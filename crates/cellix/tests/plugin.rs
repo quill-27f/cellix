@@ -45,10 +45,10 @@ fn plugin_hooks_are_wired_and_never_fail_the_agent() {
 #[test]
 fn claude_mod_bridge_loads() {
     let hooks: serde_json::Value = serde_json::from_str(&plugin_file("hooks/hooks.json")).unwrap();
-    assert_eq!(hooks["modules"][0], "./register.ts");
-    let module = plugin_file("hooks/register.ts");
+    assert_eq!(hooks["modules"][0], "./register.tsx");
+    let module = plugin_file("hooks/register.tsx");
     assert!(module.contains("export const register"));
-    for command in ["cellix-comments", "cellix-open"] {
+    for command in ["cellix", "cellix-comments", "cellix-open"] {
         assert!(module.contains(&format!("name: '{command}'")), "{command}");
     }
     // The socket is the mod's only way in, so a Cellix that isn't running must read as that.

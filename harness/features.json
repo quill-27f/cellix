@@ -544,5 +544,26 @@
     "passes": true,
     "test": "the_status_line_shows_the_files_length",
     "title": "File length in the status line"
+  },
+  {
+    "id": "pane-input",
+    "milestone": 7,
+    "passes": true,
+    "test": "clicks_and_the_wheel_cross_from_the_mod",
+    "title": "Input reaches Cellix running as a Claude Code pane"
+  },
+  {
+    "id": "pane-frames",
+    "milestone": 7,
+    "passes": true,
+    "test": "an_idle_pane_sends_no_frames",
+    "title": "Pane frames only when something changed"
+  },
+  {
+    "id": "pane-remote",
+    "milestone": 7,
+    "passes": true,
+    "test": "a_remote_frame_travels_as_a_png",
+    "title": "Pane frames as PNGs over SSH"
   }
 ]

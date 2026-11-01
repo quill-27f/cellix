@@ -26,6 +26,26 @@ fn client(request: &str, dir: Option<&str>) -> ExitCode {
     }
 }
 
+/// `cellix setup` unpacks the Claude Code plugin and says how to load it. It leaves Claude
+/// Code's settings alone, because those are the user's.
+fn setup() -> ExitCode {
+    let Some(folder) = cellix::plugin::install() else {
+        eprintln!("cellix: could not write the Claude Code plugin");
+        return ExitCode::FAILURE;
+    };
+    println!("Plugin written to {}", folder.display());
+    println!();
+    println!("Start Claude Code with it:");
+    println!("  claude --ide --plugin-dir {}", folder.display());
+    println!();
+    println!("Or add this to your shell profile, so it's always on:");
+    println!(
+        "  alias claude='claude --ide --plugin-dir {}'",
+        folder.display()
+    );
+    ExitCode::SUCCESS
+}
+
 /// `cellix hook <kind>` is what the Claude Code plugin calls. It always succeeds, because a
 /// failing hook would get in the agent's way.
 fn hook(kind: &str) -> ExitCode {
@@ -70,6 +90,18 @@ fn main() -> ExitCode {
         }
         ["checkpoint", label @ ..] => return checkpoint(&label.join(" ")),
         ["hook", kind] => return hook(kind),
+        ["pane"] => {
+            return match std::env::current_dir().and_then(|d| cellix::pane::run(&d.canonicalize()?))
+            {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("cellix: {e}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
+        ["setup"] => return setup(),
+        ["pane-send", input] => return client(&format!("pane {input}"), None),
         ["comments", "--take", rest @ ..] => return client("take", rest.first().copied()),
         ["comments", rest @ ..] => return client("comments", rest.first().copied()),
         ["open", file, rest @ ..] => {

@@ -130,6 +130,7 @@ dependencies = [
  "cellix-review",
  "cellix-term",
  "crossterm",
+ "libc",
  "png",
  "portable-pty",
  "rmpv",

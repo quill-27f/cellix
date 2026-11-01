@@ -126,6 +126,12 @@ removed in the same synchronized frame as the final page. Nothing in the row pip
 changes, and tiles move by reference, so a frame is only placements. tmux can't place
 between cells, so it keeps jumping by lines.
 
+## Surfaces
+
+The ground takes the terminal's colour, so window padding can't show as a seam, and the
+work sits on a raised sheet. Paint can't go under text, so a rounded surface is coloured
+cells with its corners painted back in the ground colour. Icon pills work the same way.
+
 ## Theme
 
 `theme` is `auto`, `dark` or `light`. `auto` is the default: Cellix asks the terminal for
@@ -210,6 +216,17 @@ Plans answer on `PermissionRequest`, not `PreToolUse`: a real run showed `PreToo
 Claude Code's own dialog up, and the answer must carry `updatedInput` to count.
 
 The plugin ships inside the binary and is written out when an agent starts.
+
+### Inside Claude Code
+
+`cellix pane` runs the whole app with no terminal, started by the mod for the session's
+life. It writes each changed frame to a private file and prints one line, and the mod
+swaps the pane's image to it. Over SSH the terminal can't read that file, so a frame is a
+PNG on stdout. Input comes back through a surface module layered over the image, and each
+event is one `cellix pane-send` over the workspace socket. An idle pane sends nothing.
+
+A process per event costs a few milliseconds, which typing doesn't notice. If it shows,
+the next step is a long-lived input channel.
 
 Cellix runs one local socket per workspace, and each integration is a thin adapter.
 Comments reach an agent through `cellix comments [--take]` as JSON. With `--wait` they are

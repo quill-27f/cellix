@@ -33,6 +33,17 @@ Ctrl+W closes a tab and Ctrl+Q quits. Ghostty keeps Cmd+W and Cmd+Q for itself, 
 only reach Cellix if you unbind them with `keybind = cmd+w=unbind` and
 `keybind = cmd+q=unbind` in your Ghostty config.
 
+Typing suggests as you go in every file type, with no setup: keywords, words from open
+files, and in `.env` files the keys from sibling files such as `.env.example`. A language
+server joins in where one is installed: `rust-analyzer`, `terraform-ls`, `gopls`,
+`pyright-langserver`, `typescript-language-server`, `yaml-language-server`, `taplo`,
+`bash-language-server` and `clangd`. Tab accepts, and so does Enter outside Markdown.
+Brackets and quotes close themselves, Ctrl+/ toggles comments, Alt+Up and Down move lines,
+Alt+Shift+Down duplicates one, and Ctrl+L goes to a line.
+
+The margin marks lines changed since the last commit, and the minimap fits the whole file,
+so you can see how long it is. Click or drag it to move.
+
 Mac text shortcuts work: Option+Backspace deletes a word, Option+Left and Right move by
 word, and Cmd+Backspace deletes to the start of the line. tmux doesn't pass Cmd through, so
 for Cmd+Z there, add `keybind = cmd+z=text:\x1a` to your Ghostty config.
@@ -105,27 +116,39 @@ To turn off smooth scrolling on a slow link, add this to `~/.config/cellix/setti
 the current HTML file. It uses [terminal-browser](https://github.com/zenbu-labs/terminal-browser)
 in a split when that's installed, and your system browser otherwise.
 
-## With an agent
+## Inside Claude Code
 
-Run Cellix inside tmux or Zellij, then choose `Open Claude Code` in the palette. It starts
-the real Claude Code in a split, connected to Cellix as its IDE, with the Cellix plugin
-loaded. There's nothing to install, including on a server. Then:
+Cellix can run as a pane in Claude Code, so you start Claude and Cellix comes to you:
 
-- **Proposed edits** open in Cellix's diff view. Accept or reject them by hunk or whole, in
+```sh
+cellix setup     # prints the command to start Claude Code with it
+```
+
+Then `/cellix` opens the pane, and `/cellix-open <file>` opens a file in it. It also opens
+by itself when Claude proposes an edit or a plan. Click the pane to type there, and press
+Esc to go back to Claude. Under 110 columns the pane drops the sidebar, and under 90 the
+minimap, so the code keeps the room.
+
+- **Proposed edits** open in the diff view. Accept or reject them by hunk or whole, in
   Cellix or in Claude's own prompt.
 - **Your selection** shows up in Claude's prompt, and `Send Selection to Agent` mentions it.
-- **Plans** open as a rendered page with Approve and Send back. Your edits and comments go
-  with the answer, and this replaces Claude's own plan dialog.
-- **Comments** go to the agent with `Send Comments to Agent`, or with your next prompt.
+- **Plans** open as a page with Approve and Send back. Your edits and comments go with the
+  answer, and this replaces Claude's own plan dialog.
+- **Comments** go with `Send Comments to Agent`, or with your next prompt.
 - **Turns** are checkpointed. Review shows what each prompt changed, and `Undo Agent Turn`
   puts the tree back, keeping a checkpoint of what it replaced.
 - **Agents** (the robot icon) lists who's running and who needs you, and every worktree.
 - **Tests** an agent runs appear in review with their results.
 - **Staging**: Accept stages the hunk in git, and the Commit button commits what's staged.
 
-Outside tmux or Zellij, start Claude Code yourself with
-`claude --plugin-dir ~/.local/share/cellix/claude-code` after using the palette once, and
-pick Cellix under `/ide`. `Open Codex` starts Codex in a split, without these connections.
+The pane needs a terminal with Kitty graphics, such as Ghostty, Kitty or WezTerm. Over SSH
+each update travels as a PNG, so it costs more than the standalone app on a slow link.
+
+## Beside an agent
+
+Running Cellix on its own inside tmux or Zellij also works: `Open Claude Code` in the
+palette starts the real tool in a split, connected to Cellix. `Open Codex` starts Codex
+there without these connections.
 
 Set `VISUAL="cellix --wait"` so Ctrl+G in Claude Code opens plans in Cellix. Comments are
 written back into the file when you quit. Any other agent can run `cellix comments --take`

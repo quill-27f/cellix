@@ -3,7 +3,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 /// Carried in the binary, so a fresh server needs nothing but Cellix.
-const FILES: [(&str, &str); 4] = [
+const FILES: [(&str, &str); 5] = [
     (
         ".claude-plugin/plugin.json",
         include_str!("../../../integrations/claude-code/.claude-plugin/plugin.json"),
@@ -13,8 +13,12 @@ const FILES: [(&str, &str); 4] = [
         include_str!("../../../integrations/claude-code/hooks/hooks.json"),
     ),
     (
-        "hooks/register.ts",
-        include_str!("../../../integrations/claude-code/hooks/register.ts"),
+        "hooks/register.tsx",
+        include_str!("../../../integrations/claude-code/hooks/register.tsx"),
+    ),
+    (
+        "hooks/pane-input.tsx",
+        include_str!("../../../integrations/claude-code/hooks/pane-input.tsx"),
     ),
     (
         "skills/cellix-review/SKILL.md",

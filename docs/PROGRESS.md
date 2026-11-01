@@ -182,3 +182,29 @@ agreed: build it, then run Cellix as a pane inside Claude Code through a mod. Th
 has what that needs, panes showing images plus pointer and key events, but none of it has
 been tried. An image named by file can't cross SSH, so remote sessions would have to send
 PNGs.
+
+## 2026-11-01: the editor, the redesign and the Claude Code pane
+
+Added ten grammars, a Terraform query, and line-based highlighting for `.env`, Dockerfile,
+INI and ignore files. Suggestions work with no server. Measuring found a full reparse on
+each key in large files: a keystroke in a 5,800 line file took 200 to 600ms to draw, under
+heavy load, and now takes about 10ms in all, with colours from a background thread.
+
+Added margin marks for changes, a whole-file minimap and bracket pairs. Built the approved
+canvas. The review view keeps its side-by-side layout on wide screens, rather than the
+canvas's stacked cards.
+
+Cellix now runs as a pane inside Claude Code. Checked live in Ghostty against 2.1.309 with
+`harness/live/pty_inject.py`: a click places the cursor, typing reaches the pane, the wheel
+scrolls, and a proposed edit opens the pane by itself. One live run was stopped by the GPU
+guard, whose measure covers the whole machine. An idle pane was resending its image twice a
+second, which is fixed, and later runs stayed in budget. No cause was proven.
+
+Unverified: the pane over a real SSH link, under tmux, and with a plan arriving. Other
+terminals. `terraform-ls` and the other servers, since only rust-analyzer is on this
+machine. Plain `claude` without `--ide` won't send edits to the pane. The pane uses the
+dark theme, because it can't ask a terminal Claude Code owns for its background.
+
+The real rust-analyzer suite still has the open failure from the last entry.
+
+Next: the user tries it.

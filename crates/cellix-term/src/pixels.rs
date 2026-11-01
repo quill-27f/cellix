@@ -68,7 +68,8 @@ fn ease_out(t: f32) -> f32 {
     1.0 - (1.0 - t).powi(3)
 }
 
-fn tile_key(grid: &Grid, y: u16) -> u64 {
+/// What a row looks like, as a key: rows with the same key draw the same pixels.
+pub fn row_key(grid: &Grid, y: u16) -> u64 {
     let mut hasher = DefaultHasher::new();
     grid.row(y).hash(&mut hasher);
     grid.cursor.filter(|c| c.1 == y).hash(&mut hasher);
@@ -275,7 +276,7 @@ impl<R: Rasterizer> Backend for PixelBackend<R> {
         self.frame += 1;
         let mut on_screen = HashSet::new();
         for y in 0..grid.height() {
-            let key = tile_key(grid, y);
+            let key = row_key(grid, y);
             let id = self.tile(&mut bytes, key, grid, y);
             on_screen.insert(id);
             if self.shown[y as usize] != Some(id) {

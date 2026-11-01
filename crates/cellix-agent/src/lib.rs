@@ -62,6 +62,8 @@ pub enum Request {
     CommentsTaken,
     Agent(AgentEvent),
     Test(TestRun),
+    /// Input for a Cellix running as a pane, as the mod's JSON.
+    Pane(String),
     /// A plan is waiting. The connection stays open until `reply` is answered or dropped.
     Plan {
         path: PathBuf,
@@ -106,6 +108,10 @@ fn answer(line: &str, comments: &SharedComments, requests: &Sender<Request>) -> 
         }
         (Some("open"), Some(path)) => {
             let _ = requests.send(Request::Open(PathBuf::from(path)));
+            Ok("ok".into())
+        }
+        (Some("pane"), Some(json)) => {
+            let _ = requests.send(Request::Pane(json.to_string()));
             Ok("ok".into())
         }
         (Some("event"), Some(json)) => {

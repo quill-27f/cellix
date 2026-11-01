@@ -275,6 +275,10 @@ pub struct App {
     server_words: Vec<String>,
     /// Set when suggestions were asked for, so an empty prefix still gets them.
     suggest_asked: bool,
+    /// Below this width the sidebar becomes a drawer. A pane beside an agent sets it higher.
+    pub compact_width: u16,
+    /// Why a pane should come forward, for the mod.
+    attention: Option<&'static str>,
     /// What the wheel has moved since the last frame.
     scrolled: Option<(Rect, i32)>,
     /// The server Claude Code connects to. Set by the terminal loop.
@@ -339,6 +343,8 @@ impl App {
             branch: None,
             measure: Rc::new(CellMeasure),
             agents: Agents::default(),
+            compact_width: COMPACT_WIDTH,
+            attention: None,
             suggest: None,
             server_words: Vec::new(),
             suggest_asked: false,
@@ -734,6 +740,7 @@ impl App {
             tab,
             reply: call.reply,
         });
+        self.attention = Some("change");
         self.say("Claude Code is proposing a change");
     }
 
@@ -1113,7 +1120,7 @@ impl App {
     }
 
     fn compact(&self) -> bool {
-        self.size.0 < COMPACT_WIDTH
+        self.size.0 < self.compact_width
     }
 
     fn activity_area(&self) -> Rect {
@@ -1187,6 +1194,10 @@ impl App {
 
     fn focused_area(&self) -> Rect {
         self.pane_area(self.focus)
+    }
+
+    pub fn take_attention(&mut self) -> Option<&'static str> {
+        self.attention.take()
     }
 
     /// The editor region the wheel just moved, and by how many rows.
@@ -2357,6 +2368,8 @@ impl App {
                 }
             }
             Request::CommentsTaken => self.say("An agent took the review comments"),
+            // Only the pane loop reads these, and it handles them before they get here.
+            Request::Pane(_) => {}
             Request::Agent(event) => self.agents.update(event),
             Request::Test(run) => {
                 let text = format!(
@@ -2375,6 +2388,7 @@ impl App {
                 match self.open(&path) {
                     Ok(()) => {
                         self.plan = Some(PendingPlan { path, reply });
+                        self.attention = Some("plan");
                         self.say("An agent is waiting for you to review this plan");
                     }
                     // Dropping `reply` lets the agent ask in its own way.
@@ -2566,6 +2580,20 @@ impl App {
                 return;
             }
             self.close_suggestions();
+        }
+        // The wheel over a pane comes with no position, so it means the file in front.
+        if mouse.x == u16::MAX {
+            let delta = if mouse.kind == MouseKind::ScrollUp {
+                -1
+            } else {
+                1
+            };
+            if let Some(review) = &mut self.review {
+                review.scroll_by(delta);
+            } else if let Some(editor) = self.editor_mut() {
+                editor.scroll_by(delta);
+            }
+            return;
         }
         let (x, y, fine_x) = (mouse.x, mouse.y, mouse.fine_x);
         if self.compact() && self.drawer && !self.sidebar_area().is_some_and(|a| a.contains(x, y)) {
