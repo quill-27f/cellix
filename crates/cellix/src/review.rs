@@ -586,7 +586,7 @@ impl Review {
                     ..theme.sidebar
                 };
                 grid.label_right(list.right().saturating_sub(1), y, mark, style, 85);
-                let end = list.right().saturating_sub(7);
+                let end = list.right().saturating_sub(8);
                 grid.label(list.x + 1, y, &run.command, theme.sidebar, end);
             }
             ListRow::File(index) => {

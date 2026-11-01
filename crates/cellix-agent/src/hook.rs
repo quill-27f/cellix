@@ -12,6 +12,8 @@ use crate::{AgentEvent, AgentState, TestRun, request, socket_path};
 /// Longest test output kept, from the end, where failures are.
 const MAX_OUTPUT: usize = 20_000;
 const LABEL_LENGTH: usize = 60;
+/// What an agent reports while its plan is with the reviewer.
+pub const PLAN_WAITING: &str = "Plan waiting for review";
 
 /// Commands whose results belong beside the diff.
 const TEST_COMMANDS: [&str; 13] = [
@@ -127,31 +129,31 @@ fn on_plan(roots: &[PathBuf], input: &Value) -> Option<String> {
         .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
         .collect();
     // Beside the socket, because that folder is private and /tmp on a server isn't.
-    let path = socket.with_file_name(format!("plan-{session}.md"));
+    let folder = socket.with_file_name(session);
+    std::fs::create_dir_all(&folder).ok()?;
+    let path = folder.join("Plan.md");
     std::fs::write(&path, plan).ok()?;
-    tell(
-        roots,
-        input,
-        AgentState::NeedsYou,
-        "Plan waiting for review",
-    );
+    tell(roots, input, AgentState::NeedsYou, PLAN_WAITING);
     let reply = ask(roots, &format!("plan {}", path.display()))?;
-    let output = match reply.split_once(' ') {
-        Some(("send-back", feedback)) => {
-            let reason: String = serde_json::from_str(feedback).ok()?;
-            json!({"hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": reason,
-            }})
+    // A PreToolUse answer wouldn't do: Claude Code still shows its own plan dialog.
+    let (verdict, text) = reply.split_once(' ').unwrap_or((&reply, "null"));
+    let text: Option<String> = serde_json::from_str(text).ok()?;
+    let decision = match (verdict, text) {
+        ("send-back", Some(message)) => json!({"behavior": "deny", "message": message}),
+        ("approve", edited) => {
+            // Claude Code only counts an approval as the user's answer if it carries the input.
+            let mut plan_input = input["tool_input"].clone();
+            if let Some(edited) = edited {
+                plan_input["plan"] = json!(edited);
+            }
+            json!({"behavior": "allow", "updatedInput": plan_input})
         }
-        _ if reply == "approve" => json!({"hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "allow",
-            "permissionDecisionReason": "Approved in Cellix",
-        }}),
         _ => return None,
     };
+    let output = json!({"hookSpecificOutput": {
+        "hookEventName": "PermissionRequest",
+        "decision": decision,
+    }});
     Some(output.to_string())
 }
 
@@ -281,8 +283,37 @@ mod tests {
         let output = waiting.join().unwrap().unwrap();
         let parsed: Value = serde_json::from_str(&output).unwrap();
         let answer = &parsed["hookSpecificOutput"];
-        assert_eq!(answer["permissionDecision"], "deny");
-        assert_eq!(answer["permissionDecisionReason"], "Split step two");
+        assert_eq!(answer["hookEventName"], "PermissionRequest");
+        assert_eq!(answer["decision"]["behavior"], "deny");
+        assert_eq!(answer["decision"]["message"], "Split step two");
+    }
+
+    #[test]
+    fn an_edited_plan_is_approved_as_edited() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let server = start(&root, Arc::default()).unwrap();
+        let hook = input(
+            &root,
+            json!({"tool_input": {"plan": "# Old", "planFilePath": "/p.md"}}),
+        );
+        let waiting = std::thread::spawn(move || handle("plan", &hook));
+        loop {
+            if let Request::Plan { reply, .. } = server
+                .requests
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+            {
+                reply.send(Decision::Approve(Some("# New".into()))).unwrap();
+                break;
+            }
+        }
+        let output = waiting.join().unwrap().unwrap();
+        let parsed: Value = serde_json::from_str(&output).unwrap();
+        let answer = &parsed["hookSpecificOutput"]["decision"];
+        assert_eq!(answer["behavior"], "allow");
+        assert_eq!(answer["updatedInput"]["plan"], "# New");
+        assert_eq!(answer["updatedInput"]["planFilePath"], "/p.md");
     }
 
     #[test]

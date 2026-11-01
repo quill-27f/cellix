@@ -22,7 +22,7 @@ fn plugin_manifest_is_valid() {
 fn plugin_hooks_are_wired_and_never_fail_the_agent() {
     let hooks: serde_json::Value = serde_json::from_str(&plugin_file("hooks/hooks.json")).unwrap();
     let events = hooks["hooks"].as_object().unwrap();
-    for name in ["UserPromptSubmit", "PreToolUse", "Stop"] {
+    for name in ["UserPromptSubmit", "PermissionRequest", "Stop"] {
         assert!(events.contains_key(name), "{name}");
     }
     for entries in events.values() {
@@ -34,7 +34,7 @@ fn plugin_hooks_are_wired_and_never_fail_the_agent() {
             }
         }
     }
-    let plan = &events["PreToolUse"][0];
+    let plan = &events["PermissionRequest"][0];
     assert_eq!(plan["matcher"], "ExitPlanMode");
     assert!(
         plan["hooks"][0]["timeout"].as_i64().unwrap() > 3600,

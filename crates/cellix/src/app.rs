@@ -928,7 +928,15 @@ impl App {
             }
             Command::AddComment => self.prompt_comment_at_cursor(),
             Command::SendToAgent => self.send_to_agent(),
-            Command::ApprovePlan => self.finish_plan(Decision::Approve),
+            Command::ApprovePlan => {
+                let path = self.plan.as_ref().map(|p| p.path.as_path());
+                let edited = self
+                    .editors
+                    .iter()
+                    .find(|e| path.is_some() && e.buffer.path() == path && e.buffer.is_dirty())
+                    .map(|e| e.buffer.text());
+                self.finish_plan(Decision::Approve(edited));
+            }
             Command::SendBackPlan => {
                 if self.plan.is_some() {
                     self.ask(
@@ -1142,6 +1150,7 @@ impl App {
             return;
         };
         let _ = plan.reply.send(decision);
+        self.agents.plan_answered();
         let file = self.relative(&plan.path);
         if let Ok(mut comments) = self.comments.lock() {
             comments.retain(|c| c.file != file);
@@ -1564,7 +1573,13 @@ impl App {
         if index >= self.editors.len() {
             return;
         }
-        self.editors.remove(index);
+        let closed = self.editors.remove(index);
+        // Closing an unanswered plan hands the question back to the agent's own dialog.
+        if let Some(plan) = &self.plan
+            && closed.buffer.path() == Some(plan.path.as_path())
+        {
+            self.plan = None;
+        }
         let last = self.editors.len().saturating_sub(1);
         for pane in &mut self.panes {
             if *pane > index {
@@ -3659,8 +3674,31 @@ mod tests {
         let decision = pending_plan(&dir, &mut app);
         let (x, y) = find(&screen(&app), APPROVE);
         app.handle(mouse(MouseKind::Left, x + 1, y));
-        assert_eq!(decision.try_recv(), Ok(Decision::Approve));
+        assert_eq!(decision.try_recv(), Ok(Decision::Approve(None)));
         assert!(!screen(&app).text().contains("step one"), "the plan closes");
+    }
+
+    #[test]
+    fn approving_an_edited_plan_sends_the_edits() {
+        let (dir, mut app) = project();
+        let decision = pending_plan(&dir, &mut app);
+        typed(&mut app, "My ");
+        app.run(Command::ApprovePlan);
+        let Ok(Decision::Approve(Some(text))) = decision.try_recv() else {
+            panic!("no answer");
+        };
+        assert!(text.contains("# My Plan"), "{text}");
+    }
+
+    #[test]
+    fn closing_a_plan_hands_it_back_to_the_agent() {
+        let (dir, mut app) = project();
+        let decision = pending_plan(&dir, &mut app);
+        app.run(Command::CloseTab);
+        assert!(matches!(
+            decision.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Disconnected)
+        ));
     }
 
     #[test]

@@ -2,7 +2,7 @@
   "hooks": {
     "SessionStart": [{ "hooks": [{ "type": "command", "command": "cellix hook session-start 2>/dev/null || true" }] }],
     "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "cellix hook prompt 2>/dev/null || true" }] }],
-    "PreToolUse": [{
+    "PermissionRequest": [{
       "matcher": "ExitPlanMode",
       "hooks": [{ "type": "command", "command": "cellix hook plan 2>/dev/null || true", "timeout": 86400 }]
     }],

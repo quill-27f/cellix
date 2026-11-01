@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use cellix_agent::hook::PLAN_WAITING;
 use cellix_agent::{AgentEvent, AgentState};
 use cellix_render::{Bounds, Grid, Rect, Style};
 use cellix_review::Worktree;
@@ -21,6 +22,15 @@ impl Agents {
         self.running.retain(|a| a.session != event.session);
         if event.state != AgentState::Ended {
             self.running.push(event);
+        }
+    }
+
+    /// The answer went back, so the agent is working again before any hook says so.
+    pub fn plan_answered(&mut self) {
+        let waiting = self.running.iter_mut().filter(|a| a.detail == PLAN_WAITING);
+        for agent in waiting {
+            agent.state = AgentState::Working;
+            agent.detail = "Working".to_string();
         }
     }
 

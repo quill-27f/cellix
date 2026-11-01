@@ -48,7 +48,8 @@ pub struct TestRun {
 /// The reviewer's answer to a plan.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Decision {
-    Approve,
+    /// With the plan's new text, if the reviewer edited it.
+    Approve(Option<String>),
     SendBack(String),
 }
 
@@ -120,7 +121,10 @@ fn answer(line: &str, comments: &SharedComments, requests: &Sender<Request>) -> 
             let _ = requests.send(Request::Plan { path, reply });
             // Quitting drops the sender, and the agent goes back to asking as usual.
             Ok(match decision.recv() {
-                Ok(Decision::Approve) => "approve".to_string(),
+                Ok(Decision::Approve(None)) => "approve".to_string(),
+                Ok(Decision::Approve(Some(text))) => {
+                    format!("approve {}", serde_json::to_string(&text)?)
+                }
                 Ok(Decision::SendBack(text)) => {
                     format!("send-back {}", serde_json::to_string(&text)?)
                 }
