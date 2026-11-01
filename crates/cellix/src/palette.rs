@@ -25,7 +25,7 @@ impl Item {
     }
 }
 
-pub const COMMANDS: [(&str, Command); 26] = [
+pub const COMMANDS: [(&str, Command); 30] = [
     ("Save", Command::Save),
     ("Undo", Command::Undo),
     ("Redo", Command::Redo),
@@ -43,6 +43,10 @@ pub const COMMANDS: [(&str, Command); 26] = [
     ("Replace in Project", Command::ReplaceInProject),
     ("Toggle Markdown Source", Command::MarkdownPreview),
     ("Open in Browser", Command::OpenInBrowser),
+    ("Send Comments to Agent", Command::SendToAgent),
+    ("Approve Plan", Command::ApprovePlan),
+    ("Send Plan Back", Command::SendBackPlan),
+    ("Show Agents", Command::ShowAgents),
     ("Review Previous Agent Turn", Command::ReviewPreviousTurn),
     ("Undo Agent Turn", Command::UndoTurn),
     ("Commit Staged Changes", Command::Commit),

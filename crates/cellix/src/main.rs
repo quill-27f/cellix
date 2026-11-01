@@ -1,3 +1,4 @@
+use std::io::Read;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -23,6 +24,17 @@ fn client(request: &str, dir: Option<&str>) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// `cellix hook <kind>` is what the Claude Code plugin calls. It always succeeds, because a
+/// failing hook would get in the agent's way.
+fn hook(kind: &str) -> ExitCode {
+    let mut input = String::new();
+    let _ = std::io::stdin().read_to_string(&mut input);
+    if let Some(output) = cellix_agent::hook::handle(kind, &input) {
+        println!("{output}");
+    }
+    ExitCode::SUCCESS
 }
 
 /// `cellix checkpoint [label]` marks the start of an agent's turn. It needs no running
@@ -57,6 +69,7 @@ fn main() -> ExitCode {
             return ExitCode::SUCCESS;
         }
         ["checkpoint", label @ ..] => return checkpoint(&label.join(" ")),
+        ["hook", kind] => return hook(kind),
         ["comments", "--take", rest @ ..] => return client("take", rest.first().copied()),
         ["comments", rest @ ..] => return client("comments", rest.first().copied()),
         ["open", file, rest @ ..] => {

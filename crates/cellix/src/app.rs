@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::mpsc::Sender;
 
 use cellix_core::{Buffer, Selection, Workspace};
 use cellix_input::{
@@ -12,11 +13,13 @@ use cellix_lang::Registry;
 use cellix_lang::lsp::{Client, Diagnostic, LspEvent, TextEdit};
 use cellix_render::{Bounds, CellMeasure, Font, Grid, Icon, Measure, Rect, Style};
 use cellix_review::{
-    Comment, append_comments, blame_line, changed_files, current_branch, restore, turns,
+    Comment, append_comments, blame_line, changed_files, current_branch, restore, turns, worktrees,
 };
 
-use cellix_agent::{Request, SharedComments};
+use cellix_agent::hook::comments_message;
+use cellix_agent::{Decision, Request, SharedComments, TestRun};
 
+use crate::agents::Agents;
 use crate::editor::{Editor, Marks};
 use crate::explorer::Explorer;
 use crate::palette::{COMMANDS, Input, Item, Palette, input, popup};
@@ -28,16 +31,19 @@ use crate::theme::Theme;
 
 const ACTIVITY_WIDTH: u16 = 5;
 /// Activity bar buttons, with what each one runs.
-const ACTIVITY: [(Icon, Command); 4] = [
+const ACTIVITY: [(Icon, Command); 5] = [
     (Icon::Files, Command::ToggleSidebar),
     (Icon::Search, Command::FindInProject),
     (Icon::Git, Command::OpenDiff),
+    (Icon::Agents, Command::ShowAgents),
     (Icon::Settings, Command::CommandPalette),
 ];
 /// Cells each activity icon spans.
 const ACTIVITY_ICON: (u8, u8) = (3, 2);
 /// Rows from one activity icon to the next.
 const ACTIVITY_STEP: u16 = 4;
+const APPROVE: &str = "[Approve]";
+const SEND_BACK: &str = "[Send back]";
 const SIDEBAR_WIDTH: u16 = 28;
 const SIDEBAR_MIN_WIDTH: u16 = 20;
 /// Below this width the window is a side pane, as beside an agent: chrome gives way to
@@ -70,6 +76,7 @@ enum PromptAction {
     Quit,
     CloseTab,
     Commit,
+    SendBackPlan,
     /// Puts the tree back to this checkpoint, after a yes.
     UndoTurn(String),
 }
@@ -90,6 +97,13 @@ struct Menu {
 enum SidebarView {
     Explorer,
     Search,
+    Agents,
+}
+
+/// A plan an agent is waiting on an answer for.
+struct PendingPlan {
+    path: PathBuf,
+    reply: Sender<Decision>,
 }
 
 /// At most one of these takes input ahead of everything else.
@@ -123,6 +137,16 @@ fn agent_split(var: impl Fn(&str) -> Option<String>) -> Option<SplitHost> {
     } else {
         var("ZELLIJ").map(|_| SplitHost::Zellij)
     }
+}
+
+/// Runs a program and waits for it, for short commands whose outcome matters.
+fn run_to_end(program: &str, args: &[&str]) -> bool {
+    std::process::Command::new(program)
+        .args(args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
 }
 
 /// Starts a program detached from the terminal, and reports whether it could start.
@@ -183,6 +207,11 @@ pub struct App {
     pending_rename: Option<(PathBuf, u64)>,
     branch: Option<String>,
     measure: Rc<dyn Measure>,
+    agents: Agents,
+    plan: Option<PendingPlan>,
+    /// The tmux pane of an agent Cellix started, with the program to reach it.
+    agent_pane: Option<(String, String)>,
+    tests: Vec<TestRun>,
     /// Where the pointer is, for hover highlights.
     hover: Option<(u16, u16)>,
     /// What the sidebar shows, as in VS Code's activity bar.
@@ -227,6 +256,10 @@ impl App {
             pending_rename: None,
             branch: None,
             measure: Rc::new(CellMeasure),
+            agents: Agents::default(),
+            plan: None,
+            agent_pane: None,
+            tests: Vec::new(),
             hover: None,
             sidebar_view: SidebarView::Explorer,
             search,
@@ -536,10 +569,10 @@ impl App {
 
     /// Rows above the code: tabs, and breadcrumbs when there's room for them.
     fn chrome_rows(&self) -> u16 {
-        if self.compact() || self.size.1 < 16 {
-            1
-        } else {
+        if self.plan_in_view() || (!self.compact() && self.size.1 >= 16) {
             2
+        } else {
+            1
         }
     }
 
@@ -782,6 +815,13 @@ impl App {
     fn finish_prompt(&mut self, prompt: Prompt) {
         let name = prompt.input.trim();
         let result = match &prompt.action {
+            PromptAction::SendBackPlan => {
+                if let Some(path) = self.plan.as_ref().map(|p| p.path.clone()) {
+                    let feedback = self.plan_feedback(&path, name);
+                    self.finish_plan(Decision::SendBack(feedback));
+                }
+                Ok(())
+            }
             PromptAction::Commit => {
                 if let (Some(review), false) = (&mut self.review, name.is_empty()) {
                     let result = review.commit(name);
@@ -883,19 +923,37 @@ impl App {
             Command::OpenDiff => {
                 self.review = match self.review {
                     Some(_) => None,
-                    None => Some(Review::new(
-                        self.workspace.root().to_path_buf(),
-                        self.registry.clone(),
-                    )),
+                    None => Some(self.new_review(self.workspace.root().to_path_buf())),
                 };
             }
             Command::AddComment => self.prompt_comment_at_cursor(),
+            Command::SendToAgent => self.send_to_agent(),
+            Command::ApprovePlan => self.finish_plan(Decision::Approve),
+            Command::SendBackPlan => {
+                if self.plan.is_some() {
+                    self.ask(
+                        "What should change? Comments go too",
+                        PromptAction::SendBackPlan,
+                    );
+                } else {
+                    self.say("No plan is waiting for review");
+                }
+            }
+            Command::ShowAgents => {
+                self.review = None;
+                self.search.focus = None;
+                self.sidebar_view = SidebarView::Agents;
+                self.show_sidebar = true;
+                self.drawer = self.compact();
+                self.agents.worktrees = worktrees(self.workspace.root());
+            }
             Command::ReviewPreviousTurn => {
-                let root = self.workspace.root().to_path_buf();
-                let registry = self.registry.clone();
-                self.review
-                    .get_or_insert_with(|| Review::new(root, registry))
-                    .previous_turn();
+                if self.review.is_none() {
+                    self.review = Some(self.new_review(self.workspace.root().to_path_buf()));
+                }
+                if let Some(review) = &mut self.review {
+                    review.previous_turn();
+                }
             }
             Command::UndoTurn => self.prompt_undo_turn(),
             Command::Commit => self.ask("Commit message", PromptAction::Commit),
@@ -1031,11 +1089,107 @@ impl App {
             ));
             return;
         };
-        if spawn(&command, &[]) {
+        if host == Some(SplitHost::Tmux) {
+            // Asking tmux for the new pane's id is what lets comments be sent to it later.
+            let (program, args) = command.split_first().expect("commands aren't empty");
+            let output = std::process::Command::new(program)
+                .args(["split-window", "-P", "-F", "#{pane_id}"])
+                .args(&args[1..])
+                .output();
+            match output {
+                Ok(done) if done.status.success() => {
+                    let pane = String::from_utf8_lossy(&done.stdout).trim().to_string();
+                    self.agent_pane = Some((program.clone(), pane));
+                    self.say(format!("Opened {agent}"));
+                }
+                _ => self.say(format!("Could not start {agent}")),
+            }
+        } else if spawn(&command, &[]) {
             self.say(format!("Opened {agent}"));
         } else {
             self.say(format!("Could not start {agent}"));
         }
+    }
+
+    /// The comments on a plan and any edits to it, as an answer the agent can act on.
+    fn plan_feedback(&self, path: &Path, note: &str) -> String {
+        let file = self.relative(path);
+        let mut comments = self
+            .comments
+            .lock()
+            .map_or_else(|_| Vec::new(), |c| c.clone());
+        comments.retain(|c| c.file == file);
+        let mut text = String::new();
+        if !note.is_empty() {
+            text.push_str(note);
+            text.push('\n');
+        }
+        if !comments.is_empty() {
+            text.push_str(&comments_message(&comments));
+        }
+        let editor = self.editors.iter().find(|e| e.buffer.path() == Some(path));
+        if let Some(editor) = editor.filter(|e| e.buffer.is_dirty()) {
+            text.push_str("The reviewer edited the plan to read:\n");
+            text.push_str(&editor.buffer.text());
+        }
+        text
+    }
+
+    /// Answers the waiting agent and closes the plan.
+    fn finish_plan(&mut self, decision: Decision) {
+        let Some(plan) = self.plan.take() else {
+            self.say("No plan is waiting for review");
+            return;
+        };
+        let _ = plan.reply.send(decision);
+        let file = self.relative(&plan.path);
+        if let Ok(mut comments) = self.comments.lock() {
+            comments.retain(|c| c.file != file);
+        }
+        if let Some(index) = self
+            .editors
+            .iter()
+            .position(|e| e.buffer.path() == Some(plan.path.as_path()))
+        {
+            self.set_active(index);
+            self.close_tab();
+        }
+    }
+
+    /// Delivers comments now if Cellix knows the agent's pane. Otherwise they wait, and the
+    /// hook adds them to the next prompt.
+    fn send_to_agent(&mut self) {
+        let comments = self
+            .comments
+            .lock()
+            .map_or_else(|_| Vec::new(), |c| c.clone());
+        if comments.is_empty() {
+            self.say("No comments to send");
+            return;
+        }
+        let Some((program, pane)) = self.agent_pane.clone() else {
+            self.say("Comments will go with your next prompt to the agent");
+            return;
+        };
+        // Sent as one line, because a newline in a prompt box would submit it early.
+        let message = comments_message(&comments).replace('\n', " ");
+        let sent = run_to_end(&program, &["send-keys", "-t", &pane, "-l", &message])
+            && run_to_end(&program, &["send-keys", "-t", &pane, "Enter"]);
+        if sent {
+            if let Ok(mut pending) = self.comments.lock() {
+                pending.clear();
+            }
+            self.say(format!("Sent {} comments to the agent", comments.len()));
+        } else {
+            self.agent_pane = None;
+            self.say("The agent's pane is gone, so comments will wait for your next prompt");
+        }
+    }
+
+    fn new_review(&self, root: PathBuf) -> Review {
+        let mut review = Review::new(root, self.registry.clone());
+        review.tests.clone_from(&self.tests);
+        review
     }
 
     fn prompt_undo_turn(&mut self) {
@@ -1151,6 +1305,19 @@ impl App {
         }
     }
 
+    /// Opens a test run's output in a tab of its own.
+    fn show_test_output(&mut self, index: usize) {
+        let Some(run) = self.tests.get(index) else {
+            return;
+        };
+        let text = format!("$ {}\n\n{}", run.command, run.output);
+        let buffer = Buffer::from_text(&text);
+        let editor = Editor::new(buffer, self.measure.clone(), self.registry.clone());
+        self.editors.push(editor);
+        self.set_active(self.editors.len() - 1);
+        self.review = None;
+    }
+
     fn click_search(&mut self, area: Rect, x: u16, y: u16) {
         match self.search.hit(area, x, y) {
             Some(search::Hit::Field(field)) => self.search.focus = Some(field),
@@ -1241,6 +1408,30 @@ impl App {
                 }
             }
             Request::CommentsTaken => self.say("An agent took the review comments"),
+            Request::Agent(event) => self.agents.update(event),
+            Request::Test(run) => {
+                let text = format!(
+                    "{} {}",
+                    run.command,
+                    if run.passed { "passed" } else { "failed" }
+                );
+                self.say(text);
+                self.tests.push(run);
+                if let Some(review) = &mut self.review {
+                    review.tests.clone_from(&self.tests);
+                }
+            }
+            Request::Plan { path, reply } => {
+                self.review = None;
+                match self.open(&path) {
+                    Ok(()) => {
+                        self.plan = Some(PendingPlan { path, reply });
+                        self.say("An agent is waiting for you to review this plan");
+                    }
+                    // Dropping `reply` lets the agent ask in its own way.
+                    Err(e) => self.say(format!("Could not open the plan: {e}")),
+                }
+            }
         }
     }
 
@@ -1276,6 +1467,7 @@ impl App {
             }
             Some(Hit::Base(base)) => review.set_base(base),
             Some(Hit::Commit) => self.ask("Commit message", PromptAction::Commit),
+            Some(Hit::Test(index)) => self.show_test_output(index),
             Some(Hit::Reject(hunk)) => self.reject(hunk),
             Some(Hit::PreviousFile) => review.step_file(-1),
             Some(Hit::NextFile) => review.step_file(1),
@@ -1443,6 +1635,15 @@ impl App {
                     editor.scroll_by(delta);
                 }
             }
+            MouseKind::Left if in_sidebar && self.sidebar_view == SidebarView::Agents => {
+                let tree = self
+                    .sidebar_area()
+                    .and_then(|a| self.agents.worktree_at(a, y));
+                if let Some(path) = tree {
+                    self.review = Some(self.new_review(path));
+                    self.drawer = false;
+                }
+            }
             MouseKind::Left if in_sidebar && self.sidebar_view == SidebarView::Search => {
                 if let Some(area) = self.sidebar_area() {
                     self.click_search(area, x, y);
@@ -1463,6 +1664,9 @@ impl App {
                 self.prompt_comment_at_cursor();
             }
             MouseKind::Left if in_sidebar => self.click_explorer(y),
+            MouseKind::Left if y == 1 && self.plan_in_view() && !in_sidebar => {
+                self.click_plan_bar(x)
+            }
             MouseKind::Left if self.compact() && y == 0 && x < MENU_BUTTON => {
                 self.run(Command::ToggleSidebar);
             }
@@ -1721,6 +1925,7 @@ impl App {
                     self.explorer.draw(grid, area, &name, self.hover, theme);
                 }
                 SidebarView::Search => self.search.draw(grid, area, &*self.measure, theme),
+                SidebarView::Agents => self.agents.draw(grid, area, theme),
             }
         }
         if let Some(review) = &self.review {
@@ -1869,6 +2074,11 @@ impl App {
                         && self.review.is_none()
                         && self.sidebar_view == SidebarView::Search
                 }
+                Command::ShowAgents => {
+                    self.show_sidebar
+                        && self.review.is_none()
+                        && self.sidebar_view == SidebarView::Agents
+                }
                 Command::OpenDiff => self.review.is_some(),
                 _ => false,
             };
@@ -1892,6 +2102,10 @@ impl App {
                 }
             }
             grid.put_icon(area.x + 1, y, *icon, ACTIVITY_ICON, style);
+            if *command == Command::ShowAgents && self.agents.needing_you() > 0 {
+                let dot = Bounds::cells(area.x as f32 + 3.0, y as f32, 0.9, 0.45);
+                grid.panel(dot, 22, Some(self.theme.error), None);
+            }
         }
     }
 
@@ -1946,7 +2160,58 @@ impl App {
         }
     }
 
+    /// Whether the plan waiting for review is the tab in view.
+    fn plan_in_view(&self) -> bool {
+        let open = self
+            .editors
+            .get(self.active())
+            .and_then(|e| e.buffer.path());
+        self.plan
+            .as_ref()
+            .is_some_and(|p| open == Some(p.path.as_path()))
+    }
+
+    fn draw_plan_bar(&self, grid: &mut Grid) {
+        let main = self.main_area();
+        let theme = &self.theme;
+        grid.fill(Rect::new(main.x, 1, main.w, 1), theme.bar);
+        let primary = Style {
+            fg: theme.button_text,
+            ..theme.bar
+        };
+        let secondary = Style {
+            fg: theme.text.fg,
+            ..theme.bar
+        };
+        let x = main.x + 1;
+        grid.button(x, 1, APPROVE, "Approve", theme.button, primary);
+        let next = x + APPROVE.len() as u16 + 1;
+        grid.button(next, 1, SEND_BACK, "Send back", theme.input, secondary);
+        let text = next + SEND_BACK.len() as u16 + 2;
+        grid.label(
+            text,
+            1,
+            "An agent is waiting on this plan",
+            theme.bar,
+            main.right(),
+        );
+    }
+
+    fn click_plan_bar(&mut self, x: u16) {
+        let first = self.main_area().x + 1;
+        let second = first + APPROVE.len() as u16 + 1;
+        if x >= first && x < first + APPROVE.len() as u16 {
+            self.run(Command::ApprovePlan);
+        } else if x >= second && x < second + SEND_BACK.len() as u16 {
+            self.run(Command::SendBackPlan);
+        }
+    }
+
     fn draw_breadcrumbs(&self, grid: &mut Grid) {
+        if self.plan_in_view() {
+            self.draw_plan_bar(grid);
+            return;
+        }
         if self.chrome_rows() < 2 {
             return;
         }
@@ -2034,8 +2299,12 @@ impl App {
         } else {
             "Ctrl+P open  Ctrl+S save  Ctrl+G review  Ctrl+Q quit"
         };
+        let waiting = self.agents.needing_you();
+        let attention = format!("An agent needs you ({waiting})");
         let left = if !message.is_empty() {
             message.as_str()
+        } else if waiting > 0 {
+            attention.as_str()
         } else if let Some(problem) = &at_cursor {
             problem.as_str()
         } else {
@@ -3327,6 +3596,127 @@ mod tests {
         assert!(!screen(&app).text().contains("first line"));
         app.handle(Event::Key(KeyEvent::ctrl('q')));
         assert!(app.quit);
+    }
+
+    fn agent(state: cellix_agent::AgentState, detail: &str) -> cellix_agent::AgentEvent {
+        cellix_agent::AgentEvent {
+            session: "s1".into(),
+            agent: "Claude Code".into(),
+            state,
+            detail: detail.into(),
+            folder: "/w".into(),
+        }
+    }
+
+    #[test]
+    fn agents_panel_shows_who_needs_you() {
+        use cellix_agent::AgentState::{Ended, NeedsYou, Working};
+        let (_dir, mut app) = project();
+        app.serve(Request::Agent(agent(NeedsYou, "Allow Bash?")));
+        assert!(screen(&app).text().contains("An agent needs you"));
+        app.run(Command::ShowAgents);
+        let text = screen(&app).text();
+        assert!(
+            text.contains("Claude Code") && text.contains("needs you"),
+            "{text}"
+        );
+        assert!(text.contains("Allow Bash?"), "{text}");
+        app.serve(Request::Agent(agent(Working, "Working")));
+        assert!(!screen(&app).text().contains("needs you"));
+        app.serve(Request::Agent(agent(Ended, "Ended")));
+        assert!(screen(&app).text().contains("None running"));
+    }
+
+    #[test]
+    fn test_results_show_in_review() {
+        let (_dir, mut app) = reviewed();
+        app.serve(Request::Test(TestRun {
+            command: "cargo test".into(),
+            passed: false,
+            output: "boom at line 3".into(),
+        }));
+        app.run(Command::OpenDiff);
+        let grid = screen(&app);
+        let (x, y) = find(&grid, "TESTS");
+        assert!(grid.row_text(y + 1).contains("cargo test"));
+        assert!(grid.row_text(y + 1).contains("failed"));
+        app.handle(mouse(MouseKind::Left, x, y + 1));
+        let text = screen(&app).text();
+        assert!(text.contains("boom at line 3"), "{text}");
+    }
+
+    fn pending_plan(dir: &TempDir, app: &mut App) -> std::sync::mpsc::Receiver<Decision> {
+        let path = dir.path().join("plan.md");
+        fs::write(&path, "# Plan\n\nstep one\n").unwrap();
+        let (reply, decision) = std::sync::mpsc::channel();
+        app.serve(Request::Plan { path, reply });
+        decision
+    }
+
+    #[test]
+    fn approving_a_plan_answers_the_agent() {
+        let (dir, mut app) = project();
+        let decision = pending_plan(&dir, &mut app);
+        let (x, y) = find(&screen(&app), APPROVE);
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        assert_eq!(decision.try_recv(), Ok(Decision::Approve));
+        assert!(!screen(&app).text().contains("step one"), "the plan closes");
+    }
+
+    #[test]
+    fn sending_a_plan_back_carries_comments_and_edits() {
+        let (dir, mut app) = project();
+        let decision = pending_plan(&dir, &mut app);
+        app.run(Command::AddComment);
+        typed(&mut app, "Too big");
+        enter(&mut app);
+        typed(&mut app, "My ");
+        let (x, y) = find(&screen(&app), SEND_BACK);
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        typed(&mut app, "Split it");
+        enter(&mut app);
+        let Ok(Decision::SendBack(text)) = decision.try_recv() else {
+            panic!("no answer");
+        };
+        assert!(text.contains("Split it"), "{text}");
+        assert!(text.contains("plan.md:1: Too big"), "{text}");
+        assert!(text.contains("# My Plan"), "{text}");
+    }
+
+    #[test]
+    fn comments_are_sent_to_the_agent_pane() {
+        let (dir, mut app) = project();
+        let log = dir.path().join("sent.txt");
+        let script = dir.path().join("fake-tmux");
+        fs::write(
+            &script,
+            format!("#!/bin/sh\necho \"$@\" >> {}\n", log.display()),
+        )
+        .unwrap();
+        fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        app.agent_pane = Some((script.display().to_string(), "%7".into()));
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        app.run(Command::AddComment);
+        typed(&mut app, "Why this");
+        enter(&mut app);
+        app.run(Command::SendToAgent);
+        let sent = fs::read_to_string(&log).unwrap();
+        assert!(sent.contains("-t %7 -l"), "{sent}");
+        assert!(sent.contains("alpha.txt:1: Why this"), "{sent}");
+        assert!(sent.trim_end().ends_with("Enter"), "{sent}");
+        assert!(app.comments.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn with_no_pane_comments_wait_for_the_next_prompt() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        app.run(Command::AddComment);
+        typed(&mut app, "Later");
+        enter(&mut app);
+        app.run(Command::SendToAgent);
+        assert!(screen(&app).text().contains("next prompt"));
+        assert_eq!(app.comments.lock().unwrap().len(), 1);
     }
 
     #[test]

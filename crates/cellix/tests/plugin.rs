@@ -17,3 +17,27 @@ fn plugin_manifest_is_valid() {
     assert!(skill.starts_with("---\nname: cellix-review\ndescription: "));
     assert!(skill.contains("cellix comments --take"));
 }
+
+#[test]
+fn plugin_hooks_are_wired_and_never_fail_the_agent() {
+    let hooks: serde_json::Value = serde_json::from_str(&plugin_file("hooks/hooks.json")).unwrap();
+    let events = hooks["hooks"].as_object().unwrap();
+    for name in ["UserPromptSubmit", "PreToolUse", "Stop"] {
+        assert!(events.contains_key(name), "{name}");
+    }
+    for entries in events.values() {
+        for entry in entries.as_array().unwrap() {
+            for hook in entry["hooks"].as_array().unwrap() {
+                let command = hook["command"].as_str().unwrap();
+                assert!(command.starts_with("cellix hook "), "{command}");
+                assert!(command.ends_with("|| true"), "{command}");
+            }
+        }
+    }
+    let plan = &events["PreToolUse"][0];
+    assert_eq!(plan["matcher"], "ExitPlanMode");
+    assert!(
+        plan["hooks"][0]["timeout"].as_i64().unwrap() > 3600,
+        "a review takes time"
+    );
+}

@@ -12,16 +12,59 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use cellix_review::Comment;
+use serde::{Deserialize, Serialize};
+
+pub mod hook;
 
 /// Comments shared between the app and the socket thread.
 pub type SharedComments = Arc<Mutex<Vec<Comment>>>;
 
-/// Requests that need the app itself, drained on its next tick.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AgentState {
+    Working,
+    NeedsYou,
+    Idle,
+    Ended,
+}
+
+/// What an agent is doing, as its hooks report it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentEvent {
+    pub session: String,
+    pub agent: String,
+    pub state: AgentState,
+    pub detail: String,
+    pub folder: String,
+}
+
+/// A test command an agent ran.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TestRun {
+    pub command: String,
+    pub passed: bool,
+    pub output: String,
+}
+
+/// The reviewer's answer to a plan.
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Decision {
+    Approve,
+    SendBack(String),
+}
+
+/// Requests that need the app itself, drained on its next tick.
+#[derive(Debug)]
 pub enum Request {
     Open(PathBuf),
     /// The socket thread already emptied the shared list.
     CommentsTaken,
+    Agent(AgentEvent),
+    Test(TestRun),
+    /// A plan is waiting. The connection stays open until `reply` is answered or dropped.
+    Plan {
+        path: PathBuf,
+        reply: Sender<Decision>,
+    },
 }
 
 fn fnv(text: &str) -> u64 {
@@ -53,12 +96,36 @@ fn answer(line: &str, comments: &SharedComments, requests: &Sender<Request>) -> 
         (Some("comments"), None) => list(false),
         (Some("take"), None) => {
             let json = list(true)?;
-            let _ = requests.send(Request::CommentsTaken);
+            // The hook takes on every prompt, and an empty take isn't news.
+            if json != "[]" {
+                let _ = requests.send(Request::CommentsTaken);
+            }
             Ok(json)
         }
         (Some("open"), Some(path)) => {
             let _ = requests.send(Request::Open(PathBuf::from(path)));
             Ok("ok".into())
+        }
+        (Some("event"), Some(json)) => {
+            let _ = requests.send(Request::Agent(serde_json::from_str(json)?));
+            Ok("ok".into())
+        }
+        (Some("test"), Some(json)) => {
+            let _ = requests.send(Request::Test(serde_json::from_str(json)?));
+            Ok("ok".into())
+        }
+        (Some("plan"), Some(path)) => {
+            let (reply, decision) = channel();
+            let path = PathBuf::from(path);
+            let _ = requests.send(Request::Plan { path, reply });
+            // Quitting drops the sender, and the agent goes back to asking as usual.
+            Ok(match decision.recv() {
+                Ok(Decision::Approve) => "approve".to_string(),
+                Ok(Decision::SendBack(text)) => {
+                    format!("send-back {}", serde_json::to_string(&text)?)
+                }
+                Err(_) => "pass".to_string(),
+            })
         }
         _ => Ok("error: unknown request".into()),
     }
@@ -105,7 +172,12 @@ pub fn start(root: &Path, comments: SharedComments) -> io::Result<Server> {
     let (sender, requests) = channel();
     thread::spawn(move || {
         for stream in listener.incoming().flatten() {
-            let _ = serve(stream, &comments, &sender);
+            // One thread each, because a plan holds its connection open for as long as
+            // the reviewer takes.
+            let (comments, sender) = (comments.clone(), sender.clone());
+            thread::spawn(move || {
+                let _ = serve(stream, &comments, &sender);
+            });
         }
     });
     Ok(Server { path, requests })
@@ -143,7 +215,7 @@ mod tests {
         assert_eq!(shared.lock().unwrap().len(), 1);
         request(dir.path(), "take").unwrap();
         assert!(shared.lock().unwrap().is_empty());
-        assert_eq!(server.requests.recv(), Ok(Request::CommentsTaken));
+        assert!(matches!(server.requests.recv(), Ok(Request::CommentsTaken)));
     }
 
     #[test]
@@ -151,10 +223,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let server = start(dir.path(), Arc::default()).unwrap();
         assert_eq!(request(dir.path(), "open /tmp/x.rs").unwrap(), "ok");
-        assert_eq!(
+        assert!(matches!(
             server.requests.recv(),
-            Ok(Request::Open(PathBuf::from("/tmp/x.rs")))
-        );
+            Ok(Request::Open(path)) if path == Path::new("/tmp/x.rs")
+        ));
     }
 
     #[test]

@@ -410,35 +410,35 @@
     "milestone": 3,
     "title": "Send comments straight to the agent",
     "test": "comments_are_sent_to_the_agent_pane",
-    "passes": false
+    "passes": true
   },
   {
     "id": "plan-approval",
     "milestone": 3,
     "title": "Approve or send back a plan from Cellix",
     "test": "plan_decision_reaches_the_hook",
-    "passes": false
+    "passes": true
   },
   {
     "id": "agent-status",
     "milestone": 4,
     "title": "See running agents and which need you",
     "test": "agents_panel_shows_who_needs_you",
-    "passes": false
+    "passes": true
   },
   {
     "id": "worktrees",
     "milestone": 4,
     "title": "Changes across worktrees",
     "test": "worktrees_are_listed_with_their_changes",
-    "passes": false
+    "passes": true
   },
   {
     "id": "test-results",
     "milestone": 4,
     "title": "Test results beside the diff",
     "test": "test_results_show_in_review",
-    "passes": false
+    "passes": true
   },
   {
     "id": "ide-connect",

@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use cellix_agent::TestRun;
 use cellix_lang::{Registry, Token};
 use cellix_render::{Grid, Rect, Rgb, Style};
 use cellix_review::{
@@ -18,6 +19,7 @@ const NUMBER_WIDTH: u16 = 5;
 const MIN_SIDE_BY_SIDE: u16 = 90;
 /// Turns listed in the timeline, newest first.
 const SHOWN_TURNS: usize = 6;
+const SHOWN_TESTS: usize = 3;
 
 /// What a click in the review view lands on.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,6 +32,8 @@ pub enum Hit {
     /// Compare against this turn, or HEAD for None.
     Base(Option<usize>),
     Commit,
+    /// Show a test run's output.
+    Test(usize),
     /// Step through the files, in the stacked layout.
     PreviousFile,
     NextFile,
@@ -47,6 +51,7 @@ enum ListRow {
     Heading(&'static str),
     Base(Option<usize>),
     Commit,
+    Test(usize),
     File(usize),
 }
 
@@ -68,6 +73,8 @@ pub struct Review {
     /// The index into `turns` being compared against, or None for HEAD.
     pub base: Option<usize>,
     staged: usize,
+    /// Test commands agents have run, newest last.
+    pub tests: Vec<TestRun>,
     tokens: (Vec<LineTokens>, Vec<LineTokens>),
 }
 
@@ -168,6 +175,7 @@ impl Review {
             turns: Vec::new(),
             base: None,
             staged: 0,
+            tests: Vec::new(),
             tokens: (Vec::new(), Vec::new()),
         };
         review.refresh();
@@ -304,6 +312,11 @@ impl Review {
             rows.push(ListRow::Base(None));
             let newest = (0..self.turns.len()).rev().take(SHOWN_TURNS);
             rows.extend(newest.map(|i| ListRow::Base(Some(i))));
+        }
+        if !self.tests.is_empty() {
+            rows.push(ListRow::Heading("TESTS"));
+            let newest = (0..self.tests.len()).rev().take(SHOWN_TESTS);
+            rows.extend(newest.map(ListRow::Test));
         }
         rows.push(ListRow::Heading("CHANGES"));
         if self.staged > 0 {
@@ -497,6 +510,7 @@ impl Review {
                 ListRow::Heading(_) => None,
                 ListRow::Base(base) => Some(Hit::Base(*base)),
                 ListRow::Commit => Some(Hit::Commit),
+                ListRow::Test(index) => Some(Hit::Test(*index)),
                 ListRow::File(index) => Some(Hit::File(*index)),
             };
         }
@@ -559,6 +573,21 @@ impl Review {
                 };
                 let text = format!("[Commit {} staged]", self.staged);
                 grid.button(list.x + 1, y, &text, "Commit", theme.button, style);
+            }
+            ListRow::Test(index) => {
+                let run = &self.tests[*index];
+                let (mark, color) = if run.passed {
+                    ("passed", theme.git_added)
+                } else {
+                    ("failed", theme.error)
+                };
+                let style = Style {
+                    fg: color,
+                    ..theme.sidebar
+                };
+                grid.label_right(list.right().saturating_sub(1), y, mark, style, 85);
+                let end = list.right().saturating_sub(7);
+                grid.label(list.x + 1, y, &run.command, theme.sidebar, end);
             }
             ListRow::File(index) => {
                 let style = pick(*index == self.selected);

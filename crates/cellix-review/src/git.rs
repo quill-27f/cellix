@@ -89,6 +89,39 @@ pub fn index_text(root: &Path, path: &Path) -> String {
     git(root, &["show", &spec]).unwrap_or_default()
 }
 
+/// A checkout of this repository.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Worktree {
+    pub path: PathBuf,
+    pub branch: String,
+    pub changes: usize,
+}
+
+/// Every worktree, each with how many files differ from its HEAD.
+pub fn worktrees(root: &Path) -> Vec<Worktree> {
+    let Some(output) = git(root, &["worktree", "list", "--porcelain"]) else {
+        return Vec::new();
+    };
+    let mut found = Vec::new();
+    for block in output.split("\n\n") {
+        let field = |name: &str| block.lines().find_map(|l| l.strip_prefix(name));
+        let Some(path) = field("worktree ") else {
+            continue;
+        };
+        let path = PathBuf::from(path);
+        let branch = field("branch refs/heads/")
+            .unwrap_or("detached")
+            .to_string();
+        let changes = changed_files(&path).len();
+        found.push(Worktree {
+            path,
+            branch,
+            changes,
+        });
+    }
+    found
+}
+
 /// How many files are staged.
 pub fn staged_count(root: &Path) -> usize {
     git(root, &["diff", "--cached", "--name-only"]).map_or(0, |o| o.lines().count())
@@ -275,6 +308,24 @@ pub(crate) mod tests {
         let patch = crate::hunk_patch(path, "", "x\ny\n", &diff.hunks[0]);
         stage_patch(dir.path(), path, &patch).unwrap();
         assert_eq!(index_text(dir.path(), path), "x\ny\n");
+    }
+
+    #[test]
+    fn worktrees_are_listed_with_their_changes() {
+        let dir = repo();
+        let other = tempfile::tempdir().unwrap();
+        let path = other.path().join("wt");
+        let target = path.to_string_lossy();
+        git(
+            dir.path(),
+            &["worktree", "add", "-q", "-b", "agent-a", &target],
+        )
+        .unwrap();
+        fs::write(path.join("kept.txt"), "edited there\n").unwrap();
+        let found = worktrees(dir.path());
+        assert_eq!(found.len(), 2, "{found:?}");
+        let agent = found.iter().find(|w| w.branch == "agent-a").unwrap();
+        assert_eq!(agent.changes, 1);
     }
 
     #[test]

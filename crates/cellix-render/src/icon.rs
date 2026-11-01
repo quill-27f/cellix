@@ -19,6 +19,7 @@ pub enum Icon {
     ReplaceAll = 10,
     Globe = 11,
     Check = 12,
+    Agents = 13,
 }
 
 /// One cell of an icon that is `width` by `height` cells.
@@ -51,6 +52,7 @@ impl Piece {
             0 => Icon::Files,
             1 => Icon::Search,
             2 => Icon::Git,
+            13 => Icon::Agents,
             _ => Icon::Settings,
         };
         Some(Self {
@@ -163,6 +165,13 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
                 || segment(p, (0.80, 0.34), (0.62, 0.18)) < 0.05
                 || segment(p, (0.88, 0.68), (0.20, 0.68)) < 0.05
                 || segment(p, (0.20, 0.68), (0.38, 0.84)) < 0.05
+        }
+        Icon::Agents => {
+            outline(p, (0.16, 0.32), (0.84, 0.86)) < STROKE
+                || segment(p, (0.50, 0.14), (0.50, 0.30)) < STROKE
+                || circle(p, (0.36, 0.54)) < 0.06
+                || circle(p, (0.64, 0.54)) < 0.06
+                || segment(p, (0.38, 0.72), (0.62, 0.72)) < STROKE
         }
         Icon::Check => {
             segment(p, (0.20, 0.52), (0.42, 0.74)) < 0.07
