@@ -15,7 +15,8 @@ use cellix_lang::complete::{self, Candidate, Source};
 use cellix_lang::lsp::{Client, Diagnostic, LspEvent, TextEdit};
 use cellix_render::{Bounds, CellMeasure, Font, Grid, Icon, Measure, Rect, Style};
 use cellix_review::{
-    Comment, append_comments, blame_line, changed_files, current_branch, restore, turns, worktrees,
+    Comment, append_comments, blame_line, changed_files, current_branch, head_text, restore, turns,
+    worktrees,
 };
 
 use cellix_agent::hook::comments_message;
@@ -394,6 +395,19 @@ impl App {
         self.editors.get_mut(index)
     }
 
+    fn load_committed(&self, editor: &mut Editor) {
+        let Some(path) = editor.buffer.path() else {
+            return;
+        };
+        let root = self.workspace.root();
+        let inside = path.strip_prefix(root).unwrap_or(path);
+        let text = head_text(root, inside);
+        // A file that isn't in git has nothing to compare with, so it shows no marks.
+        let tracked = !text.is_empty() || self.branch.is_some();
+        editor.committed = tracked.then_some(text);
+        editor.refresh_changes();
+    }
+
     pub fn open(&mut self, path: &Path) -> io::Result<()> {
         if let Some(i) = self
             .editors
@@ -404,7 +418,8 @@ impl App {
             return Ok(());
         }
         let buffer = Buffer::open(path)?;
-        let editor = Editor::new(buffer, self.measure.clone(), self.registry.clone());
+        let mut editor = Editor::new(buffer, self.measure.clone(), self.registry.clone());
+        self.load_committed(&mut editor);
         self.editors.push(editor);
         self.set_active(self.editors.len() - 1);
         self.attach_server(path);
@@ -1264,10 +1279,20 @@ impl App {
         self.ticks += 1;
         if self.ticks.is_multiple_of(EXPLORER_REFRESH_TICKS) {
             self.refresh_tree();
+            self.refresh_committed();
             if let Some(review) = &mut self.review {
                 review.refresh();
             }
         }
+    }
+
+    /// Keeps margin marks true after a commit or a checkout.
+    fn refresh_committed(&mut self) {
+        let mut editors = std::mem::take(&mut self.editors);
+        for editor in &mut editors {
+            self.load_committed(editor);
+        }
+        self.editors = editors;
     }
 
     fn refresh_tree(&mut self) {
@@ -3332,6 +3357,9 @@ impl App {
                 .path()
                 .and_then(Registry::language_name)
                 .unwrap_or("Plain Text");
+            // A final newline ends the last line rather than starting another.
+            let ends_line = rope.len_chars() > 0 && rope.char(rope.len_chars() - 1) == '\n';
+            let trailing = usize::from(ends_line);
             let mode = match self.vim.as_ref().map(|v| v.mode) {
                 Some(VimMode::Normal) => "NORMAL",
                 Some(VimMode::Insert) => "INSERT",
@@ -3342,22 +3370,21 @@ impl App {
                 format!("{mode}   Ln {}, Col {column}", line + 1)
                     .trim_start()
                     .to_string(),
+                format!("{} lines", rope.len_lines().saturating_sub(trailing)),
                 language.to_string(),
                 "UTF-8".to_string(),
                 "Spaces: 4".to_string(),
             ];
         }
-        let room = width.saturating_sub(left.chars().count().min(24) as u16 + 4) as usize;
+        // A message outranks the details, and a hint gives way to them.
+        let kept = if message.is_empty() { 24 } else { 64 };
+        let room = width.saturating_sub(left.chars().count().min(kept) as u16 + 4) as usize;
         let mut shown = right.clone();
         while shown.len() > 1 && shown.join("   ").chars().count() > room {
             shown.pop();
         }
-        // Reads like VS Code, with the language last.
-        if shown.len() > 2 {
-            shown.rotate_left(2);
-            let count = shown.len();
-            shown.swap(count - 2, count - 1);
-        }
+        // Dropped from the far end, and read from the other, with the cursor last.
+        shown.reverse();
         let right = shown.join("   ");
         let right_x = width.saturating_sub(right.chars().count() as u16 + 1);
         let mut x = 1;
@@ -3402,6 +3429,7 @@ impl App {
 mod tests {
     use super::*;
     use cellix_input::{Mods, MouseEvent};
+    use cellix_render::Paint;
     use std::fs;
     use tempfile::TempDir;
 
@@ -5012,6 +5040,46 @@ mod tests {
         }
         typed(&mut app, "x");
         assert!(colored(&screen(&app)), "an edit keeps the colours it had");
+    }
+
+    #[test]
+    fn changed_lines_are_marked_in_the_margin() {
+        let (dir, mut app) = reviewed();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        app.handle(Event::Tick);
+        for _ in 0..EXPLORER_REFRESH_TICKS {
+            app.handle(Event::Tick);
+        }
+        assert!(screen(&app).text().contains('▎'), "{}", screen(&app).text());
+    }
+
+    #[test]
+    fn the_status_line_shows_the_files_length() {
+        let (_dir, app) = code("one\ntwo\nthree\n");
+        assert!(
+            screen(&app).text().contains("3 lines"),
+            "{}",
+            screen(&app).text()
+        );
+    }
+
+    #[test]
+    fn a_minimap_shows_on_pixel_tiers_with_room() {
+        let (dir, mut app) = project();
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(10, 20)));
+        let path = dir.path().join("long.rs");
+        fs::write(&path, "fn name() {}\n".repeat(300)).unwrap();
+        app.open(&path).unwrap();
+        let maps = |app: &App| {
+            let grid = screen(app);
+            let strips = |p: &&Paint| matches!(p, Paint::Strips { .. });
+            grid.paint.iter().filter(strips).count()
+        };
+        app.handle(Event::Resize(140, 30));
+        assert!(maps(&app) > 10);
+        // Beside an agent, the code keeps the room.
+        app.handle(Event::Resize(66, 30));
+        assert_eq!(maps(&app), 0);
     }
 
     #[test]

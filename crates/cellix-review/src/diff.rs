@@ -325,9 +325,54 @@ pub fn reject_hunk(old: &str, new: &str, hunk: &Hunk) -> String {
     out
 }
 
+/// How a line differs from the last commit, for the editor's margin.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineChange {
+    Added,
+    Modified,
+    /// Lines were removed just above this one.
+    DeletedAbove,
+}
+
+/// What changed, by zero-based line of `new`.
+pub fn line_changes(old: &str, new: &str) -> Vec<(usize, LineChange)> {
+    let mut changes = Vec::new();
+    for op in TextDiff::from_lines(old, new).ops() {
+        match *op {
+            DiffOp::Equal { .. } => {}
+            DiffOp::Insert {
+                new_index, new_len, ..
+            } => changes.extend((new_index..new_index + new_len).map(|l| (l, LineChange::Added))),
+            DiffOp::Replace {
+                new_index, new_len, ..
+            } => {
+                let lines = new_index..new_index + new_len;
+                changes.extend(lines.map(|l| (l, LineChange::Modified)));
+            }
+            DiffOp::Delete { new_index, .. } => changes.push((new_index, LineChange::DeletedAbove)),
+        }
+    }
+    changes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn line_changes_name_each_kind() {
+        let old = "a\nb\nc\nd\n";
+        let new = "a\nB\nc\nnew\n";
+        assert_eq!(
+            line_changes(old, new),
+            [(1, LineChange::Modified), (3, LineChange::Modified)]
+        );
+        assert_eq!(line_changes("a\n", "a\nb\n"), [(1, LineChange::Added)]);
+        assert_eq!(
+            line_changes("a\nb\n", "b\n"),
+            [(0, LineChange::DeletedAbove)]
+        );
+    }
 
     fn lines(diff: &FileDiff) -> Vec<(Option<usize>, Option<usize>, RowKind)> {
         diff.rows

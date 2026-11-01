@@ -4,7 +4,10 @@ mod diff;
 mod git;
 mod history;
 
-pub use diff::{FileDiff, Hunk, Row, RowKind, Side, hunk_patch, rank_changes, reject_hunk};
+pub use diff::{
+    FileDiff, Hunk, LineChange, Row, RowKind, Side, hunk_patch, line_changes, rank_changes,
+    reject_hunk,
+};
 pub use git::{
     Change, Worktree, blame_line, changed_files, commit, current_branch, head_text, index_text,
     stage_patch, staged_count, worktrees,

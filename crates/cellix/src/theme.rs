@@ -50,6 +50,8 @@ pub struct Theme {
     pub find_match: Rgb,
     /// Behind code blocks on a rendered Markdown page.
     pub code_bg: Rgb,
+    /// The part of a minimap in view.
+    pub minimap_view: Rgb,
     /// Hairlines between regions.
     pub border: Rgb,
     /// The border of a focused box.
@@ -117,6 +119,7 @@ impl Theme {
             &mut self.scrollbar,
             &mut self.input,
             &mut self.code_bg,
+            &mut self.minimap_view,
             &mut self.border,
             &mut self.popup,
             &mut self.popup_border,
@@ -178,6 +181,7 @@ impl Theme {
             input: Rgb(255, 255, 255),
             find_match: Rgb(168, 216, 170),
             code_bg: Rgb(243, 243, 243),
+            minimap_view: Rgb(236, 236, 240),
             border: Rgb(229, 229, 229),
             focus: Rgb(0, 144, 241),
             popup: Rgb(255, 255, 255),
@@ -245,6 +249,7 @@ impl Default for Theme {
             input: Rgb(60, 60, 60),
             find_match: Rgb(81, 92, 47),
             code_bg: Rgb(38, 38, 40),
+            minimap_view: Rgb(50, 50, 54),
             border: Rgb(46, 46, 48),
             focus: Rgb(0, 127, 212),
             popup: Rgb(37, 37, 39),

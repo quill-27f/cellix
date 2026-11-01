@@ -43,6 +43,15 @@ impl Bounds {
     }
 }
 
+/// One bar in a minimap, in 256ths of its box.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Strip {
+    pub x: u8,
+    pub y: u8,
+    pub w: u8,
+    pub color: Rgb,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Paint {
     Panel {
@@ -73,6 +82,8 @@ pub enum Paint {
         icon: Icon,
         color: Rgb,
     },
+    /// A row's share of a minimap: many small bars, which as panels would be slow.
+    Strips { bounds: Bounds, strips: Vec<Strip> },
 }
 
 impl Paint {
@@ -83,9 +94,9 @@ impl Paint {
                 let reach = if *shadow { UNIT } else { 0 };
                 (bounds.y - reach, bounds.y + bounds.h + reach)
             }
-            Self::Hairline { bounds, .. } | Self::Icon { bounds, .. } => {
-                (bounds.y, bounds.y + bounds.h.max(1))
-            }
+            Self::Hairline { bounds, .. }
+            | Self::Icon { bounds, .. }
+            | Self::Strips { bounds, .. } => (bounds.y, bounds.y + bounds.h.max(1)),
             // Large text stands taller than its row.
             Self::Text { y, font, .. } if font.size > 100 => (*y - UNIT, *y + 2 * UNIT),
             Self::Text { y, .. } => (*y, *y + UNIT),

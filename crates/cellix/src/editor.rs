@@ -1,11 +1,13 @@
 use std::cell::{Cell, OnceCell, RefCell};
+use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 
 use cellix_core::{Buffer, Motion, Selection, Selections};
 use cellix_input::{Command, Direction, Format};
 use cellix_lang::{Registry, Span, Worker};
-use cellix_render::{Bounds, Font, Grid, INTERFACE_SIZE, Icon, Measure, Rect, Rgb, units};
+use cellix_render::{Bounds, Font, Grid, INTERFACE_SIZE, Icon, Measure, Rect, Rgb, Strip, units};
+use cellix_review::LineChange;
 use unicode_width::UnicodeWidthChar;
 
 use crate::rendered::{self, Glyph, Intent, Row, Tone};
@@ -18,6 +20,13 @@ const NARROW_PANE: u16 = 60;
 /// Heading levels the toolbar steps through before going back to plain text.
 const MAX_HEADING_CYCLE: usize = 3;
 const INDENT: &str = "    ";
+const MINIMAP_WIDTH: u16 = 13;
+/// Lines of code a minimap fits in one row of the grid.
+const MINIMAP_LINES_PER_ROW: usize = 6;
+/// Columns of code a minimap shows, past which lines are cut off.
+const MINIMAP_COLUMNS: usize = 96;
+/// Narrower panes spend every column on the code, as beside an agent.
+const MIN_MINIMAP_PANE: u16 = 90;
 /// Files up to this size highlight as they're drawn. Past it, a background thread does it,
 /// because a full reparse on each key starts to show.
 const MAX_INLINE_HIGHLIGHT: usize = 32 * 1024;
@@ -36,11 +45,20 @@ pub struct Marks {
 type Page = (u64, usize, Rc<Vec<Row>>);
 
 /// One open document and where the view is within it.
+/// Bars per row, with the revision and height they fit.
+type MinimapRows = (u64, u16, Vec<Vec<Strip>>);
+
 pub struct Editor {
     pub buffer: Buffer,
     pub selections: Selections,
     /// Char ranges to mark, while find is open.
     pub found: Vec<(usize, usize)>,
+    /// The last commit's copy of this file, to mark changed lines against.
+    pub committed: Option<String>,
+    /// Changed lines by number, with the revision they were worked out at.
+    changes: RefCell<(u64, HashMap<usize, LineChange>)>,
+    /// Bars for each row of the minimap, with what they were built for.
+    minimap: RefCell<Option<MinimapRows>>,
     pub top: usize,
     pub left: usize,
     spans: RefCell<Option<(u64, Vec<Span>)>>,
@@ -76,6 +94,9 @@ impl Editor {
             buffer,
             selections: Selections::default(),
             found: Vec::new(),
+            committed: None,
+            changes: RefCell::new((u64::MAX, HashMap::new())),
+            minimap: RefCell::new(None),
             top: 0,
             left: 0,
             spans: RefCell::new(None),
@@ -97,9 +118,166 @@ impl Editor {
             .map_or_else(|| "untitled".into(), |n| n.to_string_lossy().into_owned())
     }
 
-    /// Where text goes in `area`: all of it, less the scrollbar.
+    /// Whether a pane has room for a minimap, which only pixels can draw.
+    fn shows_minimap(&self, area: Rect) -> bool {
+        !self.measure.in_cells() && area.w >= MIN_MINIMAP_PANE
+    }
+
+    /// Where text goes in `area`: all of it, less the minimap or the scrollbar.
     fn text_area(&self, area: Rect) -> Rect {
-        Rect::new(area.x, area.y, area.w.saturating_sub(1), area.h)
+        let side = if self.shows_minimap(area) {
+            MINIMAP_WIDTH
+        } else {
+            1
+        };
+        Rect::new(area.x, area.y, area.w.saturating_sub(side), area.h)
+    }
+
+    /// Forgets the changed lines, as when the file's committed copy changes.
+    pub fn refresh_changes(&self) {
+        self.changes.borrow_mut().0 = u64::MAX;
+    }
+
+    fn line_changes(&self) -> std::cell::Ref<'_, (u64, HashMap<usize, LineChange>)> {
+        let revision = self.buffer.revision();
+        if self.changes.borrow().0 != revision {
+            let found = self.committed.as_ref().map_or_else(HashMap::new, |old| {
+                cellix_review::line_changes(old, &self.buffer.text())
+                    .into_iter()
+                    .collect()
+            });
+            *self.changes.borrow_mut() = (revision, found);
+        }
+        self.changes.borrow()
+    }
+
+    /// The bar beside a changed line, in the margin of `x`.
+    fn draw_change(&self, grid: &mut Grid, x: f32, y: u16, change: LineChange, theme: &Theme) {
+        let color = match change {
+            LineChange::Added => theme.git_added,
+            LineChange::Modified => theme.git_modified,
+            LineChange::DeletedAbove => theme.error,
+        };
+        let bounds = match change {
+            LineChange::DeletedAbove => Bounds::cells(x, y as f32 - 0.06, 0.55, 0.12),
+            _ => Bounds::cells(x, y as f32, 0.28, 1.0),
+        };
+        grid.panel(bounds, 0, Some(color), None);
+        if self.measure.in_cells() {
+            let style = cellix_render::Style {
+                fg: color,
+                ..theme.gutter
+            };
+            grid.put_str(x as u16, y, "▎", style, x as u16 + 1);
+        }
+    }
+
+    /// Bars for each row of a minimap `rows` tall, in the colours of the code. The whole
+    /// file always fits, so the map's fill shows how long the file is.
+    fn minimap_rows(&self, rows: u16, theme: &Theme) -> Vec<Vec<Strip>> {
+        let rope = self.buffer.rope();
+        let lines = rope.len_lines();
+        let capacity = rows as usize * MINIMAP_LINES_PER_ROW;
+        let shown = lines.min(capacity);
+        let mut out = vec![Vec::new(); rows as usize];
+        let spans = self.spans.borrow();
+        let no_spans = Vec::new();
+        let spans = spans.as_ref().map_or(&no_spans, |(_, spans)| spans);
+        for slot in 0..shown {
+            let line = slot * lines / shown.max(1);
+            let start = rope.line_to_byte(line);
+            let row = slot / MINIMAP_LINES_PER_ROW;
+            let y = ((slot % MINIMAP_LINES_PER_ROW) * 256 / MINIMAP_LINES_PER_ROW) as u8;
+            let text = self.line_text(line);
+            let mut column = 0;
+            for word in text.split_inclusive(char::is_whitespace) {
+                let size = word.trim_end().chars().count();
+                if size > 0 && column < MINIMAP_COLUMNS {
+                    let byte = start + (column.min(text.len()));
+                    let at = spans.partition_point(|s| s.end <= byte);
+                    let color = spans
+                        .get(at)
+                        .filter(|s| s.start <= byte)
+                        .map_or(theme.gutter.fg, |s| theme.token(s.token));
+                    let x = (column * 256 / MINIMAP_COLUMNS) as u8;
+                    let w = (size.min(MINIMAP_COLUMNS - column) * 256 / MINIMAP_COLUMNS) as u8;
+                    out[row].push(Strip { x, y, w, color });
+                }
+                column += word.chars().count();
+            }
+        }
+        out
+    }
+
+    fn draw_minimap(&self, grid: &mut Grid, full: Rect, theme: &Theme) {
+        let text = self.text_area(full);
+        let track = Rect::new(text.right(), full.y, full.w - text.w, full.h);
+        grid.fill(track, theme.text);
+        let total = if self.rendered {
+            self.page(text).len()
+        } else {
+            self.buffer.rope().len_lines()
+        }
+        .max(1);
+        let revision = self.buffer.revision();
+        let stale = !self
+            .minimap
+            .borrow()
+            .as_ref()
+            .is_some_and(|(r, h, _)| *r == revision && *h == track.h);
+        if stale {
+            let rows = self.minimap_rows(track.h, theme);
+            *self.minimap.borrow_mut() = Some((revision, track.h, rows));
+        }
+        let height = track.h as f32;
+        let filled = (total as f32 / MINIMAP_LINES_PER_ROW as f32).min(height);
+        let top = track.y as f32 + self.top as f32 * filled / total as f32;
+        let span = (text.h as f32 * filled / total as f32).clamp(0.5, height);
+        let margin = 0.6;
+        let width = track.w as f32 - margin * 1.5;
+        let view = Bounds::cells(track.x as f32 + margin - 0.2, top, width + 0.4, span);
+        grid.panel(view, 10, Some(theme.minimap_view), None);
+        if let Some((_, _, rows)) = self.minimap.borrow().as_ref() {
+            for (row, strips) in rows.iter().enumerate().filter(|(_, s)| !s.is_empty()) {
+                let bounds = Bounds::cells(
+                    track.x as f32 + margin,
+                    track.y as f32 + row as f32,
+                    width,
+                    1.0,
+                );
+                grid.paint.push(cellix_render::Paint::Strips {
+                    bounds,
+                    strips: strips.clone(),
+                });
+            }
+        }
+        // Changes down the edge, so they're findable in a long file.
+        let lines = self.buffer.rope().len_lines().max(1);
+        let fill_lines = lines as f32;
+        for (line, change) in &self.line_changes().1 {
+            let y = track.y as f32 + *line as f32 * filled / fill_lines;
+            let color = match change {
+                LineChange::Added => theme.git_added,
+                LineChange::Modified => theme.git_modified,
+                LineChange::DeletedAbove => theme.error,
+            };
+            let mark = Bounds::cells(
+                track.right() as f32 - 0.45,
+                y,
+                0.3,
+                (filled / fill_lines).max(0.1),
+            );
+            grid.panel(mark, 0, Some(color), None);
+        }
+    }
+
+    /// Scrolls to a point on the minimap or scrollbar.
+    fn map_filled(&self, area: Rect, lines: usize) -> usize {
+        if self.shows_minimap(area) {
+            (lines.div_ceil(MINIMAP_LINES_PER_ROW)).clamp(1, area.h as usize)
+        } else {
+            area.h.max(1) as usize
+        }
     }
 
     fn page_width(area: Rect) -> usize {
@@ -265,7 +443,7 @@ impl Editor {
 
     /// True when a click at `x` lands on the scrollbar.
     pub fn on_scrollbar(&self, area: Rect, x: u16) -> bool {
-        x == self.text_area(area).right()
+        x >= self.text_area(area).right()
     }
 
     /// Scrolls so that row `y` of the scrollbar's track matches the document.
@@ -276,7 +454,8 @@ impl Editor {
             self.buffer.rope().len_lines()
         };
         let row = y.saturating_sub(area.y) as usize;
-        self.top = (row * lines / area.h.max(1) as usize).min(lines.saturating_sub(1));
+        let filled = self.map_filled(area, lines);
+        self.top = (row * lines / filled).min(lines.saturating_sub(1));
     }
 
     /// Narrow panes keep only the digits they need: every column counts there.
@@ -871,13 +1050,19 @@ impl Editor {
         let area = self.text_area(full);
         if self.rendered {
             self.draw_page(grid, area, theme, focused, marks);
-            let track = Rect::new(area.right(), area.y, 1, area.h);
-            self.draw_scrollbar(grid, track, self.page(area).len(), theme);
+            if self.shows_minimap(full) {
+                self.draw_minimap(grid, full, theme);
+            } else {
+                let track = Rect::new(area.right(), area.y, 1, area.h);
+                self.draw_scrollbar(grid, track, self.page(area).len(), theme);
+            }
             return;
         }
         let lines = self.buffer.rope().len_lines();
         let track = Rect::new(area.right(), area.y, 1, area.h);
-        self.draw_scrollbar(grid, track, lines, theme);
+        if !self.shows_minimap(full) {
+            self.draw_scrollbar(grid, track, lines, theme);
+        }
         grid.fill(area, theme.text);
         let gutter = self.gutter_width(area.w);
         let rope = self.buffer.rope();
@@ -943,6 +1128,15 @@ impl Editor {
             }
         }
         self.draw_highlights(grid, area, gutter, theme, registry);
+        if self.shows_minimap(full) {
+            self.draw_minimap(grid, full, theme);
+        }
+        for (line, change) in &self.line_changes().1 {
+            if *line >= self.top && *line < self.top + area.h as usize {
+                let y = area.y + (*line - self.top) as u16;
+                self.draw_change(grid, area.x as f32 + gutter as f32 - 1.0, y, *change, theme);
+            }
+        }
         for (start, end) in self.found.iter().copied() {
             let s = Selection {
                 anchor: start,
@@ -1045,6 +1239,7 @@ impl Editor {
         if proportional {
             self.draw_page_blocks(grid, area, &rows, theme);
         }
+        let changes = self.line_changes();
         for (index, row) in rows.iter().enumerate().skip(self.top) {
             let y = area.y + (index - self.top) as u16;
             if y >= area.bottom() {
@@ -1060,6 +1255,10 @@ impl Editor {
                     Rect::new(area.x, y, area.w, 1),
                     cellix_render::Style { bg, ..theme.text },
                 );
+            }
+            let first_row = index == 0 || rows[index - 1].line != row.line;
+            if first_row && let Some(change) = changes.1.get(&row.line) {
+                self.draw_change(grid, area.x as f32 + 0.6, y, *change, theme);
             }
             if marks.comments.contains(&(row.line + 1)) {
                 let mark = cellix_render::Style {

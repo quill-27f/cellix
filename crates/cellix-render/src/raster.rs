@@ -266,6 +266,21 @@ impl SoftwareRasterizer {
                 let top = scale(bounds.y, ch);
                 target.icon(*icon, left, top, side, *color);
             }
+            Paint::Strips { bounds, strips } => {
+                let (left, top) = (scale(bounds.x, cw), scale(bounds.y, ch));
+                let (width, height) = (scale(bounds.w, cw), scale(bounds.h, ch));
+                let thickness = (ch / 24.0).ceil().max(1.0);
+                for strip in strips {
+                    let shape = Shape {
+                        x: left + strip.x as f32 * width / 256.0,
+                        y: top + strip.y as f32 * height / 256.0,
+                        w: (strip.w as f32 * width / 256.0).max(1.0),
+                        h: thickness,
+                        radius: 0.0,
+                    };
+                    target.panel(shape, Some(strip.color), None, false, ch);
+                }
+            }
         }
     }
 }

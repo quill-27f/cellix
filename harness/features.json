@@ -523,5 +523,26 @@
     "passes": true,
     "test": "large_files_get_their_colours_from_the_background",
     "title": "Large files highlight in the background"
+  },
+  {
+    "id": "git-gutter",
+    "milestone": 6,
+    "passes": true,
+    "test": "changed_lines_are_marked_in_the_margin",
+    "title": "Changed lines marked in the margin"
+  },
+  {
+    "id": "minimap",
+    "milestone": 6,
+    "passes": true,
+    "test": "a_minimap_shows_on_pixel_tiers_with_room",
+    "title": "Minimap of the whole file, hidden in narrow panes"
+  },
+  {
+    "id": "file-length",
+    "milestone": 6,
+    "passes": true,
+    "test": "the_status_line_shows_the_files_length",
+    "title": "File length in the status line"
   }
 ]
