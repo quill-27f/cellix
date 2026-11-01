@@ -215,7 +215,7 @@ impl Grid {
     /// A rounded button in a row of its own. The cell tier shows `cells`, which may be
     /// wider than the label.
     pub fn button(&mut self, x: u16, y: u16, cells: &str, label: &str, fill: Rgb, style: Style) {
-        self.button_of(BUTTON_HEIGHT, (x, y), cells, label, fill, style);
+        self.button_of((BUTTON_HEIGHT, 0.0), (x, y), cells, label, fill, style);
     }
 
     /// A button that stands past its row, for where there's air around it.
@@ -228,12 +228,39 @@ impl Grid {
         fill: Rgb,
         style: Style,
     ) {
-        self.button_of(LARGE_BUTTON_HEIGHT, (x, y), cells, label, fill, style);
+        self.button_of(
+            (LARGE_BUTTON_HEIGHT, 0.0),
+            (x, y),
+            cells,
+            label,
+            fill,
+            style,
+        );
+    }
+
+    /// A large button centred between `y` and the row below it.
+    pub fn large_button_between(
+        &mut self,
+        x: u16,
+        y: u16,
+        cells: &str,
+        label: &str,
+        fill: Rgb,
+        style: Style,
+    ) {
+        self.button_of(
+            (LARGE_BUTTON_HEIGHT, 0.5),
+            (x, y),
+            cells,
+            label,
+            fill,
+            style,
+        );
     }
 
     fn button_of(
         &mut self,
-        height: f32,
+        (height, drop): (f32, f32),
         (x, y): (u16, u16),
         cells: &str,
         label: &str,
@@ -251,17 +278,18 @@ impl Grid {
             },
             self.width,
         );
-        let top = y as f32 + (1.0 - height) / 2.0;
+        let top = y as f32 + drop + (1.0 - height) / 2.0;
         let bounds = Bounds::cells(x as f32, top, width as f32, height);
         self.panel(bounds, 22, Some(fill), None);
-        self.centred_text(x as f32 + width as f32 / 2.0, y, label, style.fg, 90);
+        let middle = x as f32 + width as f32 / 2.0;
+        self.centred_text(middle, y as f32 + drop, label, style.fg, 90);
     }
 
-    /// Paints text centred on `x`.
-    pub fn centred_text(&mut self, x: f32, y: u16, text: &str, color: Rgb, size: u8) {
+    /// Paints text centred on `x`, at a place in rows.
+    pub fn centred_text(&mut self, x: f32, y: f32, text: &str, color: Rgb, size: u8) {
         self.paint.push(Paint::Text {
             x: units(x),
-            y: y as i32 * UNIT,
+            y: units(y),
             max_width: units(self.width as f32),
             text: text.to_string(),
             color,

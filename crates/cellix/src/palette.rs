@@ -18,7 +18,7 @@ const HEADER_ROWS: u16 = 2;
 /// Where that line falls, as far below the field's text as the panel's edge is above it.
 const HEADER_LINE: f32 = 1.3;
 /// Space between the caret and the hint in an empty field.
-const HINT_GAP: f32 = 0.25;
+const HINT_GAP: f32 = 0.45;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Item {
@@ -218,7 +218,8 @@ impl Palette {
         let width = WIDTH.min(screen.w);
         Rect::new(
             screen.x + (screen.w - width) / 2,
-            2,
+            // Below the breadcrumbs, so its edge doesn't run through them.
+            3,
             width,
             ROWS + HEADER_ROWS,
         )
@@ -305,10 +306,13 @@ impl Palette {
             let inset = area.x as f32 + TEXT_INSET;
             grid.label_at(inset, area.x + 2, y, text, base, end, 100);
             if let Some(keys) = self.items[*index].keys() {
-                let quiet = Style {
-                    fg: theme.popup_dim,
-                    ..base
+                // The picked row's wash is lighter, so its keys need to be too.
+                let fg = if row == self.selected {
+                    theme.text.fg
+                } else {
+                    theme.popup_dim
                 };
+                let quiet = Style { fg, ..base };
                 grid.label_right(area.right().saturating_sub(2), y, keys, quiet, 85);
             }
         }
@@ -406,6 +410,25 @@ mod tests {
     fn subsequence_required() {
         assert!(fuzzy_score("xyz", "abc").is_none());
         assert!(fuzzy_score("abc", "a-b-c").is_some());
+    }
+
+    #[test]
+    fn the_keyboard_steps_over_a_gap() {
+        let items = vec![
+            Item::Branch("main".to_string(), "current".to_string()),
+            Item::Gap,
+            Item::NewBranch,
+        ];
+        let mut palette = Palette::asking(items, "Switch branch");
+        palette.move_by(1);
+        assert_eq!(palette.current(), Some(&Item::NewBranch));
+        palette.query = "new".to_string();
+        palette.filter();
+        assert_eq!(
+            palette.current(),
+            Some(&Item::NewBranch),
+            "gaps don't match"
+        );
     }
 
     #[test]

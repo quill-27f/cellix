@@ -139,7 +139,7 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("18-settings-keyboard", [*settings, ["click", 45, 6]], CODE_FILE)
     shoot("19-dialog", [["keys", "x"], ["keys", CTRL("q")]], CODE_FILE)
     shoot("20-prompt", [["right", 12, 2], ["click", 14, 2]])
-    shoot("21-selection", [["double", 42, 13], ["keys", CTRL("d")]], CODE_FILE)
+    shoot("21-selection", [["double", 49, 13], ["keys", CTRL("d")]], CODE_FILE)
     shoot("22-narrow", [], CODE_FILE, size="64x30")
     shoot("23-narrow-menu", [["right", 20, 10]], PAGE_FILE, size="64x30")
     shoot("24-light-page", [], PAGE_FILE, background="eff1f5")

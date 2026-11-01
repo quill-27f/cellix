@@ -286,10 +286,11 @@ def main():
             set_size(step[1], step[2])
             pump(0.4)
         elif kind == "shot":
-            # A big change takes a while to draw, and half of one is nobody's screen.
+            # A frame is prepared whole and then written, so a slow build looks quiet
+            # while it's still drawing. Half a change is nobody's screen.
             quiet = time.time()
             start = time.time()
-            while time.time() - quiet < 0.3 and time.time() - start < 10 and alive[0]:
+            while time.time() - quiet < 1.2 and time.time() - start < 10 and alive[0]:
                 before = received[0]
                 pump(0.02)
                 if received[0] - before > 256:

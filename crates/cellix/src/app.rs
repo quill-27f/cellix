@@ -58,6 +58,8 @@ const APPROVE: &str = "[Approve]";
 const FIND_WIDTH: u16 = 46;
 const CONFIRM_WIDTH: u16 = 56;
 const CONFIRM_HEIGHT: u16 = 6;
+/// Columns around a dialog button's label.
+const CONFIRM_PADDING: usize = 4;
 const PLAN_BAR_WIDTH: u16 = 48;
 /// Corners as percentages of a row's height.
 const TAB_RADIUS: u8 = 22;
@@ -1729,8 +1731,19 @@ impl App {
         let area = self.confirm_area();
         let mut x = area.right().saturating_sub(2);
         let mut placed = Vec::new();
+        // The same padding on each, which only a measured width gives proportional text.
+        let plain = self.measure.in_cells();
+        let font = Font {
+            size: 90,
+            ..Font::default()
+        };
         for (label, _) in confirm.buttons.iter().rev() {
-            let cells = format!("[{label}]");
+            let cells = if plain {
+                format!("[{label}]")
+            } else {
+                let width = self.measure.width(label, font).ceil() as usize + CONFIRM_PADDING;
+                format!("{label:^width$}")
+            };
             x = x.saturating_sub(cells.chars().count() as u16);
             placed.push((cells, x));
             x = x.saturating_sub(1);
@@ -3233,8 +3246,8 @@ impl App {
         let Some((index, ..)) = tab else {
             return;
         };
-        // Under the strip, so the menu doesn't sit on the title it belongs to.
-        let y = y + 2;
+        // Below the breadcrumbs, so its edge runs through neither them nor the title.
+        let y = y + 3;
         let path = self.editors[index].buffer.path().map(Path::to_path_buf);
         let others = self.editors.len() > 1;
         let on_file = |action: fn(PathBuf) -> MenuAction| {
@@ -3562,10 +3575,11 @@ impl App {
         let theme = &self.theme;
         grid.fill(Rect::new(main.x, main.y, main.w, 1), theme.tab);
         let area = self.tabs_area();
-        let tab = Rect::new(area.x, area.y, 15, 1);
+        let width = self.measure.width("Settings", Font::default()).ceil() as u16 + TAB_PADDING;
+        let tab = Rect::new(area.x, area.y, width, 1);
         let style = theme.tab_active;
         grid.fill(tab, style);
-        let close = tab.right().saturating_sub(3);
+        let close = tab.right().saturating_sub(2);
         grid.label_at(
             area.x as f32 + 1.5,
             area.x + 2,
@@ -3575,7 +3589,7 @@ impl App {
             close,
             100,
         );
-        grid.glyph(close as f32, area.y, Icon::Close, style.fg, "×", style);
+        grid.glyph(close as f32, area.y, Icon::Close, theme.tab.fg, "×", style);
         let bounds = Bounds::inset(tab, 0.0, 0.0);
         grid.corners(bounds, TAB_RADIUS, theme.tab.bg, TOP_LEFT | TOP_RIGHT);
     }
@@ -3704,7 +3718,8 @@ impl App {
                 smooth_scroll,
                 minimap,
             };
-            page.draw(grid, self.sheet_area(), &values, self.hover, theme);
+            let area = self.sheet_area();
+            page.draw(grid, area, &values, (self.hover, &*self.measure), theme);
             self.draw_status(grid);
             self.draw_overlay(grid);
             return;

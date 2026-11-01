@@ -213,7 +213,7 @@ impl Agents {
                 if self.codex_found {
                     "Open Codex"
                 } else {
-                    "Codex isn't installed"
+                    "Codex not installed"
                 },
                 self.codex_found,
                 theme.quiet_button(theme.sidebar.bg),

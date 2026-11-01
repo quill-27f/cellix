@@ -78,7 +78,7 @@ impl Explorer {
             };
             grid.label_at(x, end + 1, area.y, branch, dim, area.right(), BRANCH_SIZE);
             grid.paint.push(Paint::Icon {
-                bounds: Bounds::cells(x + wide - chevron - 0.75, area.y as f32 + 0.32, 0.6, 0.36),
+                bounds: Bounds::cells(x + wide - chevron - 0.8, area.y as f32 + 0.27, 0.8, 0.46),
                 icon: Icon::ChevronDown,
                 color: theme.status.fg,
             });

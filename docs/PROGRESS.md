@@ -250,3 +250,18 @@ since a right click no longer jumps straight to a comment.
 
 The features here share one commit, against the rule, because they all touch the same
 paths through `app.rs` and splitting them would have meant commits that don't build.
+
+An independent review measured every surface and found the spacing complaint had one
+cause: lines and pills sat on row boundaries, the only 8 pixels of air a row has, where the
+boards have 25. Separators now take a blank row, and the palette has a real header. A
+second pass checked the fixes and reviewed the two Settings pages the first couldn't see.
+
+Unverified: the Ghostty window for an agent, which would take focus, is covered by a test
+of its command only. Cmd+D after freeing it, since that needs Ghostty. Computer use on
+Ghostty was declined, so nothing here ran in a real window: `harness/live/term.py` stands
+in for one. Codex has no plugin, because it isn't on this machine to build against.
+
+Open from the review: matched letters and file icons in the palette, list pills in review,
+table row padding, hover states in the tour. Menus show Ctrl because Ghostty keeps Cmd+C.
+
+Next: the user tries it, and clicks Install under Settings, Integrations.

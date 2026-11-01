@@ -1,4 +1,4 @@
-use cellix_render::{Bounds, Grid, Rect, Rgb, Style};
+use cellix_render::{Bounds, Font, Grid, Measure, Rect, Rgb, Style};
 
 use crate::integrations;
 use crate::settings::default_server;
@@ -53,7 +53,7 @@ const CARD_WIDTH: u16 = 24;
 const CARD_HEIGHT: u16 = 8;
 const PREVIEW_ROWS: u16 = 6;
 const SEGMENT_WIDTH: u16 = 11;
-const BUTTON_WIDTH: u16 = 16;
+const BUTTON_WIDTH: u16 = 11;
 const TOGGLE_WIDTH: f32 = 2.6;
 const TITLE_SIZE: u8 = 170;
 const NOTE_SIZE: u8 = 90;
@@ -185,11 +185,11 @@ impl SettingsPage {
                 }
             }
             Section::Integrations => {
-                let x = page.right().saturating_sub(BUTTON_WIDTH + 1);
+                let x = page.right().saturating_sub(BUTTON_WIDTH + 2);
                 let row = |index: u16| page.y + 4 + index * 5;
-                spots.push((Rect::new(x, row(0), BUTTON_WIDTH, 1), Control::ClaudeCode));
+                spots.push((Rect::new(x, row(0), BUTTON_WIDTH, 2), Control::ClaudeCode));
                 if self.found.ghostty_keeps_cmd_d == Some(true) {
-                    let rect = Rect::new(x, row(2), BUTTON_WIDTH, 1);
+                    let rect = Rect::new(x, row(2), BUTTON_WIDTH, 2);
                     spots.push((rect, Control::Ghostty));
                 }
             }
@@ -221,7 +221,7 @@ impl SettingsPage {
         grid: &mut Grid,
         area: Rect,
         values: &Values,
-        hover: Option<(u16, u16)>,
+        (hover, measure): (Option<(u16, u16)>, &dyn Measure),
         theme: &Theme,
     ) {
         grid.fill(area, theme.text);
@@ -257,11 +257,11 @@ impl SettingsPage {
                     "The wheel moves by pixels. Turn this off on a slow link.",
                 );
                 draw_toggle(grid, page, below, smooth, values.smooth_scroll, theme);
-                let minimap = ("Minimap", "The file at a glance, beside the text.");
+                let minimap = ("Minimap", "The file at a glance, when the window has room.");
                 draw_toggle(grid, page, below + 3, minimap, values.minimap, theme);
             }
             Section::Editor => self.draw_editor(grid, page, &spots, values, theme),
-            Section::Integrations => self.draw_integrations(grid, page, hover, theme),
+            Section::Integrations => self.draw_integrations(grid, page, (hover, measure), theme),
             Section::Keyboard => draw_keyboard(grid, page, theme),
         }
         if let Some((rect, _)) = self.focus.and_then(|f| spots.get(f)) {
@@ -304,7 +304,7 @@ impl SettingsPage {
         values: &Values,
         theme: &Theme,
     ) {
-        heading(grid, page, "Editor", "How the text behaves.", theme);
+        heading(grid, page, "Editor", "How keys and languages work.", theme);
         let room = page.right().saturating_sub(SEGMENT_WIDTH * 3 + 1);
         let keymap = ("Keymap", "Standard works as in VS Code.");
         draw_text(grid, page, (page.y + 3, room), keymap, theme);
@@ -318,21 +318,19 @@ impl SettingsPage {
                     ..theme.text
                 };
                 let cells = format!("{label:^width$}", width = rect.w as usize);
-                grid.button(rect.x, rect.y, &cells, label, fill, style);
+                grid.large_button(rect.x, rect.y, &cells, label, fill, style);
             }
         }
         let mut y = page.y + 7;
+        let above = Bounds::cells(page.x as f32, y as f32 - 0.5, page.w as f32, 0.0);
+        grid.hairline(above, theme.border);
         draw_note(grid, page, y, "LANGUAGE SERVERS", theme);
         y += 1;
         for (language, server, found) in &self.found.servers {
             if y >= page.bottom() {
                 break;
             }
-            let name = Style {
-                bold: true,
-                ..theme.text
-            };
-            grid.label(page.x, y, language, name, page.x + 16);
+            grid.label(page.x, y, language, theme.text, page.x + 16);
             let quiet = Style {
                 fg: theme.gutter.fg,
                 ..theme.text
@@ -349,7 +347,11 @@ impl SettingsPage {
             } else {
                 ("Not installed", theme.gutter.fg)
             };
-            badge(grid, page.right().saturating_sub(13), y, word, color, theme);
+            let state = Style {
+                fg: color,
+                ..theme.text
+            };
+            grid.label_right(page.right(), y, word, state, NOTE_SIZE);
             y += 1;
         }
     }
@@ -358,7 +360,7 @@ impl SettingsPage {
         &self,
         grid: &mut Grid,
         page: Rect,
-        hover: Option<(u16, u16)>,
+        (hover, measure): (Option<(u16, u16)>, &dyn Measure),
         theme: &Theme,
     ) {
         heading(
@@ -377,37 +379,45 @@ impl SettingsPage {
                 "Remove",
             ),
             (true, false) => (
-                "Not installed",
+                "Plugin not installed",
                 theme.gutter.fg,
                 "Install to open Cellix as a pane in every Claude session.",
                 "Install",
             ),
             (false, false) => (
-                "Claude Code is not on this machine",
+                "Claude Code not found",
                 theme.gutter.fg,
                 "You can install now, and it's ready when Claude Code is.",
                 "Install",
             ),
         };
         let spot = Rect::new(
-            page.right().saturating_sub(BUTTON_WIDTH + 1),
+            page.right().saturating_sub(BUTTON_WIDTH + 2),
             page.y + 4,
             BUTTON_WIDTH,
-            1,
+            2,
         );
         let primary = !found.claude_installed;
-        draw_block(grid, page, 0, ("Claude Code", word, color), detail, theme);
+        let block = |index| (index, measure);
+        draw_block(
+            grid,
+            page,
+            block(0),
+            ("Claude Code", word, color),
+            detail,
+            theme,
+        );
         draw_button(grid, spot, action, primary, hover, theme);
 
         let (word, detail) = if found.codex {
             (
                 "Found",
-                "Cellix opens Codex. Its plugin isn't built yet, so it has no review pane.",
+                "Cellix can open Codex, but there's no review pane for it yet.",
             )
         } else {
             (
-                "Codex is not on this machine",
-                "Cellix opens Codex once it's installed. Its plugin isn't built yet.",
+                "Not installed",
+                "Cellix can open Codex once it's here. There's no review pane for it yet.",
             )
         };
         let color = if found.codex {
@@ -415,20 +425,20 @@ impl SettingsPage {
         } else {
             theme.gutter.fg
         };
-        draw_block(grid, page, 1, ("Codex", word, color), detail, theme);
+        draw_block(grid, page, block(1), ("Codex", word, color), detail, theme);
 
         match found.ghostty_keeps_cmd_d {
             Some(true) => {
                 let title = ("Ghostty", "Cmd+D opens a split", theme.attention);
                 let detail = "Ghostty keeps Cmd+D for itself. Ctrl+D always works.";
-                draw_block(grid, page, 2, title, detail, theme);
-                let spot = Rect::new(spot.x, page.y + 14, BUTTON_WIDTH, 1);
-                draw_button(grid, spot, "Free Cmd+D", true, hover, theme);
+                draw_block(grid, page, block(2), title, detail, theme);
+                let spot = Rect::new(spot.x, page.y + 14, BUTTON_WIDTH, 2);
+                draw_button(grid, spot, "Free Cmd+D", false, hover, theme);
             }
             Some(false) => {
                 let title = ("Ghostty", "Cmd+D is free", theme.git_added);
                 let detail = "Reload Ghostty's config if Cmd+D doesn't select yet.";
-                draw_block(grid, page, 2, title, detail, theme);
+                draw_block(grid, page, block(2), title, detail, theme);
             }
             None => {}
         }
@@ -598,7 +608,7 @@ fn badge(grid: &mut Grid, x: u16, y: u16, word: &str, color: Rgb, theme: &Theme)
 fn draw_block(
     grid: &mut Grid,
     page: Rect,
-    index: u16,
+    (index, measure): (u16, &dyn Measure),
     (name, word, color): (&str, &str, Rgb),
     detail: &str,
     theme: &Theme,
@@ -615,13 +625,19 @@ fn draw_block(
     };
     let x = page.x + 2;
     let end = grid.label(x, top + 1, name, style, page.right());
-    badge(grid, end + 1, top + 1, word, color, theme);
+    let bold = Font {
+        bold: true,
+        ..Font::default()
+    };
+    let name_end = (x as f32 + measure.width(name, bold)).ceil() as u16;
+    let at = if measure.in_cells() { end } else { name_end };
+    badge(grid, at + 1, top + 1, word, color, theme);
     let quiet = Style {
         fg: theme.gutter.fg,
         bg: theme.tab.bg,
         ..theme.text
     };
-    let room = page.right().saturating_sub(BUTTON_WIDTH + 2);
+    let room = page.right().saturating_sub(BUTTON_WIDTH + 3);
     grid.label(x, top + 2, detail, quiet, room);
 }
 
@@ -646,7 +662,7 @@ fn draw_button(
     };
     let style = Style { fg, ..theme.text };
     let cells = format!("{label:^width$}", width = rect.w as usize);
-    grid.large_button(rect.x, rect.y, &cells, label, fill, style);
+    grid.large_button_between(rect.x, rect.y, &cells, label, fill, style);
 }
 
 fn draw_keyboard(grid: &mut Grid, page: Rect, theme: &Theme) {
