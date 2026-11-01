@@ -3,8 +3,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use cellix_input::{Event, Key, KeyEvent, Mods, MouseEvent, MouseKind};
-use cellix_render::Grid;
-use cellix_term::{Backend, CellBackend};
+use cellix_render::{Grid, SoftwareRasterizer};
+use cellix_term::{
+    Backend, CellBackend, DEFAULT_QUOTA, PixelBackend, Placement, Tier, detect, select_tier,
+};
 use crossterm::event::{
     self as ct, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste,
     EnableMouseCapture, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
@@ -12,6 +14,7 @@ use crossterm::event::{
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode, size,
+    window_size,
 };
 
 use crate::App;
@@ -105,6 +108,30 @@ fn translate(event: ct::Event) -> Option<Event> {
     })
 }
 
+/// The backend for this terminal. Any failure on the way to pixels lands on cells, which
+/// always work.
+fn choose_backend() -> io::Result<Box<dyn Backend>> {
+    let forced = std::env::var("CELLIX_TIER")
+        .ok()
+        .and_then(|v| v.parse().ok());
+    let tier = select_tier(detect(|k| std::env::var(k).ok())?, forced);
+    let placement = match tier {
+        Tier::PixelsDirect => Placement::Direct,
+        Tier::PixelsPlaceholder => Placement::Placeholder,
+        Tier::Cells => return Ok(Box::new(CellBackend::default())),
+    };
+    let window = window_size()?;
+    let (columns, rows) = (window.columns.max(1) as usize, window.rows.max(1) as usize);
+    let cell = (
+        window.width as usize / columns,
+        window.height as usize / rows,
+    );
+    Ok(match SoftwareRasterizer::new(cell.0, cell.1) {
+        Some(rasterizer) => Box::new(PixelBackend::new(rasterizer, placement, DEFAULT_QUOTA)),
+        None => Box::new(CellBackend::default()),
+    })
+}
+
 /// Opens `paths` and runs until the user quits.
 pub fn run(paths: Vec<PathBuf>) -> io::Result<()> {
     let root = paths
@@ -119,7 +146,7 @@ pub fn run(paths: Vec<PathBuf>) -> io::Result<()> {
     }
 
     let _session = Session::start()?;
-    let mut backend = CellBackend::default();
+    let mut backend = choose_backend()?;
     let mut out = io::stdout();
     loop {
         let (width, height) = app.size();

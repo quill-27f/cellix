@@ -1,9 +1,13 @@
 //! Terminal side of Cellix: choosing a rendering tier and presenting grids.
 
 mod cells;
+mod detect;
+mod pixels;
 mod probe;
 
 pub use cells::CellBackend;
+pub use detect::detect;
+pub use pixels::{DEFAULT_QUOTA, PixelBackend, Placement};
 pub use probe::{Env, Multiplexer, Tier, select_tier};
 
 use std::io::{self, Write};

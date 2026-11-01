@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+base64 = "0.22"
+flate2 = "1"
+libc = "0.2"
 cellix-render = { path = "../cellix-render", version = "0.1.0" }
 
 [lints]

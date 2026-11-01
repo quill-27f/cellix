@@ -151,3 +151,59 @@ fn pty_restores_the_terminal_on_exit() {
         std::thread::sleep(Duration::from_millis(20));
     }
 }
+
+/// A fake terminal that says it speaks Kitty graphics and reports a cell size, so the
+/// binary takes the pixel path with real fonts.
+#[test]
+fn pty_pixel_tier_sends_tiles_when_the_terminal_supports_graphics() {
+    let dir = project();
+    let pty = native_pty_system()
+        .openpty(PtySize {
+            rows: 12,
+            cols: 40,
+            pixel_width: 40 * 10,
+            pixel_height: 12 * 20,
+        })
+        .unwrap();
+    let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_cellix"));
+    command.cwd(dir.path());
+    command.arg("hello.txt");
+    let mut child = pty.slave.spawn_command(command).unwrap();
+    let mut reader = pty.master.try_clone_reader().unwrap();
+    let mut input = pty.master.take_writer().unwrap();
+    let raw = Arc::new(Mutex::new(Vec::new()));
+    let sink = raw.clone();
+    std::thread::spawn(move || {
+        let mut buf = [0; 65536];
+        while let Ok(n) = reader.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            sink.lock().unwrap().extend_from_slice(&buf[..n]);
+        }
+    });
+    let contains = |needle: &[u8]| {
+        let raw = raw.lock().unwrap();
+        raw.windows(needle.len()).any(|w| w == needle)
+    };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !contains(b"a=q") {
+        assert!(Instant::now() < deadline, "no graphics query");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    input.write_all(b"\x1b_Gi=31;OK\x1b\\\x1b[?62c").unwrap();
+    input.flush().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    // 400x20 is one full-width row at this cell size: the tile is the real rasterized size.
+    while !(contains(b"a=t,f=24") && contains(b"s=400,v=20")) {
+        assert!(Instant::now() < deadline, "no tiles sent");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    input.write_all(b"\x11").unwrap();
+    input.flush().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while child.try_wait().unwrap().is_none() {
+        assert!(Instant::now() < deadline, "cellix did not exit");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
