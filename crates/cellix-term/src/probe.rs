@@ -21,6 +21,8 @@ pub struct Env {
     pub kitty_graphics: bool,
     /// tmux reports `allow-passthrough on`.
     pub tmux_passthrough: bool,
+    /// Cell size in pixels, when the terminal answered. `TIOCGWINSZ` is the fallback.
+    pub cell: Option<(usize, usize)>,
 }
 
 impl Multiplexer {
@@ -53,8 +55,7 @@ impl std::str::FromStr for Tier {
 }
 
 /// Picks a tier. A user setting wins. Otherwise this is the design's table: tmux needs
-/// placeholders, and everything else that speaks Kitty graphics, Zellij included, gets
-/// direct placement.
+/// placeholders, and anything else that speaks Kitty graphics gets direct placement.
 pub fn select_tier(env: Env, forced: Option<Tier>) -> Tier {
     if let Some(tier) = forced {
         return tier;
@@ -62,9 +63,8 @@ pub fn select_tier(env: Env, forced: Option<Tier>) -> Tier {
     match env.multiplexer {
         Multiplexer::Tmux if env.tmux_passthrough && env.kitty_graphics => Tier::PixelsPlaceholder,
         Multiplexer::Tmux => Tier::Cells,
-        Multiplexer::Zellij => Tier::PixelsDirect,
-        Multiplexer::None if env.kitty_graphics => Tier::PixelsDirect,
-        Multiplexer::None => Tier::Cells,
+        Multiplexer::Zellij | Multiplexer::None if env.kitty_graphics => Tier::PixelsDirect,
+        Multiplexer::Zellij | Multiplexer::None => Tier::Cells,
     }
 }
 
@@ -77,6 +77,7 @@ mod tests {
             multiplexer,
             kitty_graphics,
             tmux_passthrough,
+            cell: None,
         }
     }
 
@@ -104,8 +105,12 @@ mod tests {
             Tier::Cells
         );
         assert_eq!(
-            select_tier(env(Zellij, false, false), Option::None),
+            select_tier(env(Zellij, true, false), Option::None),
             Tier::PixelsDirect
+        );
+        assert_eq!(
+            select_tier(env(Zellij, false, false), Option::None),
+            Tier::Cells
         );
     }
 

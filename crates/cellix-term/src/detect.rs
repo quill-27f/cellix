@@ -17,13 +17,13 @@ fn tmux_output(args: &[&str]) -> Option<String> {
         .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// Sends the Kitty graphics query followed by a device attributes request, which every
+/// Asks for the cell size and for Kitty graphics, then device attributes, which every
 /// terminal answers, so a terminal without graphics doesn't cost the full timeout.
-/// Expects raw mode.
-fn query_kitty(out: &mut impl Write) -> io::Result<bool> {
+/// Expects raw mode. Returns (kitty graphics, cell size).
+fn query_terminal(out: &mut impl Write) -> io::Result<(bool, Option<(usize, usize)>)> {
     write!(
         out,
-        "\x1b_Gi={QUERY_ID},s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c"
+        "\x1b[16t\x1b_Gi={QUERY_ID},s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c"
     )?;
     out.flush()?;
     let deadline = Instant::now() + REPLY_TIMEOUT;
@@ -47,14 +47,21 @@ fn query_kitty(out: &mut impl Write) -> io::Result<bool> {
             break;
         }
         reply.extend_from_slice(&buf[..n as usize]);
-        if reply_has(&reply, format!("_Gi={QUERY_ID};OK").as_bytes()) {
-            return Ok(true);
-        }
         if ends_device_attributes(&reply) {
             break;
         }
     }
-    Ok(false)
+    let kitty = reply_has(&reply, format!("_Gi={QUERY_ID};OK").as_bytes());
+    Ok((kitty, parse_cell_size(&reply)))
+}
+
+/// Finds a `ESC [ 6 ; height ; width t` reply.
+fn parse_cell_size(reply: &[u8]) -> Option<(usize, usize)> {
+    let start = reply.windows(4).position(|w| w == b"\x1b[6;")? + 4;
+    let rest = std::str::from_utf8(&reply[start..]).ok()?;
+    let (body, _) = rest.split_once('t')?;
+    let (height, width) = body.split_once(';')?;
+    Some((width.parse().ok()?, height.parse().ok()?))
 }
 
 fn reply_has(reply: &[u8], needle: &[u8]) -> bool {
@@ -82,12 +89,15 @@ pub fn detect(var: impl Fn(&str) -> Option<String>) -> io::Result<Env> {
             multiplexer,
             kitty_graphics,
             tmux_passthrough,
+            cell: None,
         });
     }
+    let (kitty_graphics, cell) = query_terminal(&mut io::stdout())?;
     Ok(Env {
         multiplexer,
-        kitty_graphics: query_kitty(&mut io::stdout())?,
+        kitty_graphics,
         tmux_passthrough: false,
+        cell,
     })
 }
 
@@ -101,6 +111,13 @@ mod tests {
         assert!(ends_device_attributes(b"\x1b_Gi=31;EBADF\x1b\\\x1b[?62c"));
         assert!(!ends_device_attributes(b"\x1b[?62"));
         assert!(!ends_device_attributes(b"\x1b_Gi=31;OK\x1b\\"));
+    }
+
+    #[test]
+    fn cell_size_reply_is_parsed() {
+        let zellij = b"\x1b[6;37;17t\x1b_Gi=31;OK\x1b\\\x1b[4;888;1394t\x1b[?62;52c";
+        assert_eq!(parse_cell_size(zellij), Some((17, 37)));
+        assert_eq!(parse_cell_size(b"\x1b[?62c"), None);
     }
 
     #[test]

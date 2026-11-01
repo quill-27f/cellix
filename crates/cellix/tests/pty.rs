@@ -152,17 +152,16 @@ fn pty_restores_the_terminal_on_exit() {
     }
 }
 
-/// A fake terminal that says it speaks Kitty graphics and reports a cell size, so the
-/// binary takes the pixel path with real fonts.
-#[test]
-fn pty_pixel_tier_sends_tiles_when_the_terminal_supports_graphics() {
+/// A fake terminal that says it speaks Kitty graphics, so the binary takes the pixel path
+/// with real fonts. Returns once it has sent a tile with this size marker.
+fn expect_tiles(pixels: (u16, u16), reply: &[u8], tile_marker: &[u8]) {
     let dir = project();
     let pty = native_pty_system()
         .openpty(PtySize {
             rows: 12,
             cols: 40,
-            pixel_width: 40 * 10,
-            pixel_height: 12 * 20,
+            pixel_width: pixels.0,
+            pixel_height: pixels.1,
         })
         .unwrap();
     let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_cellix"));
@@ -191,11 +190,10 @@ fn pty_pixel_tier_sends_tiles_when_the_terminal_supports_graphics() {
         assert!(Instant::now() < deadline, "no graphics query");
         std::thread::sleep(Duration::from_millis(5));
     }
-    input.write_all(b"\x1b_Gi=31;OK\x1b\\\x1b[?62c").unwrap();
+    input.write_all(reply).unwrap();
     input.flush().unwrap();
     let deadline = Instant::now() + Duration::from_secs(20);
-    // 400x20 is one full-width row at this cell size: the tile is the real rasterized size.
-    while !(contains(b"a=t,f=24") && contains(b"s=400,v=20")) {
+    while !(contains(b"a=t,f=24") && contains(tile_marker)) {
         assert!(Instant::now() < deadline, "no tiles sent");
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -206,4 +204,77 @@ fn pty_pixel_tier_sends_tiles_when_the_terminal_supports_graphics() {
         assert!(Instant::now() < deadline, "cellix did not exit");
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+#[test]
+fn pty_pixel_tier_sends_tiles_when_the_terminal_supports_graphics() {
+    expect_tiles(
+        (40 * 10, 12 * 20),
+        b"\x1b_Gi=31;OK\x1b\\\x1b[?62c",
+        b"s=400,v=20",
+    );
+}
+
+/// Zellij can report no pixels in the window size but answers `CSI 16t`.
+#[test]
+fn pty_pixel_tier_uses_the_reported_cell_size_without_window_pixels() {
+    expect_tiles(
+        (0, 0),
+        b"\x1b[6;37;17t\x1b_Gi=31;OK\x1b\\\x1b[?62c",
+        b"s=680,v=37",
+    );
+}
+
+#[test]
+fn pty_follows_a_resize() {
+    let dir = project();
+    let pty = native_pty_system()
+        .openpty(PtySize {
+            rows: 10,
+            cols: 30,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_cellix"));
+    command.cwd(dir.path());
+    let mut child = pty.slave.spawn_command(command).unwrap();
+    let mut reader = pty.master.try_clone_reader().unwrap();
+    let parser = Arc::new(Mutex::new(vt100::Parser::new(10, 120, 0)));
+    let sink = parser.clone();
+    std::thread::spawn(move || {
+        let mut buf = [0; 8192];
+        while let Ok(n) = reader.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            sink.lock().unwrap().process(&buf[..n]);
+        }
+    });
+    let wait = |text: &str| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !parser.lock().unwrap().screen().contents().contains(text) {
+            assert!(Instant::now() < deadline, "{text:?} never appeared");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    wait("Ctrl+P open");
+    assert!(
+        !parser
+            .lock()
+            .unwrap()
+            .screen()
+            .contents()
+            .contains("Ctrl+Q quit")
+    );
+    pty.master
+        .resize(PtySize {
+            rows: 10,
+            cols: 120,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .unwrap();
+    wait("Ctrl+Q quit");
+    let _ = child.kill();
 }

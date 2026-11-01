@@ -25,28 +25,28 @@
     "milestone": 1,
     "title": "Backend tier chosen per environment, with a forcing setting",
     "test": "tier_selection_matches_design_table",
-    "passes": false
+    "passes": true
   },
   {
     "id": "kitty-direct",
     "milestone": 1,
     "title": "Pixel tier: line tiles with a=p placement, reused by reference",
     "test": "scroll_reuses_tiles_without_retransmit",
-    "passes": false
+    "passes": true
   },
   {
     "id": "kitty-placeholder",
     "milestone": 1,
     "title": "Pixel tier for tmux: passthrough and U+10EEEE cells",
     "test": "placeholder_cells_are_passthrough_wrapped",
-    "passes": false
+    "passes": true
   },
   {
     "id": "tile-eviction",
     "milestone": 1,
     "title": "Tile cache evicts within a quota",
     "test": "tile_cache_respects_quota",
-    "passes": false
+    "passes": true
   },
   {
     "id": "explorer",

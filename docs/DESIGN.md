@@ -51,35 +51,40 @@ The on-screen GPU work is done by the user's terminal in every case.
 
 ### Observed behaviour by environment
 
-Static page of tiles, checked by screenshot in Ghostty 1.4.0 on macOS.
+Static page of the real editor, checked by screenshot in Ghostty 1.4.0 on macOS with
+`harness/visual.sh`, 2026-11-01.
 
-| Environment | Direct placement | Unicode placeholders |
+| Environment | Method in use | Result |
 |---|---|---|
-| Ghostty alone | Works | Works, with seams |
-| tmux 3.8, `allow-passthrough on` | Fails: all tiles land on one row | Works, with seams |
-| Zellij 0.45.1 | Works | Fails: nothing renders |
+| Ghostty alone | Direct placement | Works |
+| tmux 3.8, `allow-passthrough on` | Unicode placeholders | Works, no visible seams |
+| Zellij 0.45.1 | Direct placement | Works |
 
-So the backend is chosen per environment:
+In the spike, direct placement failed under tmux (all tiles on one row) and placeholders
+rendered nothing under Zellij, which is why the method is chosen per environment:
 
 | Tier | Used when | Method |
 |---|---|---|
-| Pixels, direct | Kitty-graphics terminal or Zellij | `a=p` placements |
-| Pixels, placeholder | tmux with `allow-passthrough on` | Passthrough transmit, U+10EEEE cells |
-| Cells | Anything else, including tmux without passthrough | Styled text cells |
+| Pixels, direct | Terminal or Zellij answers the Kitty graphics query | `a=p` placements |
+| Pixels, placeholder | tmux with `allow-passthrough on` and a Kitty-graphics client | Passthrough transmit, U+10EEEE cells |
+| Cells | Anything else, or a host with no fonts or no known cell size | Styled text cells |
 
 Cells are a full tier, not an error state: every feature must work there. This is
 what guarantees tmux and Zellij always work. Pixels are the upgrade.
 
-Detection probes `a=q` followed by device attributes and checks `$TMUX` and
-`$ZELLIJ`. A user setting can force a tier.
+Detection sends `CSI 16t`, `a=q` and device attributes, and checks `$TMUX` and `$ZELLIJ`.
+tmux swallows the replies, so under tmux Cellix asks tmux for the client terminal name and
+`allow-passthrough`. `CELLIX_TIER` can force a tier. `CSI 16t` is preferred for cell size
+because the window size call was not reliable under Zellij at startup. Window size is
+polled as well as signalled, because a resize during font loading is otherwise lost.
 
 ### Known rendering problems
 
-- Placeholder mode shows thin light seams between lines. Direct placement of the same
-  tiles does not. The cause is not established. The spike guessed the cell size, so
-  rasterizing at the exact size is the first fix to try, and this must be solved
-  for tmux to look good.
-- Tile eviction is unsolved. It has to respect each terminal's image quota.
+- The placeholder seams from the spike are gone at the screenshot's zoom. The spike
+  guessed the cell size and Cellix rasterizes at the exact size, which is the likely
+  cause, but this has not been checked at other font sizes.
+- Pixel tiers draw with the first system monospace font, not the terminal's own font,
+  so text changes appearance between tiers. The font should be a setting.
 - A tmux tile stream costs more than direct placement, because each cell is written
   as a placeholder. This has not been measured.
 

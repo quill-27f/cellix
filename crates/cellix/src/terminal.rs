@@ -108,28 +108,48 @@ fn translate(event: ct::Event) -> Option<Event> {
     })
 }
 
-/// The backend for this terminal. Any failure on the way to pixels lands on cells, which
-/// always work.
-fn choose_backend() -> io::Result<Box<dyn Backend>> {
-    let forced = std::env::var("CELLIX_TIER")
-        .ok()
-        .and_then(|v| v.parse().ok());
-    let tier = select_tier(detect(|k| std::env::var(k).ok())?, forced);
-    let placement = match tier {
-        Tier::PixelsDirect => Placement::Direct,
-        Tier::PixelsPlaceholder => Placement::Placeholder,
-        Tier::Cells => return Ok(Box::new(CellBackend::default())),
-    };
-    let window = window_size()?;
-    let (columns, rows) = (window.columns.max(1) as usize, window.rows.max(1) as usize);
+/// How the terminal was found to work, kept so the backend can be rebuilt on a font zoom.
+struct Display {
+    placement: Option<Placement>,
+    cell: Option<(usize, usize)>,
+}
+
+impl Display {
+    fn detect() -> io::Result<Self> {
+        let forced = std::env::var("CELLIX_TIER")
+            .ok()
+            .and_then(|v| v.parse().ok());
+        let env = detect(|k| std::env::var(k).ok())?;
+        let placement = match select_tier(env, forced) {
+            Tier::PixelsDirect => Some(Placement::Direct),
+            Tier::PixelsPlaceholder => Some(Placement::Placeholder),
+            Tier::Cells => None,
+        };
+        let cell = env.cell.or_else(window_cell);
+        Ok(Self { placement, cell })
+    }
+
+    /// Any failure on the way to pixels lands on cells, which always work.
+    fn backend(&self) -> Box<dyn Backend> {
+        let pixels = self.placement.zip(self.cell).and_then(|(placement, cell)| {
+            let rasterizer = SoftwareRasterizer::new(cell.0, cell.1)?;
+            Some(PixelBackend::new(rasterizer, placement, DEFAULT_QUOTA))
+        });
+        match pixels {
+            Some(backend) => Box::new(backend),
+            None => Box::new(CellBackend::default()),
+        }
+    }
+}
+
+/// Cell size from the window's pixel size, or None when the terminal reports no pixels.
+fn window_cell() -> Option<(usize, usize)> {
+    let window = window_size().ok()?;
     let cell = (
-        window.width as usize / columns,
-        window.height as usize / rows,
+        window.width as usize / window.columns.max(1) as usize,
+        window.height as usize / window.rows.max(1) as usize,
     );
-    Ok(match SoftwareRasterizer::new(cell.0, cell.1) {
-        Some(rasterizer) => Box::new(PixelBackend::new(rasterizer, placement, DEFAULT_QUOTA)),
-        None => Box::new(CellBackend::default()),
-    })
+    (cell.0 > 0 && cell.1 > 0).then_some(cell)
 }
 
 /// Opens `paths` and runs until the user quits.
@@ -146,9 +166,21 @@ pub fn run(paths: Vec<PathBuf>) -> io::Result<()> {
     }
 
     let _session = Session::start()?;
-    let mut backend = choose_backend()?;
+    let mut display = Display::detect()?;
+    let mut backend = display.backend();
     let mut out = io::stdout();
     loop {
+        // Polled as well as signalled: a resize during slow startup is otherwise lost.
+        let now = size()?;
+        if now != app.size() {
+            app.handle(Event::Resize(now.0, now.1));
+            let cell = window_cell();
+            if display.placement.is_some() && cell.is_some() && cell != display.cell {
+                display.cell = cell;
+                backend = display.backend();
+            }
+            backend.invalidate();
+        }
         let (width, height) = app.size();
         let mut grid = Grid::new(width, height, app.background());
         app.draw(&mut grid);
@@ -158,19 +190,15 @@ pub fn run(paths: Vec<PathBuf>) -> io::Result<()> {
             return Ok(());
         }
         if ct::poll(TICK)? {
-            if let Some(event) = translate(ct::read()?) {
-                if matches!(event, Event::Resize(..)) {
-                    backend.invalidate();
-                }
-                app.handle(event);
-            }
             // Drain everything queued, so a fast wheel doesn't redraw per event.
-            while ct::poll(Duration::ZERO)? {
-                if let Some(event) = translate(ct::read()?) {
-                    if matches!(event, Event::Resize(..)) {
-                        backend.invalidate();
-                    }
-                    app.handle(event);
+            loop {
+                match translate(ct::read()?) {
+                    // The size check above handles it, and compares against the old size.
+                    Some(Event::Resize(..)) | None => {}
+                    Some(event) => app.handle(event),
+                }
+                if !ct::poll(Duration::ZERO)? {
+                    break;
                 }
             }
         } else {
