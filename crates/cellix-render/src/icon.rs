@@ -18,6 +18,7 @@ pub enum Icon {
     Close = 9,
     ReplaceAll = 10,
     Globe = 11,
+    Check = 12,
 }
 
 /// One cell of an icon that is `width` by `height` cells.
@@ -162,6 +163,10 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
                 || segment(p, (0.80, 0.34), (0.62, 0.18)) < 0.05
                 || segment(p, (0.88, 0.68), (0.20, 0.68)) < 0.05
                 || segment(p, (0.20, 0.68), (0.38, 0.84)) < 0.05
+        }
+        Icon::Check => {
+            segment(p, (0.20, 0.52), (0.42, 0.74)) < 0.07
+                || segment(p, (0.42, 0.74), (0.80, 0.28)) < 0.07
         }
         Icon::Globe => {
             let c = (0.5, 0.5);

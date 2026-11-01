@@ -9,6 +9,7 @@ use serde::Deserialize;
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct Settings {
+    /// `auto` (the default) follows the terminal. `dark` and `light` choose.
     pub theme: Option<String>,
     /// `simple` (the default) or `vim`.
     pub keymap: Option<String>,

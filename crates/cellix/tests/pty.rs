@@ -149,7 +149,7 @@ fn pty_ctrl_shift_p_and_cmd_p_work_as_in_vs_code() {
     screen.send(b"\x1b");
     std::thread::sleep(Duration::from_millis(200));
     screen.send(b"\x1b[112;9u"); // Cmd+P
-    screen.wait_for("> ");
+    screen.wait_for("Type to search");
     screen.send(b"\x1b");
     std::thread::sleep(Duration::from_millis(200));
     screen.send(b"\x11");

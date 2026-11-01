@@ -1,10 +1,11 @@
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::time::Duration;
 
 use base64::Engine;
 use cellix_input::{Event, Key, KeyEvent, Mods, MouseEvent, MouseKind};
-use cellix_render::{Grid, SoftwareRasterizer};
+use cellix_render::{CellMeasure, FontMeasure, Grid, Measure, SoftwareRasterizer};
 use cellix_term::{
     Backend, CellBackend, DEFAULT_QUOTA, PixelBackend, Placement, Tier, detect, select_tier,
 };
@@ -14,6 +15,7 @@ use crossterm::event::{
     MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
+use crossterm::style::Print;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode, size,
     window_size,
@@ -50,6 +52,7 @@ impl Drop for Session {
         let _ = execute!(
             io::stdout(),
             PopKeyboardEnhancementFlags,
+            Print("\x1b[?1016l"),
             DisableBracketedPaste,
             DisableMouseCapture,
             LeaveAlternateScreen,
@@ -68,7 +71,8 @@ fn mods(m: KeyModifiers) -> Mods {
     }
 }
 
-fn translate(event: ct::Event) -> Option<Event> {
+/// `pixels` is the cell size when the mouse reports pixels instead of cells.
+fn translate(event: ct::Event, pixels: Option<(usize, usize)>) -> Option<Event> {
     Some(match event {
         ct::Event::Key(k) if k.kind != KeyEventKind::Release => {
             let key = match k.code {
@@ -106,10 +110,18 @@ fn translate(event: ct::Event) -> Option<Event> {
                 MouseEventKind::ScrollDown => MouseKind::ScrollDown,
                 _ => return None,
             };
+            let (x, y, fine_x) = match pixels {
+                Some((cw, ch)) => {
+                    let fine = m.column as f32 / cw.max(1) as f32;
+                    (fine as u16, m.row / ch.max(1) as u16, fine)
+                }
+                None => (m.column, m.row, m.column as f32),
+            };
             Event::Mouse(MouseEvent {
                 kind,
-                x: m.column,
-                y: m.row,
+                x,
+                y,
+                fine_x,
                 mods: mods(m.modifiers),
             })
         }
@@ -123,6 +135,8 @@ fn translate(event: ct::Event) -> Option<Event> {
 struct Display {
     placement: Option<Placement>,
     cell: Option<(usize, usize)>,
+    pixel_mouse: bool,
+    light: Option<bool>,
 }
 
 impl Display {
@@ -139,7 +153,20 @@ impl Display {
             Tier::Cells => None,
         };
         let cell = env.cell.or_else(window_cell);
-        Ok(Self { placement, cell })
+        Ok(Self {
+            placement,
+            cell,
+            pixel_mouse: env.pixel_mouse,
+            light: env.light,
+        })
+    }
+
+    /// How to measure text for this display.
+    fn measure(&self) -> Rc<dyn Measure> {
+        match self.placement.zip(self.cell) {
+            Some((_, cell)) => Rc::new(FontMeasure::new(cell.0, cell.1)),
+            None => Rc::new(CellMeasure),
+        }
     }
 
     /// Any failure on the way to pixels lands on cells, which always work.
@@ -197,6 +224,15 @@ pub fn run(options: Options) -> io::Result<()> {
     let mut display = Display::detect(app.settings.tier.as_deref())?;
     let mut backend = display.backend();
     let mut out = io::stdout();
+    app.set_measure(display.measure());
+    app.follow_terminal_theme(display.light);
+    // Whole cells can't place a caret in proportional text, so ask for pixels where that's
+    // on offer. It's only used with a known cell size to divide by.
+    let pixel_mouse = display.pixel_mouse && display.placement.is_some() && display.cell.is_some();
+    if pixel_mouse {
+        write!(out, "\x1b[?1016h")?;
+    }
+    let mouse_cell = |display: &Display| display.cell.filter(|_| pixel_mouse);
     let mut redraw = true;
     let mut polls = 0;
     loop {
@@ -208,6 +244,7 @@ pub fn run(options: Options) -> io::Result<()> {
             if display.placement.is_some() && cell.is_some() && cell != display.cell {
                 display.cell = cell;
                 backend = display.backend();
+                app.set_measure(display.measure());
             }
             backend.invalidate();
             redraw = true;
@@ -230,7 +267,7 @@ pub fn run(options: Options) -> io::Result<()> {
         if ct::poll(POLL)? {
             // Drain everything queued, so a fast wheel doesn't redraw per event.
             loop {
-                match translate(ct::read()?) {
+                match translate(ct::read()?, mouse_cell(&display)) {
                     // The size check above handles it, and compares against the old size.
                     Some(Event::Resize(..)) | None => {}
                     Some(event) => app.handle(event),

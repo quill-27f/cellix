@@ -4,6 +4,7 @@
 
 use crate::grid::{Rect, Rgb};
 use crate::icon::Icon;
+use crate::measure::Font;
 
 /// Paint positions are in 64ths of a cell, so they can sit between cells and still hash.
 pub const UNIT: i32 = 64;
@@ -61,9 +62,7 @@ pub enum Paint {
         max_width: i32,
         text: String,
         color: Rgb,
-        bold: bool,
-        /// Percent of the normal interface size.
-        size: u8,
+        font: Font,
         /// `x` is the right edge rather than the left.
         align_right: bool,
     },
@@ -85,6 +84,8 @@ impl Paint {
             Self::Hairline { bounds, .. } | Self::Icon { bounds, .. } => {
                 (bounds.y, bounds.y + bounds.h.max(1))
             }
+            // Large text stands taller than its row.
+            Self::Text { y, font, .. } if font.size > 100 => (*y - UNIT, *y + 2 * UNIT),
             Self::Text { y, .. } => (*y, *y + UNIT),
         }
     }

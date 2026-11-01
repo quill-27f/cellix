@@ -14,7 +14,7 @@ a good-looking, mouse-first editor for reviewing and correcting agent work.
 |---|---|
 | Rendering | Pixels in the terminal through the Kitty graphics protocol, with a cell-based fallback |
 | Rasterizer | Software first, wgpu when available (see below) |
-| Agents | Companion first (pane, `$VISUAL`, thin plugins), hosting agents in a terminal pane later |
+| Agents | Companion: `$VISUAL`, thin plugins, and starting the real agent in a split. Never hosted |
 | Editing | Cellix's simple mode by default, optional Vim and Neovim modes |
 | Multiplexers | tmux and Zellij are required targets |
 | v1 | Plan review, diff review, file explorer, everyday editing, LSP |
@@ -121,6 +121,11 @@ Open: tiles are whole rows, so one region can't scroll separately. Smooth pixel 
 needs per-region tiles. The Markdown page is still monospaced, because its caret mapping
 works in cells, so headings can't yet be larger than body text.
 
+## Theme
+
+`theme` is `auto`, `dark` or `light`. `auto` is the default: Cellix asks the terminal for
+its background with OSC 11 and takes the matching theme, staying dark if nothing answers.
+
 ## Look
 
 The interface follows VS Code's layout and its Dark+ and Light+ colours, because that is
@@ -160,7 +165,7 @@ Requested baseline: the default VS Code experience without extensions.
 | v1 | After v1 |
 |---|---|
 | File explorer with create, rename, delete, drag | Debugging (DAP) |
-| Tabs, splits, command palette, quick open | Integrated terminal, agent hosting |
+| Tabs, splits, command palette, quick open | Integrated terminal |
 | Project search and replace | Notebooks |
 | Multi-cursor, tree-sitter highlighting | Remote multi-root workspaces |
 | Git status, side-by-side diff, blame | |
@@ -196,7 +201,8 @@ the file.
   the editor: docked panes stop at 45% width and there is no terminal element.
 - Codex and Gemini CLI: `$VISUAL` plus skills or extensions. Verify current hooks
   before building each adapter.
-- ACP: consider when agent hosting begins.
+- Running agents: Cellix doesn't host them. `Open Claude Code` and `Open Codex` start the
+  real tool in a split of tmux or Zellij, so every update they ship simply arrives.
 
 ## Crates (proposed)
 
@@ -218,4 +224,4 @@ the file.
 2. Simple-mode editing with highlighting.
 3. Plan and diff review with the agent return path. First useful release.
 4. LSP, project search, Claude Code plugin.
-5. Vim mode, then Neovim mode, then agent hosting, then debugging.
+5. Vim mode, then Neovim mode, then debugging.

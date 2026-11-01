@@ -71,15 +71,18 @@ pub enum MouseKind {
     ScrollDown,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MouseEvent {
     pub kind: MouseKind,
     pub x: u16,
     pub y: u16,
+    /// `x` with the fraction of a cell, where the terminal reports pixels. Proportional
+    /// text needs this: a cell can hold two thin letters.
+    pub fine_x: f32,
     pub mods: Mods,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Event {
     Key(KeyEvent),
     Mouse(MouseEvent),
@@ -122,6 +125,8 @@ pub enum Command {
     ReplaceInProject,
     MarkdownPreview,
     OpenInBrowser,
+    OpenClaude,
+    OpenCodex,
     GoToDefinition,
     Complete,
     RenameSymbol,

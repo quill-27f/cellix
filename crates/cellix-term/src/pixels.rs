@@ -52,6 +52,7 @@ fn tile_key(grid: &Grid, y: u16) -> u64 {
     let mut hasher = DefaultHasher::new();
     grid.row(y).hash(&mut hasher);
     grid.cursor.filter(|c| c.1 == y).hash(&mut hasher);
+    grid.caret.hash(&mut hasher);
     grid.paint_on_row(y).for_each(|p| p.hash(&mut hasher));
     hasher.finish()
 }

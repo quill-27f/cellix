@@ -23,6 +23,10 @@ pub struct Env {
     pub tmux_passthrough: bool,
     /// Cell size in pixels, when the terminal answered. `TIOCGWINSZ` is the fallback.
     pub cell: Option<(usize, usize)>,
+    /// The terminal can report the mouse in pixels (mode 1016).
+    pub pixel_mouse: bool,
+    /// Whether the terminal's background is light, if it said.
+    pub light: Option<bool>,
 }
 
 impl Multiplexer {
@@ -78,6 +82,8 @@ mod tests {
             kitty_graphics,
             tmux_passthrough,
             cell: None,
+            pixel_mouse: false,
+            light: None,
         }
     }
 

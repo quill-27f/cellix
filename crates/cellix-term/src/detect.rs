@@ -17,13 +17,20 @@ fn tmux_output(args: &[&str]) -> Option<String> {
         .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+struct Reply {
+    kitty: bool,
+    cell: Option<(usize, usize)>,
+    pixel_mouse: bool,
+    light: Option<bool>,
+}
+
 /// Asks for the cell size and for Kitty graphics, then device attributes, which every
 /// terminal answers, so a terminal without graphics doesn't cost the full timeout.
 /// Expects raw mode. Returns (kitty graphics, cell size).
-fn query_terminal(out: &mut impl Write) -> io::Result<(bool, Option<(usize, usize)>)> {
+fn query_terminal(out: &mut impl Write) -> io::Result<Reply> {
     write!(
         out,
-        "\x1b[16t\x1b_Gi={QUERY_ID},s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c"
+        "\x1b[16t\x1b]11;?\x1b\\\x1b[?1016$p\x1b_Gi={QUERY_ID},s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c"
     )?;
     out.flush()?;
     let deadline = Instant::now() + REPLY_TIMEOUT;
@@ -51,8 +58,27 @@ fn query_terminal(out: &mut impl Write) -> io::Result<(bool, Option<(usize, usiz
             break;
         }
     }
-    let kitty = reply_has(&reply, format!("_Gi={QUERY_ID};OK").as_bytes());
-    Ok((kitty, parse_cell_size(&reply)))
+    Ok(Reply {
+        kitty: reply_has(&reply, format!("_Gi={QUERY_ID};OK").as_bytes()),
+        cell: parse_cell_size(&reply),
+        pixel_mouse: reply_has(&reply, b"?1016;1$y") || reply_has(&reply, b"?1016;2$y"),
+        light: parse_background_is_light(&reply),
+    })
+}
+
+/// Reads `ESC ] 11 ; rgb:RRRR/GGGG/BBBB`, and says whether that colour is light.
+fn parse_background_is_light(reply: &[u8]) -> Option<bool> {
+    let needle = b"]11;rgb:";
+    let start = reply.windows(needle.len()).position(|w| w == needle)? + needle.len();
+    let rest = std::str::from_utf8(&reply[start..]).ok()?;
+    let mut channels = rest.split(['/', '\x1b', '\x07']).take(3).map(|part| {
+        let digits = part.len().clamp(1, 4) as u32;
+        u32::from_str_radix(part, 16)
+            .ok()
+            .map(|v| v as f32 / (16f32.powi(digits as i32) - 1.0))
+    });
+    let (r, g, b) = (channels.next()??, channels.next()??, channels.next()??);
+    Some(0.2126 * r + 0.7152 * g + 0.0722 * b > 0.5)
 }
 
 /// Finds a `ESC [ 6 ; height ; width t` reply.
@@ -85,19 +111,25 @@ pub fn detect(var: impl Fn(&str) -> Option<String>) -> io::Result<Env> {
         let kitty_graphics = KITTY_TERMINALS.iter().any(|t| client.contains(t));
         let tmux_passthrough = tmux_output(&["show", "-Apv", "allow-passthrough"])
             .is_some_and(|v| v == "on" || v == "all");
+        // tmux answers the colour query itself, from what it knows of the terminal.
+        let light = query_terminal(&mut io::stdout())?.light;
         return Ok(Env {
             multiplexer,
             kitty_graphics,
             tmux_passthrough,
             cell: None,
+            pixel_mouse: false,
+            light,
         });
     }
-    let (kitty_graphics, cell) = query_terminal(&mut io::stdout())?;
+    let reply = query_terminal(&mut io::stdout())?;
     Ok(Env {
         multiplexer,
-        kitty_graphics,
+        kitty_graphics: reply.kitty,
         tmux_passthrough: false,
-        cell,
+        cell: reply.cell,
+        pixel_mouse: reply.pixel_mouse,
+        light: reply.light,
     })
 }
 
@@ -118,6 +150,21 @@ mod tests {
         let zellij = b"\x1b[6;37;17t\x1b_Gi=31;OK\x1b\\\x1b[4;888;1394t\x1b[?62;52c";
         assert_eq!(parse_cell_size(zellij), Some((17, 37)));
         assert_eq!(parse_cell_size(b"\x1b[?62c"), None);
+    }
+
+    #[test]
+    fn the_background_decides_light_or_dark() {
+        let dark = b"\x1b]11;rgb:1e1e/1e1e/1e1e\x1b\\\x1b[?62c";
+        assert_eq!(parse_background_is_light(dark), Some(false));
+        assert_eq!(
+            parse_background_is_light(b"\x1b]11;rgb:ffff/fefe/fdfd\x07"),
+            Some(true)
+        );
+        assert_eq!(
+            parse_background_is_light(b"\x1b]11;rgb:ee/ee/ee\x07"),
+            Some(true)
+        );
+        assert_eq!(parse_background_is_light(b"\x1b[?62c"), None);
     }
 
     #[test]

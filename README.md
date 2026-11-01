@@ -53,6 +53,9 @@ in a split when that's installed, and your system browser otherwise.
 Set `VISUAL="cellix --wait"` so Ctrl+G in Claude Code opens plans in Cellix. Comments are
 written back into the file when you quit.
 
+`Open Claude Code` and `Open Codex` in the palette start the real tool in a split, inside
+tmux or Zellij.
+
 While Cellix is open, any agent can run `cellix comments --take` for your comments as JSON,
 or `cellix open <file>` to show you something. `integrations/claude-code` is a Claude Code
 plugin that teaches this.
@@ -65,7 +68,7 @@ plugin that teaches this.
 { "keymap": "vim", "theme": "light", "tier": "cells" }
 ```
 
-`keymap` is `simple` or `vim`, `theme` is `dark` or `light`, and `tier` is `direct`,
+`keymap` is `simple` or `vim`, `theme` is `auto`, `dark` or `light`, and `tier` is `direct`,
 `placeholder` or `cells`. `language_servers` maps a language to a command, and `browser`
 replaces the command that opens web pages.
 

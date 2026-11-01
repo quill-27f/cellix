@@ -9,7 +9,8 @@ use cosmic_text::{
 
 use crate::grid::{Grid, Rgb};
 use crate::icon::{Icon, Piece, inked};
-use crate::paint::{Paint, UNIT};
+use crate::measure::{Font, attrs};
+use crate::paint::{Bounds, Paint, UNIT};
 
 /// A tightly packed RGB image, matching the Kitty protocol's `f=24`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -37,8 +38,7 @@ type Mask = Rc<Vec<(u16, u16, u8)>>;
 #[derive(Clone, Hash, PartialEq, Eq)]
 struct TextKey {
     text: String,
-    bold: bool,
-    pixels: u32,
+    font: Font,
 }
 
 /// A line of interface text, drawn once and blended wherever it's used.
@@ -53,9 +53,15 @@ const INTERFACE_SIZE: f32 = 0.60;
 /// Cached text lines before the cache is dropped, so a long session can't grow it forever.
 const MAX_TEXT_MASKS: usize = 4096;
 
-const INTER: &[u8] = include_bytes!("../fonts/InterVariable.ttf");
-const MONO: &[u8] = include_bytes!("../fonts/JetBrainsMonoVariable.ttf");
-const MONO_ITALIC: &[u8] = include_bytes!("../fonts/JetBrainsMonoVariable-Italic.ttf");
+pub(crate) const INTER: &[u8] = include_bytes!("../fonts/InterVariable.ttf");
+pub(crate) const INTER_ITALIC: &[u8] = include_bytes!("../fonts/InterVariable-Italic.ttf");
+pub(crate) const MONO: &[u8] = include_bytes!("../fonts/JetBrainsMonoVariable.ttf");
+pub(crate) const MONO_ITALIC: &[u8] = include_bytes!("../fonts/JetBrainsMonoVariable-Italic.ttf");
+
+/// The pixel size painted text is drawn at, for a row height and font.
+pub(crate) fn text_pixels(row_height: usize, font: Font) -> f32 {
+    row_height as f32 * INTERFACE_SIZE * font.size as f32 / 100.0
+}
 
 /// CPU rendering. Glyphs are rasterized once and blended into their cells, so text stays
 /// locked to the grid and a row costs little more than a copy.
@@ -78,6 +84,7 @@ impl SoftwareRasterizer {
         let mut fonts = FontSystem::new();
         let db = fonts.db_mut();
         db.load_font_data(INTER.to_vec());
+        db.load_font_data(INTER_ITALIC.to_vec());
         db.load_font_data(MONO.to_vec());
         db.load_font_data(MONO_ITALIC.to_vec());
         db.set_monospace_family("JetBrains Mono");
@@ -134,14 +141,11 @@ impl SoftwareRasterizer {
         mask
     }
 
-    /// A line of interface text, centred in a row's height.
-    fn text_mask(&mut self, text: &str, bold: bool, size: u8) -> Rc<TextMask> {
-        let height = self.cell.1;
-        let px = height as f32 * INTERFACE_SIZE * size as f32 / 100.0;
+    /// A line of painted text, tall enough for its size.
+    fn text_mask(&mut self, text: &str, font: Font) -> Rc<TextMask> {
         let key = TextKey {
             text: text.to_string(),
-            bold,
-            pixels: (px * 8.0) as u32,
+            font,
         };
         if let Some(mask) = self.text.get(&key) {
             return mask.clone();
@@ -149,16 +153,13 @@ impl SoftwareRasterizer {
         if self.text.len() >= MAX_TEXT_MASKS {
             self.text.clear();
         }
+        let px = text_pixels(self.cell.1, font);
+        let height = self.cell.1.max((px * 1.45).ceil() as usize);
         let mut buffer = Buffer::new(&mut self.fonts, Metrics::new(px, height as f32));
         buffer.set_size(None, Some(height as f32));
-        let mut attrs = Attrs::new().family(Family::SansSerif);
-        attrs = attrs.weight(if bold {
-            Weight::SEMIBOLD
-        } else {
-            Weight::NORMAL
-        });
-        let rich = std::iter::once((text, attrs.clone()));
-        buffer.set_rich_text(rich, &attrs, Shaping::Advanced, None);
+        let style = attrs(font);
+        let rich = std::iter::once((text, style.clone()));
+        buffer.set_rich_text(rich, &style, Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut self.fonts, false);
         let width = buffer
             .layout_runs()
@@ -229,17 +230,18 @@ impl SoftwareRasterizer {
                 max_width,
                 text,
                 color,
-                bold,
-                size,
+                font,
                 align_right,
             } => {
-                let mask = self.text_mask(text, *bold, *size);
+                let mask = self.text_mask(text, *font);
                 let mut left = scale(*x, cw).round() as i32;
                 if *align_right {
                     left -= mask.width as i32;
                 }
-                let top = scale(*y, ch).round() as i32;
-                let limit = scale(*max_width, cw) as usize;
+                // Tall text stays centred on its row.
+                let lift = (mask.height as i32 - ch as i32) / 2;
+                let top = scale(*y, ch).round() as i32 - lift;
+                let limit = scale(*max_width, cw).max(0.0) as usize;
                 target.blit(&mask, left, top, limit, *color);
             }
             Paint::Icon {
@@ -254,6 +256,21 @@ impl SoftwareRasterizer {
             }
         }
     }
+}
+
+/// Where the caret goes: its exact place, or the cell the cursor is in.
+fn caret_bounds(grid: &Grid) -> Option<Bounds> {
+    grid.caret.or_else(|| {
+        let (x, y) = grid.cursor?;
+        Some(Bounds::cells(x as f32, y as f32 + 0.08, 0.0, 0.84))
+    })
+}
+
+fn caret_color(grid: &Grid) -> Rgb {
+    let Some((x, y)) = grid.cursor else {
+        return Rgb(255, 255, 255);
+    };
+    grid.cell(x.min(grid.width().saturating_sub(1)), y).style.fg
 }
 
 struct Shape {
@@ -486,19 +503,24 @@ impl Rasterizer for SoftwareRasterizer {
             self.draw_paint(&mut target, item);
         }
         // A thin caret, as in a real editor, not a terminal's block.
-        if let Some((x, _)) = grid.cursor.filter(|c| c.1 == y) {
-            let color = cells
-                .get(x as usize)
-                .map_or(Rgb(255, 255, 255), |c| c.style.fg);
-            fill(
-                &mut rgb,
-                width,
-                x as usize * cw,
-                0,
-                (cw / 8).max(2),
-                ch,
-                color,
-            );
+        if let Some(bounds) = caret_bounds(grid) {
+            let row = (y as i32 * UNIT, (y as i32 + 1) * UNIT);
+            if bounds.y < row.1 && bounds.y + bounds.h > row.0 {
+                let shape = Shape {
+                    x: bounds.x as f32 * cw as f32 / UNIT as f32,
+                    y: bounds.y as f32 * ch as f32 / UNIT as f32,
+                    w: (cw as f32 / 9.0).max(2.0),
+                    h: bounds.h as f32 * ch as f32 / UNIT as f32,
+                    radius: 0.0,
+                };
+                let mut target = Target {
+                    rgb: &mut rgb,
+                    width,
+                    height: ch,
+                    top: y as i32 * ch as i32,
+                };
+                target.panel(shape, Some(caret_color(grid)), None, false, ch as f32);
+            }
         }
         Image {
             width,
@@ -565,6 +587,11 @@ mod tests {
         let at = |x: usize| image.rgb[(10 * image.width + x) * 3];
         assert_eq!(at(10), 250);
         assert_eq!(at(15), 10);
+        grid.caret = Some(Bounds::cells(1.5, 0.0, 0.0, 1.0));
+        let image = r.row(&grid, 0);
+        let at = |x: usize| image.rgb[(10 * image.width + x) * 3];
+        assert_eq!(at(10), 10, "the exact caret replaces the cell one");
+        assert_eq!(at(15), 250);
     }
 
     #[test]
@@ -606,7 +633,12 @@ mod tests {
                 .faces()
                 .any(|f| f.families.iter().any(|(n, _)| n.contains("Inter")))
         );
-        assert!(r.text_mask("x", false, 100).alpha.iter().any(|a| *a > 0));
+        assert!(
+            r.text_mask("x", Font::default())
+                .alpha
+                .iter()
+                .any(|a| *a > 0)
+        );
     }
 
     #[test]

@@ -4,8 +4,9 @@ use std::sync::mpsc::{Receiver, channel};
 use std::thread;
 
 use cellix_core::{Match, Workspace};
-use cellix_render::{Grid, Icon, Rect, Style};
+use cellix_render::{Grid, Icon, Measure, Rect, Style};
 
+use crate::palette::{Input, input};
 use crate::theme::Theme;
 
 /// Rows above the results: title, query, replacement, summary.
@@ -147,10 +148,18 @@ impl Search {
         }
     }
 
-    fn draw_box(&self, grid: &mut Grid, area: Rect, y: u16, field: Field, theme: &Theme) {
+    fn draw_box(
+        &self,
+        grid: &mut Grid,
+        area: Rect,
+        y: u16,
+        field: Field,
+        measure: &dyn Measure,
+        theme: &Theme,
+    ) {
         let (text, hint) = match field {
-            Field::Query => (&self.query, "Search"),
-            Field::Replace => (&self.replace, "Replace"),
+            Field::Query => (self.query.as_str(), "Search"),
+            Field::Replace => (self.replace.as_str(), "Replace"),
         };
         let end = area.right().saturating_sub(1);
         let width = if field == Field::Replace {
@@ -158,42 +167,17 @@ impl Search {
         } else {
             end.saturating_sub(area.x + 1)
         };
-        let input = Style {
-            bg: theme.input,
-            ..theme.sidebar
-        };
         let line = Rect::new(area.x + 1, y, width, 1);
-        grid.fill(line, input);
-        let border = if self.focus == Some(field) {
-            theme.focus
-        } else {
-            theme.popup_border
+        let box_state = Input {
+            text,
+            hint,
+            focused: self.focus == Some(field),
+            behind: theme.sidebar.bg,
         };
-        grid.field(line, theme.sidebar.bg, theme.input, border);
-        if text.is_empty() {
-            let dim = Style {
-                fg: theme.gutter.fg,
-                ..input
-            };
-            grid.label_at(
-                line.x as f32 + 0.8,
-                line.x + 1,
-                y,
-                hint,
-                dim,
-                line.right(),
-                95,
-            );
-        } else {
-            grid.put_str(line.x + 1, y, text, input, line.right());
-        }
-        if self.focus == Some(field) {
-            let cursor = line.x + 1 + text.chars().count() as u16;
-            grid.cursor = Some((cursor.min(line.right().saturating_sub(1)), y));
-        }
+        input(grid, line, &box_state, measure, theme);
     }
 
-    pub fn draw(&self, grid: &mut Grid, area: Rect, theme: &Theme) {
+    pub fn draw(&self, grid: &mut Grid, area: Rect, measure: &dyn Measure, theme: &Theme) {
         grid.fill(area, theme.sidebar);
         let title = Style {
             fg: theme.gutter.fg,
@@ -208,8 +192,8 @@ impl Search {
             area.right(),
             80,
         );
-        self.draw_box(grid, area, area.y + 1, Field::Query, theme);
-        self.draw_box(grid, area, area.y + 2, Field::Replace, theme);
+        self.draw_box(grid, area, area.y + 1, Field::Query, measure, theme);
+        self.draw_box(grid, area, area.y + 2, Field::Replace, measure, theme);
         let button = area.right().saturating_sub(REPLACE_ALL.len() as u16 + 1);
         grid.glyph(
             button as f32 - 0.2,

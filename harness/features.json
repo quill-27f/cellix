@@ -247,9 +247,9 @@
   {
     "id": "agent-host",
     "milestone": 5,
-    "title": "Agent hosting in a terminal pane",
-    "test": "terminal_pane_runs_command",
-    "passes": false
+    "title": "Open Claude Code or Codex beside the editor, in a split of the host",
+    "test": "agents_open_in_a_split_of_the_host",
+    "passes": true
   },
   {
     "id": "wgpu",
@@ -348,5 +348,19 @@
     "title": "Smooth pixel scrolling with per-region tiles",
     "test": "regions_scroll_by_pixels",
     "passes": false
+  },
+  {
+    "id": "auto-theme",
+    "milestone": 2,
+    "title": "Theme follows the terminal, with dark and light as options",
+    "test": "auto_theme_follows_the_terminal",
+    "passes": true
+  },
+  {
+    "id": "text-measure",
+    "milestone": 2,
+    "title": "Carets come from measured text and stay inside their boxes",
+    "test": "the_caret_stays_inside_the_search_box",
+    "passes": true
   }
 ]

@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use cellix_core::{Buffer, Selection, Workspace};
 use cellix_input::{
@@ -9,14 +10,14 @@ use cellix_input::{
 };
 use cellix_lang::Registry;
 use cellix_lang::lsp::{Client, Diagnostic, LspEvent, TextEdit};
-use cellix_render::{Bounds, Grid, Icon, Rect, Style};
+use cellix_render::{Bounds, CellMeasure, Font, Grid, Icon, Measure, Rect, Style};
 use cellix_review::{Comment, append_comments, blame_line, changed_files, current_branch};
 
 use cellix_agent::{Request, SharedComments};
 
 use crate::editor::{Editor, Marks};
 use crate::explorer::Explorer;
-use crate::palette::{COMMANDS, Item, Palette, popup};
+use crate::palette::{COMMANDS, Input, Item, Palette, input, popup};
 use crate::rendered;
 use crate::review::{Hit, Review};
 use crate::search::{self, Field, Search};
@@ -94,6 +95,31 @@ enum Overlay {
     Menu(Menu),
 }
 
+/// What can open a split for an agent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SplitHost {
+    Tmux,
+    Zellij,
+}
+
+impl SplitHost {
+    fn command(self, agent: &str, root: &str) -> Vec<String> {
+        let words: &[&str] = match self {
+            Self::Tmux => &["tmux", "split-window", "-h", "-c", root, agent],
+            Self::Zellij => &["zellij", "run", "-d", "right", "--cwd", root, "--", agent],
+        };
+        words.iter().map(ToString::to_string).collect()
+    }
+}
+
+fn agent_split(var: impl Fn(&str) -> Option<String>) -> Option<SplitHost> {
+    if var("TMUX").is_some_and(|v| !v.is_empty()) {
+        Some(SplitHost::Tmux)
+    } else {
+        var("ZELLIJ").map(|_| SplitHost::Zellij)
+    }
+}
+
 /// Starts a program detached from the terminal, and reports whether it could start.
 fn spawn(command: &[String], args: &[&str]) -> bool {
     let Some((program, fixed)) = command.split_first() else {
@@ -151,6 +177,7 @@ pub struct App {
     /// that text, so one runs at a time and a stale reply is dropped.
     pending_rename: Option<(PathBuf, u64)>,
     branch: Option<String>,
+    measure: Rc<dyn Measure>,
     /// Where the pointer is, for hover highlights.
     hover: Option<(u16, u16)>,
     /// What the sidebar shows, as in VS Code's activity bar.
@@ -194,6 +221,7 @@ impl App {
             diagnostics: HashMap::new(),
             pending_rename: None,
             branch: None,
+            measure: Rc::new(CellMeasure),
             hover: None,
             sidebar_view: SidebarView::Explorer,
             search,
@@ -202,6 +230,20 @@ impl App {
         };
         app.refresh_tree();
         app
+    }
+
+    /// Uses this measure for text from now on.
+    pub fn set_measure(&mut self, measure: Rc<dyn Measure>) {
+        self.measure = measure;
+    }
+
+    /// In `auto`, matches the terminal's background. Terminals that don't say stay dark.
+    pub fn follow_terminal_theme(&mut self, light: Option<bool>) {
+        let chosen = self.settings.theme.as_deref();
+        if chosen.is_none() || chosen == Some("auto") {
+            let name = if light == Some(true) { "light" } else { "dark" };
+            self.theme = Theme::named(Some(name));
+        }
     }
 
     fn say(&self, text: impl Into<String>) {
@@ -806,6 +848,8 @@ impl App {
             }
             Command::AddComment => self.prompt_comment_at_cursor(),
             Command::OpenInBrowser => self.open_in_browser(),
+            Command::OpenClaude => self.open_agent("claude"),
+            Command::OpenCodex => self.open_agent("codex"),
             Command::FindInProject => self.show_search(Field::Query),
             Command::ReplaceInProject => self.show_search(Field::Replace),
             Command::MarkdownPreview => {
@@ -921,6 +965,24 @@ impl App {
             self.say(format!("Opened {target}"));
         } else {
             self.say("Could not open a browser");
+        }
+    }
+
+    /// Runs the real agent beside the editor, in a split of whatever hosts Cellix. Hosting
+    /// it ourselves would mean chasing every update, so this stays a launcher.
+    fn open_agent(&mut self, agent: &str) {
+        let root = self.workspace.root().to_string_lossy().into_owned();
+        let host = agent_split(|name| std::env::var(name).ok());
+        let Some(command) = host.map(|host| host.command(agent, &root)) else {
+            self.say(format!(
+                "Run {agent} in a split: Cellix opens it for you inside tmux or Zellij"
+            ));
+            return;
+        };
+        if spawn(&command, &[]) {
+            self.say(format!("Opened {agent}"));
+        } else {
+            self.say(format!("Could not start {agent}"));
         }
     }
 
@@ -1579,7 +1641,7 @@ impl App {
                 SidebarView::Explorer => {
                     self.explorer.draw(grid, area, &name, self.hover, theme);
                 }
-                SidebarView::Search => self.search.draw(grid, area, theme),
+                SidebarView::Search => self.search.draw(grid, area, &*self.measure, theme),
             }
         }
         if let Some(review) = &self.review {
@@ -1637,7 +1699,7 @@ impl App {
     fn draw_overlay(&self, grid: &mut Grid) {
         let theme = &self.theme;
         match &self.overlay {
-            Overlay::Palette(palette) => palette.draw(grid, theme),
+            Overlay::Palette(palette) => palette.draw(grid, self.hover, &*self.measure, theme),
             Overlay::Menu(menu) => self.draw_menu(grid, menu),
             Overlay::Prompt(prompt) => self.draw_prompt(grid, prompt),
             Overlay::None => {}
@@ -1696,10 +1758,14 @@ impl App {
             area.right(),
             90,
         );
-        let input = Rect::new(area.x + 1, area.y + 1, area.w.saturating_sub(2), 1);
-        grid.field(input, self.theme.popup, self.theme.input, self.theme.focus);
-        let end = grid.put_str(input.x + 1, input.y, &prompt.input, base, input.right());
-        grid.cursor = Some((end.min(input.right().saturating_sub(1)), input.y));
+        let line = Rect::new(area.x + 1, area.y + 1, area.w.saturating_sub(2), 1);
+        let field = Input {
+            text: &prompt.input,
+            hint: "",
+            focused: true,
+            behind: self.theme.popup,
+        };
+        input(grid, line, &field, &*self.measure, &self.theme);
     }
 
     fn draw_activity(&self, grid: &mut Grid) {
@@ -1828,30 +1894,46 @@ impl App {
     }
 
     fn draw_welcome(&self, grid: &mut Grid) {
-        let main = self.main_area();
-        let rows = [
-            "Cellix",
-            "",
-            "Ctrl+P          Open a file",
-            "Ctrl+Shift+P    Commands",
-            "Ctrl+G          Review changes",
-            "Ctrl+Shift+F    Search the project",
+        const ROWS: [(&str, &str); 4] = [
+            ("Ctrl+P", "Open a file"),
+            ("Ctrl+Shift+P", "Commands"),
+            ("Ctrl+G", "Review changes"),
+            ("Ctrl+Shift+F", "Search the project"),
         ];
+        const WIDTH: u16 = 32;
+        let main = self.main_area();
+        if main.h < 12 {
+            return;
+        }
+        let theme = &self.theme;
         let y = main.y + main.h / 3;
-        let x = main.x + main.w.saturating_sub(30) / 2;
-        for (i, row) in rows.iter().enumerate() {
-            let style = Style {
-                bold: i == 0,
-                fg: if i == 0 {
-                    self.theme.text.fg
-                } else {
-                    self.theme.gutter.fg
-                },
-                ..self.theme.text
-            };
-            let size = if i == 0 { 160 } else { 100 };
-            let line = y + i as u16;
-            grid.label_at(x as f32, x, line, row, style, main.right(), size);
+        let x = main.x + main.w.saturating_sub(WIDTH) / 2;
+        let title = Style {
+            bold: true,
+            ..theme.text
+        };
+        grid.label_at(x as f32, x, y, "Cellix", title, main.right(), 180);
+        let keys = Style {
+            fg: theme.text.fg,
+            ..theme.text
+        };
+        let description = Style {
+            fg: theme.gutter.fg,
+            ..theme.text
+        };
+        for (i, (key, what)) in ROWS.iter().enumerate() {
+            let line = y + 3 + i as u16;
+            let second = x + 15;
+            grid.label_at(x as f32, x, line, key, keys, second, 95);
+            grid.label_at(
+                second as f32,
+                second,
+                line,
+                what,
+                description,
+                main.right(),
+                95,
+            );
         }
     }
 
@@ -1925,7 +2007,12 @@ impl App {
             if let Some(branch) = &self.branch {
                 let piece = (Icon::Git, (1, 1));
                 grid.put_icon(x, y, piece.0, piece.1, bar);
-                x = grid.label(x + 2, y, &format!("{branch}  "), bar, right_x);
+                let font = Font {
+                    size: 90,
+                    ..Font::default()
+                };
+                grid.label_at(x as f32 + 1.6, x + 2, y, branch, bar, right_x, 90);
+                x = (x as f32 + 3.0 + self.measure.width(branch, font)).ceil() as u16;
             }
             let problems: usize = self.diagnostics.values().map(Vec::len).sum();
             if problems > 0 {
@@ -1981,6 +2068,7 @@ mod tests {
             kind,
             x,
             y,
+            fine_x: x as f32,
             mods: Mods::default(),
         })
     }
@@ -2358,6 +2446,7 @@ mod tests {
             kind: MouseKind::Right,
             x: find(&screen(&app), "step one").0,
             y: find(&screen(&app), "step one").1,
+            fine_x: find(&screen(&app), "step one").0 as f32,
             mods: Mods::default(),
         }));
         typed(&mut app, "split this step");
@@ -2914,6 +3003,7 @@ mod tests {
             kind: MouseKind::Left,
             x: x + 1,
             y,
+            fine_x: (x + 1) as f32,
             mods: Mods {
                 ctrl: true,
                 ..Mods::default()
@@ -2961,6 +3051,60 @@ mod tests {
         );
         let (x, y) = find(&grid, "beta.rs");
         assert!(grid.cell(x, y).style.painted);
+    }
+
+    #[test]
+    fn agents_open_in_a_split_of_the_host() {
+        let tmux = |k: &str| (k == "TMUX").then(|| "/tmp/t,1,0".to_string());
+        assert_eq!(agent_split(tmux), Some(SplitHost::Tmux));
+        assert_eq!(
+            SplitHost::Tmux.command("claude", "/w"),
+            ["tmux", "split-window", "-h", "-c", "/w", "claude"]
+        );
+        let zellij = |k: &str| (k == "ZELLIJ").then(|| "0".to_string());
+        assert_eq!(agent_split(zellij), Some(SplitHost::Zellij));
+        assert_eq!(agent_split(|_| None), None);
+    }
+
+    #[test]
+    fn auto_theme_follows_the_terminal() {
+        let (_dir, mut app) = project();
+        app.follow_terminal_theme(Some(true));
+        assert_eq!(app.background(), Theme::named(Some("light")).text);
+        app.follow_terminal_theme(Some(false));
+        assert_eq!(app.background(), Theme::default().text);
+        app.follow_terminal_theme(None);
+        assert_eq!(app.background(), Theme::default().text);
+    }
+
+    #[test]
+    fn a_chosen_theme_ignores_the_terminal() {
+        let (dir, _) = project();
+        fs::create_dir(dir.path().join(".cellix")).unwrap();
+        fs::write(
+            dir.path().join(".cellix/settings.json"),
+            r#"{"theme": "dark"}"#,
+        )
+        .unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (100, 30));
+        app.follow_terminal_theme(Some(true));
+        assert_eq!(app.background(), Theme::default().text);
+    }
+
+    #[test]
+    fn the_caret_stays_inside_the_search_box() {
+        let (_dir, mut app) = project();
+        app.run(Command::FindInProject);
+        typed(&mut app, &"x".repeat(200));
+        let grid = screen(&app);
+        let area = app.sidebar_area().unwrap();
+        let caret = grid.caret.unwrap();
+        let right = area.right() as i32 * cellix_render::units(1.0);
+        assert!(caret.x < right, "the caret left the box");
+        assert!(
+            caret.h < cellix_render::units(1.0),
+            "the caret is taller than the box"
+        );
     }
 
     #[test]

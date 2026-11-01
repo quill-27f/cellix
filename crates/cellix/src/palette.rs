@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use cellix_input::Command;
-use cellix_render::{Grid, Rect, Style};
+use cellix_render::{Bounds, Font, Grid, Measure, Rect, Rgb, Style};
 
 use crate::theme::Theme;
 
@@ -25,7 +25,7 @@ impl Item {
     }
 }
 
-pub const COMMANDS: [(&str, Command); 21] = [
+pub const COMMANDS: [(&str, Command); 23] = [
     ("Save", Command::Save),
     ("Undo", Command::Undo),
     ("Redo", Command::Redo),
@@ -43,6 +43,8 @@ pub const COMMANDS: [(&str, Command); 21] = [
     ("Replace in Project", Command::ReplaceInProject),
     ("Toggle Markdown Source", Command::MarkdownPreview),
     ("Open in Browser", Command::OpenInBrowser),
+    ("Open Claude Code", Command::OpenClaude),
+    ("Open Codex", Command::OpenCodex),
     ("Go to Definition", Command::GoToDefinition),
     ("Complete", Command::Complete),
     ("Rename Symbol", Command::RenameSymbol),
@@ -123,7 +125,13 @@ impl Palette {
         (row < self.matches.len().min(ROWS as usize)).then_some(row)
     }
 
-    pub fn draw(&self, grid: &mut Grid, theme: &Theme) {
+    pub fn draw(
+        &self,
+        grid: &mut Grid,
+        hover: Option<(u16, u16)>,
+        measure: &dyn Measure,
+        theme: &Theme,
+    ) {
         let area = Self::area(grid.area());
         let rows = self.matches.len().min(ROWS as usize) as u16;
         let area = Rect::new(area.x, area.y, area.w, rows + 1);
@@ -133,41 +141,83 @@ impl Palette {
             bg: theme.popup,
             ..theme.bar
         };
-        let input = Rect::new(area.x + 1, area.y, area.w.saturating_sub(2), 1);
-        grid.field(input, theme.popup, theme.input, theme.focus);
-        let prompt = format!(" > {}", self.query);
-        let hint = if self.query.is_empty() {
-            "> "
-        } else {
-            prompt.as_str()
-        };
-        grid.put_str(input.x, input.y, hint, base, input.right());
-        let end = input.x + prompt.chars().count() as u16;
-        grid.cursor = Some((end.min(input.right().saturating_sub(1)), area.y));
+        let line = Rect::new(area.x + 1, area.y, area.w.saturating_sub(2), 1);
+        input(
+            grid,
+            line,
+            &Input {
+                text: &self.query,
+                hint: "Type to search",
+                focused: true,
+                behind: theme.popup,
+            },
+            measure,
+            theme,
+        );
         for (row, index) in self.matches.iter().take(ROWS as usize).enumerate() {
             let y = area.y + 1 + row as u16;
-            if row == self.selected {
-                let line = Rect::new(area.x, y, area.w, 1);
-                grid.panel(
-                    cellix_render::Bounds::inset(line, 0.5, 0.04),
-                    18,
-                    Some(theme.pick),
-                    None,
-                );
+            let line = Rect::new(area.x, y, area.w, 1);
+            let hovered = hover.is_some_and(|h| line.contains(h.0, h.1));
+            if row == self.selected || hovered {
+                let fill = if row == self.selected {
+                    theme.pick
+                } else {
+                    theme.row_hover
+                };
+                grid.panel(Bounds::inset(line, 0.5, 0.04), 18, Some(fill), None);
             }
-            let label = format!("   {}", self.items[*index].label());
-            let text = label.trim_start();
-            grid.put_str(area.x, y, "  ", base, area.right());
-            grid.label_at(
-                area.x as f32 + 2.0,
-                area.x + 3,
-                y,
-                text,
-                base,
-                area.right().saturating_sub(1),
-                100,
-            );
+            let text = self.items[*index].label();
+            let end = area.right().saturating_sub(1);
+            grid.label_at(area.x as f32 + 1.5, area.x + 3, y, text, base, end, 100);
         }
+    }
+}
+
+/// What a text box shows.
+pub struct Input<'a> {
+    pub text: &'a str,
+    pub hint: &'a str,
+    pub focused: bool,
+    /// The colour behind the box's rounded corners.
+    pub behind: Rgb,
+}
+
+/// A one-line text box. Text, placeholder and caret share one origin, and the caret comes
+/// from measuring the text, so it can't drift out of the box or onto the words.
+pub fn input(grid: &mut Grid, line: Rect, field: &Input, measure: &dyn Measure, theme: &Theme) {
+    /// Space between the box's edge and its text.
+    const PADDING: f32 = 0.8;
+    let style = Style {
+        fg: theme.text.fg,
+        bg: theme.input,
+        ..theme.sidebar
+    };
+    grid.fill(line, style);
+    let border = if field.focused {
+        theme.focus
+    } else {
+        theme.popup_border
+    };
+    grid.field(line, field.behind, theme.input, border);
+    let (x, y) = (line.x as f32 + PADDING, line.y);
+    let first = line.x + 1;
+    if field.text.is_empty() {
+        let dim = Style {
+            fg: theme.gutter.fg,
+            ..style
+        };
+        grid.label_at(x, first, y, field.hint, dim, line.right(), 95);
+    } else {
+        grid.label_at(x, first, y, field.text, style, line.right(), 95);
+    }
+    if field.focused {
+        let font = Font {
+            size: 95,
+            ..Font::default()
+        };
+        let end = x + measure.width(field.text, font);
+        let last = line.right() as f32 - PADDING;
+        grid.set_caret(end.min(last), y, 0.56);
     }
 }
 

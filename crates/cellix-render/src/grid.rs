@@ -3,6 +3,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::icon::{Icon, Piece};
+use crate::measure::Font;
 use crate::paint::{Bounds, Paint, UNIT, units};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -66,6 +67,8 @@ pub struct Grid {
     height: u16,
     cells: Vec<Cell>,
     pub cursor: Option<(u16, u16)>,
+    /// The caret's exact place on the pixel tiers, when text isn't on whole cells.
+    pub caret: Option<Bounds>,
     /// Drawn over the cells on the pixel tiers, in order.
     pub paint: Vec<Paint>,
 }
@@ -81,6 +84,7 @@ impl Grid {
             height,
             cells: vec![blank; width as usize * height as usize],
             cursor: None,
+            caret: None,
             paint: Vec::new(),
         }
     }
@@ -119,12 +123,35 @@ impl Grid {
                 max_width: units(max_x.min(self.width) as f32 - x_px),
                 text: text.to_string(),
                 color: style.fg,
-                bold: style.bold,
-                size,
+                font: Font {
+                    bold: style.bold,
+                    size,
+                    ..Font::default()
+                },
                 align_right: false,
             });
         }
         end
+    }
+
+    /// Paints a run of text with no cells behind it, at a place in cells and rows.
+    pub fn text_run(&mut self, x: f32, y: f32, max_x: f32, text: &str, color: Rgb, font: Font) {
+        self.paint.push(Paint::Text {
+            x: units(x),
+            y: units(y),
+            max_width: units(max_x - x),
+            text: text.to_string(),
+            color,
+            font,
+            align_right: false,
+        });
+    }
+
+    /// Puts the caret at a place between cells, `height` rows tall and centred on `y`.
+    pub fn set_caret(&mut self, x: f32, y: u16, height: f32) {
+        self.cursor = Some((x as u16, y));
+        let top = y as f32 + (1.0 - height) / 2.0;
+        self.caret = Some(Bounds::cells(x, top, 0.0, height));
     }
 
     /// A label whose right edge sits at `right`, since proportional text is narrower than
@@ -148,8 +175,11 @@ impl Grid {
             max_width: units(right as f32),
             text: text.to_string(),
             color: style.fg,
-            bold: style.bold,
-            size,
+            font: Font {
+                bold: style.bold,
+                size,
+                ..Font::default()
+            },
             align_right: true,
         });
     }
@@ -186,8 +216,10 @@ impl Grid {
             max_width: units(width as f32),
             text: label.to_string(),
             color: style.fg,
-            bold: false,
-            size: 90,
+            font: Font {
+                size: 90,
+                ..Font::default()
+            },
             align_right: false,
         });
     }
