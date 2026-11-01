@@ -141,6 +141,7 @@ struct Display {
     cell: Option<(usize, usize)>,
     pixel_mouse: bool,
     light: Option<bool>,
+    background: Option<(u8, u8, u8)>,
     smooth: Option<Smooth>,
 }
 
@@ -163,6 +164,7 @@ impl Display {
             cell,
             pixel_mouse: env.pixel_mouse,
             light: env.light,
+            background: env.background,
             // Over a network each frame costs a round of placements, so send fewer.
             smooth: smooth.then(|| Smooth {
                 frames: if std::env::var_os("SSH_CONNECTION").is_some() {
@@ -248,6 +250,7 @@ pub fn run(options: Options) -> io::Result<()> {
     let mut out = io::stdout();
     app.set_measure(display.measure());
     app.follow_terminal_theme(display.light);
+    app.match_terminal_background(display.background);
     // Whole cells can't place a caret in proportional text, so ask for pixels where that's
     // on offer. It's only used with a known cell size to divide by.
     let pixel_mouse = display.pixel_mouse && display.placement.is_some() && display.cell.is_some();

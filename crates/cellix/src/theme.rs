@@ -17,6 +17,8 @@ pub struct Theme {
     pub row_active: Rgb,
     pub folder: Rgb,
     pub accent: Rgb,
+    /// What wants the reviewer: an agent waiting, a failed step.
+    pub attention: Rgb,
     pub keyword: Rgb,
     pub string: Rgb,
     pub comment: Rgb,
@@ -69,8 +71,58 @@ fn style(fg: Rgb, bg: Rgb) -> Style {
     }
 }
 
-/// VS Code's Dark+ and Light+ colours, since that's the look people already know.
+fn shifted(color: Rgb, by: (i16, i16, i16)) -> Rgb {
+    let move_by = |channel: u8, by: i16| (i16::from(channel) + by).clamp(0, 255) as u8;
+    Rgb(
+        move_by(color.0, by.0),
+        move_by(color.1, by.1),
+        move_by(color.2, by.2),
+    )
+}
+
+/// VS Code's Modern themes, since that's the look people already know. Surfaces are quiet
+/// and the blue is kept for what's active.
 impl Theme {
+    /// Moves every surface by the same amount, so the editor sits exactly on the terminal's
+    /// background and the panels keep their distance from it. Text colours stay, since
+    /// they're chosen for contrast and a nearby background doesn't change that.
+    pub fn on_background(mut self, background: Rgb) -> Self {
+        let base = self.text.bg;
+        let by = (
+            i16::from(background.0) - i16::from(base.0),
+            i16::from(background.1) - i16::from(base.1),
+            i16::from(background.2) - i16::from(base.2),
+        );
+        for surface in [
+            &mut self.text,
+            &mut self.sidebar,
+            &mut self.bar,
+            &mut self.tab,
+            &mut self.tab_active,
+            &mut self.gutter,
+            &mut self.activity,
+            &mut self.status,
+            &mut self.breadcrumb,
+        ] {
+            surface.bg = shifted(surface.bg, by);
+        }
+        for color in [
+            &mut self.row_hover,
+            &mut self.row_active,
+            &mut self.line,
+            &mut self.guide,
+            &mut self.scrollbar,
+            &mut self.input,
+            &mut self.code_bg,
+            &mut self.border,
+            &mut self.popup,
+            &mut self.popup_border,
+        ] {
+            *color = shifted(*color, by);
+        }
+        self
+    }
+
     /// A built-in theme by name. Unknown names get the default.
     pub fn named(name: Option<&str>) -> Self {
         match name {
@@ -82,20 +134,21 @@ impl Theme {
     fn light() -> Self {
         let text = Rgb(0, 0, 0);
         let bg = Rgb(255, 255, 255);
-        let panel = Rgb(243, 243, 243);
+        let panel = Rgb(248, 248, 249);
         Self {
             text: style(text, bg),
-            sidebar: style(Rgb(97, 97, 97), panel),
-            bar: style(Rgb(97, 97, 97), Rgb(240, 240, 240)),
-            tab: style(Rgb(110, 110, 110), Rgb(236, 236, 236)),
+            sidebar: style(Rgb(59, 59, 62), panel),
+            bar: style(Rgb(59, 59, 62), panel),
+            tab: style(Rgb(110, 110, 115), panel),
             tab_active: style(Rgb(51, 51, 51), bg),
             gutter: style(Rgb(120, 120, 125), bg),
             selection: Rgb(173, 214, 255),
             found: Rgb(255, 236, 170),
-            row_hover: Rgb(232, 232, 232),
+            row_hover: Rgb(238, 238, 240),
             row_active: Rgb(214, 235, 255),
             folder: Rgb(120, 130, 150),
             accent: Rgb(0, 95, 184),
+            attention: Rgb(170, 90, 0),
             keyword: Rgb(0, 0, 255),
             string: Rgb(163, 21, 21),
             comment: Rgb(0, 128, 0),
@@ -107,9 +160,9 @@ impl Theme {
             added_word: Rgb(165, 230, 180),
             removed_word: Rgb(250, 185, 185),
             moved: Rgb(226, 232, 250),
-            activity: style(Rgb(125, 125, 125), Rgb(248, 248, 248)),
-            activity_active: Rgb(30, 30, 30),
-            status: style(Rgb(255, 255, 255), Rgb(0, 122, 204)),
+            activity: style(Rgb(120, 120, 126), panel),
+            activity_active: Rgb(30, 30, 32),
+            status: style(Rgb(59, 59, 62), panel),
             breadcrumb: style(Rgb(110, 110, 110), bg),
             line: Rgb(245, 245, 245),
             number_active: Rgb(40, 40, 45),
@@ -127,7 +180,7 @@ impl Theme {
             popup: Rgb(255, 255, 255),
             popup_border: Rgb(200, 200, 200),
             pick: Rgb(214, 235, 255),
-            button: Rgb(0, 122, 204),
+            button: Rgb(0, 95, 184),
             button_text: Rgb(255, 255, 255),
         }
     }
@@ -147,13 +200,13 @@ impl Theme {
 
 impl Default for Theme {
     fn default() -> Self {
-        let bg = Rgb(30, 30, 30);
-        let panel = Rgb(37, 37, 38);
+        let bg = Rgb(31, 31, 32);
+        let panel = Rgb(24, 24, 25);
         Self {
             text: style(Rgb(212, 212, 212), bg),
             sidebar: style(Rgb(204, 204, 204), panel),
-            bar: style(Rgb(204, 204, 204), Rgb(37, 37, 38)),
-            tab: style(Rgb(150, 150, 150), Rgb(45, 45, 45)),
+            bar: style(Rgb(204, 204, 204), panel),
+            tab: style(Rgb(150, 150, 150), panel),
             tab_active: style(Rgb(255, 255, 255), bg),
             gutter: style(Rgb(133, 133, 133), bg),
             selection: Rgb(38, 79, 120),
@@ -162,6 +215,7 @@ impl Default for Theme {
             row_active: Rgb(55, 55, 61),
             folder: Rgb(144, 164, 174),
             accent: Rgb(55, 148, 255),
+            attention: Rgb(240, 180, 90),
             keyword: Rgb(86, 156, 214),
             string: Rgb(206, 145, 120),
             comment: Rgb(106, 153, 85),
@@ -173,9 +227,9 @@ impl Default for Theme {
             added_word: Rgb(46, 100, 54),
             removed_word: Rgb(120, 45, 45),
             moved: Rgb(38, 46, 70),
-            activity: style(Rgb(133, 133, 133), Rgb(51, 51, 51)),
-            activity_active: Rgb(255, 255, 255),
-            status: style(Rgb(255, 255, 255), Rgb(0, 122, 204)),
+            activity: style(Rgb(134, 134, 138), panel),
+            activity_active: Rgb(230, 230, 232),
+            status: style(Rgb(204, 204, 204), panel),
             breadcrumb: style(Rgb(165, 165, 165), bg),
             line: Rgb(42, 45, 46),
             number_active: Rgb(198, 198, 198),
@@ -187,13 +241,13 @@ impl Default for Theme {
             git_added: Rgb(115, 201, 145),
             input: Rgb(60, 60, 60),
             find_match: Rgb(81, 92, 47),
-            code_bg: Rgb(37, 37, 38),
-            border: Rgb(43, 43, 43),
+            code_bg: Rgb(38, 38, 40),
+            border: Rgb(46, 46, 48),
             focus: Rgb(0, 127, 212),
-            popup: Rgb(37, 37, 38),
-            popup_border: Rgb(69, 69, 69),
+            popup: Rgb(37, 37, 39),
+            popup_border: Rgb(69, 69, 72),
             pick: Rgb(4, 57, 94),
-            button: Rgb(14, 99, 156),
+            button: Rgb(0, 120, 212),
             button_text: Rgb(255, 255, 255),
         }
     }
@@ -202,6 +256,17 @@ impl Default for Theme {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_editor_sits_on_the_terminal_background() {
+        let blue = Rgb(30, 30, 46);
+        let theme = Theme::default().on_background(blue);
+        assert_eq!(theme.text.bg, blue);
+        assert_eq!(theme.gutter.bg, blue);
+        let gap = i16::from(theme.text.bg.0) - i16::from(theme.sidebar.bg.0);
+        assert_eq!(gap, 7, "panels keep their distance");
+        assert_eq!(theme.sidebar.bg.2, 39, "and pick up the tint");
+    }
 
     fn brightness(color: Rgb) -> u32 {
         (color.0 as u32 + color.1 as u32 + color.2 as u32) / 3

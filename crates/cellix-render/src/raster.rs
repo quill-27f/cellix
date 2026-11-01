@@ -364,7 +364,8 @@ impl Target<'_> {
     }
 
     fn icon(&mut self, icon: Icon, left: f32, top: f32, side: f32, color: Rgb) {
-        const SAMPLES: usize = 3;
+        // Five by five keeps thin curved strokes smooth, and tiles only draw this once.
+        const SAMPLES: usize = 5;
         let y0 = (top.floor() as i32).max(self.top);
         let y1 = ((top + side).ceil() as i32).min(self.top + self.height as i32);
         for y in y0..y1 {

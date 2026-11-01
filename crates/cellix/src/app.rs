@@ -335,6 +335,14 @@ impl App {
         }
     }
 
+    /// Lines the theme up with the terminal, so no seam shows around the app.
+    pub fn match_terminal_background(&mut self, background: Option<(u8, u8, u8)>) {
+        let chosen = self.settings.theme.as_deref();
+        if let Some((r, g, b)) = background.filter(|_| chosen.is_none() || chosen == Some("auto")) {
+            self.theme = self.theme.on_background(cellix_render::Rgb(r, g, b));
+        }
+    }
+
     fn say(&self, text: impl Into<String>) {
         *self.message.borrow_mut() = text.into();
     }
@@ -2639,6 +2647,10 @@ impl App {
             };
             let row = Rect::new(area.x, y, area.w, ACTIVITY_ICON.1 as u16);
             let hovered = self.hover.is_some_and(|h| row.contains(h.0, h.1));
+            if hovered {
+                let pill = Bounds::cells(area.x as f32 + 0.5, y as f32 - 0.1, 3.8, 2.2);
+                grid.panel(pill, 22, Some(self.theme.row_hover), None);
+            }
             let style = Style {
                 fg: if on || hovered {
                     self.theme.activity_active
@@ -2659,7 +2671,7 @@ impl App {
             grid.put_icon(area.x + 1, y, *icon, ACTIVITY_ICON, style);
             if *command == Command::ShowAgents && self.agents.needing_you() > 0 {
                 let dot = Bounds::cells(area.x as f32 + 3.0, y as f32, 0.9, 0.45);
-                grid.panel(dot, 22, Some(self.theme.error), None);
+                grid.panel(dot, 22, Some(self.theme.attention), None);
             }
         }
     }
@@ -2881,6 +2893,8 @@ impl App {
         let width = self.size.0;
         let bar = self.theme.status;
         grid.fill(Rect::new(0, y, width, 1), bar);
+        let edge = Bounds::cells(0.0, y as f32, width as f32, 0.0);
+        grid.hairline(edge, self.theme.border);
         let message = self.message.borrow();
         let at_cursor = self.cursor_line().and_then(|(path, line)| {
             let items = self.diagnostics.get(&path)?;

@@ -22,6 +22,7 @@ struct Reply {
     cell: Option<(usize, usize)>,
     pixel_mouse: bool,
     light: Option<bool>,
+    background: Option<(u8, u8, u8)>,
 }
 
 /// Asks for the cell size and for Kitty graphics, then device attributes, which every
@@ -63,11 +64,20 @@ fn query_terminal(out: &mut impl Write) -> io::Result<Reply> {
         cell: parse_cell_size(&reply),
         pixel_mouse: reply_has(&reply, b"?1016;1$y") || reply_has(&reply, b"?1016;2$y"),
         light: parse_background_is_light(&reply),
+        background: parse_background(&reply).map(|(r, g, b)| {
+            let byte = |channel: f32| (channel * 255.0).round() as u8;
+            (byte(r), byte(g), byte(b))
+        }),
     })
 }
 
-/// Reads `ESC ] 11 ; rgb:RRRR/GGGG/BBBB`, and says whether that colour is light.
 fn parse_background_is_light(reply: &[u8]) -> Option<bool> {
+    let (r, g, b) = parse_background(reply)?;
+    Some(0.2126 * r + 0.7152 * g + 0.0722 * b > 0.5)
+}
+
+/// Reads `ESC ] 11 ; rgb:RRRR/GGGG/BBBB`, as fractions of full brightness.
+fn parse_background(reply: &[u8]) -> Option<(f32, f32, f32)> {
     let needle = b"]11;rgb:";
     let start = reply.windows(needle.len()).position(|w| w == needle)? + needle.len();
     let rest = std::str::from_utf8(&reply[start..]).ok()?;
@@ -77,8 +87,7 @@ fn parse_background_is_light(reply: &[u8]) -> Option<bool> {
             .ok()
             .map(|v| v as f32 / (16f32.powi(digits as i32) - 1.0))
     });
-    let (r, g, b) = (channels.next()??, channels.next()??, channels.next()??);
-    Some(0.2126 * r + 0.7152 * g + 0.0722 * b > 0.5)
+    Some((channels.next()??, channels.next()??, channels.next()??))
 }
 
 /// Finds a `ESC [ 6 ; height ; width t` reply.
@@ -112,14 +121,15 @@ pub fn detect(var: impl Fn(&str) -> Option<String>) -> io::Result<Env> {
         let tmux_passthrough = tmux_output(&["show", "-Apv", "allow-passthrough"])
             .is_some_and(|v| v == "on" || v == "all");
         // tmux answers the colour query itself, from what it knows of the terminal.
-        let light = query_terminal(&mut io::stdout())?.light;
+        let reply = query_terminal(&mut io::stdout())?;
         return Ok(Env {
             multiplexer,
             kitty_graphics,
             tmux_passthrough,
             cell: None,
             pixel_mouse: false,
-            light,
+            light: reply.light,
+            background: reply.background,
         });
     }
     let reply = query_terminal(&mut io::stdout())?;
@@ -130,6 +140,7 @@ pub fn detect(var: impl Fn(&str) -> Option<String>) -> io::Result<Env> {
         cell: reply.cell,
         pixel_mouse: reply.pixel_mouse,
         light: reply.light,
+        background: reply.background,
     })
 }
 

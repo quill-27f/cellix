@@ -35,6 +35,11 @@ fn main() {
     if let Ok(theme) = std::env::var("CELLIX_THEME") {
         app.follow_terminal_theme(Some(theme == "light"));
     }
+    // As a terminal would report it, in hex.
+    if let Ok(hex) = std::env::var("CELLIX_BACKGROUND") {
+        let channel = |at: usize| u8::from_str_radix(&hex[at..at + 2], 16).unwrap();
+        app.match_terminal_background(Some((channel(0), channel(2), channel(4))));
+    }
     match rest.first().map(String::as_str) {
         Some("review") => app.run(Command::OpenDiff),
         Some("welcome") => {}

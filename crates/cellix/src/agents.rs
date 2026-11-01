@@ -75,7 +75,7 @@ impl Agents {
         }
         for agent in &self.running {
             let (mark, color) = match agent.state {
-                AgentState::NeedsYou => ("needs you", theme.git_modified),
+                AgentState::NeedsYou => ("needs you", theme.attention),
                 AgentState::Working => ("working", theme.git_added),
                 AgentState::Idle | AgentState::Ended => ("idle", theme.gutter.fg),
             };

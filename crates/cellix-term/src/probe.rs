@@ -27,6 +27,8 @@ pub struct Env {
     pub pixel_mouse: bool,
     /// Whether the terminal's background is light, if it said.
     pub light: Option<bool>,
+    /// The terminal's background colour, if it said.
+    pub background: Option<(u8, u8, u8)>,
 }
 
 impl Multiplexer {
@@ -84,6 +86,7 @@ mod tests {
             cell: None,
             pixel_mouse: false,
             light: None,
+            background: None,
         }
     }
 
