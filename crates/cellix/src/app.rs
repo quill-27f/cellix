@@ -4948,19 +4948,20 @@ mod tests {
 
     #[test]
     fn tables_edit_in_their_cells() {
-        let source = "| Name | Size |\n|---|---|\n| a | b |\n";
+        let source = "| Name | Size |\n|---|---|\n| apple | b |\n";
         let (_dir, mut app) = page(source);
         let grid = screen(&app);
         assert!(!grid.text().contains('|'));
-        let (x, y) = find(&grid, "a ");
+        // A word no temporary folder's name will hold, since the sidebar shows that name.
+        let (x, y) = find(&grid, "apple");
         app.handle(mouse(MouseKind::Left, x + 1, y));
         typed(&mut app, "long");
         assert_eq!(
             app.active_text().unwrap(),
-            "| Name | Size |\n|---|---|\n| along | b |\n"
+            "| Name | Size |\n|---|---|\n| alongpple | b |\n"
         );
         let text = screen(&app).text();
-        assert!(text.contains("along") && text.contains('│'), "{text}");
+        assert!(text.contains("alongpple") && text.contains('│'), "{text}");
     }
 
     #[test]

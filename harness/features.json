@@ -565,5 +565,12 @@
     "passes": true,
     "test": "a_remote_frame_travels_as_a_png",
     "title": "Pane frames as PNGs over SSH"
+  },
+  {
+    "id": "tall-heading-tile",
+    "milestone": 7,
+    "passes": true,
+    "test": "a_tall_heading_keeps_its_lower_half",
+    "title": "Tall headings keep their lower half past the minimap"
   }
 ]

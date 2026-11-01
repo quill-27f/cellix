@@ -74,7 +74,13 @@ pub fn row_key(grid: &Grid, y: u16) -> u64 {
     grid.caret
         .filter(|c| c.y < bottom && c.y + c.h > top)
         .hash(&mut hasher);
-    grid.paint_on_row(y).for_each(|p| p.hash(&mut hasher));
+    // Paint can stand in several rows, and each shows its own slice. Without the row, the
+    // empty rows above and below a tall heading are the same tile, and one is blank.
+    let mut paint = grid.paint_on_row(y).peekable();
+    if paint.peek().is_some() {
+        y.hash(&mut hasher);
+    }
+    paint.for_each(|p| p.hash(&mut hasher));
     hasher.finish()
 }
 
@@ -388,7 +394,7 @@ impl<R: Rasterizer> Backend for PixelBackend<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cellix_render::Style;
+    use cellix_render::{Rgb, Style};
 
     /// Solid tiles, so these tests measure the protocol and not fonts.
     struct Flat;
@@ -452,6 +458,27 @@ mod tests {
         let mut out = Vec::new();
         b.present(grid, &mut out).unwrap();
         String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn a_tall_heading_keeps_its_lower_half() {
+        let mut grid = Grid::new(20, 8, Style::default());
+        let big = cellix_render::Font {
+            size: 150,
+            ..cellix_render::Font::default()
+        };
+        grid.text_run((1.0, 3.5), 20.0, "Workflow", (Rgb(9, 9, 9), false), big);
+        assert_ne!(
+            row_key(&grid, 2),
+            row_key(&grid, 4),
+            "the row above and the row below show different slices"
+        );
+        let blank = Grid::new(20, 8, Style::default());
+        assert_eq!(
+            row_key(&blank, 2),
+            row_key(&blank, 4),
+            "empty rows still share a tile, which scrolling depends on"
+        );
     }
 
     #[test]
