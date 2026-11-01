@@ -4,6 +4,8 @@ const PANE = 'cellix'
 const REFRESH_MS = 5000
 const MAX_IMAGE_CELLS = 255
 const INLINE_ROWS = 28
+/** More than Claude Code allows, so the dock opens as wide as it can: 45% of the window. */
+const DOCK_COLUMNS = 400
 const START_TRIES = 40
 const START_WAIT_MS = 100
 
@@ -29,7 +31,7 @@ function send($: Engine, inputs: unknown[]) {
 
 /** Brings the pane up, tall enough to read when it sits above the prompt. */
 async function openPane($: Engine) {
-  await $.ui.open({ id: PANE, title: 'Cellix', focus: true, rows: INLINE_ROWS })
+  await $.ui.open({ id: PANE, title: 'Cellix', focus: true, rows: INLINE_ROWS, columns: DOCK_COLUMNS })
 }
 
 /** The review comments waiting in Cellix, or nothing if no Cellix serves this folder. */

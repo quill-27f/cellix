@@ -4859,6 +4859,26 @@ mod tests {
     }
 
     #[test]
+    fn typing_in_a_flowed_paragraph_keeps_the_files_lines() {
+        let (_dir, mut app) = pixel_page("one\ntwo\n");
+        for _ in 0..3 {
+            key(&mut app, Key::Right);
+        }
+        typed(&mut app, " more");
+        assert_eq!(app.active_text().unwrap(), "one more\ntwo\n");
+    }
+
+    #[test]
+    fn backspace_joins_lines_in_a_flowed_paragraph() {
+        let (_dir, mut app) = pixel_page("one\ntwo\n");
+        for _ in 0..4 {
+            key(&mut app, Key::Right);
+        }
+        key(&mut app, Key::Backspace);
+        assert_eq!(app.active_text().unwrap(), "onetwo\n");
+    }
+
+    #[test]
     fn two_spaces_stay_two_on_a_page() {
         let (_dir, mut app) = page("one\n");
         app.run(Command::Move(cellix_input::Direction::LineEnd, false));
@@ -4956,10 +4976,11 @@ mod tests {
 
     #[test]
     fn arrows_walk_the_page_and_skip_hidden_text() {
-        let (_dir, mut app) = page("**bold**\nnext\n");
+        let (_dir, mut app) = page("**bold**\n\nnext\n");
+        app.run(Command::Move(cellix_input::Direction::Down, false));
         app.run(Command::Move(cellix_input::Direction::Down, false));
         typed(&mut app, "x");
-        assert_eq!(app.active_text().unwrap(), "**bold**\nxnext\n");
+        assert_eq!(app.active_text().unwrap(), "**bold**\n\nxnext\n");
     }
 
     #[test]

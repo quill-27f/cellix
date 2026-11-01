@@ -257,6 +257,23 @@ fn prefix(line: &str) -> Option<Prefix> {
     None
 }
 
+/// Whether the line after `index` carries on the same paragraph.
+fn continues_paragraph(lines: &[(usize, &str)], index: usize) -> bool {
+    let (Some((_, line)), Some((_, next))) = (lines.get(index), lines.get(index + 1)) else {
+        return false;
+    };
+    // Two trailing spaces or a backslash are Markdown's way of forcing a line break.
+    let hard_break = line.ends_with("  ") || line.ends_with('\\');
+    let starts_table =
+        next.contains('|') && lines.get(index + 2).is_some_and(|n| is_table_rule(n.1));
+    !hard_break
+        && !next.trim().is_empty()
+        && !next.trim_start().starts_with("```")
+        && !is_rule(next)
+        && !starts_table
+        && prefix(next).is_none()
+}
+
 fn is_rule(line: &str) -> bool {
     let text = line.trim();
     text.len() >= 3
@@ -733,6 +750,26 @@ pub fn layout(text: &str, width: usize, measure: &dyn Measure, registry: &Regist
         };
         let decorated = glyphs.len();
         inline(&chars[hidden..], offset + hidden, look, &mut glyphs);
+        // A paragraph runs on across its source lines, to fill the page. Each line break
+        // shows as a space that still stands for the newline, so the file doesn't change.
+        let flows = !chars.is_empty()
+            && !matches!(
+                found.as_ref().map(|p| &p.marker),
+                Some(Marker::Heading(_) | Marker::Quote)
+            );
+        let mut last = i;
+        while flows && continues_paragraph(&lines, last) {
+            let newline = lines[last].0 + lines[last].1.chars().count();
+            glyphs.extend(decoration(" ", Tone::Text));
+            if let Some(space) = glyphs.last_mut() {
+                space.at = Some(newline);
+            }
+            last += 1;
+            let next: Vec<char> = lines[last].1.chars().collect();
+            let indent = next.iter().take_while(|c| c.is_whitespace()).count();
+            inline(&next[indent..], lines[last].0 + indent, look, &mut glyphs);
+        }
+        template.end = lines[last].0 + lines[last].1.chars().count();
         measure_glyphs(&mut glyphs, measure);
         // Checkboxes get a little more room than a glyph, for the box drawn there.
         if proportional {
@@ -758,11 +795,20 @@ pub fn layout(text: &str, width: usize, measure: &dyn Measure, registry: &Regist
             glyphs = indent;
         }
         let tall = template.tall;
+        let first = rows.len();
         wrap(template, glyphs, lead, width, &mut rows);
+        // Each row belongs to the source line it starts in, for comments and change marks.
+        for row in &mut rows[first..] {
+            if let Some(at) = row.glyphs.iter().find_map(|g| g.at) {
+                row.line = lines
+                    .partition_point(|(start, _)| *start <= at)
+                    .saturating_sub(1);
+            }
+        }
         if tall {
             rows.push(spacer(i, offset));
         }
-        i += 1;
+        i = last + 1;
     }
     rows
 }
@@ -1074,6 +1120,68 @@ body",
         let thin = layout(&"i".repeat(100), 40, &m, &Registry::default());
         let wide = layout(&"W".repeat(100), 40, &m, &Registry::default());
         assert!(thin.len() < wide.len());
+    }
+
+    fn page_rows(text: &str, width: usize) -> Vec<Row> {
+        layout(text, width, &CellMeasure, &Registry::default())
+    }
+
+    fn row_text(row: &Row) -> String {
+        row.glyphs.iter().map(|g| g.ch).collect()
+    }
+
+    #[test]
+    fn a_paragraph_runs_on_across_source_lines() {
+        let rows = page_rows("one two\nthree four\n\nnext\n", 60);
+        assert_eq!(row_text(&rows[0]), "one two three four");
+        assert_eq!(row_text(&rows[2]), "next");
+    }
+
+    #[test]
+    fn the_space_at_a_join_stands_for_the_newline() {
+        let rows = page_rows("ab\ncd\n", 60);
+        let space = rows[0].glyphs.iter().find(|g| g.ch == ' ').unwrap();
+        assert_eq!(space.at, Some(2), "the newline's position");
+        let c = rows[0].glyphs.iter().find(|g| g.ch == 'c').unwrap();
+        assert_eq!(c.at, Some(3));
+        assert_eq!(rows[0].end, 5);
+    }
+
+    #[test]
+    fn structure_stops_a_paragraph() {
+        for next in ["# Heading", "- item", "1. item", "> quote", "```", "---"] {
+            let text = format!("para\n{next}\n");
+            let rows = page_rows(&text, 60);
+            assert_eq!(row_text(&rows[0]), "para", "{next}");
+        }
+    }
+
+    #[test]
+    fn a_hard_break_is_kept() {
+        assert_eq!(
+            row_text(&page_rows("one  \ntwo\n", 60)[0]).trim_end(),
+            "one"
+        );
+    }
+
+    #[test]
+    fn a_list_item_takes_its_continuation_line() {
+        let rows = page_rows("- one\n  two\n- three\n", 60);
+        assert!(
+            row_text(&rows[0]).ends_with("one two"),
+            "{:?}",
+            row_text(&rows[0])
+        );
+    }
+
+    #[test]
+    fn a_wrapped_row_knows_its_source_line() {
+        let long = "word ".repeat(10);
+        let text = format!("{}\n{}\n", long.trim_end(), long.trim_end());
+        let rows = page_rows(&text, 30);
+        assert_eq!(rows[0].line, 0);
+        let last = rows.iter().rfind(|r| !r.glyphs.is_empty()).unwrap();
+        assert_eq!(last.line, 1);
     }
 
     #[test]
