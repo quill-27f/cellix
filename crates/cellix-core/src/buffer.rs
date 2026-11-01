@@ -32,6 +32,7 @@ pub struct Buffer {
     /// History length at the last save, or None once that state is unreachable.
     saved_at: Option<usize>,
     disk_mtime: Option<SystemTime>,
+    revision: u64,
 }
 
 impl Buffer {
@@ -56,6 +57,11 @@ impl Buffer {
 
     pub fn text(&self) -> String {
         self.rope.to_string()
+    }
+
+    /// Changes whenever the text does, so views can cache derived data.
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     pub fn path(&self) -> Option<&Path> {
@@ -94,6 +100,13 @@ impl Buffer {
         on_disk.is_some() && on_disk != self.disk_mtime
     }
 
+    /// Treats the file on disk as seen, so its change is reported once.
+    pub fn acknowledge_disk(&mut self) {
+        if let Some(path) = &self.path {
+            self.disk_mtime = fs::metadata(path).and_then(|m| m.modified()).ok();
+        }
+    }
+
     /// Replaces the contents from disk. The reload itself can be undone.
     pub fn reload(&mut self, selections: &mut Selections) -> io::Result<()> {
         let path = self
@@ -111,6 +124,7 @@ impl Buffer {
             before.clone(),
         );
         self.rope = Rope::from_str(&text);
+        self.revision += 1;
         let txn = self.undo.last_mut().expect("just pushed");
         txn.edits[0].inserted = text;
         selections.clamp(self.rope.len_chars());
@@ -141,6 +155,7 @@ impl Buffer {
         range: impl Fn(&Selection, &Rope) -> (usize, usize),
         text: impl Fn(usize) -> String,
     ) {
+        self.revision += 1;
         let before = selections.clone();
         let mut edits = Vec::new();
         let mut placed = Vec::new();
@@ -320,6 +335,7 @@ impl Buffer {
         let Some(txn) = self.undo.pop() else {
             return false;
         };
+        self.revision += 1;
         for e in txn.edits.iter().rev() {
             self.rope.remove(e.at..e.at + e.inserted.chars().count());
             self.rope.insert(e.at, &e.removed);
@@ -334,6 +350,7 @@ impl Buffer {
         let Some(txn) = self.redo.pop() else {
             return false;
         };
+        self.revision += 1;
         for e in &txn.edits {
             self.rope.remove(e.at..e.at + e.removed.chars().count());
             self.rope.insert(e.at, &e.inserted);

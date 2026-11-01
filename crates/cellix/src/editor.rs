@@ -1,7 +1,9 @@
+use std::cell::RefCell;
 use std::path::Path;
 
 use cellix_core::{Buffer, Motion, Selection, Selections};
 use cellix_input::{Command, Direction};
+use cellix_lang::{Registry, Span};
 use cellix_render::{Grid, Rect};
 use unicode_width::UnicodeWidthChar;
 
@@ -16,6 +18,7 @@ pub struct Editor {
     pub selections: Selections,
     pub top: usize,
     pub left: usize,
+    spans: RefCell<Option<(u64, Vec<Span>)>>,
 }
 
 fn display_width(c: char, column: usize) -> usize {
@@ -33,6 +36,7 @@ impl Editor {
             selections: Selections::default(),
             top: 0,
             left: 0,
+            spans: RefCell::new(None),
         }
     }
 
@@ -139,6 +143,7 @@ impl Editor {
                     .type_text(&mut self.selections, &format!("\n{indent}"));
             }
             Command::Indent => self.buffer.type_text(&mut self.selections, "    "),
+            Command::Outdent => self.outdent(),
             Command::DeleteBackward => self.buffer.delete_backward(&mut self.selections),
             Command::DeleteForward => self.buffer.delete_forward(&mut self.selections),
             Command::Undo => {
@@ -161,6 +166,22 @@ impl Editor {
         self.reveal(area);
     }
 
+    fn outdent(&mut self) {
+        let head = self.selections.primary().head;
+        let rope = self.buffer.rope();
+        let start = rope.line_to_char(rope.char_to_line(head));
+        let spaces = rope
+            .line(rope.char_to_line(head))
+            .chars()
+            .take(TAB_WIDTH)
+            .take_while(|c| *c == ' ')
+            .count();
+        if spaces > 0 {
+            self.buffer
+                .replace_range(&mut self.selections, start, start + spaces, "");
+        }
+    }
+
     pub fn selected_text(&self) -> Option<String> {
         let rope = self.buffer.rope();
         let parts: Vec<String> = self
@@ -172,7 +193,14 @@ impl Editor {
         (!parts.is_empty()).then(|| parts.join("\n"))
     }
 
-    pub fn draw(&self, grid: &mut Grid, area: Rect, theme: &Theme, focused: bool) {
+    pub fn draw(
+        &self,
+        grid: &mut Grid,
+        area: Rect,
+        theme: &Theme,
+        focused: bool,
+        registry: &Registry,
+    ) {
         grid.fill(area, theme.text);
         let gutter = self.gutter_width();
         let rope = self.buffer.rope();
@@ -200,6 +228,7 @@ impl Editor {
             }
             grid.put_str(area.x + gutter, y, &text, theme.text, area.right());
         }
+        self.draw_highlights(grid, area, gutter, theme, registry);
         for s in self.selections.iter().filter(|s| !s.is_empty()) {
             self.draw_selection(grid, area, gutter, s, theme);
         }
@@ -212,6 +241,65 @@ impl Editor {
                 let y = area.y as usize + line - self.top;
                 if x < area.right() as usize && y < area.bottom() as usize {
                     grid.cursor = Some((x as u16, y as u16));
+                }
+            }
+        }
+    }
+
+    fn draw_highlights(
+        &self,
+        grid: &mut Grid,
+        area: Rect,
+        gutter: u16,
+        theme: &Theme,
+        registry: &Registry,
+    ) {
+        let Some(path) = self.buffer.path() else {
+            return;
+        };
+        let revision = self.buffer.revision();
+        let mut cache = self.spans.borrow_mut();
+        if !cache.as_ref().is_some_and(|(r, _)| *r == revision) {
+            *cache = Some((revision, registry.highlight(path, &self.buffer.text())));
+        }
+        let Some((_, spans)) = cache.as_ref() else {
+            return;
+        };
+        let rope = self.buffer.rope();
+        let last_line = (self.top + area.h as usize).min(rope.len_lines());
+        let from = rope.line_to_byte(self.top);
+        let to = rope.line_to_byte(last_line);
+        let first = spans.partition_point(|s| s.end <= from);
+        for span in spans[first..].iter().take_while(|s| s.start < to) {
+            let fg = theme.token(span.token);
+            let (mut at, end) = (rope.byte_to_char(span.start), rope.byte_to_char(span.end));
+            while at < end {
+                let line = rope.char_to_line(at);
+                let line_end =
+                    end.min(rope.line_to_char(line) + self.line_text(line).chars().count());
+                if line >= self.top && line < last_line && at < line_end {
+                    let (a, b) = (self.column_of(at), self.column_of(line_end));
+                    let x_from = a.max(self.left) - self.left;
+                    let x_to = b.max(self.left) - self.left;
+                    let rect = Rect::new(
+                        (area.x + gutter).saturating_add(x_from as u16),
+                        area.y + (line - self.top) as u16,
+                        (x_to - x_from) as u16,
+                        1,
+                    );
+                    let clipped = Rect::new(
+                        rect.x,
+                        rect.y,
+                        rect.w.min(area.right().saturating_sub(rect.x)),
+                        1,
+                    );
+                    grid.set_style(clipped, |style| cellix_render::Style { fg, ..style });
+                }
+                let next = rope.len_lines().min(line + 1);
+                if next == line + 1 && next < rope.len_lines() {
+                    at = rope.line_to_char(next);
+                } else {
+                    break;
                 }
             }
         }

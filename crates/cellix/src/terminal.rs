@@ -2,6 +2,7 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use base64::Engine;
 use cellix_input::{Event, Key, KeyEvent, Mods, MouseEvent, MouseKind};
 use cellix_render::{Grid, SoftwareRasterizer};
 use cellix_term::{
@@ -185,6 +186,10 @@ pub fn run(paths: Vec<PathBuf>) -> io::Result<()> {
         let mut grid = Grid::new(width, height, app.background());
         app.draw(&mut grid);
         backend.present(&grid, &mut out)?;
+        if let Some(text) = app.outgoing_clipboard.take() {
+            let encoded = base64::engine::general_purpose::STANDARD.encode(text);
+            write!(out, "\x1b]52;c;{encoded}\x07")?;
+        }
         out.flush()?;
         if app.quit {
             return Ok(());

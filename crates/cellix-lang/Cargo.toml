@@ -1,0 +1,22 @@
+[package]
+name = "cellix-lang"
+description = "Language registry and highlighting for Cellix"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+tree-sitter = "0.27.1"
+tree-sitter-bash = "0.25.1"
+tree-sitter-go = "0.25.0"
+tree-sitter-highlight = "0.27.1"
+tree-sitter-javascript = "0.25.0"
+tree-sitter-json = "0.24.8"
+tree-sitter-md = "0.5.4"
+tree-sitter-python = "0.25.0"
+tree-sitter-rust = "0.24.2"
+tree-sitter-typescript = "0.23.2"
+
+[lints]
+workspace = true

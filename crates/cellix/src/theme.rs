@@ -1,3 +1,4 @@
+use cellix_lang::Token;
 use cellix_render::{Rgb, Style};
 
 /// Colours for the whole interface.
@@ -12,6 +13,12 @@ pub struct Theme {
     pub selection: Rgb,
     pub row_hover: Rgb,
     pub accent: Rgb,
+    pub keyword: Rgb,
+    pub string: Rgb,
+    pub comment: Rgb,
+    pub function: Rgb,
+    pub kind: Rgb,
+    pub number: Rgb,
 }
 
 fn style(fg: Rgb, bg: Rgb) -> Style {
@@ -19,6 +26,20 @@ fn style(fg: Rgb, bg: Rgb) -> Style {
         fg,
         bg,
         ..Style::default()
+    }
+}
+
+impl Theme {
+    pub fn token(&self, token: Token) -> Rgb {
+        match token {
+            Token::Keyword => self.keyword,
+            Token::String => self.string,
+            Token::Comment => self.comment,
+            Token::Function => self.function,
+            Token::Type => self.kind,
+            Token::Number | Token::Constant => self.number,
+            Token::Attribute | Token::Heading => self.accent,
+        }
     }
 }
 
@@ -38,6 +59,12 @@ impl Default for Theme {
             selection: Rgb(52, 66, 96),
             row_hover: Rgb(38, 42, 52),
             accent: Rgb(110, 168, 254),
+            keyword: Rgb(198, 146, 234),
+            string: Rgb(165, 214, 155),
+            comment: Rgb(106, 114, 130),
+            function: Rgb(130, 170, 255),
+            kind: Rgb(240, 198, 116),
+            number: Rgb(247, 140, 108),
         }
     }
 }

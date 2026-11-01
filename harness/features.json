@@ -60,7 +60,7 @@
     "milestone": 1,
     "title": "Explorer: create, rename, delete",
     "test": "explorer_create_rename_delete",
-    "passes": false
+    "passes": true
   },
   {
     "id": "mouse",
@@ -88,7 +88,7 @@
     "milestone": 2,
     "title": "Copy, cut and paste, including bracketed paste",
     "test": "bracketed_paste_is_one_undo",
-    "passes": false
+    "passes": true
   },
   {
     "id": "multicursor",
@@ -109,28 +109,28 @@
     "milestone": 2,
     "title": "Split panes",
     "test": "split_shows_two_panes",
-    "passes": false
+    "passes": true
   },
   {
     "id": "palette",
     "milestone": 2,
     "title": "Command palette and quick open",
     "test": "quick_open_fuzzy_matches",
-    "passes": false
+    "passes": true
   },
   {
     "id": "highlight",
     "milestone": 2,
     "title": "Tree-sitter highlighting from a language registry",
     "test": "rust_keywords_are_highlighted",
-    "passes": false
+    "passes": true
   },
   {
     "id": "reload",
     "milestone": 2,
     "title": "Open files refresh when an agent changes them on disk",
     "test": "external_change_reloads_clean_buffer",
-    "passes": false
+    "passes": true
   },
   {
     "id": "diff",

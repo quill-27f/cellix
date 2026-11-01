@@ -3,6 +3,7 @@
 mod app;
 mod editor;
 mod explorer;
+mod palette;
 mod terminal;
 mod theme;
 
