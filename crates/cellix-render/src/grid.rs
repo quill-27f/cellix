@@ -6,8 +6,9 @@ use crate::icon::{Icon, Piece};
 use crate::measure::Font;
 use crate::paint::{Bounds, Paint, UNIT, units};
 
-/// An average letter of a button's label, in cells.
-const BUTTON_CHAR_WIDTH: f32 = 0.58;
+/// Heights of a button, in rows.
+const BUTTON_HEIGHT: f32 = 0.9;
+const LARGE_BUTTON_HEIGHT: f32 = 1.22;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Rgb(pub u8, pub u8, pub u8);
@@ -132,6 +133,7 @@ impl Grid {
                     ..Font::default()
                 },
                 align_right: false,
+                centred: false,
                 underline: false,
             });
         }
@@ -155,6 +157,7 @@ impl Grid {
             color,
             font,
             align_right: false,
+            centred: false,
             underline,
         });
     }
@@ -193,6 +196,7 @@ impl Grid {
                 ..Font::default()
             },
             align_right: true,
+            centred: false,
             underline: false,
         });
     }
@@ -201,15 +205,41 @@ impl Grid {
     pub fn field(&mut self, rect: Rect, behind: Rgb, fill: Rgb, border: Rgb) {
         self.panel(Bounds::inset(rect, 0.0, 0.0), 0, Some(behind), None);
         self.panel(
-            Bounds::inset(rect, 0.15, 0.08),
+            Bounds::inset(rect, 0.15, 0.03),
             22,
             Some(fill),
             Some(border),
         );
     }
 
-    /// A rounded button. The cell tier shows `cells`, which may be wider than the label.
+    /// A rounded button in a row of its own. The cell tier shows `cells`, which may be
+    /// wider than the label.
     pub fn button(&mut self, x: u16, y: u16, cells: &str, label: &str, fill: Rgb, style: Style) {
+        self.button_of(BUTTON_HEIGHT, (x, y), cells, label, fill, style);
+    }
+
+    /// A button that stands past its row, for where there's air around it.
+    pub fn large_button(
+        &mut self,
+        x: u16,
+        y: u16,
+        cells: &str,
+        label: &str,
+        fill: Rgb,
+        style: Style,
+    ) {
+        self.button_of(LARGE_BUTTON_HEIGHT, (x, y), cells, label, fill, style);
+    }
+
+    fn button_of(
+        &mut self,
+        height: f32,
+        (x, y): (u16, u16),
+        cells: &str,
+        label: &str,
+        fill: Rgb,
+        style: Style,
+    ) {
         let width = cells.chars().count() as u16;
         self.put_str(
             x,
@@ -221,22 +251,26 @@ impl Grid {
             },
             self.width,
         );
-        let bounds = Bounds::cells(x as f32, y as f32 + 0.1, width as f32, 0.8);
-        self.panel(bounds, 20, Some(fill), None);
-        // Centred by an estimate, because a grid can't measure text and labels are short.
-        let text_width = label.chars().count() as f32 * BUTTON_CHAR_WIDTH;
-        let inset = ((width as f32 - text_width) / 2.0).max(0.3);
+        let top = y as f32 + (1.0 - height) / 2.0;
+        let bounds = Bounds::cells(x as f32, top, width as f32, height);
+        self.panel(bounds, 22, Some(fill), None);
+        self.centred_text(x as f32 + width as f32 / 2.0, y, label, style.fg, 90);
+    }
+
+    /// Paints text centred on `x`.
+    pub fn centred_text(&mut self, x: f32, y: u16, text: &str, color: Rgb, size: u8) {
         self.paint.push(Paint::Text {
-            x: units(x as f32 + inset),
+            x: units(x),
             y: y as i32 * UNIT,
-            max_width: units(width as f32),
-            text: label.to_string(),
-            color: style.fg,
+            max_width: units(self.width as f32),
+            text: text.to_string(),
+            color,
             font: Font {
-                size: 90,
+                size,
                 ..Font::default()
             },
             align_right: false,
+            centred: true,
             underline: false,
         });
     }

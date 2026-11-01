@@ -76,6 +76,8 @@ impl Item {
 pub struct Menu {
     area: Rect,
     items: Vec<Item>,
+    /// Whether each rule has a blank row of its own, which needs the room.
+    spaced: bool,
     /// The row the keyboard is on.
     pub selected: Option<usize>,
 }
@@ -84,7 +86,10 @@ impl Menu {
     /// Opens at `(x, y)`, or as near as fits on screen.
     pub fn new((x, y): (u16, u16), items: Vec<Item>, measure: &dyn Measure, screen: Rect) -> Self {
         let width = Self::width(&items, measure).min(screen.w);
-        let height = (items.len() as u16).min(screen.h.saturating_sub(2));
+        let room = screen.h.saturating_sub(2);
+        let rules = items.iter().filter(|i| i.rule).count() as u16;
+        let spaced = items.len() as u16 + rules <= room;
+        let height = (items.len() as u16 + if spaced { rules } else { 0 }).min(room);
         let x = x.min(screen.right().saturating_sub(width));
         let bottom = screen.bottom().saturating_sub(1);
         // A menu that won't fit below the pointer opens upward from it.
@@ -98,6 +103,7 @@ impl Menu {
         Self {
             area: Rect::new(x, y, width, height),
             items,
+            spaced,
             selected: None,
         }
     }
@@ -116,11 +122,18 @@ impl Menu {
         ((widest + INSET * 2.0).ceil() as u16 + 1).max(MIN_WIDTH)
     }
 
+    /// The screen row of an item, counting the blank rows of the rules above it.
+    fn row_of(&self, index: usize) -> u16 {
+        let rules = self.items[..=index].iter().filter(|i| i.rule).count();
+        let blank = if self.spaced { rules } else { 0 };
+        self.area.y + (index + blank) as u16
+    }
+
     pub fn row_at(&self, x: u16, y: u16) -> Option<usize> {
-        self.area
-            .contains(x, y)
-            .then(|| (y - self.area.y) as usize)
-            .filter(|row| *row < self.items.len())
+        if !self.area.contains(x, y) {
+            return None;
+        }
+        (0..self.items.len()).find(|i| self.row_of(*i) == y)
     }
 
     pub fn action(&self, row: usize) -> Option<&Action> {
@@ -157,29 +170,39 @@ impl Menu {
             bg: theme.popup,
             ..theme.bar
         };
-        let quiet = Style {
-            fg: theme.status.fg,
+        let keys_style = Style {
+            fg: theme.popup_dim,
             ..base
         };
-        for (row, item) in self.items.iter().take(area.h as usize).enumerate() {
-            let y = area.y + row as u16;
+        let greyed = Style {
+            fg: theme.disabled,
+            ..base
+        };
+        for (row, item) in self.items.iter().enumerate() {
+            let y = self.row_of(row);
+            if y >= area.bottom() {
+                break;
+            }
             let line = Rect::new(area.x, y, area.w, 1);
             if item.rule {
                 let across = area.w as f32 - INSET * 2.0;
-                let rule = Bounds::cells(area.x as f32 + INSET, y as f32, across, 0.0);
+                let above = if self.spaced { 0.5 } else { 0.0 };
+                let at = y as f32 - above;
+                let rule = Bounds::cells(area.x as f32 + INSET, at, across, 0.0);
                 grid.hairline(rule, theme.popup_border);
             }
             let usable = item.action.is_some();
             let hovered = hover.is_some_and(|h| line.contains(h.0, h.1));
             if usable && (self.selected == Some(row) || hovered) {
-                grid.panel(Bounds::inset(line, 0.35, 0.08), 16, Some(theme.pick), None);
+                grid.panel(Bounds::inset(line, 0.35, 0.055), 18, Some(theme.pick), None);
             }
-            let style = if usable { base } else { quiet };
+            let style = if usable { base } else { greyed };
             let x = area.x as f32 + INSET;
             grid.label_at(x, area.x + 1, y, item.label, style, area.right(), 100);
             if let Some(keys) = item.keys {
                 let right = area.right().saturating_sub(1);
-                grid.label_right(right, y, keys, quiet, KEYS_SIZE);
+                let shown = if usable { keys_style } else { greyed };
+                grid.label_right(right, y, keys, shown, KEYS_SIZE);
             }
         }
     }
@@ -230,11 +253,21 @@ mod tests {
     }
 
     #[test]
+    fn a_short_window_gives_up_the_blank_rows_first() {
+        let short = Rect::new(0, 0, 80, 5);
+        let menu = Menu::new((1, 1), items(), &CellMeasure, short);
+        assert_eq!(menu.area.h, 3);
+        assert_eq!(menu.row_at(2, menu.area.y + 2), Some(2));
+    }
+
+    #[test]
     fn a_greyed_row_does_nothing() {
         let menu = Menu::new((1, 1), items(), &CellMeasure, SCREEN);
         assert_eq!(menu.action(1), None);
         assert_eq!(menu.action(0), Some(&Action::Run(Command::Cut)));
         assert_eq!(menu.row_at(2, 2), Some(1));
+        assert_eq!(menu.row_at(2, 3), None, "the rule has this row to itself");
+        assert_eq!(menu.row_at(2, 4), Some(2));
         assert_eq!(menu.row_at(2, 9), None);
     }
 }

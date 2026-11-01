@@ -30,6 +30,8 @@ const MIN_MINIMAP_PANE: u16 = 90;
 /// Files up to this size highlight as they're drawn. Past it, a background thread does it,
 /// because a full reparse on each key starts to show.
 const MAX_INLINE_HIGHLIGHT: usize = 32 * 1024;
+/// How far a tall heading sits below its row: closer to its own text than to what's above.
+const TALL_DROP: f32 = 0.9;
 const PAGE_MARGIN: u16 = 2;
 const WIDE_PAGE_MARGIN: u16 = 4;
 /// How wide a page can be set.
@@ -345,7 +347,7 @@ impl Editor {
 
     fn page_width(area: Rect) -> usize {
         area.w
-            .saturating_sub(Self::page_margin(area) * 2)
+            .saturating_sub(Self::page_margin(area) * 2 + 1)
             .clamp(1, MAX_PAGE_WIDTH) as usize
     }
 
@@ -1287,7 +1289,7 @@ impl Editor {
         for (line, change) in &self.line_changes().1 {
             if *line >= self.top && *line < self.top + area.h as usize {
                 let y = area.y + (*line - self.top) as u16;
-                self.draw_change(grid, area.x as f32 + gutter as f32 - 1.0, y, *change, theme);
+                self.draw_change(grid, area.x as f32 + gutter as f32 - 0.7, y, *change, theme);
             }
         }
         for (start, end) in self.found.iter().copied() {
@@ -1445,7 +1447,7 @@ impl Editor {
             }
             // A tall heading on the last row would reach into the status bar, which paint
             // can't be clipped by, so it waits until it fits.
-            if !(proportional && row.tall && y + 1 >= area.bottom()) {
+            if !(proportional && row.tall && y + 2 >= area.bottom()) {
                 self.draw_page_row(grid, row, (left, y), area, bg, theme);
             }
         }
@@ -1459,7 +1461,7 @@ impl Editor {
                 if row.tall
                     && let Some(caret) = &mut grid.caret
                 {
-                    caret.y += units(0.5);
+                    caret.y += units(TALL_DROP);
                 }
             }
         }
@@ -1479,7 +1481,7 @@ impl Editor {
         let size = row.glyphs.first().map_or(100, |g| g.font.size);
         let scale = (size as f32 - MARK_SIZE as f32) / 100.0;
         let drop = BASELINE * INTERFACE_SIZE * scale;
-        let top = y as f32 + if row.tall { 0.5 } else { 0.0 } + drop;
+        let top = y as f32 + if row.tall { TALL_DROP } else { 0.0 } + drop;
         let font = Font {
             size: MARK_SIZE,
             ..Font::default()
@@ -1545,7 +1547,7 @@ impl Editor {
         if !proportional {
             return;
         }
-        let text_y = y as f32 + if row.tall { 0.5 } else { 0.0 };
+        let text_y = y as f32 + if row.tall { TALL_DROP } else { 0.0 };
         let right = area.right() as f32;
         let mut i = 0;
         while i < row.glyphs.len() {

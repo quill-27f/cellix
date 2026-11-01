@@ -10,8 +10,10 @@ use crate::palette::{Input, input};
 use crate::theme::Theme;
 
 /// Rows above the results: title, query, replacement, summary.
-const HEADER_ROWS: u16 = 4;
+const HEADER_ROWS: u16 = 6;
 const REPLACE_ALL: &str = "All";
+/// The replace field, a row clear of the search field.
+const REPLACE_ROW: u16 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Field {
@@ -135,8 +137,10 @@ impl Search {
     pub fn hit(&self, area: Rect, x: u16, y: u16) -> Option<Hit> {
         match y.checked_sub(area.y)? {
             1 => Some(Hit::Field(Field::Query)),
-            2 if x + REPLACE_ALL.len() as u16 + 2 >= area.right() => Some(Hit::ReplaceAll),
-            2 => Some(Hit::Field(Field::Replace)),
+            REPLACE_ROW if x + REPLACE_ALL.len() as u16 + 2 >= area.right() => {
+                Some(Hit::ReplaceAll)
+            }
+            REPLACE_ROW => Some(Hit::Field(Field::Replace)),
             row if row >= HEADER_ROWS => {
                 let index = self.top + (row - HEADER_ROWS) as usize;
                 match self.rows().get(index)? {
@@ -193,11 +197,18 @@ impl Search {
             80,
         );
         self.draw_box(grid, area, area.y + 1, Field::Query, measure, theme);
-        self.draw_box(grid, area, area.y + 2, Field::Replace, measure, theme);
+        self.draw_box(
+            grid,
+            area,
+            area.y + REPLACE_ROW,
+            Field::Replace,
+            measure,
+            theme,
+        );
         let button = area.right().saturating_sub(REPLACE_ALL.len() as u16 + 1);
         grid.glyph(
             button as f32 - 0.2,
-            area.y + 2,
+            area.y + REPLACE_ROW,
             Icon::ReplaceAll,
             theme.sidebar.fg,
             " ",
@@ -205,7 +216,7 @@ impl Search {
         );
         grid.put_str(
             button,
-            area.y + 2,
+            area.y + REPLACE_ROW,
             REPLACE_ALL,
             Style {
                 painted: true,
@@ -238,7 +249,7 @@ impl Search {
         grid.label_at(
             area.x as f32 + 2.0,
             area.x + 2,
-            area.y + 3,
+            area.y + REPLACE_ROW + 2,
             &summary,
             dim,
             area.right(),

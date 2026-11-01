@@ -209,6 +209,7 @@ def main():
     set_size(COLS, ROWS)
     screen = Screen()
     alive = [True]
+    received = [0]
 
     def pump(seconds):
         """Runs the terminal for a while. Returns seconds until the first frame, if any."""
@@ -231,6 +232,7 @@ def main():
                 if b"panicked" in data:
                     text = re.sub(rb"\x1b[\[_\]][^\x1b]*(\x1b\\\\)?", b"", data)
                     print(text.decode("utf8", "replace")[-600:], flush=True)
+                received[0] += len(data)
                 screen.feed(data)
             for reply in screen.replies:
                 os.write(master, reply.encode())
@@ -284,6 +286,14 @@ def main():
             set_size(step[1], step[2])
             pump(0.4)
         elif kind == "shot":
+            # A big change takes a while to draw, and half of one is nobody's screen.
+            quiet = time.time()
+            start = time.time()
+            while time.time() - quiet < 0.3 and time.time() - start < 10 and alive[0]:
+                before = received[0]
+                pump(0.02)
+                if received[0] - before > 256:
+                    quiet = time.time()
             png(step[1], *screen.picture())
         elif kind == "log":
             print(step[1], flush=True)

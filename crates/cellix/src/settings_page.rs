@@ -54,7 +54,7 @@ const CARD_HEIGHT: u16 = 8;
 const PREVIEW_ROWS: u16 = 6;
 const SEGMENT_WIDTH: u16 = 11;
 const BUTTON_WIDTH: u16 = 16;
-const TOGGLE_WIDTH: f32 = 2.2;
+const TOGGLE_WIDTH: f32 = 2.6;
 const TITLE_SIZE: u8 = 170;
 const NOTE_SIZE: u8 = 90;
 const RADIUS: u8 = 30;
@@ -143,7 +143,7 @@ impl SettingsPage {
     /// Where the page's content goes, under the tabs.
     fn content(area: Rect) -> Rect {
         let side = if area.w >= SIDE_NAV { NAV_WIDTH + 2 } else { 0 };
-        let top = area.y + if side > 0 { 3 } else { 4 };
+        let top = area.y + if side > 0 { 2 } else { 4 };
         let left = area.x + side + 2;
         let width = area.right().saturating_sub(left + 2).min(MAX_WIDTH);
         Rect::new(left, top, width, area.bottom().saturating_sub(top))
@@ -155,7 +155,7 @@ impl SettingsPage {
         let mut spots = Vec::new();
         for (i, (name, section)) in SECTIONS.iter().enumerate() {
             let rect = if area.w >= SIDE_NAV {
-                Rect::new(area.x + 2, area.y + 3 + i as u16, NAV_WIDTH, 1)
+                Rect::new(area.x + 2, area.y + 2 + i as u16, NAV_WIDTH, 1)
             } else {
                 let before: usize = SECTIONS[..i].iter().map(|s| s.0.len() + 3).sum();
                 let width = name.len() as u16 + 2;
@@ -286,7 +286,7 @@ impl SettingsPage {
             hovered.then_some(theme.row_hover)
         };
         if let Some(fill) = wash {
-            grid.panel(Bounds::inset(rect, 0.0, 0.06), 22, Some(fill), None);
+            grid.panel(Bounds::inset(rect, 0.0, 0.055), 18, Some(fill), None);
         }
         let style = Style {
             fg: if on { theme.accent } else { theme.text.fg },
@@ -305,13 +305,9 @@ impl SettingsPage {
         theme: &Theme,
     ) {
         heading(grid, page, "Editor", "How the text behaves.", theme);
-        draw_text(
-            grid,
-            page,
-            page.y + 3,
-            ("Keymap", "Standard works as in VS Code."),
-            theme,
-        );
+        let room = page.right().saturating_sub(SEGMENT_WIDTH * 3 + 1);
+        let keymap = ("Keymap", "Standard works as in VS Code.");
+        draw_text(grid, page, (page.y + 3, room), keymap, theme);
         for (rect, control) in spots {
             if let Control::Keymap(name) = control {
                 let label = KEYMAPS.iter().find(|k| k.0 == *name).map_or("", |k| k.1);
@@ -377,7 +373,7 @@ impl SettingsPage {
             (_, true) => (
                 "Installed",
                 theme.git_added,
-                "Opens as a pane in every Claude session, with no flags to remember.",
+                "Opens as a pane in every Claude session, with no flags.",
                 "Remove",
             ),
             (true, false) => (
@@ -424,14 +420,14 @@ impl SettingsPage {
         match found.ghostty_keeps_cmd_d {
             Some(true) => {
                 let title = ("Ghostty", "Cmd+D opens a split", theme.attention);
-                let detail = "Ghostty keeps Cmd+D, so Cellix never sees it. Ctrl+D always works.";
+                let detail = "Ghostty keeps Cmd+D for itself. Ctrl+D always works.";
                 draw_block(grid, page, 2, title, detail, theme);
                 let spot = Rect::new(spot.x, page.y + 14, BUTTON_WIDTH, 1);
                 draw_button(grid, spot, "Free Cmd+D", true, hover, theme);
             }
             Some(false) => {
                 let title = ("Ghostty", "Cmd+D is free", theme.git_added);
-                let detail = "Cmd+D selects the next match. Reload Ghostty's config if it doesn't.";
+                let detail = "Reload Ghostty's config if Cmd+D doesn't select yet.";
                 draw_block(grid, page, 2, title, detail, theme);
             }
             None => {}
@@ -471,8 +467,14 @@ fn draw_note(grid: &mut Grid, page: Rect, y: u16, text: &str, theme: &Theme) {
     grid.label_at(x, page.x, y, text, quiet, page.right(), NOTE_SIZE - 10);
 }
 
-/// A title with a line under it, at the left of a row of two.
-fn draw_text(grid: &mut Grid, page: Rect, y: u16, (title, detail): (&str, &str), theme: &Theme) {
+/// A title with a line under it, at the left of a row of two, stopping before `room`.
+fn draw_text(
+    grid: &mut Grid,
+    page: Rect,
+    (y, room): (u16, u16),
+    (title, detail): (&str, &str),
+    theme: &Theme,
+) {
     let name = Style {
         bold: true,
         ..theme.text
@@ -481,7 +483,6 @@ fn draw_text(grid: &mut Grid, page: Rect, y: u16, (title, detail): (&str, &str),
         fg: theme.gutter.fg,
         ..theme.text
     };
-    let room = page.right().saturating_sub(SEGMENT_WIDTH * 3 + 1);
     grid.label(page.x, y, title, name, room);
     grid.label(page.x, y + 1, detail, quiet, room);
 }
@@ -489,16 +490,17 @@ fn draw_text(grid: &mut Grid, page: Rect, y: u16, (title, detail): (&str, &str),
 fn draw_toggle(grid: &mut Grid, page: Rect, y: u16, text: (&str, &str), on: bool, theme: &Theme) {
     let above = Bounds::cells(page.x as f32, y as f32 - 0.5, page.w as f32, 0.0);
     grid.hairline(above, theme.border);
-    draw_text(grid, page, y, text, theme);
+    let room = page.right().saturating_sub(TOGGLE_WIDTH.ceil() as u16 + 2);
+    draw_text(grid, page, (y, room), text, theme);
     let right = page.right() as f32;
     let x = right - TOGGLE_WIDTH;
     let track = if on { theme.button } else { theme.popup_border };
-    let bounds = Bounds::cells(x, y as f32 + 0.2, TOGGLE_WIDTH, 0.6);
-    grid.panel(bounds, RADIUS, Some(track), None);
-    let knob_x = if on { right - 1.0 } else { x + 0.15 };
+    let bounds = Bounds::cells(x, y as f32 + 0.12, TOGGLE_WIDTH, 0.76);
+    grid.panel(bounds, 38, Some(track), None);
+    let knob_x = if on { right - 1.2 } else { x + 0.17 };
     let knob_color = if on { theme.button_text } else { theme.text.fg };
-    let knob = Bounds::cells(knob_x, y as f32 + 0.28, 0.85, 0.44);
-    grid.panel(knob, 22, Some(knob_color), None);
+    let knob = Bounds::cells(knob_x, y as f32 + 0.2, 1.03, 0.6);
+    grid.panel(knob, 30, Some(knob_color), None);
     let hidden = Style {
         painted: true,
         ..theme.text
@@ -553,6 +555,11 @@ fn draw_card(grid: &mut Grid, rect: Rect, name: &str, (on, hovered): (bool, bool
         Some(theme.border)
     };
     grid.panel(Bounds::cells(x, y, w, rows), RADIUS, None, edge);
+    if on {
+        // Twice over, so the choice shows at a glance.
+        let inner = Bounds::cells(x + 0.06, y + 0.03, w - 0.12, rows - 0.06);
+        grid.panel(inner, RADIUS, None, edge);
+    }
     let label_y = rect.y + PREVIEW_ROWS;
     let style = Style {
         bold: on,
@@ -630,7 +637,7 @@ fn draw_button(
     let fill = match (primary, hovered) {
         (true, _) => theme.button,
         (false, true) => theme.pick,
-        (false, false) => theme.row_hover,
+        (false, false) => theme.quiet_button(theme.tab.bg),
     };
     let fg = if primary {
         theme.button_text
@@ -639,7 +646,7 @@ fn draw_button(
     };
     let style = Style { fg, ..theme.text };
     let cells = format!("{label:^width$}", width = rect.w as usize);
-    grid.button(rect.x, rect.y, &cells, label, fill, style);
+    grid.large_button(rect.x, rect.y, &cells, label, fill, style);
 }
 
 fn draw_keyboard(grid: &mut Grid, page: Rect, theme: &Theme) {

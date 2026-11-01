@@ -2,14 +2,13 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use cellix_core::{Entry, Workspace};
-use cellix_render::{Bounds, Grid, Icon, Rect, Rgb, Style};
+use cellix_render::{Bounds, Font, Grid, Icon, Measure, Paint, Rect, Rgb, Style};
 
 use crate::theme::Theme;
 
 /// Rows above the tree: the EXPLORER title and the folder name.
 const HEADER_ROWS: u16 = 1;
-/// A letter of interface text, as a share of a cell.
-const LETTER_WIDTH: f32 = 0.56;
+const BRANCH_SIZE: u8 = 90;
 
 /// The file tree sidebar.
 #[derive(Default)]
@@ -46,6 +45,7 @@ impl Explorer {
         grid: &mut Grid,
         area: Rect,
         (root_name, branch): (&str, Option<&str>),
+        measure: &dyn Measure,
         hover: Option<(u16, u16)>,
         theme: &Theme,
     ) {
@@ -56,10 +56,18 @@ impl Explorer {
         };
         let end = grid.label(area.x + 2, area.y, root_name, heading, area.right());
         if let Some(branch) = branch {
-            // Proportional text is narrower than its cells, so go by the letters.
-            let name_end = area.x as f32 + 2.0 + root_name.chars().count() as f32 * LETTER_WIDTH;
-            let x = name_end + 1.0;
-            let wide = branch.chars().count() as f32 * LETTER_WIDTH + 1.6;
+            // Proportional text is narrower than its cells, so measure it.
+            let bold = Font {
+                bold: true,
+                ..Font::default()
+            };
+            let small = Font {
+                size: BRANCH_SIZE,
+                ..Font::default()
+            };
+            let x = area.x as f32 + 2.0 + measure.width(root_name, bold) + 1.0;
+            let chevron = 0.9;
+            let wide = measure.width(branch, small) + 1.0 + chevron;
             let hovered = hover.is_some_and(|h| h.1 == area.y && area.contains(h.0, h.1));
             let fill = if hovered { theme.pick } else { theme.row_hover };
             let pill = Bounds::cells(x - 0.5, area.y as f32 + 0.14, wide, 0.72);
@@ -68,7 +76,12 @@ impl Explorer {
                 fg: theme.status.fg,
                 ..theme.sidebar
             };
-            grid.label_at(x, end + 1, area.y, branch, dim, area.right(), 90);
+            grid.label_at(x, end + 1, area.y, branch, dim, area.right(), BRANCH_SIZE);
+            grid.paint.push(Paint::Icon {
+                bounds: Bounds::cells(x + wide - chevron - 0.75, area.y as f32 + 0.32, 0.6, 0.36),
+                icon: Icon::ChevronDown,
+                color: theme.status.fg,
+            });
         }
         for (row, entry) in self.entries.iter().skip(self.top).enumerate() {
             let y = area.y + HEADER_ROWS + row as u16;
@@ -84,7 +97,7 @@ impl Explorer {
                     theme.row_hover
                 };
                 let line = Rect::new(area.x, y, area.w, 1);
-                grid.panel(Bounds::inset(line, 0.4, 0.03), 14, Some(fill), None);
+                grid.panel(Bounds::inset(line, 0.4, 0.055), 18, Some(fill), None);
             }
             let status = self.status.get(&entry.path).copied();
             let style = match status {

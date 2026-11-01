@@ -13,6 +13,12 @@ const ROWS: u16 = 12;
 const TEXT_INSET: f32 = 1.4;
 /// How far a floating panel reaches past its rows, so nothing sits on its edge.
 const PANEL_PADDING: f32 = 0.3;
+/// Rows above the list: the search field, and a row holding the line under it.
+const HEADER_ROWS: u16 = 2;
+/// Where that line falls, as far below the field's text as the panel's edge is above it.
+const HEADER_LINE: f32 = 1.3;
+/// Space between the caret and the hint in an empty field.
+const HINT_GAP: f32 = 0.25;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Item {
@@ -21,6 +27,8 @@ pub enum Item {
     /// A branch to switch to, and when it last moved.
     Branch(String, String),
     NewBranch,
+    /// A blank row with a line through it, between groups.
+    Gap,
 }
 
 impl Item {
@@ -30,13 +38,14 @@ impl Item {
             Self::Command(label, _) => label,
             Self::Branch(name, _) => name,
             Self::NewBranch => "New branch…",
+            Self::Gap => "",
         }
     }
 
     /// What sits at the right of the row.
     fn keys(&self) -> Option<&str> {
         match self {
-            Self::File(..) | Self::NewBranch => None,
+            Self::File(..) | Self::NewBranch | Self::Gap => None,
             Self::Command(_, command) => keys_of(*command),
             Self::Branch(_, when) => Some(when),
         }
@@ -185,6 +194,7 @@ impl Palette {
             .items
             .iter()
             .enumerate()
+            .filter(|(_, item)| **item != Item::Gap)
             .filter_map(|(i, item)| Some((fuzzy_score(&self.query, item.label())?, i)))
             .collect();
         scored.sort_by_key(|(score, i)| (-score, *i));
@@ -195,6 +205,9 @@ impl Palette {
     pub fn move_by(&mut self, delta: isize) {
         let last = self.matches.len().saturating_sub(1) as isize;
         self.selected = (self.selected as isize + delta).clamp(0, last) as usize;
+        if self.current() == Some(&Item::Gap) {
+            self.selected = (self.selected as isize + delta).clamp(0, last) as usize;
+        }
     }
 
     pub fn current(&self) -> Option<&Item> {
@@ -203,11 +216,16 @@ impl Palette {
 
     pub fn area(screen: Rect) -> Rect {
         let width = WIDTH.min(screen.w);
-        Rect::new(screen.x + (screen.w - width) / 2, 2, width, ROWS + 1)
+        Rect::new(
+            screen.x + (screen.w - width) / 2,
+            2,
+            width,
+            ROWS + HEADER_ROWS,
+        )
     }
 
     pub fn row_at(&self, screen: Rect, y: u16) -> Option<usize> {
-        let row = y.checked_sub(Self::area(screen).y + 1)? as usize;
+        let row = y.checked_sub(Self::area(screen).y + HEADER_ROWS)? as usize;
         (row < self.matches.len().min(ROWS as usize)).then_some(row)
     }
 
@@ -220,7 +238,7 @@ impl Palette {
     ) {
         let area = Self::area(grid.area());
         let rows = self.matches.len().min(ROWS as usize) as u16;
-        let area = Rect::new(area.x, area.y, area.w, rows + 1);
+        let area = Rect::new(area.x, area.y, area.w, rows + HEADER_ROWS);
         raised(grid, area, theme);
         let base = Style {
             fg: theme.text.fg,
@@ -228,22 +246,30 @@ impl Palette {
             ..theme.bar
         };
         let dim = Style {
-            fg: theme.status.fg,
+            fg: theme.popup_dim,
             ..base
         };
         grid.glyph(
             area.x as f32 + TEXT_INSET,
             area.y,
             Icon::Search,
-            theme.status.fg,
+            theme.popup_dim,
             "⌕",
             base,
         );
-        // Clear of the icon, with the caret in the gap before the first letter.
+        // Clear of the icon. The hint waits a little past the caret, so they don't touch.
         let x = area.x as f32 + TEXT_INSET + 2.3;
         let cell = area.x + 4;
         if self.query.is_empty() {
-            grid.label_at(x, cell, area.y, self.hint, dim, area.right(), 100);
+            grid.label_at(
+                x + HINT_GAP,
+                cell,
+                area.y,
+                self.hint,
+                dim,
+                area.right(),
+                100,
+            );
         } else {
             grid.label_at(x, cell, area.y, &self.query, base, area.right(), 100);
         }
@@ -253,11 +279,18 @@ impl Palette {
         };
         let caret = x - 0.1 + measure.width(&self.query, font);
         grid.set_caret(caret, area.y, 0.56);
-        let edge = Bounds::cells(area.x as f32, area.y as f32 + 1.0, area.w as f32, 0.0);
+        let line_y = area.y as f32 + HEADER_LINE;
+        let edge = Bounds::cells(area.x as f32, line_y, area.w as f32, 0.0);
         grid.hairline(edge, theme.popup_border);
         for (row, index) in self.matches.iter().take(ROWS as usize).enumerate() {
-            let y = area.y + 1 + row as u16;
+            let y = area.y + HEADER_ROWS + row as u16;
             let line = Rect::new(area.x, y, area.w, 1);
+            if self.items[*index] == Item::Gap {
+                let across = area.w as f32 - TEXT_INSET * 2.0;
+                let rule = Bounds::cells(area.x as f32 + TEXT_INSET, y as f32 + 0.5, across, 0.0);
+                grid.hairline(rule, theme.popup_border);
+                continue;
+            }
             let hovered = hover.is_some_and(|h| line.contains(h.0, h.1));
             if row == self.selected || hovered {
                 let fill = if row == self.selected {
@@ -265,7 +298,7 @@ impl Palette {
                 } else {
                     theme.row_hover
                 };
-                grid.panel(Bounds::inset(line, 0.5, 0.1), 18, Some(fill), None);
+                grid.panel(Bounds::inset(line, 0.5, 0.055), 18, Some(fill), None);
             }
             let text = self.items[*index].label();
             let end = area.right().saturating_sub(16);
@@ -273,7 +306,7 @@ impl Palette {
             grid.label_at(inset, area.x + 2, y, text, base, end, 100);
             if let Some(keys) = self.items[*index].keys() {
                 let quiet = Style {
-                    fg: theme.status.fg,
+                    fg: theme.popup_dim,
                     ..base
                 };
                 grid.label_right(area.right().saturating_sub(2), y, keys, quiet, 85);

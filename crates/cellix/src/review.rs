@@ -25,7 +25,7 @@ const NUMBER_WIDTH: u16 = 5;
 const MIN_SIDE_BY_SIDE: u16 = 90;
 /// Corners as a percentage of a row's height.
 const CARD_RADIUS: u8 = 30;
-const HUNK_LABEL: usize = 48;
+const HUNK_LABEL: usize = 120;
 /// Turns listed in the timeline, newest first.
 const SHOWN_TURNS: usize = 6;
 const SHOWN_TESTS: usize = 3;
@@ -634,7 +634,7 @@ impl Review {
         let x = list.right() + 1;
         (
             Some(list),
-            Rect::new(x, area.y, area.right().saturating_sub(x), area.h),
+            Rect::new(x, area.y, area.right().saturating_sub(x + 1), area.h),
         )
     }
 

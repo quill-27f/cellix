@@ -216,7 +216,7 @@ impl Agents {
                     "Codex isn't installed"
                 },
                 self.codex_found,
-                theme.row_hover,
+                theme.quiet_button(theme.sidebar.bg),
                 theme.text.fg,
             ),
         ];
@@ -231,7 +231,7 @@ impl Agents {
                 ..theme.sidebar
             };
             let cells = format!("{label:^width$}", width = top.w as usize);
-            grid.button(top.x, top.y + row, &cells, label, fill, style);
+            grid.large_button(top.x, top.y + row, &cells, label, fill, style);
         }
     }
 

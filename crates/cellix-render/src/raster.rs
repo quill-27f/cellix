@@ -48,6 +48,9 @@ struct TextMask {
     alpha: Vec<u8>,
 }
 
+/// How dark a floating panel's shadow is at its edge, out of 255.
+const DARK_SHADOW: f32 = 110.0;
+const LIGHT_SHADOW: f32 = 38.0;
 /// Interface text is drawn at this size relative to the row height.
 pub const INTERFACE_SIZE: f32 = 0.60;
 /// Cached text lines before the cache is dropped, so a long session can't grow it forever.
@@ -232,12 +235,15 @@ impl SoftwareRasterizer {
                 color,
                 font,
                 align_right,
+                centred,
                 underline,
             } => {
                 let mask = self.text_mask(text, *font);
                 let mut left = scale(*x, cw).round() as i32;
                 if *align_right {
                     left -= mask.width as i32;
+                } else if *centred {
+                    left -= mask.width as i32 / 2;
                 }
                 // Tall text stays centred on its row.
                 let lift = (mask.height as i32 - ch as i32) / 2;
@@ -395,7 +401,10 @@ impl Target<'_> {
                 let d = rounded_distance(&s, x as f32 + 0.5, y as f32 + 0.5);
                 if shadow && d > 0.0 {
                     let fade = (1.0 - d / reach).clamp(0.0, 1.0);
-                    self.blend(x, y, Rgb(0, 0, 0), (fade * fade * 110.0) as u8);
+                    // A shadow heavy enough for dark surfaces is a grey halo on light ones.
+                    let light = fill.is_some_and(|f| f.0 > 180);
+                    let depth = if light { LIGHT_SHADOW } else { DARK_SHADOW };
+                    self.blend(x, y, Rgb(0, 0, 0), (fade * fade * depth) as u8);
                 }
                 let inside = ((0.5 - d) * 255.0).clamp(0.0, 255.0) as u8;
                 if let Some(color) = fill {

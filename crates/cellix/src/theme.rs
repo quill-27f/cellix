@@ -61,6 +61,10 @@ pub struct Theme {
     pub focus: Rgb,
     /// Floating panels such as the palette.
     pub popup: Rgb,
+    /// Secondary text on a floating panel, such as shortcuts.
+    pub popup_dim: Rgb,
+    /// What can't be done right now.
+    pub disabled: Rgb,
     pub popup_border: Rgb,
     /// The highlighted row of a list in a floating panel.
     pub pick: Rgb,
@@ -145,15 +149,15 @@ impl Theme {
     fn light() -> Self {
         let text = Rgb(38, 38, 46);
         let bg = Rgb(255, 255, 255);
-        let frame = Rgb(246, 246, 244);
-        let panel = Rgb(240, 240, 238);
+        let frame = Rgb(238, 238, 236);
+        let panel = Rgb(246, 246, 244);
         Self {
             text: style(text, bg),
             sidebar: style(Rgb(58, 58, 70), panel),
             bar: style(Rgb(59, 59, 62), panel),
             tab: style(Rgb(94, 94, 108), panel),
             tab_active: style(Rgb(51, 51, 51), bg),
-            gutter: style(Rgb(120, 120, 125), bg),
+            gutter: style(Rgb(102, 102, 110), bg),
             selection: Rgb(173, 214, 255),
             found: Rgb(255, 236, 170),
             row_hover: Rgb(232, 232, 230),
@@ -192,11 +196,21 @@ impl Theme {
             border: Rgb(229, 229, 229),
             focus: Rgb(0, 144, 241),
             popup: Rgb(255, 255, 255),
-            popup_border: Rgb(200, 200, 200),
+            popup_dim: Rgb(94, 94, 108),
+            disabled: Rgb(150, 150, 160),
+            popup_border: Rgb(214, 214, 214),
             pick: Rgb(232, 237, 249),
             button: Rgb(47, 91, 196),
             button_text: Rgb(255, 255, 255),
         }
+    }
+
+    /// A button that isn't the main one, as a wash over whatever's behind it.
+    pub fn quiet_button(&self, behind: Rgb) -> Rgb {
+        const WASH: i16 = 14;
+        let lighter = behind.0 < 128;
+        let by = if lighter { WASH } else { -WASH };
+        shifted(behind, (by, by, by))
     }
 
     pub fn token(&self, token: Token) -> Rgb {
@@ -223,7 +237,7 @@ impl Default for Theme {
             bar: style(Rgb(201, 201, 216), panel),
             tab: style(Rgb(154, 154, 178), panel),
             tab_active: style(Rgb(255, 255, 255), bg),
-            gutter: style(Rgb(140, 140, 166), bg),
+            gutter: style(Rgb(154, 154, 178), bg),
             selection: Rgb(62, 80, 130),
             found: Rgb(106, 84, 28),
             row_hover: Rgb(46, 46, 68),
@@ -234,14 +248,14 @@ impl Default for Theme {
             attention: Rgb(240, 180, 90),
             keyword: Rgb(143, 180, 255),
             string: Rgb(240, 185, 160),
-            comment: Rgb(122, 138, 160),
+            comment: Rgb(135, 149, 171),
             function: Rgb(232, 217, 160),
             kind: Rgb(127, 214, 194),
             number: Rgb(190, 214, 160),
-            added: Rgb(35, 61, 37),
-            removed: Rgb(72, 32, 32),
-            added_word: Rgb(46, 100, 54),
-            removed_word: Rgb(120, 45, 45),
+            added: Rgb(50, 72, 70),
+            removed: Rgb(78, 54, 66),
+            added_word: Rgb(60, 102, 86),
+            removed_word: Rgb(116, 62, 72),
             moved: Rgb(38, 46, 70),
             activity: style(Rgb(154, 154, 178), frame),
             activity_active: Rgb(143, 180, 255),
@@ -262,6 +276,8 @@ impl Default for Theme {
             border: Rgb(56, 56, 80),
             focus: Rgb(143, 180, 255),
             popup: Rgb(55, 55, 90),
+            popup_dim: Rgb(168, 168, 190),
+            disabled: Rgb(122, 122, 150),
             popup_border: Rgb(78, 78, 112),
             pick: Rgb(72, 80, 128),
             button: Rgb(143, 180, 255),

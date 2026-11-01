@@ -33,7 +33,7 @@ use crate::explorer::Explorer;
 use crate::find::Find;
 use crate::menu::{Action as MenuAction, Item as MenuItem, Menu};
 use crate::neovim::{self, Neovim};
-use crate::palette::{COMMANDS, Input, Item, Palette, input, popup};
+use crate::palette::{COMMANDS, Input, Item, Palette, input, popup, raised};
 use crate::rendered;
 use crate::review::{Hit, Review};
 use crate::search::{self, Field, Search};
@@ -61,6 +61,8 @@ const CONFIRM_HEIGHT: u16 = 6;
 const PLAN_BAR_WIDTH: u16 = 48;
 /// Corners as percentages of a row's height.
 const TAB_RADIUS: u8 = 22;
+/// Columns of a tab that aren't its name: margins, the gap and the close button.
+const TAB_PADDING: u16 = 5;
 const PILL_RADIUS: u8 = 30;
 /// What the explorer's status holds for a folder with changes inside, not a file.
 const DIRECTORY_MARK: char = '•';
@@ -1752,7 +1754,7 @@ impl App {
             ..base
         };
         let dim = Style {
-            fg: theme.status.fg,
+            fg: theme.popup_dim,
             ..base
         };
         grid.label(
@@ -1779,14 +1781,14 @@ impl App {
             let fill = match (on, hovered) {
                 (true, _) => theme.button,
                 (false, true) => theme.pick,
-                (false, false) => theme.tint,
+                (false, false) => theme.quiet_button(theme.popup),
             };
             let style = Style {
                 fg: if on { theme.button_text } else { theme.text.fg },
                 bg: fill,
                 ..base
             };
-            grid.button(*x, y, cells, confirm.buttons[i].0, fill, style);
+            grid.large_button(*x, y, cells, confirm.buttons[i].0, fill, style);
         }
     }
 
@@ -1993,7 +1995,7 @@ impl App {
                 self.branch_changed(&name, result);
             }
             Some(Item::NewBranch) => self.ask("New branch", PromptAction::NewBranch),
-            None => {}
+            Some(Item::Gap) | None => {}
         }
     }
 
@@ -2033,6 +2035,7 @@ impl App {
             .collect();
         // The branch you're on comes first, so the list opens on where you are.
         items.sort_by_key(|i| !matches!(i, Item::Branch(_, when) if when == "current"));
+        items.push(Item::Gap);
         items.push(Item::NewBranch);
         self.overlay = Overlay::Palette(Palette::asking(items, "Switch branch"));
     }
@@ -3230,6 +3233,8 @@ impl App {
         let Some((index, ..)) = tab else {
             return;
         };
+        // Under the strip, so the menu doesn't sit on the title it belongs to.
+        let y = y + 2;
         let path = self.editors[index].buffer.path().map(Path::to_path_buf);
         let others = self.editors.len() > 1;
         let on_file = |action: fn(PathBuf) -> MenuAction| {
@@ -3620,25 +3625,17 @@ impl App {
         }
     }
 
-    /// The close button is the last glyph: `×`, or `●` while the file has unsaved edits.
-    fn tab_label(editor: &Editor) -> String {
-        let close = if editor.buffer.is_dirty() {
-            "●"
-        } else {
-            "×"
-        };
-        format!("  {}  {close} ", editor.title())
+    /// Columns a tab takes, which hug its name: proportional text is narrower than its cells.
+    fn tab_width(&self, editor: &Editor) -> u16 {
+        let name = self.measure.width(&editor.title(), Font::default());
+        name.ceil() as u16 + TAB_PADDING
     }
 
     /// Tabs that fit, as (index, x, width), starting late enough to show the active one.
     /// Drawing and clicking share this, so a click always lands on what's shown.
     fn visible_tabs(&self) -> Vec<(usize, u16, u16)> {
         let area = self.tabs_area();
-        let widths: Vec<u16> = self
-            .editors
-            .iter()
-            .map(|e| Self::tab_label(e).chars().count() as u16 + 1)
-            .collect();
+        let widths: Vec<u16> = self.editors.iter().map(|e| self.tab_width(e) + 1).collect();
         let active = self.active().min(widths.len().saturating_sub(1));
         let mut first = 0;
         while first < active && widths[first..=active].iter().sum::<u16>() > area.w {
@@ -3690,7 +3687,9 @@ impl App {
             match self.sidebar_view {
                 SidebarView::Explorer => {
                     let header = (name.as_str(), self.branch.as_deref());
-                    self.explorer.draw(grid, area, header, self.hover, theme);
+                    let measure = &*self.measure;
+                    self.explorer
+                        .draw(grid, area, header, measure, self.hover, theme);
                 }
                 SidebarView::Search => self.search.draw(grid, area, &*self.measure, theme),
                 SidebarView::Agents => self.agents.draw(grid, area, self.hover, theme),
@@ -3766,6 +3765,11 @@ impl App {
 
     fn draw_overlay(&self, grid: &mut Grid) {
         let theme = &self.theme;
+        // The text's caret would stand on top of anything that floats over it.
+        if matches!(self.overlay, Overlay::Menu(_) | Overlay::Confirm(_)) {
+            grid.caret = None;
+            grid.cursor = None;
+        }
         match &self.overlay {
             Overlay::Palette(palette) => palette.draw(grid, self.hover, &*self.measure, theme),
             Overlay::Menu(menu) => menu.draw(grid, self.hover, theme),
@@ -3780,8 +3784,8 @@ impl App {
     fn draw_prompt(&self, grid: &mut Grid, prompt: &Prompt) {
         let screen = Rect::new(0, 0, self.size.0, self.size.1);
         let top = Palette::area(screen);
-        let area = Rect::new(top.x, top.y, top.w, 3);
-        popup(grid, area, &self.theme);
+        let area = Rect::new(top.x, top.y, top.w, 2);
+        raised(grid, area, &self.theme);
         let base = Style {
             fg: self.theme.text.fg,
             bg: self.theme.popup,
@@ -3867,7 +3871,6 @@ impl App {
                 },
                 ..self.theme.activity
             };
-            let pill = Rect::new(area.x + 1, y, u16::from(ACTIVITY_ICON.0), row.h);
             let wash = on.then_some(self.theme.tint);
             let wash = wash.or(hovered.then_some(self.theme.row_hover));
             let style = wash.map_or(style, |bg| Style { bg, ..style });
@@ -3883,22 +3886,37 @@ impl App {
                 }
             }
             if wash.is_some() {
-                grid.fill(pill, style);
-                let bounds = Bounds::inset(pill, 0.0, 0.0);
-                grid.corners(bounds, PILL_RADIUS, self.theme.activity.bg, ALL_CORNERS);
+                // Icons are cells, so the pill is too: the rail's full width, with paint
+                // bringing it in half a column at each side.
+                let across = Rect::new(area.x, y, area.w, row.h);
+                grid.fill(across, style);
+                let ground = self.theme.activity.bg;
+                let (h, top) = (row.h as f32, y as f32);
+                let inset = 0.5;
+                let right = area.right() as f32 - inset;
+                let left = area.x as f32 + inset;
+                grid.panel(
+                    Bounds::cells(area.x as f32, top, inset, h),
+                    0,
+                    Some(ground),
+                    None,
+                );
+                grid.panel(Bounds::cells(right, top, inset, h), 0, Some(ground), None);
+                let bounds = Bounds::cells(left, top, right - left, h);
+                grid.corners(bounds, PILL_RADIUS, ground, ALL_CORNERS);
             }
             grid.put_icon(area.x + 1, y, *icon, ACTIVITY_ICON, style);
             let changed = self.changed_count();
             if *command == Command::OpenDiff && changed > 0 {
                 let color = self.theme.button_text;
-                let badge = Bounds::cells(area.x as f32 + 2.6, y as f32 - 0.02, 1.5, 0.62);
+                let badge = Bounds::cells(area.x as f32 + 3.0, y as f32 - 0.16, 1.3, 0.58);
                 grid.panel(badge, 30, Some(self.theme.accent), None);
                 let font = Font {
                     bold: true,
                     size: BADGE_SIZE,
                     ..Font::default()
                 };
-                let (x, top) = (area.x as f32 + 3.0, y as f32 - 0.2);
+                let (x, top) = (area.x as f32 + 3.32, y as f32 - 0.36);
                 grid.text_run(
                     (x, top),
                     area.right() as f32,
@@ -3949,15 +3967,23 @@ impl App {
             grid.fill(tab, style);
             let editor = &self.editors[i];
             let name = editor.title();
-            let close_x = x + name.chars().count() as u16 + 4;
+            let close_x = x + width.saturating_sub(2);
             grid.label_at(x as f32 + 1.5, x + 2, area.y, &name, style, close_x, 100);
             if close_x < area.right() {
                 let dirty = editor.buffer.is_dirty();
                 let shown = if dirty { "●" } else { "×" };
+                let mark = Style {
+                    painted: true,
+                    ..style
+                };
                 if dirty && !hovered {
-                    grid.put_str(close_x, area.y, shown, style, area.right());
+                    grid.put_str(close_x, area.y, shown, mark, area.right());
+                    let dot =
+                        Bounds::cells(close_x as f32 + 0.45, area.y as f32 + 0.36, 0.56, 0.28);
+                    grid.panel(dot, 14, Some(theme.sidebar.fg), None);
                 } else if active || hovered {
-                    grid.glyph(close_x as f32, area.y, Icon::Close, style.fg, shown, style);
+                    let color = if hovered { style.fg } else { theme.tab.fg };
+                    grid.glyph(close_x as f32, area.y, Icon::Close, color, shown, style);
                 } else {
                     let quiet = Style {
                         painted: true,
@@ -4149,7 +4175,9 @@ impl App {
             ("Ctrl+G", "Review changes"),
             ("Ctrl+Shift+F", "Search the project"),
         ];
-        const WIDTH: u16 = 32;
+        /// Columns from a shortcut to what it does.
+        const KEYS_WIDTH: u16 = 10;
+        const WIDTH: u16 = 24;
         let main = self.main_area();
         if main.h < 12 {
             return;
@@ -4171,8 +4199,8 @@ impl App {
             ..theme.text
         };
         for (i, (key, what)) in ROWS.iter().enumerate() {
-            let line = y + 3 + i as u16;
-            let second = x + 15;
+            let line = y + 2 + i as u16;
+            let second = x + KEYS_WIDTH;
             grid.label_at(x as f32, x, line, key, keys, second, 95);
             grid.label_at(
                 second as f32,
@@ -4208,7 +4236,9 @@ impl App {
             .as_ref()
             .filter(|r| !r.is_proposal())
             .map_or_else(String::new, |r| {
-                format!("Reviewing {} files", r.changes.len())
+                let count = r.changes.len();
+                let files = if count == 1 { "file" } else { "files" };
+                format!("Reviewing {count} {files}")
             });
         let proposed = self
             .review
@@ -6590,10 +6620,10 @@ mod tests {
         let (dir, mut app) = project();
         app.open(&dir.path().join("alpha.txt")).unwrap();
         app.open(&dir.path().join("beta.rs")).unwrap();
-        let (x, y) = find(&screen(&app), "alpha.txt  ×");
+        let (x, y) = find(&screen(&app), "alpha.txt ×");
         app.handle(mouse(MouseKind::Left, x + 11, y));
         let text = screen(&app).text();
-        assert!(!text.contains("alpha.txt  ×"), "{text}");
+        assert!(!text.contains("alpha.txt ×"), "{text}");
         assert!(text.contains("fn main"), "{text}");
     }
 
@@ -6601,7 +6631,7 @@ mod tests {
     fn clicking_a_tab_name_does_not_close_it() {
         let (dir, mut app) = project();
         app.open(&dir.path().join("alpha.txt")).unwrap();
-        let (x, y) = find(&screen(&app), "alpha.txt  ×");
+        let (x, y) = find(&screen(&app), "alpha.txt ×");
         app.handle(mouse(MouseKind::Left, x + 2, y));
         assert!(screen(&app).text().contains("first line"));
     }

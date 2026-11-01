@@ -80,6 +80,8 @@ pub enum Paint {
         font: Font,
         /// `x` is the right edge rather than the left.
         align_right: bool,
+        /// `x` is the middle of the text. Only the rasterizer knows a text's true width.
+        centred: bool,
         /// Drawn under the text at its true width.
         underline: bool,
     },
