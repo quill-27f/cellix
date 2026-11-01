@@ -3,5 +3,8 @@
   "description": "Review agent work in Cellix and read the reviewer's comments back",
   "version": "0.1.0",
   "license": "MIT OR Apache-2.0",
-  "repository": "https://github.com/quill-27f/cellix"
+  "repository": "https://github.com/quill-27f/cellix",
+  "author": {
+    "name": "quill-27f"
+  }
 }

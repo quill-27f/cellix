@@ -150,7 +150,7 @@ enum SplitHost {
 }
 
 impl SplitHost {
-    fn command(self, agent: &str, root: &str, env: &[String]) -> Vec<String> {
+    fn command(self, agent: &[String], root: &str, env: &[String]) -> Vec<String> {
         let start: &[&str] = match self {
             Self::Tmux => &["tmux", "split-window", "-h", "-c", root],
             Self::Zellij => &["zellij", "run", "-d", "right", "--cwd", root, "--"],
@@ -160,7 +160,7 @@ impl SplitHost {
             words.push("env".to_string());
             words.extend_from_slice(env);
         }
-        words.push(agent.to_string());
+        words.extend_from_slice(agent);
         words
     }
 }
@@ -1603,18 +1603,35 @@ impl App {
 
     /// Runs the real agent beside the editor, in a split of whatever hosts Cellix. Hosting
     /// it ourselves would mean chasing every update, so this stays a launcher.
+    /// The environment and command that start an agent. For Claude Code they connect it to
+    /// this Cellix and load the plugin, with `cellix` on the path for the plugin's hooks.
+    fn agent_launch(&self, agent: &str) -> (Vec<String>, Vec<String>) {
+        let mut launch = vec![agent.to_string()];
+        if agent != "claude" {
+            return (Vec::new(), launch);
+        }
+        let mut env = Vec::new();
+        if let Some(ide) = &self.ide {
+            env.push(format!("CLAUDE_CODE_SSE_PORT={}", ide.port));
+            env.push("ENABLE_IDE_INTEGRATION=true".to_string());
+        }
+        let own_folder = std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(|folder| folder.display().to_string()));
+        if let (Some(folder), Ok(path)) = (own_folder, std::env::var("PATH")) {
+            env.push(format!("PATH={folder}:{path}"));
+        }
+        if let Some(plugin) = crate::plugin::install() {
+            launch.extend(["--plugin-dir".to_string(), plugin.display().to_string()]);
+        }
+        (env, launch)
+    }
+
     fn open_agent(&mut self, agent: &str) {
         let root = self.workspace.root().to_string_lossy().into_owned();
         let host = agent_split(|name| std::env::var(name).ok());
-        // What makes Claude Code connect to this Cellix by itself.
-        let env = match &self.ide {
-            Some(ide) if agent == "claude" => vec![
-                format!("CLAUDE_CODE_SSE_PORT={}", ide.port),
-                "ENABLE_IDE_INTEGRATION=true".to_string(),
-            ],
-            _ => Vec::new(),
-        };
-        let Some(command) = host.map(|host| host.command(agent, &root, &env)) else {
+        let (env, launch) = self.agent_launch(agent);
+        let Some(command) = host.map(|host| host.command(&launch, &root, &env)) else {
             self.say(format!(
                 "Run {agent} in a split: Cellix opens it for you inside tmux or Zellij"
             ));
@@ -4084,7 +4101,7 @@ mod tests {
         let tmux = |k: &str| (k == "TMUX").then(|| "/tmp/t,1,0".to_string());
         assert_eq!(agent_split(tmux), Some(SplitHost::Tmux));
         assert_eq!(
-            SplitHost::Tmux.command("claude", "/w", &[]),
+            SplitHost::Tmux.command(&["claude".to_string()], "/w", &[]),
             ["tmux", "split-window", "-h", "-c", "/w", "claude"]
         );
         let zellij = |k: &str| (k == "ZELLIJ").then(|| "0".to_string());
@@ -4577,7 +4594,8 @@ mod tests {
 
     #[test]
     fn claude_starts_with_the_port_to_connect_to() {
-        let command = SplitHost::Tmux.command("claude", "/w", &["P=1".to_string()]);
+        let agent = ["claude".to_string()];
+        let command = SplitHost::Tmux.command(&agent, "/w", &["P=1".to_string()]);
         assert_eq!(command[5..], ["env", "P=1", "claude"]);
     }
 

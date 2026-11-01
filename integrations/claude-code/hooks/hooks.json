@@ -1,21 +1,91 @@
 {
+  "modules": [
+    "./register.ts"
+  ],
   "hooks": {
-    "SessionStart": [{ "hooks": [{ "type": "command", "command": "cellix hook session-start 2>/dev/null || true" }] }],
-    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "cellix hook prompt 2>/dev/null || true" }] }],
-    "PermissionRequest": [{
-      "matcher": "ExitPlanMode",
-      "hooks": [{ "type": "command", "command": "cellix hook plan 2>/dev/null || true", "timeout": 86400 }]
-    }],
-    "PostToolUse": [{
-      "matcher": "Bash",
-      "hooks": [{ "type": "command", "command": "cellix hook tool-done 2>/dev/null || true" }]
-    }],
-    "PostToolUseFailure": [{
-      "matcher": "Bash",
-      "hooks": [{ "type": "command", "command": "cellix hook tool-failed 2>/dev/null || true" }]
-    }],
-    "Notification": [{ "hooks": [{ "type": "command", "command": "cellix hook notify 2>/dev/null || true" }] }],
-    "Stop": [{ "hooks": [{ "type": "command", "command": "cellix hook stop 2>/dev/null || true" }] }],
-    "SessionEnd": [{ "hooks": [{ "type": "command", "command": "cellix hook session-end 2>/dev/null || true" }] }]
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cellix hook session-start 2>/dev/null || true"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cellix hook prompt 2>/dev/null || true"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "matcher": "ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cellix hook plan 2>/dev/null || true",
+            "timeout": 86400
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cellix hook tool-done 2>/dev/null || true"
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cellix hook tool-failed 2>/dev/null || true"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cellix hook notify 2>/dev/null || true"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cellix hook stop 2>/dev/null || true"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cellix hook session-end 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
   }
 }

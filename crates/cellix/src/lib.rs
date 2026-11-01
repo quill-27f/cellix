@@ -6,6 +6,7 @@ mod editor;
 mod explorer;
 mod find;
 mod palette;
+mod plugin;
 mod rendered;
 mod review;
 mod search;

@@ -228,7 +228,7 @@
     "milestone": 5,
     "title": "Bridge mod: status and commands inside Claude Code",
     "test": "claude_mod_bridge_loads",
-    "passes": false
+    "passes": true
   },
   {
     "id": "vim",
