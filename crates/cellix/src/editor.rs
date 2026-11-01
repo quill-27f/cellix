@@ -11,6 +11,7 @@ use crate::theme::Theme;
 
 const TAB_WIDTH: usize = 4;
 const GUTTER_MIN_DIGITS: usize = 4;
+const NARROW_PANE: u16 = 60;
 /// Below this a source and preview side by side are too narrow to read.
 const MIN_SPLIT_WIDTH: u16 = 60;
 
@@ -84,9 +85,15 @@ impl Editor {
         self.top = (row * lines / area.h.max(1) as usize).min(lines.saturating_sub(1));
     }
 
-    fn gutter_width(&self) -> u16 {
+    /// Narrow panes keep only the digits they need: every column counts there.
+    fn gutter_width(&self, pane_width: u16) -> u16 {
         let digits = self.buffer.rope().len_lines().to_string().len();
-        (digits.max(GUTTER_MIN_DIGITS) + 2) as u16
+        let minimum = if pane_width < NARROW_PANE {
+            2
+        } else {
+            GUTTER_MIN_DIGITS
+        };
+        (digits.max(minimum) + 2) as u16
     }
 
     fn line_text(&self, line: usize) -> String {
@@ -111,7 +118,7 @@ impl Editor {
         let area = self.text_area(area);
         let rope = self.buffer.rope();
         let line = (self.top + (y.saturating_sub(area.y)) as usize).min(rope.len_lines() - 1);
-        let target = self.left + x.saturating_sub(area.x + self.gutter_width()) as usize;
+        let target = self.left + x.saturating_sub(area.x + self.gutter_width(area.w)) as usize;
         let start = rope.line_to_char(line);
         let mut column = 0;
         for (i, c) in self.line_text(line).chars().enumerate() {
@@ -141,7 +148,7 @@ impl Editor {
             self.top = line + 1 - rows;
         }
         let column = self.column_of(head);
-        let cols = area.w.saturating_sub(self.gutter_width()).max(1) as usize;
+        let cols = area.w.saturating_sub(self.gutter_width(area.w)).max(1) as usize;
         if column < self.left {
             self.left = column;
         } else if column >= self.left + cols {
@@ -265,7 +272,7 @@ impl Editor {
             crate::markdown::draw(grid, right, &self.buffer.text(), scroll, theme);
         }
         grid.fill(area, theme.text);
-        let gutter = self.gutter_width();
+        let gutter = self.gutter_width(area.w);
         let rope = self.buffer.rope();
         let current = rope.char_to_line(self.selections.primary().head);
         for row in 0..area.h {

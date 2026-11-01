@@ -8,6 +8,7 @@ use cosmic_text::{
 };
 
 use crate::grid::{Cell, Rgb};
+use crate::icon::{Piece, inked};
 
 /// A tightly packed RGB image, matching the Kitty protocol's `f=24`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -127,6 +128,47 @@ fn fit_font(fonts: &mut FontSystem, cell_width: usize, cell_height: usize) -> Op
     Some(Metrics::new(by_width.min(by_height), cell_height as f32))
 }
 
+/// Inks this cell's share of an icon, supersampled so curves stay smooth.
+fn draw_icon(
+    rgb: &mut [u8],
+    stride: usize,
+    left: usize,
+    cell: (usize, usize),
+    piece: Piece,
+    fg: Rgb,
+) {
+    const SAMPLES: usize = 4;
+    let (cw, ch) = cell;
+    let (full_w, full_h) = (cw * piece.width as usize, ch * piece.height as usize);
+    let side = full_w.min(full_h) as f32 * 0.94;
+    let (off_x, off_y) = ((full_w as f32 - side) / 2.0, (full_h as f32 - side) / 2.0);
+    for y in 0..ch {
+        for x in 0..cw {
+            let mut hits = 0;
+            for sy in 0..SAMPLES {
+                for sx in 0..SAMPLES {
+                    let px = (piece.column as usize * cw + x) as f32
+                        + (sx as f32 + 0.5) / SAMPLES as f32;
+                    let py =
+                        (piece.row as usize * ch + y) as f32 + (sy as f32 + 0.5) / SAMPLES as f32;
+                    let (u, v) = ((px - off_x) / side, (py - off_y) / side);
+                    if (0.0..1.0).contains(&u) && (0.0..1.0).contains(&v) && inked(piece.icon, u, v)
+                    {
+                        hits += 1;
+                    }
+                }
+            }
+            if hits > 0 {
+                let alpha = (hits * 255 / (SAMPLES * SAMPLES)) as u8;
+                let at = (y * stride + left + x) * 3;
+                rgb[at] = blend(fg.0, rgb[at], alpha);
+                rgb[at + 1] = blend(fg.1, rgb[at + 1], alpha);
+                rgb[at + 2] = blend(fg.2, rgb[at + 2], alpha);
+            }
+        }
+    }
+}
+
 fn blend(fg: u8, bg: u8, alpha: u8) -> u8 {
     let a = alpha as u32;
     ((fg as u32 * a + bg as u32 * (255 - a)) / 255) as u8
@@ -157,6 +199,10 @@ impl Rasterizer for SoftwareRasterizer {
             };
             fill(&mut rgb, width, i * cw, 0, cw, ch, bg);
             if cell.symbol.is_empty() || cell.symbol == " " {
+                continue;
+            }
+            if let Some(piece) = Piece::decode(&cell.symbol) {
+                draw_icon(&mut rgb, width, i * cw, (cw, ch), piece, fg);
                 continue;
             }
             let mask = self.mask(&GlyphKey {

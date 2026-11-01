@@ -10,7 +10,8 @@ use cellix_term::{
 };
 use crossterm::event::{
     self as ct, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste,
-    EnableMouseCapture, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+    EnableMouseCapture, KeyCode, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, MouseButton,
+    MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -35,7 +36,10 @@ impl Session {
             io::stdout(),
             EnterAlternateScreen,
             EnableMouseCapture,
-            EnableBracketedPaste
+            EnableBracketedPaste,
+            // Terminals without the Kitty keyboard protocol ignore this, and Ctrl+Shift+P
+            // and Cmd keys then can't be told apart: F1 and Alt+P still open commands.
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
         )?;
         Ok(Self)
     }
@@ -45,6 +49,7 @@ impl Drop for Session {
     fn drop(&mut self) {
         let _ = execute!(
             io::stdout(),
+            PopKeyboardEnhancementFlags,
             DisableBracketedPaste,
             DisableMouseCapture,
             LeaveAlternateScreen,
@@ -56,7 +61,8 @@ impl Drop for Session {
 
 fn mods(m: KeyModifiers) -> Mods {
     Mods {
-        ctrl: m.contains(KeyModifiers::CONTROL),
+        // Cmd on macOS behaves as Ctrl, so VS Code habits work on either key.
+        ctrl: m.intersects(KeyModifiers::CONTROL | KeyModifiers::SUPER),
         alt: m.contains(KeyModifiers::ALT),
         shift: m.contains(KeyModifiers::SHIFT),
     }

@@ -10,6 +10,8 @@ const LIST_WIDTH: u16 = 24;
 const ACCEPT: &str = "[Accept]";
 const REJECT: &str = "[Reject]";
 const NUMBER_WIDTH: u16 = 5;
+/// Below this, two code columns are too narrow to read, so lines stack in one.
+const MIN_SIDE_BY_SIDE: u16 = 90;
 
 /// What a click in the review view lands on.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -19,6 +21,15 @@ pub enum Hit {
     Reject(usize),
     /// A line of the new version, or the old one if it was deleted.
     Line(String, usize),
+    /// Step through the files, in the stacked layout.
+    PreviousFile,
+    NextFile,
+}
+
+/// A row of the stacked layout.
+enum Stacked<'a> {
+    Header(usize),
+    Line(&'a Side, RowKind),
 }
 
 /// The Changes view: files that differ from HEAD and a side-by-side diff of one of them.
@@ -141,7 +152,134 @@ impl Review {
         (list, area.w.saturating_sub(list.w) / 2)
     }
 
+    /// The diff as one column: an old line, then its replacement under it.
+    fn stacked(&self) -> Vec<Stacked<'_>> {
+        let mut rows = Vec::new();
+        for row in &self.diff.rows {
+            match row {
+                Row::Header(hunk) => rows.push(Stacked::Header(*hunk)),
+                Row::Line {
+                    left,
+                    right,
+                    kind: RowKind::Same,
+                } => {
+                    let side = right.as_ref().or(left.as_ref());
+                    rows.extend(side.map(|s| Stacked::Line(s, RowKind::Same)));
+                }
+                Row::Line { left, right, .. } => {
+                    rows.extend(left.iter().map(|s| Stacked::Line(s, RowKind::Removed)));
+                    rows.extend(right.iter().map(|s| Stacked::Line(s, RowKind::Added)));
+                }
+            }
+        }
+        rows
+    }
+
+    fn hit_stacked(&self, area: Rect, x: u16, y: u16) -> Option<Hit> {
+        if y == area.y {
+            return Some(if x < area.x + area.w / 2 {
+                Hit::PreviousFile
+            } else {
+                Hit::NextFile
+            });
+        }
+        let row = (y - area.y - 1) as usize;
+        match self.stacked().get(self.top + row)? {
+            Stacked::Header(hunk) => {
+                let at = x.checked_sub(area.x + 1)?;
+                let accept = ACCEPT.len() as u16;
+                if at < accept {
+                    Some(Hit::Accept(*hunk))
+                } else if at > accept && at <= accept * 2 + 1 {
+                    Some(Hit::Reject(*hunk))
+                } else {
+                    None
+                }
+            }
+            Stacked::Line(side, _) => {
+                let file = self.current_path()?.to_string_lossy().into_owned();
+                Some(Hit::Line(file, side.number))
+            }
+        }
+    }
+
+    pub fn step_file(&mut self, delta: isize) {
+        let count = self.changes.len() as isize;
+        if count > 0 {
+            self.select((self.selected as isize + delta).rem_euclid(count) as usize);
+        }
+    }
+
+    fn draw_stacked(
+        &self,
+        grid: &mut Grid,
+        area: Rect,
+        theme: &Theme,
+        commented: impl Fn(&str, usize) -> bool,
+    ) {
+        grid.fill(area, theme.text);
+        grid.fill(Rect::new(area.x, area.y, area.w, 1), theme.bar);
+        let file = self
+            .current_path()
+            .map(|p| p.to_string_lossy().into_owned());
+        let title = match &file {
+            Some(file) => format!(" ◂ {}/{}  {file}", self.selected + 1, self.changes.len()),
+            None => " No changes".to_string(),
+        };
+        grid.put_str(
+            area.x,
+            area.y,
+            &title,
+            theme.bar,
+            area.right().saturating_sub(2),
+        );
+        if file.is_some() {
+            grid.put_str(
+                area.right().saturating_sub(2),
+                area.y,
+                "▸",
+                theme.bar,
+                area.right(),
+            );
+        }
+        let file = file.unwrap_or_default();
+        for (row, entry) in self.stacked().iter().skip(self.top).enumerate() {
+            let y = area.y + 1 + row as u16;
+            if y >= area.bottom() {
+                break;
+            }
+            match entry {
+                Stacked::Header(hunk) => {
+                    grid.fill(Rect::new(area.x, y, area.w, 1), theme.bar);
+                    let state = if self.is_accepted(*hunk) {
+                        "accepted"
+                    } else {
+                        ""
+                    };
+                    let text = format!(" {ACCEPT} {REJECT} {state}");
+                    grid.put_str(area.x, y, &text, theme.bar, area.right());
+                }
+                Stacked::Line(side, kind) => {
+                    let bg = match kind {
+                        RowKind::Removed => theme.removed,
+                        RowKind::Added => theme.added,
+                        _ => theme.text.bg,
+                    };
+                    let number_fg = if commented(&file, side.number) {
+                        theme.accent
+                    } else {
+                        theme.gutter.fg
+                    };
+                    draw_side(grid, area, y, Some(side), tint(theme.text, bg), number_fg);
+                }
+            }
+        }
+    }
+
     pub fn hit(&self, area: Rect, x: u16, y: u16) -> Option<Hit> {
+        if area.w < MIN_SIDE_BY_SIDE {
+            return self.hit_stacked(area, x, y);
+        }
         let (list, width) = Self::columns(area);
         let row = (y - area.y) as usize;
         if x < list.right() {
@@ -176,6 +314,10 @@ impl Review {
         theme: &Theme,
         commented: impl Fn(&str, usize) -> bool,
     ) {
+        if area.w < MIN_SIDE_BY_SIDE {
+            self.draw_stacked(grid, area, theme, commented);
+            return;
+        }
         grid.fill(area, theme.text);
         let (list, width) = Self::columns(area);
         grid.fill(list, theme.sidebar);

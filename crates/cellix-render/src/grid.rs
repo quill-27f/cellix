@@ -2,6 +2,8 @@ use compact_str::CompactString;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+use crate::icon::{Icon, Piece};
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Rgb(pub u8, pub u8, pub u8);
 
@@ -152,6 +154,25 @@ impl Grid {
             at += width;
         }
         at
+    }
+
+    /// Places a multi-cell icon with its top-left corner at `x`, `y`.
+    pub fn put_icon(&mut self, x: u16, y: u16, icon: Icon, size: (u8, u8), style: Style) {
+        for row in 0..size.1 {
+            for column in 0..size.0 {
+                let (cx, cy) = (x + u16::from(column), y + u16::from(row));
+                if cx < self.width && cy < self.height {
+                    let piece = Piece {
+                        icon,
+                        width: size.0,
+                        height: size.1,
+                        column,
+                        row,
+                    };
+                    self.put_cell(cx, cy, piece.symbol().encode_utf8(&mut [0; 4]), style);
+                }
+            }
+        }
     }
 
     /// Overrides the style of existing cells, keeping their text.

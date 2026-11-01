@@ -140,6 +140,23 @@ fn pty_bracketed_paste_inserts_verbatim() {
 }
 
 #[test]
+fn pty_ctrl_shift_p_and_cmd_p_work_as_in_vs_code() {
+    let dir = project();
+    let mut screen = Screen::start(dir.path(), &[]);
+    screen.wait_for("other.txt");
+    screen.send(b"\x1b[112;6u"); // Ctrl+Shift+P, Kitty keyboard protocol
+    screen.wait_for("Toggle Sidebar");
+    screen.send(b"\x1b");
+    std::thread::sleep(Duration::from_millis(200));
+    screen.send(b"\x1b[112;9u"); // Cmd+P
+    screen.wait_for("> ");
+    screen.send(b"\x1b");
+    std::thread::sleep(Duration::from_millis(200));
+    screen.send(b"\x11");
+    screen.wait_exit();
+}
+
+#[test]
 fn pty_restores_the_terminal_on_exit() {
     let dir = project();
     let mut screen = Screen::start(dir.path(), &["hello.txt"]);

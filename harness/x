@@ -5,7 +5,7 @@
 #   harness/x test [args]      cargo test
 #   harness/x build [args]     cargo build
 #   harness/x run [args]       cargo run -p cellix
-#   harness/x snapshot <workspace> <out.png> [review|file]
+#   harness/x snapshot <workspace> <out.png> [review|file] [columns] [rows]
 #                              render the real UI to a PNG, with no terminal or window
 #   harness/x mux              real tmux and Zellij tests (slower, ignored by check)
 #   harness/x verify           check, then prove every passing feature has its test

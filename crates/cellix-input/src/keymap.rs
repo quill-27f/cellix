@@ -33,6 +33,9 @@ pub fn simple_keymap(event: KeyEvent) -> Option<Command> {
         Key::Char(' ') if mods.ctrl => Complete,
         Key::Char('p') if mods.alt => CommandPalette,
         Key::Char('c') if mods.alt => AddComment,
+        // As in VS Code. Telling these from Ctrl+P needs the Kitty keyboard protocol.
+        Key::Char('p' | 'P') if mods.ctrl && mods.shift => CommandPalette,
+        Key::Char('f' | 'F') if mods.ctrl && mods.shift => FindInProject,
         Key::Char(c) if mods.ctrl => match c.to_ascii_lowercase() {
             'q' => Quit,
             's' => Save,
@@ -69,6 +72,20 @@ mod tests {
     #[test]
     fn ctrl_keys_are_commands() {
         assert_eq!(simple_keymap(KeyEvent::ctrl('s')), Some(Command::Save));
+    }
+
+    #[test]
+    fn ctrl_p_opens_files_and_ctrl_shift_p_opens_commands() {
+        assert_eq!(simple_keymap(KeyEvent::ctrl('p')), Some(Command::QuickOpen));
+        let event = KeyEvent {
+            key: Key::Char('P'),
+            mods: Mods {
+                ctrl: true,
+                shift: true,
+                ..Mods::default()
+            },
+        };
+        assert_eq!(simple_keymap(event), Some(Command::CommandPalette));
     }
 
     #[test]

@@ -9,7 +9,7 @@ use cellix_input::{
 };
 use cellix_lang::Registry;
 use cellix_lang::lsp::{Client, Diagnostic, LspEvent, TextEdit};
-use cellix_render::{Grid, Rect, Style};
+use cellix_render::{Grid, Icon, Rect, Style};
 use cellix_review::{Comment, append_comments, blame_line, changed_files, current_branch};
 
 use cellix_agent::{Request, SharedComments};
@@ -21,17 +21,25 @@ use crate::review::{Hit, Review};
 use crate::settings::{Settings, default_server};
 use crate::theme::Theme;
 
-const ACTIVITY_WIDTH: u16 = 4;
-/// Activity bar buttons, every third row, with what each one runs.
-const ACTIVITY: [(&str, Command); 4] = [
-    ("☰", Command::ToggleSidebar),
-    ("⌕", Command::FindInProject),
-    ("⎇", Command::OpenDiff),
-    ("⚙", Command::CommandPalette),
+const ACTIVITY_WIDTH: u16 = 5;
+/// Activity bar buttons, with what each one runs.
+const ACTIVITY: [(Icon, Command); 4] = [
+    (Icon::Files, Command::ToggleSidebar),
+    (Icon::Search, Command::FindInProject),
+    (Icon::Git, Command::OpenDiff),
+    (Icon::Settings, Command::CommandPalette),
 ];
+/// Cells each activity icon spans.
+const ACTIVITY_ICON: (u8, u8) = (3, 2);
+/// Rows from one activity icon to the next.
+const ACTIVITY_STEP: u16 = 4;
 const SIDEBAR_WIDTH: u16 = 28;
-/// The tab bar and breadcrumbs above each pane.
-const CHROME_ROWS: u16 = 2;
+const SIDEBAR_MIN_WIDTH: u16 = 20;
+/// Below this width the window is a side pane, as beside an agent: chrome gives way to
+/// the code, and the sidebar becomes a drawer that opens over it.
+const COMPACT_WIDTH: u16 = 70;
+/// Columns for the menu button at the start of the tab bar, in the compact layout.
+const MENU_BUTTON: u16 = 3;
 const WHEEL_LINES: isize = 3;
 const MENU_ITEMS: [&str; 4] = ["New File", "New Folder", "Rename", "Delete"];
 const MENU_WIDTH: u16 = 16;
@@ -116,6 +124,8 @@ pub struct App {
     /// that text, so one runs at a time and a stale reply is dropped.
     pending_rename: Option<(PathBuf, u64)>,
     branch: Option<String>,
+    /// In the compact layout, whether the sidebar is open over the code.
+    drawer: bool,
     /// Set when the user asks to leave.
     pub quit: bool,
 }
@@ -151,6 +161,7 @@ impl App {
             diagnostics: HashMap::new(),
             pending_rename: None,
             branch: None,
+            drawer: false,
             quit: false,
         };
         app.refresh_tree();
@@ -388,42 +399,66 @@ impl App {
         self.editors.get(self.active())?.selected_text()
     }
 
+    fn compact(&self) -> bool {
+        self.size.0 < COMPACT_WIDTH
+    }
+
     fn activity_area(&self) -> Rect {
-        Rect::new(
-            0,
-            0,
-            ACTIVITY_WIDTH.min(self.size.0),
-            self.size.1.saturating_sub(1),
-        )
+        let width = if self.compact() { 0 } else { ACTIVITY_WIDTH };
+        Rect::new(0, 0, width, self.size.1.saturating_sub(1))
     }
 
     fn sidebar_area(&self) -> Option<Rect> {
         let activity = self.activity_area();
+        if self.compact() {
+            return self
+                .drawer
+                .then_some(Rect::new(0, 0, self.size.0, activity.h));
+        }
         // Review uses the explorer's width: side-by-side code needs it more.
         (self.show_sidebar && self.review.is_none()).then(|| {
-            Rect::new(
-                activity.right(),
-                0,
-                SIDEBAR_WIDTH.min(self.size.0 - activity.right()),
-                activity.h,
-            )
+            let width = (self.size.0 / 4).clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_WIDTH);
+            Rect::new(activity.right(), 0, width, activity.h)
         })
     }
 
     fn main_area(&self) -> Rect {
-        let x = self
-            .sidebar_area()
-            .map_or(self.activity_area().right(), |a| a.right());
-        Rect::new(x, 0, self.size.0 - x, self.size.1.saturating_sub(1))
+        let x = match self.sidebar_area() {
+            Some(area) if !self.compact() => area.right(),
+            _ => self.activity_area().right(),
+        };
+        Rect::new(
+            x,
+            0,
+            self.size.0.saturating_sub(x),
+            self.size.1.saturating_sub(1),
+        )
     }
 
     fn tabs_area(&self) -> Rect {
         let main = self.main_area();
-        Rect::new(main.x, main.y, main.w, 1)
+        let inset = if self.compact() { MENU_BUTTON } else { 0 };
+        Rect::new(main.x + inset, main.y, main.w.saturating_sub(inset), 1)
     }
 
+    /// Rows above the code: tabs, and breadcrumbs when there's room for them.
+    fn chrome_rows(&self) -> u16 {
+        if self.compact() || self.size.1 < 16 {
+            1
+        } else {
+            2
+        }
+    }
+
+    /// In the compact layout only the focused pane shows, at full width.
     fn pane_area(&self, pane: usize) -> Rect {
         let main = self.main_area();
+        let rows = self.chrome_rows();
+        let (y, h) = (main.y + rows, main.h.saturating_sub(rows));
+        if self.compact() {
+            let w = if pane == self.focus { main.w } else { 0 };
+            return Rect::new(main.x, y, w, h);
+        }
         let count = self.panes.len() as u16;
         let width = main.w / count.max(1);
         let x = main.x + width * pane as u16;
@@ -432,12 +467,7 @@ impl App {
         } else {
             width.saturating_sub(1)
         };
-        Rect::new(
-            x,
-            main.y + CHROME_ROWS,
-            w,
-            main.h.saturating_sub(CHROME_ROWS),
-        )
+        Rect::new(x, y, w, h)
     }
 
     fn focused_area(&self) -> Rect {
@@ -789,7 +819,9 @@ impl App {
             Command::GoToDefinition | Command::Complete => self.lsp_request(command),
             Command::RenameSymbol => self.ask("Rename to", PromptAction::RenameSymbol),
             Command::BlameLine => self.blame(),
+            Command::ToggleSidebar if self.compact() => self.drawer = !self.drawer,
             Command::ToggleSidebar => self.show_sidebar = !self.show_sidebar,
+            Command::SplitPane if self.compact() => self.say("Not enough room to split"),
             Command::Save => self.save(),
             Command::CloseTab => self.close_tab(),
             Command::NextTab => self.cycle_tab(1),
@@ -961,6 +993,8 @@ impl App {
             Some(Hit::File(index)) => review.select(index),
             Some(Hit::Accept(hunk)) => review.accept(hunk),
             Some(Hit::Reject(hunk)) => self.reject(hunk),
+            Some(Hit::PreviousFile) => review.step_file(-1),
+            Some(Hit::NextFile) => review.step_file(1),
             Some(Hit::Line(file, line)) => {
                 self.ask(
                     &format!("Comment on line {line}"),
@@ -1078,6 +1112,10 @@ impl App {
             return;
         }
         let (x, y) = (mouse.x, mouse.y);
+        if self.compact() && self.drawer && !self.sidebar_area().is_some_and(|a| a.contains(x, y)) {
+            self.drawer = false;
+            return;
+        }
         if self.activity_area().contains(x, y) {
             if mouse.kind == MouseKind::Left {
                 self.click_activity(y);
@@ -1128,6 +1166,9 @@ impl App {
                 self.prompt_comment_at_cursor();
             }
             MouseKind::Left if in_sidebar => self.click_explorer(y),
+            MouseKind::Left if self.compact() && y == 0 && x < MENU_BUTTON => {
+                self.run(Command::ToggleSidebar);
+            }
             MouseKind::Left if self.tabs_area().contains(x, y) => self.click_tab(x),
             MouseKind::Left => {
                 let Some(pane) = self.pane_at(x, y) else {
@@ -1271,11 +1312,14 @@ impl App {
             self.explorer.refresh(&self.workspace);
         } else if let Err(e) = self.open(&entry.path) {
             self.say(format!("Could not open {}: {e}", entry.name));
+        } else {
+            self.drawer = false;
         }
     }
 
     fn click_activity(&mut self, y: u16) {
-        if let Some((_, command)) = ACTIVITY.get(y.saturating_sub(1) as usize / 3) {
+        let index = y.saturating_sub(1) / ACTIVITY_STEP;
+        if let Some((_, command)) = ACTIVITY.get(index as usize) {
             if *command == Command::ToggleSidebar && self.review.is_some() {
                 self.review = None;
             } else {
@@ -1294,10 +1338,34 @@ impl App {
         format!("  {}  {close} ", editor.title())
     }
 
+    /// Tabs that fit, as (index, x, width), starting late enough to show the active one.
+    /// Drawing and clicking share this, so a click always lands on what's shown.
+    fn visible_tabs(&self) -> Vec<(usize, u16, u16)> {
+        let area = self.tabs_area();
+        let widths: Vec<u16> = self
+            .editors
+            .iter()
+            .map(|e| Self::tab_label(e).chars().count() as u16 + 1)
+            .collect();
+        let active = self.active().min(widths.len().saturating_sub(1));
+        let mut first = 0;
+        while first < active && widths[first..=active].iter().sum::<u16>() > area.w {
+            first += 1;
+        }
+        let mut tabs = Vec::new();
+        let mut x = area.x;
+        for (i, width) in widths.iter().enumerate().skip(first) {
+            if x >= area.right() {
+                break;
+            }
+            tabs.push((i, x, *width - 1));
+            x += width;
+        }
+        tabs
+    }
+
     fn click_tab(&mut self, x: u16) {
-        let mut at = self.tabs_area().x;
-        for i in 0..self.editors.len() {
-            let width = Self::tab_label(&self.editors[i]).chars().count() as u16;
+        for (i, at, width) in self.visible_tabs() {
             if x >= at && x < at + width {
                 self.set_active(i);
                 // A little wider than the glyph, so it isn't a pixel hunt.
@@ -1306,7 +1374,6 @@ impl App {
                 }
                 return;
             }
-            at += width + 1;
         }
     }
 
@@ -1315,6 +1382,10 @@ impl App {
         let theme = &self.theme;
         grid.fill(grid.area(), theme.text);
         self.draw_activity(grid);
+        let drawer_over_main = self.compact() && self.drawer;
+        if drawer_over_main {
+            self.draw_tabs(grid);
+        }
         if let Some(area) = self.sidebar_area() {
             let name = self
                 .workspace
@@ -1333,6 +1404,11 @@ impl App {
             self.draw_overlay(grid);
             return;
         }
+        if drawer_over_main {
+            self.draw_status(grid);
+            self.draw_overlay(grid);
+            return;
+        }
         self.draw_tabs(grid);
         if self.editors.is_empty() {
             self.draw_welcome(grid);
@@ -1341,6 +1417,9 @@ impl App {
         for (pane, index) in self.panes.iter().enumerate() {
             if let Some(editor) = self.editors.get(*index) {
                 let area = self.pane_area(pane);
+                if area.w == 0 {
+                    continue;
+                }
                 let file = editor.buffer.path().map(|p| self.relative(p));
                 let marks = Marks {
                     comments: file.map_or_else(Vec::new, |f| self.comment_lines(&f)),
@@ -1397,9 +1476,15 @@ impl App {
 
     fn draw_activity(&self, grid: &mut Grid) {
         let area = self.activity_area();
+        if area.w == 0 {
+            return;
+        }
         grid.fill(area, self.theme.activity);
         for (i, (icon, command)) in ACTIVITY.iter().enumerate() {
-            let y = 1 + i as u16 * 3;
+            let y = 1 + i as u16 * ACTIVITY_STEP;
+            if y + 1 >= area.bottom() {
+                break;
+            }
             let on = match command {
                 Command::ToggleSidebar => self.show_sidebar && self.review.is_none(),
                 Command::OpenDiff => self.review.is_some(),
@@ -1418,27 +1503,41 @@ impl App {
                     fg: self.theme.accent,
                     ..self.theme.activity
                 };
-                grid.put_str(area.x, y, "▌", bar, area.right());
+                for row in 0..u16::from(ACTIVITY_ICON.1) {
+                    grid.put_str(area.x, y + row, "▌", bar, area.right());
+                }
             }
-            grid.put_str(area.x + 1, y, icon, style, area.right());
+            grid.put_icon(area.x + 1, y, *icon, ACTIVITY_ICON, style);
         }
     }
 
     fn draw_tabs(&self, grid: &mut Grid) {
+        let main = self.main_area();
+        grid.fill(Rect::new(main.x, main.y, main.w, 1), self.theme.tab);
+        if self.compact() {
+            grid.put_str(main.x, main.y, " ☰ ", self.theme.tab, main.right());
+        }
         let area = self.tabs_area();
-        grid.fill(area, self.theme.tab);
-        let mut x = area.x;
-        for (i, editor) in self.editors.iter().enumerate() {
+        for (i, x, _) in self.visible_tabs() {
             let style = if i == self.active() {
                 self.theme.tab_active
             } else {
                 self.theme.tab
             };
-            x = grid.put_str(x, area.y, &Self::tab_label(editor), style, area.right()) + 1;
+            grid.put_str(
+                x,
+                area.y,
+                &Self::tab_label(&self.editors[i]),
+                style,
+                area.right(),
+            );
         }
     }
 
     fn draw_breadcrumbs(&self, grid: &mut Grid) {
+        if self.chrome_rows() < 2 {
+            return;
+        }
         let Some(path) = self
             .editors
             .get(self.active())
@@ -1457,10 +1556,10 @@ impl App {
         let rows = [
             "Cellix",
             "",
-            "Ctrl+P    Open a file",
-            "F1        Commands",
-            "Ctrl+G    Review changes",
-            "Ctrl+F    Search the project",
+            "Ctrl+P          Open a file",
+            "Ctrl+Shift+P    Commands",
+            "Ctrl+G          Review changes",
+            "Ctrl+Shift+F    Search the project",
         ];
         let y = main.y + main.h / 3;
         let x = main.x + main.w.saturating_sub(30) / 2;
@@ -1491,46 +1590,72 @@ impl App {
                 .find(|d| d.line + 1 == line)
                 .map(|d| d.message.clone())
         });
+        let hint = if self.compact() {
+            "Ctrl+P open"
+        } else {
+            "Ctrl+P open  Ctrl+S save  Ctrl+G review  Ctrl+Q quit"
+        };
         let left = if !message.is_empty() {
             message.as_str()
         } else if let Some(problem) = &at_cursor {
             problem.as_str()
         } else {
-            "Ctrl+P open  Ctrl+S save  Ctrl+G review  Ctrl+Q quit"
+            hint
         };
-        let branch = self.branch.as_ref().map(|b| format!("⎇ {b}  "));
-        let x = grid.put_str(1, y, branch.as_deref().unwrap_or(""), bar, width);
-        let problems: usize = self.diagnostics.values().map(Vec::len).sum();
-        let x = if problems > 0 {
-            grid.put_str(x, y, &format!("⊗ {problems}  "), bar, width)
-        } else {
-            x
-        };
-        grid.put_str(x, y, left, bar, width);
+        // The cursor always shows, and the rest stays only while it leaves `left` room.
+        let mut right = Vec::new();
         if let Some(editor) = self.editors.get(self.active()) {
             let head = editor.selections.primary().head;
             let rope = editor.buffer.rope();
             let line = rope.char_to_line(head);
-            let mode = match self.vim.as_ref().map(|v| v.mode) {
-                Some(VimMode::Normal) => "NORMAL  ",
-                Some(VimMode::Insert) => "INSERT  ",
-                Some(VimMode::Visual) => "VISUAL  ",
-                None => "",
-            };
             let column = head - rope.line_to_char(line) + 1;
             let language = editor
                 .buffer
                 .path()
                 .and_then(Registry::language_name)
                 .unwrap_or("Plain Text");
-            let right = format!(
-                "{mode}Ln {}, Col {column}   Spaces: 4   UTF-8   {language}",
-                line + 1
-            );
-            let x = width.saturating_sub(right.chars().count() as u16 + 1);
-            let padded = format!(" {right}");
-            grid.put_str(x.saturating_sub(1), y, &padded, bar, width);
+            let mode = match self.vim.as_ref().map(|v| v.mode) {
+                Some(VimMode::Normal) => "NORMAL",
+                Some(VimMode::Insert) => "INSERT",
+                Some(VimMode::Visual) => "VISUAL",
+                None => "",
+            };
+            right = vec![
+                format!("{mode}   Ln {}, Col {column}", line + 1)
+                    .trim_start()
+                    .to_string(),
+                language.to_string(),
+                "UTF-8".to_string(),
+                "Spaces: 4".to_string(),
+            ];
         }
+        let room = width.saturating_sub(left.chars().count().min(24) as u16 + 4) as usize;
+        let mut shown = right.clone();
+        while shown.len() > 1 && shown.join("   ").chars().count() > room {
+            shown.pop();
+        }
+        // Reads like VS Code, with the language last.
+        if shown.len() > 2 {
+            shown.rotate_left(2);
+            let count = shown.len();
+            shown.swap(count - 2, count - 1);
+        }
+        let right = shown.join("   ");
+        let right_x = width.saturating_sub(right.chars().count() as u16 + 1);
+        let mut x = 1;
+        if !self.compact() {
+            if let Some(branch) = &self.branch {
+                let piece = (Icon::Git, (1, 1));
+                grid.put_icon(x, y, piece.0, piece.1, bar);
+                x = grid.put_str(x + 2, y, &format!("{branch}  "), bar, right_x);
+            }
+            let problems: usize = self.diagnostics.values().map(Vec::len).sum();
+            if problems > 0 {
+                x = grid.put_str(x, y, &format!("⊗ {problems}  "), bar, right_x);
+            }
+        }
+        grid.put_str(x, y, left, bar, right_x.saturating_sub(1));
+        grid.put_str(right_x, y, &right, bar, width);
     }
 
     pub fn rename_running(&self) -> bool {
@@ -2176,7 +2301,6 @@ mod tests {
         fs::write(dir.path().join("n.md"), "# Title\n").unwrap();
         app.open(&dir.path().join("n.md")).unwrap();
         app.handle(Event::Resize(50, 20));
-        app.run(Command::ToggleSidebar);
         assert_eq!(screen(&app).text().matches("Title").count(), 1);
     }
 
@@ -2216,12 +2340,108 @@ mod tests {
     fn activity_bar_opens_review_by_mouse() {
         let (dir, mut app) = project();
         git(dir.path(), &["init", "-q"]);
-        let (x, y) = find(&screen(&app), "⎇");
-        app.handle(mouse(MouseKind::Left, x, y));
-        assert!(screen(&app).text().contains("?"), "{}", screen(&app).text());
-        let (x, y) = find(&screen(&app), "☰");
-        app.handle(mouse(MouseKind::Left, x, y));
+        app.handle(mouse(MouseKind::Left, 2, 1 + ACTIVITY_STEP * 2));
+        assert!(!screen(&app).text().contains("EXPLORER"));
+        app.handle(mouse(MouseKind::Left, 2, 1));
         assert!(screen(&app).text().contains("EXPLORER"));
+    }
+
+    #[test]
+    fn activity_icons_span_several_cells() {
+        let (_dir, app) = project();
+        let grid = screen(&app);
+        let pieces = (0..ACTIVITY_WIDTH)
+            .flat_map(|x| (0..5).map(move |y| (x, y)))
+            .filter(|(x, y)| cellix_render::Piece::decode(&grid.cell(*x, *y).symbol).is_some())
+            .count();
+        assert_eq!(pieces, 6, "a 3 by 2 icon");
+    }
+
+    /// A project in a side pane the size of an agent's mod panel.
+    fn narrow() -> (TempDir, App) {
+        let (dir, mut app) = project();
+        app.handle(Event::Resize(45, 30));
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        (dir, app)
+    }
+
+    #[test]
+    fn a_narrow_pane_gives_the_code_nearly_all_its_width() {
+        let (_dir, app) = narrow();
+        let grid = screen(&app);
+        let (x, _) = find(&grid, "first line");
+        assert!(x <= 4, "code starts at column {x}");
+        assert!(!grid.text().contains("EXPLORER"));
+    }
+
+    #[test]
+    fn the_drawer_opens_over_the_code_and_closes_on_a_pick() {
+        let (_dir, mut app) = narrow();
+        app.handle(mouse(MouseKind::Left, 1, 0));
+        let grid = screen(&app);
+        assert!(grid.text().contains("EXPLORER"));
+        assert!(!grid.text().contains("first line"));
+        let (x, y) = find(&grid, "beta.rs");
+        app.handle(mouse(MouseKind::Left, x, y));
+        let text = screen(&app).text();
+        assert!(text.contains("fn main"), "{text}");
+        assert!(!text.contains("EXPLORER"), "{text}");
+    }
+
+    #[test]
+    fn the_active_tab_stays_visible_when_tabs_overflow() {
+        let (dir, mut app) = project();
+        app.handle(Event::Resize(40, 30));
+        for name in ["one", "two", "three", "four", "five"] {
+            let path = dir.path().join(format!("{name}-long-name.txt"));
+            fs::write(&path, name).unwrap();
+            app.open(&path).unwrap();
+        }
+        assert!(screen(&app).row_text(0).contains("five-long-name"));
+        let (x, y) = find(&screen(&app), "×");
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert!(!screen(&app).text().contains("five-long-name"));
+    }
+
+    #[test]
+    fn narrow_status_keeps_the_cursor_and_drops_the_rest() {
+        let (_dir, app) = narrow();
+        let grid = screen(&app);
+        let status = grid.row_text(29);
+        assert!(status.contains("Ln 1, Col 1"), "{status}");
+        assert!(status.contains("Ctrl+P open"), "{status}");
+        assert!(!status.contains("Spaces"), "{status}");
+    }
+
+    #[test]
+    fn narrow_panes_refuse_to_split() {
+        let (_dir, mut app) = narrow();
+        app.run(Command::SplitPane);
+        assert!(screen(&app).text().contains("Not enough room"));
+    }
+
+    #[test]
+    fn narrow_review_stacks_changes_in_one_column() {
+        let (_dir, mut app) = reviewed();
+        app.handle(Event::Resize(50, 30));
+        app.run(Command::OpenDiff);
+        let grid = screen(&app);
+        assert_eq!(find(&grid, "second line").1 + 1, find(&grid, "CHANGED").1);
+        let (x, y) = find(&grid, "[Reject]");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        assert!(screen(&app).text().contains("No changes"));
+    }
+
+    #[test]
+    fn a_split_stays_usable_after_shrinking() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        app.run(Command::SplitPane);
+        app.open(&dir.path().join("beta.rs")).unwrap();
+        app.handle(Event::Resize(45, 30));
+        let text = screen(&app).text();
+        assert!(text.contains("fn main"), "{text}");
+        assert!(!text.contains("first line"), "{text}");
     }
 
     #[test]
@@ -2229,7 +2449,7 @@ mod tests {
         let (dir, mut app) = reviewed();
         app.open(&dir.path().join("beta.rs")).unwrap();
         let text = screen(&app).text();
-        assert!(text.contains("⎇ "), "{text}");
+        assert!(text.contains("master") || text.contains("main"), "{text}");
         assert!(text.contains("Rust"), "{text}");
     }
 

@@ -1,6 +1,6 @@
 use std::io::{self, Write};
 
-use cellix_render::{Grid, Style};
+use cellix_render::{Grid, Piece, Style};
 
 use crate::Backend;
 
@@ -47,7 +47,10 @@ impl Backend for CellBackend {
                     sgr(cell.style, &mut bytes);
                     last = Some(cell.style);
                 }
-                bytes.extend_from_slice(cell.symbol.as_bytes());
+                match Piece::decode(&cell.symbol) {
+                    Some(piece) => bytes.extend_from_slice(piece.fallback().as_bytes()),
+                    None => bytes.extend_from_slice(cell.symbol.as_bytes()),
+                }
             }
         }
         match grid.cursor {
