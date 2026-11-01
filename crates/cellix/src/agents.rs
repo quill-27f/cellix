@@ -9,8 +9,6 @@ use cellix_review::Worktree;
 use crate::integrations;
 use crate::theme::Theme;
 
-/// Rows above the first list: the panel's title and a gap.
-const HEADER_ROWS: u16 = 2;
 const SECTION_SIZE: u8 = 80;
 const DETAIL_SIZE: u8 = 85;
 /// Agents that can be started from here, as what the panel calls them and their programs.
@@ -26,6 +24,23 @@ pub enum Hit {
     /// The program of an agent to start.
     Start(&'static str),
     Worktree(PathBuf),
+}
+
+/// A row or two of the panel.
+enum Line {
+    Title(&'static str),
+    Section(&'static str),
+    Gap,
+    /// The note that takes the running list's place.
+    Nothing,
+    /// An index into `running`.
+    Reporting(usize),
+    /// An agent found running, which reports nothing.
+    Silent(String),
+    /// An index into `worktrees`.
+    Tree(usize),
+    /// An index into `installed`.
+    Start(usize),
 }
 
 /// The Agents panel: who's running, who needs you, and where work is happening.
@@ -104,31 +119,59 @@ impl Agents {
         seen.into_iter().skip(self.running.len()).collect()
     }
 
-    /// Rows of the running list, which holds a note when it's empty.
-    fn running_rows(&self) -> u16 {
-        let shown = self.running.len() + self.silent().len();
-        if shown == 0 { 2 } else { shown as u16 * 2 }
-    }
-
-    /// The row the worktrees start on, inside the panel.
-    fn worktrees_top(&self) -> u16 {
-        HEADER_ROWS + 1 + self.running_rows() + 2
-    }
-
-    /// The row the agents to start begin on, inside the panel.
-    fn starts_top(&self) -> u16 {
-        self.worktrees_top() + self.worktrees.len() as u16 * 2 + 2
+    /// The panel, top to bottom. Drawing and clicking share this. With nothing running, a
+    /// way to start something comes straight after saying so.
+    fn lines(&self) -> Vec<Line> {
+        let mut lines = vec![Line::Title("Agents"), Line::Gap, Line::Section("RUNNING")];
+        let silent = self.silent();
+        let idle = self.running.is_empty() && silent.is_empty();
+        if idle {
+            lines.push(Line::Nothing);
+        }
+        lines.extend((0..self.running.len()).map(Line::Reporting));
+        lines.extend(silent.into_iter().map(Line::Silent));
+        let starts = |lines: &mut Vec<Line>| {
+            if !self.installed.is_empty() {
+                lines.push(Line::Gap);
+                lines.push(Line::Section("START AN AGENT"));
+                lines.extend((0..self.installed.len()).map(Line::Start));
+            }
+        };
+        if idle {
+            starts(&mut lines);
+        }
+        lines.push(Line::Gap);
+        lines.push(Line::Section("WORKTREES"));
+        lines.extend((0..self.worktrees.len()).map(Line::Tree));
+        if !idle {
+            starts(&mut lines);
+        }
+        lines
     }
 
     pub fn hit(&self, area: Rect, y: u16) -> Option<Hit> {
-        let row = y.checked_sub(area.y)?;
-        let start = row.checked_sub(self.starts_top()).map(usize::from);
-        if let Some((_, program)) = start.and_then(|index| self.installed.get(index)) {
-            return Some(Hit::Start(program));
+        let mut top = area.y;
+        for line in self.lines() {
+            let rows = self.height(&line);
+            if y >= top && y < top + rows {
+                return match line {
+                    Line::Start(index) => Some(Hit::Start(self.installed[index].1)),
+                    Line::Tree(index) => Some(Hit::Worktree(self.worktrees[index].path.clone())),
+                    _ => None,
+                };
+            }
+            top += rows;
         }
-        let below = row.checked_sub(self.worktrees_top())?;
-        let tree = self.worktrees.get(below as usize / 2)?;
-        Some(Hit::Worktree(tree.path.clone()))
+        None
+    }
+
+    fn height(&self, line: &Line) -> u16 {
+        match line {
+            Line::Nothing | Line::Reporting(_) | Line::Silent(_) => 2,
+            // One worktree is just this folder, so it needs no second line to tell them apart.
+            Line::Tree(_) if self.worktrees.len() > 1 => 2,
+            _ => 1,
+        }
     }
 
     pub fn draw(&self, grid: &mut Grid, area: Rect, hover: Option<(u16, u16)>, theme: &Theme) {
@@ -137,111 +180,129 @@ impl Agents {
             fg: theme.gutter.fg,
             ..theme.sidebar
         };
-        let name = Style {
-            bold: true,
+        let side = area.x + 2;
+        let mut y = area.y;
+        for line in self.lines() {
+            let rows = self.height(&line);
+            if y + rows > area.bottom() {
+                break;
+            }
+            let row = Rect::new(area.x, y, area.w, rows);
+            let hovered = hover.is_some_and(|h| row.contains(h.0, h.1));
+            match line {
+                Line::Gap => {}
+                Line::Title(text) => {
+                    let name = Style {
+                        bold: true,
+                        ..theme.sidebar
+                    };
+                    grid.label(side, y, text, name, area.right());
+                }
+                Line::Section(text) => {
+                    grid.label_at(side as f32, side, y, text, dim, area.right(), SECTION_SIZE);
+                }
+                Line::Nothing => {
+                    grid.label(side, y, "No agents running", dim, area.right());
+                    let note = if self.installed.is_empty() {
+                        "Install one, then review what it changes."
+                    } else {
+                        "Start one below, then review what it changes."
+                    };
+                    grid.label_at(
+                        side as f32,
+                        side,
+                        y + 1,
+                        note,
+                        dim,
+                        area.right(),
+                        DETAIL_SIZE,
+                    );
+                }
+                Line::Reporting(index) => {
+                    let agent = &self.running[index];
+                    let (mark, color) = match agent.state {
+                        AgentState::NeedsYou => ("needs you", theme.attention),
+                        AgentState::Working => ("working", theme.git_added),
+                        AgentState::Idle | AgentState::Ended => ("idle", theme.gutter.fg),
+                    };
+                    draw_agent(grid, (area, y), &agent.agent, (mark, color), theme);
+                    grid.label(side + 2, y + 1, &agent.detail, dim, area.right());
+                }
+                Line::Silent(agent) => {
+                    draw_agent(grid, (area, y), &agent, ("running", theme.git_added), theme);
+                    grid.label(
+                        side + 2,
+                        y + 1,
+                        "No plugin, so no detail",
+                        dim,
+                        area.right(),
+                    );
+                }
+                Line::Tree(index) => {
+                    if hovered {
+                        let wash = Bounds::inset(row, 0.4, 0.055);
+                        grid.panel(wash, 18, Some(theme.row_hover), None);
+                    }
+                    self.draw_worktree(grid, area, (y, rows), index, theme);
+                }
+                Line::Start(index) => {
+                    if hovered {
+                        let wash = Bounds::inset(row, 0.4, 0.055);
+                        grid.panel(wash, 18, Some(theme.row_hover), None);
+                    }
+                    let plus = Style {
+                        fg: theme.gutter.fg,
+                        ..theme.sidebar
+                    };
+                    grid.label(side, y, "+", plus, side + 2);
+                    let label = self.installed[index].0;
+                    grid.label(side + 2, y, label, theme.sidebar, area.right());
+                }
+            }
+            y += rows;
+        }
+    }
+
+    fn draw_worktree(
+        &self,
+        grid: &mut Grid,
+        area: Rect,
+        (y, rows): (u16, u16),
+        index: usize,
+        theme: &Theme,
+    ) {
+        let dim = Style {
+            fg: theme.gutter.fg,
             ..theme.sidebar
         };
         let side = area.x + 2;
-        grid.label(side, area.y, "Agents", name, area.right());
-        let section = |grid: &mut Grid, y, text: &str| {
-            grid.label_at(side as f32, side, y, text, dim, area.right(), SECTION_SIZE);
+        let worktree = &self.worktrees[index];
+        let path = &worktree.path;
+        let folder = path.file_name().map(|n| n.to_string_lossy().into_owned());
+        let detached = worktree.branch == "detached";
+        let title = if detached {
+            folder.clone().unwrap_or_else(|| worktree.branch.clone())
+        } else {
+            worktree.branch.clone()
         };
-        let mut y = area.y + HEADER_ROWS;
-        section(grid, y, "RUNNING HERE");
-        y += 1;
-        let silent = self.silent();
-        if self.running.is_empty() && silent.is_empty() {
-            grid.label(side, y, "No agents here yet", dim, area.right());
-            let note = "Start one, and it shows up here";
-            grid.label_at(
-                side as f32,
-                side,
-                y + 1,
-                note,
-                dim,
-                area.right(),
-                DETAIL_SIZE,
-            );
-            y += 2;
-        }
-        for agent in &self.running {
-            let (mark, color) = match agent.state {
-                AgentState::NeedsYou => ("needs you", theme.attention),
-                AgentState::Working => ("working", theme.git_added),
-                AgentState::Idle | AgentState::Ended => ("idle", theme.gutter.fg),
-            };
-            draw_agent(grid, (area, y), &agent.agent, (mark, color), theme);
-            let detail = side + 2;
-            grid.label(detail, y + 1, &agent.detail, dim, area.right());
-            y += 2;
-        }
-        for agent in &silent {
-            draw_agent(grid, (area, y), agent, ("running", theme.git_added), theme);
-            grid.label(
-                side + 2,
-                y + 1,
-                "No plugin, so no detail",
-                dim,
-                area.right(),
-            );
-            y += 2;
-        }
-        y += 1;
-        section(grid, y, "WORKTREES");
-        y += 1;
-        for worktree in &self.worktrees {
-            if y + 1 >= area.bottom() {
-                break;
-            }
-            let row = Rect::new(area.x, y, area.w, 2);
-            if hover.is_some_and(|h| row.contains(h.0, h.1)) {
-                let wash = Bounds::inset(row, 0.4, 0.06);
-                grid.panel(wash, 18, Some(theme.row_hover), None);
-            }
-            let path = &worktree.path;
-            let folder = path.file_name().map(|n| n.to_string_lossy().into_owned());
-            let title = if worktree.branch == "detached" {
-                folder.clone().unwrap_or_else(|| worktree.branch.clone())
-            } else {
-                worktree.branch.clone()
-            };
-            grid.label(side, y, &title, theme.sidebar, area.right());
-            let place = if worktree.branch == "detached" {
+        grid.label(side, y, &title, theme.sidebar, area.right());
+        if rows > 1 {
+            let place = if detached {
                 "Detached HEAD".to_string()
             } else {
                 folder.unwrap_or_default()
             };
             let x = side as f32;
             grid.label_at(x, side, y + 1, &place, dim, area.right(), DETAIL_SIZE);
-            if worktree.changes > 0 {
-                let count = format!("{} changed", worktree.changes);
-                let badge = Style {
-                    fg: theme.git_modified,
-                    ..theme.sidebar
-                };
-                let right = area.right().saturating_sub(2);
-                grid.label_right(right, y, &count, badge, DETAIL_SIZE);
-            }
-            y += 2;
         }
-        y += 1;
-        if self.installed.is_empty() {
-            return;
-        }
-        section(grid, y, "START AN AGENT");
-        y += 1;
-        for (label, _) in &self.installed {
-            if y >= area.bottom() {
-                break;
-            }
-            let row = Rect::new(area.x, y, area.w, 1);
-            let hovered = hover.is_some_and(|h| row.contains(h.0, h.1));
-            if hovered {
-                let wash = Bounds::inset(row, 0.4, 0.055);
-                grid.panel(wash, 18, Some(theme.row_hover), None);
-            }
-            grid.label(side, y, label, theme.sidebar, area.right());
-            y += 1;
+        if worktree.changes > 0 {
+            let count = format!("{} changed", worktree.changes);
+            let badge = Style {
+                fg: theme.git_modified,
+                ..theme.sidebar
+            };
+            let right = area.right().saturating_sub(2);
+            grid.label_right(right, y, &count, badge, DETAIL_SIZE);
         }
     }
 
@@ -303,12 +364,13 @@ p3\nccodex\nfcwd\nn/work/project/sub\n";
             ..Agents::default()
         };
         let area = Rect::new(0, 0, 30, 40);
-        assert_eq!(
-            agents.hit(area, agents.starts_top()),
-            Some(Hit::Start("codex"))
+        let at = |hit: &Hit| (0..40).find(|y| agents.hit(area, *y).as_ref() == Some(hit));
+        let start = at(&Hit::Start("codex")).unwrap();
+        let tree = at(&Hit::Worktree(PathBuf::from("/work"))).unwrap();
+        assert!(
+            start < tree,
+            "with nothing running, starting one comes first"
         );
-        let tree = agents.hit(area, agents.worktrees_top());
-        assert_eq!(tree, Some(Hit::Worktree(PathBuf::from("/work"))));
         assert_eq!(agents.hit(area, 0), None, "the title does nothing");
     }
 

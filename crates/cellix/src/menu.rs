@@ -194,7 +194,12 @@ impl Menu {
             let usable = item.action.is_some();
             let hovered = hover.is_some_and(|h| line.contains(h.0, h.1));
             if usable && (self.selected == Some(row) || hovered) {
-                grid.panel(Bounds::inset(line, 0.35, 0.055), 18, Some(theme.pick), None);
+                let fill = if self.selected == Some(row) {
+                    theme.pick
+                } else {
+                    theme.popup_hover
+                };
+                grid.panel(Bounds::inset(line, 0.35, 0.055), 18, Some(fill), None);
             }
             let style = if usable { base } else { greyed };
             let x = area.x as f32 + INSET;

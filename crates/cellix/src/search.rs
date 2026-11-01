@@ -191,7 +191,14 @@ impl Search {
         input(grid, line, &box_state, measure, theme);
     }
 
-    pub fn draw(&self, grid: &mut Grid, area: Rect, measure: &dyn Measure, theme: &Theme) {
+    pub fn draw(
+        &self,
+        grid: &mut Grid,
+        area: Rect,
+        hover: Option<(u16, u16)>,
+        measure: &dyn Measure,
+        theme: &Theme,
+    ) {
         grid.fill(area, theme.sidebar);
         let title = Style {
             fg: theme.gutter.fg,
@@ -271,6 +278,11 @@ impl Search {
             let y = area.y + HEADER_ROWS + index as u16;
             if y >= area.bottom() {
                 break;
+            }
+            let line = Rect::new(area.x, y, area.w, 1);
+            if hover.is_some_and(|h| line.contains(h.0, h.1)) {
+                let wash = Bounds::inset(line, 0.4, 0.055);
+                grid.panel(wash, 18, Some(theme.row_hover), None);
             }
             match row {
                 Row::File(path, count) => self.draw_file(grid, area, y, path, *count, theme),

@@ -48,14 +48,16 @@ const CARD_WIDTH: u16 = 24;
 const CARD_HEIGHT: u16 = 8;
 const PREVIEW_ROWS: u16 = 6;
 const SEGMENT_WIDTH: u16 = 11;
-const BUTTON_WIDTH: u16 = 11;
+const BUTTON_WIDTH: u16 = 12;
 const TOGGLE_WIDTH: f32 = 2.6;
 const TITLE_SIZE: u8 = 170;
 const NOTE_SIZE: u8 = 90;
 const RADIUS: u8 = 30;
 /// Where the servers' rows start, from the top of the page.
-const SERVERS_ROW: u16 = 8;
+const SERVERS_ROW: u16 = 7;
 const INSTALL_WIDTH: u16 = 9;
+/// Columns from an integration's name to its state.
+const STATUS_GAP: f32 = 1.1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Section {
@@ -80,6 +82,8 @@ pub enum Control {
     GhosttyFill,
     /// A language server to install, as an index into `SERVERS`.
     InstallServer(usize),
+    /// A command to put on the clipboard.
+    CopyInstall(&'static str),
 }
 
 /// The settings as they stand, passed in so the page holds no second copy.
@@ -143,7 +147,6 @@ struct Block {
 enum Tone {
     Good,
     Quiet,
-    Warning,
 }
 
 /// The Settings page, which stands where the file would.
@@ -181,12 +184,12 @@ impl SettingsPage {
     fn blocks(&self) -> Vec<Block> {
         let found = &self.found;
         let mut blocks = vec![Self::claude_block(found)];
-        let agent = |name, on_path, installed, control, detail| {
+        let agent = |name, (missing, install), on_path, installed, control, detail| {
             let (state, tone, detail, action) = match (on_path, installed) {
                 (_, true) => (
                     "Installed",
                     Tone::Good,
-                    "Its work shows in Agents, and it reads your comments.",
+                    "Shows its work in Agents, and hands it your comments.",
                     Some(("Remove", false, control)),
                 ),
                 (true, false) => (
@@ -195,7 +198,12 @@ impl SettingsPage {
                     detail,
                     Some(("Install", true, control)),
                 ),
-                (false, false) => ("Not installed", Tone::Quiet, detail, None),
+                (false, false) => (
+                    missing,
+                    Tone::Quiet,
+                    "Install it first, then come back here.",
+                    Some(("Copy install", false, Control::CopyInstall(install))),
+                ),
             };
             Block {
                 name,
@@ -207,29 +215,31 @@ impl SettingsPage {
         };
         blocks.push(agent(
             "Codex",
+            ("Codex not found", "npm install -g @openai/codex"),
             found.codex,
             found.codex_installed,
             Control::Codex,
-            "Shows Codex's work in Agents, and hands it your comments.",
+            "Shows its work in Agents, and hands it your comments.",
         ));
         blocks.push(agent(
             "Gemini CLI",
+            ("Gemini CLI not found", "npm install -g @google/gemini-cli"),
             found.gemini,
             found.gemini_installed,
             Control::Gemini,
-            "Shows Gemini's work in Agents, and hands it your comments.",
+            "Shows its work in Agents, and hands it your comments.",
         ));
         match found.ghostty_keeps_padding {
             Some(true) => blocks.push(Block {
                 name: "Ghostty window",
-                state: "Padding stays empty",
-                tone: Tone::Warning,
-                detail: "Fill it with Cellix's colours. This changes every Ghostty window.",
-                action: Some(("Fill window", false, Control::GhosttyFill)),
+                state: "Window edge not matched",
+                tone: Tone::Quiet,
+                detail: "Paints the window's edge in Cellix's colours, in every window.",
+                action: Some(("Match edge", false, Control::GhosttyFill)),
             }),
             Some(false) => blocks.push(Block {
                 name: "Ghostty window",
-                state: "Filled",
+                state: "Edge matched",
                 tone: Tone::Good,
                 detail: "Cellix's colours reach the window's edge.",
                 action: None,
@@ -239,8 +249,8 @@ impl SettingsPage {
         match found.ghostty_keeps_cmd_d {
             Some(true) => blocks.push(Block {
                 name: "Ghostty keys",
-                state: "Cmd+D opens a split",
-                tone: Tone::Warning,
+                state: "Cmd+D goes to Ghostty",
+                tone: Tone::Quiet,
                 detail: "Ghostty keeps Cmd+D for itself. Ctrl+D always works.",
                 action: Some(("Free Cmd+D", false, Control::Ghostty)),
             }),
@@ -267,7 +277,7 @@ impl SettingsPage {
             (true, false) => (
                 "Plugin not installed",
                 Tone::Quiet,
-                "Install to open Cellix as a pane in every Claude session.",
+                "Opens Cellix as a pane in every Claude session.",
                 ("Install", true),
             ),
             (false, false) => (
@@ -329,8 +339,7 @@ impl SettingsPage {
                     let rect = Rect::new(x, page.y + 3, SEGMENT_WIDTH, 1);
                     spots.push((rect, Control::Keymap(name)));
                 }
-                let rows = self.server_rows(page);
-                for (row, index) in rows.enumerate() {
+                for (row, index) in self.server_rows(page).into_iter().enumerate() {
                     if !self.found.servers.get(index).copied().unwrap_or(false) {
                         let x = page.right().saturating_sub(INSTALL_WIDTH);
                         let y = page.y + SERVERS_ROW + row as u16;
@@ -354,9 +363,13 @@ impl SettingsPage {
     }
 
     /// The servers that fit on the page, by their place in `SERVERS`.
-    fn server_rows(&self, page: Rect) -> std::ops::Range<usize> {
+    fn server_rows(&self, page: Rect) -> Vec<usize> {
         let room = page.h.saturating_sub(SERVERS_ROW) as usize;
-        self.top..(self.top + room).min(SERVERS.len())
+        let here = |index: &usize| self.found.servers.get(*index).copied().unwrap_or(false);
+        // What you already have comes first.
+        let mut order: Vec<usize> = (0..SERVERS.len()).collect();
+        order.sort_by_key(|index| !here(index));
+        order.into_iter().skip(self.top).take(room).collect()
     }
 
     pub fn control_at(&self, area: Rect, x: u16, y: u16) -> Option<Control> {
@@ -444,7 +457,7 @@ impl SettingsPage {
         let wash = if on {
             Some(theme.tint)
         } else {
-            hovered.then_some(theme.row_hover)
+            hovered.then_some(theme.page_hover)
         };
         if let Some(fill) = wash {
             grid.panel(Bounds::inset(rect, 0.0, 0.055), 18, Some(fill), None);
@@ -483,11 +496,13 @@ impl SettingsPage {
                 grid.large_button(rect.x, rect.y, &cells, label, fill, style);
             }
         }
-        let line_y = page.y + SERVERS_ROW - 2;
+        let line_y = page.y + SERVERS_ROW - 1;
         let above = Bounds::cells(page.x as f32, line_y as f32 - 0.5, page.w as f32, 0.0);
         grid.hairline(above, theme.border);
-        draw_note(grid, page, line_y, "LANGUAGE SERVERS", theme);
-        for (row, index) in self.server_rows(page).enumerate() {
+        let count = self.found.servers.iter().filter(|found| **found).count();
+        let title = format!("LANGUAGE SERVERS, {count} OF {} FOUND", SERVERS.len());
+        draw_note(grid, page, line_y, &title, theme);
+        for (row, index) in self.server_rows(page).into_iter().enumerate() {
             let y = page.y + SERVERS_ROW + row as u16;
             self.draw_server(grid, page, (y, index), spots, hover, theme);
         }
@@ -513,7 +528,7 @@ impl SettingsPage {
                 page.w as f32 + 1.2,
                 0.89,
             );
-            grid.panel(wash, 18, Some(theme.row_hover), None);
+            grid.panel(wash, 18, Some(theme.page_hover), None);
         }
         let quiet = Style {
             fg: theme.gutter.fg,
@@ -522,13 +537,13 @@ impl SettingsPage {
         grid.label(page.x, y, server.languages[0], theme.text, page.x + 16);
         let found = self.found.servers.get(index).copied().unwrap_or(false);
         // Hovering a missing server shows what its button will run.
-        let shown = if hovered && !found {
-            server.install
-        } else {
-            server.command[0]
-        };
         let end = page.right().saturating_sub(INSTALL_WIDTH + 1);
-        grid.label(page.x + 16, y, shown, quiet, end);
+        if hovered && !found {
+            let runs = format!("Runs {}", server.install);
+            grid.label(page.x + 16, y, &runs, theme.text, end);
+        } else {
+            grid.label(page.x + 16, y, server.command[0], quiet, end);
+        }
         if found {
             let state = Style {
                 fg: theme.git_added,
@@ -541,18 +556,21 @@ impl SettingsPage {
             .iter()
             .find(|(_, c)| *c == Control::InstallServer(index));
         if let Some((rect, _)) = spot {
-            let on = hover.is_some_and(|h| rect.contains(h.0, h.1));
-            let fill = if on {
-                theme.pick
+            // Quiet until wanted: twenty filled buttons in a column would drown the list.
+            if hovered {
+                let style = Style {
+                    fg: theme.button_text,
+                    ..theme.text
+                };
+                let cells = format!("{:^width$}", "Install", width = rect.w as usize);
+                grid.button(rect.x, rect.y, &cells, "Install", theme.button, style);
             } else {
-                theme.quiet_button(theme.text.bg)
-            };
-            let style = Style {
-                fg: theme.text.fg,
-                ..theme.text
-            };
-            let cells = format!("{:^width$}", "Install", width = rect.w as usize);
-            grid.button(rect.x, rect.y, &cells, "Install", fill, style);
+                let style = Style {
+                    fg: theme.accent,
+                    ..theme.text
+                };
+                grid.label_right(page.right(), y, "Install", style, NOTE_SIZE);
+            }
         }
     }
 
@@ -567,7 +585,7 @@ impl SettingsPage {
             grid,
             page,
             "Integrations",
-            "Cellix works inside your agents. Nothing here changes until you click.",
+            "Cellix works with your agents and terminal. Nothing changes until you click.",
             theme,
         );
         let blocks = self.blocks();
@@ -575,7 +593,6 @@ impl SettingsPage {
             let color = match block.tone {
                 Tone::Good => theme.git_added,
                 Tone::Quiet => theme.gutter.fg,
-                Tone::Warning => theme.attention,
             };
             let text = (block.name, block.state, color);
             draw_block(
@@ -759,15 +776,15 @@ fn draw_card(grid: &mut Grid, rect: Rect, name: &str, (on, hovered): (bool, bool
     );
 }
 
-fn badge(grid: &mut Grid, x: u16, y: u16, word: &str, color: Rgb, theme: &Theme) {
-    let dot = Bounds::cells(x as f32, y as f32 + 0.36, 0.42, 0.28);
+fn badge(grid: &mut Grid, x: f32, y: u16, word: &str, color: Rgb, theme: &Theme) {
+    let dot = Bounds::cells(x, y as f32 + 0.36, 0.42, 0.28);
     grid.panel(dot, 14, Some(color), None);
     let style = Style {
         fg: color,
         ..theme.text
     };
-    let text_x = x as f32 + 1.0;
-    grid.label_at(text_x, x + 1, y, word, style, grid.width(), NOTE_SIZE);
+    let cell = x.ceil() as u16 + 1;
+    grid.label_at(x + 1.0, cell, y, word, style, grid.width(), NOTE_SIZE);
 }
 
 /// One integration: a name, its state and a line about it, in a raised box.
@@ -794,9 +811,12 @@ fn draw_block(
         bold: true,
         ..Font::default()
     };
-    let name_end = (x as f32 + measure.width(name, bold)).ceil() as u16;
-    let at = if measure.in_cells() { end } else { name_end };
-    badge(grid, at + 1, top, word, color, theme);
+    let at = if measure.in_cells() {
+        end as f32 + 1.0
+    } else {
+        x as f32 + measure.width(name, bold) + STATUS_GAP
+    };
+    badge(grid, at, top, word, color, theme);
     let quiet = Style {
         fg: theme.gutter.fg,
         bg: theme.tab.bg,

@@ -37,7 +37,7 @@ Typing suggests as you go in every file type, with no setup: keywords, words fro
 files, and in `.env` files the keys from sibling files such as `.env.example`. A language
 server joins in where one is installed: `rust-analyzer`, `terraform-ls`, `gopls`,
 `pyright-langserver`, `typescript-language-server`, `yaml-language-server`, `taplo`,
-`bash-language-server` and `clangd`. Tab accepts, and so does Enter outside Markdown.
+`bash-language-server` and `clangd`. Shift+F12 lists a symbol's references, and Alt+Shift+F formats the file, with its language server or a formatter such as `rustfmt` or `prettier`. Tab accepts, and so does Enter outside Markdown.
 Brackets and quotes close themselves, Ctrl+/ toggles comments, Alt+Up and Down move lines,
 Alt+Shift+Down duplicates one, and Ctrl+L goes to a line.
 
@@ -144,9 +144,9 @@ minimap, so the code keeps the room.
 - **Comments** go with `Send Comments to Agent`, or with your next prompt.
 - **Turns** are checkpointed. Review shows what each prompt changed, and `Undo Agent Turn`
   puts the tree back, keeping a checkpoint of what it replaced.
-- **Agents** (the robot icon) opens Claude Code or Codex, lists who's running and who
-  needs you, and every worktree. Agents started without the plugin still show up, found by
-  their working folder.
+- **Agents** (the robot icon) is what's happening here: who's running in this folder, who
+  needs you, and every worktree. Agents started without a plugin still show up, found by
+  their working folder. Agents that are installed can be started from the bottom of it.
 - **Tests** an agent runs appear in review with their results.
 - **Staging**: Accept stages the hunk in git, and the Commit button commits what's staged.
 
@@ -166,10 +166,21 @@ for your comments as JSON, or `cellix open <file>` to show you something.
 The IDE connection follows what Claude Code's VS Code extension does, which isn't a
 published protocol, so a Claude Code update could change it. It was built against 2.1.309.
 
+### Codex and Gemini CLI
+
+Settings, Integrations has an Install button for each, or the plugin's source is under
+`integrations/`. They report what the agent is doing, record a turn for each prompt, show
+test runs in review, and hand the agent your comments. They don't get the pane or plan
+review, which rely on what only Claude Code offers.
+
+Codex asks you to trust a plugin's hooks before running them, so run `/hooks` in Codex once
+after installing. Restart Gemini CLI to load its extension. Google now points people to
+Antigravity CLI in place of Gemini CLI, and that isn't covered here yet.
+
 ## Settings
 
-The gear opens Settings: theme, smooth scrolling, the minimap, the keymap, which language
-servers were found, and the install for Claude Code. Changes apply as you click, and are
+The gear opens Settings: theme, smooth scrolling, the minimap, the keymap, language servers
+with a one-click install for each, and the installs for your agents. Changes apply as you click, and are
 saved to `~/.config/cellix/settings.json`. You can also edit that file, or
 `.cellix/settings.json` in a workspace:
 
@@ -183,6 +194,12 @@ background. `tier` is `direct`, `placeholder` or `cells`. `smooth_scroll: false`
 wheel jump by lines, for a slow link, and `minimap: false` hides the minimap.
 `language_servers` maps a language to a command, and
 `browser` replaces the command that opens web pages.
+
+A terminal app can't draw in the terminal's own padding, so Cellix sits inside a thin frame
+of the terminal's colour. In Ghostty, `Fill window` under Integrations adds
+`window-padding-color = extend` and `window-padding-balance = true` to its config, which
+carries Cellix's colours out to the window's edge. That setting applies to every Ghostty
+window, so it's your choice.
 
 Ghostty keeps Cmd+D to open a split, so Cellix never sees it and Ctrl+D is the way to select
 the next match. `Free Cmd+D` under Integrations adds `keybind = super+d=unbind` to Ghostty's

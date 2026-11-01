@@ -143,6 +143,11 @@ Paint can't go under text, so a rounded surface is coloured cells with its corne
 back in the colour behind. Icon pills work the same way. Floating panels reach past their
 rows in paint, which gives them padding that a row of cells couldn't.
 
+A terminal app can't draw in the terminal's padding, so the frame is really the terminal's
+background. Tiles sit on cells given their edge colours, which lets Ghostty carry them into
+the padding with `window-padding-color = extend`. That's the user's choice in Settings,
+because it applies to every Ghostty window.
+
 A tile is keyed by what its row shows, and paint can stand in several rows, so a row with
 paint on it keys by its own number too.
 
@@ -255,8 +260,12 @@ the file.
   it sets `CLAUDE_CODE_PLUGIN_DIRS` and `CLAUDE_CODE_AUTO_CONNECT_IDE` in the `env` block of
   the user's settings, because a mod loads through that variable or `--plugin-dir`. This
   only happens when the user asks.
-- Codex and Gemini CLI: `$VISUAL` plus skills or extensions. Verify current hooks
-  before building each adapter.
+- Codex: a plugin in a local marketplace, installed with Codex's own commands. It runs
+  hooks for status, turns, comments and test runs, once the user trusts them with `/hooks`.
+- Gemini CLI: an extension with the same hooks, installed with its own command. Its folder
+  trust question isn't covered by `--consent`, and the user's click is the answer to it.
+- The Agents panel is about what's happening here, since Cellix comes to the agent. Starting
+  one is a quiet list at the bottom, for the times Cellix is opened first.
 - Running agents: Cellix doesn't host them. `Open Claude Code` and `Open Codex` start the
   real tool in a split of tmux or Zellij, or a new window of Ghostty, whose splits can't be
   opened from inside. Anywhere else the command goes on the clipboard. Every update they

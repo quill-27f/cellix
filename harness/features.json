@@ -677,5 +677,19 @@
     "passes": true,
     "test": "the_window_is_filled_once_and_keeps_the_config",
     "title": "Ghostty padding can take the colours at the window edge"
+  },
+  {
+    "id": "hover-everywhere",
+    "milestone": 7,
+    "passes": true,
+    "test": "everything_clickable_answers_the_pointer",
+    "title": "Everything clickable answers the pointer"
+  },
+  {
+    "id": "tooltips",
+    "milestone": 7,
+    "passes": true,
+    "test": "icons_say_what_they_are",
+    "title": "Icon buttons say what they are"
   }
 ]

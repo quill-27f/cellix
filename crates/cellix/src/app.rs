@@ -14,7 +14,8 @@ use cellix_lang::Registry;
 use cellix_lang::complete::{self, Candidate, Source};
 use cellix_lang::lsp::{Client, Diagnostic, LspEvent, TextEdit};
 use cellix_render::{
-    ALL_CORNERS, Bounds, CellMeasure, Font, Grid, Icon, Measure, Rect, Style, TOP_LEFT, TOP_RIGHT,
+    ALL_CORNERS, Bounds, CellMeasure, Font, Grid, Icon, Measure, Rect, Rgb, Style, TOP_LEFT,
+    TOP_RIGHT,
 };
 use cellix_review::{
     Comment, append_comments, blame_line, branches, changed_files, create_branch, current_branch,
@@ -86,6 +87,16 @@ const TOOLS: [(&str, Format); 7] = [
     ("❝", Format::Quote),
 ];
 const SEND_BACK: &str = "[Send back]";
+/// A tooltip's height in rows, and the size of its text.
+const TOOLTIP_HEIGHT: f32 = 1.22;
+const TOOLTIP_SIZE: u8 = 92;
+/// What each button is called, in order, since they're only icons and marks.
+const FIND_NAMES: [&str; 3] = ["Previous match", "Next match", "Close"];
+const RAIL_NAMES: [&str; 5] = ["Files", "Search", "Review Changes", "Agents", "Settings"];
+const TOOL_NAMES: [&str; 7] = ["Bold", "Italic", "Code", "Heading", "List", "Task", "Quote"];
+/// How far the status bar's text sits below the middle of its row, because the terminal's
+/// padding below it is the same colour and reads as part of the bar.
+const STATUS_DROP: f32 = 0.12;
 const SIDEBAR_WIDTH: u16 = 28;
 const SIDEBAR_MIN_WIDTH: u16 = 20;
 /// Below this width the window is a side pane, as beside an agent: chrome gives way to
@@ -1304,6 +1315,11 @@ impl App {
                 bg: theme.popup,
                 ..theme.bar
             };
+            let hovered = self.hover.is_some_and(|h| row.contains(h.0, h.1));
+            if hovered && i != suggest.selected {
+                let wash = Bounds::inset(row, 0.5, 0.055);
+                grid.panel(wash, 18, Some(theme.quiet_button(theme.popup)), None);
+            }
             if i == suggest.selected {
                 grid.fill(
                     Rect::new(area.x + 1, y, area.w.saturating_sub(2), 1),
@@ -1948,7 +1964,7 @@ impl App {
                 .is_some_and(|h| h.1 == y && h.0 >= *x && h.0 < x + width);
             let fill = match (on, hovered) {
                 (true, _) => theme.button,
-                (false, true) => theme.pick,
+                (false, true) => theme.popup_hover,
                 (false, false) => theme.quiet_button(theme.popup),
             };
             let style = Style {
@@ -2128,7 +2144,21 @@ impl App {
         grid.label(line.right() + 1, area.y + 1, &count, base, area.right());
         let mut x = area.right() - FIND_BUTTON * FIND_BUTTONS.len() as u16 - 1;
         for label in FIND_BUTTONS {
-            grid.label(x + 1, area.y + 1, label, base, area.right());
+            let button = Rect::new(x, area.y + 1, FIND_BUTTON, 1);
+            let on_it = self.hover.is_some_and(|h| button.contains(h.0, h.1));
+            if on_it {
+                let pill = Bounds::inset(button, 0.1, 0.055);
+                grid.panel(pill, 18, Some(theme.popup_hover), None);
+            }
+            let style = if on_it {
+                Style {
+                    fg: theme.text.fg,
+                    ..base
+                }
+            } else {
+                base
+            };
+            grid.label(x + 1, area.y + 1, label, style, area.right());
             x += FIND_BUTTON;
         }
     }
@@ -3720,6 +3750,10 @@ impl App {
                 };
                 note = done.map_or_else(|e| format!("Couldn't: {e}"), str::to_string);
             }
+            Control::CopyInstall(command) => {
+                self.copy_text(command.to_string(), "");
+                note = format!("Copied: {command}");
+            }
             Control::Codex | Control::Gemini | Control::InstallServer(_) => {
                 self.start_install(control);
                 return;
@@ -3956,7 +3990,10 @@ impl App {
                     self.explorer
                         .draw(grid, area, header, measure, self.hover, theme);
                 }
-                SidebarView::Search => self.search.draw(grid, area, &*self.measure, theme),
+                SidebarView::Search => {
+                    self.search
+                        .draw(grid, area, self.hover, &*self.measure, theme);
+                }
                 SidebarView::Agents => self.agents.draw(grid, area, self.hover, theme),
             }
         }
@@ -3977,7 +4014,7 @@ impl App {
         }
         if let Some(review) = &self.review {
             let comments = self.comments.lock().map(|c| c.clone()).unwrap_or_default();
-            review.draw(grid, self.main_area(), theme, &comments);
+            review.draw(grid, self.main_area(), self.hover, theme, &comments);
             self.draw_status(grid);
             self.draw_overlay(grid);
             return;
@@ -4027,6 +4064,88 @@ impl App {
         self.draw_status(grid);
         self.draw_suggest(grid);
         self.draw_overlay(grid);
+        self.draw_tooltip(grid);
+    }
+
+    /// Names what's under the pointer, for the buttons that are only an icon.
+    fn draw_tooltip(&self, grid: &mut Grid) {
+        let Some((x, y)) = self.hover else {
+            return;
+        };
+        let rail = self.activity_area();
+        let font = Font {
+            size: TOOLTIP_SIZE,
+            ..Font::default()
+        };
+        let wide = |name: &str| self.measure.width(name, font) + 3.0;
+        // Where each one goes: its name, left edge and top, in cells and rows.
+        let spot = match &self.overlay {
+            Overlay::Find(_) => {
+                let area = self.find_bar();
+                let first = area.right() - FIND_BUTTON * FIND_BUTTONS.len() as u16 - 1;
+                let tool = x.checked_sub(first).map(|at| at / FIND_BUTTON);
+                let name = tool
+                    .filter(|_| y == area.y + 1)
+                    .and_then(|t| FIND_NAMES.get(t as usize));
+                name.map(|name| {
+                    let left = area.right() as f32 - wide(name);
+                    (*name, left, area.y as f32 + 2.5)
+                })
+            }
+            Overlay::None if rail.w > 0 && rail.contains(x, y) => {
+                let icon = (0..ACTIVITY.len()).find(|i| {
+                    let top = Self::rail_row(*i, rail);
+                    y >= top && y < top + u16::from(ACTIVITY_ICON.1)
+                });
+                icon.map(|i| {
+                    let top = Self::rail_row(i, rail) as f32;
+                    // The middle of a two-row icon.
+                    (
+                        RAIL_NAMES[i],
+                        rail.right() as f32 + 1.0,
+                        top + 1.0 - TOOLTIP_HEIGHT / 2.0,
+                    )
+                })
+            }
+            Overlay::None => self.toolbar_x().filter(|_| y == 1).and_then(|first| {
+                let tool = x.checked_sub(first)? / TOOL_WIDTH;
+                let name = *TOOL_NAMES.get(tool as usize)?;
+                let middle = (first + tool * TOOL_WIDTH) as f32 + TOOL_WIDTH as f32 / 2.0;
+                let left = (middle - wide(name) / 2.0).min(self.size.0 as f32 - wide(name) - 0.5);
+                Some((name, left, 2.2))
+            }),
+            _ => None,
+        };
+        let Some((name, left, top)) = spot else {
+            return;
+        };
+        let theme = &self.theme;
+        let bounds = Bounds::cells(left, top, wide(name), TOOLTIP_HEIGHT);
+        grid.popup(bounds, 24, theme.popup, theme.popup_border);
+        let text_top = top + (TOOLTIP_HEIGHT - 1.0) / 2.0;
+        if self.measure.in_cells() {
+            let style = Style {
+                fg: theme.text.fg,
+                bg: theme.popup,
+                ..theme.bar
+            };
+            grid.put_str(
+                left as u16 + 1,
+                text_top.round() as u16,
+                name,
+                style,
+                self.size.0,
+            );
+        } else {
+            let end = left + wide(name);
+            grid.text_run(
+                (left + 1.5, text_top),
+                end,
+                name,
+                (theme.text.fg, false),
+                font,
+            );
+        }
     }
 
     fn draw_overlay(&self, grid: &mut Grid) {
@@ -4130,8 +4249,10 @@ impl App {
             let row = Rect::new(area.x, y, area.w, ACTIVITY_ICON.1 as u16);
             let hovered = self.hover.is_some_and(|h| row.contains(h.0, h.1));
             let style = Style {
-                fg: if on || hovered {
+                fg: if on {
                     self.theme.activity_active
+                } else if hovered {
+                    self.theme.text.fg
                 } else {
                     self.theme.activity.fg
                 },
@@ -4248,7 +4369,14 @@ impl App {
                         Bounds::cells(close_x as f32 + 0.45, area.y as f32 + 0.36, 0.56, 0.28);
                     grid.panel(dot, 14, Some(theme.sidebar.fg), None);
                 } else if active || hovered {
-                    let color = if hovered { style.fg } else { theme.tab.fg };
+                    let on_close = self
+                        .hover
+                        .is_some_and(|h| h.1 == area.y && h.0 >= close_x && h.0 < x + width);
+                    if on_close {
+                        let chip = Bounds::cells(close_x as f32 - 0.05, 0.12, 1.75, 0.76);
+                        grid.panel(chip, 16, Some(theme.row_hover), None);
+                    }
+                    let color = if hovered { theme.text.fg } else { theme.tab.fg };
                     grid.glyph(close_x as f32, area.y, Icon::Close, color, shown, style);
                 } else {
                     let quiet = Style {
@@ -4340,8 +4468,18 @@ impl App {
         grid.label(bar.x + 2, y, &words, base, bar.right());
         let approve = bar.right().saturating_sub(APPROVE.len() as u16 + 2);
         let back = approve.saturating_sub(SEND_BACK.len() as u16 + 1);
-        grid.button(back, y, SEND_BACK, "Send back", theme.tint, secondary);
-        grid.button(approve, y, APPROVE, "Approve", theme.button, primary);
+        let lit = |x: u16, cells: &str, fill: Rgb| {
+            let spot = Rect::new(x, y, cells.len() as u16, 1);
+            if self.hover.is_some_and(|h| spot.contains(h.0, h.1)) {
+                theme.quiet_button(fill)
+            } else {
+                fill
+            }
+        };
+        let back_fill = lit(back, SEND_BACK, theme.quiet_button(theme.popup));
+        let approve_fill = lit(approve, APPROVE, theme.button);
+        grid.button(back, y, SEND_BACK, "Send back", back_fill, secondary);
+        grid.button(approve, y, APPROVE, "Approve", approve_fill, primary);
     }
 
     fn click_plan_bar(&mut self, x: u16) {
@@ -4403,10 +4541,15 @@ impl App {
                 ..style
             };
             let button = Rect::new(x, 1, TOOL_WIDTH, 1);
-            if self.hover.is_some_and(|h| button.contains(h.0, h.1)) {
-                let pill = Bounds::inset(button, 0.1, 0.08);
-                grid.panel(pill, 12, Some(self.theme.pick), None);
+            let on_it = self.hover.is_some_and(|h| button.contains(h.0, h.1));
+            if on_it {
+                let pill = Bounds::inset(button, 0.1, 0.12);
+                grid.panel(pill, 14, Some(self.theme.popup_hover), None);
             }
+            let tool = Style {
+                fg: if on_it { self.theme.text.fg } else { tool.fg },
+                ..tool
+            };
             grid.label(x + 1, 1, label, tool, x + TOOL_WIDTH);
             x += TOOL_WIDTH;
         }
@@ -4591,10 +4734,21 @@ impl App {
             let hovered = self
                 .hover
                 .is_some_and(|h| h.1 == y && h.0 >= at && h.0 < end);
-            let color = if hovered { self.theme.accent } else { bar.fg };
+            if hovered {
+                let chip = Rect::new(at, y, end.saturating_sub(at), 1);
+                grid.panel(
+                    Bounds::inset(chip, -0.3, 0.12),
+                    16,
+                    Some(self.theme.row_hover),
+                    None,
+                );
+            }
+            let color = if hovered { self.theme.text.fg } else { bar.fg };
             let shown = Style { fg: color, ..bar };
             grid.glyph(at as f32, y, Icon::Git, color, "⎇", bar);
+            grid.drop_last(STATUS_DROP);
             grid.label_at(at as f32 + 1.8, at + 2, y, branch, shown, end, 90);
+            grid.drop_last(STATUS_DROP);
         }
         let mut x = start;
         if let Some(problems) = &problems {
@@ -4613,7 +4767,9 @@ impl App {
             bar
         };
         grid.label_at(x as f32, x, y, left, bar, right_x.saturating_sub(1), 90);
+        grid.drop_last(STATUS_DROP);
         grid.label_right(width.saturating_sub(1), y, &right, bar, 90);
+        grid.drop_last(STATUS_DROP);
     }
 
     /// Where the branch sits in the status bar, as (start, end) columns.
@@ -6121,7 +6277,7 @@ mod tests {
         app.serve(Request::Agent(agent(Working, "Working")));
         assert!(!screen(&app).text().contains("needs you"));
         app.serve(Request::Agent(agent(Ended, "Ended")));
-        assert!(screen(&app).text().contains("No agents here"));
+        assert!(screen(&app).text().contains("No agents running"));
     }
 
     #[test]
@@ -7763,7 +7919,7 @@ while True:
         let (_dir, mut app) = project();
         app.run(Command::ShowAgents);
         let text = screen(&app).text();
-        assert!(text.contains("No agents here"), "{text}");
+        assert!(text.contains("No agents running"), "{text}");
     }
 
     #[test]
@@ -7829,5 +7985,55 @@ while True:
         let text = screen(&app).text();
         assert!(text.contains("Go to References"), "{text}");
         assert!(text.contains("Format Document"), "{text}");
+    }
+
+    /// Pointing at this place changes what's painted.
+    fn hover_shows(app: &mut App, x: u16, y: u16) -> bool {
+        let before = screen(app).paint;
+        app.handle(mouse(MouseKind::Move, x, y));
+        screen(app).paint != before
+    }
+
+    #[test]
+    fn everything_clickable_answers_the_pointer() {
+        let (dir, mut app) = reviewed();
+        app.handle(Event::Resize(140, 40));
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        let grid = screen(&app);
+        let (x, y) = find(&grid, "beta.rs");
+        assert!(hover_shows(&mut app, x, y), "a file in the tree");
+        assert!(hover_shows(&mut app, 2, 1), "a rail icon");
+        let status = app.size.1 - 1;
+        assert!(hover_shows(&mut app, 3, status), "the status bar's branch");
+        app.handle(mouse(MouseKind::Move, 40, 12));
+
+        fs::write(dir.path().join("beta.rs"), "fn changed() {}\n").unwrap();
+        app.run(Command::OpenDiff);
+        settle_review(&mut app);
+        let (x, y) = find(&screen(&app), "beta.rs");
+        app.handle(mouse(MouseKind::Move, 40, 20));
+        assert!(hover_shows(&mut app, x, y), "a row in review");
+        app.run(Command::Cancel);
+
+        app.run(Command::QuickOpen);
+        let (x, y) = find(&screen(&app), "beta.rs");
+        assert!(hover_shows(&mut app, x, y + 1), "a palette row");
+    }
+
+    #[test]
+    fn search_results_answer_the_pointer() {
+        let (_dir, mut app) = project();
+        search_for(&mut app, "first");
+        let (x, y) = find(&screen(&app), "alpha.txt");
+        assert!(hover_shows(&mut app, x, y), "a file in the results");
+    }
+
+    #[test]
+    fn icons_say_what_they_are() {
+        let (_dir, mut app) = project();
+        app.handle(mouse(MouseKind::Move, 2, 4));
+        assert!(screen(&app).text().contains("Search"), "the rail's names");
+        app.handle(mouse(MouseKind::Move, 40, 12));
+        assert!(!screen(&app).text().contains("Review Changes"));
     }
 }

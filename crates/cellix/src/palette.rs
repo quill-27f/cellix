@@ -302,7 +302,7 @@ impl Palette {
                 let fill = if row == self.selected {
                     theme.pick
                 } else {
-                    theme.row_hover
+                    theme.popup_hover
                 };
                 grid.panel(Bounds::inset(line, 0.5, 0.055), 18, Some(fill), None);
             }

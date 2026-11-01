@@ -69,11 +69,19 @@ impl Explorer {
             let chevron = 0.9;
             let wide = measure.width(branch, small) + 1.0 + chevron;
             let hovered = hover.is_some_and(|h| h.1 == area.y && area.contains(h.0, h.1));
-            let fill = if hovered { theme.pick } else { theme.row_hover };
+            let fill = if hovered {
+                theme.row_active
+            } else {
+                theme.row_hover
+            };
             let pill = Bounds::cells(x - 0.5, area.y as f32 + 0.14, wide, 0.72);
             grid.panel(pill, 18, Some(fill), None);
             let dim = Style {
-                fg: theme.status.fg,
+                fg: if hovered {
+                    theme.text.fg
+                } else {
+                    theme.status.fg
+                },
                 ..theme.sidebar
             };
             grid.label_at(x, end + 1, area.y, branch, dim, area.right(), BRANCH_SIZE);

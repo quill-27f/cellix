@@ -13,7 +13,11 @@ pub struct Theme {
     pub selection: Rgb,
     /// Matches of a search, other than the selected one.
     pub found: Rgb,
+    /// The wash on a row under the pointer, on the sidebar.
     pub row_hover: Rgb,
+    /// The same on the sheet, and on a floating panel.
+    pub page_hover: Rgb,
+    pub popup_hover: Rgb,
     pub row_active: Rgb,
     pub accent: Rgb,
     /// A wash of the accent, behind what's selected.
@@ -119,6 +123,8 @@ impl Theme {
         }
         for color in [
             &mut self.row_hover,
+            &mut self.page_hover,
+            &mut self.popup_hover,
             &mut self.row_active,
             &mut self.line,
             &mut self.guide,
@@ -160,7 +166,9 @@ impl Theme {
             gutter: style(Rgb(102, 102, 110), bg),
             selection: Rgb(173, 214, 255),
             found: Rgb(255, 236, 170),
-            row_hover: Rgb(232, 232, 230),
+            row_hover: Rgb(236, 236, 234),
+            page_hover: Rgb(243, 243, 245),
+            popup_hover: Rgb(238, 240, 246),
             row_active: Rgb(226, 226, 224),
             accent: Rgb(47, 91, 196),
             tint: Rgb(226, 233, 248),
@@ -241,6 +249,8 @@ impl Default for Theme {
             selection: Rgb(62, 80, 130),
             found: Rgb(106, 84, 28),
             row_hover: Rgb(46, 46, 68),
+            page_hover: Rgb(53, 53, 80),
+            popup_hover: Rgb(66, 66, 106),
             row_active: Rgb(52, 52, 78),
             accent: Rgb(143, 180, 255),
             tint: Rgb(52, 60, 94),

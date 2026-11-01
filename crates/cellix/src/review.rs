@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -97,6 +98,8 @@ pub struct Review {
     tokens: (Vec<LineTokens>, Vec<LineTokens>),
     /// A read of git on its way, so a click never waits for it.
     reading: Option<Receiver<Reading>>,
+    /// Where the pointer is, set each time the view is drawn.
+    hover: Cell<Option<(u16, u16)>>,
 }
 
 /// What git says about the tree, gathered off the main thread: several git commands take
@@ -247,6 +250,7 @@ impl Review {
             stats: HashMap::new(),
             tokens: (Vec::new(), Vec::new()),
             reading: None,
+            hover: Cell::new(None),
         };
         review.refresh();
         review
@@ -276,6 +280,7 @@ impl Review {
             proposal: Some(Vec::new()),
             stats: HashMap::new(),
             reading: None,
+            hover: Cell::new(None),
             tokens: (Vec::new(), Vec::new()),
         };
         review.reload_proposal();
@@ -733,8 +738,18 @@ impl Review {
                 ..theme.sidebar
             };
             grid.label(body.x + 1, y, &file, strong, reject.saturating_sub(1));
-            grid.button(reject, y, REJECT, "Reject", theme.tint, quiet);
-            grid.button(accept, y, ACCEPT, "Accept", theme.button, primary);
+            let reject_fill = if self.on_button(reject, y, REJECT) {
+                theme.quiet_button(theme.tint)
+            } else {
+                theme.tint
+            };
+            let accept_fill = if self.on_button(accept, y, ACCEPT) {
+                theme.quiet_button(theme.button)
+            } else {
+                theme.button
+            };
+            grid.button(reject, y, REJECT, "Reject", reject_fill, quiet);
+            grid.button(accept, y, ACCEPT, "Accept", accept_fill, primary);
             return;
         }
         if narrow {
@@ -788,8 +803,18 @@ impl Review {
             fg: theme.text.fg,
             ..theme.text
         };
-        grid.button(accept, y, ACCEPT, "Accept", theme.accept_tint, green);
-        grid.button(reject, y, REJECT, "Reject", theme.line, quiet);
+        let accept_fill = if self.on_button(accept, y, ACCEPT) {
+            theme.quiet_button(theme.accept_tint)
+        } else {
+            theme.accept_tint
+        };
+        let reject_fill = if self.on_button(reject, y, REJECT) {
+            theme.quiet_button(theme.line)
+        } else {
+            theme.line
+        };
+        grid.button(accept, y, ACCEPT, "Accept", accept_fill, green);
+        grid.button(reject, y, REJECT, "Reject", reject_fill, quiet);
     }
 
     fn draw_note(&self, grid: &mut Grid, card: Rect, y: u16, text: &str, theme: &Theme) {
@@ -880,6 +905,24 @@ impl Review {
                 theme.sidebar
             }
         };
+        let selected = match row {
+            ListRow::Base(base) => self.base == *base,
+            ListRow::File(index) => self.selected == *index,
+            _ => false,
+        };
+        let usable = matches!(row, ListRow::Base(_) | ListRow::Test(_) | ListRow::File(_));
+        let hovered = usable && self.hover.get().is_some_and(|h| line.contains(h.0, h.1));
+        if selected || hovered {
+            // Pixels get a pill like every other list, over the cell tier's full row.
+            let fill = if selected {
+                theme.row_active
+            } else {
+                theme.row_hover
+            };
+            let whole = Bounds::inset(line, 0.0, 0.0);
+            grid.panel(whole, 0, Some(theme.sidebar.bg), None);
+            grid.panel(Bounds::inset(line, 0.4, 0.055), 18, Some(fill), None);
+        }
         match row {
             ListRow::Heading(text) => {
                 let dim = Style {
@@ -952,7 +995,21 @@ impl Review {
         }
     }
 
-    pub fn draw(&self, grid: &mut Grid, area: Rect, theme: &Theme, comments: &[Comment]) {
+    /// Whether the pointer is on a button at this place.
+    fn on_button(&self, x: u16, y: u16, cells: &str) -> bool {
+        let spot = Rect::new(x, y, cells.len() as u16, 1);
+        self.hover.get().is_some_and(|h| spot.contains(h.0, h.1))
+    }
+
+    pub fn draw(
+        &self,
+        grid: &mut Grid,
+        area: Rect,
+        hover: Option<(u16, u16)>,
+        theme: &Theme,
+        comments: &[Comment],
+    ) {
+        self.hover.set(hover);
         grid.fill(area, theme.sidebar);
         let (list, body) = Self::layout(area);
         if let Some(list) = list {

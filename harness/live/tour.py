@@ -90,6 +90,8 @@ def project(root):
     # Something to review.
     with open(f"{root}/src/queue.rs", "a") as f:
         f.write("\n/// Returned when the queue is full.\npub struct Full;\n")
+    with open(f"{root}/docs/PLAN.md", "a") as f:
+        f.write("\nBound the queue.\n")
 
 
 def shoot(name, steps, *args, size="120x40", background="1e1e2e"):
@@ -145,3 +147,20 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("24-light-page", [], PAGE_FILE, background="eff1f5")
     shoot("25-light-menu", [["right", 60, 12]], PAGE_FILE, background="eff1f5")
     shoot("26-light-settings", settings, CODE_FILE, background="eff1f5")
+    shoot("27-hover-rail", [["move", RAIL_X, REVIEW]], CODE_FILE)
+    shoot("28-hover-tree", [["move", 12, 3]], CODE_FILE)
+    shoot("29-hover-tab", [["move", 38, 0]], CODE_FILE)
+    shoot("30-hover-menu", [["right", 60, 12], ["move", 64, 19]], CODE_FILE)
+    shoot("31-hover-palette", [["keys", CTRL("p")], ["move", 60, 7]], CODE_FILE)
+    shoot("32-hover-toolbar", [["move", 100, 1]], PAGE_FILE)
+    shoot("33-hover-branch", [["move", 3, 39]], CODE_FILE)
+    shoot("34-hover-header", [["move", 18, 0]], CODE_FILE)
+    shoot("35-hover-review", [["click", RAIL_X, REVIEW], ["wait", 0.6], ["move", 12, 2]], CODE_FILE)
+    shoot("36-hover-accept", [["click", RAIL_X, REVIEW], ["wait", 0.6], ["move", 114, 1]], CODE_FILE)
+    shoot("37-hover-settings", [*settings, ["click", 45, 4], ["move", 80, 16]], CODE_FILE)
+    shoot("38-hover-dialog", [["keys", "x"], ["keys", CTRL("q")], ["move", 70, 17]], CODE_FILE)
+    shoot("39-hover-agents", [["click", RAIL_X, AGENTS], ["wait", 0.5], ["move", 12, 12]], CODE_FILE)
+    shoot("41-hover-tab-close", [["move", 42, 0]], CODE_FILE)
+    shoot("42-hover-install", [*settings, ["click", 45, 4], ["move", 113, 16]], CODE_FILE)
+    shoot("43-light-hover-menu", [["right", 60, 12], ["move", 64, 19]], CODE_FILE, background="eff1f5")
+    shoot("40-hover-find", [["keys", CTRL("f")], ["keys", "item"], ["move", 112, 3]], CODE_FILE)
