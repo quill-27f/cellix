@@ -29,6 +29,10 @@ cellix src/lib.rs # with a file open
 | F12, F2, Ctrl+Space | Definition, rename, completion |
 | Ctrl+S, Ctrl+Q | Save, quit |
 
+Ctrl+W closes a tab and Ctrl+Q quits. Ghostty keeps Cmd+W and Cmd+Q for itself, so they
+only reach Cellix if you unbind them with `keybind = cmd+w=unbind` and
+`keybind = cmd+q=unbind` in your Ghostty config.
+
 Cmd works as Ctrl where the terminal passes it through. Ctrl+Shift+P needs a terminal with
 the Kitty keyboard protocol, such as Ghostty, Kitty or WezTerm. Ghostty keeps Cmd+Shift+P
 for its own palette unless you rebind it.

@@ -11,4 +11,4 @@ pub use grid::{Cell, Grid, Rect, Rgb, Run, Style};
 pub use icon::{Icon, Piece};
 pub use measure::{CellMeasure, Font, FontMeasure, Measure};
 pub use paint::{Bounds, Paint, units};
-pub use raster::{Image, Rasterizer, SoftwareRasterizer};
+pub use raster::{INTERFACE_SIZE, Image, Rasterizer, SoftwareRasterizer};

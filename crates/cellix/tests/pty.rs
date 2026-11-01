@@ -157,6 +157,21 @@ fn pty_ctrl_shift_p_and_cmd_p_work_as_in_vs_code() {
 }
 
 #[test]
+fn pty_cmd_w_closes_the_tab_and_cmd_q_quits() {
+    let dir = project();
+    let mut screen = Screen::start(dir.path(), &["hello.txt"]);
+    screen.wait_for("hello from a file");
+    screen.send(b"\x1b[119;9u"); // Cmd+W, Kitty keyboard protocol
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while screen.contents().contains("hello from a file") {
+        assert!(Instant::now() < deadline, "the tab stayed open");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    screen.send(b"\x1b[113;9u"); // Cmd+Q
+    screen.wait_exit();
+}
+
+#[test]
 fn pty_restores_the_terminal_on_exit() {
     let dir = project();
     let mut screen = Screen::start(dir.path(), &["hello.txt"]);

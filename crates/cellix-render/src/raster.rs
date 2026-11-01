@@ -49,7 +49,7 @@ struct TextMask {
 }
 
 /// Interface text is drawn at this size relative to the row height.
-const INTERFACE_SIZE: f32 = 0.60;
+pub const INTERFACE_SIZE: f32 = 0.60;
 /// Cached text lines before the cache is dropped, so a long session can't grow it forever.
 const MAX_TEXT_MASKS: usize = 4096;
 

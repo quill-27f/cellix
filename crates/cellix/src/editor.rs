@@ -5,7 +5,7 @@ use std::rc::Rc;
 use cellix_core::{Buffer, Motion, Selection, Selections};
 use cellix_input::{Command, Direction};
 use cellix_lang::{Registry, Span};
-use cellix_render::{Bounds, Grid, Icon, Measure, Rect, Rgb, units};
+use cellix_render::{Bounds, Font, Grid, INTERFACE_SIZE, Icon, Measure, Rect, Rgb, units};
 use unicode_width::UnicodeWidthChar;
 
 use crate::rendered::{self, Glyph, Intent, Row, Tone};
@@ -297,9 +297,13 @@ impl Editor {
             let rows = self.page(area);
             let row = self.top + y.saturating_sub(area.y) as usize;
             let column = (fine_x - (area.x + PAGE_MARGIN) as f32).max(0.0);
-            let stop = rows[row.min(rows.len().saturating_sub(1))..]
-                .iter()
-                .find(|r| r.stop);
+            let row = row.min(rows.len().saturating_sub(1));
+            // A tall heading's lower half is the spacer under it, and still the heading.
+            let above = row
+                .checked_sub(1)
+                .and_then(|r| rows.get(r))
+                .filter(|r| r.tall);
+            let stop = above.or_else(|| rows[row..].iter().find(|r| r.stop));
             return stop.map_or(self.buffer.rope().len_chars(), |r| r.position_at(column));
         }
         let rope = self.buffer.rope();
@@ -700,8 +704,7 @@ impl Editor {
                     fg: theme.gutter.fg,
                     ..theme.text
                 };
-                let line = y + u16::from(row.tall);
-                grid.label_at(area.x as f32 + 0.6, area.x, line, "#", dim, left, 85);
+                self.draw_heading_mark(grid, row, (area.x, left, y), dim.fg);
             }
             if row.rule && proportional {
                 let line = Bounds::cells(left as f32, y as f32 + 0.5, 60.0, 0.0);
@@ -727,6 +730,34 @@ impl Editor {
                 }
             }
         }
+    }
+
+    /// The small `#` beside a heading, sitting on the heading's baseline.
+    fn draw_heading_mark(
+        &self,
+        grid: &mut Grid,
+        row: &Row,
+        (x, left, y): (u16, u16, u16),
+        color: Rgb,
+    ) {
+        /// How far a font's baseline sits below the middle of its line, in font sizes.
+        const BASELINE: f32 = 0.35;
+        const MARK_SIZE: u8 = 85;
+        let size = row.glyphs.first().map_or(100, |g| g.font.size);
+        let scale = (size as f32 - MARK_SIZE as f32) / 100.0;
+        let drop = BASELINE * INTERFACE_SIZE * scale;
+        let top = y as f32 + if row.tall { 0.5 } else { 0.0 } + drop;
+        let font = Font {
+            size: MARK_SIZE,
+            ..Font::default()
+        };
+        grid.text_run(
+            (x as f32 + 0.7, top),
+            left as f32,
+            "#",
+            (color, false),
+            font,
+        );
     }
 
     fn draw_page_row(

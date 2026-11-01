@@ -677,9 +677,14 @@ impl App {
     }
 
     fn key(&mut self, key: KeyEvent) {
-        if !matches!(self.overlay, Overlay::None) {
+        // These two work from anywhere, even with a palette or prompt open.
+        let leaving = matches!(simple_keymap(key), Some(Command::Quit | Command::CloseTab));
+        if !matches!(self.overlay, Overlay::None) && !leaving {
             self.overlay_key(key);
             return;
+        }
+        if leaving {
+            self.overlay = Overlay::None;
         }
         if self.search.focus.is_some() && self.sidebar_area().is_some() && self.search_key(key) {
             return;
@@ -3120,6 +3125,80 @@ mod tests {
             caret.h < cellix_render::units(1.0),
             "the caret is taller than the box"
         );
+    }
+
+    /// A page laid out with real fonts, as on the pixel tiers, where headings are tall.
+    fn typeset(text: &str) -> (TempDir, App) {
+        let (dir, mut app) = page(text);
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        (dir, app)
+    }
+
+    #[test]
+    fn clicking_either_half_of_a_tall_heading_lands_on_it() {
+        for lower in [0, 1] {
+            let (_dir, mut app) = typeset("## Start of a session\n\nbody\n");
+            let grid = screen(&app);
+            let (x, y) = grid
+                .paint
+                .iter()
+                .find_map(|p| match p {
+                    cellix_render::Paint::Text { text, x, y, .. } if text.starts_with("Start") => {
+                        Some((
+                            *x / cellix_render::units(1.0),
+                            *y / cellix_render::units(1.0),
+                        ))
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            app.handle(mouse(MouseKind::Left, x as u16 + 2, y as u16 + lower));
+            typed(&mut app, "Q");
+            let text = app.active_text().unwrap();
+            assert!(text.starts_with("## "), "{text}");
+            assert!(text.lines().next().unwrap().contains('Q'), "{text}");
+        }
+    }
+
+    #[test]
+    fn the_heading_mark_sits_on_the_headings_row() {
+        let (_dir, app) = typeset("## Title\n");
+        let grid = screen(&app);
+        let row = |want: &str| {
+            grid.paint.iter().find_map(|p| match p {
+                cellix_render::Paint::Text { text, y, .. } if text.as_str() == want => Some(*y),
+                _ => None,
+            })
+        };
+        let (mark, title) = (row("#").unwrap(), row("Title").unwrap());
+        assert!(mark >= title, "the mark isn't above the title");
+        assert!(
+            mark - title < cellix_render::units(0.3),
+            "the mark is a row away"
+        );
+    }
+
+    #[test]
+    fn close_and_quit_work_with_a_palette_open() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        app.run(Command::QuickOpen);
+        app.handle(Event::Key(KeyEvent::ctrl('w')));
+        assert!(!screen(&app).text().contains("first line"));
+        app.run(Command::QuickOpen);
+        app.handle(Event::Key(KeyEvent::ctrl('q')));
+        assert!(app.quit);
+    }
+
+    #[test]
+    fn close_and_quit_work_from_the_search_box() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        app.run(Command::FindInProject);
+        app.handle(Event::Key(KeyEvent::ctrl('w')));
+        assert!(!screen(&app).text().contains("first line"));
+        app.handle(Event::Key(KeyEvent::ctrl('q')));
+        assert!(app.quit);
     }
 
     #[test]
