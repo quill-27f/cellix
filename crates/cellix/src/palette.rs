@@ -9,6 +9,10 @@ const WIDTH: u16 = 64;
 /// Text in the search field, as a percentage of the interface font.
 const INTERFACE_SIZE_PERCENT: u8 = 100;
 const ROWS: u16 = 12;
+/// Space from the panel's edge to the icon and the text of the list, which line up.
+const TEXT_INSET: f32 = 1.4;
+/// How far a floating panel reaches past its rows, so nothing sits on its edge.
+const PANEL_PADDING: f32 = 0.3;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Item {
@@ -106,6 +110,8 @@ pub const COMMANDS: [(&str, Command); 45] = [
 /// Quick open and the command palette: a filtered list with a text box.
 pub struct Palette {
     pub query: String,
+    /// What the empty field says.
+    hint: &'static str,
     items: Vec<Item>,
     matches: Vec<usize>,
     pub selected: usize,
@@ -138,6 +144,7 @@ impl Palette {
     pub fn new(items: Vec<Item>) -> Self {
         let mut palette = Self {
             query: String::new(),
+            hint: "Type to search",
             items,
             matches: Vec::new(),
             selected: 0,
@@ -187,7 +194,7 @@ impl Palette {
         let area = Self::area(grid.area());
         let rows = self.matches.len().min(ROWS as usize) as u16;
         let area = Rect::new(area.x, area.y, area.w, rows + 1);
-        popup(grid, area, theme);
+        raised(grid, area, theme);
         let base = Style {
             fg: theme.text.fg,
             bg: theme.popup,
@@ -198,24 +205,27 @@ impl Palette {
             ..base
         };
         grid.glyph(
-            area.x as f32 + 1.2,
+            area.x as f32 + TEXT_INSET,
             area.y,
             Icon::Search,
             theme.status.fg,
             "⌕",
             base,
         );
-        let x = area.x + 3;
+        // Clear of the icon, with the caret in the gap before the first letter.
+        let x = area.x as f32 + TEXT_INSET + 2.3;
+        let cell = area.x + 4;
         if self.query.is_empty() {
-            grid.label(x, area.y, "Type to search", dim, area.right());
+            grid.label_at(x, cell, area.y, self.hint, dim, area.right(), 100);
         } else {
-            grid.label(x, area.y, &self.query, base, area.right());
+            grid.label_at(x, cell, area.y, &self.query, base, area.right(), 100);
         }
         let font = Font {
             size: INTERFACE_SIZE_PERCENT,
             ..Font::default()
         };
-        grid.set_caret(x as f32 + measure.width(&self.query, font), area.y, 0.56);
+        let caret = x - 0.1 + measure.width(&self.query, font);
+        grid.set_caret(caret, area.y, 0.56);
         let edge = Bounds::cells(area.x as f32, area.y as f32 + 1.0, area.w as f32, 0.0);
         grid.hairline(edge, theme.popup_border);
         for (row, index) in self.matches.iter().take(ROWS as usize).enumerate() {
@@ -228,11 +238,12 @@ impl Palette {
                 } else {
                     theme.row_hover
                 };
-                grid.panel(Bounds::inset(line, 0.5, 0.04), 18, Some(fill), None);
+                grid.panel(Bounds::inset(line, 0.5, 0.1), 18, Some(fill), None);
             }
             let text = self.items[*index].label();
             let end = area.right().saturating_sub(16);
-            grid.label_at(area.x as f32 + 1.5, area.x + 3, y, text, base, end, 100);
+            let inset = area.x as f32 + TEXT_INSET;
+            grid.label_at(inset, area.x + 2, y, text, base, end, 100);
             if let Some(keys) = self.items[*index].keys() {
                 let quiet = Style {
                     fg: theme.status.fg,
@@ -291,6 +302,19 @@ pub fn input(grid: &mut Grid, line: Rect, field: &Input, measure: &dyn Measure, 
         let last = line.right() as f32 - PADDING;
         grid.set_caret(end.min(last), y, 0.56);
     }
+}
+
+/// A floating panel with room above and below its rows. Paint reaches past the cells, so the
+/// cell tier keeps its plain box.
+pub fn raised(grid: &mut Grid, area: Rect, theme: &Theme) {
+    let base = Style {
+        fg: theme.text.fg,
+        bg: theme.popup,
+        ..theme.bar
+    };
+    grid.fill(area, base);
+    let bounds = Bounds::inset(area, 0.0, -PANEL_PADDING);
+    grid.popup(bounds, 28, theme.popup, theme.popup_border);
 }
 
 /// A floating panel. Its corner cells keep what's behind them, so rounded corners show the

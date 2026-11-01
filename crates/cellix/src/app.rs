@@ -14,8 +14,7 @@ use cellix_lang::Registry;
 use cellix_lang::complete::{self, Candidate, Source};
 use cellix_lang::lsp::{Client, Diagnostic, LspEvent, TextEdit};
 use cellix_render::{
-    ALL_CORNERS, BOTTOM_LEFT, BOTTOM_RIGHT, Bounds, CellMeasure, Font, Grid, Icon, Measure, Rect,
-    Style, TOP_LEFT, TOP_RIGHT,
+    ALL_CORNERS, Bounds, CellMeasure, Font, Grid, Icon, Measure, Rect, Style, TOP_LEFT, TOP_RIGHT,
 };
 use cellix_review::{
     Comment, append_comments, blame_line, changed_files, current_branch, head_text, restore, turns,
@@ -59,7 +58,6 @@ const CONFIRM_WIDTH: u16 = 56;
 const CONFIRM_HEIGHT: u16 = 6;
 const PLAN_BAR_WIDTH: u16 = 48;
 /// Corners as percentages of a row's height.
-const SHEET_RADIUS: u8 = 34;
 const TAB_RADIUS: u8 = 22;
 const PILL_RADIUS: u8 = 30;
 /// What the explorer's status holds for a folder with changes inside, not a file.
@@ -89,6 +87,8 @@ const SIDEBAR_MIN_WIDTH: u16 = 20;
 const COMPACT_WIDTH: u16 = 70;
 /// Columns for the menu button at the start of the tab bar, in the compact layout.
 const MENU_BUTTON: u16 = 3;
+/// Columns the status bar gives a branch's name, so a long one can't crowd the message.
+const STATUS_BRANCH_WIDTH: u16 = 28;
 const WHEEL_LINES: isize = 3;
 /// Wheel events closer together than this are a trackpad's stream.
 const WHEEL_STREAM_GAP: std::time::Duration = std::time::Duration::from_millis(60);
@@ -1181,12 +1181,10 @@ impl App {
             Some(area) if !self.compact() => area.right(),
             _ => self.activity_area().right(),
         };
-        // A column of ground on the right, where the sheet has room to be one.
-        let edge = u16::from(!self.compact());
         Rect::new(
             x,
             0,
-            self.size.0.saturating_sub(x + edge),
+            self.size.0.saturating_sub(x),
             self.size.1.saturating_sub(1),
         )
     }
@@ -3209,7 +3207,6 @@ impl App {
                 }
             }
         }
-        self.round_sheet(grid);
         if self.plan_in_view() {
             self.draw_plan_bar(grid);
         }
@@ -3399,14 +3396,6 @@ impl App {
     fn sheet_area(&self) -> Rect {
         let main = self.main_area();
         Rect::new(main.x, main.y + 1, main.w, main.h.saturating_sub(1))
-    }
-
-    fn round_sheet(&self, grid: &mut Grid) {
-        if !self.compact() {
-            let which = TOP_RIGHT | BOTTOM_RIGHT | BOTTOM_LEFT;
-            let bounds = Bounds::inset(self.sheet_area(), 0.0, 0.0);
-            grid.corners(bounds, SHEET_RADIUS, self.theme.tab.bg, which);
-        }
     }
 
     fn draw_tabs(&self, grid: &mut Grid) {
@@ -3680,6 +3669,10 @@ impl App {
         let width = self.size.0;
         let bar = self.theme.status;
         grid.fill(Rect::new(0, y, width, 1), bar);
+        grid.hairline(
+            Bounds::cells(0.0, y as f32, width as f32, 0.0),
+            self.theme.border,
+        );
         let message = self.message.borrow();
         let at_cursor = self.cursor_line().and_then(|(path, line)| {
             let items = self.diagnostics.get(&path)?;
@@ -3759,11 +3752,7 @@ impl App {
         }
         // A message outranks the details, and a hint gives way to them.
         let kept = if message.is_empty() { 24 } else { 64 };
-        let start = if self.compact() {
-            1
-        } else {
-            ACTIVITY_WIDTH + 1
-        };
+        let start = self.status_branch().map_or(1, |(_, end)| end + 1);
         let problems: usize = self.diagnostics.values().map(Vec::len).sum();
         let problems = (problems > 0 && !self.compact()).then(|| format!("⊗ {problems}  "));
         let flagged = problems.as_ref().map_or(0, |p| p.chars().count() as u16);
@@ -3777,11 +3766,16 @@ impl App {
         shown.reverse();
         let right = shown.join("   ");
         let right_x = width.saturating_sub(right.chars().count() as u16 + 1);
-        let mut x = if self.compact() {
-            1
-        } else {
-            ACTIVITY_WIDTH + 1
-        };
+        if let (Some((at, end)), Some(branch)) = (self.status_branch(), &self.branch) {
+            let hovered = self
+                .hover
+                .is_some_and(|h| h.1 == y && h.0 >= at && h.0 < end);
+            let color = if hovered { self.theme.accent } else { bar.fg };
+            let shown = Style { fg: color, ..bar };
+            grid.glyph(at as f32, y, Icon::Git, color, "⎇", bar);
+            grid.label_at(at as f32 + 1.8, at + 2, y, branch, shown, end, 90);
+        }
+        let mut x = start;
         if let Some(problems) = &problems {
             x = grid.label(x, y, problems, bar, right_x);
         }
@@ -3799,6 +3793,12 @@ impl App {
         };
         grid.label_at(x as f32, x, y, left, bar, right_x.saturating_sub(1), 90);
         grid.label_right(width.saturating_sub(1), y, &right, bar, 90);
+    }
+
+    /// Where the branch sits in the status bar, as (start, end) columns.
+    fn status_branch(&self) -> Option<(u16, u16)> {
+        let name = self.branch.as_ref()?.chars().count() as u16;
+        Some((1, 1 + 2 + name.min(STATUS_BRANCH_WIDTH) + 1))
     }
 
     pub fn rename_running(&self) -> bool {

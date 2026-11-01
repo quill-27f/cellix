@@ -572,5 +572,12 @@
     "passes": true,
     "test": "a_tall_heading_keeps_its_lower_half",
     "title": "Tall headings keep their lower half past the minimap"
+  },
+  {
+    "id": "frame-colours",
+    "milestone": 7,
+    "passes": true,
+    "test": "the_surfaces_keep_their_order_on_any_terminal",
+    "title": "The rail and status bar stand apart from the sidebar and sheet"
   }
 ]
