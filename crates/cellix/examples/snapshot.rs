@@ -13,7 +13,8 @@ use cellix_input::Command;
 use cellix_render::{Grid, Rasterizer, SoftwareRasterizer};
 
 const DEFAULT_SIZE: (u16, u16) = (120, 36);
-const CELL: (usize, usize) = (10, 22);
+// The cell size of a Retina terminal, so the picture matches what people see.
+const CELL: (usize, usize) = (17, 37);
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -35,8 +36,7 @@ fn main() {
     let mut rasterizer = SoftwareRasterizer::new(CELL.0, CELL.1).expect("no fonts on this host");
     let mut rgb = Vec::new();
     for y in 0..grid.height() {
-        let cursor = grid.cursor.filter(|c| c.1 == y).map(|c| c.0);
-        rgb.extend(rasterizer.row(grid.row(y), cursor).rgb);
+        rgb.extend(rasterizer.row(&grid, y).rgb);
     }
     let width = size.0 as u32 * CELL.0 as u32;
     let height = size.1 as u32 * CELL.1 as u32;

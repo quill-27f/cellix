@@ -42,6 +42,12 @@ and review stacks changes in one column.
 The mouse works everywhere: click files, tabs and hunks, drag to select, and right-click
 the explorer to create, rename or delete.
 
+## The web
+
+`Open in Browser` in the palette, or Ctrl+click on a link, opens the link at the cursor or
+the current HTML file. It uses [terminal-browser](https://github.com/zenbu-labs/terminal-browser)
+in a split when that's installed, and your system browser otherwise.
+
 ## With an agent
 
 Set `VISUAL="cellix --wait"` so Ctrl+G in Claude Code opens plans in Cellix. Comments are
@@ -60,9 +66,14 @@ plugin that teaches this.
 ```
 
 `keymap` is `simple` or `vim`, `theme` is `dark` or `light`, and `tier` is `direct`,
-`placeholder` or `cells`. `language_servers` maps a language to a command.
+`placeholder` or `cells`. `language_servers` maps a language to a command, and `browser`
+replaces the command that opens web pages.
 
 tmux needs `set -g allow-passthrough on` for pixels. Without it, Cellix uses text cells.
 
 See [docs/DESIGN.md](docs/DESIGN.md) for the design and [AGENTS.md](AGENTS.md) for how to
 work on it.
+
+Cellix embeds [Inter](crates/cellix-render/fonts/LICENSE-Inter.txt) and
+[JetBrains Mono](crates/cellix-render/fonts/LICENSE-JetBrainsMono.txt), both under the SIL
+Open Font License.

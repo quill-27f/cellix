@@ -68,7 +68,7 @@ rendered nothing under Zellij, which is why the method is chosen per environment
 |---|---|---|
 | Pixels, direct | Terminal or Zellij answers the Kitty graphics query | `a=p` placements |
 | Pixels, placeholder | tmux with `allow-passthrough on` and a Kitty-graphics client | Passthrough transmit, U+10EEEE cells |
-| Cells | Anything else, or a host with no fonts or no known cell size | Styled text cells |
+| Cells | Anything else, or no known cell size | Styled text cells |
 
 Cells are a full tier, not an error state: every feature must work there. This is
 what guarantees tmux and Zellij always work. Pixels are the upgrade.
@@ -104,6 +104,22 @@ These decide whether pixels stay the default:
 5. Pixel mouse reporting (mode 1016) through Zellij.
 
 If 1 or 2 fail, cells become the default in that environment.
+
+## Paint layer
+
+Cells alone read as an ASCII drawing, even as pixels. So the grid stays the source of truth
+for layout, hit-testing and the cell tier, and a list of paint items sits above it for the
+pixel tiers: proportional text, rounded panels, hairlines, shadows, icons and a thin caret.
+Paint positions are in 64ths of a cell, so they can sit between cells. A row's tile hashes
+the paint that touches it, so caching and reuse work as before. Cell text marked `painted`
+is skipped on pixel tiers and kept for the cell tier and tests.
+
+Fonts are embedded (Inter, JetBrains Mono), because pixels are drawn on the remote host
+over SSH and servers rarely have fonts.
+
+Open: tiles are whole rows, so one region can't scroll separately. Smooth pixel scrolling
+needs per-region tiles. The Markdown page is still monospaced, because its caret mapping
+works in cells, so headings can't yet be larger than body text.
 
 ## Look
 

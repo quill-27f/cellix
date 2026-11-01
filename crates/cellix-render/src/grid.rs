@@ -3,6 +3,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::icon::{Icon, Piece};
+use crate::paint::{Bounds, Paint, UNIT, units};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Rgb(pub u8, pub u8, pub u8);
@@ -14,6 +15,8 @@ pub struct Style {
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
+    /// The pixel tiers leave this cell's glyph out, because paint draws its text.
+    pub painted: bool,
 }
 
 /// A screen cell. An empty symbol is the right half of a wide character.
@@ -63,6 +66,8 @@ pub struct Grid {
     height: u16,
     cells: Vec<Cell>,
     pub cursor: Option<(u16, u16)>,
+    /// Drawn over the cells on the pixel tiers, in order.
+    pub paint: Vec<Paint>,
 }
 
 impl Grid {
@@ -76,7 +81,172 @@ impl Grid {
             height,
             cells: vec![blank; width as usize * height as usize],
             cursor: None,
+            paint: Vec::new(),
         }
+    }
+
+    /// Text in the interface font on the pixel tiers, and ordinary cells on the cell tier.
+    pub fn label(&mut self, x: u16, y: u16, text: &str, style: Style, max_x: u16) -> u16 {
+        self.label_at(x as f32, x, y, text, style, max_x, 100)
+    }
+
+    /// A label starting between cells, at a size relative to the interface font.
+    #[allow(clippy::too_many_arguments)]
+    pub fn label_at(
+        &mut self,
+        x_px: f32,
+        x: u16,
+        y: u16,
+        text: &str,
+        style: Style,
+        max_x: u16,
+        size: u8,
+    ) -> u16 {
+        let end = self.put_str(
+            x,
+            y,
+            text,
+            Style {
+                painted: true,
+                ..style
+            },
+            max_x,
+        );
+        if y < self.height {
+            self.paint.push(Paint::Text {
+                x: units(x_px),
+                y: y as i32 * UNIT,
+                max_width: units(max_x.min(self.width) as f32 - x_px),
+                text: text.to_string(),
+                color: style.fg,
+                bold: style.bold,
+                size,
+                align_right: false,
+            });
+        }
+        end
+    }
+
+    /// A label whose right edge sits at `right`, since proportional text is narrower than
+    /// its cells and would otherwise leave a gap at the end.
+    pub fn label_right(&mut self, right: u16, y: u16, text: &str, style: Style, size: u8) {
+        let cells = text.chars().count() as u16;
+        let x = right.saturating_sub(cells);
+        self.put_str(
+            x,
+            y,
+            text,
+            Style {
+                painted: true,
+                ..style
+            },
+            right,
+        );
+        self.paint.push(Paint::Text {
+            x: units(right as f32),
+            y: y as i32 * UNIT,
+            max_width: units(right as f32),
+            text: text.to_string(),
+            color: style.fg,
+            bold: style.bold,
+            size,
+            align_right: true,
+        });
+    }
+
+    /// A rounded box inside `rect`, with square corners cleaned up behind it.
+    pub fn field(&mut self, rect: Rect, behind: Rgb, fill: Rgb, border: Rgb) {
+        self.panel(Bounds::inset(rect, 0.0, 0.0), 0, Some(behind), None);
+        self.panel(
+            Bounds::inset(rect, 0.15, 0.08),
+            22,
+            Some(fill),
+            Some(border),
+        );
+    }
+
+    /// A rounded button. The cell tier shows `cells`, which may be wider than the label.
+    pub fn button(&mut self, x: u16, y: u16, cells: &str, label: &str, fill: Rgb, style: Style) {
+        let width = cells.chars().count() as u16;
+        self.put_str(
+            x,
+            y,
+            cells,
+            Style {
+                painted: true,
+                ..style
+            },
+            self.width,
+        );
+        let bounds = Bounds::cells(x as f32, y as f32 + 0.1, width as f32, 0.8);
+        self.panel(bounds, 20, Some(fill), None);
+        self.paint.push(Paint::Text {
+            x: units(x as f32 + 0.7),
+            y: y as i32 * UNIT,
+            max_width: units(width as f32),
+            text: label.to_string(),
+            color: style.fg,
+            bold: false,
+            size: 90,
+            align_right: false,
+        });
+    }
+
+    pub fn panel(&mut self, bounds: Bounds, radius: u8, fill: Option<Rgb>, border: Option<Rgb>) {
+        self.paint.push(Paint::Panel {
+            bounds,
+            radius,
+            fill,
+            border,
+            shadow: false,
+        });
+    }
+
+    /// A panel floating above the page, with a soft shadow.
+    pub fn popup(&mut self, bounds: Bounds, radius: u8, fill: Rgb, border: Rgb) {
+        self.paint.push(Paint::Panel {
+            bounds,
+            radius,
+            fill: Some(fill),
+            border: Some(border),
+            shadow: true,
+        });
+    }
+
+    pub fn hairline(&mut self, bounds: Bounds, color: Rgb) {
+        self.paint.push(Paint::Hairline { bounds, color });
+    }
+
+    /// A small icon, one row tall, with its left edge at `x`. `fallback` is what the cell
+    /// tier shows there.
+    pub fn glyph(&mut self, x: f32, y: u16, icon: Icon, color: Rgb, fallback: &str, style: Style) {
+        let cell = x.floor() as u16;
+        if cell < self.width && y < self.height {
+            self.put_str(
+                cell,
+                y,
+                fallback,
+                Style {
+                    painted: true,
+                    ..style
+                },
+                self.width,
+            );
+        }
+        self.paint.push(Paint::Icon {
+            bounds: Bounds::cells(x, y as f32 + 0.14, 2.0, 0.72),
+            icon,
+            color,
+        });
+    }
+
+    /// Paint that touches row `y`, in drawing order.
+    pub fn paint_on_row(&self, y: u16) -> impl Iterator<Item = &Paint> {
+        let (top, bottom) = (y as i32 * UNIT, (y as i32 + 1) * UNIT);
+        self.paint.iter().filter(move |p| {
+            let (from, to) = p.span();
+            from < bottom && to > top
+        })
     }
 
     pub fn width(&self) -> u16 {

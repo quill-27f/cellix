@@ -3,8 +3,10 @@
 
 mod grid;
 mod icon;
+mod paint;
 mod raster;
 
 pub use grid::{Cell, Grid, Rect, Rgb, Run, Style};
 pub use icon::{Icon, Piece};
+pub use paint::{Bounds, Paint, units};
 pub use raster::{Image, Rasterizer, SoftwareRasterizer};

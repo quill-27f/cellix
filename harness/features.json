@@ -313,5 +313,40 @@
     "title": "Ctrl or Cmd+P opens files and Ctrl+Shift+P opens commands",
     "test": "pty_ctrl_shift_p_and_cmd_p_work_as_in_vs_code",
     "passes": true
+  },
+  {
+    "id": "paint-layer",
+    "milestone": 2,
+    "title": "Pixel tiers paint a real interface over the cell grid",
+    "test": "chrome_is_painted_and_the_cells_keep_the_text",
+    "passes": true
+  },
+  {
+    "id": "embedded-fonts",
+    "milestone": 1,
+    "title": "Fonts ship in the binary, for SSH hosts with none",
+    "test": "fonts_ship_in_the_binary",
+    "passes": true
+  },
+  {
+    "id": "hover",
+    "milestone": 2,
+    "title": "Hover states follow the pointer",
+    "test": "hover_highlights_a_row_without_clearing_messages",
+    "passes": true
+  },
+  {
+    "id": "browser",
+    "milestone": 4,
+    "title": "Open links and HTML through terminal-browser",
+    "test": "the_link_at_the_cursor_opens_in_the_browser",
+    "passes": true
+  },
+  {
+    "id": "smooth-scroll",
+    "milestone": 5,
+    "title": "Smooth pixel scrolling with per-region tiles",
+    "test": "regions_scroll_by_pixels",
+    "passes": false
   }
 ]

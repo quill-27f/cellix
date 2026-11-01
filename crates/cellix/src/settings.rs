@@ -14,6 +14,8 @@ pub struct Settings {
     pub keymap: Option<String>,
     /// `direct`, `placeholder` or `cells`.
     pub tier: Option<String>,
+    /// What opens web pages. Without it, terminal-browser opens them in a split.
+    pub browser: Option<Vec<String>>,
     /// Language name to server command, overriding the built-in table.
     pub language_servers: HashMap<String, Vec<String>>,
 }
@@ -27,6 +29,7 @@ impl Settings {
         self.theme = other.theme.or(self.theme.take());
         self.keymap = other.keymap.or(self.keymap.take());
         self.tier = other.tier.or(self.tier.take());
+        self.browser = other.browser.or(self.browser.take());
         self.language_servers.extend(other.language_servers);
     }
 

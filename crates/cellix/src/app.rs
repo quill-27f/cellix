@@ -9,14 +9,15 @@ use cellix_input::{
 };
 use cellix_lang::Registry;
 use cellix_lang::lsp::{Client, Diagnostic, LspEvent, TextEdit};
-use cellix_render::{Grid, Icon, Rect, Style};
+use cellix_render::{Bounds, Grid, Icon, Rect, Style};
 use cellix_review::{Comment, append_comments, blame_line, changed_files, current_branch};
 
 use cellix_agent::{Request, SharedComments};
 
 use crate::editor::{Editor, Marks};
 use crate::explorer::Explorer;
-use crate::palette::{COMMANDS, Item, Palette};
+use crate::palette::{COMMANDS, Item, Palette, popup};
+use crate::rendered;
 use crate::review::{Hit, Review};
 use crate::search::{self, Field, Search};
 use crate::settings::{Settings, default_server};
@@ -93,6 +94,28 @@ enum Overlay {
     Menu(Menu),
 }
 
+/// Starts a program detached from the terminal, and reports whether it could start.
+fn spawn(command: &[String], args: &[&str]) -> bool {
+    let Some((program, fixed)) = command.split_first() else {
+        return false;
+    };
+    let child = std::process::Command::new(program)
+        .args(fixed)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    match child {
+        Ok(mut child) => {
+            // Reaped on a thread, so it never lingers as a zombie or blocks the interface.
+            std::thread::spawn(move || child.wait());
+            true
+        }
+        Err(_) => false,
+    }
+}
+
 /// All application state. It has no terminal: tests send events and read the grid.
 pub struct App {
     pub workspace: Workspace,
@@ -128,6 +151,8 @@ pub struct App {
     /// that text, so one runs at a time and a stale reply is dropped.
     pending_rename: Option<(PathBuf, u64)>,
     branch: Option<String>,
+    /// Where the pointer is, for hover highlights.
+    hover: Option<(u16, u16)>,
     /// What the sidebar shows, as in VS Code's activity bar.
     sidebar_view: SidebarView,
     search: Search,
@@ -169,6 +194,7 @@ impl App {
             diagnostics: HashMap::new(),
             pending_rename: None,
             branch: None,
+            hover: None,
             sidebar_view: SidebarView::Explorer,
             search,
             drawer: false,
@@ -486,8 +512,16 @@ impl App {
     }
 
     pub fn handle(&mut self, event: Event) {
-        // A tick isn't the user moving on, so it leaves messages up.
-        if event != Event::Tick {
+        // Ticks and pointer moves aren't the user moving on, so they leave messages up.
+        let passive = matches!(
+            event,
+            Event::Tick
+                | Event::Mouse(MouseEvent {
+                    kind: MouseKind::Move,
+                    ..
+                })
+        );
+        if !passive {
             self.message.borrow_mut().clear();
         }
         match event {
@@ -771,6 +805,7 @@ impl App {
                 };
             }
             Command::AddComment => self.prompt_comment_at_cursor(),
+            Command::OpenInBrowser => self.open_in_browser(),
             Command::FindInProject => self.show_search(Field::Query),
             Command::ReplaceInProject => self.show_search(Field::Replace),
             Command::MarkdownPreview => {
@@ -846,6 +881,46 @@ impl App {
                     editor.run(command, area);
                 }
             }
+        }
+    }
+
+    /// What "open in browser" means here: the link at the cursor, or this file if it's
+    /// HTML.
+    fn browser_target(&self) -> Option<String> {
+        let editor = self.editors.get(self.active())?;
+        let rope = editor.buffer.rope();
+        let head = editor.selections.primary().head;
+        let line = rope.char_to_line(head);
+        let text = rope.line(line).to_string();
+        rendered::link_at(text.trim_end(), head - rope.line_to_char(line)).or_else(|| {
+            let path = editor.buffer.path()?;
+            let extension = path.extension()?.to_str()?;
+            matches!(extension, "html" | "htm").then(|| path.display().to_string())
+        })
+    }
+
+    fn open_in_browser(&mut self) {
+        let Some(target) = self.browser_target() else {
+            self.say("Nothing to open: put the cursor on a link, or open an HTML file");
+            return;
+        };
+        let opened = match &self.settings.browser {
+            Some(command) => spawn(command, &[&target]),
+            None => spawn(
+                &["terminal-browser".to_string(), "open".to_string()],
+                &[&target, "--split", "right"],
+            ),
+        };
+        // Without terminal-browser, the system's browser still gets the page.
+        let fallback = if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        };
+        if opened || spawn(&[fallback.to_string()], &[&target]) {
+            self.say(format!("Opened {target}"));
+        } else {
+            self.say("Could not open a browser");
         }
     }
 
@@ -1180,6 +1255,10 @@ impl App {
     }
 
     fn mouse(&mut self, mouse: MouseEvent) {
+        if mouse.kind == MouseKind::Move {
+            self.hover = Some((mouse.x, mouse.y));
+            return;
+        }
         if !matches!(self.overlay, Overlay::None) {
             self.overlay_mouse(mouse);
             return;
@@ -1269,6 +1348,11 @@ impl App {
                         return;
                     }
                     let at = editor.position_at(area, x, y);
+                    if mouse.mods.ctrl {
+                        editor.selections.set_single(Selection::cursor(at));
+                        self.open_in_browser();
+                        return;
+                    }
                     if mouse.mods.shift {
                         let anchor = editor.selections.primary().anchor;
                         editor.selections.set_single(Selection {
@@ -1477,6 +1561,10 @@ impl App {
         grid.fill(grid.area(), theme.text);
         self.draw_activity(grid);
         let drawer_over_main = self.compact() && self.drawer;
+        if let Some(area) = self.sidebar_area().filter(|_| !drawer_over_main) {
+            let line = Bounds::cells(area.right() as f32, 0.0, 0.0, area.h as f32);
+            grid.hairline(line, theme.border);
+        }
         if drawer_over_main {
             self.draw_tabs(grid);
         }
@@ -1488,7 +1576,9 @@ impl App {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
             match self.sidebar_view {
-                SidebarView::Explorer => self.explorer.draw(grid, area, &name, theme),
+                SidebarView::Explorer => {
+                    self.explorer.draw(grid, area, &name, self.hover, theme);
+                }
                 SidebarView::Search => self.search.draw(grid, area, theme),
             }
         }
@@ -1555,20 +1645,61 @@ impl App {
     }
 
     fn draw_menu(&self, grid: &mut Grid, menu: &Menu) {
+        let height = MENU_ITEMS.len() as u16;
+        popup(
+            grid,
+            Rect::new(menu.x, menu.y, MENU_WIDTH, height),
+            &self.theme,
+        );
+        let base = Style {
+            fg: self.theme.text.fg,
+            bg: self.theme.popup,
+            ..self.theme.bar
+        };
         for (i, item) in MENU_ITEMS.iter().enumerate() {
             let y = menu.y + i as u16;
-            grid.fill(Rect::new(menu.x, y, MENU_WIDTH, 1), self.theme.bar);
-            let text = format!(" {item}");
-            grid.put_str(menu.x, y, &text, self.theme.bar, menu.x + MENU_WIDTH);
+            let row = Rect::new(menu.x, y, MENU_WIDTH, 1);
+            if self.hover.is_some_and(|h| row.contains(h.0, h.1)) {
+                grid.panel(
+                    Bounds::inset(row, 0.3, 0.05),
+                    16,
+                    Some(self.theme.pick),
+                    None,
+                );
+            }
+            let end = menu.x + MENU_WIDTH;
+            grid.label_at(menu.x as f32 + 1.0, menu.x + 1, y, item, base, end, 100);
         }
     }
 
+    /// Asks in a floating box at the top, as VS Code's quick input does.
     fn draw_prompt(&self, grid: &mut Grid, prompt: &Prompt) {
-        let y = self.size.1.saturating_sub(1);
-        grid.fill(Rect::new(0, y, self.size.0, 1), self.theme.bar);
-        let text = format!(" {}: {}", prompt.label, prompt.input);
-        let end = grid.put_str(0, y, &text, self.theme.bar, self.size.0);
-        grid.cursor = Some((end.min(self.size.0.saturating_sub(1)), y));
+        let screen = Rect::new(0, 0, self.size.0, self.size.1);
+        let top = Palette::area(screen);
+        let area = Rect::new(top.x, top.y, top.w, 3);
+        popup(grid, area, &self.theme);
+        let base = Style {
+            fg: self.theme.text.fg,
+            bg: self.theme.popup,
+            ..self.theme.bar
+        };
+        let dim = Style {
+            fg: self.theme.gutter.fg,
+            ..base
+        };
+        grid.label_at(
+            area.x as f32 + 1.0,
+            area.x + 1,
+            area.y,
+            &prompt.label,
+            dim,
+            area.right(),
+            90,
+        );
+        let input = Rect::new(area.x + 1, area.y + 1, area.w.saturating_sub(2), 1);
+        grid.field(input, self.theme.popup, self.theme.input, self.theme.focus);
+        let end = grid.put_str(input.x + 1, input.y, &prompt.input, base, input.right());
+        grid.cursor = Some((end.min(input.right().saturating_sub(1)), input.y));
     }
 
     fn draw_activity(&self, grid: &mut Grid) {
@@ -1596,8 +1727,10 @@ impl App {
                 Command::OpenDiff => self.review.is_some(),
                 _ => false,
             };
+            let row = Rect::new(area.x, y, area.w, ACTIVITY_ICON.1 as u16);
+            let hovered = self.hover.is_some_and(|h| row.contains(h.0, h.1));
             let style = Style {
-                fg: if on {
+                fg: if on || hovered {
                     self.theme.activity_active
                 } else {
                     self.theme.activity.fg
@@ -1619,24 +1752,52 @@ impl App {
 
     fn draw_tabs(&self, grid: &mut Grid) {
         let main = self.main_area();
-        grid.fill(Rect::new(main.x, main.y, main.w, 1), self.theme.tab);
+        let theme = &self.theme;
+        grid.fill(Rect::new(main.x, main.y, main.w, 1), theme.tab);
         if self.compact() {
-            grid.put_str(main.x, main.y, " ☰ ", self.theme.tab, main.right());
+            grid.glyph(
+                main.x as f32 + 0.5,
+                main.y,
+                Icon::Files,
+                theme.tab.fg,
+                "☰",
+                theme.tab,
+            );
         }
         let area = self.tabs_area();
-        for (i, x, _) in self.visible_tabs() {
-            let style = if i == self.active() {
-                self.theme.tab_active
-            } else {
-                self.theme.tab
-            };
-            grid.put_str(
-                x,
-                area.y,
-                &Self::tab_label(&self.editors[i]),
-                style,
-                area.right(),
-            );
+        for (i, x, width) in self.visible_tabs() {
+            let active = i == self.active();
+            let hovered = self
+                .hover
+                .is_some_and(|h| h.1 == area.y && h.0 >= x && h.0 < x + width);
+            let style = if active { theme.tab_active } else { theme.tab };
+            let tab = Rect::new(x, area.y, width.min(area.right().saturating_sub(x)), 1);
+            grid.fill(tab, style);
+            let editor = &self.editors[i];
+            let name = editor.title();
+            let close_x = x + name.chars().count() as u16 + 4;
+            grid.label_at(x as f32 + 1.5, x + 2, area.y, &name, style, close_x, 100);
+            if close_x < area.right() {
+                let dirty = editor.buffer.is_dirty();
+                let shown = if dirty { "●" } else { "×" };
+                if dirty && !hovered {
+                    grid.put_str(close_x, area.y, shown, style, area.right());
+                } else if active || hovered {
+                    grid.glyph(close_x as f32, area.y, Icon::Close, style.fg, shown, style);
+                } else {
+                    let quiet = Style {
+                        painted: true,
+                        ..style
+                    };
+                    grid.put_str(close_x, area.y, shown, quiet, area.right());
+                }
+            }
+            if active {
+                let top = Bounds::cells(tab.x as f32, tab.y as f32, tab.w as f32, 0.08);
+                grid.panel(top, 0, Some(theme.focus), None);
+            }
+            let edge = Bounds::cells(tab.right() as f32, tab.y as f32, 0.0, 1.0);
+            grid.hairline(edge, theme.border);
         }
     }
 
@@ -1652,9 +1813,18 @@ impl App {
             return;
         };
         let main = self.main_area();
-        let text = format!("  {}", self.relative(path).replace('/', " › "));
-        grid.fill(Rect::new(main.x, 1, main.w, 1), self.theme.breadcrumb);
-        grid.put_str(main.x, 1, &text, self.theme.breadcrumb, main.right());
+        let text = self.relative(path).replace('/', " › ");
+        let style = self.theme.breadcrumb;
+        grid.fill(Rect::new(main.x, 1, main.w, 1), style);
+        grid.label_at(
+            main.x as f32 + 1.5,
+            main.x + 2,
+            1,
+            &text,
+            style,
+            main.right(),
+            90,
+        );
     }
 
     fn draw_welcome(&self, grid: &mut Grid) {
@@ -1679,7 +1849,9 @@ impl App {
                 },
                 ..self.theme.text
             };
-            grid.put_str(x, y + i as u16, row, style, main.right());
+            let size = if i == 0 { 160 } else { 100 };
+            let line = y + i as u16;
+            grid.label_at(x as f32, x, line, row, style, main.right(), size);
         }
     }
 
@@ -1753,15 +1925,15 @@ impl App {
             if let Some(branch) = &self.branch {
                 let piece = (Icon::Git, (1, 1));
                 grid.put_icon(x, y, piece.0, piece.1, bar);
-                x = grid.put_str(x + 2, y, &format!("{branch}  "), bar, right_x);
+                x = grid.label(x + 2, y, &format!("{branch}  "), bar, right_x);
             }
             let problems: usize = self.diagnostics.values().map(Vec::len).sum();
             if problems > 0 {
-                x = grid.put_str(x, y, &format!("⊗ {problems}  "), bar, right_x);
+                x = grid.label(x, y, &format!("⊗ {problems}  "), bar, right_x);
             }
         }
-        grid.put_str(x, y, left, bar, right_x.saturating_sub(1));
-        grid.put_str(right_x, y, &right, bar, width);
+        grid.label_at(x as f32, x, y, left, bar, right_x.saturating_sub(1), 90);
+        grid.label_right(width.saturating_sub(1), y, &right, bar, 90);
     }
 
     pub fn rename_running(&self) -> bool {
@@ -2265,7 +2437,7 @@ mod tests {
         app.open(&dir.path().join("alpha.txt")).unwrap();
         typed(&mut app, "x");
         app.run(Command::CloseTab);
-        assert!(screen(&app).text().contains("xfirst line"));
+        assert!(screen(&app).text().contains("Save changes first"));
         typed(&mut app, "n");
         enter(&mut app);
         assert!(!screen(&app).text().contains("xfirst line"));
@@ -2702,6 +2874,93 @@ mod tests {
         typed(&mut app, "note");
         enter(&mut app);
         assert!(screen(&app).text().contains("◆"));
+    }
+
+    fn browser_app(text: &str, name: &str) -> (TempDir, App, PathBuf) {
+        let (dir, _) = project();
+        let log = dir.path().join("opened.txt");
+        fs::create_dir(dir.path().join(".cellix")).unwrap();
+        let script = format!("printf '%s' \"$1\" > {}", log.display());
+        let settings = serde_json::json!({"browser": ["sh", "-c", script, "browser"]});
+        fs::write(
+            dir.path().join(".cellix/settings.json"),
+            settings.to_string(),
+        )
+        .unwrap();
+        fs::write(dir.path().join(name), text).unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (100, 30));
+        app.open(&dir.path().join(name)).unwrap();
+        (dir, app, log)
+    }
+
+    fn wait_for_file(path: &Path) -> String {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !path.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the browser never ran"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        fs::read_to_string(path).unwrap()
+    }
+
+    #[test]
+    fn the_link_at_the_cursor_opens_in_the_browser() {
+        let (_dir, mut app, log) = browser_app("see [docs](https://a.b/c) now\n", "n.md");
+        let (x, y) = find(&screen(&app), "docs");
+        app.handle(Event::Mouse(MouseEvent {
+            kind: MouseKind::Left,
+            x: x + 1,
+            y,
+            mods: Mods {
+                ctrl: true,
+                ..Mods::default()
+            },
+        }));
+        assert_eq!(wait_for_file(&log), "https://a.b/c");
+    }
+
+    #[test]
+    fn html_files_open_in_the_browser() {
+        let (dir, mut app, log) = browser_app("<h1>hi</h1>\n", "page.html");
+        app.run(Command::OpenInBrowser);
+        let opened = wait_for_file(&log);
+        assert_eq!(opened, dir.path().join("page.html").display().to_string());
+    }
+
+    #[test]
+    fn hover_highlights_a_row_without_clearing_messages() {
+        let (_dir, mut app) = project();
+        let grid = screen(&app);
+        let before = grid.paint.len();
+        let (x, y) = find(&grid, "beta.rs");
+        app.say("still here");
+        app.handle(mouse(MouseKind::Move, x, y));
+        let after = screen(&app);
+        assert!(after.paint.len() > before, "the row gains a highlight");
+        assert!(after.text().contains("still here"));
+    }
+
+    #[test]
+    fn chrome_is_painted_and_the_cells_keep_the_text() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        let grid = screen(&app);
+        let has_text = |want: &str| {
+            grid.paint
+                .iter()
+                .any(|p| matches!(p, cellix_render::Paint::Text { text, .. } if text == want))
+        };
+        assert!(has_text("beta.rs"), "explorer rows use the interface font");
+        assert!(has_text("alpha.txt"), "tabs use the interface font");
+        assert!(
+            grid.text().contains("beta.rs"),
+            "the cell tier still has it"
+        );
+        let (x, y) = find(&grid, "beta.rs");
+        assert!(grid.cell(x, y).style.painted);
     }
 
     #[test]

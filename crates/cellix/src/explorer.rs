@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use cellix_core::{Entry, Workspace};
-use cellix_render::{Grid, Rect, Rgb, Style};
+use cellix_render::{Bounds, Grid, Icon, Rect, Rgb, Style};
 
 use crate::theme::Theme;
 
@@ -39,61 +39,107 @@ impl Explorer {
         self.top = (self.top as isize + delta).clamp(0, last.max(0)) as usize;
     }
 
-    pub fn draw(&self, grid: &mut Grid, area: Rect, root_name: &str, theme: &Theme) {
+    pub fn draw(
+        &self,
+        grid: &mut Grid,
+        area: Rect,
+        root_name: &str,
+        hover: Option<(u16, u16)>,
+        theme: &Theme,
+    ) {
         grid.fill(area, theme.sidebar);
-        grid.put_str(area.x + 2, area.y, "EXPLORER", theme.sidebar, area.right());
+        let title = Style {
+            fg: theme.gutter.fg,
+            ..theme.sidebar
+        };
+        grid.label_at(
+            area.x as f32 + 2.0,
+            area.x + 2,
+            area.y,
+            "EXPLORER",
+            title,
+            area.right(),
+            80,
+        );
         let heading = Style {
             bold: true,
             ..theme.sidebar
         };
-        let title = format!("▾ {}", root_name.to_uppercase());
-        grid.put_str(area.x + 1, area.y + 1, &title, heading, area.right());
+        let name = root_name.to_uppercase();
+        grid.label_at(
+            area.x as f32 + 2.0,
+            area.x + 3,
+            area.y + 1,
+            &name,
+            heading,
+            area.right(),
+            85,
+        );
         for (row, entry) in self.entries.iter().skip(self.top).enumerate() {
             let y = area.y + HEADER_ROWS + row as u16;
             if y >= area.bottom() {
                 break;
             }
-            let base = if self.selected == Some(self.top + row) {
-                Style {
-                    bg: theme.row_hover,
-                    ..theme.sidebar
-                }
-            } else {
-                theme.sidebar
-            };
-            grid.fill(Rect::new(area.x, y, area.w, 1), base);
+            let selected = self.selected == Some(self.top + row);
+            let hovered = hover.is_some_and(|h| h.1 == y && area.contains(h.0, h.1));
+            if selected || hovered {
+                let fill = if selected {
+                    theme.row_active
+                } else {
+                    theme.row_hover
+                };
+                let line = Rect::new(area.x, y, area.w, 1);
+                grid.panel(Bounds::inset(line, 0.4, 0.03), 14, Some(fill), None);
+            }
             let status = self.status.get(&entry.path).copied();
             let style = match status {
                 Some('?' | 'A') => Style {
                     fg: theme.git_added,
-                    ..base
+                    ..theme.sidebar
                 },
                 Some('•' | 'M') => Style {
                     fg: theme.git_modified,
-                    ..base
+                    ..theme.sidebar
                 },
                 Some(_) => Style {
                     fg: theme.error,
-                    ..base
+                    ..theme.sidebar
                 },
-                None => base,
+                None => theme.sidebar,
             };
             let x = area.x + entry.depth as u16 * 2 + 2;
             let end = area.right().saturating_sub(2);
-            let (icon, icon_fg) = match (entry.is_dir, entry.expanded) {
-                (true, true) => ("▾ ", theme.sidebar.fg),
-                (true, false) => ("▸ ", theme.sidebar.fg),
-                (false, _) => ("▪ ", file_color(&entry.name, theme)),
+            let (fallback, chevron, icon) = match (entry.is_dir, entry.expanded) {
+                (true, true) => ("▾", Some(Icon::ChevronDown), Icon::FolderOpen),
+                (true, false) => ("▸", Some(Icon::ChevronRight), Icon::Folder),
+                (false, _) => ("▪", None, Icon::File),
             };
-            let icon_style = Style {
-                fg: icon_fg,
-                ..base
+            let color = if entry.is_dir {
+                theme.folder
+            } else {
+                file_color(&entry.name, theme)
             };
-            let x = grid.put_str(x, y, icon, icon_style, end);
-            grid.put_str(x, y, &entry.name, style, end);
+            if let Some(chevron) = chevron {
+                grid.glyph(
+                    x as f32 - 1.3,
+                    y,
+                    chevron,
+                    theme.sidebar.fg,
+                    " ",
+                    theme.sidebar,
+                );
+            }
+            grid.glyph(x as f32, y, icon, color, fallback, theme.sidebar);
+            grid.label_at(x as f32 + 2.0, x + 2, y, &entry.name, style, end, 100);
             if let Some(status) = status {
                 let shown = if status == '?' { 'U' } else { status };
-                grid.put_str(end, y, &shown.to_string(), style, area.right());
+                grid.label_right(
+                    area.right().saturating_sub(1),
+                    y,
+                    &shown.to_string(),
+                    style,
+                    90,
+                );
             }
         }
     }

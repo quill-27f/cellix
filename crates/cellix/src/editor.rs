@@ -584,14 +584,19 @@ impl Editor {
         }
         let height = (rows * rows / lines).max(1);
         let top = self.top * rows / lines;
+        // A slim rounded thumb on the pixel tiers, and a block of colour on cells.
+        let cells = Rect::new(track.x, track.y + top as u16, 1, height as u16);
         let thumb = cellix_render::Style {
-            bg: theme.scrollbar,
+            fg: theme.scrollbar,
+            painted: true,
             ..theme.text
         };
-        grid.fill(
-            Rect::new(track.x, track.y + top as u16, 1, height as u16),
-            thumb,
-        );
+        for y in cells.y..cells.bottom() {
+            grid.put_str(cells.x, y, "▐", thumb, cells.right());
+        }
+        let bounds =
+            cellix_render::Bounds::cells(cells.x as f32 + 0.3, cells.y as f32, 0.5, cells.h as f32);
+        grid.panel(bounds, 20, Some(theme.scrollbar), None);
     }
 
     fn draw_page(&self, grid: &mut Grid, area: Rect, theme: &Theme, focused: bool, marks: &Marks) {
@@ -644,6 +649,7 @@ impl Editor {
                     bold: glyph.bold,
                     italic: glyph.italic,
                     underline: glyph.underline,
+                    painted: false,
                 };
                 x = grid.put_str(x, y, glyph.ch.encode_utf8(&mut [0; 4]), style, area.right());
             }

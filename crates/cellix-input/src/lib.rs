@@ -65,6 +65,8 @@ pub enum MouseKind {
     Right,
     Up,
     Drag,
+    /// The pointer moved with no button held.
+    Move,
     ScrollUp,
     ScrollDown,
 }
@@ -119,6 +121,7 @@ pub enum Command {
     BlameLine,
     ReplaceInProject,
     MarkdownPreview,
+    OpenInBrowser,
     GoToDefinition,
     Complete,
     RenameSymbol,

@@ -4,12 +4,20 @@
 /// Base of the Unicode private plane used to carry icon pieces through the grid.
 const BASE: u32 = 0xF0000;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Icon {
     Files = 0,
     Search = 1,
     Git = 2,
     Settings = 3,
+    Folder = 4,
+    FolderOpen = 5,
+    File = 6,
+    ChevronRight = 7,
+    ChevronDown = 8,
+    Close = 9,
+    ReplaceAll = 10,
+    Globe = 11,
 }
 
 /// One cell of an icon that is `width` by `height` cells.
@@ -35,7 +43,7 @@ impl Piece {
     pub fn decode(symbol: &str) -> Option<Self> {
         let mut chars = symbol.chars();
         let code = (chars.next()? as u32).checked_sub(BASE)?;
-        if chars.next().is_some() || code >= 1 << 10 {
+        if chars.next().is_some() || code >= 1 << 12 {
             return None;
         }
         let icon = match code >> 8 {
@@ -66,10 +74,10 @@ impl Piece {
                 Icon::Files => "▤",
                 Icon::Search => "⌕",
                 Icon::Git => "⎇",
-                Icon::Settings => "⚙",
+                _ => "⚙",
             };
         }
-        ART[self.icon as usize][self.row.min(1) as usize][self.column.min(2) as usize]
+        ART[(self.icon as usize).min(3)][self.row.min(1) as usize][self.column.min(2) as usize]
     }
 }
 
@@ -124,6 +132,41 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
             let radius = (x * x + y * y).sqrt();
             let tooth = (y.atan2(x) * 8.0).sin() > 0.0;
             radius > 0.16 && radius < if tooth { 0.44 } else { 0.34 }
+        }
+        Icon::Folder | Icon::FolderOpen => {
+            let body = outline(p, (0.08, 0.32), (0.92, 0.82));
+            let tab = u > 0.08 && u < 0.46 && outline(p, (0.08, 0.18), (0.46, 0.34)) < 0.05;
+            let open = icon == Icon::FolderOpen && segment(p, (0.14, 0.50), (0.86, 0.50)) < 0.05;
+            body < 0.05 || tab || open
+        }
+        Icon::File => {
+            outline(p, (0.20, 0.08), (0.80, 0.92)) < 0.05
+                || segment(p, (0.34, 0.40), (0.66, 0.40)) < 0.035
+                || segment(p, (0.34, 0.56), (0.66, 0.56)) < 0.035
+                || segment(p, (0.34, 0.72), (0.56, 0.72)) < 0.035
+        }
+        Icon::ChevronRight => {
+            segment(p, (0.42, 0.30), (0.62, 0.50)) < 0.04
+                || segment(p, (0.62, 0.50), (0.42, 0.70)) < 0.04
+        }
+        Icon::ChevronDown => {
+            segment(p, (0.30, 0.42), (0.50, 0.62)) < 0.04
+                || segment(p, (0.50, 0.62), (0.70, 0.42)) < 0.04
+        }
+        Icon::Close => {
+            segment(p, (0.30, 0.30), (0.70, 0.70)) < 0.035
+                || segment(p, (0.70, 0.30), (0.30, 0.70)) < 0.035
+        }
+        Icon::ReplaceAll => {
+            segment(p, (0.12, 0.34), (0.80, 0.34)) < 0.05
+                || segment(p, (0.80, 0.34), (0.62, 0.18)) < 0.05
+                || segment(p, (0.88, 0.68), (0.20, 0.68)) < 0.05
+                || segment(p, (0.20, 0.68), (0.38, 0.84)) < 0.05
+        }
+        Icon::Globe => {
+            let c = (0.5, 0.5);
+            (circle(p, c) - 0.40).abs() < 0.04
+                || (circle(p, c) < 0.40 && ((u - 0.5).abs() < 0.04 || (v - 0.5).abs() < 0.04))
         }
     }
 }

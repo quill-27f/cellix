@@ -12,6 +12,8 @@ pub struct Theme {
     pub gutter: Style,
     pub selection: Rgb,
     pub row_hover: Rgb,
+    pub row_active: Rgb,
+    pub folder: Rgb,
     pub accent: Rgb,
     pub keyword: Rgb,
     pub string: Rgb,
@@ -39,6 +41,17 @@ pub struct Theme {
     pub find_match: Rgb,
     /// Behind code blocks on a rendered Markdown page.
     pub code_bg: Rgb,
+    /// Hairlines between regions.
+    pub border: Rgb,
+    /// The border of a focused box.
+    pub focus: Rgb,
+    /// Floating panels such as the palette.
+    pub popup: Rgb,
+    pub popup_border: Rgb,
+    /// The highlighted row of a list in a floating panel.
+    pub pick: Rgb,
+    pub button: Rgb,
+    pub button_text: Rgb,
 }
 
 fn style(fg: Rgb, bg: Rgb) -> Style {
@@ -71,7 +84,9 @@ impl Theme {
             tab_active: style(Rgb(51, 51, 51), bg),
             gutter: style(Rgb(35, 120, 145), bg),
             selection: Rgb(173, 214, 255),
-            row_hover: Rgb(228, 230, 241),
+            row_hover: Rgb(232, 232, 232),
+            row_active: Rgb(214, 235, 255),
+            folder: Rgb(120, 130, 150),
             accent: Rgb(0, 95, 184),
             keyword: Rgb(0, 0, 255),
             string: Rgb(163, 21, 21),
@@ -96,6 +111,13 @@ impl Theme {
             input: Rgb(255, 255, 255),
             find_match: Rgb(168, 216, 170),
             code_bg: Rgb(243, 243, 243),
+            border: Rgb(229, 229, 229),
+            focus: Rgb(0, 144, 241),
+            popup: Rgb(255, 255, 255),
+            popup_border: Rgb(200, 200, 200),
+            pick: Rgb(214, 235, 255),
+            button: Rgb(0, 122, 204),
+            button_text: Rgb(255, 255, 255),
         }
     }
 
@@ -124,7 +146,9 @@ impl Default for Theme {
             tab_active: style(Rgb(255, 255, 255), bg),
             gutter: style(Rgb(133, 133, 133), bg),
             selection: Rgb(38, 79, 120),
-            row_hover: Rgb(55, 55, 61),
+            row_hover: Rgb(42, 45, 46),
+            row_active: Rgb(55, 55, 61),
+            folder: Rgb(144, 164, 174),
             accent: Rgb(55, 148, 255),
             keyword: Rgb(86, 156, 214),
             string: Rgb(206, 145, 120),
@@ -149,6 +173,13 @@ impl Default for Theme {
             input: Rgb(60, 60, 60),
             find_match: Rgb(81, 92, 47),
             code_bg: Rgb(37, 37, 38),
+            border: Rgb(43, 43, 43),
+            focus: Rgb(0, 127, 212),
+            popup: Rgb(37, 37, 38),
+            popup_border: Rgb(69, 69, 69),
+            pick: Rgb(4, 57, 94),
+            button: Rgb(14, 99, 156),
+            button_text: Rgb(255, 255, 255),
         }
     }
 }

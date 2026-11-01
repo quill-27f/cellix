@@ -210,6 +210,20 @@ impl Review {
         }
     }
 
+    fn draw_buttons(&self, grid: &mut Grid, x: u16, y: u16, theme: &Theme) {
+        let on_button = Style {
+            fg: theme.button_text,
+            ..theme.bar
+        };
+        grid.button(x, y, ACCEPT, "Accept", theme.button, on_button);
+        let secondary = Style {
+            fg: theme.text.fg,
+            ..theme.bar
+        };
+        let next = x + ACCEPT.len() as u16 + 1;
+        grid.button(next, y, REJECT, "Reject", theme.input, secondary);
+    }
+
     fn draw_stacked(
         &self,
         grid: &mut Grid,
@@ -256,8 +270,9 @@ impl Review {
                     } else {
                         ""
                     };
-                    let text = format!(" {ACCEPT} {REJECT} {state}");
-                    grid.put_str(area.x, y, &text, theme.bar, area.right());
+                    self.draw_buttons(grid, area.x + 1, y, theme);
+                    let after = area.x + ACCEPT.len() as u16 * 2 + 3;
+                    grid.label(after, y, state, theme.bar, area.right());
                 }
                 Stacked::Line(side, kind) => {
                     let bg = match kind {
@@ -332,8 +347,15 @@ impl Review {
                 theme.sidebar
             };
             grid.fill(Rect::new(list.x, y, list.w, 1), style);
-            let text = format!(" {} {}", change.status, change.path.display());
-            grid.put_str(list.x, y, &text, style, list.right());
+            let name = change.path.display().to_string();
+            grid.put_str(
+                list.x + 1,
+                y,
+                &change.status.to_string(),
+                style,
+                list.right(),
+            );
+            grid.label(list.x + 3, y, &name, style, list.right());
         }
         if self.changes.is_empty() {
             grid.put_str(
@@ -364,8 +386,11 @@ impl Review {
                     } else {
                         ""
                     };
-                    let text = format!(" {ACCEPT} {REJECT}  hunk {}  {state}", hunk + 1);
-                    grid.put_str(line.x, y, &text, theme.bar, line.right());
+                    let x = line.x + 1;
+                    self.draw_buttons(grid, x, y, theme);
+                    let text = format!("Change {}   {state}", hunk + 1);
+                    let after = x + ACCEPT.len() as u16 * 2 + 2;
+                    grid.label(after, y, &text, theme.bar, line.right());
                 }
                 Row::Line {
                     left: l,

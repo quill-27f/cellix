@@ -4,7 +4,7 @@ use std::sync::mpsc::{Receiver, channel};
 use std::thread;
 
 use cellix_core::{Match, Workspace};
-use cellix_render::{Grid, Rect, Style};
+use cellix_render::{Grid, Icon, Rect, Style};
 
 use crate::theme::Theme;
 
@@ -154,7 +154,7 @@ impl Search {
         };
         let end = area.right().saturating_sub(1);
         let width = if field == Field::Replace {
-            end.saturating_sub(area.x + REPLACE_ALL.len() as u16 + 3)
+            end.saturating_sub(area.x + 5)
         } else {
             end.saturating_sub(area.x + 1)
         };
@@ -164,12 +164,26 @@ impl Search {
         };
         let line = Rect::new(area.x + 1, y, width, 1);
         grid.fill(line, input);
+        let border = if self.focus == Some(field) {
+            theme.focus
+        } else {
+            theme.popup_border
+        };
+        grid.field(line, theme.sidebar.bg, theme.input, border);
         if text.is_empty() {
             let dim = Style {
                 fg: theme.gutter.fg,
                 ..input
             };
-            grid.put_str(line.x + 1, y, hint, dim, line.right());
+            grid.label_at(
+                line.x as f32 + 0.8,
+                line.x + 1,
+                y,
+                hint,
+                dim,
+                line.right(),
+                95,
+            );
         } else {
             grid.put_str(line.x + 1, y, text, input, line.right());
         }
@@ -181,11 +195,40 @@ impl Search {
 
     pub fn draw(&self, grid: &mut Grid, area: Rect, theme: &Theme) {
         grid.fill(area, theme.sidebar);
-        grid.put_str(area.x + 2, area.y, "SEARCH", theme.sidebar, area.right());
+        let title = Style {
+            fg: theme.gutter.fg,
+            ..theme.sidebar
+        };
+        grid.label_at(
+            area.x as f32 + 2.0,
+            area.x + 2,
+            area.y,
+            "SEARCH",
+            title,
+            area.right(),
+            80,
+        );
         self.draw_box(grid, area, area.y + 1, Field::Query, theme);
         self.draw_box(grid, area, area.y + 2, Field::Replace, theme);
         let button = area.right().saturating_sub(REPLACE_ALL.len() as u16 + 1);
-        grid.put_str(button, area.y + 2, REPLACE_ALL, theme.sidebar, area.right());
+        grid.glyph(
+            button as f32 - 0.2,
+            area.y + 2,
+            Icon::ReplaceAll,
+            theme.sidebar.fg,
+            " ",
+            theme.sidebar,
+        );
+        grid.put_str(
+            button,
+            area.y + 2,
+            REPLACE_ALL,
+            Style {
+                painted: true,
+                ..theme.sidebar
+            },
+            area.right(),
+        );
 
         let files = self
             .rows()
@@ -208,7 +251,15 @@ impl Search {
             fg: theme.gutter.fg,
             ..theme.sidebar
         };
-        grid.put_str(area.x + 2, area.y + 3, &summary, dim, area.right());
+        grid.label_at(
+            area.x as f32 + 2.0,
+            area.x + 2,
+            area.y + 3,
+            &summary,
+            dim,
+            area.right(),
+            85,
+        );
 
         let rows = self.rows();
         for (index, row) in rows.iter().skip(self.top).enumerate() {
@@ -247,7 +298,20 @@ impl Search {
         };
         let tally = count.to_string();
         let end = area.right().saturating_sub(tally.len() as u16 + 2);
-        let x = grid.put_str(area.x + 1, y, &format!("{arrow} {name}"), bold, end);
+        let chevron = if self.collapsed.contains(path) {
+            Icon::ChevronRight
+        } else {
+            Icon::ChevronDown
+        };
+        grid.glyph(
+            area.x as f32 + 0.4,
+            y,
+            chevron,
+            theme.sidebar.fg,
+            arrow,
+            theme.sidebar,
+        );
+        let x = grid.label_at(area.x as f32 + 2.2, area.x + 3, y, &name, bold, end, 100);
         let folder = path
             .parent()
             .and_then(|p| p.strip_prefix(&self.root).ok())
@@ -257,8 +321,8 @@ impl Search {
             fg: theme.gutter.fg,
             ..theme.sidebar
         };
-        grid.put_str(x + 1, y, &folder, dim, end);
-        grid.put_str(end + 1, y, &tally, theme.sidebar, area.right());
+        grid.label(x + 1, y, &folder, dim, end);
+        grid.label_right(area.right().saturating_sub(1), y, &tally, theme.sidebar, 85);
     }
 
     fn draw_match(&self, grid: &mut Grid, area: Rect, y: u16, found: &Match, theme: &Theme) {

@@ -7,8 +7,9 @@ use cosmic_text::{
     Weight,
 };
 
-use crate::grid::{Cell, Rgb};
-use crate::icon::{Piece, inked};
+use crate::grid::{Grid, Rgb};
+use crate::icon::{Icon, Piece, inked};
+use crate::paint::{Paint, UNIT};
 
 /// A tightly packed RGB image, matching the Kitty protocol's `f=24`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -18,9 +19,9 @@ pub struct Image {
     pub rgb: Vec<u8>,
 }
 
-/// Turns one row of cells into an image. `cursor` marks the column to draw the cursor at.
+/// Turns one row of a grid into an image.
 pub trait Rasterizer {
-    fn row(&mut self, cells: &[Cell], cursor: Option<u16>) -> Image;
+    fn row(&mut self, grid: &Grid, y: u16) -> Image;
 }
 
 #[derive(Clone, Hash, PartialEq, Eq)]
@@ -33,27 +34,54 @@ struct GlyphKey {
 /// Coverage of one glyph: pixel offsets from the cell's corner, with alpha.
 type Mask = Rc<Vec<(u16, u16, u8)>>;
 
-/// CPU text rendering. Each glyph is rasterized once and then blended into its cell, so
-/// text stays locked to the grid and a row costs little more than a copy.
+#[derive(Clone, Hash, PartialEq, Eq)]
+struct TextKey {
+    text: String,
+    bold: bool,
+    pixels: u32,
+}
+
+/// A line of interface text, drawn once and blended wherever it's used.
+struct TextMask {
+    width: usize,
+    height: usize,
+    alpha: Vec<u8>,
+}
+
+/// Interface text is drawn at this size relative to the row height.
+const INTERFACE_SIZE: f32 = 0.60;
+/// Cached text lines before the cache is dropped, so a long session can't grow it forever.
+const MAX_TEXT_MASKS: usize = 4096;
+
+const INTER: &[u8] = include_bytes!("../fonts/InterVariable.ttf");
+const MONO: &[u8] = include_bytes!("../fonts/JetBrainsMonoVariable.ttf");
+const MONO_ITALIC: &[u8] = include_bytes!("../fonts/JetBrainsMonoVariable-Italic.ttf");
+
+/// CPU rendering. Glyphs are rasterized once and blended into their cells, so text stays
+/// locked to the grid and a row costs little more than a copy.
 pub struct SoftwareRasterizer {
     fonts: FontSystem,
     swash: SwashCache,
     metrics: Metrics,
     cell: (usize, usize),
     masks: HashMap<GlyphKey, Mask>,
+    text: HashMap<TextKey, Rc<TextMask>>,
 }
 
 impl SoftwareRasterizer {
-    /// Returns None when the host has no fonts, as many servers don't, or when the cell
-    /// size is unknown. The caller then stays on the cell tier.
+    /// The fonts ship in the binary, because pixels are drawn on the remote host over SSH
+    /// and servers rarely have any. Returns None only when the cell size is unknown.
     pub fn new(cell_width: usize, cell_height: usize) -> Option<Self> {
         if cell_width == 0 || cell_height == 0 {
             return None;
         }
         let mut fonts = FontSystem::new();
-        if fonts.db().is_empty() {
-            return None;
-        }
+        let db = fonts.db_mut();
+        db.load_font_data(INTER.to_vec());
+        db.load_font_data(MONO.to_vec());
+        db.load_font_data(MONO_ITALIC.to_vec());
+        db.set_monospace_family("JetBrains Mono");
+        db.set_sans_serif_family("Inter Variable");
         let metrics = fit_font(&mut fonts, cell_width, cell_height)?;
         Some(Self {
             fonts,
@@ -61,6 +89,7 @@ impl SoftwareRasterizer {
             metrics,
             cell: (cell_width, cell_height),
             masks: HashMap::new(),
+            text: HashMap::new(),
         })
     }
 
@@ -103,6 +132,227 @@ impl SoftwareRasterizer {
         let mask = Rc::new(pixels);
         self.masks.insert(key.clone(), mask.clone());
         mask
+    }
+
+    /// A line of interface text, centred in a row's height.
+    fn text_mask(&mut self, text: &str, bold: bool, size: u8) -> Rc<TextMask> {
+        let height = self.cell.1;
+        let px = height as f32 * INTERFACE_SIZE * size as f32 / 100.0;
+        let key = TextKey {
+            text: text.to_string(),
+            bold,
+            pixels: (px * 8.0) as u32,
+        };
+        if let Some(mask) = self.text.get(&key) {
+            return mask.clone();
+        }
+        if self.text.len() >= MAX_TEXT_MASKS {
+            self.text.clear();
+        }
+        let mut buffer = Buffer::new(&mut self.fonts, Metrics::new(px, height as f32));
+        buffer.set_size(None, Some(height as f32));
+        let mut attrs = Attrs::new().family(Family::SansSerif);
+        attrs = attrs.weight(if bold {
+            Weight::SEMIBOLD
+        } else {
+            Weight::NORMAL
+        });
+        let rich = std::iter::once((text, attrs.clone()));
+        buffer.set_rich_text(rich, &attrs, Shaping::Advanced, None);
+        buffer.shape_until_scroll(&mut self.fonts, false);
+        let width = buffer
+            .layout_runs()
+            .next()
+            .map_or(0.0, |run| run.line_w)
+            .ceil() as usize
+            + 2;
+        let mut alpha = vec![0; width * height];
+        let white = Color::rgb(255, 255, 255);
+        buffer.draw(
+            &mut self.fonts,
+            &mut self.swash,
+            white,
+            |x, y, w, h, color| {
+                for py in y..y + h as i32 {
+                    for px in x..x + w as i32 {
+                        if px >= 0 && py >= 0 && (px as usize) < width && (py as usize) < height {
+                            let at = py as usize * width + px as usize;
+                            alpha[at] = alpha[at].max(color.a());
+                        }
+                    }
+                }
+            },
+        );
+        let mask = Rc::new(TextMask {
+            width,
+            height,
+            alpha,
+        });
+        self.text.insert(key, mask.clone());
+        mask
+    }
+
+    fn draw_paint(&mut self, target: &mut Target, paint: &Paint) {
+        let (cw, ch) = (self.cell.0 as f32, self.cell.1 as f32);
+        let scale = |v: i32, cell: f32| v as f32 * cell / UNIT as f32;
+        match paint {
+            Paint::Panel {
+                bounds,
+                radius,
+                fill,
+                border,
+                shadow,
+            } => {
+                let shape = Shape {
+                    x: scale(bounds.x, cw),
+                    y: scale(bounds.y, ch),
+                    w: scale(bounds.w, cw),
+                    h: scale(bounds.h, ch),
+                    radius: *radius as f32 * ch / 100.0,
+                };
+                target.panel(shape, *fill, *border, *shadow, ch);
+            }
+            Paint::Hairline { bounds, color } => {
+                let thickness = (ch / 24.0).ceil().max(1.0);
+                let shape = Shape {
+                    x: scale(bounds.x, cw),
+                    y: scale(bounds.y, ch),
+                    w: scale(bounds.w, cw).max(thickness),
+                    h: scale(bounds.h, ch).max(thickness),
+                    radius: 0.0,
+                };
+                target.panel(shape, Some(*color), None, false, ch);
+            }
+            Paint::Text {
+                x,
+                y,
+                max_width,
+                text,
+                color,
+                bold,
+                size,
+                align_right,
+            } => {
+                let mask = self.text_mask(text, *bold, *size);
+                let mut left = scale(*x, cw).round() as i32;
+                if *align_right {
+                    left -= mask.width as i32;
+                }
+                let top = scale(*y, ch).round() as i32;
+                let limit = scale(*max_width, cw) as usize;
+                target.blit(&mask, left, top, limit, *color);
+            }
+            Paint::Icon {
+                bounds,
+                icon,
+                color,
+            } => {
+                let side = scale(bounds.h, ch);
+                let left = scale(bounds.x, cw);
+                let top = scale(bounds.y, ch);
+                target.icon(*icon, left, top, side, *color);
+            }
+        }
+    }
+}
+
+struct Shape {
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    radius: f32,
+}
+
+/// Distance from a point to a rounded box's edge, negative inside.
+fn rounded_distance(shape: &Shape, x: f32, y: f32) -> f32 {
+    let (cx, cy) = (shape.x + shape.w / 2.0, shape.y + shape.h / 2.0);
+    let qx = (x - cx).abs() - shape.w / 2.0 + shape.radius;
+    let qy = (y - cy).abs() - shape.h / 2.0 + shape.radius;
+    let outside = (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt();
+    outside + qx.max(qy).min(0.0) - shape.radius
+}
+
+/// The part of the screen one row's tile covers, in screen pixels.
+struct Target<'a> {
+    rgb: &'a mut [u8],
+    width: usize,
+    height: usize,
+    top: i32,
+}
+
+impl Target<'_> {
+    fn blend(&mut self, x: i32, y: i32, color: Rgb, alpha: u8) {
+        let row = y - self.top;
+        if alpha == 0 || x < 0 || row < 0 || x as usize >= self.width || row as usize >= self.height
+        {
+            return;
+        }
+        let at = (row as usize * self.width + x as usize) * 3;
+        self.rgb[at] = blend(color.0, self.rgb[at], alpha);
+        self.rgb[at + 1] = blend(color.1, self.rgb[at + 1], alpha);
+        self.rgb[at + 2] = blend(color.2, self.rgb[at + 2], alpha);
+    }
+
+    fn panel(&mut self, s: Shape, fill: Option<Rgb>, border: Option<Rgb>, shadow: bool, row: f32) {
+        let reach = if shadow { row * 0.6 } else { 1.0 };
+        let (x0, x1) = (
+            (s.x - reach).floor() as i32,
+            (s.x + s.w + reach).ceil() as i32,
+        );
+        let y0 = ((s.y - reach).floor() as i32).max(self.top);
+        let y1 = ((s.y + s.h + reach).ceil() as i32).min(self.top + self.height as i32);
+        let stroke = (row / 30.0).max(1.0);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let d = rounded_distance(&s, x as f32 + 0.5, y as f32 + 0.5);
+                if shadow && d > 0.0 {
+                    let fade = (1.0 - d / reach).clamp(0.0, 1.0);
+                    self.blend(x, y, Rgb(0, 0, 0), (fade * fade * 110.0) as u8);
+                }
+                let inside = ((0.5 - d) * 255.0).clamp(0.0, 255.0) as u8;
+                if let Some(color) = fill {
+                    self.blend(x, y, color, inside);
+                }
+                if let Some(color) = border {
+                    let edge = ((0.5 - (d + stroke / 2.0).abs() + stroke / 2.0) * 255.0)
+                        .clamp(0.0, 255.0) as u8;
+                    self.blend(x, y, color, edge);
+                }
+            }
+        }
+    }
+
+    fn blit(&mut self, mask: &TextMask, left: i32, top: i32, limit: usize, color: Rgb) {
+        let from = (self.top - top).max(0) as usize;
+        let to = ((self.top + self.height as i32 - top).max(0) as usize).min(mask.height);
+        for y in from..to {
+            for x in 0..mask.width.min(limit) {
+                let alpha = mask.alpha[y * mask.width + x];
+                self.blend(left + x as i32, top + y as i32, color, alpha);
+            }
+        }
+    }
+
+    fn icon(&mut self, icon: Icon, left: f32, top: f32, side: f32, color: Rgb) {
+        const SAMPLES: usize = 3;
+        let y0 = (top.floor() as i32).max(self.top);
+        let y1 = ((top + side).ceil() as i32).min(self.top + self.height as i32);
+        for y in y0..y1 {
+            for x in left.floor() as i32..(left + side).ceil() as i32 {
+                let mut hits = 0;
+                for sy in 0..SAMPLES {
+                    for sx in 0..SAMPLES {
+                        let u = (x as f32 + (sx as f32 + 0.5) / SAMPLES as f32 - left) / side;
+                        let v = (y as f32 + (sy as f32 + 0.5) / SAMPLES as f32 - top) / side;
+                        if (0.0..1.0).contains(&u) && (0.0..1.0).contains(&v) && inked(icon, u, v) {
+                            hits += 1;
+                        }
+                    }
+                }
+                self.blend(x, y, color, (hits * 255 / (SAMPLES * SAMPLES)) as u8);
+            }
+        }
     }
 }
 
@@ -186,24 +436,20 @@ fn fill(rgb: &mut [u8], stride: usize, x: usize, y: usize, w: usize, h: usize, c
 }
 
 impl Rasterizer for SoftwareRasterizer {
-    fn row(&mut self, cells: &[Cell], cursor: Option<u16>) -> Image {
+    fn row(&mut self, grid: &Grid, y: u16) -> Image {
+        let cells = grid.row(y);
         let (cw, ch) = self.cell;
         let width = cw * cells.len();
         let mut rgb = vec![0; width * ch * 3];
         for (i, cell) in cells.iter().enumerate() {
-            let is_cursor = cursor == Some(i as u16);
-            let (fg, bg) = if is_cursor {
-                (cell.style.bg, cell.style.fg)
-            } else {
-                (cell.style.fg, cell.style.bg)
-            };
+            let (fg, bg) = (cell.style.fg, cell.style.bg);
             fill(&mut rgb, width, i * cw, 0, cw, ch, bg);
-            if cell.symbol.is_empty() || cell.symbol == " " {
+            if cell.symbol.is_empty() || cell.symbol == " " || cell.style.painted {
                 continue;
             }
             // Drawn rather than taken from a font, so stacked rows join with no gap.
             if cell.symbol == "▌" {
-                fill(&mut rgb, width, i * cw, 0, cw.div_ceil(3), ch, fg);
+                fill(&mut rgb, width, i * cw, 0, cw.div_ceil(5), ch, fg);
                 continue;
             }
             if let Some(piece) = Piece::decode(&cell.symbol) {
@@ -229,6 +475,31 @@ impl Rasterizer for SoftwareRasterizer {
                 fill(&mut rgb, width, i * cw, ch - 2, cw, 1, cell.style.fg);
             }
         }
+        let paint: Vec<Paint> = grid.paint_on_row(y).cloned().collect();
+        let mut target = Target {
+            rgb: &mut rgb,
+            width,
+            height: ch,
+            top: y as i32 * ch as i32,
+        };
+        for item in &paint {
+            self.draw_paint(&mut target, item);
+        }
+        // A thin caret, as in a real editor, not a terminal's block.
+        if let Some((x, _)) = grid.cursor.filter(|c| c.1 == y) {
+            let color = cells
+                .get(x as usize)
+                .map_or(Rgb(255, 255, 255), |c| c.style.fg);
+            fill(
+                &mut rgb,
+                width,
+                x as usize * cw,
+                0,
+                (cw / 8).max(2),
+                ch,
+                color,
+            );
+        }
         Image {
             width,
             height: ch,
@@ -242,7 +513,6 @@ mod tests {
     use super::*;
     use crate::grid::{Grid, Style};
 
-    /// None on a host without fonts, where this test has nothing to check.
     fn rasterizer() -> Option<SoftwareRasterizer> {
         SoftwareRasterizer::new(10, 20)
     }
@@ -270,7 +540,7 @@ mod tests {
     fn row_image_is_exactly_the_grid_size() {
         let Some(mut r) = rasterizer() else { return };
         let grid = Grid::new(8, 1, style());
-        let image = r.row(grid.row(0), None);
+        let image = r.row(&grid, 0);
         assert_eq!((image.width, image.height), (80, 20));
         assert_eq!(image.rgb.len(), 80 * 20 * 3);
     }
@@ -280,21 +550,63 @@ mod tests {
         let Some(mut r) = rasterizer() else { return };
         let mut grid = Grid::new(4, 1, style());
         grid.put_str(2, 0, "M", style(), 4);
-        let image = r.row(grid.row(0), None);
+        let image = r.row(&grid, 0);
         assert_eq!(lit(&image, 0, 10), 0);
         assert!(lit(&image, 2, 10) > 10, "M drew nothing");
         assert_eq!(lit(&image, 3, 10), 0, "M spilled into the next cell");
     }
 
     #[test]
-    fn cursor_inverts_its_cell() {
+    fn the_caret_is_a_thin_line() {
         let Some(mut r) = rasterizer() else { return };
-        let grid = Grid::new(3, 1, style());
-        let image = r.row(grid.row(0), Some(1));
+        let mut grid = Grid::new(3, 1, style());
+        grid.cursor = Some((1, 0));
+        let image = r.row(&grid, 0);
         let at = |x: usize| image.rgb[(10 * image.width + x) * 3];
-        assert_eq!(at(5), 10);
-        assert_eq!(at(15), 250);
-        assert_eq!(at(25), 10);
+        assert_eq!(at(10), 250);
+        assert_eq!(at(15), 10);
+    }
+
+    #[test]
+    fn labels_draw_without_their_cell_glyphs() {
+        let Some(mut r) = rasterizer() else { return };
+        let mut grid = Grid::new(20, 1, style());
+        grid.label(1, 0, "Illi", style(), 20);
+        assert!(grid.cell(1, 0).style.painted);
+        let with_paint = r.row(&grid, 0);
+        // Inter is proportional: this text is far narrower than four cells.
+        let lit_right = (0..20)
+            .flat_map(|y| (40..200).map(move |x| (x, y)))
+            .any(|(x, y)| with_paint.rgb[(y * with_paint.width + x) * 3] > 128);
+        assert!(!lit_right, "drew past the narrow label");
+    }
+
+    #[test]
+    fn panels_have_rounded_corners() {
+        let Some(mut r) = rasterizer() else { return };
+        let mut grid = Grid::new(10, 1, style());
+        grid.panel(
+            crate::paint::Bounds::cells(1.0, 0.0, 8.0, 1.0),
+            40,
+            Some(Rgb(255, 0, 0)),
+            None,
+        );
+        let image = r.row(&grid, 0);
+        let red = |x: usize, y: usize| image.rgb[(y * image.width + x) * 3];
+        assert_eq!(red(50, 10), 255, "the middle is filled");
+        assert_eq!(red(10, 0), 10, "the corner is cut");
+    }
+
+    #[test]
+    fn fonts_ship_in_the_binary() {
+        let mut r = SoftwareRasterizer::new(10, 20).unwrap();
+        assert!(
+            r.fonts
+                .db()
+                .faces()
+                .any(|f| f.families.iter().any(|(n, _)| n.contains("Inter")))
+        );
+        assert!(r.text_mask("x", false, 100).alpha.iter().any(|a| *a > 0));
     }
 
     #[test]

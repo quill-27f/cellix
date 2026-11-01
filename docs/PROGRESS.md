@@ -84,3 +84,19 @@ Unverified: all of this in a live terminal, Ctrl+Shift+P in tmux and Zellij, and
 Xcode hides inline markers such as `**`. Ctrl+F opens project search, because find in the
 current file doesn't exist yet. Tables wider than the page wrap rather than scroll, and
 code blocks on the page have no syntax colours.
+
+## 2026-11-01: paint layer
+
+Feedback was that it still read as an ASCII drawing, so the pixel tiers now paint the
+interface: Inter for chrome and JetBrains Mono for code, both embedded so SSH hosts with no
+fonts get the same look. Vector file and folder icons, rounded inputs, buttons and popups
+with shadows, hairlines, hover states and a thin caret. Prompts float at the top like VS
+Code's quick input. Scrolling was confirmed fine in a live terminal.
+
+`Open in Browser` and Ctrl+click use terminal-browser in a split, falling back to the
+system browser.
+
+Next: per-region tiles for smooth pixel scrolling, then a proportional Markdown page.
+
+Unverified: the paint layer in tmux and Zellij, and terminal-browser opening a real split.
+The tests use a stand-in command.

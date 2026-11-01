@@ -25,7 +25,7 @@ impl Item {
     }
 }
 
-pub const COMMANDS: [(&str, Command); 20] = [
+pub const COMMANDS: [(&str, Command); 21] = [
     ("Save", Command::Save),
     ("Undo", Command::Undo),
     ("Redo", Command::Redo),
@@ -42,6 +42,7 @@ pub const COMMANDS: [(&str, Command); 20] = [
     ("Blame Line", Command::BlameLine),
     ("Replace in Project", Command::ReplaceInProject),
     ("Toggle Markdown Source", Command::MarkdownPreview),
+    ("Open in Browser", Command::OpenInBrowser),
     ("Go to Definition", Command::GoToDefinition),
     ("Complete", Command::Complete),
     ("Rename Symbol", Command::RenameSymbol),
@@ -124,25 +125,71 @@ impl Palette {
 
     pub fn draw(&self, grid: &mut Grid, theme: &Theme) {
         let area = Self::area(grid.area());
-        grid.fill(area, theme.bar);
+        let rows = self.matches.len().min(ROWS as usize) as u16;
+        let area = Rect::new(area.x, area.y, area.w, rows + 1);
+        popup(grid, area, theme);
+        let base = Style {
+            fg: theme.text.fg,
+            bg: theme.popup,
+            ..theme.bar
+        };
+        let input = Rect::new(area.x + 1, area.y, area.w.saturating_sub(2), 1);
+        grid.field(input, theme.popup, theme.input, theme.focus);
         let prompt = format!(" > {}", self.query);
-        let end = grid.put_str(area.x, area.y, &prompt, theme.bar, area.right());
-        grid.cursor = Some((end, area.y));
+        let hint = if self.query.is_empty() {
+            "> "
+        } else {
+            prompt.as_str()
+        };
+        grid.put_str(input.x, input.y, hint, base, input.right());
+        let end = input.x + prompt.chars().count() as u16;
+        grid.cursor = Some((end.min(input.right().saturating_sub(1)), area.y));
         for (row, index) in self.matches.iter().take(ROWS as usize).enumerate() {
             let y = area.y + 1 + row as u16;
-            let style = if row == self.selected {
-                Style {
-                    bg: theme.selection,
-                    ..theme.bar
-                }
-            } else {
-                theme.bar
-            };
-            grid.fill(Rect::new(area.x, y, area.w, 1), style);
+            if row == self.selected {
+                let line = Rect::new(area.x, y, area.w, 1);
+                grid.panel(
+                    cellix_render::Bounds::inset(line, 0.5, 0.04),
+                    18,
+                    Some(theme.pick),
+                    None,
+                );
+            }
             let label = format!("   {}", self.items[*index].label());
-            grid.put_str(area.x, y, &label, style, area.right());
+            let text = label.trim_start();
+            grid.put_str(area.x, y, "  ", base, area.right());
+            grid.label_at(
+                area.x as f32 + 2.0,
+                area.x + 3,
+                y,
+                text,
+                base,
+                area.right().saturating_sub(1),
+                100,
+            );
         }
     }
+}
+
+/// A floating panel. Its corner cells keep what's behind them, so rounded corners show the
+/// page rather than a square of panel colour.
+pub fn popup(grid: &mut Grid, area: Rect, theme: &Theme) {
+    let base = Style {
+        fg: theme.text.fg,
+        bg: theme.popup,
+        ..theme.bar
+    };
+    for y in area.y..area.bottom() {
+        let edge = y == area.y || y + 1 == area.bottom();
+        let (x, w) = if edge {
+            (area.x + 1, area.w.saturating_sub(2))
+        } else {
+            (area.x, area.w)
+        };
+        grid.fill(Rect::new(x, y, w, 1), base);
+    }
+    let bounds = cellix_render::Bounds::inset(area, 0.0, 0.0);
+    grid.popup(bounds, 28, theme.popup, theme.popup_border);
 }
 
 #[cfg(test)]

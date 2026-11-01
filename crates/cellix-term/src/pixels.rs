@@ -4,7 +4,7 @@ use std::hash::{Hash, Hasher};
 use std::io::{self, Write};
 
 use base64::Engine;
-use cellix_render::{Cell, Grid, Image, Rasterizer};
+use cellix_render::{Grid, Image, Rasterizer};
 use flate2::{Compression, write::ZlibEncoder};
 
 use crate::Backend;
@@ -48,10 +48,11 @@ pub struct PixelBackend<R> {
     frame: u64,
 }
 
-fn tile_key(cells: &[Cell], cursor: Option<u16>) -> u64 {
+fn tile_key(grid: &Grid, y: u16) -> u64 {
     let mut hasher = DefaultHasher::new();
-    cells.hash(&mut hasher);
-    cursor.hash(&mut hasher);
+    grid.row(y).hash(&mut hasher);
+    grid.cursor.filter(|c| c.1 == y).hash(&mut hasher);
+    grid.paint_on_row(y).for_each(|p| p.hash(&mut hasher));
     hasher.finish()
 }
 
@@ -130,14 +131,7 @@ impl<R: Rasterizer> PixelBackend<R> {
     }
 
     /// Returns the tile for a row, rasterizing and sending it only if it's new.
-    fn tile(
-        &mut self,
-        out: &mut Vec<u8>,
-        key: u64,
-        cells: &[Cell],
-        cursor: Option<u16>,
-        cols: u16,
-    ) -> u32 {
+    fn tile(&mut self, out: &mut Vec<u8>, key: u64, grid: &Grid, y: u16) -> u32 {
         if let Some(tile) = self.tiles.get_mut(&key) {
             tile.last_used = self.frame;
             return tile.id;
@@ -147,7 +141,8 @@ impl<R: Rasterizer> PixelBackend<R> {
         if self.next_id == 0 {
             self.next_id = 1;
         }
-        let image = self.rasterizer.row(cells, cursor);
+        let image = self.rasterizer.row(grid, y);
+        let cols = grid.width();
         self.transmit(out, id, &image);
         if self.placement == Placement::Placeholder {
             self.apc(out, &format!("a=p,U=1,i={id},c={cols},r=1,q=2"), b"");
@@ -206,10 +201,8 @@ impl<R: Rasterizer> Backend for PixelBackend<R> {
         self.frame += 1;
         let mut on_screen = HashSet::new();
         for y in 0..grid.height() {
-            let cursor = grid.cursor.filter(|c| c.1 == y).map(|c| c.0);
-            let cells = grid.row(y);
-            let key = tile_key(cells, cursor);
-            let id = self.tile(&mut bytes, key, cells, cursor, grid.width());
+            let key = tile_key(grid, y);
+            let id = self.tile(&mut bytes, key, grid, y);
             on_screen.insert(id);
             if self.shown[y as usize] != Some(id) {
                 // A placement belongs to its image, so a new image at this row doesn't
@@ -241,11 +234,11 @@ mod tests {
     struct Flat;
 
     impl Rasterizer for Flat {
-        fn row(&mut self, cells: &[Cell], _cursor: Option<u16>) -> Image {
+        fn row(&mut self, grid: &Grid, _y: u16) -> Image {
             Image {
-                width: cells.len(),
+                width: grid.width() as usize,
                 height: 1,
-                rgb: vec![9; cells.len() * 3],
+                rgb: vec![9; grid.width() as usize * 3],
             }
         }
     }
@@ -348,6 +341,20 @@ mod tests {
         assert_eq!(count(&scrolled, "a=p,"), 5, "every row moves by reference");
         let back = present(&mut b, &page(0));
         assert_eq!(count(&back, "a=t,"), 0, "scrolling back sends nothing new");
+    }
+
+    #[test]
+    fn a_change_in_paint_makes_a_new_tile() {
+        let mut b = PixelBackend::new(Flat, Placement::Direct, DEFAULT_QUOTA);
+        let mut grid = page(0);
+        present(&mut b, &grid);
+        let bounds = cellix_render::Bounds::cells(0.0, 2.0, 4.0, 1.0);
+        grid.panel(bounds, 0, Some(cellix_render::Rgb(1, 2, 3)), None);
+        assert_eq!(
+            count(&present(&mut b, &grid), "a=t,"),
+            1,
+            "only row 2 changed"
+        );
     }
 
     #[test]

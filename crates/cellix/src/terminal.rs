@@ -101,6 +101,7 @@ fn translate(event: ct::Event) -> Option<Event> {
                 MouseEventKind::Down(MouseButton::Right) => MouseKind::Right,
                 MouseEventKind::Up(_) => MouseKind::Up,
                 MouseEventKind::Drag(_) => MouseKind::Drag,
+                MouseEventKind::Moved => MouseKind::Move,
                 MouseEventKind::ScrollUp => MouseKind::ScrollUp,
                 MouseEventKind::ScrollDown => MouseKind::ScrollDown,
                 _ => return None,

@@ -715,6 +715,37 @@ pub fn enter_intent(line: &str) -> Intent {
     })
 }
 
+/// The web address at a char position on a line: a `[text](url)` link or a bare URL.
+pub fn link_at(line: &str, column: usize) -> Option<String> {
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '['
+            && let Some(close) = chars[i..].iter().position(|c| *c == ']')
+            && chars.get(i + close + 1) == Some(&'(')
+            && let Some(end) = chars[i + close..].iter().position(|c| *c == ')')
+        {
+            let end = i + close + end;
+            if (i..=end).contains(&column) {
+                return Some(chars[i + close + 2..end].iter().collect());
+            }
+            i = end;
+        }
+        i += 1;
+    }
+    let mut start = 0;
+    for word in line.split(' ') {
+        let length = word.chars().count();
+        if (start..=start + length).contains(&column)
+            && (word.starts_with("http://") || word.starts_with("https://"))
+        {
+            return Some(word.trim_end_matches(['.', ',', ')', ';']).to_string());
+        }
+        start += length + 1;
+    }
+    None
+}
+
 /// Length of the hidden marker, which Backspace removes as a unit.
 pub fn hidden_prefix(line: &str) -> usize {
     prefix(line).map_or(0, |p| p.hidden)
@@ -829,6 +860,14 @@ mod tests {
         assert_eq!(chars[first], 'b');
         let second = next_cell(&rows, first).unwrap();
         assert_eq!(chars[second], 'c');
+    }
+
+    #[test]
+    fn links_are_found_under_the_cursor() {
+        let line = "see [docs](http://a.b/c) and https://x.y/z.";
+        assert_eq!(link_at(line, 6).as_deref(), Some("http://a.b/c"));
+        assert_eq!(link_at(line, 32).as_deref(), Some("https://x.y/z"));
+        assert_eq!(link_at(line, 1), None);
     }
 
     #[test]
