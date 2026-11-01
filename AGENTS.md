@@ -19,9 +19,9 @@ memory. Exit 75 means it was never admitted, 137 that it was killed for memory o
 use, and 124 that it timed out. Treat 137 as a bug to find. Do not raise budgets to
 get past it.
 
-**Nothing GPU runs by default.** Code that touches wgpu must be gated on
-`CELLIX_GPU=1`, which only `harness/guard.sh --gpu` sets, and must request a software
-adapter when it is unset.
+**Nothing GPU runs by default.** Cellix has no GPU code. Windows opened for real-terminal
+checks, as in `harness/visual.sh` and `harness/live/scroll.sh`, go through
+`harness/guard.sh --gpu`. They take focus, so anything the user types lands in them.
 
 **A feature is done when a test proves it.** Set `"passes": true` in
 `harness/features.json` only when the test named there exists and passes, and that

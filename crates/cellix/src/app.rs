@@ -4646,6 +4646,9 @@ mod tests {
         );
     }
 
+    /// A cold rust-analyzer on a busy machine has taken over a minute to index std.
+    const RUST_ANALYZER_WAIT: std::time::Duration = std::time::Duration::from_secs(200);
+
     /// Neovim's own config stays out of it, so this tests Cellix and not the machine.
     fn neovim_app() -> Option<(TempDir, App, PathBuf)> {
         let neovim = Neovim::start(&["--clean"]).ok()?;
@@ -5266,7 +5269,7 @@ while True:
         app.open(&path).unwrap();
         app.run(Command::Move(cellix_input::Direction::Down, false));
         app.run(Command::Save);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+        let deadline = std::time::Instant::now() + RUST_ANALYZER_WAIT;
         while !screen(&app).text().contains("mismatched types") {
             assert!(
                 std::time::Instant::now() < deadline,
@@ -5312,7 +5315,7 @@ while True:
         app.handle(Event::Tick);
         app.run(Command::Move(cellix_input::Direction::Top, false));
         app.run(Command::Move(cellix_input::Direction::Down, false));
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(40);
+        let deadline = std::time::Instant::now() + RUST_ANALYZER_WAIT;
         while !screen(&app).text().contains("mismatched types") {
             assert!(
                 std::time::Instant::now() < deadline,
@@ -5359,7 +5362,7 @@ while True:
         app.run(Command::DeleteBackward);
         typed(&mut app, "\"text\"");
         app.run(Command::Save);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let deadline = std::time::Instant::now() + RUST_ANALYZER_WAIT;
         while !screen(&app).text().contains("mismatched types") {
             assert!(
                 std::time::Instant::now() < deadline,

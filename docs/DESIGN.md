@@ -13,12 +13,11 @@ a good-looking, mouse-first editor for reviewing and correcting agent work.
 | Topic | Decision |
 |---|---|
 | Rendering | Pixels in the terminal through the Kitty graphics protocol, with a cell-based fallback |
-| Rasterizer | Software first, wgpu when available (see below) |
+| Rasterizer | Software, on the host (see below) |
 | Agents | Companion: `$VISUAL`, thin plugins, and starting the real agent in a split. Never hosted |
 | Editing | Cellix's simple mode by default, optional Vim and Neovim modes |
 | Multiplexers | tmux and Zellij are required targets |
-| v1 | Plan review, diff review, file explorer, everyday editing, LSP |
-| Later | Debugging |
+| Scope | Reviewing and correcting agent work, with everyday editing and LSP. No debugger |
 | Licence | MIT OR Apache-2.0 |
 
 ## Rendering
@@ -42,13 +41,12 @@ Conclusion: never stream frames. Render each line or UI region once as a tile, k
 it in the terminal's image store, and move tiles by reference. Only new content
 crosses the wire.
 
-### GPU
+### No GPU renderer
 
-wgpu output has to be read back to the CPU before it can be sent to the terminal,
-and one line rasterizes in under a millisecond on the CPU. A remote host often has
-no GPU at all. So software rasterizing is built first and is the path most SSH
-sessions will use, and wgpu is added behind the same trait where it proves faster.
-The on-screen GPU work is done by the user's terminal in every case.
+Output would have to be read back to the CPU before it could be sent to the terminal, one
+line rasterizes in under a millisecond on the CPU, and a remote host often has no GPU at
+all. The on-screen GPU work is done by the user's terminal in every case. Looks come from
+the paint layer, not from where pixels are computed.
 
 ### Observed behaviour by environment
 
@@ -122,8 +120,11 @@ carets and wrapping use real glyph positions. The cell tier measures one column 
 character. Where the terminal offers mode 1016 the mouse reports pixels, because a cell
 can hold two thin letters.
 
-Open: tiles are whole rows, so one region can't scroll separately. Smooth pixel scrolling
-needs per-region tiles.
+Tiles are whole rows, so one region can't scroll by itself. For a wheel notch on the direct
+tier, a layer of region tiles goes above the row tiles, moves by pixel offsets, and is
+removed in the same synchronized frame as the final page. Nothing in the row pipeline
+changes, and tiles move by reference, so a frame is only placements. tmux can't place
+between cells, so it keeps jumping by lines.
 
 ## Theme
 
@@ -172,10 +173,10 @@ Requested baseline: the default VS Code experience without extensions.
 
 | v1 | After v1 |
 |---|---|
-| File explorer with create, rename, delete, drag | Debugging (DAP) |
-| Tabs, splits, command palette, quick open | Integrated terminal |
-| Project search and replace | Notebooks |
-| Multi-cursor, tree-sitter highlighting | Remote multi-root workspaces |
+| File explorer with create, rename, delete, drag | Integrated terminal |
+| Tabs, splits, command palette, quick open | Notebooks |
+| Project search and replace | Remote multi-root workspaces |
+| Multi-cursor, tree-sitter highlighting | |
 | Git status, side-by-side diff, blame | |
 | LSP: go to definition, diagnostics, completion, rename | |
 | Markdown preview, settings, themes | |
@@ -187,15 +188,28 @@ languages to a tree-sitter grammar, with a TextMate grammar as fallback, and to 
 language server. Adding one needs no code change. Over SSH, servers run on the
 remote host and must be installed there.
 
-### Debugging later: validated, with a condition
+### No debugger
 
-Deferring is sound. Agents already debug through tests, logs and print statements,
-which covers most day-to-day work. Interactive debugging still matters for race
-conditions, memory corruption and state that is hard to reproduce, so it is deferred
-rather than dropped. The LSP client's process and transport layer should be reusable
-for DAP. A later DAP integration could also let agents drive the debugger.
+Dropped. Agents debug through tests, logs and print statements, and a companion to agents
+doesn't need to compete with a full IDE here.
 
 ## Agent integration
+
+Cellix never hosts an agent. It connects to the real tool in three ways, each proven
+against Claude Code 2.1.309:
+
+- **Hooks** reach the workspace socket through `cellix hook <kind>`. They checkpoint turns,
+  report status and test runs, and hold plans. Every hook exits cleanly, so a missing
+  Cellix never gets in the agent's way.
+- **The IDE server** is MCP over a local WebSocket, announced by a lock file in
+  `~/.claude/ide`. Only a client with the token gets in, and any request with an Origin is
+  refused, which keeps web pages off the port.
+- **The mod** adds a status entry and slash commands.
+
+Plans answer on `PermissionRequest`, not `PreToolUse`: a real run showed `PreToolUse` leaves
+Claude Code's own dialog up, and the answer must carry `updatedInput` to count.
+
+The plugin ships inside the binary and is written out when an agent starts.
 
 Cellix runs one local socket per workspace, and each integration is a thin adapter.
 Comments reach an agent through `cellix comments [--take]` as JSON. With `--wait` they are
@@ -218,11 +232,11 @@ the file.
 |---|---|
 | `cellix-core` | Buffers, undo, workspace, commands |
 | `cellix-input` | Simple, Vim and Neovim modes |
-| `cellix-render` | Layout, tile cache, software and wgpu rasterizers |
+| `cellix-render` | Layout, paint, tile cache, software rasterizer |
 | `cellix-term` | Probing, Kitty direct, Kitty placeholder and cell backends |
 | `cellix-lang` | Tree-sitter, LSP, language registry |
 | `cellix-review` | Plans, diffs, comments |
-| `cellix-agent` | Socket, CLI, adapters |
+| `cellix-agent` | Socket, hooks, IDE server |
 | `cellix` | Binary and app views |
 
 ## Milestones
@@ -232,4 +246,5 @@ the file.
 2. Simple-mode editing with highlighting.
 3. Plan and diff review with the agent return path. First useful release.
 4. LSP, project search, Claude Code plugin.
-5. Vim mode, then Neovim mode, then debugging.
+5. Vim mode, then Neovim mode.
+6. The agent loop and the IDE connection.

@@ -117,3 +117,47 @@ agent in, and Cellix says so. Xcode's formatting toolbar isn't built.
 
 One run of the real rust-analyzer tests failed after 110 seconds, then two runs passed in
 20 seconds each. The failing test wasn't captured, so treat that suite as possibly flaky.
+
+## 2026-11-01: the eight companion features, and all 68 features
+
+Built everything agreed for the companion role: review by agent turn with undo, real hunk
+staging and commit, smarter diffs, comments sent to the agent, plan approval, agent and
+worktree status, test results in review, and the Claude Code IDE connection. Also find in
+file, the Markdown toolbar, smooth scrolling, the status mod and a Neovim keymap.
+
+A design pass redrew the icons as one set, moved surfaces to VS Code's Modern themes, and
+made `auto` match the terminal's real background.
+
+Proven live against Claude Code 2.1.309, driven in tmux: checkpoints labelled by prompt,
+test results in review, a plan approved and sent back, proposed edits opening in Cellix and
+accepted there, answering in Claude's prompt closing the diff, a selection reaching
+Claude's prompt, `Open Claude Code` from the palette connecting by itself, the mod's status
+entry and `/cellix-comments`.
+
+Live runs found what tests couldn't. `PreToolUse` leaves Claude's plan dialog up, and an
+allow needs `updatedInput`. A plan's tab title showed the session id.
+
+Smooth scrolling was checked in real Ghostty by freezing output mid-animation with
+`harness/live/scroll.sh`. The frame sits between rows, clips under the breadcrumb, and
+leaves the sidebar still, and the settled page has no leftovers. How it feels by hand, and
+its cost over a slow link, are unknown. Over SSH it uses three frames instead of six.
+
+Neovim mode was checked in tmux on the cell tier with a real config: `dd`, `ciw` and `:w`.
+Plugins that open floating windows or depend on a UI won't show, since only the buffer,
+cursor and mode come back.
+
+Open problem: `real_rust_analyzer_reports_compiler_errors` passed three of three alone, but
+failed in a full run after the other real-server tests, on a machine with OrbStack using
+eight cores. A save during startup was being lost, which is fixed: files get their check
+when rust-analyzer reports it has loaded. The remaining failure isn't understood. It may be
+test order, but that isn't proven. This suite isn't in `harness/x verify`.
+
+Unverified: a real SSH link, which is the next step. Codex beyond starting it. Zellij's
+Open Claude Code path, which sets the same environment but hasn't been run. Sending
+comments straight to a pane only works in tmux, and Zellij waits for the next prompt. The
+mod needs `cellix` on the path, which `Open Claude Code` provides.
+
+`cargo publish` will fail until `integrations/claude-code` moves inside the `cellix` crate,
+because `plugin.rs` embeds it from outside.
+
+Next: the user tests the full set over SSH.

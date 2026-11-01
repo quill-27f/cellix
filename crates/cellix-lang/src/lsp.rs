@@ -51,6 +51,10 @@ struct Writer {
     stdin: ChildStdin,
     ready: bool,
     queue: Vec<Value>,
+    /// Open documents, so their checks can run again once the server has loaded.
+    opened: Vec<String>,
+    /// Whether the server last said it was still loading.
+    busy: bool,
 }
 
 impl Writer {
@@ -190,6 +194,22 @@ fn parse_rename(result: &Value) -> LspEvent {
     LspEvent::Rename(files)
 }
 
+/// rust-analyzer ignores a save that arrives while it's loading, and then a file with
+/// errors looks clean until the next save. So every open file gets its check when loading
+/// ends.
+fn recheck_when_loaded(writer: &mut Writer, quiet: bool) {
+    let finished = writer.busy && quiet;
+    writer.busy = !quiet;
+    if finished {
+        for uri in writer.opened.clone() {
+            let params = json!({"textDocument": {"uri": uri}});
+            let saved =
+                json!({"jsonrpc": "2.0", "method": "textDocument/didSave", "params": params});
+            let _ = writer.write(&saved);
+        }
+    }
+}
+
 fn read_loop(
     stdout: impl Read,
     writer: &Mutex<Writer>,
@@ -218,6 +238,13 @@ fn read_loop(
                 })
                 .collect();
             let _ = events.send(LspEvent::Diagnostics(path, items));
+            continue;
+        }
+        if message["method"] == "experimental/serverStatus" {
+            let quiet = message["params"]["quiescent"].as_bool().unwrap_or(false);
+            if let Ok(mut writer) = writer.lock() {
+                recheck_when_loaded(&mut writer, quiet);
+            }
             continue;
         }
         if !message["method"].is_null() {
@@ -288,6 +315,8 @@ impl Client {
             stdin,
             ready: false,
             queue: Vec::new(),
+            opened: Vec::new(),
+            busy: true,
         }));
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let (sender, events) = channel();
@@ -313,6 +342,7 @@ impl Client {
                 "rootUri": uri(root),
                 "capabilities": {
                     "general": {"positionEncodings": ["utf-32", "utf-16"]},
+                    "experimental": {"serverStatusNotification": true},
                     "textDocument": {
                         "publishDiagnostics": {},
                         "definition": {},
@@ -351,6 +381,9 @@ impl Client {
 
     pub fn open(&mut self, path: &Path, language: &str, text: &str) {
         self.versions.insert(path.to_path_buf(), 1);
+        if let Ok(mut writer) = self.writer.lock() {
+            writer.opened.push(uri(path));
+        }
         self.notify(
             "textDocument/didOpen",
             json!({"textDocument": {
@@ -410,6 +443,35 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn writer_over_cat() -> (Writer, Child) {
+        let mut child = Command::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let writer = Writer {
+            stdin: child.stdin.take().unwrap(),
+            ready: true,
+            queue: Vec::new(),
+            opened: vec!["file:///a.rs".to_string()],
+            busy: true,
+        };
+        (writer, child)
+    }
+
+    #[test]
+    fn open_files_get_their_check_once_loading_ends() {
+        let (mut writer, child) = writer_over_cat();
+        recheck_when_loaded(&mut writer, false);
+        recheck_when_loaded(&mut writer, true);
+        recheck_when_loaded(&mut writer, true);
+        drop(writer);
+        let sent = child.wait_with_output().unwrap().stdout;
+        let sent = String::from_utf8(sent).unwrap();
+        assert_eq!(sent.matches("textDocument/didSave").count(), 1, "{sent}");
+        assert!(sent.contains("file:///a.rs"));
+    }
 
     #[test]
     fn framing_round_trips() {
