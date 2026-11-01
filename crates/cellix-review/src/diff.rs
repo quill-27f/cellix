@@ -1,6 +1,13 @@
+use std::collections::HashSet;
+use std::path::Path;
+
 use similar::{ChangeTag, DiffOp, TextDiff};
 
+use crate::git::Change;
+
 const CONTEXT_LINES: usize = 3;
+/// Shorter lines repeat too often for a match to mean they moved.
+const MIN_MOVED_LENGTH: usize = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RowKind {
@@ -15,6 +22,10 @@ pub enum RowKind {
 pub struct Side {
     pub number: usize,
     pub text: String,
+    /// Char ranges that differ from the other side of a changed line.
+    pub changed: Vec<(usize, usize)>,
+    /// This line appears on the other side too, somewhere else in the file.
+    pub moved: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -56,6 +67,8 @@ impl FileDiff {
         let side = |lines: &[&str], i: usize| Side {
             number: i + 1,
             text: clean(lines[i]),
+            changed: Vec::new(),
+            moved: false,
         };
         let mut out = Self::default();
         for group in diff.grouped_ops(CONTEXT_LINES) {
@@ -95,13 +108,56 @@ impl FileDiff {
                                 (Some(_), None) => RowKind::Removed,
                                 _ => RowKind::Added,
                             };
+                            let (mut left, mut right) = (left, right);
+                            if let (Some(l), Some(r)) = (&mut left, &mut right) {
+                                (l.changed, r.changed) = changed_words(&l.text, &r.text);
+                            }
                             out.rows.push(Row::Line { left, right, kind });
                         }
                     }
                 }
             }
         }
+        out.mark_moved();
         out
+    }
+
+    /// Lines removed in one place and added in another are moves, not rewrites.
+    fn mark_moved(&mut self) {
+        let worth = |text: &str| text.trim().len() >= MIN_MOVED_LENGTH;
+        let collect = |rows: &[Row], left: bool| -> HashSet<String> {
+            rows.iter()
+                .filter_map(|row| match row {
+                    Row::Line {
+                        left: l,
+                        right: r,
+                        kind,
+                    } if *kind != RowKind::Same => {
+                        if left {
+                            l.as_ref()
+                        } else {
+                            r.as_ref()
+                        }
+                    }
+                    _ => None,
+                })
+                .map(|side| side.text.trim().to_string())
+                .filter(|text| worth(text))
+                .collect()
+        };
+        let (removed, added) = (collect(&self.rows, true), collect(&self.rows, false));
+        for row in &mut self.rows {
+            if let Row::Line { left, right, kind } = row
+                && *kind != RowKind::Same
+            {
+                if let Some(side) = left {
+                    side.moved = added.contains(side.text.trim());
+                }
+                if let Some(side) = right {
+                    side.moved = removed.contains(side.text.trim());
+                }
+            }
+        }
     }
 
     /// Added and removed line counts, for the file list.
@@ -117,6 +173,141 @@ impl FileDiff {
         }
         stat
     }
+}
+
+/// Splits a line into identifiers and single other characters, so `a.pop_front()` differs
+/// from `a.pop_back()` by one word, not the whole expression.
+fn tokens(line: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = None;
+    for (at, c) in line.char_indices() {
+        let word = c.is_alphanumeric() || c == '_';
+        match (word, start) {
+            (true, None) => start = Some(at),
+            (false, _) => {
+                if let Some(from) = start.take() {
+                    out.push(&line[from..at]);
+                }
+                out.push(&line[at..at + c.len_utf8()]);
+            }
+            (true, Some(_)) => {}
+        }
+    }
+    if let Some(from) = start {
+        out.push(&line[from..]);
+    }
+    out
+}
+
+/// Char ranges within a line.
+type Ranges = Vec<(usize, usize)>;
+
+/// The changed parts of a line, as char ranges on each side. A line that changed almost
+/// entirely gets none, since marking all of it says nothing.
+fn changed_words(old: &str, new: &str) -> (Ranges, Ranges) {
+    let (old_tokens, new_tokens) = (tokens(old), tokens(new));
+    let diff = TextDiff::from_slices(&old_tokens, &new_tokens);
+    let (mut left, mut right) = (Vec::new(), Vec::new());
+    let (mut at_old, mut at_new, mut same) = (0, 0, 0);
+    for change in diff.iter_all_changes() {
+        let length = change.value().chars().count();
+        match change.tag() {
+            ChangeTag::Equal => {
+                at_old += length;
+                at_new += length;
+                same += length;
+            }
+            ChangeTag::Delete => {
+                push_range(&mut left, at_old, at_old + length);
+                at_old += length;
+            }
+            ChangeTag::Insert => {
+                push_range(&mut right, at_new, at_new + length);
+                at_new += length;
+            }
+        }
+    }
+    if same * 3 < at_old.max(at_new) {
+        return (Vec::new(), Vec::new());
+    }
+    (left, right)
+}
+
+fn push_range(ranges: &mut Ranges, start: usize, end: usize) {
+    match ranges.last_mut() {
+        Some(last) if last.1 == start => last.1 = end,
+        _ => ranges.push((start, end)),
+    }
+}
+
+/// One hunk as a patch, for staging. Context lines let it apply after other hunks moved
+/// the file's line numbers.
+pub fn hunk_patch(path: &Path, old: &str, new: &str, hunk: &Hunk) -> String {
+    let old_lines: Vec<&str> = old.split_inclusive('\n').collect();
+    let new_lines: Vec<&str> = new.split_inclusive('\n').collect();
+    let old_part = old_lines[hunk.old_start..hunk.old_start + hunk.old_len].concat();
+    let new_part = new_lines[hunk.new_start..hunk.new_start + hunk.new_len].concat();
+    let name = path.display();
+    let mut patch = format!(
+        "--- a/{name}\n+++ b/{name}\n@@ -{},{} +{},{} @@\n",
+        hunk.old_start + usize::from(hunk.old_len > 0),
+        hunk.old_len,
+        hunk.new_start + usize::from(hunk.new_len > 0),
+        hunk.new_len
+    );
+    let diff = TextDiff::from_lines(&old_part, &new_part);
+    for change in diff.iter_all_changes() {
+        patch.push(match change.tag() {
+            ChangeTag::Equal => ' ',
+            ChangeTag::Delete => '-',
+            ChangeTag::Insert => '+',
+        });
+        patch.push_str(change.value());
+        if !change.value().ends_with('\n') {
+            patch.push_str("\n\\ No newline at end of file\n");
+        }
+    }
+    patch
+}
+
+fn risk(change: &Change) -> i32 {
+    const GENERATED: [&str; 7] = [
+        ".lock",
+        "-lock.json",
+        ".min.js",
+        ".snap",
+        "dist/",
+        "target/",
+        "vendor/",
+    ];
+    const SENSITIVE: [&str; 9] = [
+        "auth",
+        "secret",
+        "token",
+        "password",
+        "migration",
+        "payment",
+        "security",
+        ".github/",
+        "dockerfile",
+    ];
+    const DOCS: [&str; 4] = [".md", "docs/", "test", "spec"];
+    let path = change.path.to_string_lossy().to_lowercase();
+    let has = |words: &[&str]| words.iter().any(|w| path.contains(w));
+    if has(&GENERATED) {
+        0
+    } else if has(&SENSITIVE) {
+        3
+    } else if has(&DOCS) {
+        1
+    } else {
+        2
+    }
+}
+
+/// Orders files so the ones most worth reading come first and generated ones last.
+pub fn rank_changes(changes: &mut [Change]) {
+    changes.sort_by(|a, b| risk(b).cmp(&risk(a)).then_with(|| a.path.cmp(&b.path)));
 }
 
 /// `new` with one hunk put back as it was in `old`.
@@ -189,6 +380,78 @@ mod tests {
         assert_eq!(
             reject_hunk(&old, &result, &FileDiff::new(&old, &result).hunks[0]),
             old
+        );
+    }
+
+    #[test]
+    fn changed_words_are_marked() {
+        let diff = FileDiff::new("let count = 1;\n", "let total = 1;\n");
+        let Row::Line {
+            left: Some(l),
+            right: Some(r),
+            ..
+        } = &diff.rows[1]
+        else {
+            panic!("{:?}", diff.rows);
+        };
+        assert_eq!(l.changed, [(4, 9)]);
+        assert_eq!(r.changed, [(4, 9)]);
+    }
+
+    #[test]
+    fn identifiers_are_words_inside_an_expression() {
+        let diff = FileDiff::new("    a.pop_front()\n", "    a.pop_back()\n");
+        let Row::Line {
+            left: Some(l),
+            right: Some(r),
+            ..
+        } = &diff.rows[1]
+        else {
+            panic!("{:?}", diff.rows);
+        };
+        assert_eq!(l.changed, [(6, 15)]);
+        assert_eq!(r.changed, [(6, 14)]);
+    }
+
+    #[test]
+    fn a_rewritten_line_marks_no_words() {
+        let diff = FileDiff::new("alpha beta gamma\n", "one two three four\n");
+        let Row::Line { left: Some(l), .. } = &diff.rows[1] else {
+            panic!();
+        };
+        assert!(l.changed.is_empty());
+    }
+
+    #[test]
+    fn moved_lines_are_recognised() {
+        let old = "fn first() {}\na\nb\nc\nd\ne\nf\ng\nh\ni\nfn second() {}\n";
+        let new = "fn second() {}\na\nb\nc\nd\ne\nf\ng\nh\ni\nfn first() {}\n";
+        let diff = FileDiff::new(old, new);
+        let moved = diff
+            .rows
+            .iter()
+            .filter(|row| matches!(row, Row::Line { left: Some(s), .. } if s.moved))
+            .count();
+        assert_eq!(moved, 2, "{:?}", diff.rows);
+    }
+
+    #[test]
+    fn risky_files_come_first() {
+        let change = |p: &str| Change {
+            path: p.into(),
+            status: 'M',
+        };
+        let mut files = [
+            change("Cargo.lock"),
+            change("README.md"),
+            change("src/app.rs"),
+            change("src/auth.rs"),
+        ];
+        rank_changes(&mut files);
+        let names: Vec<String> = files.iter().map(|c| c.path.display().to_string()).collect();
+        assert_eq!(
+            names,
+            ["src/auth.rs", "src/app.rs", "README.md", "Cargo.lock"]
         );
     }
 

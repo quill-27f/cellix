@@ -11,7 +11,9 @@ use cellix_input::{
 use cellix_lang::Registry;
 use cellix_lang::lsp::{Client, Diagnostic, LspEvent, TextEdit};
 use cellix_render::{Bounds, CellMeasure, Font, Grid, Icon, Measure, Rect, Style};
-use cellix_review::{Comment, append_comments, blame_line, changed_files, current_branch};
+use cellix_review::{
+    Comment, append_comments, blame_line, changed_files, current_branch, restore, turns,
+};
 
 use cellix_agent::{Request, SharedComments};
 
@@ -67,6 +69,9 @@ enum PromptAction {
     RenameSymbol,
     Quit,
     CloseTab,
+    Commit,
+    /// Puts the tree back to this checkpoint, after a yes.
+    UndoTurn(String),
 }
 
 struct Prompt {
@@ -777,6 +782,27 @@ impl App {
     fn finish_prompt(&mut self, prompt: Prompt) {
         let name = prompt.input.trim();
         let result = match &prompt.action {
+            PromptAction::Commit => {
+                if let (Some(review), false) = (&mut self.review, name.is_empty()) {
+                    let result = review.commit(name);
+                    self.say(result.unwrap_or_else(|e| e));
+                }
+                Ok(())
+            }
+            PromptAction::UndoTurn(commit) => {
+                if name.eq_ignore_ascii_case("y") {
+                    let root = self.workspace.root().to_path_buf();
+                    let result = restore(&root, commit);
+                    self.say(match result {
+                        Ok(count) => format!("Restored {count} files, and saved a point to redo"),
+                        Err(e) => format!("Could not undo: {e}"),
+                    });
+                    if let Some(review) = &mut self.review {
+                        review.refresh();
+                    }
+                }
+                Ok(())
+            }
             PromptAction::RenameSymbol if !name.is_empty() => {
                 self.poll();
                 if self.pending_rename.is_some() {
@@ -857,10 +883,22 @@ impl App {
             Command::OpenDiff => {
                 self.review = match self.review {
                     Some(_) => None,
-                    None => Some(Review::new(self.workspace.root().to_path_buf())),
+                    None => Some(Review::new(
+                        self.workspace.root().to_path_buf(),
+                        self.registry.clone(),
+                    )),
                 };
             }
             Command::AddComment => self.prompt_comment_at_cursor(),
+            Command::ReviewPreviousTurn => {
+                let root = self.workspace.root().to_path_buf();
+                let registry = self.registry.clone();
+                self.review
+                    .get_or_insert_with(|| Review::new(root, registry))
+                    .previous_turn();
+            }
+            Command::UndoTurn => self.prompt_undo_turn(),
+            Command::Commit => self.ask("Commit message", PromptAction::Commit),
             Command::OpenInBrowser => self.open_in_browser(),
             Command::OpenClaude => self.open_agent("claude"),
             Command::OpenCodex => self.open_agent("codex"),
@@ -997,6 +1035,21 @@ impl App {
             self.say(format!("Opened {agent}"));
         } else {
             self.say(format!("Could not start {agent}"));
+        }
+    }
+
+    fn prompt_undo_turn(&mut self) {
+        let root = self.workspace.root();
+        let target = match &self.review {
+            Some(review) => review.undo_target(),
+            None => turns(root).last().cloned(),
+        };
+        match target {
+            Some(turn) => {
+                let label = format!("Undo back to \"{}\"? y/n", turn.label);
+                self.ask(&label, PromptAction::UndoTurn(turn.commit));
+            }
+            None => self.say("No agent turns recorded here yet"),
         }
     }
 
@@ -1215,7 +1268,14 @@ impl App {
         };
         match review.hit(area, x, y) {
             Some(Hit::File(index)) => review.select(index),
-            Some(Hit::Accept(hunk)) => review.accept(hunk),
+            Some(Hit::Accept(hunk)) => {
+                let result = review.accept(hunk);
+                if let Err(e) = result {
+                    self.say(format!("Could not stage: {e}"));
+                }
+            }
+            Some(Hit::Base(base)) => review.set_base(base),
+            Some(Hit::Commit) => self.ask("Commit message", PromptAction::Commit),
             Some(Hit::Reject(hunk)) => self.reject(hunk),
             Some(Hit::PreviousFile) => review.step_file(-1),
             Some(Hit::NextFile) => review.step_file(1),
@@ -2403,17 +2463,85 @@ mod tests {
     }
 
     #[test]
-    fn accept_marks_a_hunk_and_keeps_the_file() {
+    fn accept_stages_a_hunk_and_keeps_the_file() {
         let (dir, mut app) = reviewed();
         app.run(Command::OpenDiff);
         let (x, y) = find(&screen(&app), "[Accept]");
         app.handle(mouse(MouseKind::Left, x + 1, y));
-        assert!(screen(&app).text().contains("accepted"));
+        assert!(screen(&app).text().contains("staged"));
+        let staged = cellix_review::index_text(dir.path(), Path::new("alpha.txt"));
+        assert!(staged.contains("CHANGED"), "{staged}");
         assert!(
             fs::read_to_string(dir.path().join("alpha.txt"))
                 .unwrap()
                 .contains("CHANGED")
         );
+    }
+
+    #[test]
+    fn commit_from_review() {
+        let (dir, mut app) = reviewed();
+        app.run(Command::OpenDiff);
+        let (x, y) = find(&screen(&app), "[Accept]");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        let (x, y) = find(&screen(&app), "[Commit 1 staged]");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        typed(&mut app, "Change the second line");
+        enter(&mut app);
+        assert!(screen(&app).text().contains("Committed"));
+        assert!(cellix_review::changed_files(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn review_compares_against_a_turn() {
+        let (dir, mut app) = reviewed();
+        cellix_review::checkpoint(dir.path(), "Add the limit").unwrap();
+        fs::write(dir.path().join("beta.rs"), "fn turn() {}\n").unwrap();
+        app.run(Command::OpenDiff);
+        let text = screen(&app).text();
+        assert!(text.contains("alpha.txt"), "against HEAD: {text}");
+        let (x, y) = find(&screen(&app), "Add the limit");
+        app.handle(mouse(MouseKind::Left, x, y));
+        let text = screen(&app).text();
+        assert!(text.contains("fn turn()"), "{text}");
+        assert!(
+            !text.contains("alpha.txt"),
+            "that changed before the turn: {text}"
+        );
+        app.run(Command::ReviewPreviousTurn);
+        assert!(
+            screen(&app).text().contains("alpha.txt"),
+            "back to the last commit"
+        );
+    }
+
+    #[test]
+    fn a_turn_can_be_undone_from_review() {
+        let (dir, mut app) = reviewed();
+        cellix_review::checkpoint(dir.path(), "Prompt").unwrap();
+        fs::write(dir.path().join("alpha.txt"), "agent\n").unwrap();
+        app.run(Command::OpenDiff);
+        app.run(Command::UndoTurn);
+        assert!(screen(&app).text().contains("Undo back to"));
+        typed(&mut app, "y");
+        enter(&mut app);
+        let text = fs::read_to_string(dir.path().join("alpha.txt")).unwrap();
+        assert_eq!(text, "first line\nCHANGED\n");
+    }
+
+    #[test]
+    fn diffs_have_syntax_colours() {
+        let (dir, _) = reviewed();
+        fs::write(dir.path().join("beta.rs"), "fn other() {}\n").unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (120, 30));
+        app.run(Command::OpenDiff);
+        let list = (0..30)
+            .find(|y| screen(&app).row_text(*y).contains("beta.rs"))
+            .unwrap();
+        app.handle(mouse(MouseKind::Left, 6, list));
+        let grid = screen(&app);
+        let (x, y) = find(&grid, "fn other");
+        assert_eq!(grid.cell(x, y).style.fg, Theme::default().keyword);
     }
 
     #[test]

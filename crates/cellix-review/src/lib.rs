@@ -2,9 +2,14 @@
 
 mod diff;
 mod git;
+mod history;
 
-pub use diff::{FileDiff, Hunk, Row, RowKind, Side, reject_hunk};
-pub use git::{Change, blame_line, changed_files, current_branch, head_text};
+pub use diff::{FileDiff, Hunk, Row, RowKind, Side, hunk_patch, rank_changes, reject_hunk};
+pub use git::{
+    Change, blame_line, changed_files, commit, current_branch, head_text, index_text, stage_patch,
+    staged_count,
+};
+pub use history::{Turn, changed_since, checkpoint, restore, text_at, turns};
 
 use serde::{Deserialize, Serialize};
 

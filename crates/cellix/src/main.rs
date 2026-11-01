@@ -25,6 +25,29 @@ fn client(request: &str, dir: Option<&str>) -> ExitCode {
     }
 }
 
+/// `cellix checkpoint [label]` marks the start of an agent's turn. It needs no running
+/// Cellix, so a hook can call it whenever the agent is given a prompt.
+fn checkpoint(label: &str) -> ExitCode {
+    let label = if label.is_empty() {
+        "Checkpoint"
+    } else {
+        label
+    };
+    let saved = workspace_root(None)
+        .ok()
+        .and_then(|root| cellix_review::checkpoint(&root, label));
+    match saved {
+        Some(turn) => {
+            println!("{}", turn.number);
+            ExitCode::SUCCESS
+        }
+        None => {
+            eprintln!("cellix: not in a git repository");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let words: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -33,6 +56,7 @@ fn main() -> ExitCode {
             println!("cellix {}", env!("CARGO_PKG_VERSION"));
             return ExitCode::SUCCESS;
         }
+        ["checkpoint", label @ ..] => return checkpoint(&label.join(" ")),
         ["comments", "--take", rest @ ..] => return client("take", rest.first().copied()),
         ["comments", rest @ ..] => return client("comments", rest.first().copied()),
         ["open", file, rest @ ..] => {

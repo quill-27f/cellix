@@ -252,20 +252,6 @@
     "passes": true
   },
   {
-    "id": "wgpu",
-    "milestone": 5,
-    "title": "wgpu rasterizer behind the rasterizer trait, software by default",
-    "test": "wgpu_matches_software_output",
-    "passes": false
-  },
-  {
-    "id": "dap",
-    "milestone": 5,
-    "title": "Debugging over DAP",
-    "test": "dap_stops_at_breakpoint",
-    "passes": false
-  },
-  {
     "id": "scroll-overlap",
     "milestone": 1,
     "title": "Scrolling replaces tiles instead of stacking them",
@@ -362,5 +348,131 @@
     "title": "Carets come from measured text and stay inside their boxes",
     "test": "the_caret_stays_inside_the_search_box",
     "passes": true
+  },
+  {
+    "id": "turn-review",
+    "milestone": 3,
+    "title": "Review what changed in each agent turn, with a timeline",
+    "test": "review_compares_against_a_turn",
+    "passes": true
+  },
+  {
+    "id": "turn-undo",
+    "milestone": 3,
+    "title": "Undo a whole agent turn, itself undoable",
+    "test": "undoing_a_turn_can_be_undone",
+    "passes": true
+  },
+  {
+    "id": "hunk-stage",
+    "milestone": 3,
+    "title": "Accept stages the hunk in git",
+    "test": "accepting_a_hunk_stages_only_it",
+    "passes": true
+  },
+  {
+    "id": "commit",
+    "milestone": 3,
+    "title": "Commit from the review screen",
+    "test": "commit_from_review",
+    "passes": true
+  },
+  {
+    "id": "diff-words",
+    "milestone": 3,
+    "title": "Changed words highlighted within a line",
+    "test": "changed_words_are_marked",
+    "passes": true
+  },
+  {
+    "id": "diff-moved",
+    "milestone": 3,
+    "title": "Moved code is recognised, not shown as removed and added",
+    "test": "moved_lines_are_recognised",
+    "passes": true
+  },
+  {
+    "id": "diff-risk",
+    "milestone": 3,
+    "title": "Risky files first, generated files last",
+    "test": "risky_files_come_first",
+    "passes": true
+  },
+  {
+    "id": "diff-syntax",
+    "milestone": 3,
+    "title": "Syntax colours in diffs",
+    "test": "diffs_have_syntax_colours",
+    "passes": true
+  },
+  {
+    "id": "send-to-agent",
+    "milestone": 3,
+    "title": "Send comments straight to the agent",
+    "test": "comments_are_sent_to_the_agent_pane",
+    "passes": false
+  },
+  {
+    "id": "plan-approval",
+    "milestone": 3,
+    "title": "Approve or send back a plan from Cellix",
+    "test": "plan_decision_reaches_the_hook",
+    "passes": false
+  },
+  {
+    "id": "agent-status",
+    "milestone": 4,
+    "title": "See running agents and which need you",
+    "test": "agents_panel_shows_who_needs_you",
+    "passes": false
+  },
+  {
+    "id": "worktrees",
+    "milestone": 4,
+    "title": "Changes across worktrees",
+    "test": "worktrees_are_listed_with_their_changes",
+    "passes": false
+  },
+  {
+    "id": "test-results",
+    "milestone": 4,
+    "title": "Test results beside the diff",
+    "test": "test_results_show_in_review",
+    "passes": false
+  },
+  {
+    "id": "ide-connect",
+    "milestone": 4,
+    "title": "Claude Code connects to Cellix as its IDE",
+    "test": "claude_code_can_connect_and_list_tools",
+    "passes": false
+  },
+  {
+    "id": "ide-diff",
+    "milestone": 4,
+    "title": "Claude Code proposes edits in Cellix for approval",
+    "test": "open_diff_waits_for_the_reviewer",
+    "passes": false
+  },
+  {
+    "id": "ide-selection",
+    "milestone": 4,
+    "title": "Selection and open files reach Claude Code",
+    "test": "selection_reaches_the_ide_client",
+    "passes": false
+  },
+  {
+    "id": "find-in-file",
+    "milestone": 2,
+    "title": "Find in the current file",
+    "test": "find_in_file_jumps_between_matches",
+    "passes": false
+  },
+  {
+    "id": "markdown-toolbar",
+    "milestone": 2,
+    "title": "Formatting toolbar on Markdown pages",
+    "test": "toolbar_bolds_the_selection",
+    "passes": false
   }
 ]

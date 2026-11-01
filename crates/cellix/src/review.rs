@@ -1,8 +1,12 @@
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
+use cellix_lang::{Registry, Token};
 use cellix_render::{Grid, Rect, Rgb, Style};
-use cellix_review::{Change, FileDiff, Hunk, Row, RowKind, Side, changed_files, head_text};
+use cellix_review::{
+    Change, FileDiff, Row, RowKind, Side, Turn, changed_files, changed_since, commit, head_text,
+    hunk_patch, index_text, rank_changes, stage_patch, staged_count, text_at, turns,
+};
 
 use crate::theme::Theme;
 
@@ -12,6 +16,8 @@ const REJECT: &str = "[Reject]";
 const NUMBER_WIDTH: u16 = 5;
 /// Below this, two code columns are too narrow to read, so lines stack in one.
 const MIN_SIDE_BY_SIDE: u16 = 90;
+/// Turns listed in the timeline, newest first.
+const SHOWN_TURNS: usize = 6;
 
 /// What a click in the review view lands on.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -21,6 +27,9 @@ pub enum Hit {
     Reject(usize),
     /// A line of the new version, or the old one if it was deleted.
     Line(String, usize),
+    /// Compare against this turn, or HEAD for None.
+    Base(Option<usize>),
+    Commit,
     /// Step through the files, in the stacked layout.
     PreviousFile,
     NextFile,
@@ -32,20 +41,78 @@ enum Stacked<'a> {
     Line(&'a Side, RowKind),
 }
 
-/// The Changes view: files that differ from HEAD and a side-by-side diff of one of them.
+/// A row of the column beside the diff.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ListRow {
+    Heading(&'static str),
+    Base(Option<usize>),
+    Commit,
+    File(usize),
+}
+
+/// Colour spans for one line: start, end and token, in chars.
+type LineTokens = Vec<(usize, usize, Token)>;
+
+/// The Changes view: files that differ from a base, and a diff of one of them. The base is
+/// HEAD, or the checkpoint taken at the start of an agent's turn.
 pub struct Review {
     root: PathBuf,
+    registry: Rc<Registry>,
     pub changes: Vec<Change>,
     pub selected: usize,
     pub diff: FileDiff,
     old: String,
     new: String,
     top: usize,
-    accepted: HashSet<(PathBuf, Hunk)>,
+    pub turns: Vec<Turn>,
+    /// The index into `turns` being compared against, or None for HEAD.
+    pub base: Option<usize>,
+    staged: usize,
+    tokens: (Vec<LineTokens>, Vec<LineTokens>),
+}
+
+/// Splits a file's highlight spans into per-line columns.
+fn line_tokens(registry: &Registry, path: &Path, text: &str) -> Vec<LineTokens> {
+    let spans = registry.highlight(path, text);
+    let mut lines = Vec::new();
+    let mut byte = 0;
+    let mut spans = spans.iter().peekable();
+    for line in text.split_inclusive('\n') {
+        let end = byte + line.len();
+        let mut tokens = Vec::new();
+        while let Some(span) = spans.peek() {
+            if span.start >= end {
+                break;
+            }
+            let from = span.start.max(byte) - byte;
+            let to = span.end.min(end) - byte;
+            if from < to && line.is_char_boundary(from) && line.is_char_boundary(to) {
+                let start = line[..from].chars().count();
+                tokens.push((start, start + line[from..to].chars().count(), span.token));
+            }
+            if span.end > end {
+                break;
+            }
+            spans.next();
+        }
+        lines.push(tokens);
+        byte = end;
+    }
+    lines
 }
 
 fn tint(style: Style, bg: Rgb) -> Style {
     Style { bg, ..style }
+}
+
+/// What decorates a side's text.
+#[derive(Clone, Copy)]
+struct SideStyle<'a> {
+    base: Style,
+    number_fg: Rgb,
+    /// Background of the words that changed within the line.
+    word_bg: Rgb,
+    tokens: Option<&'a LineTokens>,
 }
 
 fn draw_side(
@@ -53,34 +120,55 @@ fn draw_side(
     area: Rect,
     y: u16,
     side: Option<&Side>,
-    style: Style,
-    number_fg: Rgb,
+    look: SideStyle,
+    theme: &Theme,
 ) {
+    let style = look.base;
     grid.fill(Rect::new(area.x, y, area.w, 1), style);
     let Some(side) = side else {
         return;
     };
     let number = format!("{:>4} ", side.number);
     let gutter = Style {
-        fg: number_fg,
+        fg: look.number_fg,
         ..style
     };
     grid.put_str(area.x, y, &number, gutter, area.right());
     let text = side.text.replace('\t', "    ");
     grid.put_str(area.x + NUMBER_WIDTH, y, &text, style, area.right());
+    // Tabs widen when shown, so char positions need mapping to columns.
+    let column = |at: usize| at + side.text.chars().take(at).filter(|c| *c == '\t').count() * 3;
+    let start = area.x + NUMBER_WIDTH;
+    let span = |from: usize, to: usize| {
+        let x = start.saturating_add(column(from) as u16);
+        let width = (column(to) - column(from)) as u16;
+        Rect::new(x, y, width.min(area.right().saturating_sub(x)), 1)
+    };
+    for (from, to, token) in look.tokens.into_iter().flatten() {
+        let fg = theme.token(*token);
+        grid.set_style(span(*from, *to), |s| Style { fg, ..s });
+    }
+    for (from, to) in &side.changed {
+        let bg = look.word_bg;
+        grid.set_style(span(*from, *to), |s| Style { bg, ..s });
+    }
 }
 
 impl Review {
-    pub fn new(root: PathBuf) -> Self {
+    pub fn new(root: PathBuf, registry: Rc<Registry>) -> Self {
         let mut review = Self {
             root,
+            registry,
             changes: Vec::new(),
             selected: 0,
             diff: FileDiff::default(),
             old: String::new(),
             new: String::new(),
             top: 0,
-            accepted: HashSet::new(),
+            turns: Vec::new(),
+            base: None,
+            staged: 0,
+            tokens: (Vec::new(), Vec::new()),
         };
         review.refresh();
         review
@@ -89,12 +177,48 @@ impl Review {
     /// Rereads git and the selected file. Keeps the selection where it can.
     pub fn refresh(&mut self) {
         let current = self.current_path().map(Path::to_path_buf);
-        self.changes = changed_files(&self.root);
-        self.changes.sort_by(|a, b| a.path.cmp(&b.path));
+        self.turns = turns(&self.root);
+        if self.base.is_some_and(|b| b >= self.turns.len()) {
+            self.base = None;
+        }
+        self.changes = match self.base_commit() {
+            Some(commit) => changed_since(&self.root, &commit),
+            None => changed_files(&self.root),
+        };
+        rank_changes(&mut self.changes);
+        self.staged = staged_count(&self.root);
         self.selected = current
             .and_then(|p| self.changes.iter().position(|c| c.path == p))
             .unwrap_or(0);
         self.load();
+    }
+
+    fn base_commit(&self) -> Option<String> {
+        Some(self.turns.get(self.base?)?.commit.clone())
+    }
+
+    /// Compares against a turn, or HEAD for None.
+    pub fn set_base(&mut self, base: Option<usize>) {
+        self.base = base;
+        self.top = 0;
+        self.refresh();
+    }
+
+    /// Steps the base one turn back, from HEAD to the newest turn and on.
+    pub fn previous_turn(&mut self) {
+        let base = match self.base {
+            None => self.turns.len().checked_sub(1),
+            Some(index) => index.checked_sub(1),
+        };
+        self.set_base(base);
+    }
+
+    /// The commit an undo goes back to: the turn in view, or the newest.
+    pub fn undo_target(&self) -> Option<Turn> {
+        self.base
+            .and_then(|b| self.turns.get(b))
+            .or(self.turns.last())
+            .cloned()
     }
 
     fn current_path(&self) -> Option<&Path> {
@@ -104,11 +228,19 @@ impl Review {
     fn load(&mut self) {
         let Some(path) = self.current_path().map(Path::to_path_buf) else {
             self.diff = FileDiff::default();
+            self.tokens = (Vec::new(), Vec::new());
             return;
         };
-        self.old = head_text(&self.root, &path);
+        self.old = match self.base_commit() {
+            Some(commit) => text_at(&self.root, &commit, &path),
+            None => head_text(&self.root, &path),
+        };
         self.new = std::fs::read_to_string(self.root.join(&path)).unwrap_or_default();
         self.diff = FileDiff::new(&self.old, &self.new);
+        self.tokens = (
+            line_tokens(&self.registry, &path, &self.old),
+            line_tokens(&self.registry, &path, &self.new),
+        );
         self.top = self.top.min(self.diff.rows.len().saturating_sub(1));
     }
 
@@ -127,24 +259,79 @@ impl Review {
         Some(self.root.join(self.current_path()?))
     }
 
-    pub fn accept(&mut self, hunk: usize) {
-        if let (Some(path), Some(h)) = (self.current_path(), self.diff.hunks.get(hunk)) {
-            let key = (path.to_path_buf(), *h);
-            self.accepted.insert(key);
-        }
+    /// Stages one hunk in git.
+    pub fn accept(&mut self, hunk: usize) -> Result<(), String> {
+        let path = self.current_path().ok_or("No file selected")?.to_path_buf();
+        let hunk = self.diff.hunks.get(hunk).ok_or("No such change")?;
+        let patch = hunk_patch(&path, &self.old, &self.new, hunk);
+        stage_patch(&self.root, &path, &patch)?;
+        self.staged = staged_count(&self.root);
+        Ok(())
     }
 
+    /// Whether a hunk's new text has already reached the index.
     pub fn is_accepted(&self, hunk: usize) -> bool {
-        match (self.current_path(), self.diff.hunks.get(hunk)) {
-            (Some(path), Some(h)) => self.accepted.contains(&(path.to_path_buf(), *h)),
-            _ => false,
+        let (Some(path), Some(h)) = (self.current_path(), self.diff.hunks.get(hunk)) else {
+            return false;
+        };
+        let index = index_text(&self.root, path);
+        if index == self.new {
+            return true;
         }
+        let lines: Vec<&str> = self.new.split_inclusive('\n').collect();
+        let block = lines[h.new_start..h.new_start + h.new_len].concat();
+        let old_lines: Vec<&str> = self.old.split_inclusive('\n').collect();
+        let before = old_lines[h.old_start..h.old_start + h.old_len].concat();
+        !block.is_empty() && index.contains(&block) && !index.contains(&before)
+    }
+
+    pub fn commit(&mut self, message: &str) -> Result<String, String> {
+        let result = commit(&self.root, message);
+        self.refresh();
+        result
     }
 
     /// The file's text with one hunk put back, to be written by the caller.
     pub fn rejected_text(&self, hunk: usize) -> Option<String> {
         let hunk = self.diff.hunks.get(hunk)?;
         Some(cellix_review::reject_hunk(&self.old, &self.new, hunk))
+    }
+
+    fn list_rows(&self) -> Vec<ListRow> {
+        let mut rows = Vec::new();
+        if !self.turns.is_empty() {
+            rows.push(ListRow::Heading("COMPARE WITH"));
+            rows.push(ListRow::Base(None));
+            let newest = (0..self.turns.len()).rev().take(SHOWN_TURNS);
+            rows.extend(newest.map(|i| ListRow::Base(Some(i))));
+        }
+        rows.push(ListRow::Heading("CHANGES"));
+        if self.staged > 0 {
+            rows.push(ListRow::Commit);
+        }
+        rows.extend((0..self.changes.len()).map(ListRow::File));
+        rows
+    }
+
+    fn side_style<'a>(
+        &self,
+        side: &Option<Side>,
+        bg: Rgb,
+        tokens: Option<&'a LineTokens>,
+        number_fg: Rgb,
+        theme: &Theme,
+    ) -> SideStyle<'a> {
+        let moved = side.as_ref().is_some_and(|s| s.moved);
+        SideStyle {
+            base: tint(theme.text, if moved { theme.moved } else { bg }),
+            number_fg,
+            word_bg: if bg == theme.removed {
+                theme.removed_word
+            } else {
+                theme.added_word
+            },
+            tokens,
+        }
     }
 
     fn columns(area: Rect) -> (Rect, u16) {
@@ -266,7 +453,7 @@ impl Review {
                 Stacked::Header(hunk) => {
                     grid.fill(Rect::new(area.x, y, area.w, 1), theme.bar);
                     let state = if self.is_accepted(*hunk) {
-                        "accepted"
+                        "staged"
                     } else {
                         ""
                     };
@@ -285,7 +472,15 @@ impl Review {
                     } else {
                         theme.gutter.fg
                     };
-                    draw_side(grid, area, y, Some(side), tint(theme.text, bg), number_fg);
+                    let lines = if *kind == RowKind::Removed {
+                        &self.tokens.0
+                    } else {
+                        &self.tokens.1
+                    };
+                    let tokens = lines.get(side.number - 1);
+                    let wrapped = Some((*side).clone());
+                    let look = self.side_style(&wrapped, bg, tokens, number_fg, theme);
+                    draw_side(grid, area, y, Some(side), look, theme);
                 }
             }
         }
@@ -298,7 +493,12 @@ impl Review {
         let (list, width) = Self::columns(area);
         let row = (y - area.y) as usize;
         if x < list.right() {
-            return (row < self.changes.len()).then_some(Hit::File(row));
+            return match self.list_rows().get(row)? {
+                ListRow::Heading(_) => None,
+                ListRow::Base(base) => Some(Hit::Base(*base)),
+                ListRow::Commit => Some(Hit::Commit),
+                ListRow::File(index) => Some(Hit::File(*index)),
+            };
         }
         match self.diff.rows.get(self.top + row)? {
             Row::Header(hunk) => {
@@ -322,6 +522,56 @@ impl Review {
         }
     }
 
+    fn draw_list_row(&self, grid: &mut Grid, list: Rect, y: u16, row: &ListRow, theme: &Theme) {
+        let line = Rect::new(list.x, y, list.w, 1);
+        let pick = |on: bool| {
+            if on {
+                tint(theme.sidebar, theme.row_active)
+            } else {
+                theme.sidebar
+            }
+        };
+        match row {
+            ListRow::Heading(text) => {
+                let dim = Style {
+                    fg: theme.gutter.fg,
+                    ..theme.sidebar
+                };
+                let x = list.x as f32 + 1.0;
+                grid.label_at(x, list.x + 1, y, text, dim, list.right(), 80);
+            }
+            ListRow::Base(base) => {
+                let style = pick(self.base == *base);
+                grid.fill(line, style);
+                let text = match base {
+                    None => "Last commit".to_string(),
+                    Some(index) => {
+                        let turn = &self.turns[*index];
+                        format!("{}  {}", turn.number, turn.label)
+                    }
+                };
+                grid.label(list.x + 1, y, &text, style, list.right());
+            }
+            ListRow::Commit => {
+                let style = Style {
+                    fg: theme.button_text,
+                    ..theme.sidebar
+                };
+                let text = format!("[Commit {} staged]", self.staged);
+                grid.button(list.x + 1, y, &text, "Commit", theme.button, style);
+            }
+            ListRow::File(index) => {
+                let style = pick(*index == self.selected);
+                grid.fill(line, style);
+                let change = &self.changes[*index];
+                let name = change.path.display().to_string();
+                let status = change.status.to_string();
+                grid.put_str(list.x + 1, y, &status, style, list.right());
+                grid.label(list.x + 3, y, &name, style, list.right());
+            }
+        }
+    }
+
     pub fn draw(
         &self,
         grid: &mut Grid,
@@ -336,35 +586,16 @@ impl Review {
         grid.fill(area, theme.text);
         let (list, width) = Self::columns(area);
         grid.fill(list, theme.sidebar);
-        for (i, change) in self.changes.iter().enumerate() {
+        for (i, row) in self.list_rows().iter().enumerate() {
             let y = list.y + i as u16;
             if y >= list.bottom() {
                 break;
             }
-            let style = if i == self.selected {
-                tint(theme.sidebar, theme.row_hover)
-            } else {
-                theme.sidebar
-            };
-            grid.fill(Rect::new(list.x, y, list.w, 1), style);
-            let name = change.path.display().to_string();
-            grid.put_str(
-                list.x + 1,
-                y,
-                &change.status.to_string(),
-                style,
-                list.right(),
-            );
-            grid.label(list.x + 3, y, &name, style, list.right());
+            self.draw_list_row(grid, list, y, row, theme);
         }
         if self.changes.is_empty() {
-            grid.put_str(
-                list.x + 1,
-                list.y,
-                "No changes",
-                theme.sidebar,
-                list.right(),
-            );
+            let y = list.y + self.list_rows().len() as u16;
+            grid.label(list.x + 1, y, "No changes", theme.sidebar, list.right());
         }
         let left = Rect::new(list.right(), area.y, width, area.h);
         let right = Rect::new(left.right(), area.y, area.right() - left.right(), area.h);
@@ -382,7 +613,7 @@ impl Review {
                     let line = Rect::new(left.x, y, left.w + right.w, 1);
                     grid.fill(line, theme.bar);
                     let state = if self.is_accepted(*hunk) {
-                        "accepted"
+                        "staged"
                     } else {
                         ""
                     };
@@ -412,22 +643,15 @@ impl Review {
                             theme.gutter.fg
                         }
                     };
-                    draw_side(
-                        grid,
-                        left,
-                        y,
-                        l.as_ref(),
-                        tint(theme.text, old_bg),
-                        number_fg(l),
-                    );
-                    draw_side(
-                        grid,
-                        right,
-                        y,
-                        r.as_ref(),
-                        tint(theme.text, new_bg),
-                        number_fg(r),
-                    );
+                    let tokens = |side: &Option<Side>, lines: &'_ [LineTokens]| {
+                        side.as_ref().and_then(|s| lines.get(s.number - 1)).cloned()
+                    };
+                    let (old_tokens, new_tokens) =
+                        (tokens(l, &self.tokens.0), tokens(r, &self.tokens.1));
+                    let look = self.side_style(l, old_bg, old_tokens.as_ref(), number_fg(l), theme);
+                    draw_side(grid, left, y, l.as_ref(), look, theme);
+                    let look = self.side_style(r, new_bg, new_tokens.as_ref(), number_fg(r), theme);
+                    draw_side(grid, right, y, r.as_ref(), look, theme);
                 }
             }
         }
