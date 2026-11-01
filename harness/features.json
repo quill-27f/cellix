@@ -11,14 +11,14 @@
     "milestone": 1,
     "title": "Cell grid with wide-character handling and diffing",
     "test": "diff_emits_only_changed_cells",
-    "passes": false
+    "passes": true
   },
   {
     "id": "cell-backend",
     "milestone": 1,
     "title": "Cell backend presents a grid through a real PTY",
     "test": "pty_shows_file_contents",
-    "passes": false
+    "passes": true
   },
   {
     "id": "probe",
@@ -53,7 +53,7 @@
     "milestone": 1,
     "title": "File explorer: browse, expand and open with the mouse",
     "test": "click_in_explorer_opens_file",
-    "passes": false
+    "passes": true
   },
   {
     "id": "explorer-ops",
@@ -67,21 +67,21 @@
     "milestone": 1,
     "title": "Mouse: click to place cursor, drag select, wheel scroll",
     "test": "drag_selects_text",
-    "passes": false
+    "passes": true
   },
   {
     "id": "buffer",
     "milestone": 2,
     "title": "Rope buffer with undo and redo",
     "test": "undo_redo_round_trip",
-    "passes": false
+    "passes": true
   },
   {
     "id": "edit",
     "milestone": 2,
     "title": "Simple-mode typing, delete, newline, save",
     "test": "type_and_save_writes_file",
-    "passes": false
+    "passes": true
   },
   {
     "id": "clipboard",
@@ -95,14 +95,14 @@
     "milestone": 2,
     "title": "Multi-cursor editing",
     "test": "multicursor_types_at_each_cursor",
-    "passes": false
+    "passes": true
   },
   {
     "id": "tabs",
     "milestone": 2,
     "title": "Tabs with mouse switching and dirty markers",
     "test": "click_tab_switches_buffer",
-    "passes": false
+    "passes": true
   },
   {
     "id": "splits",

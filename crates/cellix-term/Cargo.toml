@@ -1,0 +1,13 @@
+[package]
+name = "cellix-term"
+description = "Terminal probing and presentation backends for Cellix"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+cellix-render = { path = "../cellix-render", version = "0.1.0" }
+
+[lints]
+workspace = true

@@ -1,0 +1,15 @@
+[package]
+name = "cellix-core"
+description = "Buffers, undo, selections and workspace for Cellix"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+ropey = "1"
+unicode-width = "0.2"
+ignore = "0.4"
+
+[lints]
+workspace = true

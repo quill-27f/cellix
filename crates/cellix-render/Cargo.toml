@@ -1,0 +1,15 @@
+[package]
+name = "cellix-render"
+description = "Cell grid and pixel rasterizing for Cellix"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+compact_str = "0.9"
+unicode-segmentation = "1"
+unicode-width = "0.2"
+
+[lints]
+workspace = true
