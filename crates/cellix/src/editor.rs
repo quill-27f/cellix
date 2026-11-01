@@ -1338,7 +1338,12 @@ impl Editor {
                     cellix_render::Style { bg, ..theme.text },
                 );
             }
-            let first_row = index == 0 || rows[index - 1].line != row.line;
+            // A tall heading's spacer shares its line, and takes no mark.
+            let mut earlier = rows[..index]
+                .iter()
+                .rev()
+                .take_while(|r| r.line == row.line);
+            let first_row = row.stop && !earlier.any(|r| r.stop);
             if first_row && let Some(change) = changes.1.get(&row.line) {
                 self.draw_change(grid, left as f32 - 1.4, y, *change, theme);
             }

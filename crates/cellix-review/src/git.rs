@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -87,6 +88,23 @@ pub(crate) fn parse_name_status(output: &str) -> Vec<Change> {
 pub fn index_text(root: &Path, path: &Path) -> String {
     let spec = format!(":./{}", path.display());
     git(root, &["show", &spec]).unwrap_or_default()
+}
+
+/// Lines added and removed in each file since a commit, or HEAD for None.
+pub fn numstat(root: &Path, base: Option<&str>) -> HashMap<PathBuf, (usize, usize)> {
+    let text = git(root, &["diff", "--numstat", base.unwrap_or("HEAD")]).unwrap_or_default();
+    let mut stats = HashMap::new();
+    for line in text.lines() {
+        let mut parts = line.splitn(3, '\t');
+        let (Some(added), Some(removed), Some(path)) = (parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        if let (Ok(added), Ok(removed)) = (added.parse(), removed.parse()) {
+            stats.insert(PathBuf::from(path), (added, removed));
+        }
+    }
+    stats
 }
 
 /// A checkout of this repository.
@@ -308,6 +326,14 @@ pub(crate) mod tests {
         let patch = crate::hunk_patch(path, "", "x\ny\n", &diff.hunks[0]);
         stage_patch(dir.path(), path, &patch).unwrap();
         assert_eq!(index_text(dir.path(), path), "x\ny\n");
+    }
+
+    #[test]
+    fn numstat_counts_lines_by_file() {
+        let dir = repo();
+        fs::write(dir.path().join("kept.txt"), "two\nthree\n").unwrap();
+        let stats = numstat(dir.path(), None);
+        assert_eq!(stats[Path::new("kept.txt")], (2, 1));
     }
 
     #[test]

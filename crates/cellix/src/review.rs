@@ -1,12 +1,16 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use cellix_agent::TestRun;
 use cellix_lang::{Registry, Token};
-use cellix_render::{Grid, Rect, Rgb, Style};
+use cellix_render::{
+    BOTTOM_LEFT, BOTTOM_RIGHT, Bounds, Grid, Rect, Rgb, Style, TOP_LEFT, TOP_RIGHT,
+};
 use cellix_review::{
-    Change, FileDiff, Row, RowKind, Side, Turn, changed_files, changed_since, commit, head_text,
-    hunk_patch, index_text, rank_changes, stage_patch, staged_count, text_at, turns,
+    Change, Comment, FileDiff, Row, RowKind, Side, Turn, changed_files, changed_since, commit,
+    head_text, hunk_patch, index_text, numstat, rank_changes, stage_patch, staged_count, text_at,
+    turns,
 };
 
 use crate::theme::Theme;
@@ -16,12 +20,14 @@ const ACCEPT: &str = "[Accept]";
 const REJECT: &str = "[Reject]";
 const NUMBER_WIDTH: u16 = 5;
 /// Below this, two code columns are too narrow to read, so lines stack in one.
+/// Narrower than this, the list of files makes way for the cards.
 const MIN_SIDE_BY_SIDE: u16 = 90;
+/// Corners as a percentage of a row's height.
+const CARD_RADIUS: u8 = 30;
+const HUNK_LABEL: usize = 48;
 /// Turns listed in the timeline, newest first.
 const SHOWN_TURNS: usize = 6;
 const SHOWN_TESTS: usize = 3;
-const ACCEPT_ALL: &str = "[Accept]";
-const REJECT_ALL: &str = "[Reject]";
 
 /// What a click in the review view lands on.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,8 +51,11 @@ pub enum Hit {
 
 /// A row of the stacked layout.
 enum Stacked<'a> {
+    /// Space between two cards.
+    Gap,
     Header(usize),
     Line(&'a Side, RowKind),
+    Note(&'a str),
 }
 
 /// A row of the column beside the diff.
@@ -56,8 +65,6 @@ enum ListRow {
     Base(Option<usize>),
     Commit,
     Test(usize),
-    /// Accept or reject a whole proposal.
-    Decide,
     File(usize),
 }
 
@@ -84,6 +91,8 @@ pub struct Review {
     /// Set when this shows a change an agent is proposing, rather than the working tree.
     /// One entry per hunk, true once it's been accepted.
     proposal: Option<Vec<bool>>,
+    /// Lines added and removed, by file.
+    stats: HashMap<PathBuf, (usize, usize)>,
     tokens: (Vec<LineTokens>, Vec<LineTokens>),
 }
 
@@ -186,6 +195,7 @@ impl Review {
             staged: 0,
             tests: Vec::new(),
             proposal: None,
+            stats: HashMap::new(),
             tokens: (Vec::new(), Vec::new()),
         };
         review.refresh();
@@ -214,6 +224,7 @@ impl Review {
             staged: 0,
             tests: Vec::new(),
             proposal: Some(Vec::new()),
+            stats: HashMap::new(),
             tokens: (Vec::new(), Vec::new()),
         };
         review.reload_proposal();
@@ -287,6 +298,7 @@ impl Review {
             None => changed_files(&self.root),
         };
         rank_changes(&mut self.changes);
+        self.stats = numstat(&self.root, self.base_commit().as_deref());
         self.staged = staged_count(&self.root);
         self.selected = current
             .and_then(|p| self.changes.iter().position(|c| c.path == p))
@@ -355,7 +367,7 @@ impl Review {
     }
 
     pub fn scroll_by(&mut self, delta: isize) {
-        let last = self.diff.rows.len().saturating_sub(1) as isize;
+        let last = self.stacked(&[]).len().saturating_sub(1) as isize;
         self.top = (self.top as isize + delta).clamp(0, last.max(0)) as usize;
     }
 
@@ -408,7 +420,6 @@ impl Review {
         let mut rows = Vec::new();
         if self.is_proposal() {
             rows.push(ListRow::Heading("PROPOSED CHANGE"));
-            rows.push(ListRow::Decide);
             rows.extend((0..self.changes.len()).map(ListRow::File));
             return rows;
         }
@@ -424,10 +435,10 @@ impl Review {
             rows.extend(newest.map(ListRow::Test));
         }
         rows.push(ListRow::Heading("CHANGES"));
+        rows.extend((0..self.changes.len()).map(ListRow::File));
         if self.staged > 0 {
             rows.push(ListRow::Commit);
         }
-        rows.extend((0..self.changes.len()).map(ListRow::File));
         rows
     }
 
@@ -452,50 +463,131 @@ impl Review {
         }
     }
 
-    fn columns(area: Rect) -> (Rect, u16) {
-        let list = Rect::new(area.x, area.y, LIST_WIDTH.min(area.w), area.h);
-        (list, area.w.saturating_sub(list.w) / 2)
-    }
-
-    /// The diff as one column: an old line, then its replacement under it.
-    fn stacked(&self) -> Vec<Stacked<'_>> {
+    /// The diff as cards, one to a hunk: an old line, then its replacement under it, and
+    /// any comment after the line it's on.
+    fn stacked<'a>(&'a self, comments: &'a [Comment]) -> Vec<Stacked<'a>> {
+        let file = self
+            .current_path()
+            .map(|p| p.to_string_lossy().into_owned());
         let mut rows = Vec::new();
+        let note = |rows: &mut Vec<Stacked<'a>>, side: &Side| {
+            let here = |c: &&Comment| Some(&c.file) == file.as_ref() && c.line == side.number;
+            rows.extend(comments.iter().filter(here).map(|c| Stacked::Note(&c.text)));
+        };
         for row in &self.diff.rows {
             match row {
-                Row::Header(hunk) => rows.push(Stacked::Header(*hunk)),
+                Row::Header(hunk) => {
+                    if !rows.is_empty() {
+                        rows.push(Stacked::Gap);
+                    }
+                    rows.push(Stacked::Header(*hunk));
+                }
                 Row::Line {
                     left,
                     right,
                     kind: RowKind::Same,
                 } => {
-                    let side = right.as_ref().or(left.as_ref());
-                    rows.extend(side.map(|s| Stacked::Line(s, RowKind::Same)));
+                    if let Some(side) = right.as_ref().or(left.as_ref()) {
+                        rows.push(Stacked::Line(side, RowKind::Same));
+                        note(&mut rows, side);
+                    }
                 }
                 Row::Line { left, right, .. } => {
-                    rows.extend(left.iter().map(|s| Stacked::Line(s, RowKind::Removed)));
-                    rows.extend(right.iter().map(|s| Stacked::Line(s, RowKind::Added)));
+                    if let Some(side) = left {
+                        rows.push(Stacked::Line(side, RowKind::Removed));
+                    }
+                    if let Some(side) = right {
+                        rows.push(Stacked::Line(side, RowKind::Added));
+                        note(&mut rows, side);
+                    }
                 }
             }
         }
         rows
     }
 
-    fn hit_stacked(&self, area: Rect, x: u16, y: u16) -> Option<Hit> {
-        if y == area.y {
-            return Some(if x < area.x + area.w / 2 {
-                Hit::PreviousFile
-            } else {
-                Hit::NextFile
-            });
+    /// What code surrounds a hunk: the nearest line above that sits further out.
+    fn hunk_label(&self, hunk: usize) -> String {
+        let fallback = format!("Change {}", hunk + 1);
+        let Some(h) = self.diff.hunks.get(hunk) else {
+            return fallback;
+        };
+        let lines: Vec<&str> = self.new.lines().collect();
+        let depth = |line: &str| line.len() - line.trim_start().len();
+        let start = h.new_start.min(lines.len().saturating_sub(1));
+        let here = lines.get(start).map_or(0, |line| depth(line));
+        let above = lines[..start]
+            .iter()
+            .rev()
+            .find(|line| !line.trim().is_empty() && depth(line) < here.max(1));
+        above.map_or(fallback, |line| {
+            line.trim()
+                .trim_end_matches(['{', ' '])
+                .chars()
+                .take(HUNK_LABEL)
+                .collect()
+        })
+    }
+
+    /// Where the list and the cards go. The list makes way in a narrow pane.
+    fn layout(area: Rect) -> (Option<Rect>, Rect) {
+        if area.w < MIN_SIDE_BY_SIDE {
+            return (None, area);
         }
-        let row = (y - area.y - 1) as usize;
-        match self.stacked().get(self.top + row)? {
+        let list = Rect::new(area.x, area.y, LIST_WIDTH.min(area.w), area.h);
+        let x = list.right() + 1;
+        (
+            Some(list),
+            Rect::new(x, area.y, area.right().saturating_sub(x), area.h),
+        )
+    }
+
+    /// The two buttons at the end of a row, as (accept x, reject x).
+    fn button_spots(body: Rect) -> (u16, u16) {
+        let accept = body.right().saturating_sub(ACCEPT.len() as u16 + 1);
+        (accept, accept.saturating_sub(REJECT.len() as u16 + 1))
+    }
+
+    fn title_hit(&self, body: Rect, x: u16) -> Option<Hit> {
+        if self.is_proposal() {
+            let (accept, reject) = Self::button_spots(body);
+            return if x >= accept {
+                Some(Hit::AcceptProposal)
+            } else if x >= reject {
+                Some(Hit::RejectProposal)
+            } else {
+                None
+            };
+        }
+        Some(if x < body.x + body.w / 2 {
+            Hit::PreviousFile
+        } else {
+            Hit::NextFile
+        })
+    }
+
+    fn hit_cards(
+        &self,
+        list: bool,
+        body: Rect,
+        x: u16,
+        y: u16,
+        comments: &[Comment],
+    ) -> Option<Hit> {
+        if y == body.y {
+            return if list && !self.is_proposal() {
+                None
+            } else {
+                self.title_hit(body, x)
+            };
+        }
+        let row = (y - body.y - 1) as usize;
+        match self.stacked(comments).get(self.top + row)? {
             Stacked::Header(hunk) => {
-                let at = x.checked_sub(area.x + 1)?;
-                let accept = ACCEPT.len() as u16;
-                if at < accept {
+                let (accept, reject) = Self::button_spots(body);
+                if x >= accept && x < accept + ACCEPT.len() as u16 {
                     Some(Hit::Accept(*hunk))
-                } else if at > accept && at <= accept * 2 + 1 {
+                } else if x >= reject && x < reject + REJECT.len() as u16 {
                     Some(Hit::Reject(*hunk))
                 } else {
                     None
@@ -505,6 +597,7 @@ impl Review {
                 let file = self.current_path()?.to_string_lossy().into_owned();
                 Some(Hit::Line(file, side.number))
             }
+            Stacked::Gap | Stacked::Note(_) => None,
         }
     }
 
@@ -515,95 +608,138 @@ impl Review {
         }
     }
 
-    fn draw_decision(&self, grid: &mut Grid, x: u16, y: u16, theme: &Theme) {
-        let primary = Style {
-            fg: theme.button_text,
+    fn draw_title(&self, grid: &mut Grid, body: Rect, narrow: bool, theme: &Theme) {
+        let y = body.y;
+        let strong = Style {
+            bold: true,
+            fg: theme.heading,
             ..theme.sidebar
         };
-        grid.button(x, y, ACCEPT_ALL, "Accept", theme.button, primary);
-        let secondary = Style {
-            fg: theme.text.fg,
+        let dim = Style {
+            fg: theme.status.fg,
             ..theme.sidebar
         };
-        let next = x + ACCEPT_ALL.len() as u16 + 1;
-        grid.button(next, y, REJECT_ALL, "Reject", theme.input, secondary);
-    }
-
-    fn draw_buttons(&self, grid: &mut Grid, x: u16, y: u16, theme: &Theme) {
-        let on_button = Style {
-            fg: theme.button_text,
-            ..theme.bar
-        };
-        grid.button(x, y, ACCEPT, "Accept", theme.button, on_button);
-        let secondary = Style {
-            fg: theme.text.fg,
-            ..theme.bar
-        };
-        let next = x + ACCEPT.len() as u16 + 1;
-        grid.button(next, y, REJECT, "Reject", theme.input, secondary);
-    }
-
-    fn draw_stacked(
-        &self,
-        grid: &mut Grid,
-        area: Rect,
-        theme: &Theme,
-        commented: impl Fn(&str, usize) -> bool,
-    ) {
-        grid.fill(area, theme.text);
-        grid.fill(Rect::new(area.x, area.y, area.w, 1), theme.bar);
-        let file = self
+        let Some(file) = self
             .current_path()
-            .map(|p| p.to_string_lossy().into_owned());
-        let title = match &file {
-            Some(file) => format!(" ◂ {}/{}  {file}", self.selected + 1, self.changes.len()),
-            None => " No changes".to_string(),
+            .map(|p| p.to_string_lossy().into_owned())
+        else {
+            grid.label(body.x + 1, y, "No changes", dim, body.right());
+            return;
         };
-        grid.put_str(
-            area.x,
-            area.y,
-            &title,
-            theme.bar,
-            area.right().saturating_sub(2),
-        );
-        if file.is_some() {
-            grid.put_str(
-                area.right().saturating_sub(2),
-                area.y,
-                "▸",
-                theme.bar,
-                area.right(),
-            );
+        if self.is_proposal() {
+            let (accept, reject) = Self::button_spots(body);
+            let primary = Style {
+                fg: theme.button_text,
+                ..theme.sidebar
+            };
+            let quiet = Style {
+                fg: theme.text.fg,
+                ..theme.sidebar
+            };
+            grid.label(body.x + 1, y, &file, strong, reject.saturating_sub(1));
+            grid.button(reject, y, REJECT, "Reject", theme.tint, quiet);
+            grid.button(accept, y, ACCEPT, "Accept", theme.button, primary);
+            return;
         }
-        let file = file.unwrap_or_default();
-        for (row, entry) in self.stacked().iter().skip(self.top).enumerate() {
-            let y = area.y + 1 + row as u16;
-            if y >= area.bottom() {
+        if narrow {
+            let title = format!("◂ {}/{}  {file}", self.selected + 1, self.changes.len());
+            grid.label(
+                body.x + 1,
+                y,
+                &title,
+                strong,
+                body.right().saturating_sub(2),
+            );
+            grid.put_str(body.right().saturating_sub(2), y, "▸", dim, body.right());
+            return;
+        }
+        let end = grid.label(body.x + 1, y, &file, strong, body.right());
+        let since = match self.base.and_then(|b| self.turns.get(b)) {
+            Some(turn) => format!("since \u{201c}{}\u{201d}", turn.label),
+            None => "since the last commit".to_string(),
+        };
+        grid.label(end + 2, y, &since, dim, body.right());
+    }
+
+    fn draw_hunk_header(&self, grid: &mut Grid, card: Rect, y: u16, hunk: usize, theme: &Theme) {
+        grid.fill(Rect::new(card.x, y, card.w, 1), theme.text);
+        let dim = Style {
+            fg: theme.status.fg,
+            ..theme.text
+        };
+        let (accept, reject) = Self::button_spots(card);
+        grid.label(
+            card.x + 2,
+            y,
+            &self.hunk_label(hunk),
+            dim,
+            reject.saturating_sub(1),
+        );
+        if self.is_accepted(hunk) {
+            let done = Style {
+                fg: theme.git_added,
+                ..theme.text
+            };
+            let word = if self.is_proposal() { "Kept" } else { "Staged" };
+            grid.label_right(card.right().saturating_sub(1), y, word, done, 90);
+            return;
+        }
+        let green = Style {
+            fg: theme.git_added,
+            ..theme.text
+        };
+        let quiet = Style {
+            fg: theme.text.fg,
+            ..theme.text
+        };
+        grid.button(accept, y, ACCEPT, "Accept", theme.accept_tint, green);
+        grid.button(reject, y, REJECT, "Reject", theme.line, quiet);
+    }
+
+    fn draw_note(&self, grid: &mut Grid, card: Rect, y: u16, text: &str, theme: &Theme) {
+        grid.fill(Rect::new(card.x, y, card.w, 1), theme.text);
+        let inset = Rect::new(
+            card.x + NUMBER_WIDTH,
+            y,
+            card.w.saturating_sub(NUMBER_WIDTH + 2),
+            1,
+        );
+        grid.fill(inset, theme.sidebar);
+        grid.panel(
+            Bounds::inset(inset, 0.0, 0.04),
+            20,
+            Some(theme.sidebar.bg),
+            None,
+        );
+        let who = Style {
+            fg: theme.attention,
+            ..theme.sidebar
+        };
+        let end = grid.label(inset.x + 1, y, "Your comment", who, inset.right());
+        grid.label(end + 2, y, text, theme.sidebar, inset.right());
+    }
+
+    fn draw_cards(&self, grid: &mut Grid, body: Rect, theme: &Theme, comments: &[Comment]) {
+        let rows = self.stacked(comments);
+        let top = body.y + 1;
+        let ground = theme.sidebar.bg;
+        for (index, entry) in rows.iter().enumerate().skip(self.top) {
+            let y = top + (index - self.top) as u16;
+            if y >= body.bottom() {
                 break;
             }
+            let row = Rect::new(body.x, y, body.w, 1);
             match entry {
-                Stacked::Header(hunk) => {
-                    grid.fill(Rect::new(area.x, y, area.w, 1), theme.bar);
-                    let state = if self.is_accepted(*hunk) {
-                        "staged"
-                    } else {
-                        ""
-                    };
-                    self.draw_buttons(grid, area.x + 1, y, theme);
-                    let after = area.x + ACCEPT.len() as u16 * 2 + 3;
-                    grid.label(after, y, state, theme.bar, area.right());
-                }
+                Stacked::Gap => continue,
+                Stacked::Header(hunk) => self.draw_hunk_header(grid, body, y, *hunk, theme),
+                Stacked::Note(text) => self.draw_note(grid, body, y, text, theme),
                 Stacked::Line(side, kind) => {
                     let bg = match kind {
                         RowKind::Removed => theme.removed,
                         RowKind::Added => theme.added,
                         _ => theme.text.bg,
                     };
-                    let number_fg = if commented(&file, side.number) {
-                        theme.accent
-                    } else {
-                        theme.gutter.fg
-                    };
+                    let number_fg = theme.gutter.fg;
                     let lines = if *kind == RowKind::Removed {
                         &self.tokens.0
                     } else {
@@ -612,55 +748,31 @@ impl Review {
                     let tokens = lines.get(side.number - 1);
                     let wrapped = Some((*side).clone());
                     let look = self.side_style(&wrapped, bg, tokens, number_fg, theme);
-                    draw_side(grid, area, y, Some(side), look, theme);
+                    draw_side(grid, body, y, Some(side), look, theme);
                 }
+            }
+            let bounds = Bounds::inset(row, 0.0, 0.0);
+            if matches!(entry, Stacked::Header(_)) {
+                grid.corners(bounds, CARD_RADIUS, ground, TOP_LEFT | TOP_RIGHT);
+            }
+            if matches!(rows.get(index + 1), None | Some(Stacked::Gap)) {
+                grid.corners(bounds, CARD_RADIUS, ground, BOTTOM_LEFT | BOTTOM_RIGHT);
             }
         }
     }
 
-    pub fn hit(&self, area: Rect, x: u16, y: u16) -> Option<Hit> {
-        if area.w < MIN_SIDE_BY_SIDE {
-            return self.hit_stacked(area, x, y);
-        }
-        let (list, width) = Self::columns(area);
-        let row = (y - area.y) as usize;
-        if x < list.right() {
-            return match self.list_rows().get(row)? {
+    pub fn hit(&self, area: Rect, x: u16, y: u16, comments: &[Comment]) -> Option<Hit> {
+        let (list, body) = Self::layout(area);
+        if list.is_some_and(|l| x < l.right()) {
+            return match self.list_rows().get((y - area.y) as usize)? {
                 ListRow::Heading(_) => None,
                 ListRow::Base(base) => Some(Hit::Base(*base)),
                 ListRow::Commit => Some(Hit::Commit),
                 ListRow::Test(index) => Some(Hit::Test(*index)),
-                ListRow::Decide => {
-                    let at = x.checked_sub(list.x + 1)?;
-                    if at < ACCEPT_ALL.len() as u16 {
-                        Some(Hit::AcceptProposal)
-                    } else {
-                        Some(Hit::RejectProposal)
-                    }
-                }
                 ListRow::File(index) => Some(Hit::File(*index)),
             };
         }
-        match self.diff.rows.get(self.top + row)? {
-            Row::Header(hunk) => {
-                let at = x.checked_sub(list.right() + 1)?;
-                let accept = ACCEPT.len() as u16;
-                if at < accept {
-                    Some(Hit::Accept(*hunk))
-                } else if at > accept && at <= accept * 2 + 1 {
-                    Some(Hit::Reject(*hunk))
-                } else {
-                    None
-                }
-            }
-            Row::Line { left, right, .. } => {
-                let in_left = x < list.right() + width;
-                let side = if in_left { left } else { right };
-                let side = side.as_ref().or(left.as_ref()).or(right.as_ref())?;
-                let file = self.current_path()?.to_string_lossy().into_owned();
-                Some(Hit::Line(file, side.number))
-            }
-        }
+        self.hit_cards(list.is_some(), body, x, y, comments)
     }
 
     fn draw_list_row(&self, grid: &mut Grid, list: Rect, y: u16, row: &ListRow, theme: &Theme) {
@@ -701,7 +813,6 @@ impl Review {
                 let text = format!("[Commit {} staged]", self.staged);
                 grid.button(list.x + 1, y, &text, "Commit", theme.button, style);
             }
-            ListRow::Decide => self.draw_decision(grid, list.x + 1, y, theme),
             ListRow::Test(index) => {
                 let run = &self.tests[*index];
                 let (mark, color) = if run.passed {
@@ -722,95 +833,42 @@ impl Review {
                 grid.fill(line, style);
                 let change = &self.changes[*index];
                 let name = change.path.display().to_string();
-                let status = change.status.to_string();
-                grid.put_str(list.x + 1, y, &status, style, list.right());
-                grid.label(list.x + 3, y, &name, style, list.right());
+                let right = list.right().saturating_sub(1);
+                let mut end = right;
+                if let Some((added, removed)) = self.stats.get(&change.path) {
+                    let green = Style {
+                        fg: theme.git_added,
+                        ..style
+                    };
+                    let red = Style {
+                        fg: theme.error,
+                        ..style
+                    };
+                    let removed = format!("-{removed}");
+                    let added = format!("+{added}");
+                    grid.label_right(end, y, &removed, red, 85);
+                    end = end.saturating_sub(removed.len() as u16 + 1);
+                    grid.label_right(end, y, &added, green, 85);
+                    end = end.saturating_sub(added.len() as u16 + 1);
+                }
+                grid.label(list.x + 1, y, &name, style, end);
             }
         }
     }
 
-    pub fn draw(
-        &self,
-        grid: &mut Grid,
-        area: Rect,
-        theme: &Theme,
-        commented: impl Fn(&str, usize) -> bool,
-    ) {
-        if area.w < MIN_SIDE_BY_SIDE {
-            self.draw_stacked(grid, area, theme, commented);
-            return;
-        }
-        grid.fill(area, theme.text);
-        let (list, width) = Self::columns(area);
-        grid.fill(list, theme.sidebar);
-        for (i, row) in self.list_rows().iter().enumerate() {
-            let y = list.y + i as u16;
-            if y >= list.bottom() {
-                break;
-            }
-            self.draw_list_row(grid, list, y, row, theme);
-        }
-        if self.changes.is_empty() {
-            let y = list.y + self.list_rows().len() as u16;
-            grid.label(list.x + 1, y, "No changes", theme.sidebar, list.right());
-        }
-        let left = Rect::new(list.right(), area.y, width, area.h);
-        let right = Rect::new(left.right(), area.y, area.right() - left.right(), area.h);
-        let file = self
-            .current_path()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        for (row, entry) in self.diff.rows.iter().skip(self.top).enumerate() {
-            let y = area.y + row as u16;
-            if y >= area.bottom() {
-                break;
-            }
-            match entry {
-                Row::Header(hunk) => {
-                    let line = Rect::new(left.x, y, left.w + right.w, 1);
-                    grid.fill(line, theme.bar);
-                    let state = if self.is_accepted(*hunk) {
-                        "staged"
-                    } else {
-                        ""
-                    };
-                    let x = line.x + 1;
-                    self.draw_buttons(grid, x, y, theme);
-                    let text = format!("Change {}   {state}", hunk + 1);
-                    let after = x + ACCEPT.len() as u16 * 2 + 2;
-                    grid.label(after, y, &text, theme.bar, line.right());
+    pub fn draw(&self, grid: &mut Grid, area: Rect, theme: &Theme, comments: &[Comment]) {
+        grid.fill(area, theme.sidebar);
+        let (list, body) = Self::layout(area);
+        if let Some(list) = list {
+            for (i, row) in self.list_rows().iter().enumerate() {
+                let y = list.y + i as u16;
+                if y >= list.bottom() {
+                    break;
                 }
-                Row::Line {
-                    left: l,
-                    right: r,
-                    kind,
-                } => {
-                    let (old_bg, new_bg) = match kind {
-                        RowKind::Same => (theme.text.bg, theme.text.bg),
-                        RowKind::Removed | RowKind::Changed if r.is_none() => {
-                            (theme.removed, theme.text.bg)
-                        }
-                        RowKind::Added => (theme.text.bg, theme.added),
-                        _ => (theme.removed, theme.added),
-                    };
-                    let number_fg = |s: &Option<Side>| {
-                        if s.as_ref().is_some_and(|s| commented(&file, s.number)) {
-                            theme.accent
-                        } else {
-                            theme.gutter.fg
-                        }
-                    };
-                    let tokens = |side: &Option<Side>, lines: &'_ [LineTokens]| {
-                        side.as_ref().and_then(|s| lines.get(s.number - 1)).cloned()
-                    };
-                    let (old_tokens, new_tokens) =
-                        (tokens(l, &self.tokens.0), tokens(r, &self.tokens.1));
-                    let look = self.side_style(l, old_bg, old_tokens.as_ref(), number_fg(l), theme);
-                    draw_side(grid, left, y, l.as_ref(), look, theme);
-                    let look = self.side_style(r, new_bg, new_tokens.as_ref(), number_fg(r), theme);
-                    draw_side(grid, right, y, r.as_ref(), look, theme);
-                }
+                self.draw_list_row(grid, list, y, row, theme);
             }
         }
+        self.draw_title(grid, body, list.is_none(), theme);
+        self.draw_cards(grid, body, theme, comments);
     }
 }

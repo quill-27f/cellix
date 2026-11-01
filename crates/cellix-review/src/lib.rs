@@ -10,7 +10,7 @@ pub use diff::{
 };
 pub use git::{
     Change, Worktree, blame_line, changed_files, commit, current_branch, head_text, index_text,
-    stage_patch, staged_count, worktrees,
+    numstat, stage_patch, staged_count, worktrees,
 };
 pub use history::{Turn, changed_since, checkpoint, restore, text_at, turns};
 

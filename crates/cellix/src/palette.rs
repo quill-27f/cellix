@@ -1,11 +1,13 @@
 use std::path::PathBuf;
 
 use cellix_input::{Command, Format};
-use cellix_render::{Bounds, Font, Grid, Measure, Rect, Rgb, Style};
+use cellix_render::{Bounds, Font, Grid, Icon, Measure, Rect, Rgb, Style};
 
 use crate::theme::Theme;
 
 const WIDTH: u16 = 64;
+/// Text in the search field, as a percentage of the interface font.
+const INTERFACE_SIZE_PERCENT: u8 = 100;
 const ROWS: u16 = 12;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -21,6 +23,36 @@ impl Item {
             Self::Command(label, _) => label,
         }
     }
+
+    fn keys(&self) -> Option<&'static str> {
+        match self {
+            Self::File(..) => None,
+            Self::Command(_, command) => keys_of(*command),
+        }
+    }
+}
+
+/// A command's usual keys, shown beside it.
+fn keys_of(command: Command) -> Option<&'static str> {
+    Some(match command {
+        Command::Save => "Ctrl+S",
+        Command::Undo => "Ctrl+Z",
+        Command::Redo => "Ctrl+Y",
+        Command::SelectAll => "Ctrl+A",
+        Command::CloseTab => "Ctrl+W",
+        Command::FindInFile => "Ctrl+F",
+        Command::FindInProject => "Ctrl+Shift+F",
+        Command::OpenDiff => "Ctrl+G",
+        Command::ToggleSidebar => "Ctrl+B",
+        Command::ToggleComment => "Ctrl+/",
+        Command::GoToLine => "Ctrl+L",
+        Command::GoToDefinition => "F12",
+        Command::RenameSymbol => "F2",
+        Command::AddComment => "Alt+C",
+        Command::SplitPane => "Ctrl+\\",
+        Command::Quit => "Ctrl+Q",
+        _ => return None,
+    })
 }
 
 pub const COMMANDS: [(&str, Command); 45] = [
@@ -161,19 +193,31 @@ impl Palette {
             bg: theme.popup,
             ..theme.bar
         };
-        let line = Rect::new(area.x + 1, area.y, area.w.saturating_sub(2), 1);
-        input(
-            grid,
-            line,
-            &Input {
-                text: &self.query,
-                hint: "Type to search",
-                focused: true,
-                behind: theme.popup,
-            },
-            measure,
-            theme,
+        let dim = Style {
+            fg: theme.status.fg,
+            ..base
+        };
+        grid.glyph(
+            area.x as f32 + 1.2,
+            area.y,
+            Icon::Search,
+            theme.status.fg,
+            "⌕",
+            base,
         );
+        let x = area.x + 3;
+        if self.query.is_empty() {
+            grid.label(x, area.y, "Type to search", dim, area.right());
+        } else {
+            grid.label(x, area.y, &self.query, base, area.right());
+        }
+        let font = Font {
+            size: INTERFACE_SIZE_PERCENT,
+            ..Font::default()
+        };
+        grid.set_caret(x as f32 + measure.width(&self.query, font), area.y, 0.56);
+        let edge = Bounds::cells(area.x as f32, area.y as f32 + 1.0, area.w as f32, 0.0);
+        grid.hairline(edge, theme.popup_border);
         for (row, index) in self.matches.iter().take(ROWS as usize).enumerate() {
             let y = area.y + 1 + row as u16;
             let line = Rect::new(area.x, y, area.w, 1);
@@ -187,8 +231,15 @@ impl Palette {
                 grid.panel(Bounds::inset(line, 0.5, 0.04), 18, Some(fill), None);
             }
             let text = self.items[*index].label();
-            let end = area.right().saturating_sub(1);
+            let end = area.right().saturating_sub(16);
             grid.label_at(area.x as f32 + 1.5, area.x + 3, y, text, base, end, 100);
+            if let Some(keys) = self.items[*index].keys() {
+                let quiet = Style {
+                    fg: theme.status.fg,
+                    ..base
+                };
+                grid.label_right(area.right().saturating_sub(2), y, keys, quiet, 85);
+            }
         }
     }
 }

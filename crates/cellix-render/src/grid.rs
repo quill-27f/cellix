@@ -6,6 +6,9 @@ use crate::icon::{Icon, Piece};
 use crate::measure::Font;
 use crate::paint::{Bounds, Paint, UNIT, units};
 
+/// An average letter of a button's label, in cells.
+const BUTTON_CHAR_WIDTH: f32 = 0.58;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Rgb(pub u8, pub u8, pub u8);
 
@@ -220,8 +223,11 @@ impl Grid {
         );
         let bounds = Bounds::cells(x as f32, y as f32 + 0.1, width as f32, 0.8);
         self.panel(bounds, 20, Some(fill), None);
+        // Centred by an estimate, because a grid can't measure text and labels are short.
+        let text_width = label.chars().count() as f32 * BUTTON_CHAR_WIDTH;
+        let inset = ((width as f32 - text_width) / 2.0).max(0.3);
         self.paint.push(Paint::Text {
-            x: units(x as f32 + 0.7),
+            x: units(x as f32 + inset),
             y: y as i32 * UNIT,
             max_width: units(width as f32),
             text: label.to_string(),

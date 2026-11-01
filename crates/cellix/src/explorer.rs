@@ -43,7 +43,7 @@ impl Explorer {
         &self,
         grid: &mut Grid,
         area: Rect,
-        root_name: &str,
+        (root_name, branch): (&str, Option<&str>),
         hover: Option<(u16, u16)>,
         theme: &Theme,
     ) {
@@ -52,15 +52,14 @@ impl Explorer {
             bold: true,
             ..theme.sidebar
         };
-        grid.label_at(
-            area.x as f32 + 2.0,
-            area.x + 2,
-            area.y,
-            root_name,
-            heading,
-            area.right(),
-            95,
-        );
+        let end = grid.label(area.x + 2, area.y, root_name, heading, area.right());
+        if let Some(branch) = branch {
+            let dim = Style {
+                fg: theme.status.fg,
+                ..theme.sidebar
+            };
+            grid.label(end + 1, area.y, branch, dim, area.right());
+        }
         for (row, entry) in self.entries.iter().skip(self.top).enumerate() {
             let y = area.y + HEADER_ROWS + row as u16;
             if y >= area.bottom() {

@@ -256,6 +256,7 @@ fn parent_gone() -> bool {
 pub fn run(root: &Path) -> io::Result<()> {
     let mut app = App::new(root.to_path_buf(), DEFAULT_SIZE);
     app.compact_width = PANE_COMPACT_WIDTH;
+    app.in_pane = true;
     let cell = window_cell().unwrap_or(DEFAULT_CELL);
     app.set_measure(Rc::new(FontMeasure::new(cell.0, cell.1)));
     let server = cellix_agent::start(root, app.comments.clone())?;

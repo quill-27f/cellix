@@ -52,14 +52,19 @@ const ACTIVITY: [(Icon, Command); 5] = [
 /// Cells each activity icon spans.
 const ACTIVITY_ICON: (u8, u8) = (3, 2);
 /// Rows from one activity icon to the next.
-const ACTIVITY_STEP: u16 = 4;
+const ACTIVITY_STEP: u16 = 3;
 const APPROVE: &str = "[Approve]";
 const FIND_WIDTH: u16 = 46;
-const PLAN_BAR_WIDTH: u16 = 60;
+const CONFIRM_WIDTH: u16 = 56;
+const CONFIRM_HEIGHT: u16 = 6;
+const PLAN_BAR_WIDTH: u16 = 48;
 /// Corners as percentages of a row's height.
 const SHEET_RADIUS: u8 = 34;
 const TAB_RADIUS: u8 = 22;
 const PILL_RADIUS: u8 = 30;
+/// What the explorer's status holds for a folder with changes inside, not a file.
+const DIRECTORY_MARK: char = '•';
+const BADGE_SIZE: u8 = 62;
 const SUGGEST_WIDTH: u16 = 42;
 /// Room kept for the path before the toolbar is left out.
 const MIN_BREADCRUMB: u16 = 12;
@@ -105,16 +110,11 @@ enum PromptAction {
     NewFile(PathBuf),
     NewFolder(PathBuf),
     Rename(PathBuf),
-    Delete(PathBuf),
     Comment(String, usize),
     RenameSymbol,
-    Quit,
-    CloseTab,
     Commit,
     GoToLine,
     SendBackPlan,
-    /// Puts the tree back to this checkpoint, after a yes.
-    UndoTurn(String),
 }
 
 struct Prompt {
@@ -161,6 +161,33 @@ enum Overlay {
     Prompt(Prompt),
     Menu(Menu),
     Find(Find),
+    Confirm(Confirm),
+}
+
+/// What's left to do after a choice about unsaved changes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Leaving {
+    Quit,
+    CloseTab,
+}
+
+/// What a dialog's button does.
+#[derive(Clone)]
+enum Choice {
+    Cancel,
+    Save(Leaving),
+    Discard(Leaving),
+    Delete(PathBuf),
+    Undo(String),
+}
+
+/// A question with buttons, for the keyboard or the mouse.
+struct Confirm {
+    title: String,
+    detail: String,
+    /// The first is what Enter does until the selection moves.
+    buttons: Vec<(&'static str, Choice)>,
+    selected: usize,
 }
 
 /// What can open a split for an agent.
@@ -278,6 +305,8 @@ pub struct App {
     server_words: Vec<String>,
     /// Set when suggestions were asked for, so an empty prefix still gets them.
     suggest_asked: bool,
+    /// Running as a pane inside Claude Code.
+    pub in_pane: bool,
     /// Below this width the sidebar becomes a drawer. A pane beside an agent sets it higher.
     pub compact_width: u16,
     /// Why a pane should come forward, for the mod.
@@ -346,6 +375,7 @@ impl App {
             branch: None,
             measure: Rc::new(CellMeasure),
             agents: Agents::default(),
+            in_pane: false,
             compact_width: COMPACT_WIDTH,
             attention: None,
             suggest: None,
@@ -1534,6 +1564,177 @@ impl App {
         }
     }
 
+    /// Asks what to do about unsaved work before closing a tab or quitting.
+    fn confirm_leaving(&mut self, leaving: Leaving) {
+        let dirty: Vec<String> = match leaving {
+            Leaving::CloseTab => self
+                .editors
+                .get(self.active())
+                .into_iter()
+                .map(Editor::title)
+                .collect(),
+            Leaving::Quit => {
+                let unsaved = self.editors.iter().filter(|e| e.buffer.is_dirty());
+                unsaved.map(Editor::title).collect()
+            }
+        };
+        let what = match dirty.as_slice() {
+            [one] => one.clone(),
+            many => format!("{} files", many.len()),
+        };
+        self.overlay = Overlay::Confirm(Confirm {
+            title: format!("Save changes to {what}?"),
+            detail: "Your changes will be lost if you don't save them.".to_string(),
+            buttons: vec![
+                ("Save", Choice::Save(leaving)),
+                ("Don't Save", Choice::Discard(leaving)),
+                ("Cancel", Choice::Cancel),
+            ],
+            selected: 0,
+        });
+    }
+
+    fn leave(&mut self, leaving: Leaving) {
+        match leaving {
+            Leaving::Quit => self.quit = true,
+            Leaving::CloseTab => self.close_tab(),
+        }
+    }
+
+    fn choose(&mut self, choice: Choice) {
+        match choice {
+            Choice::Cancel => {}
+            Choice::Save(leaving) => {
+                self.save_dirty(leaving == Leaving::CloseTab);
+                self.leave(leaving);
+            }
+            Choice::Discard(leaving) => self.leave(leaving),
+            Choice::Delete(path) => {
+                if let Err(e) = self.workspace.delete(&path) {
+                    self.say(format!("Could not delete it: {e}"));
+                }
+                self.refresh_tree();
+            }
+            Choice::Undo(commit) => {
+                let root = self.workspace.root().to_path_buf();
+                let result = restore(&root, &commit);
+                self.say(match result {
+                    Ok(count) => format!("Restored {count} files, and saved a point to redo"),
+                    Err(e) => format!("Could not undo: {e}"),
+                });
+                if let Some(review) = &mut self.review {
+                    review.refresh();
+                }
+            }
+        }
+    }
+
+    fn confirm_key(&mut self, mut confirm: Confirm, key: KeyEvent) {
+        let count = confirm.buttons.len();
+        let picked = match key.key {
+            Key::Esc => {
+                self.choose(Choice::Cancel);
+                return;
+            }
+            Key::Enter => Some(confirm.selected),
+            Key::Right | Key::Down | Key::Tab => {
+                confirm.selected = (confirm.selected + 1) % count;
+                None
+            }
+            Key::Left | Key::Up | Key::BackTab => {
+                confirm.selected = (confirm.selected + count - 1) % count;
+                None
+            }
+            Key::Char('y' | 'Y') => Some(0),
+            Key::Char('n' | 'N') => Some(1),
+            Key::Char(c) => {
+                let letter = c.to_ascii_lowercase();
+                let starts = |label: &str| label.to_lowercase().starts_with(letter);
+                confirm.buttons.iter().position(|(label, _)| starts(label))
+            }
+            _ => None,
+        };
+        match picked.and_then(|i| confirm.buttons.get(i)) {
+            Some((_, choice)) => self.choose(choice.clone()),
+            None => self.overlay = Overlay::Confirm(confirm),
+        }
+    }
+
+    fn confirm_area(&self) -> Rect {
+        let screen = Rect::new(0, 0, self.size.0, self.size.1);
+        let width = CONFIRM_WIDTH.min(screen.w);
+        let y = (screen.h / 3).min(screen.h.saturating_sub(CONFIRM_HEIGHT));
+        Rect::new(screen.x + (screen.w - width) / 2, y, width, CONFIRM_HEIGHT)
+    }
+
+    /// Each button as (cells, x), laid out from the right edge.
+    fn confirm_buttons(&self, confirm: &Confirm) -> Vec<(String, u16)> {
+        let area = self.confirm_area();
+        let mut x = area.right().saturating_sub(2);
+        let mut placed = Vec::new();
+        for (label, _) in confirm.buttons.iter().rev() {
+            let cells = format!("[{label}]");
+            x = x.saturating_sub(cells.chars().count() as u16);
+            placed.push((cells, x));
+            x = x.saturating_sub(1);
+        }
+        placed.reverse();
+        placed
+    }
+
+    fn draw_confirm(&self, grid: &mut Grid, confirm: &Confirm) {
+        let theme = &self.theme;
+        let area = self.confirm_area();
+        popup(grid, area, theme);
+        let base = Style {
+            fg: theme.text.fg,
+            bg: theme.popup,
+            ..theme.bar
+        };
+        let strong = Style {
+            bold: true,
+            fg: theme.heading,
+            ..base
+        };
+        let dim = Style {
+            fg: theme.status.fg,
+            ..base
+        };
+        grid.label(
+            area.x + 2,
+            area.y + 1,
+            &confirm.title,
+            strong,
+            area.right().saturating_sub(1),
+        );
+        grid.label(
+            area.x + 2,
+            area.y + 2,
+            &confirm.detail,
+            dim,
+            area.right().saturating_sub(1),
+        );
+        let y = area.y + 4;
+        for (i, (cells, x)) in self.confirm_buttons(confirm).iter().enumerate() {
+            let on = i == confirm.selected;
+            let width = cells.chars().count() as u16;
+            let hovered = self
+                .hover
+                .is_some_and(|h| h.1 == y && h.0 >= *x && h.0 < x + width);
+            let fill = match (on, hovered) {
+                (true, _) => theme.button,
+                (false, true) => theme.pick,
+                (false, false) => theme.tint,
+            };
+            let style = Style {
+                fg: if on { theme.button_text } else { theme.text.fg },
+                bg: fill,
+                ..base
+            };
+            grid.button(*x, y, cells, confirm.buttons[i].0, fill, style);
+        }
+    }
+
     fn overlay_key(&mut self, key: KeyEvent) {
         let overlay = std::mem::replace(&mut self.overlay, Overlay::None);
         match overlay {
@@ -1574,6 +1775,7 @@ impl App {
                 _ => self.overlay = Overlay::Prompt(prompt),
             },
             Overlay::Find(find) => self.find_key(find, key),
+            Overlay::Confirm(confirm) => self.confirm_key(confirm, key),
             Overlay::Menu(_) | Overlay::None => {}
         }
     }
@@ -1742,20 +1944,6 @@ impl App {
                 }
                 Ok(())
             }
-            PromptAction::UndoTurn(commit) => {
-                if name.eq_ignore_ascii_case("y") {
-                    let root = self.workspace.root().to_path_buf();
-                    let result = restore(&root, commit);
-                    self.say(match result {
-                        Ok(count) => format!("Restored {count} files, and saved a point to redo"),
-                        Err(e) => format!("Could not undo: {e}"),
-                    });
-                    if let Some(review) = &mut self.review {
-                        review.refresh();
-                    }
-                }
-                Ok(())
-            }
             PromptAction::RenameSymbol if !name.is_empty() => {
                 self.poll();
                 if self.pending_rename.is_some() {
@@ -1777,22 +1965,6 @@ impl App {
                 }
                 Ok(())
             }
-            PromptAction::Quit | PromptAction::CloseTab => {
-                if name.eq_ignore_ascii_case("y") {
-                    self.save_dirty(matches!(prompt.action, PromptAction::CloseTab));
-                }
-                if !name.is_empty() {
-                    match prompt.action {
-                        PromptAction::Quit => self.quit = true,
-                        _ => self.close_tab(),
-                    }
-                }
-                Ok(())
-            }
-            PromptAction::Delete(path) if name.eq_ignore_ascii_case("y") => {
-                self.workspace.delete(path)
-            }
-            PromptAction::Delete(_) => Ok(()),
             _ if name.is_empty() => Ok(()),
             PromptAction::NewFile(dir) => self.workspace.create_file(&dir.join(name)),
             PromptAction::NewFolder(dir) => self.workspace.create_dir(&dir.join(name)),
@@ -1822,7 +1994,7 @@ impl App {
         let area = self.focused_area();
         match command {
             Command::Quit if self.editors.iter().any(|e| e.buffer.is_dirty()) => {
-                self.ask("Save changes first? y/n", PromptAction::Quit);
+                self.confirm_leaving(Leaving::Quit);
             }
             Command::Quit => self.quit = true,
             Command::CloseTab
@@ -1831,7 +2003,7 @@ impl App {
                     .get(self.active())
                     .is_some_and(|e| e.buffer.is_dirty()) =>
             {
-                self.ask("Save changes first? y/n", PromptAction::CloseTab);
+                self.confirm_leaving(Leaving::CloseTab);
             }
             Command::OpenDiff if self.proposal.is_some() => self.reject_proposal(),
             Command::MentionSelection => self.mention_selection(),
@@ -2164,8 +2336,16 @@ impl App {
         };
         match target {
             Some(turn) => {
-                let label = format!("Undo back to \"{}\"? y/n", turn.label);
-                self.ask(&label, PromptAction::UndoTurn(turn.commit));
+                self.overlay = Overlay::Confirm(Confirm {
+                    title: format!("Undo back to \u{201c}{}\u{201d}?", turn.label),
+                    detail: "Files go back to that point. A checkpoint is kept, so you can redo."
+                        .to_string(),
+                    buttons: vec![
+                        ("Undo Turn", Choice::Undo(turn.commit)),
+                        ("Cancel", Choice::Cancel),
+                    ],
+                    selected: 0,
+                });
             }
             None => self.say("No agent turns recorded here yet"),
         }
@@ -2424,7 +2604,8 @@ impl App {
         let Some(review) = &mut self.review else {
             return;
         };
-        match review.hit(area, x, y) {
+        let comments = self.comments.lock().map(|c| c.clone()).unwrap_or_default();
+        match review.hit(area, x, y, &comments) {
             Some(Hit::File(index)) => review.select(index),
             Some(Hit::AcceptProposal) => self.accept_proposal(),
             Some(Hit::RejectProposal) => self.reject_proposal(),
@@ -2789,6 +2970,18 @@ impl App {
                 }
             }
             Overlay::Find(find) => self.click_find(find, mouse.x, mouse.y),
+            Overlay::Confirm(confirm) => {
+                let y = self.confirm_area().y + 4;
+                let spots = self.confirm_buttons(&confirm);
+                let width = |cells: &String| cells.chars().count() as u16;
+                let on = spots
+                    .iter()
+                    .position(|(c, x)| mouse.y == y && mouse.x >= *x && mouse.x < x + width(c));
+                match on {
+                    Some(index) => self.choose(confirm.buttons[index].1.clone()),
+                    None => self.overlay = Overlay::Confirm(confirm),
+                }
+            }
             other => self.overlay = other,
         }
     }
@@ -2832,11 +3025,18 @@ impl App {
                 name,
                 PromptAction::Rename(target.to_path_buf()),
             ),
-            _ => (
-                format!("Delete {name}? y/n"),
-                String::new(),
-                PromptAction::Delete(target.to_path_buf()),
-            ),
+            _ => {
+                self.overlay = Overlay::Confirm(Confirm {
+                    title: format!("Delete {name}?"),
+                    detail: "This can't be undone.".to_string(),
+                    buttons: vec![
+                        ("Delete", Choice::Delete(target.to_path_buf())),
+                        ("Cancel", Choice::Cancel),
+                    ],
+                    selected: 1,
+                });
+                return;
+            }
         };
         self.overlay = Overlay::Prompt(Prompt {
             label,
@@ -2865,8 +3065,12 @@ impl App {
     }
 
     fn click_activity(&mut self, y: u16) {
-        let index = y.saturating_sub(1) / ACTIVITY_STEP;
-        if let Some((_, command)) = ACTIVITY.get(index as usize) {
+        let area = self.activity_area();
+        let index = (0..ACTIVITY.len()).find(|i| {
+            let top = Self::rail_row(*i, area);
+            y >= top && y < top + ACTIVITY_STEP
+        });
+        if let Some((_, command)) = index.and_then(|i| ACTIVITY.get(i)) {
             let on_explorer = self.sidebar_view == SidebarView::Explorer;
             match command {
                 Command::ToggleSidebar if self.review.is_some() || !on_explorer => {
@@ -2952,7 +3156,8 @@ impl App {
                 .unwrap_or_default();
             match self.sidebar_view {
                 SidebarView::Explorer => {
-                    self.explorer.draw(grid, area, &name, self.hover, theme);
+                    let header = (name.as_str(), self.branch.as_deref());
+                    self.explorer.draw(grid, area, header, self.hover, theme);
                 }
                 SidebarView::Search => self.search.draw(grid, area, &*self.measure, theme),
                 SidebarView::Agents => self.agents.draw(grid, area, theme),
@@ -2960,9 +3165,7 @@ impl App {
         }
         if let Some(review) = &self.review {
             let comments = self.comments.lock().map(|c| c.clone()).unwrap_or_default();
-            let commented =
-                |file: &str, line: usize| comments.iter().any(|c| c.file == file && c.line == line);
-            review.draw(grid, self.main_area(), theme, commented);
+            review.draw(grid, self.main_area(), theme, &comments);
             self.draw_status(grid);
             self.draw_overlay(grid);
             return;
@@ -3022,6 +3225,7 @@ impl App {
             Overlay::Menu(menu) => self.draw_menu(grid, menu),
             Overlay::Prompt(prompt) => self.draw_prompt(grid, prompt),
             Overlay::Find(find) => self.draw_find(grid, find),
+            Overlay::Confirm(confirm) => self.draw_confirm(grid, confirm),
             Overlay::None => {}
         }
     }
@@ -3088,6 +3292,22 @@ impl App {
         input(grid, line, &field, &*self.measure, &self.theme);
     }
 
+    /// Where an icon goes. The last one is Settings, which sits at the bottom given room.
+    fn rail_row(index: usize, area: Rect) -> u16 {
+        let stacked = 1 + index as u16 * ACTIVITY_STEP;
+        if index + 1 == ACTIVITY.len() {
+            stacked.max(area.bottom().saturating_sub(3))
+        } else {
+            stacked
+        }
+    }
+
+    /// How many files differ from HEAD, for the badge on the rail.
+    fn changed_count(&self) -> usize {
+        let files = self.explorer.status.values();
+        files.filter(|status| **status != DIRECTORY_MARK).count()
+    }
+
     fn draw_activity(&self, grid: &mut Grid) {
         let area = self.activity_area();
         if area.w == 0 {
@@ -3095,7 +3315,7 @@ impl App {
         }
         grid.fill(area, self.theme.activity);
         for (i, (icon, command)) in ACTIVITY.iter().enumerate() {
-            let y = 1 + i as u16 * ACTIVITY_STEP;
+            let y = Self::rail_row(i, area);
             if y + 1 >= area.bottom() {
                 break;
             }
@@ -3149,6 +3369,25 @@ impl App {
                 grid.corners(bounds, PILL_RADIUS, self.theme.activity.bg, ALL_CORNERS);
             }
             grid.put_icon(area.x + 1, y, *icon, ACTIVITY_ICON, style);
+            let changed = self.changed_count();
+            if *command == Command::OpenDiff && changed > 0 {
+                let color = self.theme.button_text;
+                let badge = Bounds::cells(area.x as f32 + 2.6, y as f32 - 0.02, 1.5, 0.62);
+                grid.panel(badge, 30, Some(self.theme.accent), None);
+                let font = Font {
+                    bold: true,
+                    size: BADGE_SIZE,
+                    ..Font::default()
+                };
+                let (x, top) = (area.x as f32 + 3.0, y as f32 - 0.2);
+                grid.text_run(
+                    (x, top),
+                    area.right() as f32,
+                    &changed.to_string(),
+                    (color, false),
+                    font,
+                );
+            }
             if *command == Command::ShowAgents && self.agents.needing_you() > 0 {
                 let dot = Bounds::cells(area.x as f32 + 3.0, y as f32 + 0.1, 0.8, 0.4);
                 grid.panel(dot, 22, Some(self.theme.attention), None);
@@ -3183,6 +3422,10 @@ impl App {
                 "☰",
                 theme.tab,
             );
+        }
+        if self.plan_in_view() {
+            self.draw_plan_banner(grid);
+            return;
         }
         let area = self.tabs_area();
         for (i, x, width) in self.visible_tabs() {
@@ -3238,6 +3481,32 @@ impl App {
         Rect::new(x, sheet.bottom().saturating_sub(4), width, 3)
     }
 
+    /// Stands in for the tabs while a plan waits, because this is the one thing to do.
+    fn draw_plan_banner(&self, grid: &mut Grid) {
+        let theme = &self.theme;
+        let main = self.main_area();
+        let dot = Bounds::cells(main.x as f32 + 1.0, main.y as f32 + 0.34, 0.45, 0.32);
+        grid.panel(dot, 16, Some(theme.attention), None);
+        let strong = Style {
+            bold: true,
+            fg: theme.heading,
+            ..theme.tab
+        };
+        let dim = Style {
+            fg: theme.status.fg,
+            ..theme.tab
+        };
+        let end = grid.label(
+            main.x + 2,
+            main.y,
+            "Claude Code is waiting on this plan",
+            strong,
+            main.right(),
+        );
+        let hint = "Edit it directly, or comment on any line";
+        grid.label(end + 2, main.y, hint, dim, main.right());
+    }
+
     fn draw_plan_bar(&self, grid: &mut Grid) {
         let bar = self.plan_bar();
         let theme = &self.theme;
@@ -3256,7 +3525,16 @@ impl App {
             ..base
         };
         let y = bar.y + 1;
-        grid.label(bar.x + 2, y, "Claude Code is waiting", base, bar.right());
+        let file = self.plan.as_ref().map(|p| self.relative(&p.path));
+        let noted = self.comments.lock().map_or(0, |c| {
+            c.iter().filter(|c| Some(&c.file) == file.as_ref()).count()
+        });
+        let words = match noted {
+            0 => "No comments".to_string(),
+            1 => "1 comment".to_string(),
+            count => format!("{count} comments"),
+        };
+        grid.label(bar.x + 2, y, &words, base, bar.right());
         let approve = bar.right().saturating_sub(APPROVE.len() as u16 + 2);
         let back = approve.saturating_sub(SEND_BACK.len() as u16 + 1);
         grid.button(back, y, SEND_BACK, "Send back", theme.input, secondary);
@@ -3286,7 +3564,13 @@ impl App {
             return;
         };
         let main = self.main_area();
-        let text = self.relative(path).replace('/', " › ");
+        // A page reads as a document, so it carries no path.
+        let page = self.editors.get(self.active()).is_some_and(|e| e.rendered);
+        let text = if page {
+            String::new()
+        } else {
+            self.relative(path).replace('/', " › ")
+        };
         let style = self.theme.breadcrumb;
         grid.fill(Rect::new(main.x, 1, main.w, 1), style);
         let toolbar = self.toolbar_x();
@@ -3302,6 +3586,13 @@ impl App {
         let Some(mut x) = toolbar else {
             return;
         };
+        let tray = Rect::new(x, 1, TOOL_WIDTH * TOOLS.len() as u16, 1);
+        grid.panel(
+            Bounds::inset(tray, -0.2, 0.04),
+            26,
+            Some(self.theme.tab.bg),
+            None,
+        );
         for (label, format) in TOOLS {
             let tool = Style {
                 bold: format == Format::Bold,
@@ -3313,7 +3604,7 @@ impl App {
                 let pill = Bounds::inset(button, 0.1, 0.08);
                 grid.panel(pill, 12, Some(self.theme.pick), None);
             }
-            grid.put_str(x + 1, 1, label, tool, main.right());
+            grid.label(x + 1, 1, label, tool, x + TOOL_WIDTH);
             x += TOOL_WIDTH;
         }
     }
@@ -3397,11 +3688,18 @@ impl App {
                 .find(|d| d.line + 1 == line)
                 .map(|d| d.message.clone())
         });
-        let hint = if self.compact() {
-            "Ctrl+P open"
-        } else {
-            "Ctrl+P open  Ctrl+S save  Ctrl+G review  Ctrl+Q quit"
-        };
+        let reviewing = self
+            .review
+            .as_ref()
+            .filter(|r| !r.is_proposal())
+            .map_or_else(String::new, |r| {
+                format!("Reviewing {} files", r.changes.len())
+            });
+        let proposed = self
+            .review
+            .as_ref()
+            .filter(|r| r.is_proposal())
+            .map_or_else(String::new, |r| format!("{} changes", r.diff.hunks.len()));
         let waiting = self.agents.needing_you();
         let attention = format!("An agent needs you ({waiting})");
         let typed = format!(":{}", self.neovim_line);
@@ -3413,8 +3711,17 @@ impl App {
             attention.as_str()
         } else if let Some(problem) = &at_cursor {
             problem.as_str()
+        } else if !proposed.is_empty() {
+            proposed.as_str()
+        } else if self.editors.is_empty() && self.review.is_none() {
+            // Hints only help a window with nothing in it yet.
+            if self.compact() {
+                "Ctrl+P open"
+            } else {
+                "Ctrl+P open  Ctrl+G review  Ctrl+Q quit"
+            }
         } else {
-            hint
+            reviewing.as_str()
         };
         // The cursor always shows, and the rest stays only while it leaves `left` room.
         let mut right = Vec::new();
@@ -3447,9 +3754,21 @@ impl App {
                 "Spaces: 4".to_string(),
             ];
         }
+        if self.in_pane && self.review.is_some() {
+            right = vec!["Esc returns to Claude".to_string()];
+        }
         // A message outranks the details, and a hint gives way to them.
         let kept = if message.is_empty() { 24 } else { 64 };
-        let room = width.saturating_sub(left.chars().count().min(kept) as u16 + 4) as usize;
+        let start = if self.compact() {
+            1
+        } else {
+            ACTIVITY_WIDTH + 1
+        };
+        let problems: usize = self.diagnostics.values().map(Vec::len).sum();
+        let problems = (problems > 0 && !self.compact()).then(|| format!("⊗ {problems}  "));
+        let flagged = problems.as_ref().map_or(0, |p| p.chars().count() as u16);
+        let used = left.chars().count().min(kept) as u16 + start + flagged + 3;
+        let room = width.saturating_sub(used) as usize;
         let mut shown = right.clone();
         while shown.len() > 1 && shown.join("   ").chars().count() > room {
             shown.pop();
@@ -3458,23 +3777,26 @@ impl App {
         shown.reverse();
         let right = shown.join("   ");
         let right_x = width.saturating_sub(right.chars().count() as u16 + 1);
-        let mut x = 1;
-        if !self.compact() {
-            if let Some(branch) = &self.branch {
-                let piece = (Icon::Git, (1, 1));
-                grid.put_icon(x, y, piece.0, piece.1, bar);
-                let font = Font {
-                    size: 90,
-                    ..Font::default()
-                };
-                grid.label_at(x as f32 + 1.6, x + 2, y, branch, bar, right_x, 90);
-                x = (x as f32 + 3.0 + self.measure.width(branch, font)).ceil() as u16;
-            }
-            let problems: usize = self.diagnostics.values().map(Vec::len).sum();
-            if problems > 0 {
-                x = grid.label(x, y, &format!("⊗ {problems}  "), bar, right_x);
-            }
+        let mut x = if self.compact() {
+            1
+        } else {
+            ACTIVITY_WIDTH + 1
+        };
+        if let Some(problems) = &problems {
+            x = grid.label(x, y, problems, bar, right_x);
         }
+        let needs_you = waiting > 0 && message.is_empty() && self.neovim_line.is_empty();
+        let bar = if needs_you {
+            let dot = Bounds::cells(x as f32, y as f32 + 0.34, 0.45, 0.32);
+            grid.panel(dot, 16, Some(self.theme.attention), None);
+            x += 1;
+            Style {
+                fg: self.theme.attention,
+                ..bar
+            }
+        } else {
+            bar
+        };
         grid.label_at(x as f32, x, y, left, bar, right_x.saturating_sub(1), 90);
         grid.label_right(width.saturating_sub(1), y, &right, bar, 90);
     }
@@ -3818,13 +4140,33 @@ mod tests {
     }
 
     #[test]
-    fn diff_view_shows_both_versions_side_by_side() {
+    fn a_change_stacks_the_old_line_over_the_new_one() {
         let (_dir, mut app) = reviewed();
         app.run(Command::OpenDiff);
         let grid = screen(&app);
         let (_, y) = find(&grid, "second line");
-        assert!(grid.row_text(y).contains("CHANGED"), "{}", grid.text());
+        assert!(grid.row_text(y + 1).contains("CHANGED"), "{}", grid.text());
         assert_eq!(find(&grid, "first line").1 + 1, y);
+        assert!(grid.text().contains("[Accept]") && grid.text().contains("[Reject]"));
+        assert!(
+            grid.text().contains("since the last commit"),
+            "{}",
+            grid.text()
+        );
+    }
+
+    #[test]
+    fn a_comment_sits_in_its_card() {
+        let (dir, mut app) = reviewed();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        app.run(Command::Move(cellix_input::Direction::Down, false));
+        app.run(Command::AddComment);
+        typed(&mut app, "Why this line");
+        enter(&mut app);
+        app.run(Command::OpenDiff);
+        let grid = screen(&app);
+        let (_, y) = find(&grid, "Why this line");
+        assert!(grid.row_text(y).contains("Your comment"), "{}", grid.text());
     }
 
     #[test]
@@ -4015,7 +4357,7 @@ mod tests {
         typed(&mut app, "x");
         app.run(Command::Quit);
         assert!(!app.quit);
-        assert!(screen(&app).text().contains("Save changes first"));
+        assert!(screen(&app).text().contains("Save changes to"));
         app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
         assert!(!app.quit, "Esc must cancel");
         app.run(Command::Quit);
@@ -4045,13 +4387,87 @@ mod tests {
         );
     }
 
+    fn dirty(dir: &TempDir, app: &mut App) {
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        typed(app, "x");
+    }
+
+    #[test]
+    fn closing_unsaved_work_offers_buttons() {
+        let (dir, mut app) = project();
+        dirty(&dir, &mut app);
+        app.run(Command::CloseTab);
+        let text = screen(&app).text();
+        for label in ["[Save]", "[Don't Save]", "[Cancel]"] {
+            assert!(text.contains(label), "{text}");
+        }
+        assert!(text.contains("Save changes to alpha.txt"), "{text}");
+    }
+
+    #[test]
+    fn the_keyboard_works_the_buttons() {
+        let (dir, mut app) = project();
+        dirty(&dir, &mut app);
+        app.run(Command::CloseTab);
+        key(&mut app, Key::Right);
+        enter(&mut app);
+        assert!(
+            !screen(&app).text().contains("xfirst line"),
+            "Don't Save closes it"
+        );
+        let on_disk = fs::read_to_string(dir.path().join("alpha.txt")).unwrap();
+        assert!(
+            on_disk.starts_with("first line"),
+            "and leaves the file alone"
+        );
+
+        dirty(&dir, &mut app);
+        app.run(Command::CloseTab);
+        enter(&mut app);
+        let on_disk = fs::read_to_string(dir.path().join("alpha.txt")).unwrap();
+        assert!(on_disk.starts_with("xfirst line"), "Save is the default");
+    }
+
+    #[test]
+    fn the_mouse_works_the_buttons() {
+        let (dir, mut app) = project();
+        dirty(&dir, &mut app);
+        app.run(Command::CloseTab);
+        let (x, y) = find(&screen(&app), "[Cancel]");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        assert!(
+            screen(&app).text().contains("xfirst line"),
+            "Cancel keeps the tab"
+        );
+        assert!(!app.overlay_is_open());
+        app.run(Command::CloseTab);
+        let (x, y) = find(&screen(&app), "[Don't Save]");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        assert!(!screen(&app).text().contains("xfirst line"));
+    }
+
+    #[test]
+    fn deleting_defaults_to_cancel() {
+        let (dir, mut app) = project();
+        menu(&mut app, "beta.rs", "Delete");
+        enter(&mut app);
+        assert!(
+            dir.path().join("beta.rs").exists(),
+            "Enter alone keeps the file"
+        );
+        menu(&mut app, "beta.rs", "Delete");
+        let (x, y) = find(&screen(&app), "[Delete]");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        assert!(!dir.path().join("beta.rs").exists());
+    }
+
     #[test]
     fn closing_a_dirty_tab_asks_first() {
         let (dir, mut app) = project();
         app.open(&dir.path().join("alpha.txt")).unwrap();
         typed(&mut app, "x");
         app.run(Command::CloseTab);
-        assert!(screen(&app).text().contains("Save changes first"));
+        assert!(screen(&app).text().contains("Save changes to"));
         typed(&mut app, "n");
         enter(&mut app);
         assert!(!screen(&app).text().contains("xfirst line"));
@@ -5631,7 +6047,7 @@ mod tests {
         let (x, y) = find(&screen(&app), "●");
         assert!(!screen(&app).row_text(y).contains('×'));
         app.handle(mouse(MouseKind::Left, x, y));
-        assert!(screen(&app).text().contains("Save changes first"));
+        assert!(screen(&app).text().contains("Save changes to"));
     }
 
     #[test]
@@ -5649,7 +6065,7 @@ mod tests {
         let (_dir, app) = project();
         let grid = screen(&app);
         let pieces = (0..ACTIVITY_WIDTH)
-            .flat_map(|x| (0..5).map(move |y| (x, y)))
+            .flat_map(|x| (0..3).map(move |y| (x, y)))
             .filter(|(x, y)| cellix_render::Piece::decode(&grid.cell(*x, *y).symbol).is_some())
             .count();
         assert_eq!(pieces, 6, "a 3 by 2 icon");
@@ -5707,7 +6123,6 @@ mod tests {
         let grid = screen(&app);
         let status = grid.row_text(29);
         assert!(status.contains("Ln 1, Col 1"), "{status}");
-        assert!(status.contains("Ctrl+P open"), "{status}");
         assert!(!status.contains("Spaces"), "{status}");
     }
 
@@ -6178,7 +6593,8 @@ while True:
         assert!(screen(&app).text().contains("already running"));
         typed(&mut app, "x");
         wait(&mut app, |a| !a.rename_running());
-        assert!(screen(&app).text().contains("rename was dropped"));
+        let text = screen(&app).text();
+        assert!(text.contains("rename was dropped"), "{text}");
         assert!(app.active_text().unwrap().starts_with("xfn main"));
     }
 

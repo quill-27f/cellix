@@ -18,6 +18,8 @@ pub struct Theme {
     pub accent: Rgb,
     /// A wash of the accent, behind what's selected.
     pub tint: Rgb,
+    /// A wash of green, behind a hunk's Accept.
+    pub accept_tint: Rgb,
     /// What wants the reviewer: an agent waiting, a failed step.
     pub attention: Rgb,
     pub keyword: Rgb,
@@ -131,6 +133,7 @@ impl Theme {
             &mut self.popup,
             &mut self.popup_border,
             &mut self.tint,
+            &mut self.accept_tint,
             &mut self.pick,
         ] {
             *color = shifted(*color, by_sheet);
@@ -163,6 +166,7 @@ impl Theme {
             row_active: Rgb(234, 234, 232),
             accent: Rgb(47, 91, 196),
             tint: Rgb(226, 233, 248),
+            accept_tint: Rgb(218, 240, 226),
             attention: Rgb(170, 90, 0),
             keyword: Rgb(0, 0, 255),
             string: Rgb(163, 21, 21),
@@ -231,6 +235,7 @@ impl Default for Theme {
             row_active: Rgb(44, 44, 64),
             accent: Rgb(143, 180, 255),
             tint: Rgb(50, 56, 86),
+            accept_tint: Rgb(44, 66, 66),
             attention: Rgb(240, 180, 90),
             keyword: Rgb(143, 180, 255),
             string: Rgb(240, 185, 160),

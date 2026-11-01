@@ -134,7 +134,7 @@ fn pty_bracketed_paste_inserts_verbatim() {
     screen.send(b"\x1b[200~pasted\ttext\x1b[201~");
     screen.wait_for("pasted");
     screen.send(b"\x11");
-    screen.wait_for("Save changes first");
+    screen.wait_for("Save changes to");
     screen.send(b"n\r");
     screen.wait_exit();
 }

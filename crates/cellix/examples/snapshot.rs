@@ -44,6 +44,11 @@ fn main() {
         Some("review") => app.run(Command::OpenDiff),
         Some("welcome") => {}
         Some("palette") => app.run(Command::CommandPalette),
+        Some("close") => {
+            app.open(&root.join("README.md")).unwrap();
+            type_text(&mut app, "x");
+            app.run(Command::CloseTab);
+        }
         Some("comment") => {
             app.open(&root.join("README.md")).unwrap();
             app.run(Command::AddComment);
