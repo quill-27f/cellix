@@ -1,10 +1,10 @@
-use std::cell::RefCell;
+use std::cell::{Cell, OnceCell, RefCell};
 use std::path::Path;
 use std::rc::Rc;
 
 use cellix_core::{Buffer, Motion, Selection, Selections};
 use cellix_input::{Command, Direction, Format};
-use cellix_lang::{Registry, Span};
+use cellix_lang::{Registry, Span, Worker};
 use cellix_render::{Bounds, Font, Grid, INTERFACE_SIZE, Icon, Measure, Rect, Rgb, units};
 use unicode_width::UnicodeWidthChar;
 
@@ -17,6 +17,10 @@ const NARROW_PANE: u16 = 60;
 /// Left margin of a rendered page, which also carries comment marks.
 /// Heading levels the toolbar steps through before going back to plain text.
 const MAX_HEADING_CYCLE: usize = 3;
+const INDENT: &str = "    ";
+/// Files up to this size highlight as they're drawn. Past it, a background thread does it,
+/// because a full reparse on each key starts to show.
+const MAX_INLINE_HIGHLIGHT: usize = 32 * 1024;
 const PAGE_MARGIN: u16 = 2;
 /// How wide a page can be set. Prose is narrower: see `rendered`.
 const MAX_PAGE_WIDTH: u16 = 200;
@@ -40,6 +44,12 @@ pub struct Editor {
     pub top: usize,
     pub left: usize,
     spans: RefCell<Option<(u64, Vec<Span>)>>,
+    /// Started for the first large file, and only then.
+    worker: OnceCell<Worker>,
+    /// The revision the worker was last asked about.
+    asked: Cell<u64>,
+    /// What the cached spans were read from, to carry them across an edit.
+    spans_bytes: Cell<usize>,
     /// Show Markdown as an editable page rather than its source, as Xcode does.
     pub rendered: bool,
     /// The laid-out page, for one revision and width.
@@ -69,6 +79,9 @@ impl Editor {
             top: 0,
             left: 0,
             spans: RefCell::new(None),
+            worker: OnceCell::new(),
+            asked: Cell::new(u64::MAX),
+            spans_bytes: Cell::new(0),
             rendered: is_markdown,
             page: RefCell::new(None),
             measure,
@@ -417,24 +430,18 @@ impl Editor {
                 self.selections
                     .apply_motion(self.buffer.rope(), motion, extend);
             }
-            Command::Newline => {
-                let head = self.selections.primary().head;
-                let rope = self.buffer.rope();
-                let line = rope.line(rope.char_to_line(head));
-                let indent: String = line
-                    .chars()
-                    .take_while(|c| matches!(c, ' ' | '\t'))
-                    .collect();
-                self.buffer
-                    .type_text(&mut self.selections, &format!("\n{indent}"));
-            }
+            Command::Newline => self.newline(),
+            Command::ToggleComment => self.toggle_comment(),
+            Command::MoveLineUp => self.move_line(-1),
+            Command::MoveLineDown => self.move_line(1),
+            Command::DuplicateLine => self.duplicate_line(),
             Command::Indent => self.buffer.type_text(&mut self.selections, "    "),
             Command::Outdent => self.outdent(),
             Command::DeleteWordLeft => self.delete_to(Motion::WordLeft),
             Command::DeleteWordRight => self.delete_to(Motion::WordRight),
             Command::DeleteToLineStart => self.delete_to(Motion::LineColumnZero),
             Command::DeleteToLineEnd => self.delete_to(Motion::LineEnd),
-            Command::DeleteBackward => self.buffer.delete_backward(&mut self.selections),
+            Command::DeleteBackward => self.backspace(),
             Command::DeleteForward => self.buffer.delete_forward(&mut self.selections),
             Command::Undo => {
                 self.buffer.undo(&mut self.selections);
@@ -493,6 +500,252 @@ impl Editor {
         if spaces > 0 {
             self.buffer
                 .replace_range(&mut self.selections, start, start + spaces, "");
+        }
+    }
+
+    fn char_at(&self, at: usize) -> Option<char> {
+        let rope = self.buffer.rope();
+        (at < rope.len_chars()).then(|| rope.char(at))
+    }
+
+    /// Keeps the line's indent, adds a level after an opening bracket, and puts a closing
+    /// bracket on a line of its own.
+    fn newline(&mut self) {
+        let head = self.selections.primary().head;
+        let rope = self.buffer.rope();
+        let line = rope.line(rope.char_to_line(head));
+        let indent: String = line
+            .chars()
+            .take_while(|c| matches!(c, ' ' | '\t'))
+            .collect();
+        let before = head.checked_sub(1).and_then(|at| self.char_at(at));
+        let after = self.char_at(head);
+        let opens = matches!(before, Some('{' | '(' | '['));
+        let closes = matches!(
+            (before, after),
+            (Some('{'), Some('}')) | (Some('('), Some(')')) | (Some('['), Some(']'))
+        );
+        let inner = format!("{indent}{}", if opens { INDENT } else { "" });
+        let text = if closes {
+            format!("\n{inner}\n{indent}")
+        } else {
+            format!("\n{inner}")
+        };
+        self.buffer.type_text(&mut self.selections, &text);
+        if closes {
+            let at = head + 1 + inner.chars().count();
+            self.selections.set_single(Selection::cursor(at));
+        }
+    }
+
+    /// Types a character, closing brackets and quotes, wrapping a selection in them, and
+    /// stepping over a closing one that's already there.
+    pub fn type_char(&mut self, c: char) {
+        let primary = self.selections.primary();
+        let close = match c {
+            '(' => Some(')'),
+            '[' => Some(']'),
+            '{' => Some('}'),
+            '"' | '`' | '\'' => Some(c),
+            _ => None,
+        };
+        let pairs = !self.rendered && self.selections.len() == 1;
+        let after = self.char_at(primary.head);
+        let before = primary.head.checked_sub(1).and_then(|at| self.char_at(at));
+        if pairs
+            && primary.is_empty()
+            && after == Some(c)
+            && matches!(c, ')' | ']' | '}' | '"' | '`' | '\'')
+        {
+            self.selections
+                .set_single(Selection::cursor(primary.head + 1));
+            return;
+        }
+        let text = c.to_string();
+        let Some(close) = close.filter(|_| pairs) else {
+            self.buffer.type_text(&mut self.selections, &text);
+            return;
+        };
+        if !primary.is_empty() {
+            let (start, end) = (primary.start(), primary.end());
+            let inner = self.buffer.rope().slice(start..end).to_string();
+            let wrapped = format!("{c}{inner}{close}");
+            self.buffer
+                .replace_range(&mut self.selections, start, end, &wrapped);
+            self.selections.set_single(Selection {
+                anchor: start + 1,
+                head: end + 1,
+                goal: None,
+            });
+            return;
+        }
+        // Beside a word, a quote is an apostrophe or a lifetime, and a bracket wraps it later.
+        let by_word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+        if by_word(after) || (c == close && by_word(before)) {
+            self.buffer.type_text(&mut self.selections, &text);
+            return;
+        }
+        self.buffer
+            .type_text(&mut self.selections, &format!("{c}{close}"));
+        self.selections
+            .set_single(Selection::cursor(primary.head + 1));
+    }
+
+    /// Deletes both halves of an empty pair.
+    fn backspace(&mut self) {
+        let primary = self.selections.primary();
+        let pair = primary.head.checked_sub(1).and_then(|at| {
+            let open = self.char_at(at)?;
+            let close = self.char_at(primary.head)?;
+            matches!(
+                (open, close),
+                ('(', ')') | ('[', ']') | ('{', '}') | ('"', '"') | ('`', '`') | ('\'', '\'')
+            )
+            .then_some(at)
+        });
+        match pair.filter(|_| primary.is_empty() && self.selections.len() == 1) {
+            Some(at) => {
+                self.buffer
+                    .replace_range(&mut self.selections, at, at + 2, "");
+                self.selections.set_single(Selection::cursor(at));
+            }
+            None => self.buffer.delete_backward(&mut self.selections),
+        }
+    }
+
+    /// The whole lines the selection touches, as (first, last, start, end in chars).
+    fn selected_lines(&self) -> (usize, usize, usize, usize) {
+        let primary = self.selections.primary();
+        let rope = self.buffer.rope();
+        let first = rope.char_to_line(primary.start());
+        let last = rope.char_to_line(primary.end());
+        let start = rope.line_to_char(first);
+        let end = rope.line_to_char(last) + self.line_text(last).chars().count();
+        (first, last, start, end)
+    }
+
+    fn toggle_comment(&mut self) {
+        let Some(mark) = self.buffer.path().and_then(Registry::line_comment) else {
+            return;
+        };
+        let (first, last, start, end) = self.selected_lines();
+        let lines: Vec<String> = (first..=last).map(|line| self.line_text(line)).collect();
+        let written = |line: &&String| !line.trim().is_empty();
+        let commented = lines
+            .iter()
+            .filter(written)
+            .all(|line| line.trim_start().starts_with(mark));
+        let margin = lines
+            .iter()
+            .filter(written)
+            .map(|line| line.len() - line.trim_start().len())
+            .min()
+            .unwrap_or(0);
+        let changed: Vec<String> = lines
+            .iter()
+            .map(|line| {
+                if line.trim().is_empty() {
+                    line.clone()
+                } else if commented {
+                    let at = line.len() - line.trim_start().len();
+                    let rest = line[at + mark.len()..]
+                        .strip_prefix(' ')
+                        .unwrap_or(&line[at + mark.len()..]);
+                    format!("{}{rest}", &line[..at])
+                } else {
+                    format!("{}{mark} {}", &line[..margin], &line[margin..])
+                }
+            })
+            .collect();
+        let text = changed.join("\n");
+        self.buffer
+            .replace_range(&mut self.selections, start, end, &text);
+        self.selections
+            .set_single(Selection::cursor(start + text.chars().count()));
+    }
+
+    fn move_line(&mut self, by: isize) {
+        let (first, last, start, end) = self.selected_lines();
+        let rope = self.buffer.rope();
+        let count = rope.len_lines();
+        let trailing = rope.line(count - 1).len_chars() == 0;
+        let lines = count - usize::from(trailing);
+        let other = if by < 0 {
+            first.checked_sub(1)
+        } else {
+            (last + 1 < lines).then_some(last + 1)
+        };
+        let Some(other) = other else {
+            return;
+        };
+        let head = self.selections.primary().head;
+        let block = rope.slice(start..end).to_string();
+        let neighbour = self.line_text(other);
+        let (from, to, text, moved) = if by < 0 {
+            let from = rope.line_to_char(other);
+            (
+                from,
+                end,
+                format!("{block}\n{neighbour}"),
+                from + head - start,
+            )
+        } else {
+            let to = rope.line_to_char(other) + neighbour.chars().count();
+            let shift = neighbour.chars().count() + 1;
+            (start, to, format!("{neighbour}\n{block}"), head + shift)
+        };
+        self.buffer
+            .replace_range(&mut self.selections, from, to, &text);
+        self.selections.set_single(Selection::cursor(moved));
+    }
+
+    fn duplicate_line(&mut self) {
+        let (_, _, start, end) = self.selected_lines();
+        let block = self.buffer.rope().slice(start..end).to_string();
+        let head = self.selections.primary().head;
+        let copy = format!("\n{block}");
+        self.buffer
+            .replace_range(&mut self.selections, end, end, &copy);
+        let at = head + block.chars().count() + 1;
+        self.selections.set_single(Selection::cursor(at));
+    }
+
+    pub fn go_to_line(&mut self, line: usize, area: Rect) {
+        let at = self.buffer.position(line.saturating_sub(1), 0);
+        self.selections.set_single(Selection::cursor(at));
+        self.reveal(area);
+    }
+
+    /// Where the caret is on screen, if it's in view.
+    pub fn caret_cell(&self, area: Rect) -> Option<(f32, u16)> {
+        let area = self.text_area(area);
+        let head = self.selections.primary().head;
+        let (row, x) = if self.rendered {
+            let rows = self.page(area);
+            let (row, x) = rendered::locate(&rows, head);
+            (row, area.x as f32 + PAGE_MARGIN as f32 + x)
+        } else {
+            let row = self.buffer.rope().char_to_line(head);
+            let column = self.column_of(head).checked_sub(self.left)?;
+            let gutter = self.gutter_width(area.w);
+            (row, (area.x + gutter) as f32 + column as f32)
+        };
+        let y = row.checked_sub(self.top)?;
+        (y < area.h as usize).then_some((x, area.y + y as u16))
+    }
+
+    /// Takes a finished highlight. Returns whether there's something new to draw.
+    pub fn collect_highlights(&self) -> bool {
+        let Some((revision, spans)) = self.worker.get().and_then(Worker::finished) else {
+            return false;
+        };
+        // It was asked for at this revision's size, or the next answer will correct it.
+        if revision == self.buffer.revision() {
+            self.spans_bytes.set(self.buffer.rope().len_bytes());
+            *self.spans.borrow_mut() = Some((revision, spans));
+            true
+        } else {
+            false
         }
     }
 
@@ -1005,12 +1258,44 @@ impl Editor {
         let revision = self.buffer.revision();
         let mut cache = self.spans.borrow_mut();
         if !cache.as_ref().is_some_and(|(r, _)| *r == revision) {
-            *cache = Some((revision, registry.highlight(path, &self.buffer.text())));
+            let bytes = self.buffer.rope().len_bytes();
+            if bytes <= MAX_INLINE_HIGHLIGHT {
+                *cache = Some((revision, registry.highlight(path, &self.buffer.text())));
+                self.spans_bytes.set(bytes);
+            } else if self.asked.get() != revision {
+                self.asked.set(revision);
+                let worker = self.worker.get_or_init(Worker::default);
+                worker.request(path, self.buffer.text(), revision);
+            }
         }
-        let Some((_, spans)) = cache.as_ref() else {
+        let Some((cached, spans)) = cache.as_ref() else {
             return;
         };
         let rope = self.buffer.rope();
+        // Until the worker answers, text after the edit keeps its colours by moving with it.
+        let moved = rope.len_bytes() as isize - self.spans_bytes.get() as isize;
+        let edit = rope.char_to_byte(self.selections.primary().head.min(rope.len_chars()));
+        let shifted: Vec<Span>;
+        let spans = if *cached == revision || moved == 0 {
+            spans
+        } else {
+            let shift = |at: usize| {
+                if at >= edit.saturating_sub(moved.max(0) as usize) {
+                    at.saturating_add_signed(moved).min(rope.len_bytes())
+                } else {
+                    at
+                }
+            };
+            shifted = spans
+                .iter()
+                .map(|s| Span {
+                    start: shift(s.start),
+                    end: shift(s.end),
+                    token: s.token,
+                })
+                .collect();
+            &shifted
+        };
         let last_line = (self.top + area.h as usize).min(rope.len_lines());
         let from = rope.line_to_byte(self.top);
         let to = rope.line_to_byte(last_line);

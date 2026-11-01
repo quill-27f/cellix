@@ -11,6 +11,9 @@ pub fn simple_keymap(event: KeyEvent) -> Option<Command> {
         Key::Right if word => Move(Direction::WordRight, shift),
         Key::Left => Move(Direction::Left, shift),
         Key::Right => Move(Direction::Right, shift),
+        Key::Down if mods.alt && shift => DuplicateLine,
+        Key::Up if mods.alt => MoveLineUp,
+        Key::Down if mods.alt => MoveLineDown,
         Key::Up => Move(Direction::Up, shift),
         Key::Down => Move(Direction::Down, shift),
         Key::Home if mods.ctrl => Move(Direction::Top, shift),
@@ -32,6 +35,8 @@ pub fn simple_keymap(event: KeyEvent) -> Option<Command> {
         Key::Char('b') if mods.alt => Move(Direction::WordLeft, shift),
         Key::Char('f') if mods.alt => Move(Direction::WordRight, shift),
         Key::Char('z' | 'Z') if mods.ctrl && mods.shift => Redo,
+        // Terminals without the Kitty protocol send Ctrl+/ as Ctrl+_ or Ctrl+7.
+        Key::Char('/' | '_' | '7') if mods.ctrl => ToggleComment,
         Key::Esc => Cancel,
         Key::F(1) => CommandPalette,
         Key::F(2) => RenameSymbol,
@@ -45,6 +50,7 @@ pub fn simple_keymap(event: KeyEvent) -> Option<Command> {
         Key::Char(c) if mods.ctrl => match c.to_ascii_lowercase() {
             // Ghostty sends these for Cmd+Backspace and Cmd+Right, and they're the
             // Mac's own text shortcuts everywhere else.
+            'l' => GoToLine,
             'u' => DeleteToLineStart,
             'k' => DeleteToLineEnd,
             'e' => Move(Direction::LineEnd, shift),

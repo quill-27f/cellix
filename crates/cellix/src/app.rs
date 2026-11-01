@@ -11,6 +11,7 @@ use cellix_input::{
     simple_keymap,
 };
 use cellix_lang::Registry;
+use cellix_lang::complete::{self, Candidate, Source};
 use cellix_lang::lsp::{Client, Diagnostic, LspEvent, TextEdit};
 use cellix_render::{Bounds, CellMeasure, Font, Grid, Icon, Measure, Rect, Style};
 use cellix_review::{
@@ -50,6 +51,7 @@ const ACTIVITY_ICON: (u8, u8) = (3, 2);
 const ACTIVITY_STEP: u16 = 4;
 const APPROVE: &str = "[Approve]";
 const FIND_WIDTH: u16 = 46;
+const SUGGEST_WIDTH: u16 = 42;
 /// Room kept for the path before the toolbar is left out.
 const MIN_BREADCRUMB: u16 = 12;
 const FIND_BUTTON: u16 = 3;
@@ -98,6 +100,7 @@ enum PromptAction {
     Quit,
     CloseTab,
     Commit,
+    GoToLine,
     SendBackPlan,
     /// Puts the tree back to this checkpoint, after a yes.
     UndoTurn(String),
@@ -120,6 +123,12 @@ enum SidebarView {
     Explorer,
     Search,
     Agents,
+}
+
+/// Suggestions showing at the caret while typing.
+struct Suggest {
+    items: Vec<Candidate>,
+    selected: usize,
 }
 
 /// A change Claude Code is waiting on, shown in the review view.
@@ -252,6 +261,11 @@ pub struct App {
     neovim_line: String,
     /// Lines a wheel notch moves. Set by the terminal loop for the tier in use.
     pub wheel_lines: isize,
+    suggest: Option<Suggest>,
+    /// The language server's latest answer, kept to rank against each new letter.
+    server_words: Vec<String>,
+    /// Set when suggestions were asked for, so an empty prefix still gets them.
+    suggest_asked: bool,
     /// What the wheel has moved since the last frame.
     scrolled: Option<(Rect, i32)>,
     /// The server Claude Code connects to. Set by the terminal loop.
@@ -316,6 +330,9 @@ impl App {
             branch: None,
             measure: Rc::new(CellMeasure),
             agents: Agents::default(),
+            suggest: None,
+            server_words: Vec::new(),
+            suggest_asked: false,
             wheel_lines: WHEEL_LINES,
             scrolled: None,
             ide: None,
@@ -441,6 +458,10 @@ impl App {
             }
             editor.synced = editor.buffer.revision();
         }
+        let mut highlighted = false;
+        for editor in &self.editors {
+            highlighted |= editor.collect_highlights();
+        }
         let mut calls = Vec::new();
         if let Some(ide) = &self.ide {
             calls.extend(ide.calls.try_iter());
@@ -455,7 +476,7 @@ impl App {
         for client in self.servers.values() {
             events.extend(client.events.try_iter());
         }
-        let changed = called || searched || !events.is_empty();
+        let changed = highlighted || called || searched || !events.is_empty();
         for event in events {
             self.lsp_event(event);
         }
@@ -768,27 +789,8 @@ impl App {
                 }
             }
             LspEvent::Completion(labels) => {
-                // Servers send everything in scope and expect the client to filter.
-                let prefix = self
-                    .editors
-                    .get(self.active())
-                    .map_or_else(String::new, |e| {
-                        let head = e.selections.primary().head;
-                        let (start, _) = e.buffer.word_at(head);
-                        e.buffer
-                            .rope()
-                            .slice(start..head)
-                            .to_string()
-                            .to_lowercase()
-                    });
-                let labels: Vec<String> = labels
-                    .into_iter()
-                    .filter(|l| l.to_lowercase().starts_with(&prefix))
-                    .collect();
-                if !labels.is_empty() && matches!(self.overlay, Overlay::None) {
-                    let items = labels.into_iter().map(Item::Completion).collect();
-                    self.overlay = Overlay::Palette(Palette::new(items));
-                }
+                self.server_words = labels;
+                self.rank_suggestions();
             }
             LspEvent::Failed(message) => {
                 self.pending_rename = None;
@@ -871,6 +873,196 @@ impl App {
         match command {
             Command::GoToDefinition => client.definition(&path, line, column),
             _ => client.completion(&path, line, column),
+        }
+    }
+
+    /// The word being typed, and where it starts.
+    fn typed_word(&self) -> Option<(String, usize)> {
+        let editor = self.editors.get(self.active())?;
+        let primary = editor.selections.primary();
+        if !primary.is_empty() {
+            return None;
+        }
+        let (start, _) = editor.buffer.word_at(primary.head);
+        let start = start.min(primary.head);
+        let word = editor.buffer.rope().slice(start..primary.head).to_string();
+        Some((word, start))
+    }
+
+    fn active_language(&self) -> &'static str {
+        let path = self
+            .editors
+            .get(self.active())
+            .and_then(|e| e.buffer.path());
+        path.and_then(Registry::language_name).unwrap_or("")
+    }
+
+    /// Recomputes what shows from what's known, without asking any server.
+    fn rank_suggestions(&mut self) {
+        let Some((typed, _)) = self.typed_word() else {
+            self.close_suggestions();
+            return;
+        };
+        // Prose gets more letters first, so sentences don't sprout menus.
+        let language = self.active_language();
+        let needed = if language == "Markdown" { 3 } else { 2 };
+        if typed.chars().count() < needed && !self.suggest_asked {
+            self.close_suggestions();
+            return;
+        }
+        let candidate = |source| move |label: String| Candidate { label, source };
+        let mut all: Vec<Candidate> = self
+            .server_words
+            .iter()
+            .cloned()
+            .map(candidate(Source::Server))
+            .collect();
+        if language == "Env"
+            && let Some(path) = self
+                .editors
+                .get(self.active())
+                .and_then(|e| e.buffer.path())
+        {
+            all.extend(
+                complete::env_keys(path)
+                    .into_iter()
+                    .map(candidate(Source::Key)),
+            );
+        }
+        let keywords = complete::keywords(language).iter().map(ToString::to_string);
+        all.extend(keywords.map(candidate(Source::Keyword)));
+        let active = self.active();
+        // The file in front first, then what else is open.
+        let order = std::iter::once(active).chain((0..self.editors.len()).filter(|i| *i != active));
+        for index in order {
+            if let Some(editor) = self.editors.get(index) {
+                let text = editor.buffer.text();
+                let words = complete::words(&text).into_iter().map(str::to_string);
+                all.extend(words.map(candidate(Source::Word)));
+            }
+        }
+        let items = complete::rank(&typed, all);
+        self.suggest = (!items.is_empty()).then_some(Suggest { items, selected: 0 });
+    }
+
+    /// Updates suggestions after a keystroke, and asks the language server too if there is one.
+    fn refresh_suggestions(&mut self) {
+        self.rank_suggestions();
+        let target = self.lsp_target().filter(|_| {
+            self.suggest_asked
+                || self
+                    .typed_word()
+                    .is_some_and(|(w, _)| w.chars().count() >= 2)
+        });
+        if let Some((language, path, line, column)) = target
+            && let Some(client) = self.servers.get_mut(language)
+        {
+            client.completion(&path, line, column);
+        }
+    }
+
+    fn close_suggestions(&mut self) {
+        self.suggest = None;
+        self.suggest_asked = false;
+        self.server_words.clear();
+    }
+
+    fn accept_suggestion(&mut self, index: usize) {
+        let label = self
+            .suggest
+            .as_ref()
+            .and_then(|s| s.items.get(index))
+            .map(|c| c.label.clone());
+        self.close_suggestions();
+        if let Some(label) = label {
+            self.insert_completion(&label);
+        }
+    }
+
+    /// Handles a key while suggestions show. Returns true if it was theirs.
+    fn suggest_key(&mut self, key: KeyEvent) -> bool {
+        let Some(suggest) = &mut self.suggest else {
+            return false;
+        };
+        let count = suggest.items.len();
+        let selected = suggest.selected;
+        match key.key {
+            Key::Down => suggest.selected = (selected + 1) % count,
+            Key::Up => suggest.selected = (selected + count - 1) % count,
+            Key::Esc => self.close_suggestions(),
+            Key::Tab => self.accept_suggestion(selected),
+            // In prose Enter means a new line, so only Tab accepts there.
+            Key::Enter if self.active_language() != "Markdown" => self.accept_suggestion(selected),
+            _ => return false,
+        }
+        true
+    }
+
+    fn suggest_area(&self) -> Option<Rect> {
+        let suggest = self.suggest.as_ref()?;
+        let editor = self.editors.get(self.active())?;
+        let (x, y) = editor.caret_cell(self.focused_area())?;
+        let height = suggest.items.len() as u16 + 2;
+        let bottom = self.size.1.saturating_sub(1);
+        let y = if y + 1 + height <= bottom {
+            y + 1
+        } else {
+            y.saturating_sub(height)
+        };
+        let x = (x as u16).min(self.size.0.saturating_sub(SUGGEST_WIDTH + 1));
+        Some(Rect::new(x, y, SUGGEST_WIDTH.min(self.size.0), height))
+    }
+
+    fn draw_suggest(&self, grid: &mut Grid) {
+        let (Some(suggest), Some(area)) = (&self.suggest, self.suggest_area()) else {
+            return;
+        };
+        let theme = &self.theme;
+        popup(grid, area, theme);
+        for (i, item) in suggest.items.iter().enumerate() {
+            let y = area.y + 1 + i as u16;
+            let row = Rect::new(area.x, y, area.w, 1);
+            let base = Style {
+                fg: theme.text.fg,
+                bg: theme.popup,
+                ..theme.bar
+            };
+            if i == suggest.selected {
+                grid.fill(
+                    Rect::new(area.x + 1, y, area.w.saturating_sub(2), 1),
+                    Style {
+                        bg: theme.pick,
+                        ..base
+                    },
+                );
+                grid.panel(Bounds::inset(row, 0.5, 0.03), 14, Some(theme.pick), None);
+            }
+            let style = Style {
+                bg: if i == suggest.selected {
+                    theme.pick
+                } else {
+                    theme.popup
+                },
+                ..base
+            };
+            let kind = Style {
+                fg: theme.gutter.fg,
+                ..style
+            };
+            grid.label(
+                area.x + 2,
+                y,
+                &item.label,
+                style,
+                area.right().saturating_sub(9),
+            );
+            grid.label_right(
+                area.right().saturating_sub(2),
+                y,
+                item.source.label(),
+                kind,
+                80,
+            );
         }
     }
 
@@ -1119,6 +1311,9 @@ impl App {
         if self.search.focus.is_some() && self.sidebar_area().is_some() && self.search_key(key) {
             return;
         }
+        if self.suggest_key(key) {
+            return;
+        }
         if self.neovim_key(key) {
             return;
         }
@@ -1135,7 +1330,13 @@ impl App {
             }
         }
         if let Some(command) = simple_keymap(key) {
+            let open = self.suggest.is_some();
             self.run(command);
+            match command {
+                Command::Complete => {}
+                Command::DeleteBackward if open => self.refresh_suggestions(),
+                _ => self.close_suggestions(),
+            }
         } else if let Key::Char(c) = key.key
             && !key.mods.ctrl
             && !key.mods.alt
@@ -1143,11 +1344,14 @@ impl App {
             let area = self.focused_area();
             if let Some(editor) = self.editor_mut() {
                 editor.prepare_edit(area);
-                editor
-                    .buffer
-                    .type_text(&mut editor.selections, c.encode_utf8(&mut [0; 4]));
+                editor.type_char(c);
             }
             self.reveal();
+            if c.is_alphanumeric() || c == '_' {
+                self.refresh_suggestions();
+            } else {
+                self.close_suggestions();
+            }
         }
     }
 
@@ -1460,7 +1664,6 @@ impl App {
                 }
             }
             Some(Item::Command(_, command)) => self.run(command),
-            Some(Item::Completion(text)) => self.insert_completion(&text),
             None => {}
         }
     }
@@ -1468,6 +1671,13 @@ impl App {
     fn finish_prompt(&mut self, prompt: Prompt) {
         let name = prompt.input.trim();
         let result = match &prompt.action {
+            PromptAction::GoToLine => {
+                let area = self.focused_area();
+                if let (Ok(line), Some(editor)) = (name.trim().parse(), self.editor_mut()) {
+                    editor.go_to_line(line, area);
+                }
+                Ok(())
+            }
             PromptAction::SendBackPlan => {
                 if let Some(path) = self.plan.as_ref().map(|p| p.path.clone()) {
                     let feedback = self.plan_feedback(&path, name);
@@ -1642,7 +1852,13 @@ impl App {
                     editor.reveal(area);
                 }
             }
-            Command::GoToDefinition | Command::Complete => self.lsp_request(command),
+            Command::GoToDefinition => self.lsp_request(command),
+            Command::Complete => {
+                self.suggest_asked = true;
+                self.poll();
+                self.refresh_suggestions();
+            }
+            Command::GoToLine => self.ask("Go to line", PromptAction::GoToLine),
             Command::RenameSymbol => self.ask("Rename to", PromptAction::RenameSymbol),
             Command::BlameLine => self.blame(),
             Command::ToggleSidebar if self.compact() => self.drawer = !self.drawer,
@@ -2307,6 +2523,15 @@ impl App {
             self.overlay_mouse(mouse);
             return;
         }
+        if let Some(area) = self.suggest_area() {
+            let on_row = area.contains(mouse.x, mouse.y) && mouse.kind == MouseKind::Left;
+            let row = mouse.y.saturating_sub(area.y + 1) as usize;
+            if on_row {
+                self.accept_suggestion(row);
+                return;
+            }
+            self.close_suggestions();
+        }
         let (x, y, fine_x) = (mouse.x, mouse.y, mouse.fine_x);
         if self.compact() && self.drawer && !self.sidebar_area().is_some_and(|a| a.contains(x, y)) {
             self.drawer = false;
@@ -2715,6 +2940,7 @@ impl App {
             }
         }
         self.draw_status(grid);
+        self.draw_suggest(grid);
         self.draw_overlay(grid);
     }
 
@@ -3160,7 +3386,7 @@ impl App {
     }
 
     pub fn overlay_is_open(&self) -> bool {
-        !matches!(self.overlay, Overlay::None)
+        !matches!(self.overlay, Overlay::None) || self.suggest.is_some()
     }
 
     pub fn size(&self) -> (u16, u16) {
@@ -4746,6 +4972,181 @@ mod tests {
         assert_eq!(app.active_text().unwrap(), "one two\n");
         app.run(Command::DeleteToLineStart);
         assert_eq!(app.active_text().unwrap(), "\n");
+    }
+
+    #[test]
+    fn typing_offers_words_from_the_file() {
+        let (dir, mut app) = project();
+        let path = dir.path().join("notes.txt");
+        fs::write(&path, "deployment\n\n").unwrap();
+        app.open(&path).unwrap();
+        app.run(Command::Move(cellix_input::Direction::Bottom, false));
+        typed(&mut app, "dep");
+        assert!(
+            screen(&app).text().contains("word"),
+            "{}",
+            screen(&app).text()
+        );
+        key(&mut app, Key::Tab);
+        assert_eq!(app.active_text().unwrap(), "deployment\n\ndeployment");
+    }
+
+    #[test]
+    fn large_files_get_their_colours_from_the_background() {
+        let (dir, mut app) = project();
+        let path = dir.path().join("large.rs");
+        fs::write(&path, "fn name() {}\n".repeat(4000)).unwrap();
+        app.open(&path).unwrap();
+        let start = std::time::Instant::now();
+        let plain = screen(&app);
+        let keyword = app.theme.keyword;
+        let colored = |grid: &Grid| (0..grid.width()).any(|x| grid.cell(x, 2).style.fg == keyword);
+        assert!(
+            !colored(&plain),
+            "the first frame doesn't wait for the parse"
+        );
+        while !colored(&screen(&app)) {
+            app.poll();
+            assert!(start.elapsed().as_secs() < 20, "no colours arrived");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        typed(&mut app, "x");
+        assert!(colored(&screen(&app)), "an edit keeps the colours it had");
+    }
+
+    #[test]
+    fn terraform_offers_its_keywords() {
+        let (dir, mut app) = project();
+        let path = dir.path().join("main.tf");
+        fs::write(&path, "").unwrap();
+        app.open(&path).unwrap();
+        typed(&mut app, "reso");
+        assert!(screen(&app).text().contains("keyword"));
+        enter(&mut app);
+        assert_eq!(app.active_text().unwrap(), "resource");
+    }
+
+    #[test]
+    fn env_files_offer_keys_from_their_siblings() {
+        let (dir, mut app) = project();
+        fs::write(dir.path().join(".env.example"), "DATABASE_URL=\n").unwrap();
+        let path = dir.path().join(".env");
+        fs::write(&path, "").unwrap();
+        app.open(&path).unwrap();
+        typed(&mut app, "DAT");
+        assert!(screen(&app).text().contains("DATABASE_URL"));
+        key(&mut app, Key::Tab);
+        assert_eq!(app.active_text().unwrap(), "DATABASE_URL");
+    }
+
+    #[test]
+    fn enter_stays_a_new_line_in_prose() {
+        let (dir, mut app) = project();
+        let path = dir.path().join("note.md");
+        fs::write(&path, "deployment\n\n").unwrap();
+        app.open(&path).unwrap();
+        app.run(Command::Move(cellix_input::Direction::Bottom, false));
+        typed(&mut app, "dep");
+        enter(&mut app);
+        assert!(
+            app.active_text().unwrap().contains("dep\n"),
+            "{:?}",
+            app.active_text()
+        );
+    }
+
+    #[test]
+    fn esc_and_moving_close_suggestions() {
+        let (dir, mut app) = project();
+        let path = dir.path().join("notes.txt");
+        fs::write(&path, "deployment\n\n").unwrap();
+        app.open(&path).unwrap();
+        app.run(Command::Move(cellix_input::Direction::Bottom, false));
+        typed(&mut app, "dep");
+        key(&mut app, Key::Esc);
+        assert!(!app.overlay_is_open());
+        typed(&mut app, "l");
+        key(&mut app, Key::Left);
+        assert!(!app.overlay_is_open());
+    }
+
+    fn code(text: &str) -> (TempDir, App) {
+        let (dir, mut app) = project();
+        let path = dir.path().join("code.rs");
+        fs::write(&path, text).unwrap();
+        app.open(&path).unwrap();
+        (dir, app)
+    }
+
+    #[test]
+    fn brackets_close_and_step_over() {
+        let (_dir, mut app) = code("");
+        typed(&mut app, "(");
+        assert_eq!(app.active_text().unwrap(), "()");
+        typed(&mut app, ")x");
+        assert_eq!(app.active_text().unwrap(), "()x");
+        key(&mut app, Key::Left);
+        key(&mut app, Key::Left);
+        key(&mut app, Key::Backspace);
+        assert_eq!(
+            app.active_text().unwrap(),
+            "x",
+            "the empty pair goes together"
+        );
+    }
+
+    #[test]
+    fn backspace_removes_an_empty_pair() {
+        let (_dir, mut app) = code("");
+        typed(&mut app, "{");
+        key(&mut app, Key::Backspace);
+        assert_eq!(app.active_text().unwrap(), "");
+    }
+
+    #[test]
+    fn a_selection_is_wrapped_in_quotes() {
+        let (_dir, mut app) = code("word\n");
+        app.run(Command::Move(cellix_input::Direction::WordRight, true));
+        typed(&mut app, "\"");
+        assert_eq!(app.active_text().unwrap(), "\"word\"\n");
+    }
+
+    #[test]
+    fn enter_inside_braces_opens_a_block() {
+        let (_dir, mut app) = code("");
+        typed(&mut app, "fn a() {");
+        enter(&mut app);
+        typed(&mut app, "x");
+        assert_eq!(app.active_text().unwrap(), "fn a() {\n    x\n}");
+    }
+
+    #[test]
+    fn comments_toggle_on_selected_lines() {
+        let (_dir, mut app) = code("    let a = 1;\n");
+        app.run(Command::ToggleComment);
+        assert_eq!(app.active_text().unwrap(), "    // let a = 1;\n");
+        app.run(Command::ToggleComment);
+        assert_eq!(app.active_text().unwrap(), "    let a = 1;\n");
+    }
+
+    #[test]
+    fn lines_move_and_duplicate() {
+        let (_dir, mut app) = code("one\ntwo\n");
+        app.run(Command::MoveLineDown);
+        assert_eq!(app.active_text().unwrap(), "two\none\n");
+        app.run(Command::MoveLineUp);
+        assert_eq!(app.active_text().unwrap(), "one\ntwo\n");
+        app.run(Command::DuplicateLine);
+        assert_eq!(app.active_text().unwrap(), "one\none\ntwo\n");
+    }
+
+    #[test]
+    fn go_to_line_moves_the_cursor() {
+        let (_dir, mut app) = code("one\ntwo\nthree\n");
+        app.run(Command::GoToLine);
+        typed(&mut app, "3");
+        enter(&mut app);
+        assert!(screen(&app).text().contains("Ln 3"));
     }
 
     #[test]

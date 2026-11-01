@@ -12,7 +12,6 @@ const ROWS: u16 = 12;
 pub enum Item {
     File(PathBuf, String),
     Command(&'static str, Command),
-    Completion(String),
 }
 
 impl Item {
@@ -20,12 +19,11 @@ impl Item {
         match self {
             Self::File(_, label) => label,
             Self::Command(label, _) => label,
-            Self::Completion(label) => label,
         }
     }
 }
 
-pub const COMMANDS: [(&str, Command); 41] = [
+pub const COMMANDS: [(&str, Command); 45] = [
     ("Save", Command::Save),
     ("Undo", Command::Undo),
     ("Redo", Command::Redo),
@@ -44,6 +42,10 @@ pub const COMMANDS: [(&str, Command); 41] = [
     ("Toggle Markdown Source", Command::MarkdownPreview),
     ("Open in Browser", Command::OpenInBrowser),
     ("Find in File", Command::FindInFile),
+    ("Toggle Comment", Command::ToggleComment),
+    ("Duplicate Line", Command::DuplicateLine),
+    ("Move Line Up", Command::MoveLineUp),
+    ("Go to Line", Command::GoToLine),
     ("Format: Bold", Command::Format(Format::Bold)),
     ("Format: Italic", Command::Format(Format::Italic)),
     ("Format: Inline Code", Command::Format(Format::Code)),

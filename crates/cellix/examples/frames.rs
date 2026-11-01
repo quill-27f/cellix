@@ -46,4 +46,16 @@ fn main() {
     }
     app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
     frame(&app, "close");
+    for c in "resource".chars() {
+        let start = Instant::now();
+        app.handle(Event::Key(KeyEvent::plain(Key::Char(c))));
+        let handled = start.elapsed().as_secs_f64() * 1000.0;
+        frame(&app, &format!("edit {c:?} {handled:.1}ms"));
+    }
+    for c in "resource".chars() {
+        let start = Instant::now();
+        app.handle(Event::Key(KeyEvent::plain(Key::Char(c))));
+        let handled = start.elapsed().as_secs_f64() * 1000.0;
+        frame(&app, &format!("edit {c:?} {handled:.1}ms"));
+    }
 }

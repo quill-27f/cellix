@@ -474,5 +474,54 @@
     "title": "Formatting toolbar on Markdown pages",
     "test": "toolbar_bolds_the_selection",
     "passes": true
+  },
+  {
+    "id": "languages",
+    "milestone": 6,
+    "passes": true,
+    "test": "each_language_highlights_a_sample",
+    "title": "Terraform, YAML, TOML, HTML, CSS, C, C++, Java, Ruby and SQL highlighting"
+  },
+  {
+    "id": "env-highlight",
+    "milestone": 6,
+    "passes": true,
+    "test": "env_files_highlight_each_part",
+    "title": "Highlighting for .env, Dockerfile, INI and ignore files"
+  },
+  {
+    "id": "suggest",
+    "milestone": 6,
+    "passes": true,
+    "test": "typing_offers_words_from_the_file",
+    "title": "Suggestions as you type, with no language server needed"
+  },
+  {
+    "id": "suggest-env",
+    "milestone": 6,
+    "passes": true,
+    "test": "env_files_offer_keys_from_their_siblings",
+    "title": ".env keys offered from sibling files"
+  },
+  {
+    "id": "auto-pairs",
+    "milestone": 6,
+    "passes": true,
+    "test": "brackets_close_and_step_over",
+    "title": "Brackets and quotes close and wrap"
+  },
+  {
+    "id": "comment-toggle",
+    "milestone": 6,
+    "passes": true,
+    "test": "comments_toggle_on_selected_lines",
+    "title": "Toggle comment by language"
+  },
+  {
+    "id": "large-files",
+    "milestone": 6,
+    "passes": true,
+    "test": "large_files_get_their_colours_from_the_background",
+    "title": "Large files highlight in the background"
   }
 ]

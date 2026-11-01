@@ -59,6 +59,11 @@ pub fn default_server(language: &str) -> Option<Vec<String>> {
         "Python" => &["pyright-langserver", "--stdio"],
         "Go" => &["gopls"],
         "TypeScript" | "TSX" | "JavaScript" => &["typescript-language-server", "--stdio"],
+        "Terraform" => &["terraform-ls", "serve"],
+        "YAML" => &["yaml-language-server", "--stdio"],
+        "TOML" => &["taplo", "lsp", "stdio"],
+        "Shell" => &["bash-language-server", "start"],
+        "C" | "C++" => &["clangd"],
         _ => return None,
     };
     Some(command.iter().map(|s| s.to_string()).collect())
