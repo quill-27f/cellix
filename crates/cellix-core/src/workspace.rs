@@ -59,7 +59,8 @@ impl Workspace {
         self.expanded.insert(dir.to_path_buf());
     }
 
-    /// Visible rows: directories first, then files, honouring .gitignore.
+    /// Visible rows: directories first, then files. Hidden and ignored files show, as in
+    /// VS Code, because agents often work in them. Only `.git` stays out.
     pub fn entries(&self) -> Vec<Entry> {
         let mut out = Vec::new();
         self.collect(&self.root, 0, &mut out);
@@ -69,9 +70,8 @@ impl Workspace {
     fn collect(&self, dir: &Path, depth: usize, out: &mut Vec<Entry>) {
         let mut children: Vec<(PathBuf, bool)> = WalkBuilder::new(dir)
             .max_depth(Some(1))
-            .hidden(false)
-            .require_git(false)
-            .filter_entry(|e| e.file_name() != ".git")
+            .standard_filters(false)
+            .filter_entry(|e| e.file_name() != ".git" && e.file_name() != ".DS_Store")
             .build()
             .flatten()
             .filter(|e| e.depth() == 1)

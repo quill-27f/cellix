@@ -106,6 +106,7 @@ fn translate(event: ct::Event, pixels: Option<(usize, usize)>) -> Option<Event> 
         ct::Event::Mouse(m) => {
             let kind = match m.kind {
                 MouseEventKind::Down(MouseButton::Left) => MouseKind::Left,
+                MouseEventKind::Down(MouseButton::Middle) => MouseKind::Middle,
                 MouseEventKind::Down(MouseButton::Right) => MouseKind::Right,
                 MouseEventKind::Up(_) => MouseKind::Up,
                 MouseEventKind::Drag(_) => MouseKind::Drag,
@@ -133,6 +134,17 @@ fn translate(event: ct::Event, pixels: Option<(usize, usize)>) -> Option<Event> 
         ct::Event::Resize(w, h) => Event::Resize(w, h),
         _ => return None,
     })
+}
+
+/// Ghostty sends Ctrl+A for Cmd+Left, and keeps Cmd+A for itself, so there Ctrl+A means
+/// the start of the line. Select All stays in the palette.
+fn cmd_left(event: Event, ghostty: bool) -> Event {
+    match event {
+        Event::Key(key) if ghostty && key == KeyEvent::ctrl('a') => {
+            Event::Key(KeyEvent::plain(Key::Home))
+        }
+        other => other,
+    }
 }
 
 /// How the terminal was found to work, kept so the backend can be rebuilt on a font zoom.
@@ -249,6 +261,12 @@ pub fn run(options: Options) -> io::Result<()> {
     let mut backend = display.backend();
     let mut out = io::stdout();
     app.set_measure(display.measure());
+    // Only the direct tier moves by less than a line, so elsewhere a notch stays short.
+    app.wheel_lines = if display.placement == Some(Placement::Direct) {
+        3
+    } else {
+        1
+    };
     app.follow_terminal_theme(display.light);
     app.match_terminal_background(display.background);
     // Whole cells can't place a caret in proportional text, so ask for pixels where that's
@@ -261,6 +279,7 @@ pub fn run(options: Options) -> io::Result<()> {
     let mut redraw = true;
     let mut polls = 0;
     let mut shown: Option<Grid> = None;
+    let ghostty = std::env::var("TERM").is_ok_and(|t| t.contains("ghostty"));
     loop {
         // Polled as well as signalled: a resize during slow startup is otherwise lost.
         let now = size()?;
@@ -297,7 +316,7 @@ pub fn run(options: Options) -> io::Result<()> {
         if ct::poll(POLL)? {
             // Drain everything queued, so a fast wheel doesn't redraw per event.
             loop {
-                match translate(ct::read()?, mouse_cell(&display)) {
+                match translate(ct::read()?, mouse_cell(&display)).map(|e| cmd_left(e, ghostty)) {
                     // The size check above handles it, and compares against the old size.
                     Some(Event::Resize(..)) | None => {}
                     Some(event) => app.handle(event),

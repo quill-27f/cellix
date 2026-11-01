@@ -430,6 +430,10 @@ impl Editor {
             }
             Command::Indent => self.buffer.type_text(&mut self.selections, "    "),
             Command::Outdent => self.outdent(),
+            Command::DeleteWordLeft => self.delete_to(Motion::WordLeft),
+            Command::DeleteWordRight => self.delete_to(Motion::WordRight),
+            Command::DeleteToLineStart => self.delete_to(Motion::LineColumnZero),
+            Command::DeleteToLineEnd => self.delete_to(Motion::LineEnd),
             Command::DeleteBackward => self.buffer.delete_backward(&mut self.selections),
             Command::DeleteForward => self.buffer.delete_forward(&mut self.selections),
             Command::Undo => {
@@ -490,6 +494,22 @@ impl Editor {
             self.buffer
                 .replace_range(&mut self.selections, start, start + spaces, "");
         }
+    }
+
+    /// Deletes from the cursor to where a motion lands, or just the selection if any.
+    fn delete_to(&mut self, motion: Motion) {
+        let primary = self.selections.primary();
+        let (start, end) = if primary.is_empty() {
+            let mut moved = self.selections.clone();
+            moved.apply_motion(self.buffer.rope(), motion, false);
+            let target = moved.primary().head;
+            (target.min(primary.head), target.max(primary.head))
+        } else {
+            (primary.start(), primary.end())
+        };
+        self.buffer
+            .replace_range(&mut self.selections, start, end, "");
+        self.selections.set_single(Selection::cursor(start));
     }
 
     fn toggle_inline(&mut self, marker: &str) {
@@ -813,7 +833,11 @@ impl Editor {
                 let bar = Bounds::cells(left as f32 + 0.1, y as f32 + 0.08, 0.3, 0.84);
                 grid.panel(bar, 12, Some(theme.popup_border), None);
             }
-            self.draw_page_row(grid, row, (left, y), area, bg, theme);
+            // A tall heading on the last row would reach into the status bar, which paint
+            // can't be clipped by, so it waits until it fits.
+            if !(proportional && row.tall && y + 1 >= area.bottom()) {
+                self.draw_page_row(grid, row, (left, y), area, bg, theme);
+            }
         }
         if focused && primary.is_empty() && caret_row >= self.top {
             let y = area.y as usize + caret_row - self.top;

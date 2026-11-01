@@ -62,6 +62,7 @@ impl KeyEvent {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MouseKind {
     Left,
+    Middle,
     Right,
     Up,
     Drag,
@@ -137,6 +138,10 @@ pub enum Command {
     ReplaceInProject,
     MarkdownPreview,
     OpenInBrowser,
+    DeleteWordLeft,
+    DeleteWordRight,
+    DeleteToLineStart,
+    DeleteToLineEnd,
     FindInFile,
     Format(Format),
     SendToAgent,

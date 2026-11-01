@@ -250,6 +250,8 @@ pub struct App {
     neovim_mode: String,
     /// The `:` line being typed.
     neovim_line: String,
+    /// Lines a wheel notch moves. Set by the terminal loop for the tier in use.
+    pub wheel_lines: isize,
     /// What the wheel has moved since the last frame.
     scrolled: Option<(Rect, i32)>,
     /// The server Claude Code connects to. Set by the terminal loop.
@@ -314,6 +316,7 @@ impl App {
             branch: None,
             measure: Rc::new(CellMeasure),
             agents: Agents::default(),
+            wheel_lines: WHEEL_LINES,
             scrolled: None,
             ide: None,
             proposal: None,
@@ -2321,9 +2324,9 @@ impl App {
                 MouseKind::Left => self.click_review(x, y),
                 MouseKind::ScrollUp | MouseKind::ScrollDown => {
                     let delta = if mouse.kind == MouseKind::ScrollUp {
-                        -WHEEL_LINES
+                        -self.wheel_lines
                     } else {
-                        WHEEL_LINES
+                        self.wheel_lines
                     };
                     if let Some(review) = &mut self.review {
                         review.scroll_by(delta);
@@ -2334,11 +2337,21 @@ impl App {
             return;
         }
         match mouse.kind {
+            MouseKind::Middle if y == self.main_area().y && !in_sidebar => {
+                let tab = self
+                    .visible_tabs()
+                    .into_iter()
+                    .find(|(_, at, width)| x >= *at && x < at + width);
+                if let Some((index, _, _)) = tab {
+                    self.set_active(index);
+                    self.run(Command::CloseTab);
+                }
+            }
             MouseKind::ScrollUp | MouseKind::ScrollDown => {
                 let delta = if mouse.kind == MouseKind::ScrollUp {
-                    -WHEEL_LINES
+                    -self.wheel_lines
                 } else {
-                    WHEEL_LINES
+                    self.wheel_lines
                 };
                 if in_sidebar && self.sidebar_view == SidebarView::Search {
                     self.search.scroll_by(delta);
@@ -2810,10 +2823,6 @@ impl App {
             };
             let row = Rect::new(area.x, y, area.w, ACTIVITY_ICON.1 as u16);
             let hovered = self.hover.is_some_and(|h| row.contains(h.0, h.1));
-            if hovered {
-                let pill = Bounds::cells(area.x as f32 + 0.5, y as f32 - 0.1, 3.8, 2.2);
-                grid.panel(pill, 22, Some(self.theme.row_hover), None);
-            }
             let style = Style {
                 fg: if on || hovered {
                     self.theme.activity_active
@@ -4708,6 +4717,35 @@ mod tests {
         typed(&mut app, "vl");
         assert_eq!(app.selected_text().as_deref(), Some("on"));
         assert!(screen(&app).text().contains("VISUAL"));
+    }
+
+    #[test]
+    fn middle_click_closes_a_tab() {
+        let (dir, mut app) = project();
+        fs::write(dir.path().join("other.txt"), "x\n").unwrap();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        app.open(&dir.path().join("other.txt")).unwrap();
+        let tab = |app: &App, name| screen(app).row_text(0).find(name);
+        let x = tab(&app, "alpha.txt").unwrap();
+        let x = screen(&app).row_text(0)[..x].chars().count() as u16;
+        app.handle(mouse(MouseKind::Middle, x + 1, 0));
+        assert_eq!(tab(&app, "alpha.txt"), None);
+        assert!(tab(&app, "other.txt").is_some());
+    }
+
+    #[test]
+    fn option_backspace_deletes_a_word() {
+        let (dir, mut app) = project();
+        let path = dir.path().join("words.txt");
+        fs::write(&path, "one two\n").unwrap();
+        app.open(&path).unwrap();
+        app.run(Command::Move(cellix_input::Direction::LineEnd, false));
+        app.run(Command::DeleteWordLeft);
+        assert_eq!(app.active_text().unwrap(), "one \n");
+        app.run(Command::Undo);
+        assert_eq!(app.active_text().unwrap(), "one two\n");
+        app.run(Command::DeleteToLineStart);
+        assert_eq!(app.active_text().unwrap(), "\n");
     }
 
     #[test]

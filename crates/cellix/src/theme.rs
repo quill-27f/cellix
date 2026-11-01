@@ -93,6 +93,9 @@ impl Theme {
             i16::from(background.1) - i16::from(base.1),
             i16::from(background.2) - i16::from(base.2),
         );
+        // Ghostty's window padding shows the terminal's own colour, so chrome darker than it
+        // would leave a seam around the app. Everything sits on one ground instead, and
+        // the hairlines mark the regions.
         for surface in [
             &mut self.text,
             &mut self.sidebar,
@@ -104,7 +107,7 @@ impl Theme {
             &mut self.status,
             &mut self.breadcrumb,
         ] {
-            surface.bg = shifted(surface.bg, by);
+            surface.bg = background;
         }
         for color in [
             &mut self.row_hover,
@@ -263,9 +266,11 @@ mod tests {
         let theme = Theme::default().on_background(blue);
         assert_eq!(theme.text.bg, blue);
         assert_eq!(theme.gutter.bg, blue);
-        let gap = i16::from(theme.text.bg.0) - i16::from(theme.sidebar.bg.0);
-        assert_eq!(gap, 7, "panels keep their distance");
-        assert_eq!(theme.sidebar.bg.2, 39, "and pick up the tint");
+        assert_eq!(
+            theme.sidebar.bg, blue,
+            "so no seam shows at the window's edge"
+        );
+        assert_eq!(theme.status.bg, blue);
     }
 
     fn brightness(color: Rgb) -> u32 {

@@ -24,8 +24,14 @@ pub fn simple_keymap(event: KeyEvent) -> Option<Command> {
         Key::Enter => Newline,
         Key::Tab => Indent,
         Key::BackTab => Outdent,
+        Key::Backspace if word => DeleteWordLeft,
+        Key::Delete if word => DeleteWordRight,
         Key::Backspace => DeleteBackward,
         Key::Delete => DeleteForward,
+        // What terminals send for Option+Left and Option+Right.
+        Key::Char('b') if mods.alt => Move(Direction::WordLeft, shift),
+        Key::Char('f') if mods.alt => Move(Direction::WordRight, shift),
+        Key::Char('z' | 'Z') if mods.ctrl && mods.shift => Redo,
         Key::Esc => Cancel,
         Key::F(1) => CommandPalette,
         Key::F(2) => RenameSymbol,
@@ -37,6 +43,11 @@ pub fn simple_keymap(event: KeyEvent) -> Option<Command> {
         Key::Char('p' | 'P') if mods.ctrl && mods.shift => CommandPalette,
         Key::Char('f' | 'F') if mods.ctrl && mods.shift => FindInProject,
         Key::Char(c) if mods.ctrl => match c.to_ascii_lowercase() {
+            // Ghostty sends these for Cmd+Backspace and Cmd+Right, and they're the
+            // Mac's own text shortcuts everywhere else.
+            'u' => DeleteToLineStart,
+            'k' => DeleteToLineEnd,
+            'e' => Move(Direction::LineEnd, shift),
             'q' => Quit,
             's' => Save,
             'z' => Undo,
@@ -86,6 +97,32 @@ mod tests {
             },
         };
         assert_eq!(simple_keymap(event), Some(Command::CommandPalette));
+    }
+
+    #[test]
+    fn mac_text_shortcuts_work() {
+        let alt = |key| KeyEvent {
+            key,
+            mods: Mods {
+                alt: true,
+                ..Mods::default()
+            },
+        };
+        assert_eq!(
+            simple_keymap(alt(Key::Backspace)),
+            Some(Command::DeleteWordLeft)
+        );
+        assert_eq!(
+            simple_keymap(alt(Key::Delete)),
+            Some(Command::DeleteWordRight)
+        );
+        let word_left = Some(Command::Move(Direction::WordLeft, false));
+        assert_eq!(simple_keymap(alt(Key::Char('b'))), word_left);
+        assert_eq!(
+            simple_keymap(KeyEvent::ctrl('u')),
+            Some(Command::DeleteToLineStart)
+        );
+        assert_eq!(simple_keymap(KeyEvent::ctrl('z')), Some(Command::Undo));
     }
 
     #[test]

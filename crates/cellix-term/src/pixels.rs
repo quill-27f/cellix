@@ -5,7 +5,7 @@ use std::io::{self, Write};
 use std::time::Duration;
 
 use base64::Engine;
-use cellix_render::{Grid, Image, Rasterizer, Rect};
+use cellix_render::{Grid, Image, Rasterizer, Rect, UNIT};
 use flate2::{Compression, write::ZlibEncoder};
 
 use crate::Backend;
@@ -72,7 +72,11 @@ fn tile_key(grid: &Grid, y: u16) -> u64 {
     let mut hasher = DefaultHasher::new();
     grid.row(y).hash(&mut hasher);
     grid.cursor.filter(|c| c.1 == y).hash(&mut hasher);
-    grid.caret.hash(&mut hasher);
+    // Only on its own row: hashed everywhere, moving the caret resent the whole screen.
+    let (top, bottom) = (y as i32 * UNIT, (y as i32 + 1) * UNIT);
+    grid.caret
+        .filter(|c| c.y < bottom && c.y + c.h > top)
+        .hash(&mut hasher);
     grid.paint_on_row(y).for_each(|p| p.hash(&mut hasher));
     hasher.finish()
 }
@@ -638,6 +642,17 @@ mod tests {
             1,
             "only row 2 changed"
         );
+    }
+
+    #[test]
+    fn moving_the_caret_sends_only_its_rows() {
+        let mut b = PixelBackend::new(Flat, Placement::Direct, DEFAULT_QUOTA);
+        let mut grid = page(0);
+        grid.set_caret(1.0, 1, 0.6);
+        present(&mut b, &grid);
+        let mut moved = page(0);
+        moved.set_caret(2.0, 1, 0.6);
+        assert_eq!(count(&present(&mut b, &moved), "a=t,"), 1, "only row 1");
     }
 
     #[test]
