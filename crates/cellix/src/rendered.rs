@@ -2,41 +2,55 @@
 //! the document: this lays it out with its markers hidden, and every visible character
 //! remembers its source position, so clicks and edits land in the right place.
 
-use unicode_width::UnicodeWidthChar;
+use std::path::Path;
+
+use cellix_lang::{Registry, Token};
+use cellix_render::{Font, Measure};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tone {
     Text,
     Heading,
+    /// Inline code, on a pill.
     Code,
+    /// Text in a code block, coloured by the language if it's known.
+    Block(Option<Token>),
     Link,
     Dim,
+    /// A task checkbox, ticked or not. The pixel tiers draw it as a shape.
+    Check(bool),
+    /// Space or a table's column line, which the pixel tiers don't paint as text.
+    TableLine,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Look {
     tone: Tone,
-    bold: bool,
-    italic: bool,
+    font: Font,
     underline: bool,
 }
 
 const PLAIN: Look = Look {
     tone: Tone::Text,
-    bold: false,
-    italic: false,
+    font: Font {
+        mono: false,
+        bold: false,
+        italic: false,
+        size: 100,
+    },
     underline: false,
 };
 
 /// One visible character. `at` is its source position, and None marks decoration such as
-/// a bullet or table padding, which has no source of its own.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// a bullet, which has no source of its own. `x` and `advance` are in cells.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Glyph {
     pub ch: char,
     pub at: Option<usize>,
+    pub x: f32,
+    pub advance: f32,
     pub tone: Tone,
-    pub bold: bool,
-    pub italic: bool,
+    pub font: Font,
     pub underline: bool,
 }
 
@@ -44,9 +58,10 @@ fn glyph(ch: char, at: Option<usize>, look: Look) -> Glyph {
     Glyph {
         ch,
         at,
+        x: 0.0,
+        advance: 0.0,
         tone: look.tone,
-        bold: look.bold,
-        italic: look.italic,
+        font: look.font,
         underline: look.underline,
     }
 }
@@ -56,58 +71,119 @@ fn decoration(text: &str, tone: Tone) -> Vec<Glyph> {
     text.chars().map(|c| glyph(c, None, look)).collect()
 }
 
+/// Fills in each glyph's advance, measuring runs of one font together so kerning counts.
+fn measure_glyphs(glyphs: &mut [Glyph], measure: &dyn Measure) {
+    let mut start = 0;
+    while start < glyphs.len() {
+        let font = glyphs[start].font;
+        let end = (start..glyphs.len())
+            .find(|i| glyphs[*i].font != font)
+            .unwrap_or(glyphs.len());
+        let text: String = glyphs[start..end].iter().map(|g| g.ch).collect();
+        let advances = measure.advances(&text, font);
+        for (g, advance) in glyphs[start..end].iter_mut().zip(advances.iter()) {
+            g.advance = *advance;
+        }
+        start = end;
+    }
+}
+
+/// A table row's geometry, for drawing its box.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TableRow {
+    /// The left edge of each column, then the right edge of the table.
+    pub columns: Vec<f32>,
+    pub header: bool,
+}
+
 /// One screen row of the page.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Row {
     pub glyphs: Vec<Glyph>,
     /// Source line, counting from zero.
     pub line: usize,
     /// Where the caret goes at this row's end.
     pub end: usize,
-    /// Whether the caret may stop here. Labels and table rules aren't text.
+    /// Where text starts, for a caret on an empty row.
+    pub lead: f32,
+    /// Whether the caret may stop here. Labels, spacers and the like aren't text.
     pub stop: bool,
     /// The last row of its source line, when a line wraps.
     pub last: bool,
-    /// Sits on the code background.
+    /// Part of a code block.
     pub shaded: bool,
+    /// A horizontal rule.
+    pub rule: bool,
+    /// Has a quote's bar.
+    pub quote: bool,
+    /// A heading's level, or zero.
+    pub heading: u8,
+    /// Text stands two rows tall, centred across this row and an empty one under it.
+    pub tall: bool,
     /// The column of a task checkbox, and the source position of its mark.
-    pub checkbox: Option<(usize, usize)>,
+    pub checkbox: Option<(f32, usize)>,
     /// Where each table cell starts in the source.
     pub cells: Vec<usize>,
+    pub table: Option<TableRow>,
 }
 
 impl Row {
-    fn caret_x(&self, pos: usize) -> usize {
-        let mut x = 0;
-        let mut before = None;
-        for g in &self.glyphs {
-            // The end of a table cell is a place of its own, before the padding.
-            if g.at.is_some_and(|at| at >= pos) || (g.at.is_none() && before == Some(pos)) {
-                return x;
-            }
-            before = g.at.map(|at| at + 1);
-            x += g.ch.width().unwrap_or(0);
+    fn new(line: usize, end: usize) -> Self {
+        Self {
+            glyphs: Vec::new(),
+            line,
+            end,
+            lead: 0.0,
+            stop: true,
+            last: true,
+            shaded: false,
+            rule: false,
+            quote: false,
+            heading: 0,
+            tall: false,
+            checkbox: None,
+            cells: Vec::new(),
+            table: None,
         }
-        x
     }
 
-    /// The source position at a column.
-    pub fn position_at(&self, column: usize) -> usize {
-        let mut x = 0;
-        for (i, g) in self.glyphs.iter().enumerate() {
-            x += g.ch.width().unwrap_or(0);
-            if x > column {
-                // Padding belongs to the text before it, as in a table cell.
-                if g.at.is_none()
-                    && let Some(before) = self.glyphs[..i].iter().rev().find_map(|g| g.at)
-                {
-                    return before + 1;
-                }
-                let next = self.glyphs[i..].iter().find_map(|g| g.at);
-                return next.unwrap_or(self.end);
+    fn caret_x(&self, pos: usize) -> f32 {
+        let mut before: Option<(usize, f32)> = None;
+        for g in &self.glyphs {
+            if g.at.is_some_and(|at| at >= pos) {
+                return g.x;
             }
+            // The end of a table cell is a place of its own, before the next column.
+            if let (None, Some((end, x))) = (g.at, before)
+                && end == pos
+            {
+                return x;
+            }
+            before = g.at.map(|at| (at + 1, g.x + g.advance));
         }
-        self.end
+        before.map_or(self.lead, |(_, x)| x)
+    }
+
+    /// The source position nearest a column.
+    pub fn position_at(&self, column: f32) -> usize {
+        let cell = self.table.as_ref().and_then(|t| {
+            let index = t.columns.iter().rposition(|x| *x <= column)?;
+            Some((t.columns[index], t.columns.get(index + 1).copied()?))
+        });
+        let in_scope = |g: &&Glyph| {
+            g.at.is_some() && cell.is_none_or(|(left, right)| g.x >= left && g.x < right)
+        };
+        let mut last = None;
+        for g in self.glyphs.iter().filter(in_scope) {
+            if column < g.x + g.advance / 2.0 {
+                return g.at.unwrap_or(self.end);
+            }
+            last = g.at;
+        }
+        match (last, cell) {
+            (Some(at), Some(_)) => at + 1,
+            _ => self.end,
+        }
     }
 }
 
@@ -207,9 +283,18 @@ fn inline(chars: &[char], offset: usize, look: Look, out: &mut Vec<Glyph>) {
             inline(&rest[open..close], at + open, next, out);
             Some(close + open)
         };
-        let bold = Look { bold: true, ..look };
+        let bold = Look {
+            font: Font {
+                bold: true,
+                ..look.font
+            },
+            ..look
+        };
         let italic = Look {
-            italic: true,
+            font: Font {
+                italic: true,
+                ..look.font
+            },
             ..look
         };
         let used = if rest.starts_with(&['*', '*']) {
@@ -227,6 +312,10 @@ fn inline(chars: &[char], offset: usize, look: Look, out: &mut Vec<Glyph>) {
             closing(rest, 1, &['`']).map(|close| {
                 let code = Look {
                     tone: Tone::Code,
+                    font: Font {
+                        mono: true,
+                        ..look.font
+                    },
                     ..look
                 };
                 for (n, c) in rest[1..close].iter().enumerate() {
@@ -265,49 +354,32 @@ fn link(rest: &[char], at: usize, look: Look, out: &mut Vec<Glyph>) -> Option<us
     Some(end + 1)
 }
 
-/// Splits a line's glyphs into rows of at most `width`, breaking at spaces, and indents
-/// continuation rows to line up under the text.
-fn wrap(
-    line: usize,
-    end: usize,
-    glyphs: Vec<Glyph>,
-    lead: usize,
-    width: usize,
-    rows: &mut Vec<Row>,
-) {
-    let blank = Row {
-        glyphs: Vec::new(),
-        line,
-        end,
-        stop: true,
-        last: true,
-        shaded: false,
-        checkbox: None,
-        cells: Vec::new(),
-    };
-    let width = width.max(lead + 8);
-    if glyphs.len() <= width {
-        rows.push(Row { glyphs, ..blank });
-        return;
-    }
-    let indent = decoration(&" ".repeat(lead), Tone::Text);
-    let mut current: Vec<Glyph> = Vec::new();
-    let mut rest = glyphs.into_iter().peekable();
+/// Sets a line's glyphs into rows no wider than `width`, breaking at spaces, with
+/// continuation rows starting at `lead`.
+fn wrap(template: Row, glyphs: Vec<Glyph>, lead: f32, width: f32, rows: &mut Vec<Row>) {
+    let end = template.end;
     let mut pieces: Vec<Vec<Glyph>> = Vec::new();
-    while let Some(g) = rest.next() {
-        current.push(g);
-        if current.len() >= width && rest.peek().is_some() {
+    let mut current: Vec<Glyph> = Vec::new();
+    let mut x = 0.0;
+    for mut g in glyphs {
+        if x + g.advance > width && !current.is_empty() {
             let cut = current
                 .iter()
-                .rposition(|g| g.ch == ' ')
-                .filter(|i| *i > lead)
+                .rposition(|g| g.ch == ' ' && g.at.is_some())
+                .filter(|i| current[*i].x > lead)
                 .map_or(current.len(), |i| i + 1);
-            let tail = current.split_off(cut);
-            pieces.push(std::mem::replace(
-                &mut current,
-                indent.iter().copied().chain(tail).collect(),
-            ));
+            let mut tail = current.split_off(cut);
+            pieces.push(std::mem::take(&mut current));
+            x = lead;
+            for t in &mut tail {
+                t.x = x;
+                x += t.advance;
+            }
+            current = tail;
         }
+        g.x = x;
+        x += g.advance;
+        current.push(g);
     }
     pieces.push(current);
     let count = pieces.len();
@@ -316,11 +388,13 @@ fn wrap(
         .map(|p| p.iter().find_map(|g| g.at).unwrap_or(end))
         .collect();
     for (i, glyphs) in pieces.into_iter().enumerate() {
+        let last = i + 1 == count;
         rows.push(Row {
             glyphs,
             end: starts.get(i + 1).copied().unwrap_or(end),
-            last: i + 1 == count,
-            ..blank.clone()
+            last,
+            lead,
+            ..template.clone()
         });
     }
 }
@@ -358,18 +432,21 @@ fn is_table_rule(line: &str) -> bool {
     text.contains('-') && text.contains('|') && text.chars().all(|c| "|-: ".contains(c))
 }
 
-/// Lays out a table with its pipes and rule hidden and its columns aligned.
-fn table(lines: &[(usize, &str)], first: usize, rows: &mut Vec<Row>) {
+/// Lays out a table with its pipes and rule hidden: real columns, with padding.
+fn table(lines: &[(usize, &str)], first: usize, measure: &dyn Measure, rows: &mut Vec<Row>) {
+    /// Space between a cell's edge and its text, in cells.
+    const PADDING: f32 = 1.0;
     let mut parsed: Vec<Vec<Vec<Glyph>>> = Vec::new();
     let mut starts: Vec<Vec<usize>> = Vec::new();
     for (index, (offset, line)) in lines.iter().enumerate() {
         if index == 1 {
-            parsed.push(Vec::new());
-            starts.push(Vec::new());
             continue;
         }
         let look = Look {
-            bold: index == 0,
+            font: Font {
+                bold: index == 0,
+                ..Font::default()
+            },
             ..PLAIN
         };
         let cells = split_cells(line);
@@ -380,61 +457,38 @@ fn table(lines: &[(usize, &str)], first: usize, rows: &mut Vec<Row>) {
                 .map(|(at, cell)| {
                     let mut out = Vec::new();
                     inline(cell, offset + at, look, &mut out);
+                    measure_glyphs(&mut out, measure);
                     out
                 })
                 .collect(),
         );
     }
-    let columns = parsed.iter().map(Vec::len).max().unwrap_or(0);
-    let widths: Vec<usize> = (0..columns)
-        .map(|c| {
-            parsed
-                .iter()
-                .filter_map(|r| r.get(c))
-                .map(Vec::len)
-                .max()
-                .unwrap_or(0)
-                .max(3)
-        })
-        .collect();
-    let base = |line: usize, end: usize| Row {
-        glyphs: Vec::new(),
-        line,
-        end,
-        stop: true,
-        last: true,
-        shaded: false,
-        checkbox: None,
-        cells: Vec::new(),
-    };
+    let count = parsed.iter().map(Vec::len).max().unwrap_or(0);
+    let mut columns = vec![0.0f32];
+    for c in 0..count {
+        let widest = parsed
+            .iter()
+            .filter_map(|r| r.get(c))
+            .map(|cell| cell.iter().map(|g| g.advance).sum::<f32>())
+            .fold(3.0f32, f32::max);
+        columns.push(columns[c] + widest.ceil() + PADDING * 2.0);
+    }
     for (index, cells) in parsed.iter().enumerate() {
-        let (offset, text) = lines[index];
-        let line = first + index;
-        if index == 1 {
-            let parts: Vec<String> = widths.iter().map(|w| "─".repeat(*w)).collect();
-            rows.push(Row {
-                glyphs: decoration(&parts.join("─┼─"), Tone::Dim),
-                stop: false,
-                ..base(line, offset)
-            });
-            continue;
-        }
+        let source = if index == 0 { 0 } else { index + 1 };
+        let (offset, text) = lines[source];
         let mut glyphs = Vec::new();
-        for (c, width) in widths.iter().enumerate() {
+        for (c, left) in columns.iter().take(count).enumerate() {
             if c > 0 {
-                glyphs.extend(decoration(" │ ", Tone::Dim));
+                let mut bar = decoration("│", Tone::TableLine);
+                bar[0].x = *left;
+                bar[0].advance = 1.0;
+                glyphs.extend(bar);
             }
-            let cell = cells.get(c).cloned().unwrap_or_default();
-            let used = cell.len();
-            glyphs.extend(cell);
-            let mut pad = decoration(&" ".repeat(width - used), Tone::Text);
-            // An empty cell still needs somewhere for the caret to land.
-            if used == 0
-                && let (Some(first), Some(at)) = (pad.first_mut(), starts[index].get(c))
-            {
-                first.at = Some(*at);
+            let mut x = left + PADDING;
+            for g in cells.get(c).into_iter().flatten() {
+                glyphs.push(Glyph { x, ..*g });
+                x += g.advance;
             }
-            glyphs.extend(pad);
         }
         let end = cells
             .iter()
@@ -445,32 +499,105 @@ fn table(lines: &[(usize, &str)], first: usize, rows: &mut Vec<Row>) {
         rows.push(Row {
             glyphs,
             cells: starts[index].clone(),
-            ..base(line, end)
+            lead: PADDING,
+            table: Some(TableRow {
+                columns: columns.clone(),
+                header: index == 0,
+            }),
+            ..Row::new(first + source, end)
         });
     }
 }
 
-fn shaded(line: usize, offset: usize, text: &str, tone: Tone) -> Row {
-    let look = Look { tone, ..PLAIN };
-    let glyphs: Vec<Glyph> = text
-        .chars()
-        .enumerate()
-        .map(|(i, c)| glyph(c, Some(offset + i), look))
-        .collect();
-    Row {
-        end: offset + text.chars().count(),
-        glyphs,
-        line,
-        stop: true,
-        last: true,
-        shaded: true,
-        checkbox: None,
-        cells: Vec::new(),
+/// The file extension the registry knows a fence's language by.
+fn fence_extension(language: &str) -> &str {
+    match language {
+        "rust" => "rs",
+        "python" => "py",
+        "javascript" => "js",
+        "typescript" => "ts",
+        "shell" | "bash" | "zsh" => "sh",
+        other => other,
     }
 }
 
-/// Lays the whole document out for a page `width` columns wide.
-pub fn layout(text: &str, width: usize) -> Vec<Row> {
+/// Space inside a code block, in cells.
+const CODE_PADDING: f32 = 1.2;
+/// How wide running text gets, in cells, so lines stay comfortable in a wide window.
+const READABLE_WIDTH: f32 = 62.0;
+
+struct Context<'a> {
+    measure: &'a dyn Measure,
+    registry: &'a Registry,
+}
+
+/// Rows for a block of code, coloured by its language.
+fn code_rows(
+    lines: &[(usize, &str)],
+    first: usize,
+    language: &str,
+    context: &Context,
+    tone: Option<Tone>,
+    rows: &mut Vec<Row>,
+) {
+    let source: String = lines.iter().map(|(_, l)| format!("{l}\n")).collect();
+    let path = format!("code.{}", fence_extension(language));
+    let spans = context.registry.highlight(Path::new(&path), &source);
+    let mut byte = 0;
+    for (index, (offset, line)) in lines.iter().enumerate() {
+        let mut glyphs = Vec::new();
+        for (i, ch) in line.chars().enumerate() {
+            let token = spans
+                .iter()
+                .find(|s| s.start <= byte && byte < s.end)
+                .map(|s| s.token);
+            let look = Look {
+                tone: tone.unwrap_or(Tone::Block(token)),
+                font: Font {
+                    mono: true,
+                    size: 92,
+                    ..Font::default()
+                },
+                underline: false,
+            };
+            glyphs.push(glyph(ch, Some(offset + i), look));
+            byte += ch.len_utf8();
+        }
+        byte += 1;
+        measure_glyphs(&mut glyphs, context.measure);
+        let mut x = CODE_PADDING;
+        for g in &mut glyphs {
+            g.x = x;
+            x += g.advance;
+        }
+        rows.push(Row {
+            glyphs,
+            shaded: true,
+            lead: CODE_PADDING,
+            ..Row::new(first + index, offset + line.chars().count())
+        });
+    }
+}
+
+/// Sizes of headings one to six, in percent of body text.
+const HEADINGS: [u8; 6] = [190, 150, 122, 110, 100, 100];
+
+fn spacer(line: usize, end: usize) -> Row {
+    Row {
+        stop: false,
+        ..Row::new(line, end)
+    }
+}
+
+/// Lays the whole document out for a page `width` cells wide.
+pub fn layout(text: &str, width: usize, measure: &dyn Measure, registry: &Registry) -> Vec<Row> {
+    let context = Context { measure, registry };
+    let proportional = !measure.in_cells();
+    let width = if proportional {
+        (width as f32).min(READABLE_WIDTH)
+    } else {
+        width as f32
+    };
     let mut lines: Vec<(usize, &str)> = Vec::new();
     let mut offset = 0;
     for line in text.split('\n') {
@@ -478,33 +605,57 @@ pub fn layout(text: &str, width: usize) -> Vec<Row> {
         offset += line.chars().count() + 1;
     }
     let mut rows = Vec::new();
+    if proportional {
+        rows.push(spacer(0, 0));
+    }
     let mut i = 0;
     // Front matter shows as dimmed text, with its delimiters hidden.
     if lines[0].1 == "---"
         && let Some(close) = (1..lines.len()).find(|n| lines[*n].1 == "---")
     {
-        for (n, (offset, line)) in lines.iter().enumerate().take(close).skip(1) {
-            rows.push(shaded(n, *offset, line, Tone::Dim));
-        }
+        code_rows(
+            &lines[1..close],
+            1,
+            "",
+            &context,
+            Some(Tone::Dim),
+            &mut rows,
+        );
         i = close + 1;
     }
     while i < lines.len() {
         let (offset, line) = lines[i];
         let trimmed = line.trim_start();
         if let Some(language) = trimmed.strip_prefix("```") {
+            let language = language.trim();
             let close = (i + 1..lines.len())
                 .find(|n| lines[*n].1.trim_start().starts_with("```"))
                 .unwrap_or(lines.len());
-            if !language.trim().is_empty() {
+            if !language.is_empty() {
+                let mut label = decoration(language, Tone::Dim);
+                for g in &mut label {
+                    g.font.size = 78;
+                }
+                measure_glyphs(&mut label, measure);
+                let mut x = CODE_PADDING;
+                for g in &mut label {
+                    g.x = x;
+                    x += g.advance;
+                }
                 rows.push(Row {
-                    glyphs: decoration(language.trim(), Tone::Dim),
-                    stop: false,
-                    ..shaded(i, offset, "", Tone::Dim)
+                    glyphs: label,
+                    shaded: true,
+                    ..spacer(i, offset)
                 });
             }
-            for (n, (offset, line)) in lines.iter().enumerate().take(close).skip(i + 1) {
-                rows.push(shaded(n, *offset, line, Tone::Code));
-            }
+            code_rows(
+                &lines[i + 1..close],
+                i + 1,
+                language,
+                &context,
+                None,
+                &mut rows,
+            );
             i = close + 1;
             continue;
         }
@@ -512,20 +663,22 @@ pub fn layout(text: &str, width: usize) -> Vec<Row> {
             let end = (i + 2..lines.len())
                 .find(|n| !lines[*n].1.contains('|'))
                 .unwrap_or(lines.len());
-            table(&lines[i..end], i, &mut rows);
+            table(&lines[i..end], i, measure, &mut rows);
             i = end;
             continue;
         }
         if is_rule(line) {
+            let mut glyphs = decoration(&"─".repeat(width as usize), Tone::Dim);
+            measure_glyphs(&mut glyphs, measure);
+            let mut x = 0.0;
+            for g in &mut glyphs {
+                g.x = x;
+                x += g.advance;
+            }
             rows.push(Row {
-                glyphs: decoration(&"─".repeat(width.min(60)), Tone::Dim),
-                line: i,
-                end: offset,
-                stop: true,
-                last: true,
-                shaded: false,
-                checkbox: None,
-                cells: Vec::new(),
+                glyphs,
+                rule: true,
+                ..Row::new(i, offset)
             });
             i += 1;
             continue;
@@ -533,21 +686,34 @@ pub fn layout(text: &str, width: usize) -> Vec<Row> {
         let chars: Vec<char> = line.chars().collect();
         let found = prefix(line);
         let mut glyphs = Vec::new();
-        let mut checkbox = None;
+        let mut template = Row::new(i, offset + chars.len());
+        let mut lead_extra = 0.0;
         let (hidden, look) = match &found {
             None => (0, PLAIN),
             Some(p) => {
                 let depth = p.indent / 2;
                 let pad = " ".repeat(p.indent);
                 let look = match &p.marker {
-                    Marker::Heading(level) => Look {
-                        tone: Tone::Heading,
-                        bold: true,
-                        underline: *level == 1,
-                        italic: false,
-                    },
+                    Marker::Heading(level) => {
+                        template.heading = *level as u8;
+                        template.tall = proportional && *level <= 2;
+                        Look {
+                            tone: Tone::Heading,
+                            font: Font {
+                                bold: true,
+                                size: HEADINGS[level - 1],
+                                ..Font::default()
+                            },
+                            underline: false,
+                        }
+                    }
                     Marker::Quote => {
-                        glyphs.extend(decoration("▌ ", Tone::Dim));
+                        if proportional {
+                            template.quote = true;
+                            lead_extra = 1.4;
+                        } else {
+                            glyphs.extend(decoration("▌ ", Tone::Dim));
+                        }
                         PLAIN
                     }
                     Marker::Bullet => {
@@ -560,21 +726,47 @@ pub fn layout(text: &str, width: usize) -> Vec<Row> {
                         PLAIN
                     }
                     Marker::Task { checked, mark } => {
+                        template.checkbox = Some((p.indent as f32, offset + mark));
                         let symbol = if *checked { "☑" } else { "☐" };
-                        checkbox = Some((p.indent, offset + mark));
-                        glyphs.extend(decoration(&format!("{pad}{symbol} "), Tone::Link));
+                        glyphs.extend(decoration(&pad, Tone::Text));
+                        glyphs.extend(decoration(symbol, Tone::Check(*checked)));
+                        glyphs.extend(decoration(" ", Tone::Text));
                         PLAIN
                     }
                 };
                 (p.hidden, look)
             }
         };
-        let lead = glyphs.len();
+        let decorated = glyphs.len();
         inline(&chars[hidden..], offset + hidden, look, &mut glyphs);
-        let first = rows.len();
-        wrap(i, offset + chars.len(), glyphs, lead, width, &mut rows);
-        if let Some(row) = rows.get_mut(first) {
-            row.checkbox = checkbox;
+        measure_glyphs(&mut glyphs, measure);
+        // Checkboxes get a little more room than a glyph, for the box drawn there.
+        if proportional {
+            for g in &mut glyphs[..decorated] {
+                if matches!(g.tone, Tone::Check(_)) {
+                    g.advance = 1.3;
+                }
+            }
+        }
+        // List text lines up whatever the marker's width, as in a real document.
+        if proportional && decorated > 0 {
+            let pad = found.as_ref().map_or(0, |p| p.indent) as f32;
+            let width: f32 = glyphs[..decorated].iter().map(|g| g.advance).sum();
+            glyphs[decorated - 1].advance += (pad + 1.8 - width).max(0.0);
+            glyphs[decorated - 1].tone = Tone::TableLine;
+        }
+        let lead = glyphs[..decorated].iter().map(|g| g.advance).sum::<f32>() + lead_extra;
+        if lead_extra > 0.0 {
+            // The quote's bar takes the indent, so the text starts after it.
+            let mut indent = decoration(" ", Tone::TableLine);
+            indent[0].advance = lead_extra;
+            indent.append(&mut glyphs);
+            glyphs = indent;
+        }
+        let tall = template.tall;
+        wrap(template, glyphs, lead, width, &mut rows);
+        if tall {
+            rows.push(spacer(i, offset));
         }
         i += 1;
     }
@@ -583,7 +775,7 @@ pub fn layout(text: &str, width: usize) -> Vec<Row> {
 
 /// The row and column of a source position. Positions inside hidden text land on the
 /// nearest visible place.
-pub fn locate(rows: &[Row], pos: usize) -> (usize, usize) {
+pub fn locate(rows: &[Row], pos: usize) -> (usize, f32) {
     for (index, row) in rows.iter().enumerate() {
         let inside = if row.last {
             pos <= row.end
@@ -595,7 +787,7 @@ pub fn locate(rows: &[Row], pos: usize) -> (usize, usize) {
         }
     }
     let last = rows.iter().rposition(|r| r.stop).unwrap_or(0);
-    (last, rows.get(last).map_or(0, |r| r.caret_x(usize::MAX)))
+    (last, rows.get(last).map_or(0.0, |r| r.caret_x(usize::MAX)))
 }
 
 /// Every place the caret can rest, in source order.
@@ -641,7 +833,7 @@ pub fn step(rows: &[Row], pos: usize, forward: bool) -> usize {
 }
 
 /// Moves `delta` caret rows, keeping to column `goal`.
-pub fn vertical(rows: &[Row], pos: usize, delta: isize, goal: usize) -> usize {
+pub fn vertical(rows: &[Row], pos: usize, delta: isize, goal: f32) -> usize {
     let (mut row, _) = locate(rows, pos);
     for _ in 0..delta.unsigned_abs() {
         let next = if delta < 0 {
@@ -754,13 +946,18 @@ pub fn hidden_prefix(line: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cellix_render::{CellMeasure, FontMeasure};
 
     fn text(row: &Row) -> String {
         row.glyphs.iter().map(|g| g.ch).collect()
     }
 
+    fn page(source: &str, width: usize) -> Vec<Row> {
+        layout(source, width, &CellMeasure, &Registry::default())
+    }
+
     fn texts(source: &str) -> Vec<String> {
-        layout(source, 40).iter().map(text).collect()
+        page(source, 40).iter().map(text).collect()
     }
 
     #[test]
@@ -795,7 +992,7 @@ mod tests {
     #[test]
     fn every_glyph_knows_its_source_position() {
         let source = "# Hi **yo**";
-        let rows = layout(source, 40);
+        let rows = page(source, 40);
         let chars: Vec<char> = source.chars().collect();
         for g in &rows[0].glyphs {
             assert_eq!(chars[g.at.unwrap()], g.ch);
@@ -808,17 +1005,25 @@ mod tests {
             texts("```rust\nlet x;\n```\nafter"),
             ["rust", "let x;", "after"]
         );
-        let rows = layout("```rust\nlet x;\n```", 40);
+        let rows = page("```rust\nlet x;\n```", 40);
         assert!(!rows[0].stop);
         assert!(rows[1].shaded);
+        assert_eq!(rows[1].glyphs[0].tone, Tone::Block(Some(Token::Keyword)));
     }
 
     #[test]
     fn tables_align_with_pipes_and_rule_hidden() {
-        let rows = texts("| Path | Holds |\n|---|---|\n| a | long text |");
-        assert_eq!(rows[0], "Path │ Holds    ");
-        assert_eq!(rows[1], "─────┼──────────");
-        assert_eq!(rows[2], "a    │ long text");
+        let rows = page(
+            "| Path | Holds |
+|---|---|
+| a | long text |",
+            40,
+        );
+        assert_eq!(rows.len(), 2, "the rule isn't a row");
+        assert!(!text(&rows[1]).contains('|'));
+        let x = |r: &Row, c: char| r.glyphs.iter().find(|g| g.ch == c).unwrap().x;
+        assert_eq!(x(&rows[0], 'H'), x(&rows[1], 'l'), "columns line up");
+        assert!(rows[0].table.as_ref().unwrap().header);
     }
 
     #[test]
@@ -828,33 +1033,88 @@ mod tests {
 
     #[test]
     fn long_lines_wrap_under_their_text() {
-        let rows = layout("- one two three four", 12);
+        let rows = page("- one two three four", 12);
         assert_eq!(text(&rows[0]), "• one two ");
-        assert_eq!(text(&rows[1]), "  three four");
+        assert_eq!(text(&rows[1]), "three four");
+        assert_eq!(
+            rows[1].glyphs[0].x, 2.0,
+            "continuations line up under the text"
+        );
         assert!(!rows[0].last);
         assert!(rows[1].last);
     }
 
     #[test]
     fn the_caret_skips_hidden_markers() {
-        let rows = layout("# Hi\nnext", 40);
+        let rows = page(
+            "# Hi
+next",
+            40,
+        );
         assert_eq!(snap(&rows, 0), 2);
         assert_eq!(step(&rows, 2, false), 2);
         assert_eq!(step(&rows, 4, true), 5);
-        assert_eq!(locate(&rows, 2), (0, 0));
+        assert_eq!(locate(&rows, 2), (0, 0.0));
+    }
+
+    #[test]
+    fn headings_stand_taller_than_body_text() {
+        let m = FontMeasure::new(17, 37);
+        let rows = layout(
+            "# Big
+
+body",
+            60,
+            &m,
+            &Registry::default(),
+        );
+        let big = rows.iter().find(|r| r.heading == 1).unwrap();
+        assert!(big.tall);
+        assert!(big.glyphs[0].font.size > 150);
+        assert!(!big.glyphs[0].font.mono, "body text is proportional");
+    }
+
+    #[test]
+    fn wrapping_uses_real_widths() {
+        let m = FontMeasure::new(17, 37);
+        let thin = layout(&"i".repeat(100), 40, &m, &Registry::default());
+        let wide = layout(&"W".repeat(100), 40, &m, &Registry::default());
+        assert!(thin.len() < wide.len());
+    }
+
+    #[test]
+    fn running_text_keeps_a_readable_width() {
+        let m = FontMeasure::new(17, 37);
+        let rows = layout(&"word ".repeat(60), 200, &m, &Registry::default());
+        let widest = rows
+            .iter()
+            .flat_map(|r| r.glyphs.iter().map(|g| g.x + g.advance))
+            .fold(0.0, f32::max);
+        assert!(widest <= READABLE_WIDTH + 0.5, "{widest}");
+    }
+
+    #[test]
+    fn clicks_land_between_real_glyphs() {
+        let m = FontMeasure::new(17, 37);
+        let rows = layout("iiiiWWWW", 60, &m, &Registry::default());
+        let row = rows
+            .iter()
+            .find(|r| r.stop && !r.glyphs.is_empty())
+            .unwrap();
+        assert_eq!(row.position_at(row.glyphs[5].x + 0.05), 5);
     }
 
     #[test]
     fn vertical_moves_keep_the_column_and_skip_rules() {
-        let rows = layout("| a |\n|---|\n| b |", 40);
-        let down = vertical(&rows, 2, 1, 0);
+        let rows = page("| a |\n|---|\n| b |", 40);
+        let down = vertical(&rows, 2, 1, 0.0);
         assert_eq!(rows[locate(&rows, down).0].line, 2);
     }
 
     #[test]
     fn tab_finds_the_next_cell() {
         let source = "| a | b |\n|---|---|\n| c | d |";
-        let rows = layout(source, 40);
+        let rows = page(source, 40);
         let chars: Vec<char> = source.chars().collect();
         let first = next_cell(&rows, 2).unwrap();
         assert_eq!(chars[first], 'b');

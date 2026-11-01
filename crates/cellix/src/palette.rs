@@ -215,7 +215,8 @@ pub fn input(grid: &mut Grid, line: Rect, field: &Input, measure: &dyn Measure, 
             size: 95,
             ..Font::default()
         };
-        let end = x + measure.width(field.text, font);
+        // Just clear of the first letter, when there's only a placeholder.
+        let end = x + measure.width(field.text, font) - 0.1;
         let last = line.right() as f32 - PADDING;
         grid.set_caret(end.min(last), y, 0.56);
     }

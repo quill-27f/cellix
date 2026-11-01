@@ -205,7 +205,7 @@
   {
     "id": "markdown",
     "milestone": 4,
-    "title": "Markdown is one editable rendered page, like Xcode",
+    "title": "Markdown is one editable page with real typography, like Xcode",
     "test": "markdown_opens_rendered_and_editable",
     "passes": true
   },

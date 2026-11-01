@@ -129,13 +129,21 @@ impl Grid {
                     ..Font::default()
                 },
                 align_right: false,
+                underline: false,
             });
         }
         end
     }
 
     /// Paints a run of text with no cells behind it, at a place in cells and rows.
-    pub fn text_run(&mut self, x: f32, y: f32, max_x: f32, text: &str, color: Rgb, font: Font) {
+    pub fn text_run(
+        &mut self,
+        (x, y): (f32, f32),
+        max_x: f32,
+        text: &str,
+        (color, underline): (Rgb, bool),
+        font: Font,
+    ) {
         self.paint.push(Paint::Text {
             x: units(x),
             y: units(y),
@@ -144,6 +152,7 @@ impl Grid {
             color,
             font,
             align_right: false,
+            underline,
         });
     }
 
@@ -181,6 +190,7 @@ impl Grid {
                 ..Font::default()
             },
             align_right: true,
+            underline: false,
         });
     }
 
@@ -221,6 +231,7 @@ impl Grid {
                 ..Font::default()
             },
             align_right: false,
+            underline: false,
         });
     }
 

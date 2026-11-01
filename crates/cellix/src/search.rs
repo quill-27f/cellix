@@ -4,7 +4,7 @@ use std::sync::mpsc::{Receiver, channel};
 use std::thread;
 
 use cellix_core::{Match, Workspace};
-use cellix_render::{Grid, Icon, Measure, Rect, Style};
+use cellix_render::{Bounds, Font, Grid, Icon, Measure, Rect, Style};
 
 use crate::palette::{Input, input};
 use crate::theme::Theme;
@@ -253,7 +253,7 @@ impl Search {
             }
             match row {
                 Row::File(path, count) => self.draw_file(grid, area, y, path, *count, theme),
-                Row::Match(found) => self.draw_match(grid, area, y, found, theme),
+                Row::Match(found) => self.draw_match(grid, area, y, found, measure, theme),
             }
         }
     }
@@ -309,26 +309,67 @@ impl Search {
         grid.label_right(area.right().saturating_sub(1), y, &tally, theme.sidebar, 85);
     }
 
-    fn draw_match(&self, grid: &mut Grid, area: Rect, y: u16, found: &Match, theme: &Theme) {
-        let start = area.x + 4;
-        let width = area.right().saturating_sub(start + 1) as usize;
+    /// A result line in the interface font. The line starts at a word, so a match far along
+    /// it still shows with some sense of what's before it.
+    fn draw_match(
+        &self,
+        grid: &mut Grid,
+        area: Rect,
+        y: u16,
+        found: &Match,
+        measure: &dyn Measure,
+        theme: &Theme,
+    ) {
+        let font = Font {
+            size: 92,
+            ..Font::default()
+        };
         let chars: Vec<char> = found.text.chars().collect();
         let column = found.column.min(chars.len());
-        // Leading space is noise here, and a far-right match still has to show.
         let indent = chars.iter().take_while(|c| c.is_whitespace()).count();
-        let from = indent.max(column.saturating_sub(width / 3)).min(column);
-        let length = self.query.chars().count();
-        let end = (column + length).min(chars.len());
+        let width = area.right().saturating_sub(area.x + 5) as usize;
+        let mut from = indent.max(column.saturating_sub(width / 2)).min(column);
+        while from > indent && !chars[from - 1].is_whitespace() {
+            from += 1;
+            if from >= column {
+                from = column;
+                break;
+            }
+        }
+        let end = (column + self.query.chars().count()).min(chars.len());
         let before: String = chars[from..column].iter().collect();
         let hit: String = chars[column..end].iter().collect();
         let after: String = chars[end..].iter().collect();
         let right = area.right().saturating_sub(1);
-        let x = grid.put_str(start, y, &before, theme.sidebar, right);
-        let highlight = Style {
-            bg: theme.find_match,
+        let quiet = Style {
+            painted: !measure.in_cells(),
             ..theme.sidebar
         };
+        // Cells carry the text for the cell tier and tests.
+        let x = grid.put_str(area.x + 4, y, &before, quiet, right);
+        let highlight = Style {
+            bg: if measure.in_cells() {
+                theme.find_match
+            } else {
+                theme.sidebar.bg
+            },
+            ..quiet
+        };
         let x = grid.put_str(x, y, &hit, highlight, right);
-        grid.put_str(x, y, &after, theme.sidebar, right);
+        grid.put_str(x, y, &after, quiet, right);
+        if measure.in_cells() {
+            return;
+        }
+        let limit = right as f32;
+        let mut at = area.x as f32 + 3.0;
+        let plain = (theme.sidebar.fg, false);
+        grid.text_run((at, y as f32), limit, &before, plain, font);
+        at += measure.width(&before, font);
+        let span = measure.width(&hit, font);
+        let bounds = Bounds::cells(at, y as f32 + 0.16, span, 0.68);
+        grid.panel(bounds, 12, Some(theme.find_match), None);
+        grid.text_run((at, y as f32), limit, &hit, plain, font);
+        at += span;
+        grid.text_run((at, y as f32), limit, &after, plain, font);
     }
 }

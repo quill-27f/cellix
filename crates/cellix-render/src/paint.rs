@@ -65,6 +65,8 @@ pub enum Paint {
         font: Font,
         /// `x` is the right edge rather than the left.
         align_right: bool,
+        /// Drawn under the text at its true width.
+        underline: bool,
     },
     Icon {
         bounds: Bounds,

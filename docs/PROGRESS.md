@@ -103,3 +103,14 @@ looks the same in all three. The block-art icons on the cell tier are crude.
 
 Unverified: terminal-browser opening a real split (the tests use a stand-in command), a
 real SSH session, and paint-heavy rows under tmux, where each tile costs more to send.
+
+## 2026-11-01: end-to-end interface audit
+
+Compared against Xcode and VS Code from screenshots. Text is now measured, so carets sit
+in the right place and stay inside text boxes. The Markdown page uses real typography, and
+the mouse reports pixels where the terminal can. Theme is auto, dark or light, from OSC 11.
+Claude Code and Codex start in a split of tmux or Zellij, replacing the plan to host them.
+
+Unverified: all of this in a live terminal, pixel mouse under Ghostty, OSC 11 through tmux
+and Zellij, and starting a real agent. Outside tmux and Zellij there's no split to open an
+agent in, and Cellix says so. Xcode's formatting toolbar isn't built.

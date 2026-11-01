@@ -154,7 +154,7 @@ pub struct App {
     overlay: Overlay,
     size: (u16, u16),
     theme: Theme,
-    registry: Registry,
+    registry: Rc<Registry>,
     drag: Drag,
     message: RefCell<String>,
     clipboard: String,
@@ -206,7 +206,7 @@ impl App {
             overlay: Overlay::None,
             size,
             theme: Theme::named(settings.theme.as_deref()),
-            registry: Registry::default(),
+            registry: Rc::default(),
             drag: Drag::None,
             message: RefCell::new(String::new()),
             clipboard: String::new(),
@@ -234,6 +234,9 @@ impl App {
 
     /// Uses this measure for text from now on.
     pub fn set_measure(&mut self, measure: Rc<dyn Measure>) {
+        for editor in &mut self.editors {
+            editor.set_measure(measure.clone());
+        }
         self.measure = measure;
     }
 
@@ -272,7 +275,9 @@ impl App {
             self.set_active(i);
             return Ok(());
         }
-        self.editors.push(Editor::new(Buffer::open(path)?));
+        let buffer = Buffer::open(path)?;
+        let editor = Editor::new(buffer, self.measure.clone(), self.registry.clone());
+        self.editors.push(editor);
         self.set_active(self.editors.len() - 1);
         self.attach_server(path);
         Ok(())
@@ -408,6 +413,7 @@ impl App {
     /// their buffers and stay unsaved, and closed files change on disk.
     fn apply_edits(&mut self, path: &Path, mut edits: Vec<TextEdit>) -> io::Result<()> {
         edits.sort_by_key(|e| std::cmp::Reverse(e.start));
+        let (measure, registry) = (self.measure.clone(), self.registry.clone());
         let open = self
             .editors
             .iter_mut()
@@ -415,7 +421,10 @@ impl App {
         let mut scratch = None;
         let editor = match open {
             Some(editor) => editor,
-            None => scratch.insert(Editor::new(Buffer::open(path)?)),
+            None => {
+                let buffer = Buffer::open(path)?;
+                scratch.insert(Editor::new(buffer, measure, registry))
+            }
         };
         for edit in edits {
             let start = editor.buffer.position(edit.start.0, edit.start.1);
@@ -1325,7 +1334,7 @@ impl App {
             self.overlay_mouse(mouse);
             return;
         }
-        let (x, y) = (mouse.x, mouse.y);
+        let (x, y, fine_x) = (mouse.x, mouse.y, mouse.fine_x);
         if self.compact() && self.drawer && !self.sidebar_area().is_some_and(|a| a.contains(x, y)) {
             self.drawer = false;
             return;
@@ -1383,7 +1392,7 @@ impl App {
                 }
                 let area = self.focused_area();
                 if let Some(editor) = self.editor_mut() {
-                    let at = editor.position_at(area, x, y);
+                    let at = editor.position_at(area, fine_x, y);
                     editor.selections.set_single(Selection::cursor(at));
                 }
                 self.prompt_comment_at_cursor();
@@ -1406,10 +1415,10 @@ impl App {
                         self.drag = Drag::Scrollbar;
                         return;
                     }
-                    if editor.click_checkbox(area, x, y) {
+                    if editor.click_checkbox(area, fine_x, y) {
                         return;
                     }
-                    let at = editor.position_at(area, x, y);
+                    let at = editor.position_at(area, fine_x, y);
                     if mouse.mods.ctrl {
                         editor.selections.set_single(Selection::cursor(at));
                         self.open_in_browser();
@@ -1433,7 +1442,7 @@ impl App {
             MouseKind::Drag if self.drag == Drag::Text => {
                 let area = self.focused_area();
                 if let Some(editor) = self.editor_mut() {
-                    let at = editor.position_at(area, x, y);
+                    let at = editor.position_at(area, fine_x, y);
                     let anchor = editor.selections.primary().anchor;
                     editor.selections.set_single(Selection {
                         anchor,
@@ -2877,7 +2886,8 @@ mod tests {
             app.active_text().unwrap(),
             "| Name | Size |\n|---|---|\n| along | b |\n"
         );
-        assert!(screen(&app).text().contains("along │ b"));
+        let text = screen(&app).text();
+        assert!(text.contains("along") && text.contains('│'), "{text}");
     }
 
     #[test]

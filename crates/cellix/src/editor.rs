@@ -5,10 +5,10 @@ use std::rc::Rc;
 use cellix_core::{Buffer, Motion, Selection, Selections};
 use cellix_input::{Command, Direction};
 use cellix_lang::{Registry, Span};
-use cellix_render::{Grid, Rect};
+use cellix_render::{Bounds, Grid, Icon, Measure, Rect, Rgb, units};
 use unicode_width::UnicodeWidthChar;
 
-use crate::rendered::{self, Intent, Row, Tone};
+use crate::rendered::{self, Glyph, Intent, Row, Tone};
 use crate::theme::Theme;
 
 const TAB_WIDTH: usize = 4;
@@ -16,8 +16,8 @@ const GUTTER_MIN_DIGITS: usize = 4;
 const NARROW_PANE: u16 = 60;
 /// Left margin of a rendered page, which also carries comment marks.
 const PAGE_MARGIN: u16 = 2;
-/// A rendered page stops growing here, so lines stay readable in a wide window.
-const MAX_PAGE_WIDTH: u16 = 100;
+/// How wide a page can be set. Prose is narrower: see `rendered`.
+const MAX_PAGE_WIDTH: u16 = 200;
 
 /// Per-line marks for the gutter, as 1-based lines.
 #[derive(Default)]
@@ -40,6 +40,8 @@ pub struct Editor {
     pub rendered: bool,
     /// The laid-out page, for one revision and width.
     page: RefCell<Option<Page>>,
+    measure: Rc<dyn Measure>,
+    registry: Rc<Registry>,
     /// The revision last sent to a language server.
     pub synced: u64,
 }
@@ -53,7 +55,7 @@ fn display_width(c: char, column: usize) -> usize {
 }
 
 impl Editor {
-    pub fn new(buffer: Buffer) -> Self {
+    pub fn new(buffer: Buffer, measure: Rc<dyn Measure>, registry: Rc<Registry>) -> Self {
         let extension = buffer.path().and_then(Path::extension);
         let is_markdown = extension.is_some_and(|e| e == "md" || e == "markdown");
         Self {
@@ -64,6 +66,8 @@ impl Editor {
             spans: RefCell::new(None),
             rendered: is_markdown,
             page: RefCell::new(None),
+            measure,
+            registry,
             synced: 0,
         }
     }
@@ -97,9 +101,17 @@ impl Editor {
         {
             return rows.clone();
         }
-        let rows = Rc::new(rendered::layout(&self.buffer.text(), width));
+        let text = self.buffer.text();
+        let rows = rendered::layout(&text, width, &*self.measure, &self.registry);
+        let rows = Rc::new(rows);
         *cache = Some((revision, width, rows.clone()));
         rows
+    }
+
+    /// Text is measured differently from here on, so the page has to be set again.
+    pub fn set_measure(&mut self, measure: Rc<dyn Measure>) {
+        self.measure = measure;
+        *self.page.borrow_mut() = None;
     }
 
     /// Moves a caret out of hidden source, so typing never lands inside a marker.
@@ -128,7 +140,10 @@ impl Editor {
         let head = primary.head;
         let page = area.h.max(2) as isize - 1;
         let (_, column) = rendered::locate(&rows, head);
-        let goal = primary.goal.unwrap_or(column);
+        // Selection keeps its goal as a whole number, so this one is in paint units.
+        let goal = primary
+            .goal
+            .map_or(column, |g| g as f32 / units(1.0) as f32);
         let vertical = |delta| rendered::vertical(&rows, head, delta, goal);
         let (next, keep_goal) = match direction {
             Direction::Left => (rendered::step(&rows, head, false), false),
@@ -146,7 +161,7 @@ impl Editor {
         self.selections.set_single(Selection {
             anchor: if extend { primary.anchor } else { next },
             head: next,
-            goal: keep_goal.then_some(goal),
+            goal: keep_goal.then_some(units(goal) as usize),
         });
         true
     }
@@ -209,18 +224,18 @@ impl Editor {
     }
 
     /// Toggles a task checkbox at a click. Returns true if there was one.
-    pub fn click_checkbox(&mut self, area: Rect, x: u16, y: u16) -> bool {
+    pub fn click_checkbox(&mut self, area: Rect, x: f32, y: u16) -> bool {
         if !self.rendered {
             return false;
         }
         let area = self.text_area(area);
         let rows = self.page(area);
         let row = self.top + y.saturating_sub(area.y) as usize;
-        let column = x.saturating_sub(area.x + PAGE_MARGIN) as usize;
+        let column = x - (area.x + PAGE_MARGIN) as f32;
         let Some((at, mark)) = rows.get(row).and_then(|r| r.checkbox) else {
             return false;
         };
-        if column != at {
+        if column < at || column >= at + 1.3 {
             return false;
         }
         let checked = self.buffer.rope().char(mark) != ' ';
@@ -275,12 +290,13 @@ impl Editor {
     }
 
     /// Char position at a screen cell inside `area`, clamped to the text.
-    pub fn position_at(&self, area: Rect, x: u16, y: u16) -> usize {
+    pub fn position_at(&self, area: Rect, fine_x: f32, y: u16) -> usize {
+        let x = fine_x as u16;
         let area = self.text_area(area);
         if self.rendered {
             let rows = self.page(area);
             let row = self.top + y.saturating_sub(area.y) as usize;
-            let column = x.saturating_sub(area.x + PAGE_MARGIN) as usize;
+            let column = (fine_x - (area.x + PAGE_MARGIN) as f32).max(0.0);
             let stop = rows[row.min(rows.len().saturating_sub(1))..]
                 .iter()
                 .find(|r| r.stop);
@@ -599,28 +615,76 @@ impl Editor {
         grid.panel(bounds, 20, Some(theme.scrollbar), None);
     }
 
+    /// Backgrounds of code blocks and tables, drawn before the text on top of them.
+    fn draw_page_blocks(&self, grid: &mut Grid, area: Rect, rows: &[Row], theme: &Theme) {
+        let left = (area.x + PAGE_MARGIN) as f32;
+        let visible = self.top..(self.top + area.h as usize).min(rows.len());
+        let y_of = |index: usize| area.y as f32 + (index - self.top) as f32;
+        let mut index = visible.start;
+        while index < visible.end {
+            let row = &rows[index];
+            let group =
+                |r: &Row| (row.shaded && r.shaded) || (row.table.is_some() && r.table.is_some());
+            if !group(row) {
+                index += 1;
+                continue;
+            }
+            let end = (index..visible.end)
+                .find(|i| !group(&rows[*i]))
+                .unwrap_or(visible.end);
+            let (top, height) = (y_of(index), (end - index) as f32);
+            if row.shaded {
+                let width = area.right() as f32 - left - 1.0;
+                let bounds = Bounds::cells(left, top - 0.08, width, height + 0.2);
+                grid.panel(bounds, 22, Some(theme.code_bg), Some(theme.border));
+            } else if let Some(table) = &row.table {
+                let width = table.columns.last().copied().unwrap_or(0.0);
+                let bounds = Bounds::cells(left, top + 0.02, width, height - 0.04);
+                if table.header {
+                    let head = Bounds::cells(left, top + 0.02, width, 1.0);
+                    grid.panel(head, 14, Some(theme.code_bg), None);
+                }
+                for at in index + 1..end {
+                    let line = Bounds::cells(left, y_of(at), width, 0.0);
+                    grid.hairline(line, theme.popup_border);
+                }
+                let inner = table.columns.len().saturating_sub(2);
+                for x in table.columns.iter().skip(1).take(inner) {
+                    let line = Bounds::cells(left + x, top + 0.02, 0.0, height - 0.04);
+                    grid.hairline(line, theme.popup_border);
+                }
+                grid.panel(bounds, 14, None, Some(theme.popup_border));
+            }
+            index = end;
+        }
+    }
+
     fn draw_page(&self, grid: &mut Grid, area: Rect, theme: &Theme, focused: bool, marks: &Marks) {
         grid.fill(area, theme.text);
         let rows = self.page(area);
+        let proportional = !self.measure.in_cells();
         let left = area.x + PAGE_MARGIN;
         let primary = self.selections.primary();
         let (caret_row, caret_x) = rendered::locate(&rows, primary.head);
+        if proportional {
+            self.draw_page_blocks(grid, area, &rows, theme);
+        }
         for (index, row) in rows.iter().enumerate().skip(self.top) {
             let y = area.y + (index - self.top) as u16;
             if y >= area.bottom() {
                 break;
             }
-            let bg = if row.shaded {
+            let bg = if row.shaded && !proportional {
                 theme.code_bg
-            } else if focused && index == caret_row {
-                theme.line
             } else {
                 theme.text.bg
             };
-            grid.fill(
-                Rect::new(area.x, y, area.w, 1),
-                cellix_render::Style { bg, ..theme.text },
-            );
+            if !proportional {
+                grid.fill(
+                    Rect::new(area.x, y, area.w, 1),
+                    cellix_render::Style { bg, ..theme.text },
+                );
+            }
             if marks.comments.contains(&(row.line + 1)) {
                 let mark = cellix_render::Style {
                     fg: theme.accent,
@@ -629,39 +693,141 @@ impl Editor {
                 };
                 grid.put_str(area.x, y, "◆", mark, left);
             }
-            let mut x = left;
-            for glyph in &row.glyphs {
-                let fg = match glyph.tone {
-                    Tone::Text => theme.text.fg,
-                    Tone::Heading => theme.heading,
-                    Tone::Code => theme.string,
-                    Tone::Link => theme.accent,
-                    Tone::Dim => theme.gutter.fg,
+            // Xcode shows a heading's level in the margin, beside the caret.
+            let commented = marks.comments.contains(&(row.line + 1));
+            if proportional && focused && index == caret_row && row.heading > 0 && !commented {
+                let dim = cellix_render::Style {
+                    fg: theme.gutter.fg,
+                    ..theme.text
                 };
-                let selected = glyph.at.is_some_and(|at| {
-                    self.selections
-                        .iter()
-                        .any(|s| at >= s.start() && at < s.end())
-                });
-                let style = cellix_render::Style {
-                    fg,
-                    bg: if selected { theme.selection } else { bg },
-                    bold: glyph.bold,
-                    italic: glyph.italic,
-                    underline: glyph.underline,
-                    painted: false,
-                };
-                x = grid.put_str(x, y, glyph.ch.encode_utf8(&mut [0; 4]), style, area.right());
+                let line = y + u16::from(row.tall);
+                grid.label_at(area.x as f32 + 0.6, area.x, line, "#", dim, left, 85);
             }
+            if row.rule && proportional {
+                let line = Bounds::cells(left as f32, y as f32 + 0.5, 60.0, 0.0);
+                grid.hairline(line, theme.popup_border);
+            }
+            if row.quote {
+                let bar = Bounds::cells(left as f32 + 0.1, y as f32 + 0.08, 0.3, 0.84);
+                grid.panel(bar, 12, Some(theme.popup_border), None);
+            }
+            self.draw_page_row(grid, row, (left, y), area, bg, theme);
         }
         if focused && primary.is_empty() && caret_row >= self.top {
             let y = area.y as usize + caret_row - self.top;
-            let x = left as usize + caret_x;
-            if y < area.bottom() as usize && x < area.right() as usize {
-                grid.cursor = Some((x as u16, y as u16));
+            let x = left as f32 + caret_x;
+            if y < area.bottom() as usize && x < area.right() as f32 {
+                let row = &rows[caret_row];
+                let size = row.glyphs.first().map_or(100, |g| g.font.size) as f32 / 100.0;
+                grid.set_caret(x, y as u16, (0.62 * size).min(1.6));
+                if row.tall
+                    && let Some(caret) = &mut grid.caret
+                {
+                    caret.y += units(0.5);
+                }
             }
-        } else if focused && self.selections.primary().head == 0 {
-            grid.cursor = None;
+        }
+    }
+
+    fn draw_page_row(
+        &self,
+        grid: &mut Grid,
+        row: &Row,
+        (left, y): (u16, u16),
+        area: Rect,
+        bg: Rgb,
+        theme: &Theme,
+    ) {
+        let proportional = !self.measure.in_cells();
+        let origin = left as f32;
+        let fg_of = |tone: Tone| match tone {
+            Tone::Text | Tone::Block(None) => theme.text.fg,
+            Tone::Heading => theme.heading,
+            Tone::Code => theme.string,
+            Tone::Block(Some(token)) => theme.token(token),
+            Tone::Link | Tone::Check(_) => theme.accent,
+            Tone::Dim | Tone::TableLine => theme.gutter.fg,
+        };
+        let selected = |at: Option<usize>| {
+            at.is_some_and(|at| {
+                self.selections
+                    .iter()
+                    .any(|s| at >= s.start() && at < s.end())
+            })
+        };
+        // Cells carry the text for the cell tier, and for tests. Pixels come from paint.
+        for g in &row.glyphs {
+            let style = cellix_render::Style {
+                fg: fg_of(g.tone),
+                bg: if selected(g.at) && !proportional {
+                    theme.selection
+                } else {
+                    bg
+                },
+                bold: g.font.bold,
+                italic: g.font.italic,
+                underline: g.underline,
+                painted: proportional,
+            };
+            let x = left + g.x as u16;
+            grid.put_str(x, y, g.ch.encode_utf8(&mut [0; 4]), style, area.right());
+        }
+        if !proportional {
+            return;
+        }
+        let text_y = y as f32 + if row.tall { 0.5 } else { 0.0 };
+        let right = area.right() as f32;
+        let mut i = 0;
+        while i < row.glyphs.len() {
+            let g = row.glyphs[i];
+            let same = |o: &Glyph| {
+                o.font == g.font
+                    && o.tone == g.tone
+                    && o.underline == g.underline
+                    && selected(o.at) == selected(g.at)
+                    && (g.tone != Tone::TableLine || o.x == g.x)
+            };
+            // A table's cells are apart, so a run stops at a jump in position.
+            let mut end = i + 1;
+            while end < row.glyphs.len() && same(&row.glyphs[end]) {
+                let prior = row.glyphs[end - 1];
+                if (prior.x + prior.advance - row.glyphs[end].x).abs() > 0.01 {
+                    break;
+                }
+                end += 1;
+            }
+            let run = &row.glyphs[i..end];
+            let text: String = run.iter().map(|g| g.ch).collect();
+            let x = origin + g.x;
+            let width: f32 = run.iter().map(|g| g.advance).sum();
+            if selected(g.at) {
+                let bounds = Bounds::cells(x, text_y + 0.06, width, 0.88);
+                grid.panel(bounds, 6, Some(theme.selection), None);
+            }
+            match g.tone {
+                Tone::TableLine => {}
+                Tone::Check(checked) => {
+                    let bounds = Bounds::cells(x, y as f32 + 0.2, 1.1, 0.6);
+                    let fill = checked.then_some(theme.accent);
+                    grid.panel(bounds, 16, fill, Some(theme.gutter.fg));
+                    if checked {
+                        grid.paint.push(cellix_render::Paint::Icon {
+                            bounds: Bounds::cells(x + 0.15, y as f32 + 0.22, 1.0, 0.56),
+                            icon: Icon::Check,
+                            color: theme.button_text,
+                        });
+                    }
+                }
+                _ => {
+                    if g.tone == Tone::Code {
+                        let pill = Bounds::cells(x - 0.2, text_y + 0.14, width + 0.4, 0.72);
+                        grid.panel(pill, 14, Some(theme.code_bg), None);
+                    }
+                    let color = (fg_of(g.tone), g.underline);
+                    grid.text_run((x, text_y), right, &text, color, g.font);
+                }
+            }
+            i = end;
         }
     }
 

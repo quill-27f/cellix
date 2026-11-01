@@ -9,12 +9,18 @@ use std::io::BufWriter;
 use std::path::PathBuf;
 
 use cellix::App;
-use cellix_input::Command;
-use cellix_render::{Grid, Rasterizer, SoftwareRasterizer};
+use cellix_input::{Command, Event, Key, KeyEvent};
+use cellix_render::{FontMeasure, Grid, Rasterizer, SoftwareRasterizer};
 
 const DEFAULT_SIZE: (u16, u16) = (120, 36);
 // The cell size of a Retina terminal, so the picture matches what people see.
 const CELL: (usize, usize) = (17, 37);
+
+fn type_text(app: &mut App, text: &str) {
+    for c in text.chars() {
+        app.handle(Event::Key(KeyEvent::plain(Key::Char(c))));
+    }
+}
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -25,8 +31,25 @@ fn main() {
     let number = |i: usize, default| rest.get(i).and_then(|v| v.parse().ok()).unwrap_or(default);
     let size = (number(1, DEFAULT_SIZE.0), number(2, DEFAULT_SIZE.1));
     let mut app = App::new(root.clone(), size);
+    app.set_measure(std::rc::Rc::new(FontMeasure::new(CELL.0, CELL.1)));
+    if let Ok(theme) = std::env::var("CELLIX_THEME") {
+        app.follow_terminal_theme(Some(theme == "light"));
+    }
     match rest.first().map(String::as_str) {
         Some("review") => app.run(Command::OpenDiff),
+        Some("welcome") => {}
+        Some("palette") => app.run(Command::CommandPalette),
+        Some("comment") => {
+            app.open(&root.join("README.md")).unwrap();
+            app.run(Command::AddComment);
+            type_text(&mut app, "Tighten this");
+        }
+        Some(view) if view.starts_with("search:") => {
+            app.run(Command::FindInProject);
+            type_text(&mut app, &view["search:".len()..]);
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            app.poll();
+        }
         Some(file) => app.open(&root.join(file)).unwrap(),
         None => {}
     }

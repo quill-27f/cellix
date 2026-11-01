@@ -117,9 +117,13 @@ is skipped on pixel tiers and kept for the cell tier and tests.
 Fonts are embedded (Inter, JetBrains Mono), because pixels are drawn on the remote host
 over SSH and servers rarely have fonts.
 
+Text is measured with the same fonts the rasterizer draws, through the `Measure` trait, so
+carets and wrapping use real glyph positions. The cell tier measures one column per
+character. Where the terminal offers mode 1016 the mouse reports pixels, because a cell
+can hold two thin letters.
+
 Open: tiles are whole rows, so one region can't scroll separately. Smooth pixel scrolling
-needs per-region tiles. The Markdown page is still monospaced, because its caret mapping
-works in cells, so headings can't yet be larger than body text.
+needs per-region tiles.
 
 ## Theme
 
@@ -146,6 +150,10 @@ the caret's line. Bullets and checkboxes are drawn, tables have real cells, and 
 become a language label. Enter, Backspace and Tab act on structure. The source remains the
 document, and each visible character keeps its source position. Xcode's handling of inline
 markers wasn't confirmed: Cellix hides them too.
+
+On the pixel tiers the page is proportional text at a readable width, with large headings
+spanning two rows, tables with borders and padding, and rounded code blocks with a language
+label and syntax colours. Xcode's formatting toolbar isn't built.
 
 ## Modes
 

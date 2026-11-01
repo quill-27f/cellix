@@ -232,6 +232,7 @@ impl SoftwareRasterizer {
                 color,
                 font,
                 align_right,
+                underline,
             } => {
                 let mask = self.text_mask(text, *font);
                 let mut left = scale(*x, cw).round() as i32;
@@ -243,6 +244,17 @@ impl SoftwareRasterizer {
                 let top = scale(*y, ch).round() as i32 - lift;
                 let limit = scale(*max_width, cw).max(0.0) as usize;
                 target.blit(&mask, left, top, limit, *color);
+                if *underline {
+                    let thickness = (ch / 24.0).ceil().max(1.0);
+                    let shape = Shape {
+                        x: left as f32,
+                        y: scale(*y, ch) + ch * 0.78,
+                        w: mask.width.saturating_sub(2).min(limit) as f32,
+                        h: thickness,
+                        radius: 0.0,
+                    };
+                    target.panel(shape, Some(*color), None, false, ch);
+                }
             }
             Paint::Icon {
                 bounds,
@@ -488,7 +500,8 @@ impl Rasterizer for SoftwareRasterizer {
             }
         }
         for (i, cell) in cells.iter().enumerate() {
-            if cell.style.underline {
+            // Painted text underlines itself, at its true width.
+            if cell.style.underline && !cell.style.painted {
                 fill(&mut rgb, width, i * cw, ch - 2, cw, 1, cell.style.fg);
             }
         }
