@@ -23,7 +23,7 @@ impl Item {
     }
 }
 
-pub const COMMANDS: [(&str, Command); 13] = [
+pub const COMMANDS: [(&str, Command); 15] = [
     ("Save", Command::Save),
     ("Undo", Command::Undo),
     ("Redo", Command::Redo),
@@ -36,6 +36,8 @@ pub const COMMANDS: [(&str, Command); 13] = [
     ("Toggle Sidebar", Command::ToggleSidebar),
     ("Find in Project", Command::FindInProject),
     ("Review Changes", Command::OpenDiff),
+    ("Add Comment", Command::AddComment),
+    ("Blame Line", Command::BlameLine),
     ("Quit", Command::Quit),
 ];
 

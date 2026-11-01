@@ -200,6 +200,7 @@ impl Editor {
         theme: &Theme,
         focused: bool,
         registry: &Registry,
+        comments: &[usize],
     ) {
         grid.fill(area, theme.text);
         let gutter = self.gutter_width();
@@ -212,6 +213,13 @@ impl Editor {
             let y = area.y + row;
             let number = format!("{:>w$} ", line + 1, w = gutter as usize - 1);
             grid.put_str(area.x, y, &number, theme.gutter, area.x + gutter);
+            if comments.contains(&(line + 1)) {
+                let mark = cellix_render::Style {
+                    fg: theme.accent,
+                    ..theme.gutter
+                };
+                grid.put_str(area.x, y, "◆", mark, area.x + gutter);
+            }
 
             let mut column = 0;
             let mut text = String::new();

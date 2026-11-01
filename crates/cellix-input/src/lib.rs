@@ -113,6 +113,8 @@ pub enum Command {
     CommandPalette,
     FindInProject,
     OpenDiff,
+    AddComment,
+    BlameLine,
     Cancel,
     Quit,
 }

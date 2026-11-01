@@ -17,3 +17,13 @@ Real-terminal checks found two bugs a fake terminal could not: a resize lost dur
 loading, and Zellij falling to cells because the window size had no pixels yet.
 
 Unverified: live scrolling, pane switching and detach, a real SSH link, other terminals.
+
+## 2026-11-01: review, the first useful release
+
+Ctrl+G opens side-by-side changes against HEAD. Hunks can be accepted or rejected with
+the mouse, and any line can take a comment. `cellix --wait <file>` appends comments to
+the file on exit, for `$VISUAL`. `cellix comments` reads them over the workspace socket.
+Quit and close now ask before discarding unsaved edits, which they silently did before.
+
+Accept only marks a hunk: it doesn't touch the file or the git index, and marks are lost
+on exit. Reject refuses to run over unsaved edits.

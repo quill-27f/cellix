@@ -134,6 +134,8 @@ fn pty_bracketed_paste_inserts_verbatim() {
     screen.send(b"\x1b[200~pasted\ttext\x1b[201~");
     screen.wait_for("pasted");
     screen.send(b"\x11");
+    screen.wait_for("Save changes first");
+    screen.send(b"n\r");
     screen.wait_exit();
 }
 
@@ -277,4 +279,52 @@ fn pty_follows_a_resize() {
         .unwrap();
     wait("Ctrl+Q quit");
     let _ = child.kill();
+}
+
+#[test]
+fn wait_blocks_until_closed() {
+    let dir = project();
+    let plan = dir.path().join("plan.md");
+    std::fs::write(&plan, "# Plan\nstep\n").unwrap();
+    let mut screen = Screen::start(dir.path(), &["--wait", "plan.md"]);
+    screen.wait_for("step");
+    assert!(screen.child.try_wait().unwrap().is_none());
+    screen.send(b"\x1bc"); // Alt+C on line 1
+    screen.wait_for("Comment on line 1");
+    screen.send(b"nice\r");
+    screen.wait_for("\u{25c6}");
+    assert!(screen.child.try_wait().unwrap().is_none());
+    screen.send(b"\x11");
+    screen.wait_exit();
+    let text = std::fs::read_to_string(plan).unwrap();
+    assert!(text.ends_with("- Line 1: nice\n"), "{text}");
+}
+
+#[test]
+fn cli_reads_comments_over_socket() {
+    let dir = project();
+    let mut screen = Screen::start(dir.path(), &["hello.txt"]);
+    screen.wait_for("hello from a file");
+    screen.send(b"\x1bc");
+    screen.wait_for("Comment on line 1");
+    screen.send(b"from a human\r");
+    screen.wait_for("\u{25c6}");
+    let cli = |args: &[&str]| {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_cellix"))
+            .args(args)
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let json = cli(&["comments"]);
+    assert!(json.contains(r#""file":"hello.txt""#), "{json}");
+    assert!(json.contains(r#""text":"from a human""#), "{json}");
+    assert!(cli(&["comments", "--take"]).contains("from a human"));
+    assert_eq!(cli(&["comments"]).trim(), "[]");
+    cli(&["open", "other.txt"]);
+    screen.wait_for("other contents");
+    screen.send(b"\x11");
+    screen.wait_exit();
 }

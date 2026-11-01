@@ -137,49 +137,49 @@
     "milestone": 3,
     "title": "Side-by-side diff of working tree against HEAD",
     "test": "side_by_side_diff_aligns_hunks",
-    "passes": false
+    "passes": true
   },
   {
     "id": "hunks",
     "milestone": 3,
     "title": "Accept or reject a hunk",
     "test": "reject_hunk_restores_file",
-    "passes": false
+    "passes": true
   },
   {
     "id": "comments",
     "milestone": 3,
     "title": "Line comments on diffs and plans",
     "test": "comment_is_attached_to_line",
-    "passes": false
+    "passes": true
   },
   {
     "id": "plan-review",
     "milestone": 3,
     "title": "Plan review: open, edit, comment, send back",
     "test": "plan_review_returns_comments",
-    "passes": false
+    "passes": true
   },
   {
     "id": "wait",
     "milestone": 3,
     "title": "cellix --wait for $VISUAL",
     "test": "wait_blocks_until_closed",
-    "passes": false
+    "passes": true
   },
   {
     "id": "socket",
     "milestone": 3,
     "title": "Per-workspace socket and CLI deliver review comments as JSON",
     "test": "cli_reads_comments_over_socket",
-    "passes": false
+    "passes": true
   },
   {
     "id": "git",
     "milestone": 3,
     "title": "Git status in explorer, and blame",
     "test": "explorer_shows_git_status",
-    "passes": false
+    "passes": true
   },
   {
     "id": "search",

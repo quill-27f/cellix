@@ -6,10 +6,14 @@ use cellix_core::{Buffer, Selection, Workspace};
 use cellix_input::{Command, Event, Key, KeyEvent, MouseEvent, MouseKind, simple_keymap};
 use cellix_lang::Registry;
 use cellix_render::{Grid, Rect, Style};
+use cellix_review::{Comment, append_comments, blame_line, changed_files};
+
+use cellix_agent::{Request, SharedComments};
 
 use crate::editor::Editor;
 use crate::explorer::Explorer;
 use crate::palette::{COMMANDS, Item, Palette};
+use crate::review::{Hit, Review};
 use crate::theme::Theme;
 
 const SIDEBAR_WIDTH: u16 = 28;
@@ -32,6 +36,9 @@ enum PromptAction {
     NewFolder(PathBuf),
     Rename(PathBuf),
     Delete(PathBuf),
+    Comment(String, usize),
+    Quit,
+    CloseTab,
 }
 
 struct Prompt {
@@ -73,6 +80,12 @@ pub struct App {
     /// Text for the terminal's clipboard, sent with OSC 52 by the terminal loop.
     pub outgoing_clipboard: Option<String>,
     ticks: u32,
+    review: Option<Review>,
+    /// Shared with the socket thread, so agents can read comments at any time.
+    pub comments: SharedComments,
+    /// With `--wait`: comments on this file are appended to it on exit, so an agent that
+    /// only reads the file back still gets them.
+    pub wait_file: Option<PathBuf>,
     /// Set when the user asks to leave.
     pub quit: bool,
 }
@@ -82,7 +95,7 @@ impl App {
         let workspace = Workspace::new(root);
         let mut explorer = Explorer::default();
         explorer.refresh(&workspace);
-        Self {
+        let mut app = Self {
             workspace,
             explorer,
             editors: Vec::new(),
@@ -98,8 +111,13 @@ impl App {
             clipboard: String::new(),
             outgoing_clipboard: None,
             ticks: 0,
+            review: None,
+            comments: SharedComments::default(),
+            wait_file: None,
             quit: false,
-        }
+        };
+        app.refresh_tree();
+        app
     }
 
     fn say(&self, text: impl Into<String>) {
@@ -230,7 +248,30 @@ impl App {
         }
         self.ticks += 1;
         if self.ticks.is_multiple_of(EXPLORER_REFRESH_TICKS) {
-            self.explorer.refresh(&self.workspace);
+            self.refresh_tree();
+            if let Some(review) = &mut self.review {
+                review.refresh();
+            }
+        }
+    }
+
+    fn refresh_tree(&mut self) {
+        self.explorer.refresh(&self.workspace);
+        let root = self.workspace.root().to_path_buf();
+        self.explorer.status.clear();
+        for change in changed_files(&root) {
+            let path = root.join(&change.path);
+            for parent in path
+                .ancestors()
+                .skip(1)
+                .take_while(|p| p.starts_with(&root) && *p != root)
+            {
+                self.explorer
+                    .status
+                    .entry(parent.to_path_buf())
+                    .or_insert('•');
+            }
+            self.explorer.status.insert(path, change.status);
         }
     }
 
@@ -319,6 +360,24 @@ impl App {
     fn finish_prompt(&mut self, prompt: Prompt) {
         let name = prompt.input.trim();
         let result = match &prompt.action {
+            PromptAction::Comment(file, line) => {
+                if !name.is_empty() {
+                    self.add_comment(file.clone(), *line, name.to_string());
+                }
+                Ok(())
+            }
+            PromptAction::Quit | PromptAction::CloseTab => {
+                if name.eq_ignore_ascii_case("y") {
+                    self.save_dirty(matches!(prompt.action, PromptAction::CloseTab));
+                }
+                if !name.is_empty() {
+                    match prompt.action {
+                        PromptAction::Quit => self.quit = true,
+                        _ => self.close_tab(),
+                    }
+                }
+                Ok(())
+            }
             PromptAction::Delete(path) if name.eq_ignore_ascii_case("y") => {
                 self.workspace.delete(path)
             }
@@ -351,7 +410,26 @@ impl App {
     pub fn run(&mut self, command: Command) {
         let area = self.focused_area();
         match command {
+            Command::Quit if self.editors.iter().any(|e| e.buffer.is_dirty()) => {
+                self.ask("Save changes first? y/n", PromptAction::Quit);
+            }
             Command::Quit => self.quit = true,
+            Command::CloseTab
+                if self
+                    .editors
+                    .get(self.active())
+                    .is_some_and(|e| e.buffer.is_dirty()) =>
+            {
+                self.ask("Save changes first? y/n", PromptAction::CloseTab);
+            }
+            Command::OpenDiff => {
+                self.review = match self.review {
+                    Some(_) => None,
+                    None => Some(Review::new(self.workspace.root().to_path_buf())),
+                };
+            }
+            Command::AddComment => self.prompt_comment_at_cursor(),
+            Command::BlameLine => self.blame(),
             Command::ToggleSidebar => self.show_sidebar = !self.show_sidebar,
             Command::Save => self.save(),
             Command::CloseTab => self.close_tab(),
@@ -399,6 +477,7 @@ impl App {
                 let text = self.clipboard.clone();
                 self.paste(&text);
             }
+            Command::Cancel if self.review.is_some() => self.review = None,
             Command::Cancel => {
                 if let Some(editor) = self.editor_mut() {
                     let head = editor.selections.primary().head;
@@ -410,6 +489,152 @@ impl App {
                     editor.run(command, area);
                 }
             }
+        }
+    }
+
+    fn ask(&mut self, label: &str, action: PromptAction) {
+        self.overlay = Overlay::Prompt(Prompt {
+            label: label.to_string(),
+            input: String::new(),
+            action,
+        });
+    }
+
+    fn save_dirty(&mut self, only_active: bool) {
+        let active = self.active();
+        for (i, editor) in self.editors.iter_mut().enumerate() {
+            if editor.buffer.is_dirty() && (!only_active || i == active) {
+                let _ = editor.buffer.save();
+            }
+        }
+    }
+
+    fn relative(&self, path: &Path) -> String {
+        path.strip_prefix(self.workspace.root())
+            .unwrap_or(path)
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn add_comment(&mut self, file: String, line: usize, text: String) {
+        if let Ok(mut comments) = self.comments.lock() {
+            comments.push(Comment { file, line, text });
+        }
+    }
+
+    fn comment_lines(&self, file: &str) -> Vec<usize> {
+        self.comments.lock().map_or_else(
+            |_| Vec::new(),
+            |c| {
+                c.iter()
+                    .filter(|c| c.file == file)
+                    .map(|c| c.line)
+                    .collect()
+            },
+        )
+    }
+
+    fn cursor_line(&self) -> Option<(PathBuf, usize)> {
+        let editor = self.editors.get(self.active())?;
+        let path = editor.buffer.path()?.to_path_buf();
+        let rope = editor.buffer.rope();
+        Some((
+            path,
+            rope.char_to_line(editor.selections.primary().head) + 1,
+        ))
+    }
+
+    fn prompt_comment_at_cursor(&mut self) {
+        if let Some((path, line)) = self.cursor_line() {
+            let file = self.relative(&path);
+            self.ask(
+                &format!("Comment on line {line}"),
+                PromptAction::Comment(file, line),
+            );
+        }
+    }
+
+    fn blame(&mut self) {
+        if let Some((path, line)) = self.cursor_line() {
+            let file = self.relative(&path);
+            let root = self.workspace.root().to_path_buf();
+            let note = blame_line(&root, Path::new(&file), line);
+            self.say(note.unwrap_or_else(|| "No blame for this line".to_string()));
+        }
+    }
+
+    /// Runs requests from the socket thread.
+    pub fn serve(&mut self, request: Request) {
+        match request {
+            Request::Open(path) => {
+                if let Err(e) = self.open(&path) {
+                    self.say(format!("Could not open {}: {e}", path.display()));
+                }
+            }
+            Request::CommentsTaken => self.say("An agent took the review comments"),
+        }
+    }
+
+    /// Writes comments into the `--wait` file. Called once, as the app exits.
+    pub fn finish(&self) -> io::Result<()> {
+        let Some(path) = &self.wait_file else {
+            return Ok(());
+        };
+        let file = self.relative(path);
+        let comments: Vec<Comment> = self.comments.lock().map_or_else(
+            |_| Vec::new(),
+            |c| c.iter().filter(|c| c.file == file).cloned().collect(),
+        );
+        if comments.is_empty() {
+            return Ok(());
+        }
+        let text = std::fs::read_to_string(path)?;
+        std::fs::write(path, append_comments(&text, &comments))
+    }
+
+    fn click_review(&mut self, x: u16, y: u16) {
+        let area = self.main_area();
+        let Some(review) = &mut self.review else {
+            return;
+        };
+        match review.hit(area, x, y) {
+            Some(Hit::File(index)) => review.select(index),
+            Some(Hit::Accept(hunk)) => review.accept(hunk),
+            Some(Hit::Reject(hunk)) => self.reject(hunk),
+            Some(Hit::Line(file, line)) => {
+                self.ask(
+                    &format!("Comment on line {line}"),
+                    PromptAction::Comment(file, line),
+                );
+            }
+            None => {}
+        }
+    }
+
+    /// Puts one hunk back on disk. Refuses if the file has unsaved edits, which the
+    /// rejection would silently overwrite.
+    fn reject(&mut self, hunk: usize) {
+        let Some(review) = &self.review else {
+            return;
+        };
+        let (Some(path), Some(text)) = (review.absolute_path(), review.rejected_text(hunk)) else {
+            return;
+        };
+        let dirty = self
+            .editors
+            .iter()
+            .any(|e| e.buffer.path() == Some(path.as_path()) && e.buffer.is_dirty());
+        if dirty {
+            self.say("Save or undo your edits to this file first");
+            return;
+        }
+        let note = match std::fs::write(&path, text) {
+            Ok(()) => "Rejected the hunk".to_string(),
+            Err(e) => format!("Could not write the file: {e}"),
+        };
+        self.say(note);
+        if let Some(review) = &mut self.review {
+            review.refresh();
         }
     }
 
@@ -468,6 +693,23 @@ impl App {
         }
         let (x, y) = (mouse.x, mouse.y);
         let in_sidebar = self.sidebar_area().is_some_and(|a| a.contains(x, y));
+        if self.review.is_some() && !in_sidebar && self.main_area().contains(x, y) {
+            match mouse.kind {
+                MouseKind::Left => self.click_review(x, y),
+                MouseKind::ScrollUp | MouseKind::ScrollDown => {
+                    let delta = if mouse.kind == MouseKind::ScrollUp {
+                        -WHEEL_LINES
+                    } else {
+                        WHEEL_LINES
+                    };
+                    if let Some(review) = &mut self.review {
+                        review.scroll_by(delta);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
         match mouse.kind {
             MouseKind::ScrollUp | MouseKind::ScrollDown => {
                 let delta = if mouse.kind == MouseKind::ScrollUp {
@@ -482,6 +724,17 @@ impl App {
                 }
             }
             MouseKind::Right if in_sidebar => self.open_menu(x, y),
+            MouseKind::Right if self.pane_at(x, y).is_some() => {
+                if let Some(pane) = self.pane_at(x, y) {
+                    self.focus = pane;
+                }
+                let area = self.focused_area();
+                if let Some(editor) = self.editor_mut() {
+                    let at = editor.position_at(area, x, y);
+                    editor.selections.set_single(Selection::cursor(at));
+                }
+                self.prompt_comment_at_cursor();
+            }
             MouseKind::Left if in_sidebar => self.click_explorer(y),
             MouseKind::Left if self.tabs_area().contains(x, y) => self.click_tab(x),
             MouseKind::Left => {
@@ -648,11 +901,29 @@ impl App {
                 .unwrap_or_default();
             self.explorer.draw(grid, area, &name, theme);
         }
+        if let Some(review) = &self.review {
+            let comments = self.comments.lock().map(|c| c.clone()).unwrap_or_default();
+            let commented =
+                |file: &str, line: usize| comments.iter().any(|c| c.file == file && c.line == line);
+            review.draw(grid, self.main_area(), theme, commented);
+            self.draw_status(grid);
+            self.draw_overlay(grid);
+            return;
+        }
         self.draw_tabs(grid);
         for (pane, index) in self.panes.iter().enumerate() {
             if let Some(editor) = self.editors.get(*index) {
                 let area = self.pane_area(pane);
-                editor.draw(grid, area, theme, pane == self.focus, &self.registry);
+                let file = editor.buffer.path().map(|p| self.relative(p));
+                let lines = file.map_or_else(Vec::new, |f| self.comment_lines(&f));
+                editor.draw(
+                    grid,
+                    area,
+                    theme,
+                    pane == self.focus,
+                    &self.registry,
+                    &lines,
+                );
                 if pane + 1 < self.panes.len() {
                     let line = Rect::new(area.right(), area.y, 1, area.h);
                     grid.fill(line, theme.tab);
@@ -660,6 +931,11 @@ impl App {
             }
         }
         self.draw_status(grid);
+        self.draw_overlay(grid);
+    }
+
+    fn draw_overlay(&self, grid: &mut Grid) {
+        let theme = &self.theme;
         match &self.overlay {
             Overlay::Palette(palette) => palette.draw(grid, theme),
             Overlay::Menu(menu) => self.draw_menu(grid, menu),
@@ -705,7 +981,7 @@ impl App {
         grid.fill(Rect::new(0, y, width, 1), self.theme.bar);
         let message = self.message.borrow();
         let left = if message.is_empty() {
-            "Ctrl+P open  Ctrl+S save  Ctrl+Q quit"
+            "Ctrl+P open  Ctrl+S save  Ctrl+G review  Ctrl+Q quit"
         } else {
             message.as_str()
         };
@@ -1031,6 +1307,201 @@ mod tests {
             app.handle(Event::Tick);
         }
         assert!(screen(&app).text().contains("from-agent.txt"));
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap()
+            .status;
+        assert!(status.success(), "git {args:?}");
+    }
+
+    /// A committed project with one agent edit to alpha.txt.
+    fn reviewed() -> (TempDir, App) {
+        let (dir, _) = project();
+        git(dir.path(), &["init", "-q"]);
+        git(dir.path(), &["config", "user.email", "t@example.com"]);
+        git(dir.path(), &["config", "user.name", "Tester"]);
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-q", "-m", "base"]);
+        fs::write(dir.path().join("alpha.txt"), "first line\nCHANGED\n").unwrap();
+        let app = App::new(dir.path().to_path_buf(), (120, 30));
+        (dir, app)
+    }
+
+    #[test]
+    fn diff_view_shows_both_versions_side_by_side() {
+        let (_dir, mut app) = reviewed();
+        app.run(Command::OpenDiff);
+        let grid = screen(&app);
+        let (_, y) = find(&grid, "second line");
+        assert!(grid.row_text(y).contains("CHANGED"), "{}", grid.text());
+        assert_eq!(find(&grid, "first line").1 + 1, y);
+    }
+
+    #[test]
+    fn reject_hunk_restores_file() {
+        let (dir, mut app) = reviewed();
+        app.run(Command::OpenDiff);
+        let (x, y) = find(&screen(&app), "[Reject]");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        assert_eq!(
+            fs::read_to_string(dir.path().join("alpha.txt")).unwrap(),
+            "first line\nsecond line\n"
+        );
+        assert!(screen(&app).text().contains("No changes"));
+    }
+
+    #[test]
+    fn accept_marks_a_hunk_and_keeps_the_file() {
+        let (dir, mut app) = reviewed();
+        app.run(Command::OpenDiff);
+        let (x, y) = find(&screen(&app), "[Accept]");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        assert!(screen(&app).text().contains("accepted"));
+        assert!(
+            fs::read_to_string(dir.path().join("alpha.txt"))
+                .unwrap()
+                .contains("CHANGED")
+        );
+    }
+
+    #[test]
+    fn reject_refuses_to_overwrite_unsaved_edits() {
+        let (dir, mut app) = reviewed();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        typed(&mut app, "mine");
+        app.run(Command::OpenDiff);
+        let (x, y) = find(&screen(&app), "[Reject]");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        assert!(
+            fs::read_to_string(dir.path().join("alpha.txt"))
+                .unwrap()
+                .contains("CHANGED")
+        );
+        assert!(screen(&app).text().contains("Save or undo"));
+    }
+
+    #[test]
+    fn comment_is_attached_to_line() {
+        let (dir, mut app) = reviewed();
+        app.run(Command::OpenDiff);
+        let (x, y) = find(&screen(&app), "CHANGED");
+        app.handle(mouse(MouseKind::Left, x, y));
+        typed(&mut app, "why this");
+        enter(&mut app);
+        let comment = app.comments.lock().unwrap()[0].clone();
+        assert_eq!(
+            comment,
+            Comment {
+                file: "alpha.txt".into(),
+                line: 2,
+                text: "why this".into()
+            }
+        );
+        app.run(Command::OpenDiff);
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        assert!(screen(&app).text().contains("◆"));
+    }
+
+    #[test]
+    fn plan_review_returns_comments() {
+        let (dir, mut app) = project();
+        let plan = dir.path().join("plan.md");
+        fs::write(&plan, "# Plan\nstep one\n").unwrap();
+        app.wait_file = Some(plan.clone());
+        app.open(&plan).unwrap();
+        app.handle(Event::Mouse(MouseEvent {
+            kind: MouseKind::Right,
+            x: find(&screen(&app), "step one").0,
+            y: find(&screen(&app), "step one").1,
+            mods: Mods::default(),
+        }));
+        typed(&mut app, "split this step");
+        enter(&mut app);
+        app.finish().unwrap();
+        assert_eq!(
+            fs::read_to_string(plan).unwrap(),
+            "# Plan\nstep one\n\n## Review comments\n\n- Line 2: split this step\n"
+        );
+    }
+
+    #[test]
+    fn explorer_shows_git_status() {
+        let (dir, mut app) = reviewed();
+        let (_, y) = find(&screen(&app), "alpha.txt");
+        assert!(
+            screen(&app).row_text(y)[..28].ends_with("M "),
+            "{}",
+            screen(&app).row_text(y)
+        );
+        fs::write(dir.path().join("beta.rs"), "changed\n").unwrap();
+        for _ in 0..EXPLORER_REFRESH_TICKS {
+            app.handle(Event::Tick);
+        }
+        let (_, y) = find(&screen(&app), "beta.rs");
+        assert!(screen(&app).row_text(y).contains("M"));
+    }
+
+    #[test]
+    fn blame_reports_the_commit() {
+        let (dir, mut app) = reviewed();
+        app.open(&dir.path().join("beta.rs")).unwrap();
+        app.run(Command::BlameLine);
+        assert!(screen(&app).text().contains("Tester: base"));
+    }
+
+    #[test]
+    fn quit_with_unsaved_changes_asks_first() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        typed(&mut app, "x");
+        app.run(Command::Quit);
+        assert!(!app.quit);
+        assert!(screen(&app).text().contains("Save changes first"));
+        app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
+        assert!(!app.quit, "Esc must cancel");
+        app.run(Command::Quit);
+        typed(&mut app, "y");
+        enter(&mut app);
+        assert!(app.quit);
+        assert!(
+            fs::read_to_string(dir.path().join("alpha.txt"))
+                .unwrap()
+                .starts_with("xfirst")
+        );
+    }
+
+    #[test]
+    fn quit_can_discard_on_request() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        typed(&mut app, "x");
+        app.run(Command::Quit);
+        typed(&mut app, "n");
+        enter(&mut app);
+        assert!(app.quit);
+        assert!(
+            fs::read_to_string(dir.path().join("alpha.txt"))
+                .unwrap()
+                .starts_with("first")
+        );
+    }
+
+    #[test]
+    fn closing_a_dirty_tab_asks_first() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        typed(&mut app, "x");
+        app.run(Command::CloseTab);
+        assert!(screen(&app).text().contains("xfirst line"));
+        typed(&mut app, "n");
+        enter(&mut app);
+        assert!(!screen(&app).text().contains("xfirst line"));
     }
 
     #[test]

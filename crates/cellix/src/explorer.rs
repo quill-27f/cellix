@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
+
 use cellix_core::{Entry, Workspace};
 use cellix_render::{Grid, Rect, Style};
 
@@ -9,6 +12,8 @@ pub struct Explorer {
     pub entries: Vec<Entry>,
     pub top: usize,
     pub selected: Option<usize>,
+    /// Git status letters by absolute path, with directories marked for what they hold.
+    pub status: HashMap<PathBuf, char>,
 }
 
 impl Explorer {
@@ -66,7 +71,15 @@ impl Explorer {
             };
             let indent = " ".repeat(entry.depth * 2 + 1);
             let text = format!("{indent}{marker}{}", entry.name);
-            grid.put_str(area.x, y, &text, style, area.right());
+            grid.put_str(area.x, y, &text, style, area.right().saturating_sub(2));
+            if let Some(status) = self.status.get(&entry.path) {
+                let mark = Style {
+                    fg: theme.accent,
+                    ..style
+                };
+                let x = area.right().saturating_sub(2);
+                grid.put_str(x, y, &status.to_string(), mark, area.right());
+            }
         }
     }
 }

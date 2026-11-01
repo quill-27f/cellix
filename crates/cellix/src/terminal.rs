@@ -153,8 +153,17 @@ fn window_cell() -> Option<(usize, usize)> {
     (cell.0 > 0 && cell.1 > 0).then_some(cell)
 }
 
-/// Opens `paths` and runs until the user quits.
-pub fn run(paths: Vec<PathBuf>) -> io::Result<()> {
+/// What the command line asked for.
+#[derive(Debug, Default)]
+pub struct Options {
+    pub paths: Vec<PathBuf>,
+    /// Behave as `$VISUAL`: write review comments into the file before exiting.
+    pub wait: bool,
+}
+
+/// Opens the requested files and runs until the user quits.
+pub fn run(options: Options) -> io::Result<()> {
+    let paths = options.paths;
     let root = paths
         .iter()
         .find(|p| p.is_dir())
@@ -163,8 +172,14 @@ pub fn run(paths: Vec<PathBuf>) -> io::Result<()> {
         .canonicalize()?;
     let mut app = App::new(root, size()?);
     for path in paths.iter().filter(|p| p.is_file()) {
-        app.open(&path.canonicalize()?)?;
+        let path = path.canonicalize()?;
+        app.open(&path)?;
+        if options.wait {
+            app.wait_file = Some(path);
+        }
     }
+    // Agents are optional: a second window on this workspace still edits normally.
+    let server = cellix_agent::start(app.workspace.root(), app.comments.clone()).ok();
 
     let _session = Session::start()?;
     let mut display = Display::detect()?;
@@ -192,7 +207,7 @@ pub fn run(paths: Vec<PathBuf>) -> io::Result<()> {
         }
         out.flush()?;
         if app.quit {
-            return Ok(());
+            break;
         }
         if ct::poll(TICK)? {
             // Drain everything queued, so a fast wheel doesn't redraw per event.
@@ -209,5 +224,12 @@ pub fn run(paths: Vec<PathBuf>) -> io::Result<()> {
         } else {
             app.handle(Event::Tick);
         }
+        if let Some(server) = &server {
+            while let Ok(request) = server.requests.try_recv() {
+                app.serve(request);
+            }
+        }
     }
+    drop(_session);
+    app.finish()
 }

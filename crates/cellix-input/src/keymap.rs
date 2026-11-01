@@ -29,6 +29,7 @@ pub fn simple_keymap(event: KeyEvent) -> Option<Command> {
         Key::Esc => Cancel,
         Key::F(1) => CommandPalette,
         Key::Char('p') if mods.alt => CommandPalette,
+        Key::Char('c') if mods.alt => AddComment,
         Key::Char(c) if mods.ctrl => match c.to_ascii_lowercase() {
             'q' => Quit,
             's' => Save,

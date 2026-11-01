@@ -101,16 +101,28 @@ name = "cellix"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "cellix-agent",
  "cellix-core",
  "cellix-input",
  "cellix-lang",
  "cellix-render",
+ "cellix-review",
  "cellix-term",
  "crossterm",
  "portable-pty",
  "tempfile",
  "unicode-width",
  "vt100",
+]
+
+[[package]]
+name = "cellix-agent"
+version = "0.1.0"
+dependencies = [
+ "cellix-review",
+ "libc",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -150,6 +162,16 @@ dependencies = [
  "cosmic-text",
  "unicode-segmentation",
  "unicode-width",
+]
+
+[[package]]
+name = "cellix-review"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "similar",
+ "tempfile",
 ]
 
 [[package]]
@@ -830,6 +852,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4148590afebada386688f18773da617792bf2ef03ffc1e4cbd2b1d45b023e0ba"
 dependencies = [
  "serde_core",
+ "serde_derive",
 ]
 
 [[package]]
@@ -936,6 +959,15 @@ name = "simd-adler32"
 version = "0.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a219298ac11a56ea9a6d2120044824d6f01aeb034955e7af7bc16858527deea"
+
+[[package]]
+name = "similar"
+version = "3.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2f8bec09ae8fae0f4f265a4559a9334be3929d8504e9b536df0a41302bd1733"
+dependencies = [
+ "bstr",
+]
 
 [[package]]
 name = "skrifa"

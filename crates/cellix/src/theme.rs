@@ -19,6 +19,8 @@ pub struct Theme {
     pub function: Rgb,
     pub kind: Rgb,
     pub number: Rgb,
+    pub added: Rgb,
+    pub removed: Rgb,
 }
 
 fn style(fg: Rgb, bg: Rgb) -> Style {
@@ -65,6 +67,8 @@ impl Default for Theme {
             function: Rgb(130, 170, 255),
             kind: Rgb(240, 198, 116),
             number: Rgb(247, 140, 108),
+            added: Rgb(30, 58, 42),
+            removed: Rgb(70, 34, 38),
         }
     }
 }

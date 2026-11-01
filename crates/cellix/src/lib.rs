@@ -4,8 +4,9 @@ mod app;
 mod editor;
 mod explorer;
 mod palette;
+mod review;
 mod terminal;
 mod theme;
 
 pub use app::App;
-pub use terminal::run;
+pub use terminal::{Options, run};
