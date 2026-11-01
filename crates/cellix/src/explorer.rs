@@ -7,7 +7,7 @@ use cellix_render::{Bounds, Grid, Icon, Rect, Rgb, Style};
 use crate::theme::Theme;
 
 /// Rows above the tree: the EXPLORER title and the folder name.
-const HEADER_ROWS: u16 = 2;
+const HEADER_ROWS: u16 = 1;
 
 /// The file tree sidebar.
 #[derive(Default)]
@@ -48,32 +48,18 @@ impl Explorer {
         theme: &Theme,
     ) {
         grid.fill(area, theme.sidebar);
-        let title = Style {
-            fg: theme.gutter.fg,
+        let heading = Style {
+            bold: true,
             ..theme.sidebar
         };
         grid.label_at(
             area.x as f32 + 2.0,
             area.x + 2,
             area.y,
-            "EXPLORER",
-            title,
-            area.right(),
-            80,
-        );
-        let heading = Style {
-            bold: true,
-            ..theme.sidebar
-        };
-        let name = root_name.to_uppercase();
-        grid.label_at(
-            area.x as f32 + 2.0,
-            area.x + 3,
-            area.y + 1,
-            &name,
+            root_name,
             heading,
             area.right(),
-            85,
+            95,
         );
         for (row, entry) in self.entries.iter().skip(self.top).enumerate() {
             let y = area.y + HEADER_ROWS + row as u16;
@@ -115,9 +101,9 @@ impl Explorer {
                 (false, _) => ("▪", None, Icon::File),
             };
             let color = if entry.is_dir {
-                theme.folder
+                folder_color(&entry.name)
             } else {
-                file_color(&entry.name, theme)
+                file_color(&entry.name)
             };
             if let Some(chevron) = chevron {
                 grid.glyph(
@@ -145,14 +131,54 @@ impl Explorer {
     }
 }
 
-/// A colour for the file's kind, standing in for VS Code's file icons.
-fn file_color(name: &str, theme: &Theme) -> Rgb {
-    match name.rsplit('.').next().unwrap_or("") {
-        "rs" => theme.string,
-        "md" | "markdown" => theme.accent,
-        "json" | "toml" | "yml" | "yaml" => theme.git_modified,
-        "py" | "go" | "ts" | "tsx" | "js" | "jsx" => theme.kind,
-        "sh" | "bash" | "zsh" => theme.comment,
-        _ => theme.gutter.fg,
+/// A folder's colour, for the names that mean something, as VS Code's icon themes do.
+fn folder_color(name: &str) -> Rgb {
+    match name {
+        "src" | "lib" | "app" | "crates" | "packages" => Rgb(120, 170, 240),
+        "test" | "tests" | "spec" | "__tests__" => Rgb(120, 200, 150),
+        "docs" | "doc" => Rgb(110, 190, 220),
+        ".github" | ".git" | ".gitlab" => Rgb(235, 130, 110),
+        ".claude" | ".codex" | ".cursor" => Rgb(230, 150, 110),
+        "target" | "dist" | "build" | "out" | "node_modules" | ".venv" => Rgb(135, 135, 155),
+        "scripts" | "harness" | "bin" | "tools" => Rgb(170, 200, 110),
+        "terraform" | "infra" | "deploy" | "k8s" => Rgb(165, 140, 235),
+        "assets" | "public" | "static" | "images" => Rgb(230, 190, 100),
+        _ => Rgb(143, 168, 205),
+    }
+}
+
+/// A file's colour, standing in for the logo a full icon theme would draw.
+fn file_color(name: &str) -> Rgb {
+    let lower = name.to_lowercase();
+    if lower.starts_with(".env") {
+        return Rgb(235, 200, 90);
+    }
+    if lower.starts_with("dockerfile") {
+        return Rgb(90, 170, 235);
+    }
+    if lower.starts_with("license") {
+        return Rgb(220, 190, 110);
+    }
+    match lower.rsplit('.').next().unwrap_or("") {
+        "rs" => Rgb(235, 140, 90),
+        "md" | "markdown" | "mdx" => Rgb(100, 170, 240),
+        "json" | "jsonc" => Rgb(235, 200, 90),
+        "toml" | "ini" | "cfg" | "conf" => Rgb(170, 170, 190),
+        "yml" | "yaml" => Rgb(225, 110, 130),
+        "tf" | "tfvars" | "hcl" => Rgb(165, 140, 235),
+        "py" => Rgb(90, 165, 225),
+        "ts" | "tsx" => Rgb(80, 150, 235),
+        "js" | "jsx" | "mjs" => Rgb(240, 215, 100),
+        "go" => Rgb(90, 200, 225),
+        "sh" | "bash" | "zsh" => Rgb(140, 205, 110),
+        "html" | "htm" => Rgb(235, 120, 80),
+        "css" | "scss" => Rgb(110, 150, 240),
+        "c" | "h" | "cpp" | "cc" | "hpp" => Rgb(110, 160, 220),
+        "java" => Rgb(225, 120, 90),
+        "rb" => Rgb(225, 90, 90),
+        "sql" => Rgb(235, 180, 110),
+        "lock" => Rgb(135, 135, 155),
+        "gitignore" | "dockerignore" => Rgb(235, 130, 110),
+        _ => Rgb(150, 150, 172),
     }
 }

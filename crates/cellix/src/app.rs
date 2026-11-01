@@ -13,7 +13,10 @@ use cellix_input::{
 use cellix_lang::Registry;
 use cellix_lang::complete::{self, Candidate, Source};
 use cellix_lang::lsp::{Client, Diagnostic, LspEvent, TextEdit};
-use cellix_render::{Bounds, CellMeasure, Font, Grid, Icon, Measure, Rect, Style};
+use cellix_render::{
+    ALL_CORNERS, BOTTOM_LEFT, BOTTOM_RIGHT, Bounds, CellMeasure, Font, Grid, Icon, Measure, Rect,
+    Style, TOP_LEFT, TOP_RIGHT,
+};
 use cellix_review::{
     Comment, append_comments, blame_line, changed_files, current_branch, head_text, restore, turns,
     worktrees,
@@ -52,6 +55,11 @@ const ACTIVITY_ICON: (u8, u8) = (3, 2);
 const ACTIVITY_STEP: u16 = 4;
 const APPROVE: &str = "[Approve]";
 const FIND_WIDTH: u16 = 46;
+const PLAN_BAR_WIDTH: u16 = 60;
+/// Corners as percentages of a row's height.
+const SHEET_RADIUS: u8 = 34;
+const TAB_RADIUS: u8 = 22;
+const PILL_RADIUS: u8 = 30;
 const SUGGEST_WIDTH: u16 = 42;
 /// Room kept for the path before the toolbar is left out.
 const MIN_BREADCRUMB: u16 = 12;
@@ -1132,10 +1140,12 @@ impl App {
             Some(area) if !self.compact() => area.right(),
             _ => self.activity_area().right(),
         };
+        // A column of ground on the right, where the sheet has room to be one.
+        let edge = u16::from(!self.compact());
         Rect::new(
             x,
             0,
-            self.size.0.saturating_sub(x),
+            self.size.0.saturating_sub(x + edge),
             self.size.1.saturating_sub(1),
         )
     }
@@ -1148,7 +1158,7 @@ impl App {
 
     /// Rows above the code: tabs, and breadcrumbs when there's room for them.
     fn chrome_rows(&self) -> u16 {
-        if self.plan_in_view() || (!self.compact() && self.size.1 >= 16) {
+        if !self.compact() && self.size.1 >= 16 {
             2
         } else {
             1
@@ -2651,7 +2661,7 @@ impl App {
             MouseKind::Left
                 if y == 1 && !in_sidebar && self.toolbar_x().is_some() && self.click_toolbar(x) => {
             }
-            MouseKind::Left if y == 1 && self.plan_in_view() && !in_sidebar => {
+            MouseKind::Left if y == self.plan_bar().y + 1 && self.plan_in_view() && !in_sidebar => {
                 self.click_plan_bar(x)
             }
             MouseKind::Left if self.compact() && y == 0 && x < MENU_BUTTON => {
@@ -2886,18 +2896,11 @@ impl App {
     pub fn draw(&self, grid: &mut Grid) {
         grid.cursor = None;
         let theme = &self.theme;
-        grid.fill(grid.area(), theme.text);
+        grid.fill(grid.area(), theme.tab);
+        let sheet = self.sheet_area();
+        grid.fill(sheet, theme.text);
         self.draw_activity(grid);
         let drawer_over_main = self.compact() && self.drawer;
-        if let Some(area) = self.sidebar_area().filter(|_| !drawer_over_main) {
-            let line = Bounds::cells(area.right() as f32, 0.0, 0.0, area.h as f32);
-            grid.hairline(line, theme.border);
-        }
-        let activity = self.activity_area();
-        if activity.w > 0 {
-            let line = Bounds::cells(activity.right() as f32, 0.0, 0.0, activity.h as f32);
-            grid.hairline(line, theme.border);
-        }
         if drawer_over_main {
             self.draw_tabs(grid);
         }
@@ -2963,6 +2966,10 @@ impl App {
                     grid.fill(line, theme.tab);
                 }
             }
+        }
+        self.round_sheet(grid);
+        if self.plan_in_view() {
+            self.draw_plan_bar(grid);
         }
         self.draw_status(grid);
         self.draw_suggest(grid);
@@ -3082,20 +3089,45 @@ impl App {
                 },
                 ..self.theme.activity
             };
+            let pill = Rect::new(area.x + 1, y, u16::from(ACTIVITY_ICON.0), row.h);
+            let wash = on.then_some(self.theme.tint);
+            let wash = wash.or(hovered.then_some(self.theme.row_hover));
+            let style = wash.map_or(style, |bg| Style { bg, ..style });
             if on {
+                // Only the cell tier needs the bar, since pixels have the pill.
                 let bar = Style {
                     fg: self.theme.accent,
+                    painted: true,
                     ..self.theme.activity
                 };
                 for row in 0..u16::from(ACTIVITY_ICON.1) {
                     grid.put_str(area.x, y + row, "▌", bar, area.right());
                 }
             }
+            if wash.is_some() {
+                grid.fill(pill, style);
+                let bounds = Bounds::inset(pill, 0.0, 0.0);
+                grid.corners(bounds, PILL_RADIUS, self.theme.activity.bg, ALL_CORNERS);
+            }
             grid.put_icon(area.x + 1, y, *icon, ACTIVITY_ICON, style);
             if *command == Command::ShowAgents && self.agents.needing_you() > 0 {
-                let dot = Bounds::cells(area.x as f32 + 3.0, y as f32, 0.9, 0.45);
+                let dot = Bounds::cells(area.x as f32 + 3.0, y as f32 + 0.1, 0.8, 0.4);
                 grid.panel(dot, 22, Some(self.theme.attention), None);
             }
+        }
+    }
+
+    /// The raised surface the work sits on, under the tabs.
+    fn sheet_area(&self) -> Rect {
+        let main = self.main_area();
+        Rect::new(main.x, main.y + 1, main.w, main.h.saturating_sub(1))
+    }
+
+    fn round_sheet(&self, grid: &mut Grid) {
+        if !self.compact() {
+            let which = TOP_RIGHT | BOTTOM_RIGHT | BOTTOM_LEFT;
+            let bounds = Bounds::inset(self.sheet_area(), 0.0, 0.0);
+            grid.corners(bounds, SHEET_RADIUS, self.theme.tab.bg, which);
         }
     }
 
@@ -3142,11 +3174,9 @@ impl App {
                 }
             }
             if active {
-                let top = Bounds::cells(tab.x as f32, tab.y as f32, tab.w as f32, 0.08);
-                grid.panel(top, 0, Some(theme.focus), None);
+                let bounds = Bounds::inset(tab, 0.0, 0.0);
+                grid.corners(bounds, TAB_RADIUS, theme.tab.bg, TOP_LEFT | TOP_RIGHT);
             }
-            let edge = Bounds::cells(tab.right() as f32, tab.y as f32, 0.0, 1.0);
-            grid.hairline(edge, theme.border);
         }
     }
 
@@ -3161,47 +3191,51 @@ impl App {
             .is_some_and(|p| open == Some(p.path.as_path()))
     }
 
+    /// Where the plan's decision floats, low in the middle of the sheet.
+    fn plan_bar(&self) -> Rect {
+        let sheet = self.sheet_area();
+        let width = PLAN_BAR_WIDTH.min(sheet.w);
+        let x = sheet.x + (sheet.w - width) / 2;
+        Rect::new(x, sheet.bottom().saturating_sub(4), width, 3)
+    }
+
     fn draw_plan_bar(&self, grid: &mut Grid) {
-        let main = self.main_area();
+        let bar = self.plan_bar();
         let theme = &self.theme;
-        grid.fill(Rect::new(main.x, 1, main.w, 1), theme.bar);
+        popup(grid, bar, theme);
+        let base = Style {
+            fg: theme.status.fg,
+            bg: theme.popup,
+            ..theme.bar
+        };
         let primary = Style {
             fg: theme.button_text,
-            ..theme.bar
+            ..base
         };
         let secondary = Style {
             fg: theme.text.fg,
-            ..theme.bar
+            ..base
         };
-        let x = main.x + 1;
-        grid.button(x, 1, APPROVE, "Approve", theme.button, primary);
-        let next = x + APPROVE.len() as u16 + 1;
-        grid.button(next, 1, SEND_BACK, "Send back", theme.input, secondary);
-        let text = next + SEND_BACK.len() as u16 + 2;
-        grid.label(
-            text,
-            1,
-            "An agent is waiting on this plan",
-            theme.bar,
-            main.right(),
-        );
+        let y = bar.y + 1;
+        grid.label(bar.x + 2, y, "Claude Code is waiting", base, bar.right());
+        let approve = bar.right().saturating_sub(APPROVE.len() as u16 + 2);
+        let back = approve.saturating_sub(SEND_BACK.len() as u16 + 1);
+        grid.button(back, y, SEND_BACK, "Send back", theme.input, secondary);
+        grid.button(approve, y, APPROVE, "Approve", theme.button, primary);
     }
 
     fn click_plan_bar(&mut self, x: u16) {
-        let first = self.main_area().x + 1;
-        let second = first + APPROVE.len() as u16 + 1;
-        if x >= first && x < first + APPROVE.len() as u16 {
+        let bar = self.plan_bar();
+        let approve = bar.right().saturating_sub(APPROVE.len() as u16 + 2);
+        let back = approve.saturating_sub(SEND_BACK.len() as u16 + 1);
+        if x >= approve && x < approve + APPROVE.len() as u16 {
             self.run(Command::ApprovePlan);
-        } else if x >= second && x < second + SEND_BACK.len() as u16 {
+        } else if x >= back && x < back + SEND_BACK.len() as u16 {
             self.run(Command::SendBackPlan);
         }
     }
 
     fn draw_breadcrumbs(&self, grid: &mut Grid) {
-        if self.plan_in_view() {
-            self.draw_plan_bar(grid);
-            return;
-        }
         if self.chrome_rows() < 2 {
             return;
         }
@@ -3316,8 +3350,6 @@ impl App {
         let width = self.size.0;
         let bar = self.theme.status;
         grid.fill(Rect::new(0, y, width, 1), bar);
-        let edge = Bounds::cells(0.0, y as f32, width as f32, 0.0);
-        grid.hairline(edge, self.theme.border);
         let message = self.message.borrow();
         let at_cursor = self.cursor_line().and_then(|(path, line)| {
             let items = self.diagnostics.get(&path)?;
@@ -4070,7 +4102,7 @@ mod tests {
         app.run(Command::FindInProject);
         let text = screen(&app).text();
         assert!(text.contains("SEARCH"), "{text}");
-        assert!(!text.contains("EXPLORER"), "{text}");
+        assert!(!text.contains("alpha.txt"), "{text}");
     }
 
     #[test]
@@ -4193,7 +4225,7 @@ mod tests {
         app.handle(mouse(MouseKind::Left, 2, 1 + ACTIVITY_STEP));
         assert!(screen(&app).text().contains("SEARCH"));
         app.handle(mouse(MouseKind::Left, 2, 1));
-        assert!(screen(&app).text().contains("EXPLORER"));
+        assert!(screen(&app).text().contains("alpha.txt"));
     }
 
     #[test]
@@ -5028,7 +5060,9 @@ mod tests {
         let start = std::time::Instant::now();
         let plain = screen(&app);
         let keyword = app.theme.keyword;
-        let colored = |grid: &Grid| (0..grid.width()).any(|x| grid.cell(x, 2).style.fg == keyword);
+        let code = app.main_area().x;
+        let colored =
+            |grid: &Grid| (code..grid.width()).any(|x| grid.cell(x, 2).style.fg == keyword);
         assert!(
             !colored(&plain),
             "the first frame doesn't wait for the parse"
@@ -5356,9 +5390,9 @@ mod tests {
         let (dir, mut app) = project();
         git(dir.path(), &["init", "-q"]);
         app.handle(mouse(MouseKind::Left, 2, 1 + ACTIVITY_STEP * 2));
-        assert!(!screen(&app).text().contains("EXPLORER"));
+        assert!(app.review.is_some());
         app.handle(mouse(MouseKind::Left, 2, 1));
-        assert!(screen(&app).text().contains("EXPLORER"));
+        assert!(app.review.is_none());
     }
 
     #[test]
@@ -5386,7 +5420,7 @@ mod tests {
         let grid = screen(&app);
         let (x, _) = find(&grid, "first line");
         assert!(x <= 4, "code starts at column {x}");
-        assert!(!grid.text().contains("EXPLORER"));
+        assert!(app.sidebar_area().is_none());
     }
 
     #[test]
@@ -5394,13 +5428,13 @@ mod tests {
         let (_dir, mut app) = narrow();
         app.handle(mouse(MouseKind::Left, 1, 0));
         let grid = screen(&app);
-        assert!(grid.text().contains("EXPLORER"));
+        assert!(grid.text().contains("alpha.txt"));
         assert!(!grid.text().contains("first line"));
         let (x, y) = find(&grid, "beta.rs");
         app.handle(mouse(MouseKind::Left, x, y));
         let text = screen(&app).text();
         assert!(text.contains("fn main"), "{text}");
-        assert!(!text.contains("EXPLORER"), "{text}");
+        assert!(app.sidebar_area().is_none(), "the drawer closes on a pick");
     }
 
     #[test]

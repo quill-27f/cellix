@@ -10,7 +10,7 @@ use cosmic_text::{
 use crate::grid::{Grid, Rgb};
 use crate::icon::{Icon, Piece, inked};
 use crate::measure::{Font, attrs};
-use crate::paint::{Bounds, Paint, UNIT};
+use crate::paint::{BOTTOM_LEFT, BOTTOM_RIGHT, Bounds, Paint, TOP_LEFT, TOP_RIGHT, UNIT};
 
 /// A tightly packed RGB image, matching the Kitty protocol's `f=24`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -266,6 +266,21 @@ impl SoftwareRasterizer {
                 let top = scale(bounds.y, ch);
                 target.icon(*icon, left, top, side, *color);
             }
+            Paint::Corners {
+                bounds,
+                radius,
+                color,
+                which,
+            } => {
+                let shape = Shape {
+                    x: scale(bounds.x, cw),
+                    y: scale(bounds.y, ch),
+                    w: scale(bounds.w, cw),
+                    h: scale(bounds.h, ch),
+                    radius: *radius as f32 * ch / 100.0,
+                };
+                target.corners(&shape, *color, *which);
+            }
             Paint::Strips { bounds, strips } => {
                 let (left, top) = (scale(bounds.x, cw), scale(bounds.y, ch));
                 let (width, height) = (scale(bounds.w, cw), scale(bounds.h, ch));
@@ -326,6 +341,34 @@ struct Target<'a> {
 }
 
 impl Target<'_> {
+    fn corners(&mut self, s: &Shape, color: Rgb, which: u8) {
+        let r = s.radius;
+        let spots = [
+            (TOP_LEFT, s.x, s.y, s.x + r, s.y + r),
+            (TOP_RIGHT, s.x + s.w - r, s.y, s.x + s.w - r, s.y + r),
+            (
+                BOTTOM_RIGHT,
+                s.x + s.w - r,
+                s.y + s.h - r,
+                s.x + s.w - r,
+                s.y + s.h - r,
+            ),
+            (BOTTOM_LEFT, s.x, s.y + s.h - r, s.x + r, s.y + s.h - r),
+        ];
+        for (flag, left, top, cx, cy) in spots {
+            if which & flag == 0 {
+                continue;
+            }
+            for y in top.floor() as i32..(top + r).ceil() as i32 {
+                for x in left.floor() as i32..(left + r).ceil() as i32 {
+                    let d = ((x as f32 + 0.5 - cx).powi(2) + (y as f32 + 0.5 - cy).powi(2)).sqrt();
+                    let outside = (d - r + 0.5).clamp(0.0, 1.0);
+                    self.blend(x, y, color, (outside * 255.0) as u8);
+                }
+            }
+        }
+    }
+
     fn blend(&mut self, x: i32, y: i32, color: Rgb, alpha: u8) {
         let row = y - self.top;
         if alpha == 0 || x < 0 || row < 0 || x as usize >= self.width || row as usize >= self.height

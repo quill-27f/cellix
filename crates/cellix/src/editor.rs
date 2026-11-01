@@ -32,7 +32,7 @@ const MIN_MINIMAP_PANE: u16 = 90;
 const MAX_INLINE_HIGHLIGHT: usize = 32 * 1024;
 const PAGE_MARGIN: u16 = 2;
 /// How wide a page can be set. Prose is narrower: see `rendered`.
-const MAX_PAGE_WIDTH: u16 = 200;
+const MAX_PAGE_WIDTH: u16 = 88;
 
 /// Per-line marks for the gutter, as 1-based lines.
 #[derive(Default)]
@@ -280,6 +280,11 @@ impl Editor {
         }
     }
 
+    /// Pages sit in the middle of a wide pane, as a document does.
+    fn page_margin(area: Rect) -> u16 {
+        (area.w.saturating_sub(MAX_PAGE_WIDTH) / 2).max(PAGE_MARGIN)
+    }
+
     fn page_width(area: Rect) -> usize {
         area.w
             .saturating_sub(PAGE_MARGIN + 1)
@@ -427,7 +432,7 @@ impl Editor {
         let area = self.text_area(area);
         let rows = self.page(area);
         let row = self.top + y.saturating_sub(area.y) as usize;
-        let column = x - (area.x + PAGE_MARGIN) as f32;
+        let column = x - (area.x + Self::page_margin(area)) as f32;
         let Some((at, mark)) = rows.get(row).and_then(|r| r.checkbox) else {
             return false;
         };
@@ -493,7 +498,7 @@ impl Editor {
         if self.rendered {
             let rows = self.page(area);
             let row = self.top + y.saturating_sub(area.y) as usize;
-            let column = (fine_x - (area.x + PAGE_MARGIN) as f32).max(0.0);
+            let column = (fine_x - (area.x + Self::page_margin(area)) as f32).max(0.0);
             let row = row.min(rows.len().saturating_sub(1));
             // A tall heading's lower half is the spacer under it, and still the heading.
             let above = row
@@ -902,7 +907,7 @@ impl Editor {
         let (row, x) = if self.rendered {
             let rows = self.page(area);
             let (row, x) = rendered::locate(&rows, head);
-            (row, area.x as f32 + PAGE_MARGIN as f32 + x)
+            (row, (area.x + Self::page_margin(area)) as f32 + x)
         } else {
             let row = self.buffer.rope().char_to_line(head);
             let column = self.column_of(head).checked_sub(self.left)?;
@@ -1187,7 +1192,7 @@ impl Editor {
 
     /// Backgrounds of code blocks and tables, drawn before the text on top of them.
     fn draw_page_blocks(&self, grid: &mut Grid, area: Rect, rows: &[Row], theme: &Theme) {
-        let left = (area.x + PAGE_MARGIN) as f32;
+        let left = (area.x + Self::page_margin(area)) as f32;
         let visible = self.top..(self.top + area.h as usize).min(rows.len());
         let y_of = |index: usize| area.y as f32 + (index - self.top) as f32;
         let mut index = visible.start;
@@ -1233,7 +1238,7 @@ impl Editor {
         grid.fill(area, theme.text);
         let rows = self.page(area);
         let proportional = !self.measure.in_cells();
-        let left = area.x + PAGE_MARGIN;
+        let left = area.x + Self::page_margin(area);
         let primary = self.selections.primary();
         let (caret_row, caret_x) = rendered::locate(&rows, primary.head);
         if proportional {
@@ -1258,7 +1263,7 @@ impl Editor {
             }
             let first_row = index == 0 || rows[index - 1].line != row.line;
             if first_row && let Some(change) = changes.1.get(&row.line) {
-                self.draw_change(grid, area.x as f32 + 0.6, y, *change, theme);
+                self.draw_change(grid, left as f32 - 1.4, y, *change, theme);
             }
             if marks.comments.contains(&(row.line + 1)) {
                 let mark = cellix_render::Style {

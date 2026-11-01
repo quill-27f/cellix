@@ -10,5 +10,7 @@ mod raster;
 pub use grid::{Cell, Grid, Rect, Rgb, Run, Style};
 pub use icon::{Icon, Piece};
 pub use measure::{CellMeasure, Font, FontMeasure, Measure};
-pub use paint::{Bounds, Paint, Strip, UNIT, units};
+pub use paint::{
+    ALL_CORNERS, BOTTOM_LEFT, BOTTOM_RIGHT, Bounds, Paint, Strip, TOP_LEFT, TOP_RIGHT, UNIT, units,
+};
 pub use raster::{INTERFACE_SIZE, Image, Rasterizer, SoftwareRasterizer};

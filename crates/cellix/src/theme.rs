@@ -15,8 +15,9 @@ pub struct Theme {
     pub found: Rgb,
     pub row_hover: Rgb,
     pub row_active: Rgb,
-    pub folder: Rgb,
     pub accent: Rgb,
+    /// A wash of the accent, behind what's selected.
+    pub tint: Rgb,
     /// What wants the reviewer: an agent waiting, a failed step.
     pub attention: Rgb,
     pub keyword: Rgb,
@@ -95,21 +96,27 @@ impl Theme {
             i16::from(background.1) - i16::from(base.1),
             i16::from(background.2) - i16::from(base.2),
         );
-        // Ghostty's window padding shows the terminal's own colour, so chrome darker than it
-        // would leave a seam around the app. Everything sits on one ground instead, and
-        // the hairlines mark the regions.
+        // The ground is the terminal's own colour, so Ghostty's window padding can't show
+        // as a seam. The sheet holding the text keeps its distance from it.
+        let lift = i16::from(self.text.bg.0) - i16::from(self.sidebar.bg.0);
+        let by_sheet = (by.0, by.1, by.2);
         for surface in [
-            &mut self.text,
             &mut self.sidebar,
             &mut self.bar,
             &mut self.tab,
-            &mut self.tab_active,
-            &mut self.gutter,
             &mut self.activity,
             &mut self.status,
-            &mut self.breadcrumb,
         ] {
             surface.bg = background;
+        }
+        let sheet = shifted(background, (lift, lift, lift));
+        for surface in [
+            &mut self.text,
+            &mut self.tab_active,
+            &mut self.gutter,
+            &mut self.breadcrumb,
+        ] {
+            surface.bg = sheet;
         }
         for color in [
             &mut self.row_hover,
@@ -123,8 +130,10 @@ impl Theme {
             &mut self.border,
             &mut self.popup,
             &mut self.popup_border,
+            &mut self.tint,
+            &mut self.pick,
         ] {
-            *color = shifted(*color, by);
+            *color = shifted(*color, by_sheet);
         }
         self
     }
@@ -138,22 +147,22 @@ impl Theme {
     }
 
     fn light() -> Self {
-        let text = Rgb(0, 0, 0);
+        let text = Rgb(38, 38, 46);
         let bg = Rgb(255, 255, 255);
-        let panel = Rgb(248, 248, 249);
+        let panel = Rgb(246, 246, 244);
         Self {
             text: style(text, bg),
-            sidebar: style(Rgb(59, 59, 62), panel),
+            sidebar: style(Rgb(58, 58, 70), panel),
             bar: style(Rgb(59, 59, 62), panel),
-            tab: style(Rgb(110, 110, 115), panel),
+            tab: style(Rgb(94, 94, 108), panel),
             tab_active: style(Rgb(51, 51, 51), bg),
             gutter: style(Rgb(120, 120, 125), bg),
             selection: Rgb(173, 214, 255),
             found: Rgb(255, 236, 170),
-            row_hover: Rgb(238, 238, 240),
-            row_active: Rgb(214, 235, 255),
-            folder: Rgb(120, 130, 150),
-            accent: Rgb(0, 95, 184),
+            row_hover: Rgb(238, 238, 236),
+            row_active: Rgb(234, 234, 232),
+            accent: Rgb(47, 91, 196),
+            tint: Rgb(226, 233, 248),
             attention: Rgb(170, 90, 0),
             keyword: Rgb(0, 0, 255),
             string: Rgb(163, 21, 21),
@@ -166,9 +175,9 @@ impl Theme {
             added_word: Rgb(165, 230, 180),
             removed_word: Rgb(250, 185, 185),
             moved: Rgb(226, 232, 250),
-            activity: style(Rgb(120, 120, 126), panel),
-            activity_active: Rgb(30, 30, 32),
-            status: style(Rgb(59, 59, 62), panel),
+            activity: style(Rgb(94, 94, 108), panel),
+            activity_active: Rgb(47, 91, 196),
+            status: style(Rgb(94, 94, 108), panel),
             breadcrumb: style(Rgb(110, 110, 110), bg),
             line: Rgb(245, 245, 245),
             number_active: Rgb(40, 40, 45),
@@ -186,8 +195,8 @@ impl Theme {
             focus: Rgb(0, 144, 241),
             popup: Rgb(255, 255, 255),
             popup_border: Rgb(200, 200, 200),
-            pick: Rgb(214, 235, 255),
-            button: Rgb(0, 95, 184),
+            pick: Rgb(232, 237, 249),
+            button: Rgb(47, 91, 196),
             button_text: Rgb(255, 255, 255),
         }
     }
@@ -207,56 +216,56 @@ impl Theme {
 
 impl Default for Theme {
     fn default() -> Self {
-        let bg = Rgb(31, 31, 32);
-        let panel = Rgb(24, 24, 25);
+        let bg = Rgb(38, 38, 58);
+        let panel = Rgb(30, 30, 46);
         Self {
-            text: style(Rgb(212, 212, 212), bg),
-            sidebar: style(Rgb(204, 204, 204), panel),
-            bar: style(Rgb(204, 204, 204), panel),
-            tab: style(Rgb(150, 150, 150), panel),
+            text: style(Rgb(214, 214, 226), bg),
+            sidebar: style(Rgb(201, 201, 216), panel),
+            bar: style(Rgb(201, 201, 216), panel),
+            tab: style(Rgb(154, 154, 178), panel),
             tab_active: style(Rgb(255, 255, 255), bg),
-            gutter: style(Rgb(133, 133, 133), bg),
-            selection: Rgb(38, 79, 120),
+            gutter: style(Rgb(140, 140, 166), bg),
+            selection: Rgb(58, 74, 120),
             found: Rgb(106, 84, 28),
-            row_hover: Rgb(42, 45, 46),
-            row_active: Rgb(55, 55, 61),
-            folder: Rgb(144, 164, 174),
-            accent: Rgb(55, 148, 255),
+            row_hover: Rgb(40, 40, 58),
+            row_active: Rgb(44, 44, 64),
+            accent: Rgb(143, 180, 255),
+            tint: Rgb(50, 56, 86),
             attention: Rgb(240, 180, 90),
-            keyword: Rgb(86, 156, 214),
-            string: Rgb(206, 145, 120),
-            comment: Rgb(106, 153, 85),
-            function: Rgb(220, 220, 170),
-            kind: Rgb(78, 201, 176),
-            number: Rgb(181, 206, 168),
+            keyword: Rgb(143, 180, 255),
+            string: Rgb(240, 185, 160),
+            comment: Rgb(122, 138, 160),
+            function: Rgb(232, 217, 160),
+            kind: Rgb(127, 214, 194),
+            number: Rgb(190, 214, 160),
             added: Rgb(35, 61, 37),
             removed: Rgb(72, 32, 32),
             added_word: Rgb(46, 100, 54),
             removed_word: Rgb(120, 45, 45),
             moved: Rgb(38, 46, 70),
-            activity: style(Rgb(134, 134, 138), panel),
-            activity_active: Rgb(230, 230, 232),
-            status: style(Rgb(204, 204, 204), panel),
-            breadcrumb: style(Rgb(165, 165, 165), bg),
-            line: Rgb(42, 45, 46),
+            activity: style(Rgb(154, 154, 178), panel),
+            activity_active: Rgb(143, 180, 255),
+            status: style(Rgb(154, 154, 178), panel),
+            breadcrumb: style(Rgb(154, 154, 178), bg),
+            line: Rgb(44, 44, 66),
             number_active: Rgb(198, 198, 198),
-            guide: Rgb(64, 64, 64),
+            guide: Rgb(54, 54, 76),
             scrollbar: Rgb(79, 79, 79),
             error: Rgb(244, 71, 71),
             heading: Rgb(240, 240, 240),
-            git_modified: Rgb(226, 192, 141),
-            git_added: Rgb(115, 201, 145),
-            input: Rgb(60, 60, 60),
+            git_modified: Rgb(240, 180, 90),
+            git_added: Rgb(127, 214, 160),
+            input: Rgb(30, 30, 46),
             find_match: Rgb(81, 92, 47),
-            code_bg: Rgb(38, 38, 40),
-            minimap_view: Rgb(50, 50, 54),
-            border: Rgb(46, 46, 48),
-            focus: Rgb(0, 127, 212),
-            popup: Rgb(37, 37, 39),
-            popup_border: Rgb(69, 69, 72),
-            pick: Rgb(4, 57, 94),
-            button: Rgb(0, 120, 212),
-            button_text: Rgb(255, 255, 255),
+            code_bg: Rgb(30, 30, 46),
+            minimap_view: Rgb(50, 50, 72),
+            border: Rgb(50, 50, 70),
+            focus: Rgb(143, 180, 255),
+            popup: Rgb(49, 49, 74),
+            popup_border: Rgb(68, 68, 94),
+            pick: Rgb(62, 68, 104),
+            button: Rgb(143, 180, 255),
+            button_text: Rgb(20, 20, 31),
         }
     }
 }
@@ -266,11 +275,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_editor_sits_on_the_terminal_background() {
+    fn the_ground_is_the_terminal_background() {
         let blue = Rgb(30, 30, 46);
         let theme = Theme::default().on_background(blue);
-        assert_eq!(theme.text.bg, blue);
-        assert_eq!(theme.gutter.bg, blue);
+        assert_eq!(theme.activity.bg, blue);
+        assert_ne!(
+            theme.text.bg, blue,
+            "the text sits on a sheet raised from it"
+        );
         assert_eq!(
             theme.sidebar.bg, blue,
             "so no seam shows at the window's edge"

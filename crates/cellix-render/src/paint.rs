@@ -52,6 +52,12 @@ pub struct Strip {
     pub color: Rgb,
 }
 
+pub const TOP_LEFT: u8 = 1;
+pub const TOP_RIGHT: u8 = 2;
+pub const BOTTOM_RIGHT: u8 = 4;
+pub const BOTTOM_LEFT: u8 = 8;
+pub const ALL_CORNERS: u8 = 15;
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Paint {
     Panel {
@@ -82,6 +88,15 @@ pub enum Paint {
         icon: Icon,
         color: Rgb,
     },
+    /// Fills the listed corners of `bounds` back in. Cells can't be rounded and paint
+    /// can't go under text, so a rounded surface is cells with its corners painted out.
+    Corners {
+        bounds: Bounds,
+        /// As a percentage of a row's height.
+        radius: u8,
+        color: Rgb,
+        which: u8,
+    },
     /// A row's share of a minimap: many small bars, which as panels would be slow.
     Strips { bounds: Bounds, strips: Vec<Strip> },
 }
@@ -96,7 +111,8 @@ impl Paint {
             }
             Self::Hairline { bounds, .. }
             | Self::Icon { bounds, .. }
-            | Self::Strips { bounds, .. } => (bounds.y, bounds.y + bounds.h.max(1)),
+            | Self::Strips { bounds, .. }
+            | Self::Corners { bounds, .. } => (bounds.y, bounds.y + bounds.h.max(1)),
             // Large text stands taller than its row.
             Self::Text { y, font, .. } if font.size > 100 => (*y - UNIT, *y + 2 * UNIT),
             Self::Text { y, .. } => (*y, *y + UNIT),

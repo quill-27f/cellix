@@ -165,27 +165,30 @@ fn gear(p: Point) -> f32 {
     ring(p, CENTRE, BODY).min(ring(p, CENTRE, 2.6)).min(tooth)
 }
 
-fn folder(p: Point, open: bool) -> f32 {
-    let body = path(
-        p,
-        &[
-            (4.3, 20.0),
-            (19.7, 20.0),
-            (21.5, 18.2),
-            (21.5, 9.3),
-            (19.7, 7.5),
-            (11.8, 7.5),
-            (9.5, 4.5),
-            (4.3, 4.5),
-            (2.5, 6.3),
-            (2.5, 18.2),
-            (4.3, 20.0),
-        ],
+/// Whether a point is inside a box with round corners.
+fn within(p: Point, min: Point, max: Point, radius: f32) -> bool {
+    let (cx, cy) = ((min.0 + max.0) / 2.0, (min.1 + max.1) / 2.0);
+    let (qx, qy) = (
+        (p.0 - cx).abs() - (max.0 - min.0) / 2.0 + radius,
+        (p.1 - cy).abs() - (max.1 - min.1) / 2.0 + radius,
     );
-    if open {
-        body.min(segment(p, (2.5, 11.5), (21.5, 11.5)))
-    } else {
-        body
+    (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt() + qx.max(qy).min(0.0) < radius
+}
+
+/// Folders and files are solid, as in VS Code's icon themes, so colour can carry the kind.
+fn solid(icon: Icon, p: Point) -> Option<bool> {
+    let folder =
+        || within(p, (2.0, 7.5), (22.0, 20.5), 2.2) || within(p, (2.0, 4.0), (11.0, 11.0), 1.8);
+    match icon {
+        Icon::Folder => Some(folder()),
+        Icon::FolderOpen => Some(folder() && !(p.1 > 10.2 && p.1 < 11.8)),
+        Icon::File => {
+            let page = within(p, (4.5, 2.0), (19.5, 22.0), 2.2);
+            let fold = p.1 - 2.0 < p.0 - 13.5;
+            let line = |y: f32| segment(p, (8.0, y), (16.0, y)) < 1.0;
+            Some(page && !fold && !line(12.5) && !line(16.8))
+        }
+        _ => None,
     }
 }
 
@@ -203,6 +206,9 @@ fn half_stroke(icon: Icon) -> f32 {
 /// round-ended stroke, which is what makes them read as a set.
 pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
     let p = (u * 24.0, v * 24.0);
+    if let Some(ink) = solid(icon, p) {
+        return ink;
+    }
     let distance = match icon {
         Icon::Files => {
             let back = path(p, &[(9.0, 2.5), (15.0, 2.5), (20.5, 8.0), (20.5, 17.5)]);
@@ -229,11 +235,7 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
             .min(segment(p, (15.0, 13.0), (15.0, 15.5)))
             .min(segment(p, (1.5, 14.5), (4.0, 14.5)))
             .min(segment(p, (20.0, 14.5), (22.5, 14.5))),
-        Icon::Folder => folder(p, false),
-        Icon::FolderOpen => folder(p, true),
-        Icon::File => page(p, 5.0, 19.0, 2.5, 21.5)
-            .min(segment(p, (8.5, 13.0), (15.5, 13.0)))
-            .min(segment(p, (8.5, 17.0), (15.5, 17.0))),
+        Icon::Folder | Icon::FolderOpen | Icon::File => f32::MAX,
         Icon::ChevronRight => path(p, &[(9.5, 6.5), (15.0, 12.0), (9.5, 17.5)]),
         Icon::ChevronDown => path(p, &[(6.5, 9.5), (12.0, 15.0), (17.5, 9.5)]),
         Icon::Close => {

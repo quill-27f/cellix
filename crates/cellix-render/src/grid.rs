@@ -284,6 +284,15 @@ impl Grid {
     }
 
     /// Paint that touches row `y`, in drawing order.
+    pub fn corners(&mut self, bounds: Bounds, radius: u8, color: Rgb, which: u8) {
+        self.paint.push(Paint::Corners {
+            bounds,
+            radius,
+            color,
+            which,
+        });
+    }
+
     pub fn paint_on_row(&self, y: u16) -> impl Iterator<Item = &Paint> {
         let (top, bottom) = (y as i32 * UNIT, (y as i32 + 1) * UNIT);
         self.paint.iter().filter(move |p| {
