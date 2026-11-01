@@ -265,3 +265,29 @@ Open from the review: matched letters and file icons in the palette, list pills 
 table row padding, hover states in the tour. Menus show Ctrl because Ghostty keeps Cmd+C.
 
 Next: the user tries it, and clicks Install under Settings, Integrations.
+
+## 2026-11-02: fourth round, frame, languages and agents
+
+Ghostty's padding can't be drawn in, which is why the app never filled the window. Tiles now
+sit on real cell colours at the edges, so `window-padding-color = extend` can carry them out,
+and Settings can turn that on. Not seen in a real window yet: the screen locked first.
+
+Added Go to References and Format Document, proven with a real rust-analyzer. Thirteen more
+grammars and a table of 26 language servers, each installable from Settings. Plugins for
+Codex and Gemini CLI. Hover has one grammar now, and the Agents panel leads with what's
+running, since Cellix comes to the agent.
+
+Real SSH works: the headless terminal drove Cellix on a Linux machine in OrbStack over `ssh`,
+and an edit landed in the file there. A key took 19 ms.
+
+A test mistake to learn from: the server install used a login shell, whose profile replaced
+the PATH holding a fake `npm`, so the real one started and left two dangling links in
+Homebrew's folder. They were removed. The install now uses the PATH Cellix was given.
+
+Unverified: real Ghostty and Terminal.app, including hover with a real pointer, since the
+screen was locked. A real Codex run, because its hooks need trusting with `/hooks` and
+bypassing that isn't ours to do: only its documented input was tested. A real Gemini run,
+which needs a sign-in. Antigravity CLI, which Google says replaces Gemini CLI, isn't covered.
+
+Next: the user checks the window fill, and trusts the Codex hooks.
+

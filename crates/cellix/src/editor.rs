@@ -1418,7 +1418,9 @@ impl Editor {
                 .take_while(|r| r.line == row.line);
             let first_row = row.stop && !earlier.any(|r| r.stop);
             if first_row && let Some(change) = changes.1.get(&row.line) {
-                self.draw_change(grid, left as f32 - 1.4, y, *change, theme);
+                // Beside a tall heading's text, which sits in the row below its own.
+                let mark = if row.tall { y + 1 } else { y };
+                self.draw_change(grid, left as f32 - 1.4, mark, *change, theme);
             }
             if marks.comments.contains(&(row.line + 1)) {
                 let mark = cellix_render::Style {

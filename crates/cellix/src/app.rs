@@ -271,8 +271,9 @@ fn install_server(index: usize) -> String {
     let Some(server) = SERVERS.get(index) else {
         return String::new();
     };
+    // Not a login shell, whose profile would swap the PATH Cellix was started with.
     let done = std::process::Command::new("sh")
-        .args(["-lc", server.install])
+        .args(["-c", server.install])
         .stdin(std::process::Stdio::null())
         .output();
     match done {
@@ -1472,7 +1473,7 @@ impl App {
             event,
             Event::Tick
                 | Event::Mouse(MouseEvent {
-                    kind: MouseKind::Move,
+                    kind: MouseKind::Move | MouseKind::Up,
                     ..
                 })
         );
@@ -3796,6 +3797,7 @@ impl App {
         let (sender, receiver) = std::sync::mpsc::channel();
         page.note = "Working…".to_string();
         page.installing = Some(receiver);
+        self.say("Working…");
         std::thread::spawn(move || {
             let var = |name: &str| std::env::var(name).ok();
             let said = |done: io::Result<()>, note: &str| {
@@ -3834,8 +3836,9 @@ impl App {
             return false;
         };
         page.installing = None;
-        page.note = note;
+        page.note.clone_from(&note);
         page.found = Found::look();
+        self.say(note);
         let paths: Vec<PathBuf> = self
             .editors
             .iter()
@@ -8035,5 +8038,13 @@ while True:
         assert!(screen(&app).text().contains("Search"), "the rail's names");
         app.handle(mouse(MouseKind::Move, 40, 12));
         assert!(!screen(&app).text().contains("Review Changes"));
+    }
+
+    #[test]
+    fn letting_go_of_the_mouse_keeps_a_message_up() {
+        let (_dir, mut app) = project();
+        app.say("Working…");
+        app.handle(mouse(MouseKind::Up, 40, 12));
+        assert!(screen(&app).text().contains("Working…"));
     }
 }
