@@ -58,10 +58,11 @@ git clone https://github.com/quill-27f/cellix.git
 cd cellix
 cargo install --path crates/cellix
 
-# Lets pixels through tmux, and stops Claude Code warning about focus events
+# Pixels through tmux, no focus warning from Claude Code, click to switch panes
 cat >> ~/.tmux.conf <<'CONF'
 set -g allow-passthrough on
 set -g focus-events on
+set -g mouse on
 CONF
 tmux source-file ~/.tmux.conf 2>/dev/null   # only needed if tmux is already running
 
