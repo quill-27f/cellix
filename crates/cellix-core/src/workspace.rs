@@ -20,8 +20,15 @@ pub struct Entry {
 pub struct Match {
     pub path: PathBuf,
     pub line: usize,
+    /// Char offset of the hit within `text`.
+    pub column: usize,
     pub text: String,
 }
+
+/// Search stops here, because results past this help nobody and cost memory.
+const MAX_MATCHES: usize = 5000;
+/// Larger files are skipped: they're rarely source, and reading them stalls a search.
+const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
 /// The root folder and which of its directories are expanded.
 #[derive(Debug)]
@@ -117,16 +124,23 @@ impl Workspace {
             return found;
         }
         for path in files {
+            if fs::metadata(&path).is_ok_and(|m| m.len() > MAX_FILE_BYTES) {
+                continue;
+            }
             let Ok(text) = fs::read_to_string(&path) else {
                 continue;
             };
             for (line, content) in text.lines().enumerate() {
-                if content.contains(query) {
+                if let Some(byte) = content.find(query) {
                     found.push(Match {
                         path: path.clone(),
                         line,
-                        text: content.trim().to_string(),
+                        column: content[..byte].chars().count(),
+                        text: content.to_string(),
                     });
+                    if found.len() >= MAX_MATCHES {
+                        return found;
+                    }
                 }
             }
         }

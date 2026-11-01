@@ -12,8 +12,6 @@ const ROWS: u16 = 12;
 pub enum Item {
     File(PathBuf, String),
     Command(&'static str, Command),
-    /// A search result: file, 0-based line, and its label.
-    Match(PathBuf, usize, String),
     Completion(String),
 }
 
@@ -22,7 +20,7 @@ impl Item {
         match self {
             Self::File(_, label) => label,
             Self::Command(label, _) => label,
-            Self::Match(_, _, label) | Self::Completion(label) => label,
+            Self::Completion(label) => label,
         }
     }
 }

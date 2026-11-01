@@ -18,6 +18,7 @@ use crate::editor::{Editor, Marks};
 use crate::explorer::Explorer;
 use crate::palette::{COMMANDS, Item, Palette};
 use crate::review::{Hit, Review};
+use crate::search::{self, Field, Search};
 use crate::settings::{Settings, default_server};
 use crate::theme::Theme;
 
@@ -61,9 +62,6 @@ enum PromptAction {
     Rename(PathBuf),
     Delete(PathBuf),
     Comment(String, usize),
-    Search,
-    ReplaceFind,
-    ReplaceWith(String),
     RenameSymbol,
     Quit,
     CloseTab,
@@ -79,6 +77,12 @@ struct Menu {
     x: u16,
     y: u16,
     target: PathBuf,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SidebarView {
+    Explorer,
+    Search,
 }
 
 /// At most one of these takes input ahead of everything else.
@@ -124,6 +128,9 @@ pub struct App {
     /// that text, so one runs at a time and a stale reply is dropped.
     pending_rename: Option<(PathBuf, u64)>,
     branch: Option<String>,
+    /// What the sidebar shows, as in VS Code's activity bar.
+    sidebar_view: SidebarView,
+    search: Search,
     /// In the compact layout, whether the sidebar is open over the code.
     drawer: bool,
     /// Set when the user asks to leave.
@@ -133,6 +140,7 @@ pub struct App {
 impl App {
     pub fn new(root: PathBuf, size: (u16, u16)) -> Self {
         let settings = Settings::load(&root);
+        let search = Search::new(root.clone());
         let workspace = Workspace::new(root);
         let mut explorer = Explorer::default();
         explorer.refresh(&workspace);
@@ -161,6 +169,8 @@ impl App {
             diagnostics: HashMap::new(),
             pending_rename: None,
             branch: None,
+            sidebar_view: SidebarView::Explorer,
+            search,
             drawer: false,
             quit: false,
         };
@@ -247,11 +257,12 @@ impl App {
             }
             editor.synced = editor.buffer.revision();
         }
+        let searched = self.search.poll();
         let mut events = Vec::new();
         for client in self.servers.values() {
             events.extend(client.events.try_iter());
         }
-        let changed = !events.is_empty();
+        let changed = searched || !events.is_empty();
         for event in events {
             self.lsp_event(event);
         }
@@ -583,6 +594,9 @@ impl App {
             self.overlay_key(key);
             return;
         }
+        if self.search.focus.is_some() && self.sidebar_area().is_some() && self.search_key(key) {
+            return;
+        }
         if let Some(vim) = &mut self.vim {
             match vim.key(key) {
                 VimAction::Commands(commands) => {
@@ -661,17 +675,6 @@ impl App {
                 }
             }
             Some(Item::Command(_, command)) => self.run(command),
-            Some(Item::Match(path, line, _)) => {
-                if let Err(e) = self.open(&path) {
-                    self.say(format!("Could not open: {e}"));
-                }
-                let area = self.focused_area();
-                if let Some(editor) = self.editor_mut() {
-                    let at = editor.buffer.position(line, 0);
-                    editor.selections.set_single(Selection::cursor(at));
-                    editor.reveal(area);
-                }
-            }
             Some(Item::Completion(text)) => self.insert_completion(&text),
             None => {}
         }
@@ -680,51 +683,6 @@ impl App {
     fn finish_prompt(&mut self, prompt: Prompt) {
         let name = prompt.input.trim();
         let result = match &prompt.action {
-            PromptAction::Search => {
-                let root = self.workspace.root().to_path_buf();
-                let items: Vec<Item> = self
-                    .workspace
-                    .search(name)
-                    .into_iter()
-                    .map(|m| {
-                        let file = m.path.strip_prefix(&root).unwrap_or(&m.path);
-                        let label = format!("{}:{}  {}", file.display(), m.line + 1, m.text);
-                        Item::Match(m.path.clone(), m.line, label)
-                    })
-                    .collect();
-                if items.is_empty() {
-                    self.say(format!("No results for {name}"));
-                } else {
-                    self.overlay = Overlay::Palette(Palette::new(items));
-                }
-                Ok(())
-            }
-            PromptAction::ReplaceFind => {
-                if !name.is_empty() {
-                    let label = format!("Replace {name} with");
-                    self.ask(&label, PromptAction::ReplaceWith(name.to_string()));
-                }
-                Ok(())
-            }
-            PromptAction::ReplaceWith(query) => {
-                let with = prompt.input.as_str();
-                let dirty: Vec<PathBuf> = self
-                    .editors
-                    .iter()
-                    .filter(|e| e.buffer.is_dirty())
-                    .filter_map(|e| e.buffer.path().map(Path::to_path_buf))
-                    .collect();
-                let changed = self.workspace.replace_all(query, with, &dirty);
-                if let Ok(count) = changed {
-                    let skipped = if dirty.is_empty() {
-                        String::new()
-                    } else {
-                        format!(", skipped {} with unsaved edits", dirty.len())
-                    };
-                    self.say(format!("Replaced in {count} files{skipped}"));
-                }
-                changed.map(drop)
-            }
             PromptAction::RenameSymbol if !name.is_empty() => {
                 self.poll();
                 if self.pending_rename.is_some() {
@@ -809,8 +767,8 @@ impl App {
                 };
             }
             Command::AddComment => self.prompt_comment_at_cursor(),
-            Command::FindInProject => self.ask("Search", PromptAction::Search),
-            Command::ReplaceInProject => self.ask("Replace", PromptAction::ReplaceFind),
+            Command::FindInProject => self.show_search(Field::Query),
+            Command::ReplaceInProject => self.show_search(Field::Replace),
             Command::MarkdownPreview => {
                 if let Some(editor) = self.editor_mut() {
                     editor.preview = !editor.preview;
@@ -881,6 +839,114 @@ impl App {
                     editor.run(command, area);
                 }
             }
+        }
+    }
+
+    fn show_search(&mut self, field: Field) {
+        self.review = None;
+        self.sidebar_view = SidebarView::Search;
+        self.show_sidebar = true;
+        self.drawer = self.compact();
+        self.search.focus = Some(field);
+    }
+
+    fn show_explorer(&mut self) {
+        self.search.focus = None;
+        self.review = None;
+        self.sidebar_view = SidebarView::Explorer;
+    }
+
+    /// Keys for the search boxes. Returns false to let a shortcut through.
+    fn search_key(&mut self, key: KeyEvent) -> bool {
+        if key.mods.ctrl || key.mods.alt {
+            return false;
+        }
+        match key.key {
+            Key::Esc => {
+                self.search.focus = None;
+                self.drawer = false;
+            }
+            Key::Tab | Key::BackTab => {
+                self.search.focus = Some(match self.search.focus {
+                    Some(Field::Query) => Field::Replace,
+                    _ => Field::Query,
+                });
+            }
+            Key::Enter if self.search.focus == Some(Field::Replace) => self.replace_all(),
+            Key::Enter => self.search.start(),
+            Key::Backspace => {
+                if let Some(field) = self.search.field_mut() {
+                    field.pop();
+                }
+                self.search_edited();
+            }
+            Key::Char(c) => {
+                if let Some(field) = self.search.field_mut() {
+                    field.push(c);
+                }
+                self.search_edited();
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Results follow the query as it's typed, and don't depend on the replacement.
+    fn search_edited(&mut self) {
+        if self.search.focus == Some(Field::Query) {
+            self.search.start();
+        }
+    }
+
+    fn replace_all(&mut self) {
+        let (query, with) = (self.search.query.clone(), self.search.replace.clone());
+        let dirty: Vec<PathBuf> = self
+            .editors
+            .iter()
+            .filter(|e| e.buffer.is_dirty())
+            .filter_map(|e| e.buffer.path().map(Path::to_path_buf))
+            .collect();
+        match self.workspace.replace_all(&query, &with, &dirty) {
+            Ok(count) => {
+                let skipped = if dirty.is_empty() {
+                    String::new()
+                } else {
+                    format!(", skipped {} with unsaved edits", dirty.len())
+                };
+                self.say(format!("Replaced in {count} files{skipped}"));
+            }
+            Err(e) => self.say(format!("Could not replace: {e}")),
+        }
+        self.search.start();
+    }
+
+    fn open_match(&mut self, found: &cellix_core::Match) {
+        if let Err(e) = self.open(&found.path) {
+            self.say(format!("Could not open: {e}"));
+            return;
+        }
+        self.drawer = false;
+        self.search.focus = None;
+        let area = self.focused_area();
+        let length = self.search.query.chars().count();
+        if let Some(editor) = self.editor_mut() {
+            let start = editor.buffer.position(found.line, found.column);
+            editor.selections.set_single(Selection {
+                anchor: start,
+                head: start + length,
+                goal: None,
+            });
+            editor.reveal(area);
+        }
+    }
+
+    fn click_search(&mut self, area: Rect, x: u16, y: u16) {
+        match self.search.hit(area, x, y) {
+            Some(search::Hit::Field(field)) => self.search.focus = Some(field),
+            Some(search::Hit::ReplaceAll) => self.replace_all(),
+            Some(search::Hit::File(path)) => self.search.toggle_file(path),
+            Some(search::Hit::Match(found)) => self.open_match(&found),
+            None => {}
         }
     }
 
@@ -1147,13 +1213,22 @@ impl App {
                 } else {
                     WHEEL_LINES
                 };
-                if in_sidebar {
+                if in_sidebar && self.sidebar_view == SidebarView::Search {
+                    self.search.scroll_by(delta);
+                } else if in_sidebar {
                     self.explorer.scroll_by(delta);
                 } else if let Some(editor) = self.editor_mut() {
                     editor.scroll_by(delta);
                 }
             }
-            MouseKind::Right if in_sidebar => self.open_menu(x, y),
+            MouseKind::Left if in_sidebar && self.sidebar_view == SidebarView::Search => {
+                if let Some(area) = self.sidebar_area() {
+                    self.click_search(area, x, y);
+                }
+            }
+            MouseKind::Right if in_sidebar && self.sidebar_view == SidebarView::Explorer => {
+                self.open_menu(x, y);
+            }
             MouseKind::Right if self.pane_at(x, y).is_some() => {
                 if let Some(pane) = self.pane_at(x, y) {
                     self.focus = pane;
@@ -1174,6 +1249,7 @@ impl App {
                 let Some(pane) = self.pane_at(x, y) else {
                     return;
                 };
+                self.search.focus = None;
                 self.focus = pane;
                 let area = self.focused_area();
                 if let Some(editor) = self.editor_mut() {
@@ -1320,10 +1396,18 @@ impl App {
     fn click_activity(&mut self, y: u16) {
         let index = y.saturating_sub(1) / ACTIVITY_STEP;
         if let Some((_, command)) = ACTIVITY.get(index as usize) {
-            if *command == Command::ToggleSidebar && self.review.is_some() {
-                self.review = None;
-            } else {
-                self.run(*command);
+            let on_explorer = self.sidebar_view == SidebarView::Explorer;
+            match command {
+                Command::ToggleSidebar if self.review.is_some() || !on_explorer => {
+                    self.show_explorer();
+                    self.show_sidebar = true;
+                }
+                // A second click closes the panel, as it does in VS Code.
+                Command::FindInProject if !on_explorer && self.review.is_none() => {
+                    self.show_explorer();
+                    self.show_sidebar = false;
+                }
+                command => self.run(*command),
             }
         }
     }
@@ -1393,7 +1477,10 @@ impl App {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            self.explorer.draw(grid, area, &name, theme);
+            match self.sidebar_view {
+                SidebarView::Explorer => self.explorer.draw(grid, area, &name, theme),
+                SidebarView::Search => self.search.draw(grid, area, theme),
+            }
         }
         if let Some(review) = &self.review {
             let comments = self.comments.lock().map(|c| c.clone()).unwrap_or_default();
@@ -1486,7 +1573,16 @@ impl App {
                 break;
             }
             let on = match command {
-                Command::ToggleSidebar => self.show_sidebar && self.review.is_none(),
+                Command::ToggleSidebar => {
+                    self.show_sidebar
+                        && self.review.is_none()
+                        && self.sidebar_view == SidebarView::Explorer
+                }
+                Command::FindInProject => {
+                    self.show_sidebar
+                        && self.review.is_none()
+                        && self.sidebar_view == SidebarView::Search
+                }
                 Command::OpenDiff => self.review.is_some(),
                 _ => false,
             };
@@ -2233,16 +2329,103 @@ mod tests {
         assert!(!screen(&app).text().contains("NORMAL"));
     }
 
-    #[test]
-    fn project_search_opens_a_result() {
-        let (dir, mut app) = project();
-        fs::write(dir.path().join("found.txt"), "a\nb\nneedle here\n").unwrap();
+    /// Sends text to the search box and waits for the search to finish.
+    fn search_for(app: &mut App, query: &str) {
         app.run(Command::FindInProject);
-        typed(&mut app, "needle");
-        enter(&mut app);
-        assert!(screen(&app).text().contains("found.txt:3"));
-        enter(&mut app);
-        assert!(screen(&app).text().contains("Ln 3, Col 1"));
+        typed(app, query);
+        wait(app, |a| {
+            let text = screen(a).text();
+            !text.contains("Searching") && (text.contains(" result") || text.contains("No results"))
+        });
+    }
+
+    #[test]
+    fn search_replaces_the_explorer_in_the_sidebar() {
+        let (_dir, mut app) = project();
+        app.run(Command::FindInProject);
+        let text = screen(&app).text();
+        assert!(text.contains("SEARCH"), "{text}");
+        assert!(!text.contains("EXPLORER"), "{text}");
+    }
+
+    #[test]
+    fn project_search_groups_results_by_file() {
+        let (dir, mut app) = project();
+        fs::write(dir.path().join("found.txt"), "needle one\nneedle two\n").unwrap();
+        fs::write(dir.path().join("src/more.txt"), "a needle\n").unwrap();
+        search_for(&mut app, "needle");
+        let text = screen(&app).text();
+        assert!(text.contains("3 results in 2 files"), "{text}");
+        assert!(text.contains("found.txt"), "{text}");
+        assert!(text.contains("more.txt"), "{text}");
+    }
+
+    #[test]
+    fn search_highlights_the_match() {
+        let (dir, mut app) = project();
+        fs::write(dir.path().join("found.txt"), "    a needle here\n").unwrap();
+        search_for(&mut app, "needle");
+        let grid = screen(&app);
+        let (x, y) = find(&grid, "a needle here");
+        assert_eq!(grid.cell(x + 2, y).style.bg, Theme::default().find_match);
+        assert_ne!(grid.cell(x, y).style.bg, Theme::default().find_match);
+    }
+
+    #[test]
+    fn clicking_a_result_opens_it_with_the_match_selected() {
+        let (dir, mut app) = project();
+        fs::write(dir.path().join("found.txt"), "a\nb\nsome needle here\n").unwrap();
+        search_for(&mut app, "needle");
+        let (x, y) = find(&screen(&app), "some needle here");
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert_eq!(app.selected_text().as_deref(), Some("needle"));
+        assert!(screen(&app).text().contains("Ln 3, Col"));
+    }
+
+    #[test]
+    fn clicking_a_file_collapses_its_results() {
+        let (dir, mut app) = project();
+        fs::write(dir.path().join("found.txt"), "needle one\n").unwrap();
+        search_for(&mut app, "needle");
+        let (x, y) = find(&screen(&app), "found.txt");
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert!(!screen(&app).text().contains("needle one"));
+    }
+
+    #[test]
+    fn search_follows_typing_and_drops_stale_results() {
+        let (dir, mut app) = project();
+        fs::write(dir.path().join("found.txt"), "zqneedle\nzqneat\n").unwrap();
+        search_for(&mut app, "zqne");
+        assert!(screen(&app).text().contains("2 results"));
+        typed(&mut app, "at");
+        wait(&mut app, |a| screen(a).text().contains("1 result in"));
+    }
+
+    #[test]
+    fn typing_in_search_does_not_touch_the_open_file() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        search_for(&mut app, "first");
+        assert_eq!(app.active_text().unwrap(), "first line\nsecond line\n");
+    }
+
+    #[test]
+    fn escape_returns_the_keyboard_to_the_editor() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        app.run(Command::FindInProject);
+        app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
+        typed(&mut app, "x");
+        assert!(app.active_text().unwrap().starts_with("xfirst"));
+    }
+
+    #[test]
+    fn shortcuts_still_work_from_the_search_box() {
+        let (_dir, mut app) = project();
+        app.run(Command::FindInProject);
+        app.handle(Event::Key(KeyEvent::ctrl('p')));
+        assert!(screen(&app).text().contains("src/lib.rs"));
     }
 
     #[test]
@@ -2253,9 +2436,8 @@ mod tests {
         fs::write(dir.path().join("keep.txt"), "old\n").unwrap();
         app.open(&dir.path().join("keep.txt")).unwrap();
         typed(&mut app, "x");
-        app.run(Command::ReplaceInProject);
-        typed(&mut app, "old");
-        enter(&mut app);
+        search_for(&mut app, "old");
+        app.handle(Event::Key(KeyEvent::plain(Key::Tab)));
         typed(&mut app, "new");
         enter(&mut app);
         let read = |p: &str| fs::read_to_string(dir.path().join(p)).unwrap();
@@ -2263,6 +2445,45 @@ mod tests {
         assert_eq!(read("src/b.txt"), "new\n");
         assert_eq!(read("keep.txt"), "old\n", "unsaved files are skipped");
         assert!(screen(&app).text().contains("Replaced in 2 files"));
+    }
+
+    #[test]
+    fn replace_all_works_by_mouse() {
+        let (dir, mut app) = project();
+        fs::write(dir.path().join("a.txt"), "old\n").unwrap();
+        search_for(&mut app, "old");
+        app.handle(Event::Key(KeyEvent::plain(Key::Tab)));
+        typed(&mut app, "new");
+        let (x, y) = find(&screen(&app), " All");
+        app.handle(mouse(MouseKind::Left, x + 2, y));
+        assert_eq!(
+            fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "new\n"
+        );
+    }
+
+    #[test]
+    fn activity_bar_switches_between_explorer_and_search() {
+        let (_dir, mut app) = project();
+        app.handle(mouse(MouseKind::Left, 2, 1 + ACTIVITY_STEP));
+        assert!(screen(&app).text().contains("SEARCH"));
+        app.handle(mouse(MouseKind::Left, 2, 1));
+        assert!(screen(&app).text().contains("EXPLORER"));
+    }
+
+    #[test]
+    fn narrow_search_opens_in_the_drawer_and_closes_on_a_pick() {
+        let (dir, mut app) = narrow();
+        fs::write(dir.path().join("found.txt"), "needle\n").unwrap();
+        search_for(&mut app, "needle");
+        let (x, y) = find(&screen(&app), "needle");
+        let row = (y..30)
+            .find(|y| screen(&app).row_text(*y).contains("    needle"))
+            .unwrap();
+        let _ = (x, y);
+        app.handle(mouse(MouseKind::Left, 6, row));
+        assert!(!screen(&app).text().contains("SEARCH"));
+        assert_eq!(app.selected_text().as_deref(), Some("needle"));
     }
 
     #[test]

@@ -34,6 +34,9 @@ pub struct Theme {
     pub heading: Rgb,
     pub git_modified: Rgb,
     pub git_added: Rgb,
+    /// Background of a text box.
+    pub input: Rgb,
+    pub find_match: Rgb,
 }
 
 fn style(fg: Rgb, bg: Rgb) -> Style {
@@ -88,6 +91,8 @@ impl Theme {
             heading: Rgb(0, 0, 128),
             git_modified: Rgb(137, 93, 0),
             git_added: Rgb(40, 130, 60),
+            input: Rgb(255, 255, 255),
+            find_match: Rgb(168, 216, 170),
         }
     }
 
@@ -138,6 +143,8 @@ impl Default for Theme {
             heading: Rgb(86, 156, 214),
             git_modified: Rgb(226, 192, 141),
             git_added: Rgb(115, 201, 145),
+            input: Rgb(60, 60, 60),
+            find_match: Rgb(81, 92, 47),
         }
     }
 }

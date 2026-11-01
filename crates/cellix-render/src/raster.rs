@@ -201,6 +201,11 @@ impl Rasterizer for SoftwareRasterizer {
             if cell.symbol.is_empty() || cell.symbol == " " {
                 continue;
             }
+            // Drawn rather than taken from a font, so stacked rows join with no gap.
+            if cell.symbol == "▌" {
+                fill(&mut rgb, width, i * cw, 0, cw.div_ceil(3), ch, fg);
+                continue;
+            }
             if let Some(piece) = Piece::decode(&cell.symbol) {
                 draw_icon(&mut rgb, width, i * cw, (cw, ch), piece, fg);
                 continue;
