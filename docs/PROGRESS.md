@@ -114,3 +114,6 @@ Claude Code and Codex start in a split of tmux or Zellij, replacing the plan to 
 Unverified: all of this in a live terminal, pixel mouse under Ghostty, OSC 11 through tmux
 and Zellij, and starting a real agent. Outside tmux and Zellij there's no split to open an
 agent in, and Cellix says so. Xcode's formatting toolbar isn't built.
+
+One run of the real rust-analyzer tests failed after 110 seconds, then two runs passed in
+20 seconds each. The failing test wasn't captured, so treat that suite as possibly flaky.
