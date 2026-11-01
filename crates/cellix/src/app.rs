@@ -160,7 +160,8 @@ impl App {
     }
 
     fn sidebar_area(&self) -> Option<Rect> {
-        self.show_sidebar.then(|| {
+        // Review uses the explorer's width: side-by-side code needs it more.
+        (self.show_sidebar && self.review.is_none()).then(|| {
             Rect::new(
                 0,
                 0,

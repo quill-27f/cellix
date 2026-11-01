@@ -34,6 +34,9 @@ in `docs/PROGRESS.md`.
 - PTY tests in `crates/cellix/tests`: the real binary, driven by keys and mouse.
 - `harness/x mux`: the real binary inside tmux and Zellij.
 
+To see the interface, run `harness/x snapshot` and read the PNG. It needs no terminal or
+window. `harness/visual.sh` opens real windows, so use it only to check terminal behaviour.
+
 **Every feature must work on the cell tier.** All UI draws to the `Grid`. Backends only
 present it, so a feature never talks to a backend directly.
 

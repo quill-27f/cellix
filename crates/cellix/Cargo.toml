@@ -19,6 +19,7 @@ crossterm = "0.29"
 unicode-width = "0.2"
 
 [dev-dependencies]
+png = "0.18.1"
 portable-pty = "0.9"
 tempfile = "3"
 vt100 = "0.16"

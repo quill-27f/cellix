@@ -5,6 +5,8 @@
 #   harness/x test [args]      cargo test
 #   harness/x build [args]     cargo build
 #   harness/x run [args]       cargo run -p cellix
+#   harness/x snapshot <workspace> <out.png> [review|file]
+#                              render the real UI to a PNG, with no terminal or window
 #   harness/x mux              real tmux and Zellij tests (slower, ignored by check)
 #   harness/x verify           check, then prove every passing feature has its test
 #   harness/x next             the next unfinished feature
@@ -26,6 +28,7 @@ case $task in
   test) guard test cargo test --workspace "$@" ;;
   build) guard build cargo build --workspace "$@" ;;
   run) exec cargo run -p cellix -- "$@" ;;
+  snapshot) guard snapshot cargo run -q -p cellix --example snapshot -- "$@" ;;
   mux) guard mux cargo test -p cellix --test mux -- --ignored --test-threads=1 "$@" ;;
   verify)
     "$0" check || exit 1
@@ -48,5 +51,5 @@ case $task in
     [ -f "$log" ] && { echo "recent guarded jobs:"; tail -3 "$log"; } ;;
   reserve-name)
     cd harness/reserve-crate && exec cargo publish "$@" ;;
-  *) sed -n '2,12p' "$0" | sed 's/^# *//'; exit 2 ;;
+  *) sed -n '2,14p' "$0" | sed 's/^# *//'; exit 2 ;;
 esac
