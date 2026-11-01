@@ -1636,6 +1636,11 @@ impl App {
             let line = Bounds::cells(area.right() as f32, 0.0, 0.0, area.h as f32);
             grid.hairline(line, theme.border);
         }
+        let activity = self.activity_area();
+        if activity.w > 0 {
+            let line = Bounds::cells(activity.right() as f32, 0.0, 0.0, activity.h as f32);
+            grid.hairline(line, theme.border);
+        }
         if drawer_over_main {
             self.draw_tabs(grid);
         }

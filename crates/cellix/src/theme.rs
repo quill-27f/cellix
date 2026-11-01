@@ -96,8 +96,8 @@ impl Theme {
             number: Rgb(9, 134, 88),
             added: Rgb(214, 245, 220),
             removed: Rgb(255, 224, 224),
-            activity: style(Rgb(120, 120, 120), Rgb(44, 44, 44)),
-            activity_active: Rgb(255, 255, 255),
+            activity: style(Rgb(125, 125, 125), Rgb(248, 248, 248)),
+            activity_active: Rgb(30, 30, 30),
             status: style(Rgb(255, 255, 255), Rgb(0, 122, 204)),
             breadcrumb: style(Rgb(110, 110, 110), bg),
             line: Rgb(245, 245, 245),
@@ -180,6 +180,49 @@ impl Default for Theme {
             pick: Rgb(4, 57, 94),
             button: Rgb(14, 99, 156),
             button_text: Rgb(255, 255, 255),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn brightness(color: Rgb) -> u32 {
+        (color.0 as u32 + color.1 as u32 + color.2 as u32) / 3
+    }
+
+    /// A panel left in the other theme's colours stands out as a block.
+    #[test]
+    fn every_panel_belongs_to_its_theme() {
+        let light = Theme::named(Some("light"));
+        for panel in [
+            light.text,
+            light.sidebar,
+            light.activity,
+            light.tab,
+            light.tab_active,
+        ] {
+            assert!(brightness(panel.bg) > 200, "{panel:?}");
+        }
+        let dark = Theme::default();
+        for panel in [
+            dark.text,
+            dark.sidebar,
+            dark.activity,
+            dark.tab,
+            dark.tab_active,
+        ] {
+            assert!(brightness(panel.bg) < 80, "{panel:?}");
+        }
+    }
+
+    #[test]
+    fn activity_icons_stay_readable() {
+        for theme in [Theme::named(Some("light")), Theme::default()] {
+            let bg = brightness(theme.activity.bg) as i32;
+            assert!((brightness(theme.activity_active) as i32 - bg).abs() > 120);
+            assert!((brightness(theme.activity.fg) as i32 - bg).abs() > 60);
         }
     }
 }
