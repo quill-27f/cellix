@@ -18,6 +18,9 @@ const PANEL_PADDING: f32 = 0.3;
 pub enum Item {
     File(PathBuf, String),
     Command(&'static str, Command),
+    /// A branch to switch to, and when it last moved.
+    Branch(String, String),
+    NewBranch,
 }
 
 impl Item {
@@ -25,21 +28,29 @@ impl Item {
         match self {
             Self::File(_, label) => label,
             Self::Command(label, _) => label,
+            Self::Branch(name, _) => name,
+            Self::NewBranch => "New branch…",
         }
     }
 
-    fn keys(&self) -> Option<&'static str> {
+    /// What sits at the right of the row.
+    fn keys(&self) -> Option<&str> {
         match self {
-            Self::File(..) => None,
+            Self::File(..) | Self::NewBranch => None,
             Self::Command(_, command) => keys_of(*command),
+            Self::Branch(_, when) => Some(when),
         }
     }
 }
 
 /// A command's usual keys, shown beside it.
-fn keys_of(command: Command) -> Option<&'static str> {
+pub fn keys_of(command: Command) -> Option<&'static str> {
     Some(match command {
         Command::Save => "Ctrl+S",
+        Command::Cut => "Ctrl+X",
+        Command::Copy => "Ctrl+C",
+        Command::Paste => "Ctrl+V",
+        Command::CommandPalette => "Ctrl+Shift+P",
         Command::Undo => "Ctrl+Z",
         Command::Redo => "Ctrl+Y",
         Command::SelectAll => "Ctrl+A",
@@ -59,7 +70,7 @@ fn keys_of(command: Command) -> Option<&'static str> {
     })
 }
 
-pub const COMMANDS: [(&str, Command); 45] = [
+pub const COMMANDS: [(&str, Command); 47] = [
     ("Save", Command::Save),
     ("Undo", Command::Undo),
     ("Redo", Command::Redo),
@@ -101,6 +112,8 @@ pub const COMMANDS: [(&str, Command); 45] = [
     ("Commit Staged Changes", Command::Commit),
     ("Open Claude Code", Command::OpenClaude),
     ("Open Codex", Command::OpenCodex),
+    ("Open Settings", Command::OpenSettings),
+    ("Switch Branch", Command::SwitchBranch),
     ("Go to Definition", Command::GoToDefinition),
     ("Complete", Command::Complete),
     ("Rename Symbol", Command::RenameSymbol),
@@ -153,7 +166,21 @@ impl Palette {
         palette
     }
 
+    /// A palette whose empty field asks for something other than a search.
+    pub fn asking(items: Vec<Item>, hint: &'static str) -> Self {
+        Self {
+            hint,
+            ..Self::new(items)
+        }
+    }
+
     pub fn filter(&mut self) {
+        // Nothing typed means no ranking: the list keeps the order it came in.
+        if self.query.is_empty() {
+            self.matches = (0..self.items.len()).collect();
+            self.selected = 0;
+            return;
+        }
         let mut scored: Vec<(i32, usize)> = self
             .items
             .iter()

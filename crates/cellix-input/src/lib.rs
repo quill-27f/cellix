@@ -103,6 +103,11 @@ pub enum Format {
     Bullet,
     Task,
     Quote,
+    Strikethrough,
+    /// Takes a line's heading, list or quote marker away.
+    PlainText,
+    CodeBlock,
+    Table,
 }
 
 /// Anything the user can ask for. Each entry is also a command-palette item unless it
@@ -161,6 +166,8 @@ pub enum Command {
     Commit,
     OpenClaude,
     OpenCodex,
+    OpenSettings,
+    SwitchBranch,
     GoToDefinition,
     Complete,
     RenameSymbol,

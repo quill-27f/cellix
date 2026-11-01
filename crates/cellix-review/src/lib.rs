@@ -9,8 +9,9 @@ pub use diff::{
     reject_hunk,
 };
 pub use git::{
-    Change, Worktree, blame_line, changed_files, commit, current_branch, head_text, index_text,
-    numstat, stage_patch, staged_count, worktrees,
+    Branch, Change, Worktree, blame_line, branches, changed_files, commit, create_branch,
+    current_branch, head_text, index_text, numstat, stage_patch, staged_count, switch_branch,
+    worktrees,
 };
 pub use history::{Turn, changed_since, checkpoint, restore, text_at, turns};
 

@@ -68,6 +68,60 @@ pub fn current_branch(root: &Path) -> Option<String> {
     Some(name.trim().to_string())
 }
 
+/// A local branch, and when it last moved.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Branch {
+    pub name: String,
+    pub when: String,
+}
+
+/// Local branches, most recently moved first.
+pub fn branches(root: &Path) -> Vec<Branch> {
+    let format = "--format=%(refname:short)%09%(committerdate:relative)";
+    let args = [
+        "for-each-ref",
+        "--sort=-committerdate",
+        format,
+        "refs/heads",
+    ];
+    let Some(output) = git(root, &args) else {
+        return Vec::new();
+    };
+    output
+        .lines()
+        .filter_map(|line| line.split_once('\t'))
+        .map(|(name, when)| Branch {
+            name: name.to_string(),
+            when: when.to_string(),
+        })
+        .collect()
+}
+
+fn switch(root: &Path, args: &[&str]) -> Result<(), String> {
+    let done = Command::new("git")
+        .current_dir(root)
+        .arg("switch")
+        .args(args)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if done.status.success() {
+        return Ok(());
+    }
+    let said = String::from_utf8_lossy(&done.stderr);
+    let first = said.lines().find(|l| !l.trim().is_empty());
+    Err(first.unwrap_or("git refused").trim().to_string())
+}
+
+/// Moves to a branch. Git refuses when that would lose changes, and says why.
+pub fn switch_branch(root: &Path, name: &str) -> Result<(), String> {
+    switch(root, &[name])
+}
+
+/// Starts a branch here and moves to it.
+pub fn create_branch(root: &Path, name: &str) -> Result<(), String> {
+    switch(root, &["-c", name])
+}
+
 /// Parses `--name-status -z` output.
 pub(crate) fn parse_name_status(output: &str) -> Vec<Change> {
     let mut changes = Vec::new();

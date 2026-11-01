@@ -17,8 +17,8 @@ use cellix_render::{
     ALL_CORNERS, Bounds, CellMeasure, Font, Grid, Icon, Measure, Rect, Style, TOP_LEFT, TOP_RIGHT,
 };
 use cellix_review::{
-    Comment, append_comments, blame_line, changed_files, current_branch, head_text, restore, turns,
-    worktrees,
+    Comment, append_comments, blame_line, branches, changed_files, create_branch, current_branch,
+    head_text, restore, switch_branch, turns, worktrees,
 };
 
 use cellix_agent::hook::comments_message;
@@ -27,16 +27,18 @@ use cellix_agent::{Decision, Request, SharedComments, TestRun};
 
 use serde_json::{Value, json};
 
-use crate::agents::Agents;
+use crate::agents::{Agents, Hit as AgentHit};
 use crate::editor::{Editor, Marks};
 use crate::explorer::Explorer;
 use crate::find::Find;
+use crate::menu::{Action as MenuAction, Item as MenuItem, Menu};
 use crate::neovim::{self, Neovim};
 use crate::palette::{COMMANDS, Input, Item, Palette, input, popup};
 use crate::rendered;
 use crate::review::{Hit, Review};
 use crate::search::{self, Field, Search};
 use crate::settings::{Settings, default_server};
+use crate::settings_page::{Control, Found, SettingsPage, Values};
 use crate::theme::Theme;
 
 const ACTIVITY_WIDTH: u16 = 5;
@@ -46,7 +48,7 @@ const ACTIVITY: [(Icon, Command); 5] = [
     (Icon::Search, Command::FindInProject),
     (Icon::Git, Command::OpenDiff),
     (Icon::Agents, Command::ShowAgents),
-    (Icon::Settings, Command::CommandPalette),
+    (Icon::Settings, Command::OpenSettings),
 ];
 /// Cells each activity icon spans.
 const ACTIVITY_ICON: (u8, u8) = (3, 2);
@@ -92,8 +94,8 @@ const STATUS_BRANCH_WIDTH: u16 = 28;
 const WHEEL_LINES: isize = 3;
 /// Wheel events closer together than this are a trackpad's stream.
 const WHEEL_STREAM_GAP: std::time::Duration = std::time::Duration::from_millis(60);
-const MENU_ITEMS: [&str; 4] = ["New File", "New Folder", "Rename", "Delete"];
-const MENU_WIDTH: u16 = 16;
+/// How close together presses must be to count as one double or triple click.
+const MULTI_CLICK: std::time::Duration = std::time::Duration::from_millis(400);
 /// Ticks between explorer refreshes, so files an agent creates appear on their own.
 const EXPLORER_REFRESH_TICKS: u32 = 4;
 
@@ -115,18 +117,13 @@ enum PromptAction {
     Commit,
     GoToLine,
     SendBackPlan,
+    NewBranch,
 }
 
 struct Prompt {
     label: String,
     input: String,
     action: PromptAction,
-}
-
-struct Menu {
-    x: u16,
-    y: u16,
-    target: PathBuf,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -195,6 +192,8 @@ struct Confirm {
 enum SplitHost {
     Tmux,
     Zellij,
+    /// A new Ghostty window, since Ghostty's splits can't be opened from inside.
+    Ghostty,
 }
 
 impl SplitHost {
@@ -202,8 +201,13 @@ impl SplitHost {
         let start: &[&str] = match self {
             Self::Tmux => &["tmux", "split-window", "-h", "-c", root],
             Self::Zellij => &["zellij", "run", "-d", "right", "--cwd", root, "--"],
+            Self::Ghostty => &["open", "-na", "Ghostty.app", "--args"],
         };
         let mut words: Vec<String> = start.iter().map(ToString::to_string).collect();
+        if self == Self::Ghostty {
+            words.push(format!("--working-directory={root}"));
+            words.push("-e".to_string());
+        }
         if !env.is_empty() {
             words.push("env".to_string());
             words.extend_from_slice(env);
@@ -216,9 +220,38 @@ impl SplitHost {
 fn agent_split(var: impl Fn(&str) -> Option<String>) -> Option<SplitHost> {
     if var("TMUX").is_some_and(|v| !v.is_empty()) {
         Some(SplitHost::Tmux)
+    } else if var("ZELLIJ").is_some() {
+        Some(SplitHost::Zellij)
     } else {
-        var("ZELLIJ").map(|_| SplitHost::Zellij)
+        let ghostty = var("TERM").is_some_and(|t| t.contains("ghostty"));
+        (ghostty && cfg!(target_os = "macos")).then_some(SplitHost::Ghostty)
     }
+}
+
+/// What the system's clipboard holds, where a local tool can read it. Over SSH that would
+/// be the server's clipboard, so there Cellix keeps to its own.
+fn system_clipboard() -> Option<String> {
+    if cfg!(test) || std::env::var_os("SSH_CONNECTION").is_some() {
+        return None;
+    }
+    let tools: [&[&str]; 3] = [
+        &["pbpaste"],
+        &["wl-paste", "-n"],
+        &["xclip", "-o", "-sel", "c"],
+    ];
+    tools.iter().find_map(|tool| {
+        let output = std::process::Command::new(tool[0])
+            .args(&tool[1..])
+            .output()
+            .ok()?;
+        let text = String::from_utf8(output.stdout).ok()?;
+        (output.status.success() && !text.is_empty()).then_some(text)
+    })
+}
+
+/// Saves a setting, and returns what to say if that failed.
+fn store(key: &str, value: serde_json::Value) -> String {
+    Settings::store(key, value).map_or_else(|e| format!("Couldn't save: {e}"), |()| String::new())
 }
 
 /// Runs a program and waits for it, for short commands whose outcome matters.
@@ -326,6 +359,14 @@ pub struct App {
     tests: Vec<TestRun>,
     /// Where the pointer is, for hover highlights.
     hover: Option<(u16, u16)>,
+    /// The last press in text, with where it was and how many it made in a row.
+    last_click: Option<(std::time::Instant, u16, u16, u8)>,
+    /// The Settings page, when it stands in place of the file.
+    settings_page: Option<SettingsPage>,
+    /// What the terminal said of itself, kept for when the theme changes.
+    terminal_look: (Option<bool>, Option<(u8, u8, u8)>),
+    /// A change to smooth scrolling for the terminal loop to pick up.
+    smooth_change: Option<bool>,
     /// What the sidebar shows, as in VS Code's activity bar.
     sidebar_view: SidebarView,
     search: Search,
@@ -392,6 +433,10 @@ impl App {
             agent_pane: None,
             tests: Vec::new(),
             hover: None,
+            last_click: None,
+            settings_page: None,
+            terminal_look: (None, None),
+            smooth_change: None,
             sidebar_view: SidebarView::Explorer,
             search,
             drawer: false,
@@ -411,6 +456,7 @@ impl App {
 
     /// In `auto`, matches the terminal's background. Terminals that don't say stay dark.
     pub fn follow_terminal_theme(&mut self, light: Option<bool>) {
+        self.terminal_look.0 = light;
         let chosen = self.settings.theme.as_deref();
         if chosen.is_none() || chosen == Some("auto") {
             let name = if light == Some(true) { "light" } else { "dark" };
@@ -420,8 +466,13 @@ impl App {
 
     /// Lines the theme up with the terminal, so no seam shows around the app.
     pub fn match_terminal_background(&mut self, background: Option<(u8, u8, u8)>) {
+        self.terminal_look.1 = background;
         let chosen = self.settings.theme.as_deref();
-        if let Some((r, g, b)) = background.filter(|_| chosen.is_none() || chosen == Some("auto")) {
+        // A chosen theme that agrees with the terminal can sit on it too.
+        let light = self.terminal_look.0 == Some(true);
+        let agrees = chosen == Some(if light { "light" } else { "dark" });
+        let follows = chosen.is_none() || chosen == Some("auto") || agrees;
+        if let Some((r, g, b)) = background.filter(|_| follows) {
             self.theme = self.theme.on_background(cellix_render::Rgb(r, g, b));
         }
     }
@@ -457,6 +508,7 @@ impl App {
     }
 
     pub fn open(&mut self, path: &Path) -> io::Result<()> {
+        self.settings_page = None;
         if let Some(i) = self
             .editors
             .iter()
@@ -467,6 +519,7 @@ impl App {
         }
         let buffer = Buffer::open(path)?;
         let mut editor = Editor::new(buffer, self.measure.clone(), self.registry.clone());
+        editor.minimap_on = self.settings.minimap != Some(false);
         self.load_committed(&mut editor);
         self.editors.push(editor);
         self.set_active(self.editors.len() - 1);
@@ -535,11 +588,12 @@ impl App {
         }
         self.tell_selection();
         let searched = self.search.poll();
+        let reviewed = self.review.as_mut().is_some_and(Review::poll);
         let mut events = Vec::new();
         for client in self.servers.values() {
             events.extend(client.events.try_iter());
         }
-        let changed = highlighted || called || searched || !events.is_empty();
+        let changed = highlighted || called || searched || reviewed || !events.is_empty();
         for event in events {
             self.lsp_event(event);
         }
@@ -1333,8 +1387,8 @@ impl App {
         if self.ticks.is_multiple_of(EXPLORER_REFRESH_TICKS) {
             self.refresh_tree();
             self.refresh_committed();
-            if let Some(review) = &mut self.review {
-                review.refresh();
+            if let Some(review) = self.review.as_mut().filter(|r| !r.is_reading()) {
+                review.refresh_later();
             }
         }
     }
@@ -1385,6 +1439,9 @@ impl App {
         }
         if leaving {
             self.overlay = Overlay::None;
+        }
+        if self.settings_page.is_some() && self.settings_key(key) {
+            return;
         }
         if self.search.focus.is_some() && self.sidebar_area().is_some() && self.search_key(key) {
             return;
@@ -1774,7 +1831,24 @@ impl App {
             },
             Overlay::Find(find) => self.find_key(find, key),
             Overlay::Confirm(confirm) => self.confirm_key(confirm, key),
-            Overlay::Menu(_) | Overlay::None => {}
+            Overlay::Menu(mut menu) => match key.key {
+                Key::Up | Key::BackTab => {
+                    menu.step(-1);
+                    self.overlay = Overlay::Menu(menu);
+                }
+                Key::Down | Key::Tab => {
+                    menu.step(1);
+                    self.overlay = Overlay::Menu(menu);
+                }
+                Key::Enter => {
+                    if let Some(action) = menu.selected.and_then(|row| menu.action(row)) {
+                        self.menu_action(action.clone());
+                    }
+                }
+                Key::Esc => {}
+                _ => self.overlay = Overlay::Menu(menu),
+            },
+            Overlay::None => {}
         }
     }
 
@@ -1914,8 +1988,53 @@ impl App {
                 }
             }
             Some(Item::Command(_, command)) => self.run(command),
+            Some(Item::Branch(name, _)) => {
+                let result = switch_branch(self.workspace.root(), &name);
+                self.branch_changed(&name, result);
+            }
+            Some(Item::NewBranch) => self.ask("New branch", PromptAction::NewBranch),
             None => {}
         }
+    }
+
+    /// Shows the new branch's files, or says why git wouldn't move.
+    fn branch_changed(&mut self, name: &str, result: Result<(), String>) {
+        match result {
+            Ok(()) => {
+                self.tick();
+                self.refresh_tree();
+                self.refresh_committed();
+                if let Some(review) = &mut self.review {
+                    review.refresh();
+                }
+                self.say(format!("On {name}"));
+            }
+            Err(reason) => {
+                self.overlay = Overlay::Confirm(Confirm {
+                    title: format!("Couldn't switch to {name}"),
+                    detail: reason,
+                    buttons: vec![("OK", Choice::Cancel)],
+                    selected: 0,
+                });
+            }
+        }
+    }
+
+    fn switch_branch_list(&mut self) {
+        let root = self.workspace.root();
+        let current = self.branch.clone();
+        let mut items: Vec<Item> = branches(root)
+            .into_iter()
+            .map(|b| {
+                let here = current.as_deref() == Some(b.name.as_str());
+                let when = if here { "current".to_string() } else { b.when };
+                Item::Branch(b.name, when)
+            })
+            .collect();
+        // The branch you're on comes first, so the list opens on where you are.
+        items.sort_by_key(|i| !matches!(i, Item::Branch(_, when) if when == "current"));
+        items.push(Item::NewBranch);
+        self.overlay = Overlay::Palette(Palette::asking(items, "Switch branch"));
     }
 
     fn finish_prompt(&mut self, prompt: Prompt) {
@@ -1964,6 +2083,11 @@ impl App {
                 Ok(())
             }
             _ if name.is_empty() => Ok(()),
+            PromptAction::NewBranch => {
+                let result = create_branch(self.workspace.root(), name);
+                self.branch_changed(name, result);
+                Ok(())
+            }
             PromptAction::NewFile(dir) => self.workspace.create_file(&dir.join(name)),
             PromptAction::NewFolder(dir) => self.workspace.create_dir(&dir.join(name)),
             PromptAction::Rename(path) => match path.parent() {
@@ -2043,12 +2167,24 @@ impl App {
             }
             Command::ShowAgents => {
                 self.review = None;
+                self.settings_page = None;
                 self.search.focus = None;
                 self.sidebar_view = SidebarView::Agents;
                 self.show_sidebar = true;
                 self.drawer = self.compact();
                 self.agents.worktrees = worktrees(self.workspace.root());
+                self.agents.look_for_codex();
+                self.agents.scan(self.workspace.root());
             }
+            Command::OpenSettings => {
+                let closing = self.settings_page.is_some();
+                self.settings_page = (!closing).then(|| SettingsPage::new(Found::look()));
+                if !closing {
+                    self.review = None;
+                    self.drawer = false;
+                }
+            }
+            Command::SwitchBranch => self.switch_branch_list(),
             Command::ReviewPreviousTurn => {
                 if self.review.is_none() {
                     self.review = Some(self.new_review(self.workspace.root().to_path_buf()));
@@ -2128,7 +2264,7 @@ impl App {
                 }
             }
             Command::Paste => {
-                let text = self.clipboard.clone();
+                let text = system_clipboard().unwrap_or_else(|| self.clipboard.clone());
                 self.paste(&text);
             }
             Command::Cancel if self.review.is_some() => self.review = None,
@@ -2206,7 +2342,12 @@ impl App {
         if let (Some(folder), Ok(path)) = (own_folder, std::env::var("PATH")) {
             env.push(format!("PATH={folder}:{path}"));
         }
-        if let Some(plugin) = crate::plugin::install() {
+        // Once installed, Claude Code already loads it, and loading it twice would run
+        // every hook twice.
+        let var = |name: &str| std::env::var(name).ok();
+        if !crate::integrations::claude_installed(var)
+            && let Some(plugin) = crate::plugin::install()
+        {
             launch.extend(["--plugin-dir".to_string(), plugin.display().to_string()]);
         }
         (env, launch)
@@ -2217,8 +2358,11 @@ impl App {
         let host = agent_split(|name| std::env::var(name).ok());
         let (env, launch) = self.agent_launch(agent);
         let Some(command) = host.map(|host| host.command(&launch, &root, &env)) else {
+            // Nothing here can open a window for it, so hand over the command instead.
+            let line = launch.join(" ");
+            self.copy_text(line, "");
             self.say(format!(
-                "Run {agent} in a split: Cellix opens it for you inside tmux or Zellij"
+                "Copied the command: paste it in a terminal to start {agent}"
             ));
             return;
         };
@@ -2789,7 +2933,21 @@ impl App {
             }
             return;
         }
+        let status_row = self.size.1.saturating_sub(1);
+        if y == status_row {
+            let on_branch = self
+                .status_branch()
+                .is_some_and(|(at, end)| x >= at && x < end);
+            if mouse.kind == MouseKind::Left && on_branch {
+                self.run(Command::SwitchBranch);
+            }
+            return;
+        }
         let in_sidebar = self.sidebar_area().is_some_and(|a| a.contains(x, y));
+        if self.settings_page.is_some() && !in_sidebar {
+            self.settings_mouse(mouse);
+            return;
+        }
         if self.review.is_some() && !in_sidebar && self.main_area().contains(x, y) {
             match mouse.kind {
                 MouseKind::Left => self.click_review(x, y),
@@ -2848,12 +3006,15 @@ impl App {
                 }
             }
             MouseKind::Left if in_sidebar && self.sidebar_view == SidebarView::Agents => {
-                let tree = self
-                    .sidebar_area()
-                    .and_then(|a| self.agents.worktree_at(a, y));
-                if let Some(path) = tree {
-                    self.review = Some(self.new_review(path));
-                    self.drawer = false;
+                let hit = self.sidebar_area().and_then(|a| self.agents.hit(a, y));
+                match hit {
+                    Some(AgentHit::OpenClaude) => self.run(Command::OpenClaude),
+                    Some(AgentHit::OpenCodex) => self.run(Command::OpenCodex),
+                    Some(AgentHit::Worktree(path)) => {
+                        self.review = Some(self.new_review(path));
+                        self.drawer = false;
+                    }
+                    None => {}
                 }
             }
             MouseKind::Left if in_sidebar && self.sidebar_view == SidebarView::Search => {
@@ -2862,8 +3023,9 @@ impl App {
                 }
             }
             MouseKind::Right if in_sidebar && self.sidebar_view == SidebarView::Explorer => {
-                self.open_menu(x, y);
+                self.open_explorer_menu(x, y);
             }
+            MouseKind::Right if self.tabs_area().contains(x, y) => self.open_tab_menu(x, y),
             MouseKind::Right if self.pane_at(x, y).is_some() => {
                 if let Some(pane) = self.pane_at(x, y) {
                     self.focus = pane;
@@ -2871,9 +3033,19 @@ impl App {
                 let area = self.focused_area();
                 if let Some(editor) = self.editor_mut() {
                     let at = editor.position_at(area, fine_x, y);
-                    editor.selections.set_single(Selection::cursor(at));
+                    // A click on the selection is about the selection, so it stays.
+                    let on_it = editor
+                        .selections
+                        .iter()
+                        .any(|s| at >= s.start() && at < s.end());
+                    if !on_it {
+                        editor.selections.set_single(Selection::cursor(at));
+                    }
                 }
-                self.prompt_comment_at_cursor();
+                self.open_editor_menu(x, y);
+            }
+            MouseKind::Left if in_sidebar && self.on_explorer_header(y) => {
+                self.run(Command::SwitchBranch);
             }
             MouseKind::Left if in_sidebar => self.click_explorer(y),
             MouseKind::Left
@@ -2893,6 +3065,7 @@ impl App {
                 self.search.focus = None;
                 self.focus = pane;
                 let area = self.focused_area();
+                let clicks = self.count_click(x, y);
                 if let Some(editor) = self.editor_mut() {
                     if editor.on_scrollbar(area, x) {
                         editor.scroll_to_row(area, y);
@@ -2903,6 +3076,15 @@ impl App {
                         return;
                     }
                     let at = editor.position_at(area, fine_x, y);
+                    if clicks > 1 {
+                        if clicks == 2 {
+                            editor.select_word_at(at);
+                        } else {
+                            editor.select_line_at(at);
+                        }
+                        self.drag = Drag::Text;
+                        return;
+                    }
                     if mouse.mods.ctrl {
                         editor.selections.set_single(Selection::cursor(at));
                         self.open_in_browser();
@@ -2947,7 +3129,29 @@ impl App {
         }
     }
 
+    /// One, two or three, for a press in this place soon after the last.
+    fn count_click(&mut self, x: u16, y: u16) -> u8 {
+        let again = self.last_click.filter(|(at, click_x, click_y, _)| {
+            at.elapsed() < MULTI_CLICK && *click_y == y && click_x.abs_diff(x) <= 1
+        });
+        let count = again.map_or(1, |(.., count)| count % 3 + 1);
+        self.last_click = Some((std::time::Instant::now(), x, y, count));
+        count
+    }
+
+    fn on_explorer_header(&self, y: u16) -> bool {
+        self.sidebar_view == SidebarView::Explorer
+            && self.branch.is_some()
+            && self.sidebar_area().is_some_and(|a| y == a.y)
+    }
+
     fn overlay_mouse(&mut self, mouse: MouseEvent) {
+        // Another right click moves the menu there, as it does everywhere else.
+        if mouse.kind == MouseKind::Right && matches!(self.overlay, Overlay::Menu(_)) {
+            self.overlay = Overlay::None;
+            self.mouse(mouse);
+            return;
+        }
         if mouse.kind != MouseKind::Left {
             return;
         }
@@ -2961,10 +3165,12 @@ impl App {
                 }
             }
             Overlay::Menu(menu) => {
-                let row = mouse.y.checked_sub(menu.y).map(usize::from);
-                let inside = mouse.x >= menu.x && mouse.x < menu.x + MENU_WIDTH;
-                if let Some(row) = row.filter(|r| inside && *r < MENU_ITEMS.len()) {
-                    self.menu_choice(row, &menu.target);
+                // A greyed row stays open, so a slip doesn't dismiss the menu.
+                if let Some(row) = menu.row_at(mouse.x, mouse.y) {
+                    match menu.action(row) {
+                        Some(action) => self.menu_action(action.clone()),
+                        None => self.overlay = Overlay::Menu(menu),
+                    }
                 }
             }
             Overlay::Find(find) => self.click_find(find, mouse.x, mouse.y),
@@ -2984,63 +3190,389 @@ impl App {
         }
     }
 
-    fn open_menu(&mut self, x: u16, y: u16) {
+    fn show_menu(&mut self, at: (u16, u16), items: Vec<MenuItem>) {
+        let screen = Rect::new(0, 0, self.size.0, self.size.1);
+        self.overlay = Overlay::Menu(Menu::new(at, items, &*self.measure, screen));
+    }
+
+    fn open_explorer_menu(&mut self, x: u16, y: u16) {
         let target = self.sidebar_area().and_then(|area| {
             let index = self.explorer.entry_at(area, y)?;
             self.explorer.selected = Some(index);
             Some(self.explorer.entries[index].path.clone())
         });
-        let target = target.unwrap_or_else(|| self.workspace.root().to_path_buf());
-        self.overlay = Overlay::Menu(Menu { x, y, target });
+        let root = self.workspace.root().to_path_buf();
+        let target = target.unwrap_or_else(|| root.clone());
+        let dir = if target.is_dir() {
+            target.clone()
+        } else {
+            target.parent().unwrap_or(&root).to_path_buf()
+        };
+        let entry = target != root;
+        let items = vec![
+            MenuItem::new("New File", MenuAction::NewFile(dir.clone())),
+            MenuItem::new("New Folder", MenuAction::NewFolder(dir)),
+            MenuItem::new("Rename", MenuAction::Rename(target.clone()))
+                .after_rule()
+                .when(entry),
+            MenuItem::new("Delete", MenuAction::Delete(target.clone())).when(entry),
+            MenuItem::new("Copy Path", MenuAction::CopyPath(target.clone())).after_rule(),
+            MenuItem::new("Copy Relative Path", MenuAction::CopyRelativePath(target)),
+        ];
+        self.show_menu((x, y), items);
     }
 
-    fn menu_choice(&mut self, row: usize, target: &Path) {
-        let dir = if target.is_dir() {
-            target.to_path_buf()
-        } else {
-            target
-                .parent()
-                .unwrap_or(self.workspace.root())
-                .to_path_buf()
+    fn open_tab_menu(&mut self, x: u16, y: u16) {
+        let tab = self
+            .visible_tabs()
+            .into_iter()
+            .find(|(_, at, width)| x >= *at && x < at + width);
+        let Some((index, ..)) = tab else {
+            return;
         };
-        let name = target
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let (label, input, action) = match row {
-            0 => (
-                "New file".to_string(),
-                String::new(),
-                PromptAction::NewFile(dir),
-            ),
-            1 => (
-                "New folder".to_string(),
-                String::new(),
-                PromptAction::NewFolder(dir),
-            ),
-            2 => (
-                "Rename".to_string(),
-                name,
-                PromptAction::Rename(target.to_path_buf()),
-            ),
-            _ => {
+        let path = self.editors[index].buffer.path().map(Path::to_path_buf);
+        let others = self.editors.len() > 1;
+        let on_file = |action: fn(PathBuf) -> MenuAction| {
+            let fallback = PathBuf::new();
+            action(path.clone().unwrap_or(fallback))
+        };
+        let items = vec![
+            MenuItem::new("Close", MenuAction::CloseTab(index)),
+            MenuItem::new("Close Others", MenuAction::CloseOtherTabs(index)).when(others),
+            MenuItem::new("Close All", MenuAction::CloseAllTabs),
+            MenuItem::new("Copy Path", on_file(MenuAction::CopyPath))
+                .after_rule()
+                .when(path.is_some()),
+            MenuItem::new("Copy Relative Path", on_file(MenuAction::CopyRelativePath))
+                .when(path.is_some()),
+            MenuItem::new("Reveal in Sidebar", on_file(MenuAction::Reveal)).when(path.is_some()),
+        ];
+        self.show_menu((x, y), items);
+    }
+
+    /// What a right click on text offers. A page gets Xcode's formatting, and code gets
+    /// what its language server can do, greyed out when there's no server to ask.
+    fn editor_items(&self) -> Vec<MenuItem> {
+        let Some(editor) = self.editors.get(self.active()) else {
+            return Vec::new();
+        };
+        let selected = editor.selected_text().is_some();
+        let path = editor.buffer.path();
+        let language = path.and_then(Registry::language_name);
+        let run = MenuItem::run;
+        let edit = [
+            run("Cut", Command::Cut).after_rule().when(selected),
+            run("Copy", Command::Copy).when(selected),
+            run("Paste", Command::Paste),
+        ];
+        let agent = [
+            run("Add Comment", Command::AddComment).after_rule(),
+            run("Send Selection to Agent", Command::MentionSelection).when(selected),
+        ];
+        let mut items = Vec::new();
+        if editor.rendered {
+            items.push(run("Show Source", Command::MarkdownPreview));
+            items.extend(edit);
+            let format = |name, format| run(name, Command::Format(format));
+            items.extend([
+                format("Bold", Format::Bold).after_rule(),
+                format("Italic", Format::Italic),
+                format("Strikethrough", Format::Strikethrough),
+                format("Code", Format::Code),
+                format("Plain Text", Format::PlainText).after_rule(),
+                format("Heading", Format::Heading),
+                format("Code Block", Format::CodeBlock),
+                format("Insert Table", Format::Table),
+            ]);
+            items.extend(agent);
+        } else {
+            let server = language.is_some_and(|l| self.servers.contains_key(l));
+            items.extend([
+                run("Go to Definition", Command::GoToDefinition).when(server),
+                run("Rename Symbol", Command::RenameSymbol).when(server),
+            ]);
+            if language == Some("Markdown") {
+                items.push(run("Show Page", Command::MarkdownPreview));
+            }
+            items.extend(edit);
+            items.push(run("Toggle Comment", Command::ToggleComment).after_rule());
+            items.extend(agent.into_iter().map(|i| MenuItem { rule: false, ..i }));
+            items.push(run("Command Palette…", Command::CommandPalette).after_rule());
+        }
+        items
+    }
+
+    fn open_editor_menu(&mut self, x: u16, y: u16) {
+        let items = self.editor_items();
+        if !items.is_empty() {
+            self.show_menu((x, y), items);
+        }
+    }
+
+    fn copy_text(&mut self, text: String, note: &str) {
+        self.clipboard.clone_from(&text);
+        self.outgoing_clipboard = Some(text);
+        self.say(note);
+    }
+
+    /// Closes every tab but `keep`, leaving any with unsaved edits open.
+    fn close_tabs_except(&mut self, keep: Option<usize>) {
+        let path = keep.and_then(|i| {
+            self.editors
+                .get(i)?
+                .buffer
+                .path()?
+                .to_str()
+                .map(str::to_string)
+        });
+        let plan = self.plan.as_ref().map(|p| p.path.clone());
+        let before = self.editors.len();
+        self.editors.retain(|e| {
+            let kept = path.is_some() && e.buffer.path().and_then(Path::to_str) == path.as_deref();
+            kept || e.buffer.is_dirty() || e.buffer.path() == plan.as_deref()
+        });
+        self.panes = vec![0];
+        self.focus = 0;
+        let unsaved = self
+            .editors
+            .len()
+            .saturating_sub(usize::from(path.is_some()));
+        if unsaved > 0 {
+            self.say(format!("{unsaved} tabs with unsaved edits stayed open"));
+        } else if before > self.editors.len() {
+            self.say("Closed");
+        }
+    }
+
+    fn reveal_in_sidebar(&mut self, path: &Path) {
+        let root = self.workspace.root().to_path_buf();
+        let parents: Vec<PathBuf> = path
+            .ancestors()
+            .skip(1)
+            .take_while(|p| p.starts_with(&root) && *p != root)
+            .map(Path::to_path_buf)
+            .collect();
+        self.explorer.refresh(&self.workspace);
+        for parent in parents.iter().rev() {
+            let closed = self
+                .explorer
+                .entries
+                .iter()
+                .any(|e| e.path == *parent && !e.expanded);
+            if closed {
+                self.workspace.toggle(parent);
+                self.explorer.refresh(&self.workspace);
+            }
+        }
+        self.show_explorer();
+        self.show_sidebar = true;
+        self.explorer.selected = self.explorer.entries.iter().position(|e| e.path == path);
+    }
+
+    fn menu_action(&mut self, action: MenuAction) {
+        let name = |path: &Path| {
+            path.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        };
+        let prompt = |label: &str, input: String, action| {
+            Overlay::Prompt(Prompt {
+                label: label.to_string(),
+                input,
+                action,
+            })
+        };
+        match action {
+            MenuAction::Run(command) => self.run(command),
+            MenuAction::NewFile(dir) => {
+                self.overlay = prompt("New file", String::new(), PromptAction::NewFile(dir));
+            }
+            MenuAction::NewFolder(dir) => {
+                self.overlay = prompt("New folder", String::new(), PromptAction::NewFolder(dir));
+            }
+            MenuAction::Rename(target) => {
+                let input = name(&target);
+                self.overlay = prompt("Rename", input, PromptAction::Rename(target));
+            }
+            MenuAction::Delete(target) => {
                 self.overlay = Overlay::Confirm(Confirm {
-                    title: format!("Delete {name}?"),
+                    title: format!("Delete {}?", name(&target)),
                     detail: "This can't be undone.".to_string(),
                     buttons: vec![
-                        ("Delete", Choice::Delete(target.to_path_buf())),
+                        ("Delete", Choice::Delete(target)),
                         ("Cancel", Choice::Cancel),
                     ],
                     selected: 1,
                 });
-                return;
             }
+            MenuAction::CopyPath(path) => {
+                self.copy_text(path.display().to_string(), "Copied the path");
+            }
+            MenuAction::CopyRelativePath(path) => {
+                self.copy_text(self.relative(&path), "Copied the relative path");
+            }
+            MenuAction::Reveal(path) => self.reveal_in_sidebar(&path),
+            MenuAction::CloseTab(index) => {
+                self.set_active(index);
+                self.run(Command::CloseTab);
+            }
+            MenuAction::CloseOtherTabs(index) => self.close_tabs_except(Some(index)),
+            MenuAction::CloseAllTabs => self.close_tabs_except(None),
+        }
+    }
+
+    fn settings_values(&self) -> (String, String, bool, bool) {
+        let chosen = |value: &Option<String>, fallback: &str| {
+            value.clone().unwrap_or_else(|| fallback.to_string())
         };
-        self.overlay = Overlay::Prompt(Prompt {
-            label,
-            input,
-            action,
-        });
+        (
+            chosen(&self.settings.theme, "auto"),
+            chosen(&self.settings.keymap, "simple"),
+            self.settings.smooth_scroll != Some(false),
+            self.settings.minimap != Some(false),
+        )
+    }
+
+    fn settings_key(&mut self, key: KeyEvent) -> bool {
+        let area = self.sheet_area();
+        let Some(page) = &mut self.settings_page else {
+            return false;
+        };
+        match key.key {
+            Key::Esc => self.settings_page = None,
+            Key::Down | Key::Right | Key::Tab => page.step(area, 1),
+            Key::Up | Key::Left | Key::BackTab => page.step(area, -1),
+            Key::Enter | Key::Char(' ') => {
+                if let Some(control) = page.focused(area) {
+                    self.use_control(control);
+                }
+            }
+            // Ctrl keys and the like still reach the app, so Ctrl+P works from here.
+            Key::Char(_) if !key.mods.ctrl && !key.mods.alt => {}
+            _ => return false,
+        }
+        true
+    }
+
+    fn settings_mouse(&mut self, mouse: MouseEvent) {
+        let area = self.sheet_area();
+        let Some(page) = &self.settings_page else {
+            return;
+        };
+        if mouse.kind != MouseKind::Left {
+            return;
+        }
+        if self.tabs_area().contains(mouse.x, mouse.y) {
+            self.settings_page = None;
+        } else if let Some(control) = page.control_at(area, mouse.x, mouse.y) {
+            self.use_control(control);
+        }
+    }
+
+    /// Picks up a change to the theme, keeping the frame on the terminal's own colour.
+    fn apply_theme(&mut self) {
+        self.theme = Theme::named(self.settings.theme.as_deref());
+        let (light, background) = self.terminal_look;
+        self.follow_terminal_theme(light);
+        self.match_terminal_background(background);
+    }
+
+    fn use_control(&mut self, control: Control) {
+        let mut note = String::new();
+        let var = |name: &str| std::env::var(name).ok();
+        match control {
+            Control::Section(section) => {
+                if let Some(page) = &mut self.settings_page {
+                    page.section = section;
+                    page.focus = None;
+                }
+            }
+            Control::Theme(name) => {
+                self.settings.theme = Some(name.to_string());
+                self.apply_theme();
+                note = store("theme", name.into());
+            }
+            Control::SmoothScroll => {
+                let on = self.settings.smooth_scroll == Some(false);
+                self.settings.smooth_scroll = Some(on);
+                self.smooth_change = Some(on);
+                note = store("smooth_scroll", on.into());
+            }
+            Control::Minimap => {
+                let on = self.settings.minimap == Some(false);
+                self.settings.minimap = Some(on);
+                for editor in &mut self.editors {
+                    editor.minimap_on = on;
+                }
+                note = store("minimap", on.into());
+            }
+            Control::Keymap(name) => {
+                self.vim = (name == "vim").then(Vim::default);
+                self.neovim = (name == "neovim")
+                    .then(|| Neovim::start(&[]).ok())
+                    .flatten();
+                if name == "neovim" && self.neovim.is_none() {
+                    note = "Neovim wasn't found, so the keymap stayed as it was".to_string();
+                } else {
+                    self.settings.keymap = Some(name.to_string());
+                    note = store("keymap", name.into());
+                }
+            }
+            Control::ClaudeCode => {
+                let installed = self
+                    .settings_page
+                    .as_ref()
+                    .is_some_and(|p| p.found.claude_installed);
+                let done = if installed {
+                    crate::integrations::remove_claude(var)
+                        .map(|()| "Removed. Restart Claude Code.")
+                } else {
+                    crate::integrations::install_claude(var)
+                        .map(|()| "Installed. Restart Claude Code to load it.")
+                };
+                note = done.map_or_else(|e| format!("Couldn't: {e}"), str::to_string);
+            }
+            Control::Ghostty => {
+                note = crate::integrations::free_cmd_d(var).map_or_else(
+                    |e| format!("Couldn't: {e}"),
+                    |()| "Done. Reload Ghostty's config with Cmd+Shift+,".to_string(),
+                );
+            }
+        }
+        if let Some(page) = &mut self.settings_page {
+            if matches!(control, Control::ClaudeCode | Control::Ghostty) {
+                page.found = Found::look();
+            }
+            page.note = note;
+        }
+    }
+
+    /// The new smooth scrolling setting, once, for the terminal loop to act on.
+    pub fn take_smooth_change(&mut self) -> Option<bool> {
+        self.smooth_change.take()
+    }
+
+    fn draw_settings_tab(&self, grid: &mut Grid) {
+        let main = self.main_area();
+        let theme = &self.theme;
+        grid.fill(Rect::new(main.x, main.y, main.w, 1), theme.tab);
+        let area = self.tabs_area();
+        let tab = Rect::new(area.x, area.y, 15, 1);
+        let style = theme.tab_active;
+        grid.fill(tab, style);
+        let close = tab.right().saturating_sub(3);
+        grid.label_at(
+            area.x as f32 + 1.5,
+            area.x + 2,
+            area.y,
+            "Settings",
+            style,
+            close,
+            100,
+        );
+        grid.glyph(close as f32, area.y, Icon::Close, style.fg, "×", style);
+        let bounds = Bounds::inset(tab, 0.0, 0.0);
+        grid.corners(bounds, TAB_RADIUS, theme.tab.bg, TOP_LEFT | TOP_RIGHT);
     }
 
     fn click_explorer(&mut self, y: u16) {
@@ -3069,6 +3601,9 @@ impl App {
             y >= top && y < top + ACTIVITY_STEP
         });
         if let Some((_, command)) = index.and_then(|i| ACTIVITY.get(i)) {
+            if *command != Command::OpenSettings {
+                self.settings_page = None;
+            }
             let on_explorer = self.sidebar_view == SidebarView::Explorer;
             match command {
                 Command::ToggleSidebar if self.review.is_some() || !on_explorer => {
@@ -3158,8 +3693,22 @@ impl App {
                     self.explorer.draw(grid, area, header, self.hover, theme);
                 }
                 SidebarView::Search => self.search.draw(grid, area, &*self.measure, theme),
-                SidebarView::Agents => self.agents.draw(grid, area, theme),
+                SidebarView::Agents => self.agents.draw(grid, area, self.hover, theme),
             }
+        }
+        if let Some(page) = &self.settings_page {
+            self.draw_settings_tab(grid);
+            let (chosen, keymap, smooth_scroll, minimap) = self.settings_values();
+            let values = Values {
+                theme: &chosen,
+                keymap: &keymap,
+                smooth_scroll,
+                minimap,
+            };
+            page.draw(grid, self.sheet_area(), &values, self.hover, theme);
+            self.draw_status(grid);
+            self.draw_overlay(grid);
+            return;
         }
         if let Some(review) = &self.review {
             let comments = self.comments.lock().map(|c| c.clone()).unwrap_or_default();
@@ -3219,39 +3768,11 @@ impl App {
         let theme = &self.theme;
         match &self.overlay {
             Overlay::Palette(palette) => palette.draw(grid, self.hover, &*self.measure, theme),
-            Overlay::Menu(menu) => self.draw_menu(grid, menu),
+            Overlay::Menu(menu) => menu.draw(grid, self.hover, theme),
             Overlay::Prompt(prompt) => self.draw_prompt(grid, prompt),
             Overlay::Find(find) => self.draw_find(grid, find),
             Overlay::Confirm(confirm) => self.draw_confirm(grid, confirm),
             Overlay::None => {}
-        }
-    }
-
-    fn draw_menu(&self, grid: &mut Grid, menu: &Menu) {
-        let height = MENU_ITEMS.len() as u16;
-        popup(
-            grid,
-            Rect::new(menu.x, menu.y, MENU_WIDTH, height),
-            &self.theme,
-        );
-        let base = Style {
-            fg: self.theme.text.fg,
-            bg: self.theme.popup,
-            ..self.theme.bar
-        };
-        for (i, item) in MENU_ITEMS.iter().enumerate() {
-            let y = menu.y + i as u16;
-            let row = Rect::new(menu.x, y, MENU_WIDTH, 1);
-            if self.hover.is_some_and(|h| row.contains(h.0, h.1)) {
-                grid.panel(
-                    Bounds::inset(row, 0.3, 0.05),
-                    16,
-                    Some(self.theme.pick),
-                    None,
-                );
-            }
-            let end = menu.x + MENU_WIDTH;
-            grid.label_at(menu.x as f32 + 1.0, menu.x + 1, y, item, base, end, 100);
         }
     }
 
@@ -3333,6 +3854,7 @@ impl App {
                         && self.sidebar_view == SidebarView::Agents
                 }
                 Command::OpenDiff => self.review.is_some(),
+                Command::OpenSettings => self.settings_page.is_some(),
                 _ => false,
             };
             let row = Rect::new(area.x, y, area.w, ACTIVITY_ICON.1 as u16);
@@ -3749,6 +4271,9 @@ impl App {
         }
         if self.in_pane && self.review.is_some() {
             right = vec!["Esc returns to Claude".to_string()];
+        }
+        if self.settings_page.is_some() {
+            right.clear();
         }
         // A message outranks the details, and a hint gives way to them.
         let kept = if message.is_empty() { 24 } else { 64 };
@@ -4222,6 +4747,11 @@ mod tests {
         assert!(text.contains("alpha.txt"), "against HEAD: {text}");
         let (x, y) = find(&screen(&app), "Add the limit");
         app.handle(mouse(MouseKind::Left, x, y));
+        assert!(
+            app.review.as_ref().unwrap().base.is_some(),
+            "the click lands at once, before git has answered"
+        );
+        settle_review(&mut app);
         let text = screen(&app).text();
         assert!(text.contains("fn turn()"), "{text}");
         assert!(
@@ -4229,6 +4759,7 @@ mod tests {
             "that changed before the turn: {text}"
         );
         app.run(Command::ReviewPreviousTurn);
+        settle_review(&mut app);
         assert!(
             screen(&app).text().contains("alpha.txt"),
             "back to the last commit"
@@ -4316,6 +4847,8 @@ mod tests {
             fine_x: find(&screen(&app), "step one").0 as f32,
             mods: Mods::default(),
         }));
+        let (x, y) = find(&screen(&app), "Add Comment");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
         typed(&mut app, "split this step");
         enter(&mut app);
         app.finish().unwrap();
@@ -5292,7 +5825,7 @@ mod tests {
         app.serve(Request::Agent(agent(Working, "Working")));
         assert!(!screen(&app).text().contains("needs you"));
         app.serve(Request::Agent(agent(Ended, "Ended")));
-        assert!(screen(&app).text().contains("None running"));
+        assert!(screen(&app).text().contains("No agents here"));
     }
 
     #[test]
@@ -6659,5 +7192,304 @@ while True:
             app.handle(Event::Resize(size.0, size.1));
             screen(&app);
         }
+    }
+
+    /// Lets a background read of git land.
+    fn settle_review(app: &mut App) {
+        while app.review.as_ref().is_some_and(Review::is_reading) {
+            app.poll();
+        }
+    }
+
+    /// The word at a place on screen, by a fast double click.
+    fn double_click(app: &mut App, x: u16, y: u16) {
+        for _ in 0..2 {
+            app.handle(mouse(MouseKind::Left, x, y));
+            app.handle(mouse(MouseKind::Up, x, y));
+        }
+    }
+
+    #[test]
+    fn a_double_click_selects_the_word_and_a_third_the_line() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        let (x, y) = find(&screen(&app), "second");
+        double_click(&mut app, x + 2, y);
+        assert_eq!(app.selected_text().as_deref(), Some("second"));
+        app.handle(mouse(MouseKind::Left, x + 2, y));
+        assert_eq!(app.selected_text().as_deref(), Some("second line\n"));
+    }
+
+    #[test]
+    fn a_double_click_works_on_a_page() {
+        let (_dir, mut app) = page("One **bold** word\n");
+        let (x, y) = find(&screen(&app), "bold");
+        double_click(&mut app, x + 1, y);
+        assert_eq!(app.selected_text().as_deref(), Some("bold"));
+    }
+
+    #[test]
+    fn clicks_apart_are_not_a_double_click() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        let (x, y) = find(&screen(&app), "second");
+        app.handle(mouse(MouseKind::Left, x, y));
+        app.handle(mouse(MouseKind::Left, x + 7, y));
+        assert_eq!(app.selected_text(), None);
+    }
+
+    #[test]
+    fn ctrl_d_gathers_the_same_word_and_typing_replaces_them_all() {
+        let (_dir, mut app) = page("cat and cat and cat\n");
+        let (x, y) = find(&screen(&app), "cat");
+        double_click(&mut app, x + 1, y);
+        for _ in 0..2 {
+            app.run(Command::SelectNextMatch);
+        }
+        assert_eq!(app.editors[0].selections.len(), 3);
+        typed(&mut app, "dog");
+        assert_eq!(app.active_text().unwrap(), "dog and dog and dog\n");
+    }
+
+    #[test]
+    fn right_clicking_a_page_offers_formatting() {
+        let (_dir, mut app) = page("# Title\n\nsome words here\n");
+        let (x, y) = find(&screen(&app), "words");
+        double_click(&mut app, x + 1, y);
+        app.handle(mouse(MouseKind::Right, x + 1, y));
+        let text = screen(&app).text();
+        for item in [
+            "Show Source",
+            "Cut",
+            "Bold",
+            "Strikethrough",
+            "Code Block",
+            "Insert Table",
+        ] {
+            assert!(text.contains(item), "{item}\n{text}");
+        }
+        assert_eq!(
+            app.selected_text().as_deref(),
+            Some("words"),
+            "it stays selected"
+        );
+        let (x, y) = find(&screen(&app), "Strikethrough");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        assert_eq!(
+            app.active_text().unwrap(),
+            "# Title\n\nsome ~~words~~ here\n"
+        );
+    }
+
+    #[test]
+    fn right_clicking_code_offers_what_the_language_can_do() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        let (x, y) = find(&screen(&app), "first");
+        app.handle(mouse(MouseKind::Right, x, y));
+        let text = screen(&app).text();
+        assert!(
+            text.contains("Go to Definition") && text.contains("Paste"),
+            "{text}"
+        );
+        assert!(!text.contains("Bold"), "formatting is for pages");
+        // With no language server this row can't do anything, so a click leaves it open.
+        let (rx, ry) = find(&screen(&app), "Go to Definition");
+        app.handle(mouse(MouseKind::Left, rx + 1, ry));
+        assert!(screen(&app).text().contains("Go to Definition"));
+    }
+
+    #[test]
+    fn a_menu_works_from_the_keyboard() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        let (x, y) = find(&screen(&app), "first");
+        app.handle(mouse(MouseKind::Right, x, y));
+        key(&mut app, Key::Esc);
+        assert!(!app.overlay_is_open());
+        app.handle(mouse(MouseKind::Right, x, y));
+        key(&mut app, Key::Down);
+        enter(&mut app);
+        assert!(!app.overlay_is_open(), "Paste ran and the menu closed");
+    }
+
+    #[test]
+    fn page_formats_change_the_source() {
+        let cases = [
+            (Format::PlainText, "## Title\n", "Title\n"),
+            (Format::PlainText, "- [ ] task\n", "task\n"),
+            (Format::CodeBlock, "code\n", "```\ncode\n```\n"),
+        ];
+        for (format, before, after) in cases {
+            let (_dir, mut app) = page(before);
+            app.run(Command::Format(format));
+            assert_eq!(app.active_text().unwrap(), after, "{format:?}");
+        }
+        let (_dir, mut app) = page("words\n");
+        app.run(Command::Format(Format::Table));
+        assert_eq!(
+            app.active_text().unwrap(),
+            "words\n\n| Column | Column |\n|---|---|\n|  |  |\n\n"
+        );
+    }
+
+    #[test]
+    fn a_tab_has_its_own_menu() {
+        let (dir, mut app) = project();
+        for name in ["alpha.txt", "beta.rs"] {
+            app.open(&dir.path().join(name)).unwrap();
+        }
+        let (x, y) = find(&screen(&app), "alpha.txt");
+        let row = (0..y + 3)
+            .find(|r| screen(&app).row_text(*r).contains("beta.rs"))
+            .unwrap();
+        assert!(row <= y);
+        app.handle(mouse(MouseKind::Right, app.visible_tabs()[0].1 + 2, 0));
+        assert!(screen(&app).text().contains("Close Others"));
+        let (x2, y2) = find(&screen(&app), "Close Others");
+        app.handle(mouse(MouseKind::Left, x2 + 1, y2));
+        assert_eq!(app.editors.len(), 1);
+        assert!(app.editors[0].title().contains("alpha"), "{x}");
+    }
+
+    #[test]
+    fn clicking_the_branch_switches_it() {
+        let (dir, mut app) = reviewed();
+        let run = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .current_dir(dir.path())
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(status.status.success());
+        };
+        run(&["branch", "feature"]);
+        app.handle(Event::Tick);
+        app.refresh_tree();
+        let branch = app.branch.clone().unwrap();
+        let (x, y) = find(&screen(&app), &branch);
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert!(screen(&app).text().contains("feature"), "the list shows it");
+        typed(&mut app, "feat");
+        enter(&mut app);
+        assert_eq!(app.branch.as_deref(), Some("feature"));
+        assert!(screen(&app).text().contains("feature"));
+    }
+
+    #[test]
+    fn a_new_branch_can_be_made_from_the_list() {
+        let (_dir, mut app) = reviewed();
+        app.run(Command::SwitchBranch);
+        typed(&mut app, "New");
+        enter(&mut app);
+        typed(&mut app, "topic");
+        enter(&mut app);
+        assert_eq!(app.branch.as_deref(), Some("topic"));
+    }
+
+    #[test]
+    fn a_refused_switch_says_why_in_a_dialog() {
+        let (dir, mut app) = reviewed();
+        let result = switch_branch(dir.path(), "no-such-branch");
+        app.branch_changed("no-such-branch", result);
+        assert!(screen(&app).text().contains("Couldn't switch"));
+        enter(&mut app);
+        assert!(!app.overlay_is_open());
+    }
+
+    #[test]
+    fn the_gear_opens_settings_and_they_apply_at_once() {
+        let (_dir, mut app) = project();
+        let area = app.activity_area();
+        app.handle(mouse(MouseKind::Left, 2, App::rail_row(4, area)));
+        assert!(screen(&app).text().contains("Appearance"));
+        let (x, y) = find(&screen(&app), "Light");
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert_eq!(app.settings.theme.as_deref(), Some("light"));
+        assert_eq!(
+            app.theme.text.bg,
+            Theme::named(Some("light")).text.bg,
+            "at once"
+        );
+        key(&mut app, Key::Esc);
+        assert!(!screen(&app).text().contains("Appearance"));
+    }
+
+    #[test]
+    fn settings_reach_the_editors_and_work_by_keyboard() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        app.run(Command::OpenSettings);
+        let area = app.sheet_area();
+        let page = app.settings_page.as_ref().unwrap();
+        let at = page
+            .controls(area)
+            .iter()
+            .position(|(_, c)| *c == Control::Minimap)
+            .unwrap();
+        for _ in 0..=at {
+            key(&mut app, Key::Tab);
+        }
+        key(&mut app, Key::Enter);
+        assert_eq!(app.settings.minimap, Some(false));
+        assert!(!app.editors[0].minimap_on);
+        app.run(Command::QuickOpen);
+        typed(&mut app, "beta");
+        enter(&mut app);
+        assert!(
+            app.settings_page.is_none(),
+            "opening a file leaves the page"
+        );
+        assert!(
+            !app.editors[1].minimap_on,
+            "and new files follow the setting"
+        );
+    }
+
+    #[test]
+    fn the_keymap_changes_without_a_restart() {
+        let (_dir, mut app) = project();
+        app.run(Command::OpenSettings);
+        let area = app.sheet_area();
+        app.settings_page.as_mut().unwrap().section = crate::settings_page::Section::Editor;
+        let page = app.settings_page.as_ref().unwrap();
+        let (rect, _) = page
+            .controls(area)
+            .into_iter()
+            .find(|(_, c)| *c == Control::Keymap("vim"))
+            .unwrap();
+        app.handle(mouse(MouseKind::Left, rect.x + 1, rect.y));
+        assert!(app.vim.is_some());
+    }
+
+    #[test]
+    fn the_agents_panel_offers_something_to_do() {
+        let (_dir, mut app) = project();
+        app.run(Command::ShowAgents);
+        let text = screen(&app).text();
+        assert!(text.contains("Open Claude Code"), "{text}");
+        assert!(text.contains("No agents here"), "{text}");
+    }
+
+    #[test]
+    fn ghostty_gets_a_new_window_for_an_agent() {
+        let var = |name: &str| (name == "TERM").then(|| "xterm-ghostty".to_string());
+        if cfg!(target_os = "macos") {
+            assert_eq!(agent_split(var), Some(SplitHost::Ghostty));
+        }
+        let launch = ["claude".to_string()];
+        let words = SplitHost::Ghostty.command(&launch, "/work", &["A=1".to_string()]);
+        let expected = [
+            "open",
+            "-na",
+            "Ghostty.app",
+            "--args",
+            "--working-directory=/work",
+            "-e",
+            "env",
+            "A=1",
+            "claude",
+        ];
+        assert_eq!(words, expected);
     }
 }

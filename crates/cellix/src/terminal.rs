@@ -190,6 +190,14 @@ impl Display {
         })
     }
 
+    /// Turns the wheel's animation on or off.
+    fn set_smooth(&mut self, on: bool) {
+        self.smooth = on.then_some(Smooth {
+            frames: SCROLL_FRAMES,
+            pause: SCROLL_PAUSE,
+        });
+    }
+
     /// How to measure text for this display.
     fn measure(&self) -> Rc<dyn Measure> {
         match self.placement.zip(self.cell) {
@@ -293,6 +301,11 @@ pub fn run(options: Options) -> io::Result<()> {
                 app.set_measure(display.measure());
             }
             backend.invalidate();
+            redraw = true;
+        }
+        if let Some(on) = app.take_smooth_change() {
+            display.set_smooth(on);
+            backend = display.backend();
             redraw = true;
         }
         if redraw {

@@ -27,22 +27,31 @@ fn client(request: &str, dir: Option<&str>) -> ExitCode {
 }
 
 /// `cellix setup` unpacks the Claude Code plugin and says how to load it. It leaves Claude
-/// Code's settings alone, because those are the user's.
-fn setup() -> ExitCode {
+/// Code's settings alone, because those are the user's: `--install` is how they ask.
+fn setup(install: bool) -> ExitCode {
+    if install {
+        return match cellix::integrations::install_claude(|name| std::env::var(name).ok()) {
+            Ok(()) => {
+                println!("Installed. Claude Code now opens Cellix with no flags.");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("cellix: could not install: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
     let Some(folder) = cellix::plugin::install() else {
         eprintln!("cellix: could not write the Claude Code plugin");
         return ExitCode::FAILURE;
     };
     println!("Plugin written to {}", folder.display());
     println!();
-    println!("Start Claude Code with it:");
-    println!("  claude --ide --plugin-dir {}", folder.display());
+    println!("Install it for every Claude Code session, with no flags:");
+    println!("  cellix setup --install");
     println!();
-    println!("Or add this to your shell profile, so it's always on:");
-    println!(
-        "  alias claude='claude --ide --plugin-dir {}'",
-        folder.display()
-    );
+    println!("Or try it in one session:");
+    println!("  claude --ide --plugin-dir {}", folder.display());
     ExitCode::SUCCESS
 }
 
@@ -100,7 +109,20 @@ fn main() -> ExitCode {
                 }
             };
         }
-        ["setup"] => return setup(),
+        ["setup"] => return setup(false),
+        ["setup", "--install"] => return setup(true),
+        ["setup", "--remove"] => {
+            return match cellix::integrations::remove_claude(|name| std::env::var(name).ok()) {
+                Ok(()) => {
+                    println!("Removed. Claude Code no longer loads Cellix.");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("cellix: could not remove: {e}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
         ["pane-send", input] => return client(&format!("pane {input}"), None),
         ["comments", "--take", rest @ ..] => return client("take", rest.first().copied()),
         ["comments", rest @ ..] => return client("comments", rest.first().copied()),

@@ -33,7 +33,7 @@ fn data_dir(var: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
     data.or_else(|| Some(PathBuf::from(var("HOME")?).join(".local/share")))
 }
 
-fn write_to(folder: &Path) -> io::Result<()> {
+pub(crate) fn write_to(folder: &Path) -> io::Result<()> {
     for (name, text) in FILES {
         let path = folder.join(name);
         if let Some(parent) = path.parent() {
@@ -44,9 +44,14 @@ fn write_to(folder: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Where the Claude Code plugin lives.
+pub(crate) fn folder(var: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
+    Some(data_dir(var)?.join("cellix/claude-code"))
+}
+
 /// Writes the Claude Code plugin to the user's data folder, and returns where.
 pub fn install() -> Option<PathBuf> {
-    let folder = data_dir(|name| std::env::var(name).ok())?.join("cellix/claude-code");
+    let folder = folder(|name| std::env::var(name).ok())?;
     write_to(&folder).ok()?;
     Some(folder)
 }

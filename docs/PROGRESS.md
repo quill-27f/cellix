@@ -225,3 +225,28 @@ Unverified: the smooth scroll fix in a real window, because the screen locked be
 could be captured. It's covered by tests of what scrolls, not by eye. Over SSH as before.
 
 Next: the user checks scrolling and the canvas.
+
+## 2026-11-01: third round of real use
+
+The tile key left out the row, so the empty rows around a tall heading shared a tile and
+its lower half showed blank. That only happened past the minimap, which is why a small
+scroll seemed to fix it. Snapshots draw rows one at a time and could never show this, so
+`harness/live/term.py` is now a headless terminal for the real binary. It keeps Kitty
+graphics, takes real keys and mouse, and writes PNGs. `harness/x tour` walks every surface
+through it, and the `ui-expert` agent reviews those pictures.
+
+New: right-click menus on pages, code, tabs and the explorer. Double and triple click.
+A branch switcher from the sidebar or the status bar. An Agents panel with something to do
+in it. A real Settings page. `cellix setup --install`. Compare-with no longer waits for
+git on the main thread: a click went from about 600 ms to under 100 ms on a debug build.
+
+A new test caught a real bug: typing with several carets on a page collapsed them after
+the first letter, which was the likely cause of the Ctrl+D report.
+
+`tables_edit_in_their_cells` was wrong: it looked for "a " anywhere on screen, and failed
+when the random temp folder in the sidebar ended in that letter. It now looks for a word
+that can't appear by chance. `plan_review_returns_comments` now goes through the menu,
+since a right click no longer jumps straight to a comment.
+
+The features here share one commit, against the rule, because they all touch the same
+paths through `app.rs` and splitting them would have meant commits that don't build.

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::mpsc::{self, Receiver};
 
 use cellix_agent::TestRun;
 use cellix_lang::{Registry, Token};
@@ -94,6 +95,54 @@ pub struct Review {
     /// Lines added and removed, by file.
     stats: HashMap<PathBuf, (usize, usize)>,
     tokens: (Vec<LineTokens>, Vec<LineTokens>),
+    /// A read of git on its way, so a click never waits for it.
+    reading: Option<Receiver<Reading>>,
+}
+
+/// What git says about the tree, gathered off the main thread: several git commands take
+/// long enough that doing them on a click makes the click feel ignored.
+struct Reading {
+    base: Option<usize>,
+    turns: Vec<Turn>,
+    changes: Vec<Change>,
+    stats: HashMap<PathBuf, (usize, usize)>,
+    staged: usize,
+    /// The file that was selected, with its two sides.
+    file: Option<(PathBuf, String, String)>,
+}
+
+impl Reading {
+    fn take(root: &Path, base: Option<usize>, selected: Option<PathBuf>) -> Self {
+        let turns = turns(root);
+        let base = base.filter(|b| *b < turns.len());
+        let commit = base.map(|b| turns[b].commit.clone());
+        let mut changes = match &commit {
+            Some(commit) => changed_since(root, commit),
+            None => changed_files(root),
+        };
+        rank_changes(&mut changes);
+        let stats = numstat(root, commit.as_deref());
+        let staged = staged_count(root);
+        let path = selected
+            .filter(|p| changes.iter().any(|c| c.path == *p))
+            .or_else(|| changes.first().map(|c| c.path.clone()));
+        let file = path.map(|path| {
+            let old = match &commit {
+                Some(commit) => text_at(root, commit, &path),
+                None => head_text(root, &path),
+            };
+            let new = std::fs::read_to_string(root.join(&path)).unwrap_or_default();
+            (path, old, new)
+        });
+        Self {
+            base,
+            turns,
+            changes,
+            stats,
+            staged,
+            file,
+        }
+    }
 }
 
 /// Splits a file's highlight spans into per-line columns.
@@ -197,6 +246,7 @@ impl Review {
             proposal: None,
             stats: HashMap::new(),
             tokens: (Vec::new(), Vec::new()),
+            reading: None,
         };
         review.refresh();
         review
@@ -225,6 +275,7 @@ impl Review {
             tests: Vec::new(),
             proposal: Some(Vec::new()),
             stats: HashMap::new(),
+            reading: None,
             tokens: (Vec::new(), Vec::new()),
         };
         review.reload_proposal();
@@ -283,27 +334,66 @@ impl Review {
         kept.iter().all(|k| *k)
     }
 
-    /// Rereads git and the selected file. Keeps the selection where it can.
+    /// Rereads git and the selected file now, for when what follows depends on it. Keeps
+    /// the selection where it can.
     pub fn refresh(&mut self) {
         if self.is_proposal() {
             return;
         }
+        self.reading = None;
         let current = self.current_path().map(Path::to_path_buf);
-        self.turns = turns(&self.root);
-        if self.base.is_some_and(|b| b >= self.turns.len()) {
-            self.base = None;
+        self.apply(Reading::take(&self.root, self.base, current));
+    }
+
+    /// Rereads in the background. `poll` picks up the result.
+    pub fn refresh_later(&mut self) {
+        if self.is_proposal() {
+            return;
         }
-        self.changes = match self.base_commit() {
-            Some(commit) => changed_since(&self.root, &commit),
-            None => changed_files(&self.root),
+        let (root, base) = (self.root.clone(), self.base);
+        let current = self.current_path().map(Path::to_path_buf);
+        let (sender, receiver) = mpsc::channel();
+        self.reading = Some(receiver);
+        std::thread::spawn(move || {
+            let _ = sender.send(Reading::take(&root, base, current));
+        });
+    }
+
+    /// Whether a background read is still out.
+    pub fn is_reading(&self) -> bool {
+        self.reading.is_some()
+    }
+
+    /// Takes in a finished read, and says whether anything arrived.
+    pub fn poll(&mut self) -> bool {
+        let Some(reading) = self.reading.as_ref().and_then(|r| r.try_recv().ok()) else {
+            return false;
         };
-        rank_changes(&mut self.changes);
-        self.stats = numstat(&self.root, self.base_commit().as_deref());
-        self.staged = staged_count(&self.root);
+        self.reading = None;
+        self.apply(reading);
+        true
+    }
+
+    fn apply(&mut self, reading: Reading) {
+        let current = self.current_path().map(Path::to_path_buf);
+        self.base = reading.base;
+        self.turns = reading.turns;
+        self.changes = reading.changes;
+        self.stats = reading.stats;
+        self.staged = reading.staged;
         self.selected = current
             .and_then(|p| self.changes.iter().position(|c| c.path == p))
             .unwrap_or(0);
-        self.load();
+        let Some((path, old, new)) = reading.file else {
+            self.load();
+            return;
+        };
+        if self.current_path() != Some(path.as_path()) {
+            // The selection moved while this was being read.
+            self.load();
+        } else if old != self.old || new != self.new || self.diff.rows.is_empty() {
+            self.show_file(&path, old, new);
+        }
     }
 
     fn base_commit(&self) -> Option<String> {
@@ -314,7 +404,7 @@ impl Review {
     pub fn set_base(&mut self, base: Option<usize>) {
         self.base = base;
         self.top = 0;
-        self.refresh();
+        self.refresh_later();
     }
 
     /// Steps the base one turn back, from HEAD to the newest turn and on.
@@ -344,15 +434,21 @@ impl Review {
             self.tokens = (Vec::new(), Vec::new());
             return;
         };
-        self.old = match self.base_commit() {
+        let old = match self.base_commit() {
             Some(commit) => text_at(&self.root, &commit, &path),
             None => head_text(&self.root, &path),
         };
-        self.new = std::fs::read_to_string(self.root.join(&path)).unwrap_or_default();
+        let new = std::fs::read_to_string(self.root.join(&path)).unwrap_or_default();
+        self.show_file(&path, old, new);
+    }
+
+    fn show_file(&mut self, path: &Path, old: String, new: String) {
+        self.old = old;
+        self.new = new;
         self.diff = FileDiff::new(&self.old, &self.new);
         self.tokens = (
-            line_tokens(&self.registry, &path, &self.old),
-            line_tokens(&self.registry, &path, &self.new),
+            line_tokens(&self.registry, path, &self.old),
+            line_tokens(&self.registry, path, &self.new),
         );
         self.top = self.top.min(self.diff.rows.len().saturating_sub(1));
     }

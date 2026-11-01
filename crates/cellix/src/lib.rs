@@ -5,6 +5,8 @@ mod app;
 mod editor;
 mod explorer;
 mod find;
+pub mod integrations;
+mod menu;
 mod neovim;
 mod palette;
 pub mod pane;
@@ -13,6 +15,7 @@ mod rendered;
 mod review;
 mod search;
 mod settings;
+mod settings_page;
 mod terminal;
 mod theme;
 

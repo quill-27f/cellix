@@ -122,8 +122,14 @@ in a split when that's installed, and your system browser otherwise.
 Cellix can run as a pane in Claude Code, so you start Claude and Cellix comes to you:
 
 ```sh
-cellix setup     # prints the command to start Claude Code with it
+cellix setup --install    # or Install under Settings, Integrations
 ```
+
+That adds two lines to the `env` block of `~/.claude/settings.json`, which load the plugin
+in every session and connect to a running Cellix, so there are no flags to remember. It
+keeps everything else in the file, and `cellix setup --remove` takes the two lines back.
+Restart Claude Code to pick it up. To try it in one session instead, `cellix setup` prints
+the command.
 
 Then `/cellix` opens the pane, and `/cellix-open <file>` opens a file in it. It also opens
 by itself when Claude proposes an edit or a plan. Click the pane to type there, and press
@@ -138,7 +144,9 @@ minimap, so the code keeps the room.
 - **Comments** go with `Send Comments to Agent`, or with your next prompt.
 - **Turns** are checkpointed. Review shows what each prompt changed, and `Undo Agent Turn`
   puts the tree back, keeping a checkpoint of what it replaced.
-- **Agents** (the robot icon) lists who's running and who needs you, and every worktree.
+- **Agents** (the robot icon) opens Claude Code or Codex, lists who's running and who
+  needs you, and every worktree. Agents started without the plugin still show up, found by
+  their working folder.
 - **Tests** an agent runs appear in review with their results.
 - **Staging**: Accept stages the hunk in git, and the Commit button commits what's staged.
 
@@ -160,7 +168,10 @@ published protocol, so a Claude Code update could change it. It was built agains
 
 ## Settings
 
-`.cellix/settings.json` in a workspace, or `~/.config/cellix/settings.json`:
+The gear opens Settings: theme, smooth scrolling, the minimap, the keymap, which language
+servers were found, and the install for Claude Code. Changes apply as you click, and are
+saved to `~/.config/cellix/settings.json`. You can also edit that file, or
+`.cellix/settings.json` in a workspace:
 
 ```json
 { "keymap": "vim", "theme": "light", "tier": "cells" }
@@ -169,8 +180,13 @@ published protocol, so a Claude Code update could change it. It was built agains
 `keymap` is `simple`, `vim` or `neovim`, which runs your own `nvim` and config behind the
 editor. `theme` is `auto`, `dark` or `light`, and `auto` also matches your terminal's
 background. `tier` is `direct`, `placeholder` or `cells`. `smooth_scroll: false` makes the
-wheel jump by lines, for a slow link. `language_servers` maps a language to a command, and
+wheel jump by lines, for a slow link, and `minimap: false` hides the minimap.
+`language_servers` maps a language to a command, and
 `browser` replaces the command that opens web pages.
+
+Ghostty keeps Cmd+D to open a split, so Cellix never sees it and Ctrl+D is the way to select
+the next match. `Free Cmd+D` under Integrations adds `keybind = super+d=unbind` to Ghostty's
+config, which then needs a reload.
 
 tmux needs `set -g allow-passthrough on` for pixels, as shown under [Over SSH](#over-ssh).
 Without it, Cellix uses text cells.

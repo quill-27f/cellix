@@ -79,6 +79,8 @@ pub struct Editor {
     spans_bytes: Cell<usize>,
     /// Show Markdown as an editable page rather than its source, as Xcode does.
     pub rendered: bool,
+    /// Whether the minimap may show, given the room.
+    pub minimap_on: bool,
     /// The laid-out page, for one revision and width.
     page: RefCell<Option<Page>>,
     measure: Rc<dyn Measure>,
@@ -114,6 +116,7 @@ impl Editor {
             asked: Cell::new(u64::MAX),
             spans_bytes: Cell::new(0),
             rendered: is_markdown,
+            minimap_on: true,
             page: RefCell::new(None),
             measure,
             registry,
@@ -130,7 +133,7 @@ impl Editor {
 
     /// Whether a pane has room for a minimap, which only pixels can draw.
     fn shows_minimap(&self, area: Rect) -> bool {
-        !self.measure.in_cells() && area.w >= MIN_MINIMAP_PANE
+        self.minimap_on && !self.measure.in_cells() && area.w >= MIN_MINIMAP_PANE
     }
 
     /// Where text goes in `area`: all of it, less the minimap or the scrollbar.
@@ -377,7 +380,8 @@ impl Editor {
         }
         let area = self.text_area(area);
         let primary = self.selections.primary();
-        if primary.is_empty() {
+        // Only for one caret: replacing it would end a multi-cursor edit after a letter.
+        if primary.is_empty() && self.selections.len() == 1 {
             let at = rendered::snap(&self.page(area), primary.head);
             self.selections.set_single(Selection::cursor(at));
         }
@@ -1073,6 +1077,12 @@ impl Editor {
             Format::Heading => (0, "# ".to_string()),
             Format::Bullet => simple("- "),
             Format::Task => simple("- [ ] "),
+            Format::PlainText if heading => (hashes + 1, String::new()),
+            Format::PlainText => {
+                let markers = ["- [ ] ", "- [x] ", "- ", "* ", "> "];
+                let found = markers.iter().find(|m| line.starts_with(**m));
+                (found.map_or(0, |m| m.len()), String::new())
+            }
             _ => simple("> "),
         }
     }
@@ -1103,8 +1113,69 @@ impl Editor {
             Format::Bold => self.toggle_inline("**"),
             Format::Italic => self.toggle_inline("*"),
             Format::Code => self.toggle_inline("`"),
+            Format::Strikethrough => self.toggle_inline("~~"),
+            Format::CodeBlock => self.fence_lines(),
+            Format::Table => self.insert_table(),
             _ => self.toggle_lines(format),
         }
+    }
+
+    /// Puts the selected lines in a fenced block, with the caret on its first line.
+    fn fence_lines(&mut self) {
+        let primary = self.selections.primary();
+        let rope = self.buffer.rope();
+        let first = rope.char_to_line(primary.start());
+        let last = rope.char_to_line(primary.end());
+        let start = rope.line_to_char(first);
+        let end = rope.line_to_char(last) + self.line_text(last).chars().count();
+        let inner = rope.slice(start..end).to_string();
+        let text = format!("```\n{inner}\n```");
+        self.buffer
+            .replace_range(&mut self.selections, start, end, &text);
+        self.selections.set_single(Selection::cursor(start + 4));
+    }
+
+    /// Adds a small table below this line, with the caret in its first cell.
+    fn insert_table(&mut self) {
+        const TABLE: &str = "| Column | Column |\n|---|---|\n|  |  |\n";
+        let head = self.selections.primary().head;
+        let rope = self.buffer.rope();
+        let line = rope.char_to_line(head);
+        let text = self.line_text(line);
+        let at = rope.line_to_char(line) + text.chars().count();
+        let gap = if text.trim().is_empty() { "" } else { "\n\n" };
+        let insert = format!("{gap}{TABLE}");
+        self.buffer
+            .replace_range(&mut self.selections, at, at, &insert);
+        let cell = at + gap.chars().count() + 2;
+        self.selections.set_single(Selection::cursor(cell));
+    }
+
+    /// Selects the word at a place, as a double click does.
+    pub fn select_word_at(&mut self, at: usize) {
+        let (start, end) = self.buffer.word_at(at);
+        self.selections.set_single(Selection {
+            anchor: start,
+            head: end,
+            goal: None,
+        });
+    }
+
+    /// Selects the whole line at a place, as a triple click does.
+    pub fn select_line_at(&mut self, at: usize) {
+        let rope = self.buffer.rope();
+        let line = rope.char_to_line(at);
+        let start = rope.line_to_char(line);
+        let end = if line + 1 < rope.len_lines() {
+            rope.line_to_char(line + 1)
+        } else {
+            rope.len_chars()
+        };
+        self.selections.set_single(Selection {
+            anchor: start,
+            head: end,
+            goal: None,
+        });
     }
 
     pub fn selected_text(&self) -> Option<String> {

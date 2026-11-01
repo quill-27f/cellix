@@ -37,6 +37,12 @@ in `docs/PROGRESS.md`.
 To see the interface, run `harness/x snapshot` and read the PNG. It needs no terminal or
 window. `harness/visual.sh` opens real windows, so use it only to check terminal behaviour.
 
+**Look at every surface before calling a UI change done.** `harness/x tour` drives the
+real binary through a headless terminal and writes a PNG of each surface to `target/tour`,
+going through the tile cache and smooth scrolling as a real terminal does. Then have the
+`ui-expert` agent review those pictures, and fix what it finds. Tests have repeatedly
+passed on things that looked wrong.
+
 **Every feature must work on the cell tier.** All UI draws to the `Grid`. Backends only
 present it, so a feature never talks to a backend directly.
 

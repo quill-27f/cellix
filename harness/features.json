@@ -579,5 +579,68 @@
     "passes": true,
     "test": "the_surfaces_keep_their_order_on_any_terminal",
     "title": "The rail and status bar stand apart from the sidebar and sheet"
+  },
+  {
+    "id": "menu-page",
+    "milestone": 7,
+    "passes": true,
+    "test": "right_clicking_a_page_offers_formatting",
+    "title": "Right click on a page offers Xcode's formatting"
+  },
+  {
+    "id": "menu-code",
+    "milestone": 7,
+    "passes": true,
+    "test": "right_clicking_code_offers_what_the_language_can_do",
+    "title": "Right click on code offers what its language can do"
+  },
+  {
+    "id": "menu-tab",
+    "milestone": 7,
+    "passes": true,
+    "test": "a_tab_has_its_own_menu",
+    "title": "Tabs have a context menu"
+  },
+  {
+    "id": "multi-click",
+    "milestone": 7,
+    "passes": true,
+    "test": "a_double_click_selects_the_word_and_a_third_the_line",
+    "title": "Double click selects a word, triple click a line"
+  },
+  {
+    "id": "page-multi-caret",
+    "milestone": 7,
+    "passes": true,
+    "test": "ctrl_d_gathers_the_same_word_and_typing_replaces_them_all",
+    "title": "Several carets survive typing on a page"
+  },
+  {
+    "id": "branch-switch",
+    "milestone": 7,
+    "passes": true,
+    "test": "clicking_the_branch_switches_it",
+    "title": "Clicking the branch switches it"
+  },
+  {
+    "id": "settings-page",
+    "milestone": 7,
+    "passes": true,
+    "test": "the_gear_opens_settings_and_they_apply_at_once",
+    "title": "A real Settings page that applies as you click"
+  },
+  {
+    "id": "claude-install",
+    "milestone": 7,
+    "passes": true,
+    "test": "installing_leaves_the_rest_of_claudes_settings_alone",
+    "title": "Install into Claude Code with no flags, keeping its settings"
+  },
+  {
+    "id": "agents-actions",
+    "milestone": 7,
+    "passes": true,
+    "test": "the_agents_panel_offers_something_to_do",
+    "title": "The Agents panel offers something to do"
   }
 ]

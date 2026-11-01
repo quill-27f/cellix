@@ -134,9 +134,17 @@ unchanged. On a page, arrows and Home and End move by what's shown.
 
 ## Surfaces
 
-The ground takes the terminal's colour, so window padding can't show as a seam, and the
-work sits on a raised sheet. Paint can't go under text, so a rounded surface is coloured
-cells with its corners painted back in the ground colour. Icon pills work the same way.
+The rail and the status bar are the frame, in the terminal's own colour, so window padding
+can't show as a seam around them. The sidebar is raised from the frame, and the sheet the
+work sits on is raised again. Every surface moves together when the terminal's background
+does, so the steps between them hold on any colour.
+
+Paint can't go under text, so a rounded surface is coloured cells with its corners painted
+back in the colour behind. Icon pills work the same way. Floating panels reach past their
+rows in paint, which gives them padding that a row of cells couldn't.
+
+A tile is keyed by what its row shows, and paint can stand in several rows, so a row with
+paint on it keys by its own number too.
 
 ## Theme
 
@@ -243,11 +251,16 @@ the file.
 - Review return path: comments are delivered as structured data over the socket and
   CLI, so any agent can consume them.
 - Claude Code: a plugin with a mod for status and commands. The mod is a bridge, not
-  the editor: docked panes stop at 45% width and there is no terminal element.
+  the editor: docked panes stop at 45% width and there is no terminal element. Installing
+  it sets `CLAUDE_CODE_PLUGIN_DIRS` and `CLAUDE_CODE_AUTO_CONNECT_IDE` in the `env` block of
+  the user's settings, because a mod loads through that variable or `--plugin-dir`. This
+  only happens when the user asks.
 - Codex and Gemini CLI: `$VISUAL` plus skills or extensions. Verify current hooks
   before building each adapter.
 - Running agents: Cellix doesn't host them. `Open Claude Code` and `Open Codex` start the
-  real tool in a split of tmux or Zellij, so every update they ship simply arrives.
+  real tool in a split of tmux or Zellij, or a new window of Ghostty, whose splits can't be
+  opened from inside. Anywhere else the command goes on the clipboard. Every update they
+  ship simply arrives.
 
 ## Crates (proposed)
 

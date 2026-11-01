@@ -8,6 +8,8 @@ use crate::theme::Theme;
 
 /// Rows above the tree: the EXPLORER title and the folder name.
 const HEADER_ROWS: u16 = 1;
+/// A letter of interface text, as a share of a cell.
+const LETTER_WIDTH: f32 = 0.56;
 
 /// The file tree sidebar.
 #[derive(Default)]
@@ -54,11 +56,19 @@ impl Explorer {
         };
         let end = grid.label(area.x + 2, area.y, root_name, heading, area.right());
         if let Some(branch) = branch {
+            // Proportional text is narrower than its cells, so go by the letters.
+            let name_end = area.x as f32 + 2.0 + root_name.chars().count() as f32 * LETTER_WIDTH;
+            let x = name_end + 1.0;
+            let wide = branch.chars().count() as f32 * LETTER_WIDTH + 1.6;
+            let hovered = hover.is_some_and(|h| h.1 == area.y && area.contains(h.0, h.1));
+            let fill = if hovered { theme.pick } else { theme.row_hover };
+            let pill = Bounds::cells(x - 0.5, area.y as f32 + 0.14, wide, 0.72);
+            grid.panel(pill, 18, Some(fill), None);
             let dim = Style {
                 fg: theme.status.fg,
                 ..theme.sidebar
             };
-            grid.label(end + 1, area.y, branch, dim, area.right());
+            grid.label_at(x, end + 1, area.y, branch, dim, area.right(), 90);
         }
         for (row, entry) in self.entries.iter().skip(self.top).enumerate() {
             let y = area.y + HEADER_ROWS + row as u16;

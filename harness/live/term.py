@@ -228,6 +228,9 @@ def main():
                 if not data:
                     alive[0] = False
                     return first
+                if b"panicked" in data:
+                    text = re.sub(rb"\x1b[\[_\]][^\x1b]*(\x1b\\\\)?", b"", data)
+                    print(text.decode("utf8", "replace")[-600:], flush=True)
                 screen.feed(data)
             for reply in screen.replies:
                 os.write(master, reply.encode())
@@ -299,7 +302,11 @@ def main():
             print(f"{step[1]}: {(time.time() - sent) * 1000:.0f} ms", flush=True)
             pump(0.2)
 
-    pump(1.2)
+    # A cold start can take seconds, so wait for a real frame rather than guessing.
+    deadline = time.time() + 20
+    while not screen.placements and alive[0] and time.time() < deadline:
+        pump(0.05)
+    pump(0.4)
     for step in script:
         if not alive[0]:
             print("the program exited early", flush=True)
