@@ -48,7 +48,7 @@ pub fn simple_keymap(event: KeyEvent) -> Option<Command> {
             'd' => SelectNextMatch,
             'w' => CloseTab,
             'p' => QuickOpen,
-            'f' => FindInProject,
+            'f' => FindInFile,
             'b' => ToggleSidebar,
             'g' => OpenDiff,
             '\\' => SplitPane,

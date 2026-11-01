@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use cellix_input::Command;
+use cellix_input::{Command, Format};
 use cellix_render::{Bounds, Font, Grid, Measure, Rect, Rgb, Style};
 
 use crate::theme::Theme;
@@ -25,7 +25,7 @@ impl Item {
     }
 }
 
-pub const COMMANDS: [(&str, Command); 33] = [
+pub const COMMANDS: [(&str, Command); 41] = [
     ("Save", Command::Save),
     ("Undo", Command::Undo),
     ("Redo", Command::Redo),
@@ -43,6 +43,14 @@ pub const COMMANDS: [(&str, Command); 33] = [
     ("Replace in Project", Command::ReplaceInProject),
     ("Toggle Markdown Source", Command::MarkdownPreview),
     ("Open in Browser", Command::OpenInBrowser),
+    ("Find in File", Command::FindInFile),
+    ("Format: Bold", Command::Format(Format::Bold)),
+    ("Format: Italic", Command::Format(Format::Italic)),
+    ("Format: Inline Code", Command::Format(Format::Code)),
+    ("Format: Heading", Command::Format(Format::Heading)),
+    ("Format: Bulleted List", Command::Format(Format::Bullet)),
+    ("Format: Task List", Command::Format(Format::Task)),
+    ("Format: Quote", Command::Format(Format::Quote)),
     ("Send Comments to Agent", Command::SendToAgent),
     ("Send Selection to Agent", Command::MentionSelection),
     ("Accept Proposed Change", Command::AcceptProposal),

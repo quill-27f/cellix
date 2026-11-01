@@ -7,7 +7,8 @@ use std::sync::mpsc::Sender;
 
 use cellix_core::{Buffer, Selection, Workspace};
 use cellix_input::{
-    Command, Event, Key, KeyEvent, MouseEvent, MouseKind, Vim, VimAction, VimMode, simple_keymap,
+    Command, Event, Format, Key, KeyEvent, MouseEvent, MouseKind, Vim, VimAction, VimMode,
+    simple_keymap,
 };
 use cellix_lang::Registry;
 use cellix_lang::lsp::{Client, Diagnostic, LspEvent, TextEdit};
@@ -25,6 +26,7 @@ use serde_json::{Value, json};
 use crate::agents::Agents;
 use crate::editor::{Editor, Marks};
 use crate::explorer::Explorer;
+use crate::find::Find;
 use crate::palette::{COMMANDS, Input, Item, Palette, input, popup};
 use crate::rendered;
 use crate::review::{Hit, Review};
@@ -46,6 +48,22 @@ const ACTIVITY_ICON: (u8, u8) = (3, 2);
 /// Rows from one activity icon to the next.
 const ACTIVITY_STEP: u16 = 4;
 const APPROVE: &str = "[Approve]";
+const FIND_WIDTH: u16 = 46;
+/// Room kept for the path before the toolbar is left out.
+const MIN_BREADCRUMB: u16 = 12;
+const FIND_BUTTON: u16 = 3;
+const FIND_BUTTONS: [&str; 3] = ["↑", "↓", "×"];
+/// One cell either side of each mark.
+const TOOL_WIDTH: u16 = 3;
+const TOOLS: [(&str, Format); 7] = [
+    ("B", Format::Bold),
+    ("I", Format::Italic),
+    ("<>", Format::Code),
+    ("H", Format::Heading),
+    ("•", Format::Bullet),
+    ("☐", Format::Task),
+    ("❝", Format::Quote),
+];
 const SEND_BACK: &str = "[Send back]";
 const SIDEBAR_WIDTH: u16 = 28;
 const SIDEBAR_MIN_WIDTH: u16 = 20;
@@ -121,6 +139,7 @@ enum Overlay {
     Palette(Palette),
     Prompt(Prompt),
     Menu(Menu),
+    Find(Find),
 }
 
 /// What can open a split for an agent.
@@ -954,6 +973,10 @@ impl App {
                 palette.filter();
             }
             Overlay::Prompt(prompt) => prompt.input.push_str(text),
+            Overlay::Find(find) => {
+                find.query.push_str(text);
+                self.search_file();
+            }
             _ => {
                 let area = self.focused_area();
                 if let Some(editor) = self.editor_mut() {
@@ -1120,8 +1143,137 @@ impl App {
                 }
                 _ => self.overlay = Overlay::Prompt(prompt),
             },
+            Overlay::Find(find) => self.find_key(find, key),
             Overlay::Menu(_) | Overlay::None => {}
         }
+    }
+
+    fn find_key(&mut self, mut find: Find, key: KeyEvent) {
+        match key.key {
+            Key::Esc => {
+                if let Some(editor) = self.editor_mut() {
+                    editor.found.clear();
+                }
+                return;
+            }
+            Key::Enter if key.mods.shift => find.step(-1),
+            Key::Enter | Key::Down => find.step(1),
+            Key::Up => find.step(-1),
+            Key::Backspace => {
+                find.query.pop();
+            }
+            Key::Char(c) if !key.mods.ctrl && !key.mods.alt => find.query.push(c),
+            _ => {}
+        }
+        self.overlay = Overlay::Find(find);
+        if matches!(key.key, Key::Backspace | Key::Char(_)) {
+            self.search_file();
+        } else {
+            self.show_match();
+        }
+    }
+
+    /// Searches the open file for the query as it stands.
+    fn search_file(&mut self) {
+        let index = self.active();
+        let Some(editor) = self.editors.get(index) else {
+            return;
+        };
+        let from = editor.selections.primary().start();
+        let text = editor.buffer.text();
+        if let Overlay::Find(find) = &mut self.overlay {
+            find.search(&text, from);
+        }
+        self.show_match();
+    }
+
+    fn show_match(&mut self) {
+        let area = self.focused_area();
+        let index = self.active();
+        let Overlay::Find(find) = &self.overlay else {
+            return;
+        };
+        let (matches, selected) = (find.matches.clone(), find.selected());
+        let Some(editor) = self.editors.get_mut(index) else {
+            return;
+        };
+        editor.found = matches;
+        if let Some((start, end)) = selected {
+            editor.selections.set_single(Selection {
+                anchor: start,
+                head: end,
+                goal: None,
+            });
+            editor.reveal(area);
+        }
+    }
+
+    fn open_find(&mut self) {
+        if self.review.is_some() || self.active() >= self.editors.len() {
+            self.show_search(Field::Query);
+            return;
+        }
+        let query = self
+            .selected_text()
+            .filter(|text| !text.contains('\n'))
+            .unwrap_or_default();
+        self.overlay = Overlay::Find(Find {
+            query,
+            ..Find::default()
+        });
+        self.search_file();
+    }
+
+    fn find_bar(&self) -> Rect {
+        let pane = self.focused_area();
+        let width = FIND_WIDTH.min(pane.w);
+        let x = pane.right().saturating_sub(width + 1).max(pane.x);
+        Rect::new(x, pane.y, width, 3)
+    }
+
+    fn draw_find(&self, grid: &mut Grid, find: &Find) {
+        let theme = &self.theme;
+        let area = self.find_bar();
+        popup(grid, area, theme);
+        let count = find.count_label();
+        let right = FIND_BUTTONS.len() as u16 * FIND_BUTTON + count.chars().count() as u16 + 2;
+        let field = area.w.saturating_sub(right + 2);
+        let line = Rect::new(area.x + 1, area.y + 1, field, 1);
+        let text = Input {
+            text: &find.query,
+            hint: "Find",
+            focused: true,
+            behind: theme.popup,
+        };
+        input(grid, line, &text, &*self.measure, theme);
+        let base = Style {
+            fg: theme.gutter.fg,
+            bg: theme.popup,
+            ..theme.bar
+        };
+        grid.label(line.right() + 1, area.y + 1, &count, base, area.right());
+        let mut x = area.right() - FIND_BUTTON * FIND_BUTTONS.len() as u16 - 1;
+        for label in FIND_BUTTONS {
+            grid.label(x + 1, area.y + 1, label, base, area.right());
+            x += FIND_BUTTON;
+        }
+    }
+
+    fn click_find(&mut self, mut find: Find, x: u16, y: u16) {
+        let area = self.find_bar();
+        let first = area.right() - FIND_BUTTON * FIND_BUTTONS.len() as u16 - 1;
+        let key = if area.contains(x, y) && x >= first && y == area.y + 1 {
+            match (x - first) / FIND_BUTTON {
+                0 => Key::Up,
+                1 => Key::Down,
+                _ => Key::Esc,
+            }
+        } else {
+            self.overlay = Overlay::Find(find);
+            return;
+        };
+        find.current = find.current.min(find.matches.len());
+        self.find_key(find, KeyEvent::plain(key));
     }
 
     fn pick(&mut self, item: Option<Item>) {
@@ -1256,6 +1408,13 @@ impl App {
                 };
             }
             Command::AddComment => self.prompt_comment_at_cursor(),
+            Command::FindInFile => self.open_find(),
+            Command::Format(format) => {
+                let area = self.focused_area();
+                if let Some(editor) = self.editor_mut() {
+                    editor.format(format, area);
+                }
+            }
             Command::SendToAgent => self.send_to_agent(),
             Command::ApprovePlan => {
                 let path = self.plan.as_ref().map(|p| p.path.as_path());
@@ -2028,6 +2187,9 @@ impl App {
                 self.prompt_comment_at_cursor();
             }
             MouseKind::Left if in_sidebar => self.click_explorer(y),
+            MouseKind::Left
+                if y == 1 && !in_sidebar && self.toolbar_x().is_some() && self.click_toolbar(x) => {
+            }
             MouseKind::Left if y == 1 && self.plan_in_view() && !in_sidebar => {
                 self.click_plan_bar(x)
             }
@@ -2116,6 +2278,7 @@ impl App {
                     self.menu_choice(row, &menu.target);
                 }
             }
+            Overlay::Find(find) => self.click_find(find, mouse.x, mouse.y),
             other => self.overlay = other,
         }
     }
@@ -2350,6 +2513,7 @@ impl App {
             Overlay::Palette(palette) => palette.draw(grid, self.hover, &*self.measure, theme),
             Overlay::Menu(menu) => self.draw_menu(grid, menu),
             Overlay::Prompt(prompt) => self.draw_prompt(grid, prompt),
+            Overlay::Find(find) => self.draw_find(grid, find),
             Overlay::None => {}
         }
     }
@@ -2590,15 +2754,55 @@ impl App {
         let text = self.relative(path).replace('/', " › ");
         let style = self.theme.breadcrumb;
         grid.fill(Rect::new(main.x, 1, main.w, 1), style);
+        let toolbar = self.toolbar_x();
         grid.label_at(
             main.x as f32 + 1.5,
             main.x + 2,
             1,
             &text,
             style,
-            main.right(),
+            toolbar.unwrap_or(main.right()),
             90,
         );
+        let Some(mut x) = toolbar else {
+            return;
+        };
+        for (label, format) in TOOLS {
+            let tool = Style {
+                bold: format == Format::Bold,
+                italic: format == Format::Italic,
+                ..style
+            };
+            let button = Rect::new(x, 1, TOOL_WIDTH, 1);
+            if self.hover.is_some_and(|h| button.contains(h.0, h.1)) {
+                let pill = Bounds::inset(button, 0.1, 0.08);
+                grid.panel(pill, 12, Some(self.theme.pick), None);
+            }
+            grid.put_str(x + 1, 1, label, tool, main.right());
+            x += TOOL_WIDTH;
+        }
+    }
+
+    /// Where the Markdown toolbar starts, if the page in view has one.
+    fn toolbar_x(&self) -> Option<u16> {
+        let width = TOOL_WIDTH * TOOLS.len() as u16;
+        let main = self.main_area();
+        let page = self.editors.get(self.active()).is_some_and(|e| e.rendered);
+        let room = main.w > width + MIN_BREADCRUMB;
+        (page && room && self.chrome_rows() == 2 && !self.plan_in_view())
+            .then(|| main.right() - width - 1)
+    }
+
+    fn click_toolbar(&mut self, x: u16) -> bool {
+        let Some(first) = self.toolbar_x() else {
+            return false;
+        };
+        let tool = x.checked_sub(first).map(|at| at / TOOL_WIDTH);
+        let Some((_, format)) = tool.and_then(|tool| TOOLS.get(tool as usize)) else {
+            return false;
+        };
+        self.run(Command::Format(*format));
+        true
     }
 
     fn draw_welcome(&self, grid: &mut Grid) {
@@ -3638,7 +3842,7 @@ mod tests {
     #[test]
     fn clicking_a_checkbox_toggles_the_source() {
         let (_dir, mut app) = page("- [ ] task\n");
-        let (x, y) = find(&screen(&app), "☐");
+        let (x, y) = find(&screen(&app), "☐ task");
         app.handle(mouse(MouseKind::Left, x, y));
         assert_eq!(app.active_text().unwrap(), "- [x] task\n");
         assert!(screen(&app).text().contains("☑ task"));
@@ -4126,6 +4330,88 @@ mod tests {
         let (call, answer) = ide("openDiff", args);
         app.ide_call(call);
         answer
+    }
+
+    #[test]
+    fn find_in_file_jumps_between_matches() {
+        let (dir, mut app) = project();
+        let path = dir.path().join("many.txt");
+        fs::write(&path, "one two\ntwo three\nTWO\n").unwrap();
+        app.open(&path).unwrap();
+        app.handle(Event::Key(KeyEvent::ctrl('f')));
+        typed(&mut app, "two");
+        assert!(
+            screen(&app).text().contains("1 of 3"),
+            "{}",
+            screen(&app).text()
+        );
+        assert_eq!(app.selected_text().as_deref(), Some("two"));
+        enter(&mut app);
+        assert!(screen(&app).text().contains("2 of 3"));
+        enter(&mut app);
+        assert_eq!(app.selected_text().as_deref(), Some("TWO"));
+        let (x, y) = find(&screen(&app), "↑");
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert!(screen(&app).text().contains("2 of 3"));
+        app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
+        assert!(!screen(&app).text().contains("2 of 3"));
+        assert_eq!(
+            app.selected_text().as_deref(),
+            Some("two"),
+            "the match stays selected"
+        );
+        assert!(app.editors[0..].iter().all(|e| e.found.is_empty()));
+    }
+
+    #[test]
+    fn find_starts_from_the_selection() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        app.run(Command::Move(cellix_input::Direction::WordRight, true));
+        app.run(Command::FindInFile);
+        assert!(
+            screen(&app).text().contains("1 of 1"),
+            "{}",
+            screen(&app).text()
+        );
+    }
+
+    #[test]
+    fn toolbar_bolds_the_selection() {
+        let (dir, mut app) = project();
+        let path = dir.path().join("note.md");
+        fs::write(&path, "one two\n").unwrap();
+        app.open(&path).unwrap();
+        app.run(Command::Move(cellix_input::Direction::WordRight, true));
+        let grid = screen(&app);
+        let first = app.toolbar_x().unwrap();
+        assert_eq!(grid.row_text(1).chars().nth(first as usize + 1), Some('B'));
+        app.handle(mouse(MouseKind::Left, first + 1, 1));
+        assert_eq!(app.active_text().as_deref(), Some("**one** two\n"));
+        assert_eq!(app.selected_text().as_deref(), Some("one"));
+        app.handle(mouse(MouseKind::Left, first + 1, 1));
+        assert_eq!(
+            app.active_text().as_deref(),
+            Some("one two\n"),
+            "a second click undoes it"
+        );
+    }
+
+    #[test]
+    fn toolbar_steps_lines_through_headings_and_lists() {
+        let (dir, mut app) = project();
+        let path = dir.path().join("note.md");
+        fs::write(&path, "one\n").unwrap();
+        app.open(&path).unwrap();
+        for wanted in ["# one\n", "## one\n", "### one\n", "one\n"] {
+            app.run(Command::Format(Format::Heading));
+            assert_eq!(app.active_text().as_deref(), Some(wanted));
+        }
+        app.run(Command::Format(Format::Bullet));
+        assert_eq!(app.active_text().as_deref(), Some("- one\n"));
+        app.run(Command::Format(Format::Bullet));
+        app.run(Command::Format(Format::Task));
+        assert_eq!(app.active_text().as_deref(), Some("- [ ] one\n"));
     }
 
     #[test]

@@ -44,6 +44,11 @@ fn main() {
             app.run(Command::AddComment);
             type_text(&mut app, "Tighten this");
         }
+        Some(view) if view.starts_with("find:") => {
+            app.open(&root.join("README.md")).unwrap();
+            app.run(Command::FindInFile);
+            type_text(&mut app, &view["find:".len()..]);
+        }
         Some(view) if view.starts_with("search:") => {
             app.run(Command::FindInProject);
             type_text(&mut app, &view["search:".len()..]);

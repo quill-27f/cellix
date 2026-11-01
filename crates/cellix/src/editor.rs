@@ -3,7 +3,7 @@ use std::path::Path;
 use std::rc::Rc;
 
 use cellix_core::{Buffer, Motion, Selection, Selections};
-use cellix_input::{Command, Direction};
+use cellix_input::{Command, Direction, Format};
 use cellix_lang::{Registry, Span};
 use cellix_render::{Bounds, Font, Grid, INTERFACE_SIZE, Icon, Measure, Rect, Rgb, units};
 use unicode_width::UnicodeWidthChar;
@@ -15,6 +15,8 @@ const TAB_WIDTH: usize = 4;
 const GUTTER_MIN_DIGITS: usize = 4;
 const NARROW_PANE: u16 = 60;
 /// Left margin of a rendered page, which also carries comment marks.
+/// Heading levels the toolbar steps through before going back to plain text.
+const MAX_HEADING_CYCLE: usize = 3;
 const PAGE_MARGIN: u16 = 2;
 /// How wide a page can be set. Prose is narrower: see `rendered`.
 const MAX_PAGE_WIDTH: u16 = 200;
@@ -33,6 +35,8 @@ type Page = (u64, usize, Rc<Vec<Row>>);
 pub struct Editor {
     pub buffer: Buffer,
     pub selections: Selections,
+    /// Char ranges to mark, while find is open.
+    pub found: Vec<(usize, usize)>,
     pub top: usize,
     pub left: usize,
     spans: RefCell<Option<(u64, Vec<Span>)>>,
@@ -61,6 +65,7 @@ impl Editor {
         Self {
             buffer,
             selections: Selections::default(),
+            found: Vec::new(),
             top: 0,
             left: 0,
             spans: RefCell::new(None),
@@ -483,6 +488,88 @@ impl Editor {
         }
     }
 
+    fn toggle_inline(&mut self, marker: &str) {
+        let primary = self.selections.primary();
+        let (start, end) = if primary.is_empty() {
+            self.buffer.word_at(primary.head)
+        } else {
+            (primary.start(), primary.end())
+        };
+        let size = marker.chars().count();
+        let rope = self.buffer.rope();
+        let before = start
+            .checked_sub(size)
+            .filter(|from| rope.slice(*from..start) == marker);
+        let after_end = end + size;
+        let after = after_end <= rope.len_chars() && rope.slice(end..after_end) == marker;
+        let inner = rope.slice(start..end).to_string();
+        let (from, to, text, selected) = match before.filter(|_| after) {
+            Some(from) => (from, after_end, inner, from),
+            None => (start, end, format!("{marker}{inner}{marker}"), start + size),
+        };
+        let length = end - start;
+        self.buffer
+            .replace_range(&mut self.selections, from, to, &text);
+        self.selections.set_single(Selection {
+            anchor: selected,
+            head: selected + length,
+            goal: None,
+        });
+    }
+
+    /// The prefix a selected line should get, given the one it has.
+    fn next_prefix(format: Format, line: &str) -> (usize, String) {
+        let hashes = line.chars().take_while(|c| *c == '#').count();
+        let heading = hashes > 0 && line[hashes..].starts_with(' ');
+        let simple = |prefix: &str| {
+            if line.starts_with(prefix) {
+                (prefix.len(), String::new())
+            } else {
+                (0, prefix.to_string())
+            }
+        };
+        match format {
+            Format::Heading if heading && hashes < MAX_HEADING_CYCLE => {
+                (hashes + 1, format!("{} ", "#".repeat(hashes + 1)))
+            }
+            Format::Heading if heading => (hashes + 1, String::new()),
+            Format::Heading => (0, "# ".to_string()),
+            Format::Bullet => simple("- "),
+            Format::Task => simple("- [ ] "),
+            _ => simple("> "),
+        }
+    }
+
+    fn toggle_lines(&mut self, format: Format) {
+        let primary = self.selections.primary();
+        let rope = self.buffer.rope();
+        let first = rope.char_to_line(primary.start());
+        let last = rope.char_to_line(primary.end());
+        let start = rope.line_to_char(first);
+        let end = rope.line_to_char(last) + self.line_text(last).chars().count();
+        let mut text = Vec::new();
+        for line in first..=last {
+            let line = self.line_text(line);
+            let (drop, add) = Self::next_prefix(format, &line);
+            text.push(format!("{add}{}", &line[drop..]));
+        }
+        let text = text.join("\n");
+        self.buffer
+            .replace_range(&mut self.selections, start, end, &text);
+        let at = start + text.chars().count();
+        self.selections.set_single(Selection::cursor(at));
+    }
+
+    pub fn format(&mut self, format: Format, area: Rect) {
+        self.prepare_edit(area);
+        match format {
+            Format::Bold => self.toggle_inline("**"),
+            Format::Italic => self.toggle_inline("*"),
+            Format::Code => self.toggle_inline("`"),
+            _ => self.toggle_lines(format),
+        }
+    }
+
     pub fn selected_text(&self) -> Option<String> {
         let rope = self.buffer.rope();
         let parts: Vec<String> = self
@@ -579,8 +666,16 @@ impl Editor {
             }
         }
         self.draw_highlights(grid, area, gutter, theme, registry);
+        for (start, end) in self.found.iter().copied() {
+            let s = Selection {
+                anchor: start,
+                head: end,
+                goal: None,
+            };
+            self.draw_range(grid, area, gutter, &s, theme.found);
+        }
         for s in self.selections.iter().filter(|s| !s.is_empty()) {
-            self.draw_selection(grid, area, gutter, s, theme);
+            self.draw_range(grid, area, gutter, s, theme.selection);
         }
         if focused {
             let head = self.selections.primary().head;
@@ -786,15 +881,21 @@ impl Editor {
                     .any(|s| at >= s.start() && at < s.end())
             })
         };
+        let found = |at: Option<usize>| {
+            at.is_some_and(|at| self.found.iter().any(|f| at >= f.0 && at < f.1))
+        };
+        let mark = |at: Option<usize>| {
+            if selected(at) {
+                Some(theme.selection)
+            } else {
+                found(at).then_some(theme.found)
+            }
+        };
         // Cells carry the text for the cell tier, and for tests. Pixels come from paint.
         for g in &row.glyphs {
             let style = cellix_render::Style {
                 fg: fg_of(g.tone),
-                bg: if selected(g.at) && !proportional {
-                    theme.selection
-                } else {
-                    bg
-                },
+                bg: mark(g.at).filter(|_| !proportional).unwrap_or(bg),
                 bold: g.font.bold,
                 italic: g.font.italic,
                 underline: g.underline,
@@ -815,7 +916,7 @@ impl Editor {
                 o.font == g.font
                     && o.tone == g.tone
                     && o.underline == g.underline
-                    && selected(o.at) == selected(g.at)
+                    && mark(o.at) == mark(g.at)
                     && (g.tone != Tone::TableLine || o.x == g.x)
             };
             // A table's cells are apart, so a run stops at a jump in position.
@@ -831,9 +932,9 @@ impl Editor {
             let text: String = run.iter().map(|g| g.ch).collect();
             let x = origin + g.x;
             let width: f32 = run.iter().map(|g| g.advance).sum();
-            if selected(g.at) {
+            if let Some(color) = mark(g.at) {
                 let bounds = Bounds::cells(x, text_y + 0.06, width, 0.88);
-                grid.panel(bounds, 6, Some(theme.selection), None);
+                grid.panel(bounds, 6, Some(color), None);
             }
             match g.tone {
                 Tone::TableLine => {}
@@ -921,14 +1022,7 @@ impl Editor {
         }
     }
 
-    fn draw_selection(
-        &self,
-        grid: &mut Grid,
-        area: Rect,
-        gutter: u16,
-        s: &Selection,
-        theme: &Theme,
-    ) {
+    fn draw_range(&self, grid: &mut Grid, area: Rect, gutter: u16, s: &Selection, bg: Rgb) {
         let rope = self.buffer.rope();
         let (first, last) = (rope.char_to_line(s.start()), rope.char_to_line(s.end()));
         for line in first.max(self.top)..=last {
@@ -948,7 +1042,6 @@ impl Editor {
                 (x_to - x_from.min(x_to)).max(usize::from(line < last)) as u16,
                 1,
             );
-            let bg = theme.selection;
             grid.set_style(rect, |style| cellix_render::Style { bg, ..style });
         }
     }

@@ -4,6 +4,7 @@ mod agents;
 mod app;
 mod editor;
 mod explorer;
+mod find;
 mod palette;
 mod rendered;
 mod review;

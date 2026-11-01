@@ -466,13 +466,13 @@
     "milestone": 2,
     "title": "Find in the current file",
     "test": "find_in_file_jumps_between_matches",
-    "passes": false
+    "passes": true
   },
   {
     "id": "markdown-toolbar",
     "milestone": 2,
     "title": "Formatting toolbar on Markdown pages",
     "test": "toolbar_bolds_the_selection",
-    "passes": false
+    "passes": true
   }
 ]

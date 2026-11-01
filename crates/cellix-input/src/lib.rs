@@ -92,6 +92,18 @@ pub enum Event {
     Tick,
 }
 
+/// Markdown formatting, as the page's toolbar offers it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Format {
+    Bold,
+    Italic,
+    Code,
+    Heading,
+    Bullet,
+    Task,
+    Quote,
+}
+
 /// Anything the user can ask for. Each entry is also a command-palette item unless it
 /// needs arguments.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -125,6 +137,8 @@ pub enum Command {
     ReplaceInProject,
     MarkdownPreview,
     OpenInBrowser,
+    FindInFile,
+    Format(Format),
     SendToAgent,
     MentionSelection,
     AcceptProposal,
