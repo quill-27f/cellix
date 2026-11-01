@@ -1,0 +1,12 @@
+[package]
+name = "cellix"
+version = "0.0.1"
+edition = "2024"
+description = "A terminal-native editor for reviewing and correcting agent work (early development)"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/quill-27f/cellix"
+readme = "README.md"
+categories = ["command-line-utilities", "text-editors"]
+keywords = ["editor", "terminal", "tui", "agent"]
+
+[workspace]

@@ -1,0 +1,22 @@
+[workspace]
+members = ["crates/*"]
+exclude = ["spikes", "harness/reserve-crate"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/quill-27f/cellix"
+
+[workspace.lints.clippy]
+all = "warn"
+
+[profile.dev]
+# Keeps debug builds small: less disk and less linker memory.
+debug = "line-tables-only"
+split-debuginfo = "unpacked"
+
+[profile.release]
+lto = "thin"
+strip = true

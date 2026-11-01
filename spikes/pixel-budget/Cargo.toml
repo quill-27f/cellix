@@ -1,0 +1,15 @@
+[package]
+name = "pixel-budget"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+base64 = "0.22"
+cosmic-text = "0.19"
+flate2 = "1"
+
+[profile.release]
+debug = false

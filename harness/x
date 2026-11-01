@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Task runner. Everything that compiles or runs Rust goes through the guard.
+#
+#   harness/x check            fmt, clippy, all tests: the gate before every commit
+#   harness/x test [args]      cargo test
+#   harness/x build [args]     cargo build
+#   harness/x run [args]       cargo run -p cellix
+#   harness/x mux              real tmux and Zellij tests (slower, ignored by check)
+#   harness/x verify           check, then prove every passing feature has its test
+#   harness/x next             the next unfinished feature
+#   harness/x status           machine state, feature counts, recent guarded jobs
+#   harness/x reserve-name     publish the crates.io placeholder (needs cargo login)
+set -u
+root=$(cd "$(dirname "$0")/.." && pwd)
+cd "$root" || exit 1
+features=harness/features.json
+guard() { label=$1; shift; harness/guard.sh --label "$label" -- "$@"; }
+
+task=${1:-status}
+[ $# -eq 0 ] || shift
+case $task in
+  check)
+    guard check sh -c 'cargo fmt --all --check &&
+      cargo clippy --workspace --all-targets -- -D warnings &&
+      cargo test --workspace' ;;
+  test) guard test cargo test --workspace "$@" ;;
+  build) guard build cargo build --workspace "$@" ;;
+  run) exec cargo run -p cellix -- "$@" ;;
+  mux) guard mux cargo test -p cellix --test mux -- --ignored --test-threads=1 "$@" ;;
+  verify)
+    "$0" check || exit 1
+    list=$(guard list cargo test --workspace -- --list 2>/dev/null) || exit 1
+    missing=0
+    for t in $(jq -r '.[] | select(.passes) | .test' "$features"); do
+      printf '%s\n' "$list" | grep -q "$t: test" || { echo "missing test: $t"; missing=1; }
+    done
+    [ "$missing" = 0 ] || { echo "verify failed: features marked passing have no test"; exit 1; }
+    echo "verify ok: $(jq '[.[] | select(.passes)] | length' "$features") of $(jq length "$features") features" ;;
+  next)
+    jq -r '[.[] | select(.passes | not)] | sort_by(.milestone) | first //
+      "all features pass" | if type == "object" then "[\(.id)] M\(.milestone): \(.title)\n  test: \(.test)" else . end' "$features" ;;
+  status)
+    echo "memory free: $(memory_pressure -Q 2>/dev/null | awk '/free percentage/ { print $NF }'), pressure level $(sysctl -n kern.memorystatus_vm_pressure_level 2>/dev/null) (1 normal, 2 warn, 4 critical)"
+    echo "swap: $(sysctl -n vm.swapusage 2>/dev/null | cut -d' ' -f1-8)"
+    echo "load: $(uptime | sed 's/.*load averages*: //'), disk free: $(df -g . | awk 'NR == 2 { print $4 }') GB, target: $(du -sh target 2>/dev/null | cut -f1)"
+    echo "features: $(jq '[.[] | select(.passes)] | length' "$features") of $(jq length "$features") passing"
+    log=$(git rev-parse --git-common-dir)/cellix-guard/guard.log
+    [ -f "$log" ] && { echo "recent guarded jobs:"; tail -3 "$log"; } ;;
+  reserve-name)
+    cd harness/reserve-crate && exec cargo publish "$@" ;;
+  *) sed -n '2,12p' "$0" | sed 's/^# *//'; exit 2 ;;
+esac

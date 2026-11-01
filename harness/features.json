@@ -1,0 +1,261 @@
+[
+  {
+    "id": "harness",
+    "milestone": 0,
+    "title": "Binary starts, prints its version and exits",
+    "test": "prints_version",
+    "passes": true
+  },
+  {
+    "id": "grid",
+    "milestone": 1,
+    "title": "Cell grid with wide-character handling and diffing",
+    "test": "diff_emits_only_changed_cells",
+    "passes": false
+  },
+  {
+    "id": "cell-backend",
+    "milestone": 1,
+    "title": "Cell backend presents a grid through a real PTY",
+    "test": "pty_shows_file_contents",
+    "passes": false
+  },
+  {
+    "id": "probe",
+    "milestone": 1,
+    "title": "Backend tier chosen per environment, with a forcing setting",
+    "test": "tier_selection_matches_design_table",
+    "passes": false
+  },
+  {
+    "id": "kitty-direct",
+    "milestone": 1,
+    "title": "Pixel tier: line tiles with a=p placement, reused by reference",
+    "test": "scroll_reuses_tiles_without_retransmit",
+    "passes": false
+  },
+  {
+    "id": "kitty-placeholder",
+    "milestone": 1,
+    "title": "Pixel tier for tmux: passthrough and U+10EEEE cells",
+    "test": "placeholder_cells_are_passthrough_wrapped",
+    "passes": false
+  },
+  {
+    "id": "tile-eviction",
+    "milestone": 1,
+    "title": "Tile cache evicts within a quota",
+    "test": "tile_cache_respects_quota",
+    "passes": false
+  },
+  {
+    "id": "explorer",
+    "milestone": 1,
+    "title": "File explorer: browse, expand and open with the mouse",
+    "test": "click_in_explorer_opens_file",
+    "passes": false
+  },
+  {
+    "id": "explorer-ops",
+    "milestone": 1,
+    "title": "Explorer: create, rename, delete",
+    "test": "explorer_create_rename_delete",
+    "passes": false
+  },
+  {
+    "id": "mouse",
+    "milestone": 1,
+    "title": "Mouse: click to place cursor, drag select, wheel scroll",
+    "test": "drag_selects_text",
+    "passes": false
+  },
+  {
+    "id": "buffer",
+    "milestone": 2,
+    "title": "Rope buffer with undo and redo",
+    "test": "undo_redo_round_trip",
+    "passes": false
+  },
+  {
+    "id": "edit",
+    "milestone": 2,
+    "title": "Simple-mode typing, delete, newline, save",
+    "test": "type_and_save_writes_file",
+    "passes": false
+  },
+  {
+    "id": "clipboard",
+    "milestone": 2,
+    "title": "Copy, cut and paste, including bracketed paste",
+    "test": "bracketed_paste_is_one_undo",
+    "passes": false
+  },
+  {
+    "id": "multicursor",
+    "milestone": 2,
+    "title": "Multi-cursor editing",
+    "test": "multicursor_types_at_each_cursor",
+    "passes": false
+  },
+  {
+    "id": "tabs",
+    "milestone": 2,
+    "title": "Tabs with mouse switching and dirty markers",
+    "test": "click_tab_switches_buffer",
+    "passes": false
+  },
+  {
+    "id": "splits",
+    "milestone": 2,
+    "title": "Split panes",
+    "test": "split_shows_two_panes",
+    "passes": false
+  },
+  {
+    "id": "palette",
+    "milestone": 2,
+    "title": "Command palette and quick open",
+    "test": "quick_open_fuzzy_matches",
+    "passes": false
+  },
+  {
+    "id": "highlight",
+    "milestone": 2,
+    "title": "Tree-sitter highlighting from a language registry",
+    "test": "rust_keywords_are_highlighted",
+    "passes": false
+  },
+  {
+    "id": "reload",
+    "milestone": 2,
+    "title": "Open files refresh when an agent changes them on disk",
+    "test": "external_change_reloads_clean_buffer",
+    "passes": false
+  },
+  {
+    "id": "diff",
+    "milestone": 3,
+    "title": "Side-by-side diff of working tree against HEAD",
+    "test": "side_by_side_diff_aligns_hunks",
+    "passes": false
+  },
+  {
+    "id": "hunks",
+    "milestone": 3,
+    "title": "Accept or reject a hunk",
+    "test": "reject_hunk_restores_file",
+    "passes": false
+  },
+  {
+    "id": "comments",
+    "milestone": 3,
+    "title": "Line comments on diffs and plans",
+    "test": "comment_is_attached_to_line",
+    "passes": false
+  },
+  {
+    "id": "plan-review",
+    "milestone": 3,
+    "title": "Plan review: open, edit, comment, send back",
+    "test": "plan_review_returns_comments",
+    "passes": false
+  },
+  {
+    "id": "wait",
+    "milestone": 3,
+    "title": "cellix --wait for $VISUAL",
+    "test": "wait_blocks_until_closed",
+    "passes": false
+  },
+  {
+    "id": "socket",
+    "milestone": 3,
+    "title": "Per-workspace socket and CLI deliver review comments as JSON",
+    "test": "cli_reads_comments_over_socket",
+    "passes": false
+  },
+  {
+    "id": "git",
+    "milestone": 3,
+    "title": "Git status in explorer, and blame",
+    "test": "explorer_shows_git_status",
+    "passes": false
+  },
+  {
+    "id": "search",
+    "milestone": 4,
+    "title": "Project search and replace",
+    "test": "project_replace_changes_all_matches",
+    "passes": false
+  },
+  {
+    "id": "lsp-client",
+    "milestone": 4,
+    "title": "LSP: start a server, diagnostics",
+    "test": "lsp_diagnostics_are_shown",
+    "passes": false
+  },
+  {
+    "id": "lsp-nav",
+    "milestone": 4,
+    "title": "LSP: go to definition, completion, rename",
+    "test": "lsp_goto_definition_jumps",
+    "passes": false
+  },
+  {
+    "id": "markdown",
+    "milestone": 4,
+    "title": "Markdown preview",
+    "test": "markdown_preview_renders_headings",
+    "passes": false
+  },
+  {
+    "id": "settings",
+    "milestone": 4,
+    "title": "Settings file and themes",
+    "test": "settings_change_theme",
+    "passes": false
+  },
+  {
+    "id": "claude-plugin",
+    "milestone": 4,
+    "title": "Claude Code plugin with a bridge mod",
+    "test": "plugin_manifest_is_valid",
+    "passes": false
+  },
+  {
+    "id": "vim",
+    "milestone": 5,
+    "title": "Built-in Vim mode",
+    "test": "vim_motions_and_operators",
+    "passes": false
+  },
+  {
+    "id": "neovim",
+    "milestone": 5,
+    "title": "Neovim mode over nvim --embed",
+    "test": "neovim_mode_edits_buffer",
+    "passes": false
+  },
+  {
+    "id": "agent-host",
+    "milestone": 5,
+    "title": "Agent hosting in a terminal pane",
+    "test": "terminal_pane_runs_command",
+    "passes": false
+  },
+  {
+    "id": "wgpu",
+    "milestone": 5,
+    "title": "wgpu rasterizer behind the rasterizer trait, software by default",
+    "test": "wgpu_matches_software_output",
+    "passes": false
+  },
+  {
+    "id": "dap",
+    "milestone": 5,
+    "title": "Debugging over DAP",
+    "test": "dap_stops_at_breakpoint",
+    "passes": false
+  }
+]

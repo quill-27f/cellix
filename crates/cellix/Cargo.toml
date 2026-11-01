@@ -1,0 +1,10 @@
+[package]
+name = "cellix"
+description = "A terminal-native editor for reviewing and correcting agent work"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
