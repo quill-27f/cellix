@@ -28,6 +28,9 @@ pub fn simple_keymap(event: KeyEvent) -> Option<Command> {
         Key::Delete => DeleteForward,
         Key::Esc => Cancel,
         Key::F(1) => CommandPalette,
+        Key::F(2) => RenameSymbol,
+        Key::F(12) => GoToDefinition,
+        Key::Char(' ') if mods.ctrl => Complete,
         Key::Char('p') if mods.alt => CommandPalette,
         Key::Char('c') if mods.alt => AddComment,
         Key::Char(c) if mods.ctrl => match c.to_ascii_lowercase() {

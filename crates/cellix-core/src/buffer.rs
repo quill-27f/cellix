@@ -5,7 +5,7 @@ use std::time::SystemTime;
 
 use ropey::Rope;
 
-use crate::selection::{Selection, Selections, is_word};
+use crate::selection::{Selection, Selections, is_word, line_len};
 
 #[derive(Clone, Debug)]
 struct Edit {
@@ -285,6 +285,12 @@ impl Buffer {
         self.undo.last_mut().expect("just pushed").before = selections.clone();
         selections.clamp(self.rope.len_chars());
         self.undo.last_mut().expect("just pushed").after = selections.clone();
+    }
+
+    /// The char index of a line and column, clamped to the text.
+    pub fn position(&self, line: usize, column: usize) -> usize {
+        let line = line.min(self.rope.len_lines().saturating_sub(1));
+        self.rope.line_to_char(line) + column.min(line_len(&self.rope, line))
     }
 
     /// Selects the word under a cursor, or the next match of the selected text. This is

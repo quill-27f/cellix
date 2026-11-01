@@ -186,42 +186,42 @@
     "milestone": 4,
     "title": "Project search and replace",
     "test": "project_replace_changes_all_matches",
-    "passes": false
+    "passes": true
   },
   {
     "id": "lsp-client",
     "milestone": 4,
     "title": "LSP: start a server, diagnostics",
     "test": "lsp_diagnostics_are_shown",
-    "passes": false
+    "passes": true
   },
   {
     "id": "lsp-nav",
     "milestone": 4,
     "title": "LSP: go to definition, completion, rename",
     "test": "lsp_goto_definition_jumps",
-    "passes": false
+    "passes": true
   },
   {
     "id": "markdown",
     "milestone": 4,
     "title": "Markdown preview",
     "test": "markdown_preview_renders_headings",
-    "passes": false
+    "passes": true
   },
   {
     "id": "settings",
     "milestone": 4,
     "title": "Settings file and themes",
     "test": "settings_change_theme",
-    "passes": false
+    "passes": true
   },
   {
     "id": "claude-plugin",
     "milestone": 4,
     "title": "Claude Code plugin with a bridge mod",
     "test": "plugin_manifest_is_valid",
-    "passes": false
+    "passes": true
   },
   {
     "id": "vim",

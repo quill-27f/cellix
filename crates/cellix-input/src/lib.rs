@@ -115,6 +115,11 @@ pub enum Command {
     OpenDiff,
     AddComment,
     BlameLine,
+    ReplaceInProject,
+    MarkdownPreview,
+    GoToDefinition,
+    Complete,
+    RenameSymbol,
     Cancel,
     Quit,
 }

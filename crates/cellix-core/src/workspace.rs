@@ -15,6 +15,14 @@ pub struct Entry {
     pub expanded: bool,
 }
 
+/// One line containing a project search hit. Lines count from zero.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Match {
+    pub path: PathBuf,
+    pub line: usize,
+    pub text: String,
+}
+
 /// The root folder and which of its directories are expanded.
 #[derive(Debug)]
 pub struct Workspace {
@@ -98,6 +106,52 @@ impl Workspace {
             .filter(|e| e.file_type().is_some_and(|t| t.is_file()))
             .map(ignore::DirEntry::into_path)
             .collect()
+    }
+
+    /// Lines containing `query`, in path order. Binary files are skipped.
+    pub fn search(&self, query: &str) -> Vec<Match> {
+        let mut files = self.files();
+        files.sort();
+        let mut found = Vec::new();
+        if query.is_empty() {
+            return found;
+        }
+        for path in files {
+            let Ok(text) = fs::read_to_string(&path) else {
+                continue;
+            };
+            for (line, content) in text.lines().enumerate() {
+                if content.contains(query) {
+                    found.push(Match {
+                        path: path.clone(),
+                        line,
+                        text: content.trim().to_string(),
+                    });
+                }
+            }
+        }
+        found
+    }
+
+    /// Replaces `query` in every file except `skip`, and returns how many changed.
+    pub fn replace_all(&self, query: &str, with: &str, skip: &[PathBuf]) -> io::Result<usize> {
+        let mut changed = 0;
+        if query.is_empty() {
+            return Ok(changed);
+        }
+        for path in self.files() {
+            if skip.contains(&path) {
+                continue;
+            }
+            let Ok(text) = fs::read_to_string(&path) else {
+                continue;
+            };
+            if text.contains(query) {
+                fs::write(&path, text.replace(query, with))?;
+                changed += 1;
+            }
+        }
+        Ok(changed)
     }
 
     pub fn create_file(&self, path: &Path) -> io::Result<()> {

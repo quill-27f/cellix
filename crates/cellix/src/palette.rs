@@ -12,6 +12,9 @@ const ROWS: u16 = 12;
 pub enum Item {
     File(PathBuf, String),
     Command(&'static str, Command),
+    /// A search result: file, 0-based line, and its label.
+    Match(PathBuf, usize, String),
+    Completion(String),
 }
 
 impl Item {
@@ -19,11 +22,12 @@ impl Item {
         match self {
             Self::File(_, label) => label,
             Self::Command(label, _) => label,
+            Self::Match(_, _, label) | Self::Completion(label) => label,
         }
     }
 }
 
-pub const COMMANDS: [(&str, Command); 15] = [
+pub const COMMANDS: [(&str, Command); 20] = [
     ("Save", Command::Save),
     ("Undo", Command::Undo),
     ("Redo", Command::Redo),
@@ -38,6 +42,11 @@ pub const COMMANDS: [(&str, Command); 15] = [
     ("Review Changes", Command::OpenDiff),
     ("Add Comment", Command::AddComment),
     ("Blame Line", Command::BlameLine),
+    ("Replace in Project", Command::ReplaceInProject),
+    ("Markdown Preview", Command::MarkdownPreview),
+    ("Go to Definition", Command::GoToDefinition),
+    ("Complete", Command::Complete),
+    ("Rename Symbol", Command::RenameSymbol),
     ("Quit", Command::Quit),
 ];
 

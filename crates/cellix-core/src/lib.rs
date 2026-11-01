@@ -6,4 +6,4 @@ mod workspace;
 
 pub use buffer::Buffer;
 pub use selection::{Motion, Selection, Selections};
-pub use workspace::{Entry, Workspace};
+pub use workspace::{Entry, Match, Workspace};

@@ -1,5 +1,7 @@
 //! The language registry and syntax highlighting. A language is one row in `SPECS`.
 
+pub mod lsp;
+
 use std::cell::OnceCell;
 use std::path::Path;
 

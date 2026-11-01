@@ -20,7 +20,10 @@ use crossterm::terminal::{
 
 use crate::App;
 
-const TICK: Duration = Duration::from_millis(500);
+/// How long to wait for input before checking on language servers.
+const POLL: Duration = Duration::from_millis(50);
+/// Polls between ticks, so background file checks run about twice a second.
+const POLLS_PER_TICK: u32 = 10;
 
 /// Restores the terminal however the loop ends, including on panic.
 struct Session;
@@ -116,9 +119,11 @@ struct Display {
 }
 
 impl Display {
-    fn detect() -> io::Result<Self> {
+    fn detect(setting: Option<&str>) -> io::Result<Self> {
         let forced = std::env::var("CELLIX_TIER")
             .ok()
+            .as_deref()
+            .or(setting)
             .and_then(|v| v.parse().ok());
         let env = detect(|k| std::env::var(k).ok())?;
         let placement = match select_tier(env, forced) {
@@ -182,9 +187,11 @@ pub fn run(options: Options) -> io::Result<()> {
     let server = cellix_agent::start(app.workspace.root(), app.comments.clone()).ok();
 
     let _session = Session::start()?;
-    let mut display = Display::detect()?;
+    let mut display = Display::detect(app.settings.tier.as_deref())?;
     let mut backend = display.backend();
     let mut out = io::stdout();
+    let mut redraw = true;
+    let mut polls = 0;
     loop {
         // Polled as well as signalled: a resize during slow startup is otherwise lost.
         let now = size()?;
@@ -196,20 +203,24 @@ pub fn run(options: Options) -> io::Result<()> {
                 backend = display.backend();
             }
             backend.invalidate();
+            redraw = true;
         }
-        let (width, height) = app.size();
-        let mut grid = Grid::new(width, height, app.background());
-        app.draw(&mut grid);
-        backend.present(&grid, &mut out)?;
-        if let Some(text) = app.outgoing_clipboard.take() {
-            let encoded = base64::engine::general_purpose::STANDARD.encode(text);
-            write!(out, "\x1b]52;c;{encoded}\x07")?;
+        if redraw {
+            let (width, height) = app.size();
+            let mut grid = Grid::new(width, height, app.background());
+            app.draw(&mut grid);
+            backend.present(&grid, &mut out)?;
+            if let Some(text) = app.outgoing_clipboard.take() {
+                let encoded = base64::engine::general_purpose::STANDARD.encode(text);
+                write!(out, "\x1b]52;c;{encoded}\x07")?;
+            }
+            out.flush()?;
+            redraw = false;
         }
-        out.flush()?;
         if app.quit {
             break;
         }
-        if ct::poll(TICK)? {
+        if ct::poll(POLL)? {
             // Drain everything queued, so a fast wheel doesn't redraw per event.
             loop {
                 match translate(ct::read()?) {
@@ -221,12 +232,20 @@ pub fn run(options: Options) -> io::Result<()> {
                     break;
                 }
             }
+            redraw = true;
         } else {
-            app.handle(Event::Tick);
+            polls += 1;
+            if polls >= POLLS_PER_TICK {
+                polls = 0;
+                app.handle(Event::Tick);
+                redraw = true;
+            }
         }
+        redraw |= app.poll();
         if let Some(server) = &server {
             while let Ok(request) = server.requests.try_recv() {
                 app.serve(request);
+                redraw = true;
             }
         }
     }

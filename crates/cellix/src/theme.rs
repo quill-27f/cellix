@@ -32,6 +32,40 @@ fn style(fg: Rgb, bg: Rgb) -> Style {
 }
 
 impl Theme {
+    /// A built-in theme by name. Unknown names get the default.
+    pub fn named(name: Option<&str>) -> Self {
+        match name {
+            Some("light") => Self::light(),
+            _ => Self::default(),
+        }
+    }
+
+    fn light() -> Self {
+        let text = Rgb(36, 41, 47);
+        let bg = Rgb(255, 255, 255);
+        let panel = Rgb(243, 244, 246);
+        let dim = Rgb(100, 106, 115);
+        Self {
+            text: style(text, bg),
+            sidebar: style(Rgb(60, 66, 74), panel),
+            bar: style(Rgb(60, 66, 74), Rgb(228, 231, 235)),
+            tab: style(dim, panel),
+            tab_active: style(text, bg),
+            gutter: style(Rgb(150, 156, 165), bg),
+            selection: Rgb(200, 220, 250),
+            row_hover: Rgb(226, 232, 240),
+            accent: Rgb(9, 105, 218),
+            keyword: Rgb(130, 40, 170),
+            string: Rgb(10, 110, 60),
+            comment: Rgb(106, 115, 125),
+            function: Rgb(9, 90, 190),
+            kind: Rgb(140, 90, 0),
+            number: Rgb(190, 60, 20),
+            added: Rgb(214, 245, 220),
+            removed: Rgb(255, 224, 224),
+        }
+    }
+
     pub fn token(&self, token: Token) -> Rgb {
         match token {
             Token::Keyword => self.keyword,

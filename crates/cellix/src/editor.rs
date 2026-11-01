@@ -12,6 +12,13 @@ use crate::theme::Theme;
 const TAB_WIDTH: usize = 4;
 const GUTTER_MIN_DIGITS: usize = 4;
 
+/// Per-line marks for the gutter, as 1-based lines.
+#[derive(Default)]
+pub struct Marks {
+    pub comments: Vec<usize>,
+    pub errors: Vec<usize>,
+}
+
 /// One open document and where the view is within it.
 pub struct Editor {
     pub buffer: Buffer,
@@ -19,6 +26,10 @@ pub struct Editor {
     pub top: usize,
     pub left: usize,
     spans: RefCell<Option<(u64, Vec<Span>)>>,
+    /// Show Markdown as formatted text.
+    pub preview: bool,
+    /// The revision last sent to a language server.
+    pub synced: u64,
 }
 
 fn display_width(c: char, column: usize) -> usize {
@@ -37,6 +48,8 @@ impl Editor {
             top: 0,
             left: 0,
             spans: RefCell::new(None),
+            preview: false,
+            synced: 0,
         }
     }
 
@@ -200,8 +213,12 @@ impl Editor {
         theme: &Theme,
         focused: bool,
         registry: &Registry,
-        comments: &[usize],
+        marks: &Marks,
     ) {
+        if self.preview {
+            crate::markdown::draw(grid, area, &self.buffer.text(), self.top, theme);
+            return;
+        }
         grid.fill(area, theme.text);
         let gutter = self.gutter_width();
         let rope = self.buffer.rope();
@@ -213,7 +230,14 @@ impl Editor {
             let y = area.y + row;
             let number = format!("{:>w$} ", line + 1, w = gutter as usize - 1);
             grid.put_str(area.x, y, &number, theme.gutter, area.x + gutter);
-            if comments.contains(&(line + 1)) {
+            if marks.errors.contains(&(line + 1)) {
+                let mark = cellix_render::Style {
+                    fg: theme.number,
+                    ..theme.gutter
+                };
+                grid.put_str(area.x, y, &number, mark, area.x + gutter);
+            }
+            if marks.comments.contains(&(line + 1)) {
                 let mark = cellix_render::Style {
                     fg: theme.accent,
                     ..theme.gutter

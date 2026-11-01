@@ -3,8 +3,10 @@
 mod app;
 mod editor;
 mod explorer;
+mod markdown;
 mod palette;
 mod review;
+mod settings;
 mod terminal;
 mod theme;
 

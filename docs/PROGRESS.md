@@ -27,3 +27,15 @@ Quit and close now ask before discarding unsaved edits, which they silently did 
 
 Accept only marks a hunk: it doesn't touch the file or the git index, and marks are lost
 on exit. Reject refuses to run over unsaved edits.
+
+## 2026-11-01: language features, search, settings
+
+Added project search and replace, Markdown preview, settings with light and dark themes,
+an LSP client (diagnostics, definition, completion, rename) and a Claude Code plugin
+with a skill that reads comments back. The bridge mod moved to its own ledger entry.
+
+Unverified: the LSP client has only run against a scripted server in the tests.
+`real_rust_analyzer_finds_a_definition` covers a real server but is ignored, and has not
+passed: this machine's rust-analyzer is a stub. Positions assume the server honours the
+requested UTF-32 encoding, so a UTF-16-only server will misplace non-ASCII columns.
+Replace is plain text with no preview, and skips files with unsaved edits.

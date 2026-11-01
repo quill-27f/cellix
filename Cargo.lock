@@ -111,6 +111,9 @@ dependencies = [
  "crossterm",
  "png",
  "portable-pty",
+ "pulldown-cmark",
+ "serde",
+ "serde_json",
  "tempfile",
  "unicode-width",
  "vt100",
@@ -143,6 +146,8 @@ version = "0.1.0"
 name = "cellix-lang"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
+ "tempfile",
  "tree-sitter",
  "tree-sitter-bash",
  "tree-sitter-go",
@@ -715,6 +720,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "pulldown-cmark"
+version = "0.13.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3db2be46835f013dd3f4fa7f5f7402c537787b54ebb6fe2b94bbdd7e2669bb7b"
+dependencies = [
+ "bitflags 2.13.2",
+ "memchr",
+ "unicase",
+]
+
+[[package]]
 name = "quote"
 version = "1.0.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1281,6 +1297,12 @@ checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
 dependencies = [
  "core_maths",
 ]
+
+[[package]]
+name = "unicase"
+version = "2.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "357cc3acc6a036009fd6c973ed009037c732d60d0b4f6c673e9041497482a28f"
 
 [[package]]
 name = "unicode-bidi"

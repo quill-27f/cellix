@@ -1,19 +1,22 @@
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use cellix_core::{Buffer, Selection, Workspace};
 use cellix_input::{Command, Event, Key, KeyEvent, MouseEvent, MouseKind, simple_keymap};
 use cellix_lang::Registry;
+use cellix_lang::lsp::{Client, Diagnostic, LspEvent, TextEdit};
 use cellix_render::{Grid, Rect, Style};
 use cellix_review::{Comment, append_comments, blame_line, changed_files};
 
 use cellix_agent::{Request, SharedComments};
 
-use crate::editor::Editor;
+use crate::editor::{Editor, Marks};
 use crate::explorer::Explorer;
 use crate::palette::{COMMANDS, Item, Palette};
 use crate::review::{Hit, Review};
+use crate::settings::{Settings, default_server};
 use crate::theme::Theme;
 
 const SIDEBAR_WIDTH: u16 = 28;
@@ -37,6 +40,10 @@ enum PromptAction {
     Rename(PathBuf),
     Delete(PathBuf),
     Comment(String, usize),
+    Search,
+    ReplaceFind,
+    ReplaceWith(String),
+    RenameSymbol,
     Quit,
     CloseTab,
 }
@@ -86,12 +93,17 @@ pub struct App {
     /// With `--wait`: comments on this file are appended to it on exit, so an agent that
     /// only reads the file back still gets them.
     pub wait_file: Option<PathBuf>,
+    pub settings: Settings,
+    /// Running servers, by language.
+    servers: HashMap<&'static str, Client>,
+    diagnostics: HashMap<PathBuf, Vec<Diagnostic>>,
     /// Set when the user asks to leave.
     pub quit: bool,
 }
 
 impl App {
     pub fn new(root: PathBuf, size: (u16, u16)) -> Self {
+        let settings = Settings::load(&root);
         let workspace = Workspace::new(root);
         let mut explorer = Explorer::default();
         explorer.refresh(&workspace);
@@ -104,7 +116,7 @@ impl App {
             show_sidebar: true,
             overlay: Overlay::None,
             size,
-            theme: Theme::default(),
+            theme: Theme::named(settings.theme.as_deref()),
             registry: Registry::default(),
             drag: Drag::None,
             message: RefCell::new(String::new()),
@@ -114,6 +126,9 @@ impl App {
             review: None,
             comments: SharedComments::default(),
             wait_file: None,
+            settings,
+            servers: HashMap::new(),
+            diagnostics: HashMap::new(),
             quit: false,
         };
         app.refresh_tree();
@@ -148,7 +163,166 @@ impl App {
         }
         self.editors.push(Editor::new(Buffer::open(path)?));
         self.set_active(self.editors.len() - 1);
+        self.attach_server(path);
         Ok(())
+    }
+
+    /// Starts this language's server if there is one. A missing server only costs the
+    /// language features, so it isn't an error.
+    fn attach_server(&mut self, path: &Path) {
+        let Some(language) = Registry::language_name(path) else {
+            return;
+        };
+        if !self.servers.contains_key(language) {
+            let command = self
+                .settings
+                .language_servers
+                .get(language)
+                .cloned()
+                .or_else(|| default_server(language));
+            let root = self.workspace.root().to_path_buf();
+            match command.map(|c| Client::start(&c, &root)) {
+                Some(Ok(client)) => {
+                    self.servers.insert(language, client);
+                }
+                _ => return,
+            }
+        }
+        let index = self.active();
+        let (Some(editor), Some(client)) =
+            (self.editors.get_mut(index), self.servers.get_mut(language))
+        else {
+            return;
+        };
+        client.open(path, language, &editor.buffer.text());
+        editor.synced = editor.buffer.revision();
+    }
+
+    /// Sends edits to servers and handles their replies. Returns true if anything changed.
+    pub fn poll(&mut self) -> bool {
+        for editor in &mut self.editors {
+            if editor.synced == editor.buffer.revision() {
+                continue;
+            }
+            let Some(path) = editor.buffer.path() else {
+                continue;
+            };
+            if let Some(client) =
+                Registry::language_name(path).and_then(|language| self.servers.get_mut(language))
+            {
+                client.change(path, &editor.buffer.text());
+            }
+            editor.synced = editor.buffer.revision();
+        }
+        let mut events = Vec::new();
+        for client in self.servers.values() {
+            events.extend(client.events.try_iter());
+        }
+        let changed = !events.is_empty();
+        for event in events {
+            self.lsp_event(event);
+        }
+        changed
+    }
+
+    fn lsp_event(&mut self, event: LspEvent) {
+        match event {
+            LspEvent::Diagnostics(path, items) => {
+                self.diagnostics.insert(path, items);
+            }
+            LspEvent::Definition(path, line, column) => {
+                if self.open(&path).is_ok() {
+                    let area = self.focused_area();
+                    if let Some(editor) = self.editor_mut() {
+                        let at = editor.buffer.position(line, column);
+                        editor.selections.set_single(Selection::cursor(at));
+                        editor.reveal(area);
+                    }
+                }
+            }
+            LspEvent::Completion(labels) => {
+                if !labels.is_empty() && matches!(self.overlay, Overlay::None) {
+                    let items = labels.into_iter().map(Item::Completion).collect();
+                    self.overlay = Overlay::Palette(Palette::new(items));
+                }
+            }
+            LspEvent::Rename(files) => {
+                let mut count = 0;
+                for (path, edits) in files {
+                    count += edits.len();
+                    if let Err(e) = self.apply_edits(&path, edits) {
+                        self.say(format!("Could not rename in {}: {e}", path.display()));
+                    }
+                }
+                self.say(format!("Renamed {count} occurrences"));
+            }
+        }
+    }
+
+    /// Applies edits last to first, so earlier positions stay valid. Open files change in
+    /// their buffers and stay unsaved, and closed files change on disk.
+    fn apply_edits(&mut self, path: &Path, mut edits: Vec<TextEdit>) -> io::Result<()> {
+        edits.sort_by_key(|e| std::cmp::Reverse(e.start));
+        let open = self
+            .editors
+            .iter_mut()
+            .find(|e| e.buffer.path() == Some(path));
+        let mut scratch = None;
+        let editor = match open {
+            Some(editor) => editor,
+            None => scratch.insert(Editor::new(Buffer::open(path)?)),
+        };
+        for edit in edits {
+            let start = editor.buffer.position(edit.start.0, edit.start.1);
+            let end = editor.buffer.position(edit.end.0, edit.end.1);
+            editor
+                .buffer
+                .replace_range(&mut editor.selections, start, end, &edit.text);
+        }
+        if let Some(mut closed) = scratch {
+            closed.buffer.save()?;
+        }
+        Ok(())
+    }
+
+    fn lsp_target(&mut self) -> Option<(&'static str, PathBuf, usize, usize)> {
+        let editor = self.editors.get(self.active())?;
+        let path = editor.buffer.path()?.to_path_buf();
+        let language = Registry::language_name(&path)?;
+        let rope = editor.buffer.rope();
+        let head = editor.selections.primary().head;
+        let line = rope.char_to_line(head);
+        Some((language, path, line, head - rope.line_to_char(line)))
+    }
+
+    fn lsp_request(&mut self, command: Command) {
+        self.poll();
+        let Some((language, path, line, column)) = self.lsp_target() else {
+            return;
+        };
+        let Some(client) = self.servers.get_mut(language) else {
+            self.say(format!("No language server for {language}"));
+            return;
+        };
+        match command {
+            Command::GoToDefinition => client.definition(&path, line, column),
+            _ => client.completion(&path, line, column),
+        }
+    }
+
+    /// Replaces the word before the cursor with a completion.
+    fn insert_completion(&mut self, text: &str) {
+        if let Some(editor) = self.editor_mut() {
+            let head = editor.selections.primary().head;
+            let (start, _) = editor.buffer.word_at(head);
+            editor.selections.set_single(Selection {
+                anchor: start,
+                head,
+                goal: None,
+            });
+            editor.buffer.replace(&mut editor.selections, text);
+        }
+        self.reveal();
     }
 
     pub fn active_text(&self) -> Option<String> {
@@ -199,7 +373,10 @@ impl App {
     }
 
     pub fn handle(&mut self, event: Event) {
-        self.message.borrow_mut().clear();
+        // A tick isn't the user moving on, so it leaves messages up.
+        if event != Event::Tick {
+            self.message.borrow_mut().clear();
+        }
         match event {
             Event::Key(key) => self.key(key),
             Event::Mouse(mouse) => self.mouse(mouse),
@@ -354,6 +531,18 @@ impl App {
                 }
             }
             Some(Item::Command(_, command)) => self.run(command),
+            Some(Item::Match(path, line, _)) => {
+                if let Err(e) = self.open(&path) {
+                    self.say(format!("Could not open: {e}"));
+                }
+                let area = self.focused_area();
+                if let Some(editor) = self.editor_mut() {
+                    let at = editor.buffer.position(line, 0);
+                    editor.selections.set_single(Selection::cursor(at));
+                    editor.reveal(area);
+                }
+            }
+            Some(Item::Completion(text)) => self.insert_completion(&text),
             None => {}
         }
     }
@@ -361,6 +550,61 @@ impl App {
     fn finish_prompt(&mut self, prompt: Prompt) {
         let name = prompt.input.trim();
         let result = match &prompt.action {
+            PromptAction::Search => {
+                let root = self.workspace.root().to_path_buf();
+                let items: Vec<Item> = self
+                    .workspace
+                    .search(name)
+                    .into_iter()
+                    .map(|m| {
+                        let file = m.path.strip_prefix(&root).unwrap_or(&m.path);
+                        let label = format!("{}:{}  {}", file.display(), m.line + 1, m.text);
+                        Item::Match(m.path.clone(), m.line, label)
+                    })
+                    .collect();
+                if items.is_empty() {
+                    self.say(format!("No results for {name}"));
+                } else {
+                    self.overlay = Overlay::Palette(Palette::new(items));
+                }
+                Ok(())
+            }
+            PromptAction::ReplaceFind => {
+                if !name.is_empty() {
+                    let label = format!("Replace {name} with");
+                    self.ask(&label, PromptAction::ReplaceWith(name.to_string()));
+                }
+                Ok(())
+            }
+            PromptAction::ReplaceWith(query) => {
+                let with = prompt.input.as_str();
+                let dirty: Vec<PathBuf> = self
+                    .editors
+                    .iter()
+                    .filter(|e| e.buffer.is_dirty())
+                    .filter_map(|e| e.buffer.path().map(Path::to_path_buf))
+                    .collect();
+                let changed = self.workspace.replace_all(query, with, &dirty);
+                if let Ok(count) = changed {
+                    let skipped = if dirty.is_empty() {
+                        String::new()
+                    } else {
+                        format!(", skipped {} with unsaved edits", dirty.len())
+                    };
+                    self.say(format!("Replaced in {count} files{skipped}"));
+                }
+                changed.map(drop)
+            }
+            PromptAction::RenameSymbol if !name.is_empty() => {
+                self.poll();
+                if let Some((language, path, line, column)) = self.lsp_target()
+                    && let Some(client) = self.servers.get_mut(language)
+                {
+                    client.rename(&path, line, column, name);
+                }
+                Ok(())
+            }
+            PromptAction::RenameSymbol => Ok(()),
             PromptAction::Comment(file, line) => {
                 if !name.is_empty() {
                     self.add_comment(file.clone(), *line, name.to_string());
@@ -430,6 +674,15 @@ impl App {
                 };
             }
             Command::AddComment => self.prompt_comment_at_cursor(),
+            Command::FindInProject => self.ask("Search", PromptAction::Search),
+            Command::ReplaceInProject => self.ask("Replace", PromptAction::ReplaceFind),
+            Command::MarkdownPreview => {
+                if let Some(editor) = self.editor_mut() {
+                    editor.preview = !editor.preview;
+                }
+            }
+            Command::GoToDefinition | Command::Complete => self.lsp_request(command),
+            Command::RenameSymbol => self.ask("Rename to", PromptAction::RenameSymbol),
             Command::BlameLine => self.blame(),
             Command::ToggleSidebar => self.show_sidebar = !self.show_sidebar,
             Command::Save => self.save(),
@@ -916,14 +1169,21 @@ impl App {
             if let Some(editor) = self.editors.get(*index) {
                 let area = self.pane_area(pane);
                 let file = editor.buffer.path().map(|p| self.relative(p));
-                let lines = file.map_or_else(Vec::new, |f| self.comment_lines(&f));
+                let marks = Marks {
+                    comments: file.map_or_else(Vec::new, |f| self.comment_lines(&f)),
+                    errors: editor
+                        .buffer
+                        .path()
+                        .and_then(|p| self.diagnostics.get(p))
+                        .map_or_else(Vec::new, |d| d.iter().map(|d| d.line + 1).collect()),
+                };
                 editor.draw(
                     grid,
                     area,
                     theme,
                     pane == self.focus,
                     &self.registry,
-                    &lines,
+                    &marks,
                 );
                 if pane + 1 < self.panes.len() {
                     let line = Rect::new(area.right(), area.y, 1, area.h);
@@ -981,10 +1241,19 @@ impl App {
         let width = self.size.0;
         grid.fill(Rect::new(0, y, width, 1), self.theme.bar);
         let message = self.message.borrow();
-        let left = if message.is_empty() {
-            "Ctrl+P open  Ctrl+S save  Ctrl+G review  Ctrl+Q quit"
-        } else {
+        let at_cursor = self.cursor_line().and_then(|(path, line)| {
+            let items = self.diagnostics.get(&path)?;
+            items
+                .iter()
+                .find(|d| d.line + 1 == line)
+                .map(|d| d.message.clone())
+        });
+        let left = if !message.is_empty() {
             message.as_str()
+        } else if let Some(problem) = &at_cursor {
+            problem.as_str()
+        } else {
+            "Ctrl+P open  Ctrl+S save  Ctrl+G review  Ctrl+Q quit"
         };
         grid.put_str(1, y, left, self.theme.bar, width);
         if let Some(editor) = self.editors.get(self.active()) {
@@ -1503,6 +1772,237 @@ mod tests {
         typed(&mut app, "n");
         enter(&mut app);
         assert!(!screen(&app).text().contains("xfirst line"));
+    }
+
+    #[test]
+    fn messages_outlive_background_ticks() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        app.run(Command::Save);
+        app.handle(Event::Tick);
+        assert!(screen(&app).text().contains("Saved alpha.txt"));
+    }
+
+    #[test]
+    fn project_search_opens_a_result() {
+        let (dir, mut app) = project();
+        fs::write(dir.path().join("found.txt"), "a\nb\nneedle here\n").unwrap();
+        app.run(Command::FindInProject);
+        typed(&mut app, "needle");
+        enter(&mut app);
+        assert!(screen(&app).text().contains("found.txt:3"));
+        enter(&mut app);
+        assert!(screen(&app).text().contains("Ln 3, Col 1"));
+    }
+
+    #[test]
+    fn project_replace_changes_all_matches() {
+        let (dir, mut app) = project();
+        fs::write(dir.path().join("a.txt"), "old old\n").unwrap();
+        fs::write(dir.path().join("src/b.txt"), "old\n").unwrap();
+        fs::write(dir.path().join("keep.txt"), "old\n").unwrap();
+        app.open(&dir.path().join("keep.txt")).unwrap();
+        typed(&mut app, "x");
+        app.run(Command::ReplaceInProject);
+        typed(&mut app, "old");
+        enter(&mut app);
+        typed(&mut app, "new");
+        enter(&mut app);
+        let read = |p: &str| fs::read_to_string(dir.path().join(p)).unwrap();
+        assert_eq!(read("a.txt"), "new new\n");
+        assert_eq!(read("src/b.txt"), "new\n");
+        assert_eq!(read("keep.txt"), "old\n", "unsaved files are skipped");
+        assert!(screen(&app).text().contains("Replaced in 2 files"));
+    }
+
+    #[test]
+    fn markdown_preview_renders_headings() {
+        let (dir, mut app) = project();
+        fs::write(dir.path().join("n.md"), "# Title\n\ntext\n").unwrap();
+        app.open(&dir.path().join("n.md")).unwrap();
+        assert!(screen(&app).text().contains("# Title"));
+        app.run(Command::MarkdownPreview);
+        let grid = screen(&app);
+        assert!(!grid.text().contains("# Title"));
+        let (x, y) = find(&grid, "Title");
+        assert!(grid.cell(x, y).style.bold);
+    }
+
+    #[test]
+    fn settings_change_theme() {
+        let (dir, _) = project();
+        fs::create_dir(dir.path().join(".cellix")).unwrap();
+        fs::write(
+            dir.path().join(".cellix/settings.json"),
+            r#"{"theme": "light"}"#,
+        )
+        .unwrap();
+        let light = App::new(dir.path().to_path_buf(), (100, 30));
+        assert_eq!(light.background(), Theme::named(Some("light")).text);
+        assert_ne!(light.background(), Theme::default().text);
+    }
+
+    /// Scripted language server: answers the handshake, reports one diagnostic and
+    /// jumps every definition to line 2.
+    const FAKE_SERVER: &str = r#"
+import json, sys
+def read():
+    n = 0
+    while True:
+        h = sys.stdin.buffer.readline()
+        if not h: sys.exit()
+        h = h.strip()
+        if not h: break
+        if h.lower().startswith(b"content-length:"): n = int(h.split(b":")[1])
+    return json.loads(sys.stdin.buffer.read(n))
+def send(m):
+    b = json.dumps(m).encode()
+    sys.stdout.buffer.write(b"Content-Length: %d\r\n\r\n" % len(b) + b)
+    sys.stdout.buffer.flush()
+while True:
+    m = read()
+    method, i = m.get("method"), m.get("id")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": i, "result": {"capabilities": {}}})
+    elif method == "textDocument/didOpen":
+        uri = m["params"]["textDocument"]["uri"]
+        send({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": {"uri": uri,
+            "diagnostics": [{"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}},
+            "message": "fake problem here", "severity": 1}]}})
+    elif method == "textDocument/definition":
+        uri = m["params"]["textDocument"]["uri"]
+        send({"jsonrpc": "2.0", "id": i, "result": {"uri": uri,
+            "range": {"start": {"line": 1, "character": 3}, "end": {"line": 1, "character": 4}}}})
+    elif method == "textDocument/completion":
+        send({"jsonrpc": "2.0", "id": i, "result": [{"label": "completed_name"}]})
+    elif method == "textDocument/rename":
+        uri = m["params"]["textDocument"]["uri"]
+        send({"jsonrpc": "2.0", "id": i, "result": {"changes": {uri: [{"newText": m["params"]["newName"],
+            "range": {"start": {"line": 0, "character": 3}, "end": {"line": 0, "character": 7}}}]}}})
+    elif i is not None:
+        send({"jsonrpc": "2.0", "id": i, "result": None})
+"#;
+
+    fn with_server() -> (TempDir, App) {
+        let (dir, _) = project();
+        fs::write(dir.path().join("server.py"), FAKE_SERVER).unwrap();
+        fs::create_dir(dir.path().join(".cellix")).unwrap();
+        let settings = serde_json::json!({"language_servers": {
+            "Rust": ["python3", "-I", dir.path().join("server.py")]
+        }});
+        fs::write(
+            dir.path().join(".cellix/settings.json"),
+            settings.to_string(),
+        )
+        .unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (100, 30));
+        fs::write(dir.path().join("beta.rs"), "fn main() {}\nfn other() {}\n").unwrap();
+        app.open(&dir.path().join("beta.rs")).unwrap();
+        (dir, app)
+    }
+
+    fn wait(app: &mut App, done: impl Fn(&App) -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !done(app) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{}",
+                screen(app).text()
+            );
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn lsp_diagnostics_are_shown() {
+        let (_dir, mut app) = with_server();
+        wait(&mut app, |a| screen(a).text().contains("fake problem here"));
+        let grid = screen(&app);
+        let (x, y) = find(&grid, "fn main");
+        assert_eq!(grid.cell(x - 2, y).style.fg, Theme::default().number);
+    }
+
+    #[test]
+    fn lsp_goto_definition_jumps() {
+        let (_dir, mut app) = with_server();
+        app.run(Command::GoToDefinition);
+        wait(&mut app, |a| screen(a).text().contains("Ln 2, Col 4"));
+    }
+
+    #[test]
+    fn lsp_completion_replaces_the_word() {
+        let (_dir, mut app) = with_server();
+        typed(&mut app, "co");
+        app.run(Command::Complete);
+        wait(&mut app, |a| screen(a).text().contains("completed_name"));
+        enter(&mut app);
+        assert!(
+            app.active_text()
+                .unwrap()
+                .starts_with("completed_namefn main")
+        );
+    }
+
+    #[test]
+    fn lsp_rename_edits_the_open_buffer() {
+        let (_dir, mut app) = with_server();
+        app.run(Command::RenameSymbol);
+        typed(&mut app, "start");
+        enter(&mut app);
+        wait(&mut app, |a| {
+            a.active_text().unwrap().starts_with("fn start()")
+        });
+    }
+
+    /// Needs rust-analyzer. Run with `harness/x test real_rust_analyzer -- --ignored`.
+    #[test]
+    #[ignore = "needs a real language server"]
+    fn real_rust_analyzer_finds_a_definition() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("src")).unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("src/main.rs"),
+            "fn helper() -> i32 {\n    1\n}\n\nfn main() {\n    helper();\n}\n",
+        )
+        .unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (100, 30));
+        app.open(&dir.path().join("src/main.rs")).unwrap();
+        for _ in 0..5 {
+            app.run(Command::Move(cellix_input::Direction::Down, false));
+        }
+        for _ in 0..5 {
+            app.run(Command::Move(cellix_input::Direction::Right, false));
+        }
+        assert!(screen(&app).text().contains("Ln 6, Col 6"));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        while !screen(&app).text().contains("Ln 1, Col 4") {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{}",
+                screen(&app).text()
+            );
+            app.run(Command::GoToDefinition);
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            app.poll();
+        }
+    }
+
+    #[test]
+    fn a_missing_server_is_not_an_error() {
+        let (dir, _) = project();
+        fs::create_dir(dir.path().join(".cellix")).unwrap();
+        let settings = r#"{"language_servers": {"Rust": ["cellix-no-such-server"]}}"#;
+        fs::write(dir.path().join(".cellix/settings.json"), settings).unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (100, 30));
+        app.open(&dir.path().join("beta.rs")).unwrap();
+        app.run(Command::GoToDefinition);
+        assert!(screen(&app).text().contains("No language server for Rust"));
     }
 
     #[test]
