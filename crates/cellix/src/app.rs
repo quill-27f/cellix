@@ -27,6 +27,7 @@ use crate::agents::Agents;
 use crate::editor::{Editor, Marks};
 use crate::explorer::Explorer;
 use crate::find::Find;
+use crate::neovim::{self, Neovim};
 use crate::palette::{COMMANDS, Input, Item, Palette, input, popup};
 use crate::rendered;
 use crate::review::{Hit, Review};
@@ -242,6 +243,13 @@ pub struct App {
     branch: Option<String>,
     measure: Rc<dyn Measure>,
     agents: Agents,
+    /// Set in the `neovim` keymap, when `nvim` could start.
+    neovim: Option<Neovim>,
+    /// What Neovim last saw of the open file: path, revision and cursor.
+    neovim_file: Option<(PathBuf, u64, usize)>,
+    neovim_mode: String,
+    /// The `:` line being typed.
+    neovim_line: String,
     /// What the wheel has moved since the last frame.
     scrolled: Option<(Rect, i32)>,
     /// The server Claude Code connects to. Set by the terminal loop.
@@ -293,6 +301,12 @@ impl App {
             comments: SharedComments::default(),
             wait_file: None,
             vim: (settings.keymap.as_deref() == Some("vim")).then(Vim::default),
+            neovim: (settings.keymap.as_deref() == Some("neovim"))
+                .then(|| Neovim::start(&[]).ok())
+                .flatten(),
+            neovim_file: None,
+            neovim_mode: String::new(),
+            neovim_line: String::new(),
             settings,
             servers: HashMap::new(),
             diagnostics: HashMap::new(),
@@ -1102,6 +1116,9 @@ impl App {
         if self.search.focus.is_some() && self.sidebar_area().is_some() && self.search_key(key) {
             return;
         }
+        if self.neovim_key(key) {
+            return;
+        }
         if let Some(vim) = &mut self.vim {
             match vim.key(key) {
                 VimAction::Commands(commands) => {
@@ -1128,6 +1145,135 @@ impl App {
                     .type_text(&mut editor.selections, c.encode_utf8(&mut [0; 4]));
             }
             self.reveal();
+        }
+    }
+
+    /// Sends a key to Neovim. Returns false if Cellix should handle it instead.
+    fn neovim_key(&mut self, key: KeyEvent) -> bool {
+        let Some(keys) = neovim::notation(key).filter(|_| self.neovim.is_some()) else {
+            return false;
+        };
+        let index = self.active();
+        let Some(editor) = self
+            .editors
+            .get(index)
+            .filter(|e| e.buffer.path().is_some())
+        else {
+            return false;
+        };
+        let Some(path) = editor.buffer.path().map(Path::to_path_buf) else {
+            return false;
+        };
+        let (revision, head) = (editor.buffer.revision(), editor.selections.primary().head);
+        let text = editor.buffer.text();
+        let rope = editor.buffer.rope();
+        let line = rope.char_to_line(head);
+        let column = rope.slice(rope.line_to_char(line)..head).len_bytes();
+        // The `:` commands that mean something to the app, not to a scratch buffer.
+        if key.key == Key::Enter && !self.neovim_line.is_empty() {
+            let command = match self.neovim_line.as_str() {
+                "w" => Some(vec![Command::Save]),
+                "q" => Some(vec![Command::CloseTab]),
+                "wq" | "x" => Some(vec![Command::Save, Command::CloseTab]),
+                "qa" => Some(vec![Command::Quit]),
+                _ => None,
+            };
+            if let Some(commands) = command {
+                self.neovim_line.clear();
+                if let Some(neovim) = &mut self.neovim {
+                    neovim.input("<Esc>");
+                }
+                self.neovim_settle();
+                for command in commands {
+                    self.run(command);
+                }
+                return true;
+            }
+        }
+        let same_file = self.neovim_file.as_ref().map(|f| f.0.as_path()) == Some(path.as_path());
+        let seen = self.neovim_file.clone();
+        let Some(neovim) = &mut self.neovim else {
+            return false;
+        };
+        if !same_file {
+            neovim.show(&path);
+        }
+        if !same_file || seen.as_ref().map(|f| f.1) != Some(revision) {
+            neovim.set_text(&text);
+        }
+        if !same_file || seen.as_ref().map(|f| f.2) != Some(head) {
+            neovim.set_cursor(line, column);
+        }
+        self.neovim_file = Some((path, revision, head));
+        if let Some(neovim) = &mut self.neovim {
+            neovim.input(&keys);
+        }
+        self.neovim_settle();
+        true
+    }
+
+    /// Brings Cellix up to date with what the last key did.
+    fn neovim_settle(&mut self) {
+        let Some(state) = self.neovim.as_mut().and_then(Neovim::state) else {
+            return;
+        };
+        self.neovim_mode = match state.mode.chars().next() {
+            Some('i') => "INSERT",
+            Some('R') => "REPLACE",
+            Some('v' | 'V' | '\u{16}') => "VISUAL",
+            Some('c') => "COMMAND",
+            _ => "NORMAL",
+        }
+        .to_string();
+        self.neovim_line = state.cmdline.clone();
+        if state.cmdtype.is_empty() {
+            self.neovim_line.clear();
+        }
+        let area = self.focused_area();
+        let index = self.active();
+        let Some(editor) = self.editors.get_mut(index) else {
+            return;
+        };
+        if let Some(lines) = state.lines {
+            let ended = editor.buffer.text().ends_with('\n');
+            let text = lines.join("\n") + if ended { "\n" } else { "" };
+            if text != editor.buffer.text() {
+                let end = editor.buffer.rope().len_chars();
+                editor
+                    .buffer
+                    .replace_range(&mut editor.selections, 0, end, &text);
+            }
+        }
+        let rope = editor.buffer.rope();
+        let char_at = |(line, byte): (usize, usize)| {
+            let line = line.min(rope.len_lines().saturating_sub(1));
+            let start = rope.line_to_char(line);
+            let bytes = rope.line_to_byte(line) + byte;
+            rope.byte_to_char(bytes.min(rope.len_bytes())).max(start)
+        };
+        let head = char_at(state.cursor);
+        let selection = if state.mode.starts_with(['v', 'V']) {
+            let anchor = char_at(state.anchor);
+            // Vim's selection includes the character under the cursor.
+            let (from, to) = if anchor <= head {
+                (anchor, head + 1)
+            } else {
+                (anchor + 1, head)
+            };
+            Selection {
+                anchor: from,
+                head: to.min(rope.len_chars()),
+                goal: None,
+            }
+        } else {
+            Selection::cursor(head)
+        };
+        let revision = editor.buffer.revision();
+        editor.selections.set_single(selection);
+        editor.reveal(area);
+        if let Some(file) = &mut self.neovim_file {
+            file.1 = revision;
+            file.2 = selection.head;
         }
     }
 
@@ -2927,7 +3073,10 @@ impl App {
         };
         let waiting = self.agents.needing_you();
         let attention = format!("An agent needs you ({waiting})");
-        let left = if !message.is_empty() {
+        let typed = format!(":{}", self.neovim_line);
+        let left = if !self.neovim_line.is_empty() {
+            typed.as_str()
+        } else if !message.is_empty() {
             message.as_str()
         } else if waiting > 0 {
             attention.as_str()
@@ -2952,7 +3101,7 @@ impl App {
                 Some(VimMode::Normal) => "NORMAL",
                 Some(VimMode::Insert) => "INSERT",
                 Some(VimMode::Visual) => "VISUAL",
-                None => "",
+                None => self.neovim_mode.as_str(),
             };
             right = vec![
                 format!("{mode}   Ln {}, Col {column}", line + 1)
@@ -4495,6 +4644,67 @@ mod tests {
             None,
             "an edit in between can't be animated"
         );
+    }
+
+    /// Neovim's own config stays out of it, so this tests Cellix and not the machine.
+    fn neovim_app() -> Option<(TempDir, App, PathBuf)> {
+        let neovim = Neovim::start(&["--clean"]).ok()?;
+        let (dir, mut app) = project();
+        app.neovim = Some(neovim);
+        let path = dir.path().join("note.txt");
+        fs::write(&path, "one\ntwo\nthree\n").unwrap();
+        app.open(&path).unwrap();
+        Some((dir, app, path))
+    }
+
+    #[test]
+    fn neovim_mode_edits_buffer() {
+        let Some((_dir, mut app, path)) = neovim_app() else {
+            return;
+        };
+        typed(&mut app, "dd");
+        assert_eq!(app.active_text().unwrap(), "two\nthree\n");
+        typed(&mut app, "A!");
+        assert!(screen(&app).text().contains("INSERT"));
+        key(&mut app, Key::Esc);
+        assert_eq!(app.active_text().unwrap(), "two!\nthree\n");
+        assert!(screen(&app).text().contains("NORMAL"));
+        typed(&mut app, "u");
+        assert_eq!(app.active_text().unwrap(), "two\nthree\n");
+        typed(&mut app, ".");
+        typed(&mut app, ":w");
+        assert!(screen(&app).text().contains(":w"));
+        enter(&mut app);
+        assert_eq!(
+            fs::read_to_string(path).unwrap(),
+            app.active_text().unwrap()
+        );
+    }
+
+    #[test]
+    fn neovim_sees_edits_made_outside_it() {
+        let Some((_dir, mut app, _path)) = neovim_app() else {
+            return;
+        };
+        typed(&mut app, "x");
+        assert_eq!(app.active_text().unwrap(), "ne\ntwo\nthree\n");
+        let area = app.focused_area();
+        let editor = app.editor_mut().unwrap();
+        editor.prepare_edit(area);
+        editor.buffer.type_text(&mut editor.selections, "Z");
+        typed(&mut app, "x");
+        // The cursor follows the Z, so x takes the letter after it.
+        assert_eq!(app.active_text().unwrap(), "Ze\ntwo\nthree\n");
+    }
+
+    #[test]
+    fn neovim_visual_mode_selects() {
+        let Some((_dir, mut app, _path)) = neovim_app() else {
+            return;
+        };
+        typed(&mut app, "vl");
+        assert_eq!(app.selected_text().as_deref(), Some("on"));
+        assert!(screen(&app).text().contains("VISUAL"));
     }
 
     #[test]

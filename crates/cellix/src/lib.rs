@@ -5,6 +5,7 @@ mod app;
 mod editor;
 mod explorer;
 mod find;
+mod neovim;
 mod palette;
 mod plugin;
 mod rendered;

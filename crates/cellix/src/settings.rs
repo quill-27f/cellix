@@ -11,7 +11,7 @@ use serde::Deserialize;
 pub struct Settings {
     /// `auto` (the default) follows the terminal. `dark` and `light` choose.
     pub theme: Option<String>,
-    /// `simple` (the default) or `vim`.
+    /// `simple` (the default), `vim`, or `neovim`, which needs `nvim` on the host.
     pub keymap: Option<String>,
     /// `direct`, `placeholder` or `cells`.
     pub tier: Option<String>,

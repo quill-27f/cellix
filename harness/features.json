@@ -242,7 +242,7 @@
     "milestone": 5,
     "title": "Neovim mode over nvim --embed",
     "test": "neovim_mode_edits_buffer",
-    "passes": false
+    "passes": true
   },
   {
     "id": "agent-host",
