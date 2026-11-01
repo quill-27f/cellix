@@ -33,6 +33,10 @@ Ctrl+W closes a tab and Ctrl+Q quits. Ghostty keeps Cmd+W and Cmd+Q for itself, 
 only reach Cellix if you unbind them with `keybind = cmd+w=unbind` and
 `keybind = cmd+q=unbind` in your Ghostty config.
 
+Mac text shortcuts work: Option+Backspace deletes a word, Option+Left and Right move by
+word, and Cmd+Backspace deletes to the start of the line. tmux doesn't pass Cmd through, so
+for Cmd+Z there, add `keybind = cmd+z=text:\x1a` to your Ghostty config.
+
 Cmd works as Ctrl where the terminal passes it through. Ctrl+Shift+P needs a terminal with
 the Kitty keyboard protocol, such as Ghostty, Kitty or WezTerm. Ghostty keeps Cmd+Shift+P
 for its own palette unless you rebind it.

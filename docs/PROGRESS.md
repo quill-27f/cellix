@@ -161,3 +161,24 @@ mod needs `cellix` on the path, which `Open Claude Code` provides.
 because `plugin.rs` embeds it from outside.
 
 Next: the user tests the full set over SSH.
+
+## 2026-11-01: first real use, and a redesign
+
+Using it in a tmux window showed what no test had. The caret was hashed into every row's
+tile, so each keystroke resent the whole screen: about 570 KB per key, now about 140 KB
+in a palette and less in the editor. `crates/cellix/examples/frames` measures this.
+
+Also fixed: Mac text shortcuts, middle-click to close a tab, hidden and ignored files in the
+explorer, headings painting over the status bar, and the hover pill hiding its icon. On a
+known terminal background all chrome now sits on that colour, because Ghostty's window
+padding showed as a seam. The test for that changed on purpose: panels no longer keep a
+fixed distance from the editor.
+
+Unverified live: all of the above, including Cmd+Z outside tmux. The wheel moves one line at
+a time under tmux and three on the direct tier.
+
+A redesign is on a Claude Design canvas, waiting for the user's review. Next, once it's
+agreed: build it, then run Cellix as a pane inside Claude Code through a mod. The mod API
+has what that needs, panes showing images plus pointer and key events, but none of it has
+been tried. An image named by file can't cross SSH, so remote sessions would have to send
+PNGs.
