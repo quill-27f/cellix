@@ -7,7 +7,7 @@ use base64::Engine;
 use cellix_input::{Event, Key, KeyEvent, Mods, MouseEvent, MouseKind};
 use cellix_render::{CellMeasure, FontMeasure, Grid, Measure, SoftwareRasterizer};
 use cellix_term::{
-    Backend, CellBackend, DEFAULT_QUOTA, PixelBackend, Placement, Tier, detect, select_tier,
+    Backend, CellBackend, DEFAULT_QUOTA, PixelBackend, Placement, Smooth, Tier, detect, select_tier,
 };
 use crossterm::event::{
     self as ct, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste,
@@ -23,6 +23,10 @@ use crossterm::terminal::{
 
 use crate::App;
 
+/// Steps in a wheel notch's animation, which together take about 70ms.
+const SCROLL_FRAMES: u32 = 6;
+const REMOTE_SCROLL_FRAMES: u32 = 3;
+const SCROLL_PAUSE: Duration = Duration::from_millis(12);
 /// How long to wait for input before checking on language servers.
 const POLL: Duration = Duration::from_millis(50);
 /// Polls between ticks, so background file checks run about twice a second.
@@ -137,10 +141,11 @@ struct Display {
     cell: Option<(usize, usize)>,
     pixel_mouse: bool,
     light: Option<bool>,
+    smooth: Option<Smooth>,
 }
 
 impl Display {
-    fn detect(setting: Option<&str>) -> io::Result<Self> {
+    fn detect(setting: Option<&str>, smooth: bool) -> io::Result<Self> {
         let forced = std::env::var("CELLIX_TIER")
             .ok()
             .as_deref()
@@ -158,6 +163,15 @@ impl Display {
             cell,
             pixel_mouse: env.pixel_mouse,
             light: env.light,
+            // Over a network each frame costs a round of placements, so send fewer.
+            smooth: smooth.then(|| Smooth {
+                frames: if std::env::var_os("SSH_CONNECTION").is_some() {
+                    REMOTE_SCROLL_FRAMES
+                } else {
+                    SCROLL_FRAMES
+                },
+                pause: SCROLL_PAUSE,
+            }),
         })
     }
 
@@ -173,7 +187,11 @@ impl Display {
     fn backend(&self) -> Box<dyn Backend> {
         let pixels = self.placement.zip(self.cell).and_then(|(placement, cell)| {
             let rasterizer = SoftwareRasterizer::new(cell.0, cell.1)?;
-            Some(PixelBackend::new(rasterizer, placement, DEFAULT_QUOTA))
+            let backend = PixelBackend::new(rasterizer, placement, DEFAULT_QUOTA);
+            Some(match self.smooth {
+                Some(smooth) => backend.with_smooth(smooth),
+                None => backend,
+            })
         });
         match pixels {
             Some(backend) => Box::new(backend),
@@ -224,7 +242,8 @@ pub fn run(options: Options) -> io::Result<()> {
         .and_then(|_| cellix_agent::ide::IdeServer::start(app.workspace.root()).ok());
 
     let _session = Session::start()?;
-    let mut display = Display::detect(app.settings.tier.as_deref())?;
+    let smooth = app.settings.smooth_scroll != Some(false);
+    let mut display = Display::detect(app.settings.tier.as_deref(), smooth)?;
     let mut backend = display.backend();
     let mut out = io::stdout();
     app.set_measure(display.measure());
@@ -238,6 +257,7 @@ pub fn run(options: Options) -> io::Result<()> {
     let mouse_cell = |display: &Display| display.cell.filter(|_| pixel_mouse);
     let mut redraw = true;
     let mut polls = 0;
+    let mut shown: Option<Grid> = None;
     loop {
         // Polled as well as signalled: a resize during slow startup is otherwise lost.
         let now = size()?;
@@ -256,7 +276,11 @@ pub fn run(options: Options) -> io::Result<()> {
             let (width, height) = app.size();
             let mut grid = Grid::new(width, height, app.background());
             app.draw(&mut grid);
+            if let (Some((area, rows)), Some(from)) = (app.take_scroll(), &shown) {
+                backend.scroll(from, &grid, area, rows, &mut out)?;
+            }
             backend.present(&grid, &mut out)?;
+            shown = Some(grid);
             if let Some(text) = app.outgoing_clipboard.take() {
                 let encoded = base64::engine::general_purpose::STANDARD.encode(text);
                 write!(out, "\x1b]52;c;{encoded}\x07")?;

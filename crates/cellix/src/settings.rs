@@ -15,6 +15,8 @@ pub struct Settings {
     pub keymap: Option<String>,
     /// `direct`, `placeholder` or `cells`.
     pub tier: Option<String>,
+    /// `false` makes the wheel jump by lines, for a slow link.
+    pub smooth_scroll: Option<bool>,
     /// What opens web pages. Without it, terminal-browser opens them in a split.
     pub browser: Option<Vec<String>>,
     /// Language name to server command, overriding the built-in table.
@@ -28,6 +30,7 @@ fn read(path: &Path) -> Option<Settings> {
 impl Settings {
     fn merge(&mut self, other: Self) {
         self.theme = other.theme.or(self.theme.take());
+        self.smooth_scroll = other.smooth_scroll.or(self.smooth_scroll.take());
         self.keymap = other.keymap.or(self.keymap.take());
         self.tier = other.tier.or(self.tier.take());
         self.browser = other.browser.or(self.browser.take());

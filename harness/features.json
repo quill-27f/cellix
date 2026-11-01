@@ -333,7 +333,7 @@
     "milestone": 5,
     "title": "Smooth pixel scrolling with per-region tiles",
     "test": "regions_scroll_by_pixels",
-    "passes": false
+    "passes": true
   },
   {
     "id": "auto-theme",

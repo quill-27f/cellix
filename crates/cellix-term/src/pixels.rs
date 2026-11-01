@@ -2,9 +2,10 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::io::{self, Write};
+use std::time::Duration;
 
 use base64::Engine;
-use cellix_render::{Grid, Image, Rasterizer};
+use cellix_render::{Grid, Image, Rasterizer, Rect};
 use flate2::{Compression, write::ZlibEncoder};
 
 use crate::Backend;
@@ -17,6 +18,18 @@ const CHUNK: usize = 4096;
 const PLACEHOLDER: char = '\u{10EEEE}';
 /// Row and column zero in the placeholder encoding.
 const DIACRITIC_ZERO: char = '\u{305}';
+
+/// Above the row tiles, so a scrolling region covers them and nothing else has to change.
+const SCROLL_LAYER: u32 = 1;
+/// Placement ids for a scrolling region, clear of the row placements.
+const FIRST_STRIP: usize = 100_000;
+
+/// How a region animates. Direct placement only, since only that can sit between cells.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Smooth {
+    pub frames: u32,
+    pub pause: Duration,
+}
 
 struct Tile {
     id: u32,
@@ -46,6 +59,13 @@ pub struct PixelBackend<R> {
     used: usize,
     quota: usize,
     frame: u64,
+    smooth: Option<Smooth>,
+    /// Whether region placements are waiting to be removed by the next present.
+    scrolling: bool,
+}
+
+fn ease_out(t: f32) -> f32 {
+    1.0 - (1.0 - t).powi(3)
 }
 
 fn tile_key(grid: &Grid, y: u16) -> u64 {
@@ -75,7 +95,14 @@ impl<R: Rasterizer> PixelBackend<R> {
             used: 0,
             quota,
             frame: 0,
+            smooth: None,
+            scrolling: false,
         }
+    }
+
+    pub fn with_smooth(mut self, smooth: Smooth) -> Self {
+        self.smooth = (self.placement == Placement::Direct).then_some(smooth);
+        self
     }
 
     /// Writes one graphics command, wrapped for tmux in placeholder mode.
@@ -137,11 +164,7 @@ impl<R: Rasterizer> PixelBackend<R> {
             tile.last_used = self.frame;
             return tile.id;
         }
-        let id = self.next_id;
-        self.next_id = (self.next_id + 1) & 0xff_ffff;
-        if self.next_id == 0 {
-            self.next_id = 1;
-        }
+        let id = self.new_id();
         let image = self.rasterizer.row(grid, y);
         let cols = grid.width();
         self.transmit(out, id, &image);
@@ -157,6 +180,52 @@ impl<R: Rasterizer> PixelBackend<R> {
                 last_used: self.frame,
             },
         );
+        id
+    }
+
+    /// The tile for part of a row, shared with any row that looks the same.
+    fn region_tile(&mut self, out: &mut Vec<u8>, grid: &Grid, y: u16, area: Rect) -> (u32, Image) {
+        let image = self.rasterizer.row(grid, y);
+        let cell = image.width / grid.width().max(1) as usize;
+        let (left, width) = (area.x as usize * cell, area.w as usize * cell);
+        let mut rgb = Vec::with_capacity(width * image.height * 3);
+        for line in image.rgb.chunks_exact(image.width * 3) {
+            rgb.extend_from_slice(&line[left * 3..(left + width) * 3]);
+        }
+        let crop = Image {
+            width,
+            height: image.height,
+            rgb,
+        };
+        let mut hasher = DefaultHasher::new();
+        crop.rgb.hash(&mut hasher);
+        let key = hasher.finish();
+        if let Some(tile) = self.tiles.get_mut(&key) {
+            tile.last_used = self.frame;
+            return (tile.id, crop);
+        }
+        let id = self.new_id();
+        self.transmit(out, id, &crop);
+        self.used += crop.rgb.len();
+        let bytes = crop.rgb.len();
+        let last_used = self.frame;
+        self.tiles.insert(
+            key,
+            Tile {
+                id,
+                bytes,
+                last_used,
+            },
+        );
+        (id, crop)
+    }
+
+    fn new_id(&mut self) -> u32 {
+        let id = self.next_id;
+        self.next_id = (self.next_id + 1) & 0xff_ffff;
+        if self.next_id == 0 {
+            self.next_id = 1;
+        }
         id
     }
 
@@ -215,10 +284,98 @@ impl<R: Rasterizer> Backend for PixelBackend<R> {
                 self.shown[y as usize] = Some(id);
             }
         }
+        if std::mem::take(&mut self.scrolling) {
+            self.apc(&mut bytes, &format!("a=d,d=z,z={SCROLL_LAYER},q=2"), b"");
+        }
         self.evict(&mut bytes, &on_screen);
         bytes.extend_from_slice(b"\x1b[?2026l");
         out.write_all(&bytes)?;
         out.flush()
+    }
+
+    fn scroll(
+        &mut self,
+        from: &Grid,
+        to: &Grid,
+        area: Rect,
+        rows: i32,
+        out: &mut dyn Write,
+    ) -> io::Result<()> {
+        let height = area.h as i32;
+        let same_size = (from.width(), from.height()) == (to.width(), to.height());
+        let Some(smooth) = self.smooth.filter(|_| {
+            same_size && rows != 0 && rows.abs() < height && self.size == (to.width(), to.height())
+        }) else {
+            return Ok(());
+        };
+        let moved = rows.unsigned_abs() as u16;
+        // The rows of both grids in one strip, top to bottom. Most appear in both.
+        let lines = area.y..area.bottom();
+        let strip: Vec<(&Grid, u16)> = if rows > 0 {
+            let fresh = lines.clone().skip(area.h as usize - moved as usize);
+            lines
+                .map(|y| (from, y))
+                .chain(fresh.map(|y| (to, y)))
+                .collect()
+        } else {
+            let fresh = lines.clone().take(moved as usize);
+            fresh
+                .map(|y| (to, y))
+                .chain(lines.map(|y| (from, y)))
+                .collect()
+        };
+        let mut bytes = Vec::new();
+        let tiles: Vec<(u32, Image)> = strip
+            .iter()
+            .map(|(grid, y)| self.region_tile(&mut bytes, grid, *y, area))
+            .collect();
+        let Some(cell_height) = tiles.first().map(|(_, image)| image.height as i32) else {
+            return Ok(());
+        };
+        let travel = rows.abs() * cell_height;
+        let window = height * cell_height;
+        let mut placed = HashSet::new();
+        self.scrolling = true;
+        for frame in 1..=smooth.frames {
+            let eased = ease_out(frame as f32 / smooth.frames as f32);
+            let moved_by = (travel as f32 * eased).round() as i32;
+            let offset = if rows > 0 {
+                moved_by
+            } else {
+                travel - moved_by
+            };
+            bytes.extend_from_slice(b"\x1b[?2026h");
+            for (index, (id, image)) in tiles.iter().enumerate() {
+                let top = index as i32 * cell_height - offset;
+                let number = FIRST_STRIP + index;
+                let (clip_top, clip_end) = ((-top).max(0), cell_height.min(window - top));
+                if clip_top >= clip_end {
+                    if placed.remove(&index) {
+                        self.apc(&mut bytes, &format!("a=d,d=i,i={id},p={number},q=2"), b"");
+                    }
+                    continue;
+                }
+                let pixel = top.max(0);
+                let row = area.y as i32 + pixel / cell_height;
+                let _ = write!(bytes, "\x1b[{};{}H", row + 1, area.x + 1);
+                let control = format!(
+                    "a=p,i={id},p={number},x=0,y={clip_top},w={},h={},Y={},z={SCROLL_LAYER},C=1,q=2",
+                    image.width,
+                    clip_end - clip_top,
+                    pixel % cell_height,
+                );
+                self.apc(&mut bytes, &control, b"");
+                placed.insert(index);
+            }
+            bytes.extend_from_slice(b"\x1b[?2026l");
+            out.write_all(&bytes)?;
+            out.flush()?;
+            bytes.clear();
+            if frame < smooth.frames {
+                std::thread::sleep(smooth.pause);
+            }
+        }
+        Ok(())
     }
 
     fn invalidate(&mut self) {
@@ -242,6 +399,131 @@ mod tests {
                 rgb: vec![9; grid.width() as usize * 3],
             }
         }
+    }
+
+    /// Eight by sixteen, with a colour taken from the row's first letter.
+    struct Sized;
+
+    impl Rasterizer for Sized {
+        fn row(&mut self, grid: &Grid, y: u16) -> Image {
+            let tone = grid.row(y)[9].symbol.bytes().next().unwrap_or(0);
+            let (width, height) = (grid.width() as usize * 8, 16);
+            Image {
+                width,
+                height,
+                rgb: vec![tone; width * height * 3],
+            }
+        }
+    }
+
+    /// A sidebar in the first eight columns that stays still, and a pane that moves.
+    fn pane(top: usize) -> Grid {
+        let mut grid = Grid::new(20, 8, Style::default());
+        for y in 0..8 {
+            grid.put_str(0, y, "side", Style::default(), 8);
+            let letter = char::from(b'a' + (top + y as usize) as u8);
+            grid.put_str(9, y, &letter.to_string(), Style::default(), 20);
+        }
+        grid
+    }
+
+    const PANE: Rect = Rect {
+        x: 8,
+        y: 1,
+        w: 12,
+        h: 6,
+    };
+
+    fn smooth(frames: u32) -> PixelBackend<Sized> {
+        let pause = Duration::ZERO;
+        PixelBackend::new(Sized, Placement::Direct, DEFAULT_QUOTA)
+            .with_smooth(Smooth { frames, pause })
+    }
+
+    fn scroll(b: &mut PixelBackend<Sized>, from: &Grid, to: &Grid, rows: i32) -> String {
+        let mut out = Vec::new();
+        b.scroll(from, to, PANE, rows, &mut out).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    fn present_sized(b: &mut PixelBackend<Sized>, grid: &Grid) -> String {
+        let mut out = Vec::new();
+        b.present(grid, &mut out).unwrap();
+        String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn regions_scroll_by_pixels() {
+        let mut b = smooth(4);
+        let (from, to) = (pane(0), pane(3));
+        present_sized(&mut b, &from);
+        let moving = scroll(&mut b, &from, &to, 3);
+        assert_eq!(count(&moving, "\x1b[?2026h"), 4, "every frame is atomic");
+        assert!(count(&moving, ",Y=") > 0);
+        let offsets: HashSet<String> = moving
+            .split(",Y=")
+            .skip(1)
+            .map(|rest| rest.split(',').next().unwrap().to_string())
+            .collect();
+        assert!(
+            offsets.iter().any(|y| y != "0"),
+            "it sits between cells: {offsets:?}"
+        );
+        assert!(moving.contains(",z=1,"), "above the row tiles");
+        assert!(
+            !moving.contains("\x1b[1;9H"),
+            "nothing lands on the row above the pane"
+        );
+        assert!(
+            !moving.contains(";1H"),
+            "the sidebar's column is never touched"
+        );
+        let settled = present_sized(&mut b, &to);
+        assert_eq!(
+            count(&settled, "a=d,d=z,z=1"),
+            1,
+            "the layer goes with the final page"
+        );
+        assert_eq!(count(&present_sized(&mut b, &to), "a=d,d=z"), 0);
+    }
+
+    #[test]
+    fn a_region_clips_at_its_edges() {
+        let mut b = smooth(2);
+        let (from, to) = (pane(0), pane(1));
+        present_sized(&mut b, &from);
+        let moving = scroll(&mut b, &from, &to, 1);
+        // Halfway through the first frame's easing, the top row has lost its top pixels.
+        assert!(moving.contains(",y=14,w=96,h=2,"), "{moving:?}");
+    }
+
+    #[test]
+    fn scrolling_back_needs_nothing_new() {
+        let mut b = smooth(3);
+        let (from, to) = (pane(0), pane(2));
+        present_sized(&mut b, &from);
+        scroll(&mut b, &from, &to, 2);
+        present_sized(&mut b, &to);
+        let back = scroll(&mut b, &to, &from, -2);
+        assert_eq!(
+            count(&back, "a=t,"),
+            0,
+            "the tiles are in the terminal already"
+        );
+    }
+
+    #[test]
+    fn a_jump_past_the_region_or_a_tier_without_pixels_doesnt_animate() {
+        let mut b = smooth(3);
+        let (from, to) = (pane(0), pane(9));
+        present_sized(&mut b, &from);
+        assert_eq!(scroll(&mut b, &from, &to, 9), "");
+        let tmux =
+            PixelBackend::new(Sized, Placement::Placeholder, DEFAULT_QUOTA).with_smooth(Smooth {
+                frames: 3,
+                pause: Duration::ZERO,
+            });
+        assert_eq!(tmux.smooth, None);
     }
 
     fn page(top: usize) -> Grid {

@@ -242,6 +242,8 @@ pub struct App {
     branch: Option<String>,
     measure: Rc<dyn Measure>,
     agents: Agents,
+    /// What the wheel has moved since the last frame.
+    scrolled: Option<(Rect, i32)>,
     /// The server Claude Code connects to. Set by the terminal loop.
     pub ide: Option<IdeServer>,
     proposal: Option<Proposal>,
@@ -298,6 +300,7 @@ impl App {
             branch: None,
             measure: Rc::new(CellMeasure),
             agents: Agents::default(),
+            scrolled: None,
             ide: None,
             proposal: None,
             queued_diffs: VecDeque::new(),
@@ -944,6 +947,11 @@ impl App {
         self.pane_area(self.focus)
     }
 
+    /// The editor region the wheel just moved, and by how many rows.
+    pub fn take_scroll(&mut self) -> Option<(Rect, i32)> {
+        self.scrolled.take()
+    }
+
     pub fn handle(&mut self, event: Event) {
         // Ticks and pointer moves aren't the user moving on, so they leave messages up.
         let passive = matches!(
@@ -956,6 +964,17 @@ impl App {
         );
         if !passive {
             self.message.borrow_mut().clear();
+        }
+        let wheel = matches!(
+            event,
+            Event::Mouse(MouseEvent {
+                kind: MouseKind::ScrollUp | MouseKind::ScrollDown,
+                ..
+            })
+        );
+        // Anything else may change the page, and then the two frames don't line up.
+        if !passive && !wheel {
+            self.scrolled = None;
         }
         match event {
             Event::Key(key) => self.key(key),
@@ -2154,8 +2173,16 @@ impl App {
                     self.search.scroll_by(delta);
                 } else if in_sidebar {
                     self.explorer.scroll_by(delta);
-                } else if let Some(editor) = self.editor_mut() {
-                    editor.scroll_by(delta);
+                } else if self.pane_at(x, y).is_some() {
+                    let area = self.focused_area();
+                    if let Some(editor) = self.editor_mut() {
+                        let before = editor.top() as i32;
+                        editor.scroll_by(delta);
+                        let rows = editor.top() as i32 - before;
+                        let text = Rect::new(area.x, area.y, area.w.saturating_sub(1), area.h);
+                        let total = self.scrolled.map_or(0, |(_, r)| r) + rows;
+                        self.scrolled = Some((text, total));
+                    }
                 }
             }
             MouseKind::Left if in_sidebar && self.sidebar_view == SidebarView::Agents => {
@@ -4412,6 +4439,31 @@ mod tests {
         app.run(Command::Format(Format::Bullet));
         app.run(Command::Format(Format::Task));
         assert_eq!(app.active_text().as_deref(), Some("- [ ] one\n"));
+    }
+
+    #[test]
+    fn the_wheel_reports_what_it_moved() {
+        let (dir, mut app) = project();
+        let path = dir.path().join("long.txt");
+        fs::write(&path, "line\n".repeat(200)).unwrap();
+        app.open(&path).unwrap();
+        let (x, y) = (40, 10);
+        app.handle(mouse(MouseKind::ScrollDown, x, y));
+        app.handle(mouse(MouseKind::ScrollDown, x, y));
+        let (area, rows) = app.take_scroll().unwrap();
+        assert_eq!(rows, WHEEL_LINES as i32 * 2);
+        assert_eq!(area, {
+            let pane = app.focused_area();
+            Rect::new(pane.x, pane.y, pane.w - 1, pane.h)
+        });
+        assert_eq!(app.take_scroll(), None);
+        app.handle(mouse(MouseKind::ScrollDown, x, y));
+        typed(&mut app, "x");
+        assert_eq!(
+            app.take_scroll(),
+            None,
+            "an edit in between can't be animated"
+        );
     }
 
     #[test]

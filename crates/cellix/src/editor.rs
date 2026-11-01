@@ -326,6 +326,10 @@ impl Editor {
         start + self.line_text(line).chars().count()
     }
 
+    pub fn top(&self) -> usize {
+        self.top
+    }
+
     pub fn scroll_by(&mut self, delta: isize) {
         // A cached page is close enough to bound the scroll; draw corrects any slack.
         let rows = self.page.borrow().as_ref().map(|(_, _, rows)| rows.len());
