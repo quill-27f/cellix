@@ -98,5 +98,8 @@ system browser.
 
 Next: per-region tiles for smooth pixel scrolling, then a proportional Markdown page.
 
-Unverified: the paint layer in tmux and Zellij, and terminal-browser opening a real split.
-The tests use a stand-in command.
+Checked by screenshot on a static page in Ghostty, tmux and Zellij, where the paint layer
+looks the same in all three. The block-art icons on the cell tier are crude.
+
+Unverified: terminal-browser opening a real split (the tests use a stand-in command), a
+real SSH session, and paint-heavy rows under tmux, where each tile costs more to send.
