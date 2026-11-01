@@ -7,8 +7,8 @@ The name joins cell and pixel: it renders pixels in the terminal and falls back 
 cells.
 
 Status: early. Plan and diff review, everyday editing and Vim mode work and are tested.
-Definition, rename and completion work with rust-analyzer, but compiler errors don't show
-yet. See [docs/PROGRESS.md](docs/PROGRESS.md).
+Definition, rename, completion and compiler errors work with rust-analyzer, and no other
+language server has been tried. See [docs/PROGRESS.md](docs/PROGRESS.md).
 
 ## Try it
 

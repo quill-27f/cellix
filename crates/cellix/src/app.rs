@@ -476,6 +476,7 @@ impl App {
 
     fn tick(&mut self) {
         let mut note = None;
+        let mut reloaded = Vec::new();
         for editor in &mut self.editors {
             if !editor.buffer.changed_on_disk() {
                 continue;
@@ -488,13 +489,27 @@ impl App {
                 editor.buffer.acknowledge_disk();
             } else {
                 note = Some(match editor.buffer.reload(&mut editor.selections) {
-                    Ok(()) => format!("Reloaded {}", editor.title()),
+                    Ok(()) => {
+                        reloaded.extend(editor.buffer.path().map(Path::to_path_buf));
+                        format!("Reloaded {}", editor.title())
+                    }
                     Err(e) => format!("Could not reload {}: {e}", editor.title()),
                 });
             }
         }
         if let Some(note) = note {
             self.say(note);
+        }
+        // A file an agent wrote is a saved file: servers only run their full check on save.
+        if !reloaded.is_empty() {
+            self.poll();
+        }
+        for path in reloaded {
+            if let Some(client) =
+                Registry::language_name(&path).and_then(|language| self.servers.get(language))
+            {
+                client.saved(&path);
+            }
         }
         self.ticks += 1;
         if self.ticks.is_multiple_of(EXPLORER_REFRESH_TICKS) {
@@ -2504,10 +2519,9 @@ while True:
         app.run(Command::Undo);
     }
 
-    /// Needs rust-analyzer, and doesn't pass yet: `cargo check` output never arrives after
-    /// a save. See docs/PROGRESS.md.
+    /// Needs rust-analyzer. The error is already on disk when the server starts.
     #[test]
-    #[ignore = "known failure with a real language server"]
+    #[ignore = "needs a real language server"]
     fn real_rust_analyzer_reports_compiler_errors() {
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir(dir.path().join("src")).unwrap();
@@ -2528,6 +2542,99 @@ while True:
         app.run(Command::Move(cellix_input::Direction::Down, false));
         app.run(Command::Save);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+        while !screen(&app).text().contains("mismatched types") {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{}",
+                screen(&app).text()
+            );
+            app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+    }
+
+    /// Needs rust-analyzer. The main case: an agent rewrites a file that's open.
+    #[test]
+    #[ignore = "needs a real language server"]
+    fn real_rust_analyzer_reports_an_error_an_agent_wrote() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("src")).unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let path = root.join("src/main.rs");
+        fs::write(
+            &path,
+            "fn main() {\n    let x: i32 = 1;\n    println!(\"{x}\");\n}\n",
+        )
+        .unwrap();
+        let mut app = App::new(root, (100, 30));
+        app.open(&path).unwrap();
+        let settle = std::time::Instant::now();
+        while settle.elapsed() < std::time::Duration::from_secs(6) {
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        fs::write(
+            &path,
+            "fn main() {\n    let x: i32 = \"text\";\n    println!(\"{x}\");\n}\n",
+        )
+        .unwrap();
+        app.handle(Event::Tick);
+        app.run(Command::Move(cellix_input::Direction::Top, false));
+        app.run(Command::Move(cellix_input::Direction::Down, false));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(40);
+        while !screen(&app).text().contains("mismatched types") {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{}",
+                screen(&app).text()
+            );
+            app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
+            app.handle(Event::Tick);
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+    }
+
+    /// Needs rust-analyzer. An error typed into a clean file, as opposed to one already
+    /// on disk when the server started.
+    #[test]
+    #[ignore = "needs a real language server"]
+    fn real_rust_analyzer_reports_an_error_typed_after_opening() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("src")).unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let path = root.join("src/main.rs");
+        fs::write(
+            &path,
+            "fn main() {\n    let x: i32 = 1;\n    println!(\"{x}\");\n}\n",
+        )
+        .unwrap();
+        let mut app = App::new(root, (100, 30));
+        app.open(&path).unwrap();
+        // Long enough for the first check to finish, so this tests a later one.
+        let settle = std::time::Instant::now();
+        while settle.elapsed() < std::time::Duration::from_secs(6) {
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        app.run(Command::Move(cellix_input::Direction::Down, false));
+        app.run(Command::Move(cellix_input::Direction::LineEnd, false));
+        app.run(Command::Move(cellix_input::Direction::Left, false));
+        app.run(Command::DeleteBackward);
+        typed(&mut app, "\"text\"");
+        app.run(Command::Save);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
         while !screen(&app).text().contains("mismatched types") {
             assert!(
                 std::time::Instant::now() < deadline,

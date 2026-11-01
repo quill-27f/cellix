@@ -64,5 +64,11 @@ scrollbar. Tabs close with `×`. Markdown opens with source and live preview sid
 rust-analyzer now runs in the ignored tests: definition, rename and completion pass, and
 found real bugs the scripted server could not, including a rename applied twice.
 
-Open: `real_rust_analyzer_reports_compiler_errors` fails. `cargo check` errors never
-appear after a save, and the cause isn't known. Syntax errors are also untested.
+An earlier version of this entry said compiler errors never appear. That was wrong: they
+appear after a save. The real gap was narrower and worse: when an agent rewrote an open
+file, no save reached the server, so `cargo check` never ran. Reloads now count as saves.
+Run these with `harness/guard.sh -- cargo test -p cellix --lib real_rust_analyzer -- --ignored`.
+
+Unverified: live scrolling in a real terminal after the overlap fix, other language
+servers, and the look on the cell tier in terminals with weak Unicode fonts, where the
+activity bar icons may be small or missing.

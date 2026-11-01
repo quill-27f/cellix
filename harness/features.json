@@ -206,7 +206,7 @@
     "id": "markdown",
     "milestone": 4,
     "title": "Markdown preview",
-    "test": "markdown_preview_renders_headings",
+    "test": "markdown_opens_with_source_and_preview_side_by_side",
     "passes": true
   },
   {
@@ -296,8 +296,8 @@
   {
     "id": "lsp-compiler-errors",
     "milestone": 4,
-    "title": "Compiler errors from a real language server appear after save",
-    "test": "real_rust_analyzer_reports_compiler_errors",
-    "passes": false
+    "title": "Compiler errors appear after a save or an agent rewrite",
+    "test": "real_rust_analyzer_reports_an_error_an_agent_wrote",
+    "passes": true
   }
 ]
