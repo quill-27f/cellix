@@ -47,6 +47,53 @@ and review stacks changes in one column.
 The mouse works everywhere: click files, tabs and hunks, drag to select, and right-click
 the explorer to create, rename or delete.
 
+## Over SSH
+
+Everything runs on the server, and your local terminal only draws the result. This setup
+hasn't been tried on a real SSH link yet. On the server, you need Rust, git and tmux, plus
+Claude Code if you want the agent features:
+
+```sh
+git clone https://github.com/quill-27f/cellix.git
+cd cellix
+cargo install --path crates/cellix
+
+# Lets pixels through tmux, and stops Claude Code warning about focus events
+cat >> ~/.tmux.conf <<'CONF'
+set -g allow-passthrough on
+set -g focus-events on
+CONF
+tmux source-file ~/.tmux.conf 2>/dev/null   # only needed if tmux is already running
+
+# Language server for Rust projects, optional
+rustup component add rust-analyzer
+```
+
+Then, from your own machine:
+
+```sh
+ssh you@your-server
+tmux new -A -s work   # starts the session, or rejoins it after a dropped connection
+cd your-project
+cellix
+```
+
+Inside Cellix, press Ctrl+Shift+P or F1 and choose `Open Claude Code`. It opens in a tmux
+split, already connected to Cellix.
+
+If pixels look wrong or scrolling is heavy, these commands help:
+
+```sh
+tmux show -g allow-passthrough   # should say on
+CELLIX_TIER=cells cellix         # text cells only, for one run
+```
+
+To turn off smooth scrolling on a slow link, add this to `~/.config/cellix/settings.json`:
+
+```json
+{ "smooth_scroll": false }
+```
+
 ## The web
 
 `Open in Browser` in the palette, or Ctrl+click on a link, opens the link at the cursor or
@@ -96,7 +143,8 @@ background. `tier` is `direct`, `placeholder` or `cells`. `smooth_scroll: false`
 wheel jump by lines, for a slow link. `language_servers` maps a language to a command, and
 `browser` replaces the command that opens web pages.
 
-tmux needs `set -g allow-passthrough on` for pixels. Without it, Cellix uses text cells.
+tmux needs `set -g allow-passthrough on` for pixels, as shown under [Over SSH](#over-ssh).
+Without it, Cellix uses text cells.
 
 See [docs/DESIGN.md](docs/DESIGN.md) for the design and [AGENTS.md](AGENTS.md) for how to
 work on it.
