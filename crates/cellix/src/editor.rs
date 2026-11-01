@@ -31,8 +31,9 @@ const MIN_MINIMAP_PANE: u16 = 90;
 /// because a full reparse on each key starts to show.
 const MAX_INLINE_HIGHLIGHT: usize = 32 * 1024;
 const PAGE_MARGIN: u16 = 2;
-/// How wide a page can be set. Prose is narrower: see `rendered`.
-const MAX_PAGE_WIDTH: u16 = 88;
+const WIDE_PAGE_MARGIN: u16 = 4;
+/// How wide a page can be set.
+const MAX_PAGE_WIDTH: u16 = 512;
 
 /// Per-line marks for the gutter, as 1-based lines.
 #[derive(Default)]
@@ -45,8 +46,14 @@ pub struct Marks {
 type Page = (u64, usize, Rc<Vec<Row>>);
 
 /// One open document and where the view is within it.
-/// Bars per row, with the revision and height they fit.
-type MinimapRows = (u64, u16, Vec<Vec<Strip>>);
+/// A colour pulled towards the background, as text is at a minimap's size.
+fn dimmed(color: Rgb, bg: Rgb) -> Rgb {
+    let mix = |a: u8, b: u8| ((a as u16 * 3 + b as u16 * 2) / 5) as u8;
+    Rgb(mix(color.0, bg.0), mix(color.1, bg.1), mix(color.2, bg.2))
+}
+
+/// Bars per row, with the revision, height and width they fit.
+type MinimapRows = ((u64, u16, u16), Vec<Vec<Strip>>);
 
 pub struct Editor {
     pub buffer: Buffer,
@@ -62,6 +69,8 @@ pub struct Editor {
     pub top: usize,
     pub left: usize,
     spans: RefCell<Option<(u64, Vec<Span>)>>,
+    /// How many rows the pane showed last, which is what bounds scrolling.
+    view_rows: Cell<u16>,
     /// Started for the first large file, and only then.
     worker: OnceCell<Worker>,
     /// The revision the worker was last asked about.
@@ -100,6 +109,7 @@ impl Editor {
             top: 0,
             left: 0,
             spans: RefCell::new(None),
+            view_rows: Cell::new(0),
             worker: OnceCell::new(),
             asked: Cell::new(u64::MAX),
             spans_bytes: Cell::new(0),
@@ -172,11 +182,57 @@ impl Editor {
         }
     }
 
+    /// The words of a line of code, as (column, length, colour).
+    fn code_words(&self, line: usize, spans: &[Span], theme: &Theme) -> Vec<(usize, usize, Rgb)> {
+        let start = self.buffer.rope().line_to_byte(line);
+        let text = self.line_text(line);
+        let mut words = Vec::new();
+        let (mut column, mut byte) = (0, 0);
+        for word in text.split_inclusive(char::is_whitespace) {
+            let size = word.trim_end().chars().count();
+            if size > 0 {
+                let at = start + byte;
+                let found = spans.partition_point(|s| s.end <= at);
+                let span = spans.get(found).filter(|s| s.start <= at);
+                let color = span.map_or(theme.text.fg, |s| theme.token(s.token));
+                words.push((column, size, color));
+            }
+            column += word.chars().count();
+            byte += word.len();
+        }
+        words
+    }
+
+    /// The words of a page row, in the same shape.
+    fn page_words(row: &Row, theme: &Theme) -> Vec<(usize, usize, Rgb)> {
+        let color = |tone| match tone {
+            Tone::Heading => theme.heading,
+            Tone::Code | Tone::Block(_) => theme.string,
+            Tone::Link | Tone::Check(_) => theme.accent,
+            _ => theme.text.fg,
+        };
+        let mut words = Vec::new();
+        let mut run: Option<(usize, usize, Rgb)> = None;
+        for g in &row.glyphs {
+            if g.ch.is_whitespace() {
+                words.extend(run.take());
+            } else {
+                let column = g.x as usize;
+                let word = run.get_or_insert((column, 0, color(g.tone)));
+                word.1 = (column + 1).saturating_sub(word.0);
+            }
+        }
+        words.extend(run);
+        words
+    }
+
     /// Bars for each row of a minimap `rows` tall, in the colours of the code. The whole
     /// file always fits, so the map's fill shows how long the file is.
-    fn minimap_rows(&self, rows: u16, theme: &Theme) -> Vec<Vec<Strip>> {
-        let rope = self.buffer.rope();
-        let lines = rope.len_lines();
+    fn minimap_rows(&self, rows: u16, text: Rect, theme: &Theme) -> Vec<Vec<Strip>> {
+        let page = self.rendered.then(|| self.page(text));
+        let lines = page
+            .as_ref()
+            .map_or_else(|| self.buffer.rope().len_lines(), |p| p.len());
         let capacity = rows as usize * MINIMAP_LINES_PER_ROW;
         let shown = lines.min(capacity);
         let mut out = vec![Vec::new(); rows as usize];
@@ -185,25 +241,19 @@ impl Editor {
         let spans = spans.as_ref().map_or(&no_spans, |(_, spans)| spans);
         for slot in 0..shown {
             let line = slot * lines / shown.max(1);
-            let start = rope.line_to_byte(line);
+            let words = match &page {
+                Some(page) => Self::page_words(&page[line], theme),
+                None => self.code_words(line, spans, theme),
+            };
             let row = slot / MINIMAP_LINES_PER_ROW;
             let y = ((slot % MINIMAP_LINES_PER_ROW) * 256 / MINIMAP_LINES_PER_ROW) as u8;
-            let text = self.line_text(line);
-            let mut column = 0;
-            for word in text.split_inclusive(char::is_whitespace) {
-                let size = word.trim_end().chars().count();
-                if size > 0 && column < MINIMAP_COLUMNS {
-                    let byte = start + (column.min(text.len()));
-                    let at = spans.partition_point(|s| s.end <= byte);
-                    let color = spans
-                        .get(at)
-                        .filter(|s| s.start <= byte)
-                        .map_or(theme.gutter.fg, |s| theme.token(s.token));
+            for (column, size, color) in words {
+                if column < MINIMAP_COLUMNS {
                     let x = (column * 256 / MINIMAP_COLUMNS) as u8;
                     let w = (size.min(MINIMAP_COLUMNS - column) * 256 / MINIMAP_COLUMNS) as u8;
+                    let color = dimmed(color, theme.text.bg);
                     out[row].push(Strip { x, y, w, color });
                 }
-                column += word.chars().count();
             }
         }
         out
@@ -220,24 +270,29 @@ impl Editor {
         }
         .max(1);
         let revision = self.buffer.revision();
+        let built = (revision, track.h, text.w);
         let stale = !self
             .minimap
             .borrow()
             .as_ref()
-            .is_some_and(|(r, h, _)| *r == revision && *h == track.h);
+            .is_some_and(|(key, _)| *key == built);
         if stale {
-            let rows = self.minimap_rows(track.h, theme);
-            *self.minimap.borrow_mut() = Some((revision, track.h, rows));
+            let rows = self.minimap_rows(track.h, text, theme);
+            *self.minimap.borrow_mut() = Some((built, rows));
         }
         let height = track.h as f32;
         let filled = (total as f32 / MINIMAP_LINES_PER_ROW as f32).min(height);
-        let top = track.y as f32 + self.top as f32 * filled / total as f32;
-        let span = (text.h as f32 * filled / total as f32).clamp(0.5, height);
+        let span = (text.h as f32 * filled / total as f32).clamp(1.0, height);
+        // Past the fold the marker's top stops short, so the end of the file meets the end
+        // of the map rather than sliding off it.
+        let range = total.saturating_sub(text.h as usize).max(1) as f32;
+        let travel = (filled - span).max(0.0);
+        let top = track.y as f32 + (self.top as f32 / range).min(1.0) * travel;
         let margin = 0.6;
         let width = track.w as f32 - margin * 1.5;
-        let view = Bounds::cells(track.x as f32 + margin - 0.2, top, width + 0.4, span);
-        grid.panel(view, 10, Some(theme.minimap_view), None);
-        if let Some((_, _, rows)) = self.minimap.borrow().as_ref() {
+        let view = Bounds::cells(track.x as f32 + margin - 0.3, top, width + 0.6, span);
+        grid.panel(view, 12, Some(theme.minimap_view), Some(theme.popup_border));
+        if let Some((_, rows)) = self.minimap.borrow().as_ref() {
             for (row, strips) in rows.iter().enumerate().filter(|(_, s)| !s.is_empty()) {
                 let bounds = Bounds::cells(
                     track.x as f32 + margin,
@@ -261,12 +316,8 @@ impl Editor {
                 LineChange::Modified => theme.git_modified,
                 LineChange::DeletedAbove => theme.error,
             };
-            let mark = Bounds::cells(
-                track.right() as f32 - 0.45,
-                y,
-                0.3,
-                (filled / fill_lines).max(0.1),
-            );
+            let height = (filled / fill_lines).max(0.1);
+            let mark = Bounds::cells(track.right() as f32 - 0.45, y, 0.3, height);
             grid.panel(mark, 0, Some(color), None);
         }
     }
@@ -280,14 +331,18 @@ impl Editor {
         }
     }
 
-    /// Pages sit in the middle of a wide pane, as a document does.
+    /// Pages use the whole pane, with room in the margin for marks.
     fn page_margin(area: Rect) -> u16 {
-        (area.w.saturating_sub(MAX_PAGE_WIDTH) / 2).max(PAGE_MARGIN)
+        if area.w < NARROW_PANE {
+            PAGE_MARGIN
+        } else {
+            WIDE_PAGE_MARGIN
+        }
     }
 
     fn page_width(area: Rect) -> usize {
         area.w
-            .saturating_sub(PAGE_MARGIN + 1)
+            .saturating_sub(Self::page_margin(area) * 2)
             .clamp(1, MAX_PAGE_WIDTH) as usize
     }
 
@@ -460,7 +515,10 @@ impl Editor {
         };
         let row = y.saturating_sub(area.y) as usize;
         let filled = self.map_filled(area, lines);
-        self.top = (row * lines / filled).min(lines.saturating_sub(1));
+        // The point clicked comes to the middle of the view.
+        let middle = (row * lines / filled).saturating_sub(area.h as usize / 2);
+        self.view_rows.set(area.h);
+        self.top = middle.min(self.last_top());
     }
 
     /// Narrow panes keep only the digits they need: every column counts there.
@@ -527,14 +585,30 @@ impl Editor {
         self.top
     }
 
-    pub fn scroll_by(&mut self, delta: isize) {
+    /// The lines or page rows there are to scroll through.
+    fn scroll_length(&self) -> usize {
         // A cached page is close enough to bound the scroll; draw corrects any slack.
         let rows = self.page.borrow().as_ref().map(|(_, _, rows)| rows.len());
-        let lines = rows
-            .filter(|_| self.rendered)
-            .unwrap_or_else(|| self.buffer.rope().len_lines());
-        let last = lines.saturating_sub(1) as isize;
+        rows.filter(|_| self.rendered)
+            .unwrap_or_else(|| self.buffer.rope().len_lines())
+    }
+
+    /// The furthest down the view goes: the end of the file at the bottom of the pane.
+    fn last_top(&self) -> usize {
+        self.scroll_length()
+            .saturating_sub(self.view_rows.get().max(1) as usize)
+    }
+
+    pub fn scroll_by(&mut self, delta: isize) {
+        let last = self.last_top() as isize;
         self.top = (self.top as isize + delta).clamp(0, last) as usize;
+    }
+
+    /// What moves when the wheel does: the text, without the minimap beside it or the left
+    /// column, where the sheet's rounded corners are.
+    pub fn scroll_region(&self, area: Rect) -> Rect {
+        let text = self.text_area(area);
+        Rect::new(text.x + 1, text.y, text.w.saturating_sub(1), text.h)
     }
 
     /// Scrolls just enough to show the primary cursor.
@@ -927,6 +1001,8 @@ impl Editor {
         if revision == self.buffer.revision() {
             self.spans_bytes.set(self.buffer.rope().len_bytes());
             *self.spans.borrow_mut() = Some((revision, spans));
+            // Its bars were drawn without colours.
+            *self.minimap.borrow_mut() = None;
             true
         } else {
             false
@@ -1053,6 +1129,7 @@ impl Editor {
     ) {
         let full = area;
         let area = self.text_area(full);
+        self.view_rows.set(area.h);
         if self.rendered {
             self.draw_page(grid, area, theme, focused, marks);
             if self.shows_minimap(full) {

@@ -85,6 +85,8 @@ const COMPACT_WIDTH: u16 = 70;
 /// Columns for the menu button at the start of the tab bar, in the compact layout.
 const MENU_BUTTON: u16 = 3;
 const WHEEL_LINES: isize = 3;
+/// Wheel events closer together than this are a trackpad's stream.
+const WHEEL_STREAM_GAP: std::time::Duration = std::time::Duration::from_millis(60);
 const MENU_ITEMS: [&str; 4] = ["New File", "New Folder", "Rename", "Delete"];
 const MENU_WIDTH: u16 = 16;
 /// Ticks between explorer refreshes, so files an agent creates appear on their own.
@@ -268,6 +270,7 @@ pub struct App {
     neovim_mode: String,
     /// The `:` line being typed.
     neovim_line: String,
+    last_wheel: Option<std::time::Instant>,
     /// Lines a wheel notch moves. Set by the terminal loop for the tier in use.
     pub wheel_lines: isize,
     suggest: Option<Suggest>,
@@ -348,6 +351,7 @@ impl App {
             suggest: None,
             server_words: Vec::new(),
             suggest_asked: false,
+            last_wheel: None,
             wheel_lines: WHEEL_LINES,
             scrolled: None,
             ide: None,
@@ -2636,10 +2640,17 @@ impl App {
                 }
             }
             MouseKind::ScrollUp | MouseKind::ScrollDown => {
+                // A trackpad sends a stream of events, one per line of travel, and a wheel
+                // sends a notch at a time. Treating them alike makes a trackpad lurch.
+                let streaming = self
+                    .last_wheel
+                    .is_some_and(|at| at.elapsed() < WHEEL_STREAM_GAP);
+                self.last_wheel = Some(std::time::Instant::now());
+                let step = if streaming { 1 } else { self.wheel_lines };
                 let delta = if mouse.kind == MouseKind::ScrollUp {
-                    -self.wheel_lines
+                    -step
                 } else {
-                    self.wheel_lines
+                    step
                 };
                 if in_sidebar && self.sidebar_view == SidebarView::Search {
                     self.search.scroll_by(delta);
@@ -2651,7 +2662,7 @@ impl App {
                         let before = editor.top() as i32;
                         editor.scroll_by(delta);
                         let rows = editor.top() as i32 - before;
-                        let text = Rect::new(area.x, area.y, area.w.saturating_sub(1), area.h);
+                        let text = editor.scroll_region(area);
                         let total = self.scrolled.map_or(0, |(_, r)| r) + rows;
                         self.scrolled = Some((text, total));
                     }
@@ -4309,7 +4320,7 @@ mod tests {
         let grid = screen(&app);
         assert_eq!(grid.text().matches("Title").count(), 1);
         let (x, _) = find(&grid, "Title");
-        assert_eq!(x, app.focused_area().x + 2);
+        assert_eq!(x, app.focused_area().x + 4);
     }
 
     #[test]
@@ -4367,6 +4378,127 @@ mod tests {
         assert_eq!(app.active_text().unwrap(), "Title\n");
         app.run(Command::Undo);
         assert_eq!(app.active_text().unwrap(), "## Title\n");
+    }
+
+    #[test]
+    fn spaces_type_on_a_page() {
+        let (_dir, mut app) = page("one\n");
+        app.run(Command::Move(cellix_input::Direction::LineEnd, false));
+        typed(&mut app, " two three");
+        assert_eq!(app.active_text().unwrap(), "one two three\n");
+    }
+
+    fn pixel_page(text: &str) -> (TempDir, App) {
+        let (dir, mut app) = page(text);
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(16, 36)));
+        screen(&app);
+        (dir, app)
+    }
+
+    #[test]
+    fn spaces_type_on_a_page_of_real_fonts() {
+        let (_dir, mut app) = pixel_page("one\n");
+        app.run(Command::Move(cellix_input::Direction::LineEnd, false));
+        typed(&mut app, " two  three");
+        assert_eq!(app.active_text().unwrap(), "one two  three\n");
+    }
+
+    #[test]
+    fn spaces_type_where_a_line_wraps() {
+        let long = "word ".repeat(50);
+        let (_dir, mut app) = pixel_page(&format!("{}\n", long.trim_end()));
+        app.run(Command::Move(cellix_input::Direction::Top, false));
+        app.run(Command::Move(cellix_input::Direction::LineEnd, false));
+        app.run(Command::Move(cellix_input::Direction::Bottom, false));
+        app.run(Command::Move(cellix_input::Direction::Left, false));
+        typed(&mut app, " end of it");
+        assert!(
+            app.active_text().unwrap().contains("word end of it"),
+            "{:?}",
+            app.active_text()
+        );
+        // In the middle of the line too, at a wrapped row's edge.
+        for _ in 0..40 {
+            app.run(Command::Move(cellix_input::Direction::WordLeft, false));
+            typed(&mut app, " ");
+            app.run(Command::Move(cellix_input::Direction::Left, false));
+        }
+        let text = app.active_text().unwrap();
+        assert!(text.matches(' ').count() > 50, "{text}");
+    }
+
+    #[test]
+    fn a_space_at_the_end_of_a_wrapped_row_moves_the_caret() {
+        let width = 60;
+        let (_dir, mut app) = pixel_page("x\n");
+        for i in 0..width {
+            typed(&mut app, if i % 7 == 6 { " " } else { "a" });
+        }
+        let text = app.active_text().unwrap();
+        assert_eq!(
+            text.chars().filter(|c| *c == ' ').count(),
+            width / 7,
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn two_spaces_stay_two_on_a_page() {
+        let (_dir, mut app) = page("one\n");
+        app.run(Command::Move(cellix_input::Direction::LineEnd, false));
+        typed(&mut app, "  x");
+        assert_eq!(app.active_text().unwrap(), "one  x\n");
+    }
+
+    #[test]
+    fn spaces_type_in_a_heading_and_a_list() {
+        let (_dir, mut app) = page("# One\n\n- item\n");
+        app.run(Command::Move(cellix_input::Direction::LineEnd, false));
+        typed(&mut app, " more");
+        assert!(app.active_text().unwrap().starts_with("# One more\n"));
+        app.run(Command::Move(cellix_input::Direction::Bottom, false));
+        app.run(Command::Move(cellix_input::Direction::Up, false));
+        app.run(Command::Move(cellix_input::Direction::LineEnd, false));
+        typed(&mut app, " two");
+        assert!(app.active_text().unwrap().contains("- item two"));
+    }
+
+    #[test]
+    fn the_wheel_moves_only_the_text() {
+        let (dir, mut app) = project();
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(10, 20)));
+        app.handle(Event::Resize(140, 30));
+        let path = dir.path().join("long.rs");
+        fs::write(&path, "fn name() {}\n".repeat(300)).unwrap();
+        app.open(&path).unwrap();
+        app.handle(mouse(MouseKind::ScrollDown, 100, 10));
+        let (area, _) = app.take_scroll().unwrap();
+        let pane = app.focused_area();
+        assert!(
+            area.right() < pane.right().saturating_sub(10),
+            "not the minimap: {area:?}"
+        );
+        assert!(area.x > pane.x, "not the sheet's rounded corner: {area:?}");
+    }
+
+    #[test]
+    fn scrolling_stops_at_the_end_of_the_file() {
+        let (dir, mut app) = project();
+        let path = dir.path().join("short.rs");
+        fs::write(&path, "x\n".repeat(40)).unwrap();
+        app.open(&path).unwrap();
+        screen(&app);
+        for _ in 0..200 {
+            app.handle(mouse(MouseKind::ScrollDown, 60, 10));
+        }
+        assert!(
+            screen(&app).text().contains("41"),
+            "the last line stays in view"
+        );
+        assert!(
+            screen(&app).text().contains(" 20 "),
+            "with a full page above it"
+        );
     }
 
     #[test]
@@ -4953,12 +5085,12 @@ mod tests {
         let (x, y) = (40, 10);
         app.handle(mouse(MouseKind::ScrollDown, x, y));
         app.handle(mouse(MouseKind::ScrollDown, x, y));
-        let (area, rows) = app.take_scroll().unwrap();
-        assert_eq!(rows, WHEEL_LINES as i32 * 2);
-        assert_eq!(area, {
-            let pane = app.focused_area();
-            Rect::new(pane.x, pane.y, pane.w - 1, pane.h)
-        });
+        let (_, rows) = app.take_scroll().unwrap();
+        assert_eq!(
+            rows,
+            WHEEL_LINES as i32 + 1,
+            "a notch, then a stream's single line"
+        );
         assert_eq!(app.take_scroll(), None);
         app.handle(mouse(MouseKind::ScrollDown, x, y));
         typed(&mut app, "x");
@@ -5142,6 +5274,95 @@ mod tests {
         // Beside an agent, the code keeps the room.
         app.handle(Event::Resize(66, 30));
         assert_eq!(maps(&app), 0);
+    }
+
+    fn minimap_marker(app: &App) -> cellix_render::Bounds {
+        let grid = screen(app);
+        let code = Rect::new(grid.width() - 16, 0, 16, grid.height());
+        let marker = grid.paint.iter().find_map(|p| match p {
+            Paint::Panel {
+                bounds,
+                fill: Some(fill),
+                ..
+            } if *fill == app.theme.minimap_view
+                && bounds.x >= code.x as i32 * cellix_render::UNIT =>
+            {
+                Some(*bounds)
+            }
+            _ => None,
+        });
+        marker.expect("a marker for the view")
+    }
+
+    fn long_file(app: &mut App, dir: &TempDir, name: &str, text: &str) {
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(10, 20)));
+        app.handle(Event::Resize(140, 30));
+        let path = dir.path().join(name);
+        fs::write(&path, text.repeat(600)).unwrap();
+        app.open(&path).unwrap();
+        screen(app);
+    }
+
+    #[test]
+    fn the_minimap_marker_follows_the_view_to_the_end() {
+        for (name, text) in [
+            ("long.rs", "fn name() {}\n"),
+            ("long.md", "A line of prose.\n\n"),
+        ] {
+            let (dir, mut app) = project();
+            long_file(&mut app, &dir, name, text);
+            let start = minimap_marker(&app);
+            assert_eq!(
+                start.y,
+                app.focused_area().y as i32 * cellix_render::UNIT,
+                "{name}"
+            );
+            for _ in 0..2000 {
+                app.handle(mouse(MouseKind::ScrollDown, 80, 10));
+            }
+            let end = minimap_marker(&app);
+            let pane = app.focused_area();
+            let bottom = pane.bottom() as i32 * cellix_render::UNIT;
+            assert!(
+                end.y > start.y + 10 * cellix_render::UNIT,
+                "{name}: it moved"
+            );
+            assert!(
+                (bottom - (end.y + end.h)).abs() < cellix_render::UNIT,
+                "{name}: {end:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn clicking_the_minimap_brings_that_part_of_the_file_to_the_middle() {
+        let (dir, mut app) = project();
+        long_file(&mut app, &dir, "long.rs", "fn name() {}\n");
+        let pane = app.focused_area();
+        let (x, y) = (pane.right() - 5, pane.y + pane.h / 2);
+        app.handle(mouse(MouseKind::Left, x, y));
+        let marker = minimap_marker(&app);
+        let middle = marker.y + marker.h / 2;
+        let expected = y as i32 * cellix_render::UNIT;
+        assert!(
+            (middle - expected).abs() < 2 * cellix_render::UNIT,
+            "{marker:?} near row {y}"
+        );
+    }
+
+    #[test]
+    fn a_page_uses_the_whole_width() {
+        let (dir, mut app) = project();
+        app.handle(Event::Resize(140, 30));
+        let path = dir.path().join("wide.md");
+        fs::write(&path, "word ".repeat(100)).unwrap();
+        app.open(&path).unwrap();
+        let pane = app.focused_area();
+        let grid = screen(&app);
+        let (x, y) = find(&grid, "word");
+        assert!(x <= pane.x + 4, "it starts at the left: {x}");
+        let end = grid.row_text(y).trim_end().chars().count() as u16;
+        assert!(end > pane.right() - 10, "it runs across the pane: {end}");
     }
 
     #[test]

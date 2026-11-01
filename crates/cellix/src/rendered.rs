@@ -523,8 +523,6 @@ fn fence_extension(language: &str) -> &str {
 
 /// Space inside a code block, in cells.
 const CODE_PADDING: f32 = 1.2;
-/// How wide running text gets, in cells, so lines stay comfortable in a wide window.
-const READABLE_WIDTH: f32 = 62.0;
 
 struct Context<'a> {
     measure: &'a dyn Measure,
@@ -593,11 +591,7 @@ fn spacer(line: usize, end: usize) -> Row {
 pub fn layout(text: &str, width: usize, measure: &dyn Measure, registry: &Registry) -> Vec<Row> {
     let context = Context { measure, registry };
     let proportional = !measure.in_cells();
-    let width = if proportional {
-        (width as f32).min(READABLE_WIDTH)
-    } else {
-        width as f32
-    };
+    let width = width as f32;
     let mut lines: Vec<(usize, &str)> = Vec::new();
     let mut offset = 0;
     for line in text.split('\n') {
@@ -1083,14 +1077,14 @@ body",
     }
 
     #[test]
-    fn running_text_keeps_a_readable_width() {
+    fn running_text_uses_the_width_it_is_given() {
         let m = FontMeasure::new(17, 37);
-        let rows = layout(&"word ".repeat(60), 200, &m, &Registry::default());
+        let rows = layout(&"word ".repeat(60), 150, &m, &Registry::default());
         let widest = rows
             .iter()
             .flat_map(|r| r.glyphs.iter().map(|g| g.x + g.advance))
             .fold(0.0, f32::max);
-        assert!(widest <= READABLE_WIDTH + 0.5, "{widest}");
+        assert!(widest > 120.0 && widest <= 150.5, "{widest}");
     }
 
     #[test]

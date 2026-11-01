@@ -75,6 +75,7 @@ fn key_of(name: &str) -> Option<Key> {
         "home" => Key::Home,
         "end" => Key::End,
         "escape" => Key::Esc,
+        "space" => Key::Char(' '),
         one => {
             let mut chars = one.chars();
             let c = chars.next()?;
@@ -332,6 +333,18 @@ mod tests {
         assert_eq!(translate(input), [Event::Key(KeyEvent::ctrl('s'))]);
         let input: Input = serde_json::from_str(r#"{"type":"key","key":"return"}"#).unwrap();
         assert_eq!(translate(input), [Event::Key(KeyEvent::plain(Key::Enter))]);
+    }
+
+    #[test]
+    fn the_space_bar_crosses_from_the_mod() {
+        for name in ["space", " "] {
+            let text = format!(r#"{{"type":"key","key":"{name}"}}"#);
+            let input: Input = serde_json::from_str(&text).unwrap();
+            assert_eq!(
+                translate(input),
+                [Event::Key(KeyEvent::plain(Key::Char(' ')))]
+            );
+        }
     }
 
     #[test]

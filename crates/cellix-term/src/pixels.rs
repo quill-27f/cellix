@@ -64,10 +64,6 @@ pub struct PixelBackend<R> {
     scrolling: bool,
 }
 
-fn ease_out(t: f32) -> f32 {
-    1.0 - (1.0 - t).powi(3)
-}
-
 /// What a row looks like, as a key: rows with the same key draw the same pixels.
 pub fn row_key(grid: &Grid, y: u16) -> u64 {
     let mut hasher = DefaultHasher::new();
@@ -342,8 +338,9 @@ impl<R: Rasterizer> Backend for PixelBackend<R> {
         let mut placed = HashSet::new();
         self.scrolling = true;
         for frame in 1..=smooth.frames {
-            let eased = ease_out(frame as f32 / smooth.frames as f32);
-            let moved_by = (travel as f32 * eased).round() as i32;
+            // At a steady pace, so one notch running into the next doesn't pulse.
+            let progress = frame as f32 / smooth.frames as f32;
+            let moved_by = (travel as f32 * progress).round() as i32;
             let offset = if rows > 0 {
                 moved_by
             } else {
@@ -498,8 +495,8 @@ mod tests {
         let (from, to) = (pane(0), pane(1));
         present_sized(&mut b, &from);
         let moving = scroll(&mut b, &from, &to, 1);
-        // Halfway through the first frame's easing, the top row has lost its top pixels.
-        assert!(moving.contains(",y=14,w=96,h=2,"), "{moving:?}");
+        // Halfway through, the top row has lost its top half.
+        assert!(moving.contains(",y=8,w=96,h=8,"), "{moving:?}");
     }
 
     #[test]

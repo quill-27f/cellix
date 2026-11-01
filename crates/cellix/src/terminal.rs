@@ -23,10 +23,11 @@ use crossterm::terminal::{
 
 use crate::App;
 
-/// Steps in a wheel notch's animation, which together take about 70ms.
-const SCROLL_FRAMES: u32 = 6;
-const REMOTE_SCROLL_FRAMES: u32 = 3;
-const SCROLL_PAUSE: Duration = Duration::from_millis(12);
+/// Steps in a wheel notch's animation. It stays short, because a trackpad's stream sends
+/// the next notch as this one ends, and a long ease would pulse.
+const SCROLL_FRAMES: u32 = 4;
+const REMOTE_SCROLL_FRAMES: u32 = 2;
+const SCROLL_PAUSE: Duration = Duration::from_millis(7);
 /// How long to wait for input before checking on language servers.
 const POLL: Duration = Duration::from_millis(50);
 /// Polls between ticks, so background file checks run about twice a second.
