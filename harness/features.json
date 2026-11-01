@@ -264,5 +264,40 @@
     "title": "Debugging over DAP",
     "test": "dap_stops_at_breakpoint",
     "passes": false
+  },
+  {
+    "id": "scroll-overlap",
+    "milestone": 1,
+    "title": "Scrolling replaces tiles instead of stacking them",
+    "test": "scroll_leaves_exactly_one_tile_on_each_row",
+    "passes": true
+  },
+  {
+    "id": "tab-close",
+    "milestone": 2,
+    "title": "Tabs close with a mouse click on ×",
+    "test": "clicking_x_closes_a_tab",
+    "passes": true
+  },
+  {
+    "id": "markdown-split",
+    "milestone": 2,
+    "title": "Markdown opens with source and live preview side by side",
+    "test": "markdown_opens_with_source_and_preview_side_by_side",
+    "passes": true
+  },
+  {
+    "id": "vscode-look",
+    "milestone": 2,
+    "title": "VS Code layout: activity bar, breadcrumbs, status bar",
+    "test": "status_bar_shows_branch_and_language",
+    "passes": true
+  },
+  {
+    "id": "lsp-compiler-errors",
+    "milestone": 4,
+    "title": "Compiler errors from a real language server appear after save",
+    "test": "real_rust_analyzer_reports_compiler_errors",
+    "passes": false
   }
 ]

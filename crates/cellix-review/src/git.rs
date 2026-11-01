@@ -60,6 +60,12 @@ pub fn changed_files(root: &Path) -> Vec<Change> {
     changes
 }
 
+/// The checked-out branch, or None outside a repository or on a detached HEAD.
+pub fn current_branch(root: &Path) -> Option<String> {
+    let name = git(root, &["symbolic-ref", "--short", "-q", "HEAD"])?;
+    Some(name.trim().to_string())
+}
+
 /// The file as committed, or empty if it's new.
 pub fn head_text(root: &Path, path: &Path) -> String {
     let spec = format!("HEAD:./{}", path.display());

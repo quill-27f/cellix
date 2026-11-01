@@ -21,6 +21,19 @@ pub struct Theme {
     pub number: Rgb,
     pub added: Rgb,
     pub removed: Rgb,
+    pub activity: Style,
+    pub activity_active: Rgb,
+    pub status: Style,
+    pub breadcrumb: Style,
+    /// Background of the line holding the cursor.
+    pub line: Rgb,
+    pub number_active: Rgb,
+    pub guide: Rgb,
+    pub scrollbar: Rgb,
+    pub error: Rgb,
+    pub heading: Rgb,
+    pub git_modified: Rgb,
+    pub git_added: Rgb,
 }
 
 fn style(fg: Rgb, bg: Rgb) -> Style {
@@ -31,6 +44,7 @@ fn style(fg: Rgb, bg: Rgb) -> Style {
     }
 }
 
+/// VS Code's Dark+ and Light+ colours, since that's the look people already know.
 impl Theme {
     /// A built-in theme by name. Unknown names get the default.
     pub fn named(name: Option<&str>) -> Self {
@@ -41,28 +55,39 @@ impl Theme {
     }
 
     fn light() -> Self {
-        let text = Rgb(36, 41, 47);
+        let text = Rgb(0, 0, 0);
         let bg = Rgb(255, 255, 255);
-        let panel = Rgb(243, 244, 246);
-        let dim = Rgb(100, 106, 115);
+        let panel = Rgb(243, 243, 243);
         Self {
             text: style(text, bg),
-            sidebar: style(Rgb(60, 66, 74), panel),
-            bar: style(Rgb(60, 66, 74), Rgb(228, 231, 235)),
-            tab: style(dim, panel),
-            tab_active: style(text, bg),
-            gutter: style(Rgb(150, 156, 165), bg),
-            selection: Rgb(200, 220, 250),
-            row_hover: Rgb(226, 232, 240),
-            accent: Rgb(9, 105, 218),
-            keyword: Rgb(130, 40, 170),
-            string: Rgb(10, 110, 60),
-            comment: Rgb(106, 115, 125),
-            function: Rgb(9, 90, 190),
-            kind: Rgb(140, 90, 0),
-            number: Rgb(190, 60, 20),
+            sidebar: style(Rgb(97, 97, 97), panel),
+            bar: style(Rgb(97, 97, 97), Rgb(240, 240, 240)),
+            tab: style(Rgb(110, 110, 110), Rgb(236, 236, 236)),
+            tab_active: style(Rgb(51, 51, 51), bg),
+            gutter: style(Rgb(35, 120, 145), bg),
+            selection: Rgb(173, 214, 255),
+            row_hover: Rgb(228, 230, 241),
+            accent: Rgb(0, 95, 184),
+            keyword: Rgb(0, 0, 255),
+            string: Rgb(163, 21, 21),
+            comment: Rgb(0, 128, 0),
+            function: Rgb(121, 94, 38),
+            kind: Rgb(38, 127, 153),
+            number: Rgb(9, 134, 88),
             added: Rgb(214, 245, 220),
             removed: Rgb(255, 224, 224),
+            activity: style(Rgb(120, 120, 120), Rgb(44, 44, 44)),
+            activity_active: Rgb(255, 255, 255),
+            status: style(Rgb(255, 255, 255), Rgb(0, 122, 204)),
+            breadcrumb: style(Rgb(110, 110, 110), bg),
+            line: Rgb(245, 245, 245),
+            number_active: Rgb(11, 33, 110),
+            guide: Rgb(211, 211, 211),
+            scrollbar: Rgb(200, 200, 200),
+            error: Rgb(225, 40, 40),
+            heading: Rgb(0, 0, 128),
+            git_modified: Rgb(137, 93, 0),
+            git_added: Rgb(40, 130, 60),
         }
     }
 
@@ -81,28 +106,38 @@ impl Theme {
 
 impl Default for Theme {
     fn default() -> Self {
-        let text = Rgb(216, 219, 226);
-        let dim = Rgb(120, 126, 140);
-        let bg = Rgb(24, 26, 31);
-        let panel = Rgb(19, 21, 25);
+        let bg = Rgb(30, 30, 30);
+        let panel = Rgb(37, 37, 38);
         Self {
-            text: style(text, bg),
-            sidebar: style(Rgb(176, 181, 192), panel),
-            bar: style(Rgb(176, 181, 192), Rgb(32, 35, 42)),
-            tab: style(dim, panel),
-            tab_active: style(text, bg),
-            gutter: style(Rgb(84, 90, 104), bg),
-            selection: Rgb(52, 66, 96),
-            row_hover: Rgb(38, 42, 52),
-            accent: Rgb(110, 168, 254),
-            keyword: Rgb(198, 146, 234),
-            string: Rgb(165, 214, 155),
-            comment: Rgb(106, 114, 130),
-            function: Rgb(130, 170, 255),
-            kind: Rgb(240, 198, 116),
-            number: Rgb(247, 140, 108),
-            added: Rgb(30, 58, 42),
-            removed: Rgb(70, 34, 38),
+            text: style(Rgb(212, 212, 212), bg),
+            sidebar: style(Rgb(204, 204, 204), panel),
+            bar: style(Rgb(204, 204, 204), Rgb(37, 37, 38)),
+            tab: style(Rgb(150, 150, 150), Rgb(45, 45, 45)),
+            tab_active: style(Rgb(255, 255, 255), bg),
+            gutter: style(Rgb(133, 133, 133), bg),
+            selection: Rgb(38, 79, 120),
+            row_hover: Rgb(55, 55, 61),
+            accent: Rgb(55, 148, 255),
+            keyword: Rgb(86, 156, 214),
+            string: Rgb(206, 145, 120),
+            comment: Rgb(106, 153, 85),
+            function: Rgb(220, 220, 170),
+            kind: Rgb(78, 201, 176),
+            number: Rgb(181, 206, 168),
+            added: Rgb(35, 61, 37),
+            removed: Rgb(72, 32, 32),
+            activity: style(Rgb(133, 133, 133), Rgb(51, 51, 51)),
+            activity_active: Rgb(255, 255, 255),
+            status: style(Rgb(255, 255, 255), Rgb(0, 122, 204)),
+            breadcrumb: style(Rgb(165, 165, 165), bg),
+            line: Rgb(42, 45, 46),
+            number_active: Rgb(198, 198, 198),
+            guide: Rgb(64, 64, 64),
+            scrollbar: Rgb(79, 79, 79),
+            error: Rgb(244, 71, 71),
+            heading: Rgb(86, 156, 214),
+            git_modified: Rgb(226, 192, 141),
+            git_added: Rgb(115, 201, 145),
         }
     }
 }

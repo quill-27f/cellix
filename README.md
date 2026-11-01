@@ -7,8 +7,8 @@ The name joins cell and pixel: it renders pixels in the terminal and falls back 
 cells.
 
 Status: early. Plan and diff review, everyday editing and Vim mode work and are tested.
-The language server client has not yet run against a real server, and live scrolling on
-the pixel tiers is unproven. See [docs/PROGRESS.md](docs/PROGRESS.md).
+Definition, rename and completion work with rust-analyzer, but compiler errors don't show
+yet. See [docs/PROGRESS.md](docs/PROGRESS.md).
 
 ## Try it
 

@@ -48,3 +48,21 @@ binary in tmux for typing, splits, resizing and window switching, on the cell ti
 Next: prove live scrolling and pixel tiers under tmux and Zellij, which `docs/DESIGN.md`
 lists as the condition for pixels staying the default. Then the bridge mod, Neovim mode,
 agent hosting, the wgpu rasterizer and DAP.
+
+## 2026-11-01: first real use
+
+Feedback from using the binary drove this pass.
+
+Scrolling on the pixel tier left stale rows on screen, because each tile's old placement
+stayed when a new image took its row. Fixed, with a test that models the terminal's
+placement rules and failed before the fix. Still needs confirming in a live terminal.
+
+The look now follows VS Code: Dark+ and Light+ colours, activity bar, breadcrumbs, status
+bar with branch and language, current-line highlight, indent guides and a clickable
+scrollbar. Tabs close with `×`. Markdown opens with source and live preview side by side.
+
+rust-analyzer now runs in the ignored tests: definition, rename and completion pass, and
+found real bugs the scripted server could not, including a rename applied twice.
+
+Open: `real_rust_analyzer_reports_compiler_errors` fails. `cargo check` errors never
+appear after a save, and the cause isn't known. Syntax errors are also untested.

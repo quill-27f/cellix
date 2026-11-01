@@ -91,10 +91,11 @@ polled as well as signalled, because a resize during font loading is otherwise l
 
 ## Not yet proven
 
-Static pages only have been verified on the pixel tiers. These decide whether pixels stay
-the default:
+These decide whether pixels stay the default:
 
-1. Live scrolling smoothness in Ghostty, tmux and Zellij.
+1. Live scrolling in Ghostty, tmux and Zellij. Real use in Ghostty showed text overlapping,
+   because a placement belongs to its image and a new image doesn't replace it. That is
+   fixed and modelled in a test, but smoothness and the fix itself need checking live.
 2. Pixel tiers through tmux and Zellij with split panes, pane switching, resizing and
    detach. `harness/x mux` covers tmux splits, resizes and window switches, but with no
    client attached, so on the cell tier. Zellij has no automated test yet.
@@ -103,6 +104,14 @@ the default:
 5. Pixel mouse reporting (mode 1016) through Zellij.
 
 If 1 or 2 fail, cells become the default in that environment.
+
+## Look
+
+The interface follows VS Code's layout and its Dark+ and Light+ colours, because that is
+what the target users already read fluently: activity bar, explorer, tabs, breadcrumbs,
+blue status bar, current-line highlight, indent guides. It's all drawn to the grid, so it
+holds on the cell tier. Markdown opens with source and live preview side by side, like
+Xcode, falling back to source alone in a narrow pane.
 
 ## Modes
 

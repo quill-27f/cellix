@@ -4,7 +4,7 @@ mod diff;
 mod git;
 
 pub use diff::{FileDiff, Hunk, Row, RowKind, Side, reject_hunk};
-pub use git::{Change, blame_line, changed_files, head_text};
+pub use git::{Change, blame_line, changed_files, current_branch, head_text};
 
 use serde::{Deserialize, Serialize};
 
