@@ -3,8 +3,9 @@
 //! it can't read rather than replace it.
 
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use serde_json::{Map, Value, json};
 
@@ -13,6 +14,12 @@ const PLUGIN_DIRS: &str = "CLAUDE_CODE_PLUGIN_DIRS";
 /// Connects to a running Cellix on its own, which `--ide` does for one session.
 const AUTO_CONNECT: &str = "CLAUDE_CODE_AUTO_CONNECT_IDE";
 const GHOSTTY_FREE_CMD_D: &str = "keybind = super+d=unbind";
+/// Fills Ghostty's padding with the colours at the window's edge, so Cellix reaches it.
+const GHOSTTY_FILL: [&str; 2] = [
+    "window-padding-color = extend",
+    "window-padding-balance = true",
+];
+const CODEX_PLUGIN: &str = "cellix@cellix";
 
 fn config_dir(var: &impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
     let chosen = var("CLAUDE_CONFIG_DIR").filter(|d| !d.is_empty());
@@ -117,6 +124,85 @@ pub fn remove_claude(var: impl Fn(&str) -> Option<String>) -> io::Result<()> {
     write_settings(&file, &settings)
 }
 
+/// Runs an agent's own command, so its config stays its business, and returns what went
+/// wrong in its words.
+fn run(program: &str, args: &[&str]) -> io::Result<()> {
+    let done = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .output()?;
+    if done.status.success() {
+        return Ok(());
+    }
+    let said = String::from_utf8_lossy(&done.stderr);
+    let first = said
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("it refused");
+    Err(io::Error::other(first.trim().to_string()))
+}
+
+fn codex_home(var: &impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
+    let chosen = var("CODEX_HOME").filter(|d| !d.is_empty());
+    chosen
+        .map(PathBuf::from)
+        .or_else(|| Some(PathBuf::from(var("HOME")?).join(".codex")))
+}
+
+/// Whether Codex has Cellix's plugin, which it records in its own config.
+pub fn codex_installed(var: impl Fn(&str) -> Option<String>) -> bool {
+    let config = codex_home(&var).map(|home| home.join("config.toml"));
+    let text = config.and_then(|c| fs::read_to_string(c).ok());
+    text.is_some_and(|t| t.contains(CODEX_PLUGIN))
+}
+
+/// Adds Cellix as a local marketplace and installs its plugin, with Codex's own commands.
+pub fn install_codex(var: impl Fn(&str) -> Option<String>) -> io::Result<()> {
+    let folder = crate::plugin::write_codex(var)?;
+    let source = folder.display().to_string();
+    run("codex", &["plugin", "marketplace", "add", &source])?;
+    run("codex", &["plugin", "add", CODEX_PLUGIN])
+}
+
+pub fn remove_codex() -> io::Result<()> {
+    run("codex", &["plugin", "remove", CODEX_PLUGIN])?;
+    run("codex", &["plugin", "marketplace", "remove", "cellix"])
+}
+
+/// Whether Gemini CLI has Cellix's extension, which it keeps in a folder of its own.
+pub fn gemini_installed(var: impl Fn(&str) -> Option<String>) -> bool {
+    let home = var("HOME").map(PathBuf::from);
+    home.is_some_and(|h| h.join(".gemini/extensions/cellix").exists())
+}
+
+pub fn install_gemini(var: impl Fn(&str) -> Option<String>) -> io::Result<()> {
+    let folder = crate::plugin::write_gemini(var)?;
+    let source = folder.display().to_string();
+    // `--consent` doesn't cover its folder trust question. The user's click answered that.
+    let mut child = Command::new("gemini")
+        .args(["extensions", "install", &source, "--consent"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(b"y\n")?;
+    }
+    let done = child.wait_with_output()?;
+    if done.status.success() {
+        return Ok(());
+    }
+    let said = String::from_utf8_lossy(&done.stderr);
+    let last = said.lines().rfind(|l| !l.trim().is_empty());
+    Err(io::Error::other(
+        last.unwrap_or("it refused").trim().to_string(),
+    ))
+}
+
+pub fn remove_gemini() -> io::Result<()> {
+    run("gemini", &["extensions", "uninstall", "cellix"])
+}
+
 /// Whether a program can be run by name.
 pub fn on_path(program: &str, var: impl Fn(&str) -> Option<String>) -> bool {
     let path = var("PATH").unwrap_or_default();
@@ -149,10 +235,18 @@ pub fn ghostty_keeps_cmd_d(var: impl Fn(&str) -> Option<String>) -> Option<bool>
     Some(!text.lines().any(frees))
 }
 
-/// Adds the line that lets Cmd+D through. Ghostty picks it up when its config reloads.
-pub fn free_cmd_d(var: impl Fn(&str) -> Option<String>) -> io::Result<()> {
+/// Whether this is Ghostty, and it still leaves its padding in the terminal's colour.
+pub fn ghostty_keeps_padding(var: impl Fn(&str) -> Option<String>) -> Option<bool> {
+    let ghostty = var("TERM").is_some_and(|t| t.contains("ghostty"));
+    let config = ghostty_config(&var).filter(|_| ghostty)?;
+    let text = fs::read_to_string(config).unwrap_or_default();
+    let set = |line: &str| line.replace(' ', "") == GHOSTTY_FILL[0].replace(' ', "");
+    Some(!text.lines().any(set))
+}
+
+fn append_to_ghostty(lines: &[&str], var: &impl Fn(&str) -> Option<String>) -> io::Result<()> {
     let missing = || io::Error::new(io::ErrorKind::NotFound, "no home folder");
-    let config = ghostty_config(&var).ok_or_else(missing)?;
+    let config = ghostty_config(var).ok_or_else(missing)?;
     if let Some(parent) = config.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -164,9 +258,21 @@ pub fn free_cmd_d(var: impl Fn(&str) -> Option<String>) -> io::Result<()> {
     if !text.is_empty() && !text.ends_with('\n') {
         text.push('\n');
     }
-    text.push_str(GHOSTTY_FREE_CMD_D);
-    text.push('\n');
+    for line in lines {
+        text.push_str(line);
+        text.push('\n');
+    }
     fs::write(config, text)
+}
+
+/// Adds the line that lets Cmd+D through. Ghostty picks it up when its config reloads.
+pub fn free_cmd_d(var: impl Fn(&str) -> Option<String>) -> io::Result<()> {
+    append_to_ghostty(&[GHOSTTY_FREE_CMD_D], &var)
+}
+
+/// Lets colour reach the window's edge. This applies to every Ghostty window.
+pub fn fill_ghostty_window(var: impl Fn(&str) -> Option<String>) -> io::Result<()> {
+    append_to_ghostty(&GHOSTTY_FILL, &var)
 }
 
 #[cfg(test)]
@@ -259,6 +365,30 @@ mod tests {
             fs::read_to_string(&config).unwrap(),
             format!("font-size = 14\n{GHOSTTY_FREE_CMD_D}\n")
         );
+    }
+
+    #[test]
+    fn the_window_is_filled_once_and_keeps_the_config() {
+        let (dir, var) = home();
+        let config = dir.path().join(".config/ghostty/config");
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        fs::write(&config, "window-padding-x = 10\n").unwrap();
+        assert_eq!(ghostty_keeps_padding(&var), Some(true));
+        fill_ghostty_window(&var).unwrap();
+        assert_eq!(ghostty_keeps_padding(&var), Some(false));
+        let text = fs::read_to_string(&config).unwrap();
+        assert!(text.starts_with("window-padding-x = 10\n"));
+        assert!(text.contains("window-padding-color = extend"));
+    }
+
+    #[test]
+    fn a_codex_install_is_read_from_its_config() {
+        let (dir, var) = home();
+        assert!(!codex_installed(&var));
+        fs::create_dir_all(dir.path().join(".codex")).unwrap();
+        let config = "[plugins.\"cellix@cellix\"]\nenabled = true\n";
+        fs::write(dir.path().join(".codex/config.toml"), config).unwrap();
+        assert!(codex_installed(&var));
     }
 
     #[test]

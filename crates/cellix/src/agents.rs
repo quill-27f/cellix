@@ -9,20 +9,22 @@ use cellix_review::Worktree;
 use crate::integrations;
 use crate::theme::Theme;
 
-/// Rows above the buttons: the panel's title and a gap.
+/// Rows above the first list: the panel's title and a gap.
 const HEADER_ROWS: u16 = 2;
-const CLAUDE_ROW: u16 = HEADER_ROWS;
-const CODEX_ROW: u16 = HEADER_ROWS + 2;
-/// Rows from the top of the panel to its first list.
-const LISTS_TOP: u16 = HEADER_ROWS + 5;
 const SECTION_SIZE: u8 = 80;
 const DETAIL_SIZE: u8 = 85;
+/// Agents that can be started from here, as what the panel calls them and their programs.
+const AGENTS: [(&str, &str); 3] = [
+    ("Claude Code", "claude"),
+    ("Codex", "codex"),
+    ("Gemini CLI", "gemini"),
+];
 
 /// What a click in the panel lands on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Hit {
-    OpenClaude,
-    OpenCodex,
+    /// The program of an agent to start.
+    Start(&'static str),
     Worktree(PathBuf),
 }
 
@@ -33,7 +35,8 @@ pub struct Agents {
     pub worktrees: Vec<Worktree>,
     /// Agents found running in this folder that haven't reported through a plugin.
     seen: Arc<Mutex<Vec<String>>>,
-    pub codex_found: bool,
+    /// The agents installed here.
+    installed: Vec<(&'static str, &'static str)>,
 }
 
 /// Names of the agents whose working folder is `root`, from `lsof -Fcn` output.
@@ -49,6 +52,7 @@ fn agents_in(output: &str, root: &Path) -> Vec<String> {
             found.push(match command {
                 "claude" => "Claude Code".to_string(),
                 "codex" => "Codex".to_string(),
+                "gemini" => "Gemini CLI".to_string(),
                 other => other.to_string(),
             });
         }
@@ -85,7 +89,8 @@ impl Agents {
         let root = root.to_path_buf();
         std::thread::spawn(move || {
             let output = std::process::Command::new("lsof")
-                .args(["-a", "-d", "cwd", "-c", "claude", "-c", "codex", "-Fcn"])
+                .args(["-a", "-d", "cwd", "-c", "claude", "-c", "codex"])
+                .args(["-c", "gemini", "-Fcn"])
                 .output();
             if let (Ok(output), Ok(mut seen)) = (output, seen.lock()) {
                 *seen = agents_in(&String::from_utf8_lossy(&output.stdout), &root);
@@ -99,20 +104,29 @@ impl Agents {
         seen.into_iter().skip(self.running.len()).collect()
     }
 
-    fn worktrees_top(&self) -> u16 {
+    /// Rows of the running list, which holds a note when it's empty.
+    fn running_rows(&self) -> u16 {
         let shown = self.running.len() + self.silent().len();
-        LISTS_TOP + 1 + shown.max(1) as u16 * 2 + 1
+        if shown == 0 { 2 } else { shown as u16 * 2 }
+    }
+
+    /// The row the worktrees start on, inside the panel.
+    fn worktrees_top(&self) -> u16 {
+        HEADER_ROWS + 1 + self.running_rows() + 2
+    }
+
+    /// The row the agents to start begin on, inside the panel.
+    fn starts_top(&self) -> u16 {
+        self.worktrees_top() + self.worktrees.len() as u16 * 2 + 2
     }
 
     pub fn hit(&self, area: Rect, y: u16) -> Option<Hit> {
         let row = y.checked_sub(area.y)?;
-        if row == CLAUDE_ROW {
-            return Some(Hit::OpenClaude);
+        let start = row.checked_sub(self.starts_top()).map(usize::from);
+        if let Some((_, program)) = start.and_then(|index| self.installed.get(index)) {
+            return Some(Hit::Start(program));
         }
-        if row == CODEX_ROW && self.codex_found {
-            return Some(Hit::OpenCodex);
-        }
-        let below = row.checked_sub(self.worktrees_top() + 1)?;
+        let below = row.checked_sub(self.worktrees_top())?;
         let tree = self.worktrees.get(below as usize / 2)?;
         Some(Hit::Worktree(tree.path.clone()))
     }
@@ -129,17 +143,25 @@ impl Agents {
         };
         let side = area.x + 2;
         grid.label(side, area.y, "Agents", name, area.right());
-        let width = area.w.saturating_sub(4);
-        self.draw_buttons(grid, Rect::new(side, area.y, width, 1), hover, theme);
         let section = |grid: &mut Grid, y, text: &str| {
             grid.label_at(side as f32, side, y, text, dim, area.right(), SECTION_SIZE);
         };
-        let mut y = area.y + LISTS_TOP;
+        let mut y = area.y + HEADER_ROWS;
         section(grid, y, "RUNNING HERE");
         y += 1;
         let silent = self.silent();
         if self.running.is_empty() && silent.is_empty() {
-            grid.label(side, y, "No agents here", dim, area.right());
+            grid.label(side, y, "No agents here yet", dim, area.right());
+            let note = "Start one, and it shows up here";
+            grid.label_at(
+                side as f32,
+                side,
+                y + 1,
+                note,
+                dim,
+                area.right(),
+                DETAIL_SIZE,
+            );
             y += 2;
         }
         for agent in &self.running {
@@ -155,7 +177,13 @@ impl Agents {
         }
         for agent in &silent {
             draw_agent(grid, (area, y), agent, ("running", theme.git_added), theme);
-            grid.label(side + 2, y + 1, "Without the plugin", dim, area.right());
+            grid.label(
+                side + 2,
+                y + 1,
+                "No plugin, so no detail",
+                dim,
+                area.right(),
+            );
             y += 2;
         }
         y += 1;
@@ -196,48 +224,35 @@ impl Agents {
             }
             y += 2;
         }
-    }
-
-    fn draw_buttons(&self, grid: &mut Grid, top: Rect, hover: Option<(u16, u16)>, theme: &Theme) {
-        let on = |row: u16| hover.is_some_and(|h| h.1 == top.y + row);
-        let rows: [(u16, &str, bool, Rgb, Rgb); 2] = [
-            (
-                CLAUDE_ROW,
-                "Open Claude Code",
-                true,
-                theme.button,
-                theme.button_text,
-            ),
-            (
-                CODEX_ROW,
-                if self.codex_found {
-                    "Open Codex"
-                } else {
-                    "Codex not installed"
-                },
-                self.codex_found,
-                theme.quiet_button(theme.sidebar.bg),
-                theme.text.fg,
-            ),
-        ];
-        for (row, label, usable, fill, fg) in rows {
-            let fill = if usable && on(row) && row != CLAUDE_ROW {
-                theme.pick
-            } else {
-                fill
-            };
-            let style = Style {
-                fg: if usable { fg } else { theme.gutter.fg },
-                ..theme.sidebar
-            };
-            let cells = format!("{label:^width$}", width = top.w as usize);
-            grid.large_button(top.x, top.y + row, &cells, label, fill, style);
+        y += 1;
+        if self.installed.is_empty() {
+            return;
+        }
+        section(grid, y, "START AN AGENT");
+        y += 1;
+        for (label, _) in &self.installed {
+            if y >= area.bottom() {
+                break;
+            }
+            let row = Rect::new(area.x, y, area.w, 1);
+            let hovered = hover.is_some_and(|h| row.contains(h.0, h.1));
+            if hovered {
+                let wash = Bounds::inset(row, 0.4, 0.055);
+                grid.panel(wash, 18, Some(theme.row_hover), None);
+            }
+            grid.label(side, y, label, theme.sidebar, area.right());
+            y += 1;
         }
     }
 
-    /// Whether Codex can be opened, which only changes when the panel opens.
-    pub fn look_for_codex(&mut self) {
-        self.codex_found = integrations::on_path("codex", |name| std::env::var(name).ok());
+    /// Finds which agents can be started, which only changes when the panel opens.
+    pub fn look_for_agents(&mut self) {
+        let var = |name: &str| std::env::var(name).ok();
+        self.installed = AGENTS
+            .iter()
+            .copied()
+            .filter(|(_, program)| integrations::on_path(program, var))
+            .collect();
     }
 }
 
@@ -274,6 +289,27 @@ p3\nccodex\nfcwd\nn/work/project/sub\n";
     fn only_agents_in_this_folder_count() {
         let found = agents_in(OUTPUT, Path::new("/work/project"));
         assert_eq!(found, ["Claude Code", "Codex"]);
+    }
+
+    #[test]
+    fn a_click_finds_the_agent_to_start_below_the_worktrees() {
+        let agents = Agents {
+            installed: vec![("Codex", "codex")],
+            worktrees: vec![Worktree {
+                path: PathBuf::from("/work"),
+                branch: "main".to_string(),
+                changes: 0,
+            }],
+            ..Agents::default()
+        };
+        let area = Rect::new(0, 0, 30, 40);
+        assert_eq!(
+            agents.hit(area, agents.starts_top()),
+            Some(Hit::Start("codex"))
+        );
+        let tree = agents.hit(area, agents.worktrees_top());
+        assert_eq!(tree, Some(Hit::Worktree(PathBuf::from("/work"))));
+        assert_eq!(agents.hit(area, 0), None, "the title does nothing");
     }
 
     #[test]

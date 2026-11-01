@@ -119,6 +119,62 @@ fn ruby() -> tree_sitter::Language {
 fn sql() -> tree_sitter::Language {
     tree_sitter_sequel::LANGUAGE.into()
 }
+fn c_sharp() -> tree_sitter::Language {
+    tree_sitter_c_sharp::LANGUAGE.into()
+}
+fn kotlin() -> tree_sitter::Language {
+    tree_sitter_kotlin_ng::LANGUAGE.into()
+}
+fn swift() -> tree_sitter::Language {
+    tree_sitter_swift::LANGUAGE.into()
+}
+fn php() -> tree_sitter::Language {
+    tree_sitter_php::LANGUAGE_PHP.into()
+}
+fn lua() -> tree_sitter::Language {
+    tree_sitter_lua::LANGUAGE.into()
+}
+fn scala() -> tree_sitter::Language {
+    tree_sitter_scala::LANGUAGE.into()
+}
+fn elixir() -> tree_sitter::Language {
+    tree_sitter_elixir::LANGUAGE.into()
+}
+fn haskell() -> tree_sitter::Language {
+    tree_sitter_haskell::LANGUAGE.into()
+}
+fn zig() -> tree_sitter::Language {
+    tree_sitter_zig::LANGUAGE.into()
+}
+fn dart() -> tree_sitter::Language {
+    tree_sitter_dart::LANGUAGE.into()
+}
+fn r_lang() -> tree_sitter::Language {
+    tree_sitter_r::LANGUAGE.into()
+}
+fn nix() -> tree_sitter::Language {
+    tree_sitter_nix::LANGUAGE.into()
+}
+fn powershell() -> tree_sitter::Language {
+    tree_sitter_powershell::LANGUAGE.into()
+}
+
+/// This grammar ships no highlight query either.
+const KOTLIN_HIGHLIGHTS: &str = r#"
+(line_comment) @comment
+(block_comment) @comment
+(string_literal) @string
+(multiline_string_literal) @string
+(character_literal) @string
+(number_literal) @number
+(float_literal) @number
+(function_declaration (identifier) @function)
+(class_declaration (identifier) @type)
+(user_type (identifier) @type)
+["abstract" "as" "by" "catch" "class" "companion" "const" "constructor" "data" "do" "else"
+ "enum" "final" "finally" "for" "fun" "if" "import" "in" "inline" "interface" "internal"
+ "is" "object" "open" "operator" "override" "package" "private" "protected" "public"] @keyword
+"#;
 
 /// The grammar ships no highlight query, so Terraform's is here. Earlier patterns win.
 const HCL_HIGHLIGHTS: &str = r#"
@@ -145,7 +201,7 @@ fn typescript_queries() -> (String, &'static str, &'static str) {
     (highlights, "", tree_sitter_typescript::LOCALS_QUERY)
 }
 
-const SPECS: [Spec; 19] = [
+const SPECS: [Spec; 32] = [
     Spec {
         name: "Rust",
         extensions: &["rs"],
@@ -279,6 +335,84 @@ const SPECS: [Spec; 19] = [
         extensions: &["sql"],
         language: sql,
         queries: || (tree_sitter_sequel::HIGHLIGHTS_QUERY.into(), "", ""),
+    },
+    Spec {
+        name: "C#",
+        extensions: &["cs", "csx"],
+        language: c_sharp,
+        queries: || (tree_sitter_c_sharp::HIGHLIGHTS_QUERY.into(), "", ""),
+    },
+    Spec {
+        name: "Kotlin",
+        extensions: &["kt", "kts"],
+        language: kotlin,
+        queries: || (KOTLIN_HIGHLIGHTS.into(), "", ""),
+    },
+    Spec {
+        name: "Swift",
+        extensions: &["swift"],
+        language: swift,
+        queries: || (tree_sitter_swift::HIGHLIGHTS_QUERY.into(), "", ""),
+    },
+    Spec {
+        name: "PHP",
+        extensions: &["php", "phtml"],
+        language: php,
+        queries: || (tree_sitter_php::HIGHLIGHTS_QUERY.into(), "", ""),
+    },
+    Spec {
+        name: "Lua",
+        extensions: &["lua"],
+        language: lua,
+        queries: || (tree_sitter_lua::HIGHLIGHTS_QUERY.into(), "", ""),
+    },
+    Spec {
+        name: "Scala",
+        extensions: &["scala", "sc", "sbt"],
+        language: scala,
+        queries: || (tree_sitter_scala::HIGHLIGHTS_QUERY.into(), "", ""),
+    },
+    Spec {
+        name: "Elixir",
+        extensions: &["ex", "exs"],
+        language: elixir,
+        queries: || (tree_sitter_elixir::HIGHLIGHTS_QUERY.into(), "", ""),
+    },
+    Spec {
+        name: "Haskell",
+        extensions: &["hs"],
+        language: haskell,
+        queries: || (tree_sitter_haskell::HIGHLIGHTS_QUERY.into(), "", ""),
+    },
+    Spec {
+        name: "Zig",
+        extensions: &["zig"],
+        language: zig,
+        queries: || (tree_sitter_zig::HIGHLIGHTS_QUERY.into(), "", ""),
+    },
+    Spec {
+        name: "Dart",
+        extensions: &["dart"],
+        language: dart,
+        queries: || (tree_sitter_dart::HIGHLIGHTS_QUERY.into(), "", ""),
+    },
+    Spec {
+        name: "R",
+        extensions: &["r", "R"],
+        language: r_lang,
+        queries: || (tree_sitter_r::HIGHLIGHTS_QUERY.into(), "", ""),
+    },
+    Spec {
+        name: "Nix",
+        extensions: &["nix"],
+        language: nix,
+        queries: || (tree_sitter_nix::HIGHLIGHTS_QUERY.into(), "", ""),
+    },
+    Spec {
+        name: "PowerShell",
+        extensions: &["ps1", "psm1", "psd1"],
+        language: powershell,
+        queries: || (tree_sitter_powershell::HIGHLIGHTS_QUERY.into(), "", ""),
     },
 ];
 
@@ -447,12 +581,11 @@ impl Registry {
     /// What starts a comment that runs to the end of the line, if the language has one.
     pub fn line_comment(path: &Path) -> Option<&'static str> {
         match Self::language_name(path)? {
-            "Rust" | "JavaScript" | "TypeScript" | "TSX" | "Go" | "C" | "C++" | "Java" => {
-                Some("//")
-            }
+            "Rust" | "JavaScript" | "TypeScript" | "TSX" | "Go" | "C" | "C++" | "Java" | "C#"
+            | "Kotlin" | "Swift" | "PHP" | "Scala" | "Zig" | "Dart" => Some("//"),
             "Python" | "Shell" | "Terraform" | "YAML" | "TOML" | "Ruby" | "Env" | "Dockerfile"
-            | "Ignore" => Some("#"),
-            "SQL" => Some("--"),
+            | "Ignore" | "Elixir" | "R" | "Nix" | "PowerShell" => Some("#"),
+            "SQL" | "Lua" | "Haskell" => Some("--"),
             "INI" => Some(";"),
             _ => None,
         }
@@ -656,6 +789,32 @@ mod tests {
         assert_eq!(name("terraform.tfvars"), Some("Terraform"));
         assert_eq!(name("Cargo.lock"), Some("TOML"));
         assert_eq!(name("Dockerfile.prod"), Some("Dockerfile"));
+    }
+
+    #[test]
+    fn every_popular_language_highlights() {
+        let samples = [
+            ("a.java", "class A { int x = 1; }\n"),
+            ("a.cs", "class A { int x = 1; }\n"),
+            ("a.kt", "fun main() { val x = 1 }\n// done\n"),
+            ("a.swift", "func main() { let x = 1 }\n"),
+            ("a.php", "<?php\nfunction a() { return 1; }\n"),
+            ("a.lua", "local x = 1\nfunction a() end\n"),
+            ("a.scala", "object A { def x = 1 }\n"),
+            ("a.ex", "defmodule A do\n  def x, do: 1\nend\n"),
+            ("a.hs", "main :: IO ()\nmain = pure ()\n"),
+            ("a.zig", "const x: u8 = 1;\n"),
+            ("a.dart", "void main() { var x = 1; }\n"),
+            ("a.r", "x <- function(a) { a + 1 }\n"),
+            ("a.nix", "{ x = 1; }\n"),
+            ("a.ps1", "function A { $x = 1 }\n"),
+            ("a.rb", "def a\n  1\nend\n"),
+        ];
+        let registry = Registry::default();
+        for (name, text) in samples {
+            let spans = registry.highlight(Path::new(name), text);
+            assert!(!spans.is_empty(), "{name} has no colour");
+        }
     }
 
     #[test]

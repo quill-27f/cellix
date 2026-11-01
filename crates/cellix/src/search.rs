@@ -90,6 +90,16 @@ impl Search {
         self.incoming = Some(receiver);
     }
 
+    /// Shows places found some other way, such as a symbol's references.
+    pub fn show(&mut self, query: String, results: Vec<Match>) {
+        self.generation += 1;
+        self.incoming = None;
+        self.top = 0;
+        self.collapsed.clear();
+        self.query = query;
+        self.results = results;
+    }
+
     /// Takes finished results. Returns true if the panel changed.
     pub fn poll(&mut self) -> bool {
         let Some(receiver) = &self.incoming else {

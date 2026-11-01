@@ -31,6 +31,9 @@ pub fn simple_keymap(event: KeyEvent) -> Option<Command> {
         Key::Delete if word => DeleteWordRight,
         Key::Backspace => DeleteBackward,
         Key::Delete => DeleteForward,
+        // Before Option+Right below, which is the same letter without Shift.
+        Key::Char('F') if mods.alt => FormatDocument,
+        Key::Char('f') if mods.alt && shift => FormatDocument,
         // What terminals send for Option+Left and Option+Right.
         Key::Char('b') if mods.alt => Move(Direction::WordLeft, shift),
         Key::Char('f') if mods.alt => Move(Direction::WordRight, shift),
@@ -40,6 +43,7 @@ pub fn simple_keymap(event: KeyEvent) -> Option<Command> {
         Key::Esc => Cancel,
         Key::F(1) => CommandPalette,
         Key::F(2) => RenameSymbol,
+        Key::F(12) if shift => GoToReferences,
         Key::F(12) => GoToDefinition,
         Key::Char(' ') if mods.ctrl => Complete,
         Key::Char('p') if mods.alt => CommandPalette,
@@ -80,6 +84,27 @@ pub fn simple_keymap(event: KeyEvent) -> Option<Command> {
 mod tests {
     use super::*;
     use crate::Mods;
+
+    #[test]
+    fn option_shift_f_formats_and_option_f_still_moves() {
+        let alt = |c, shift| KeyEvent {
+            key: Key::Char(c),
+            mods: Mods {
+                alt: true,
+                shift,
+                ..Mods::default()
+            },
+        };
+        assert_eq!(simple_keymap(alt('F', true)), Some(Command::FormatDocument));
+        assert_eq!(
+            simple_keymap(alt('F', false)),
+            Some(Command::FormatDocument)
+        );
+        assert_eq!(
+            simple_keymap(alt('f', false)),
+            Some(Command::Move(Direction::WordRight, false))
+        );
+    }
 
     #[test]
     fn plain_characters_are_text() {

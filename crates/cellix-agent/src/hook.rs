@@ -12,6 +12,8 @@ use crate::{AgentEvent, AgentState, TestRun, request, socket_path};
 /// Longest test output kept, from the end, where failures are.
 const MAX_OUTPUT: usize = 20_000;
 const LABEL_LENGTH: usize = 60;
+/// Where `handle_for` leaves the agent's name in a hook's input.
+const AGENT_KEY: &str = "cellix_agent";
 /// What an agent reports while its plan is with the reviewer.
 pub const PLAN_WAITING: &str = "Plan waiting for review";
 
@@ -66,7 +68,10 @@ fn ask(roots: &[PathBuf], line: &str) -> Option<String> {
 fn tell(roots: &[PathBuf], input: &Value, state: AgentState, detail: &str) {
     let event = AgentEvent {
         session: input["session_id"].as_str().unwrap_or("").to_string(),
-        agent: "Claude Code".to_string(),
+        agent: input[AGENT_KEY]
+            .as_str()
+            .unwrap_or("Claude Code")
+            .to_string(),
         state,
         detail: detail.to_string(),
         folder: roots
@@ -166,8 +171,15 @@ fn on_tool(roots: &[PathBuf], input: &Value, passed: bool) {
     let text = response["stdout"]
         .as_str()
         .or_else(|| input["error"].as_str())
+        .or_else(|| response["returnDisplay"].as_str())
+        .or_else(|| response["output"].as_str())
         .or_else(|| response.as_str())
         .unwrap_or("");
+    // Agents without a failure hook say so in the result.
+    let exit = response["exit_code"]
+        .as_i64()
+        .or(response["exitCode"].as_i64());
+    let passed = passed && exit.unwrap_or(0) == 0 && response["error"].is_null();
     let start = text
         .char_indices()
         .rev()
@@ -183,9 +195,18 @@ fn on_tool(roots: &[PathBuf], input: &Value, passed: bool) {
     }
 }
 
-/// Handles one hook, and returns what to print for Claude Code, if anything.
+/// Handles one hook from Claude Code.
 pub fn handle(kind: &str, stdin: &str) -> Option<String> {
-    let input: Value = serde_json::from_str(stdin).unwrap_or(Value::Null);
+    handle_for("Claude Code", kind, stdin)
+}
+
+/// Handles one hook from a named agent, and returns what to print for it, if anything.
+pub fn handle_for(agent: &str, kind: &str, stdin: &str) -> Option<String> {
+    let mut input: Value = serde_json::from_str(stdin).unwrap_or(json!({}));
+    if !input.is_object() {
+        input = json!({});
+    }
+    input[AGENT_KEY] = json!(agent);
     let roots = roots(&input);
     match kind {
         "session-start" => tell(&roots, &input, AgentState::Idle, "Ready"),
@@ -314,6 +335,46 @@ mod tests {
         assert_eq!(answer["behavior"], "allow");
         assert_eq!(answer["updatedInput"]["plan"], "# New");
         assert_eq!(answer["updatedInput"]["planFilePath"], "/p.md");
+    }
+
+    #[test]
+    fn events_carry_the_agents_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let server = start(&root, Arc::default()).unwrap();
+        handle_for("Codex", "session-start", &input(&root, json!({})));
+        match server
+            .requests
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+        {
+            Request::Agent(event) => assert_eq!(event.agent, "Codex"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_failed_command_is_read_from_the_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let server = start(&root, Arc::default()).unwrap();
+        let run = input(
+            &root,
+            json!({"tool_input": {"command": "cargo test"},
+                   "tool_response": {"returnDisplay": "boom", "error": "exit 1"}}),
+        );
+        handle_for("Gemini", "tool-done", &run);
+        match server
+            .requests
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+        {
+            Request::Test(run) => {
+                assert!(!run.passed);
+                assert_eq!(run.output, "boom");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

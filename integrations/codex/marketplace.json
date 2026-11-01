@@ -1,0 +1,12 @@
+{
+  "name": "cellix",
+  "interface": { "displayName": "Cellix" },
+  "plugins": [
+    {
+      "name": "cellix",
+      "source": { "source": "local", "path": "./plugins/cellix" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Productivity"
+    }
+  ]
+}

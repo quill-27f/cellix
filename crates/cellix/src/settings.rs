@@ -74,21 +74,151 @@ impl Settings {
     }
 }
 
+/// A language server: the languages it covers, how it starts, and how to install it.
+pub struct Server {
+    pub languages: &'static [&'static str],
+    pub command: &'static [&'static str],
+    pub install: &'static str,
+}
+
+const fn server(
+    languages: &'static [&'static str],
+    command: &'static [&'static str],
+    install: &'static str,
+) -> Server {
+    Server {
+        languages,
+        command,
+        install,
+    }
+}
+
+/// The popular servers. A language without one still has colour and word completion.
+pub const SERVERS: [Server; 26] = [
+    server(
+        &["Rust"],
+        &["rust-analyzer"],
+        "rustup component add rust-analyzer",
+    ),
+    server(
+        &["Python"],
+        &["pyright-langserver", "--stdio"],
+        "npm install -g pyright",
+    ),
+    server(
+        &["TypeScript", "TSX", "JavaScript"],
+        &["typescript-language-server", "--stdio"],
+        "npm install -g typescript typescript-language-server",
+    ),
+    server(
+        &["Go"],
+        &["gopls"],
+        "go install golang.org/x/tools/gopls@latest",
+    ),
+    server(&["Java"], &["jdtls"], "brew install jdtls"),
+    server(
+        &["C#"],
+        &["csharp-ls"],
+        "dotnet tool install --global csharp-ls",
+    ),
+    server(&["C", "C++"], &["clangd"], "brew install llvm"),
+    server(
+        &["Kotlin"],
+        &["kotlin-language-server"],
+        "brew install kotlin-language-server",
+    ),
+    server(&["Swift"], &["sourcekit-lsp"], "xcode-select --install"),
+    server(
+        &["PHP"],
+        &["intelephense", "--stdio"],
+        "npm install -g intelephense",
+    ),
+    server(&["Ruby"], &["ruby-lsp"], "gem install ruby-lsp"),
+    server(
+        &["Lua"],
+        &["lua-language-server"],
+        "brew install lua-language-server",
+    ),
+    server(&["Scala"], &["metals"], "brew install metals"),
+    server(&["Elixir"], &["elixir-ls"], "brew install elixir-ls"),
+    server(
+        &["Haskell"],
+        &["haskell-language-server-wrapper", "--lsp"],
+        "brew install haskell-language-server",
+    ),
+    server(&["Zig"], &["zls"], "brew install zls"),
+    server(
+        &["Dart"],
+        &["dart", "language-server", "--protocol=lsp"],
+        "brew install dart",
+    ),
+    server(
+        &["Shell"],
+        &["bash-language-server", "start"],
+        "npm install -g bash-language-server",
+    ),
+    server(
+        &["Terraform"],
+        &["terraform-ls", "serve"],
+        "brew install hashicorp/tap/terraform-ls",
+    ),
+    server(
+        &["YAML"],
+        &["yaml-language-server", "--stdio"],
+        "npm install -g yaml-language-server",
+    ),
+    server(&["TOML"], &["taplo", "lsp", "stdio"], "brew install taplo"),
+    server(
+        &["HTML"],
+        &["vscode-html-language-server", "--stdio"],
+        "npm install -g vscode-langservers-extracted",
+    ),
+    server(
+        &["CSS"],
+        &["vscode-css-language-server", "--stdio"],
+        "npm install -g vscode-langservers-extracted",
+    ),
+    server(
+        &["JSON"],
+        &["vscode-json-language-server", "--stdio"],
+        "npm install -g vscode-langservers-extracted",
+    ),
+    server(
+        &["Dockerfile"],
+        &["docker-langserver", "--stdio"],
+        "npm install -g dockerfile-language-server-nodejs",
+    ),
+    server(
+        &["Markdown"],
+        &["marksman", "server"],
+        "brew install marksman",
+    ),
+];
+
 /// The server for a language when settings don't name one.
 pub fn default_server(language: &str) -> Option<Vec<String>> {
-    let command: &[&str] = match language {
-        "Rust" => &["rust-analyzer"],
-        "Python" => &["pyright-langserver", "--stdio"],
-        "Go" => &["gopls"],
-        "TypeScript" | "TSX" | "JavaScript" => &["typescript-language-server", "--stdio"],
-        "Terraform" => &["terraform-ls", "serve"],
-        "YAML" => &["yaml-language-server", "--stdio"],
-        "TOML" => &["taplo", "lsp", "stdio"],
-        "Shell" => &["bash-language-server", "start"],
-        "C" | "C++" => &["clangd"],
+    let found = SERVERS.iter().find(|s| s.languages.contains(&language))?;
+    Some(found.command.iter().map(|s| s.to_string()).collect())
+}
+
+/// A formatter that reads a file on stdin and writes it to stdout, for when no language
+/// server offers formatting. The file's name goes on the end where a tool needs it.
+pub fn formatter(language: &str) -> Option<&'static [&'static str]> {
+    Some(match language {
+        "Rust" => &["rustfmt", "--edition", "2024"],
+        "Go" => &["gofmt"],
+        "Python" => &["ruff", "format", "-"],
+        "C" | "C++" => &["clang-format"],
+        "Shell" => &["shfmt"],
+        "Terraform" => &["terraform", "fmt", "-"],
+        "Swift" => &["swift-format"],
+        "Lua" => &["stylua", "-"],
+        "Zig" => &["zig", "fmt", "--stdin"],
+        "JavaScript" | "TypeScript" | "TSX" | "JSON" | "HTML" | "CSS" | "YAML" | "Markdown" => {
+            &["prettier", "--stdin-filepath"]
+        }
         _ => return None,
-    };
-    Some(command.iter().map(|s| s.to_string()).collect())
+    })
 }
 
 #[cfg(test)]

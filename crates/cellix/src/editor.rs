@@ -538,7 +538,7 @@ impl Editor {
         (digits.max(minimum) + 2) as u16
     }
 
-    fn line_text(&self, line: usize) -> String {
+    pub fn line_text(&self, line: usize) -> String {
         let text = self.buffer.rope().line(line).to_string();
         text.trim_end_matches(['\n', '\r']).to_string()
     }

@@ -5,7 +5,7 @@ use std::io::{self, Write};
 use std::time::Duration;
 
 use base64::Engine;
-use cellix_render::{Grid, Image, Rasterizer, Rect, UNIT};
+use cellix_render::{Grid, Image, Rasterizer, Rect, Rgb, UNIT};
 use flate2::{Compression, write::ZlibEncoder};
 
 use crate::Backend;
@@ -62,6 +62,8 @@ pub struct PixelBackend<R> {
     smooth: Option<Smooth>,
     /// Whether region placements are waiting to be removed by the next present.
     scrolling: bool,
+    /// The colours last given to the cells under the tiles, along the window's edges.
+    edges: Vec<Rgb>,
 }
 
 /// What a row looks like, as a key: rows with the same key draw the same pixels.
@@ -104,6 +106,7 @@ impl<R: Rasterizer> PixelBackend<R> {
             frame: 0,
             smooth: None,
             scrolling: false,
+            edges: Vec::new(),
         }
     }
 
@@ -162,6 +165,33 @@ impl<R: Rasterizer> PixelBackend<R> {
                 }
                 out.extend_from_slice(b"\x1b[39m");
             }
+        }
+    }
+
+    /// Gives the cells under the tiles their colours along the window's edges. Tiles can't
+    /// reach a terminal's padding, but a terminal can extend cell colours into it, as
+    /// Ghostty does with `window-padding-color = extend`. Elsewhere nothing shows.
+    fn paint_edges(&mut self, out: &mut Vec<u8>, grid: &Grid) {
+        let (width, height) = (grid.width() as usize, grid.height() as usize);
+        self.edges.resize(width * height, Rgb(0, 0, 0));
+        let mut wrote = false;
+        for y in 0..height {
+            let row = grid.row(y as u16);
+            for (x, cell) in row.iter().enumerate() {
+                // Ghostty extends a row only when every cell in it has a colour.
+                let on_edge = y == 0 || y + 1 == height || x == 0 || x + 1 == width;
+                let at = y * width + x;
+                if !on_edge || self.edges[at] == cell.style.bg {
+                    continue;
+                }
+                self.edges[at] = cell.style.bg;
+                let Rgb(r, g, b) = cell.style.bg;
+                let _ = write!(out, "\x1b[{};{}H\x1b[48;2;{r};{g};{b}m ", y + 1, x + 1);
+                wrote = true;
+            }
+        }
+        if wrote {
+            out.extend_from_slice(b"\x1b[0m");
         }
     }
 
@@ -274,6 +304,10 @@ impl<R: Rasterizer> Backend for PixelBackend<R> {
             self.used = 0;
             self.shown = vec![None; grid.height() as usize];
             self.size = size;
+            self.edges.clear();
+        }
+        if self.placement == Placement::Direct {
+            self.paint_edges(&mut bytes, grid);
         }
         self.frame += 1;
         let mut on_screen = HashSet::new();
@@ -394,7 +428,7 @@ impl<R: Rasterizer> Backend for PixelBackend<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cellix_render::{Rgb, Style};
+    use cellix_render::Style;
 
     /// Solid tiles, so these tests measure the protocol and not fonts.
     struct Flat;

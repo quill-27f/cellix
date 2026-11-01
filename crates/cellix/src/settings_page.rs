@@ -1,8 +1,13 @@
+use std::sync::mpsc::Receiver;
+
 use cellix_render::{Bounds, Font, Grid, Measure, Rect, Rgb, Style};
 
 use crate::integrations;
-use crate::settings::default_server;
+use crate::settings::{SERVERS, Server};
 use crate::theme::Theme;
+
+/// Rows from one integration's card to the next.
+const BLOCK_STEP: u16 = 4;
 
 const SECTIONS: [(&str, Section); 4] = [
     ("Appearance", Section::Appearance),
@@ -16,16 +21,6 @@ const THEMES: [(&str, &str, &str); 3] = [
     ("light", "Light", "Always light"),
 ];
 const KEYMAPS: [(&str, &str); 3] = [("simple", "Standard"), ("vim", "Vim"), ("neovim", "Neovim")];
-const LANGUAGES: [&str; 8] = [
-    "Rust",
-    "Python",
-    "Go",
-    "TypeScript",
-    "Terraform",
-    "YAML",
-    "TOML",
-    "C",
-];
 /// Real keys, so this list stays a promise. Cmd stands in for Ctrl where the terminal
 /// passes it on.
 const SHORTCUTS: [(&str, &str); 14] = [
@@ -58,6 +53,9 @@ const TOGGLE_WIDTH: f32 = 2.6;
 const TITLE_SIZE: u8 = 170;
 const NOTE_SIZE: u8 = 90;
 const RADIUS: u8 = 30;
+/// Where the servers' rows start, from the top of the page.
+const SERVERS_ROW: u16 = 8;
+const INSTALL_WIDTH: u16 = 9;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Section {
@@ -76,7 +74,12 @@ pub enum Control {
     Minimap,
     Keymap(&'static str),
     ClaudeCode,
+    Codex,
+    Gemini,
     Ghostty,
+    GhosttyFill,
+    /// A language server to install, as an index into `SERVERS`.
+    InstallServer(usize),
 }
 
 /// The settings as they stand, passed in so the page holds no second copy.
@@ -94,10 +97,15 @@ pub struct Found {
     pub claude: bool,
     pub claude_installed: bool,
     pub codex: bool,
+    pub codex_installed: bool,
+    pub gemini: bool,
+    pub gemini_installed: bool,
     /// Whether Ghostty keeps Cmd+D, when this is Ghostty.
     pub ghostty_keeps_cmd_d: Option<bool>,
-    /// Language, server and whether it's installed.
-    pub servers: Vec<(&'static str, String, bool)>,
+    /// Whether Ghostty's padding stays empty, when this is Ghostty.
+    pub ghostty_keeps_padding: Option<bool>,
+    /// For each of `SERVERS`, whether it's installed.
+    pub servers: Vec<bool>,
 }
 
 impl Found {
@@ -107,17 +115,35 @@ impl Found {
             claude: integrations::on_path("claude", var),
             claude_installed: integrations::claude_installed(var),
             codex: integrations::on_path("codex", var),
+            codex_installed: integrations::codex_installed(var),
+            gemini: integrations::on_path("gemini", var),
+            gemini_installed: integrations::gemini_installed(var),
             ghostty_keeps_cmd_d: integrations::ghostty_keeps_cmd_d(var),
-            servers: LANGUAGES
+            ghostty_keeps_padding: integrations::ghostty_keeps_padding(var),
+            servers: SERVERS
                 .iter()
-                .filter_map(|language| {
-                    let server = default_server(language)?.into_iter().next()?;
-                    let found = integrations::on_path(&server, var);
-                    Some((*language, server, found))
-                })
+                .map(|s| integrations::on_path(s.command[0], var))
                 .collect(),
         }
     }
+}
+
+/// One card on the Integrations page.
+struct Block {
+    name: &'static str,
+    state: &'static str,
+    /// How the state reads.
+    tone: Tone,
+    detail: &'static str,
+    /// A button's label, whether it's the main one, and what it does.
+    action: Option<(&'static str, bool, Control)>,
+}
+
+#[derive(Clone, Copy)]
+enum Tone {
+    Good,
+    Quiet,
+    Warning,
 }
 
 /// The Settings page, which stands where the file would.
@@ -128,6 +154,10 @@ pub struct SettingsPage {
     pub found: Found,
     /// What the last action did.
     pub note: String,
+    /// The first language server in view.
+    pub top: usize,
+    /// An install under way, which says how it went.
+    pub installing: Option<Receiver<String>>,
 }
 
 impl SettingsPage {
@@ -137,6 +167,122 @@ impl SettingsPage {
             focus: None,
             found,
             note: String::new(),
+            top: 0,
+            installing: None,
+        }
+    }
+
+    pub fn scroll_by(&mut self, delta: isize) {
+        let last = SERVERS.len().saturating_sub(1) as isize;
+        self.top = (self.top as isize + delta).clamp(0, last) as usize;
+    }
+
+    /// The cards to show, which depend on what's on this machine.
+    fn blocks(&self) -> Vec<Block> {
+        let found = &self.found;
+        let mut blocks = vec![Self::claude_block(found)];
+        let agent = |name, on_path, installed, control, detail| {
+            let (state, tone, detail, action) = match (on_path, installed) {
+                (_, true) => (
+                    "Installed",
+                    Tone::Good,
+                    "Its work shows in Agents, and it reads your comments.",
+                    Some(("Remove", false, control)),
+                ),
+                (true, false) => (
+                    "Plugin not installed",
+                    Tone::Quiet,
+                    detail,
+                    Some(("Install", true, control)),
+                ),
+                (false, false) => ("Not installed", Tone::Quiet, detail, None),
+            };
+            Block {
+                name,
+                state,
+                tone,
+                detail,
+                action,
+            }
+        };
+        blocks.push(agent(
+            "Codex",
+            found.codex,
+            found.codex_installed,
+            Control::Codex,
+            "Shows Codex's work in Agents, and hands it your comments.",
+        ));
+        blocks.push(agent(
+            "Gemini CLI",
+            found.gemini,
+            found.gemini_installed,
+            Control::Gemini,
+            "Shows Gemini's work in Agents, and hands it your comments.",
+        ));
+        match found.ghostty_keeps_padding {
+            Some(true) => blocks.push(Block {
+                name: "Ghostty window",
+                state: "Padding stays empty",
+                tone: Tone::Warning,
+                detail: "Fill it with Cellix's colours. This changes every Ghostty window.",
+                action: Some(("Fill window", false, Control::GhosttyFill)),
+            }),
+            Some(false) => blocks.push(Block {
+                name: "Ghostty window",
+                state: "Filled",
+                tone: Tone::Good,
+                detail: "Cellix's colours reach the window's edge.",
+                action: None,
+            }),
+            None => {}
+        }
+        match found.ghostty_keeps_cmd_d {
+            Some(true) => blocks.push(Block {
+                name: "Ghostty keys",
+                state: "Cmd+D opens a split",
+                tone: Tone::Warning,
+                detail: "Ghostty keeps Cmd+D for itself. Ctrl+D always works.",
+                action: Some(("Free Cmd+D", false, Control::Ghostty)),
+            }),
+            Some(false) => blocks.push(Block {
+                name: "Ghostty keys",
+                state: "Cmd+D is free",
+                tone: Tone::Good,
+                detail: "Reload Ghostty's config if Cmd+D doesn't select yet.",
+                action: None,
+            }),
+            None => {}
+        }
+        blocks
+    }
+
+    fn claude_block(found: &Found) -> Block {
+        let (state, tone, detail, action) = match (found.claude, found.claude_installed) {
+            (_, true) => (
+                "Installed",
+                Tone::Good,
+                "Opens as a pane in every Claude session, with no flags.",
+                ("Remove", false),
+            ),
+            (true, false) => (
+                "Plugin not installed",
+                Tone::Quiet,
+                "Install to open Cellix as a pane in every Claude session.",
+                ("Install", true),
+            ),
+            (false, false) => (
+                "Claude Code not found",
+                Tone::Quiet,
+                "You can install now, and it's ready when Claude Code is.",
+                ("Install", true),
+            ),
+        };
+        Block {
+            name: "Claude Code",
+            state,
+            tone,
+            detail,
+            action: Some((action.0, action.1, Control::ClaudeCode)),
         }
     }
 
@@ -183,19 +329,34 @@ impl SettingsPage {
                     let rect = Rect::new(x, page.y + 3, SEGMENT_WIDTH, 1);
                     spots.push((rect, Control::Keymap(name)));
                 }
+                let rows = self.server_rows(page);
+                for (row, index) in rows.enumerate() {
+                    if !self.found.servers.get(index).copied().unwrap_or(false) {
+                        let x = page.right().saturating_sub(INSTALL_WIDTH);
+                        let y = page.y + SERVERS_ROW + row as u16;
+                        let rect = Rect::new(x, y, INSTALL_WIDTH, 1);
+                        spots.push((rect, Control::InstallServer(index)));
+                    }
+                }
             }
             Section::Integrations => {
                 let x = page.right().saturating_sub(BUTTON_WIDTH + 2);
-                let row = |index: u16| page.y + 4 + index * 5;
-                spots.push((Rect::new(x, row(0), BUTTON_WIDTH, 2), Control::ClaudeCode));
-                if self.found.ghostty_keeps_cmd_d == Some(true) {
-                    let rect = Rect::new(x, row(2), BUTTON_WIDTH, 2);
-                    spots.push((rect, Control::Ghostty));
+                for (index, block) in self.blocks().iter().enumerate() {
+                    if let Some((_, _, control)) = block.action {
+                        let y = page.y + 3 + index as u16 * BLOCK_STEP;
+                        spots.push((Rect::new(x, y, BUTTON_WIDTH, 2), control));
+                    }
                 }
             }
             Section::Keyboard => {}
         }
         spots
+    }
+
+    /// The servers that fit on the page, by their place in `SERVERS`.
+    fn server_rows(&self, page: Rect) -> std::ops::Range<usize> {
+        let room = page.h.saturating_sub(SERVERS_ROW) as usize;
+        self.top..(self.top + room).min(SERVERS.len())
     }
 
     pub fn control_at(&self, area: Rect, x: u16, y: u16) -> Option<Control> {
@@ -260,7 +421,7 @@ impl SettingsPage {
                 let minimap = ("Minimap", "The file at a glance, when the window has room.");
                 draw_toggle(grid, page, below + 3, minimap, values.minimap, theme);
             }
-            Section::Editor => self.draw_editor(grid, page, &spots, values, theme),
+            Section::Editor => self.draw_editor(grid, page, &spots, values, hover, theme),
             Section::Integrations => self.draw_integrations(grid, page, (hover, measure), theme),
             Section::Keyboard => draw_keyboard(grid, page, theme),
         }
@@ -302,6 +463,7 @@ impl SettingsPage {
         page: Rect,
         spots: &[(Rect, Control)],
         values: &Values,
+        hover: Option<(u16, u16)>,
         theme: &Theme,
     ) {
         heading(grid, page, "Editor", "How keys and languages work.", theme);
@@ -321,38 +483,76 @@ impl SettingsPage {
                 grid.large_button(rect.x, rect.y, &cells, label, fill, style);
             }
         }
-        let mut y = page.y + 7;
-        let above = Bounds::cells(page.x as f32, y as f32 - 0.5, page.w as f32, 0.0);
+        let line_y = page.y + SERVERS_ROW - 2;
+        let above = Bounds::cells(page.x as f32, line_y as f32 - 0.5, page.w as f32, 0.0);
         grid.hairline(above, theme.border);
-        draw_note(grid, page, y, "LANGUAGE SERVERS", theme);
-        y += 1;
-        for (language, server, found) in &self.found.servers {
-            if y >= page.bottom() {
-                break;
-            }
-            grid.label(page.x, y, language, theme.text, page.x + 16);
-            let quiet = Style {
-                fg: theme.gutter.fg,
-                ..theme.text
-            };
-            grid.label(
-                page.x + 16,
-                y,
-                server,
-                quiet,
-                page.right().saturating_sub(16),
+        draw_note(grid, page, line_y, "LANGUAGE SERVERS", theme);
+        for (row, index) in self.server_rows(page).enumerate() {
+            let y = page.y + SERVERS_ROW + row as u16;
+            self.draw_server(grid, page, (y, index), spots, hover, theme);
+        }
+    }
+
+    /// One server: its languages and program, and whether it's here or a click from it.
+    fn draw_server(
+        &self,
+        grid: &mut Grid,
+        page: Rect,
+        (y, index): (u16, usize),
+        spots: &[(Rect, Control)],
+        hover: Option<(u16, u16)>,
+        theme: &Theme,
+    ) {
+        let server: &Server = &SERVERS[index];
+        let row = Rect::new(page.x, y, page.w, 1);
+        let hovered = hover.is_some_and(|h| row.contains(h.0, h.1));
+        if hovered {
+            let wash = Bounds::cells(
+                page.x as f32 - 0.6,
+                y as f32 + 0.055,
+                page.w as f32 + 1.2,
+                0.89,
             );
-            let (word, color) = if *found {
-                ("Found", theme.git_added)
-            } else {
-                ("Not installed", theme.gutter.fg)
-            };
+            grid.panel(wash, 18, Some(theme.row_hover), None);
+        }
+        let quiet = Style {
+            fg: theme.gutter.fg,
+            ..theme.text
+        };
+        grid.label(page.x, y, server.languages[0], theme.text, page.x + 16);
+        let found = self.found.servers.get(index).copied().unwrap_or(false);
+        // Hovering a missing server shows what its button will run.
+        let shown = if hovered && !found {
+            server.install
+        } else {
+            server.command[0]
+        };
+        let end = page.right().saturating_sub(INSTALL_WIDTH + 1);
+        grid.label(page.x + 16, y, shown, quiet, end);
+        if found {
             let state = Style {
-                fg: color,
+                fg: theme.git_added,
                 ..theme.text
             };
-            grid.label_right(page.right(), y, word, state, NOTE_SIZE);
-            y += 1;
+            grid.label_right(page.right(), y, "Found", state, NOTE_SIZE);
+            return;
+        }
+        let spot = spots
+            .iter()
+            .find(|(_, c)| *c == Control::InstallServer(index));
+        if let Some((rect, _)) = spot {
+            let on = hover.is_some_and(|h| rect.contains(h.0, h.1));
+            let fill = if on {
+                theme.pick
+            } else {
+                theme.quiet_button(theme.text.bg)
+            };
+            let style = Style {
+                fg: theme.text.fg,
+                ..theme.text
+            };
+            let cells = format!("{:^width$}", "Install", width = rect.w as usize);
+            grid.button(rect.x, rect.y, &cells, "Install", fill, style);
         }
     }
 
@@ -370,86 +570,52 @@ impl SettingsPage {
             "Cellix works inside your agents. Nothing here changes until you click.",
             theme,
         );
-        let found = &self.found;
-        let (word, color, detail, action) = match (found.claude, found.claude_installed) {
-            (_, true) => (
-                "Installed",
-                theme.git_added,
-                "Opens as a pane in every Claude session, with no flags.",
-                "Remove",
-            ),
-            (true, false) => (
-                "Plugin not installed",
-                theme.gutter.fg,
-                "Install to open Cellix as a pane in every Claude session.",
-                "Install",
-            ),
-            (false, false) => (
-                "Claude Code not found",
-                theme.gutter.fg,
-                "You can install now, and it's ready when Claude Code is.",
-                "Install",
-            ),
-        };
-        let spot = Rect::new(
-            page.right().saturating_sub(BUTTON_WIDTH + 2),
-            page.y + 4,
-            BUTTON_WIDTH,
-            2,
-        );
-        let primary = !found.claude_installed;
-        let block = |index| (index, measure);
-        draw_block(
-            grid,
-            page,
-            block(0),
-            ("Claude Code", word, color),
-            detail,
-            theme,
-        );
-        draw_button(grid, spot, action, primary, hover, theme);
-
-        let (word, detail) = if found.codex {
-            (
-                "Found",
-                "Cellix can open Codex, but there's no review pane for it yet.",
-            )
-        } else {
-            (
-                "Not installed",
-                "Cellix can open Codex once it's here. There's no review pane for it yet.",
-            )
-        };
-        let color = if found.codex {
-            theme.git_added
-        } else {
-            theme.gutter.fg
-        };
-        draw_block(grid, page, block(1), ("Codex", word, color), detail, theme);
-
-        match found.ghostty_keeps_cmd_d {
-            Some(true) => {
-                let title = ("Ghostty", "Cmd+D opens a split", theme.attention);
-                let detail = "Ghostty keeps Cmd+D for itself. Ctrl+D always works.";
-                draw_block(grid, page, block(2), title, detail, theme);
-                let spot = Rect::new(spot.x, page.y + 14, BUTTON_WIDTH, 2);
-                draw_button(grid, spot, "Free Cmd+D", false, hover, theme);
+        let blocks = self.blocks();
+        for (index, block) in blocks.iter().enumerate() {
+            let color = match block.tone {
+                Tone::Good => theme.git_added,
+                Tone::Quiet => theme.gutter.fg,
+                Tone::Warning => theme.attention,
+            };
+            let text = (block.name, block.state, color);
+            draw_block(
+                grid,
+                page,
+                (index as u16, measure),
+                text,
+                block.detail,
+                theme,
+            );
+            if let Some((label, primary, control)) = block.action {
+                let spots = self.controls_at(page);
+                let spot = spots.iter().find(|(_, c)| *c == control);
+                if let Some((rect, _)) = spot {
+                    draw_button(grid, *rect, label, primary, hover, theme);
+                }
             }
-            Some(false) => {
-                let title = ("Ghostty", "Cmd+D is free", theme.git_added);
-                let detail = "Reload Ghostty's config if Cmd+D doesn't select yet.";
-                draw_block(grid, page, block(2), title, detail, theme);
-            }
-            None => {}
         }
         if !self.note.is_empty() {
             let style = Style {
                 fg: theme.accent,
                 ..theme.text
             };
-            let y = page.y + 19;
+            let y = page.y + 3 + blocks.len() as u16 * BLOCK_STEP;
             grid.label(page.x, y, &self.note, style, page.right());
         }
+    }
+
+    /// Where the cards' buttons sit on a page already laid out.
+    fn controls_at(&self, page: Rect) -> Vec<(Rect, Control)> {
+        let x = page.right().saturating_sub(BUTTON_WIDTH + 2);
+        let blocks = self.blocks();
+        let placed = blocks.iter().enumerate();
+        placed
+            .filter_map(|(index, block)| {
+                let (_, _, control) = block.action?;
+                let y = page.y + 3 + index as u16 * BLOCK_STEP;
+                Some((Rect::new(x, y, BUTTON_WIDTH, 2), control))
+            })
+            .collect()
     }
 }
 
@@ -613,9 +779,8 @@ fn draw_block(
     detail: &str,
     theme: &Theme,
 ) {
-    let top = page.y + 3 + index * 5;
-    let box_area = Rect::new(page.x, top, page.w, 4);
-    let surface = Bounds::inset(box_area, 0.0, 0.0);
+    let top = page.y + 3 + index * BLOCK_STEP;
+    let surface = Bounds::cells(page.x as f32, top as f32 - 0.4, page.w as f32, 2.8);
     grid.panel(surface, RADIUS, Some(theme.tab.bg), Some(theme.border));
     let style = Style {
         fg: theme.heading,
@@ -624,21 +789,21 @@ fn draw_block(
         ..theme.text
     };
     let x = page.x + 2;
-    let end = grid.label(x, top + 1, name, style, page.right());
+    let end = grid.label(x, top, name, style, page.right());
     let bold = Font {
         bold: true,
         ..Font::default()
     };
     let name_end = (x as f32 + measure.width(name, bold)).ceil() as u16;
     let at = if measure.in_cells() { end } else { name_end };
-    badge(grid, at + 1, top + 1, word, color, theme);
+    badge(grid, at + 1, top, word, color, theme);
     let quiet = Style {
         fg: theme.gutter.fg,
         bg: theme.tab.bg,
         ..theme.text
     };
     let room = page.right().saturating_sub(BUTTON_WIDTH + 3);
-    grid.label(x, top + 2, detail, quiet, room);
+    grid.label(x, top + 1, detail, quiet, room);
 }
 
 fn draw_button(
@@ -708,9 +873,8 @@ mod tests {
     fn page(section: Section) -> SettingsPage {
         SettingsPage {
             section,
-            focus: None,
             found: Found::default(),
-            note: String::new(),
+            ..SettingsPage::new(Found::default())
         }
     }
 

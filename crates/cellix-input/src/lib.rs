@@ -166,9 +166,12 @@ pub enum Command {
     Commit,
     OpenClaude,
     OpenCodex,
+    OpenGemini,
     OpenSettings,
     SwitchBranch,
     GoToDefinition,
+    GoToReferences,
+    FormatDocument,
     Complete,
     RenameSymbol,
     /// Selects this many whole lines from the cursor.

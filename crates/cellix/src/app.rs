@@ -37,7 +37,7 @@ use crate::palette::{COMMANDS, Input, Item, Palette, input, popup, raised};
 use crate::rendered;
 use crate::review::{Hit, Review};
 use crate::search::{self, Field, Search};
-use crate::settings::{Settings, default_server};
+use crate::settings::{SERVERS, Settings, default_server, formatter};
 use crate::settings_page::{Control, Found, SettingsPage, Values};
 use crate::theme::Theme;
 
@@ -95,6 +95,8 @@ const COMPACT_WIDTH: u16 = 70;
 const MENU_BUTTON: u16 = 3;
 /// Columns the status bar gives a branch's name, so a long one can't crowd the message.
 const STATUS_BRANCH_WIDTH: u16 = 28;
+/// Spaces per indent, which is what the status bar shows and formatters are told.
+const TAB_SIZE: usize = 4;
 const WHEEL_LINES: isize = 3;
 /// Wheel events closer together than this are a trackpad's stream.
 const WHEEL_STREAM_GAP: std::time::Duration = std::time::Duration::from_millis(60);
@@ -251,6 +253,58 @@ fn system_clipboard() -> Option<String> {
         let text = String::from_utf8(output.stdout).ok()?;
         (output.status.success() && !text.is_empty()).then_some(text)
     })
+}
+
+/// Runs a language server's install command, and says how it went.
+fn install_server(index: usize) -> String {
+    let Some(server) = SERVERS.get(index) else {
+        return String::new();
+    };
+    let done = std::process::Command::new("sh")
+        .args(["-lc", server.install])
+        .stdin(std::process::Stdio::null())
+        .output();
+    match done {
+        Ok(done) if done.status.success() => format!("Installed {}", server.command[0]),
+        Ok(done) => {
+            let said = String::from_utf8_lossy(&done.stderr);
+            let first = said.lines().rfind(|l| !l.trim().is_empty());
+            format!("Couldn't: {}", first.unwrap_or("the install failed").trim())
+        }
+        Err(e) => format!("Couldn't: {e}"),
+    }
+}
+
+/// Runs text through a formatter on stdin, and returns what comes out.
+fn format_with(tool: &[&str], path: &str, text: &str) -> Result<String, String> {
+    use std::io::Write;
+    use std::process::{Command as Process, Stdio};
+    let (program, args) = tool.split_first().ok_or("No formatter")?;
+    let mut command = Process::new(program);
+    command.args(args);
+    if args.last() == Some(&"--stdin-filepath") {
+        command.arg(path);
+    }
+    let child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
+    let Ok(mut child) = child else {
+        return Err(format!("Install {program} to format this file"));
+    };
+    let mut stdin = child.stdin.take().ok_or("No formatter input")?;
+    let input = text.to_string();
+    // On a thread, so a big file can't fill the pipe while nothing reads the other end.
+    let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()));
+    let done = child.wait_with_output().map_err(|e| e.to_string())?;
+    let _ = writer.join();
+    if done.status.success() {
+        return String::from_utf8(done.stdout).map_err(|e| e.to_string());
+    }
+    let said = String::from_utf8_lossy(&done.stderr);
+    let first = said.lines().next().unwrap_or("it failed");
+    Err(format!("{program}: {first}"))
 }
 
 /// Saves a setting, and returns what to say if that failed.
@@ -593,11 +647,13 @@ impl App {
         self.tell_selection();
         let searched = self.search.poll();
         let reviewed = self.review.as_mut().is_some_and(Review::poll);
+        let installed = self.poll_install();
         let mut events = Vec::new();
         for client in self.servers.values() {
             events.extend(client.events.try_iter());
         }
-        let changed = highlighted || called || searched || reviewed || !events.is_empty();
+        let changed =
+            highlighted || called || searched || reviewed || installed || !events.is_empty();
         for event in events {
             self.lsp_event(event);
         }
@@ -914,6 +970,19 @@ impl App {
                 self.server_words = labels;
                 self.rank_suggestions();
             }
+            LspEvent::References(places) => self.show_references(places),
+            LspEvent::Formatted(path, edits) => {
+                let count = edits.len();
+                let area = self.focused_area();
+                match self.apply_edits(&path, edits) {
+                    Ok(()) if count == 0 => self.say("Already formatted"),
+                    Ok(()) => self.say("Formatted"),
+                    Err(e) => self.say(format!("Could not format: {e}")),
+                }
+                if let Some(editor) = self.editor_mut() {
+                    editor.reveal(area);
+                }
+            }
             LspEvent::Failed(message) => {
                 self.pending_rename = None;
                 self.say(message);
@@ -973,6 +1042,91 @@ impl App {
         Ok(())
     }
 
+    /// Lists a symbol's references where search results go, as VS Code's panel does.
+    fn show_references(&mut self, places: Vec<(PathBuf, usize, usize)>) {
+        if places.is_empty() {
+            self.say("No references found");
+            return;
+        }
+        let word = self.typed_symbol();
+        let mut found = Vec::new();
+        for (path, line, column) in places {
+            let open = self
+                .editors
+                .iter()
+                .find(|e| e.buffer.path() == Some(path.as_path()));
+            let text = match open {
+                Some(editor) => editor.line_text(line),
+                None => std::fs::read_to_string(&path)
+                    .ok()
+                    .and_then(|t| t.lines().nth(line).map(str::to_string))
+                    .unwrap_or_default(),
+            };
+            found.push(cellix_core::Match {
+                path,
+                line,
+                column,
+                text,
+            });
+        }
+        self.search.show(word, found);
+        self.sidebar_view = SidebarView::Search;
+        self.show_sidebar = true;
+        self.drawer = self.compact();
+    }
+
+    /// The word at the caret.
+    fn typed_symbol(&self) -> String {
+        let Some(editor) = self.editors.get(self.active()) else {
+            return String::new();
+        };
+        let (start, end) = editor.buffer.word_at(editor.selections.primary().head);
+        editor.buffer.rope().slice(start..end).to_string()
+    }
+
+    /// Formats with the language server if there is one, and otherwise with a formatter
+    /// that's on the path.
+    fn format_document(&mut self) {
+        self.poll();
+        let Some(editor) = self.editors.get(self.active()) else {
+            return;
+        };
+        let Some(path) = editor.buffer.path().map(Path::to_path_buf) else {
+            return;
+        };
+        let text = editor.buffer.text();
+        let language = Registry::language_name(&path).unwrap_or("Plain Text");
+        if let Some(client) = self.servers.get_mut(language) {
+            client.format(&path, TAB_SIZE);
+            return;
+        }
+        let Some(tool) = formatter(language) else {
+            self.say(format!("No formatter for {language}"));
+            return;
+        };
+        let name = path.display().to_string();
+        match format_with(tool, &name, &text) {
+            Ok(formatted) if formatted == text => self.say("Already formatted"),
+            Ok(formatted) => {
+                let area = self.focused_area();
+                if let Some(editor) = self.editor_mut() {
+                    let end = editor.buffer.rope().len_chars();
+                    let head = editor.selections.primary().head;
+                    editor
+                        .buffer
+                        .replace_range(&mut editor.selections, 0, end, &formatted);
+                    let last = editor.buffer.rope().len_chars();
+                    editor
+                        .selections
+                        .set_single(Selection::cursor(head.min(last)));
+                    editor.reveal(area);
+                }
+                self.say("Formatted");
+            }
+            Err(e) => self.say(e),
+        }
+    }
+
     fn lsp_target(&mut self) -> Option<(&'static str, PathBuf, usize, usize)> {
         let editor = self.editors.get(self.active())?;
         let path = editor.buffer.path()?.to_path_buf();
@@ -994,6 +1148,7 @@ impl App {
         };
         match command {
             Command::GoToDefinition => client.definition(&path, line, column),
+            Command::GoToReferences => client.references(&path, line, column),
             _ => client.completion(&path, line, column),
         }
     }
@@ -2189,9 +2344,10 @@ impl App {
                 self.show_sidebar = true;
                 self.drawer = self.compact();
                 self.agents.worktrees = worktrees(self.workspace.root());
-                self.agents.look_for_codex();
+                self.agents.look_for_agents();
                 self.agents.scan(self.workspace.root());
             }
+            Command::OpenGemini => self.open_agent("gemini"),
             Command::OpenSettings => {
                 let closing = self.settings_page.is_some();
                 self.settings_page = (!closing).then(|| SettingsPage::new(Found::look()));
@@ -2224,7 +2380,8 @@ impl App {
                     editor.reveal(area);
                 }
             }
-            Command::GoToDefinition => self.lsp_request(command),
+            Command::GoToDefinition | Command::GoToReferences => self.lsp_request(command),
+            Command::FormatDocument => self.format_document(),
             Command::Complete => {
                 self.suggest_asked = true;
                 self.poll();
@@ -3024,8 +3181,7 @@ impl App {
             MouseKind::Left if in_sidebar && self.sidebar_view == SidebarView::Agents => {
                 let hit = self.sidebar_area().and_then(|a| self.agents.hit(a, y));
                 match hit {
-                    Some(AgentHit::OpenClaude) => self.run(Command::OpenClaude),
-                    Some(AgentHit::OpenCodex) => self.run(Command::OpenCodex),
+                    Some(AgentHit::Start(program)) => self.open_agent(program),
                     Some(AgentHit::Worktree(path)) => {
                         self.review = Some(self.new_review(path));
                         self.drawer = false;
@@ -3307,7 +3463,10 @@ impl App {
             let server = language.is_some_and(|l| self.servers.contains_key(l));
             items.extend([
                 run("Go to Definition", Command::GoToDefinition).when(server),
+                run("Go to References", Command::GoToReferences).when(server),
                 run("Rename Symbol", Command::RenameSymbol).when(server),
+                run("Format Document", Command::FormatDocument)
+                    .when(server || language.is_some_and(|l| formatter(l).is_some())),
             ]);
             if language == Some("Markdown") {
                 items.push(run("Show Page", Command::MarkdownPreview));
@@ -3477,6 +3636,17 @@ impl App {
         let Some(page) = &self.settings_page else {
             return;
         };
+        if matches!(mouse.kind, MouseKind::ScrollUp | MouseKind::ScrollDown) {
+            let delta = if mouse.kind == MouseKind::ScrollUp {
+                -1
+            } else {
+                1
+            };
+            if let Some(page) = &mut self.settings_page {
+                page.scroll_by(delta);
+            }
+            return;
+        }
         if mouse.kind != MouseKind::Left {
             return;
         }
@@ -3550,19 +3720,100 @@ impl App {
                 };
                 note = done.map_or_else(|e| format!("Couldn't: {e}"), str::to_string);
             }
+            Control::Codex | Control::Gemini | Control::InstallServer(_) => {
+                self.start_install(control);
+                return;
+            }
             Control::Ghostty => {
                 note = crate::integrations::free_cmd_d(var).map_or_else(
                     |e| format!("Couldn't: {e}"),
                     |()| "Done. Reload Ghostty's config with Cmd+Shift+,".to_string(),
                 );
             }
+            Control::GhosttyFill => {
+                note = crate::integrations::fill_ghostty_window(var).map_or_else(
+                    |e| format!("Couldn't: {e}"),
+                    |()| "Done. Reload Ghostty's config with Cmd+Shift+,".to_string(),
+                );
+            }
         }
         if let Some(page) = &mut self.settings_page {
-            if matches!(control, Control::ClaudeCode | Control::Ghostty) {
+            if matches!(
+                control,
+                Control::ClaudeCode | Control::Ghostty | Control::GhosttyFill
+            ) {
                 page.found = Found::look();
             }
             page.note = note;
         }
+    }
+
+    /// Starts an install off the main thread: package managers and agents' own commands
+    /// can take minutes, and the app stays usable meanwhile.
+    fn start_install(&mut self, control: Control) {
+        let Some(page) = &mut self.settings_page else {
+            return;
+        };
+        if page.installing.is_some() {
+            page.note = "Another install is still running".to_string();
+            return;
+        }
+        let found = (page.found.codex_installed, page.found.gemini_installed);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        page.note = "Working…".to_string();
+        page.installing = Some(receiver);
+        std::thread::spawn(move || {
+            let var = |name: &str| std::env::var(name).ok();
+            let said = |done: io::Result<()>, note: &str| {
+                done.map_or_else(|e| format!("Couldn't: {e}"), |()| note.to_string())
+            };
+            let note = match control {
+                Control::Codex if found.0 => {
+                    said(crate::integrations::remove_codex(), "Removed from Codex.")
+                }
+                Control::Codex => said(
+                    crate::integrations::install_codex(var),
+                    "Installed. Run /hooks in Codex once to trust its hooks.",
+                ),
+                Control::Gemini if found.1 => said(
+                    crate::integrations::remove_gemini(),
+                    "Removed from Gemini CLI.",
+                ),
+                Control::Gemini => said(
+                    crate::integrations::install_gemini(var),
+                    "Installed. Restart Gemini CLI to load it.",
+                ),
+                Control::InstallServer(index) => install_server(index),
+                _ => String::new(),
+            };
+            let _ = sender.send(note);
+        });
+    }
+
+    /// Takes in a finished install, and connects any file it can now help.
+    fn poll_install(&mut self) -> bool {
+        let Some(page) = &mut self.settings_page else {
+            return false;
+        };
+        let done = page.installing.as_ref().and_then(|r| r.try_recv().ok());
+        let Some(note) = done else {
+            return false;
+        };
+        page.installing = None;
+        page.note = note;
+        page.found = Found::look();
+        let paths: Vec<PathBuf> = self
+            .editors
+            .iter()
+            .filter_map(|e| e.buffer.path().map(Path::to_path_buf))
+            .collect();
+        let active = self.active();
+        for (index, path) in paths.iter().enumerate() {
+            self.set_active(index);
+            self.attach_server(path);
+        }
+        self.set_active(active.min(self.editors.len().saturating_sub(1)));
+        true
     }
 
     /// The new smooth scrolling setting, once, for the terminal loop to act on.
@@ -7512,7 +7763,6 @@ while True:
         let (_dir, mut app) = project();
         app.run(Command::ShowAgents);
         let text = screen(&app).text();
-        assert!(text.contains("Open Claude Code"), "{text}");
         assert!(text.contains("No agents here"), "{text}");
     }
 
@@ -7536,5 +7786,48 @@ while True:
             "claude",
         ];
         assert_eq!(words, expected);
+    }
+
+    #[test]
+    fn references_land_in_the_search_panel_and_open_where_they_are() {
+        let (dir, mut app) = project();
+        let path = dir.path().join("beta.rs");
+        app.open(&path).unwrap();
+        app.show_references(vec![
+            (path.clone(), 0, 3),
+            (dir.path().join("src/lib.rs"), 0, 7),
+        ]);
+        assert!(app.sidebar_view == SidebarView::Search);
+        let text = screen(&app).text();
+        assert!(text.contains("2 results in 2 files"), "{text}");
+        assert!(text.contains("pub fn x"), "read from disk: {text}");
+    }
+
+    #[test]
+    fn no_references_says_so() {
+        let (_dir, mut app) = project();
+        app.show_references(Vec::new());
+        assert!(screen(&app).text().contains("No references found"));
+        assert!(app.sidebar_view != SidebarView::Search);
+    }
+
+    #[test]
+    fn a_formatter_reads_the_file_and_gives_it_back() {
+        assert_eq!(format_with(&["cat"], "a.rs", "x\n").unwrap(), "x\n");
+        let missing = format_with(&["no-such-formatter"], "a.rs", "x").unwrap_err();
+        assert!(missing.contains("Install no-such-formatter"), "{missing}");
+        let failed = format_with(&["false"], "a.rs", "x").unwrap_err();
+        assert!(failed.starts_with("false:"), "{failed}");
+    }
+
+    #[test]
+    fn code_menus_offer_references_and_formatting() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("beta.rs")).unwrap();
+        let (x, y) = find(&screen(&app), "main");
+        app.handle(mouse(MouseKind::Right, x, y));
+        let text = screen(&app).text();
+        assert!(text.contains("Go to References"), "{text}");
+        assert!(text.contains("Format Document"), "{text}");
     }
 }

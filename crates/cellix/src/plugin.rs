@@ -26,6 +26,41 @@ const FILES: [(&str, &str); 5] = [
     ),
 ];
 
+/// The Codex plugin, under the marketplace folder Codex reads it from.
+const CODEX_FILES: [(&str, &str); 4] = [
+    (
+        "plugins/cellix/plugin.json",
+        include_str!("../../../integrations/codex/plugin.json"),
+    ),
+    (
+        "plugins/cellix/hooks/hooks.json",
+        include_str!("../../../integrations/codex/hooks/hooks.json"),
+    ),
+    (
+        "plugins/cellix/skills/cellix-review/SKILL.md",
+        include_str!("../../../integrations/codex/skills/cellix-review/SKILL.md"),
+    ),
+    (
+        ".agents/plugins/marketplace.json",
+        include_str!("../../../integrations/codex/marketplace.json"),
+    ),
+];
+
+const GEMINI_FILES: [(&str, &str); 3] = [
+    (
+        "gemini-extension.json",
+        include_str!("../../../integrations/gemini/gemini-extension.json"),
+    ),
+    (
+        "hooks/hooks.json",
+        include_str!("../../../integrations/gemini/hooks/hooks.json"),
+    ),
+    (
+        "GEMINI.md",
+        include_str!("../../../integrations/gemini/GEMINI.md"),
+    ),
+];
+
 fn data_dir(var: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
     let data = var("XDG_DATA_HOME")
         .filter(|d| !d.is_empty())
@@ -34,7 +69,11 @@ fn data_dir(var: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
 }
 
 pub(crate) fn write_to(folder: &Path) -> io::Result<()> {
-    for (name, text) in FILES {
+    write_files(folder, &FILES)
+}
+
+fn write_files(folder: &Path, files: &[(&str, &str)]) -> io::Result<()> {
+    for (name, text) in files {
         let path = folder.join(name);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -42,6 +81,24 @@ pub(crate) fn write_to(folder: &Path) -> io::Result<()> {
         fs::write(path, text)?;
     }
     Ok(())
+}
+
+/// Writes the Codex marketplace, and returns its folder.
+pub(crate) fn write_codex(var: impl Fn(&str) -> Option<String>) -> io::Result<PathBuf> {
+    let folder = data_dir(var)
+        .ok_or(io::ErrorKind::NotFound)?
+        .join("cellix/codex");
+    write_files(&folder, &CODEX_FILES)?;
+    Ok(folder)
+}
+
+/// Writes the Gemini extension, and returns its folder.
+pub(crate) fn write_gemini(var: impl Fn(&str) -> Option<String>) -> io::Result<PathBuf> {
+    let folder = data_dir(var)
+        .ok_or(io::ErrorKind::NotFound)?
+        .join("cellix/gemini");
+    write_files(&folder, &GEMINI_FILES)?;
+    Ok(folder)
 }
 
 /// Where the Claude Code plugin lives.

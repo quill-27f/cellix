@@ -34,16 +34,22 @@ pub enum LspEvent {
     Definition(PathBuf, usize, usize),
     Completion(Vec<String>),
     Rename(Vec<(PathBuf, Vec<TextEdit>)>),
+    /// Everywhere a symbol is used, as (file, line, column).
+    References(Vec<(PathBuf, usize, usize)>),
+    /// The edits that format a file.
+    Formatted(PathBuf, Vec<TextEdit>),
     /// The server refused a request, in its own words.
     Failed(String),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Pending {
     Initialize,
     Definition,
     Completion,
     Rename,
+    References,
+    Formatting(PathBuf),
 }
 
 /// Holds messages until the server has answered `initialize`, as the protocol requires.
@@ -87,6 +93,17 @@ impl Drop for Client {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+/// The name the protocol knows a language by, where that isn't simply ours in lower case.
+fn language_id(language: &str) -> String {
+    match language {
+        "C#" => "csharp".to_string(),
+        "C++" => "cpp".to_string(),
+        "Shell" => "shellscript".to_string(),
+        "TSX" => "typescriptreact".to_string(),
+        other => other.to_lowercase(),
     }
 }
 
@@ -154,6 +171,19 @@ fn parse_location(result: &Value) -> Option<LspEvent> {
     };
     let (line, column) = position(&range["start"]);
     Some(LspEvent::Definition(path_of(uri)?, line, column))
+}
+
+fn parse_references(result: &Value) -> LspEvent {
+    let found = result
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|location| {
+            let path = path_of(location["uri"].as_str()?)?;
+            let (line, column) = position(&location["range"]["start"]);
+            Some((path, line, column))
+        });
+    LspEvent::References(found.collect())
 }
 
 fn parse_completion(result: &Value) -> LspEvent {
@@ -281,6 +311,8 @@ fn read_loop(
             Some(Pending::Definition) => parse_location(result),
             Some(Pending::Completion) => Some(parse_completion(result)),
             Some(Pending::Rename) => Some(parse_rename(result)),
+            Some(Pending::References) => Some(parse_references(result)),
+            Some(Pending::Formatting(path)) => Some(LspEvent::Formatted(path, text_edits(result))),
             None => None,
         };
         if let Some(event) = event {
@@ -348,6 +380,8 @@ impl Client {
                         "definition": {},
                         "completion": {},
                         "rename": {},
+                        "references": {},
+                        "formatting": {},
                     },
                 },
             },
@@ -388,7 +422,7 @@ impl Client {
             "textDocument/didOpen",
             json!({"textDocument": {
                 "uri": uri(path),
-                "languageId": language.to_lowercase(),
+                "languageId": language_id(language),
                 "version": 1,
                 "text": text,
             }}),
@@ -433,6 +467,21 @@ impl Client {
         self.request("textDocument/completion", params, Pending::Completion);
     }
 
+    pub fn references(&mut self, path: &Path, line: usize, column: usize) {
+        let mut params = Self::at(path, line, column);
+        params["context"] = json!({"includeDeclaration": true});
+        self.request("textDocument/references", params, Pending::References);
+    }
+
+    pub fn format(&mut self, path: &Path, tab_size: usize) {
+        let params = json!({
+            "textDocument": {"uri": uri(path)},
+            "options": {"tabSize": tab_size, "insertSpaces": true},
+        });
+        let kind = Pending::Formatting(path.to_path_buf());
+        self.request("textDocument/formatting", params, kind);
+    }
+
     pub fn rename(&mut self, path: &Path, line: usize, column: usize, name: &str) {
         let mut params = Self::at(path, line, column);
         params["newName"] = json!(name);
@@ -471,6 +520,26 @@ mod tests {
         let sent = String::from_utf8(sent).unwrap();
         assert_eq!(sent.matches("textDocument/didSave").count(), 1, "{sent}");
         assert!(sent.contains("file:///a.rs"));
+    }
+
+    #[test]
+    fn references_list_every_place() {
+        let result = json!([
+            {"uri": "file:///a.rs", "range": {"start": {"line": 1, "character": 2}}},
+            {"uri": "file:///b.rs", "range": {"start": {"line": 3, "character": 4}}},
+        ]);
+        let LspEvent::References(found) = parse_references(&result) else {
+            panic!("not references");
+        };
+        assert_eq!(found[1], (PathBuf::from("/b.rs"), 3, 4));
+        assert!(matches!(parse_references(&Value::Null), LspEvent::References(f) if f.is_empty()));
+    }
+
+    #[test]
+    fn languages_go_by_the_names_servers_expect() {
+        assert_eq!(language_id("C#"), "csharp");
+        assert_eq!(language_id("Shell"), "shellscript");
+        assert_eq!(language_id("Rust"), "rust");
     }
 
     #[test]

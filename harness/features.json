@@ -642,5 +642,40 @@
     "passes": true,
     "test": "the_agents_panel_offers_something_to_do",
     "title": "The Agents panel offers something to do"
+  },
+  {
+    "id": "lsp-references",
+    "milestone": 7,
+    "passes": true,
+    "test": "references_land_in_the_search_panel_and_open_where_they_are",
+    "title": "Go to References lists every use in the search panel"
+  },
+  {
+    "id": "format-document",
+    "milestone": 7,
+    "passes": true,
+    "test": "a_formatter_reads_the_file_and_gives_it_back",
+    "title": "Format Document uses the language server or a formatter on the path"
+  },
+  {
+    "id": "popular-languages",
+    "milestone": 7,
+    "passes": true,
+    "test": "every_popular_language_highlights",
+    "title": "Grammars for all the popular languages"
+  },
+  {
+    "id": "agent-names",
+    "milestone": 7,
+    "passes": true,
+    "test": "events_carry_the_agents_name",
+    "title": "Hooks from Codex and Gemini are named as theirs"
+  },
+  {
+    "id": "edge-fill",
+    "milestone": 7,
+    "passes": true,
+    "test": "the_window_is_filled_once_and_keeps_the_config",
+    "title": "Ghostty padding can take the colours at the window edge"
   }
 ]

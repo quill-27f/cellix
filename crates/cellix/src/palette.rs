@@ -71,6 +71,8 @@ pub fn keys_of(command: Command) -> Option<&'static str> {
         Command::ToggleComment => "Ctrl+/",
         Command::GoToLine => "Ctrl+L",
         Command::GoToDefinition => "F12",
+        Command::GoToReferences => "Shift+F12",
+        Command::FormatDocument => "Alt+Shift+F",
         Command::RenameSymbol => "F2",
         Command::AddComment => "Alt+C",
         Command::SplitPane => "Ctrl+\\",
@@ -79,7 +81,7 @@ pub fn keys_of(command: Command) -> Option<&'static str> {
     })
 }
 
-pub const COMMANDS: [(&str, Command); 47] = [
+pub const COMMANDS: [(&str, Command); 50] = [
     ("Save", Command::Save),
     ("Undo", Command::Undo),
     ("Redo", Command::Redo),
@@ -123,7 +125,10 @@ pub const COMMANDS: [(&str, Command); 47] = [
     ("Open Codex", Command::OpenCodex),
     ("Open Settings", Command::OpenSettings),
     ("Switch Branch", Command::SwitchBranch),
+    ("Open Gemini CLI", Command::OpenGemini),
     ("Go to Definition", Command::GoToDefinition),
+    ("Go to References", Command::GoToReferences),
+    ("Format Document", Command::FormatDocument),
     ("Complete", Command::Complete),
     ("Rename Symbol", Command::RenameSymbol),
     ("Quit", Command::Quit),
