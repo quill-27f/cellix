@@ -53,7 +53,8 @@ the Kitty keyboard protocol, such as Ghostty, Kitty or WezTerm. Ghostty keeps Cm
 for its own palette unless you rebind it.
 
 Markdown opens as one editable page, as in Xcode: the markers are hidden and you type on
-the rendered text. The toolbar has bold, italic, code, heading, list, task and quote, and
+the rendered text. Paragraphs flow across the whole pane, and the file keeps its own line
+breaks. The toolbar has bold, italic, code, heading, list, task and quote, and
 Toggle Markdown Source in the palette shows the raw file.
 
 Under 70 columns, as beside an agent, the sidebar becomes a drawer behind the `☰` button

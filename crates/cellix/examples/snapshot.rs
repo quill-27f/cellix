@@ -44,6 +44,11 @@ fn main() {
         Some("review") => app.run(Command::OpenDiff),
         Some("welcome") => {}
         Some("palette") => app.run(Command::CommandPalette),
+        Some("plan") => {
+            let path = root.join("plan.md");
+            let (reply, _decision) = std::sync::mpsc::channel();
+            app.serve(cellix_agent::Request::Plan { path, reply });
+        }
         Some("close") => {
             app.open(&root.join("README.md")).unwrap();
             type_text(&mut app, "x");

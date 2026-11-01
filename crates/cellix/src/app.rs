@@ -450,9 +450,9 @@ impl App {
         let root = self.workspace.root();
         let inside = path.strip_prefix(root).unwrap_or(path);
         let text = head_text(root, inside);
-        // A file that isn't in git has nothing to compare with, so it shows no marks.
-        let tracked = !text.is_empty() || self.branch.is_some();
-        editor.committed = tracked.then_some(text);
+        // A file that isn't committed has nothing to compare with, and marking every line
+        // as new says nothing.
+        editor.committed = (!text.is_empty()).then_some(text);
         editor.refresh_changes();
     }
 
@@ -3537,7 +3537,7 @@ impl App {
         grid.label(bar.x + 2, y, &words, base, bar.right());
         let approve = bar.right().saturating_sub(APPROVE.len() as u16 + 2);
         let back = approve.saturating_sub(SEND_BACK.len() as u16 + 1);
-        grid.button(back, y, SEND_BACK, "Send back", theme.input, secondary);
+        grid.button(back, y, SEND_BACK, "Send back", theme.tint, secondary);
         grid.button(approve, y, APPROVE, "Approve", theme.button, primary);
     }
 
@@ -5682,6 +5682,18 @@ mod tests {
             app.handle(Event::Tick);
         }
         assert!(screen(&app).text().contains('▎'), "{}", screen(&app).text());
+    }
+
+    #[test]
+    fn a_new_file_has_no_margin_marks() {
+        let (dir, mut app) = reviewed();
+        fs::write(dir.path().join("new.txt"), "one\ntwo\n").unwrap();
+        app.open(&dir.path().join("new.txt")).unwrap();
+        assert!(
+            !screen(&app).text().contains('▎'),
+            "{}",
+            screen(&app).text()
+        );
     }
 
     #[test]

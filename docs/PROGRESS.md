@@ -208,3 +208,20 @@ dark theme, because it can't ask a terminal Claude Code owns for its background.
 The real rust-analyzer suite still has the open failure from the last entry.
 
 Next: the user tries it.
+
+## 2026-11-01: second round of real use
+
+The user found the build didn't match the approved canvas, and more. Fixed the space bar in
+the pane, whose key name was dropped. The minimap bounced because the smooth scroll layer
+took it in, and its marker was nearly invisible. Pages are now full width, by the user's
+choice over the canvas, with paragraphs flowing across source lines. Questions are dialogs
+with buttons. Review is stacked cards as the canvas shows. Side-by-side is gone.
+
+The pane's bands above and below are Claude Code's own frame, proven by painting our box
+magenta and seeing none of it outside the image. The dock is capped at 45% of the window.
+Neither can be changed from a mod.
+
+Unverified: the smooth scroll fix in a real window, because the screen locked before it
+could be captured. It's covered by tests of what scrolls, not by eye. Over SSH as before.
+
+Next: the user checks scrolling and the canvas.

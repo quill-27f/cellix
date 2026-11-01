@@ -126,6 +126,12 @@ removed in the same synchronized frame as the final page. Nothing in the row pip
 changes, and tiles move by reference, so a frame is only placements. tmux can't place
 between cells, so it keeps jumping by lines.
 
+## Pages
+
+A page uses the pane's full width. A line break inside a paragraph shows as a space that
+keeps the newline's source position, so a hard-wrapped file fills the page and saves
+unchanged. On a page, arrows and Home and End move by what's shown.
+
 ## Surfaces
 
 The ground takes the terminal's colour, so window padding can't show as a seam, and the
