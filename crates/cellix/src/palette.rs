@@ -41,7 +41,7 @@ pub const COMMANDS: [(&str, Command); 20] = [
     ("Add Comment", Command::AddComment),
     ("Blame Line", Command::BlameLine),
     ("Replace in Project", Command::ReplaceInProject),
-    ("Markdown Preview", Command::MarkdownPreview),
+    ("Toggle Markdown Source", Command::MarkdownPreview),
     ("Go to Definition", Command::GoToDefinition),
     ("Complete", Command::Complete),
     ("Rename Symbol", Command::RenameSymbol),

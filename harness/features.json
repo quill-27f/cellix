@@ -205,8 +205,8 @@
   {
     "id": "markdown",
     "milestone": 4,
-    "title": "Markdown preview",
-    "test": "markdown_opens_with_source_and_preview_side_by_side",
+    "title": "Markdown is one editable rendered page, like Xcode",
+    "test": "markdown_opens_rendered_and_editable",
     "passes": true
   },
   {
@@ -280,13 +280,6 @@
     "passes": true
   },
   {
-    "id": "markdown-split",
-    "milestone": 2,
-    "title": "Markdown opens with source and live preview side by side",
-    "test": "markdown_opens_with_source_and_preview_side_by_side",
-    "passes": true
-  },
-  {
     "id": "vscode-look",
     "milestone": 2,
     "title": "VS Code layout: activity bar, breadcrumbs, status bar",
@@ -298,6 +291,27 @@
     "milestone": 4,
     "title": "Compiler errors appear after a save or an agent rewrite",
     "test": "real_rust_analyzer_reports_an_error_an_agent_wrote",
+    "passes": true
+  },
+  {
+    "id": "responsive",
+    "milestone": 2,
+    "title": "Narrow panes: drawer sidebar, stacked review, code keeps the width",
+    "test": "a_narrow_pane_gives_the_code_nearly_all_its_width",
+    "passes": true
+  },
+  {
+    "id": "search-panel",
+    "milestone": 4,
+    "title": "Search as a sidebar panel, live and grouped by file",
+    "test": "project_search_groups_results_by_file",
+    "passes": true
+  },
+  {
+    "id": "keys",
+    "milestone": 2,
+    "title": "Ctrl or Cmd+P opens files and Ctrl+Shift+P opens commands",
+    "test": "pty_ctrl_shift_p_and_cmd_p_work_as_in_vs_code",
     "passes": true
   }
 ]

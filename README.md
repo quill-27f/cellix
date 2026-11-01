@@ -20,14 +20,24 @@ cellix src/lib.rs # with a file open
 
 | Keys | Action |
 |---|---|
-| Ctrl+P | Quick open |
-| F1 or Alt+P | Command palette |
+| Ctrl+P | Go to a file |
+| Ctrl+Shift+P, F1 or Alt+P | Command palette |
 | Ctrl+G | Review changes against HEAD |
 | Alt+C, or right-click | Comment on a line |
-| Ctrl+F | Search the project |
+| Ctrl+Shift+F or Ctrl+F | Search the project |
 | Ctrl+\\ | Split pane |
 | F12, F2, Ctrl+Space | Definition, rename, completion |
 | Ctrl+S, Ctrl+Q | Save, quit |
+
+Cmd works as Ctrl where the terminal passes it through. Ctrl+Shift+P needs a terminal with
+the Kitty keyboard protocol, such as Ghostty, Kitty or WezTerm. Ghostty keeps Cmd+Shift+P
+for its own palette unless you rebind it.
+
+Markdown opens as one editable page, as in Xcode: the markers are hidden and you type on
+the rendered text. Toggle Markdown Source in the palette shows the raw file.
+
+Under 70 columns, as beside an agent, the sidebar becomes a drawer behind the `☰` button
+and review stacks changes in one column.
 
 The mouse works everywhere: click files, tabs and hunks, drag to select, and right-click
 the explorer to create, rename or delete.

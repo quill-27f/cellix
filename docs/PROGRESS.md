@@ -72,3 +72,15 @@ Run these with `harness/guard.sh -- cargo test -p cellix --lib real_rust_analyze
 Unverified: live scrolling in a real terminal after the overlap fix, other language
 servers, and the look on the cell tier in terminals with weak Unicode fonts, where the
 activity bar icons may be small or missing.
+
+## 2026-11-01: second round of real use
+
+Markdown is now one editable rendered page, replacing the side-by-side preview after
+reading how Xcode's rendered editor behaves. Search is a live sidebar panel. Activity
+icons are real shapes spanning three by two cells. Ctrl+Shift+P and Cmd keys work through
+the Kitty keyboard protocol. Narrow panes get a layout of their own.
+
+Unverified: all of this in a live terminal, Ctrl+Shift+P in tmux and Zellij, and whether
+Xcode hides inline markers such as `**`. Ctrl+F opens project search, because find in the
+current file doesn't exist yet. Tables wider than the page wrap rather than scroll, and
+code blocks on the page have no syntax colours.

@@ -37,6 +37,8 @@ pub struct Theme {
     /// Background of a text box.
     pub input: Rgb,
     pub find_match: Rgb,
+    /// Behind code blocks on a rendered Markdown page.
+    pub code_bg: Rgb,
 }
 
 fn style(fg: Rgb, bg: Rgb) -> Style {
@@ -93,6 +95,7 @@ impl Theme {
             git_added: Rgb(40, 130, 60),
             input: Rgb(255, 255, 255),
             find_match: Rgb(168, 216, 170),
+            code_bg: Rgb(243, 243, 243),
         }
     }
 
@@ -145,6 +148,7 @@ impl Default for Theme {
             git_added: Rgb(115, 201, 145),
             input: Rgb(60, 60, 60),
             find_match: Rgb(81, 92, 47),
+            code_bg: Rgb(37, 37, 38),
         }
     }
 }

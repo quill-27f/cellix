@@ -3,8 +3,8 @@
 mod app;
 mod editor;
 mod explorer;
-mod markdown;
 mod palette;
+mod rendered;
 mod review;
 mod search;
 mod settings;

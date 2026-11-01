@@ -110,8 +110,21 @@ If 1 or 2 fail, cells become the default in that environment.
 The interface follows VS Code's layout and its Dark+ and Light+ colours, because that is
 what the target users already read fluently: activity bar, explorer, tabs, breadcrumbs,
 blue status bar, current-line highlight, indent guides. It's all drawn to the grid, so it
-holds on the cell tier. Markdown opens with source and live preview side by side, like
-Xcode, falling back to source alone in a narrow pane.
+holds on the cell tier. Activity icons span several cells: shapes on the pixel tier and
+block art on cells, because a font glyph is too small beside a real IDE.
+
+Cellix often lives in a pane beside an agent, so width decides the layout. Under 70
+columns the activity bar goes, the sidebar becomes a drawer over the code, splits collapse
+to the focused pane, the status bar keeps only what fits, and review stacks changes.
+
+### Markdown
+
+Markdown follows Xcode 27's rendered editor, as read from its `RenderedEditor` framework:
+one editable surface, not a preview beside the source. Block markers stay hidden even on
+the caret's line. Bullets and checkboxes are drawn, tables have real cells, and fences
+become a language label. Enter, Backspace and Tab act on structure. The source remains the
+document, and each visible character keeps its source position. Xcode's handling of inline
+markers wasn't confirmed: Cellix hides them too.
 
 ## Modes
 

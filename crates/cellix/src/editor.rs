@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::path::Path;
+use std::rc::Rc;
 
 use cellix_core::{Buffer, Motion, Selection, Selections};
 use cellix_input::{Command, Direction};
@@ -7,13 +8,16 @@ use cellix_lang::{Registry, Span};
 use cellix_render::{Grid, Rect};
 use unicode_width::UnicodeWidthChar;
 
+use crate::rendered::{self, Intent, Row, Tone};
 use crate::theme::Theme;
 
 const TAB_WIDTH: usize = 4;
 const GUTTER_MIN_DIGITS: usize = 4;
 const NARROW_PANE: u16 = 60;
-/// Below this a source and preview side by side are too narrow to read.
-const MIN_SPLIT_WIDTH: u16 = 60;
+/// Left margin of a rendered page, which also carries comment marks.
+const PAGE_MARGIN: u16 = 2;
+/// A rendered page stops growing here, so lines stay readable in a wide window.
+const MAX_PAGE_WIDTH: u16 = 100;
 
 /// Per-line marks for the gutter, as 1-based lines.
 #[derive(Default)]
@@ -22,6 +26,9 @@ pub struct Marks {
     pub errors: Vec<usize>,
 }
 
+/// A laid-out page: the revision and width it was made for, and its rows.
+type Page = (u64, usize, Rc<Vec<Row>>);
+
 /// One open document and where the view is within it.
 pub struct Editor {
     pub buffer: Buffer,
@@ -29,8 +36,10 @@ pub struct Editor {
     pub top: usize,
     pub left: usize,
     spans: RefCell<Option<(u64, Vec<Span>)>>,
-    /// Show Markdown as formatted text.
-    pub preview: bool,
+    /// Show Markdown as an editable page rather than its source, as Xcode does.
+    pub rendered: bool,
+    /// The laid-out page, for one revision and width.
+    page: RefCell<Option<Page>>,
     /// The revision last sent to a language server.
     pub synced: u64,
 }
@@ -53,7 +62,8 @@ impl Editor {
             top: 0,
             left: 0,
             spans: RefCell::new(None),
-            preview: is_markdown,
+            rendered: is_markdown,
+            page: RefCell::new(None),
             synced: 0,
         }
     }
@@ -65,12 +75,159 @@ impl Editor {
             .map_or_else(|| "untitled".into(), |n| n.to_string_lossy().into_owned())
     }
 
-    /// The source's share of `area`: the left half beside a preview, and otherwise all
-    /// of it, less the scrollbar.
+    /// Where text goes in `area`: all of it, less the scrollbar.
     fn text_area(&self, area: Rect) -> Rect {
-        let split = self.preview && area.w >= MIN_SPLIT_WIDTH;
-        let width = if split { area.w / 2 } else { area.w };
-        Rect::new(area.x, area.y, width.saturating_sub(1), area.h)
+        Rect::new(area.x, area.y, area.w.saturating_sub(1), area.h)
+    }
+
+    fn page_width(area: Rect) -> usize {
+        area.w
+            .saturating_sub(PAGE_MARGIN + 1)
+            .clamp(1, MAX_PAGE_WIDTH) as usize
+    }
+
+    /// The rendered page for this width, laid out again only after an edit.
+    fn page(&self, area: Rect) -> Rc<Vec<Row>> {
+        let width = Self::page_width(area);
+        let revision = self.buffer.revision();
+        let mut cache = self.page.borrow_mut();
+        if let Some((r, w, rows)) = cache.as_ref()
+            && *r == revision
+            && *w == width
+        {
+            return rows.clone();
+        }
+        let rows = Rc::new(rendered::layout(&self.buffer.text(), width));
+        *cache = Some((revision, width, rows.clone()));
+        rows
+    }
+
+    /// Moves a caret out of hidden source, so typing never lands inside a marker.
+    pub fn prepare_edit(&mut self, area: Rect) {
+        if !self.rendered {
+            return;
+        }
+        let area = self.text_area(area);
+        let primary = self.selections.primary();
+        if primary.is_empty() {
+            let at = rendered::snap(&self.page(area), primary.head);
+            self.selections.set_single(Selection::cursor(at));
+        }
+    }
+
+    /// Runs a move on the page, where rows and hidden markers change what it means.
+    fn move_on_page(&mut self, area: Rect, direction: Direction, extend: bool) -> bool {
+        let rows = self.page(area);
+        // Start from a visible place, so a selection never takes in a hidden marker.
+        let mut primary = self.selections.primary();
+        if primary.is_empty() {
+            let at = rendered::snap(&rows, primary.head);
+            primary.anchor = at;
+            primary.head = at;
+        }
+        let head = primary.head;
+        let page = area.h.max(2) as isize - 1;
+        let (_, column) = rendered::locate(&rows, head);
+        let goal = primary.goal.unwrap_or(column);
+        let vertical = |delta| rendered::vertical(&rows, head, delta, goal);
+        let (next, keep_goal) = match direction {
+            Direction::Left => (rendered::step(&rows, head, false), false),
+            Direction::Right => (rendered::step(&rows, head, true), false),
+            Direction::Up => (vertical(-1), true),
+            Direction::Down => (vertical(1), true),
+            Direction::PageUp => (vertical(-page), true),
+            Direction::PageDown => (vertical(page), true),
+            Direction::LineStart | Direction::LineColumnZero => {
+                (rendered::row_edge(&rows, head, false), false)
+            }
+            Direction::LineEnd => (rendered::row_edge(&rows, head, true), false),
+            _ => return false,
+        };
+        self.selections.set_single(Selection {
+            anchor: if extend { primary.anchor } else { next },
+            head: next,
+            goal: keep_goal.then_some(goal),
+        });
+        true
+    }
+
+    fn line_of_head(&self) -> (String, usize) {
+        let rope = self.buffer.rope();
+        let line = rope.char_to_line(self.selections.primary().head);
+        (self.line_text(line), rope.line_to_char(line))
+    }
+
+    /// Enter on a page continues lists and quotes, and ends them on an empty item.
+    fn enter_on_page(&mut self) {
+        let (line, start) = self.line_of_head();
+        let head = self.selections.primary().head;
+        let at_end = head == start + line.chars().count();
+        match rendered::enter_intent(&line) {
+            Intent::Continue(marker) if at_end => {
+                self.buffer
+                    .replace(&mut self.selections, &format!("\n{marker}"));
+            }
+            Intent::EndList(hidden) => {
+                self.buffer
+                    .replace_range(&mut self.selections, start, start + hidden, "");
+                self.selections.set_single(Selection::cursor(start));
+            }
+            _ => self.buffer.replace(&mut self.selections, "\n"),
+        }
+    }
+
+    /// Backspace at the start of an item or heading removes its marker in one step.
+    fn backspace_on_page(&mut self) {
+        let (line, start) = self.line_of_head();
+        let hidden = rendered::hidden_prefix(&line);
+        let primary = self.selections.primary();
+        if primary.is_empty() && hidden > 0 && primary.head == start + hidden {
+            self.buffer
+                .replace_range(&mut self.selections, start, start + hidden, "");
+            self.selections.set_single(Selection::cursor(start));
+        } else {
+            self.buffer.delete_backward(&mut self.selections);
+        }
+    }
+
+    /// Tab moves between table cells, and otherwise indents.
+    fn tab_on_page(&mut self, area: Rect) {
+        let rows = self.page(area);
+        let head = self.selections.primary().head;
+        if let Some(cell) = rendered::next_cell(&rows, head) {
+            self.selections.set_single(Selection::cursor(cell));
+            return;
+        }
+        let (line, start) = self.line_of_head();
+        if rendered::hidden_prefix(&line) > 0 {
+            self.buffer
+                .replace_range(&mut self.selections, start, start, "  ");
+            self.selections.set_single(Selection::cursor(head + 2));
+        } else {
+            self.buffer.type_text(&mut self.selections, "    ");
+        }
+    }
+
+    /// Toggles a task checkbox at a click. Returns true if there was one.
+    pub fn click_checkbox(&mut self, area: Rect, x: u16, y: u16) -> bool {
+        if !self.rendered {
+            return false;
+        }
+        let area = self.text_area(area);
+        let rows = self.page(area);
+        let row = self.top + y.saturating_sub(area.y) as usize;
+        let column = x.saturating_sub(area.x + PAGE_MARGIN) as usize;
+        let Some((at, mark)) = rows.get(row).and_then(|r| r.checkbox) else {
+            return false;
+        };
+        if column != at {
+            return false;
+        }
+        let checked = self.buffer.rope().char(mark) != ' ';
+        let text = if checked { " " } else { "x" };
+        self.buffer
+            .replace_range(&mut self.selections, mark, mark + 1, text);
+        true
     }
 
     /// True when a click at `x` lands on the scrollbar.
@@ -80,7 +237,11 @@ impl Editor {
 
     /// Scrolls so that row `y` of the scrollbar's track matches the document.
     pub fn scroll_to_row(&mut self, area: Rect, y: u16) {
-        let lines = self.buffer.rope().len_lines();
+        let lines = if self.rendered {
+            self.page(self.text_area(area)).len()
+        } else {
+            self.buffer.rope().len_lines()
+        };
         let row = y.saturating_sub(area.y) as usize;
         self.top = (row * lines / area.h.max(1) as usize).min(lines.saturating_sub(1));
     }
@@ -116,6 +277,15 @@ impl Editor {
     /// Char position at a screen cell inside `area`, clamped to the text.
     pub fn position_at(&self, area: Rect, x: u16, y: u16) -> usize {
         let area = self.text_area(area);
+        if self.rendered {
+            let rows = self.page(area);
+            let row = self.top + y.saturating_sub(area.y) as usize;
+            let column = x.saturating_sub(area.x + PAGE_MARGIN) as usize;
+            let stop = rows[row.min(rows.len().saturating_sub(1))..]
+                .iter()
+                .find(|r| r.stop);
+            return stop.map_or(self.buffer.rope().len_chars(), |r| r.position_at(column));
+        }
         let rope = self.buffer.rope();
         let line = (self.top + (y.saturating_sub(area.y)) as usize).min(rope.len_lines() - 1);
         let target = self.left + x.saturating_sub(area.x + self.gutter_width(area.w)) as usize;
@@ -132,13 +302,29 @@ impl Editor {
     }
 
     pub fn scroll_by(&mut self, delta: isize) {
-        let last = self.buffer.rope().len_lines().saturating_sub(1) as isize;
+        // A cached page is close enough to bound the scroll; draw corrects any slack.
+        let rows = self.page.borrow().as_ref().map(|(_, _, rows)| rows.len());
+        let lines = rows
+            .filter(|_| self.rendered)
+            .unwrap_or_else(|| self.buffer.rope().len_lines());
+        let last = lines.saturating_sub(1) as isize;
         self.top = (self.top as isize + delta).clamp(0, last) as usize;
     }
 
     /// Scrolls just enough to show the primary cursor.
     pub fn reveal(&mut self, area: Rect) {
         let area = self.text_area(area);
+        if self.rendered {
+            let (row, _) = rendered::locate(&self.page(area), self.selections.primary().head);
+            let height = area.h.max(1) as usize;
+            if row < self.top {
+                self.top = row;
+            } else if row >= self.top + height {
+                self.top = row + 1 - height;
+            }
+            self.left = 0;
+            return;
+        }
         let head = self.selections.primary().head;
         let line = self.buffer.rope().char_to_line(head);
         let rows = area.h.max(1) as usize;
@@ -158,6 +344,30 @@ impl Editor {
 
     pub fn run(&mut self, command: Command, area: Rect) {
         let page = area.h.max(2) as usize - 1;
+        if self.rendered {
+            let text_area = self.text_area(area);
+            self.prepare_for_command(command, text_area);
+            let handled = match command {
+                Command::Move(direction, extend) => self.move_on_page(text_area, direction, extend),
+                Command::Newline => {
+                    self.enter_on_page();
+                    true
+                }
+                Command::DeleteBackward => {
+                    self.backspace_on_page();
+                    true
+                }
+                Command::Indent => {
+                    self.tab_on_page(text_area);
+                    true
+                }
+                _ => false,
+            };
+            if handled {
+                self.reveal(area);
+                return;
+            }
+        }
         match command {
             Command::Move(direction, extend) => {
                 let motion = match direction {
@@ -223,6 +433,20 @@ impl Editor {
         self.reveal(area);
     }
 
+    /// Edits start from a visible place. Moves start wherever the caret is.
+    fn prepare_for_command(&mut self, command: Command, area: Rect) {
+        if matches!(
+            command,
+            Command::Newline | Command::DeleteBackward | Command::DeleteForward | Command::Indent
+        ) {
+            let primary = self.selections.primary();
+            if primary.is_empty() {
+                let at = rendered::snap(&self.page(area), primary.head);
+                self.selections.set_single(Selection::cursor(at));
+            }
+        }
+    }
+
     fn outdent(&mut self) {
         let head = self.selections.primary().head;
         let rope = self.buffer.rope();
@@ -261,16 +485,15 @@ impl Editor {
     ) {
         let full = area;
         let area = self.text_area(full);
-        if area.right() < full.right() {
-            self.draw_scrollbar(grid, Rect::new(area.right(), area.y, 1, area.h), theme);
+        if self.rendered {
+            self.draw_page(grid, area, theme, focused, marks);
+            let track = Rect::new(area.right(), area.y, 1, area.h);
+            self.draw_scrollbar(grid, track, self.page(area).len(), theme);
+            return;
         }
-        if self.preview && full.w >= MIN_SPLIT_WIDTH {
-            let x = area.right() + 1;
-            let right = Rect::new(x, area.y, full.right() - x, area.h);
-            let lines = self.buffer.rope().len_lines().saturating_sub(1).max(1);
-            let scroll = self.top as f32 / lines as f32;
-            crate::markdown::draw(grid, right, &self.buffer.text(), scroll, theme);
-        }
+        let lines = self.buffer.rope().len_lines();
+        let track = Rect::new(area.right(), area.y, 1, area.h);
+        self.draw_scrollbar(grid, track, lines, theme);
         grid.fill(area, theme.text);
         let gutter = self.gutter_width(area.w);
         let rope = self.buffer.rope();
@@ -353,9 +576,8 @@ impl Editor {
         }
     }
 
-    fn draw_scrollbar(&self, grid: &mut Grid, track: Rect, theme: &Theme) {
+    fn draw_scrollbar(&self, grid: &mut Grid, track: Rect, lines: usize, theme: &Theme) {
         grid.fill(track, theme.text);
-        let lines = self.buffer.rope().len_lines().max(1);
         let rows = track.h as usize;
         if lines <= rows {
             return;
@@ -370,6 +592,71 @@ impl Editor {
             Rect::new(track.x, track.y + top as u16, 1, height as u16),
             thumb,
         );
+    }
+
+    fn draw_page(&self, grid: &mut Grid, area: Rect, theme: &Theme, focused: bool, marks: &Marks) {
+        grid.fill(area, theme.text);
+        let rows = self.page(area);
+        let left = area.x + PAGE_MARGIN;
+        let primary = self.selections.primary();
+        let (caret_row, caret_x) = rendered::locate(&rows, primary.head);
+        for (index, row) in rows.iter().enumerate().skip(self.top) {
+            let y = area.y + (index - self.top) as u16;
+            if y >= area.bottom() {
+                break;
+            }
+            let bg = if row.shaded {
+                theme.code_bg
+            } else if focused && index == caret_row {
+                theme.line
+            } else {
+                theme.text.bg
+            };
+            grid.fill(
+                Rect::new(area.x, y, area.w, 1),
+                cellix_render::Style { bg, ..theme.text },
+            );
+            if marks.comments.contains(&(row.line + 1)) {
+                let mark = cellix_render::Style {
+                    fg: theme.accent,
+                    bg,
+                    ..theme.text
+                };
+                grid.put_str(area.x, y, "◆", mark, left);
+            }
+            let mut x = left;
+            for glyph in &row.glyphs {
+                let fg = match glyph.tone {
+                    Tone::Text => theme.text.fg,
+                    Tone::Heading => theme.heading,
+                    Tone::Code => theme.string,
+                    Tone::Link => theme.accent,
+                    Tone::Dim => theme.gutter.fg,
+                };
+                let selected = glyph.at.is_some_and(|at| {
+                    self.selections
+                        .iter()
+                        .any(|s| at >= s.start() && at < s.end())
+                });
+                let style = cellix_render::Style {
+                    fg,
+                    bg: if selected { theme.selection } else { bg },
+                    bold: glyph.bold,
+                    italic: glyph.italic,
+                    underline: glyph.underline,
+                };
+                x = grid.put_str(x, y, glyph.ch.encode_utf8(&mut [0; 4]), style, area.right());
+            }
+        }
+        if focused && primary.is_empty() && caret_row >= self.top {
+            let y = area.y as usize + caret_row - self.top;
+            let x = left as usize + caret_x;
+            if y < area.bottom() as usize && x < area.right() as usize {
+                grid.cursor = Some((x as u16, y as u16));
+            }
+        } else if focused && self.selections.primary().head == 0 {
+            grid.cursor = None;
+        }
     }
 
     fn draw_highlights(

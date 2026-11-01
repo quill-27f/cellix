@@ -507,7 +507,9 @@ impl App {
             }
             Overlay::Prompt(prompt) => prompt.input.push_str(text),
             _ => {
+                let area = self.focused_area();
                 if let Some(editor) = self.editor_mut() {
+                    editor.prepare_edit(area);
                     editor.buffer.replace(&mut editor.selections, text);
                 }
                 self.reveal();
@@ -615,7 +617,9 @@ impl App {
             && !key.mods.ctrl
             && !key.mods.alt
         {
+            let area = self.focused_area();
             if let Some(editor) = self.editor_mut() {
+                editor.prepare_edit(area);
                 editor
                     .buffer
                     .type_text(&mut editor.selections, c.encode_utf8(&mut [0; 4]));
@@ -770,8 +774,11 @@ impl App {
             Command::FindInProject => self.show_search(Field::Query),
             Command::ReplaceInProject => self.show_search(Field::Replace),
             Command::MarkdownPreview => {
+                let area = self.focused_area();
                 if let Some(editor) = self.editor_mut() {
-                    editor.preview = !editor.preview;
+                    editor.rendered = !editor.rendered;
+                    editor.top = 0;
+                    editor.reveal(area);
                 }
             }
             Command::GoToDefinition | Command::Complete => self.lsp_request(command),
@@ -1256,6 +1263,9 @@ impl App {
                     if editor.on_scrollbar(area, x) {
                         editor.scroll_to_row(area, y);
                         self.drag = Drag::Scrollbar;
+                        return;
+                    }
+                    if editor.click_checkbox(area, x, y) {
                         return;
                     }
                     let at = editor.position_at(area, x, y);
@@ -2486,43 +2496,212 @@ mod tests {
         assert_eq!(app.selected_text().as_deref(), Some("needle"));
     }
 
-    #[test]
-    fn markdown_opens_with_source_and_preview_side_by_side() {
+    fn page(text: &str) -> (TempDir, App) {
         let (dir, mut app) = project();
-        fs::write(dir.path().join("n.md"), "# Title\n\ntext\n").unwrap();
+        fs::write(dir.path().join("n.md"), text).unwrap();
         app.open(&dir.path().join("n.md")).unwrap();
-        let grid = screen(&app);
-        let (_, y) = find(&grid, "# Title");
-        let row = grid.row_text(y);
-        assert_eq!(row.matches("Title").count(), 2, "{row}");
-        let x = row[..row.rfind("Title").unwrap()].chars().count() as u16;
-        assert!(grid.cell(x, y).style.bold, "the preview is rendered");
-        assert!(!grid.cell(find(&grid, "# Title").0, y).style.bold);
+        (dir, app)
+    }
 
-        typed(&mut app, "x");
-        assert!(screen(&app).text().contains("x# Title"));
-        app.run(Command::MarkdownPreview);
-        assert_eq!(screen(&app).row_text(y).matches("Title").count(), 1);
+    fn key(app: &mut App, key: Key) {
+        app.handle(Event::Key(KeyEvent::plain(key)));
     }
 
     #[test]
-    fn typing_in_markdown_updates_the_preview() {
-        let (dir, mut app) = project();
-        fs::write(dir.path().join("n.md"), "body\n").unwrap();
-        app.open(&dir.path().join("n.md")).unwrap();
+    fn markdown_opens_rendered_and_editable() {
+        let (dir, mut app) = page("# Title\n\nsome **bold** text\n");
+        let grid = screen(&app);
+        assert!(!grid.text().contains("# Title"));
+        assert!(!grid.text().contains("**"));
+        let (x, y) = find(&grid, "Title");
+        assert!(grid.cell(x, y).style.bold);
+        assert!(grid.text().contains("some bold text"));
+
+        // Clicking on the page and typing edits the source at that spot.
+        let (x, y) = find(&grid, "bold text");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        typed(&mut app, "X");
+        app.run(Command::Save);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("n.md")).unwrap(),
+            "# Title\n\nsome **bXold** text\n"
+        );
+    }
+
+    #[test]
+    fn there_is_no_second_pane_or_gutter() {
+        let (_dir, app) = page("# Title\n");
+        let grid = screen(&app);
+        assert_eq!(grid.text().matches("Title").count(), 1);
+        let (x, _) = find(&grid, "Title");
+        assert_eq!(x, app.focused_area().x + 2);
+    }
+
+    #[test]
+    fn typing_starts_after_a_hidden_marker() {
+        let (_dir, mut app) = page("# Title\n");
+        typed(&mut app, "My ");
+        assert_eq!(app.active_text().unwrap(), "# My Title\n");
+    }
+
+    #[test]
+    fn markers_stay_hidden_on_the_line_being_edited() {
+        let (_dir, mut app) = page("# Title\n");
+        typed(&mut app, "x");
+        assert!(!screen(&app).text().contains("# "));
+    }
+
+    #[test]
+    fn typing_a_marker_formats_the_line() {
+        let (_dir, mut app) = page("plain\n");
+        let grid = screen(&app);
+        let before = find(&grid, "plain");
         typed(&mut app, "# ");
         let grid = screen(&app);
-        let (_, y) = find(&grid, "# body");
-        assert_eq!(grid.row_text(y).matches("body").count(), 2);
+        let (x, y) = find(&grid, "plain");
+        assert!(grid.cell(x, y).style.bold);
+        assert_eq!((x, y), before);
     }
 
     #[test]
-    fn narrow_panes_show_markdown_source_only() {
-        let (dir, mut app) = project();
-        fs::write(dir.path().join("n.md"), "# Title\n").unwrap();
-        app.open(&dir.path().join("n.md")).unwrap();
-        app.handle(Event::Resize(50, 20));
-        assert_eq!(screen(&app).text().matches("Title").count(), 1);
+    fn enter_continues_a_list_and_an_empty_item_ends_it() {
+        let (_dir, mut app) = page("- one\n");
+        app.run(Command::Move(cellix_input::Direction::LineEnd, false));
+        enter(&mut app);
+        typed(&mut app, "two");
+        assert_eq!(app.active_text().unwrap(), "- one\n- two\n");
+        enter(&mut app);
+        enter(&mut app);
+        assert_eq!(app.active_text().unwrap(), "- one\n- two\n\n");
+    }
+
+    #[test]
+    fn enter_counts_ordered_lists() {
+        let (_dir, mut app) = page("1. one\n");
+        app.run(Command::Move(cellix_input::Direction::LineEnd, false));
+        enter(&mut app);
+        typed(&mut app, "two");
+        assert_eq!(app.active_text().unwrap(), "1. one\n2. two\n");
+    }
+
+    #[test]
+    fn backspace_at_the_start_removes_the_marker() {
+        let (_dir, mut app) = page("## Title\n");
+        app.run(Command::Move(cellix_input::Direction::LineStart, false));
+        key(&mut app, Key::Backspace);
+        assert_eq!(app.active_text().unwrap(), "Title\n");
+        app.run(Command::Undo);
+        assert_eq!(app.active_text().unwrap(), "## Title\n");
+    }
+
+    #[test]
+    fn clicking_a_checkbox_toggles_the_source() {
+        let (_dir, mut app) = page("- [ ] task\n");
+        let (x, y) = find(&screen(&app), "☐");
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert_eq!(app.active_text().unwrap(), "- [x] task\n");
+        assert!(screen(&app).text().contains("☑ task"));
+    }
+
+    #[test]
+    fn tables_edit_in_their_cells() {
+        let source = "| Name | Size |\n|---|---|\n| a | b |\n";
+        let (_dir, mut app) = page(source);
+        let grid = screen(&app);
+        assert!(!grid.text().contains('|'));
+        let (x, y) = find(&grid, "a ");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        typed(&mut app, "long");
+        assert_eq!(
+            app.active_text().unwrap(),
+            "| Name | Size |\n|---|---|\n| along | b |\n"
+        );
+        assert!(screen(&app).text().contains("along │ b"));
+    }
+
+    #[test]
+    fn tab_moves_between_table_cells() {
+        let (_dir, mut app) = page("| a | b |\n|---|---|\n| c | d |\n");
+        key(&mut app, Key::Tab);
+        typed(&mut app, "x");
+        assert_eq!(
+            app.active_text().unwrap(),
+            "| a | xb |\n|---|---|\n| c | d |\n"
+        );
+    }
+
+    #[test]
+    fn arrows_walk_the_page_and_skip_hidden_text() {
+        let (_dir, mut app) = page("**bold**\nnext\n");
+        app.run(Command::Move(cellix_input::Direction::Down, false));
+        typed(&mut app, "x");
+        assert_eq!(app.active_text().unwrap(), "**bold**\nxnext\n");
+    }
+
+    #[test]
+    fn selecting_on_the_page_selects_source() {
+        let (_dir, mut app) = page("# Title\n");
+        for _ in 0..3 {
+            app.run(Command::Move(cellix_input::Direction::Right, true));
+        }
+        assert_eq!(app.selected_text().as_deref(), Some("Tit"));
+    }
+
+    #[test]
+    fn code_fences_hide_and_their_code_stays_editable() {
+        let (_dir, mut app) = page("```rust\nlet x;\n```\n");
+        let grid = screen(&app);
+        assert!(!grid.text().contains("```"));
+        assert!(grid.text().contains("rust"));
+        let (x, y) = find(&grid, "let x;");
+        assert_eq!(grid.cell(x, y).style.bg, Theme::default().code_bg);
+        app.handle(mouse(MouseKind::Left, x, y));
+        typed(&mut app, "y");
+        assert_eq!(app.active_text().unwrap(), "```rust\nylet x;\n```\n");
+    }
+
+    #[test]
+    fn the_page_wraps_in_a_narrow_pane() {
+        let long = "word ".repeat(30);
+        let (_dir, mut app) = page(&long);
+        app.handle(Event::Resize(40, 30));
+        let grid = screen(&app);
+        assert!(grid.row_text(3).contains("word"), "{}", grid.text());
+        app.run(Command::Move(cellix_input::Direction::LineEnd, false));
+        app.run(Command::Move(cellix_input::Direction::Down, false));
+        typed(&mut app, "x");
+        assert_eq!(app.active_text().unwrap().matches('x').count(), 1);
+    }
+
+    #[test]
+    fn the_source_is_one_command_away() {
+        let (_dir, mut app) = page("# Title\n");
+        app.run(Command::MarkdownPreview);
+        assert!(screen(&app).text().contains("# Title"));
+        app.run(Command::MarkdownPreview);
+        assert!(!screen(&app).text().contains("# Title"));
+    }
+
+    #[test]
+    fn long_pages_scroll_and_keep_the_caret_visible() {
+        let long: String = (0..200).map(|i| format!("line {i}\n\n")).collect();
+        let (_dir, mut app) = page(&long);
+        app.run(Command::Move(cellix_input::Direction::Bottom, false));
+        app.handle(mouse(MouseKind::ScrollUp, 60, 10));
+        for _ in 0..80 {
+            app.run(Command::Move(cellix_input::Direction::Down, false));
+        }
+        let cursor = screen(&app).cursor;
+        assert!(cursor.is_some(), "the caret is off the page");
+    }
+
+    #[test]
+    fn comments_show_on_rendered_pages() {
+        let (_dir, mut app) = page("# Title\n");
+        app.run(Command::AddComment);
+        typed(&mut app, "note");
+        enter(&mut app);
+        assert!(screen(&app).text().contains("◆"));
     }
 
     #[test]
