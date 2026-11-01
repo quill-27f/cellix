@@ -20,6 +20,8 @@ const MIN_SIDE_BY_SIDE: u16 = 90;
 /// Turns listed in the timeline, newest first.
 const SHOWN_TURNS: usize = 6;
 const SHOWN_TESTS: usize = 3;
+const ACCEPT_ALL: &str = "[Accept]";
+const REJECT_ALL: &str = "[Reject]";
 
 /// What a click in the review view lands on.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,6 +36,8 @@ pub enum Hit {
     Commit,
     /// Show a test run's output.
     Test(usize),
+    AcceptProposal,
+    RejectProposal,
     /// Step through the files, in the stacked layout.
     PreviousFile,
     NextFile,
@@ -52,6 +56,8 @@ enum ListRow {
     Base(Option<usize>),
     Commit,
     Test(usize),
+    /// Accept or reject a whole proposal.
+    Decide,
     File(usize),
 }
 
@@ -75,6 +81,9 @@ pub struct Review {
     staged: usize,
     /// Test commands agents have run, newest last.
     pub tests: Vec<TestRun>,
+    /// Set when this shows a change an agent is proposing, rather than the working tree.
+    /// One entry per hunk, true once it's been accepted.
+    proposal: Option<Vec<bool>>,
     tokens: (Vec<LineTokens>, Vec<LineTokens>),
 }
 
@@ -176,14 +185,98 @@ impl Review {
             base: None,
             staged: 0,
             tests: Vec::new(),
+            proposal: None,
             tokens: (Vec::new(), Vec::new()),
         };
         review.refresh();
         review
     }
 
+    /// A change an agent wants to make to a file. Nothing is on disk yet.
+    pub fn proposing(
+        root: PathBuf,
+        registry: Rc<Registry>,
+        path: PathBuf,
+        old: String,
+        new: String,
+    ) -> Self {
+        let mut review = Self {
+            root,
+            registry,
+            changes: vec![Change { path, status: 'M' }],
+            selected: 0,
+            diff: FileDiff::default(),
+            old,
+            new,
+            top: 0,
+            turns: Vec::new(),
+            base: None,
+            staged: 0,
+            tests: Vec::new(),
+            proposal: Some(Vec::new()),
+            tokens: (Vec::new(), Vec::new()),
+        };
+        review.reload_proposal();
+        review.proposal = Some(vec![false; review.diff.hunks.len()]);
+        review
+    }
+
+    fn reload_proposal(&mut self) {
+        self.diff = FileDiff::new(&self.old, &self.new);
+        if let Some(path) = self.current_path().map(Path::to_path_buf) {
+            self.tokens = (
+                line_tokens(&self.registry, &path, &self.old),
+                line_tokens(&self.registry, &path, &self.new),
+            );
+        }
+        self.top = self.top.min(self.diff.rows.len().saturating_sub(1));
+    }
+
+    pub fn is_proposal(&self) -> bool {
+        self.proposal.is_some()
+    }
+
+    /// The proposed text, as the reviewer has left it.
+    pub fn proposed_text(&self) -> &str {
+        &self.new
+    }
+
+    pub fn proposed_unchanged(&self) -> bool {
+        self.old == self.new
+    }
+
+    /// Keeps one proposed hunk. Returns whether every hunk is now decided.
+    pub fn keep_proposed(&mut self, hunk: usize) -> bool {
+        let Some(kept) = &mut self.proposal else {
+            return false;
+        };
+        if let Some(entry) = kept.get_mut(hunk) {
+            *entry = true;
+        }
+        kept.iter().all(|k| *k)
+    }
+
+    /// Drops one proposed hunk. Returns whether every hunk is now decided.
+    pub fn drop_proposed(&mut self, hunk: usize) -> bool {
+        let Some(text) = self.rejected_text(hunk) else {
+            return false;
+        };
+        self.new = text;
+        self.reload_proposal();
+        let Some(kept) = &mut self.proposal else {
+            return false;
+        };
+        if hunk < kept.len() {
+            kept.remove(hunk);
+        }
+        kept.iter().all(|k| *k)
+    }
+
     /// Rereads git and the selected file. Keeps the selection where it can.
     pub fn refresh(&mut self) {
+        if self.is_proposal() {
+            return;
+        }
         let current = self.current_path().map(Path::to_path_buf);
         self.turns = turns(&self.root);
         if self.base.is_some_and(|b| b >= self.turns.len()) {
@@ -253,6 +346,9 @@ impl Review {
     }
 
     pub fn select(&mut self, index: usize) {
+        if self.is_proposal() {
+            return;
+        }
         self.selected = index;
         self.top = 0;
         self.load();
@@ -279,6 +375,9 @@ impl Review {
 
     /// Whether a hunk's new text has already reached the index.
     pub fn is_accepted(&self, hunk: usize) -> bool {
+        if let Some(kept) = &self.proposal {
+            return kept.get(hunk).copied().unwrap_or(false);
+        }
         let (Some(path), Some(h)) = (self.current_path(), self.diff.hunks.get(hunk)) else {
             return false;
         };
@@ -307,6 +406,12 @@ impl Review {
 
     fn list_rows(&self) -> Vec<ListRow> {
         let mut rows = Vec::new();
+        if self.is_proposal() {
+            rows.push(ListRow::Heading("PROPOSED CHANGE"));
+            rows.push(ListRow::Decide);
+            rows.extend((0..self.changes.len()).map(ListRow::File));
+            return rows;
+        }
         if !self.turns.is_empty() {
             rows.push(ListRow::Heading("COMPARE WITH"));
             rows.push(ListRow::Base(None));
@@ -410,6 +515,20 @@ impl Review {
         }
     }
 
+    fn draw_decision(&self, grid: &mut Grid, x: u16, y: u16, theme: &Theme) {
+        let primary = Style {
+            fg: theme.button_text,
+            ..theme.sidebar
+        };
+        grid.button(x, y, ACCEPT_ALL, "Accept", theme.button, primary);
+        let secondary = Style {
+            fg: theme.text.fg,
+            ..theme.sidebar
+        };
+        let next = x + ACCEPT_ALL.len() as u16 + 1;
+        grid.button(next, y, REJECT_ALL, "Reject", theme.input, secondary);
+    }
+
     fn draw_buttons(&self, grid: &mut Grid, x: u16, y: u16, theme: &Theme) {
         let on_button = Style {
             fg: theme.button_text,
@@ -511,6 +630,14 @@ impl Review {
                 ListRow::Base(base) => Some(Hit::Base(*base)),
                 ListRow::Commit => Some(Hit::Commit),
                 ListRow::Test(index) => Some(Hit::Test(*index)),
+                ListRow::Decide => {
+                    let at = x.checked_sub(list.x + 1)?;
+                    if at < ACCEPT_ALL.len() as u16 {
+                        Some(Hit::AcceptProposal)
+                    } else {
+                        Some(Hit::RejectProposal)
+                    }
+                }
                 ListRow::File(index) => Some(Hit::File(*index)),
             };
         }
@@ -574,6 +701,7 @@ impl Review {
                 let text = format!("[Commit {} staged]", self.staged);
                 grid.button(list.x + 1, y, &text, "Commit", theme.button, style);
             }
+            ListRow::Decide => self.draw_decision(grid, list.x + 1, y, theme),
             ListRow::Test(index) => {
                 let run = &self.tests[*index];
                 let (mark, color) = if run.passed {

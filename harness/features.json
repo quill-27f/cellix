@@ -445,21 +445,21 @@
     "milestone": 4,
     "title": "Claude Code connects to Cellix as its IDE",
     "test": "claude_code_can_connect_and_list_tools",
-    "passes": false
+    "passes": true
   },
   {
     "id": "ide-diff",
     "milestone": 4,
     "title": "Claude Code proposes edits in Cellix for approval",
     "test": "open_diff_waits_for_the_reviewer",
-    "passes": false
+    "passes": true
   },
   {
     "id": "ide-selection",
     "milestone": 4,
     "title": "Selection and open files reach Claude Code",
     "test": "selection_reaches_the_ide_client",
-    "passes": false
+    "passes": true
   },
   {
     "id": "find-in-file",

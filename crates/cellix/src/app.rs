@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -17,7 +17,10 @@ use cellix_review::{
 };
 
 use cellix_agent::hook::comments_message;
+use cellix_agent::ide::{IdeCall, IdeServer};
 use cellix_agent::{Decision, Request, SharedComments, TestRun};
+
+use serde_json::{Value, json};
 
 use crate::agents::Agents;
 use crate::editor::{Editor, Marks};
@@ -100,6 +103,12 @@ enum SidebarView {
     Agents,
 }
 
+/// A change Claude Code is waiting on, shown in the review view.
+struct Proposal {
+    tab: String,
+    reply: Sender<Vec<String>>,
+}
+
 /// A plan an agent is waiting on an answer for.
 struct PendingPlan {
     path: PathBuf,
@@ -122,12 +131,18 @@ enum SplitHost {
 }
 
 impl SplitHost {
-    fn command(self, agent: &str, root: &str) -> Vec<String> {
-        let words: &[&str] = match self {
-            Self::Tmux => &["tmux", "split-window", "-h", "-c", root, agent],
-            Self::Zellij => &["zellij", "run", "-d", "right", "--cwd", root, "--", agent],
+    fn command(self, agent: &str, root: &str, env: &[String]) -> Vec<String> {
+        let start: &[&str] = match self {
+            Self::Tmux => &["tmux", "split-window", "-h", "-c", root],
+            Self::Zellij => &["zellij", "run", "-d", "right", "--cwd", root, "--"],
         };
-        words.iter().map(ToString::to_string).collect()
+        let mut words: Vec<String> = start.iter().map(ToString::to_string).collect();
+        if !env.is_empty() {
+            words.push("env".to_string());
+            words.extend_from_slice(env);
+        }
+        words.push(agent.to_string());
+        words
     }
 }
 
@@ -208,6 +223,13 @@ pub struct App {
     branch: Option<String>,
     measure: Rc<dyn Measure>,
     agents: Agents,
+    /// The server Claude Code connects to. Set by the terminal loop.
+    pub ide: Option<IdeServer>,
+    proposal: Option<Proposal>,
+    /// Diffs waiting their turn, because only one shows at a time.
+    queued_diffs: VecDeque<IdeCall>,
+    /// The last selection told to Claude Code, to send only changes.
+    told_selection: Option<Value>,
     plan: Option<PendingPlan>,
     /// The tmux pane of an agent Cellix started, with the program to reach it.
     agent_pane: Option<(String, String)>,
@@ -257,6 +279,10 @@ impl App {
             branch: None,
             measure: Rc::new(CellMeasure),
             agents: Agents::default(),
+            ide: None,
+            proposal: None,
+            queued_diffs: VecDeque::new(),
+            told_selection: None,
             plan: None,
             agent_pane: None,
             tests: Vec::new(),
@@ -368,16 +394,315 @@ impl App {
             }
             editor.synced = editor.buffer.revision();
         }
+        let mut calls = Vec::new();
+        if let Some(ide) = &self.ide {
+            calls.extend(ide.calls.try_iter());
+        }
+        let called = !calls.is_empty();
+        for call in calls {
+            self.ide_call(call);
+        }
+        self.tell_selection();
         let searched = self.search.poll();
         let mut events = Vec::new();
         for client in self.servers.values() {
             events.extend(client.events.try_iter());
         }
-        let changed = searched || !events.is_empty();
+        let changed = called || searched || !events.is_empty();
         for event in events {
             self.lsp_event(event);
         }
         changed
+    }
+
+    fn file_uri(path: &Path) -> String {
+        format!("file://{}", path.display())
+    }
+
+    /// A path from Claude Code, which may be absolute, a file URI, or relative to the root.
+    fn ide_path(&self, text: &str) -> PathBuf {
+        self.workspace
+            .root()
+            .join(text.strip_prefix("file://").unwrap_or(text))
+    }
+
+    fn line_column(editor: &Editor, at: usize) -> Value {
+        let rope = editor.buffer.rope();
+        let line = rope.char_to_line(at);
+        json!({"line": line, "character": at - rope.line_to_char(line)})
+    }
+
+    /// The selection in the protocol's shape, or None with no file in view.
+    fn ide_selection(&self) -> Option<Value> {
+        let editor = self.editors.get(self.active())?;
+        let path = editor.buffer.path()?;
+        let selection = editor.selections.primary();
+        Some(json!({
+            "text": editor.selected_text().unwrap_or_default(),
+            "filePath": path,
+            "fileUrl": Self::file_uri(path),
+            "selection": {
+                "start": Self::line_column(editor, selection.start()),
+                "end": Self::line_column(editor, selection.end()),
+                "isEmpty": selection.is_empty(),
+            },
+        }))
+    }
+
+    fn tell_selection(&mut self) {
+        let Some(ide) = self.ide.as_ref().filter(|ide| ide.connected()) else {
+            return;
+        };
+        let current = self.ide_selection();
+        if current != self.told_selection {
+            if let Some(selection) = &current {
+                ide.notify("selection_changed", selection.clone());
+            }
+            self.told_selection = current;
+        }
+    }
+
+    /// `@`-mentions the selection in Claude Code's prompt.
+    fn mention_selection(&mut self) {
+        let (Some(ide), Some(editor)) = (&self.ide, self.editors.get(self.active())) else {
+            self.say("Claude Code isn't connected");
+            return;
+        };
+        let Some(path) = editor.buffer.path().filter(|_| ide.connected()) else {
+            self.say("Claude Code isn't connected");
+            return;
+        };
+        let selection = editor.selections.primary();
+        let rope = editor.buffer.rope();
+        ide.notify(
+            "at_mentioned",
+            json!({
+                "filePath": path,
+                "lineStart": rope.char_to_line(selection.start()),
+                "lineEnd": rope.char_to_line(selection.end()),
+            }),
+        );
+        self.say("Sent the selection to Claude Code");
+    }
+
+    fn ide_call(&mut self, call: IdeCall) {
+        let args = &call.args;
+        let text_arg = |name: &str| args[name].as_str().unwrap_or_default().to_string();
+        let answer = match call.tool.as_str() {
+            "openDiff" => return self.propose(call),
+            "openFile" => {
+                let path = self.ide_path(&text_arg("filePath"));
+                let (start, end) = (text_arg("startText"), text_arg("endText"));
+                self.ide_open(&path, &start, &end)
+            }
+            "getCurrentSelection" | "getLatestSelection" => {
+                let none = json!({"success": false, "message": "No active editor"});
+                self.ide_selection().unwrap_or(none).to_string()
+            }
+            "getOpenEditors" => self.ide_open_editors(),
+            "getDiagnostics" => {
+                let uri = args["uri"].as_str().map(|uri| self.ide_path(uri));
+                self.ide_diagnostics(uri.as_deref())
+            }
+            "checkDocumentDirty" => {
+                let path = self.ide_path(&text_arg("filePath"));
+                let found = self.editors.iter().find(|e| e.buffer.path() == Some(&path));
+                json!({
+                    "success": true,
+                    "filePath": path,
+                    "isDirty": found.is_some_and(|e| e.buffer.is_dirty()),
+                    "isUntitled": false,
+                })
+                .to_string()
+            }
+            "saveDocument" => {
+                let path = self.ide_path(&text_arg("filePath"));
+                let found = self
+                    .editors
+                    .iter_mut()
+                    .find(|e| e.buffer.path() == Some(&path));
+                let saved = found.map(|e| e.buffer.save());
+                json!({"success": matches!(saved, Some(Ok(()))), "filePath": path}).to_string()
+            }
+            "close_tab" => {
+                self.withdraw_diff(Some(&text_arg("tab_name")));
+                "TAB_CLOSED".to_string()
+            }
+            "closeAllDiffTabs" => format!("CLOSED_{}_DIFF_TABS", self.withdraw_diff(None)),
+            tool => format!("Cellix doesn't have {tool}"),
+        };
+        let _ = call.reply.send(vec![answer]);
+    }
+
+    fn ide_open(&mut self, path: &Path, start: &str, end: &str) -> String {
+        if let Err(e) = self.open(path) {
+            return format!("Could not open {}: {e}", path.display());
+        }
+        self.review = None;
+        let index = self.active();
+        if let Some(editor) = self.editors.get_mut(index).filter(|_| !start.is_empty()) {
+            let text = editor.buffer.text();
+            if let Some(from) = text.find(start) {
+                let to = (!end.is_empty())
+                    .then(|| text[from..].find(end).map(|at| from + at + end.len()))
+                    .flatten()
+                    .unwrap_or(from + start.len());
+                let chars = |byte: usize| text[..byte].chars().count();
+                let selection = Selection {
+                    anchor: chars(from),
+                    head: chars(to),
+                    goal: None,
+                };
+                editor.selections.set_single(selection);
+                let area = self.focused_area();
+                if let Some(editor) = self.editors.get_mut(index) {
+                    editor.reveal(area);
+                }
+            }
+        }
+        format!("Opened file: {}", path.display())
+    }
+
+    fn ide_open_editors(&self) -> String {
+        let tabs: Vec<Value> = self
+            .editors
+            .iter()
+            .enumerate()
+            .filter_map(|(index, editor)| {
+                let path = editor.buffer.path()?;
+                Some(json!({
+                    "uri": Self::file_uri(path),
+                    "isActive": index == self.active(),
+                    "label": editor.title(),
+                    "languageId": Registry::language_name(path).unwrap_or("plaintext"),
+                    "isDirty": editor.buffer.is_dirty(),
+                }))
+            })
+            .collect();
+        json!({"tabs": tabs}).to_string()
+    }
+
+    fn ide_diagnostics(&self, only: Option<&Path>) -> String {
+        let files: Vec<Value> = self
+            .diagnostics
+            .iter()
+            .filter(|(path, items)| !items.is_empty() && only.is_none_or(|o| o == path.as_path()))
+            .map(|(path, items)| {
+                let diagnostics: Vec<Value> = items
+                    .iter()
+                    .map(|item| {
+                        let at = json!({"line": item.line, "character": item.column});
+                        json!({
+                            "message": item.message,
+                            "severity": if item.severity == 1 { "Error" } else { "Warning" },
+                            "range": {"start": at, "end": at},
+                            "source": "language server",
+                        })
+                    })
+                    .collect();
+                json!({"uri": Self::file_uri(path), "diagnostics": diagnostics})
+            })
+            .collect();
+        Value::Array(files).to_string()
+    }
+
+    /// Shows a change Claude Code wants to make, and holds its reply until it's decided.
+    fn propose(&mut self, call: IdeCall) {
+        let tab = call.args["tab_name"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        if let Some(current) = &self.proposal {
+            if current.tab != tab {
+                self.queued_diffs.push_back(call);
+                return;
+            }
+            // The same tab again replaces the old proposal, and the old call gets rejected.
+            self.finish_proposal(vec!["DIFF_REJECTED".to_string(), tab.clone()]);
+        }
+        let args = &call.args;
+        let new = args["new_file_contents"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        let path = self.ide_path(args["new_file_path"].as_str().unwrap_or_default());
+        let old_path = self.ide_path(args["old_file_path"].as_str().unwrap_or_default());
+        // Missing means a new file, shown as all added.
+        let old = std::fs::read_to_string(&old_path).unwrap_or_default();
+        let root = self.workspace.root().to_path_buf();
+        let shown = path.strip_prefix(&root).unwrap_or(&path).to_path_buf();
+        self.review = Some(Review::proposing(
+            root,
+            self.registry.clone(),
+            shown,
+            old,
+            new,
+        ));
+        self.drawer = false;
+        self.proposal = Some(Proposal {
+            tab,
+            reply: call.reply,
+        });
+        self.say("Claude Code is proposing a change");
+    }
+
+    /// Answers the waiting call, closes the view, and shows the next diff in line.
+    fn finish_proposal(&mut self, answer: Vec<String>) {
+        if let Some(proposal) = self.proposal.take() {
+            let _ = proposal.reply.send(answer);
+        }
+        self.review = None;
+        if let Some(next) = self.queued_diffs.pop_front() {
+            self.propose(next);
+        }
+    }
+
+    fn accept_proposal(&mut self) {
+        let Some(review) = self.review.as_ref().filter(|r| r.is_proposal()) else {
+            self.say("No proposed change is waiting");
+            return;
+        };
+        let text = review.proposed_text().to_string();
+        let unchanged = review.proposed_unchanged();
+        let tab = self
+            .proposal
+            .as_ref()
+            .map(|p| p.tab.clone())
+            .unwrap_or_default();
+        self.finish_proposal(if unchanged {
+            vec!["DIFF_REJECTED".to_string(), tab]
+        } else {
+            vec!["FILE_SAVED".to_string(), text]
+        });
+    }
+
+    fn reject_proposal(&mut self) {
+        let Some(proposal) = &self.proposal else {
+            self.say("No proposed change is waiting");
+            return;
+        };
+        let tab = proposal.tab.clone();
+        self.finish_proposal(vec!["DIFF_REJECTED".to_string(), tab]);
+    }
+
+    /// Closes diffs that Claude Code no longer needs, usually because they were answered
+    /// in its own prompt. Returns how many went.
+    fn withdraw_diff(&mut self, tab: Option<&str>) -> usize {
+        let wanted = |name: &str| tab.is_none_or(|t| t == name);
+        let before = self.queued_diffs.len();
+        self.queued_diffs
+            .retain(|call| !wanted(call.args["tab_name"].as_str().unwrap_or_default()));
+        let mut closed = before - self.queued_diffs.len();
+        if self.proposal.as_ref().is_some_and(|p| wanted(&p.tab)) {
+            let tab = self
+                .proposal
+                .as_ref()
+                .map(|p| p.tab.clone())
+                .unwrap_or_default();
+            self.finish_proposal(vec!["DIFF_REJECTED".to_string(), tab]);
+            closed += 1;
+        }
+        closed
     }
 
     fn lsp_event(&mut self, event: LspEvent) {
@@ -920,6 +1245,10 @@ impl App {
             {
                 self.ask("Save changes first? y/n", PromptAction::CloseTab);
             }
+            Command::OpenDiff if self.proposal.is_some() => self.reject_proposal(),
+            Command::MentionSelection => self.mention_selection(),
+            Command::AcceptProposal => self.accept_proposal(),
+            Command::RejectProposal => self.reject_proposal(),
             Command::OpenDiff => {
                 self.review = match self.review {
                     Some(_) => None,
@@ -1091,7 +1420,15 @@ impl App {
     fn open_agent(&mut self, agent: &str) {
         let root = self.workspace.root().to_string_lossy().into_owned();
         let host = agent_split(|name| std::env::var(name).ok());
-        let Some(command) = host.map(|host| host.command(agent, &root)) else {
+        // What makes Claude Code connect to this Cellix by itself.
+        let env = match &self.ide {
+            Some(ide) if agent == "claude" => vec![
+                format!("CLAUDE_CODE_SSE_PORT={}", ide.port),
+                "ENABLE_IDE_INTEGRATION=true".to_string(),
+            ],
+            _ => Vec::new(),
+        };
+        let Some(command) = host.map(|host| host.command(agent, &root, &env)) else {
             self.say(format!(
                 "Run {agent} in a split: Cellix opens it for you inside tmux or Zellij"
             ));
@@ -1468,6 +1805,18 @@ impl App {
         };
         match review.hit(area, x, y) {
             Some(Hit::File(index)) => review.select(index),
+            Some(Hit::AcceptProposal) => self.accept_proposal(),
+            Some(Hit::RejectProposal) => self.reject_proposal(),
+            Some(Hit::Accept(hunk)) if review.is_proposal() => {
+                if review.keep_proposed(hunk) {
+                    self.accept_proposal();
+                }
+            }
+            Some(Hit::Reject(hunk)) if review.is_proposal() => {
+                if review.drop_proposed(hunk) {
+                    self.accept_proposal();
+                }
+            }
             Some(Hit::Accept(hunk)) => {
                 let result = review.accept(hunk);
                 if let Err(e) = result {
@@ -3490,7 +3839,7 @@ mod tests {
         let tmux = |k: &str| (k == "TMUX").then(|| "/tmp/t,1,0".to_string());
         assert_eq!(agent_split(tmux), Some(SplitHost::Tmux));
         assert_eq!(
-            SplitHost::Tmux.command("claude", "/w"),
+            SplitHost::Tmux.command("claude", "/w", &[]),
             ["tmux", "split-window", "-h", "-c", "/w", "claude"]
         );
         let zellij = |k: &str| (k == "ZELLIJ").then(|| "0".to_string());
@@ -3755,6 +4104,129 @@ mod tests {
         app.run(Command::SendToAgent);
         assert!(screen(&app).text().contains("next prompt"));
         assert_eq!(app.comments.lock().unwrap().len(), 1);
+    }
+
+    fn ide(tool: &str, args: Value) -> (IdeCall, std::sync::mpsc::Receiver<Vec<String>>) {
+        let (reply, answer) = std::sync::mpsc::channel();
+        let tool = tool.to_string();
+        (IdeCall { tool, args, reply }, answer)
+    }
+
+    fn diff_args(dir: &TempDir, tab: &str, new: &str) -> Value {
+        let path = dir.path().join("alpha.txt");
+        json!({
+            "old_file_path": path,
+            "new_file_path": path,
+            "new_file_contents": new,
+            "tab_name": tab,
+        })
+    }
+
+    fn propose(app: &mut App, args: Value) -> std::sync::mpsc::Receiver<Vec<String>> {
+        let (call, answer) = ide("openDiff", args);
+        app.ide_call(call);
+        answer
+    }
+
+    #[test]
+    fn a_proposed_change_is_shown_and_accepted() {
+        let (dir, mut app) = project();
+        let answer = propose(&mut app, diff_args(&dir, "t", "first line\nsecond\n"));
+        let grid = screen(&app);
+        assert!(grid.text().contains("PROPOSED CHANGE"), "{}", grid.text());
+        let on_disk = fs::read_to_string(dir.path().join("alpha.txt")).unwrap();
+        assert!(
+            !on_disk.contains("second\n"),
+            "nothing is written until accepted"
+        );
+        let (x, y) = find(&grid, "[Accept]");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        assert_eq!(answer.try_recv().unwrap()[0], "FILE_SAVED");
+        assert!(!screen(&app).text().contains("PROPOSED CHANGE"));
+    }
+
+    #[test]
+    fn rejecting_every_hunk_rejects_the_proposal() {
+        let (dir, mut app) = project();
+        let answer = propose(&mut app, diff_args(&dir, "t", "first line\nsecond\n"));
+        app.run(Command::RejectProposal);
+        assert_eq!(answer.try_recv().unwrap(), vec!["DIFF_REJECTED", "t"]);
+    }
+
+    #[test]
+    fn a_rejected_hunk_leaves_the_rest_of_the_proposal() {
+        let (dir, mut app) = project();
+        let old: String = (0..40).map(|i| format!("line {i}\n")).collect();
+        fs::write(dir.path().join("alpha.txt"), &old).unwrap();
+        let new = old
+            .replace("line 2\n", "two\n")
+            .replace("line 30\n", "thirty\n");
+        let answer = propose(&mut app, diff_args(&dir, "t", &new));
+        let review = app.review.as_mut().unwrap();
+        assert_eq!(review.diff.hunks.len(), 2);
+        assert!(!review.drop_proposed(0), "one hunk is still undecided");
+        assert!(review.keep_proposed(0));
+        app.run(Command::AcceptProposal);
+        let answer = answer.try_recv().unwrap();
+        assert_eq!(answer[0], "FILE_SAVED");
+        assert!(
+            answer[1].contains("line 2\n") && answer[1].contains("thirty"),
+            "{answer:?}"
+        );
+    }
+
+    #[test]
+    fn a_diff_answered_in_the_agent_closes_here() {
+        let (dir, mut app) = project();
+        let answer = propose(&mut app, diff_args(&dir, "t", "new\n"));
+        let queued = propose(&mut app, diff_args(&dir, "u", "other\n"));
+        let (call, closed) = ide("close_tab", json!({"tab_name": "t"}));
+        app.ide_call(call);
+        assert_eq!(closed.try_recv().unwrap(), vec!["TAB_CLOSED"]);
+        assert_eq!(answer.try_recv().unwrap()[0], "DIFF_REJECTED");
+        assert!(
+            screen(&app).text().contains("PROPOSED CHANGE"),
+            "the next one shows"
+        );
+        app.run(Command::AcceptProposal);
+        assert_eq!(queued.try_recv().unwrap()[1], "other\n");
+    }
+
+    #[test]
+    fn selection_reaches_the_ide_client() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        app.run(Command::SelectAll);
+        let selection = app.ide_selection().unwrap();
+        assert_eq!(selection["selection"]["start"]["line"], 0);
+        assert_eq!(selection["selection"]["isEmpty"], false);
+        assert!(selection["text"].as_str().unwrap().contains("first line"));
+        assert!(
+            selection["fileUrl"]
+                .as_str()
+                .unwrap()
+                .starts_with("file:///")
+        );
+        let (call, answer) = ide("getLatestSelection", json!({}));
+        app.ide_call(call);
+        assert!(answer.try_recv().unwrap()[0].contains("first line"));
+    }
+
+    #[test]
+    fn open_file_selects_the_text_claude_points_at() {
+        let (dir, mut app) = project();
+        let path = dir.path().join("alpha.txt");
+        let args = json!({"filePath": path, "startText": "first", "endText": "line"});
+        let (call, answer) = ide("openFile", args);
+        app.ide_call(call);
+        assert!(answer.try_recv().unwrap()[0].starts_with("Opened file:"));
+        assert_eq!(app.selected_text().as_deref(), Some("first line"));
+    }
+
+    #[test]
+    fn claude_starts_with_the_port_to_connect_to() {
+        let command = SplitHost::Tmux.command("claude", "/w", &["P=1".to_string()]);
+        assert_eq!(command[5..], ["env", "P=1", "claude"]);
     }
 
     #[test]

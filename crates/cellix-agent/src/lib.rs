@@ -15,6 +15,7 @@ use cellix_review::Comment;
 use serde::{Deserialize, Serialize};
 
 pub mod hook;
+pub mod ide;
 
 /// Comments shared between the app and the socket thread.
 pub type SharedComments = Arc<Mutex<Vec<Comment>>>;

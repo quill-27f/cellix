@@ -219,6 +219,9 @@ pub fn run(options: Options) -> io::Result<()> {
     }
     // Agents are optional: a second window on this workspace still edits normally.
     let server = cellix_agent::start(app.workspace.root(), app.comments.clone()).ok();
+    app.ide = server
+        .as_ref()
+        .and_then(|_| cellix_agent::ide::IdeServer::start(app.workspace.root()).ok());
 
     let _session = Session::start()?;
     let mut display = Display::detect(app.settings.tier.as_deref())?;

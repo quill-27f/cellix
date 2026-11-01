@@ -129,7 +129,7 @@ fn on_plan(roots: &[PathBuf], input: &Value) -> Option<String> {
         .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
         .collect();
     // Beside the socket, because that folder is private and /tmp on a server isn't.
-    let folder = socket.with_file_name(session);
+    let folder = socket.with_extension("").join(session);
     std::fs::create_dir_all(&folder).ok()?;
     let path = folder.join("Plan.md");
     std::fs::write(&path, plan).ok()?;
