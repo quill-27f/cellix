@@ -101,6 +101,9 @@ pub struct App {
     /// Running servers, by language.
     servers: HashMap<&'static str, Client>,
     diagnostics: HashMap<PathBuf, Vec<Diagnostic>>,
+    /// The file and revision a rename was asked against. Its edits are only valid for
+    /// that text, so one runs at a time and a stale reply is dropped.
+    pending_rename: Option<(PathBuf, u64)>,
     /// Set when the user asks to leave.
     pub quit: bool,
 }
@@ -134,6 +137,7 @@ impl App {
             settings,
             servers: HashMap::new(),
             diagnostics: HashMap::new(),
+            pending_rename: None,
             quit: false,
         };
         app.refresh_tree();
@@ -246,12 +250,45 @@ impl App {
                 }
             }
             LspEvent::Completion(labels) => {
+                // Servers send everything in scope and expect the client to filter.
+                let prefix = self
+                    .editors
+                    .get(self.active())
+                    .map_or_else(String::new, |e| {
+                        let head = e.selections.primary().head;
+                        let (start, _) = e.buffer.word_at(head);
+                        e.buffer
+                            .rope()
+                            .slice(start..head)
+                            .to_string()
+                            .to_lowercase()
+                    });
+                let labels: Vec<String> = labels
+                    .into_iter()
+                    .filter(|l| l.to_lowercase().starts_with(&prefix))
+                    .collect();
                 if !labels.is_empty() && matches!(self.overlay, Overlay::None) {
                     let items = labels.into_iter().map(Item::Completion).collect();
                     self.overlay = Overlay::Palette(Palette::new(items));
                 }
             }
+            LspEvent::Failed(message) => {
+                self.pending_rename = None;
+                self.say(message);
+            }
             LspEvent::Rename(files) => {
+                let Some((path, revision)) = self.pending_rename.take() else {
+                    return;
+                };
+                let current = self
+                    .editors
+                    .iter()
+                    .find(|e| e.buffer.path() == Some(path.as_path()))
+                    .map(|e| e.buffer.revision());
+                if current != Some(revision) {
+                    self.say("The file changed, so the rename was dropped");
+                    return;
+                }
                 let mut count = 0;
                 for (path, edits) in files {
                     count += edits.len();
@@ -614,10 +651,15 @@ impl App {
             }
             PromptAction::RenameSymbol if !name.is_empty() => {
                 self.poll();
-                if let Some((language, path, line, column)) = self.lsp_target()
+                if self.pending_rename.is_some() {
+                    self.say("A rename is already running");
+                } else if let Some((language, path, line, column)) = self.lsp_target()
                     && let Some(client) = self.servers.get_mut(language)
                 {
                     client.rename(&path, line, column, name);
+                    let index = self.active();
+                    let revision = self.editors.get(index).map(|e| e.buffer.revision());
+                    self.pending_rename = revision.map(|r| (path, r));
                 }
                 Ok(())
             }
@@ -945,6 +987,13 @@ impl App {
             Err(e) => format!("Could not save: {e}"),
         };
         self.say(note);
+        // Sent after any pending edit, so the server checks what was saved.
+        self.poll();
+        if let Some((language, path, ..)) = self.lsp_target()
+            && let Some(client) = self.servers.get(language)
+        {
+            client.saved(&path);
+        }
     }
 
     fn cycle_tab(&mut self, delta: isize) {
@@ -1312,6 +1361,14 @@ impl App {
             };
             grid.put_str(x, y, &right, style, width);
         }
+    }
+
+    pub fn rename_running(&self) -> bool {
+        self.pending_rename.is_some()
+    }
+
+    pub fn overlay_is_open(&self) -> bool {
+        !matches!(self.overlay, Overlay::None)
     }
 
     pub fn size(&self) -> (u16, u16) {
@@ -2032,7 +2089,7 @@ while True:
     #[test]
     fn lsp_completion_replaces_the_word() {
         let (_dir, mut app) = with_server();
-        typed(&mut app, "co");
+        typed(&mut app, "");
         app.run(Command::Complete);
         wait(&mut app, |a| screen(a).text().contains("completed_name"));
         enter(&mut app);
@@ -2090,6 +2147,123 @@ while True:
             std::thread::sleep(std::time::Duration::from_millis(500));
             app.poll();
         }
+    }
+
+    /// Needs rust-analyzer. Covers what the scripted server can't: real indexing,
+    /// real edits and real compiler output.
+    #[test]
+    #[ignore = "needs a real language server"]
+    fn real_rust_analyzer_completes_renames_and_reports_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("src")).unwrap();
+        fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("src/main.rs"),
+            "fn helper() -> i32 {\n    1\n}\n\nfn main() {\n    helper();\n}\n",
+        )
+        .unwrap();
+        let path = dir.path().join("src/main.rs");
+        let mut app = App::new(dir.path().to_path_buf(), (100, 30));
+        app.open(&path).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        let wait_for =
+            |app: &mut App, done: &dyn Fn(&App) -> bool, retry: &mut dyn FnMut(&mut App)| {
+                while !done(app) {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "{}",
+                        screen(app).text()
+                    );
+                    retry(app);
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                    app.poll();
+                }
+            };
+
+        // Rename from the call site, retrying until the server has indexed the project.
+        for _ in 0..5 {
+            app.run(Command::Move(cellix_input::Direction::Down, false));
+        }
+        for _ in 0..5 {
+            app.run(Command::Move(cellix_input::Direction::Right, false));
+        }
+        wait_for(
+            &mut app,
+            &|a| a.active_text().unwrap().contains("fn renamed()"),
+            &mut |a| {
+                if !a.rename_running() {
+                    a.run(Command::RenameSymbol);
+                    typed(a, "renamed");
+                    enter(a);
+                }
+            },
+        );
+        let text = app.active_text().unwrap();
+        assert!(text.contains("    renamed();"), "{text}");
+
+        // Complete a prefix of the new name on a fresh line in main.
+        app.run(Command::Move(cellix_input::Direction::LineEnd, false));
+        app.run(Command::Newline);
+        typed(&mut app, "rena");
+        wait_for(
+            &mut app,
+            &|a| a.overlay_is_open() && screen(a).text().contains("renamed"),
+            &mut |a| {
+                if a.overlay_is_open() {
+                    a.handle(Event::Key(KeyEvent::plain(Key::Esc)));
+                }
+                a.run(Command::Complete);
+            },
+        );
+        app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
+        app.run(Command::Undo);
+
+        // A type error only comes from cargo check, which saving triggers.
+        fs::write(
+            &path,
+            "fn main() {\n    let x: i32 = \"text\";\n    println!(\"{x}\");\n}\n",
+        )
+        .unwrap();
+        app.handle(Event::Tick);
+        app.poll();
+        app.run(Command::Move(cellix_input::Direction::Top, false));
+        app.run(Command::Move(cellix_input::Direction::Down, false));
+        wait_for(
+            &mut app,
+            &|a| screen(a).text().contains("mismatched types"),
+            &mut |a| {
+                a.run(Command::Save);
+                a.handle(Event::Tick);
+            },
+        );
+    }
+
+    #[test]
+    fn a_rename_is_dropped_if_the_file_changed_while_waiting() {
+        let (_dir, mut app) = with_server();
+        app.run(Command::RenameSymbol);
+        typed(&mut app, "start");
+        enter(&mut app);
+        assert!(app.rename_running());
+        app.run(Command::RenameSymbol);
+        typed(&mut app, "again");
+        enter(&mut app);
+        assert!(screen(&app).text().contains("already running"));
+        typed(&mut app, "x");
+        wait(&mut app, |a| !a.rename_running());
+        assert!(screen(&app).text().contains("rename was dropped"));
+        assert!(app.active_text().unwrap().starts_with("xfn main"));
+    }
+
+    #[test]
+    fn server_errors_are_shown_in_its_own_words() {
+        let (_dir, mut app) = with_server();
+        app.lsp_event(LspEvent::Failed("No references found".into()));
+        assert!(screen(&app).text().contains("No references found"));
     }
 
     #[test]

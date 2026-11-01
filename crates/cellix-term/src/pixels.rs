@@ -212,6 +212,11 @@ impl<R: Rasterizer> Backend for PixelBackend<R> {
             let id = self.tile(&mut bytes, key, cells, cursor, grid.width());
             on_screen.insert(id);
             if self.shown[y as usize] != Some(id) {
+                // A placement belongs to its image, so a new image at this row doesn't
+                // replace the old one. Left alone, stale rows pile up as you scroll.
+                if let (Placement::Direct, Some(old)) = (self.placement, self.shown[y as usize]) {
+                    self.apc(&mut bytes, &format!("a=d,d=i,i={old},p={},q=2", y + 1), b"");
+                }
                 self.place(&mut bytes, id, y, grid.width());
                 self.shown[y as usize] = Some(id);
             }
@@ -262,6 +267,76 @@ mod tests {
 
     fn count(haystack: &str, needle: &str) -> usize {
         haystack.matches(needle).count()
+    }
+
+    /// What a Kitty-protocol terminal keeps on screen: placements are keyed by image and
+    /// placement id together, so a new image at a row doesn't replace the old one.
+    #[derive(Default)]
+    struct Screen {
+        placements: HashMap<(u32, u32), u16>,
+    }
+
+    fn field(control: &str, key: &str) -> Option<String> {
+        control
+            .split(',')
+            .find_map(|kv| kv.strip_prefix(&format!("{key}=")).map(str::to_string))
+    }
+
+    impl Screen {
+        fn apply(&mut self, output: &str) {
+            let mut rest = output;
+            let mut row = 0;
+            while let Some(at) = rest.find('\x1b') {
+                rest = &rest[at..];
+                if let Some(after) = rest.strip_prefix("\x1b_G") {
+                    let end = after.find(['\x1b', ';']).unwrap_or(after.len());
+                    let control = &after[..end];
+                    let id = field(control, "i").and_then(|v| v.parse().ok());
+                    let placement = field(control, "p").and_then(|v| v.parse().ok());
+                    match (
+                        field(control, "a").as_deref(),
+                        field(control, "d").as_deref(),
+                    ) {
+                        (Some("p"), _) => {
+                            self.placements
+                                .insert((id.unwrap(), placement.unwrap()), row);
+                        }
+                        (Some("d"), Some("A")) => self.placements.clear(),
+                        (Some("d"), Some("I" | "i")) => self.placements.retain(|k, _| {
+                            k.0 != id.unwrap() || placement.is_some_and(|p| k.1 != p)
+                        }),
+                        _ => {}
+                    }
+                    rest = &rest[3..];
+                } else {
+                    let body = rest.strip_prefix("\x1b[").unwrap_or("");
+                    if let Some(semi) = body.find(";1H")
+                        && let Ok(y) = body[..semi].parse::<u16>()
+                    {
+                        row = y - 1;
+                    }
+                    rest = &rest[1..];
+                }
+            }
+        }
+
+        fn rows(&self) -> Vec<usize> {
+            let mut counts = vec![0; 5];
+            for row in self.placements.values() {
+                counts[*row as usize] += 1;
+            }
+            counts
+        }
+    }
+
+    #[test]
+    fn scroll_leaves_exactly_one_tile_on_each_row() {
+        let mut b = PixelBackend::new(Flat, Placement::Direct, DEFAULT_QUOTA);
+        let mut screen = Screen::default();
+        for top in [0, 1, 2, 3, 1, 0, 7, 2] {
+            screen.apply(&present(&mut b, &page(top)));
+            assert_eq!(screen.rows(), vec![1; 5], "after scrolling to {top}");
+        }
     }
 
     #[test]

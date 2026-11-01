@@ -34,6 +34,8 @@ pub enum LspEvent {
     Definition(PathBuf, usize, usize),
     Completion(Vec<String>),
     Rename(Vec<(PathBuf, Vec<TextEdit>)>),
+    /// The server refused a request, in its own words.
+    Failed(String),
 }
 
 #[derive(Clone, Copy)]
@@ -161,8 +163,9 @@ fn parse_completion(result: &Value) -> LspEvent {
         .into_iter()
         .flatten()
         .filter_map(|item| {
-            item["insertText"]
+            item["textEdit"]["newText"]
                 .as_str()
+                .or_else(|| item["insertText"].as_str())
                 .or_else(|| item["label"].as_str())
                 .map(str::to_string)
         })
@@ -232,6 +235,10 @@ fn read_loop(
         };
         let kind = pending.lock().ok().and_then(|mut p| p.remove(&id));
         let result = &message["result"];
+        if let Some(error) = message["error"]["message"].as_str() {
+            let _ = events.send(LspEvent::Failed(error.to_string()));
+            continue;
+        }
         let event = match kind {
             Some(Pending::Initialize) => {
                 if let Ok(mut writer) = writer.lock() {
@@ -365,6 +372,14 @@ impl Client {
                 "textDocument": {"uri": uri(path), "version": version},
                 "contentChanges": [{"text": text}],
             }),
+        );
+    }
+
+    /// Servers such as rust-analyzer run their compiler check on this.
+    pub fn saved(&self, path: &Path) {
+        self.notify(
+            "textDocument/didSave",
+            json!({"textDocument": {"uri": uri(path)}}),
         );
     }
 
