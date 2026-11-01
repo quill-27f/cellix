@@ -10,6 +10,8 @@ use serde::Deserialize;
 #[serde(default)]
 pub struct Settings {
     pub theme: Option<String>,
+    /// `simple` (the default) or `vim`.
+    pub keymap: Option<String>,
     /// `direct`, `placeholder` or `cells`.
     pub tier: Option<String>,
     /// Language name to server command, overriding the built-in table.
@@ -23,6 +25,7 @@ fn read(path: &Path) -> Option<Settings> {
 impl Settings {
     fn merge(&mut self, other: Self) {
         self.theme = other.theme.or(self.theme.take());
+        self.keymap = other.keymap.or(self.keymap.take());
         self.tier = other.tier.or(self.tier.take());
         self.language_servers.extend(other.language_servers);
     }

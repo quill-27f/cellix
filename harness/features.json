@@ -219,16 +219,23 @@
   {
     "id": "claude-plugin",
     "milestone": 4,
-    "title": "Claude Code plugin with a bridge mod",
+    "title": "Claude Code plugin with a review skill",
     "test": "plugin_manifest_is_valid",
     "passes": true
+  },
+  {
+    "id": "claude-mod",
+    "milestone": 5,
+    "title": "Bridge mod: status and commands inside Claude Code",
+    "test": "claude_mod_bridge_loads",
+    "passes": false
   },
   {
     "id": "vim",
     "milestone": 5,
     "title": "Built-in Vim mode",
     "test": "vim_motions_and_operators",
-    "passes": false
+    "passes": true
   },
   {
     "id": "neovim",

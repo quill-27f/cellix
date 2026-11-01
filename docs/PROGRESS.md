@@ -39,3 +39,12 @@ Unverified: the LSP client has only run against a scripted server in the tests.
 passed: this machine's rust-analyzer is a stub. Positions assume the server honours the
 requested UTF-32 encoding, so a UTF-16-only server will misplace non-ASCII columns.
 Replace is plain text with no preview, and skips files with unsaved edits.
+
+## 2026-11-01: Vim mode and real tmux tests
+
+Added a built-in Vim subset behind `"keymap": "vim"`. `harness/x mux` now runs the real
+binary in tmux for typing, splits, resizing and window switching, on the cell tier.
+
+Next: prove live scrolling and pixel tiers under tmux and Zellij, which `docs/DESIGN.md`
+lists as the condition for pixels staying the default. Then the bridge mod, Neovim mode,
+agent hosting, the wgpu rasterizer and DAP.

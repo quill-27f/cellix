@@ -41,6 +41,7 @@ pub enum Motion {
     WordLeft,
     WordRight,
     LineStart,
+    LineColumnZero,
     LineEnd,
     Top,
     Bottom,
@@ -205,6 +206,7 @@ fn step(rope: &Rope, at: usize, goal: usize, motion: Motion) -> usize {
                 start + indent
             }
         }
+        Motion::LineColumnZero => rope.line_to_char(line),
         Motion::LineEnd => rope.line_to_char(line) + line_len(rope, line),
         Motion::Top => 0,
         Motion::Bottom => rope.len_chars(),

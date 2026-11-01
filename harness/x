@@ -50,6 +50,6 @@ case $task in
     log=$(git rev-parse --git-common-dir)/cellix-guard/guard.log
     [ -f "$log" ] && { echo "recent guarded jobs:"; tail -3 "$log"; } ;;
   reserve-name)
-    cd harness/reserve-crate && exec cargo publish "$@" ;;
+    cd harness/reserve-crate && exec ../guard.sh --label reserve -- cargo publish "$@" ;;
   *) sed -n '2,14p' "$0" | sed 's/^# *//'; exit 2 ;;
 esac

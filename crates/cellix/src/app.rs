@@ -4,7 +4,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use cellix_core::{Buffer, Selection, Workspace};
-use cellix_input::{Command, Event, Key, KeyEvent, MouseEvent, MouseKind, simple_keymap};
+use cellix_input::{
+    Command, Event, Key, KeyEvent, MouseEvent, MouseKind, Vim, VimAction, VimMode, simple_keymap,
+};
 use cellix_lang::Registry;
 use cellix_lang::lsp::{Client, Diagnostic, LspEvent, TextEdit};
 use cellix_render::{Grid, Rect, Style};
@@ -94,6 +96,8 @@ pub struct App {
     /// only reads the file back still gets them.
     pub wait_file: Option<PathBuf>,
     pub settings: Settings,
+    /// Set in Vim mode. Other key handling stays the same underneath it.
+    vim: Option<Vim>,
     /// Running servers, by language.
     servers: HashMap<&'static str, Client>,
     diagnostics: HashMap<PathBuf, Vec<Diagnostic>>,
@@ -126,6 +130,7 @@ impl App {
             review: None,
             comments: SharedComments::default(),
             wait_file: None,
+            vim: (settings.keymap.as_deref() == Some("vim")).then(Vim::default),
             settings,
             servers: HashMap::new(),
             diagnostics: HashMap::new(),
@@ -465,6 +470,18 @@ impl App {
             self.overlay_key(key);
             return;
         }
+        if let Some(vim) = &mut self.vim {
+            match vim.key(key) {
+                VimAction::Commands(commands) => {
+                    for command in commands {
+                        self.run(command);
+                    }
+                    return;
+                }
+                VimAction::Pending => return,
+                VimAction::Passthrough => {}
+            }
+        }
         if let Some(command) = simple_keymap(key) {
             self.run(command);
         } else if let Key::Char(c) = key.key
@@ -719,6 +736,7 @@ impl App {
                 self.overlay = Overlay::Palette(Palette::new(items));
             }
             Command::Copy => self.copy(),
+            Command::PasteLine => self.paste_line(),
             Command::Cut => {
                 self.copy();
                 if let Some(editor) = self.editor_mut()
@@ -889,6 +907,25 @@ impl App {
         self.say(note);
         if let Some(review) = &mut self.review {
             review.refresh();
+        }
+    }
+
+    /// Vim's `p`: a copied line goes below this one, and other text after the cursor.
+    fn paste_line(&mut self) {
+        let text = self.clipboard.clone();
+        let area = self.focused_area();
+        if text.ends_with('\n') {
+            self.run(Command::Move(cellix_input::Direction::Down, false));
+            self.run(Command::Move(
+                cellix_input::Direction::LineColumnZero,
+                false,
+            ));
+        } else {
+            self.run(Command::Move(cellix_input::Direction::Right, false));
+        }
+        if let Some(editor) = self.editor_mut() {
+            editor.buffer.replace(&mut editor.selections, &text);
+            editor.reveal(area);
         }
     }
 
@@ -1260,11 +1297,14 @@ impl App {
             let head = editor.selections.primary().head;
             let rope = editor.buffer.rope();
             let line = rope.char_to_line(head);
-            let right = format!(
-                "Ln {}, Col {}",
-                line + 1,
-                head - rope.line_to_char(line) + 1
-            );
+            let mode = match self.vim.as_ref().map(|v| v.mode) {
+                Some(VimMode::Normal) => "NORMAL  ",
+                Some(VimMode::Insert) => "INSERT  ",
+                Some(VimMode::Visual) => "VISUAL  ",
+                None => "",
+            };
+            let column = head - rope.line_to_char(line) + 1;
+            let right = format!("{mode}Ln {}, Col {column}", line + 1);
             let x = width.saturating_sub(right.chars().count() as u16 + 1);
             let style = Style {
                 bold: true,
@@ -1781,6 +1821,65 @@ mod tests {
         app.run(Command::Save);
         app.handle(Event::Tick);
         assert!(screen(&app).text().contains("Saved alpha.txt"));
+    }
+
+    fn vim_app(text: &str) -> (TempDir, App) {
+        let (dir, _) = project();
+        fs::create_dir(dir.path().join(".cellix")).unwrap();
+        fs::write(
+            dir.path().join(".cellix/settings.json"),
+            r#"{"keymap": "vim"}"#,
+        )
+        .unwrap();
+        fs::write(dir.path().join("v.txt"), text).unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (100, 30));
+        app.open(&dir.path().join("v.txt")).unwrap();
+        (dir, app)
+    }
+
+    #[test]
+    fn vim_motions_and_operators() {
+        let (_dir, mut app) = vim_app("one two three\nsecond\nthird\n");
+        assert!(screen(&app).text().contains("NORMAL"));
+        typed(&mut app, "wdw");
+        assert_eq!(app.active_text().unwrap(), "one three\nsecond\nthird\n");
+        typed(&mut app, "jdd");
+        assert_eq!(app.active_text().unwrap(), "one three\nthird\n");
+        typed(&mut app, "ggyyGp");
+        assert!(app.active_text().unwrap().contains("one three\n"));
+        typed(&mut app, "u");
+        typed(&mut app, "ggx");
+        assert_eq!(app.active_text().unwrap(), "ne three\nthird\n");
+        typed(&mut app, "u");
+        typed(&mut app, "A!");
+        assert!(screen(&app).text().contains("INSERT"));
+        app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
+        assert_eq!(app.active_text().unwrap(), "one three!\nthird\n");
+    }
+
+    #[test]
+    fn vim_counts_and_change() {
+        let (_dir, mut app) = vim_app("a\nb\nc\nd\n");
+        typed(&mut app, "2dd");
+        assert_eq!(app.active_text().unwrap(), "c\nd\n");
+        typed(&mut app, "cwZ");
+        assert_eq!(app.active_text().unwrap(), "Z\nd\n");
+    }
+
+    #[test]
+    fn vim_visual_deletes_the_selection() {
+        let (_dir, mut app) = vim_app("hello world\n");
+        typed(&mut app, "vlld");
+        assert_eq!(app.active_text().unwrap(), "lo world\n");
+    }
+
+    #[test]
+    fn simple_is_the_default_keymap() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        typed(&mut app, "dd");
+        assert!(app.active_text().unwrap().starts_with("ddfirst"));
+        assert!(!screen(&app).text().contains("NORMAL"));
     }
 
     #[test]

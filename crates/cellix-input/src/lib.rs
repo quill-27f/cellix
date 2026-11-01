@@ -2,8 +2,10 @@
 //! commands, so views never depend on which mode is active.
 
 mod keymap;
+mod vim;
 
 pub use keymap::simple_keymap;
+pub use vim::{Vim, VimAction, VimMode};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Key {
@@ -120,6 +122,10 @@ pub enum Command {
     GoToDefinition,
     Complete,
     RenameSymbol,
+    /// Selects this many whole lines from the cursor.
+    SelectLines(usize),
+    /// Pastes after the cursor, or below it for a copied line.
+    PasteLine,
     Cancel,
     Quit,
 }
@@ -134,6 +140,8 @@ pub enum Direction {
     WordLeft,
     WordRight,
     LineStart,
+    /// Column zero, where `LineStart` stops at the indent first.
+    LineColumnZero,
     LineEnd,
     Top,
     Bottom,

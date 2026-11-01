@@ -135,6 +135,7 @@ impl Editor {
                     Direction::WordLeft => Motion::WordLeft,
                     Direction::WordRight => Motion::WordRight,
                     Direction::LineStart => Motion::LineStart,
+                    Direction::LineColumnZero => Motion::LineColumnZero,
                     Direction::LineEnd => Motion::LineEnd,
                     Direction::Top => Motion::Top,
                     Direction::Bottom => Motion::Bottom,
@@ -170,6 +171,16 @@ impl Editor {
                 self.selections.set_single(Selection {
                     anchor: 0,
                     head: len,
+                    goal: None,
+                });
+            }
+            Command::SelectLines(count) => {
+                let rope = self.buffer.rope();
+                let line = rope.char_to_line(self.selections.primary().head);
+                let last = rope.len_lines();
+                self.selections.set_single(Selection {
+                    anchor: rope.line_to_char(line),
+                    head: rope.line_to_char((line + count).min(last)),
                     goal: None,
                 });
             }

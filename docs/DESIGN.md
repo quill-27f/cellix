@@ -1,6 +1,7 @@
 # Cellix design
 
-Date: 2026-11-01. Status: draft, based on `spikes/pixel-budget`.
+Date: 2026-11-01. Status: implemented through milestone 4 plus Vim mode. Progress is in
+`docs/PROGRESS.md` and `harness/features.json`.
 
 ## Goal
 
@@ -90,11 +91,13 @@ polled as well as signalled, because a resize during font loading is otherwise l
 
 ## Not yet proven
 
-Static pages only have been verified. These decide whether pixels stay the default:
+Static pages only have been verified on the pixel tiers. These decide whether pixels stay
+the default:
 
-1. Live scrolling smoothness in Ghostty, tmux and Zellij. The 5,967 fps from `demo`
-   is the rate the terminal accepted bytes, not frames displayed.
-2. tmux and Zellij behaviour with split panes, pane switching, resizing and detach.
+1. Live scrolling smoothness in Ghostty, tmux and Zellij.
+2. Pixel tiers through tmux and Zellij with split panes, pane switching, resizing and
+   detach. `harness/x mux` covers tmux splits, resizes and window switches, but with no
+   client attached, so on the cell tier. Zellij has no automated test yet.
 3. A real SSH session on a slow link.
 4. Other terminals: Kitty, WezTerm, iTerm2, and whether Zellij behaves the same on them.
 5. Pixel mouse reporting (mode 1016) through Zellij.
@@ -106,7 +109,8 @@ If 1 or 2 fail, cells become the default in that environment.
 A single input layer maps keys to editor commands.
 
 - **Simple (default):** VS Code-style keys, mouse for everything, no modes to learn.
-- **Vim:** built-in emulation, because Vim has no embedding interface.
+- **Vim:** built-in emulation, because Vim has no embedding interface. A subset: motions,
+  counts, `d`, `c`, `y`, `p`, `x`, `u`, Visual and Insert. No `:` commands or registers.
 - **Neovim:** drives `nvim --embed`, using the user's config. Requires `nvim` on the host.
 
 Order: Simple, then Vim, then Neovim.
@@ -143,6 +147,9 @@ for DAP. A later DAP integration could also let agents drive the debugger.
 ## Agent integration
 
 Cellix runs one local socket per workspace, and each integration is a thin adapter.
+Comments reach an agent through `cellix comments [--take]` as JSON. With `--wait` they are
+also appended to the file as a "Review comments" section, because `$VISUAL` only returns
+the file.
 
 - `$VISUAL`: `cellix --wait <file>` covers Ctrl+G in Claude Code and equivalents elsewhere.
 - Review return path: comments are delivered as structured data over the socket and
@@ -164,7 +171,7 @@ Cellix runs one local socket per workspace, and each integration is a thin adapt
 | `cellix-lang` | Tree-sitter, LSP, language registry |
 | `cellix-review` | Plans, diffs, comments |
 | `cellix-agent` | Socket, CLI, adapters |
-| `cellix` | Binary |
+| `cellix` | Binary and app views |
 
 ## Milestones
 
