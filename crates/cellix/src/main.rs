@@ -153,6 +153,15 @@ fn main() -> ExitCode {
             println!("cellix {}", env!("CARGO_PKG_VERSION"));
             return ExitCode::SUCCESS;
         }
+        ["session-host", socket] => {
+            return match cellix::hold::serve(std::path::Path::new(socket)) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("cellix: {e}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
         ["checkpoint", label @ ..] => return checkpoint(&label.join(" ")),
         ["hook", kind] => return hook("Claude Code", kind),
         ["hook", "--agent", agent, kind] => return hook(agent, kind),

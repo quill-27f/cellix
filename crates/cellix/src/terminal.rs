@@ -289,6 +289,7 @@ pub fn run(options: Options) -> io::Result<()> {
         1
     };
     app.follow_terminal_theme(display.light);
+    app.rejoin_sessions();
     app.match_terminal_background(display.background);
     // Whole cells can't place a caret in proportional text, so ask for pixels where that's
     // on offer. It's only used with a known cell size to divide by.

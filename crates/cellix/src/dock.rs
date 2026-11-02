@@ -18,6 +18,7 @@ use cellix_render::{Bitmap, Bounds, Grid, Paint, Rect, Rgb, Style};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use unicode_width::UnicodeWidthStr;
 
+use crate::hold::Held;
 use crate::kitty::{Outcome, Piece, Protocol, Scanner, Shown};
 use crate::pdfview::PdfView;
 use crate::theme::Theme;
@@ -113,6 +114,18 @@ impl Dimensions for Size {
     }
 }
 
+/// How a session reaches its program.
+enum Link {
+    /// Cellix owns the PTY, so the program ends with Cellix.
+    Own {
+        master: Box<dyn MasterPty + Send>,
+        killer: Box<dyn ChildKiller + Send + Sync>,
+        pid: Option<u32>,
+    },
+    /// A host of its own owns the PTY, so the program can outlive Cellix.
+    Held(Held),
+}
+
 /// A place in the visible text, as (column, row).
 type Spot = (u16, u16);
 
@@ -145,9 +158,9 @@ pub struct Session {
     parser: Processor,
     events: Events,
     writer: Box<dyn Write + Send>,
-    master: Box<dyn MasterPty + Send>,
-    killer: Box<dyn ChildKiller + Send + Sync>,
-    pid: Option<u32>,
+    link: Link,
+    /// Left running if Cellix goes without saying otherwise, as when a connection drops.
+    keep: bool,
     output: Receiver<Vec<u8>>,
     finished: Receiver<()>,
     pub exited: bool,
@@ -212,12 +225,49 @@ impl Session {
             let _ = child.wait();
             let _ = done.send(());
         });
+        let link = Link::Own {
+            master: pair.master,
+            killer,
+            pid,
+        };
+        Ok(Self::around(
+            name,
+            link,
+            writer,
+            (output, finished),
+            (size, cell),
+        ))
+    }
+
+    /// Joins a program running under a host of its own.
+    pub fn join(name: &str, held: Held, size: (u16, u16), cell: CellPixels) -> io::Result<Self> {
+        let writer = Box::new(held.keys()?);
+        let (sender, output) = mpsc::channel();
+        let (done, finished) = mpsc::channel();
+        held.listen(sender, done)?;
+        held.resize(
+            size,
+            (size.0.saturating_mul(cell.0), size.1.saturating_mul(cell.1)),
+        );
+        let channels = (output, finished);
+        let mut session = Self::around(name, Link::Held(held), writer, channels, (size, cell));
+        session.keep = true;
+        Ok(session)
+    }
+
+    fn around(
+        name: &str,
+        link: Link,
+        writer: Box<dyn Write + Send>,
+        (output, finished): (Receiver<Vec<u8>>, Receiver<()>),
+        (size, cell): ((u16, u16), CellPixels),
+    ) -> Self {
         let events = Events::default();
         let dimensions = Size {
             columns: size.0 as usize,
             lines: size.1 as usize,
         };
-        Ok(Self {
+        Self {
             shell: name == crate::agents::SHELL.0,
             browser: name == BROWSER,
             name: name.to_string(),
@@ -225,9 +275,8 @@ impl Session {
             parser: Processor::new(),
             events,
             writer,
-            master: pair.master,
-            killer,
-            pid,
+            link,
+            keep: false,
             output,
             finished,
             exited: false,
@@ -237,7 +286,12 @@ impl Session {
             scanner: Scanner::default(),
             protocol: Protocol::default(),
             pictures: Vec::new(),
-        })
+        }
+    }
+
+    /// Whether this can be left running after Cellix goes.
+    pub fn can_outlive(&self) -> bool {
+        matches!(self.link, Link::Held(_)) && !self.exited
     }
 
     /// Whether comments can go here.
@@ -354,8 +408,14 @@ impl Session {
         if self.exited || self.browser {
             return false;
         }
-        let front = self.master.process_group_leader();
-        !self.shell || front.is_none() || front.map(|p| p as u32) != self.pid
+        let at_prompt = match &self.link {
+            Link::Own { master, pid, .. } => {
+                let front = master.process_group_leader();
+                front.is_some() && front.map(|p| p as u32) == *pid
+            }
+            Link::Held(held) => held.at_prompt(),
+        };
+        !self.shell || !at_prompt
     }
 
     pub fn write(&mut self, bytes: &[u8]) {
@@ -409,7 +469,15 @@ impl Session {
         self.size = size;
         self.cell = cell;
         self.selection = None;
-        let _ = self.master.resize(pty_size(size, cell));
+        match &self.link {
+            Link::Own { master, .. } => {
+                let _ = master.resize(pty_size(size, cell));
+            }
+            Link::Held(held) => {
+                let pixels = pty_size(size, cell);
+                held.resize(size, (pixels.pixel_width, pixels.pixel_height));
+            }
+        }
         self.term.resize(Size {
             columns: size.0 as usize,
             lines: size.1 as usize,
@@ -662,13 +730,20 @@ impl Session {
     }
 
     pub fn stop(&mut self) {
-        let _ = self.killer.kill();
+        match &mut self.link {
+            Link::Own { killer, .. } => {
+                let _ = killer.kill();
+            }
+            Link::Held(held) => held.kill(),
+        }
     }
 }
 
 impl Drop for Session {
     fn drop(&mut self) {
-        self.stop();
+        if !self.keep {
+            self.stop();
+        }
     }
 }
 
@@ -869,11 +944,18 @@ impl Dock {
         changed
     }
 
+    /// Stops everything here, even what could have outlived Cellix.
+    pub fn stop_all(&mut self) {
+        for session in &mut self.sessions {
+            session.stop();
+        }
+    }
+
     pub fn close(&mut self, index: usize) {
         if index >= self.sessions.len() {
             return;
         }
-        self.sessions.remove(index);
+        self.sessions.remove(index).stop();
         self.active = match self.active {
             _ if self.sessions.is_empty() => None,
             Some(active) if active >= index => Some(active.saturating_sub(1)),

@@ -1335,5 +1335,40 @@
     "title": "A notebook edit reaches its cell and a new cell is added",
     "test": "an_edit_reaches_its_cell_and_a_new_cell_is_added",
     "passes": true
+  },
+  {
+    "id": "hold-outlive",
+    "milestone": 9,
+    "title": "A program runs on with nobody attached and shows what it did",
+    "test": "a_program_runs_on_with_nobody_attached_and_shows_what_it_did",
+    "passes": true
+  },
+  {
+    "id": "hold-ended",
+    "milestone": 9,
+    "title": "A program that ends unattached is told about later",
+    "test": "a_program_that_ends_while_nobody_is_attached_is_told_about_later",
+    "passes": true
+  },
+  {
+    "id": "hold-stop",
+    "milestone": 9,
+    "title": "Stopping a held program ends it",
+    "test": "stopping_a_held_program_ends_it",
+    "passes": true
+  },
+  {
+    "id": "hold-size",
+    "milestone": 9,
+    "title": "A new size reaches a held program",
+    "test": "a_new_size_reaches_the_program",
+    "passes": true
+  },
+  {
+    "id": "hold-clean",
+    "milestone": 9,
+    "title": "A dead host leaves nothing behind",
+    "test": "a_dead_host_leaves_nothing_behind",
+    "passes": true
   }
 ]

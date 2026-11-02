@@ -213,6 +213,8 @@ enum Choice {
     Reload,
     /// Quit, stopping what's running in the side pane.
     Stop,
+    /// Quit, leaving it running for next time.
+    KeepRunning,
     CloseSession(usize),
     Undo(String),
 }
@@ -497,6 +499,10 @@ pub struct App {
     system_browser: Vec<String>,
     /// What saves the clipboard's picture to the file named last.
     clipboard_image: Vec<String>,
+    /// The answer to quitting was to leave things running.
+    keep_running: bool,
+    /// What runs sessions so they can outlive Cellix: Cellix itself, away from tests.
+    host_program: Option<PathBuf>,
     /// Checks spelling and grammar, started when a page first needs it.
     spell: Option<crate::spell::Spell>,
     spell_on: bool,
@@ -539,6 +545,8 @@ impl App {
             ticks: 0,
             review: None,
             clipboard_image: clipboard_image_command(),
+            keep_running: false,
+            host_program: std::env::current_exe().ok().filter(|_| !cfg!(test)),
             spell: None,
             spell_on: cfg!(not(test)) && settings.spell_check != Some(false),
             last_edit: (0, std::time::Instant::now()),
@@ -2321,7 +2329,7 @@ impl App {
 
     fn leave(&mut self, leaving: Leaving) {
         match leaving {
-            Leaving::Quit => self.quit = true,
+            Leaving::Quit => self.quit_now(),
             Leaving::CloseTab => self.close_tab(),
         }
     }
@@ -2340,6 +2348,11 @@ impl App {
                 }
             }
             Choice::Stop => {
+                self.stop_confirmed = true;
+                self.run(Command::Quit);
+            }
+            Choice::KeepRunning => {
+                self.keep_running = true;
                 self.stop_confirmed = true;
                 self.run(Command::Quit);
             }
@@ -2868,17 +2881,27 @@ impl App {
         match command {
             Command::Quit if !self.stop_confirmed && !self.dock.busy().is_empty() => {
                 let names = self.dock.busy().join(", ");
+                let can_keep = self.dock.sessions.iter().any(Session::can_outlive);
+                let mut buttons = vec![("Cancel", Choice::Cancel)];
+                if can_keep {
+                    buttons.push(("Keep Running", Choice::KeepRunning));
+                }
+                buttons.push(("Stop and Quit", Choice::Stop));
                 self.overlay = Overlay::Confirm(Confirm {
                     title: "Stop what's running?".to_string(),
-                    detail: format!("{names} will stop if you quit."),
-                    buttons: vec![("Cancel", Choice::Cancel), ("Stop and Quit", Choice::Stop)],
+                    detail: if can_keep {
+                        format!("{names} can keep running, and be here next time you open this.")
+                    } else {
+                        format!("{names} will stop if you quit.")
+                    },
+                    buttons,
                     selected: 0,
                 });
             }
             Command::Quit if self.editors.iter().any(|e| e.buffer.is_dirty()) => {
                 self.confirm_leaving(Leaving::Quit);
             }
-            Command::Quit => self.quit = true,
+            Command::Quit => self.quit_now(),
             Command::CloseTab
                 if self
                     .editors
@@ -3293,7 +3316,29 @@ impl App {
     fn start_session(&mut self, name: &str, argv: &[String], env: &[String], folder: &Path) {
         self.dock.open = true;
         let size = self.dock_screen().map_or((80, 24), |a| (a.w, a.h));
-        match Session::start(name, argv, env, folder, size, self.cell_size()) {
+        // A browser has nothing worth keeping, and nothing else should end with Cellix.
+        let held = self
+            .host_program
+            .clone()
+            .filter(|_| name != BROWSER)
+            .and_then(|program| {
+                let cell = self.cell_size();
+                let job = crate::hold::Job {
+                    name: name.to_string(),
+                    argv: argv.to_vec(),
+                    env: env.to_vec(),
+                    folder: folder.to_path_buf(),
+                    size,
+                    pixels: (size.0.saturating_mul(cell.0), size.1.saturating_mul(cell.1)),
+                };
+                let sessions = crate::hold::folder_of(self.workspace.root());
+                crate::hold::start(&program, &sessions, &job).ok()
+            });
+        let started = match held {
+            Some(held) => Session::join(name, held, size, self.cell_size()),
+            None => Session::start(name, argv, env, folder, size, self.cell_size()),
+        };
+        match started {
             Ok(session) => {
                 self.dock.sessions.push(session);
                 self.dock.active = Some(self.dock.sessions.len() - 1);
@@ -3313,6 +3358,38 @@ impl App {
             area.w,
             area.h.saturating_sub(1),
         ))
+    }
+
+    /// Quits. What's in the side pane stops with it unless it was asked to stay.
+    fn quit_now(&mut self) {
+        if !self.keep_running {
+            self.dock.stop_all();
+        }
+        self.quit = true;
+    }
+
+    /// Picks up what the last Cellix here left running, in tabs of the side pane.
+    pub fn rejoin_sessions(&mut self) {
+        let folder = crate::hold::folder_of(self.workspace.root());
+        let mut names = Vec::new();
+        for (name, socket) in crate::hold::left_running(&folder) {
+            let Ok(held) = crate::hold::Held::connect(&socket) else {
+                continue;
+            };
+            let size = self.dock_screen().map_or((80, 24), |a| (a.w, a.h));
+            if let Ok(session) = Session::join(&name, held, size, self.cell_size()) {
+                self.dock.sessions.push(session);
+                names.push(name);
+            }
+        }
+        if !names.is_empty() {
+            self.dock.active = Some(self.dock.sessions.len() - 1);
+            self.dock.open = true;
+            self.dock.front = Front::Session;
+            self.fit_dock();
+            let names = names.join(", ");
+            self.say(format!("{names} kept running while you were away"));
+        }
     }
 
     /// Pixels in a cell, for programs that draw pictures.

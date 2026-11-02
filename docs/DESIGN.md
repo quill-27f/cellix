@@ -272,6 +272,11 @@ doesn't need to compete with a full IDE here.
 
 ## Agent integration
 
+Each program in the side pane runs under a small host of its own: Cellix re-run as
+`cellix session-host`, which owns the PTY and a Unix socket and keeps recent output. So Cellix can
+quit, or an SSH connection drop, and the next Cellix in that folder finds it with what it printed.
+Quitting offers Keep Running. A dropped connection keeps everything, since nobody can be asked.
+
 The side pane's terminal also reads the Kitty graphics protocol, so a program in it can draw
 pictures. That is how `terminal-browser` shows a real browser inside Cellix, and how a plot from a
 training run shows in a shell. Frames become bitmaps on the `Grid`'s paint list like any other

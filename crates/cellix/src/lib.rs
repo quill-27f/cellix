@@ -6,6 +6,7 @@ mod dock;
 mod editor;
 mod explorer;
 mod find;
+pub mod hold;
 pub mod integrations;
 mod kitty;
 mod menu;
