@@ -5,9 +5,10 @@ use super::*;
 
 /// Rows set out on the page. Past this a file stays usable, and its source has the rest.
 const MAX_ROWS: usize = 2000;
-/// The widest a column may stand, and the narrowest it's pushed to when there are many.
-const WIDE: usize = 40;
+/// The narrowest a column is pushed to when they don't all fit.
 const NARROW: usize = 8;
+/// Space a column's edges take up.
+const EDGES: usize = 2;
 
 /// A row's fields, each with where its text starts. Quotes are hidden, not parsed away, so
 /// every char still has its place in the source.
@@ -72,7 +73,16 @@ pub(super) fn layout(
         .map(|i| fields(lines[*i].1, separator))
         .collect();
     let count = table.iter().map(Vec::len).max().unwrap_or(0).max(1);
-    let fair = (width as usize / count).clamp(NARROW, WIDE);
+    // Every column gets what it needs if they all fit, or else the longest give way.
+    let longest: Vec<usize> = (0..count)
+        .map(|c| {
+            let cells = table.iter().filter_map(|row| row.get(c));
+            cells.map(|(_, cell)| cell.len()).max().unwrap_or(0)
+        })
+        .collect();
+    let needed: usize = longest.iter().map(|w| w + EDGES).sum();
+    let fair = (width as usize / count).saturating_sub(EDGES).max(NARROW);
+    let fits = needed <= width as usize;
     let body = table.iter().skip(1);
     let aligns: Vec<char> = (0..count)
         .map(|c| {
@@ -94,7 +104,7 @@ pub(super) fn layout(
             ..PLAIN
         };
         let glyphs = cells.iter().map(|(at, cell)| {
-            let long = cell.len() > fair;
+            let long = !fits && cell.len() > fair;
             let kept = if long { fair - 1 } else { cell.len() };
             let mut out: Vec<Glyph> = cell[..kept]
                 .iter()

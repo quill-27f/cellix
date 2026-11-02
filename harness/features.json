@@ -1524,5 +1524,75 @@
     "title": "Cutting with Track Changes on keeps a suggestion",
     "test": "cutting_with_tracking_on_keeps_the_words_as_a_suggestion",
     "passes": true
+  },
+  {
+    "id": "stars-both",
+    "milestone": 9,
+    "title": "Bold italics hide all their stars",
+    "test": "bold_italics_hide_all_their_stars",
+    "passes": true
+  },
+  {
+    "id": "list-gap",
+    "milestone": 9,
+    "title": "Nested list markers keep their distance from their text",
+    "test": "nested_list_markers_keep_their_distance_from_their_text",
+    "passes": true
+  },
+  {
+    "id": "nb-error",
+    "milestone": 9,
+    "title": "A notebook's error is red and not crossed out",
+    "test": "a_notebooks_error_is_red_and_not_crossed_out",
+    "passes": true
+  },
+  {
+    "id": "csv-room",
+    "milestone": 9,
+    "title": "Data keeps whole cells when there is room",
+    "test": "data_keeps_whole_cells_when_there_is_room",
+    "passes": true
+  },
+  {
+    "id": "csv-status",
+    "milestone": 9,
+    "title": "Data says what it is in the status bar",
+    "test": "data_says_what_it_is_in_the_status_bar",
+    "passes": true
+  },
+  {
+    "id": "tex-algorithm",
+    "milestone": 9,
+    "title": "An algorithm is built from its steps with its caption on the page",
+    "test": "an_algorithm_is_built_from_its_steps_with_its_caption_on_the_page",
+    "passes": true
+  },
+  {
+    "id": "math-rows",
+    "milestone": 9,
+    "title": "Rows of a display keep clear of each other",
+    "test": "rows_of_a_display_keep_clear_of_each_other",
+    "passes": true
+  },
+  {
+    "id": "math-numbers",
+    "milestone": 9,
+    "title": "Equation numbers stand on their own rows",
+    "test": "a_tall_row_takes_its_share_of_the_picture",
+    "passes": true
+  },
+  {
+    "id": "spell-names",
+    "milestone": 9,
+    "title": "Names and keys are not misspellings",
+    "test": "names_and_keys_are_not_misspellings",
+    "passes": true
+  },
+  {
+    "id": "spell-british",
+    "milestone": 9,
+    "title": "British spelling is not a mistake",
+    "test": "british_spelling_is_not_a_mistake",
+    "passes": true
   }
 ]

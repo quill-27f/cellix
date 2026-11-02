@@ -2657,9 +2657,10 @@ impl Editor {
                 grid.hairline(line, theme.popup_border);
             }
             if row.quote {
-                let bar = Bounds::cells(left as f32 + 0.1, y as f32 + 0.08, 0.3, 0.84);
+                // Whole rows, so a block's bar runs on unbroken from row to row.
+                let bar = Bounds::cells(left as f32 + 0.1, y as f32, 0.3, 1.0);
                 let colour = row.callout.map(|kind| callout_colour(kind, theme));
-                grid.panel(bar, 12, Some(colour.unwrap_or(theme.popup_border)), None);
+                grid.panel(bar, 0, Some(colour.unwrap_or(theme.popup_border)), None);
             }
             // A tall heading on the last row would reach into the status bar, which paint
             // can't be clipped by, so it waits until it fits.
@@ -2771,7 +2772,8 @@ impl Editor {
             Tone::Footnote => theme.accent,
             Tone::Callout(kind) => callout_colour(kind, theme),
             Tone::Inserted => theme.inserted(),
-            Tone::Deleted => theme.deleted(),
+            Tone::Deleted | Tone::Failed => theme.deleted(),
+            Tone::Margin(_) => theme.gutter.fg,
         };
         let selected = |at: Option<usize>| {
             at.is_some_and(|at| {
@@ -2831,8 +2833,13 @@ impl Editor {
             } else {
                 theme.accent
             };
-            let line = Bounds::cells(x, text_y + 0.9, width, 0.07);
-            grid.panel(line, 0, Some(colour), None);
+            // Dots, since a solid line means a link, or text a change added.
+            const DOT: f32 = 0.18;
+            const STEP: f32 = 0.4;
+            for dot in 0..(width / STEP).ceil() as usize {
+                let spot = Bounds::cells(x + dot as f32 * STEP, text_y + 0.9, DOT, 0.07);
+                grid.panel(spot, 0, Some(colour), None);
+            }
         }
         let mut i = 0;
         while i < row.glyphs.len() {
@@ -2905,6 +2912,7 @@ impl Editor {
                     let shift = match g.tone {
                         Tone::Raised | Tone::Footnote => -0.2,
                         Tone::Lowered => 0.2,
+                        Tone::Margin(moved) => moved as f32 / 64.0,
                         _ => 0.0,
                     };
                     let inked = g.underline || g.tone == Tone::Inserted;

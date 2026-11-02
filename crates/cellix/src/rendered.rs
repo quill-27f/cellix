@@ -56,6 +56,10 @@ pub enum Tone {
     /// Text a tracked change adds, and text it takes away.
     Inserted,
     Deleted,
+    /// What failed, in the colour of failure.
+    Failed,
+    /// An equation's number, moved this many 64ths of a row from the middle of its row.
+    Margin(i8),
 }
 
 /// The kinds of GitHub's callouts.
@@ -425,6 +429,8 @@ pub struct Library {
     diagrams: HashMap<(Kind, String, u32), Result<Figure, String>>,
     /// Pieces of LaTeX that have been built, by their key and the room they had.
     built: HashMap<(u64, u32), Option<Figure>>,
+    /// Where each row of a display stands, by its source.
+    rows: HashMap<String, Option<Vec<f32>>>,
 }
 
 /// How a piece of LaTeX stands on the page.
@@ -700,7 +706,17 @@ fn inline(chars: &[char], offset: usize, look: Look, context: &Context, out: &mu
                     .find(|n| rest[*n] == marker)
                     .is_some_and(|n| rest[1..n].iter().all(|c| !c.is_whitespace()))
         };
-        let used = if rest.starts_with(&['{', '+', '+']) {
+        let strong = Look {
+            font: Font {
+                bold: true,
+                italic: true,
+                ..look.font
+            },
+            ..look
+        };
+        let used = if rest.starts_with(&['*', '*', '*']) {
+            wrap(&['*', '*', '*'], strong, out)
+        } else if rest.starts_with(&['{', '+', '+']) {
             critic(
                 rest,
                 &['+', '+', '}'],
@@ -1268,6 +1284,30 @@ impl Context<'_> {
         }
     }
 
+    /// Where each row of a display stands in its picture, kept between layouts.
+    fn row_centres(&self, source: &str, count: usize) -> Option<Vec<f32>> {
+        const EM: u32 = 24;
+        if count < 2 {
+            return None;
+        }
+        let expanded = self.extras.project.as_ref().map(|p| p.expand(source));
+        let source = expanded.as_deref().unwrap_or(source);
+        let make = || {
+            let rows = cellix_doc::latex::display_rows(source);
+            let rows: Vec<String> = rows.iter().map(ToString::to_string).collect();
+            cellix_doc::math::row_centres(&rows, EM).filter(|c| c.len() == count)
+        };
+        match self.extras.library {
+            Some(library) => library
+                .borrow_mut()
+                .rows
+                .entry(source.to_string())
+                .or_insert_with(make)
+                .clone(),
+            None => make(),
+        }
+    }
+
     /// A picture a notebook cell drew.
     fn cell_picture(&self, bytes: &[u8], width: f32) -> Option<usize> {
         let cell = self.cell()?;
@@ -1412,7 +1452,7 @@ fn fit_for(share: Option<u32>, width: f32) -> Fit {
 
 /// Sets equation numbers at the right margin, spread down the picture's rows.
 fn margin_numbers(
-    numbers: &[Option<String>],
+    (numbers, source): (&[Option<String>], &str),
     first: usize,
     height: f32,
     width: f32,
@@ -1420,15 +1460,21 @@ fn margin_numbers(
     rows: &mut [Row],
 ) {
     let count = numbers.len().max(1) as f32;
+    let centres = context.row_centres(source, numbers.len());
     for (index, number) in numbers.iter().enumerate() {
         let Some(number) = number else {
             continue;
         };
-        // In the middle of its share of the picture, which starts a little into its row.
-        let middle = 0.2 + height * (index as f32 + 0.5) / count;
+        // In the middle of its line, in a picture that starts a little into its row.
+        let share = centres
+            .as_ref()
+            .and_then(|c| c.get(index).copied())
+            .unwrap_or((index as f32 + 0.5) / count);
+        let middle = 0.2 + height * share;
         let row = first + middle.floor() as usize;
+        let shift = ((middle.fract() - 0.5) * 64.0) as i8;
         let number = number.replace('$', "").replace("\\ast", "∗");
-        let mut mark = decoration(&format!("({number})"), Tone::Dim);
+        let mut mark = decoration(&format!("({number})"), Tone::Margin(shift));
         measure_glyphs(&mut mark, context.measure);
         let shown: f32 = mark.iter().map(|g| g.advance).sum();
         let mut x = width - shown;
@@ -1532,11 +1578,14 @@ fn cell_outputs(
 ) {
     /// Lines of printed text shown before the rest is left out.
     const MOST: usize = 40;
+    if !outputs.is_empty() {
+        rows.push(spacer(line, at));
+    }
     for output in outputs {
         match output {
             Output::Text(text) | Output::Error(text) => {
                 let tone = if matches!(output, Output::Error(_)) {
-                    Tone::Deleted
+                    Tone::Failed
                 } else {
                     Tone::Dim
                 };
@@ -1805,7 +1854,7 @@ pub fn layout_with(
                 let mut count = 0;
                 let numbers = cellix_doc::latex::equation_rows(&formula, false, &mut count);
                 let shown = context.extras.figures.borrow()[figure].height;
-                margin_numbers(&numbers, at, shown, width, &context, &mut rows);
+                margin_numbers((&numbers, &formula), at, shown, width, &context, &mut rows);
                 if open {
                     let start = rows.iter().rposition(|r| r.figure.is_some());
                     if let Some(row) = start.and_then(|at| rows.get_mut(at)) {
@@ -2035,7 +2084,13 @@ pub fn layout_with(
         }
         // List text lines up whatever the marker's width, as in a real document.
         if proportional && decorated > 0 {
-            let pad = found.as_ref().map_or(0, |p| p.indent) as f32;
+            let indent = found.as_ref().map_or(0, |p| p.indent);
+            // Nesting moves the marker too, so it keeps its distance from its text.
+            for g in glyphs.iter_mut().take(indent.min(decorated)) {
+                g.advance = 1.0;
+                g.tone = Tone::TableLine;
+            }
+            let pad = indent as f32;
             let width: f32 = glyphs[..decorated].iter().map(|g| g.advance).sum();
             glyphs[decorated - 1].advance += (pad + 1.8 - width).max(0.0);
             glyphs[decorated - 1].tone = Tone::TableLine;

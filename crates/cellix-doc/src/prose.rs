@@ -255,6 +255,39 @@ fn worth_showing(kind: LintKind) -> bool {
     )
 }
 
+/// Words that aren't English to begin with: names like ImageNet and CIFAR, anything with a
+/// digit in it, a letter or two left by a formula, and what keyboards call their keys.
+fn technical(word: &str) -> bool {
+    const KEYS: [&str; 4] = ["Ctrl", "Cmd", "Esc", "Alt"];
+    let mut letters = word.chars();
+    let first = letters.next();
+    let inner_capital = letters.any(char::is_uppercase);
+    word.chars().count() <= 2
+        || inner_capital
+        || first.is_some_and(|c| c.is_ascii_digit())
+        || word.chars().any(|c| c.is_ascii_digit())
+        || KEYS.contains(&word)
+}
+
+/// Whether a suggestion is only the other side of the Atlantic: minimises for minimizes,
+/// colour for color. Either is right, and the writer knows which they mean.
+fn regional(word: &str, fix: &Suggestion) -> bool {
+    let Suggestion::ReplaceWith(fix) = fix else {
+        return false;
+    };
+    let fix: String = fix.iter().collect::<String>().to_lowercase();
+    let word = word.to_lowercase();
+    let plain = |text: &str| {
+        text.replace("ise", "ize")
+            .replace("isa", "iza")
+            .replace("yse", "yze")
+            .replace("our", "or")
+            .replace("tre", "ter")
+            .replace("ll", "l")
+    };
+    plain(&word) == plain(&fix)
+}
+
 /// Does the checking. Starting it takes a moment, so it lives on its own thread.
 pub struct Checker {
     dictionary: Arc<FstDictionary>,
@@ -290,7 +323,10 @@ impl Checker {
             let (start, end) = (lint.span.start, lint.span.end.min(chars.len()));
             let word: String = chars[start..end].iter().collect();
             let spelling = lint.lint_kind == LintKind::Spelling;
-            if spelling && self.known.contains(&word.to_lowercase()) {
+            if spelling && (self.known.contains(&word.to_lowercase()) || technical(&word)) {
+                continue;
+            }
+            if spelling && lint.suggestions.iter().any(|fix| regional(&word, fix)) {
                 continue;
             }
             let fixes = lint
@@ -372,6 +408,23 @@ mod tests {
                 .iter()
                 .all(|i| !i.spelling)
         );
+    }
+
+    #[test]
+    fn names_and_keys_are_not_misspellings() {
+        let mut checker = Checker::new(HashSet::new());
+        let text =
+            "We trained on ImageNet and CIFAR-10, drew it in TikZ, and pressed Ctrl to go.\n";
+        let found = checker.check(text, Source::Markdown);
+        assert!(found.iter().all(|i| !i.spelling), "{found:?}");
+    }
+
+    #[test]
+    fn british_spelling_is_not_a_mistake() {
+        let mut checker = Checker::new(HashSet::new());
+        let text = "This minimises the loss, and the colour of the emphasised centre stays.\n";
+        let found = checker.check(text, Source::Markdown);
+        assert!(found.iter().all(|i| !i.spelling), "{found:?}");
     }
 
     #[test]

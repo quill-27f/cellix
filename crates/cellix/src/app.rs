@@ -2153,11 +2153,8 @@ impl App {
         editor.selected_text().filter(|t| !t.trim().is_empty())?;
         let area = self.focused_area();
         let (x, y) = editor.caret_cell(area)?;
-        let y = if y + 1 < area.bottom() {
-            y + 1
-        } else {
-            y.checked_sub(1)?
-        };
+        // Above the words, so it never covers what it's about, unless they're at the top.
+        let y = if y > area.y { y - 1 } else { y + 1 };
         let width = COMMENT_WIDTH + ASK_WIDTH;
         let x = (x as u16)
             .min(area.right().saturating_sub(width + 1))
@@ -2192,38 +2189,46 @@ impl App {
     }
 
     fn draw_chip(&self, grid: &mut Grid, chip: Rect, name: &str) {
+        /// Its gap from the words it stands over, and from the button beside it, in cells.
+        const LIFT: f32 = 0.2;
+        const SIDE: f32 = 0.24;
         let theme = &self.theme;
         let on_it = self.hover.is_some_and(|h| chip.contains(h.0, h.1));
         let style = Style {
             fg: theme.text.fg,
             bold: false,
+            painted: !self.measure.in_cells(),
+            bg: theme.popup,
             ..theme.bar
         };
-        grid.fill(
-            chip,
-            Style {
-                bg: theme.popup,
-                ..style
-            },
-        );
-        if !self.measure.in_cells() {
+        if self.measure.in_cells() {
+            grid.fill(chip, style);
+        } else {
             let fill = if on_it {
                 theme.popup_hover
             } else {
                 theme.popup
             };
-            grid.popup(
-                Bounds::inset(chip, 0.04, 0.02),
-                20,
-                fill,
-                theme.popup_border,
+            let bounds = Bounds::cells(
+                chip.x as f32 + SIDE,
+                chip.y as f32 + 0.02 - LIFT,
+                chip.w as f32 - SIDE * 2.0,
+                0.96,
+            );
+            grid.popup(bounds, 20, fill, theme.popup_border);
+            let font = Font::default();
+            let width = self.measure.width(name, font);
+            let x = chip.x as f32 + (chip.w as f32 - width) / 2.0;
+            let top = chip.y as f32 - LIFT;
+            grid.text_run(
+                (x, top),
+                chip.right() as f32,
+                name,
+                (theme.text.fg, false),
+                font,
             );
         }
-        let style = Style {
-            bg: theme.popup,
-            ..style
-        };
-        grid.label(chip.x + 1, chip.y, name, style, chip.right());
+        grid.put_str(chip.x + 1, chip.y, name, style, chip.right());
     }
 
     /// The button on a PDF or picture in the side pane, once the pointer has been on it.
@@ -4142,7 +4147,12 @@ impl App {
 
     fn outline_here(&self) -> Option<usize> {
         let line = self.cursor_line()?.1.saturating_sub(1);
-        crate::outline::current(&self.outline.headings, line)
+        // Above the first heading still counts as being in the document's first part.
+        crate::outline::current(&self.outline.headings, line).or((!self
+            .outline
+            .headings
+            .is_empty())
+        .then_some(0))
     }
 
     fn click_outline(&mut self, y: u16) {
@@ -7122,7 +7132,12 @@ impl App {
                     .trim_start()
                     .to_string(),
                 format!("{} lines", rope.len_lines().saturating_sub(trailing)),
-                language.to_string(),
+                match editor.dialect() {
+                    Dialect::Data(',') => "CSV".to_string(),
+                    Dialect::Data(_) => "TSV".to_string(),
+                    _ if editor.notebook.is_some() => "Notebook".to_string(),
+                    _ => language.to_string(),
+                },
                 "UTF-8".to_string(),
                 // A writer counts words, and has no use for indent width.
                 if editor.tracking {
@@ -10473,6 +10488,81 @@ mod tests {
         let (x, y) = find(&screen(&app), "Ask Agent");
         app.handle(mouse(MouseKind::Left, x, y));
         assert_eq!(app.dock.draft.as_ref().unwrap().quote, "torch");
+    }
+
+    #[test]
+    fn bold_italics_hide_all_their_stars() {
+        let (_dir, app) = picture_page("Some ***both*** here\n");
+        let shown: String = tones_on_page(&app).iter().map(|(c, _)| *c).collect();
+        assert!(!shown.contains('*'), "{shown}");
+    }
+
+    #[test]
+    fn nested_list_markers_keep_their_distance_from_their_text() {
+        let (_dir, app) = picture_page("- one\n  - two\n    - three\n");
+        let rows = app.editors[0].page_rows(app.focused_area());
+        let gaps: Vec<f32> = rows
+            .iter()
+            .filter(|r| r.glyphs.iter().any(|g| g.at.is_some()))
+            .map(|r| {
+                let text = r.glyphs.iter().find(|g| g.at.is_some()).unwrap();
+                let mark = r.glyphs.iter().find(|g| "•◦▪".contains(g.ch)).unwrap();
+                text.x - mark.x
+            })
+            .collect();
+        assert_eq!(gaps.len(), 3);
+        // Painted as one run its spaces would take the font's width, and the marker stay put.
+        let row = rows
+            .iter()
+            .find(|r| r.glyphs.iter().any(|g| g.ch == '◦'))
+            .unwrap();
+        assert_eq!(row.glyphs[0].tone, crate::rendered::Tone::TableLine);
+        let spread =
+            gaps.iter().cloned().fold(0.0, f32::max) - gaps.iter().cloned().fold(9.0, f32::min);
+        assert!(spread < 0.2, "{gaps:?}");
+    }
+
+    #[test]
+    fn a_notebooks_error_is_red_and_not_crossed_out() {
+        let (_dir, app) = data_app("run.ipynb", NOTEBOOK);
+        assert_eq!(
+            text_with(&app, crate::rendered::Tone::Failed),
+            "Boom happened"
+        );
+        assert_eq!(text_with(&app, crate::rendered::Tone::Deleted), "");
+    }
+
+    #[test]
+    fn data_keeps_whole_cells_when_there_is_room() {
+        let long = "a long note that runs on well past forty columns of text here";
+        let (_dir, app) = data_app("runs.csv", &format!("name,note\nalpha,{long}\n"));
+        assert!(screen(&app).text().contains(long));
+    }
+
+    #[test]
+    fn data_says_what_it_is_in_the_status_bar() {
+        let (_dir, app) = data_app("runs.csv", "a,b\n1,2\n");
+        assert!(screen(&app).text().contains("CSV"));
+    }
+
+    #[test]
+    fn an_algorithm_is_built_from_its_steps_with_its_caption_on_the_page() {
+        let dir = tempfile::tempdir().unwrap();
+        let sample = dir.path().join("sample.pdf");
+        fs::write(&sample, cellix_doc::pdf::sample()).unwrap();
+        let source = "\\begin{document}\n\\begin{algorithm}[h]\n\\caption{Descent}\n\\begin{algorithmic}[1]\n\\State go\n\\end{algorithmic}\n\\end{algorithm}\n\\end{document}\n";
+        fs::write(dir.path().join("paper.tex"), source).unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(10, 20)));
+        let reply = format!(
+            "grep -q caption snippet.tex && exit 1; grep -q algorithmic snippet.tex && cp {} snippet.pdf",
+            sample.display()
+        );
+        app.settings.latex_engine = Some(fake_latex(dir.path(), &reply));
+        app.built_folder = dir.path().join("built");
+        app.open(&dir.path().join("paper.tex")).unwrap();
+        waits_for(&mut app, |app| !pictures(app).is_empty());
+        assert!(painted_text(&app).contains("Algorithm 1"));
     }
 
     #[test]

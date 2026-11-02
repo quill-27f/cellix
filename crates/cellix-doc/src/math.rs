@@ -66,6 +66,9 @@ const SUBSTITUTES: [(&str, &str); 24] = [
     ("{smallmatrix}", "{matrix}"),
 ];
 
+/// Something unseen that reaches a script's depth below a row's own limits.
+const ROW_DEPTH: &str = "\\vphantom{\\underset{\\underset{x}{x}}{X}}";
+
 /// Operators whose limits stand under them in a display. The engine only does this for `\lim`.
 const UNDER: [&str; 8] = [
     "\\max",
@@ -200,7 +203,61 @@ fn prepared(source: &str, display: bool) -> String {
             .replace(&format!("{{{name}}}"), "{aligned}");
     }
     let text = text.replace("{gathered}", "{aligned}");
-    if display { limits_under(&text) } else { text }
+    let text = if display { limits_under(&text) } else { text };
+    if text.contains("{aligned}") {
+        roomy_rows(&text)
+    } else {
+        text
+    }
+}
+
+/// Gives a row with limits under it more depth, so they clear the next row's. The engine has
+/// no `\\\\[gap]`, but a row is as deep as whatever's in it, seen or not.
+fn roomy_rows(text: &str) -> String {
+    let rows: Vec<&str> = text.split("\\\\").collect();
+    let last = rows.len().saturating_sub(1);
+    let spaced = rows.iter().enumerate().map(|(index, row)| {
+        if index < last && row.contains("\\underset") {
+            format!("{row}{ROW_DEPTH}")
+        } else {
+            (*row).to_string()
+        }
+    });
+    spaced.collect::<Vec<_>>().join("\\\\")
+}
+
+/// Where each row of a display stands in its picture, as shares of its height, from what
+/// each row measures alone. None if one of them can't be set by itself.
+pub fn row_centres(rows: &[String], em: u32) -> Option<Vec<f32>> {
+    let mut heights = Vec::with_capacity(rows.len());
+    for row in rows {
+        let mut text = row.replace('&', " ");
+        for word in [
+            "\\begin{align*}",
+            "\\begin{align}",
+            "\\end{align*}",
+            "\\end{align}",
+        ] {
+            text = text.replace(word, " ");
+        }
+        for word in [
+            "\\begin{gather*}",
+            "\\begin{gather}",
+            "\\end{gather*}",
+            "\\end{gather}",
+        ] {
+            text = text.replace(word, " ");
+        }
+        heights.push(render(&text, true, em).ok()?.height as f32);
+    }
+    let total: f32 = heights.iter().sum();
+    let mut done = 0.0;
+    let centres = heights.iter().map(|height| {
+        let centre = (done + height / 2.0) / total.max(1.0);
+        done += height;
+        centre
+    });
+    Some(centres.collect())
 }
 
 fn pixels(dim: &Dim, em: u32) -> f64 {
@@ -295,6 +352,30 @@ mod tests {
     fn a_thin_space_in_an_operators_name_is_not_a_comma() {
         let text = prepared(r"\operatorname{arg\,min} + \operatorname*{arg\,max}", false);
         assert!(!text.contains("operatorname"), "{text}");
+    }
+
+    #[test]
+    fn rows_of_a_display_keep_clear_of_each_other() {
+        let plain = r"\begin{aligned} a &= \mathrm{x}_{y} \\ c &= d \end{aligned}";
+        let under = r"\begin{aligned} a &= \max_{y} \\ c &= d \end{aligned}";
+        assert!(!prepared(plain, true).contains("vphantom"));
+        assert!(prepared(under, true).contains("vphantom"));
+        let (low, high) = (
+            render(plain, true, 30).unwrap(),
+            render(under, true, 30).unwrap(),
+        );
+        assert!(high.height > low.height + 10);
+    }
+
+    #[test]
+    fn a_tall_row_takes_its_share_of_the_picture() {
+        let rows = vec![
+            r"\begin{align} a &= b".to_string(),
+            r"\sum_{i=1}^{n} c \end{align}".to_string(),
+        ];
+        let centres = row_centres(&rows, 30).unwrap();
+        assert!(centres[0] < 0.3, "{centres:?}");
+        assert!(centres[1] > 0.5, "{centres:?}");
     }
 
     #[test]

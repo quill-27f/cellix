@@ -620,7 +620,14 @@ impl Page<'_, '_> {
             self.rows[at].stop = false;
         }
         let height = context.extras.figures.borrow()[figure].height;
-        margin_numbers(&numbers, at, height, self.width, context, self.rows);
+        margin_numbers(
+            (&numbers, &source),
+            at,
+            height,
+            self.width,
+            context,
+            self.rows,
+        );
     }
 
     /// Something only LaTeX can draw, as a picture once it's built and as source until then.
@@ -649,6 +656,21 @@ impl Page<'_, '_> {
             Built::Waiting => self.label("Drawing with LaTeX…", last),
             Built::Failed(why) => self.label(&format!("Can't draw this: {why}"), last),
             Built::Never => {}
+        }
+    }
+
+    /// An algorithm: a float, which can't be built alone, around steps that can. The page
+    /// sets its caption, as it does a figure's.
+    fn algorithm(&mut self, first: usize, last: usize) {
+        self.counters.algorithms += 1;
+        let number = self.counters.algorithms;
+        let holds = |text: &str, wanted: &str| text.contains(wanted);
+        let from = (first..=last).find(|n| holds(self.lines[*n].1, "\\begin{algorithmic}"));
+        let to = (first..=last).find(|n| holds(self.lines[*n].1, "\\end{algorithmic}"));
+        self.caption("Algorithm", number, first, last);
+        match (from, to) {
+            (Some(from), Some(to)) => self.drawn(from, to),
+            _ => self.source(first, last),
         }
     }
 
@@ -1048,6 +1070,7 @@ impl Page<'_, '_> {
                 self.caption("Table", self.counters.tables, index, last);
             }
             "tabular" => self.tabular(index, last),
+            "algorithm" | "algorithm*" => self.algorithm(index, last),
             _ if cellix_doc::latex::DRAWN.contains(&name) => self.drawn(index, last),
             _ if VERBATIM.contains(&name) => {
                 let code = &self.lines[index + 1..last];

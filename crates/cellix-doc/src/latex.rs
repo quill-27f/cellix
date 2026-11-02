@@ -64,6 +64,7 @@ pub struct Macro {
 /// Where numbering stands.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Counters {
+    pub algorithms: usize,
     /// Chapter, section, subsection and subsubsection.
     pub sections: [usize; 4],
     pub equations: usize,
@@ -181,7 +182,7 @@ pub fn equation_rows(source: &str, numbered: bool, equations: &mut usize) -> Vec
 }
 
 /// A display's rows: one for an `equation`, one for each `\\` of an `align`.
-fn display_rows(source: &str) -> Vec<&str> {
+pub fn display_rows(source: &str) -> Vec<&str> {
     if !source.contains("{align") && !source.contains("{gather") {
         return vec![source];
     }
@@ -845,8 +846,8 @@ pub fn standalone(setup: &[String], body: &str) -> String {
     if body.contains("tikzcd") {
         out.push_str("\\usepackage{tikz-cd}\n");
     }
-    if body.contains("\\begin{algorithm}") {
-        out.push_str("\\usepackage{algorithm,algpseudocode}\n");
+    if body.contains("\\begin{algorithmic}") {
+        out.push_str("\\usepackage{algpseudocode}\n");
     }
     if body.contains("forest") {
         out.push_str("\\usepackage{forest}\n");
