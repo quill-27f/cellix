@@ -882,7 +882,6 @@ pub enum TabHit {
     Tab(usize),
     Close(usize),
     New,
-    Comments,
     /// A view that comes and goes, and the × on its tab.
     View(Front),
     CloseView(Front),
@@ -936,6 +935,8 @@ pub struct Dock {
     pub log_folder: std::path::PathBuf,
     /// Whether the list of agents has a tab.
     pub agents_tab: bool,
+    /// Whether the comments have a tab.
+    pub comments_tab: bool,
     /// The column tabs stop at, for what stands past them.
     pub tabs_end: Cell<u16>,
 }
@@ -1024,22 +1025,47 @@ impl Dock {
             other => other,
         };
         self.focused &= self.active.is_some();
-        self.front = match (self.front, self.active) {
-            (Front::Session, None) => Front::Session,
-            (front, _) => front,
+        if self.front == Front::Session && self.active.is_none() {
+            self.next_tab();
+        }
+    }
+
+    /// Goes to what's left in the pane, which closes when that's nothing.
+    fn next_tab(&mut self) {
+        let standing = [
+            (self.comments_tab, Front::Comments),
+            (self.agents_tab, Front::Agents),
+            (self.pdf.is_some(), Front::Pdf),
+            (!self.log.is_empty(), Front::Log),
+            (self.problems, Front::Problems),
+        ];
+        let left = standing.into_iter().find(|(open, _)| *open);
+        self.front = match (self.active, left) {
+            (Some(_), _) | (None, None) => Front::Session,
+            (None, Some((_, view))) => view,
         };
+        if self.active.is_none() && left.is_none() {
+            self.open = false;
+            self.focused = false;
+        }
     }
 
     fn comments_width(&self) -> u16 {
         let count = self.comment_count.get();
         let digits = if count > 9 { COUNT_WIDTH } else { 1 };
-        COMMENTS_WIDTH + if count > 0 { digits + 1 } else { 0 }
+        COMMENTS_WIDTH + CLOSE_WIDTH + 1 + if count > 0 { digits + 1 } else { 0 }
     }
 
     /// Whether the list of what can be started is showing. With nothing running, it's what
     /// the pane has to show.
     pub fn listing(&self) -> bool {
         self.front == Front::Agents || (self.active.is_none() && self.front == Front::Session)
+    }
+
+    /// Brings the comments forward, in a tab of their own.
+    pub fn show_comments(&mut self) {
+        self.comments_tab = true;
+        self.front = Front::Comments;
     }
 
     /// Brings the list of agents forward, in a tab that stays until it's closed or used.
@@ -1052,6 +1078,9 @@ impl Dock {
     /// The views with a tab just now, in order, each with its name and width.
     fn views(&self) -> Vec<(Front, &'static str, u16)> {
         let mut views = Vec::new();
+        if self.comments_tab || self.front == Front::Comments {
+            views.push((Front::Comments, "Comments", self.comments_width()));
+        }
         if self.agents_tab || self.listing() {
             views.push((Front::Agents, "Agents", AGENTS_WIDTH));
         }
@@ -1069,7 +1098,7 @@ impl Dock {
 
     /// Each view's tab, where it stands.
     fn view_tabs(&self, area: Rect) -> Vec<(Front, &'static str, Rect)> {
-        let mut x = area.x + 1 + self.comments_width();
+        let mut x = area.x + 1;
         let tabs = self.views().into_iter().map(|(front, name, width)| {
             let tab = Rect::new(x, area.y, width, 1);
             x += width;
@@ -1091,7 +1120,7 @@ impl Dock {
     /// Where sessions' tabs start, after the fixed ones.
     fn first_tab(&self, area: Rect) -> u16 {
         let views = self.views().iter().map(|view| view.2).sum::<u16>();
-        area.x + 1 + self.comments_width() + views
+        area.x + 1 + views
     }
 
     /// Takes a view's tab away, and what it shows.
@@ -1105,14 +1134,11 @@ impl Dock {
             Front::Log => self.log.clear(),
             Front::Problems => self.problems = false,
             Front::Agents => self.agents_tab = false,
-            Front::Session | Front::Comments => {}
+            Front::Comments => self.comments_tab = false,
+            Front::Session => {}
         }
         if showing {
-            self.front = if self.active.is_some() {
-                Front::Session
-            } else {
-                Front::Comments
-            };
+            self.next_tab();
         }
     }
 
@@ -1188,9 +1214,6 @@ impl Dock {
         if x + HIDE_WIDTH >= area.right() {
             return Some(TabHit::Hide);
         }
-        if x < area.x + 1 + self.comments_width() {
-            return Some(TabHit::Comments);
-        }
         for (view, _, tab) in self.view_tabs(area) {
             if x >= tab.x && x < tab.right() {
                 let on_close = x + CLOSE_WIDTH + 1 >= tab.right();
@@ -1221,7 +1244,6 @@ impl Dock {
         let count = self.comment_count.get();
         let row = Rect::new(area.x, area.y, area.w, 1);
         grid.fill(row, theme.tab);
-        let comments = Rect::new(area.x + 1, area.y, self.comments_width(), 1);
         for (view, name, tab) in self.view_tabs(area) {
             let on = self.front == view || (view == Front::Agents && self.listing());
             let hovered = hover.is_some_and(|h| tab.contains(h.0, h.1));
@@ -1237,7 +1259,12 @@ impl Dock {
                 ..theme.tab
             };
             let close = tab.right().saturating_sub(CLOSE_WIDTH + 1);
-            grid.label(tab.x + 1, area.y, name, quiet, close);
+            if view == Front::Comments && count > 0 {
+                let name = format!("{name} {count}");
+                grid.label(tab.x + 1, area.y, &name, quiet, close);
+            } else {
+                grid.label(tab.x + 1, area.y, name, quiet, close);
+            }
             if on || hovered {
                 let plain = Style {
                     bold: false,
@@ -1246,32 +1273,6 @@ impl Dock {
                 grid.label(close, area.y, "×", plain, tab.right());
             }
         }
-        let on_comments = self.front == Front::Comments;
-        if on_comments {
-            grid.fill(comments, theme.sidebar);
-        } else if hover.is_some_and(|h| comments.contains(h.0, h.1)) {
-            grid.panel(
-                Bounds::inset(comments, 0.1, 0.1),
-                16,
-                Some(theme.row_hover),
-                None,
-            );
-        }
-        let name = if count > 0 {
-            format!("Comments {count}")
-        } else {
-            "Comments".to_string()
-        };
-        let quiet = Style {
-            fg: if on_comments {
-                theme.text.fg
-            } else {
-                theme.gutter.fg
-            },
-            bold: on_comments,
-            ..theme.tab
-        };
-        grid.label(comments.x + 1, area.y, &name, quiet, comments.right());
         for (index, (start, end)) in self.tabs(area).into_iter().enumerate() {
             let session = &self.sessions[index];
             let active = self.active == Some(index) && self.front == Front::Session;

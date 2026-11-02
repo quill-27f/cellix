@@ -2431,7 +2431,13 @@ impl App {
                 theme.status.fg
             };
             toolbar::draw_icon(grid, icon, cell, color, theme.tab);
-            if command == Command::ListAgents && self.agents.needing_you() > 0 {
+            // With no tab to say so, the icon does.
+            let waiting = match command {
+                Command::ListAgents => self.agents.needing_you() > 0,
+                Command::ShowComments => self.dock.comment_count.get() > 0,
+                _ => false,
+            };
+            if waiting {
                 let dot = Bounds::cells(cell.right() as f32 - 1.2, 0.1, 0.8, 0.4);
                 grid.panel(dot, 22, Some(theme.attention), None);
             }
@@ -2999,7 +3005,7 @@ impl App {
     /// Opens the comments, with one being written.
     fn write_comment(&mut self, draft: Draft) {
         self.dock.open = true;
-        self.dock.front = Front::Comments;
+        self.dock.show_comments();
         self.dock.focused = false;
         self.dock.comments_top = 0;
         self.dock.draft = Some(draft);
@@ -3979,15 +3985,15 @@ impl App {
             Command::NewTerminal => self.open_agent(crate::agents::SHELL.1),
             Command::ShowBrowser => self.show_browser(),
             Command::ShowComments if self.dock.showing(Front::Comments) => {
-                self.run(Command::CloseDock);
+                self.dock.close_view(Front::Comments);
             }
             Command::ShowComments => {
                 self.dock.open = true;
-                self.dock.front = Front::Comments;
+                self.dock.show_comments();
                 self.dock.focused = false;
             }
             Command::ListAgents if self.dock.showing(Front::Agents) => {
-                self.run(Command::CloseDock);
+                self.dock.close_view(Front::Agents);
             }
             Command::ListAgents => {
                 self.dock.open = true;
@@ -4539,10 +4545,6 @@ impl App {
                     Some(TabHit::New | TabHit::View(Front::Agents)) => {
                         self.refresh_agents();
                         self.dock.show_list();
-                    }
-                    Some(TabHit::Comments) => {
-                        self.dock.front = Front::Comments;
-                        self.dock.focused = false;
                     }
                     Some(TabHit::View(view)) => {
                         self.dock.front = view;
@@ -5108,7 +5110,7 @@ impl App {
         self.save_threads();
         if page {
             self.dock.open = true;
-            self.dock.front = Front::Comments;
+            self.dock.show_comments();
             self.dock.focused = false;
         } else if let Ok(mut comments) = self.comments.lock() {
             comments.push(Comment { file, line, text });
@@ -5211,7 +5213,7 @@ impl App {
                             thread.asked = true;
                         }
                         self.save_threads();
-                        self.dock.front = Front::Comments;
+                        self.dock.show_comments();
                         self.say(format!("{name} sees this with its next prompt"));
                     }
                     // Nobody to ask yet: it goes to whichever agent starts.
@@ -12581,10 +12583,9 @@ mod tests {
         );
         let tabs = app.dock.view_tabs_for_test(area);
         assert_eq!(tabs[0].0, Front::Agents);
-        let agents = tabs[0].2;
-        let (x, _) = find(&screen(&app), "Comments");
-        app.handle(mouse(MouseKind::Left, x, area.y));
+        press_action(&mut app, Command::ShowComments);
         assert_eq!(app.dock.front, Front::Comments);
+        let agents = app.dock.view_tabs_for_test(area)[1].2;
         assert!(
             screen(&app).row_text(area.y).contains("Agents"),
             "it's still there"
@@ -12605,6 +12606,50 @@ mod tests {
         with_a_shell(&mut app);
         assert!(!app.dock.agents_tab);
         assert!(!app.dock.listing());
+    }
+
+    #[test]
+    fn the_pane_holds_only_what_was_opened_and_closes_with_the_last_of_it() {
+        let (_dir, mut app) = project();
+        press_action(&mut app, Command::ToggleTerminal);
+        let area = app.dock_area().unwrap();
+        let row = screen(&app).row_text(area.y);
+        assert!(
+            row.contains("Terminal") && !row.contains("Comments"),
+            "{row}"
+        );
+        assert!(!row.contains("Agents"), "{row}");
+        let (x, _) = find(&screen(&app), "Terminal");
+        app.handle(mouse(MouseKind::Middle, x, area.y));
+        assert!(app.dock_area().is_none(), "nothing took its place");
+        assert!(!app.dock.agents_tab);
+    }
+
+    #[test]
+    fn closing_one_of_two_tabs_goes_to_the_other() {
+        let (_dir, mut app) = project();
+        press_action(&mut app, Command::ToggleTerminal);
+        press_action(&mut app, Command::ShowComments);
+        let area = app.dock_area().unwrap();
+        let (comments, ..) = app.dock.view_tabs_for_test(area)[0];
+        assert_eq!(comments, Front::Comments);
+        app.dock.close_view(Front::Comments);
+        assert!(
+            app.dock.showing(Front::Session),
+            "the terminal is what's left"
+        );
+        app.dock.close(0);
+        assert!(!app.dock.open);
+    }
+
+    #[test]
+    fn the_comments_tab_closes_like_any_other() {
+        let (_dir, mut app) = project();
+        press_action(&mut app, Command::ShowComments);
+        let area = app.dock_area().unwrap();
+        let (_, _, tab) = app.dock.view_tabs_for_test(area)[0];
+        app.handle(mouse(MouseKind::Left, tab.right() - 2, area.y));
+        assert!(!app.dock.open, "it was the only tab");
     }
 
     #[test]

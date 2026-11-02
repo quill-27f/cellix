@@ -408,3 +408,9 @@ Not reproduced: lag typing a comment after Ask Agent. Frames took under 25 ms in
 one frame per key and less data than typing on the page. Unverified: a real Ghostty for the browser,
 which ran headless with Ghostty's environment set. This commit holds several features, because the
 pane changes touch the same code and verifying each alone wasn't worth the load on this machine.
+
+The pane now holds only what was opened. Comments was a fixed tab and the list of agents stood in
+when nothing else was left, so a terminal opened beside Comments and closing it showed Agents. Now
+each is a tab with a ×, closing one goes to what's left, and closing the last closes the pane. The
+dot on the Comments icon says there are comments when they have no tab. Going through the pane's
+own × still only hides it, and what runs there keeps running.

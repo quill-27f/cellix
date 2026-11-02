@@ -1986,5 +1986,26 @@
     "title": "Deleting one placement leaves the rest",
     "test": "taking_one_placement_away_leaves_the_rest",
     "passes": true
+  },
+  {
+    "id": "pane-last-closes",
+    "milestone": 9,
+    "title": "The pane holds what was opened and closes with the last of it",
+    "test": "the_pane_holds_only_what_was_opened_and_closes_with_the_last_of_it",
+    "passes": true
+  },
+  {
+    "id": "pane-next-tab",
+    "milestone": 9,
+    "title": "Closing a pane tab goes to what's left",
+    "test": "closing_one_of_two_tabs_goes_to_the_other",
+    "passes": true
+  },
+  {
+    "id": "pane-comments-close",
+    "milestone": 9,
+    "title": "The Comments tab closes like any other",
+    "test": "the_comments_tab_closes_like_any_other",
+    "passes": true
   }
 ]
