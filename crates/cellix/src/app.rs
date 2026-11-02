@@ -54,6 +54,8 @@ use crate::toolbar::{self, Tool};
 const ACTIVITY_WIDTH: u16 = 5;
 /// The buttons that stand by a selection, and the one on a picture.
 const COMMENT_WIDTH: u16 = 10;
+/// The row the Comment button stands on over a PDF, clear of its zoom buttons.
+const VIEW_COMMENT_ROW: u16 = 2;
 const ASK_WIDTH: u16 = 11;
 /// The list an empty window shows, its width, the rows above it, and the height it needs.
 const WELCOME_WIDTH: u16 = 44;
@@ -2203,8 +2205,65 @@ impl App {
         grid.label(chip.x + 1, chip.y, name, style, chip.right());
     }
 
+    /// The button on a PDF or picture in the side pane, once the pointer has been on it.
+    fn view_comment(&self) -> Option<Rect> {
+        let screen = self.dock_screen()?;
+        let showing = self.dock.front == Front::Pdf && self.dock.pdf.is_some();
+        self.hover.filter(|h| screen.contains(h.0, h.1))?;
+        let ready = showing && self.dock.pdf_spot.is_some();
+        (ready && matches!(self.overlay, Overlay::None)).then(|| {
+            let left = screen.right().saturating_sub(COMMENT_WIDTH + 2);
+            Rect::new(left, screen.y + VIEW_COMMENT_ROW, COMMENT_WIDTH, 1)
+        })
+    }
+
+    /// Starts a comment on the place last pointed at. A paper's page leads back to its
+    /// source, where a comment can stay put through every rebuild.
+    fn comment_on_view(&mut self) {
+        let Some(view) = &self.dock.pdf else {
+            return;
+        };
+        let name = view
+            .path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let is_pdf = view.path.extension().is_some_and(|e| e == "pdf");
+        let spot = self.dock.pdf_spot.unwrap_or_default();
+        let source = view.source_at(spot.0, spot.1, spot.2);
+        let shown = view.path.clone();
+        let (file, line, quote) = match source {
+            Some((path, line)) => {
+                let text = std::fs::read_to_string(&path).unwrap_or_default();
+                let quote = text.lines().nth(line.saturating_sub(1)).unwrap_or_default();
+                (self.relative(&path), line, quote.trim().to_string())
+            }
+            None if is_pdf => {
+                let page = spot.0 + 1;
+                (
+                    self.relative(&shown),
+                    page,
+                    format!("Page {page} of {name}"),
+                )
+            }
+            None => (self.relative(&shown), 1, format!("Image {name}")),
+        };
+        self.write_comment(Draft {
+            thread: None,
+            file,
+            line,
+            quote,
+            text: String::new(),
+            ask: false,
+            code: false,
+        });
+    }
+
     /// The buttons that stand by what's selected, and on the picture under the pointer.
     fn draw_companion(&self, grid: &mut Grid) {
+        if let Some(chip) = self.view_comment() {
+            self.draw_chip(grid, chip, "Comment");
+        }
         if let Some((comment, ask)) = self.selection_bar() {
             self.draw_chip(grid, comment, "Comment");
             self.draw_chip(grid, ask, "Ask Agent");
@@ -2215,6 +2274,10 @@ impl App {
 
     /// Takes a click on those buttons.
     fn click_companion(&mut self, x: u16, y: u16) -> bool {
+        if self.view_comment().is_some_and(|chip| chip.contains(x, y)) {
+            self.comment_on_view();
+            return true;
+        }
         if let Some((comment, ask)) = self.selection_bar() {
             if comment.contains(x, y) {
                 self.prompt_comment_at_cursor(false);
@@ -2231,6 +2294,18 @@ impl App {
                 true
             }
             _ => false,
+        }
+    }
+
+    /// Remembers where on a page the pointer is, unless it's on the button itself.
+    fn note_view_spot(&mut self, x: u16, y: u16) {
+        if self.view_comment().is_some_and(|chip| chip.contains(x, y)) {
+            return;
+        }
+        let screen = self.dock_screen().unwrap_or_default();
+        let hit = self.dock.pdf.as_ref().and_then(|v| v.hit(screen, x, y));
+        if let Some(PdfHit::Page(page, across, down)) = hit {
+            self.dock.pdf_spot = Some((page, across, down));
         }
     }
 
@@ -3725,6 +3800,10 @@ impl App {
             if mouse.kind == MouseKind::Left {
                 self.pdf_click(x, y);
             }
+            if mouse.kind == MouseKind::Right {
+                self.note_view_spot(x, y);
+                self.comment_on_view();
+            }
             return true;
         }
         if self.dock.front == Front::Comments {
@@ -4689,6 +4768,9 @@ impl App {
                 .is_some_and(|a| a.contains(mouse.x, mouse.y));
             if in_pane && self.dock.front == Front::Session {
                 self.dock_session_mouse(mouse);
+            }
+            if in_pane && self.dock.front == Front::Pdf {
+                self.note_view_spot(mouse.x, mouse.y);
             }
             return;
         }
@@ -10333,6 +10415,98 @@ mod tests {
     }
 
     #[test]
+    fn a_paper_takes_comments_the_same_way() {
+        let dir = tempfile::tempdir().unwrap();
+        let source =
+            "\\documentclass{article}\n\\begin{document}\nThe cache goes first.\n\\end{document}\n";
+        fs::write(dir.path().join("paper.tex"), source).unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        app.open(&dir.path().join("paper.tex")).unwrap();
+        select_word(&mut app, "cache");
+        let grid = screen(&app);
+        assert!(grid.text().contains("Ask Agent"), "{}", grid.text());
+        let (x, y) = find(&grid, "Comment");
+        app.handle(mouse(MouseKind::Left, x, y));
+        typed(&mut app, "Why first");
+        enter(&mut app);
+        assert_eq!(app.threads[0].quote, "cache");
+        assert_eq!(app.threads[0].line, 3);
+    }
+
+    #[test]
+    fn data_takes_comments_the_same_way() {
+        let (_dir, mut app) = data_app("runs.csv", "model,loss\nalpha,0.25\n");
+        select_word(&mut app, "alpha");
+        let (x, y) = find(&screen(&app), "Comment");
+        app.handle(mouse(MouseKind::Left, x, y));
+        typed(&mut app, "Odd value");
+        enter(&mut app);
+        assert_eq!(app.threads[0].quote, "alpha");
+        assert_eq!(app.threads[0].file, "runs.csv");
+    }
+
+    #[test]
+    fn a_notebook_takes_comments_the_same_way() {
+        let (_dir, mut app) = data_app("run.ipynb", NOTEBOOK);
+        select_word(&mut app, "torch");
+        let (x, y) = find(&screen(&app), "Ask Agent");
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert_eq!(app.dock.draft.as_ref().unwrap().quote, "torch");
+    }
+
+    #[test]
+    fn a_picture_in_the_pane_takes_a_comment() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 44));
+        let image = image::RgbaImage::from_pixel(80, 80, image::Rgba([1, 2, 3, 255]));
+        image.save(dir.path().join("loss.png")).unwrap();
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(10, 20)));
+        app.open(&dir.path().join("loss.png")).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.dock.pdf.as_ref().unwrap().pages_ready() == 0 {
+            assert!(std::time::Instant::now() < deadline);
+            app.poll();
+            let _ = screen(&app);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let picture = pictures(&app)[0];
+        let (x, y) = (
+            ((picture.x + 64) / 64) as u16,
+            ((picture.y + 64) / 64) as u16,
+        );
+        app.handle(mouse(MouseKind::Right, x, y));
+        assert_eq!(app.dock.draft.as_ref().unwrap().quote, "Image loss.png");
+    }
+
+    #[test]
+    fn a_pdf_takes_a_comment_on_its_page() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("paper.pdf"), cellix_doc::pdf::sample()).unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 44));
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(10, 20)));
+        app.open(&dir.path().join("paper.pdf")).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.dock.pdf.as_ref().unwrap().pages_ready() == 0 {
+            assert!(std::time::Instant::now() < deadline);
+            app.poll();
+            let _ = screen(&app);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let picture = pictures(&app)[0];
+        let (x, y) = (
+            ((picture.x + 64) / 64) as u16,
+            ((picture.y + 64) / 64) as u16,
+        );
+        app.handle(mouse(MouseKind::Move, x, y));
+        let chip = app.view_comment().expect("a button on the page");
+        app.handle(mouse(MouseKind::Left, chip.x + 1, chip.y));
+        assert_eq!(
+            app.dock.draft.as_ref().unwrap().quote,
+            "Page 1 of paper.pdf"
+        );
+    }
+
+    #[test]
     fn a_picture_can_be_commented_on() {
         let (_dir, mut app) = picture_page("![Plot](plot.png)\n\nwords\n");
         let _ = screen(&app);
@@ -10373,6 +10547,25 @@ mod tests {
                 .quote
                 .contains("flowchart LR")
         );
+    }
+
+    #[test]
+    fn the_sample_document_draws_everything_it_shows_off() {
+        let samples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples");
+        let mut app = App::new(samples.clone(), (150, 44));
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(10, 20)));
+        app.built_folder = tempfile::tempdir().unwrap().path().to_path_buf();
+        app.open(&samples.join("writing.md")).unwrap();
+        let rows = app.editors[0].page_rows(app.focused_area());
+        let shown = rows.iter().filter(|r| r.figure.is_some()).count();
+        assert!(shown >= 15, "pictures, diagrams and formulas: {shown}");
+        let words: String = rows
+            .iter()
+            .flat_map(|r| r.glyphs.iter().map(|g| g.ch))
+            .collect();
+        for hidden in ["```mermaid", "[!NOTE]", "{++", "[^source]", "{width="] {
+            assert!(!words.contains(hidden), "{hidden} shows as source");
+        }
     }
 
     #[test]

@@ -1,0 +1,11 @@
+# Build output of the samples.
+paper/*.aux
+paper/*.log
+paper/*.pdf
+paper/*.bbl
+paper/*.blg
+paper/*.out
+paper/*.soc
+paper/*.loc
+paper/*.toc
+paper/*.synctex.gz

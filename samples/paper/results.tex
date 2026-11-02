@@ -1,0 +1,23 @@
+\section{Results}\label{sec:results}
+
+This section lives in its own file, and its numbering carries on from the main one, as
+Table~\ref{tab:results} and Figure~\ref{fig:loss} show. Right-click a table cell for rows and columns.
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lrr}
+    \hline
+    Model & Accuracy & Params \\
+    \hline
+    Baseline & 91.2 & 1.2M \\
+    Attention & 94.8 & 1.4M \\
+    \hline
+  \end{tabular}
+  \caption{Accuracy on the test set.}\label{tab:results}
+\end{table}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.7\linewidth]{figures/loss}
+  \caption{Training and validation loss.}\label{fig:loss}
+\end{figure}

@@ -1,0 +1,5 @@
+model,dataset,accuracy,params,notes
+Baseline,CIFAR-10,91.2,1200000,plain ResNet
+Attention,CIFAR-10,94.8,1400000,"with a comma, in quotes"
+Baseline,ImageNet,76.1,25600000,
+Attention,ImageNet,78.4,26100000,best so far

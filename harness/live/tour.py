@@ -5,14 +5,14 @@ project and home folder, so a tour can't touch real settings.
 
     tour.py <binary> <out folder>
 """
-import json, os, subprocess, sys, tempfile
+import json, os, shutil, subprocess, sys, tempfile
 
 binary, out = sys.argv[1], os.path.abspath(sys.argv[2])
 here = os.path.dirname(os.path.abspath(__file__))
 os.makedirs(out, exist_ok=True)
 CTRL = lambda c: chr(ord(c) - 96)
 RAIL_X = 2
-SEARCH, REVIEW, AGENTS = 4, 7, 10
+SEARCH, OUTLINE, REVIEW, AGENTS = 4, 7, 10, 13
 
 CODE = """//! A bounded queue.
 use std::collections::VecDeque;
@@ -268,3 +268,43 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("54-paper-pdf", build, PAPER_FILE, size="170x44", background="eff1f5")
     shoot("55-paper-cite", [["click", 69, 1]], PAPER_FILE, size="150x44", background="eff1f5")
     shoot("56-narrow-note", [["click", RAIL_X, AGENTS], ["wait", 0.6]], NOTE_FILE, size="100x34")
+
+    # The samples, which use everything a page can do.
+    samples = os.path.join(ROOT, "samples")
+    shutil.copytree(os.path.join(here, "..", "..", "samples"), samples)
+    WRITING = os.path.join(samples, "writing.md")
+    PAPER = os.path.join(samples, "paper", "main.tex")
+    light = {"size": "150x44", "background": "eff1f5"}
+    shoot("57-welcome", [], **light)
+    start_shell = [["click", RAIL_X, AGENTS], ["wait", 0.6], ["click", 125, 13], ["wait", 1.5]]
+    shoot("58-welcome-with-shell", start_shell, **light)
+    shoot("59-sample-top", [], WRITING, **light)
+    for number, (name, notches) in enumerate(
+        [
+            ("lists", 3),
+            ("callouts", 6),
+            ("table", 9),
+            ("math", 12),
+            ("pictures", 16),
+            ("flow", 22),
+            ("class", 30),
+            ("charts", 40),
+            ("tikz", 52),
+            ("code", 60),
+            ("footnotes", 68),
+            ("changes", 74),
+        ]
+    ):
+        steps = [["wheel", 90, 20, notches], ["wait", 1.0]]
+        shoot(f"{60 + number}-sample-{name}", steps, WRITING, **light)
+    shoot("72-sample-dark", [["wheel", 90, 20, 22], ["wait", 1.0]], WRITING, size="150x44")
+    shoot("73-selection-bar", [["double", 60, 7], ["wait", 0.5]], WRITING, **light)
+    shoot("74-outline", [["click", RAIL_X, OUTLINE], ["wait", 0.8]], WRITING, **light)
+    shoot("75-data", [], os.path.join(samples, "data.csv"), **light)
+    shoot("76-notebook", [], os.path.join(samples, "notebook.ipynb"), **light)
+    shoot("77-paper-top", [["wait", 1.0]], PAPER, **light)
+    for number, (name, notches) in enumerate(
+        [("math", 8), ("theorems", 14), ("drawn", 24), ("tables", 32), ("changes", 40)]
+    ):
+        steps = [["wait", 1.0], ["wheel", 90, 20, notches], ["wait", 1.0]]
+        shoot(f"{78 + number}-paper-{name}", steps, PAPER, **light)

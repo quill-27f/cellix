@@ -138,7 +138,10 @@ Whatever can be seen can be talked about. A selection, in code or on a page, get
 Agent beside it, and a picture, diagram or formula gets a Comment button under the pointer. Comments
 are written in the side pane, with what they're about in view. Ask Agent sends the comment to the
 agent as soon as it's written, with its file, line and quote, and how to answer with `cellix reply`,
-so the answer lands under it. A picture's comment names its file, so the agent can open it.
+so the answer lands under it. A picture's comment names its file, so the agent can open it. All of
+this works the same in code, Markdown, LaTeX, data and notebooks. A PDF or image in the side pane
+takes a comment too, from a button or a right click, and a paper's PDF lands it on the source line
+behind that place, so it stays put through every rebuild.
 
 ## Guidance
 

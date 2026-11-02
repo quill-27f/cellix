@@ -1461,5 +1461,47 @@
     "title": "A diagram says what it is when commented on",
     "test": "a_diagram_says_what_it_is_when_commented_on",
     "passes": true
+  },
+  {
+    "id": "samples",
+    "milestone": 9,
+    "title": "The sample document draws everything it shows off",
+    "test": "the_sample_document_draws_everything_it_shows_off",
+    "passes": true
+  },
+  {
+    "id": "companion-tex",
+    "milestone": 9,
+    "title": "A paper takes comments the same way",
+    "test": "a_paper_takes_comments_the_same_way",
+    "passes": true
+  },
+  {
+    "id": "companion-data",
+    "milestone": 9,
+    "title": "Data takes comments the same way",
+    "test": "data_takes_comments_the_same_way",
+    "passes": true
+  },
+  {
+    "id": "companion-notebook",
+    "milestone": 9,
+    "title": "A notebook takes comments the same way",
+    "test": "a_notebook_takes_comments_the_same_way",
+    "passes": true
+  },
+  {
+    "id": "companion-image-pane",
+    "milestone": 9,
+    "title": "A picture in the side pane takes a comment",
+    "test": "a_picture_in_the_pane_takes_a_comment",
+    "passes": true
+  },
+  {
+    "id": "companion-pdf",
+    "milestone": 9,
+    "title": "A PDF takes a comment on its page",
+    "test": "a_pdf_takes_a_comment_on_its_page",
+    "passes": true
   }
 ]

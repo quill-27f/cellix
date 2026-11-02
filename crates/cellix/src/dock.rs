@@ -878,6 +878,8 @@ pub struct Dock {
     pub front: Front,
     /// The PDF being worked on.
     pub pdf: Option<PdfView>,
+    /// The place on a page last pointed at, for a comment on it.
+    pub pdf_spot: Option<(usize, f32, f32)>,
     /// How far the comments have scrolled.
     pub comments_top: usize,
     /// A comment or reply being written.
