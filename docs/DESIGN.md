@@ -247,6 +247,11 @@ blue status bar, current-line highlight, indent guides. It's all drawn to the gr
 holds on the cell tier. Activity icons span several cells: shapes on the pixel tier and
 block art on cells, because a font glyph is too small beside a real IDE.
 
+Git has two places. Source Control in the sidebar decides what goes in: a message, staged and
+unstaged files, Commit, and Push or Pull, as in VS Code. Review reads what changed, hunk by hunk,
+and takes over the explorer's width unless Source Control is showing, in which case it stands
+beside the panel with no list of its own.
+
 Cellix often lives in a pane beside an agent, so width decides the layout. Under 70
 columns the activity bar goes, the sidebar becomes a drawer over the code, splits collapse
 to the focused pane, the status bar keeps only what fits, and review stacks changes.

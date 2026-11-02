@@ -85,7 +85,7 @@ pub fn keys_of(command: Command) -> Option<&'static str> {
     })
 }
 
-pub const COMMANDS: [(&str, Command); 69] = [
+pub const COMMANDS: [(&str, Command); 70] = [
     ("Save", Command::Save),
     ("Undo", Command::Undo),
     ("Redo", Command::Redo),
@@ -128,6 +128,7 @@ pub const COMMANDS: [(&str, Command); 69] = [
     ("Show Agents", Command::ShowAgents),
     ("Close Side Pane", Command::CloseDock),
     ("Show Outline", Command::ShowOutline),
+    ("Show Source Control", Command::ShowSourceControl),
     ("Run Cell", Command::RunCell),
     ("Run All Cells", Command::RunAllCells),
     ("Clear All Outputs", Command::ClearOutputs),

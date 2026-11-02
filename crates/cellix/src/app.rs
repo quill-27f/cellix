@@ -49,6 +49,7 @@ use crate::search::{self, Field, Search};
 use crate::settings::{SERVERS, Settings, default_server, formatter};
 use crate::settings_page::{Control, Found, SettingsPage, Values};
 use crate::snippets::Snippet;
+use crate::source::{Hit as SourceHit, Source as SourceControl};
 use crate::theme::Theme;
 use crate::threads::{self, Draft, Hit as ThreadHit};
 use crate::toolbar::{self, Bar, Tool};
@@ -71,7 +72,7 @@ const ACTIVITY: [(Icon, Command); 6] = [
     (Icon::Files, Command::ToggleSidebar),
     (Icon::Search, Command::FindInProject),
     (Icon::Outline, Command::ShowOutline),
-    (Icon::Git, Command::OpenDiff),
+    (Icon::Git, Command::ShowSourceControl),
     (Icon::Agents, Command::ShowAgents),
     (Icon::Settings, Command::OpenSettings),
 ];
@@ -114,7 +115,7 @@ const RAIL_NAMES: [&str; 6] = [
     "Files",
     "Search",
     "Outline",
-    "Review Changes",
+    "Source Control",
     "Agents",
     "Settings",
 ];
@@ -179,6 +180,7 @@ enum SidebarView {
     Explorer,
     Search,
     Outline,
+    Source,
 }
 
 /// Suggestions showing at the caret while typing.
@@ -239,6 +241,8 @@ enum Choice {
     Stop,
     /// Quit, leaving it running for next time.
     KeepRunning,
+    /// Throw away a file's changes, deleting it if git never knew it.
+    DiscardFile(PathBuf, bool),
     CloseSession(usize),
     Undo(String),
 }
@@ -547,6 +551,9 @@ pub struct App {
     /// What the sidebar shows, as in VS Code's activity bar.
     sidebar_view: SidebarView,
     outline: Outline,
+    source: SourceControl,
+    /// Ticks since Source Control last read the repository.
+    source_age: u32,
     search: Search,
     /// In the compact layout, whether the sidebar is open over the code.
     drawer: bool,
@@ -568,6 +575,8 @@ pub struct App {
     pane_explained: bool,
     /// A comment waiting for an agent to be started.
     pending_ask: Option<u32>,
+    /// A push or pull on its way.
+    sync_result: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     /// What runs sessions so they can outlive Cellix: Cellix itself, away from tests.
     host_program: Option<PathBuf>,
     /// A kernel for each notebook that has run something, by its file.
@@ -617,6 +626,7 @@ impl App {
             review: None,
             clipboard_image: clipboard_image_command(),
             pending_ask: None,
+            sync_result: None,
             keep_running: false,
             kernels: HashMap::new(),
             kernel_command: None,
@@ -685,6 +695,8 @@ impl App {
             smooth_change: None,
             sidebar_view: SidebarView::Explorer,
             outline: Outline::default(),
+            source: SourceControl::default(),
+            source_age: 0,
             search,
             drawer: false,
             quit: false,
@@ -1303,6 +1315,181 @@ impl App {
         Some((Rect::new(right, top, RUN_WIDTH, 1), line))
     }
 
+    /// Keeps Source Control up to date while it shows, and takes in what a push or pull did.
+    fn poll_source(&mut self) -> bool {
+        const EVERY_TICKS: u32 = 4;
+        let mut changed = self.source.poll();
+        let shown = self.review.as_ref().filter(|r| r.beside_panel);
+        self.source.shown = shown.and_then(|r| r.current_path()).map(Path::to_path_buf);
+        if let Some(result) = &self.sync_result
+            && let Ok(result) = result.try_recv()
+        {
+            self.sync_result = None;
+            self.source.busy = None;
+            match result {
+                Ok(done) => self.say(done),
+                Err(why) => self.say(format!("Git refused: {why}")),
+            }
+            self.source.refresh(self.workspace.root());
+            changed = true;
+        }
+        if self.sidebar_view == SidebarView::Source && self.show_sidebar {
+            self.source_age += 1;
+            if self.source_age >= EVERY_TICKS {
+                self.source_age = 0;
+                self.source.refresh(self.workspace.root());
+            }
+        }
+        changed
+    }
+
+    fn click_source(&mut self, x: u16, y: u16) {
+        let Some(area) = self.sidebar_area() else {
+            return;
+        };
+        let hit = self.source.hit(area, x, y);
+        self.source.focused = hit == Some(SourceHit::Message);
+        let root = self.workspace.root().to_path_buf();
+        let result = match hit {
+            None | Some(SourceHit::Message) => Ok(()),
+            Some(SourceHit::Commit) => {
+                self.commit_message();
+                return;
+            }
+            Some(SourceHit::Sync) => {
+                self.sync_remote();
+                return;
+            }
+            Some(SourceHit::Open(path)) => {
+                self.show_change(path);
+                return;
+            }
+            Some(SourceHit::Discard(path, untracked)) => {
+                let name = path.display().to_string();
+                self.overlay = Overlay::Confirm(Confirm {
+                    title: format!("Discard changes to {name}?"),
+                    detail: if untracked {
+                        "This file isn't in git, so it will be deleted.".to_string()
+                    } else {
+                        "This can't be undone.".to_string()
+                    },
+                    buttons: vec![
+                        ("Cancel", Choice::Cancel),
+                        ("Discard", Choice::DiscardFile(path, untracked)),
+                    ],
+                    selected: 0,
+                });
+                return;
+            }
+            Some(SourceHit::Stage(path)) => cellix_review::stage(&root, &[path]),
+            Some(SourceHit::Unstage(path)) => cellix_review::unstage(&root, &[path]),
+            Some(SourceHit::StageAll) => cellix_review::stage(&root, &self.source.unstaged()),
+            Some(SourceHit::UnstageAll) => cellix_review::unstage(&root, &self.source.staged()),
+        };
+        if let Err(why) = result {
+            self.say(format!("Git refused: {why}"));
+        }
+        self.source_settled();
+    }
+
+    /// Reads the repository now, since something just changed it.
+    fn source_settled(&mut self) {
+        self.source.entries = cellix_review::status_entries(self.workspace.root());
+        self.source.refresh(self.workspace.root());
+        if let Some(review) = &mut self.review {
+            review.refresh();
+        }
+    }
+
+    /// Shows a file's changes beside the panel.
+    fn show_change(&mut self, path: PathBuf) {
+        if self.review.is_none() {
+            self.review = Some(self.new_review(self.workspace.root().to_path_buf()));
+        }
+        if let Some(review) = &mut self.review {
+            review.beside_panel = true;
+            review.show_path(path);
+        }
+    }
+
+    /// Commits with the panel's message, staging everything first if nothing's staged.
+    fn commit_message(&mut self) {
+        let message = self.source.message.trim().to_string();
+        if self.source.entries.is_empty() {
+            self.say("Nothing to commit");
+            return;
+        }
+        if message.is_empty() {
+            self.source.focused = true;
+            self.say("Write a message first");
+            return;
+        }
+        let root = self.workspace.root().to_path_buf();
+        if self.source.staged().is_empty()
+            && let Err(why) = cellix_review::stage(&root, &self.source.unstaged())
+        {
+            self.say(format!("Git refused: {why}"));
+            return;
+        }
+        match cellix_review::commit(&root, &message) {
+            Ok(done) => {
+                self.say(done);
+                self.source.message.clear();
+                self.source.focused = false;
+            }
+            Err(why) => self.say(format!("Git refused: {why}")),
+        }
+        self.source_settled();
+        self.refresh_tree();
+    }
+
+    /// Pushes, pulls or publishes, off the main thread: a network can take its time.
+    fn sync_remote(&mut self) {
+        if self.source.busy.is_some() {
+            return;
+        }
+        let root = self.workspace.root().to_path_buf();
+        let counts = self.source.remote.counts;
+        let branch = self.branch.clone().unwrap_or_default();
+        self.source.busy = Some(match counts {
+            Some((_, 0)) => "Pushing…",
+            Some((0, _)) => "Pulling…",
+            Some(_) => "Syncing…",
+            None => "Publishing…",
+        });
+        let (done, result) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let outcome = match counts {
+                Some((_, 0)) => cellix_review::push(&root).map(|()| "Pushed"),
+                Some((0, _)) => cellix_review::pull(&root).map(|()| "Pulled"),
+                Some(_) => cellix_review::pull(&root)
+                    .and_then(|()| cellix_review::push(&root))
+                    .map(|()| "Synced"),
+                None => cellix_review::publish(&root, &branch).map(|()| "Published"),
+            };
+            let _ = done.send(outcome.map(ToString::to_string));
+        });
+        self.sync_result = Some(result);
+    }
+
+    /// Keys for the commit message. Returns true if it took the key.
+    fn source_key(&mut self, key: KeyEvent) -> bool {
+        if !self.source.focused || !matches!(self.overlay, Overlay::None) {
+            return false;
+        }
+        match key.key {
+            Key::Esc => self.source.focused = false,
+            Key::Enter if key.mods.shift || key.mods.alt => self.source.message.push('\n'),
+            Key::Enter => self.commit_message(),
+            Key::Backspace => {
+                self.source.message.pop();
+            }
+            Key::Char(c) if !key.mods.ctrl => self.source.message.push(c),
+            _ => return false,
+        }
+        true
+    }
+
     /// Passes on what pages are waiting for, and sets them again as it comes.
     fn poll_snippets(&mut self) -> bool {
         let wanted: Vec<_> = self.editors.iter().flat_map(Editor::take_wanted).collect();
@@ -1368,6 +1555,7 @@ impl App {
             | self.poll_snippets()
             | self.poll_spell()
             | self.poll_kernels()
+            | self.poll_source()
             | self.poll_pending_ask();
         let mut events = Vec::new();
         for client in self.servers.values() {
@@ -2122,8 +2310,10 @@ impl App {
         if self.dock.open && self.size.0 < CROWDED_WIDTH {
             return None;
         }
-        // Review uses the explorer's width: side-by-side code needs it more.
-        (self.show_sidebar && self.review.is_none()).then(|| {
+        // Review uses the explorer's width: side-by-side code needs it more. Source Control
+        // stays, since it's what the diff was opened from.
+        let beside = self.review.is_none() || self.sidebar_view == SidebarView::Source;
+        (self.show_sidebar && beside).then(|| {
             let width = (self.size.0 / 4).clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_WIDTH);
             Rect::new(activity.right(), 0, width, activity.h)
         })
@@ -2234,6 +2424,10 @@ impl App {
     fn paste(&mut self, text: &str) {
         if let Some(draft) = &mut self.dock.draft {
             draft.text.push_str(text);
+            return;
+        }
+        if self.source.focused {
+            self.source.message.push_str(text);
             return;
         }
         if self.dock.focused
@@ -2671,6 +2865,9 @@ impl App {
         if matches!(self.overlay, Overlay::None) && self.draft_key(key) {
             return;
         }
+        if self.source_key(key) {
+            return;
+        }
         // Jupyter's keys, for a notebook: Shift+Enter runs and moves on, Ctrl+Enter stays.
         let in_notebook = !self.dock.focused
             && matches!(self.overlay, Overlay::None)
@@ -2945,6 +3142,13 @@ impl App {
             Choice::Stop => {
                 self.stop_confirmed = true;
                 self.run(Command::Quit);
+            }
+            Choice::DiscardFile(path, untracked) => {
+                let root = self.workspace.root().to_path_buf();
+                if let Err(why) = cellix_review::discard(&root, &path, untracked) {
+                    self.say(format!("Git refused: {why}"));
+                }
+                self.source_settled();
             }
             Choice::KeepRunning => {
                 self.keep_running = true;
@@ -3512,7 +3716,12 @@ impl App {
             Command::OpenDiff => {
                 self.review = match self.review {
                     Some(_) => None,
-                    None => Some(self.new_review(self.workspace.root().to_path_buf())),
+                    None => {
+                        let mut review = self.new_review(self.workspace.root().to_path_buf());
+                        review.beside_panel =
+                            self.show_sidebar && self.sidebar_view == SidebarView::Source;
+                        Some(review)
+                    }
                 };
             }
             Command::AddComment => self.prompt_comment_at_cursor(false),
@@ -3688,6 +3897,18 @@ impl App {
             Command::BlameLine => self.blame(),
             Command::ToggleSidebar if self.compact() => self.drawer = !self.drawer,
             Command::ToggleSidebar => self.show_sidebar = !self.show_sidebar,
+            Command::ShowSourceControl if self.sidebar_view == SidebarView::Source => {
+                self.show_explorer();
+            }
+            Command::ShowSourceControl => {
+                self.search.focus = None;
+                self.review = None;
+                self.sidebar_view = SidebarView::Source;
+                self.show_sidebar = true;
+                self.drawer = self.compact();
+                self.source_age = 0;
+                self.source.refresh(self.workspace.root());
+            }
             Command::ShowOutline if self.sidebar_view == SidebarView::Outline => {
                 self.show_explorer();
             }
@@ -5281,6 +5502,8 @@ impl App {
                     self.search.scroll_by(delta);
                 } else if in_sidebar && self.sidebar_view == SidebarView::Outline {
                     self.outline.scroll_by(delta);
+                } else if in_sidebar && self.sidebar_view == SidebarView::Source {
+                    self.source.scroll_by(delta);
                 } else if in_sidebar {
                     self.explorer.scroll_by(delta);
                 } else if self.pane_at(x, y).is_some() {
@@ -5301,6 +5524,10 @@ impl App {
                 }
             }
             MouseKind::Left if !in_sidebar && self.click_welcome(x, y) => {}
+            MouseKind::Left if in_sidebar && self.sidebar_view == SidebarView::Source => {
+                self.click_source(x, y);
+            }
+            MouseKind::Right if in_sidebar && self.sidebar_view == SidebarView::Source => {}
             MouseKind::Left if in_sidebar && self.sidebar_view == SidebarView::Outline => {
                 self.click_outline(y);
             }
@@ -6256,6 +6483,12 @@ impl App {
                     let here = (self.outline_here(), !self.editors.is_empty());
                     self.outline.draw(grid, area, here, self.hover, theme);
                 }
+                SidebarView::Source => {
+                    let branch = self.branch.as_deref();
+                    let measure = self.measure.clone();
+                    let source = &self.source;
+                    source.draw(grid, area, branch, self.hover, measure.as_ref(), theme);
+                }
             }
         }
         self.draw_dock(grid);
@@ -6528,6 +6761,9 @@ impl App {
                         && self.review.is_none()
                         && self.sidebar_view == SidebarView::Outline
                 }
+                Command::ShowSourceControl => {
+                    self.show_sidebar && self.sidebar_view == SidebarView::Source
+                }
                 Command::ShowAgents => self.dock.open,
                 Command::OpenDiff => self.review.is_some(),
                 Command::OpenSettings => self.settings_page.is_some(),
@@ -6581,7 +6817,7 @@ impl App {
             }
             grid.put_icon(area.x + 1, y, *icon, ACTIVITY_ICON, style);
             let changed = self.changed_count();
-            if *command == Command::OpenDiff && changed > 0 {
+            if *command == Command::ShowSourceControl && changed > 0 {
                 let color = self.theme.button_text;
                 let badge = Bounds::cells(area.x as f32 + 3.0, y as f32 - 0.16, 1.3, 0.58);
                 grid.panel(badge, 30, Some(self.theme.accent), None);
@@ -11462,6 +11698,171 @@ mod tests {
         assert!(text.lines().nth(3).unwrap().contains("next"), "{text}");
     }
 
+    /// A repository with a commit, one changed file and one new one, with the panel showing.
+    fn source_app() -> (TempDir, App) {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "-q"]);
+        git(dir.path(), &["config", "user.email", "t@example.com"]);
+        git(dir.path(), &["config", "user.name", "Tester"]);
+        fs::write(dir.path().join("kept.txt"), "one\n").unwrap();
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-q", "-m", "base"]);
+        fs::write(dir.path().join("kept.txt"), "two\n").unwrap();
+        fs::write(dir.path().join("fresh.txt"), "new\n").unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        app.run(Command::ShowSourceControl);
+        app.source_settled();
+        (dir, app)
+    }
+
+    /// Clicks a mark on a file's row.
+    fn press_on_row(app: &mut App, name: &str, from_right: u16) {
+        let area = app.sidebar_area().unwrap();
+        let (_, y) = find(&screen(app), name);
+        app.handle(mouse(MouseKind::Left, area.right() - from_right, y));
+    }
+
+    fn staged_files(dir: &Path) -> String {
+        let output = std::process::Command::new("git")
+            .args([
+                "-C",
+                &dir.display().to_string(),
+                "diff",
+                "--cached",
+                "--name-only",
+            ])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    #[test]
+    fn source_control_lists_changes_and_stages_and_unstages_them() {
+        let (dir, mut app) = source_app();
+        let text = screen(&app).text();
+        assert!(
+            text.contains("SOURCE CONTROL") && text.contains("CHANGES"),
+            "{text}"
+        );
+        assert!(!text.contains("STAGED CHANGES"), "{text}");
+        press_on_row(&mut app, "kept.txt", crate::source::STAGE_FROM_RIGHT);
+        assert_eq!(staged_files(dir.path()).trim(), "kept.txt");
+        assert!(screen(&app).text().contains("STAGED CHANGES"));
+        press_on_row(&mut app, "kept.txt", crate::source::STAGE_FROM_RIGHT);
+        assert_eq!(staged_files(dir.path()).trim(), "");
+    }
+
+    #[test]
+    fn a_message_commits_what_is_staged() {
+        let (dir, mut app) = source_app();
+        press_on_row(&mut app, "kept.txt", crate::source::STAGE_FROM_RIGHT);
+        let area = app.sidebar_area().unwrap();
+        app.handle(mouse(MouseKind::Left, area.x + 4, area.y + 3));
+        typed(&mut app, "Change the words");
+        enter(&mut app);
+        let log = std::process::Command::new("git")
+            .args([
+                "-C",
+                &dir.path().display().to_string(),
+                "log",
+                "-1",
+                "--format=%s",
+            ])
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&log.stdout).trim(),
+            "Change the words"
+        );
+        assert!(app.source.message.is_empty());
+        let text = screen(&app).text();
+        assert!(
+            text.contains("fresh.txt") && !text.contains("STAGED"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn with_nothing_staged_commit_takes_everything() {
+        let (_dir, mut app) = source_app();
+        assert!(screen(&app).text().contains("Commit All"));
+        app.source.message = "All of it".to_string();
+        let (x, y) = find(&screen(&app), "Commit All");
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert!(screen(&app).text().contains("No changes"));
+    }
+
+    #[test]
+    fn a_commit_with_no_message_asks_for_one() {
+        let (_dir, mut app) = source_app();
+        let (x, y) = find(&screen(&app), "Commit All");
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert!(screen(&app).text().contains("Write a message first"));
+        assert!(app.source.focused);
+    }
+
+    #[test]
+    fn discarding_asks_first_and_then_puts_the_file_back() {
+        let (dir, mut app) = source_app();
+        press_on_row(&mut app, "kept.txt", crate::source::DISCARD_FROM_RIGHT);
+        assert!(screen(&app).text().contains("Discard changes to kept.txt"));
+        assert_eq!(
+            fs::read_to_string(dir.path().join("kept.txt")).unwrap(),
+            "two\n"
+        );
+        app.choose(Choice::DiscardFile(PathBuf::from("kept.txt"), false));
+        assert_eq!(
+            fs::read_to_string(dir.path().join("kept.txt")).unwrap(),
+            "one\n"
+        );
+    }
+
+    #[test]
+    fn a_click_on_a_file_shows_its_diff_beside_the_panel() {
+        let (_dir, mut app) = source_app();
+        let (x, y) = find(&screen(&app), "kept.txt");
+        app.handle(mouse(MouseKind::Left, x, y));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.review.as_ref().unwrap().is_reading() {
+            assert!(std::time::Instant::now() < deadline);
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(app.sidebar_area().is_some(), "the panel stays");
+        assert_eq!(
+            app.review.as_ref().unwrap().current_path(),
+            Some(Path::new("kept.txt"))
+        );
+    }
+
+    #[test]
+    fn commits_to_push_show_and_push_goes_through() {
+        let (dir, mut app) = source_app();
+        let remote = dir.path().join("remote.git");
+        let bare = remote.display().to_string();
+        git(dir.path(), &["init", "-q", "--bare", &bare]);
+        git(dir.path(), &["remote", "add", "origin", &bare]);
+        let branch = cellix_review::current_branch(dir.path()).unwrap();
+        git(dir.path(), &["push", "-q", "-u", "origin", &branch]);
+        git(dir.path(), &["commit", "-q", "--allow-empty", "-m", "more"]);
+        app.source.refresh(dir.path());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.source.sync_label().as_deref() != Some("Push 1") {
+            assert!(std::time::Instant::now() < deadline);
+            app.source.poll();
+            app.source.refresh(dir.path());
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        app.sync_remote();
+        while app.source.busy.is_some() {
+            assert!(std::time::Instant::now() < deadline);
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(screen(&app).text().contains("Pushed"));
+        assert_eq!(cellix_review::ahead_behind(dir.path()), Some((0, 0)));
+    }
+
     #[test]
     fn a_picture_in_the_pane_takes_a_comment() {
         let dir = tempfile::tempdir().unwrap();
@@ -12590,9 +12991,9 @@ mod tests {
         let (dir, mut app) = project();
         git(dir.path(), &["init", "-q"]);
         app.handle(mouse(MouseKind::Left, 2, 1 + ACTIVITY_STEP * 3));
-        assert!(app.review.is_some());
+        assert!(app.sidebar_view == SidebarView::Source);
         app.handle(mouse(MouseKind::Left, 2, 1));
-        assert!(app.review.is_none());
+        assert!(app.sidebar_view == SidebarView::Explorer);
     }
 
     #[test]

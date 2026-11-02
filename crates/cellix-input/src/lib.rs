@@ -178,6 +178,8 @@ pub enum Command {
     CloseDock,
     /// Shows the document's headings in the sidebar.
     ShowOutline,
+    /// Shows what's changed, to stage and commit, in the sidebar.
+    ShowSourceControl,
     /// Runs the notebook cell the caret is in.
     RunCell,
     /// Clears what every cell printed.

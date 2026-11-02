@@ -373,3 +373,18 @@ Round six, continued while the user tests. The design review's smaller items wen
 proof closes its last line, captions stand in the middle of the page, labels clear their headings,
 text scrolling under the toolbar has a line to go under, and the agents list reads as a tab.
 
+
+Round seven, from the user's notes while testing. Notebooks run in a real Jupyter kernel with their
+own bar and Jupyter's keys. The minimap shows pictures. Ask Agent no longer sticks when no agent is in
+the pane: the comment waits for the next prompt or the next agent started. The pointer is set with
+OSC 22 and put back. Tables take Excel's keys. Tabs in the pane close. The status bar's error count
+opens a Problems tab.
+
+The rail's Git icon now opens Source Control in the sidebar, as VS Code's does: a message box, Commit,
+Push or Pull with counts, Staged Changes and Changes, and hover marks to stage, unstage and discard.
+A click on a file shows its diff beside the panel. Ctrl+G still opens the full Review, which keeps
+its own list unless the panel is showing. `activity_bar_opens_review_by_mouse` moved with the icon,
+and the tour's review scenes now use Ctrl+G, with two new scenes for the panel.
+
+Unverified: push and pull against a real server with credentials, only a local bare repository was
+tried. Partial staging of lines isn't in the panel; hunks can still be staged from Review.

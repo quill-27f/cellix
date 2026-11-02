@@ -62,6 +62,142 @@ pub fn changed_files(root: &Path) -> Vec<Change> {
     changes
 }
 
+/// A file git knows something about: what's staged, and what isn't.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Entry {
+    pub path: PathBuf,
+    /// X and Y of `git status`, with `?` for a file git doesn't track.
+    pub index: char,
+    pub worktree: char,
+}
+
+impl Entry {
+    pub fn is_untracked(&self) -> bool {
+        self.index == '?'
+    }
+
+    pub fn is_staged(&self) -> bool {
+        !matches!(self.index, ' ' | '?')
+    }
+
+    pub fn is_unstaged(&self) -> bool {
+        self.is_untracked() || self.worktree != ' '
+    }
+
+    /// The letter it shows in one list or the other, as VS Code writes them.
+    pub fn letter(&self, staged: bool) -> char {
+        match (self.is_untracked(), staged) {
+            (true, _) => 'U',
+            (false, true) => self.index,
+            (false, false) => self.worktree,
+        }
+    }
+}
+
+/// Every changed file, with both sides of its status.
+pub fn status_entries(root: &Path) -> Vec<Entry> {
+    let Some(output) = git(
+        root,
+        &[
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+            ".",
+        ],
+    ) else {
+        return Vec::new();
+    };
+    let mut entries = Vec::new();
+    let mut fields = output.split('\0');
+    while let Some(entry) = fields.next() {
+        let mut chars = entry.chars();
+        let (Some(index), Some(worktree)) = (chars.next(), chars.next()) else {
+            continue;
+        };
+        if entry.len() < 4 {
+            continue;
+        }
+        if matches!(index, 'R' | 'C') {
+            fields.next();
+        }
+        entries.push(Entry {
+            path: PathBuf::from(&entry[3..]),
+            index,
+            worktree,
+        });
+    }
+    entries
+}
+
+fn run_git(root: &Path, args: &[&str], paths: &[PathBuf]) -> Result<(), String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .args(paths)
+        // Nothing here can answer a prompt, so one mustn't hang waiting.
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .map_err(|e| e.to_string())?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let said = String::from_utf8_lossy(&output.stderr);
+    let first = said.lines().find(|line| !line.trim().is_empty());
+    Err(first.unwrap_or("git refused").trim().to_string())
+}
+
+/// Stages whole files.
+pub fn stage(root: &Path, paths: &[PathBuf]) -> Result<(), String> {
+    run_git(root, &["add", "-A", "--"], paths)
+}
+
+/// Takes files back out of what's staged, leaving their changes alone.
+pub fn unstage(root: &Path, paths: &[PathBuf]) -> Result<(), String> {
+    if git(root, &["rev-parse", "--verify", "-q", "HEAD"]).is_some() {
+        run_git(root, &["reset", "-q", "HEAD", "--"], paths)
+    } else {
+        // Before the first commit there's nothing to go back to.
+        run_git(root, &["rm", "-q", "--cached", "--"], paths)
+    }
+}
+
+/// Throws a file's changes away. A file git never knew about simply goes.
+pub fn discard(root: &Path, path: &Path, untracked: bool) -> Result<(), String> {
+    if untracked {
+        return std::fs::remove_file(root.join(path)).map_err(|e| e.to_string());
+    }
+    run_git(root, &["checkout", "--"], &[path.to_path_buf()])
+}
+
+/// Commits to push and to pull, or None with no upstream.
+pub fn ahead_behind(root: &Path) -> Option<(usize, usize)> {
+    let counts = git(
+        root,
+        &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
+    )?;
+    let mut numbers = counts.split_whitespace().map(str::parse::<usize>);
+    Some((numbers.next()?.ok()?, numbers.next()?.ok()?))
+}
+
+pub fn has_remote(root: &Path) -> bool {
+    git(root, &["remote"]).is_some_and(|names| !names.trim().is_empty())
+}
+
+pub fn push(root: &Path) -> Result<(), String> {
+    run_git(root, &["push", "-q"], &[])
+}
+
+pub fn pull(root: &Path) -> Result<(), String> {
+    run_git(root, &["pull", "-q", "--ff-only"], &[])
+}
+
+/// Pushes a branch that has no upstream yet, and tracks it.
+pub fn publish(root: &Path, branch: &str) -> Result<(), String> {
+    run_git(root, &["push", "-q", "-u", "origin", branch], &[])
+}
+
 /// The checked-out branch, or None outside a repository or on a detached HEAD.
 pub fn current_branch(root: &Path) -> Option<String> {
     let name = git(root, &["symbolic-ref", "--short", "-q", "HEAD"])?;

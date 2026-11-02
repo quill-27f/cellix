@@ -52,7 +52,7 @@ pub struct Draft {
 const NEW_DRAFT: u32 = 0;
 
 /// Breaks text into rows no wider than `width`, at spaces.
-fn wrap(text: &str, width: f32, measure: &dyn Measure) -> Vec<String> {
+pub fn wrap(text: &str, width: f32, measure: &dyn Measure) -> Vec<String> {
     let font = Font::default();
     let mut rows = Vec::new();
     for paragraph in text.lines() {

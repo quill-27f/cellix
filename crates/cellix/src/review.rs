@@ -82,6 +82,10 @@ type LineTokens = Vec<(usize, usize, Token)>;
 /// The Changes view: files that differ from a base, and a diff of one of them. The base is
 /// HEAD, or the checkpoint taken at the start of an agent's turn.
 pub struct Review {
+    /// The Source Control panel stands beside this, so it has no list of its own.
+    pub beside_panel: bool,
+    /// A file to show once the changes have been read.
+    wanted: Option<PathBuf>,
     root: PathBuf,
     registry: Rc<Registry>,
     pub changes: Vec<Change>,
@@ -257,6 +261,8 @@ impl Review {
             tokens: (Vec::new(), Vec::new()),
             reading: None,
             hover: Cell::new(None),
+            beside_panel: false,
+            wanted: None,
         };
         review.refresh();
         review
@@ -288,6 +294,8 @@ impl Review {
             reading: None,
             hover: Cell::new(None),
             tokens: (Vec::new(), Vec::new()),
+            beside_panel: false,
+            wanted: None,
         };
         review.reload_proposal();
         review.proposal = Some(vec![false; review.diff.hunks.len()]);
@@ -386,7 +394,10 @@ impl Review {
     }
 
     fn apply(&mut self, reading: Reading) {
-        let current = self.current_path().map(Path::to_path_buf);
+        let current = self
+            .wanted
+            .take()
+            .or_else(|| self.current_path().map(Path::to_path_buf));
         self.base = reading.base;
         self.turns = reading.turns;
         self.changes = reading.changes;
@@ -435,7 +446,7 @@ impl Review {
             .cloned()
     }
 
-    fn current_path(&self) -> Option<&Path> {
+    pub fn current_path(&self) -> Option<&Path> {
         self.changes.get(self.selected).map(|c| c.path.as_path())
     }
 
@@ -462,6 +473,14 @@ impl Review {
             line_tokens(&self.registry, path, &self.new),
         );
         self.top = self.top.min(self.diff.rows.len().saturating_sub(1));
+    }
+
+    /// Shows one file, now or when the list of changes has been read.
+    pub fn show_path(&mut self, path: PathBuf) {
+        match self.changes.iter().position(|c| c.path == path) {
+            Some(index) => self.select(index),
+            None => self.wanted = Some(path),
+        }
     }
 
     pub fn select(&mut self, index: usize) {
@@ -637,8 +656,8 @@ impl Review {
     }
 
     /// Where the list and the cards go. The list makes way in a narrow pane.
-    fn layout(area: Rect) -> (Option<Rect>, Rect) {
-        if area.w < MIN_SIDE_BY_SIDE {
+    fn layout(&self, area: Rect) -> (Option<Rect>, Rect) {
+        if area.w < MIN_SIDE_BY_SIDE || self.beside_panel {
             return (None, area);
         }
         let list = Rect::new(area.x, area.y, LIST_WIDTH.min(area.w), area.h);
@@ -895,7 +914,7 @@ impl Review {
     }
 
     pub fn hit(&self, area: Rect, x: u16, y: u16, comments: &[Comment]) -> Option<Hit> {
-        let (list, body) = Self::layout(area);
+        let (list, body) = self.layout(area);
         if list.is_some_and(|l| x < l.right()) {
             return match self.list_rows().get((y - area.y) as usize)? {
                 ListRow::Heading(_) => None,
@@ -1023,7 +1042,7 @@ impl Review {
     ) {
         self.hover.set(hover);
         grid.fill(area, theme.sidebar);
-        let (list, body) = Self::layout(area);
+        let (list, body) = self.layout(area);
         if let Some(list) = list {
             for (i, row) in self.list_rows().iter().enumerate() {
                 let y = list.y + i as u16;

@@ -1797,5 +1797,54 @@
     "title": "Outputs can be cleared",
     "test": "outputs_can_be_cleared",
     "passes": true
+  },
+  {
+    "id": "scm-stage",
+    "milestone": 9,
+    "title": "Source Control lists staged and unstaged files, and stages and unstages them",
+    "test": "source_control_lists_changes_and_stages_and_unstages_them",
+    "passes": true
+  },
+  {
+    "id": "scm-commit",
+    "milestone": 9,
+    "title": "A message in the panel commits what's staged",
+    "test": "a_message_commits_what_is_staged",
+    "passes": true
+  },
+  {
+    "id": "scm-commit-all",
+    "milestone": 9,
+    "title": "With nothing staged, Commit takes everything",
+    "test": "with_nothing_staged_commit_takes_everything",
+    "passes": true
+  },
+  {
+    "id": "scm-no-message",
+    "milestone": 9,
+    "title": "A commit with no message asks for one",
+    "test": "a_commit_with_no_message_asks_for_one",
+    "passes": true
+  },
+  {
+    "id": "scm-discard",
+    "milestone": 9,
+    "title": "Discarding asks first, then restores the file",
+    "test": "discarding_asks_first_and_then_puts_the_file_back",
+    "passes": true
+  },
+  {
+    "id": "scm-diff",
+    "milestone": 9,
+    "title": "A click on a file shows its diff beside the panel",
+    "test": "a_click_on_a_file_shows_its_diff_beside_the_panel",
+    "passes": true
+  },
+  {
+    "id": "scm-push",
+    "milestone": 9,
+    "title": "Commits to push show, and Push goes through",
+    "test": "commits_to_push_show_and_push_goes_through",
+    "passes": true
   }
 ]
