@@ -1503,5 +1503,26 @@
     "title": "A PDF takes a comment on its page",
     "test": "a_pdf_takes_a_comment_on_its_page",
     "passes": true
+  },
+  {
+    "id": "export-svg",
+    "milestone": 9,
+    "title": "An SVG image reaches a PDF as a picture",
+    "test": "an_svg_image_reaches_a_pdf_as_a_picture",
+    "passes": true
+  },
+  {
+    "id": "track-word",
+    "milestone": 9,
+    "title": "Deleting a word with Track Changes on crosses it out",
+    "test": "deleting_a_word_with_tracking_on_crosses_it_out",
+    "passes": true
+  },
+  {
+    "id": "track-cut",
+    "milestone": 9,
+    "title": "Cutting with Track Changes on keeps a suggestion",
+    "test": "cutting_with_tracking_on_keeps_the_words_as_a_suggestion",
+    "passes": true
   }
 ]

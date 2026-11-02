@@ -17,12 +17,14 @@ cellix            # the current folder
 cellix src/lib.rs # with a file open
 ```
 
+A static Linux binary comes from the `release` workflow, for a server with no Rust on it.
+
 | Keys | Action |
 |---|---|
 | Ctrl+P | Go to a file |
 | Ctrl+Shift+P, F1 or Alt+P | Command palette |
 | Ctrl+G | Review changes against HEAD |
-| Alt+C, or right-click | Comment on a line |
+| Alt+C, or select text | Comment on what's selected |
 | Ctrl+F | Find in the file |
 | Ctrl+Shift+F | Search the project |
 | Ctrl+\\ | Split pane |
@@ -65,24 +67,61 @@ the explorer to create, rename or delete.
 
 ## Writing
 
-Markdown and LaTeX files both open as a page you type on. Formulas are typeset, images and
-tables show as themselves, and the file underneath stays plain text. Put the caret in a formula
-and its source opens with the result under it. Math comes from pure Rust and fonts in the
-binary, so it works on a server with no TeX.
+Markdown and LaTeX files both open as a page you type on, and the file underneath stays plain text.
+`samples/writing.md` and `samples/paper/main.tex` use everything below, so they're the place to try it.
 
-The toolbar above a page holds paragraph styles, formats, lists, a panel of symbols and formula
-templates, a table size picker, images and comments. Right-click in a table to add rows and
-columns, align them, or delete them.
+**Text.** Formats, lists, tasks, quotes, `==highlights==`, `H~2~O`, `x^2^`, footnotes and GitHub
+callouts such as `> [!NOTE]` all stand on the page with their markers hidden. The Outline icon lists
+a document's headings. Spelling and grammar are checked offline by Harper, with fixes and Add to
+Dictionary on a right click.
 
-A `.tex` file shows its sections, numbers, citations, equations, figures and tables, and anything
-Cellix doesn't recognise stays visible as source. **Cite** lists the keys in your `.bib` files.
-**Build PDF**, or Ctrl+Alt+B, runs `tectonic`, `latexmk` or `pdflatex`, shows the PDF in the side
-pane, and goes to the line of any error. Set `latex_engine` in the settings file to use your own
-command. Export to PDF does the same for Markdown, through LaTeX.
+**Math.** Formulas are typeset as you write them, from pure Rust and fonts in the binary, so they
+work on a server with no TeX. Click one and its source opens with the result under it.
 
-To review a document with an agent, comment on it. The comment becomes a thread beside the page,
-kept in `.cellix/threads.json`. **Ask agent** sends it to the agent in the side pane, which answers
-with `cellix reply <id> "text"`, and the answer lands under your question.
+**Tables.** The table button has a size picker. Click any cell to type in it, and right-click for
+rows, columns and alignment.
+
+**Pictures.** Pick one from the project, paste one from the clipboard, or drop a file on the page.
+Drag an image's edge to size it, or right-click to resize, replace or delete it. PNG, JPEG, WebP, GIF,
+SVG and PDF all work.
+
+**Diagrams.** ` ```mermaid `, ` ```dot ` and ` ```svg ` blocks stand as pictures, drawn by pure Rust
+with no browser or Node. Click one to edit its source with the picture under it. ` ```tikz ` blocks
+and `tikzpicture`, `tikzcd`, `forest`, `circuitikz` and `algorithm` in a paper are built alone by
+your LaTeX engine in the background, and kept, so typing never waits.
+
+**Track changes.** The pencil keeps edits as suggestions in the text itself, as CriticMarkup or the
+`changes` package. Right-click one to accept or reject it, or settle them all from the commands.
+
+**Papers.** A `.tex` file shows its sections, numbers, citations, equations, theorems, figures and
+tables, across `\\input` files, and anything Cellix doesn't recognise stays visible as source. **Cite**
+lists the keys in your `.bib` files. **Build PDF**, or Ctrl+Alt+B, runs `tectonic`, `latexmk` or
+`pdflatex`, shows the PDF in the side pane, keeps what the build said in a Log tab, and goes to the
+line of any error. Clicking the PDF goes to that place in the source. Set `latex_engine` in the
+settings file to use your own command. Export to PDF does the same for Markdown, through LaTeX, with
+diagrams and footnotes.
+
+**Data and notebooks.** CSV and TSV files open as a table you can edit in place. A Jupyter notebook
+opens as a page with each cell's output under it, and saving keeps those outputs. Cells don't run
+here: a shell in the side pane can do that.
+
+## Working with an agent
+
+Whatever you can see, you can talk about, the same way in every file type. Select text and **Comment**
+and **Ask Agent** appear beside it. A picture, diagram or formula has a Comment button under the
+pointer, and a PDF or image in the side pane takes one too. Comments are threads in the side pane,
+kept in `.cellix/threads.json`. Ask Agent sends yours to the agent with its file, line and quote, the
+agent answers with `cellix reply <id> "text"`, and the answer lands under your question.
+
+The Agents icon starts a real agent or a shell in the side pane, beside your file. Press Ctrl+` to
+move the keyboard between the two, and the × at the top right, or Ctrl+Shift+`, to hide the pane.
+Hiding stops nothing. What runs there outlives Cellix too: quitting offers Keep Running, a dropped SSH
+connection keeps everything, and the next Cellix in that folder finds it with what it printed.
+
+A program in a shell there can draw pictures with the Kitty graphics protocol, and Open in Browser
+runs a real browser there with `terminal-browser` if it's installed.
+
+Getting Started, in the command palette or on the empty window, is a short guide.
 
 ## Over SSH
 

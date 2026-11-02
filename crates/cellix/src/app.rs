@@ -345,12 +345,33 @@ fn clipboard_image_command() -> Vec<String> {
     ]
 }
 
+/// A document with its SVG images swapped for pictures LaTeX can read, made beside it.
+fn svg_as_pictures(text: &str, folder: &Path, made: &mut Vec<PathBuf>) -> String {
+    let lines = text.split('\n').map(|line| {
+        let image = cellix_doc::figure::image_line(line).filter(|i| i.path.ends_with(".svg"));
+        let picture = image.and_then(|image| {
+            let source = std::fs::read_to_string(folder.join(image.path)).ok()?;
+            let name = format!(".diagram-{}.png", made.len());
+            write_svg(&source, &folder.join(&name))?;
+            made.push(folder.join(&name));
+            cellix_doc::figure::set_path(line, &name)
+        });
+        picture.unwrap_or_else(|| line.to_string())
+    });
+    lines.collect::<Vec<_>>().join("\n")
+}
+
 /// Draws a diagram for print, on white and sharp enough for paper.
 fn write_diagram(kind: cellix_doc::diagram::Kind, source: &str, file: &Path) -> Option<()> {
+    let svg = cellix_doc::diagram::svg(kind, source, false).ok()?;
+    write_svg(&svg, file)
+}
+
+/// Draws SVG to a picture for print.
+fn write_svg(svg: &str, file: &Path) -> Option<()> {
     const PRINT_SCALE: f32 = 3.0;
     const PRINT_WIDTH: u32 = 2400;
-    let svg = cellix_doc::diagram::svg(kind, source, false).ok()?;
-    let raster = cellix_doc::diagram::rasterize(&svg, PRINT_SCALE, PRINT_WIDTH).ok()?;
+    let raster = cellix_doc::diagram::rasterize(svg, PRINT_SCALE, PRINT_WIDTH).ok()?;
     let image = image::RgbaImage::from_raw(raster.width, raster.height, raster.rgba)?;
     image.save(file).ok()
 }
@@ -3379,7 +3400,7 @@ impl App {
                 if let Some(editor) = self.editor_mut()
                     && editor.selected_text().is_some()
                 {
-                    editor.buffer.replace(&mut editor.selections, "");
+                    editor.cut_selection();
                 }
             }
             Command::Paste => {
@@ -6697,7 +6718,7 @@ impl App {
         // LaTeX can't read a diagram, so each goes in as a picture beside the document.
         let folder = out.parent().map(Path::to_path_buf).unwrap_or_default();
         let mut made = vec![out.clone()];
-        let text = editor.buffer.text();
+        let text = svg_as_pictures(&editor.buffer.text(), &folder, &mut made);
         let tex = cellix_doc::latex::from_markdown_with(&text, &mut |kind, source| {
             let name = format!(".diagram-{}.png", made.len());
             let file = folder.join(&name);
@@ -10566,6 +10587,40 @@ mod tests {
         for hidden in ["```mermaid", "[!NOTE]", "{++", "[^source]", "{width="] {
             assert!(!words.contains(hidden), "{hidden} shows as source");
         }
+    }
+
+    #[test]
+    fn an_svg_image_reaches_a_pdf_as_a_picture() {
+        let dir = tempfile::tempdir().unwrap();
+        let svg = "<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10'><rect width='10' height='10'/></svg>";
+        fs::write(dir.path().join("mark.svg"), svg).unwrap();
+        let mut made = vec![dir.path().join("out.tex")];
+        let text = svg_as_pictures(
+            "![Mark](mark.svg){width=50%}\n\nwords\n",
+            dir.path(),
+            &mut made,
+        );
+        assert_eq!(text, "![Mark](.diagram-1.png){width=50%}\n\nwords\n");
+        assert!(made[1].is_file());
+    }
+
+    #[test]
+    fn deleting_a_word_with_tracking_on_crosses_it_out() {
+        let (_dir, mut app) = tracking_page("one two\n");
+        let (x, y) = cell_of(&app, "two");
+        app.handle(mouse(MouseKind::Left, x + 3, y));
+        app.run(Command::DeleteWordLeft);
+        assert_eq!(app.active_text().unwrap(), "one {--two--}\n");
+    }
+
+    #[test]
+    fn cutting_with_tracking_on_keeps_the_words_as_a_suggestion() {
+        let (_dir, mut app) = tracking_page("one two three\n");
+        let (x, y) = cell_of(&app, "two");
+        double_click(&mut app, x + 1, y);
+        app.run(Command::Cut);
+        assert_eq!(app.active_text().unwrap(), "one {--two--} three\n");
+        assert_eq!(app.clipboard, "two");
     }
 
     #[test]

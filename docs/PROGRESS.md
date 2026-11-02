@@ -328,3 +328,44 @@ build log panel. Codex and Gemini have `cellix plan` but no plan-held hook. The 
 terminal clips the status band, which a real window doesn't.
 
 Next: the user tests Claude Code, Codex and SSH.
+
+## 2026-11-02: sixth round, documents in full, and a companion everywhere
+
+The user's reports first. A click in an empty table cell had no text to land on, so the caret went to
+the end of the row: empty cells now have a place of their own. The side pane had no way to close: it
+has an × that stops nothing. Open in Browser left Cellix: the pane's terminal now reads the Kitty
+graphics protocol, so `terminal-browser` runs there, proven with the real one. That work found
+programs in the pane were told the wrong background, because the check used a palette number.
+
+Documents gained Mermaid, Graphviz and SVG diagrams from pure Rust, TikZ and `tikzcd` built in the
+background and proven with real `tectonic`, image sizing, dropping, pasting and a drag handle,
+footnotes, callouts, highlights, tracked changes, spelling and grammar with Harper, an Outline, a
+build Log, CSV tables, and notebooks that save back with their outputs.
+
+The missing list from round five: Han characters drew blank in code because a monospace search
+stopped at a font of blanks. Operators had their limits at the side, and `arg\\,min` printed a comma,
+which was ours to fix. `\\sum\\limits` in text is still the engine's. Sessions now outlive Cellix
+under a small host, proven by a job that kept writing through a quit and a rejoin, and stopped on Stop
+and Quit. A `release` workflow built a static Linux binary on CI. The headless terminal now shows
+images over the window's padding as Ghostty does, which was what cut off the status band.
+
+The user then asked for guidance and a companion approach. An empty window lists clickable actions and
+names the next step for what's running, the agents panel says how it works, and Getting Started is a
+real page. A selection offers Comment and Ask Agent in every file type, and pictures, diagrams,
+formulas, PDFs and images take comments too.
+
+Tests changed because behaviour did: `cli_reads_comments_over_socket` waits for the side pane, since
+comments on code are now written there. `a_comment_sits_in_its_card` closes the pane first, since its
+text now shows there too. Several rail tests moved with the new Outline icon. Two table tests looked
+for one letter a temporary folder's name could hold, so they failed at random, and now use words.
+
+Unverified: real Claude Code, Codex or Gemini in the pane, in the fifth round's list and still. A real
+Ghostty window for any of this round's work, including the browser and Keep Running, which ran
+through the headless terminal. SSH. Linux with the static binary, past `--version` on CI.
+
+Not done: Codex and Gemini still have no plan-held hook, since neither could be tested here and it
+would be a guess. Web export leaves `tikz` blocks as source. A notebook's comment line counts page
+lines, not JSON ones. Cells don't run. Jobs held for a project are only found from that same folder.
+
+Next: the user plays with `samples/` and tests Claude Code, Codex and SSH.
+

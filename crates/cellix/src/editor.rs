@@ -1408,6 +1408,15 @@ impl Editor {
         } else {
             (primary.start(), primary.end())
         };
+        if self.tracking && self.rendered {
+            self.selections.set_single(Selection {
+                anchor: start,
+                head: end,
+                goal: None,
+            });
+            self.tracked_delete(false);
+            return;
+        }
         self.buffer
             .replace_range(&mut self.selections, start, end, "");
         self.selections.set_single(Selection::cursor(start));
@@ -1842,6 +1851,15 @@ impl Editor {
             .iter()
             .find(|c| c.kind == Kind::Delete && c.start < head && head < c.end);
         deleted.map_or(head, |c| c.end)
+    }
+
+    /// Takes out what's selected, as a suggestion if changes are being tracked.
+    pub fn cut_selection(&mut self) {
+        if self.tracking && self.rendered {
+            self.tracked_delete(false);
+        } else {
+            self.buffer.replace(&mut self.selections, "");
+        }
     }
 
     /// Pastes as a suggestion.
