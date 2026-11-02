@@ -28,8 +28,11 @@ use crate::App;
 /// How often a scroll moves. Over a network each frame costs a round of placements.
 const SCROLL_FRAME: Duration = Duration::from_millis(8);
 const REMOTE_SCROLL_FRAME: Duration = Duration::from_millis(33);
-/// How quickly a scroll closes on where it's going, which gives VS Code's feel of about 125 ms.
-const SCROLL_EASE: Duration = Duration::from_millis(40);
+/// How quickly a scroll closes on where it's going. It only blends one line into the next: any
+/// longer and the page trails the hand, which reads as lag and not as smoothness.
+const SCROLL_EASE: Duration = Duration::from_millis(14);
+/// The longest to spend on queued input before drawing.
+const INPUT_SLICE: Duration = Duration::from_millis(4);
 /// How often the page under a scroll is brought up to date while it moves.
 const SCROLL_PRESENT: Duration = Duration::from_millis(120);
 /// How long to wait for input before checking on language servers.
@@ -374,6 +377,7 @@ pub fn run(options: Options) -> io::Result<()> {
             loop {
                 let event = ct::read()?;
                 // Anything but the wheel or a passing pointer may change what's under a scroll.
+                // A trackpad wanders sideways as it goes, so those count as the wheel too.
                 let passing = matches!(
                     &event,
                     ct::Event::Mouse(mouse) if matches!(
@@ -381,6 +385,8 @@ pub fn run(options: Options) -> io::Result<()> {
                         ct::MouseEventKind::Moved
                             | ct::MouseEventKind::ScrollUp
                             | ct::MouseEventKind::ScrollDown
+                            | ct::MouseEventKind::ScrollLeft
+                            | ct::MouseEventKind::ScrollRight
                     )
                 );
                 if !passing {
@@ -402,7 +408,8 @@ pub fn run(options: Options) -> io::Result<()> {
                     Some(Event::Resize(..)) | None => {}
                     Some(event) => app.handle(event),
                 }
-                if !ct::poll(Duration::ZERO)? {
+                // A stream of input mustn't hold up the frames it's asking for.
+                if started.elapsed() >= INPUT_SLICE || !ct::poll(Duration::ZERO)? {
                     break;
                 }
             }

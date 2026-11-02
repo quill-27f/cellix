@@ -148,6 +148,66 @@ pub enum Paint {
 }
 
 impl Paint {
+    /// Paint units of the columns this can touch, as (left, right). It may overstate them:
+    /// that costs a tile, where understating would leave stale pixels.
+    pub fn reach(&self) -> (i32, i32) {
+        match self {
+            Self::Panel { bounds, shadow, .. } => {
+                let shade = if *shadow { 2 * UNIT } else { 0 };
+                (bounds.x - shade, bounds.x + bounds.w + shade)
+            }
+            Self::Hairline { bounds, .. }
+            | Self::Icon { bounds, .. }
+            | Self::Strips { bounds, .. }
+            | Self::Corners { bounds, .. } => (bounds.x, bounds.x + bounds.w.max(1)),
+            Self::Image { bounds, clip, .. } => (
+                bounds.x.max(clip.x),
+                (bounds.x + bounds.w.max(1)).min(clip.x + clip.w),
+            ),
+            Self::Text {
+                x,
+                max_width,
+                text,
+                align_right,
+                centred,
+                ..
+            } => {
+                // Only the rasterizer knows true widths, but a character is never this wide.
+                let wide = (text.chars().count() as i32 + 1).saturating_mul(4 * UNIT);
+                if *align_right {
+                    (x.saturating_sub(wide), *x)
+                } else if *centred {
+                    (x.saturating_sub(wide), x.saturating_add(wide))
+                } else {
+                    (*x, x.saturating_add(*max_width))
+                }
+            }
+        }
+    }
+
+    /// This as seen from a row starting at `top`. What's drawn in a row depends on this and not
+    /// on where the row stands, so a row that scrolls keeps its tile.
+    pub fn on_row(&self, top: i32) -> Self {
+        let mut paint = self.clone();
+        match &mut paint {
+            Self::Panel { bounds, .. }
+            | Self::Hairline { bounds, .. }
+            | Self::Icon { bounds, .. }
+            | Self::Strips { bounds, .. }
+            | Self::Corners { bounds, .. } => bounds.y -= top,
+            Self::Image { bounds, clip, .. } => {
+                // A clip that doesn't reach into the row makes no difference to it.
+                let bottom = (clip.y + clip.h).min(top + UNIT);
+                clip.y = clip.y.max(top);
+                clip.h = bottom - clip.y;
+                clip.y -= top;
+                bounds.y -= top;
+            }
+            Self::Text { y, .. } => *y -= top,
+        }
+        paint
+    }
+
     /// Paint units of the rows this touches, as (top, bottom).
     pub(crate) fn span(&self) -> (i32, i32) {
         match self {

@@ -472,3 +472,13 @@ near zero: 158 of them in five minutes. That was the periodic look at the tree a
 a thread now, and only touches an editor when something really changed. `explorer_shows_git_status`
 and `new_files_appear_in_the_explorer_by_themselves` wait for it, since it no longer finishes in the
 tick.
+
+Scrolling again, from the log and from reading how Claude Code does it. Its fullscreen view has no
+animation: a trackpad's flood moves a line per event, and a wheel's speed ramps and fades. So the
+first event no longer jumps three lines, and the ease went from 40 ms to 14, since a longer one
+trails the hand and reads as lag. Tiles are now cut into bands, so a scrolled row keeps its tile and
+settling draws nothing new, which was up to 195 ms on the user's machine. Queued input can't hold up
+a frame for more than 4 ms, and a trackpad wandering sideways no longer ends a glide. The rail's
+icons and the top-right bar were also made smaller and airier, as asked.
+`the_wheel_reports_what_it_moved` changed with the first event. Tests that placed the icons moved
+with the new margin. How it feels in a real Ghostty is still for the user to judge.

@@ -6,7 +6,7 @@ use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
-use cellix_render::{Grid, Image, Rasterizer, Rect, Rgb, UNIT};
+use cellix_render::{Grid, Image, Paint, Rasterizer, Rect, Rgb, UNIT};
 use flate2::{Compression, write::ZlibEncoder};
 
 use crate::Backend;
@@ -24,6 +24,8 @@ const DIACRITIC_ZERO: char = '\u{305}';
 const SCROLL_LAYER: u32 = 1;
 /// Placement ids for a scrolling region, clear of the row placements.
 const FIRST_STRIP: usize = 100_000;
+/// Placement numbers a band adds, so each band of a row has its own.
+const BAND_PLACEMENTS: usize = 10_000;
 /// Rows of the page a glide can tell apart, which wrap round far out of sight.
 const STRIP_ROWS: i32 = 1 << 20;
 /// Pixels from the end at which a glide counts as there.
@@ -91,7 +93,10 @@ pub struct PixelBackend<R> {
     rasterizer: R,
     placement: Placement,
     tiles: HashMap<u64, Tile>,
-    shown: Vec<Option<u32>>,
+    /// What's showing in each row, band by band.
+    shown: Vec<Vec<Option<u32>>>,
+    /// The bands those are.
+    bands: Vec<u16>,
     size: (u16, u16),
     next_id: u32,
     used: usize,
@@ -108,22 +113,52 @@ pub struct PixelBackend<R> {
 
 /// What a row looks like, as a key: rows with the same key draw the same pixels.
 pub fn row_key(grid: &Grid, y: u16) -> u64 {
+    band_key(grid, y, (0, grid.width()))
+}
+
+/// What one band of a row looks like, as a key. It says nothing of where the row stands, so
+/// a row keeps its tile as it scrolls.
+fn band_key(grid: &Grid, y: u16, (from, to): (u16, u16)) -> u64 {
     let mut hasher = DefaultHasher::new();
-    grid.row(y).hash(&mut hasher);
-    grid.cursor.filter(|c| c.1 == y).hash(&mut hasher);
+    (from, to).hash(&mut hasher);
+    grid.row(y)[from as usize..to as usize].hash(&mut hasher);
+    let inside = |x: u16| x >= from && x < to;
+    let cursor = grid.cursor.filter(|c| c.1 == y && inside(c.0));
+    cursor.map(|c| c.0).hash(&mut hasher);
     // Only on its own row: hashed everywhere, moving the caret resent the whole screen.
     let (top, bottom) = (y as i32 * UNIT, (y as i32 + 1) * UNIT);
-    grid.caret
-        .filter(|c| c.y < bottom && c.y + c.h > top)
-        .hash(&mut hasher);
-    // Paint can stand in several rows, and each shows its own slice. Without the row, the
-    // empty rows above and below a tall heading are the same tile, and one is blank.
-    let mut paint = grid.paint_on_row(y).peekable();
-    if paint.peek().is_some() {
-        y.hash(&mut hasher);
+    let (left, right) = (from as i32 * UNIT, to as i32 * UNIT);
+    let caret = grid
+        .caret
+        .filter(|c| c.y < bottom && c.y + c.h > top && c.x >= left && c.x < right);
+    caret.map(|c| (c.x, c.y - top, c.w, c.h)).hash(&mut hasher);
+    let meets = |paint: &&Paint| {
+        let (start, end) = paint.reach();
+        start < right && end > left
+    };
+    // Paint can stand in several rows, and each shows its own slice, which `on_row` keeps
+    // apart: the rows above and below a tall heading aren't the same tile.
+    for paint in grid.paint_on_row(y).filter(meets) {
+        paint.on_row(top).hash(&mut hasher);
     }
-    paint.for_each(|p| p.hash(&mut hasher));
     hasher.finish()
+}
+
+/// Part of a row's image, between two pixel columns.
+fn crop(image: &Image, left: usize, right: usize) -> Image {
+    let mut rgb = Vec::with_capacity((right - left) * image.height * 3);
+    for line in image.rgb.chunks_exact(image.width * 3) {
+        rgb.extend_from_slice(&line[left * 3..right * 3]);
+    }
+    Image {
+        width: right - left,
+        height: image.height,
+        rgb,
+    }
+}
+
+fn place_number(y: u16, band: usize) -> usize {
+    y as usize + 1 + band * BAND_PLACEMENTS
 }
 
 fn zlib(data: &[u8]) -> Vec<u8> {
@@ -139,6 +174,7 @@ impl<R: Rasterizer> PixelBackend<R> {
             placement,
             tiles: HashMap::new(),
             shown: Vec::new(),
+            bands: Vec::new(),
             size: (0, 0),
             next_id: 1,
             used: 0,
@@ -198,12 +234,23 @@ impl<R: Rasterizer> PixelBackend<R> {
         }
     }
 
-    fn place(&self, out: &mut Vec<u8>, id: u32, y: u16, cols: u16, rows: u16) {
-        let _ = write!(out, "\x1b[{};1H", y + 1);
+    /// Where a band of a row goes, and how many rows high.
+    fn place(
+        &self,
+        out: &mut Vec<u8>,
+        id: u32,
+        (y, band): (u16, usize),
+        (from, to): (u16, u16),
+        rows: u16,
+        last: bool,
+    ) {
+        let cols = to - from;
+        let _ = write!(out, "\x1b[{};{}H", y + 1, from + 1);
         match self.placement {
             Placement::Direct => {
-                let cols = cols + self.bleed.cols;
-                let control = format!("a=p,i={id},p={},c={cols},r={rows},C=1,q=2", y + 1);
+                let cols = cols + if last { self.bleed.cols } else { 0 };
+                let number = place_number(y, band);
+                let control = format!("a=p,i={id},p={number},c={cols},r={rows},C=1,q=2");
                 self.apc(out, &control, b"");
             }
             Placement::Placeholder => {
@@ -266,40 +313,71 @@ impl<R: Rasterizer> PixelBackend<R> {
         Image { width, height, rgb }
     }
 
-    /// Returns the tile for a row, rasterizing and sending it only if it's new.
-    fn tile(&mut self, out: &mut Vec<u8>, key: u64, grid: &Grid, y: u16) -> u32 {
-        if let Some(tile) = self.tiles.get_mut(&key) {
-            tile.last_used = self.frame;
-            return tile.id;
+    /// The bands of a row, as (first column, column past the last). The last row is the
+    /// status bar, which nothing scrolls in, and its tile can reach below the text area.
+    fn spans(&self, grid: &Grid, y: u16) -> Vec<(u16, u16)> {
+        let width = grid.width();
+        if y + 1 == grid.height() {
+            return vec![(0, width)];
         }
-        let id = self.new_id();
-        let image = self.rasterizer.row(grid, y);
-        let cols = grid.width();
-        self.cell = Some((
-            (image.width / cols.max(1) as usize) as i32,
-            image.height as i32,
-        ));
-        let image = self.bled(image, grid, y);
-        self.transmit(out, id, &image);
-        if self.placement == Placement::Placeholder {
-            self.apc(out, &format!("a=p,U=1,i={id},c={cols},r=1,q=2"), b"");
+        let inside = grid.bands.iter().copied().filter(|x| *x > 0 && *x < width);
+        let edges: Vec<u16> = [0].into_iter().chain(inside).chain([width]).collect();
+        edges.windows(2).map(|edge| (edge[0], edge[1])).collect()
+    }
+
+    /// The tile for each band of a row, rasterizing the row once if any of them is new.
+    fn band_tiles(&mut self, out: &mut Vec<u8>, grid: &Grid, y: u16) -> Vec<u32> {
+        let spans = self.spans(grid, y);
+        // The last row's tile is taller than the same row anywhere else.
+        let bottom = y + 1 == grid.height() && self.bleed.rows > 0;
+        let keys: Vec<u64> = spans
+            .iter()
+            .map(|span| band_key(grid, y, *span).rotate_left(u32::from(bottom)))
+            .collect();
+        if keys.iter().any(|key| !self.tiles.contains_key(key)) {
+            let image = self.rasterizer.row(grid, y);
+            let cols = grid.width();
+            let cell = image.width / cols.max(1) as usize;
+            self.cell = Some((cell as i32, image.height as i32));
+            let image = self.bled(image, grid, y);
+            for (&(from, to), key) in spans.iter().zip(&keys) {
+                if self.tiles.contains_key(key) {
+                    continue;
+                }
+                let right = if to == cols {
+                    image.width
+                } else {
+                    to as usize * cell
+                };
+                let part = crop(&image, from as usize * cell, right);
+                let id = self.new_id();
+                self.transmit(out, id, &part);
+                if self.placement == Placement::Placeholder {
+                    let wide = to - from;
+                    self.apc(out, &format!("a=p,U=1,i={id},c={wide},r=1,q=2"), b"");
+                }
+                self.used += part.rgb.len();
+                let tile = Tile {
+                    id,
+                    bytes: part.rgb.len(),
+                    last_used: self.frame,
+                };
+                self.tiles.insert(*key, tile);
+            }
         }
-        self.used += image.rgb.len();
-        self.tiles.insert(
-            key,
-            Tile {
-                id,
-                bytes: image.rgb.len(),
-                last_used: self.frame,
-            },
-        );
-        id
+        let frame = self.frame;
+        let mut use_tile = |key: &u64| {
+            let tile = self.tiles.get_mut(key).expect("made above");
+            tile.last_used = frame;
+            tile.id
+        };
+        keys.iter().map(&mut use_tile).collect()
     }
 
     /// A glide from what's on screen now, whose rows are in the terminal already.
-    fn start_glide(&self, area: Rect) -> Option<Glide> {
+    fn start_glide(&self, area: Rect, band: usize) -> Option<Glide> {
         let shown = (area.y..area.bottom()).enumerate().map(|(index, y)| {
-            let id = (*self.shown.get(y as usize)?)?;
+            let id = (*self.shown.get(y as usize)?.get(band)?)?;
             Some((index as i32, id))
         });
         Some(Glide {
@@ -358,26 +436,42 @@ impl<R: Rasterizer> Backend for PixelBackend<R> {
             self.tiles.clear();
             self.glide = None;
             self.used = 0;
-            self.shown = vec![None; grid.height() as usize];
+            self.shown = vec![Vec::new(); grid.height() as usize];
             self.size = size;
+        }
+        if grid.bands != self.bands {
+            // The panels moved, so what's shown is cut in the wrong places. Tiles stay.
+            if self.placement == Placement::Direct {
+                self.apc(&mut bytes, "a=d,d=a,q=2", b"");
+            }
+            self.shown = vec![Vec::new(); grid.height() as usize];
+            self.bands.clone_from(&grid.bands);
+            self.glide = None;
+            self.scrolling = false;
         }
         self.frame += 1;
         let mut on_screen = HashSet::new();
         for y in 0..grid.height() {
             let bottom = y + 1 == grid.height() && self.bleed.rows > 0;
-            // The last row's tile is taller than the same row anywhere else.
-            let key = row_key(grid, y).rotate_left(u32::from(bottom));
-            let id = self.tile(&mut bytes, key, grid, y);
-            on_screen.insert(id);
-            if self.shown[y as usize] != Some(id) {
+            let spans = self.spans(grid, y);
+            let ids = self.band_tiles(&mut bytes, grid, y);
+            self.shown[y as usize].resize(ids.len(), None);
+            for (band, (id, span)) in ids.into_iter().zip(spans).enumerate() {
+                on_screen.insert(id);
+                let old = self.shown[y as usize][band];
+                if old == Some(id) {
+                    continue;
+                }
                 // A placement belongs to its image, so a new image at this row doesn't
                 // replace the old one. Left alone, stale rows pile up as you scroll.
-                if let (Placement::Direct, Some(old)) = (self.placement, self.shown[y as usize]) {
-                    self.apc(&mut bytes, &format!("a=d,d=i,i={old},p={},q=2", y + 1), b"");
+                if let (Placement::Direct, Some(old)) = (self.placement, old) {
+                    let number = place_number(y, band);
+                    self.apc(&mut bytes, &format!("a=d,d=i,i={old},p={number},q=2"), b"");
                 }
                 let rows = 1 + if bottom { self.bleed.rows } else { 0 };
-                self.place(&mut bytes, id, y, grid.width(), rows);
-                self.shown[y as usize] = Some(id);
+                let last = span.1 == grid.width();
+                self.place(&mut bytes, id, (y, band), span, rows, last);
+                self.shown[y as usize][band] = Some(id);
             }
         }
         if std::mem::take(&mut self.scrolling) {
@@ -405,11 +499,16 @@ impl<R: Rasterizer> Backend for PixelBackend<R> {
             && self.size == (to.width(), to.height())
             && rows != 0
             && rows.abs() < area.h as i32;
-        if !can_glide || self.glide.as_ref().is_some_and(|g| g.area != area) {
+        let spans = self.spans(to, area.y);
+        let band = spans
+            .iter()
+            .position(|span| *span == (area.x, area.right()));
+        let same_area = self.glide.as_ref().is_none_or(|g| g.area == area);
+        let (true, true, Some(band)) = (can_glide, same_area, band) else {
             self.settle();
             return Ok(());
-        }
-        let Some(mut glide) = self.glide.take().or_else(|| self.start_glide(area)) else {
+        };
+        let Some(mut glide) = self.glide.take().or_else(|| self.start_glide(area, band)) else {
             return Ok(());
         };
         let mut bytes = Vec::new();
@@ -417,7 +516,7 @@ impl<R: Rasterizer> Backend for PixelBackend<R> {
         for (index, y) in (area.y..area.bottom()).enumerate() {
             let row = glide.target + index as i32;
             if let Entry::Vacant(place) = glide.rows.entry(row) {
-                place.insert(self.tile(&mut bytes, row_key(to, y), to, y));
+                place.insert(self.band_tiles(&mut bytes, to, y)[band]);
             }
         }
         self.glide = Some(glide);
@@ -450,7 +549,6 @@ impl<R: Rasterizer> Backend for PixelBackend<R> {
             glide.at = target;
         }
         let at = glide.at.round() as i32;
-        let across = i32::from(glide.area.x) * cell_w;
         let wide = i32::from(glide.area.w) * cell_w;
         let mut bytes = b"\x1b[?2026h".to_vec();
         for (&row, &id) in &glide.rows {
@@ -467,7 +565,7 @@ impl<R: Rasterizer> Backend for PixelBackend<R> {
             let y = i32::from(glide.area.y) + pixel / cell_h;
             let _ = write!(bytes, "\x1b[{};{}H", y + 1, glide.area.x + 1);
             let control = format!(
-                "a=p,i={id},p={number},x={across},y={clip_top},w={wide},h={},Y={},z={SCROLL_LAYER},C=1,q=2",
+                "a=p,i={id},p={number},x=0,y={clip_top},w={wide},h={},Y={},z={SCROLL_LAYER},C=1,q=2",
                 clip_end - clip_top,
                 pixel % cell_h,
             );
@@ -537,8 +635,9 @@ mod tests {
     /// A sidebar in the first eight columns that stays still, and a pane that moves.
     fn pane(top: usize) -> Grid {
         let mut grid = Grid::new(20, 8, Style::default());
+        grid.bands = vec![PANE.x];
         for y in 0..8 {
-            grid.put_str(0, y, "side", Style::default(), 8);
+            grid.put_str(0, y, &format!("side{y}"), Style::default(), 8);
             let letter = char::from(b'a' + (top + y as usize) as u8);
             grid.put_str(9, y, &letter.to_string(), Style::default(), 20);
         }
@@ -757,8 +856,8 @@ mod tests {
         scroll(&mut b, &from, &to, 1);
         let moving = frames(&mut b, 3);
         assert!(
-            moving.contains(",x=64,y="),
-            "only the pane's columns: {moving:?}"
+            moving.contains(",x=0,y="),
+            "the pane's own tiles: {moving:?}"
         );
         let clipped = moving
             .split(",y=")
@@ -780,6 +879,64 @@ mod tests {
             count(&back, "a=t,"),
             0,
             "the tiles are in the terminal already"
+        );
+    }
+
+    #[test]
+    fn a_scrolled_page_keeps_its_tiles_whatever_stands_beside_it() {
+        let mut b = smooth();
+        let (from, to) = (pane(0), pane(3));
+        present_sized(&mut b, &from);
+        scroll(&mut b, &from, &to, 3);
+        frames(&mut b, 200);
+        let settled = present_sized(&mut b, &to);
+        // A row outside the region can change too, as this page has no bars there.
+        assert!(
+            count(&settled, "a=t,") <= 2,
+            "the region sent nothing: {settled:?}"
+        );
+    }
+
+    #[test]
+    fn a_change_in_one_band_sends_only_that_band() {
+        let mut b = smooth();
+        let mut grid = pane(0);
+        present_sized(&mut b, &grid);
+        grid.put_str(10, 3, "x", Style::default(), 20);
+        let sent = present_sized(&mut b, &grid);
+        assert_eq!(count(&sent, "a=t,"), 1, "{sent:?}");
+    }
+
+    #[test]
+    fn typeset_rows_keep_their_tiles_as_they_move() {
+        let text = |row: u16| Paint::Text {
+            x: 0,
+            y: i32::from(row) * UNIT,
+            max_width: 8 * UNIT,
+            text: "words".into(),
+            color: Rgb(1, 2, 3),
+            font: cellix_render::Font::default(),
+            align_right: false,
+            centred: false,
+            underline: false,
+        };
+        let mut grid = Grid::new(20, 8, Style::default());
+        grid.paint.extend([text(1), text(4)]);
+        assert_eq!(row_key(&grid, 1), row_key(&grid, 4));
+        assert_ne!(row_key(&grid, 1), row_key(&grid, 2));
+    }
+
+    #[test]
+    fn moving_a_panel_recuts_what_is_shown() {
+        let mut b = smooth();
+        let mut grid = pane(0);
+        present_sized(&mut b, &grid);
+        grid.bands = vec![4];
+        let sent = present_sized(&mut b, &grid);
+        assert_eq!(count(&sent, "a=d,d=a,"), 1, "the old cut goes first");
+        assert!(
+            sent.contains("\x1b[1;5H"),
+            "the new one is placed: {sent:?}"
         );
     }
 

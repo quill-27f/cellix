@@ -342,9 +342,23 @@ fn fallback(icon: Icon) -> &'static str {
     }
 }
 
-/// One icon in the middle of `cell`, the same size as the bar's.
-pub fn draw_icon(grid: &mut Grid, icon: Icon, cell: Rect, color: Rgb, style: Style) {
-    draw_face(grid, Face::Icon(icon), cell, color, style);
+/// One icon in the middle of `cell`, `side` rows tall.
+pub fn draw_icon(grid: &mut Grid, (icon, side): (Icon, f32), cell: Rect, color: Rgb, style: Style) {
+    let middle = cell.x as f32 + cell.w as f32 / 2.0;
+    // A square in pixels: a cell is about twice as tall as it's wide.
+    let across = side * 2.0;
+    let top = cell.y as f32 + (cell.h as f32 - side) / 2.0;
+    grid.paint.push(Paint::Icon {
+        bounds: Bounds::cells(middle - across / 2.0, top, across, side),
+        icon,
+        color,
+    });
+    let shown = Style {
+        fg: color,
+        painted: true,
+        ..style
+    };
+    grid.put_str(cell.x + 1, cell.y, fallback(icon), shown, cell.right());
 }
 
 /// Draws the bar across `row`. `style` names the caret's paragraph, and `active` the formats

@@ -2238,5 +2238,75 @@
     "title": "A stale look at the disk cannot undo what just happened",
     "test": "a_stale_look_cant_undo_what_just_happened",
     "passes": true
+  },
+  {
+    "id": "bands-reuse",
+    "milestone": 9,
+    "title": "A scrolled page keeps its tiles",
+    "test": "a_scrolled_page_keeps_its_tiles_whatever_stands_beside_it",
+    "passes": true
+  },
+  {
+    "id": "bands-one",
+    "milestone": 9,
+    "title": "A change in one band sends only that band",
+    "test": "a_change_in_one_band_sends_only_that_band",
+    "passes": true
+  },
+  {
+    "id": "bands-typeset",
+    "milestone": 9,
+    "title": "Typeset rows keep their tiles as they move",
+    "test": "typeset_rows_keep_their_tiles_as_they_move",
+    "passes": true
+  },
+  {
+    "id": "bands-recut",
+    "milestone": 9,
+    "title": "Moving a panel recuts what is shown",
+    "test": "moving_a_panel_recuts_what_is_shown",
+    "passes": true
+  },
+  {
+    "id": "bands-app",
+    "milestone": 9,
+    "title": "Tiles are cut at the edges of what scrolls",
+    "test": "tiles_are_cut_at_the_edges_of_what_scrolls",
+    "passes": true
+  },
+  {
+    "id": "wheel-flood",
+    "milestone": 9,
+    "title": "A trackpad moves a line an event",
+    "test": "a_trackpads_flood_moves_a_line_an_event",
+    "passes": true
+  },
+  {
+    "id": "wheel-first",
+    "milestone": 9,
+    "title": "The first wheel event never jumps",
+    "test": "the_first_event_never_jumps",
+    "passes": true
+  },
+  {
+    "id": "wheel-ramp",
+    "milestone": 9,
+    "title": "A wheel spun quickly gathers speed",
+    "test": "a_wheel_spun_quickly_gathers_speed",
+    "passes": true
+  },
+  {
+    "id": "wheel-slow",
+    "milestone": 9,
+    "title": "A slow wheel stays slow",
+    "test": "a_slow_wheel_stays_slow",
+    "passes": true
+  },
+  {
+    "id": "wheel-turn",
+    "milestone": 9,
+    "title": "Turning round starts the wheel again",
+    "test": "turning_round_starts_again",
+    "passes": true
   }
 ]

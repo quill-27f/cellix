@@ -87,14 +87,19 @@ const PANE_ACTIONS: [(Icon, Command, &str); 5] = [
     (Icon::Globe, Command::ShowBrowser, "Browser"),
     (Icon::Agents, Command::ListAgents, "Agents"),
 ];
-/// Columns each of those takes.
+/// Columns each of those takes, and rows tall each icon is.
 const ACTION_WIDTH: u16 = 4;
+const ACTION_ICON: f32 = 0.62;
+/// Columns kept clear on each side of the whole bar.
+const ACTION_MARGIN: u16 = 1;
+/// Rows tall a rail icon is on the pixel tiers. Text cells keep their block art.
+const RAIL_ICON: f32 = 1.2;
 /// Where the pane's own close button stands, which they keep clear of.
 const PANE_CLOSE: u16 = 3;
 /// Columns kept for tabs beside them, in the pane and over the file. A window with less goes
 /// without them, sooner than move them somewhere else.
 const PANE_TABS_ROOM: u16 = 14;
-const FILE_TABS_ROOM: u16 = 24;
+const FILE_TABS_ROOM: u16 = 20;
 /// Rows the window needs before the pane can stand under the file, and its share of them.
 const STACK_HEIGHT: u16 = 16;
 const STACK_SHARE: u16 = 45;
@@ -147,7 +152,6 @@ const STATUS_BRANCH_WIDTH: u16 = 28;
 const TAB_SIZE: usize = 4;
 const WHEEL_LINES: isize = 3;
 /// Wheel events closer together than this are a trackpad's stream.
-const WHEEL_STREAM_GAP: std::time::Duration = std::time::Duration::from_millis(60);
 /// How close together presses must be to count as one double or triple click.
 const MULTI_CLICK: std::time::Duration = std::time::Duration::from_millis(400);
 /// Ticks between explorer refreshes, so files an agent creates appear on their own.
@@ -521,7 +525,7 @@ pub struct App {
     neovim_mode: String,
     /// The `:` line being typed.
     neovim_line: String,
-    last_wheel: Option<std::time::Instant>,
+    wheel: crate::wheel::Wheel,
     /// Lines a wheel notch moves. Set by the terminal loop for the tier in use.
     pub wheel_lines: isize,
     suggest: Option<Suggest>,
@@ -696,7 +700,7 @@ impl App {
             suggest: None,
             server_words: Vec::new(),
             suggest_asked: false,
-            last_wheel: None,
+            wheel: crate::wheel::Wheel::default(),
             wheel_lines: WHEEL_LINES,
             scrolled: None,
             ide: None,
@@ -2382,7 +2386,7 @@ impl App {
         let inset = if self.compact() { MENU_BUTTON } else { 0 };
         let actions = self.pane_actions();
         let shared = actions.first().filter(|(cell, ..)| cell.x < main.right());
-        let end = shared.map_or(main.right(), |(cell, ..)| cell.x);
+        let end = shared.map_or(main.right(), |(cell, ..)| cell.x - ACTION_MARGIN);
         let width = end.saturating_sub(main.x + inset);
         Rect::new(main.x + inset, main.y, width, 1)
     }
@@ -2390,7 +2394,7 @@ impl App {
     /// The icons at the top right, each with where it stands.
     fn pane_actions(&self) -> Vec<(Rect, Icon, Command, &'static str)> {
         // The same place whatever's open, so a second click finds the same icon.
-        let wide = ACTION_WIDTH * PANE_ACTIONS.len() as u16 + PANE_CLOSE;
+        let wide = ACTION_WIDTH * PANE_ACTIONS.len() as u16 + PANE_CLOSE + ACTION_MARGIN;
         let pane = self.dock_area().filter(|_| !self.dock_under());
         let least = pane.map_or(self.main_area().x + FILE_TABS_ROOM, |pane| {
             pane.x + PANE_TABS_ROOM
@@ -2457,7 +2461,7 @@ impl App {
             } else {
                 theme.status.fg
             };
-            toolbar::draw_icon(grid, icon, cell, color, theme.tab);
+            toolbar::draw_icon(grid, (icon, ACTION_ICON), cell, color, theme.tab);
             // With no tab to say so, the icon does.
             let waiting = match command {
                 Command::ListAgents => self.agents.needing_you() > 0,
@@ -4854,7 +4858,9 @@ impl App {
         let held = actions
             .first()
             .filter(|(cell, ..)| cell.x >= area.x && area.y == 0);
-        let end = held.map_or(area.right().saturating_sub(PANE_CLOSE), |(cell, ..)| cell.x);
+        let end = held.map_or(area.right().saturating_sub(PANE_CLOSE), |(cell, ..)| {
+            cell.x - ACTION_MARGIN
+        });
         self.dock.tabs_end.set(end);
         self.dock.tabs_flush.set(self.dock_under());
         self.dock.draw_tabs(grid, area, self.hover, theme);
@@ -5850,18 +5856,9 @@ impl App {
                 }
             }
             MouseKind::ScrollUp | MouseKind::ScrollDown => {
-                // A trackpad sends a stream of events, one per line of travel, and a wheel
-                // sends a notch at a time. Treating them alike makes a trackpad lurch.
-                let streaming = self
-                    .last_wheel
-                    .is_some_and(|at| at.elapsed() < WHEEL_STREAM_GAP);
-                self.last_wheel = Some(std::time::Instant::now());
-                let step = if streaming { 1 } else { self.wheel_lines };
-                let delta = if mouse.kind == MouseKind::ScrollUp {
-                    -step
-                } else {
-                    step
-                };
+                let down = mouse.kind == MouseKind::ScrollDown;
+                let step = self.wheel.lines(down, std::time::Instant::now()) as isize;
+                let delta = if down { step } else { -step };
                 if in_sidebar && self.sidebar_view == SidebarView::Search {
                     self.search.scroll_by(delta);
                 } else if in_sidebar && self.sidebar_view == SidebarView::Outline {
@@ -6826,7 +6823,28 @@ impl App {
         }
     }
 
+    /// Where tiles are cut: at the edges of what moves on its own, so that text scrolling in
+    /// one place doesn't redraw what stands beside it.
+    fn tile_bands(&self) -> Vec<u16> {
+        let main = self.main_area();
+        let mut bands = vec![main.x, main.right()];
+        if let Some(area) = self.dock_area().filter(|_| !self.dock_under()) {
+            bands.push(area.x);
+        }
+        for (pane, index) in self.panes.iter().enumerate() {
+            let area = self.pane_area(pane);
+            if let (Some(editor), true) = (self.editors.get(*index), area.w > 0) {
+                let text = editor.scroll_region(area);
+                bands.extend([text.x, text.right()]);
+            }
+        }
+        bands.sort_unstable();
+        bands.dedup();
+        bands
+    }
+
     pub fn draw(&self, grid: &mut Grid) {
+        grid.bands = self.tile_bands();
         grid.cursor = None;
         let theme = &self.theme;
         grid.fill(grid.area(), theme.tab);
@@ -7189,7 +7207,13 @@ impl App {
                 let bounds = Bounds::cells(left, top, right - left, h);
                 grid.corners(bounds, PILL_RADIUS, ground, ALL_CORNERS);
             }
-            grid.put_icon(area.x + 1, y, *icon, ACTIVITY_ICON, style);
+            if self.measure.in_cells() {
+                grid.put_icon(area.x + 1, y, *icon, ACTIVITY_ICON, style);
+            } else {
+                let cell = Rect::new(area.x, y, area.w, row.h);
+                let shape = (*icon, RAIL_ICON);
+                toolbar::draw_icon(grid, shape, cell, style.fg, style);
+            }
             let changed = self.changed_count();
             if *command == Command::ShowSourceControl && changed > 0 {
                 let color = self.theme.button_text;
@@ -12714,7 +12738,7 @@ mod tests {
     fn the_icons_at_the_top_right_are_there_with_the_pane_shut() {
         let (_dir, mut app) = project();
         assert!(!app.dock.open);
-        let right = app.size.0 - PANE_CLOSE;
+        let right = app.size.0 - PANE_CLOSE - ACTION_MARGIN;
         assert_eq!(app.pane_actions().last().unwrap().0.right(), right);
         assert!(
             app.tabs_area().right() <= app.pane_actions()[0].0.x,
@@ -12799,7 +12823,7 @@ mod tests {
         let (_dir, mut app) = reviewed();
         app.run(Command::OpenDiff);
         let _ = screen(&app);
-        let strip = ACTION_WIDTH * PANE_ACTIONS.len() as u16 + PANE_CLOSE;
+        let strip = ACTION_WIDTH * PANE_ACTIONS.len() as u16 + PANE_CLOSE + ACTION_MARGIN;
         assert_eq!(app.actions_over_main(), strip);
     }
 
@@ -12898,6 +12922,15 @@ mod tests {
     }
 
     #[test]
+    fn tiles_are_cut_at_the_edges_of_what_scrolls() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        let grid = screen(&app);
+        let text = app.editors[0].scroll_region(app.pane_area(0));
+        assert!(grid.bands.contains(&text.x) && grid.bands.contains(&text.right()));
+    }
+
+    #[test]
     fn a_tiny_window_goes_without_the_icons() {
         let (dir, _) = project();
         let app = App::new(dir.path().to_path_buf(), (40, 30));
@@ -12912,7 +12945,7 @@ mod tests {
         let area = app.dock_area().unwrap();
         assert_eq!(
             app.pane_actions().last().unwrap().0.right(),
-            area.right() - PANE_CLOSE
+            area.right() - PANE_CLOSE - ACTION_MARGIN
         );
         app.handle(mouse(MouseKind::Left, area.right() - 2, area.y));
         assert!(!app.dock.open, "the close button still closes");
@@ -13038,11 +13071,10 @@ mod tests {
         assert_eq!(tabs[0].0, Front::Agents);
         press_action(&mut app, Command::ShowComments);
         assert_eq!(app.dock.front, Front::Comments);
-        let agents = app.dock.view_tabs_for_test(area)[1].2;
-        assert!(
-            screen(&app).row_text(area.y).contains("Agents"),
-            "it's still there"
-        );
+        let _ = screen(&app);
+        let tabs = app.dock.view_tabs_for_test(area);
+        assert_eq!(tabs[1].0, Front::Agents, "it's still there");
+        let agents = tabs[1].2;
         app.handle(mouse(MouseKind::Left, agents.x + 1, area.y));
         assert!(app.dock.listing());
         assert!(screen(&app).text().contains("START AN AGENT"));
@@ -13416,11 +13448,7 @@ mod tests {
         app.handle(mouse(MouseKind::ScrollDown, x, y));
         app.handle(mouse(MouseKind::ScrollDown, x, y));
         let (_, rows) = app.take_scroll().unwrap();
-        assert_eq!(
-            rows,
-            WHEEL_LINES as i32 + 1,
-            "a notch, then a stream's single line"
-        );
+        assert_eq!(rows, 2, "a line for each event, with no jump to start");
         assert_eq!(app.take_scroll(), None);
         app.handle(mouse(MouseKind::ScrollDown, x, y));
         typed(&mut app, "x");

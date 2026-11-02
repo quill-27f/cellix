@@ -75,6 +75,9 @@ pub struct Grid {
     pub caret: Option<Bounds>,
     /// Drawn over the cells on the pixel tiers, in order.
     pub paint: Vec<Paint>,
+    /// Columns where a new band starts, in order. Each band of a row is its own tile, so text
+    /// that scrolls isn't tied to whatever the sidebar or minimap shows at that height.
+    pub bands: Vec<u16>,
 }
 
 impl Grid {
@@ -90,6 +93,7 @@ impl Grid {
             cursor: None,
             caret: None,
             paint: Vec::new(),
+            bands: Vec::new(),
         }
     }
 

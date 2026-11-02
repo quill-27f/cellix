@@ -403,9 +403,17 @@ the file.
 ## Scrolling
 
 A wheel notch used to play a fixed animation that held up the main loop, so a trackpad's stream
-of events came through in bursts. Scrolling is now a target and a position. Input moves the target,
-and the view closes on it on every frame with an exponential ease, so a new notch redirects the
-motion and turning round never jumps. The rows it moves are the whole-row tiles the terminal already
+of events came through in bursts. Scrolling is now a target and a position. Input moves the target
+at once, and the view closes on it on every frame, so a new notch redirects the motion and turning
+round never jumps. Claude Code's fullscreen view and vim are the model: no animation to wait for,
+one line per event from a trackpad's flood, and speed that ramps only while a wheel keeps spinning.
+So the ease is about 14 ms, enough to blend one line into the next and too short to trail the hand. The rows it moves are the whole-row tiles the terminal already
 holds, shown through a crop and a pixel offset, so a frame is a line of text per row and nothing is
 drawn. The page underneath is already at the end and only catches up now and then, because a typeset
 page is expensive to redraw. Typing or a click ends the glide at once.
+
+Tiles are cut into bands at the edges of what moves on its own: the sidebar, the text, the minimap,
+the pane. A row's key says nothing of where the row stands. Whole-window tiles tied each row to
+whatever the sidebar showed at that height, so every row of a scroll was new, and settling redrew the
+window. The periodic look at the tree and git runs on a thread for the same reason: anything on the
+main loop shows up as a stall in the glide.

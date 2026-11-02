@@ -32,6 +32,7 @@ mod terminal;
 mod theme;
 mod threads;
 mod toolbar;
+mod wheel;
 
 pub use app::App;
 pub use terminal::{Options, run};
