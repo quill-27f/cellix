@@ -180,6 +180,8 @@ pub enum Command {
     ShowOutline,
     /// Runs the notebook cell the caret is in.
     RunCell,
+    /// Clears what every cell printed.
+    ClearOutputs,
     RunAllCells,
     /// Stops what the notebook's kernel is doing.
     InterruptKernel,

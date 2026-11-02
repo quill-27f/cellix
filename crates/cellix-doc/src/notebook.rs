@@ -49,6 +49,11 @@ pub fn new_code_cell(language: &str) -> String {
     format!("<!-- cell new code -->\n```{language}\n\n```")
 }
 
+/// A new text cell's lines.
+pub fn new_text_cell() -> String {
+    "<!-- cell new text -->\n".to_string()
+}
+
 /// A field that may be a string or a list of lines.
 fn joined(value: Option<&Value>) -> String {
     match value {
@@ -132,6 +137,17 @@ impl Notebook {
         name.and_then(Value::as_str)
             .unwrap_or("python3")
             .to_string()
+    }
+
+    /// Clears what every cell printed.
+    pub fn clear_all_outputs(&mut self) {
+        let Some(cells) = self.json["cells"].as_array_mut() else {
+            return;
+        };
+        for cell in cells.iter_mut().filter(|c| c.get("outputs").is_some()) {
+            cell["outputs"] = json!([]);
+            cell["execution_count"] = Value::Null;
+        }
     }
 
     /// Clears what a cell last printed, as it starts again.

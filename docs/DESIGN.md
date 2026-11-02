@@ -162,7 +162,9 @@ A Jupyter notebook opens as a page too, with what each cell printed and drew und
 become Markdown with a hidden line above each, and saving puts the text back into the JSON beside
 the outputs it already had. Cells run in a real Jupyter kernel, through a small Python program that
 passes lines of JSON between Jupyter's client library and Cellix, using the project's own Python if
-it has one. Outputs land under each cell as they come, and are saved with the notebook.
+it has one. Outputs land under each cell as they come, and are saved with the notebook. A notebook
+gets its own bar with Run, Run All, Interrupt, Restart, adding cells and what the kernel is doing,
+and Jupyter's keys: Shift+Enter runs and moves on, Ctrl+Enter runs and stays.
 
 CSV and TSV files open as a table on the same page, with cells edited in place and rows and columns
 from the menu. A long file shows its first 2,000 rows and says so. Every table moves like a sheet:

@@ -1880,15 +1880,47 @@ impl Editor {
         Ok(())
     }
 
-    /// Adds a code cell below this line.
-    pub fn insert_code_cell(&mut self) {
+    /// Adds a cell after the one the caret is in, with the caret ready in it.
+    pub fn insert_cell(&mut self, code: bool) {
         let language = self
             .notebook
             .as_ref()
             .map_or("python", |n| n.language.as_str());
-        let cell = cellix_doc::notebook::new_code_cell(language);
-        let caret = cell.find("\n\n").map_or(0, |at| at + 1);
-        self.insert_block(&cell, caret);
+        let cell = if code {
+            cellix_doc::notebook::new_code_cell(language)
+        } else {
+            cellix_doc::notebook::new_text_cell()
+        };
+        let rope = self.buffer.rope();
+        let line = rope.char_to_line(self.selections.primary().head);
+        let next = (line + 1..rope.len_lines()).find(|n| marker(&self.line_text(*n)).is_some());
+        let at = next.map_or(rope.len_chars(), |n| rope.line_to_char(n));
+        let caret = if code {
+            cell.find("\n\n").map_or(0, |gap| gap + 1)
+        } else {
+            cell.chars().count()
+        };
+        let lead = if at == rope.len_chars() && !self.buffer.text().ends_with("\n\n") {
+            "\n"
+        } else {
+            ""
+        };
+        let block = format!("{lead}{cell}\n\n");
+        self.buffer
+            .replace_range(&mut self.selections, at, at, &block);
+        let spot = at + lead.chars().count() + cell[..caret].chars().count();
+        self.selections.set_single(Selection::cursor(spot));
+    }
+
+    /// Moves to the first line of the next code cell, if there is one.
+    pub fn go_to_next_cell(&mut self, area: Rect) {
+        let rope = self.buffer.rope();
+        let line = rope.char_to_line(self.selections.primary().head);
+        let next = (line + 1..rope.len_lines())
+            .find(|n| marker(&self.line_text(*n)).is_some_and(|m| m.code));
+        if let Some(next) = next {
+            self.go_to_line(next + 3, area);
+        }
     }
 
     /// What's wrong with this revision of the text.

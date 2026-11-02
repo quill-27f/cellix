@@ -51,12 +51,14 @@ use crate::settings_page::{Control, Found, SettingsPage, Values};
 use crate::snippets::Snippet;
 use crate::theme::Theme;
 use crate::threads::{self, Draft, Hit as ThreadHit};
-use crate::toolbar::{self, Tool};
+use crate::toolbar::{self, Bar, Tool};
 
 const ACTIVITY_WIDTH: u16 = 5;
 /// The buttons that stand by a selection, and the one on a picture.
 const COMMENT_WIDTH: u16 = 10;
 const RUN_WIDTH: u16 = 6;
+/// Columns kept clear of the end of a notebook's bar, for its export button.
+const KERNEL_STATUS_END: u16 = 6;
 /// The row the Comment button stands on over a PDF, clear of its zoom buttons.
 const VIEW_COMMENT_ROW: u16 = 2;
 const ASK_WIDTH: u16 = 11;
@@ -1096,6 +1098,37 @@ impl App {
             }
         }
         Some(file)
+    }
+
+    fn add_cell(&mut self, code: bool) {
+        let area = self.focused_area();
+        if let Some(editor) = self.editor_mut() {
+            editor.prepare_edit(area);
+            editor.insert_cell(code);
+        }
+        self.reveal();
+    }
+
+    /// Runs the cell and moves on to the next, as Shift+Enter does in Jupyter.
+    fn run_and_advance(&mut self) {
+        self.run_cell();
+        let area = self.focused_area();
+        if let Some(editor) = self.editor_mut() {
+            editor.go_to_next_cell(area);
+        }
+    }
+
+    fn clear_all_outputs(&mut self) {
+        let Some(editor) = self.editor_mut() else {
+            return;
+        };
+        if let Some(book) = editor.notebook.as_mut() {
+            book.clear_all_outputs();
+        }
+        if !editor.buffer.is_dirty() {
+            let _ = editor.save();
+        }
+        editor.refresh_page();
     }
 
     /// Sends cells to the kernel, marking them as running.
@@ -2638,6 +2671,21 @@ impl App {
         if matches!(self.overlay, Overlay::None) && self.draft_key(key) {
             return;
         }
+        // Jupyter's keys, for a notebook: Shift+Enter runs and moves on, Ctrl+Enter stays.
+        let in_notebook = !self.dock.focused
+            && matches!(self.overlay, Overlay::None)
+            && self
+                .editors
+                .get(self.active())
+                .is_some_and(|e| e.notebook.is_some());
+        if in_notebook && key.key == Key::Enter && (key.mods.shift || key.mods.ctrl) {
+            if key.mods.shift {
+                self.run_and_advance();
+            } else {
+                self.run_cell();
+            }
+            return;
+        }
         if self.dock.focused && matches!(self.overlay, Overlay::None) {
             // The session gets everything but what moves away from it.
             let leaves = matches!(
@@ -3501,6 +3549,7 @@ impl App {
                 }
             }
             Command::RunCell => self.run_cell(),
+            Command::ClearOutputs => self.clear_all_outputs(),
             Command::RunAllCells => self.run_all_cells(),
             Command::InterruptKernel => {
                 if let Some(kernel) = self.active_file().and_then(|f| self.kernels.get(&f)) {
@@ -5602,6 +5651,7 @@ impl App {
                     run("Run All Cells", Command::RunAllCells),
                     run("Interrupt Kernel", Command::InterruptKernel),
                     run("Restart Kernel", Command::RestartKernel),
+                    run("Clear All Outputs", Command::ClearOutputs),
                     MenuItem::new("Add Code Cell", MenuAction::AddCodeCell).after_rule(),
                 ]);
             }
@@ -5772,14 +5822,7 @@ impl App {
                 let root = self.workspace.root().to_path_buf();
                 self.start_session(&name, &argv, &[], &root);
             }
-            MenuAction::AddCodeCell => {
-                let area = self.focused_area();
-                if let Some(editor) = self.editor_mut() {
-                    editor.prepare_edit(area);
-                    editor.insert_code_cell();
-                }
-                self.reveal();
-            }
+            MenuAction::AddCodeCell => self.add_cell(true),
             MenuAction::ImageWidth(percent) => {
                 if let Some(editor) = self.editor_mut() {
                     editor.set_image_width(percent);
@@ -6344,7 +6387,7 @@ impl App {
             Overlay::None => self
                 .toolbar_row()
                 .filter(|_| y == 1)
-                .and_then(|row| toolbar::hit(row, x, self.page_dialect()))
+                .and_then(|row| toolbar::hit(row, x, self.page_bar()))
                 .map(|button| {
                     let name = button.name;
                     let middle = button.x as f32 + button.width as f32 / 2.0;
@@ -6760,7 +6803,7 @@ impl App {
         grid.fill(Rect::new(main.x, 1, main.w, 1), style);
         if let Some(row) = self.toolbar_row() {
             let (paragraph, active) = self.editors[self.active()].caret_formats();
-            let dialect = self.page_dialect();
+            let bar = self.page_bar();
             let tracking = self.editors[self.active()].tracking;
             // Text scrolled under the bar needs a line to go under.
             if self.editors[self.active()].top() > 0 {
@@ -6772,10 +6815,19 @@ impl App {
                 grid,
                 row,
                 (paragraph, &active, tracking),
-                dialect,
+                bar,
                 self.hover,
                 &self.theme,
             );
+            if bar == Bar::Notebook {
+                let status = self.kernel_status();
+                let right = row.right().saturating_sub(KERNEL_STATUS_END);
+                let quiet = Style {
+                    fg: self.theme.status.fg,
+                    ..self.theme.breadcrumb
+                };
+                grid.label_right(right, row.y, &status, quiet, 90);
+            }
             return;
         }
         grid.label_at(
@@ -6802,10 +6854,8 @@ impl App {
     }
 
     fn click_toolbar(&mut self, x: u16) -> bool {
-        let dialect = self.page_dialect();
-        let button = self
-            .toolbar_row()
-            .and_then(|row| toolbar::hit(row, x, dialect));
+        let bar = self.page_bar();
+        let button = self.toolbar_row().and_then(|row| toolbar::hit(row, x, bar));
         let Some(button) = button else {
             return false;
         };
@@ -6817,6 +6867,38 @@ impl App {
     fn on_page(&self) -> bool {
         let page = self.editors.get(self.active()).is_some_and(|e| e.rendered);
         page && self.review.is_none() && self.settings_page.is_none() && self.search.focus.is_none()
+    }
+
+    fn page_bar(&self) -> Bar {
+        let notebook = self
+            .editors
+            .get(self.active())
+            .is_some_and(|e| e.notebook.is_some());
+        if notebook {
+            Bar::Notebook
+        } else {
+            Bar::Page(self.page_dialect())
+        }
+    }
+
+    /// What the kernel is doing, for the notebook's bar.
+    fn kernel_status(&self) -> String {
+        let Some(editor) = self.editors.get(self.active()) else {
+            return String::new();
+        };
+        let Some(book) = editor.notebook.as_ref() else {
+            return String::new();
+        };
+        let started = self
+            .active_file()
+            .is_some_and(|f| self.kernels.contains_key(&f));
+        let name = book.kernel();
+        match (started, book.running.len()) {
+            (_, 0) if started => format!("{name}, idle"),
+            (_, 0) => format!("{name}, not started"),
+            (_, 1) => format!("{name}, running"),
+            (_, many) => format!("{name}, running {many} cells"),
+        }
     }
 
     fn page_dialect(&self) -> Dialect {
@@ -7341,6 +7423,12 @@ impl App {
             }
             Tool::Comment => self.run(Command::AddComment),
             Tool::Track => self.run(Command::ToggleTracking),
+            Tool::RunCell => self.run(Command::RunCell),
+            Tool::RunAll => self.run(Command::RunAllCells),
+            Tool::Interrupt => self.run(Command::InterruptKernel),
+            Tool::Restart => self.run(Command::RestartKernel),
+            Tool::AddCode => self.add_cell(true),
+            Tool::AddText => self.add_cell(false),
             Tool::Cite => self.show_citations(),
             Tool::Build => self.run(Command::BuildPdf),
             Tool::Export => {
@@ -7353,7 +7441,7 @@ impl App {
             }
             Tool::More => {
                 let row = self.toolbar_row().unwrap_or_default();
-                let items = toolbar::overflow(row, self.page_dialect())
+                let items = toolbar::overflow(row, self.page_bar())
                     .into_iter()
                     .map(|(name, tool)| MenuItem::new(name, MenuAction::Tool(tool)))
                     .collect();
@@ -9770,7 +9858,7 @@ mod tests {
         app.run(Command::Move(cellix_input::Direction::WordRight, true));
         let grid = screen(&app);
         let row = app.toolbar_row().unwrap();
-        let first = toolbar::layout(row, Dialect::Markdown)[1].x;
+        let first = toolbar::layout(row, Bar::Page(Dialect::Markdown))[1].x;
         assert_eq!(grid.row_text(1).chars().nth(first as usize + 1), Some('B'));
         app.handle(mouse(MouseKind::Left, first + 1, 1));
         assert_eq!(app.active_text().as_deref(), Some("**one** two\n"));
@@ -9785,8 +9873,8 @@ mod tests {
 
     fn click_tool(app: &mut App, name: &str) {
         let row = app.toolbar_row().unwrap();
-        let dialect = app.page_dialect();
-        let button = toolbar::layout(row, dialect)
+        let bar = app.page_bar();
+        let button = toolbar::layout(row, bar)
             .into_iter()
             .find(|b| b.name == name);
         let button = button.unwrap_or_else(|| panic!("no {name}"));
@@ -10877,7 +10965,7 @@ mod tests {
         let area = app.focused_area();
         let lines = app.active_text().unwrap().lines().count();
         app.editors[0].go_to_line(lines, area);
-        app.editors[0].insert_code_cell();
+        app.editors[0].insert_cell(true);
         typed(&mut app, "fresh()");
         app.run(Command::RunCell);
         cell_ran(&mut app, "ran: fresh()");
@@ -10893,6 +10981,68 @@ mod tests {
         app.run(Command::RunAllCells);
         cell_ran(&mut app, "Install Jupyter in the Side Pane");
         assert!(!screen(&app).text().contains("Running…"));
+    }
+
+    #[test]
+    fn a_notebook_has_its_own_bar_that_says_what_the_kernel_is_doing() {
+        let (dir, mut app) = data_app("run.ipynb", NOTEBOOK);
+        app.kernel_command = Some(fake_runner(dir.path(), "{'ready': True}"));
+        assert_eq!(app.page_bar(), Bar::Notebook);
+        assert!(screen(&app).text().contains("python3, not started"));
+        let row = app.toolbar_row().unwrap();
+        let button = toolbar::layout(row, Bar::Notebook)
+            .into_iter()
+            .find(|b| b.name == "Run All Cells")
+            .unwrap();
+        app.handle(mouse(MouseKind::Left, button.x + 1, row.y));
+        cell_ran(&mut app, "ran: import torch");
+        assert!(screen(&app).text().contains("python3, idle"));
+    }
+
+    #[test]
+    fn shift_enter_runs_a_cell_and_moves_on() {
+        let two = NOTEBOOK.replace(r#""nbformat": 4"#, r#""nbformat": 4, "x": 1"#);
+        let (dir, mut app) = data_app("run.ipynb", &two);
+        app.kernel_command = Some(fake_runner(dir.path(), "{'ready': True}"));
+        let (x, y) = find(&screen(&app), "train()");
+        app.handle(mouse(MouseKind::Left, x, y));
+        app.handle(Event::Key(cellix_input::KeyEvent {
+            key: Key::Enter,
+            mods: cellix_input::Mods {
+                ctrl: false,
+                shift: true,
+                alt: false,
+            },
+        }));
+        cell_ran(&mut app, "ran: import torch");
+        assert_eq!(
+            app.active_text().unwrap().matches("train()").count(),
+            1,
+            "no new line typed"
+        );
+    }
+
+    #[test]
+    fn a_cell_can_be_added_below_the_one_at_the_caret() {
+        let (_dir, mut app) = data_app("run.ipynb", NOTEBOOK);
+        let (x, y) = find(&screen(&app), "train()");
+        app.handle(mouse(MouseKind::Left, x, y));
+        app.use_tool(Tool::AddCode, 10);
+        typed(&mut app, "after()");
+        let text = app.active_text().unwrap();
+        let fences = text.matches("```python").count();
+        assert_eq!(fences, 2, "{text}");
+        assert!(text.find("train()") < text.find("after()"), "{text}");
+        assert!(!text.contains("```\n```"), "{text}");
+    }
+
+    #[test]
+    fn outputs_can_be_cleared() {
+        let (dir, mut app) = data_app("run.ipynb", NOTEBOOK);
+        app.run(Command::ClearOutputs);
+        assert!(!screen(&app).text().contains("epoch one loss"));
+        let saved = fs::read_to_string(dir.path().join("run.ipynb")).unwrap();
+        assert!(!saved.contains("epoch one loss"));
     }
 
     #[test]

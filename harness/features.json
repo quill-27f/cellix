@@ -1776,5 +1776,26 @@
     "title": "A Markdown table moves the same way",
     "test": "a_markdown_table_moves_the_same_way",
     "passes": true
+  },
+  {
+    "id": "nb-bar",
+    "milestone": 9,
+    "title": "A notebook has its own bar that says what the kernel is doing",
+    "test": "a_notebook_has_its_own_bar_that_says_what_the_kernel_is_doing",
+    "passes": true
+  },
+  {
+    "id": "nb-shift-enter",
+    "milestone": 9,
+    "title": "Shift+Enter runs a cell and moves on",
+    "test": "shift_enter_runs_a_cell_and_moves_on",
+    "passes": true
+  },
+  {
+    "id": "nb-clear",
+    "milestone": 9,
+    "title": "Outputs can be cleared",
+    "test": "outputs_can_be_cleared",
+    "passes": true
   }
 ]

@@ -39,6 +39,11 @@ pub enum Icon {
     More = 28,
     Diagram = 29,
     Track = 31,
+    PlayAll = 32,
+    Stop = 33,
+    Restart = 34,
+    AddCell = 35,
+    AddText = 36,
 }
 
 /// One cell of an icon that is `width` by `height` cells.
@@ -349,6 +354,30 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
             .min(path(p, &[(7.0, 10.5), (12.0, 15.5), (17.0, 10.5)]))
             .min(segment(p, (4.0, 20.0), (20.0, 20.0))),
         Icon::Play => path(p, &[(7.0, 4.5), (19.5, 12.0), (7.0, 19.5), (7.0, 4.5)]),
+        Icon::PlayAll => path(p, &[(3.0, 5.5), (12.0, 12.0), (3.0, 18.5), (3.0, 5.5)]).min(path(
+            p,
+            &[(12.0, 5.5), (21.0, 12.0), (12.0, 18.5), (12.0, 5.5)],
+        )),
+        Icon::Stop => rounded(p, (6.0, 6.0), (18.0, 18.0), 1.5),
+        Icon::Restart => {
+            // A circle with a gap at the top right, and an arrowhead closing it.
+            let angle = (p.1 - 12.0).atan2(p.0 - 12.0);
+            let gap = angle > -1.1 && angle < 0.1;
+            let arc = if gap {
+                f32::MAX
+            } else {
+                ring(p, (12.0, 12.0), 7.5)
+            };
+            arc.min(path(p, &[(19.5, 4.0), (19.5, 10.0), (13.8, 10.0)]))
+        }
+        Icon::AddCell => rounded(p, (3.0, 6.0), (21.0, 18.0), 2.0)
+            .min(segment(p, (12.0, 9.0), (12.0, 15.0)))
+            .min(segment(p, (9.0, 12.0), (15.0, 12.0))),
+        Icon::AddText => segment(p, (3.0, 6.0), (21.0, 6.0))
+            .min(segment(p, (3.0, 11.0), (13.0, 11.0)))
+            .min(segment(p, (3.0, 16.0), (10.0, 16.0)))
+            .min(segment(p, (18.0, 13.0), (18.0, 21.0)))
+            .min(segment(p, (14.0, 17.0), (22.0, 17.0))),
         Icon::Cite => path(p, &[(9.0, 4.5), (5.5, 4.5), (5.5, 19.5), (9.0, 19.5)])
             .min(path(
                 p,
