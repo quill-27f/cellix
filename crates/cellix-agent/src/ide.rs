@@ -82,13 +82,53 @@ fn new_token() -> io::Result<String> {
 impl IdeServer {
     pub fn start(root: &Path) -> io::Result<Self> {
         let config = config_dir().ok_or_else(|| io::Error::other("no home folder"))?;
-        Self::start_in(root, &config)
+        Self::start_in(root, &config, None)
     }
 
-    fn start_in(root: &Path, config: &Path) -> io::Result<Self> {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+    /// Starts on the port and token noted in `kept`, if it can, and notes what it used. An
+    /// agent that outlived the last Cellix was started pointing at that port, so this is the
+    /// only way it can find the next one.
+    pub fn start_kept(root: &Path, kept: &Path) -> io::Result<Self> {
+        let config = config_dir().ok_or_else(|| io::Error::other("no home folder"))?;
+        Self::start_in(root, &config, Some(kept))
+    }
+
+    fn start_in(root: &Path, config: &Path, kept: Option<&Path>) -> io::Result<Self> {
+        let noted: Option<Value> = kept
+            .and_then(|file| fs::read(file).ok())
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        let old_port = noted.as_ref().and_then(|n| n["port"].as_u64());
+        let old_token = noted.as_ref().and_then(|n| n["token"].as_str());
+        let again = old_port
+            .and_then(|port| u16::try_from(port).ok())
+            .and_then(|port| TcpListener::bind((Ipv4Addr::LOCALHOST, port)).ok());
+        let reused = again.is_some();
+        let listener = match again {
+            Some(listener) => listener,
+            None => TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?,
+        };
         let port = listener.local_addr()?.port();
-        let token = new_token()?;
+        let token = match old_token.filter(|_| reused) {
+            Some(token) => token.to_string(),
+            None => new_token()?,
+        };
+        if let Some(file) = kept {
+            if let Some(parent) = file.parent() {
+                fs::DirBuilder::new()
+                    .recursive(true)
+                    .mode(0o700)
+                    .create(parent)?;
+            }
+            io::Write::write_all(
+                &mut fs::OpenOptions::new()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .mode(0o600)
+                    .open(file)?,
+                json!({"port": port, "token": token}).to_string().as_bytes(),
+            )?;
+        }
         let folder = config.join("ide");
         fs::DirBuilder::new()
             .recursive(true)
@@ -320,6 +360,39 @@ fn tool_fallback(tool: &str, args: &Value) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_next_cellix_takes_the_same_port_and_token() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("project");
+        let kept = dir.path().join("held/ide.json");
+        // The port a Cellix that has since quit was on.
+        let free = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = free.local_addr().unwrap().port();
+        drop(free);
+        fs::create_dir_all(kept.parent().unwrap()).unwrap();
+        let noted = json!({"port": port, "token": "kept-token"}).to_string();
+        fs::write(&kept, noted).unwrap();
+        let next = IdeServer::start_in(&root, dir.path(), Some(&kept)).unwrap();
+        assert_eq!(next.port, port);
+        assert_eq!(lock_of(dir.path(), port)["authToken"], "kept-token");
+    }
+
+    #[test]
+    fn a_port_someone_else_took_is_given_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("project");
+        let kept = dir.path().join("ide.json");
+        let first = IdeServer::start_in(&root, dir.path(), Some(&kept)).unwrap();
+        // Still running, so the port's taken: a second window here gets its own.
+        let second = IdeServer::start_in(&root, dir.path(), Some(&kept)).unwrap();
+        assert_ne!(first.port, second.port);
+        let (first_token, second_token) = (
+            lock_of(dir.path(), first.port)["authToken"].clone(),
+            lock_of(dir.path(), second.port)["authToken"].clone(),
+        );
+        assert_ne!(first_token, second_token, "a token goes with its port");
+    }
     use tungstenite::client::IntoClientRequest;
     use tungstenite::stream::MaybeTlsStream;
 
@@ -344,7 +417,7 @@ mod tests {
 
     fn start() -> (tempfile::TempDir, IdeServer, Client) {
         let dir = tempfile::tempdir().unwrap();
-        let server = IdeServer::start_in(dir.path(), dir.path()).unwrap();
+        let server = IdeServer::start_in(dir.path(), dir.path(), None).unwrap();
         let token = lock_of(dir.path(), server.port)["authToken"]
             .as_str()
             .unwrap()
@@ -408,7 +481,7 @@ mod tests {
     #[test]
     fn a_wrong_token_or_a_web_page_is_refused() {
         let dir = tempfile::tempdir().unwrap();
-        let server = IdeServer::start_in(dir.path(), dir.path()).unwrap();
+        let server = IdeServer::start_in(dir.path(), dir.path(), None).unwrap();
         assert!(connect(server.port, "wrong").is_err());
         let token = lock_of(dir.path(), server.port)["authToken"]
             .as_str()
@@ -430,7 +503,7 @@ mod tests {
     fn the_lock_file_is_private_and_goes_away() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
-        let server = IdeServer::start_in(dir.path(), dir.path()).unwrap();
+        let server = IdeServer::start_in(dir.path(), dir.path(), None).unwrap();
         let path = dir.path().join("ide").join(format!("{}.lock", server.port));
         let mode = fs::metadata(&path).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600);

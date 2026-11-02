@@ -296,6 +296,8 @@ Each program in the side pane runs under a small host of its own: Cellix re-run 
 `cellix session-host`, which owns the PTY and a Unix socket and keeps recent output. So Cellix can
 quit, or an SSH connection drop, and the next Cellix in that folder finds it with what it printed.
 Quitting offers Keep Running. A dropped connection keeps everything, since nobody can be asked.
+Claude Code is told the IDE port when it starts, so Cellix keeps its port and token per folder, and
+the next Cellix takes the same ones for an agent that outlived the last.
 
 The side pane's terminal also reads the Kitty graphics protocol, so a program in it can draw
 pictures. That is how `terminal-browser` shows a real browser inside Cellix, and how a plot from a

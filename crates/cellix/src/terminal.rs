@@ -272,9 +272,11 @@ pub fn run(options: Options) -> io::Result<()> {
     }
     // Agents are optional: a second window on this workspace still edits normally.
     let server = cellix_agent::start(app.workspace.root(), app.comments.clone()).ok();
-    app.ide = server
-        .as_ref()
-        .and_then(|_| cellix_agent::ide::IdeServer::start(app.workspace.root()).ok());
+    app.ide = server.as_ref().and_then(|_| {
+        let root = app.workspace.root();
+        let kept = crate::hold::folder_of(root).join("ide.json");
+        cellix_agent::ide::IdeServer::start_kept(root, &kept).ok()
+    });
 
     let _session = Session::start()?;
     let smooth = app.settings.smooth_scroll != Some(false);

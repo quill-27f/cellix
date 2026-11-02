@@ -1650,5 +1650,19 @@
     "title": "TikZ goes into an exported PDF as itself",
     "test": "tikz_goes_into_the_paper_as_itself",
     "passes": true
+  },
+  {
+    "id": "ide-kept",
+    "milestone": 9,
+    "title": "The next Cellix takes the same IDE port and token",
+    "test": "the_next_cellix_takes_the_same_port_and_token",
+    "passes": true
+  },
+  {
+    "id": "ide-taken",
+    "milestone": 9,
+    "title": "A taken IDE port is given up",
+    "test": "a_port_someone_else_took_is_given_up",
+    "passes": true
   }
 ]
