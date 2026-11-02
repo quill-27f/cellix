@@ -1899,8 +1899,8 @@
   {
     "id": "strip-narrow",
     "milestone": 9,
-    "title": "A narrow pane leaves the icons by the file's tabs",
-    "test": "a_narrow_pane_leaves_the_icons_at_the_end_of_the_files_tabs",
+    "title": "The icons stay put whatever the pane does",
+    "test": "the_icons_stay_put_whatever_the_pane_does",
     "passes": true
   },
   {
@@ -2006,6 +2006,34 @@
     "milestone": 9,
     "title": "The Comments tab closes like any other",
     "test": "the_comments_tab_closes_like_any_other",
+    "passes": true
+  },
+  {
+    "id": "strip-everywhere",
+    "milestone": 9,
+    "title": "The icons stay in Review and Settings",
+    "test": "the_icons_stay_in_review_and_settings",
+    "passes": true
+  },
+  {
+    "id": "rail-truth",
+    "milestone": 9,
+    "title": "The rail only lights what is showing",
+    "test": "the_rail_only_lights_what_is_showing",
+    "passes": true
+  },
+  {
+    "id": "nb-dividers",
+    "milestone": 9,
+    "title": "A notebook's groups are divided where they start",
+    "test": "a_notebooks_groups_are_divided_where_they_start",
+    "passes": true
+  },
+  {
+    "id": "pane-tabs-share",
+    "milestone": 9,
+    "title": "Tabs in a narrow pane stay clear of the icons",
+    "test": "every_tab_in_a_narrow_pane_keeps_its_close_button_clear_of_the_icons",
     "passes": true
   }
 ]

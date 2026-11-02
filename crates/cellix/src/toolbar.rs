@@ -405,7 +405,7 @@ pub fn draw(
             draw_face(grid, face, cell, color, base);
         }
     }
-    for button in BUTTONS.iter().filter(|b| b.gap) {
+    for button in buttons(bar).filter(|b| b.gap) {
         if let Some(shown) = all.iter().find(|p| p.tool == button.tool) {
             let x = shown.x as f32 - GAP as f32 / 2.0;
             let line = Bounds::cells(x, row.y as f32 + 0.22, 0.0, 0.56);
@@ -417,6 +417,27 @@ pub fn draw(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_notebooks_groups_are_divided_where_they_start() {
+        let row = Rect::new(10, 1, 100, 1);
+        let theme = Theme::named(Some("dark"));
+        let mut grid = Grid::new(120, 3, theme.text);
+        draw(
+            &mut grid,
+            row,
+            ("", &[], false),
+            Bar::Notebook,
+            None,
+            &theme,
+        );
+        let lines = grid
+            .paint
+            .iter()
+            .filter(|p| matches!(p, Paint::Hairline { .. }));
+        let gaps = NOTEBOOK_BUTTONS.iter().filter(|b| b.gap).count();
+        assert_eq!(lines.count(), gaps);
+    }
 
     #[test]
     fn a_wide_bar_shows_everything() {

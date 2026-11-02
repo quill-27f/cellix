@@ -239,7 +239,7 @@ impl Theme {
             popup_dim: Rgb(94, 94, 108),
             disabled: Rgb(150, 150, 160),
             popup_border: Rgb(214, 214, 214),
-            pick: Rgb(232, 237, 249),
+            pick: Rgb(214, 226, 252),
             button: Rgb(47, 91, 196),
             button_text: Rgb(255, 255, 255),
         }

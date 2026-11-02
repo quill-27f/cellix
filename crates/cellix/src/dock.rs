@@ -15,7 +15,7 @@ use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor, Rgb as TermRgb};
 use cellix_input::{Key, KeyEvent, MouseKind};
-use cellix_render::{Bitmap, Bounds, Grid, Paint, Rect, Rgb, Style};
+use cellix_render::{Bitmap, Bounds, Grid, Icon, Paint, Rect, Rgb, Style};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use unicode_width::UnicodeWidthStr;
 
@@ -1096,10 +1096,27 @@ impl Dock {
         views
     }
 
+    /// How wide a session's tab would like to be.
+    fn session_width(session: &Session) -> u16 {
+        session.name.chars().count() as u16 + TAB_PADDING * 2 + CLOSE_WIDTH
+    }
+
+    /// What each tab gets when they can't all have what they'd like, so none falls off the end.
+    fn tab_share(&self, area: Rect) -> Option<u16> {
+        let views = self.views();
+        let wanted = views.iter().map(|view| view.2).sum::<u16>()
+            + self.sessions.iter().map(Self::session_width).sum::<u16>();
+        let room = self.tabs_end.get().saturating_sub(area.x + 1 + NEW_WIDTH);
+        let count = (views.len() + self.sessions.len()).max(1) as u16;
+        (self.tabs_end.get() > 0 && wanted > room).then(|| (room / count).max(SMALLEST_TAB))
+    }
+
     /// Each view's tab, where it stands.
     fn view_tabs(&self, area: Rect) -> Vec<(Front, &'static str, Rect)> {
         let mut x = area.x + 1;
+        let share = self.tab_share(area);
         let tabs = self.views().into_iter().map(|(front, name, width)| {
+            let width = share.map_or(width, |each| each.min(width));
             let tab = Rect::new(x, area.y, width, 1);
             x += width;
             (front, name, tab)
@@ -1119,7 +1136,11 @@ impl Dock {
 
     /// Where sessions' tabs start, after the fixed ones.
     fn first_tab(&self, area: Rect) -> u16 {
-        let views = self.views().iter().map(|view| view.2).sum::<u16>();
+        let views = self
+            .view_tabs(area)
+            .iter()
+            .map(|view| view.2.w)
+            .sum::<u16>();
         area.x + 1 + views
     }
 
@@ -1191,18 +1212,12 @@ impl Dock {
     /// Each tab as (start, end) columns.
     fn tabs(&self, area: Rect) -> Vec<(u16, u16)> {
         let mut x = self.first_tab(area);
-        let full = |s: &Session| s.name.chars().count() as u16 + TAB_PADDING * 2 + CLOSE_WIDTH;
-        let wanted = self.sessions.iter().map(full).sum::<u16>();
-        let room = self.tabs_end.get().saturating_sub(x + NEW_WIDTH);
-        // Out of room, they share what there is, so none falls off the end.
-        let share = (self.tabs_end.get() > 0 && wanted > room).then(|| {
-            let each = room / self.sessions.len().max(1) as u16;
-            each.max(SMALLEST_TAB)
-        });
+        let share = self.tab_share(area);
         self.sessions
             .iter()
             .map(|s| {
-                let width = share.map_or(full(s), |each| each.min(full(s)));
+                let full = Self::session_width(s);
+                let width = share.map_or(full, |each| each.min(full));
                 let tab = (x, x + width);
                 x += width;
                 tab
@@ -1270,7 +1285,7 @@ impl Dock {
                     bold: false,
                     ..quiet
                 };
-                grid.label(close, area.y, "×", plain, tab.right());
+                grid.glyph(close as f32, area.y, Icon::Close, plain.fg, "×", plain);
             }
         }
         for (index, (start, end)) in self.tabs(area).into_iter().enumerate() {
@@ -1314,7 +1329,7 @@ impl Dock {
                     fg: theme.gutter.fg,
                     ..style
                 };
-                grid.label(close, area.y, "×", quiet, end);
+                grid.glyph(close as f32, area.y, Icon::Close, quiet.fg, "×", quiet);
             }
         }
         let plus = self.tabs(area).last().map_or(self.first_tab(area), |t| t.1);

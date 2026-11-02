@@ -4,9 +4,10 @@
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 
-use cellix_render::{Bounds, Font, Grid, Measure, Rect, Style};
+use cellix_render::{Bounds, Font, Grid, Icon, Measure, Rect, Style};
 use cellix_review::{Entry, ahead_behind, status_entries};
 
+use crate::explorer::file_color;
 use crate::theme::Theme;
 use crate::threads::wrap;
 
@@ -14,11 +15,17 @@ const SIDE: u16 = 2;
 /// Rows of the message box.
 const MESSAGE_ROWS: u16 = 3;
 /// Where a row's marks stand, from the panel's right edge.
-pub const LETTER_FROM_RIGHT: u16 = 3;
+const LETTER_FROM_RIGHT: u16 = 3;
 pub const STAGE_FROM_RIGHT: u16 = 5;
 pub const DISCARD_FROM_RIGHT: u16 = 7;
 /// How wide the button beside Commit is.
 const SYNC_WIDTH: u16 = 10;
+/// Columns from a row's icon to its name.
+const NAME_FROM_ICON: u16 = 3;
+/// Cells between a file's name and its folder.
+const FOLDER_GAP: f32 = 0.8;
+/// How far the message box stands past its rows, so its text has air above it.
+const BOX_ROOM: f32 = 0.12;
 
 /// What a click in the panel lands on.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -264,8 +271,7 @@ impl Source {
                     let name = if *staged { "STAGED CHANGES" } else { "CHANGES" };
                     grid.label(left, y, name, quiet, right);
                     let number = count.to_string();
-                    let at = right.saturating_sub(LETTER_FROM_RIGHT);
-                    grid.label(at, y, &number, quiet, right);
+                    grid.label_right(right.saturating_sub(SIDE), y, &number, quiet, 100);
                     if hovered {
                         let mark = if *staged { "−" } else { "+" };
                         let x = right.saturating_sub(STAGE_FROM_RIGHT);
@@ -286,7 +292,8 @@ impl Source {
                         let wash = Bounds::inset(whole, 0.4, 0.06);
                         grid.panel(wash, 14, Some(tone), None);
                     }
-                    self.draw_change(grid, area, y, (entry, *staged), hovered, theme);
+                    let look = (measure, theme);
+                    self.draw_change(grid, area, y, (entry, *staged), hovered, look);
                 }
             }
         }
@@ -308,12 +315,9 @@ impl Source {
         } else {
             theme.popup_border
         };
-        grid.panel(
-            Bounds::inset(frame, 0.0, 0.03),
-            22,
-            Some(theme.text.bg),
-            Some(edge),
-        );
+        let tall = MESSAGE_ROWS as f32 + BOX_ROOM * 2.0;
+        let outline = Bounds::cells(left as f32, y as f32 - BOX_ROOM, width as f32, tall);
+        grid.panel(outline, 22, Some(theme.text.bg), Some(edge));
         let inner = width.saturating_sub(2).max(1) as f32;
         let hint = "Message (Enter to commit)";
         let rows = if self.message.is_empty() {
@@ -396,7 +400,7 @@ impl Source {
         y: u16,
         (entry, staged): (&Entry, bool),
         hovered: bool,
-        theme: &Theme,
+        (measure, theme): (&dyn Measure, &Theme),
     ) {
         let right = area.right();
         let letter = entry.letter(staged);
@@ -414,20 +418,33 @@ impl Source {
         } else {
             LETTER_FROM_RIGHT + 1
         });
-        let after = grid.label(area.x + SIDE, y, &name, theme.sidebar, end);
+        let icon = area.x + SIDE;
+        grid.glyph(
+            icon as f32,
+            y,
+            Icon::File,
+            file_color(&name),
+            "▪",
+            theme.sidebar,
+        );
+        let at = icon + NAME_FROM_ICON;
+        grid.label(at, y, &name, theme.sidebar, end);
         if let Some(folder) = entry.path.parent().filter(|f| !f.as_os_str().is_empty()) {
             let quiet = Style {
                 fg: theme.gutter.fg,
                 ..theme.sidebar
             };
-            grid.label(after + 1, y, &folder.display().to_string(), quiet, end);
+            // Set after the name as it's drawn, which isn't how many cells it would fill.
+            let x = at as f32 + measure.width(&name, Font::default()) + FOLDER_GAP;
+            let folder = folder.display().to_string();
+            grid.label_at(x, x.ceil() as u16, y, &folder, quiet, end, 100);
         }
         let mark = Style {
             fg: colour,
             ..theme.sidebar
         };
-        let at = right.saturating_sub(LETTER_FROM_RIGHT);
-        grid.label(at, y, letter.encode_utf8(&mut [0; 4]), mark, right);
+        let edge = right.saturating_sub(SIDE);
+        grid.label_right(edge, y, letter.encode_utf8(&mut [0; 4]), mark, 100);
         if hovered {
             let stage = right.saturating_sub(STAGE_FROM_RIGHT);
             grid.label(

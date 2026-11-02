@@ -178,7 +178,7 @@ fn folder_color(name: &str) -> Rgb {
 }
 
 /// A file's colour, standing in for the logo a full icon theme would draw.
-fn file_color(name: &str) -> Rgb {
+pub fn file_color(name: &str) -> Rgb {
     let lower = name.to_lowercase();
     if lower.starts_with(".env") {
         return Rgb(235, 200, 90);

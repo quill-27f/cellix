@@ -219,8 +219,12 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("10-branches", [["click", 3, 39]], CODE_FILE)
     shoot("11-find", [["keys", CTRL("f")], ["keys", "item"]], CODE_FILE)
     shoot("12-search", [["click", RAIL_X, SEARCH]], CODE_FILE)
-    shoot("13-review", [["keys", "\u0007"], ["wait", 0.4]], CODE_FILE)
-    shoot("13-strip-hover", [["move", 150, 0], ["wait", 0.4]], CODE_FILE)
+    shoot("13-review", [["keys", "\u0007"], ["wait", 1.2]], CODE_FILE)
+    shoot("13-strip-hover", [["wait", 0.8], ["move", 99, 0], ["wait", 0.4]], CODE_FILE)
+    git_tab = [["click", RAIL_X, REVIEW], ["wait", 0.8]]
+    shoot("13-source-hover", [*git_tab, ["move", 14, 11], ["wait", 0.3]], CODE_FILE)
+    shoot("13-source-staged", [*git_tab, ["click", 28, 11], ["wait", 0.8], ["move", 14, 11]], CODE_FILE)
+    shoot("13-source-diff", [*git_tab, ["click", 14, 11], ["wait", 1.2]], CODE_FILE)
     shoot("13-stacked-pane", [*LIST_AGENTS, ["wait", 0.6]], CODE_FILE, size="72x44")
     shoot("13-source-control", [["click", RAIL_X, REVIEW], ["wait", 0.8]], CODE_FILE)
     shoot("13-source-message", [["click", RAIL_X, REVIEW], ["wait", 0.8], ["click", 14, 3],
@@ -250,7 +254,7 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("36-hover-accept", [["keys", "\u0007"], ["wait", 0.6], ["move", 114, 1]], CODE_FILE)
     shoot("37-hover-settings", [*settings, ["click", 45, 4], ["move", 80, 16]], CODE_FILE)
     shoot("38-hover-dialog", [["keys", "x"], ["keys", CTRL("q")], ["move", 70, 17]], CODE_FILE)
-    shoot("39-hover-agents", [*LIST_AGENTS, ["wait", 0.5], ["move", 12, 12]], CODE_FILE)
+    shoot("39-hover-agents", [*LIST_AGENTS, ["wait", 0.5], ["move", 90, 12]], CODE_FILE)
     shoot("41-hover-tab-close", [["move", 42, 0]], CODE_FILE)
     shoot("42-hover-install", [*settings, ["click", 45, 4], ["move", 113, 16]], CODE_FILE)
     shoot("43-light-hover-menu", [["right", 60, 12], ["move", 64, 19]], CODE_FILE, background="eff1f5")
@@ -282,7 +286,7 @@ with tempfile.TemporaryDirectory() as scratch:
     PAPER = os.path.join(samples, "paper", "main.tex")
     light = {"size": "150x44", "background": "eff1f5"}
     shoot("57-welcome", [], **light)
-    start_shell = [*LIST_AGENTS, ["wait", 0.6], ["click", 125, 13], ["wait", 1.5]]
+    start_shell = [["keys", "\x1b[112;6u"], ["wait", 0.3], ["keys", "New Terminal"], ["wait", 0.3], ["keys", "\r"], ["wait", 1.5]]
     shoot("58-welcome-with-shell", start_shell, **light)
     shoot("59-sample-top", [], WRITING, **light)
     for number, (name, notches) in enumerate(

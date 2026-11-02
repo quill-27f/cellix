@@ -414,3 +414,13 @@ when nothing else was left, so a terminal opened beside Comments and closing it 
 each is a tab with a ×, closing one goes to what's left, and closing the last closes the pane. The
 dot on the Comments icon says there are comments when they have no tab. Going through the pane's
 own × still only hides it, and what runs there keeps running.
+
+The design review's findings on the icons went in. They now stand in one place whatever the pane
+does, on every surface, three columns in from the corner so the pane's × has a slot.
+`a_narrow_pane_leaves_the_icons_at_the_end_of_the_files_tabs` became
+`the_icons_stay_put_whatever_the_pane_does`, since the behaviour it pinned was the defect. The rail
+lights only what's showing, and Review lights Source Control. Source Control rows gained file icons
+and a folder set after the name as drawn. A notebook's dividers come from its own groups: they were
+being read from the page bar's. Tabs in a narrow pane share the row, so long names are cut short
+there. The tour gained scenes for hover, staged files and the diff beside the panel, and 13-review
+was a tour timing problem, not a repaint bug: the shot came before the first key landed.

@@ -91,11 +91,10 @@ const PANE_ACTIONS: [(Icon, Command, &str); 5] = [
 const ACTION_WIDTH: u16 = 4;
 /// Where the pane's own close button stands, which they keep clear of.
 const PANE_CLOSE: u16 = 3;
-/// How wide the pane must be to hold them and still have room for its tabs. Narrower, they
-/// stand at the end of the file's tabs.
-const PANE_HOLDS_ACTIONS: u16 = 50;
-/// Columns kept for tabs beside them.
-const TABS_ROOM: u16 = 24;
+/// Columns kept for tabs beside them, in the pane and over the file. A window with less goes
+/// without them, sooner than move them somewhere else.
+const PANE_TABS_ROOM: u16 = 14;
+const FILE_TABS_ROOM: u16 = 24;
 /// Rows the window needs before the pane can stand under the file, and its share of them.
 const STACK_HEIGHT: u16 = 16;
 const STACK_SHARE: u16 = 45;
@@ -2375,15 +2374,13 @@ impl App {
 
     /// The icons at the top right, each with where it stands.
     fn pane_actions(&self) -> Vec<(Rect, Icon, Command, &'static str)> {
-        let main = self.main_area();
-        let pane = self
-            .dock_area()
-            .filter(|pane| !self.dock_under() && pane.w >= PANE_HOLDS_ACTIONS);
-        let (left, end) = pane.map_or((main.x, main.right()), |pane| {
-            (pane.x, pane.right() - PANE_CLOSE)
+        // The same place whatever's open, so a second click finds the same icon.
+        let wide = ACTION_WIDTH * PANE_ACTIONS.len() as u16 + PANE_CLOSE;
+        let pane = self.dock_area().filter(|_| !self.dock_under());
+        let least = pane.map_or(self.main_area().x + FILE_TABS_ROOM, |pane| {
+            pane.x + PANE_TABS_ROOM
         });
-        let start = end.checked_sub(ACTION_WIDTH * PANE_ACTIONS.len() as u16);
-        let Some(start) = start.filter(|x| *x >= left + TABS_ROOM) else {
+        let Some(start) = self.size.0.checked_sub(wide).filter(|x| *x >= least) else {
             return Vec::new();
         };
         let cell = |i: usize| Rect::new(start + ACTION_WIDTH * i as u16, 0, ACTION_WIDTH, 1);
@@ -2397,6 +2394,21 @@ impl App {
         let actions = self.pane_actions();
         let found = actions.into_iter().find(|(cell, ..)| cell.contains(x, y));
         found.map(|(_, _, command, _)| command)
+    }
+
+    /// Whether what a rail icon stands for is showing. Review is Source Control at full size.
+    fn rail_on(&self, command: Command) -> bool {
+        let shown = self.sidebar_area().is_some();
+        match command {
+            Command::ToggleSidebar => shown && self.sidebar_view == SidebarView::Explorer,
+            Command::FindInProject => shown && self.sidebar_view == SidebarView::Search,
+            Command::ShowOutline => shown && self.sidebar_view == SidebarView::Outline,
+            Command::ShowSourceControl => {
+                self.review.is_some() || (shown && self.sidebar_view == SidebarView::Source)
+            }
+            Command::OpenSettings => self.settings_page.is_some(),
+            _ => false,
+        }
     }
 
     /// Whether what an icon stands for is showing.
@@ -6714,7 +6726,9 @@ impl App {
             let area = self.sheet_area();
             page.draw(grid, area, &values, (self.hover, &*self.measure), theme);
             self.draw_status(grid);
+            self.draw_pane_actions(grid);
             self.draw_overlay(grid);
+            self.draw_tooltip(grid);
             return;
         }
         if let Some(review) = &self.review {
@@ -6722,7 +6736,9 @@ impl App {
             review.title_room.set(self.actions_over_main());
             review.draw(grid, self.main_area(), self.hover, theme, &comments);
             self.draw_status(grid);
+            self.draw_pane_actions(grid);
             self.draw_overlay(grid);
+            self.draw_tooltip(grid);
             return;
         }
         if drawer_over_main {
@@ -6966,29 +6982,7 @@ impl App {
             if y + 1 >= area.bottom() {
                 break;
             }
-            let on = match command {
-                Command::ToggleSidebar => {
-                    self.show_sidebar
-                        && self.review.is_none()
-                        && self.sidebar_view == SidebarView::Explorer
-                }
-                Command::FindInProject => {
-                    self.show_sidebar
-                        && self.review.is_none()
-                        && self.sidebar_view == SidebarView::Search
-                }
-                Command::ShowOutline => {
-                    self.show_sidebar
-                        && self.review.is_none()
-                        && self.sidebar_view == SidebarView::Outline
-                }
-                Command::ShowSourceControl => {
-                    self.show_sidebar && self.sidebar_view == SidebarView::Source
-                }
-                Command::OpenDiff => self.review.is_some(),
-                Command::OpenSettings => self.settings_page.is_some(),
-                _ => false,
-            };
+            let on = self.rail_on(*command);
             let row = Rect::new(area.x, y, area.w, ACTIVITY_ICON.1 as u16);
             let hovered = self.hover.is_some_and(|h| row.contains(h.0, h.1));
             let style = Style {
@@ -12386,7 +12380,7 @@ mod tests {
     fn the_icons_at_the_top_right_are_there_with_the_pane_shut() {
         let (_dir, mut app) = project();
         assert!(!app.dock.open);
-        let right = app.size.0;
+        let right = app.size.0 - PANE_CLOSE;
         assert_eq!(app.pane_actions().last().unwrap().0.right(), right);
         assert!(
             app.tabs_area().right() <= app.pane_actions()[0].0.x,
@@ -12405,14 +12399,65 @@ mod tests {
         assert!(names.collect::<Vec<_>>().contains(&Icon::Agents));
     }
 
+    /// Where the icons stand, which every test here compares.
+    fn action_spots(app: &App) -> Vec<Rect> {
+        app.pane_actions().iter().map(|(cell, ..)| *cell).collect()
+    }
+
+    /// The icons that were really drawn.
+    fn drawn_icons(app: &App) -> Vec<Icon> {
+        let paint = screen(app).paint;
+        let icons = paint.iter().filter_map(|p| match p {
+            cellix_render::Paint::Icon { icon, .. } => Some(*icon),
+            _ => None,
+        });
+        icons.collect()
+    }
+
     #[test]
-    fn a_narrow_pane_leaves_the_icons_at_the_end_of_the_files_tabs() {
+    fn the_icons_stay_put_whatever_the_pane_does() {
+        for size in [(110, 30), (150, 44)] {
+            let (dir, _) = project();
+            let mut app = App::new(dir.path().to_path_buf(), size);
+            let shut = action_spots(&app);
+            app.run(Command::ListAgents);
+            assert_eq!(action_spots(&app), shut, "with the pane beside the file");
+        }
         let (dir, _) = project();
-        let mut app = App::new(dir.path().to_path_buf(), (110, 30));
+        let mut app = App::new(dir.path().to_path_buf(), (72, 40));
+        let shut = action_spots(&app);
         app.run(Command::ListAgents);
-        let pane = app.dock_area().unwrap();
-        assert!(pane.w < PANE_HOLDS_ACTIONS);
-        assert_eq!(app.pane_actions().last().unwrap().0.right(), pane.x);
+        assert!(app.dock_under());
+        assert_eq!(action_spots(&app), shut, "with the pane under the file");
+    }
+
+    #[test]
+    fn the_icons_stay_in_review_and_settings() {
+        let (_dir, mut app) = reviewed();
+        app.run(Command::OpenDiff);
+        assert!(drawn_icons(&app).contains(&Icon::Terminal), "in Review");
+        app.run(Command::OpenDiff);
+        app.run(Command::OpenSettings);
+        assert!(drawn_icons(&app).contains(&Icon::Terminal), "in Settings");
+    }
+
+    #[test]
+    fn the_rail_only_lights_what_is_showing() {
+        let (dir, mut app) = reviewed();
+        assert!(app.rail_on(Command::ToggleSidebar));
+        app.run(Command::OpenDiff);
+        assert!(
+            app.rail_on(Command::ShowSourceControl),
+            "Review is Source Control"
+        );
+        assert!(!app.rail_on(Command::ToggleSidebar));
+        let mut narrow = App::new(dir.path().to_path_buf(), (72, 40));
+        narrow.run(Command::ListAgents);
+        assert!(narrow.sidebar_area().is_none());
+        assert!(
+            !narrow.rail_on(Command::ToggleSidebar),
+            "no sidebar, so no light"
+        );
     }
 
     #[test]
@@ -12420,10 +12465,8 @@ mod tests {
         let (_dir, mut app) = reviewed();
         app.run(Command::OpenDiff);
         let _ = screen(&app);
-        assert_eq!(
-            app.actions_over_main(),
-            ACTION_WIDTH * PANE_ACTIONS.len() as u16
-        );
+        let strip = ACTION_WIDTH * PANE_ACTIONS.len() as u16 + PANE_CLOSE;
+        assert_eq!(app.actions_over_main(), strip);
     }
 
     #[test]
@@ -12442,6 +12485,22 @@ mod tests {
         assert!(
             app.dock.new_button_for_test(area) < first,
             "nothing falls under them"
+        );
+    }
+
+    #[test]
+    fn every_tab_in_a_narrow_pane_keeps_its_close_button_clear_of_the_icons() {
+        let (_dir, mut app) = project();
+        with_a_shell(&mut app);
+        app.run(Command::ShowComments);
+        app.run(Command::ListAgents);
+        let _ = screen(&app);
+        let area = app.dock_area().unwrap();
+        let first = app.pane_actions()[0].0.x;
+        let tabs = app.dock.view_tabs_for_test(area);
+        assert!(
+            tabs.iter().all(|(_, _, tab)| tab.right() <= first),
+            "{tabs:?}"
         );
     }
 
@@ -12572,7 +12631,8 @@ mod tests {
 
     #[test]
     fn the_agents_list_is_a_tab_that_stays() {
-        let (_dir, mut app) = project();
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (170, 44));
         with_a_shell(&mut app);
         let area = app.dock_area().unwrap();
         let plus = app.dock.new_button_for_test(area);
