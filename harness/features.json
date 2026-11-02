@@ -2133,5 +2133,47 @@
     "title": "The front tab keeps its name, others show it on hover",
     "test": "the_tab_in_front_keeps_its_name_and_the_others_say_theirs_on_hover",
     "passes": true
+  },
+  {
+    "id": "rail-close",
+    "milestone": 9,
+    "title": "A click on the lit rail icon closes the left side",
+    "test": "a_click_on_the_lit_rail_icon_closes_the_left_side",
+    "passes": true
+  },
+  {
+    "id": "ctrl-b-toggle",
+    "milestone": 9,
+    "title": "Ctrl+B closes and opens the left side",
+    "test": "ctrl_b_closes_and_opens_the_left_side_with_nothing_picked",
+    "passes": true
+  },
+  {
+    "id": "rail-review",
+    "milestone": 9,
+    "title": "A click on Git in full Review closes it",
+    "test": "a_click_on_git_in_full_review_closes_it",
+    "passes": true
+  },
+  {
+    "id": "panel-hide-review",
+    "milestone": 9,
+    "title": "Hiding the panel gives a diff its list back",
+    "test": "hiding_the_panel_gives_a_diff_beside_it_its_own_list_back",
+    "passes": true
+  },
+  {
+    "id": "csv-switch",
+    "milestone": 9,
+    "title": "A CSV goes to its source and comes back",
+    "test": "a_csv_goes_to_its_source_and_comes_back",
+    "passes": true
+  },
+  {
+    "id": "page-switch-menu",
+    "milestone": 9,
+    "title": "The source of a page offers the way back in its menu",
+    "test": "the_source_of_a_page_offers_the_way_back_on_a_right_click",
+    "passes": true
   }
 ]

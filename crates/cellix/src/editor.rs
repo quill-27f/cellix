@@ -2577,6 +2577,11 @@ impl Editor {
         });
     }
 
+    /// Whether this file has a page to show, whichever view it's in.
+    pub fn has_page(&self) -> bool {
+        self.buffer.path().is_some_and(|p| Dialect::of(p).is_some())
+    }
+
     pub fn selected_text(&self) -> Option<String> {
         let rope = self.buffer.rope();
         let parts: Vec<String> = self

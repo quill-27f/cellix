@@ -3901,8 +3901,8 @@ impl App {
                     editor.format(format, area);
                 }
             }
-            // On a page these keys mean what they mean in any writing tool.
-            Command::ToggleSidebar if self.on_page() => {
+            // On a page, with words picked, it means what it means in any writing tool.
+            Command::ToggleSidebar if self.on_page() && self.selected_text().is_some() => {
                 self.run(Command::Format(Format::Bold));
             }
             Command::SendToAgent => self.send_to_agent(),
@@ -4082,10 +4082,9 @@ impl App {
             Command::GoToLine => self.ask("Go to line", PromptAction::GoToLine),
             Command::RenameSymbol => self.ask("Rename to", PromptAction::RenameSymbol),
             Command::BlameLine => self.blame(),
-            Command::ToggleSidebar if self.compact() => self.drawer = !self.drawer,
-            Command::ToggleSidebar => self.show_sidebar = !self.show_sidebar,
-            Command::ShowSourceControl if self.sidebar_view == SidebarView::Source => {
-                self.show_explorer();
+            Command::ToggleSidebar => self.toggle_sidebar(),
+            Command::ShowSourceControl if self.rail_on(Command::ShowSourceControl) => {
+                self.hide_sidebar();
             }
             Command::ShowSourceControl => {
                 self.search.focus = None;
@@ -4096,8 +4095,8 @@ impl App {
                 self.source_age = 0;
                 self.source.refresh(self.workspace.root());
             }
-            Command::ShowOutline if self.sidebar_view == SidebarView::Outline => {
-                self.show_explorer();
+            Command::ShowOutline if self.rail_on(Command::ShowOutline) => {
+                self.hide_sidebar();
             }
             Command::ShowOutline => {
                 self.search.focus = None;
@@ -4977,6 +4976,48 @@ impl App {
         }
     }
 
+    /// Closes the left side. Review takes back the list it gave up to the panel, and a Review
+    /// with no panel beside it is what the lit icon stood for, so it closes.
+    fn hide_sidebar(&mut self) {
+        self.search.focus = None;
+        self.show_sidebar = false;
+        self.drawer = false;
+        match &mut self.review {
+            Some(review) if review.beside_panel => review.beside_panel = false,
+            review => *review = None,
+        }
+    }
+
+    fn toggle_sidebar(&mut self) {
+        if self.compact() {
+            self.drawer = !self.drawer;
+        } else if self.sidebar_area().is_some() {
+            self.hide_sidebar();
+        } else {
+            self.show_sidebar = true;
+        }
+    }
+
+    /// The button that goes between a file's page and its source. A page with a toolbar has
+    /// that instead, and a window too short for this row has it in the right-click menu.
+    fn page_switch(&self) -> Option<(Rect, &'static str)> {
+        let editor = self.editors.get(self.active())?;
+        let free = self.review.is_none() && self.settings_page.is_none();
+        let row = self.chrome_rows() == 2 && !self.plan_in_view();
+        if !free || !row || !editor.has_page() || self.toolbar_row().is_some() {
+            return None;
+        }
+        let name = if editor.rendered {
+            "Show Source"
+        } else {
+            "Show Page"
+        };
+        let main = self.main_area();
+        let width = name.chars().count() as u16 + 2;
+        let x = main.right().checked_sub(width + 1)?;
+        Some((Rect::new(x, 1, width, 1), name))
+    }
+
     fn show_explorer(&mut self) {
         self.search.focus = None;
         self.review = None;
@@ -5811,7 +5852,14 @@ impl App {
                 self.click_plan_bar(x)
             }
             MouseKind::Left if self.compact() && y == 0 && x < MENU_BUTTON => {
-                self.run(Command::ToggleSidebar);
+                self.toggle_sidebar();
+            }
+            MouseKind::Left
+                if self
+                    .page_switch()
+                    .is_some_and(|(cell, _)| cell.contains(x, y)) =>
+            {
+                self.run(Command::MarkdownPreview);
             }
             MouseKind::Left if self.tabs_area().contains(x, y) => self.click_tab(x),
             MouseKind::Left => {
@@ -6071,6 +6119,9 @@ impl App {
             run("Send Selection to Agent", Command::MentionSelection).when(selected),
         ];
         let mut items = Vec::new();
+        if !editor.rendered && editor.has_page() {
+            items.push(run("Show Page", Command::MarkdownPreview));
+        }
         if editor.rendered {
             if let Some(issue) = editor.issue_at_caret() {
                 let word = editor.words_in(issue.start, issue.end);
@@ -6634,19 +6685,21 @@ impl App {
             y >= top && y < top + ACTIVITY_STEP
         });
         if let Some((_, command)) = index.and_then(|i| ACTIVITY.get(i)) {
-            if *command != Command::OpenSettings {
+            let settings = *command == Command::OpenSettings;
+            let lit = !settings && self.settings_page.is_none() && self.rail_on(*command);
+            if !settings {
                 self.settings_page = None;
             }
-            let on_explorer = self.sidebar_view == SidebarView::Explorer;
+            // A click on what's already showing closes it, as it does in VS Code.
+            if lit {
+                self.hide_sidebar();
+                return;
+            }
             match command {
-                Command::ToggleSidebar if self.review.is_some() || !on_explorer => {
+                Command::ToggleSidebar => {
                     self.show_explorer();
                     self.show_sidebar = true;
-                }
-                // A second click closes the panel, as it does in VS Code.
-                Command::FindInProject if !on_explorer && self.review.is_none() => {
-                    self.show_explorer();
-                    self.show_sidebar = false;
+                    self.drawer = self.compact();
                 }
                 command => self.run(*command),
             }
@@ -7313,6 +7366,21 @@ impl App {
             main.right(),
             90,
         );
+        if let Some((cell, name)) = self.page_switch() {
+            if self.hover.is_some_and(|h| cell.contains(h.0, h.1)) {
+                let fill = Some(self.theme.row_hover);
+                grid.panel(Bounds::inset(cell, 0.1, 0.08), 16, fill, None);
+            }
+            grid.label_at(
+                cell.x as f32 + 1.0,
+                cell.x + 1,
+                1,
+                name,
+                style,
+                cell.right(),
+                90,
+            );
+        }
     }
 
     /// The row the document toolbar sits in, if the page in view has one.
@@ -8265,7 +8333,10 @@ impl App {
             || self
                 .run_button()
                 .is_some_and(|(chip, _)| chip.contains(x, y))
-            || self.view_comment().is_some_and(|chip| chip.contains(x, y));
+            || self.view_comment().is_some_and(|chip| chip.contains(x, y))
+            || self
+                .page_switch()
+                .is_some_and(|(chip, _)| chip.contains(x, y));
         let status = y + 1 == self.size.1
             && (self
                 .status_branch()
@@ -11025,9 +11096,9 @@ mod tests {
         let (_, line) = app.cursor_line().unwrap();
         assert_eq!(line, 125);
         assert!(app.editors[0].top() > 0, "the page moved there");
-        // A second press puts the files back.
+        // A second press closes it, as a second click on the rail does.
         app.run(Command::ShowOutline);
-        assert!(app.sidebar_view == SidebarView::Explorer);
+        assert!(app.sidebar_area().is_none());
     }
 
     #[test]
@@ -12303,10 +12374,99 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_b_is_bold_on_a_page() {
+    fn ctrl_b_is_bold_on_words_picked_on_a_page() {
         let (_dir, mut app) = page_app("word tail\n");
+        app.run(Command::Move(cellix_input::Direction::WordRight, true));
         app.handle(Event::Key(KeyEvent::ctrl('b')));
         assert_eq!(app.active_text().as_deref(), Some("**word** tail\n"));
+    }
+
+    #[test]
+    fn ctrl_b_closes_and_opens_the_left_side_with_nothing_picked() {
+        let (_dir, mut app) = page_app("word tail\n");
+        assert!(app.sidebar_area().is_some());
+        app.handle(Event::Key(KeyEvent::ctrl('b')));
+        assert!(app.sidebar_area().is_none());
+        assert_eq!(app.active_text().as_deref(), Some("word tail\n"), "no bold");
+        app.handle(Event::Key(KeyEvent::ctrl('b')));
+        assert!(app.sidebar_area().is_some());
+    }
+
+    #[test]
+    fn a_click_on_the_lit_rail_icon_closes_the_left_side() {
+        for (row, (_, command)) in ACTIVITY.iter().copied().enumerate().take(4) {
+            let (_dir, mut app) = page_app("# Title\n\nword tail\n");
+            let area = app.activity_area();
+            let y = App::rail_row(row, area);
+            if !app.rail_on(command) {
+                app.handle(mouse(MouseKind::Left, 2, y));
+            }
+            assert!(app.rail_on(command), "{command:?} opens");
+            app.handle(mouse(MouseKind::Left, 2, y));
+            assert!(app.sidebar_area().is_none(), "{command:?} closes");
+            app.handle(mouse(MouseKind::Left, 2, y));
+            assert!(app.rail_on(command), "{command:?} opens again");
+            assert_eq!(app.active_text().as_deref(), Some("# Title\n\nword tail\n"));
+        }
+    }
+
+    #[test]
+    fn a_click_on_git_in_full_review_closes_it() {
+        let (_dir, mut app) = reviewed();
+        app.run(Command::OpenDiff);
+        let area = app.activity_area();
+        app.handle(mouse(MouseKind::Left, 2, App::rail_row(3, area)));
+        assert!(app.review.is_none());
+    }
+
+    #[test]
+    fn hiding_the_panel_gives_a_diff_beside_it_its_own_list_back() {
+        let (_dir, mut app) = source_app();
+        let (x, y) = find(&screen(&app), "kept.txt");
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert!(app.review.as_ref().unwrap().beside_panel);
+        app.handle(Event::Key(KeyEvent::ctrl('b')));
+        assert!(!app.review.as_ref().unwrap().beside_panel);
+    }
+
+    /// A data file open on its page.
+    fn csv_app() -> (TempDir, App) {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("data.csv");
+        fs::write(&file, "a,b\n1,2\n").unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (120, 30));
+        app.open(&file).unwrap();
+        (dir, app)
+    }
+
+    #[test]
+    fn a_csv_goes_to_its_source_and_comes_back() {
+        let (_dir, mut app) = csv_app();
+        assert!(app.editors[0].rendered);
+        let (x, y) = find(&screen(&app), "Show Source");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        assert!(!app.editors[0].rendered);
+        let (x, y) = find(&screen(&app), "Show Page");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        assert!(app.editors[0].rendered);
+    }
+
+    #[test]
+    fn the_source_of_a_page_offers_the_way_back_on_a_right_click() {
+        let (_dir, mut app) = csv_app();
+        app.run(Command::MarkdownPreview);
+        let names: Vec<String> = app
+            .editor_items()
+            .iter()
+            .map(|i| i.label.to_string())
+            .collect();
+        assert!(names.iter().any(|name| name == "Show Page"), "{names:?}");
+    }
+
+    #[test]
+    fn plain_code_has_no_page_to_go_to() {
+        let (_dir, app) = project();
+        assert!(app.page_switch().is_none());
     }
 
     #[test]

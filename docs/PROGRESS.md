@@ -444,3 +444,9 @@ them when stacked.
 The comment lag still can't be reproduced. The release build answered in 3 to 10 ms on the page and
 about 5 ms in a comment, short or 600 characters long. So `~/.cache/cellix/slow-frames.log` now notes
 any frame over 50 ms with where the time went, timings only, started afresh each run.
+
+From testing. A CSV had no way back from its source, because that view had no toolbar: a button at
+the end of the path row now goes between page and source, and the source's right-click menu says the
+same. A click on a lit rail icon closes the left side, as in VS Code. Ctrl+B does too, unless words
+are picked on a page, where it stays Bold. `ctrl_b_is_bold_on_a_page` became
+`ctrl_b_is_bold_on_words_picked_on_a_page` for that, and the Outline test's second press closes now.

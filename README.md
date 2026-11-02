@@ -25,6 +25,7 @@ A static Linux binary comes from the `release` workflow, for a server with no Ru
 | Ctrl+Shift+P, F1 or Alt+P | Command palette |
 | Ctrl+G | Review changes against HEAD |
 | Ctrl+J | Bring up or put away a terminal in the side pane |
+| Ctrl+B | Close or open the left side, or Bold with words picked on a page |
 | Alt+C, or select text | Comment on what's selected |
 | Ctrl+F | Find in the file |
 | Ctrl+Shift+F | Search the project |
