@@ -352,6 +352,8 @@ pub struct Extras<'a> {
     /// Where relative image paths start.
     pub folder: Option<&'a Path>,
     pub library: Option<&'a RefCell<Library>>,
+    /// What each LaTeX label will number to, filled in before the paper is laid out.
+    pub labels: RefCell<HashMap<String, String>>,
     /// Filled in by layout.
     pub figures: RefCell<Vec<Figure>>,
     /// Every formula and image in the page, as source ranges, filled in by layout.

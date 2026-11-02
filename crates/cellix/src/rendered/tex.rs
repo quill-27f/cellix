@@ -262,10 +262,12 @@ fn command(rest: &[char], at: usize, look: Look, context: &Context, out: &mut Ve
                 tone: Tone::Dim,
                 font: Font {
                     size: 80,
+                    bold: false,
                     ..look.font
                 },
-                ..look
+                underline: false,
             };
+            out.push(glyph(' ', None, quiet));
             for (n, c) in inner.iter().enumerate() {
                 out.push(glyph(*c, Some(start + n), quiet));
             }
@@ -283,8 +285,26 @@ fn command(rest: &[char], at: usize, look: Look, context: &Context, out: &mut Ve
             out.extend(decoration("]", Tone::Link));
         }
         _ if REFS.contains(&name) => {
-            for (n, c) in inner.iter().enumerate() {
-                out.push(glyph(*c, Some(start + n), link));
+            let key: String = inner.iter().collect();
+            let number = context.extras.labels.borrow().get(&key).cloned();
+            match number {
+                // What it will print as. The number has no source, so it holds the place.
+                Some(number) => {
+                    let shown = if name == "eqref" {
+                        format!("({number})")
+                    } else {
+                        number
+                    };
+                    for (n, c) in shown.chars().enumerate() {
+                        let spot = (n == 0).then_some(start);
+                        out.push(glyph(c, spot, link));
+                    }
+                }
+                None => {
+                    for (n, c) in inner.iter().enumerate() {
+                        out.push(glyph(*c, Some(start + n), link));
+                    }
+                }
             }
         }
         _ if TEXT_COMMANDS.contains(&name) => inline(inner, start, look, context, out),
@@ -306,6 +326,8 @@ struct Page<'a, 'b> {
     equations: usize,
     figures: usize,
     tables: usize,
+    /// Section, subsection and subsubsection numbers.
+    sections: [usize; 3],
     /// For each list open here, its next number, if it's numbered.
     lists: Vec<Option<u64>>,
     /// Where `\title` and `\author` are, as (line, start, end) char ranges in those lines.
@@ -395,6 +417,8 @@ impl Page<'_, '_> {
         if decorated > 0 {
             let width: f32 = glyphs[..decorated].iter().map(|g| g.advance).sum();
             glyphs[decorated - 1].advance += (indent + 1.8 - width).max(0.0);
+            // A space stretched past its width can't be drawn as part of a run of text.
+            glyphs[decorated - 1].tone = Tone::TableLine;
             lead = indent + 1.8;
         }
         let template = Row {
@@ -414,7 +438,13 @@ impl Page<'_, '_> {
         last + 1
     }
 
-    fn heading(&mut self, index: usize, level: usize, range: (usize, usize)) {
+    fn heading(
+        &mut self,
+        index: usize,
+        level: usize,
+        range: (usize, usize),
+        number: Option<String>,
+    ) {
         let (offset, line) = self.lines[index];
         let chars: Vec<char> = line.chars().collect();
         let look = Look {
@@ -427,6 +457,13 @@ impl Page<'_, '_> {
             underline: false,
         };
         let mut glyphs = Vec::new();
+        if let Some(number) = number {
+            let mut mark = decoration(&format!("{number}  "), Tone::Heading);
+            for g in &mut mark {
+                g.font = look.font;
+            }
+            glyphs.extend(mark);
+        }
         inline(
             &chars[range.0..range.1],
             offset + range.0,
@@ -452,6 +489,11 @@ impl Page<'_, '_> {
         wrap(template, glyphs, 0.0, self.width, self.rows);
         if tall {
             self.rows.push(spacer(index, offset));
+            // A tall heading sits low in its rows, so text under it needs a row of air.
+            let next = self.lines.get(index + 1);
+            if next.is_some_and(|(_, line)| !line.trim().is_empty()) {
+                self.rows.push(spacer(index, offset));
+            }
         }
     }
 
@@ -667,6 +709,7 @@ impl Page<'_, '_> {
             let template = Row::new(line, saved.0 + end);
             wrap(template, glyphs, 0.0, self.width, self.rows);
         }
+        self.rows.push(spacer(index, self.lines[index].0));
     }
 
     /// Lays out what starts at line `index`, and returns the line after it.
@@ -688,10 +731,14 @@ impl Page<'_, '_> {
             let star = format!("\\{name}*{{");
             let plain = format!("\\{name}{{");
             if (text.starts_with(&star) || text.starts_with(&plain))
-                && let Some(range) = argument(line, name.trim_end_matches('*'))
-                    .or_else(|| argument(line, &format!("{name}*")))
+                && let Some(range) =
+                    argument(line, name).or_else(|| argument(line, &format!("{name}*")))
             {
-                self.heading(index, level, range);
+                let starred = text.starts_with(&star);
+                let number = (!starred)
+                    .then(|| advance(&mut self.sections, level))
+                    .flatten();
+                self.heading(index, level, range, number);
                 return index + 1;
             }
         }
@@ -797,6 +844,54 @@ impl Page<'_, '_> {
     }
 }
 
+/// Counts a section at `level`, and returns its number as it prints.
+fn advance(sections: &mut [usize; 3], level: usize) -> Option<String> {
+    if !(1..=3).contains(&level) {
+        return None;
+    }
+    sections[level - 1] += 1;
+    sections[level..].fill(0);
+    let parts: Vec<String> = sections[..level].iter().map(ToString::to_string).collect();
+    Some(parts.join("."))
+}
+
+/// Works out what every `\\label` will number to, as LaTeX's own first pass does, so a
+/// reference shows its number even before what it points at has been laid out.
+fn number_labels(lines: &[(usize, &str)]) -> HashMap<String, String> {
+    let mut labels = HashMap::new();
+    let mut sections = [0; 3];
+    let (mut equations, mut figures, mut tables) = (0, 0, 0);
+    let mut current = String::new();
+    for (_, line) in lines {
+        let text = line.trim_start();
+        for (name, level) in SECTIONS {
+            if text.starts_with(&format!("\\{name}{{")) {
+                current = advance(&mut sections, level).unwrap_or_default();
+            }
+        }
+        match env_begin(line) {
+            Some(name) if MATH.contains(&name) && !name.ends_with('*') => {
+                equations += 1;
+                current = equations.to_string();
+            }
+            Some("figure" | "figure*") => {
+                figures += 1;
+                current = figures.to_string();
+            }
+            Some("table" | "table*") => {
+                tables += 1;
+                current = tables.to_string();
+            }
+            _ => {}
+        }
+        if let Some((start, end)) = argument(line, "label") {
+            let chars: Vec<char> = line.chars().collect();
+            labels.insert(chars[start..end].iter().collect(), current.clone());
+        }
+    }
+    labels
+}
+
 /// How many chars of indent a line has.
 fn offset_of_text(line: &str) -> usize {
     line.chars().take_while(|c| c.is_whitespace()).count()
@@ -832,6 +927,7 @@ pub(super) fn layout(lines: &[(usize, &str)], width: f32, context: &Context, row
             })
     };
     let (title, author) = (place("title"), place("author"));
+    *context.extras.labels.borrow_mut() = number_labels(lines);
     let mut page = Page {
         lines,
         width,
@@ -840,6 +936,7 @@ pub(super) fn layout(lines: &[(usize, &str)], width: f32, context: &Context, row
         equations: 0,
         figures: 0,
         tables: 0,
+        sections: [0; 3],
         lists: Vec::new(),
         title,
         author,
@@ -961,6 +1058,28 @@ ignored after the end
     #[test]
     fn hidden_marks_keep_escapes_and_spaces() {
         assert_eq!(shown("100\\% of a~b\n")[0], "100% of a b");
+    }
+
+    #[test]
+    fn sections_and_references_show_their_numbers() {
+        let source = "\\section{One}\n\\subsection{Inner}\\label{sec:inner}\n\\section{Two}\n\\begin{equation}\na\\label{eq:a}\n\\end{equation}\nSee \\ref{sec:inner} and \\eqref{eq:a} and \\ref{gone}.\n";
+        let all = shown(source).join("\n");
+        assert!(all.contains("1  One"), "{all}");
+        assert!(all.contains("1.1  Inner"), "{all}");
+        assert!(all.contains("2  Two"), "{all}");
+        assert!(all.contains("See 1.1 and (1) and gone."), "{all}");
+    }
+
+    #[test]
+    fn list_text_is_set_where_its_glyphs_say() {
+        let rows = page("\\begin{itemize}\n\\item One \\textbf{two}\n\\end{itemize}\n");
+        let row = rows.iter().find(|r| text(r).contains("One")).unwrap();
+        let tones: Vec<Tone> = row.glyphs.iter().take(2).map(|g| g.tone).collect();
+        assert_eq!(
+            tones,
+            [Tone::Text, Tone::TableLine],
+            "the marker's gap isn't text"
+        );
     }
 
     #[test]
