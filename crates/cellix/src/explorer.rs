@@ -22,11 +22,16 @@ pub struct Explorer {
 
 impl Explorer {
     pub fn refresh(&mut self, workspace: &Workspace) {
+        self.show(workspace.entries());
+    }
+
+    /// Shows a fresh list, keeping the selection on the same file.
+    pub fn show(&mut self, entries: Vec<Entry>) {
         let selected = self
             .selected
             .and_then(|i| self.entries.get(i))
             .map(|e| e.path.clone());
-        self.entries = workspace.entries();
+        self.entries = entries;
         self.selected = selected.and_then(|p| self.entries.iter().position(|e| e.path == p));
     }
 

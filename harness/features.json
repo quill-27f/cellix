@@ -2217,5 +2217,26 @@
     "title": "Tiles in a scroll aren't thrown away",
     "test": "tiles_a_glide_is_showing_arent_thrown_away",
     "passes": true
+  },
+  {
+    "id": "disk-off-thread",
+    "milestone": 9,
+    "title": "The regular look at the disk never holds up the screen",
+    "test": "the_regular_look_at_the_disk_never_holds_up_the_screen",
+    "passes": true
+  },
+  {
+    "id": "disk-idle",
+    "milestone": 9,
+    "title": "A look that finds nothing new changes nothing",
+    "test": "a_look_that_finds_nothing_new_changes_nothing",
+    "passes": true
+  },
+  {
+    "id": "disk-stale",
+    "milestone": 9,
+    "title": "A stale look at the disk cannot undo what just happened",
+    "test": "a_stale_look_cant_undo_what_just_happened",
+    "passes": true
   }
 ]

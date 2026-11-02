@@ -31,7 +31,7 @@ const MAX_MATCHES: usize = 5000;
 const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
 /// The root folder and which of its directories are expanded.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Workspace {
     root: PathBuf,
     expanded: BTreeSet<PathBuf>,

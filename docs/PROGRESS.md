@@ -464,3 +464,11 @@ Getting ready to go public. The history holds no secrets, personal paths or pers
 workflow builds four targets and writes a Homebrew formula from their checksums, and publishes to the
 tap and crates.io only where their tokens are set. The README leads with what Cellix is to an agent.
 
+
+The lag and the scrolling had a cause my tests couldn't see. `slow-frames.log` on the user's machine
+showed the main thread stalling 60 to 170 ms in event handling about every two seconds, with drawing
+near zero: 158 of them in five minutes. That was the periodic look at the tree and git, which ran
+`git show` and a fresh diff for every open file on the main thread. Small test folders hid it. It's on
+a thread now, and only touches an editor when something really changed. `explorer_shows_git_status`
+and `new_files_appear_in_the_explorer_by_themselves` wait for it, since it no longer finishes in the
+tick.

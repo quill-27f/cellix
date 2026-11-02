@@ -260,6 +260,15 @@ enum Choice {
     Undo(String),
 }
 
+/// What the periodic look at the disk found.
+struct DiskLook {
+    entries: Vec<cellix_core::Entry>,
+    branch: Option<String>,
+    changes: Vec<cellix_review::Change>,
+    /// Each open file as it was last committed.
+    committed: Vec<(PathBuf, String)>,
+}
+
 /// A question with buttons, for the keyboard or the mouse.
 struct Confirm {
     title: String,
@@ -567,6 +576,8 @@ pub struct App {
     source: SourceControl,
     /// Ticks since Source Control last read the repository.
     source_age: u32,
+    /// The periodic look at the tree and git, on its way.
+    disk_look: Option<std::sync::mpsc::Receiver<DiskLook>>,
     search: Search,
     /// In the compact layout, whether the sidebar is open over the code.
     drawer: bool,
@@ -710,6 +721,7 @@ impl App {
             outline: Outline::default(),
             source: SourceControl::default(),
             source_age: 0,
+            disk_look: None,
             search,
             drawer: false,
             quit: false,
@@ -1569,6 +1581,7 @@ impl App {
             | self.poll_spell()
             | self.poll_kernels()
             | self.poll_source()
+            | self.poll_disk()
             | self.poll_pending_ask();
         let mut events = Vec::new();
         for client in self.servers.values() {
@@ -2676,8 +2689,7 @@ impl App {
         }
         self.ticks += 1;
         if self.ticks.is_multiple_of(EXPLORER_REFRESH_TICKS) {
-            self.refresh_tree();
-            self.refresh_committed();
+            self.look_at_disk();
             if let Some(review) = self.review.as_mut().filter(|r| !r.is_reading()) {
                 review.refresh_later();
             }
@@ -2693,25 +2705,92 @@ impl App {
         self.editors = editors;
     }
 
-    fn refresh_tree(&mut self) {
-        self.explorer.refresh(&self.workspace);
-        let root = self.workspace.root().to_path_buf();
-        self.explorer.status.clear();
-        self.branch = current_branch(&root);
-        for change in changed_files(&root) {
+    /// Reads the tree and what git knows, away from the screen. This runs every couple of
+    /// seconds, and on the main thread it stopped typing and scrolling each time.
+    fn look_at_disk(&mut self) {
+        if self.disk_look.is_some() {
+            return;
+        }
+        let workspace = self.workspace.clone();
+        let opened = self.editors.iter().filter_map(|e| e.buffer.path());
+        let opened: Vec<PathBuf> = opened.map(Path::to_path_buf).collect();
+        let (done, look) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let root = workspace.root();
+            let inside = |path: &PathBuf| path.strip_prefix(root).unwrap_or(path).to_path_buf();
+            let _ = done.send(DiskLook {
+                entries: workspace.entries(),
+                branch: current_branch(root),
+                changes: changed_files(root),
+                committed: opened
+                    .iter()
+                    .map(|path| (path.clone(), head_text(root, &inside(path))))
+                    .collect(),
+            });
+        });
+        self.disk_look = Some(look);
+    }
+
+    /// Takes in what the disk said. Nothing else is touched unless something really changed,
+    /// so an idle window stays idle. Returns true if it did.
+    fn poll_disk(&mut self) -> bool {
+        let Some(look) = self
+            .disk_look
+            .as_ref()
+            .and_then(|look| look.try_recv().ok())
+        else {
+            return false;
+        };
+        self.disk_look = None;
+        let status = self.status_of(&look.changes);
+        let tree = self.explorer.entries != look.entries;
+        let marks = self.explorer.status != status;
+        let branch = self.branch != look.branch;
+        if tree {
+            self.explorer.show(look.entries);
+        }
+        self.explorer.status = status;
+        self.branch = look.branch;
+        let mut committed = false;
+        for (path, text) in look.committed {
+            let same = |e: &&mut Editor| e.buffer.path() == Some(path.as_path());
+            let text = (!text.is_empty()).then_some(text);
+            if let Some(editor) = self.editors.iter_mut().find(same)
+                && editor.committed != text
+            {
+                editor.committed = text;
+                editor.refresh_changes();
+                committed = true;
+            }
+        }
+        tree || marks || branch || committed
+    }
+
+    /// The marks for the explorer: each changed file's letter, and a dot on its folders.
+    fn status_of(&self, changes: &[cellix_review::Change]) -> HashMap<PathBuf, char> {
+        let root = self.workspace.root();
+        let mut status = HashMap::new();
+        for change in changes {
             let path = root.join(&change.path);
             for parent in path
                 .ancestors()
                 .skip(1)
-                .take_while(|p| p.starts_with(&root) && *p != root)
+                .take_while(|p| p.starts_with(root) && *p != root)
             {
-                self.explorer
-                    .status
-                    .entry(parent.to_path_buf())
-                    .or_insert('•');
+                status.entry(parent.to_path_buf()).or_insert('•');
             }
-            self.explorer.status.insert(path, change.status);
+            status.insert(path, change.status);
         }
+        status
+    }
+
+    fn refresh_tree(&mut self) {
+        // A look already on its way saw the tree before whatever brought this on.
+        self.disk_look = None;
+        self.explorer.refresh(&self.workspace);
+        let root = self.workspace.root().to_path_buf();
+        self.branch = current_branch(&root);
+        self.explorer.status = self.status_of(&changed_files(&root));
     }
 
     fn reveal(&mut self) {
@@ -8686,7 +8765,61 @@ mod tests {
         for _ in 0..EXPLORER_REFRESH_TICKS {
             app.handle(Event::Tick);
         }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.disk_look.is_some() {
+            assert!(std::time::Instant::now() < deadline);
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         assert!(screen(&app).text().contains("from-agent.txt"));
+    }
+
+    #[test]
+    fn the_regular_look_at_the_disk_never_holds_up_the_screen() {
+        let (dir, mut app) = project();
+        fs::write(dir.path().join("from-agent.txt"), "x").unwrap();
+        for _ in 0..EXPLORER_REFRESH_TICKS {
+            app.handle(Event::Tick);
+        }
+        assert!(app.disk_look.is_some(), "it went off on its own");
+        assert!(
+            !app.explorer
+                .entries
+                .iter()
+                .any(|e| e.name == "from-agent.txt"),
+            "and the tick didn't wait for it"
+        );
+    }
+
+    #[test]
+    fn a_look_that_finds_nothing_new_changes_nothing() {
+        let (_dir, mut app) = reviewed();
+        app.open(&app.workspace.root().join("alpha.txt")).unwrap();
+        let settled = |app: &mut App| {
+            app.look_at_disk();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                let changed = app.poll_disk();
+                if app.disk_look.is_none() {
+                    return changed;
+                }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        };
+        settled(&mut app);
+        assert!(
+            !settled(&mut app),
+            "so nothing is redrawn or compared again"
+        );
+    }
+
+    #[test]
+    fn a_stale_look_cant_undo_what_just_happened() {
+        let (_dir, mut app) = project();
+        app.look_at_disk();
+        app.refresh_tree();
+        assert!(app.disk_look.is_none());
     }
 
     fn git(dir: &Path, args: &[&str]) {
@@ -8920,6 +9053,12 @@ mod tests {
         fs::write(dir.path().join("beta.rs"), "changed\n").unwrap();
         for _ in 0..EXPLORER_REFRESH_TICKS {
             app.handle(Event::Tick);
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.disk_look.is_some() {
+            assert!(std::time::Instant::now() < deadline);
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(5));
         }
         let (_, y) = find(&screen(&app), "beta.rs");
         assert!(screen(&app).row_text(y).contains("M"));
