@@ -15,6 +15,8 @@ use cellix_doc::latex::Project;
 use cellix_lang::{Registry, Token};
 use cellix_render::{Bitmap, Font, INTERFACE_SIZE, Measure, Pixels};
 
+use crate::snippets::{Snippet, State};
+
 mod tex;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -367,6 +369,18 @@ pub struct Library {
     images: HashMap<(PathBuf, u32), Option<Figure>>,
     /// Diagrams by what they're drawn from, with why one couldn't be.
     diagrams: HashMap<(Kind, String, u32), Result<Figure, String>>,
+    /// Pieces of LaTeX that have been built, by their key and the room they had.
+    built: HashMap<(u64, u32), Option<Figure>>,
+}
+
+/// How a piece of LaTeX stands on the page.
+pub(crate) enum Built {
+    Shown(usize),
+    /// LaTeX is on it.
+    Waiting,
+    Failed(String),
+    /// Nothing here can build it.
+    Never,
 }
 
 /// What a page is written in.
@@ -407,6 +421,10 @@ pub struct Extras<'a> {
     pub library: Option<&'a RefCell<Library>>,
     /// Diagrams standing on their last good picture, and why the current source won't draw.
     pub broken: RefCell<Vec<(usize, String)>>,
+    /// Where built pieces of LaTeX are kept. Without it they aren't built.
+    pub built: Option<&'a Path>,
+    /// Pieces of LaTeX this page is waiting for.
+    pub wanted: RefCell<Vec<Snippet>>,
     /// Filled in by layout.
     pub figures: RefCell<Vec<Figure>>,
     /// The picture of a formula being edited in a line, filled in by layout.
@@ -428,6 +446,35 @@ fn figure_of(formula: &cellix_doc::math::Formula, cell: (u32, u32)) -> Figure {
         width: formula.width as f32 / cell.0 as f32,
         height: formula.height as f32 / cell.1 as f32,
         baseline: formula.baseline as f32 / cell.1 as f32,
+    }
+}
+
+/// Turns black lines on white paper into ink, so a drawing takes the sheet's colours. One with
+/// colours of its own stays as it is, on its paper.
+fn figure_of_built(page: &cellix_doc::pdf::Page, key: u64, cell: (u32, u32)) -> Figure {
+    let grey = page
+        .rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .all(|p| p[0].abs_diff(p[1]) < 8 && p[1].abs_diff(p[2]) < 8);
+    let (kind, pixels) = if grey {
+        let ink = page.rgba.as_chunks::<4>().0.iter().map(|p| 255 - p[1]);
+        (Pixels::Coverage, Arc::new(ink.collect::<Vec<u8>>()))
+    } else {
+        (Pixels::Rgba, page.rgba.clone())
+    };
+    Figure {
+        bitmap: Bitmap {
+            id: key ^ u64::from(page.width),
+            width: page.width,
+            height: page.height,
+            kind,
+            pixels,
+        },
+        width: page.width as f32 / cell.0 as f32,
+        height: page.height as f32 / cell.1 as f32,
+        baseline: 0.0,
     }
 }
 
@@ -999,6 +1046,44 @@ impl Context<'_> {
         }
     }
 
+    /// A piece of LaTeX for this page, once it's been built. Asking is what starts the build.
+    fn built(&self, body: &str, width: f32) -> Built {
+        let (Some(cell), Some(folder)) = (self.cell(), self.extras.built) else {
+            return Built::Never;
+        };
+        let setup = self.extras.project.as_ref().map(|p| p.setup.as_slice());
+        let tex = cellix_doc::latex::standalone(setup.unwrap_or_default(), body);
+        let snippet = Snippet::new(tex);
+        let key = snippet.key;
+        let wanted = (width * cell.0 as f32) as u32;
+        match crate::snippets::state(folder, key) {
+            State::Missing => {
+                self.extras.wanted.borrow_mut().push(snippet);
+                Built::Waiting
+            }
+            State::Failed(reason) => Built::Failed(reason),
+            State::Ready(path) => {
+                let make = || {
+                    let document = cellix_doc::pdf::Document::open(std::fs::read(&path).ok()?);
+                    // A point is about a thirteenth of a row of text.
+                    let scale = cell.1 as f32 / 13.5;
+                    let page = document.ok()?.render_at(0, scale, wanted)?;
+                    Some(figure_of_built(&page, key, cell))
+                };
+                let figure = match self.extras.library {
+                    Some(library) => library
+                        .borrow_mut()
+                        .built
+                        .entry((key, wanted))
+                        .or_insert_with(make)
+                        .clone(),
+                    None => make(),
+                };
+                figure.map_or(Built::Never, |figure| Built::Shown(self.keep(figure)))
+            }
+        }
+    }
+
     /// Loads an image for this page, and returns its index among the figures. LaTeX names
     /// files without their extension, and a figure is often a PDF.
     fn image(&self, source: &str, fit: Fit) -> Option<usize> {
@@ -1180,6 +1265,20 @@ fn code_rows(
     }
 }
 
+/// A fenced block of TikZ as LaTeX, in its environment unless it brought its own.
+fn fenced_tikz(language: &str, source: &str) -> String {
+    let name = if language == "tikzcd" {
+        "tikzcd"
+    } else {
+        "tikzpicture"
+    };
+    if source.contains("\\begin{") {
+        source.to_string()
+    } else {
+        format!("\\begin{{{name}}}\n{source}\n\\end{{{name}}}")
+    }
+}
+
 /// A small line under something, saying what's wrong with it.
 fn note_row(text: &str, line: usize, at: usize, context: &Context) -> Row {
     let mut note = decoration(text, Tone::Dim);
@@ -1266,6 +1365,35 @@ pub fn layout_with(
             let close = (i + 1..lines.len())
                 .find(|n| lines[*n].1.trim_start().starts_with("```"))
                 .unwrap_or(lines.len());
+            if matches!(language, "tikz" | "tikzcd") && context.cell().is_some() {
+                let last = close.min(lines.len() - 1);
+                let source: Vec<&str> = lines[i + 1..close].iter().map(|(_, l)| *l).collect();
+                let body = fenced_tikz(language, &source.join("\n"));
+                let end = lines[last].0 + lines[last].1.chars().count();
+                extras.spans.borrow_mut().push((offset, end + 1));
+                let open = extras.open == Some((offset, end + 1));
+                let inside = lines.get(i + 1).map_or(offset + 3, |(start, _)| *start);
+                let built = context.built(&body, width);
+                let shown = matches!(built, Built::Shown(_));
+                if !shown || open {
+                    code_rows(&lines[i..=last], i, "", &context, None, &mut rows);
+                }
+                match built {
+                    Built::Shown(figure) => {
+                        figure_rows(figure, &context, (i, inside, end), width, &mut rows);
+                        if open && let Some(row) = rows.iter_mut().rfind(|r| r.figure.is_some()) {
+                            row.stop = false;
+                        }
+                    }
+                    Built::Waiting => {
+                        rows.push(note_row("Drawing with LaTeX…", i, offset, &context));
+                    }
+                    Built::Failed(why) => rows.push(note_row(&why, i, offset, &context)),
+                    Built::Never => {}
+                }
+                i = close + 1;
+                continue;
+            }
             let kind = cellix_doc::diagram::kind_of(language).filter(|_| context.cell().is_some());
             let mut drawing = None;
             if let Some(kind) = kind {

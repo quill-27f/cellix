@@ -1,6 +1,6 @@
 use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use cellix_core::{Buffer, Motion, Selection, Selections};
@@ -16,6 +16,7 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::panels::Symbol;
 use crate::rendered::{self, Dialect, Extras, Figure, Glyph, Intent, Library, Row, Target, Tone};
+use crate::snippets::Snippet;
 use crate::theme::Theme;
 
 const TAB_WIDTH: usize = 4;
@@ -115,6 +116,10 @@ pub struct Editor {
     library: RefCell<Library>,
     /// Whether the sheet is dark, which diagrams are drawn for.
     dark: Cell<bool>,
+    /// Where built pieces of LaTeX are kept.
+    pub built: Option<PathBuf>,
+    /// Pieces of LaTeX this page is waiting for, for the app to have built.
+    wanted: RefCell<Vec<Snippet>>,
     /// Text comments are about, as char ranges, tinted on a page.
     pub quoted: RefCell<Vec<(usize, usize)>>,
     /// The paper this file belongs to, and the revision it was read at.
@@ -174,6 +179,8 @@ impl Editor {
             page: RefCell::new(None),
             library: RefCell::default(),
             dark: Cell::new(false),
+            built: None,
+            wanted: RefCell::default(),
             quoted: RefCell::default(),
             project: RefCell::new(None),
             show_preamble: false,
@@ -468,9 +475,11 @@ impl Editor {
             folder,
             library: Some(&self.library),
             dark: self.dark.get(),
+            built: self.built.as_deref(),
             ..Extras::default()
         };
         let rows = rendered::layout_with(text, width, &*self.measure, &self.registry, &extras);
+        self.wanted.borrow_mut().extend(extras.wanted.take());
         (
             Rc::new(rows),
             extras.figures.into_inner(),
@@ -549,6 +558,16 @@ impl Editor {
                 color: theme.text.fg,
             });
         }
+    }
+
+    /// What this page is waiting on LaTeX for.
+    pub fn take_wanted(&self) -> Vec<Snippet> {
+        self.wanted.take()
+    }
+
+    /// Sets the page again, now something it was waiting for has come.
+    pub fn refresh_page(&mut self) {
+        *self.page.borrow_mut() = None;
     }
 
     /// Text is measured differently from here on, so the page has to be set again.

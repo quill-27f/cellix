@@ -36,6 +36,12 @@ impl Document {
         Some((width, height))
     }
 
+    /// Draws a page at `scale` pixels to the point, or smaller if that would pass `max_width`.
+    pub fn render_at(&self, page: usize, scale: f32, max_width: u32) -> Option<Page> {
+        let (width, _) = self.size(page)?;
+        self.render(page, ((width * scale) as u32).clamp(1, max_width.max(1)))
+    }
+
     /// Draws a page `width` pixels wide.
     pub fn render(&self, page: usize, width: u32) -> Option<Page> {
         let pages = self.pdf.pages();

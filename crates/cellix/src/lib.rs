@@ -20,6 +20,7 @@ mod review;
 mod search;
 mod settings;
 mod settings_page;
+mod snippets;
 mod terminal;
 mod theme;
 mod threads;

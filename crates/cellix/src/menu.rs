@@ -40,6 +40,8 @@ pub enum Action {
     TypeImagePath,
     /// Adds a new diagram from a template.
     Diagram(usize),
+    /// Adds a drawing to a paper from a template.
+    PaperDiagram(usize),
 }
 
 /// One row. `None` for an action shows what can't be done here, rather than hiding it, so

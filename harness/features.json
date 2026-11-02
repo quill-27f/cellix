@@ -1062,5 +1062,40 @@
     "title": "SVG files show as images",
     "test": "plain_svg_becomes_pixels",
     "passes": true
+  },
+  {
+    "id": "tikz-built",
+    "milestone": 9,
+    "title": "TikZ and commutative diagrams are built in the background and show on the page",
+    "test": "a_commutative_diagram_is_built_in_the_background_and_shows",
+    "passes": true
+  },
+  {
+    "id": "tikz-error",
+    "milestone": 9,
+    "title": "A drawing LaTeX refuses says why",
+    "test": "a_piece_latex_refuses_says_why",
+    "passes": true
+  },
+  {
+    "id": "tikz-md",
+    "milestone": 9,
+    "title": "A TikZ block in Markdown is built too",
+    "test": "a_tikz_block_in_markdown_is_built_too",
+    "passes": true
+  },
+  {
+    "id": "tikz-setup",
+    "milestone": 9,
+    "title": "A drawing built alone keeps the paper's setup",
+    "test": "a_piece_built_alone_keeps_the_papers_setup_and_not_its_page",
+    "passes": true
+  },
+  {
+    "id": "tikz-tool",
+    "milestone": 9,
+    "title": "The toolbar adds a drawing to a paper",
+    "test": "a_paper_is_offered_drawings_of_its_own",
+    "passes": true
   }
 ]

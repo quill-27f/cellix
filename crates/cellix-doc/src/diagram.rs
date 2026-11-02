@@ -74,6 +74,26 @@ pub const TEMPLATES: [(&str, &str, &str); 9] = [
     ("Graph", "dot", "digraph {\n  a -> b\n  b -> c\n}"),
 ];
 
+/// What a new drawing in a paper starts as: its name and its LaTeX.
+pub const PAPER_TEMPLATES: [(&str, &str); 4] = [
+    (
+        "Commutative Diagram",
+        "\\begin{tikzcd}\n  A \\arrow[r, \"f\"] \\arrow[d, \"g\"'] & B \\arrow[d, \"h\"] \\\\\n  C \\arrow[r, \"k\"'] & D\n\\end{tikzcd}",
+    ),
+    (
+        "Flow",
+        "\\begin{tikzpicture}[every node/.style={draw, rounded corners, inner sep=6pt}]\n  \\node (a) at (0,0) {Input};\n  \\node (b) at (3,0) {Model};\n  \\node (c) at (6,0) {Output};\n  \\draw[->] (a) -- (b);\n  \\draw[->] (b) -- (c);\n\\end{tikzpicture}",
+    ),
+    (
+        "Axes and Curve",
+        "\\begin{tikzpicture}\n  \\draw[->] (0,0) -- (4,0) node[right] {$x$};\n  \\draw[->] (0,0) -- (0,3) node[above] {$y$};\n  \\draw[thick] (0,0) .. controls (1,3) and (3,0) .. (4,2.5);\n\\end{tikzpicture}",
+    ),
+    (
+        "Tree",
+        "\\begin{tikzpicture}[level distance=12mm, sibling distance=20mm]\n  \\node {Root}\n    child { node {Left} }\n    child { node {Right} };\n\\end{tikzpicture}",
+    ),
+];
+
 thread_local! {
     /// Set while a diagram is being drawn, when a half-typed one may panic the library.
     static DRAWING: Cell<bool> = const { Cell::new(false) };

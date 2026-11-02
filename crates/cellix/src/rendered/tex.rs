@@ -596,6 +596,35 @@ impl Page<'_, '_> {
         margin_numbers(&numbers, at, height, self.width, context, self.rows);
     }
 
+    /// Something only LaTeX can draw, as a picture once it's built and as source until then.
+    fn drawn(&mut self, first: usize, last: usize) {
+        let start = self.lines[first].0;
+        let end = self.line_end(last);
+        let context = self.context;
+        context.extras.spans.borrow_mut().push((start, end + 1));
+        let open = context.extras.open == Some((start, end + 1));
+        let source: Vec<&str> = self.lines[first..=last].iter().map(|(_, l)| *l).collect();
+        let built = context.built(&source.join("\n"), self.width);
+        let shown = matches!(built, Built::Shown(_));
+        if open || !shown {
+            let lines = &self.lines[first..=last];
+            code_rows(lines, first, "", context, Some(Tone::Dim), self.rows);
+        }
+        match built {
+            Built::Shown(figure) => {
+                let at = self.rows.len();
+                let inside = self.lines[(first + 1).min(last)].0;
+                figure_rows(figure, context, (first, inside, end), self.width, self.rows);
+                if open {
+                    self.rows[at].stop = false;
+                }
+            }
+            Built::Waiting => self.label("Drawing with LaTeX…", last),
+            Built::Failed(why) => self.label(&format!("Can't draw this: {why}"), last),
+            Built::Never => {}
+        }
+    }
+
     /// A list of what's in a `figure`: the image and its caption.
     fn figure(&mut self, first: usize, last: usize) {
         self.counters.figures += 1;
@@ -607,6 +636,16 @@ impl Page<'_, '_> {
             let share = cellix_doc::figure::graphics_width(line);
             Some((chars[start..end].iter().collect::<String>(), share))
         });
+        let drawn = (first..=last).find_map(|from| {
+            let name = env_begin(self.lines[from].1)?;
+            let close = format!("\\end{{{name}}}");
+            let is_drawn = cellix_doc::latex::DRAWN.contains(&name);
+            let to = (from..=last).find(|n| self.lines[*n].1.contains(&close))?;
+            is_drawn.then_some((from, to))
+        });
+        if let (None, Some((from, to))) = (&image, drawn) {
+            self.drawn(from, to);
+        }
         if let Some((path, share)) = image {
             let shown = self.context.image(&path, fit_for(share, self.width));
             match shown {
@@ -982,6 +1021,7 @@ impl Page<'_, '_> {
                 self.caption("Table", self.counters.tables, index, last);
             }
             "tabular" => self.tabular(index, last),
+            _ if cellix_doc::latex::DRAWN.contains(&name) => self.drawn(index, last),
             _ if VERBATIM.contains(&name) => {
                 let code = &self.lines[index + 1..last];
                 code_rows(code, index + 1, "", self.context, None, self.rows);

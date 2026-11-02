@@ -485,6 +485,9 @@ pub struct App {
     system_browser: Vec<String>,
     /// What saves the clipboard's picture to the file named last.
     clipboard_image: Vec<String>,
+    /// Where pieces of LaTeX built for pages are kept, and what builds them.
+    built_folder: PathBuf,
+    snippets: Option<crate::snippets::Worker>,
     /// A page on its way to the browser, and whether it got there.
     browser_result: Option<(String, std::sync::mpsc::Receiver<bool>)>,
     /// Set when the user asks to leave.
@@ -519,6 +522,8 @@ impl App {
             ticks: 0,
             review: None,
             clipboard_image: clipboard_image_command(),
+            built_folder: crate::snippets::default_folder(),
+            snippets: None,
             system_browser: vec![
                 if cfg!(target_os = "macos") {
                     "open"
@@ -671,6 +676,7 @@ impl App {
         })?;
         let mut editor = Editor::new(buffer, self.measure.clone(), self.registry.clone());
         editor.minimap_on = self.settings.minimap != Some(false);
+        editor.built = Some(self.built_folder.clone());
         self.load_committed(&mut editor);
         self.editors.push(editor);
         self.set_active(self.editors.len() - 1);
@@ -894,6 +900,30 @@ impl App {
     }
 
     /// Sends edits to servers and handles their replies. Returns true if anything changed.
+    /// Passes on what pages are waiting for, and sets them again as it comes.
+    fn poll_snippets(&mut self) -> bool {
+        let wanted: Vec<_> = self.editors.iter().flat_map(Editor::take_wanted).collect();
+        if !wanted.is_empty() && self.snippets.is_none() {
+            let folder = self.built_folder.clone();
+            self.snippets = self
+                .latex_engine()
+                .map(|engine| crate::snippets::Worker::start(engine, folder));
+        }
+        let Some(worker) = &mut self.snippets else {
+            return false;
+        };
+        for snippet in wanted {
+            worker.ask(snippet);
+        }
+        let finished = worker.poll();
+        if finished {
+            for editor in &mut self.editors {
+                editor.refresh_page();
+            }
+        }
+        finished
+    }
+
     pub fn poll(&mut self) -> bool {
         for editor in &mut self.editors {
             if editor.synced == editor.buffer.revision() {
@@ -925,8 +955,11 @@ impl App {
         let terminal = self.dock.poll(&self.theme);
         let searched = self.search.poll();
         let reviewed = self.review.as_mut().is_some_and(Review::poll);
-        let installed =
-            self.poll_install() | self.poll_browser() | self.poll_offer() | self.poll_build();
+        let installed = self.poll_install()
+            | self.poll_browser()
+            | self.poll_offer()
+            | self.poll_build()
+            | self.poll_snippets();
         let mut events = Vec::new();
         for client in self.servers.values() {
             events.extend(client.events.try_iter());
@@ -4789,6 +4822,15 @@ impl App {
                 }
                 self.reveal();
             }
+            MenuAction::PaperDiagram(index) => {
+                let (_, source) = cellix_doc::diagram::PAPER_TEMPLATES[index];
+                let area = self.focused_area();
+                if let Some(editor) = self.editor_mut() {
+                    editor.prepare_edit(area);
+                    editor.insert_block(source, 2);
+                }
+                self.reveal();
+            }
             MenuAction::Table(edit) => {
                 if let Some(editor) = self.editor_mut() {
                     editor.edit_table(edit);
@@ -6132,6 +6174,13 @@ impl App {
                     MenuItem::new("Paste from Clipboard", MenuAction::PasteImage),
                     MenuItem::new("Type a Path…", MenuAction::TypeImagePath),
                 ];
+                self.show_menu((x, 3), items);
+            }
+            Tool::Diagram if self.page_dialect() == Dialect::Latex => {
+                let templates = cellix_doc::diagram::PAPER_TEMPLATES.iter().enumerate();
+                let items = templates
+                    .map(|(index, (name, _))| MenuItem::new(name, MenuAction::PaperDiagram(index)))
+                    .collect();
                 self.show_menu((x, 3), items);
             }
             Tool::Diagram => {
@@ -8965,6 +9014,96 @@ mod tests {
         assert_eq!(app.active_text().unwrap(), "words\n");
         let left = fs::read_dir(dir.path().join("images")).unwrap().count();
         assert_eq!(left, 0);
+    }
+
+    /// A stand-in for LaTeX that makes a real PDF, and proves it ran.
+    fn fake_latex(dir: &Path, reply: &str) -> Vec<String> {
+        let script = dir.join("latex.sh");
+        fs::write(&script, format!("#!/bin/sh\n{reply}\n")).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        vec![script.display().to_string()]
+    }
+
+    fn waits_for(app: &mut App, done: impl Fn(&App) -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !done(app) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{}",
+                painted_text(app)
+            );
+            app.poll();
+            let _ = screen(app);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    fn tikz_paper(reply: &str) -> (TempDir, App) {
+        let dir = tempfile::tempdir().unwrap();
+        let sample = dir.path().join("sample.pdf");
+        fs::write(&sample, cellix_doc::pdf::sample()).unwrap();
+        let reply = reply.replace("SAMPLE", &sample.display().to_string());
+        let source = "\\documentclass{article}\n\\usepackage{tikz}\n\\begin{document}\n\\begin{tikzcd}\nA \\arrow[r] & B\n\\end{tikzcd}\n\\end{document}\n";
+        fs::write(dir.path().join("paper.tex"), source).unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(10, 20)));
+        app.settings.latex_engine = Some(fake_latex(dir.path(), &reply));
+        app.built_folder = dir.path().join("built");
+        app.open(&dir.path().join("paper.tex")).unwrap();
+        (dir, app)
+    }
+
+    #[test]
+    fn a_commutative_diagram_is_built_in_the_background_and_shows() {
+        let (dir, mut app) = tikz_paper("grep -q tikz-cd snippet.tex && cp SAMPLE snippet.pdf");
+        assert!(painted_text(&app).contains("Drawing with LaTeX"));
+        assert!(pictures(&app).is_empty());
+        waits_for(&mut app, |app| !pictures(app).is_empty());
+        assert!(!painted_text(&app).contains("Drawing with LaTeX"));
+        // The file it came from is gone, and the picture stays for next time.
+        let kept = fs::read_dir(dir.path().join("built")).unwrap().count();
+        assert_eq!(kept, 1);
+    }
+
+    #[test]
+    fn a_piece_latex_refuses_says_why() {
+        let (_dir, mut app) = tikz_paper("echo '! Package tikz Error: no such library'; exit 1");
+        waits_for(&mut app, |app| {
+            painted_text(app).contains("no such library")
+        });
+    }
+
+    #[test]
+    fn a_paper_is_offered_drawings_of_its_own() {
+        let (_dir, mut app) = tikz_paper("cp SAMPLE snippet.pdf");
+        app.use_tool(Tool::Diagram, 40);
+        let (x, y) = find(&screen(&app), "Flow");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        let text = app.active_text().unwrap();
+        assert!(text.contains("\\begin{tikzpicture}[every node"), "{text}");
+    }
+
+    #[test]
+    fn a_tikz_block_in_markdown_is_built_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let sample = dir.path().join("sample.pdf");
+        fs::write(&sample, cellix_doc::pdf::sample()).unwrap();
+        fs::write(
+            dir.path().join("note.md"),
+            "```tikz\n\\draw (0,0) -- (1,1);\n```\n",
+        )
+        .unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(10, 20)));
+        let reply = format!(
+            "grep -q 'begin{{tikzpicture}}' snippet.tex && cp {} snippet.pdf",
+            sample.display()
+        );
+        app.settings.latex_engine = Some(fake_latex(dir.path(), &reply));
+        app.built_folder = dir.path().join("built");
+        app.open(&dir.path().join("note.md")).unwrap();
+        waits_for(&mut app, |app| !pictures(app).is_empty());
     }
 
     #[test]

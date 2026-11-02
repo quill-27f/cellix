@@ -137,7 +137,10 @@ unchanged. On a page, arrows and Home and End move by what's shown.
 Diagrams are text in the document. A fenced `mermaid`, `dot` or `svg` block stands on the page as
 a picture, and opens to its source with the picture under it while it's written. They are drawn by
 pure Rust (`mermaid-rs-renderer`, `layout-rs`, `resvg`), so nothing needs a browser or Node, and
-the web page and PDF export carry them too. An image's size is written as `{width=50%}`, which
+the web page and PDF export carry them too. What only LaTeX can draw (TikZ, `tikzcd`, `forest`,
+`circuitikz`, `algorithm`) is built alone in the background with the paper's own engine and setup,
+and kept by its content in the cache folder, so typing never waits. Line art becomes ink in the
+sheet's colour, so it reads in both themes. An image's size is written as `{width=50%}`, which
 Pandoc reads as well, and as `width=0.5\linewidth` in a paper.
 
 Markdown and LaTeX share one page: `rendered.rs` lays out Markdown and `rendered/tex.rs` lays out

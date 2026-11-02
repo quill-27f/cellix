@@ -131,6 +131,8 @@ pub struct Project {
     pub starts: HashMap<PathBuf, Counters>,
     /// What each citation key shows as: author and year.
     pub citations: HashMap<String, String>,
+    /// The paper's own packages and commands, which a piece built alone still needs.
+    pub setup: Vec<String>,
 }
 
 /// The argument of `\name{...}` on a line, as a byte range.
@@ -432,6 +434,7 @@ impl Project {
     }
 
     fn lines(&mut self, text: &str, folder: &Path, counters: &mut Counters, depth: usize) {
+        self.setup.extend(setup_of(text));
         let mut current = String::new();
         let lines: Vec<&str> = text.lines().collect();
         let mut index = 0;
@@ -779,6 +782,88 @@ pub fn new_table(rows: usize, columns: usize) -> String {
     out
 }
 
+/// Environments only LaTeX can draw, each built on its own for the page.
+pub const DRAWN: [&str; 7] = [
+    "tikzpicture",
+    "tikzcd",
+    "forest",
+    "circuitikz",
+    "algorithm",
+    "algorithmic",
+    "algorithm2e",
+];
+
+/// What starts a line of setup a piece built alone needs too.
+const SETUP: [&str; 10] = [
+    "\\usepackage",
+    "\\usetikzlibrary",
+    "\\usepgfplotslibrary",
+    "\\tikzset",
+    "\\tikzcdset",
+    "\\pgfplotsset",
+    "\\newcommand",
+    "\\renewcommand",
+    "\\DeclareMathOperator",
+    "\\def",
+];
+
+/// Packages that shape a whole document, which a small picture must not have.
+const PAGE_PACKAGES: [&str; 5] = ["geometry", "hyperref", "cleveref", "fancyhdr", "natbib"];
+
+/// The lines of a file's preamble worth repeating, with commands that run over several lines
+/// kept whole.
+fn setup_of(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut lines = text.lines();
+    while let Some(line) = lines.next() {
+        if line.contains("\\begin{document}") {
+            break;
+        }
+        let code = line.split('%').next().unwrap_or("").trim();
+        let wanted = SETUP.iter().any(|start| code.starts_with(start))
+            && !PAGE_PACKAGES.iter().any(|name| code.contains(name));
+        if !wanted {
+            continue;
+        }
+        let mut whole = code.to_string();
+        let open = |text: &str| text.matches('{').count() as i64 - text.matches('}').count() as i64;
+        while open(&whole) > 0 {
+            let Some(next) = lines.next() else { break };
+            whole.push('\n');
+            whole.push_str(next.split('%').next().unwrap_or(""));
+        }
+        out.push(whole);
+    }
+    out
+}
+
+/// A piece of a paper as a file of its own, cut to its size.
+pub fn standalone(setup: &[String], body: &str) -> String {
+    let mut out = String::from(
+        "\\documentclass[border=2pt,varwidth=16cm]{standalone}\n\\usepackage{amsmath,amssymb}\n\\usepackage{tikz}\n",
+    );
+    if body.contains("tikzcd") {
+        out.push_str("\\usepackage{tikz-cd}\n");
+    }
+    if body.contains("\\begin{algorithm}") {
+        out.push_str("\\usepackage{algorithm,algpseudocode}\n");
+    }
+    if body.contains("forest") {
+        out.push_str("\\usepackage{forest}\n");
+    }
+    if body.contains("circuitikz") {
+        out.push_str("\\usepackage{circuitikz}\n");
+    }
+    for line in setup {
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.push_str("\\begin{document}\n");
+    out.push_str(body);
+    out.push_str("\n\\end{document}\n");
+    out
+}
+
 /// Where a cell's text starts in a `tabular`'s lines, in chars.
 pub fn tabular_cell_offset(text: &str, row: usize, column: usize) -> usize {
     let is_row = |line: &&str| line.contains("\\\\");
@@ -946,6 +1031,20 @@ pub fn from_markdown_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_piece_built_alone_keeps_the_papers_setup_and_not_its_page() {
+        let text = "\\documentclass{article}\n\\usepackage{tikz,bm}\n\\usepackage{hyperref}\n\\usepackage[margin=1in]{geometry}\n\\usetikzlibrary{arrows.meta}\n\\tikzset{\n  box/.style={draw}\n}\n\\newcommand{\\R}{\\mathbb{R}} % reals\n\\begin{document}\n\\newcommand{\\later}{x}\n\\end{document}\n";
+        let setup = setup_of(text);
+        assert_eq!(setup.len(), 4, "{setup:?}");
+        assert!(setup[2].contains("box/.style"));
+        let tex = standalone(&setup, "\\begin{tikzcd} A \\arrow[r] & B \\end{tikzcd}");
+        assert!(tex.contains("\\usepackage{tikz-cd}"));
+        assert!(tex.contains("\\newcommand{\\R}"));
+        assert!(!tex.contains("geometry"));
+        assert!(!tex.contains("later"));
+        assert!(tex.ends_with("\\end{document}\n"));
+    }
 
     #[test]
     fn a_diagram_and_a_sized_image_reach_the_paper() {
