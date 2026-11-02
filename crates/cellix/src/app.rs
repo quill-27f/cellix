@@ -47,6 +47,7 @@ use crate::review::{Hit, Review};
 use crate::search::{self, Field, Search};
 use crate::settings::{SERVERS, Settings, default_server, formatter};
 use crate::settings_page::{Control, Found, SettingsPage, Values};
+use crate::snippets::Snippet;
 use crate::theme::Theme;
 use crate::threads::{self, Draft, Hit as ThreadHit};
 use crate::toolbar::{self, Tool};
@@ -359,6 +360,24 @@ fn svg_as_pictures(text: &str, folder: &Path, made: &mut Vec<PathBuf>) -> String
         picture.unwrap_or_else(|| line.to_string())
     });
     lines.collect::<Vec<_>>().join("\n")
+}
+
+/// What's been built for a block of LaTeX, as a picture a page can hold in itself.
+fn built_as_html(folder: &Path, body: &str) -> Option<String> {
+    use base64::Engine;
+    const WIDTH: u32 = 1200;
+    const SCALE: f32 = 2.5;
+    let snippet = Snippet::new(cellix_doc::latex::standalone(&[], body));
+    let crate::snippets::State::Ready(path) = crate::snippets::state(folder, snippet.key) else {
+        return None;
+    };
+    let document = cellix_doc::pdf::Document::open(std::fs::read(path).ok()?).ok()?;
+    let page = document.render_at(0, SCALE, WIDTH)?;
+    let image = image::RgbaImage::from_raw(page.width, page.height, page.rgba.as_ref().clone())?;
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    image.write_to(&mut bytes, image::ImageFormat::Png).ok()?;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes.into_inner());
+    Some(format!("<img src=\"data:image/png;base64,{encoded}\">"))
 }
 
 /// Draws a diagram for print, on white and sharp enough for paper.
@@ -3433,10 +3452,13 @@ impl App {
         let name = path.file_stem().map(|n| n.to_string_lossy().into_owned());
         let title = name.unwrap_or_else(|| "Document".to_string());
         let base = path.parent().map(|p| p.display().to_string());
-        let page = cellix_doc::html::page(
+        let built = self.built_folder.clone();
+        let picture = move |body: &str| built_as_html(&built, body);
+        let page = cellix_doc::html::page_with(
             &title,
             &editor.buffer.text(),
             base.as_deref().unwrap_or_default(),
+            &picture,
         );
         let folder = std::env::temp_dir().join("cellix-pages");
         std::fs::create_dir_all(&folder)?;
@@ -10617,6 +10639,24 @@ mod tests {
         assert!(grid.row_text(area.y).contains("Agents"), "{}", grid.text());
         // The panel doesn't say it twice.
         assert!(!grid.row_text(area.y + 1).contains("Agents"));
+    }
+
+    #[test]
+    fn a_built_drawing_is_carried_inside_the_web_page() {
+        let dir = tempfile::tempdir().unwrap();
+        let body = "\\begin{tikzpicture}\n\\draw (0,0);\n\\end{tikzpicture}";
+        let snippet = Snippet::new(cellix_doc::latex::standalone(&[], body));
+        fs::write(
+            dir.path().join(format!("{:016x}.pdf", snippet.key)),
+            cellix_doc::pdf::sample(),
+        )
+        .unwrap();
+        let html = built_as_html(dir.path(), body).unwrap();
+        assert!(
+            html.starts_with("<img src=\"data:image/png;base64,"),
+            "{html}"
+        );
+        assert!(built_as_html(dir.path(), "something else").is_none());
     }
 
     #[test]

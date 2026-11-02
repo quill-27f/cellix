@@ -1621,20 +1621,6 @@ fn cell_outputs(
     }
 }
 
-/// A fenced block of TikZ as LaTeX, in its environment unless it brought its own.
-fn fenced_tikz(language: &str, source: &str) -> String {
-    let name = if language == "tikzcd" {
-        "tikzcd"
-    } else {
-        "tikzpicture"
-    };
-    if source.contains("\\begin{") {
-        source.to_string()
-    } else {
-        format!("\\begin{{{name}}}\n{source}\n\\end{{{name}}}")
-    }
-}
-
 /// A small line under something, saying what's wrong with it.
 fn note_row(text: &str, line: usize, at: usize, context: &Context) -> Row {
     let mut note = decoration(text, Tone::Dim);
@@ -1734,10 +1720,10 @@ pub fn layout_with(
             let close = (i + 1..lines.len())
                 .find(|n| lines[*n].1.trim_start().starts_with("```"))
                 .unwrap_or(lines.len());
-            if matches!(language, "tikz" | "tikzcd") && context.cell().is_some() {
+            if cellix_doc::diagram::is_tikz(language) && context.cell().is_some() {
                 let last = close.min(lines.len() - 1);
                 let source: Vec<&str> = lines[i + 1..close].iter().map(|(_, l)| *l).collect();
-                let body = fenced_tikz(language, &source.join("\n"));
+                let body = cellix_doc::diagram::fenced_tikz(language, &source.join("\n"));
                 let end = lines[last].0 + lines[last].1.chars().count();
                 extras.spans.borrow_mut().push((offset, end + 1));
                 let open = extras.open == Some((offset, end + 1));

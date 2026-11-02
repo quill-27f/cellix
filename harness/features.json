@@ -1622,5 +1622,33 @@
     "title": "A hook with no details asks nothing of a running Cellix",
     "test": "a_hook_with_no_details_asks_nothing_of_a_running_cellix",
     "passes": true
+  },
+  {
+    "id": "math-limits-text",
+    "milestone": 9,
+    "title": "Limits asked for in running text stand over and under",
+    "test": "limits_asked_for_in_running_text_stand_over_and_under",
+    "passes": true
+  },
+  {
+    "id": "web-tikz",
+    "milestone": 9,
+    "title": "TikZ reaches the web page once it's been built",
+    "test": "tikz_reaches_the_web_page_once_it_has_been_built",
+    "passes": true
+  },
+  {
+    "id": "web-tikz-image",
+    "milestone": 9,
+    "title": "A built drawing is carried inside the web page",
+    "test": "a_built_drawing_is_carried_inside_the_web_page",
+    "passes": true
+  },
+  {
+    "id": "pdf-tikz",
+    "milestone": 9,
+    "title": "TikZ goes into an exported PDF as itself",
+    "test": "tikz_goes_into_the_paper_as_itself",
+    "passes": true
   }
 ]

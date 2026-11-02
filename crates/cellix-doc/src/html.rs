@@ -59,6 +59,15 @@ fn formula(source: &str, display: bool) -> String {
     }
 }
 
+/// A block only LaTeX can draw, as what `built` has for it, or as its source.
+fn built_or_source(language: &str, source: &str, built: &Built) -> String {
+    let body = diagram::fenced_tikz(language, source);
+    match built(&body) {
+        Some(picture) => format!("<div class=\"diagram\">{picture}</div>"),
+        None => format!("<pre><code>{}</code></pre>", escape(source)),
+    }
+}
+
 /// A diagram as a picture, or its source if it can't be drawn.
 fn drawn(kind: diagram::Kind, source: &str) -> String {
     match diagram::svg(kind, source, false) {
@@ -140,6 +149,14 @@ pub fn marked(markdown: &str) -> String {
 
 /// The body of a Markdown document. Formulas that won't parse stay as their source.
 pub fn body(markdown: &str) -> String {
+    body_with(markdown, &|_| None)
+}
+
+/// What's already been built for a block of LaTeX, as HTML.
+pub type Built<'a> = dyn Fn(&str) -> Option<String> + 'a;
+
+/// The body of a Markdown document, with what's been built for its blocks of TikZ.
+pub fn body_with(markdown: &str, built: &Built) -> String {
     let options = Options::ENABLE_TABLES
         | Options::ENABLE_TASKLISTS
         | Options::ENABLE_STRIKETHROUGH
@@ -156,8 +173,26 @@ pub fn body(markdown: &str) -> String {
     let sized = marked(&sized);
     let mut events = Vec::new();
     let mut open: Option<(diagram::Kind, String)> = None;
+    let mut tikz: Option<(String, String)> = None;
     for event in Parser::new_ext(&sized, options) {
+        if let Some((language, source)) = &mut tikz {
+            match event {
+                Event::Text(text) => source.push_str(&text),
+                Event::End(TagEnd::CodeBlock) => {
+                    let html = built_or_source(language, source.trim_end(), built);
+                    events.push(Event::Html(html.into()));
+                    tikz = None;
+                }
+                _ => {}
+            }
+            continue;
+        }
         match (&mut open, event) {
+            (None, Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(language))))
+                if diagram::is_tikz(&language) =>
+            {
+                tikz = Some((language.to_string(), String::new()));
+            }
             (None, Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(language))))
                 if diagram::kind_of(&language).is_some() =>
             {
@@ -184,13 +219,18 @@ pub fn body(markdown: &str) -> String {
 
 /// A whole page. `base` is the folder relative links and images start from.
 pub fn page(title: &str, markdown: &str, base: &str) -> String {
+    page_with(title, markdown, base, &|_| None)
+}
+
+/// A whole page, with what's been built for its blocks of TikZ.
+pub fn page_with(title: &str, markdown: &str, base: &str, built: &Built) -> String {
     format!(
         "<!doctype html>\n<html><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width\">\
          <title>{}</title><base href=\"file://{}/\"><style>{STYLE}</style></head>\n<body>\n{}</body></html>\n",
         escape(title),
         escape(base),
-        body(markdown)
+        body_with(markdown, built)
     )
 }
 
@@ -235,6 +275,21 @@ mod tests {
         ] {
             assert!(html.contains(want), "{want}: {html}");
         }
+    }
+
+    #[test]
+    fn tikz_reaches_the_web_page_once_it_has_been_built() {
+        let text = "```tikz\n\\draw (0,0);\n```\n";
+        assert!(
+            body(text).contains("\\draw"),
+            "unbuilt, it stays as its source"
+        );
+        let html = body_with(text, &|tex| {
+            assert!(tex.contains("\\begin{tikzpicture}"));
+            Some("<img src=\"drawn\">".to_string())
+        });
+        assert!(html.contains("<img src=\"drawn\">"), "{html}");
+        assert!(!html.contains("\\draw"), "{html}");
     }
 
     #[test]

@@ -19,6 +19,25 @@ pub enum Kind {
     Svg,
 }
 
+/// Whether a fence holds TikZ, which only LaTeX can draw.
+pub fn is_tikz(language: &str) -> bool {
+    matches!(language.split_whitespace().next(), Some("tikz" | "tikzcd"))
+}
+
+/// A fenced block of TikZ as LaTeX, in its environment unless it brought its own.
+pub fn fenced_tikz(language: &str, source: &str) -> String {
+    let name = if language.starts_with("tikzcd") {
+        "tikzcd"
+    } else {
+        "tikzpicture"
+    };
+    if source.contains("\\begin{") {
+        source.to_string()
+    } else {
+        format!("\\begin{{{name}}}\n{source}\n\\end{{{name}}}")
+    }
+}
+
 /// The kind a fence's language names.
 pub fn kind_of(language: &str) -> Option<Kind> {
     match language.split_whitespace().next()? {

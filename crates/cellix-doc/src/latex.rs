@@ -1,7 +1,7 @@
 //! What a paper needs that isn't on the page: which file to build, what to build it with,
 //! what went wrong and where, and Markdown turned into LaTeX for export.
 
-use crate::diagram::{Kind, kind_of};
+use crate::diagram::{Kind, fenced_tikz, is_tikz, kind_of};
 use crate::figure;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -946,8 +946,21 @@ pub fn from_markdown_with(
     let mut columns = 0;
     let mut cell = 0;
     let mut diagram: Option<(Kind, String)> = None;
+    let mut tikz: Option<(String, String)> = None;
     let mut skipping = false;
     for event in Parser::new_ext(&markdown, options) {
+        if let Some((language, source)) = &mut tikz {
+            match event {
+                Event::Text(text) => source.push_str(&text),
+                Event::End(TagEnd::CodeBlock) => {
+                    let body = fenced_tikz(language, source.trim_end());
+                    out.push_str(&format!("\n\\begin{{center}}\n{body}\n\\end{{center}}\n"));
+                    tikz = None;
+                }
+                _ => {}
+            }
+            continue;
+        }
         if let Some((kind, source)) = &mut diagram {
             match event {
                 Event::Text(text) => source.push_str(&text),
@@ -1024,6 +1037,9 @@ pub fn from_markdown_with(
             {
                 diagram = kind_of(&language).map(|kind| (kind, String::new()));
             }
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(language))) if is_tikz(&language) => {
+                tikz = Some((language.to_string(), String::new()));
+            }
             Event::Start(Tag::CodeBlock(_)) => {
                 verbatim = true;
                 out.push_str("\n\\begin{verbatim}\n");
@@ -1085,6 +1101,16 @@ mod tests {
         assert!(!tex.contains("geometry"));
         assert!(!tex.contains("later"));
         assert!(tex.ends_with("\\end{document}\n"));
+    }
+
+    #[test]
+    fn tikz_goes_into_the_paper_as_itself() {
+        let tex = from_markdown("```tikz\n\\draw (0,0) -- (1,1);\n```\n");
+        assert!(
+            tex.contains("\\begin{tikzpicture}\n\\draw (0,0) -- (1,1);\n\\end{tikzpicture}"),
+            "{tex}"
+        );
+        assert!(!tex.contains("verbatim"), "{tex}");
     }
 
     #[test]

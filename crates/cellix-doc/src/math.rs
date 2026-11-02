@@ -109,6 +109,56 @@ fn script(text: &str) -> Option<(&str, usize)> {
     }
 }
 
+/// Big operators, whose limits the engine only stacks by itself in a display.
+const BIG: [&str; 7] = [
+    "\\sum", "\\prod", "\\coprod", "\\int", "\\bigcup", "\\bigcap", "\\oint",
+];
+
+/// Sets `\sum\limits_{a}^{b}` as a stack, since the engine ignores the word for these.
+fn limits_asked_for(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find('\\') {
+        out.push_str(&rest[..at]);
+        rest = &rest[at..];
+        let asked = BIG.iter().find_map(|name| {
+            let after = rest.strip_prefix(*name)?.trim_start();
+            Some((*name, after.strip_prefix("\\limits")?))
+        });
+        let Some((name, mut tail)) = asked else {
+            out.push('\\');
+            rest = &rest[1..];
+            continue;
+        };
+        let (mut under, mut over) = (None, None);
+        for _ in 0..2 {
+            let trimmed = tail.trim_start();
+            let slot = match trimmed.chars().next() {
+                Some('_') => &mut under,
+                Some('^') => &mut over,
+                _ => break,
+            };
+            let body = trimmed[1..].trim_start();
+            let Some((text, used)) = script(body) else {
+                break;
+            };
+            *slot = Some(text);
+            tail = &body[used..];
+        }
+        let mut stack = name.to_string();
+        if let Some(over) = over {
+            stack = format!("\\overset{{{over}}}{{{stack}}}");
+        }
+        if let Some(under) = under {
+            stack = format!("\\underset{{{under}}}{{{stack}}}");
+        }
+        out.push_str(&stack);
+        rest = tail;
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Sets `\max_{x}` as a stack, so its limit stands under it the way TeX puts it.
 fn limits_under(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
@@ -202,7 +252,7 @@ fn prepared(source: &str, display: bool) -> String {
             .replace(&format!("{{{name}*}}"), "{aligned}")
             .replace(&format!("{{{name}}}"), "{aligned}");
     }
-    let text = text.replace("{gathered}", "{aligned}");
+    let text = limits_asked_for(&text.replace("{gathered}", "{aligned}"));
     let text = if display { limits_under(&text) } else { text };
     if text.contains("{aligned}") {
         roomy_rows(&text)
@@ -376,6 +426,21 @@ mod tests {
         let centres = row_centres(&rows, 30).unwrap();
         assert!(centres[0] < 0.3, "{centres:?}");
         assert!(centres[1] > 0.5, "{centres:?}");
+    }
+
+    #[test]
+    fn limits_asked_for_in_running_text_stand_over_and_under() {
+        assert_eq!(
+            prepared(r"\sum\limits_{i=1}^{n} x", false),
+            r"\underset{i=1}{\overset{n}{\sum}} x"
+        );
+        assert_eq!(
+            prepared(r"\prod\limits^2_a", false),
+            r"\underset{a}{\overset{2}{\prod}}"
+        );
+        let beside = render(r"\sum_{i=1}^n x", false, 30).unwrap();
+        let stacked = render(r"\sum\limits_{i=1}^n x", false, 30).unwrap();
+        assert!(stacked.height > beside.height + 8);
     }
 
     #[test]
