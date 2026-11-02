@@ -1097,5 +1097,26 @@
     "title": "The toolbar adds a drawing to a paper",
     "test": "a_paper_is_offered_drawings_of_its_own",
     "passes": true
+  },
+  {
+    "id": "cjk-cells",
+    "milestone": 9,
+    "title": "Han characters are drawn in the cells",
+    "test": "han_characters_are_drawn_in_the_cells",
+    "passes": true
+  },
+  {
+    "id": "outline",
+    "milestone": 9,
+    "title": "The Outline lists a document's headings and a click goes there",
+    "test": "the_outline_lists_a_documents_headings_and_a_click_goes_there",
+    "passes": true
+  },
+  {
+    "id": "build-log",
+    "milestone": 9,
+    "title": "A failed build leaves its log in the pane",
+    "test": "a_failed_build_leaves_its_log_in_the_pane",
+    "passes": true
   }
 ]

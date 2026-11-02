@@ -7,6 +7,7 @@ use cosmic_text::{
     Style as FontStyle, SwashCache, Weight, fontdb,
 };
 use unicode_script::Script;
+use unicode_width::UnicodeWidthStr;
 
 use crate::grid::{Grid, Rgb};
 use crate::icon::{Icon, Piece, inked};
@@ -162,7 +163,14 @@ impl SoftwareRasterizer {
         let (width, height) = (self.cell.0 * 2, self.cell.1);
         let mut buffer = Buffer::new(&mut self.fonts, self.metrics);
         buffer.set_size(Some(width as f32 * 2.0), Some(height as f32));
-        let mut attrs = Attrs::new().family(Family::Monospace);
+        // Asked for a monospaced Han glyph, the search stops at a font that only has blanks.
+        // A wide glyph fills its two cells whatever font it's from.
+        let family = if UnicodeWidthStr::width(key.symbol.as_str()) > 1 {
+            Family::SansSerif
+        } else {
+            Family::Monospace
+        };
+        let mut attrs = Attrs::new().family(family);
         if key.bold {
             attrs = attrs.weight(Weight::BOLD);
         }
@@ -814,6 +822,23 @@ mod tests {
         let image = r.row(&grid, 0);
         assert_eq!((image.width, image.height), (80, 20));
         assert_eq!(image.rgb.len(), 80 * 20 * 3);
+    }
+
+    #[test]
+    fn han_characters_are_drawn_in_the_cells() {
+        let Some(mut r) = rasterizer() else { return };
+        let fonts = system_fonts();
+        let has_han = fonts.faces().any(|face| {
+            let name = &face.families[0].0;
+            CJK_FONTS.iter().any(|font| font == name)
+        });
+        if !has_han {
+            return;
+        }
+        let mut grid = Grid::new(4, 1, style());
+        grid.put_str(0, 0, "中", style(), 4);
+        let image = r.row(&grid, 0);
+        assert!(lit(&image, 0, 10) > 10);
     }
 
     #[test]

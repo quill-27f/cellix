@@ -10,6 +10,7 @@ pub mod integrations;
 mod kitty;
 mod menu;
 mod neovim;
+mod outline;
 mod palette;
 pub mod pane;
 mod panels;

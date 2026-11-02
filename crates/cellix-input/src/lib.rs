@@ -176,6 +176,8 @@ pub enum Command {
     SendBackPlan,
     ShowAgents,
     CloseDock,
+    /// Shows the document's headings in the sidebar.
+    ShowOutline,
     ReviewPreviousTurn,
     UndoTurn,
     Commit,

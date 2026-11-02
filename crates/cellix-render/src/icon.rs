@@ -20,8 +20,9 @@ pub enum Icon {
     Globe = 11,
     Check = 12,
     Agents = 13,
+    Outline = 14,
     // The document toolbar's, which only ever appear as paint.
-    ListBullet = 14,
+    ListBullet = 30,
     ListNumber = 15,
     ListTask = 16,
     Quote = 17,
@@ -70,6 +71,7 @@ impl Piece {
             1 => Icon::Search,
             2 => Icon::Git,
             13 => Icon::Agents,
+            14 => Icon::Outline,
             _ => Icon::Settings,
         };
         Some(Self {
@@ -83,17 +85,18 @@ impl Piece {
 
     /// What the cell tier shows, since terminals can't draw the private plane.
     pub fn fallback(self) -> &'static str {
-        const ART: [[[&str; 3]; 2]; 5] = [
+        const ART: [[[&str; 3]; 2]; 6] = [
             [["▛", "▀", "▜"], ["▙", "▄", "▟"]],
             [["▞", "▀", "▚"], ["▚", "▄", "▟"]],
             [["●", "─", "●"], ["●", "─", "╯"]],
             [["▚", "▀", "▞"], ["▞", "▄", "▚"]],
             [["▗", "▄", "▖"], ["▐", "█", "▌"]],
+            [["▪", "─", "─"], [" ", "▪", "─"]],
         ];
-        let art = if self.icon == Icon::Agents {
-            4
-        } else {
-            (self.icon as usize).min(3)
+        let art = match self.icon {
+            Icon::Agents => 4,
+            Icon::Outline => 5,
+            other => (other as usize).min(3),
         };
         if self.width == 1 {
             return match self.icon {
@@ -101,6 +104,7 @@ impl Piece {
                 Icon::Search => "⌕",
                 Icon::Git => "⎇",
                 Icon::Agents => "◉",
+                Icon::Outline => "≡",
                 _ => "⚙",
             };
         }
@@ -253,6 +257,9 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
             .min(segment(p, (1.5, 14.5), (4.0, 14.5)))
             .min(segment(p, (20.0, 14.5), (22.5, 14.5))),
         Icon::Folder | Icon::FolderOpen | Icon::File => f32::MAX,
+        Icon::Outline => path(p, &[(4.0, 6.0), (20.0, 6.0)])
+            .min(path(p, &[(8.0, 12.0), (20.0, 12.0)]))
+            .min(path(p, &[(12.0, 18.0), (20.0, 18.0)])),
         Icon::ListBullet => (circle(p, (5.0, 6.5)) - 0.4)
             .min(circle(p, (5.0, 12.0)) - 0.4)
             .min(circle(p, (5.0, 17.5)) - 0.4)

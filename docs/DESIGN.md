@@ -134,6 +134,11 @@ unchanged. On a page, arrows and Home and End move by what's shown.
 
 ### Documents
 
+The Outline in the sidebar lists a document's headings, or a paper's sections, and a click goes
+there. The side pane keeps what the last build said in a Log tab, and a line that names a place
+goes to it. Wide glyphs are looked up as sans-serif rather than monospace in the cells: asked for a
+monospaced Han glyph, the font search stops at a font that holds only blanks.
+
 Diagrams are text in the document. A fenced `mermaid`, `dot` or `svg` block stands on the page as
 a picture, and opens to its source with the picture under it while it's written. They are drawn by
 pure Rust (`mermaid-rs-renderer`, `layout-rs`, `resvg`), so nothing needs a browser or Node, and

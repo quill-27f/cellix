@@ -37,6 +37,7 @@ use crate::explorer::Explorer;
 use crate::find::Find;
 use crate::menu::{Action as MenuAction, Item as MenuItem, Menu};
 use crate::neovim::{self, Neovim};
+use crate::outline::Outline;
 use crate::palette::{COMMANDS, Input, Item, Palette, input, popup, raised};
 use crate::panels::{MathPanel, SYMBOLS, TablePicker};
 use crate::pdfview::{Hit as PdfHit, PdfView};
@@ -51,9 +52,10 @@ use crate::toolbar::{self, Tool};
 
 const ACTIVITY_WIDTH: u16 = 5;
 /// Activity bar buttons, with what each one runs.
-const ACTIVITY: [(Icon, Command); 5] = [
+const ACTIVITY: [(Icon, Command); 6] = [
     (Icon::Files, Command::ToggleSidebar),
     (Icon::Search, Command::FindInProject),
+    (Icon::Outline, Command::ShowOutline),
     (Icon::Git, Command::OpenDiff),
     (Icon::Agents, Command::ShowAgents),
     (Icon::Settings, Command::OpenSettings),
@@ -150,6 +152,7 @@ struct Prompt {
 enum SidebarView {
     Explorer,
     Search,
+    Outline,
 }
 
 /// Suggestions showing at the caret while typing.
@@ -470,6 +473,7 @@ pub struct App {
     smooth_change: Option<bool>,
     /// What the sidebar shows, as in VS Code's activity bar.
     sidebar_view: SidebarView,
+    outline: Outline,
     search: Search,
     /// In the compact layout, whether the sidebar is open over the code.
     drawer: bool,
@@ -581,6 +585,7 @@ impl App {
             terminal_look: (None, None),
             smooth_change: None,
             sidebar_view: SidebarView::Explorer,
+            outline: Outline::default(),
             search,
             drawer: false,
             quit: false,
@@ -925,6 +930,9 @@ impl App {
     }
 
     pub fn poll(&mut self) -> bool {
+        if self.sidebar_view == SidebarView::Outline {
+            self.refresh_outline();
+        }
         for editor in &mut self.editors {
             if editor.synced == editor.buffer.revision() {
                 continue;
@@ -2922,6 +2930,16 @@ impl App {
             Command::BlameLine => self.blame(),
             Command::ToggleSidebar if self.compact() => self.drawer = !self.drawer,
             Command::ToggleSidebar => self.show_sidebar = !self.show_sidebar,
+            Command::ShowOutline if self.sidebar_view == SidebarView::Outline => {
+                self.show_explorer();
+            }
+            Command::ShowOutline => {
+                self.search.focus = None;
+                self.review = None;
+                self.sidebar_view = SidebarView::Outline;
+                self.show_sidebar = true;
+                self.drawer = self.compact();
+            }
             Command::SplitPane if self.compact() => self.say("Not enough room to split"),
             Command::Save => self.save(),
             Command::CloseTab => self.close_tab(),
@@ -3288,8 +3306,21 @@ impl App {
                         self.dock.front = Front::Pdf;
                         self.dock.focused = false;
                     }
+                    Some(TabHit::Log) => {
+                        self.dock.front = Front::Log;
+                        self.dock.focused = false;
+                    }
                     None => {}
                 }
+            }
+            return true;
+        }
+        if self.dock.front == Front::Log {
+            match mouse.kind {
+                MouseKind::ScrollUp => self.dock.log_top = self.dock.log_top.saturating_sub(3),
+                MouseKind::ScrollDown => self.dock.log_top += 3,
+                MouseKind::Left => self.log_click(y),
+                _ => {}
             }
             return true;
         }
@@ -3461,6 +3492,10 @@ impl App {
             view.draw(grid, screen, self.measure.in_cells(), theme);
             return;
         }
+        if self.dock.front == Front::Log {
+            self.dock.draw_log(grid, screen, self.hover, theme);
+            return;
+        }
         if self.dock.front == Front::Comments {
             let look = (&*self.measure, theme);
             let top = self.dock.comments_top;
@@ -3605,6 +3640,34 @@ impl App {
         self.show_sidebar = true;
         self.drawer = self.compact();
         self.search.focus = Some(field);
+    }
+
+    /// The headings of the document in view, and which one the caret is under.
+    fn refresh_outline(&mut self) {
+        let Some(editor) = self.editors.get(self.active()) else {
+            self.outline.headings.clear();
+            return;
+        };
+        self.outline.headings = crate::outline::of(&editor.buffer.text(), editor.dialect());
+    }
+
+    fn outline_here(&self) -> Option<usize> {
+        let line = self.cursor_line()?.1.saturating_sub(1);
+        crate::outline::current(&self.outline.headings, line)
+    }
+
+    fn click_outline(&mut self, y: u16) {
+        let Some(area) = self.sidebar_area() else {
+            return;
+        };
+        let Some(line) = self.outline.at(area, y).map(|heading| heading.line) else {
+            return;
+        };
+        self.drawer = false;
+        let text = self.focused_area();
+        if let Some(editor) = self.editor_mut() {
+            editor.go_to_line(line + 1, text);
+        }
     }
 
     fn show_explorer(&mut self) {
@@ -4341,6 +4404,8 @@ impl App {
                 };
                 if in_sidebar && self.sidebar_view == SidebarView::Search {
                     self.search.scroll_by(delta);
+                } else if in_sidebar && self.sidebar_view == SidebarView::Outline {
+                    self.outline.scroll_by(delta);
                 } else if in_sidebar {
                     self.explorer.scroll_by(delta);
                 } else if self.pane_at(x, y).is_some() {
@@ -4360,6 +4425,10 @@ impl App {
                     self.click_search(area, x, y);
                 }
             }
+            MouseKind::Left if in_sidebar && self.sidebar_view == SidebarView::Outline => {
+                self.click_outline(y);
+            }
+            MouseKind::Right if in_sidebar && self.sidebar_view == SidebarView::Outline => {}
             MouseKind::Right if in_sidebar && self.sidebar_view == SidebarView::Explorer => {
                 self.open_explorer_menu(x, y);
             }
@@ -5222,6 +5291,10 @@ impl App {
                     self.search
                         .draw(grid, area, self.hover, &*self.measure, theme);
                 }
+                SidebarView::Outline => {
+                    let here = self.outline_here();
+                    self.outline.draw(grid, area, here, self.hover, theme);
+                }
             }
         }
         self.draw_dock(grid);
@@ -5476,6 +5549,11 @@ impl App {
                     self.show_sidebar
                         && self.review.is_none()
                         && self.sidebar_view == SidebarView::Search
+                }
+                Command::ShowOutline => {
+                    self.show_sidebar
+                        && self.review.is_none()
+                        && self.sidebar_view == SidebarView::Outline
                 }
                 Command::ShowAgents => self.dock.open,
                 Command::OpenDiff => self.review.is_some(),
@@ -6082,6 +6160,9 @@ impl App {
             .map(Path::to_path_buf)
             .unwrap_or_default();
         let problems = cellix_doc::latex::problems(&build.said, &folder);
+        self.dock.log = build.said.lines().map(str::to_string).collect();
+        self.dock.log_top = 0;
+        self.dock.log_folder = folder.clone();
         let mut by_file: HashMap<PathBuf, Vec<Diagnostic>> = HashMap::new();
         for problem in &problems {
             by_file
@@ -6109,8 +6190,14 @@ impl App {
                 many => format!("Built in {seconds:.1} s, with {many} warnings"),
             });
         } else if let Some(first) = problems.first() {
+            self.dock.open = true;
+            self.dock.front = Front::Log;
+            self.dock.focused = false;
             self.go_to_problem(first);
         } else {
+            self.dock.open = true;
+            self.dock.front = Front::Log;
+            self.dock.focused = false;
             // The first error is the cause. What follows is the engine giving up.
             let first = build.said.lines().find(|l| l.starts_with("error:"));
             let last = build.said.lines().rfind(|l| !l.trim().is_empty());
@@ -6119,6 +6206,18 @@ impl App {
             self.say(format!("The build failed: {reason}"));
         }
         true
+    }
+
+    /// A line of the build's log that names a place goes there.
+    fn log_click(&mut self, y: u16) {
+        let Some(line) = self.dock_screen().and_then(|s| self.dock.log_line(s, y)) else {
+            return;
+        };
+        let folder = self.dock.log_folder.clone();
+        let problems = cellix_doc::latex::problems(&line, &folder);
+        if let Some(first) = problems.first() {
+            self.go_to_problem(first);
+        }
     }
 
     fn go_to_problem(&mut self, problem: &cellix_doc::latex::Problem) {
@@ -9107,6 +9206,54 @@ mod tests {
     }
 
     #[test]
+    fn the_outline_lists_a_documents_headings_and_a_click_goes_there() {
+        let mut text = "# First\n\nwords\n\n".to_string();
+        text.push_str(&"line\n\n".repeat(60));
+        text.push_str("## Second part\n\nend\n");
+        let (_dir, mut app) = page_app(&text);
+        app.run(Command::ShowOutline);
+        app.poll();
+        let area = app.sidebar_area().unwrap();
+        let grid = screen(&app);
+        let (x, y) = find(&grid, "Second part");
+        assert!(area.contains(x, y));
+        app.handle(mouse(MouseKind::Left, x, y));
+        let (_, line) = app.cursor_line().unwrap();
+        assert_eq!(line, 125);
+        assert!(app.editors[0].top() > 0, "the page moved there");
+        // A second press puts the files back.
+        app.run(Command::ShowOutline);
+        assert!(app.sidebar_view == SidebarView::Explorer);
+    }
+
+    #[test]
+    fn a_failed_build_leaves_its_log_in_the_pane() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = "\\documentclass{article}\n\\begin{document}\nx\n\\end{document}\n";
+        fs::write(dir.path().join("paper.tex"), source).unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        let script = dir.path().join("latex.sh");
+        fs::write(&script, "#!/bin/sh\necho 'first line of the log'\necho 'paper.tex:3: Undefined control sequence'\nexit 1\n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        app.settings.latex_engine = Some(vec![script.display().to_string()]);
+        app.open(&dir.path().join("paper.tex")).unwrap();
+        app.run(Command::BuildPdf);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while app.dock.log.is_empty() {
+            assert!(std::time::Instant::now() < deadline);
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(app.dock.front, Front::Log);
+        let grid = screen(&app);
+        assert!(grid.text().contains("first line of the log"));
+        let (x, y) = find(&grid, "paper.tex:3:");
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert_eq!(app.cursor_line().unwrap().1, 3);
+    }
+
+    #[test]
     fn a_page_counts_words() {
         let (_dir, app) = page_app("one two three\n");
         assert!(screen(&app).text().contains("3 words"));
@@ -10014,7 +10161,7 @@ mod tests {
     fn activity_bar_opens_review_by_mouse() {
         let (dir, mut app) = project();
         git(dir.path(), &["init", "-q"]);
-        app.handle(mouse(MouseKind::Left, 2, 1 + ACTIVITY_STEP * 2));
+        app.handle(mouse(MouseKind::Left, 2, 1 + ACTIVITY_STEP * 3));
         assert!(app.review.is_some());
         app.handle(mouse(MouseKind::Left, 2, 1));
         assert!(app.review.is_none());
@@ -10794,7 +10941,7 @@ while True:
     fn the_gear_opens_settings_and_they_apply_at_once() {
         let (_dir, mut app) = project();
         let area = app.activity_area();
-        app.handle(mouse(MouseKind::Left, 2, App::rail_row(4, area)));
+        app.handle(mouse(MouseKind::Left, 2, App::rail_row(5, area)));
         assert!(screen(&app).text().contains("Appearance"));
         let (x, y) = find(&screen(&app), "Light");
         app.handle(mouse(MouseKind::Left, x, y));

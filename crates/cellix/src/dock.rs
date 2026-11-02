@@ -35,6 +35,7 @@ const CLOSE_WIDTH: u16 = 2;
 /// The Comments tab at the far end.
 const COMMENTS_WIDTH: u16 = 11;
 const PDF_WIDTH: u16 = 5;
+const LOG_WIDTH: u16 = 5;
 /// The button that closes the pane.
 const HIDE_WIDTH: u16 = 3;
 /// What the pane's browser tab is called.
@@ -772,6 +773,7 @@ pub enum TabHit {
     New,
     Comments,
     Pdf,
+    Log,
     /// The pane's own close button, at the far end.
     Hide,
 }
@@ -783,6 +785,8 @@ pub enum Front {
     Session,
     Comments,
     Pdf,
+    /// What the last build said.
+    Log,
 }
 
 /// The side pane: its tabs, and whether it's open and has the keyboard.
@@ -803,6 +807,10 @@ pub struct Dock {
     pub comments_top: usize,
     /// A comment or reply being written.
     pub draft: Option<Draft>,
+    /// What the last build said, how far it has scrolled, and where its paths start.
+    pub log: Vec<String>,
+    pub log_top: usize,
+    pub log_folder: std::path::PathBuf,
 }
 
 impl Dock {
@@ -878,10 +886,64 @@ impl Dock {
         };
     }
 
+    /// Where the log's tab goes, if there's a log.
+    fn log_tab(&self, area: Rect) -> Option<Rect> {
+        let pdf = if self.pdf.is_some() { PDF_WIDTH } else { 0 };
+        (!self.log.is_empty())
+            .then(|| Rect::new(area.x + 1 + COMMENTS_WIDTH + pdf, area.y, LOG_WIDTH, 1))
+    }
+
     /// Where sessions' tabs start, after the fixed ones.
     fn first_tab(&self, area: Rect) -> u16 {
         let pdf = if self.pdf.is_some() { PDF_WIDTH } else { 0 };
-        area.x + 1 + COMMENTS_WIDTH + pdf
+        let log = if self.log.is_empty() { 0 } else { LOG_WIDTH };
+        area.x + 1 + COMMENTS_WIDTH + pdf + log
+    }
+
+    /// The log line at a row of the screen.
+    pub fn log_line(&self, screen: Rect, y: u16) -> Option<String> {
+        let row = y.checked_sub(screen.y)? as usize;
+        self.log.get(self.log_top + row).cloned()
+    }
+
+    pub fn draw_log(
+        &self,
+        grid: &mut Grid,
+        screen: Rect,
+        hover: Option<(u16, u16)>,
+        theme: &Theme,
+    ) {
+        grid.fill(screen, theme.sidebar);
+        let palette = palette_of(theme);
+        let lines = self.log.iter().skip(self.log_top).take(screen.h as usize);
+        for (row, line) in lines.enumerate() {
+            let y = screen.y + row as u16;
+            let whole = Rect::new(screen.x, y, screen.w, 1);
+            if hover.is_some_and(|h| whole.contains(h.0, h.1)) {
+                grid.panel(
+                    Bounds::inset(whole, 0.3, 0.06),
+                    12,
+                    Some(theme.row_hover),
+                    None,
+                );
+            }
+            let lowered = line.to_lowercase();
+            let fg = if lowered.starts_with("error")
+                || line.starts_with('!')
+                || lowered.contains(": error")
+            {
+                palette[1]
+            } else if lowered.contains("warning") || lowered.contains("overfull") {
+                palette[3]
+            } else {
+                theme.sidebar.fg
+            };
+            let style = Style {
+                fg,
+                ..theme.sidebar
+            };
+            grid.put_str(screen.x + 1, y, line, style, screen.right());
+        }
     }
 
     /// Each tab as (start, end) columns.
@@ -904,6 +966,12 @@ impl Dock {
         }
         if x < area.x + 1 + COMMENTS_WIDTH {
             return Some(TabHit::Comments);
+        }
+        if self
+            .log_tab(area)
+            .is_some_and(|tab| x >= tab.x && x < tab.right())
+        {
+            return Some(TabHit::Log);
         }
         if x < self.first_tab(area) {
             return Some(TabHit::Pdf);
@@ -949,6 +1017,21 @@ impl Dock {
                 ..theme.tab
             };
             grid.label(tab.x + 1, area.y, "PDF", quiet, tab.right());
+        }
+        if let Some(tab) = self.log_tab(area) {
+            let on = self.front == Front::Log;
+            if on {
+                grid.fill(tab, theme.sidebar);
+            } else if hover.is_some_and(|h| tab.contains(h.0, h.1)) {
+                let bounds = Bounds::inset(tab, 0.1, 0.1);
+                grid.panel(bounds, 16, Some(theme.row_hover), None);
+            }
+            let quiet = Style {
+                fg: if on { theme.text.fg } else { theme.gutter.fg },
+                bold: on,
+                ..theme.tab
+            };
+            grid.label(tab.x + 1, area.y, "Log", quiet, tab.right());
         }
         let on_comments = self.front == Front::Comments;
         if on_comments {
