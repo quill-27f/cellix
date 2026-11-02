@@ -4,10 +4,13 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
+use cellix_doc::diagram::{Kind, Raster};
+use cellix_doc::figure::image_line;
 use cellix_doc::latex::Project;
 use cellix_lang::{Registry, Token};
 use cellix_render::{Bitmap, Font, INTERFACE_SIZE, Measure, Pixels};
@@ -362,6 +365,8 @@ pub struct Library {
     /// The last formula that typeset at each place, to hold while its source is half typed.
     last_good: HashMap<usize, Figure>,
     images: HashMap<(PathBuf, u32), Option<Figure>>,
+    /// Diagrams by what they're drawn from, with why one couldn't be.
+    diagrams: HashMap<(Kind, String, u32), Result<Figure, String>>,
 }
 
 /// What a page is written in.
@@ -397,7 +402,11 @@ pub struct Extras<'a> {
     pub open: Option<(usize, usize)>,
     /// Where relative image paths start.
     pub folder: Option<&'a Path>,
+    /// Diagrams are drawn for the sheet they stand on.
+    pub dark: bool,
     pub library: Option<&'a RefCell<Library>>,
+    /// Diagrams standing on their last good picture, and why the current source won't draw.
+    pub broken: RefCell<Vec<(usize, String)>>,
     /// Filled in by layout.
     pub figures: RefCell<Vec<Figure>>,
     /// The picture of a formula being edited in a line, filled in by layout.
@@ -422,9 +431,50 @@ fn figure_of(formula: &cellix_doc::math::Formula, cell: (u32, u32)) -> Figure {
     }
 }
 
+/// Pixels from a drawing, with an id that stands for what they show.
+fn figure_of_raster(raster: Raster, identity: impl Hash, cell: (u32, u32)) -> Figure {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    identity.hash(&mut hasher);
+    (raster.width, raster.height).hash(&mut hasher);
+    Figure {
+        bitmap: Bitmap {
+            id: hasher.finish(),
+            width: raster.width,
+            height: raster.height,
+            kind: Pixels::Rgba,
+            pixels: Arc::new(raster.rgba),
+        },
+        width: raster.width as f32 / cell.0 as f32,
+        height: raster.height as f32 / cell.1 as f32,
+        baseline: 0.0,
+    }
+}
+
+/// How a picture takes up the page.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Fit {
+    /// Its own size, but never past this many cells.
+    AtMost(f32),
+    /// Exactly this many cells across, because the document says so.
+    Exactly(f32),
+}
+
+impl Fit {
+    fn cells(self) -> f32 {
+        match self {
+            Self::AtMost(cells) | Self::Exactly(cells) => cells,
+        }
+    }
+}
+
 /// Reads an image and sets it to fit the page, keeping its shape.
-fn load_image(path: &Path, cell: (u32, u32), width: f32) -> Option<Figure> {
-    let wanted = (width * cell.0 as f32) as u32;
+fn load_image(path: &Path, cell: (u32, u32), fit: Fit) -> Option<Figure> {
+    let wanted = (fit.cells() * cell.0 as f32) as u32;
+    if path.extension().is_some_and(|e| e == "svg") {
+        let text = std::fs::read_to_string(path).ok()?;
+        let raster = cellix_doc::diagram::rasterize(&text, device_scale(cell), wanted).ok()?;
+        return Some(sized(figure_of_raster(raster, (path, wanted), cell), fit));
+    }
     let image = if path.extension().is_some_and(|e| e == "pdf") {
         let document = cellix_doc::pdf::Document::open(std::fs::read(path).ok()?).ok()?;
         let page = document.render(0, wanted)?;
@@ -443,7 +493,7 @@ fn load_image(path: &Path, cell: (u32, u32), width: f32) -> Option<Figure> {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     std::hash::Hash::hash(&path, &mut hasher);
     std::hash::Hash::hash(&(w, h), &mut hasher);
-    Some(Figure {
+    let figure = Figure {
         bitmap: Bitmap {
             id: std::hash::Hasher::finish(&hasher),
             width: w,
@@ -454,7 +504,22 @@ fn load_image(path: &Path, cell: (u32, u32), width: f32) -> Option<Figure> {
         width: w as f32 / cell.0 as f32,
         height: h as f32 / cell.1 as f32,
         baseline: 0.0,
-    })
+    };
+    Some(sized(figure, fit))
+}
+
+/// Stands a figure at the width the document asks for, keeping its shape.
+fn sized(mut figure: Figure, fit: Fit) -> Figure {
+    if let Fit::Exactly(cells) = fit {
+        figure.height *= cells / figure.width.max(0.01);
+        figure.width = cells;
+    }
+    figure
+}
+
+/// Device pixels to a drawing's own pixels. A row is about eighteen of those.
+fn device_scale(cell: (u32, u32)) -> f32 {
+    (cell.1 as f32 / 18.0).max(1.0)
 }
 
 /// Finds where inline math closes: the closing `$` hugs its text and isn't a price.
@@ -896,13 +961,51 @@ impl Context<'_> {
         cellix_doc::math::render(source, true, 20).err()
     }
 
+    /// A diagram for this page, or why it can't be drawn. While its source is half typed,
+    /// the last good picture stays, so the page doesn't jump.
+    fn diagram(&self, kind: Kind, source: &str, width: f32, place: usize) -> Result<usize, String> {
+        let cell = self.cell().ok_or_else(String::new)?;
+        let wanted = (width * cell.0 as f32) as u32;
+        let dark = self.extras.dark;
+        let make = || {
+            let svg = cellix_doc::diagram::svg(kind, source, dark)?;
+            let raster = cellix_doc::diagram::rasterize(&svg, device_scale(cell), wanted)?;
+            Ok(figure_of_raster(raster, (kind, source, dark), cell))
+        };
+        let figure: Result<Figure, String> = match self.extras.library {
+            Some(library) => library
+                .borrow_mut()
+                .diagrams
+                .entry((kind, source.to_string(), wanted))
+                .or_insert_with(make)
+                .clone(),
+            None => make(),
+        };
+        let Some(library) = self.extras.library else {
+            return figure.map(|f| self.keep(f));
+        };
+        match figure {
+            Ok(figure) => {
+                library.borrow_mut().last_good.insert(place, figure.clone());
+                Ok(self.keep(figure))
+            }
+            Err(why) => match library.borrow().last_good.get(&place).cloned() {
+                Some(figure) => {
+                    self.extras.broken.borrow_mut().push((place, why));
+                    Ok(self.keep(figure))
+                }
+                None => Err(why),
+            },
+        }
+    }
+
     /// Loads an image for this page, and returns its index among the figures. LaTeX names
     /// files without their extension, and a figure is often a PDF.
-    fn image(&self, source: &str, width: f32) -> Option<usize> {
+    fn image(&self, source: &str, fit: Fit) -> Option<usize> {
         let cell = self.cell()?;
         let folder = self.extras.folder?;
         let named = folder.join(source);
-        let path = ["", "png", "jpg", "jpeg", "pdf", "webp"]
+        let path = ["", "png", "jpg", "jpeg", "pdf", "webp", "svg"]
             .iter()
             .map(|extension| {
                 if extension.is_empty() {
@@ -912,12 +1015,12 @@ impl Context<'_> {
                 }
             })
             .find(|path| path.is_file())?;
-        let make = || load_image(&path, cell, width);
+        let make = || load_image(&path, cell, fit);
         let figure = match self.extras.library {
             Some(library) => library
                 .borrow_mut()
                 .images
-                .entry((path.clone(), width as u32))
+                .entry((path.clone(), (fit.cells() as u32) << 1 | exact(fit)))
                 .or_insert_with(make)
                 .clone(),
             None => make(),
@@ -952,12 +1055,17 @@ fn math_block(lines: &[(usize, &str)], first: usize) -> Option<(usize, String)> 
     None
 }
 
-/// `![alt](path)` standing alone on its line.
-fn image_line(line: &str) -> Option<(usize, &str, &str)> {
-    let text = line.trim();
-    let rest = text.strip_prefix("![")?.strip_suffix(')')?;
-    let (alt, path) = rest.split_once("](")?;
-    (!path.contains(' ')).then_some((line.len() - line.trim_start().len(), alt, path))
+/// Tells a size asked for from a limit, in the image cache's key.
+fn exact(fit: Fit) -> u32 {
+    u32::from(matches!(fit, Fit::Exactly(_)))
+}
+
+/// How wide a picture stands, given the share of the page its source asks for.
+fn fit_for(share: Option<u32>, width: f32) -> Fit {
+    match share {
+        Some(percent) => Fit::Exactly(width * percent.clamp(5, 100) as f32 / 100.0),
+        None => Fit::AtMost(width.min(90.0)),
+    }
 }
 
 /// Sets equation numbers at the right margin, spread down the picture's rows.
@@ -1072,6 +1180,24 @@ fn code_rows(
     }
 }
 
+/// A small line under something, saying what's wrong with it.
+fn note_row(text: &str, line: usize, at: usize, context: &Context) -> Row {
+    let mut note = decoration(text, Tone::Dim);
+    for g in &mut note {
+        g.font.size = 85;
+    }
+    measure_glyphs(&mut note, context.measure);
+    let mut x = CODE_PADDING;
+    for g in &mut note {
+        g.x = x;
+        x += g.advance;
+    }
+    Row {
+        glyphs: note,
+        ..spacer(line, at)
+    }
+}
+
 /// Sizes of headings one to six, in percent of body text.
 const HEADINGS: [u8; 6] = [190, 150, 122, 110, 100, 100];
 
@@ -1140,6 +1266,23 @@ pub fn layout_with(
             let close = (i + 1..lines.len())
                 .find(|n| lines[*n].1.trim_start().starts_with("```"))
                 .unwrap_or(lines.len());
+            let kind = cellix_doc::diagram::kind_of(language).filter(|_| context.cell().is_some());
+            let mut drawing = None;
+            if let Some(kind) = kind {
+                let last = close.min(lines.len() - 1);
+                let end = lines[last].0 + lines[last].1.chars().count();
+                extras.spans.borrow_mut().push((offset, end + 1));
+                let open = extras.open == Some((offset, end + 1));
+                let source: Vec<&str> = lines[i + 1..close].iter().map(|(_, l)| *l).collect();
+                let drawn = context.diagram(kind, &source.join("\n"), width, offset);
+                let inside = lines.get(i + 1).map_or(offset + 3, |(start, _)| *start);
+                if let (false, Ok(figure)) = (open, &drawn) {
+                    figure_rows(*figure, &context, (i, inside, end), width, &mut rows);
+                    i = close + 1;
+                    continue;
+                }
+                drawing = Some((drawn, (i, inside, end)));
+            }
             if !language.is_empty() {
                 let mut label = decoration(language, Tone::Dim);
                 for g in &mut label {
@@ -1165,6 +1308,23 @@ pub fn layout_with(
                 None,
                 &mut rows,
             );
+            // Being written, it stands under its source, and says what's wrong with it.
+            match drawing {
+                Some((Ok(figure), place)) => {
+                    figure_rows(figure, &context, place, width, &mut rows);
+                    if let Some(row) = rows.iter_mut().rfind(|r| r.figure.is_some()) {
+                        row.stop = false;
+                    }
+                    let broken = extras.broken.borrow();
+                    if let Some((_, why)) = broken.iter().find(|(place, _)| *place == offset) {
+                        rows.push(note_row(why, i, offset, &context));
+                    }
+                }
+                Some((Err(why), _)) if !why.is_empty() => {
+                    rows.push(note_row(&why, i, offset, &context));
+                }
+                _ => {}
+            }
             i = close + 1;
             continue;
         }
@@ -1212,11 +1372,12 @@ pub fn layout_with(
             i = last + 1;
             continue;
         }
-        if let Some((indent, alt, path)) = image_line(line) {
+        if let Some(image) = image_line(line) {
+            let (indent, alt, path) = (image.indent, image.alt, image.path);
             let end = offset + line.chars().count();
             extras.spans.borrow_mut().push((offset, end + 1));
             let open = extras.open == Some((offset, end + 1));
-            let figure = context.image(path, width.min(90.0));
+            let figure = context.image(path, fit_for(image.width, width));
             if let Some(figure) = figure.filter(|_| !open) {
                 figure_rows(
                     figure,
@@ -1247,6 +1408,14 @@ pub fn layout_with(
             }
             if open {
                 code_rows(&lines[i..=i], i, "", &context, None, &mut rows);
+                // The picture stays in view under the line that names it.
+                if let Some(figure) = figure {
+                    let place = (i, offset + indent + 1, end);
+                    figure_rows(figure, &context, place, width, &mut rows);
+                    if let Some(row) = rows.iter_mut().rfind(|r| r.figure.is_some()) {
+                        row.stop = false;
+                    }
+                }
                 i += 1;
                 continue;
             }

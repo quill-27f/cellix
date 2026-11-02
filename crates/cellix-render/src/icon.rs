@@ -36,6 +36,7 @@ pub enum Icon {
     Play = 26,
     Cite = 27,
     More = 28,
+    Diagram = 29,
 }
 
 /// One cell of an icon that is `width` by `height` cells.
@@ -289,6 +290,11 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
             .min(segment(p, (3.0, 9.5), (21.0, 9.5)))
             .min(segment(p, (3.0, 14.5), (21.0, 14.5)))
             .min(segment(p, (12.0, 4.5), (12.0, 19.5))),
+        Icon::Diagram => rounded(p, (2.5, 3.5), (10.0, 9.5), 1.5)
+            .min(rounded(p, (14.0, 3.5), (21.5, 9.5), 1.5))
+            .min(rounded(p, (14.0, 14.5), (21.5, 20.5), 1.5))
+            .min(path(p, &[(10.0, 6.5), (14.0, 6.5)]))
+            .min(path(p, &[(6.2, 9.5), (6.2, 17.5), (14.0, 17.5)])),
         Icon::Picture => rounded(p, (3.0, 4.5), (21.0, 19.5), 2.5)
             .min(ring(p, (8.5, 9.8), 1.5))
             .min(path(

@@ -8,6 +8,9 @@ repository.workspace = true
 
 [dependencies]
 flate2 = "1"
+layout-rs = "0.1"
+mermaid-rs-renderer = { version = "0.3", default-features = false }
+resvg = "0.47"
 hayro = "0.8"
 latex-rust = { version = "3.0.1", features = ["png"] }
 png = "0.18.1"

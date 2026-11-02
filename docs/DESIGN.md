@@ -134,6 +134,12 @@ unchanged. On a page, arrows and Home and End move by what's shown.
 
 ### Documents
 
+Diagrams are text in the document. A fenced `mermaid`, `dot` or `svg` block stands on the page as
+a picture, and opens to its source with the picture under it while it's written. They are drawn by
+pure Rust (`mermaid-rs-renderer`, `layout-rs`, `resvg`), so nothing needs a browser or Node, and
+the web page and PDF export carry them too. An image's size is written as `{width=50%}`, which
+Pandoc reads as well, and as `width=0.5\linewidth` in a paper.
+
 Markdown and LaTeX share one page: `rendered.rs` lays out Markdown and `rendered/tex.rs` lays out
 LaTeX, into the same rows of glyphs that each remember their source position. So clicks, selection
 and editing work the same in both, and the file is always the document.

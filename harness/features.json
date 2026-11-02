@@ -978,5 +978,89 @@
     "title": "Programs in the side pane are told the real background colour",
     "test": "a_program_is_told_the_real_background",
     "passes": true
+  },
+  {
+    "id": "diagram-page",
+    "milestone": 9,
+    "title": "Mermaid and Graphviz blocks stand as pictures and open to their source",
+    "test": "a_diagram_stands_as_a_picture_and_opens_to_its_source",
+    "passes": true
+  },
+  {
+    "id": "diagram-half",
+    "milestone": 9,
+    "title": "A half-written diagram keeps its last picture",
+    "test": "a_half_written_diagram_keeps_its_last_picture_and_says_why",
+    "passes": true
+  },
+  {
+    "id": "diagram-cells",
+    "milestone": 9,
+    "title": "On the cell tier a diagram stays as source",
+    "test": "on_the_cell_tier_a_diagram_stays_as_its_source",
+    "passes": true
+  },
+  {
+    "id": "diagram-tool",
+    "milestone": 9,
+    "title": "The toolbar adds a diagram from a template",
+    "test": "the_toolbar_adds_a_diagram",
+    "passes": true
+  },
+  {
+    "id": "diagram-export",
+    "milestone": 9,
+    "title": "Diagrams and sized images reach the PDF",
+    "test": "a_diagram_and_a_sized_image_reach_the_paper",
+    "passes": true
+  },
+  {
+    "id": "diagram-web",
+    "milestone": 9,
+    "title": "Diagrams and sized images reach the web page",
+    "test": "diagrams_and_sized_images_reach_the_web_page",
+    "passes": true
+  },
+  {
+    "id": "image-size",
+    "milestone": 9,
+    "title": "An image is sized from its menu",
+    "test": "an_image_is_sized_from_its_menu_and_the_page_follows",
+    "passes": true
+  },
+  {
+    "id": "image-delete",
+    "milestone": 9,
+    "title": "An image comes out from its menu",
+    "test": "an_image_comes_out_from_its_menu",
+    "passes": true
+  },
+  {
+    "id": "image-tex",
+    "milestone": 9,
+    "title": "A paper's figure is sized from its menu",
+    "test": "a_paper_figure_is_sized_the_way_papers_size_them",
+    "passes": true
+  },
+  {
+    "id": "image-drop",
+    "milestone": 9,
+    "title": "A dropped picture is copied in beside the document",
+    "test": "a_dropped_picture_is_copied_in_beside_the_document",
+    "passes": true
+  },
+  {
+    "id": "image-paste",
+    "milestone": 9,
+    "title": "A picture on the clipboard lands in the document",
+    "test": "a_picture_on_the_clipboard_lands_in_the_document",
+    "passes": true
+  },
+  {
+    "id": "svg-image",
+    "milestone": 9,
+    "title": "SVG files show as images",
+    "test": "plain_svg_becomes_pixels",
+    "passes": true
   }
 ]

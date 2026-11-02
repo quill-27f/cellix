@@ -1,15 +1,17 @@
 //! A Markdown file as a web page that stands alone: math is inline SVG, so the page needs
 //! no scripts and no network.
 
-use pulldown_cmark::{Event, Options, Parser, html};
+use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd, html};
 
-use crate::math;
+use crate::{diagram, figure, math};
 
 const STYLE: &str = "
 :root { color-scheme: light dark; --text: #1f2328; --dim: #59636e; --line: #d1d9e0;
   --code: #f6f8fa; --link: #0969da; }
 @media (prefers-color-scheme: dark) { :root { --text: #e6edf3; --dim: #9198a1;
-  --line: #3d444d; --code: #151b23; --link: #4493f8; } svg { filter: invert(1); } }
+  --line: #3d444d; --code: #151b23; --link: #4493f8; }
+  .math svg, .inline-math svg { filter: invert(1); }
+  .diagram { background: #fff; border-radius: 8px; } }
 body { max-width: 46rem; margin: 3rem auto; padding: 0 1.25rem; color: var(--text);
   font: 17px/1.65 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 h1, h2, h3 { line-height: 1.25; margin: 2em 0 .6em; } h1 { margin-top: 0; }
@@ -23,6 +25,8 @@ blockquote { margin: 1em 0; padding-left: 1em; border-left: 3px solid var(--line
 table { border-collapse: collapse; margin: 1em 0; }
 th, td { border: 1px solid var(--line); padding: .4em .8em; } th { background: var(--code); }
 .math { text-align: center; margin: 1.2em 0; overflow-x: auto; }
+.diagram { text-align: center; margin: 1.2em 0; padding: 1em; overflow-x: auto; }
+.diagram svg { max-width: 100%; height: auto; }
 hr { border: 0; border-top: 1px solid var(--line); margin: 2em 0; }
 ";
 
@@ -38,7 +42,15 @@ fn formula(source: &str, display: bool) -> String {
     if display {
         format!("<div class=\"math\">{shown}</div>")
     } else {
-        shown
+        format!("<span class=\"inline-math\">{shown}</span>")
+    }
+}
+
+/// A diagram as a picture, or its source if it can't be drawn.
+fn drawn(kind: diagram::Kind, source: &str) -> String {
+    match diagram::svg(kind, source, false) {
+        Ok(svg) => format!("<div class=\"diagram\">{svg}</div>"),
+        Err(_) => format!("<pre><code>{}</code></pre>", escape(source)),
     }
 }
 
@@ -49,13 +61,38 @@ pub fn body(markdown: &str) -> String {
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_FOOTNOTES
         | Options::ENABLE_MATH;
-    let events = Parser::new_ext(markdown, options).map(|event| match event {
-        Event::InlineMath(source) => Event::InlineHtml(formula(&source, false).into()),
-        Event::DisplayMath(source) => Event::Html(formula(&source, true).into()),
-        other => other,
+    let sized = figure::rewrite_sized(markdown, |image, width| {
+        format!(
+            "<img src=\"{}\" alt=\"{}\" style=\"width:{width}%\">",
+            escape(image.path),
+            escape(image.alt)
+        )
     });
+    let mut events = Vec::new();
+    let mut open: Option<(diagram::Kind, String)> = None;
+    for event in Parser::new_ext(&sized, options) {
+        match (&mut open, event) {
+            (None, Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(language))))
+                if diagram::kind_of(&language).is_some() =>
+            {
+                open = diagram::kind_of(&language).map(|kind| (kind, String::new()));
+            }
+            (Some((_, source)), Event::Text(text)) => source.push_str(&text),
+            (Some((kind, source)), Event::End(TagEnd::CodeBlock)) => {
+                events.push(Event::Html(drawn(*kind, source).into()));
+                open = None;
+            }
+            (_, Event::InlineMath(source)) => {
+                events.push(Event::InlineHtml(formula(&source, false).into()));
+            }
+            (_, Event::DisplayMath(source)) => {
+                events.push(Event::Html(formula(&source, true).into()));
+            }
+            (_, other) => events.push(other),
+        }
+    }
     let mut out = String::new();
-    html::push_html(&mut out, events);
+    html::push_html(&mut out, events.into_iter());
     out
 }
 
@@ -84,6 +121,22 @@ mod tests {
         assert!(html.contains("checkbox"));
         assert_eq!(html.matches("<svg").count(), 2, "{html}");
         assert!(html.contains("class=\"math\""));
+    }
+
+    #[test]
+    fn diagrams_and_sized_images_reach_the_web_page() {
+        let text = "```mermaid\nflowchart LR\n  A --> B\n```\n\n![Plot](a.png){width=40%}\n";
+        let html = body(text);
+        assert!(html.contains("class=\"diagram\""), "{html}");
+        assert!(html.contains("<svg"), "{html}");
+        assert!(!html.contains("flowchart"), "{html}");
+        assert!(html.contains("style=\"width:40%\""), "{html}");
+    }
+
+    #[test]
+    fn a_broken_diagram_stays_as_its_source() {
+        let html = body("```mermaid\nnot a diagram (\n```\n");
+        assert!(html.contains("not a diagram"), "{html}");
     }
 
     #[test]

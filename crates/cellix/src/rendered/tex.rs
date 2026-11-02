@@ -604,10 +604,11 @@ impl Page<'_, '_> {
             let line = self.lines[i].1;
             let (start, end) = argument(line, "includegraphics")?;
             let chars: Vec<char> = line.chars().collect();
-            Some(chars[start..end].iter().collect::<String>())
+            let share = cellix_doc::figure::graphics_width(line);
+            Some((chars[start..end].iter().collect::<String>(), share))
         });
-        if let Some(path) = image {
-            let shown = self.context.image(&path, self.width.min(90.0));
+        if let Some((path, share)) = image {
+            let shown = self.context.image(&path, fit_for(share, self.width));
             match shown {
                 Some(figure) => {
                     let at = self.lines[first].0 + 1;

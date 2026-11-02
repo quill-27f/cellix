@@ -113,6 +113,8 @@ pub struct Editor {
     page: RefCell<Option<PageCache>>,
     /// Formulas and images already drawn, so typing doesn't redo them.
     library: RefCell<Library>,
+    /// Whether the sheet is dark, which diagrams are drawn for.
+    dark: Cell<bool>,
     /// Text comments are about, as char ranges, tinted on a page.
     pub quoted: RefCell<Vec<(usize, usize)>>,
     /// The paper this file belongs to, and the revision it was read at.
@@ -171,6 +173,7 @@ impl Editor {
             minimap_on: true,
             page: RefCell::new(None),
             library: RefCell::default(),
+            dark: Cell::new(false),
             quoted: RefCell::default(),
             project: RefCell::new(None),
             show_preamble: false,
@@ -464,6 +467,7 @@ impl Editor {
             open,
             folder,
             library: Some(&self.library),
+            dark: self.dark.get(),
             ..Extras::default()
         };
         let rows = rendered::layout_with(text, width, &*self.measure, &self.registry, &extras);
@@ -1510,6 +1514,102 @@ impl Editor {
         }
     }
 
+    /// The line that names the image the caret is on. A paper's figure counts as a whole.
+    fn image_line_at_caret(&self) -> Option<usize> {
+        let head = self.selections.primary().head;
+        let rope = self.buffer.rope();
+        let line = rope.char_to_line(head);
+        if self.dialect() == Dialect::Markdown {
+            return cellix_doc::figure::image_line(&self.line_text(line)).map(|_| line);
+        }
+        let names = |n: &usize| self.line_text(*n).contains("\\includegraphics");
+        if names(&line) {
+            return Some(line);
+        }
+        let opens = |n: &usize| self.line_text(*n).contains("\\begin{figure");
+        let closes = |n: &usize| self.line_text(*n).contains("\\end{figure");
+        let first = (0..=line).rev().find(opens)?;
+        let last = (line..rope.len_lines()).find(closes)?;
+        (first..=last).find(names)
+    }
+
+    pub fn image_at_caret(&self) -> bool {
+        self.image_line_at_caret().is_some()
+    }
+
+    /// Puts a new line in place of the image's, leaving the caret where the line starts so
+    /// the picture shows again.
+    fn rewrite_image(&mut self, line: usize, text: &str) {
+        let start = self.buffer.rope().line_to_char(line);
+        let end = start + self.line_text(line).chars().count();
+        self.buffer
+            .replace_range(&mut self.selections, start, end, text);
+        self.selections.set_single(Selection::cursor(start));
+    }
+
+    /// Sets how much of the page the image at the caret takes, in percent.
+    pub fn set_image_width(&mut self, percent: u32) {
+        let Some(line) = self.image_line_at_caret() else {
+            return;
+        };
+        let text = self.line_text(line);
+        let sized = if self.dialect() == Dialect::Latex {
+            cellix_doc::figure::set_graphics_width(&text, percent)
+        } else {
+            cellix_doc::figure::set_width(&text, percent)
+        };
+        if let Some(sized) = sized {
+            self.rewrite_image(line, &sized);
+        }
+    }
+
+    /// Shows another file in the image's place, keeping its words and size.
+    pub fn replace_image(&mut self, path: &str) {
+        let Some(line) = self.image_line_at_caret() else {
+            return;
+        };
+        let text = self.line_text(line);
+        let replaced = if self.dialect() == Dialect::Latex {
+            cellix_doc::figure::set_graphics_path(&text, path)
+        } else {
+            cellix_doc::figure::set_path(&text, path)
+        };
+        if let Some(replaced) = replaced {
+            self.rewrite_image(line, &replaced);
+        }
+    }
+
+    /// Takes the image out, with the figure around it in a paper.
+    pub fn remove_image(&mut self) {
+        let Some(line) = self.image_line_at_caret() else {
+            return;
+        };
+        let rope = self.buffer.rope();
+        let (mut first, mut last) = (line, line);
+        if self.dialect() == Dialect::Latex {
+            let opens = |n: &usize| self.line_text(*n).contains("\\begin{figure");
+            let closes = |n: &usize| self.line_text(*n).contains("\\end{figure");
+            if let (Some(a), Some(b)) = (
+                (0..=line).rev().find(opens),
+                (line..rope.len_lines()).find(closes),
+            ) {
+                (first, last) = (a, b);
+            }
+        }
+        let start = rope.line_to_char(first);
+        let end = rope.line_to_char((last + 1).min(rope.len_lines() - 1));
+        let end = end.max(start + self.line_text(last).chars().count());
+        self.buffer
+            .replace_range(&mut self.selections, start, end, "");
+        self.selections.set_single(Selection::cursor(start));
+    }
+
+    /// Adds a diagram below this line, with the caret in its source to go on writing.
+    pub fn insert_diagram(&mut self, language: &str, source: &str) {
+        let block = format!("```{language}\n{source}\n```");
+        self.insert_block(&block, language.chars().count() + 4);
+    }
+
     /// Types text where the caret is.
     pub fn insert_text(&mut self, text: &str) {
         self.buffer.replace(&mut self.selections, text);
@@ -1790,6 +1890,11 @@ impl Editor {
         let full = area;
         let area = self.text_area(full);
         self.view_rows.set(area.h);
+        let dark = !theme.is_light();
+        if self.dark.replace(dark) != dark {
+            *self.page.borrow_mut() = None;
+            *self.library.borrow_mut() = Library::default();
+        }
         if self.rendered {
             self.draw_page(grid, area, theme, focused, marks);
             if self.shows_minimap(full) {

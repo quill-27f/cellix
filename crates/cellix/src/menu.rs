@@ -31,6 +31,15 @@ pub enum Action {
     CloseAllTabs,
     Tool(Tool),
     Table(TableEdit),
+    /// Sizes the image at the caret, in percent of the page.
+    ImageWidth(u32),
+    ReplaceImage,
+    RemoveImage,
+    ChooseImage,
+    PasteImage,
+    TypeImagePath,
+    /// Adds a new diagram from a template.
+    Diagram(usize),
 }
 
 /// One row. `None` for an action shows what can't be done here, rather than hiding it, so

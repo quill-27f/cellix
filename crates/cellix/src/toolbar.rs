@@ -24,6 +24,7 @@ pub enum Tool {
     Format(Format),
     Table,
     Image,
+    Diagram,
     Math,
     Comment,
     Export,
@@ -74,7 +75,7 @@ const fn icon(tool: Tool, name: &'static str, icon: Icon, gap: bool) -> Button {
     }
 }
 
-const BUTTONS: [Button; 14] = [
+const BUTTONS: [Button; 15] = [
     mark(Tool::Format(Format::Bold), "Bold", "B", false),
     Button {
         tool: Tool::Format(Format::Italic),
@@ -122,6 +123,7 @@ const BUTTONS: [Button; 14] = [
     icon(Tool::Math, "Formula", Icon::Sigma, true),
     icon(Tool::Table, "Table", Icon::Table, false),
     icon(Tool::Image, "Image", Icon::Picture, false),
+    icon(Tool::Diagram, "Diagram", Icon::Diagram, false),
     icon(Tool::Format(Format::Rule), "Divider", Icon::Rule, false),
     icon(Tool::Comment, "Comment", Icon::Comment, true),
 ];
@@ -401,7 +403,7 @@ mod tests {
         let bold = layout(row, Dialect::Markdown)[1];
         let found = hit(row, bold.x + 1, Dialect::Markdown);
         assert_eq!(found.map(|p| p.name), Some("Bold"));
-        assert_eq!(hit(row, 60, Dialect::Markdown), None);
+        assert_eq!(hit(row, 70, Dialect::Markdown), None);
     }
 
     #[test]

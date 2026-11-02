@@ -1,6 +1,8 @@
 //! What a paper needs that isn't on the page: which file to build, what to build it with,
 //! what went wrong and where, and Markdown turned into LaTeX for export.
 
+use crate::diagram::{Kind, kind_of};
+use crate::figure;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -805,8 +807,21 @@ pub fn tabular_cell_offset(text: &str, row: usize, column: usize) -> usize {
 
 const HEADER: &str = "\\documentclass[11pt]{article}\n\\usepackage{amsmath,amssymb,graphicx,hyperref}\n\\usepackage[margin=1in]{geometry}\n\\usepackage{booktabs}\n\\usepackage[normalem]{ulem}\n\\begin{document}\n";
 
-/// Markdown as a LaTeX document. Math goes through untouched, which is the point.
+/// Markdown as a LaTeX document, with diagrams as source.
 pub fn from_markdown(markdown: &str) -> String {
+    from_markdown_with(markdown, &mut |_, _| None)
+}
+
+/// Markdown as a LaTeX document. Math goes through untouched, which is the point. `picture`
+/// draws a diagram to a file and names it, since LaTeX can't read one.
+pub fn from_markdown_with(
+    markdown: &str,
+    picture: &mut dyn FnMut(Kind, &str) -> Option<String>,
+) -> String {
+    let markdown = figure::rewrite_sized(markdown, |image, width| {
+        let share = f64::from(width) / 100.0;
+        format!("![{}]({} \"{share:.2}\")", image.alt, image.path)
+    });
     let options = Options::ENABLE_TABLES
         | Options::ENABLE_TASKLISTS
         | Options::ENABLE_STRIKETHROUGH
@@ -815,7 +830,26 @@ pub fn from_markdown(markdown: &str) -> String {
     let mut verbatim = false;
     let mut columns = 0;
     let mut cell = 0;
-    for event in Parser::new_ext(markdown, options) {
+    let mut diagram: Option<(Kind, String)> = None;
+    for event in Parser::new_ext(&markdown, options) {
+        if let Some((kind, source)) = &mut diagram {
+            match event {
+                Event::Text(text) => source.push_str(&text),
+                Event::End(TagEnd::CodeBlock) => {
+                    match picture(*kind, source) {
+                        Some(file) => out.push_str(&format!(
+                            "\n\\begin{{center}}\n\\includegraphics[width=\\linewidth]{{{file}}}\n\\end{{center}}\n"
+                        )),
+                        None => out.push_str(&format!(
+                            "\n\\begin{{verbatim}}\n{source}\\end{{verbatim}}\n"
+                        )),
+                    }
+                    diagram = None;
+                }
+                _ => {}
+            }
+            continue;
+        }
         match event {
             Event::Start(Tag::Heading { level, .. }) => out.push_str(match level {
                 HeadingLevel::H1 => "\n\\section*{",
@@ -836,9 +870,11 @@ pub fn from_markdown(markdown: &str) -> String {
                 out.push_str(&format!("\\href{{{}}}{{", escape(&dest_url)));
             }
             Event::End(TagEnd::Link) => out.push('}'),
-            Event::Start(Tag::Image { dest_url, .. }) => {
+            Event::Start(Tag::Image {
+                dest_url, title, ..
+            }) => {
                 out.push_str(&format!(
-                    "\n\\includegraphics[width=\\linewidth]{{{dest_url}}}\n\\iffalse "
+                    "\n\\includegraphics[width={title}\\linewidth]{{{dest_url}}}\n\\iffalse "
                 ));
             }
             Event::End(TagEnd::Image) => out.push_str("\\fi\n"),
@@ -857,8 +893,12 @@ pub fn from_markdown(markdown: &str) -> String {
                     "[$\\square$] "
                 });
             }
-            Event::Start(Tag::CodeBlock(kind)) => {
-                let _ = matches!(kind, CodeBlockKind::Fenced(_));
+            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(language)))
+                if kind_of(&language).is_some() =>
+            {
+                diagram = kind_of(&language).map(|kind| (kind, String::new()));
+            }
+            Event::Start(Tag::CodeBlock(_)) => {
                 verbatim = true;
                 out.push_str("\n\\begin{verbatim}\n");
             }
@@ -906,6 +946,29 @@ pub fn from_markdown(markdown: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_diagram_and_a_sized_image_reach_the_paper() {
+        let text = "```mermaid\nflowchart LR\n  A --> B\n```\n\n![Plot](a.png){width=40%}\n";
+        let mut asked = Vec::new();
+        let tex = from_markdown_with(text, &mut |kind, source| {
+            asked.push((kind, source.to_string()));
+            Some("drawn.png".to_string())
+        });
+        assert_eq!(asked[0].0, Kind::Mermaid);
+        assert!(asked[0].1.contains("A --> B"));
+        assert!(
+            tex.contains("\\includegraphics[width=\\linewidth]{drawn.png}"),
+            "{tex}"
+        );
+        assert!(
+            tex.contains("\\includegraphics[width=0.40\\linewidth]{a.png}"),
+            "{tex}"
+        );
+        assert!(!tex.contains("flowchart"), "{tex}");
+        let fallback = from_markdown(text);
+        assert!(fallback.contains("flowchart"), "{fallback}");
+    }
 
     #[test]
     fn a_tabular_edits_like_a_table() {

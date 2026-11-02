@@ -300,13 +300,57 @@ fn store(key: &str, value: serde_json::Value) -> String {
 
 /// Runs a program and waits for it, for short commands whose outcome matters.
 /// Runs a command to its end, for when starting isn't the same as working.
-/// Whether a program can be started by name.
-fn on_path(program: &str) -> bool {
-    if program.contains('/') {
-        return Path::new(program).is_file();
-    }
-    let paths = std::env::var_os("PATH").unwrap_or_default();
-    std::env::split_paths(&paths).any(|folder| folder.join(program).is_file())
+/// Where pictures added to a document go, beside it.
+const IMAGE_FOLDER: &str = "images";
+
+/// Saves the clipboard's picture to the file named last, on this platform.
+fn clipboard_image_command() -> Vec<String> {
+    let script = if cfg!(target_os = "macos") {
+        "osascript -e 'on run {path}' -e 'set out to open for access POSIX file path with write permission' \
+         -e 'write (the clipboard as «class PNGf») to out' -e 'close access out' -e 'end run' \"$1\""
+    } else {
+        "wl-paste --type image/png > \"$1\" 2>/dev/null || xclip -selection clipboard -t image/png -o > \"$1\""
+    };
+    vec![
+        "sh".to_string(),
+        "-c".to_string(),
+        script.to_string(),
+        "clipboard".to_string(),
+    ]
+}
+
+/// Draws a diagram for print, on white and sharp enough for paper.
+fn write_diagram(kind: cellix_doc::diagram::Kind, source: &str, file: &Path) -> Option<()> {
+    const PRINT_SCALE: f32 = 3.0;
+    const PRINT_WIDTH: u32 = 2400;
+    let svg = cellix_doc::diagram::svg(kind, source, false).ok()?;
+    let raster = cellix_doc::diagram::rasterize(&svg, PRINT_SCALE, PRINT_WIDTH).ok()?;
+    let image = image::RgbaImage::from_raw(raster.width, raster.height, raster.rgba)?;
+    image.save(file).ok()
+}
+
+/// Whether a file is a picture a document can show.
+fn is_image(path: &Path) -> bool {
+    let extension = path.extension().and_then(|e| e.to_str());
+    matches!(
+        extension.map(str::to_ascii_lowercase).as_deref(),
+        Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "svg")
+    )
+}
+
+/// The picture a pasted path names. Terminals quote a dropped path, or escape its spaces.
+fn dropped_image(text: &str) -> Option<PathBuf> {
+    let text = text.trim();
+    let unquoted = text
+        .strip_prefix('\'')
+        .and_then(|t| t.strip_suffix('\''))
+        .or_else(|| text.strip_prefix('"').and_then(|t| t.strip_suffix('"')));
+    let path = match unquoted {
+        Some(path) => path.to_string(),
+        None => text.replace("\\ ", " "),
+    };
+    let path = PathBuf::from(path);
+    (path.is_absolute() && is_image(&path) && path.is_file()).then_some(path)
 }
 
 fn ran_well(command: &[String], arg: &str) -> bool {
@@ -406,7 +450,7 @@ pub struct App {
     /// A build under way.
     build: Option<std::sync::mpsc::Receiver<Build>>,
     /// A file made only for a build, to remove once it's done.
-    remove_after_build: Option<PathBuf>,
+    remove_after_build: Vec<PathBuf>,
     /// The comments on this project, kept with it.
     threads: Vec<Thread>,
     /// The editor and revision comments were last placed for.
@@ -439,6 +483,8 @@ pub struct App {
     server_install: Option<String>,
     /// What opens a page when nothing else does.
     system_browser: Vec<String>,
+    /// What saves the clipboard's picture to the file named last.
+    clipboard_image: Vec<String>,
     /// A page on its way to the browser, and whether it got there.
     browser_result: Option<(String, std::sync::mpsc::Receiver<bool>)>,
     /// Set when the user asks to leave.
@@ -472,6 +518,7 @@ impl App {
             outgoing_clipboard: None,
             ticks: 0,
             review: None,
+            clipboard_image: clipboard_image_command(),
             system_browser: vec![
                 if cfg!(target_os = "macos") {
                     "open"
@@ -518,7 +565,7 @@ impl App {
             dock: Dock::default(),
             stop_confirmed: false,
             build: None,
-            remove_after_build: None,
+            remove_after_build: Vec::new(),
             threads,
             threads_seen: None,
             threads_broken,
@@ -1765,6 +1812,13 @@ impl App {
                 self.search_file();
             }
             _ => {
+                // A file dropped on a terminal arrives as its path.
+                if self.on_page()
+                    && let Some(path) = dropped_image(text)
+                {
+                    self.place_image(&path, false);
+                    return;
+                }
                 let area = self.focused_area();
                 if let Some(editor) = self.editor_mut() {
                     editor.prepare_edit(area);
@@ -2553,6 +2607,7 @@ impl App {
                 self.branch_changed(&name, result);
             }
             Some(Item::NewBranch) => self.ask("New branch", PromptAction::NewBranch),
+            Some(Item::Image(path, _, replacing)) => self.place_image(&path, replacing),
             Some(Item::Citation(key, _)) => {
                 let area = self.focused_area();
                 if let Some(editor) = self.editor_mut() {
@@ -2951,7 +3006,9 @@ impl App {
         let Some(mut argv) = self.pane_browser() else {
             return false;
         };
-        if !on_path(&argv[0]) {
+        let var = |name: &str| std::env::var(name).ok();
+        let found = Path::new(&argv[0]).is_file() || crate::integrations::on_path(&argv[0], var);
+        if !found {
             return false;
         }
         argv.push(target.to_string());
@@ -4553,6 +4610,19 @@ impl App {
         ];
         let mut items = Vec::new();
         if editor.rendered {
+            if editor.image_at_caret() {
+                let size = |name, percent| MenuItem::new(name, MenuAction::ImageWidth(percent));
+                items.extend([
+                    size("Small", 25),
+                    size("Medium", 50),
+                    size("Large", 75),
+                    size("Full Width", 100),
+                    MenuItem::new("Replace Image…", MenuAction::ReplaceImage).after_rule(),
+                    MenuItem::new("Delete Image", MenuAction::RemoveImage),
+                ]);
+                items.extend(agent);
+                return items;
+            }
             items.push(run("Show Source", Command::MarkdownPreview));
             items.extend(edit);
             let format = |name, format| run(name, Command::Format(format));
@@ -4584,6 +4654,7 @@ impl App {
                 MenuItem::new("Insert Table…", MenuAction::Tool(Tool::Table)),
                 MenuItem::new("Insert Formula…", MenuAction::Tool(Tool::Math)),
                 MenuItem::new("Insert Image…", MenuAction::Tool(Tool::Image)),
+                MenuItem::new("Insert Diagram…", MenuAction::Tool(Tool::Diagram)),
             ]);
             items.extend(agent);
         } else {
@@ -4689,6 +4760,35 @@ impl App {
         match action {
             MenuAction::Run(command) => self.run(command),
             MenuAction::Tool(tool) => self.use_tool(tool, self.main_area().x),
+            MenuAction::ImageWidth(percent) => {
+                if let Some(editor) = self.editor_mut() {
+                    editor.set_image_width(percent);
+                }
+            }
+            MenuAction::RemoveImage => {
+                if let Some(editor) = self.editor_mut() {
+                    editor.remove_image();
+                }
+            }
+            MenuAction::ReplaceImage => self.choose_image(true),
+            MenuAction::PasteImage => self.paste_image(),
+            MenuAction::ChooseImage => self.choose_image(false),
+            MenuAction::TypeImagePath => {
+                self.overlay = Overlay::Prompt(Prompt {
+                    label: "Image file".to_string(),
+                    input: String::new(),
+                    action: PromptAction::Image,
+                });
+            }
+            MenuAction::Diagram(index) => {
+                let (_, language, source) = cellix_doc::diagram::TEMPLATES[index];
+                let area = self.focused_area();
+                if let Some(editor) = self.editor_mut() {
+                    editor.prepare_edit(area);
+                    editor.insert_diagram(language, source);
+                }
+                self.reveal();
+            }
             MenuAction::Table(edit) => {
                 if let Some(editor) = self.editor_mut() {
                     editor.edit_table(edit);
@@ -5664,6 +5764,89 @@ impl App {
         editor.map(Editor::dialect).unwrap_or_default()
     }
 
+    /// Lists the pictures in this project, to pick one.
+    fn choose_image(&mut self, replacing: bool) {
+        let items: Vec<Item> = self
+            .workspace
+            .files()
+            .into_iter()
+            .filter(|path| is_image(path))
+            .map(|path| {
+                let label = self.relative(&path);
+                Item::Image(path, label, replacing)
+            })
+            .collect();
+        if items.is_empty() {
+            self.say("No pictures in this project yet");
+            return;
+        }
+        self.overlay = Overlay::Palette(Palette::asking(items, "Image"));
+    }
+
+    /// The folder this document's relative paths start from.
+    fn document_folder(&self) -> PathBuf {
+        let editor = self.editors.get(self.active());
+        let folder = editor.and_then(|e| e.buffer.path()).and_then(Path::parent);
+        folder.map_or_else(|| self.workspace.root().to_path_buf(), Path::to_path_buf)
+    }
+
+    /// Where a picture goes in the document. One from outside the project is copied in
+    /// beside it, so the document still works on another machine.
+    fn image_reference(&self, path: &Path) -> io::Result<String> {
+        let folder = self.document_folder();
+        if let Ok(relative) = path.strip_prefix(&folder) {
+            return Ok(relative.to_string_lossy().into_owned());
+        }
+        let name = path.file_name().ok_or(io::ErrorKind::InvalidInput)?;
+        let target = folder.join(IMAGE_FOLDER).join(name);
+        std::fs::create_dir_all(folder.join(IMAGE_FOLDER))?;
+        if target != path {
+            std::fs::copy(path, &target)?;
+        }
+        Ok(Path::new(IMAGE_FOLDER)
+            .join(name)
+            .to_string_lossy()
+            .into_owned())
+    }
+
+    fn place_image(&mut self, path: &Path, replacing: bool) {
+        let reference = match self.image_reference(path) {
+            Ok(reference) => reference,
+            Err(e) => {
+                self.say(format!("Could not add the picture: {e}"));
+                return;
+            }
+        };
+        let area = self.focused_area();
+        if let Some(editor) = self.editor_mut() {
+            editor.prepare_edit(area);
+            if replacing {
+                editor.replace_image(&reference);
+            } else {
+                editor.insert_image(&reference);
+            }
+        }
+        self.reveal();
+    }
+
+    /// Saves the picture on the clipboard beside the document, and puts it in.
+    fn paste_image(&mut self) {
+        let folder = self.document_folder().join(IMAGE_FOLDER);
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let target = folder.join(format!("pasted-{stamp}.png"));
+        let saved = std::fs::create_dir_all(&folder).is_ok()
+            && ran_well(&self.clipboard_image, &target.display().to_string())
+            && target.metadata().is_ok_and(|m| m.len() > 0);
+        if saved {
+            self.place_image(&target, false);
+        } else {
+            let _ = std::fs::remove_file(&target);
+            self.say("There's no picture on the clipboard");
+        }
+    }
+
     /// The keys in the project's bibliographies, to pick one to cite.
     fn show_citations(&mut self) {
         let root = self.workspace.root().to_path_buf();
@@ -5810,7 +5993,6 @@ impl App {
             self.build_pdf();
             return;
         }
-        let tex = cellix_doc::latex::from_markdown(&editor.buffer.text());
         let out = path.with_extension("tex");
         if out.exists() {
             self.say(format!(
@@ -5819,9 +6001,20 @@ impl App {
             ));
             return;
         }
+        // LaTeX can't read a diagram, so each goes in as a picture beside the document.
+        let folder = out.parent().map(Path::to_path_buf).unwrap_or_default();
+        let mut made = vec![out.clone()];
+        let text = editor.buffer.text();
+        let tex = cellix_doc::latex::from_markdown_with(&text, &mut |kind, source| {
+            let name = format!(".diagram-{}.png", made.len());
+            let file = folder.join(&name);
+            write_diagram(kind, source, &file)?;
+            made.push(file);
+            Some(name)
+        });
         match std::fs::write(&out, tex) {
             Ok(()) => {
-                self.remove_after_build = Some(out.clone());
+                self.remove_after_build = made;
                 self.start_build(out);
             }
             Err(e) => self.say(format!("Could not write the LaTeX file: {e}")),
@@ -5838,7 +6031,7 @@ impl App {
             return false;
         };
         self.build = None;
-        if let Some(path) = self.remove_after_build.take() {
+        for path in self.remove_after_build.drain(..) {
             let _ = std::fs::remove_file(path);
         }
         let folder = build
@@ -5934,11 +6127,19 @@ impl App {
                 self.overlay = Overlay::Math(MathPanel::new((x, 3), &*self.measure));
             }
             Tool::Image => {
-                self.overlay = Overlay::Prompt(Prompt {
-                    label: "Image file".to_string(),
-                    input: String::new(),
-                    action: PromptAction::Image,
-                });
+                let items = vec![
+                    MenuItem::new("From This Project…", MenuAction::ChooseImage),
+                    MenuItem::new("Paste from Clipboard", MenuAction::PasteImage),
+                    MenuItem::new("Type a Path…", MenuAction::TypeImagePath),
+                ];
+                self.show_menu((x, 3), items);
+            }
+            Tool::Diagram => {
+                let templates = cellix_doc::diagram::TEMPLATES.iter().enumerate();
+                let items = templates
+                    .map(|(index, (name, ..))| MenuItem::new(name, MenuAction::Diagram(index)))
+                    .collect();
+                self.show_menu((x, 3), items);
             }
             Tool::Comment => self.run(Command::AddComment),
             Tool::Cite => self.show_citations(),
@@ -7389,9 +7590,10 @@ mod tests {
 
     #[test]
     fn arrows_walk_through_empty_cells() {
-        let source = "| A | B |\n|---|---|\n|     |     |\n";
+        // Words no temporary folder's name will hold, since the sidebar shows that name.
+        let source = "| Alpha | Beta |\n|---|---|\n|     |     |\n";
         let (_dir, mut app) = page_app(source);
-        let (x, y) = cell_of(&app, "A");
+        let (x, y) = cell_of(&app, "Alpha");
         app.handle(mouse(MouseKind::Left, x, y + 1));
         key(&mut app, Key::Right);
         typed(&mut app, "x");
@@ -7403,13 +7605,13 @@ mod tests {
 
     #[test]
     fn a_tabular_edit_leaves_the_caret_in_the_new_cell() {
-        let source = "\\begin{tabular}{ll}\n  A & B \\\\\n  1 & 2 \\\\\n\\end{tabular}\n";
+        let source = "\\begin{tabular}{ll}\n  A & B \\\\\n  one & two \\\\\n\\end{tabular}\n";
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("paper.tex");
         fs::write(&path, source).unwrap();
         let mut app = App::new(dir.path().to_path_buf(), (150, 40));
         app.open(&path).unwrap();
-        let (x, y) = cell_of(&app, "2");
+        let (x, y) = cell_of(&app, "two");
         app.handle(mouse(MouseKind::Left, x, y));
         app.editors[0].edit_table(TableEdit::RowBelow);
         typed(&mut app, "new");
@@ -8593,6 +8795,176 @@ mod tests {
         assert_eq!(pictures(&app), 1, "open, with the result under it");
         typed(&mut app, "\\frac{");
         assert_eq!(pictures(&app), 1, "and it holds while the source is broken");
+    }
+
+    /// A page at the pixel tier, where pictures can show.
+    fn picture_page(text: &str) -> (TempDir, App) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.md");
+        fs::write(&path, text).unwrap();
+        let image = image::RgbaImage::from_pixel(40, 20, image::Rgba([200, 30, 30, 255]));
+        image.save(dir.path().join("plot.png")).unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(10, 20)));
+        app.open(&path).unwrap();
+        (dir, app)
+    }
+
+    fn pictures(app: &App) -> Vec<cellix_render::Bounds> {
+        let grid = screen(app);
+        let bounds = grid.paint.iter().filter_map(|p| match p {
+            cellix_render::Paint::Image { bounds, .. } => Some(*bounds),
+            _ => None,
+        });
+        bounds.collect()
+    }
+
+    /// Everything drawn as text, which a pixel page sets between the cells.
+    fn painted_text(app: &App) -> String {
+        let grid = screen(app);
+        let runs = grid.paint.iter().filter_map(|p| match p {
+            cellix_render::Paint::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        });
+        runs.collect::<Vec<_>>().join("\n")
+    }
+
+    const FLOW: &str = "before\n\n```mermaid\nflowchart LR\n  Alpha --> Beta\n```\n\nafter\n";
+
+    #[test]
+    fn a_diagram_stands_as_a_picture_and_opens_to_its_source() {
+        let (_dir, mut app) = picture_page(FLOW);
+        assert_eq!(pictures(&app).len(), 1);
+        assert!(!painted_text(&app).contains("flowchart"));
+        let picture = pictures(&app)[0];
+        let (x, y) = ((picture.x / 64) as u16 + 2, (picture.y / 64) as u16 + 1);
+        app.handle(mouse(MouseKind::Left, x, y));
+        let text = painted_text(&app);
+        assert!(text.contains("flowchart"), "{text}");
+        assert_eq!(pictures(&app).len(), 1, "it stays in view while written");
+        typed(&mut app, " ");
+        assert!(app.active_text().unwrap().contains("```mermaid"));
+    }
+
+    #[test]
+    fn a_half_written_diagram_keeps_its_last_picture_and_says_why() {
+        let (_dir, mut app) = picture_page(FLOW);
+        let picture = pictures(&app)[0];
+        let (x, y) = ((picture.x / 64) as u16 + 2, (picture.y / 64) as u16 + 1);
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert_eq!(pictures(&app).len(), 1);
+        typed(&mut app, "wrong ");
+        assert_eq!(pictures(&app).len(), 1, "{}", painted_text(&app));
+        let text = painted_text(&app);
+        assert!(text.to_lowercase().contains("diagram"), "{text}");
+    }
+
+    #[test]
+    fn on_the_cell_tier_a_diagram_stays_as_its_source() {
+        let (_dir, app) = page_app(FLOW);
+        assert!(screen(&app).text().contains("flowchart"));
+    }
+
+    #[test]
+    fn the_toolbar_adds_a_diagram() {
+        let (_dir, mut app) = picture_page("words\n");
+        app.use_tool(Tool::Diagram, 40);
+        let (x, y) = find(&screen(&app), "Sequence");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        let text = app.active_text().unwrap();
+        assert!(text.contains("```mermaid\nsequenceDiagram"), "{text}");
+        assert_eq!(pictures(&app).len(), 1);
+        assert!(painted_text(&app).contains("sequenceDiagram"));
+    }
+
+    #[test]
+    fn an_image_is_sized_from_its_menu_and_the_page_follows() {
+        let (_dir, mut app) = picture_page("![Plot](plot.png)\n\nwords\n");
+        let before = pictures(&app)[0];
+        let (x, y) = ((before.x / 64) as u16 + 1, (before.y / 64) as u16);
+        app.handle(mouse(MouseKind::Right, x, y));
+        let (mx, my) = find(&screen(&app), "Full Width");
+        app.handle(mouse(MouseKind::Left, mx + 1, my));
+        assert!(
+            app.active_text()
+                .unwrap()
+                .starts_with("![Plot](plot.png){width=100%}"),
+        );
+        let wide = pictures(&app)[0];
+        assert!(wide.w > before.w * 4, "{wide:?} {before:?}");
+    }
+
+    #[test]
+    fn an_image_comes_out_from_its_menu() {
+        let (_dir, mut app) = picture_page("![Plot](plot.png)\n\nwords\n");
+        let picture = pictures(&app)[0];
+        let (x, y) = ((picture.x / 64) as u16 + 1, (picture.y / 64) as u16);
+        app.handle(mouse(MouseKind::Right, x, y));
+        let (mx, my) = find(&screen(&app), "Delete Image");
+        app.handle(mouse(MouseKind::Left, mx + 1, my));
+        assert_eq!(app.active_text().unwrap(), "\nwords\n");
+    }
+
+    #[test]
+    fn a_paper_figure_is_sized_the_way_papers_size_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = "\\begin{document}\n\\begin{figure}\n  \\includegraphics{plot.png}\n  \\caption{A}\n\\end{figure}\n\\end{document}\n";
+        fs::write(dir.path().join("paper.tex"), source).unwrap();
+        let image = image::RgbaImage::from_pixel(40, 20, image::Rgba([200, 30, 30, 255]));
+        image.save(dir.path().join("plot.png")).unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(10, 20)));
+        app.open(&dir.path().join("paper.tex")).unwrap();
+        let picture = pictures(&app)[0];
+        let (x, y) = ((picture.x / 64) as u16 + 1, (picture.y / 64) as u16);
+        app.handle(mouse(MouseKind::Right, x, y));
+        let (mx, my) = find(&screen(&app), "Medium");
+        app.handle(mouse(MouseKind::Left, mx + 1, my));
+        let text = app.active_text().unwrap();
+        assert!(
+            text.contains("\\includegraphics[width=0.50\\linewidth]{plot.png}"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_dropped_picture_is_copied_in_beside_the_document() {
+        let (dir, mut app) = picture_page("words\n");
+        let outside = tempfile::tempdir().unwrap();
+        let picture = outside.path().join("my plot.png");
+        fs::copy(dir.path().join("plot.png"), &picture).unwrap();
+        let dropped = picture.display().to_string().replace(' ', "\\ ");
+        app.handle(Event::Paste(dropped));
+        let text = app.active_text().unwrap();
+        assert!(text.contains("![](images/my plot.png)"), "{text}");
+        assert!(dir.path().join("images/my plot.png").is_file());
+    }
+
+    #[test]
+    fn a_picture_on_the_clipboard_lands_in_the_document() {
+        let (dir, mut app) = picture_page("words\n");
+        let source = dir.path().join("plot.png");
+        app.clipboard_image = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("cp {} \"$1\"", source.display()),
+            "clipboard".to_string(),
+        ];
+        app.paste_image();
+        let text = app.active_text().unwrap();
+        assert!(text.contains("![](images/pasted-"), "{text}");
+        assert_eq!(pictures(&app).len(), 1, "{text}");
+    }
+
+    #[test]
+    fn an_empty_clipboard_says_so_and_leaves_nothing() {
+        let (dir, mut app) = picture_page("words\n");
+        app.clipboard_image = vec!["false".to_string()];
+        app.paste_image();
+        assert!(screen(&app).text().contains("no picture on the clipboard"));
+        assert_eq!(app.active_text().unwrap(), "words\n");
+        let left = fs::read_dir(dir.path().join("images")).unwrap().count();
+        assert_eq!(left, 0);
     }
 
     #[test]
