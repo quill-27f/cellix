@@ -11,9 +11,10 @@ use cellix_term::{
     select_tier,
 };
 use crossterm::event::{
-    self as ct, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste,
-    EnableMouseCapture, KeyCode, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags, MouseButton,
-    MouseEventKind, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    self as ct, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture,
+    EnableBracketedPaste, EnableFocusChange, EnableMouseCapture, KeyCode, KeyEventKind,
+    KeyModifiers, KeyboardEnhancementFlags, MouseButton, MouseEventKind,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::style::Print;
@@ -47,6 +48,7 @@ impl Session {
             EnterAlternateScreen,
             EnableMouseCapture,
             EnableBracketedPaste,
+            EnableFocusChange,
             // Terminals without the Kitty keyboard protocol ignore this, and Ctrl+Shift+P
             // and Cmd keys then can't be told apart: F1 and Alt+P still open commands.
             PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
@@ -63,6 +65,7 @@ impl Drop for Session {
             Print("\x1b[?1016l"),
             DisableBracketedPaste,
             DisableMouseCapture,
+            DisableFocusChange,
             LeaveAlternateScreen,
             crossterm::cursor::Show
         );
@@ -343,7 +346,15 @@ pub fn run(options: Options) -> io::Result<()> {
         })? {
             // Drain everything queued, so a fast wheel doesn't redraw per event.
             loop {
-                match translate(ct::read()?, mouse_cell(&display)).map(|e| cmd_left(e, ghostty)) {
+                let event = ct::read()?;
+                // A multiplexer forgets images when a client leaves, so a new one starts
+                // with an empty window until everything is sent again.
+                if matches!(event, ct::Event::FocusGained)
+                    && display.placement == Some(Placement::Placeholder)
+                {
+                    backend.invalidate();
+                }
+                match translate(event, mouse_cell(&display)).map(|e| cmd_left(e, ghostty)) {
                     // The size check above handles it, and compares against the old size.
                     Some(Event::Resize(..)) | None => {}
                     Some(event) => app.handle(event),

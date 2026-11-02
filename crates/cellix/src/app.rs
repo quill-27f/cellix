@@ -3875,6 +3875,7 @@ impl App {
     }
 
     fn click_review(&mut self, x: u16, y: u16) {
+        let clicks = self.count_click(x, y);
         let area = self.main_area();
         let Some(review) = &mut self.review else {
             return;
@@ -3912,7 +3913,17 @@ impl App {
                     PromptAction::Comment(file, line),
                 );
             }
-            None => {}
+            Some(Hit::Text(file, line)) if clicks >= 2 => {
+                self.review = None;
+                let path = self.workspace.root().join(file);
+                if self.open(&path).is_ok() {
+                    let area = self.focused_area();
+                    if let Some(editor) = self.editor_mut() {
+                        editor.go_to_line(line, area);
+                    }
+                }
+            }
+            Some(Hit::Text(..)) | None => {}
         }
     }
 
@@ -6003,7 +6014,13 @@ impl App {
                 format!("{} lines", rope.len_lines().saturating_sub(trailing)),
                 language.to_string(),
                 "UTF-8".to_string(),
-                "Spaces: 4".to_string(),
+                // A writer counts words, and has no use for indent width.
+                if editor.rendered {
+                    let words = editor.buffer.text().split_whitespace().count();
+                    format!("{words} words")
+                } else {
+                    "Spaces: 4".to_string()
+                },
             ];
         }
         if self.in_pane && self.review.is_some() {
@@ -8311,6 +8328,12 @@ mod tests {
         assert_eq!(pictures(&app), 1, "open, with the result under it");
         typed(&mut app, "\\frac{");
         assert_eq!(pictures(&app), 1, "and it holds while the source is broken");
+    }
+
+    #[test]
+    fn a_page_counts_words() {
+        let (_dir, app) = page_app("one two three\n");
+        assert!(screen(&app).text().contains("3 words"));
     }
 
     #[test]

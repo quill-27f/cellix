@@ -3,9 +3,10 @@ use std::rc::Rc;
 
 use compact_str::CompactString;
 use cosmic_text::{
-    Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, Style as FontStyle, SwashCache,
-    Weight,
+    Attrs, Buffer, Color, Fallback, Family, FontSystem, Metrics, PlatformFallback, Shaping,
+    Style as FontStyle, SwashCache, Weight, fontdb,
 };
+use unicode_script::Script;
 
 use crate::grid::{Grid, Rgb};
 use crate::icon::{Icon, Piece, inked};
@@ -36,6 +37,8 @@ struct GlyphKey {
 
 /// Coverage of one glyph: pixel offsets from the cell's corner, with alpha.
 type Mask = Rc<Vec<(u16, u16, u8)>>;
+/// A colour glyph: pixel offsets, colours and alpha.
+type Painted = Rc<Vec<(u16, u16, Rgb, u8)>>;
 
 #[derive(Clone, Hash, PartialEq, Eq)]
 struct TextKey {
@@ -48,6 +51,46 @@ struct TextMask {
     width: usize,
     height: usize,
     alpha: Vec<u8>,
+}
+
+/// Fonts that hold Chinese and Japanese. The usual choices can be on-demand downloads a
+/// machine doesn't have, and a missing one leaves the text blank.
+const CJK_FONTS: [&str; 9] = [
+    "PingFang SC",
+    "Hiragino Sans",
+    "Hiragino Sans GB",
+    "Songti SC",
+    "Heiti SC",
+    "Arial Unicode MS",
+    "Noto Sans CJK SC",
+    "Noto Sans CJK JP",
+    "WenQuanYi Micro Hei",
+];
+
+/// The platform's fallback, with a longer list for the scripts it runs out of.
+struct WiderFallback(PlatformFallback);
+
+impl Fallback for WiderFallback {
+    fn common_fallback(&self) -> &[&'static str] {
+        self.0.common_fallback()
+    }
+
+    fn forbidden_fallback(&self) -> &[&'static str] {
+        self.0.forbidden_fallback()
+    }
+
+    fn script_fallback(&self, script: Script, locale: &str) -> &[&'static str] {
+        match script {
+            Script::Han | Script::Hiragana | Script::Katakana => &CJK_FONTS,
+            other => self.0.script_fallback(other, locale),
+        }
+    }
+}
+
+fn system_fonts() -> fontdb::Database {
+    let mut db = fontdb::Database::new();
+    db.load_system_fonts();
+    db
 }
 
 /// How dark a floating panel's shadow is at its edge, out of 255.
@@ -76,6 +119,8 @@ pub struct SoftwareRasterizer {
     metrics: Metrics,
     cell: (usize, usize),
     masks: HashMap<GlyphKey, Mask>,
+    /// Glyphs with colours of their own, such as emoji, as pixels with those colours.
+    painted: HashMap<GlyphKey, Painted>,
     text: HashMap<TextKey, Rc<TextMask>>,
 }
 
@@ -86,7 +131,11 @@ impl SoftwareRasterizer {
         if cell_width == 0 || cell_height == 0 {
             return None;
         }
-        let mut fonts = FontSystem::new();
+        let mut fonts = FontSystem::new_with_locale_and_db_and_fallback(
+            "en-US".to_string(),
+            system_fonts(),
+            WiderFallback(PlatformFallback),
+        );
         let db = fonts.db_mut();
         db.load_font_data(INTER.to_vec());
         db.load_font_data(INTER_ITALIC.to_vec());
@@ -101,6 +150,7 @@ impl SoftwareRasterizer {
             metrics,
             cell: (cell_width, cell_height),
             masks: HashMap::new(),
+            painted: HashMap::new(),
             text: HashMap::new(),
         })
     }
@@ -123,6 +173,7 @@ impl SoftwareRasterizer {
         buffer.set_rich_text(rich, &attrs, Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut self.fonts, false);
         let mut pixels = Vec::new();
+        let mut coloured = Vec::new();
         let white = Color::rgb(255, 255, 255);
         buffer.draw(
             &mut self.fonts,
@@ -136,11 +187,20 @@ impl SoftwareRasterizer {
                     for px in x..x + w as i32 {
                         if px >= 0 && py >= 0 && (px as usize) < width && (py as usize) < height {
                             pixels.push((px as u16, py as u16, color.a()));
+                            let rgb = Rgb(color.r(), color.g(), color.b());
+                            coloured.push((px as u16, py as u16, rgb, color.a()));
                         }
                     }
                 }
             },
         );
+        // Text comes out white, ready to take any colour. Anything else is the glyph's own.
+        if coloured
+            .iter()
+            .any(|(_, _, rgb, _)| *rgb != Rgb(255, 255, 255))
+        {
+            self.painted.insert(key.clone(), Rc::new(coloured));
+        }
         let mask = Rc::new(pixels);
         self.masks.insert(key.clone(), mask.clone());
         mask
@@ -614,9 +674,12 @@ impl Rasterizer for SoftwareRasterizer {
         let (cw, ch) = self.cell;
         let width = cw * cells.len();
         let mut rgb = vec![0; width * ch * 3];
+        // Backgrounds first: a wide glyph runs into the next cell, whose colour would cut it.
         for (i, cell) in cells.iter().enumerate() {
-            let (fg, bg) = (cell.style.fg, cell.style.bg);
-            fill(&mut rgb, width, i * cw, 0, cw, ch, bg);
+            fill(&mut rgb, width, i * cw, 0, cw, ch, cell.style.bg);
+        }
+        for (i, cell) in cells.iter().enumerate() {
+            let fg = cell.style.fg;
             if cell.symbol.is_empty() || cell.symbol == " " || cell.style.painted {
                 continue;
             }
@@ -629,11 +692,23 @@ impl Rasterizer for SoftwareRasterizer {
                 draw_icon(&mut rgb, width, i * cw, (cw, ch), piece, fg);
                 continue;
             }
-            let mask = self.mask(&GlyphKey {
+            let key = GlyphKey {
                 symbol: cell.symbol.clone(),
                 bold: cell.style.bold,
                 italic: cell.style.italic,
-            });
+            };
+            let mask = self.mask(&key);
+            if let Some(painted) = self.painted.get(&key) {
+                for &(x, y, color, alpha) in painted.iter() {
+                    let at = (y as usize * width + i * cw + x as usize) * 3;
+                    if at + 2 < rgb.len() && (i * cw + x as usize) < width {
+                        rgb[at] = blend(color.0, rgb[at], alpha);
+                        rgb[at + 1] = blend(color.1, rgb[at + 1], alpha);
+                        rgb[at + 2] = blend(color.2, rgb[at + 2], alpha);
+                    }
+                }
+                continue;
+            }
             for &(x, y, alpha) in mask.iter() {
                 let at = (y as usize * width + i * cw + x as usize) * 3;
                 if at + 2 < rgb.len() && (i * cw + x as usize) < width {
@@ -722,6 +797,19 @@ mod tests {
         let image = r.row(&grid, 0);
         assert_eq!((image.width, image.height), (80, 20));
         assert_eq!(image.rgb.len(), 80 * 20 * 3);
+    }
+
+    #[test]
+    fn a_wide_glyph_keeps_its_right_half() {
+        let Some(mut r) = rasterizer() else { return };
+        let mut grid = Grid::new(4, 1, style());
+        grid.put_str(1, 0, "MM", style(), 4);
+        let image = r.row(&grid, 0);
+        assert!(lit(&image, 1, 10) > 10);
+        assert!(
+            lit(&image, 2, 10) > 10,
+            "the next cell's colour didn't cover it"
+        );
     }
 
     #[test]

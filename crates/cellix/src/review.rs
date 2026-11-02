@@ -31,14 +31,20 @@ const HUNK_LABEL: usize = 120;
 const SHOWN_TURNS: usize = 6;
 const SHOWN_TESTS: usize = 3;
 
+/// Columns of a stacked line that hold its number.
+const LINE_NUMBER_WIDTH: u16 = 8;
+
 /// What a click in the review view lands on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Hit {
     File(usize),
     Accept(usize),
     Reject(usize),
-    /// A line of the new version, or the old one if it was deleted.
+    /// A line number, which starts a comment on that line of the new version, or the old
+    /// one if it was deleted.
     Line(String, usize),
+    /// The text of a line, which a double click opens in its file.
+    Text(String, usize),
     /// Compare against this turn, or HEAD for None.
     Base(Option<usize>),
     Commit,
@@ -696,7 +702,13 @@ impl Review {
             }
             Stacked::Line(side, _) => {
                 let file = self.current_path()?.to_string_lossy().into_owned();
-                Some(Hit::Line(file, side.number))
+                // Only the numbers: a click in the code is someone reading it.
+                let in_numbers = x < body.x + LINE_NUMBER_WIDTH;
+                Some(if in_numbers {
+                    Hit::Line(file, side.number)
+                } else {
+                    Hit::Text(file, side.number)
+                })
             }
             Stacked::Gap | Stacked::Note(_) => None,
         }
