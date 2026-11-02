@@ -730,42 +730,42 @@
   {
     "id": "doc-toolbar",
     "milestone": 8,
-    "passes": false,
+    "passes": true,
     "test": "the_toolbar_writes_every_format",
     "title": "Documents have a full toolbar on top"
   },
   {
     "id": "table-editing",
     "milestone": 8,
-    "passes": false,
+    "passes": true,
     "test": "tables_grow_and_shrink_from_the_menu",
     "title": "Table rows and columns change from the context menu"
   },
   {
     "id": "table-picker",
     "milestone": 8,
-    "passes": false,
+    "passes": true,
     "test": "a_new_table_comes_from_the_size_picker",
     "title": "A new table comes from a size picker"
   },
   {
     "id": "math-render",
     "milestone": 8,
-    "passes": false,
+    "passes": true,
     "test": "formulas_show_typeset_and_open_on_the_caret",
     "title": "Formulas show typeset and open for editing on the caret"
   },
   {
     "id": "math-panel",
     "milestone": 8,
-    "passes": false,
+    "passes": true,
     "test": "the_math_panel_inserts_templates",
     "title": "A panel inserts symbols and formula templates"
   },
   {
     "id": "page-images",
     "milestone": 8,
-    "passes": false,
+    "passes": true,
     "test": "images_show_in_the_page",
     "title": "Images show in the page"
   },

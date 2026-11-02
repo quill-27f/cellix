@@ -1,10 +1,12 @@
 use std::path::PathBuf;
 
+use cellix_doc::table::Edit as TableEdit;
 use cellix_input::Command;
 use cellix_render::{Bounds, Font, Grid, Measure, Rect, Style};
 
 use crate::palette::{keys_of, raised};
 use crate::theme::Theme;
+use crate::toolbar::Tool;
 
 /// Space from the menu's edge to its text.
 const INSET: f32 = 1.0;
@@ -27,6 +29,8 @@ pub enum Action {
     CloseTab(usize),
     CloseOtherTabs(usize),
     CloseAllTabs,
+    Tool(Tool),
+    Table(TableEdit),
 }
 
 /// One row. `None` for an action shows what can't be done here, rather than hiding it, so

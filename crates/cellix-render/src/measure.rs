@@ -59,6 +59,11 @@ pub trait Measure {
     /// True when text sits in whole cells, so cell positions are exact.
     fn in_cells(&self) -> bool;
 
+    /// A cell's size in pixels, where there are pixels.
+    fn cell_pixels(&self) -> Option<(u32, u32)> {
+        None
+    }
+
     fn width(&self, text: &str, font: Font) -> f32 {
         self.advances(text, font).iter().sum()
     }
@@ -147,6 +152,10 @@ impl Measure for FontMeasure {
 
     fn in_cells(&self) -> bool {
         false
+    }
+
+    fn cell_pixels(&self) -> Option<(u32, u32)> {
+        Some((self.cell.0 as u32, self.cell.1 as u32))
     }
 }
 

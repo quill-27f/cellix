@@ -108,6 +108,12 @@ pub enum Format {
     PlainText,
     CodeBlock,
     Table,
+    Numbered,
+    /// A heading of this level, or plain text at zero.
+    Level(u8),
+    /// A line across the page.
+    Rule,
+    Link,
 }
 
 /// Anything the user can ask for. Each entry is also a command-palette item unless it

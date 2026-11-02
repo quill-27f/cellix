@@ -2,6 +2,9 @@
 //! hairlines, shadows and small icons. The grid stays the source of truth for layout and
 //! hit-testing, and the cell tier ignores all of this.
 
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
 use crate::grid::{Rect, Rgb};
 use crate::icon::Icon;
 use crate::measure::Font;
@@ -58,6 +61,39 @@ pub const BOTTOM_RIGHT: u8 = 4;
 pub const BOTTOM_LEFT: u8 = 8;
 pub const ALL_CORNERS: u8 = 15;
 
+/// What a bitmap's bytes are.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Pixels {
+    /// One byte a pixel of ink, drawn in a colour: a formula takes the text's.
+    Coverage,
+    /// Four bytes a pixel: a picture or a page of a PDF.
+    Rgba,
+}
+
+/// Pixels made elsewhere. `id` stands for the content, so a tile hashes it and not every byte.
+#[derive(Clone, Debug)]
+pub struct Bitmap {
+    pub id: u64,
+    pub width: u32,
+    pub height: u32,
+    pub kind: Pixels,
+    pub pixels: Arc<Vec<u8>>,
+}
+
+impl PartialEq for Bitmap {
+    fn eq(&self, other: &Self) -> bool {
+        (self.id, self.width, self.height) == (other.id, other.width, other.height)
+    }
+}
+
+impl Eq for Bitmap {}
+
+impl Hash for Bitmap {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        (self.id, self.width, self.height).hash(state);
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Paint {
     Panel {
@@ -101,6 +137,14 @@ pub enum Paint {
     },
     /// A row's share of a minimap: many small bars, which as panels would be slow.
     Strips { bounds: Bounds, strips: Vec<Strip> },
+    /// A bitmap scaled to `bounds`. Coverage is inked in `color`.
+    Image {
+        bounds: Bounds,
+        /// What it stays inside, since a page scrolls past its pictures.
+        clip: Bounds,
+        bitmap: Bitmap,
+        color: Rgb,
+    },
 }
 
 impl Paint {
@@ -115,6 +159,10 @@ impl Paint {
             | Self::Icon { bounds, .. }
             | Self::Strips { bounds, .. }
             | Self::Corners { bounds, .. } => (bounds.y, bounds.y + bounds.h.max(1)),
+            Self::Image { bounds, clip, .. } => (
+                bounds.y.max(clip.y),
+                (bounds.y + bounds.h.max(1)).min(clip.y + clip.h),
+            ),
             // Large text stands taller than its row.
             Self::Text { y, font, .. } if font.size > 100 => (*y - UNIT, *y + 2 * UNIT),
             Self::Text { y, .. } => (*y, *y + UNIT),

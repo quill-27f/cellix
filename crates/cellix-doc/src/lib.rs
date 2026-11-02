@@ -2,3 +2,4 @@
 
 pub mod html;
 pub mod math;
+pub mod table;

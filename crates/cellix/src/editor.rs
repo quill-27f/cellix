@@ -4,13 +4,17 @@ use std::path::Path;
 use std::rc::Rc;
 
 use cellix_core::{Buffer, Motion, Selection, Selections};
+use cellix_doc::table::Edit as TableEdit;
 use cellix_input::{Command, Direction, Format};
 use cellix_lang::{Registry, Span, Worker};
-use cellix_render::{Bounds, Font, Grid, INTERFACE_SIZE, Icon, Measure, Rect, Rgb, Strip, units};
+use cellix_render::{
+    Bounds, Font, Grid, INTERFACE_SIZE, Icon, Measure, Paint, Rect, Rgb, Strip, units,
+};
 use cellix_review::LineChange;
 use unicode_width::UnicodeWidthChar;
 
-use crate::rendered::{self, Glyph, Intent, Row, Tone};
+use crate::panels::Symbol;
+use crate::rendered::{self, Extras, Figure, Glyph, Intent, Library, Row, Tone};
 use crate::theme::Theme;
 
 const TAB_WIDTH: usize = 4;
@@ -44,8 +48,20 @@ pub struct Marks {
     pub errors: Vec<usize>,
 }
 
-/// A laid-out page: the revision and width it was made for, and its rows.
-type Page = (u64, usize, Rc<Vec<Row>>);
+/// A page's rows, its figures, and where its formulas and images are.
+type LaidOut = (Rc<Vec<Row>>, Vec<Figure>, Vec<(usize, usize)>);
+
+/// A laid-out page, and what it was made for.
+struct PageCache {
+    revision: u64,
+    width: usize,
+    /// The formula showing as source.
+    open: Option<(usize, usize)>,
+    rows: Rc<Vec<Row>>,
+    figures: Rc<Vec<Figure>>,
+    /// Every formula and image, which the caret opens by moving into.
+    spans: Rc<Vec<(usize, usize)>>,
+}
 
 /// One open document and where the view is within it.
 /// A colour pulled towards the background, as text is at a minimap's size.
@@ -84,7 +100,9 @@ pub struct Editor {
     /// Whether the minimap may show, given the room.
     pub minimap_on: bool,
     /// The laid-out page, for one revision and width.
-    page: RefCell<Option<Page>>,
+    page: RefCell<Option<PageCache>>,
+    /// Formulas and images already drawn, so typing doesn't redo them.
+    library: RefCell<Library>,
     measure: Rc<dyn Measure>,
     registry: Rc<Registry>,
     /// The revision last sent to a language server.
@@ -120,6 +138,7 @@ impl Editor {
             rendered: is_markdown,
             minimap_on: true,
             page: RefCell::new(None),
+            library: RefCell::default(),
             measure,
             registry,
             synced: 0,
@@ -351,28 +370,98 @@ impl Editor {
             .clamp(1, MAX_PAGE_WIDTH) as usize
     }
 
-    /// The rendered page for this width, laid out again only after an edit.
+    /// Lays the page out, with `open` showing as source.
+    fn lay_out(&self, text: &str, width: usize, open: Option<(usize, usize)>) -> LaidOut {
+        let folder = self.buffer.path().and_then(Path::parent);
+        let extras = Extras {
+            open,
+            folder,
+            library: Some(&self.library),
+            ..Extras::default()
+        };
+        let rows = rendered::layout_with(text, width, &*self.measure, &self.registry, &extras);
+        (
+            Rc::new(rows),
+            extras.figures.into_inner(),
+            extras.spans.into_inner(),
+        )
+    }
+
+    /// The rendered page for this width, laid out again only after an edit, or when the
+    /// caret moves into or out of a formula.
     fn page(&self, area: Rect) -> Rc<Vec<Row>> {
         let width = Self::page_width(area);
         let revision = self.buffer.revision();
+        let head = self.selections.primary().head;
         let mut cache = self.page.borrow_mut();
-        if let Some((r, w, rows)) = cache.as_ref()
-            && *r == revision
-            && *w == width
-        {
-            return rows.clone();
+        let stale = cache
+            .as_ref()
+            .is_none_or(|c| c.revision != revision || c.width != width);
+        if stale {
+            let text = self.buffer.text();
+            let (rows, figures, spans) = self.lay_out(&text, width, None);
+            *cache = Some(PageCache {
+                revision,
+                width,
+                open: None,
+                rows,
+                figures: Rc::new(figures),
+                spans: Rc::new(spans),
+            });
         }
-        let text = self.buffer.text();
-        let rows = rendered::layout(&text, width, &*self.measure, &self.registry);
-        let rows = Rc::new(rows);
-        *cache = Some((revision, width, rows.clone()));
-        rows
+        let page = cache.as_mut().expect("laid out above");
+        let open = page
+            .spans
+            .iter()
+            .copied()
+            .find(|s| s.0 < head && head < s.1);
+        if open != page.open {
+            let text = self.buffer.text();
+            let (rows, figures, _) = self.lay_out(&text, width, open);
+            page.open = open;
+            page.rows = rows;
+            page.figures = Rc::new(figures);
+        }
+        page.rows.clone()
+    }
+
+    fn figures(&self) -> Rc<Vec<Figure>> {
+        let cache = self.page.borrow();
+        cache
+            .as_ref()
+            .map_or_else(Rc::default, |page| page.figures.clone())
+    }
+
+    /// Draws the pictures in view, including those that started above it.
+    fn draw_figures(&self, grid: &mut Grid, area: Rect, rows: &[Row], theme: &Theme) {
+        let figures = self.figures();
+        let left = (area.x + Self::page_margin(area)) as f32;
+        let end = (self.top + area.h as usize).min(rows.len());
+        for (index, row) in rows.iter().enumerate().take(end) {
+            let Some((figure, x)) = row.figure else {
+                continue;
+            };
+            let Some(figure) = figures.get(figure) else {
+                continue;
+            };
+            let top = area.y as f32 + index as f32 - self.top as f32;
+            if top + figure.height < area.y as f32 {
+                continue;
+            }
+            grid.paint.push(Paint::Image {
+                bounds: Bounds::cells(left + x, top + 0.2, figure.width, figure.height),
+                clip: Bounds::cells(area.x as f32, area.y as f32, area.w as f32, area.h as f32),
+                bitmap: figure.bitmap.clone(),
+                color: theme.text.fg,
+            });
+        }
     }
 
     /// Text is measured differently from here on, so the page has to be set again.
     pub fn set_measure(&mut self, measure: Rc<dyn Measure>) {
         self.measure = measure;
         *self.page.borrow_mut() = None;
+        *self.library.borrow_mut() = Library::default();
     }
 
     /// Moves a caret out of hidden source, so typing never lands inside a marker.
@@ -569,7 +658,19 @@ impl Editor {
                 .checked_sub(1)
                 .and_then(|r| rows.get(r))
                 .filter(|r| r.tall);
-            let stop = above.or_else(|| rows[row..].iter().find(|r| r.stop));
+            // So is any part of a picture, which opens it wherever it's clicked.
+            let picture = (!rows[row].stop)
+                .then(|| {
+                    rows[..=row]
+                        .iter()
+                        .rev()
+                        .find(|r| r.stop || r.figure.is_some())
+                })
+                .flatten()
+                .filter(|r| r.figure.is_some());
+            let stop = above
+                .or(picture)
+                .or_else(|| rows[row..].iter().find(|r| r.stop));
             return stop.map_or(self.buffer.rope().len_chars(), |r| r.position_at(column));
         }
         let rope = self.buffer.rope();
@@ -594,7 +695,7 @@ impl Editor {
     /// The lines or page rows there are to scroll through.
     fn scroll_length(&self) -> usize {
         // A cached page is close enough to bound the scroll; draw corrects any slack.
-        let rows = self.page.borrow().as_ref().map(|(_, _, rows)| rows.len());
+        let rows = self.page.borrow().as_ref().map(|page| page.rows.len());
         rows.filter(|_| self.rendered)
             .unwrap_or_else(|| self.buffer.rope().len_lines())
     }
@@ -1077,6 +1178,12 @@ impl Editor {
             }
             Format::Heading if heading => (hashes + 1, String::new()),
             Format::Heading => (0, "# ".to_string()),
+            Format::Level(level) => {
+                let drop = if heading { hashes + 1 } else { 0 };
+                let add = "#".repeat(level as usize);
+                (drop, if level == 0 { add } else { format!("{add} ") })
+            }
+            Format::Numbered => simple("1. "),
             Format::Bullet => simple("- "),
             Format::Task => simple("- [ ] "),
             Format::PlainText if heading => (hashes + 1, String::new()),
@@ -1117,9 +1224,188 @@ impl Editor {
             Format::Code => self.toggle_inline("`"),
             Format::Strikethrough => self.toggle_inline("~~"),
             Format::CodeBlock => self.fence_lines(),
-            Format::Table => self.insert_table(),
+            Format::Table => self.insert_table(3, 3),
+            Format::Rule => self.insert_block("---", 3),
+            Format::Link => self.make_link(),
             _ => self.toggle_lines(format),
         }
+    }
+
+    /// `[text](url)`, with the address selected to type over.
+    fn make_link(&mut self) {
+        let primary = self.selections.primary();
+        let (start, end) = if primary.is_empty() {
+            self.buffer.word_at(primary.head)
+        } else {
+            (primary.start(), primary.end())
+        };
+        let text = self.buffer.rope().slice(start..end).to_string();
+        let link = format!("[{text}](https://)");
+        self.buffer
+            .replace_range(&mut self.selections, start, end, &link);
+        let address = start + text.chars().count() + 3;
+        self.selections.set_single(Selection {
+            anchor: address,
+            head: address + "https://".len(),
+            goal: None,
+        });
+    }
+
+    /// Puts text in a block of its own below this line, with the caret `caret` chars in.
+    pub fn insert_block(&mut self, block: &str, caret: usize) {
+        let head = self.selections.primary().head;
+        let rope = self.buffer.rope();
+        let line = rope.char_to_line(head);
+        let text = self.line_text(line);
+        let at = rope.line_to_char(line) + text.chars().count();
+        let gap = if text.trim().is_empty() { "" } else { "\n\n" };
+        let insert = format!("{gap}{block}\n");
+        self.buffer
+            .replace_range(&mut self.selections, at, at, &insert);
+        let spot = at + gap.chars().count() + caret;
+        self.selections.set_single(Selection::cursor(spot));
+    }
+
+    /// Whether the caret is inside a formula showing as source.
+    pub fn in_formula(&self) -> bool {
+        self.page
+            .borrow()
+            .as_ref()
+            .is_some_and(|p| p.open.is_some())
+    }
+
+    /// Inserts a symbol or template. Inside a formula it goes in where the caret is, and
+    /// anywhere else it starts a new formula.
+    pub fn insert_math(&mut self, symbol: &Symbol) {
+        let (open, close, block) = match (self.in_formula(), symbol.block) {
+            (true, _) => ("", "", false),
+            (false, true) => ("$$\n", "\n$$", true),
+            (false, false) => ("$", "$", false),
+        };
+        let chars = symbol.text.chars().count();
+        let caret = symbol.caret.min(chars) + open.chars().count();
+        let text = format!("{open}{}{close}", symbol.text);
+        if block {
+            self.insert_block(&text, caret);
+            return;
+        }
+        let primary = self.selections.primary();
+        let (start, end) = (primary.start(), primary.end());
+        self.buffer
+            .replace_range(&mut self.selections, start, end, &text);
+        self.selections.set_single(Selection::cursor(start + caret));
+    }
+
+    /// The table the caret is in, as its first and last lines and the caret's row and
+    /// column, with the header as row zero and the rule left out.
+    pub fn table_at_caret(&self) -> Option<(usize, usize, usize, usize)> {
+        let head = self.selections.primary().head;
+        let rope = self.buffer.rope();
+        let line = rope.char_to_line(head);
+        let has_pipe = |n: usize| n < rope.len_lines() && self.line_text(n).contains('|');
+        if !has_pipe(line) {
+            return None;
+        }
+        let first = (0..=line)
+            .rev()
+            .take_while(|n| has_pipe(*n))
+            .last()
+            .unwrap_or(line);
+        let last = (line..rope.len_lines())
+            .take_while(|n| has_pipe(*n))
+            .last()
+            .unwrap_or(line);
+        let rule = self.line_text(first + 1);
+        let is_rule = |c: char| "|-: ".contains(c);
+        if last == first || !rule.contains('-') || !rule.chars().all(is_rule) {
+            return None;
+        }
+        let column = head - rope.line_to_char(line);
+        let before: String = self.line_text(line).chars().take(column).collect();
+        let pipes = before.matches('|').count().saturating_sub(1);
+        let row = match line - first {
+            0 => 0,
+            1 => 1,
+            below => below - 1,
+        };
+        Some((first, last, row, pipes))
+    }
+
+    /// Changes the table the caret is in, and leaves the caret in the cell that matters.
+    pub fn edit_table(&mut self, edit: TableEdit) {
+        let Some((first, last, row, column)) = self.table_at_caret() else {
+            return;
+        };
+        let rope = self.buffer.rope();
+        let start = rope.line_to_char(first);
+        let end = rope.line_to_char(last) + self.line_text(last).chars().count();
+        let text = rope.slice(start..end).to_string();
+        match cellix_doc::table::apply(&text, row, column, edit) {
+            Some((table, row, column)) => {
+                self.buffer
+                    .replace_range(&mut self.selections, start, end, &table);
+                let at = start + cellix_doc::table::cell_offset(&table, row, column);
+                self.selections.set_single(Selection::cursor(at));
+            }
+            None => {
+                // Whatever's after the table closes up behind it.
+                let total = self.buffer.rope().len_chars();
+                self.buffer
+                    .replace_range(&mut self.selections, start, (end + 1).min(total), "");
+                self.selections.set_single(Selection::cursor(start));
+            }
+        }
+    }
+
+    /// What kind of paragraph the caret is in, and which formats it's already in.
+    pub fn caret_formats(&self) -> (&'static str, Vec<Format>) {
+        let head = self.selections.primary().head;
+        let rope = self.buffer.rope();
+        let line = self.line_text(rope.char_to_line(head));
+        let hashes = line.chars().take_while(|c| *c == '#').count();
+        let trimmed = line.trim_start();
+        let digits = trimmed.chars().take_while(char::is_ascii_digit).count();
+        let mut active = Vec::new();
+        if trimmed.starts_with("- [") {
+            active.push(Format::Task);
+        } else if trimmed.starts_with("- ") || trimmed.starts_with("* ") {
+            active.push(Format::Bullet);
+        } else if digits > 0 && trimmed[digits..].starts_with(". ") {
+            active.push(Format::Numbered);
+        } else if trimmed.starts_with("> ") {
+            active.push(Format::Quote);
+        }
+        let cache = self.page.borrow();
+        let rows = cache.as_ref().map(|p| p.rows.clone());
+        let at = rows.iter().flat_map(|r| r.iter()).find_map(|row| {
+            row.glyphs
+                .iter()
+                .find(|g| g.at == Some(head) || g.at.map(|a| a + 1) == Some(head))
+        });
+        if let Some(glyph) = at {
+            if glyph.font.bold && hashes == 0 {
+                active.push(Format::Bold);
+            }
+            if glyph.font.italic {
+                active.push(Format::Italic);
+            }
+            if glyph.tone == Tone::Code {
+                active.push(Format::Code);
+            }
+            if glyph.tone == Tone::Link {
+                active.push(Format::Link);
+            }
+        }
+        let style = match hashes {
+            1 => "Heading 1",
+            2 => "Heading 2",
+            3 => "Heading 3",
+            4 => "Heading 4",
+            5 => "Heading 5",
+            6 => "Heading 6",
+            _ => "Text",
+        };
+        (style, active)
     }
 
     /// Puts the selected lines in a fenced block, with the caret on its first line.
@@ -1137,20 +1423,16 @@ impl Editor {
         self.selections.set_single(Selection::cursor(start + 4));
     }
 
-    /// Adds a small table below this line, with the caret in its first cell.
-    fn insert_table(&mut self) {
-        const TABLE: &str = "| Column | Column |\n|---|---|\n|  |  |\n";
+    /// Adds a new table below this line, with its first heading selected to type over.
+    pub fn insert_table(&mut self, rows: usize, columns: usize) {
+        let table = cellix_doc::table::new_table(rows, columns);
+        self.insert_block(&table, 2);
         let head = self.selections.primary().head;
-        let rope = self.buffer.rope();
-        let line = rope.char_to_line(head);
-        let text = self.line_text(line);
-        let at = rope.line_to_char(line) + text.chars().count();
-        let gap = if text.trim().is_empty() { "" } else { "\n\n" };
-        let insert = format!("{gap}{TABLE}");
-        self.buffer
-            .replace_range(&mut self.selections, at, at, &insert);
-        let cell = at + gap.chars().count() + 2;
-        self.selections.set_single(Selection::cursor(cell));
+        self.selections.set_single(Selection {
+            anchor: head,
+            head: head + "Column 1".len(),
+            goal: None,
+        });
     }
 
     /// Selects the word at a place, as a double click does.
@@ -1393,6 +1675,7 @@ impl Editor {
         let (caret_row, caret_x) = rendered::locate(&rows, primary.head);
         if proportional {
             self.draw_page_blocks(grid, area, &rows, theme);
+            self.draw_figures(grid, area, &rows, theme);
         }
         let changes = self.line_changes();
         for (index, row) in rows.iter().enumerate().skip(self.top) {
@@ -1515,6 +1798,7 @@ impl Editor {
             Tone::Block(Some(token)) => theme.token(token),
             Tone::Link | Tone::Check(_) => theme.accent,
             Tone::Dim | Tone::TableLine => theme.gutter.fg,
+            Tone::Formula { .. } => theme.text.fg,
         };
         let selected = |at: Option<usize>| {
             at.is_some_and(|at| {
@@ -1580,6 +1864,24 @@ impl Editor {
             }
             match g.tone {
                 Tone::TableLine => {}
+                Tone::Formula { index, .. } => {
+                    if let Some(figure) = self.figures().get(index as usize) {
+                        // Text sits on a baseline below the row's middle: stand on it.
+                        let line = text_y + 0.5 + 0.35 * cellix_render::INTERFACE_SIZE;
+                        let top = line - figure.baseline;
+                        grid.paint.push(Paint::Image {
+                            bounds: Bounds::cells(x, top, figure.width, figure.height),
+                            clip: Bounds::cells(
+                                area.x as f32,
+                                area.y as f32,
+                                area.w as f32,
+                                area.h as f32,
+                            ),
+                            bitmap: figure.bitmap.clone(),
+                            color: theme.text.fg,
+                        });
+                    }
+                }
                 Tone::Check(checked) => {
                     let bounds = Bounds::cells(x, y as f32 + 0.2, 1.1, 0.6);
                     let fill = checked.then_some(theme.accent);

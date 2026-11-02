@@ -20,6 +20,22 @@ pub enum Icon {
     Globe = 11,
     Check = 12,
     Agents = 13,
+    // The document toolbar's, which only ever appear as paint.
+    ListBullet = 14,
+    ListNumber = 15,
+    ListTask = 16,
+    Quote = 17,
+    Code = 18,
+    Link = 19,
+    Table = 20,
+    Picture = 21,
+    Sigma = 22,
+    Rule = 23,
+    Comment = 24,
+    Export = 25,
+    Play = 26,
+    Cite = 27,
+    More = 28,
 }
 
 /// One cell of an icon that is `width` by `height` cells.
@@ -236,6 +252,85 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
             .min(segment(p, (1.5, 14.5), (4.0, 14.5)))
             .min(segment(p, (20.0, 14.5), (22.5, 14.5))),
         Icon::Folder | Icon::FolderOpen | Icon::File => f32::MAX,
+        Icon::ListBullet => (circle(p, (5.0, 6.5)) - 0.4)
+            .min(circle(p, (5.0, 12.0)) - 0.4)
+            .min(circle(p, (5.0, 17.5)) - 0.4)
+            .min(segment(p, (9.5, 6.5), (20.5, 6.5)))
+            .min(segment(p, (9.5, 12.0), (20.5, 12.0)))
+            .min(segment(p, (9.5, 17.5), (20.5, 17.5))),
+        Icon::ListNumber => path(p, &[(3.8, 5.2), (5.4, 4.0), (5.4, 9.5)])
+            .min(path(
+                p,
+                &[
+                    (3.6, 15.0),
+                    (5.0, 13.8),
+                    (6.8, 14.8),
+                    (3.6, 19.8),
+                    (7.2, 19.8),
+                ],
+            ))
+            .min(segment(p, (10.5, 6.8), (20.5, 6.8)))
+            .min(segment(p, (10.5, 16.8), (20.5, 16.8))),
+        Icon::ListTask => rounded(p, (4.0, 4.0), (20.0, 20.0), 3.5)
+            .min(path(p, &[(8.0, 12.2), (11.0, 15.2), (16.2, 9.0)])),
+        Icon::Quote => segment(p, (4.5, 5.0), (4.5, 19.0))
+            .min(segment(p, (9.5, 7.0), (20.5, 7.0)))
+            .min(segment(p, (9.5, 12.0), (20.5, 12.0)))
+            .min(segment(p, (9.5, 17.0), (16.5, 17.0))),
+        Icon::Code => path(p, &[(8.5, 6.5), (3.0, 12.0), (8.5, 17.5)])
+            .min(path(p, &[(15.5, 6.5), (21.0, 12.0), (15.5, 17.5)])),
+        Icon::Link => rounded(p, (2.5, 8.0), (13.5, 16.0), 4.0).min(rounded(
+            p,
+            (10.5, 8.0),
+            (21.5, 16.0),
+            4.0,
+        )),
+        Icon::Table => rounded(p, (3.0, 4.5), (21.0, 19.5), 2.5)
+            .min(segment(p, (3.0, 9.5), (21.0, 9.5)))
+            .min(segment(p, (3.0, 14.5), (21.0, 14.5)))
+            .min(segment(p, (12.0, 4.5), (12.0, 19.5))),
+        Icon::Picture => rounded(p, (3.0, 4.5), (21.0, 19.5), 2.5)
+            .min(ring(p, (8.5, 9.8), 1.5))
+            .min(path(
+                p,
+                &[
+                    (3.5, 18.0),
+                    (9.5, 12.8),
+                    (13.5, 16.2),
+                    (16.2, 13.8),
+                    (20.5, 17.5),
+                ],
+            )),
+        Icon::Sigma => path(
+            p,
+            &[
+                (18.0, 7.5),
+                (18.0, 4.5),
+                (5.5, 4.5),
+                (12.5, 12.0),
+                (5.5, 19.5),
+                (18.0, 19.5),
+                (18.0, 16.5),
+            ],
+        ),
+        Icon::Rule => segment(p, (3.0, 12.0), (21.0, 12.0))
+            .min(segment(p, (8.0, 6.5), (16.0, 6.5)))
+            .min(segment(p, (8.0, 17.5), (16.0, 17.5))),
+        Icon::Comment => rounded(p, (3.0, 4.0), (21.0, 16.5), 3.5)
+            .min(path(p, &[(8.0, 16.5), (8.0, 20.5), (12.5, 16.5)])),
+        Icon::Export => path(p, &[(12.0, 3.5), (12.0, 15.0)])
+            .min(path(p, &[(7.0, 10.5), (12.0, 15.5), (17.0, 10.5)]))
+            .min(segment(p, (4.0, 20.0), (20.0, 20.0))),
+        Icon::Play => path(p, &[(7.0, 4.5), (19.5, 12.0), (7.0, 19.5), (7.0, 4.5)]),
+        Icon::Cite => path(p, &[(9.0, 4.5), (5.5, 4.5), (5.5, 19.5), (9.0, 19.5)])
+            .min(path(
+                p,
+                &[(15.0, 4.5), (18.5, 4.5), (18.5, 19.5), (15.0, 19.5)],
+            ))
+            .min(segment(p, (12.0, 9.0), (12.0, 15.0))),
+        Icon::More => (circle(p, (5.0, 12.0)) - 0.5)
+            .min(circle(p, (12.0, 12.0)) - 0.5)
+            .min(circle(p, (19.0, 12.0)) - 0.5),
         Icon::ChevronRight => path(p, &[(9.5, 6.5), (15.0, 12.0), (9.5, 17.5)]),
         Icon::ChevronDown => path(p, &[(6.5, 9.5), (12.0, 15.0), (17.5, 9.5)]),
         Icon::Close => {

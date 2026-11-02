@@ -25,6 +25,7 @@ use cellix_review::{
 use cellix_agent::hook::comments_message;
 use cellix_agent::ide::{IdeCall, IdeServer};
 use cellix_agent::{Decision, Request, SharedComments, TestRun};
+use cellix_doc::table::{Align, Edit as TableEdit};
 
 use serde_json::{Value, json};
 
@@ -36,12 +37,14 @@ use crate::find::Find;
 use crate::menu::{Action as MenuAction, Item as MenuItem, Menu};
 use crate::neovim::{self, Neovim};
 use crate::palette::{COMMANDS, Input, Item, Palette, input, popup, raised};
+use crate::panels::{MathPanel, SYMBOLS, TablePicker};
 use crate::rendered;
 use crate::review::{Hit, Review};
 use crate::search::{self, Field, Search};
 use crate::settings::{SERVERS, Settings, default_server, formatter};
 use crate::settings_page::{Control, Found, SettingsPage, Values};
 use crate::theme::Theme;
+use crate::toolbar::{self, Tool};
 
 const ACTIVITY_WIDTH: u16 = 5;
 /// Activity bar buttons, with what each one runs.
@@ -72,21 +75,8 @@ const PILL_RADIUS: u8 = 30;
 const DIRECTORY_MARK: char = '•';
 const BADGE_SIZE: u8 = 62;
 const SUGGEST_WIDTH: u16 = 42;
-/// Room kept for the path before the toolbar is left out.
-const MIN_BREADCRUMB: u16 = 12;
 const FIND_BUTTON: u16 = 3;
 const FIND_BUTTONS: [&str; 3] = ["↑", "↓", "×"];
-/// One cell either side of each mark.
-const TOOL_WIDTH: u16 = 3;
-const TOOLS: [(&str, Format); 7] = [
-    ("B", Format::Bold),
-    ("I", Format::Italic),
-    ("<>", Format::Code),
-    ("H", Format::Heading),
-    ("•", Format::Bullet),
-    ("☐", Format::Task),
-    ("❝", Format::Quote),
-];
 const SEND_BACK: &str = "[Send back]";
 /// The card that offers a language's support.
 const OFFER_WIDTH: u16 = 46;
@@ -99,7 +89,6 @@ const TOOLTIP_SIZE: u8 = 92;
 /// What each button is called, in order, since they're only icons and marks.
 const FIND_NAMES: [&str; 3] = ["Previous match", "Next match", "Close"];
 const RAIL_NAMES: [&str; 5] = ["Files", "Search", "Review Changes", "Agents", "Settings"];
-const TOOL_NAMES: [&str; 7] = ["Bold", "Italic", "Code", "Heading", "List", "Task", "Quote"];
 /// Below this width, opening the side pane puts the sidebar away.
 const CROWDED_WIDTH: u16 = 120;
 const SIDEBAR_WIDTH: u16 = 28;
@@ -144,6 +133,7 @@ enum PromptAction {
     GoToLine,
     SendBackPlan,
     NewBranch,
+    Image,
 }
 
 struct Prompt {
@@ -184,6 +174,8 @@ enum Overlay {
     Menu(Menu),
     Find(Find),
     Confirm(Confirm),
+    TablePicker(TablePicker),
+    Math(MathPanel),
 }
 
 /// What's left to do after a choice about unsaved changes.
@@ -2215,6 +2207,22 @@ impl App {
             },
             Overlay::Find(find) => self.find_key(find, key),
             Overlay::Confirm(confirm) => self.confirm_key(confirm, key),
+            Overlay::TablePicker(mut picker) => match key.key {
+                Key::Esc => {}
+                Key::Enter => self.insert_table(picker.size),
+                other => {
+                    picker.key(other);
+                    self.overlay = Overlay::TablePicker(picker);
+                }
+            },
+            Overlay::Math(mut panel) => match key.key {
+                Key::Esc => {}
+                Key::Enter => self.insert_math(panel.selected),
+                other => {
+                    panel.key(other);
+                    self.overlay = Overlay::Math(panel);
+                }
+            },
             Overlay::Menu(mut menu) => match key.key {
                 Key::Up | Key::BackTab => {
                     menu.step(-1);
@@ -2439,6 +2447,15 @@ impl App {
     fn finish_prompt(&mut self, prompt: Prompt) {
         let name = prompt.input.trim();
         let result = match &prompt.action {
+            PromptAction::Image => {
+                let area = self.focused_area();
+                let image = format!("![]({name})");
+                if let Some(editor) = self.editor_mut() {
+                    editor.prepare_edit(area);
+                    editor.insert_block(&image, 2);
+                }
+                Ok(())
+            }
             PromptAction::GoToLine => {
                 let area = self.focused_area();
                 if let (Ok(line), Some(editor)) = (name.trim().parse(), self.editor_mut()) {
@@ -3615,8 +3632,10 @@ impl App {
             }
             MouseKind::Left if in_sidebar => self.click_explorer(y),
             MouseKind::Left
-                if y == 1 && !in_sidebar && self.toolbar_x().is_some() && self.click_toolbar(x) => {
-            }
+                if y == 1
+                    && !in_sidebar
+                    && self.toolbar_row().is_some()
+                    && self.click_toolbar(x) => {}
             MouseKind::Left if y == self.plan_bar().y + 1 && self.plan_in_view() && !in_sidebar => {
                 self.click_plan_bar(x)
             }
@@ -3740,6 +3759,16 @@ impl App {
                 }
             }
             Overlay::Find(find) => self.click_find(find, mouse.x, mouse.y),
+            Overlay::TablePicker(picker) => {
+                if let Some(size) = picker.size_at(mouse.x, mouse.y) {
+                    self.insert_table(size);
+                }
+            }
+            Overlay::Math(panel) => {
+                if let Some(index) = panel.symbol_at(mouse.x, mouse.y) {
+                    self.insert_math(index);
+                }
+            }
             Overlay::Confirm(confirm) => {
                 let y = self.confirm_area().y + 4;
                 let spots = self.confirm_buttons(&confirm);
@@ -3842,6 +3871,23 @@ impl App {
             items.push(run("Show Source", Command::MarkdownPreview));
             items.extend(edit);
             let format = |name, format| run(name, Command::Format(format));
+            if editor.table_at_caret().is_some() {
+                let table = |name, edit| MenuItem::new(name, MenuAction::Table(edit));
+                items.extend([
+                    table("Insert Row Above", TableEdit::RowAbove).after_rule(),
+                    table("Insert Row Below", TableEdit::RowBelow),
+                    table("Insert Column Left", TableEdit::ColumnLeft),
+                    table("Insert Column Right", TableEdit::ColumnRight),
+                    table("Align Left", TableEdit::Align(Align::Left)).after_rule(),
+                    table("Align Center", TableEdit::Align(Align::Centre)),
+                    table("Align Right", TableEdit::Align(Align::Right)),
+                    table("Delete Row", TableEdit::DeleteRow).after_rule(),
+                    table("Delete Column", TableEdit::DeleteColumn),
+                    table("Delete Table", TableEdit::Delete),
+                ]);
+                items.extend(agent);
+                return items;
+            }
             items.extend([
                 format("Bold", Format::Bold).after_rule(),
                 format("Italic", Format::Italic),
@@ -3850,7 +3896,9 @@ impl App {
                 format("Plain Text", Format::PlainText).after_rule(),
                 format("Heading", Format::Heading),
                 format("Code Block", Format::CodeBlock),
-                format("Insert Table", Format::Table),
+                MenuItem::new("Insert Table…", MenuAction::Tool(Tool::Table)),
+                MenuItem::new("Insert Formula…", MenuAction::Tool(Tool::Math)),
+                MenuItem::new("Insert Image…", MenuAction::Tool(Tool::Image)),
             ]);
             items.extend(agent);
         } else {
@@ -3955,6 +4003,12 @@ impl App {
         };
         match action {
             MenuAction::Run(command) => self.run(command),
+            MenuAction::Tool(tool) => self.use_tool(tool, self.main_area().x),
+            MenuAction::Table(edit) => {
+                if let Some(editor) = self.editor_mut() {
+                    editor.edit_table(edit);
+                }
+            }
             MenuAction::NewFile(dir) => {
                 self.overlay = prompt("New file", String::new(), PromptAction::NewFile(dir));
             }
@@ -4455,13 +4509,17 @@ impl App {
                     )
                 })
             }
-            Overlay::None => self.toolbar_x().filter(|_| y == 1).and_then(|first| {
-                let tool = x.checked_sub(first)? / TOOL_WIDTH;
-                let name = *TOOL_NAMES.get(tool as usize)?;
-                let middle = (first + tool * TOOL_WIDTH) as f32 + TOOL_WIDTH as f32 / 2.0;
-                let left = (middle - wide(name) / 2.0).min(self.size.0 as f32 - wide(name) - 0.5);
-                Some((name, left, 2.2))
-            }),
+            Overlay::None => self
+                .toolbar_row()
+                .filter(|_| y == 1)
+                .and_then(|row| toolbar::hit(row, x))
+                .map(|button| {
+                    let name = button.name;
+                    let middle = button.x as f32 + button.width as f32 / 2.0;
+                    let left =
+                        (middle - wide(name) / 2.0).min(self.size.0 as f32 - wide(name) - 0.5);
+                    (name, left.max(0.5), 2.2)
+                }),
             _ => None,
         };
         let Some((name, left, top)) = spot else {
@@ -4499,7 +4557,10 @@ impl App {
     fn draw_overlay(&self, grid: &mut Grid) {
         let theme = &self.theme;
         // The text's caret would stand on top of anything that floats over it.
-        if matches!(self.overlay, Overlay::Menu(_) | Overlay::Confirm(_)) {
+        if matches!(
+            self.overlay,
+            Overlay::Menu(_) | Overlay::Confirm(_) | Overlay::TablePicker(_) | Overlay::Math(_)
+        ) {
             grid.caret = None;
             grid.cursor = None;
         }
@@ -4509,6 +4570,8 @@ impl App {
             Overlay::Prompt(prompt) => self.draw_prompt(grid, prompt),
             Overlay::Find(find) => self.draw_find(grid, find),
             Overlay::Confirm(confirm) => self.draw_confirm(grid, confirm),
+            Overlay::TablePicker(picker) => picker.draw(grid, self.hover, theme),
+            Overlay::Math(panel) => panel.draw(grid, self.hover, theme),
             Overlay::None => {}
         }
     }
@@ -4858,67 +4921,97 @@ impl App {
         };
         let style = self.theme.breadcrumb;
         grid.fill(Rect::new(main.x, 1, main.w, 1), style);
-        let toolbar = self.toolbar_x();
+        if let Some(row) = self.toolbar_row() {
+            let (paragraph, active) = self.editors[self.active()].caret_formats();
+            toolbar::draw(grid, row, (paragraph, &active), self.hover, &self.theme);
+            return;
+        }
         grid.label_at(
             main.x as f32 + 1.5,
             main.x + 2,
             1,
             &text,
             style,
-            toolbar.unwrap_or(main.right()),
+            main.right(),
             90,
         );
-        let Some(mut x) = toolbar else {
-            return;
-        };
-        let tray = Rect::new(x, 1, TOOL_WIDTH * TOOLS.len() as u16, 1);
-        grid.panel(
-            Bounds::inset(tray, -0.2, 0.04),
-            26,
-            Some(self.theme.tab.bg),
-            None,
-        );
-        for (label, format) in TOOLS {
-            let tool = Style {
-                bold: format == Format::Bold,
-                italic: format == Format::Italic,
-                ..style
-            };
-            let button = Rect::new(x, 1, TOOL_WIDTH, 1);
-            let on_it = self.hover.is_some_and(|h| button.contains(h.0, h.1));
-            if on_it {
-                let pill = Bounds::inset(button, 0.1, 0.12);
-                grid.panel(pill, 14, Some(self.theme.popup_hover), None);
-            }
-            let tool = Style {
-                fg: if on_it { self.theme.text.fg } else { tool.fg },
-                ..tool
-            };
-            grid.label(x + 1, 1, label, tool, x + TOOL_WIDTH);
-            x += TOOL_WIDTH;
-        }
     }
 
-    /// Where the Markdown toolbar starts, if the page in view has one.
-    fn toolbar_x(&self) -> Option<u16> {
-        let width = TOOL_WIDTH * TOOLS.len() as u16;
+    /// The row the document toolbar sits in, if the page in view has one.
+    fn toolbar_row(&self) -> Option<Rect> {
         let main = self.main_area();
         let page = self.editors.get(self.active()).is_some_and(|e| e.rendered);
-        let room = main.w > width + MIN_BREADCRUMB;
+        let room = main.w >= toolbar::MIN_WIDTH;
         (page && room && self.chrome_rows() == 2 && !self.plan_in_view())
-            .then(|| main.right() - width - 1)
+            .then(|| Rect::new(main.x, 1, main.w, 1))
     }
 
     fn click_toolbar(&mut self, x: u16) -> bool {
-        let Some(first) = self.toolbar_x() else {
+        let button = self.toolbar_row().and_then(|row| toolbar::hit(row, x));
+        let Some(button) = button else {
             return false;
         };
-        let tool = x.checked_sub(first).map(|at| at / TOOL_WIDTH);
-        let Some((_, format)) = tool.and_then(|tool| TOOLS.get(tool as usize)) else {
-            return false;
-        };
-        self.run(Command::Format(*format));
+        self.use_tool(button.tool, button.x);
         true
+    }
+
+    fn use_tool(&mut self, tool: Tool, x: u16) {
+        let below = (x, 2);
+        match tool {
+            Tool::Format(format) => self.run(Command::Format(format)),
+            Tool::Styles => {
+                let level =
+                    |name, level| MenuItem::run(name, Command::Format(Format::Level(level)));
+                let items = vec![
+                    level("Text", 0),
+                    level("Heading 1", 1),
+                    level("Heading 2", 2),
+                    level("Heading 3", 3),
+                    MenuItem::run("Code Block", Command::Format(Format::CodeBlock)).after_rule(),
+                ];
+                self.show_menu(below, items);
+            }
+            Tool::Table => self.overlay = Overlay::TablePicker(TablePicker::new((x, 3))),
+            Tool::Math => {
+                self.overlay = Overlay::Math(MathPanel::new((x, 3), &*self.measure));
+            }
+            Tool::Image => {
+                self.overlay = Overlay::Prompt(Prompt {
+                    label: "Image file".to_string(),
+                    input: String::new(),
+                    action: PromptAction::Image,
+                });
+            }
+            Tool::Comment => self.run(Command::AddComment),
+            Tool::Export => {
+                let items = vec![MenuItem::run("Open in Browser", Command::OpenInBrowser)];
+                self.show_menu(below, items);
+            }
+            Tool::More => {
+                let row = self.toolbar_row().unwrap_or_default();
+                let items = toolbar::overflow(row)
+                    .into_iter()
+                    .map(|(name, tool)| MenuItem::new(name, MenuAction::Tool(tool)))
+                    .collect();
+                self.show_menu(below, items);
+            }
+        }
+    }
+
+    fn insert_math(&mut self, index: usize) {
+        let area = self.focused_area();
+        if let (Some(symbol), Some(editor)) = (SYMBOLS.get(index), self.editor_mut()) {
+            editor.prepare_edit(area);
+            editor.insert_math(symbol);
+        }
+    }
+
+    fn insert_table(&mut self, (rows, columns): (usize, usize)) {
+        let area = self.focused_area();
+        if let Some(editor) = self.editor_mut() {
+            editor.prepare_edit(area);
+            editor.insert_table(rows, columns);
+        }
     }
 
     fn draw_welcome(&self, grid: &mut Grid) {
@@ -6968,7 +7061,8 @@ mod tests {
         app.open(&path).unwrap();
         app.run(Command::Move(cellix_input::Direction::WordRight, true));
         let grid = screen(&app);
-        let first = app.toolbar_x().unwrap();
+        let row = app.toolbar_row().unwrap();
+        let first = toolbar::layout(row)[1].x;
         assert_eq!(grid.row_text(1).chars().nth(first as usize + 1), Some('B'));
         app.handle(mouse(MouseKind::Left, first + 1, 1));
         assert_eq!(app.active_text().as_deref(), Some("**one** two\n"));
@@ -6979,6 +7073,180 @@ mod tests {
             Some("one two\n"),
             "a second click undoes it"
         );
+    }
+
+    fn click_tool(app: &mut App, name: &str) {
+        let row = app.toolbar_row().unwrap();
+        let button = toolbar::layout(row).into_iter().find(|b| b.name == name);
+        let button = button.unwrap_or_else(|| panic!("no {name}"));
+        app.handle(mouse(MouseKind::Left, button.x + 1, 1));
+    }
+
+    fn page_app(text: &str) -> (TempDir, App) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.md");
+        fs::write(&path, text).unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        app.open(&path).unwrap();
+        (dir, app)
+    }
+
+    #[test]
+    fn the_toolbar_writes_every_format() {
+        for (tool, want) in [
+            ("Bold", "**word** tail\n"),
+            ("Italic", "*word* tail\n"),
+            ("Strikethrough", "~~word~~ tail\n"),
+            ("Code", "`word` tail\n"),
+            ("Link", "[word](https://) tail\n"),
+            ("Bullet List", "- word tail\n"),
+            ("Numbered List", "1. word tail\n"),
+            ("Task List", "- [ ] word tail\n"),
+            ("Quote", "> word tail\n"),
+        ] {
+            let (_dir, mut app) = page_app("word tail\n");
+            click_tool(&mut app, tool);
+            assert_eq!(app.active_text().as_deref(), Some(want), "{tool}");
+        }
+        let (_dir, mut app) = page_app("word\n");
+        click_tool(&mut app, "Divider");
+        assert_eq!(app.active_text().as_deref(), Some("word\n\n---\n\n"));
+    }
+
+    #[test]
+    fn the_style_menu_sets_a_paragraph() {
+        let (_dir, mut app) = page_app("word\n");
+        let grid = screen(&app);
+        assert!(grid.row_text(1).contains("Text"));
+        click_tool(&mut app, "Paragraph Style");
+        let (x, y) = find(&screen(&app), "Heading 3");
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert_eq!(app.active_text().as_deref(), Some("### word\n"));
+        assert!(screen(&app).row_text(1).contains("Heading 3"));
+    }
+
+    #[test]
+    fn a_narrow_pane_keeps_every_tool_in_a_menu() {
+        let (_dir, mut app) = page_app("word\n");
+        app.run(Command::ShowAgents);
+        click_tool(&mut app, "More");
+        let text = screen(&app).text();
+        assert!(text.contains("Comment"), "{text}");
+    }
+
+    #[test]
+    fn a_new_table_comes_from_the_size_picker() {
+        let (_dir, mut app) = page_app("before\n");
+        click_tool(&mut app, "Table");
+        assert!(matches!(app.overlay, Overlay::TablePicker(_)));
+        let Overlay::TablePicker(picker) = &app.overlay else {
+            unreachable!();
+        };
+        let area = picker.area();
+        app.handle(mouse(MouseKind::Left, area.x + 1 + 3 * 3, area.y + 1));
+        let text = app.active_text().unwrap();
+        assert!(text.contains("Column 4"), "{text}");
+        assert_eq!(text.matches('\n').count(), 6, "{text}");
+        assert_eq!(app.selected_text().as_deref(), Some("Column 1"));
+    }
+
+    fn cell_of(app: &App, text: &str) -> (u16, u16) {
+        find(&screen(app), text)
+    }
+
+    #[test]
+    fn tables_grow_and_shrink_from_the_menu() {
+        let source = "| Alpha | Beta |\n|---|---|\n| one | two |\n";
+        let pick = |app: &mut App, name: &str| {
+            let (x, y) = cell_of(app, "two");
+            app.handle(mouse(MouseKind::Right, x + 1, y));
+            let (x, y) = find(&screen(app), name);
+            app.handle(mouse(MouseKind::Left, x, y));
+        };
+        let (_dir, mut app) = page_app(source);
+        pick(&mut app, "Insert Row Below");
+        let text = app.active_text().unwrap();
+        assert_eq!(text.lines().count(), 4, "{text}");
+        pick(&mut app, "Insert Column Right");
+        let text = app.active_text().unwrap();
+        assert_eq!(
+            text.lines().next().unwrap().matches('|').count(),
+            4,
+            "{text}"
+        );
+        pick(&mut app, "Align Right");
+        assert!(app.active_text().unwrap().contains("--:"));
+        pick(&mut app, "Delete Row");
+        let text = app.active_text().unwrap();
+        assert_eq!(text.lines().count(), 3, "{text}");
+        assert!(!text.contains("two"), "{text}");
+        let at_header = |app: &mut App, cell: &str, name: &str| {
+            let (x, y) = cell_of(app, cell);
+            app.handle(mouse(MouseKind::Right, x, y));
+            let (x, y) = find(&screen(app), name);
+            app.handle(mouse(MouseKind::Left, x, y));
+        };
+        at_header(&mut app, "Beta", "Delete Column");
+        let text = app.active_text().unwrap();
+        assert!(!text.contains("Beta"), "{text}");
+        at_header(&mut app, "Alpha", "Delete Table");
+        assert_eq!(app.active_text().as_deref(), Some(""));
+    }
+
+    #[test]
+    fn formulas_show_typeset_and_open_on_the_caret() {
+        let (_dir, mut app) = page_app("See $x^2$ here\n");
+        let area = app.focused_area();
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        let pictures = |app: &App| {
+            screen(app)
+                .paint
+                .iter()
+                .filter(|p| matches!(p, cellix_render::Paint::Image { .. }))
+                .count()
+        };
+        assert_eq!(pictures(&app), 1, "typeset, with the caret away");
+        let editor = app.editor_mut().unwrap();
+        editor.selections.set_single(Selection::cursor(6));
+        assert_eq!(pictures(&app), 0, "open, as source");
+        let source = |p: &cellix_render::Paint| matches!(p, cellix_render::Paint::Text { text, .. } if text == "$x^2$");
+        assert!(screen(&app).paint.iter().any(source));
+        typed(&mut app, "+1");
+        assert_eq!(app.active_text().as_deref(), Some("See $x+1^2$ here\n"));
+        let editor = app.editor_mut().unwrap();
+        editor.selections.set_single(Selection::cursor(0));
+        assert_eq!(pictures(&app), 1, "and it closes on leaving");
+        assert!(area.w > 0);
+    }
+
+    #[test]
+    fn clicking_anywhere_on_a_block_formula_opens_it() {
+        let (_dir, mut app) = page_app("$$\n\\frac{a}{b} + \\frac{\\frac{c}{d}}{e}\n$$\n\nnext\n");
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        let area = app.focused_area();
+        screen(&app);
+        let at = app.editors[0].position_at(area, area.x as f32 + 30.0, area.y + 2);
+        assert!((1..30).contains(&at), "inside the formula: {at}");
+    }
+
+    #[test]
+    fn the_math_panel_inserts_templates() {
+        let (_dir, mut app) = page_app("x\n");
+        app.run(Command::Move(cellix_input::Direction::LineEnd, false));
+        click_tool(&mut app, "Formula");
+        let Overlay::Math(panel) = &app.overlay else {
+            panic!("no panel");
+        };
+        let area = panel.area();
+        app.handle(mouse(MouseKind::Left, area.x + 2, area.y));
+        assert_eq!(app.active_text().as_deref(), Some("x$\\frac{}{}$\n"));
+        typed(&mut app, "a");
+        assert_eq!(app.active_text().as_deref(), Some("x$\\frac{a}{}$\n"));
+        app.run(Command::Move(cellix_input::Direction::Left, false));
+        click_tool(&mut app, "Formula");
+        enter(&mut app);
+        let text = app.active_text().unwrap();
+        assert_eq!(text.matches('$').count(), 2, "inside a formula: {text}");
     }
 
     #[test]
@@ -8282,7 +8550,7 @@ while True:
         app.run(Command::Format(Format::Table));
         assert_eq!(
             app.active_text().unwrap(),
-            "words\n\n| Column | Column |\n|---|---|\n|  |  |\n\n"
+            format!("words\n\n{}\n\n", cellix_doc::table::new_table(3, 3))
         );
     }
 

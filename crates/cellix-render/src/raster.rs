@@ -10,7 +10,9 @@ use cosmic_text::{
 use crate::grid::{Grid, Rgb};
 use crate::icon::{Icon, Piece, inked};
 use crate::measure::{Font, attrs};
-use crate::paint::{BOTTOM_LEFT, BOTTOM_RIGHT, Bounds, Paint, TOP_LEFT, TOP_RIGHT, UNIT};
+use crate::paint::{
+    BOTTOM_LEFT, BOTTOM_RIGHT, Bitmap, Bounds, Paint, Pixels, TOP_LEFT, TOP_RIGHT, UNIT,
+};
 
 /// A tightly packed RGB image, matching the Kitty protocol's `f=24`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -287,6 +289,29 @@ impl SoftwareRasterizer {
                 };
                 target.corners(&shape, *color, *which);
             }
+            Paint::Image {
+                bounds,
+                clip,
+                bitmap,
+                color,
+            } => {
+                let shape = Shape {
+                    x: scale(bounds.x, cw),
+                    y: scale(bounds.y, ch),
+                    w: scale(bounds.w, cw),
+                    h: scale(bounds.h, ch),
+                    radius: 0.0,
+                };
+                let across = (
+                    scale(clip.x, cw) as i32,
+                    scale(clip.x + clip.w, cw).ceil() as i32,
+                );
+                let down = (
+                    scale(clip.y, ch) as i32,
+                    scale(clip.y + clip.h, ch).ceil() as i32,
+                );
+                target.image(&shape, (across, down), bitmap, *color);
+            }
             Paint::Strips { bounds, strips } => {
                 let (left, top) = (scale(bounds.x, cw), scale(bounds.y, ch));
                 let (width, height) = (scale(bounds.w, cw), scale(bounds.h, ch));
@@ -426,6 +451,57 @@ impl Target<'_> {
             for x in 0..mask.width.min(limit) {
                 let alpha = mask.alpha[y * mask.width + x];
                 self.blend(left + x as i32, top + y as i32, color, alpha);
+            }
+        }
+    }
+
+    /// Scales a bitmap into `s`, sampling between its pixels so nothing shimmers.
+    fn image(&mut self, s: &Shape, clip: ((i32, i32), (i32, i32)), bitmap: &Bitmap, color: Rgb) {
+        let (width, height) = (bitmap.width as usize, bitmap.height as usize);
+        if width == 0 || height == 0 || s.w <= 0.0 || s.h <= 0.0 {
+            return;
+        }
+        let channels = match bitmap.kind {
+            Pixels::Coverage => 1,
+            Pixels::Rgba => 4,
+        };
+        let at = |x: usize, y: usize, c: usize| -> f32 {
+            let index = (y.min(height - 1) * width + x.min(width - 1)) * channels + c;
+            bitmap.pixels.get(index).copied().unwrap_or(0) as f32
+        };
+        let sample = |u: f32, v: f32, c: usize| -> f32 {
+            let (fx, fy) = (u.max(0.0), v.max(0.0));
+            let (x, y) = (fx as usize, fy as usize);
+            let (dx, dy) = (fx - x as f32, fy - y as f32);
+            let top = at(x, y, c) * (1.0 - dx) + at(x + 1, y, c) * dx;
+            let bottom = at(x, y + 1, c) * (1.0 - dx) + at(x + 1, y + 1, c) * dx;
+            top * (1.0 - dy) + bottom * dy
+        };
+        let ((left, right), (top, bottom)) = clip;
+        let y0 = (s.y.floor() as i32).max(self.top).max(top);
+        let y1 = ((s.y + s.h).ceil() as i32)
+            .min(self.top + self.height as i32)
+            .min(bottom);
+        let x0 = (s.x.floor() as i32).max(0).max(left);
+        let x1 = ((s.x + s.w).ceil() as i32)
+            .min(self.width as i32)
+            .min(right);
+        let (ax, ay) = (width as f32 / s.w, height as f32 / s.h);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let u = (x as f32 + 0.5 - s.x) * ax - 0.5;
+                let v = (y as f32 + 0.5 - s.y) * ay - 0.5;
+                match bitmap.kind {
+                    Pixels::Coverage => self.blend(x, y, color, sample(u, v, 0) as u8),
+                    Pixels::Rgba => {
+                        let ink = Rgb(
+                            sample(u, v, 0) as u8,
+                            sample(u, v, 1) as u8,
+                            sample(u, v, 2) as u8,
+                        );
+                        self.blend(x, y, ink, sample(u, v, 3) as u8);
+                    }
+                }
             }
         }
     }

@@ -2,10 +2,13 @@
 //! the document: this lays it out with its markers hidden, and every visible character
 //! remembers its source position, so clicks and edits land in the right place.
 
-use std::path::Path;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use cellix_lang::{Registry, Token};
-use cellix_render::{Font, Measure};
+use cellix_render::{Bitmap, Font, INTERFACE_SIZE, Measure, Pixels};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tone {
@@ -21,6 +24,11 @@ pub enum Tone {
     Check(bool),
     /// Space or a table's column line, which the pixel tiers don't paint as text.
     TableLine,
+    /// A typeset formula, as an index into the page's figures, and its width in 64ths.
+    Formula {
+        index: u16,
+        width: u16,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,7 +90,10 @@ fn measure_glyphs(glyphs: &mut [Glyph], measure: &dyn Measure) {
         let text: String = glyphs[start..end].iter().map(|g| g.ch).collect();
         let advances = measure.advances(&text, font);
         for (g, advance) in glyphs[start..end].iter_mut().zip(advances.iter()) {
-            g.advance = *advance;
+            g.advance = match g.tone {
+                Tone::Formula { width, .. } => width as f32 / 64.0,
+                _ => *advance,
+            };
         }
         start = end;
     }
@@ -125,6 +136,9 @@ pub struct Row {
     /// Where each table cell starts in the source.
     pub cells: Vec<usize>,
     pub table: Option<TableRow>,
+    /// A picture that starts on this row, as an index into the page's figures, and its
+    /// column.
+    pub figure: Option<(usize, f32)>,
 }
 
 impl Row {
@@ -144,6 +158,7 @@ impl Row {
             checkbox: None,
             cells: Vec::new(),
             table: None,
+            figure: None,
         }
     }
 
@@ -166,6 +181,10 @@ impl Row {
 
     /// The source position nearest a column.
     pub fn position_at(&self, column: f32) -> usize {
+        // A picture has one place: inside its source.
+        if let (Some(_), Some(at)) = (self.figure, self.glyphs.first().and_then(|g| g.at)) {
+            return at;
+        }
         let cell = self.table.as_ref().and_then(|t| {
             let index = t.columns.iter().rposition(|x| *x <= column)?;
             Some((t.columns[index], t.columns.get(index + 1).copied()?))
@@ -269,6 +288,9 @@ fn continues_paragraph(lines: &[(usize, &str)], index: usize) -> bool {
     !hard_break
         && !next.trim().is_empty()
         && !next.trim_start().starts_with("```")
+        && !next.trim_start().starts_with("$$")
+        && !next.trim_start().starts_with("\\[")
+        && image_line(next).is_none()
         && !is_rule(next)
         && !starts_table
         && prefix(next).is_none()
@@ -282,6 +304,95 @@ fn is_rule(line: &str) -> bool {
             || text.chars().all(|c| c == '_'))
 }
 
+/// A typeset formula or an image, sized for the page.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Figure {
+    pub bitmap: Bitmap,
+    /// Its size in cells.
+    pub width: f32,
+    pub height: f32,
+    /// How far its baseline sits below its top, in rows.
+    pub baseline: f32,
+}
+
+/// Pictures already made, kept between layouts: a page is laid out on every key.
+#[derive(Default)]
+pub struct Library {
+    formulas: HashMap<(String, bool), Option<Figure>>,
+    images: HashMap<(PathBuf, u32), Option<Figure>>,
+}
+
+/// What a page needs beyond its text.
+#[derive(Default)]
+pub struct Extras<'a> {
+    /// The span showing as source, because the caret is in it.
+    pub open: Option<(usize, usize)>,
+    /// Where relative image paths start.
+    pub folder: Option<&'a Path>,
+    pub library: Option<&'a RefCell<Library>>,
+    /// Filled in by layout.
+    pub figures: RefCell<Vec<Figure>>,
+    /// Every formula and image in the page, as source ranges, filled in by layout.
+    pub spans: RefCell<Vec<(usize, usize)>>,
+}
+
+/// Formulas are set at the size of the text around them, so they read as part of it.
+fn figure_of(formula: &cellix_doc::math::Formula, cell: (u32, u32)) -> Figure {
+    Figure {
+        bitmap: Bitmap {
+            id: formula.id,
+            width: formula.width,
+            height: formula.height,
+            kind: Pixels::Coverage,
+            pixels: formula.alpha.clone(),
+        },
+        width: formula.width as f32 / cell.0 as f32,
+        height: formula.height as f32 / cell.1 as f32,
+        baseline: formula.baseline as f32 / cell.1 as f32,
+    }
+}
+
+/// Reads an image and sets it to fit the page, keeping its shape.
+fn load_image(path: &Path, cell: (u32, u32), width: f32) -> Option<Figure> {
+    let image = image::open(path).ok()?.to_rgba8();
+    let wanted = (width * cell.0 as f32) as u32;
+    let image = if image.width() > wanted {
+        let height = image.height() * wanted / image.width();
+        image::imageops::thumbnail(&image, wanted, height.max(1))
+    } else {
+        image
+    };
+    let (w, h) = image.dimensions();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(&path, &mut hasher);
+    std::hash::Hash::hash(&(w, h), &mut hasher);
+    Some(Figure {
+        bitmap: Bitmap {
+            id: std::hash::Hasher::finish(&hasher),
+            width: w,
+            height: h,
+            kind: Pixels::Rgba,
+            pixels: Arc::new(image.into_raw()),
+        },
+        width: w as f32 / cell.0 as f32,
+        height: h as f32 / cell.1 as f32,
+        baseline: 0.0,
+    })
+}
+
+/// Finds where inline math closes: the closing `$` hugs its text and isn't a price.
+fn math_end(chars: &[char]) -> Option<usize> {
+    if chars.get(1).is_none_or(|c| c.is_whitespace() || *c == '$') {
+        return None;
+    }
+    (2..chars.len()).find(|i| {
+        chars[*i] == '$'
+            && chars[*i - 1] != '\\'
+            && !chars[*i - 1].is_whitespace()
+            && !chars.get(*i + 1).is_some_and(char::is_ascii_digit)
+    })
+}
+
 /// Finds a closing marker in `chars` at or after `from`.
 fn closing(chars: &[char], from: usize, marker: &[char]) -> Option<usize> {
     (from..chars.len().saturating_sub(marker.len() - 1))
@@ -289,7 +400,7 @@ fn closing(chars: &[char], from: usize, marker: &[char]) -> Option<usize> {
 }
 
 /// Turns one span of text into glyphs, hiding emphasis, code and link markers.
-fn inline(chars: &[char], offset: usize, look: Look, out: &mut Vec<Glyph>) {
+fn inline(chars: &[char], offset: usize, look: Look, context: &Context, out: &mut Vec<Glyph>) {
     let mut i = 0;
     while i < chars.len() {
         let rest = &chars[i..];
@@ -297,7 +408,7 @@ fn inline(chars: &[char], offset: usize, look: Look, out: &mut Vec<Glyph>) {
         let wrap = |marker: &[char], next: Look, out: &mut Vec<Glyph>| {
             let open = marker.len();
             let close = closing(rest, open, marker)?;
-            inline(&rest[open..close], at + open, next, out);
+            inline(&rest[open..close], at + open, next, context, out);
             Some(close + open)
         };
         let bold = Look {
@@ -341,7 +452,12 @@ fn inline(chars: &[char], offset: usize, look: Look, out: &mut Vec<Glyph>) {
                 close + 1
             })
         } else if rest[0] == '[' {
-            link(rest, at, look, out)
+            link(rest, at, look, context, out)
+        } else if rest[0] == '$' && (i == 0 || chars[i - 1] != '\\') {
+            math_end(rest).map(|end| {
+                inline_formula(&rest[..=end], at, context, out);
+                end + 1
+            })
         } else {
             None
         };
@@ -356,7 +472,13 @@ fn inline(chars: &[char], offset: usize, look: Look, out: &mut Vec<Glyph>) {
 }
 
 /// `[text](url)`: shows the text and hides the rest.
-fn link(rest: &[char], at: usize, look: Look, out: &mut Vec<Glyph>) -> Option<usize> {
+fn link(
+    rest: &[char],
+    at: usize,
+    look: Look,
+    context: &Context,
+    out: &mut Vec<Glyph>,
+) -> Option<usize> {
     let close = rest.iter().position(|c| *c == ']')?;
     if rest.get(close + 1) != Some(&'(') {
         return None;
@@ -367,8 +489,43 @@ fn link(rest: &[char], at: usize, look: Look, out: &mut Vec<Glyph>) -> Option<us
         underline: true,
         ..look
     };
-    inline(&rest[1..close], at + 1, shown, out);
+    inline(&rest[1..close], at + 1, shown, context, out);
     Some(end + 1)
+}
+
+/// `$...$`: a picture of the formula, or its source when the caret is in it, when it won't
+/// typeset, or on the cell tier.
+fn inline_formula(span: &[char], at: usize, context: &Context, out: &mut Vec<Glyph>) {
+    let range = (at, at + span.len());
+    context.extras.spans.borrow_mut().push(range);
+    let inner: String = span[1..span.len() - 1].iter().collect();
+    let code = Look {
+        tone: Tone::Code,
+        font: Font {
+            mono: true,
+            ..Font::default()
+        },
+        underline: false,
+    };
+    if context.extras.open == Some(range) {
+        for (n, c) in span.iter().enumerate() {
+            out.push(glyph(*c, Some(at + n), code));
+        }
+        return;
+    }
+    let Some(figure) = context.formula(&inner, false) else {
+        for (n, c) in span[1..span.len() - 1].iter().enumerate() {
+            out.push(glyph(*c, Some(at + 1 + n), code));
+        }
+        return;
+    };
+    let width = (context.extras.figures.borrow()[figure].width * 64.0).ceil() as u16;
+    let tone = Tone::Formula {
+        index: figure as u16,
+        width,
+    };
+    // Inside the span, so reaching it from either side opens it for editing.
+    out.push(glyph('\u{FFFC}', Some(at + 1), Look { tone, ..PLAIN }));
 }
 
 /// Sets a line's glyphs into rows no wider than `width`, breaking at spaces, with
@@ -450,7 +607,7 @@ fn is_table_rule(line: &str) -> bool {
 }
 
 /// Lays out a table with its pipes and rule hidden: real columns, with padding.
-fn table(lines: &[(usize, &str)], first: usize, measure: &dyn Measure, rows: &mut Vec<Row>) {
+fn table(lines: &[(usize, &str)], first: usize, context: &Context, rows: &mut Vec<Row>) {
     /// Space between a cell's edge and its text, in cells.
     const PADDING: f32 = 1.0;
     let mut parsed: Vec<Vec<Vec<Glyph>>> = Vec::new();
@@ -473,8 +630,8 @@ fn table(lines: &[(usize, &str)], first: usize, measure: &dyn Measure, rows: &mu
                 .iter()
                 .map(|(at, cell)| {
                     let mut out = Vec::new();
-                    inline(cell, offset + at, look, &mut out);
-                    measure_glyphs(&mut out, measure);
+                    inline(cell, offset + at, look, context, &mut out);
+                    measure_glyphs(&mut out, context.measure);
                     out
                 })
                 .collect(),
@@ -544,6 +701,125 @@ const CODE_PADDING: f32 = 1.2;
 struct Context<'a> {
     measure: &'a dyn Measure,
     registry: &'a Registry,
+    extras: &'a Extras<'a>,
+}
+
+impl Context<'_> {
+    /// A cell's pixels, or None on the cell tier, which has no pictures.
+    fn cell(&self) -> Option<(u32, u32)> {
+        self.measure.cell_pixels()
+    }
+
+    fn keep(&self, figure: Figure) -> usize {
+        let mut figures = self.extras.figures.borrow_mut();
+        figures.push(figure);
+        figures.len() - 1
+    }
+
+    /// Typesets a formula for this page, and returns its index among the figures.
+    fn formula(&self, source: &str, display: bool) -> Option<usize> {
+        let cell = self.cell()?;
+        let make = || {
+            // Display math stands a little larger, as it does in print.
+            let scale = if display { 1.2 } else { 1.05 };
+            let em = (cell.1 as f32 * INTERFACE_SIZE * scale).round() as u32;
+            let formula = cellix_doc::math::render(source, display, em).ok()?;
+            Some(figure_of(&formula, cell))
+        };
+        let figure = match self.extras.library {
+            Some(library) => library
+                .borrow_mut()
+                .formulas
+                .entry((source.to_string(), display))
+                .or_insert_with(make)
+                .clone(),
+            None => make(),
+        };
+        figure.map(|f| self.keep(f))
+    }
+
+    /// Loads an image for this page, and returns its index among the figures.
+    fn image(&self, source: &str, width: f32) -> Option<usize> {
+        let cell = self.cell()?;
+        let path = self.extras.folder?.join(source);
+        let make = || load_image(&path, cell, width);
+        let figure = match self.extras.library {
+            Some(library) => library
+                .borrow_mut()
+                .images
+                .entry((path.clone(), width as u32))
+                .or_insert_with(make)
+                .clone(),
+            None => make(),
+        };
+        figure.map(|f| self.keep(f))
+    }
+}
+
+/// `$$` and `\\[` blocks: the line a block ends on, and the formula inside it.
+fn math_block(lines: &[(usize, &str)], first: usize) -> Option<(usize, String)> {
+    let line = lines[first].1.trim();
+    let (open, close) = if line.starts_with("$$") {
+        ("$$", "$$")
+    } else if line.starts_with("\\[") {
+        ("\\[", "\\]")
+    } else {
+        return None;
+    };
+    let after = &line[open.len()..];
+    if let Some(inner) = after.strip_suffix(close) {
+        return Some((first, inner.trim().to_string()));
+    }
+    let mut inner = vec![after];
+    for (index, (_, text)) in lines.iter().enumerate().skip(first + 1) {
+        let text = text.trim();
+        if let Some(last) = text.strip_suffix(close) {
+            inner.push(last);
+            return Some((index, inner.join("\n").trim().to_string()));
+        }
+        inner.push(text);
+    }
+    None
+}
+
+/// `![alt](path)` standing alone on its line.
+fn image_line(line: &str) -> Option<(usize, &str, &str)> {
+    let text = line.trim();
+    let rest = text.strip_prefix("![")?.strip_suffix(')')?;
+    let (alt, path) = rest.split_once("](")?;
+    (!path.contains(' ')).then_some((line.len() - line.trim_start().len(), alt, path))
+}
+
+/// A picture's rows: the first carries it and a caret stop, and the rest make its room.
+fn figure_rows(
+    figure: usize,
+    context: &Context,
+    (line, at, end): (usize, usize, usize),
+    width: f32,
+    rows: &mut Vec<Row>,
+) {
+    let (shape_width, height) = {
+        let figures = context.extras.figures.borrow();
+        (figures[figure].width, figures[figure].height)
+    };
+    let mut stop = glyph(
+        ' ',
+        Some(at),
+        Look {
+            tone: Tone::TableLine,
+            ..PLAIN
+        },
+    );
+    stop.advance = 0.0;
+    rows.push(Row {
+        glyphs: vec![stop],
+        figure: Some((figure, ((width - shape_width) / 2.0).max(0.0))),
+        ..Row::new(line, end)
+    });
+    // A click anywhere on the picture means the picture.
+    for _ in 1..(height + 0.6).ceil() as usize {
+        rows.push(spacer(line, at));
+    }
 }
 
 /// Rows for a block of code, coloured by its language.
@@ -605,8 +881,24 @@ fn spacer(line: usize, end: usize) -> Row {
 }
 
 /// Lays the whole document out for a page `width` cells wide.
+#[cfg(test)]
 pub fn layout(text: &str, width: usize, measure: &dyn Measure, registry: &Registry) -> Vec<Row> {
-    let context = Context { measure, registry };
+    layout_with(text, width, measure, registry, &Extras::default())
+}
+
+/// Lays a document out, with its formulas and images.
+pub fn layout_with(
+    text: &str,
+    width: usize,
+    measure: &dyn Measure,
+    registry: &Registry,
+    extras: &Extras,
+) -> Vec<Row> {
+    let context = Context {
+        measure,
+        registry,
+        extras,
+    };
     let proportional = !measure.in_cells();
     let width = width as f32;
     let mut lines: Vec<(usize, &str)> = Vec::new();
@@ -674,9 +966,78 @@ pub fn layout(text: &str, width: usize, measure: &dyn Measure, registry: &Regist
             let end = (i + 2..lines.len())
                 .find(|n| !lines[*n].1.contains('|'))
                 .unwrap_or(lines.len());
-            table(&lines[i..end], i, measure, &mut rows);
+            table(&lines[i..end], i, &context, &mut rows);
             i = end;
             continue;
+        }
+        if let Some((last, formula)) = math_block(&lines, i) {
+            let end = lines[last].0 + lines[last].1.chars().count();
+            extras.spans.borrow_mut().push((offset, end + 1));
+            let open = extras.open == Some((offset, end + 1));
+            if open || context.cell().is_none() {
+                code_rows(&lines[i..=last], i, "", &context, None, &mut rows);
+            }
+            if let Some(figure) = context.formula(&formula, true) {
+                // Opening still shows the result, under the source being typed.
+                figure_rows(figure, &context, (i, offset + 1, end), width, &mut rows);
+                if open {
+                    let start = rows.iter().rposition(|r| r.figure.is_some());
+                    if let Some(row) = start.and_then(|at| rows.get_mut(at)) {
+                        row.stop = false;
+                    }
+                }
+            } else if !open && context.cell().is_some() {
+                // It won't typeset: the source is what there is.
+                code_rows(
+                    &lines[i..=last],
+                    i,
+                    "",
+                    &context,
+                    Some(Tone::Dim),
+                    &mut rows,
+                );
+            }
+            i = last + 1;
+            continue;
+        }
+        if let Some((indent, alt, path)) = image_line(line) {
+            let end = offset + line.chars().count();
+            extras.spans.borrow_mut().push((offset, end + 1));
+            let open = extras.open == Some((offset, end + 1));
+            let figure = context.image(path, width.min(90.0));
+            if let Some(figure) = figure.filter(|_| !open) {
+                figure_rows(
+                    figure,
+                    &context,
+                    (i, offset + indent + 1, end),
+                    width,
+                    &mut rows,
+                );
+                if !alt.is_empty() {
+                    let mut caption = decoration(alt, Tone::Dim);
+                    for g in &mut caption {
+                        g.font.size = 85;
+                    }
+                    measure_glyphs(&mut caption, measure);
+                    let shown: f32 = caption.iter().map(|g| g.advance).sum();
+                    let mut x = ((width - shown) / 2.0).max(0.0);
+                    for g in &mut caption {
+                        g.x = x;
+                        x += g.advance;
+                    }
+                    rows.push(Row {
+                        glyphs: caption,
+                        ..spacer(i, end)
+                    });
+                }
+                i += 1;
+                continue;
+            }
+            if open {
+                code_rows(&lines[i..=i], i, "", &context, None, &mut rows);
+                i += 1;
+                continue;
+            }
         }
         if is_rule(line) {
             let mut glyphs = decoration(&"─".repeat(width as usize), Tone::Dim);
@@ -749,7 +1110,13 @@ pub fn layout(text: &str, width: usize, measure: &dyn Measure, registry: &Regist
             }
         };
         let decorated = glyphs.len();
-        inline(&chars[hidden..], offset + hidden, look, &mut glyphs);
+        inline(
+            &chars[hidden..],
+            offset + hidden,
+            look,
+            &context,
+            &mut glyphs,
+        );
         // A paragraph runs on across its source lines, to fill the page. Each line break
         // shows as a space that still stands for the newline, so the file doesn't change.
         let flows = !chars.is_empty()
@@ -767,7 +1134,8 @@ pub fn layout(text: &str, width: usize, measure: &dyn Measure, registry: &Regist
             last += 1;
             let next: Vec<char> = lines[last].1.chars().collect();
             let indent = next.iter().take_while(|c| c.is_whitespace()).count();
-            inline(&next[indent..], lines[last].0 + indent, look, &mut glyphs);
+            let start = lines[last].0 + indent;
+            inline(&next[indent..], start, look, &context, &mut glyphs);
         }
         template.end = lines[last].0 + lines[last].1.chars().count();
         measure_glyphs(&mut glyphs, measure);
@@ -854,7 +1222,18 @@ fn stops(rows: &[Row]) -> Vec<usize> {
 
 pub fn snap(rows: &[Row], pos: usize) -> usize {
     let (row, x) = locate(rows, pos);
-    rows.get(row).map_or(pos, |r| r.position_at(x))
+    let Some(row) = rows.get(row) else {
+        return pos;
+    };
+    // Right before a closed formula is a real place, though no glyph starts there.
+    if row
+        .glyphs
+        .iter()
+        .any(|g| matches!(g.tone, Tone::Formula { .. }) && g.at == Some(pos + 1))
+    {
+        return pos;
+    }
+    row.position_at(x)
 }
 
 pub fn step(rows: &[Row], pos: usize, forward: bool) -> usize {
@@ -1214,6 +1593,12 @@ body",
     }
 
     #[test]
+    fn padded_tables_show_every_column() {
+        let rows = texts("| A   | B   |\n| --- | --- |\n| one | two |\n|     |     |\n");
+        assert!(rows[1].contains("two"), "{rows:?}");
+    }
+
+    #[test]
     fn tab_finds_the_next_cell() {
         let source = "| a | b |\n|---|---|\n| c | d |";
         let rows = page(source, 40);
@@ -1230,6 +1615,106 @@ body",
         assert_eq!(link_at(line, 6).as_deref(), Some("http://a.b/c"));
         assert_eq!(link_at(line, 32).as_deref(), Some("https://x.y/z"));
         assert_eq!(link_at(line, 1), None);
+    }
+
+    type Typeset = (Vec<Row>, Vec<Figure>, Vec<(usize, usize)>);
+
+    /// Lays a page out as the pixel tiers do, with `open` showing as source.
+    fn typeset(text: &str, open: Option<(usize, usize)>) -> Typeset {
+        let m = FontMeasure::new(17, 37);
+        let extras = Extras {
+            open,
+            ..Extras::default()
+        };
+        let rows = layout_with(text, 60, &m, &Registry::default(), &extras);
+        (rows, extras.figures.into_inner(), extras.spans.into_inner())
+    }
+
+    fn formulas(rows: &[Row]) -> usize {
+        let is = |g: &&Glyph| matches!(g.tone, Tone::Formula { .. });
+        rows.iter().flat_map(|r| r.glyphs.iter().filter(is)).count()
+    }
+
+    #[test]
+    fn formulas_show_as_pictures_in_the_line() {
+        let source = "Energy is $E = mc^2$ here.";
+        let (rows, figures, spans) = typeset(source, None);
+        assert_eq!(formulas(&rows), 1);
+        assert_eq!(figures.len(), 1);
+        assert_eq!(spans, [(10, 20)]);
+        let shown: String = rows.iter().map(text).collect();
+        assert!(!shown.contains("mc^2"), "{shown}");
+        assert!(shown.contains("here."));
+    }
+
+    #[test]
+    fn a_formula_shows_its_source_when_open() {
+        let source = "Energy is $E = mc^2$ here.";
+        let (rows, figures, _) = typeset(source, Some((10, 20)));
+        assert_eq!(formulas(&rows), 0);
+        assert!(figures.is_empty());
+        let shown: String = rows.iter().map(text).collect();
+        assert!(shown.contains("$E = mc^2$"), "{shown}");
+    }
+
+    #[test]
+    fn prices_are_not_formulas() {
+        let (rows, _, spans) = typeset("It costs $5 and then $10 more.", None);
+        assert_eq!(formulas(&rows), 0);
+        assert!(spans.is_empty());
+    }
+
+    #[test]
+    fn a_block_formula_takes_rows_of_its_own() {
+        let source = "before\n\n$$\n\\sum_{i=1}^{n} i = \\frac{n(n+1)}{2}\n$$\n\nafter\n";
+        let (rows, figures, spans) = typeset(source, None);
+        assert_eq!(figures.len(), 1);
+        assert_eq!(spans.len(), 1);
+        let at = rows.iter().position(|r| r.figure.is_some()).unwrap();
+        assert!(rows[at].stop, "the caret can reach it");
+        assert!(!rows[at + 1].stop, "and the rest is room for it");
+        let shown: String = rows.iter().map(text).collect();
+        assert!(!shown.contains("sum"), "{shown}");
+        let (open, figures, _) = typeset(source, Some(spans[0]));
+        let shown: String = open.iter().map(text).collect();
+        assert!(shown.contains("\\sum"), "source to edit: {shown}");
+        assert_eq!(figures.len(), 1, "with the result still under it");
+    }
+
+    #[test]
+    fn a_formula_that_wont_typeset_stays_readable() {
+        let (rows, figures, _) = typeset("Bad $\\frac{$ here", None);
+        assert!(figures.is_empty());
+        let shown: String = rows.iter().map(text).collect();
+        assert!(shown.contains("\\frac{"), "{shown}");
+    }
+
+    #[test]
+    fn the_cell_tier_shows_formulas_as_text() {
+        assert_eq!(texts("Is $x^2$ big"), ["Is x^2 big"]);
+    }
+
+    #[test]
+    fn images_show_in_the_page() {
+        let dir = tempfile::tempdir().unwrap();
+        let pixels = image::RgbaImage::from_pixel(340, 74, image::Rgba([200, 30, 30, 255]));
+        pixels.save(dir.path().join("plot.png")).unwrap();
+        let source = "![The plot](plot.png)\n\nafter\n";
+        let m = FontMeasure::new(17, 37);
+        let extras = Extras {
+            folder: Some(dir.path()),
+            ..Extras::default()
+        };
+        let rows = layout_with(source, 60, &m, &Registry::default(), &extras);
+        let figures = extras.figures.into_inner();
+        assert_eq!(figures.len(), 1);
+        assert_eq!(figures[0].width, 20.0);
+        assert_eq!(figures[0].height, 2.0);
+        let caption = rows.iter().find(|r| text(r).contains("The plot")).unwrap();
+        assert!(!caption.stop);
+        assert!(rows.iter().any(|r| r.figure.is_some()));
+        let missing = typeset("![gone](nothing.png)\n", None);
+        assert!(missing.1.is_empty(), "a missing image stays as its source");
     }
 
     #[test]
