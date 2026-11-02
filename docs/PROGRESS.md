@@ -482,3 +482,9 @@ a frame for more than 4 ms, and a trackpad wandering sideways no longer ends a g
 icons and the top-right bar were also made smaller and airier, as asked.
 `the_wheel_reports_what_it_moved` changed with the first event. Tests that placed the icons moved
 with the new margin. How it feels in a real Ghostty is still for the user to judge.
+
+The README now leads with Cellix inside an agent, and with writing documents alongside it. The editor
+on its own comes after. `cellix setup claude`, `codex` and `gemini` make that one line each, doing
+what the Install buttons do. Its screenshots still show Cellix on its own: a shot from inside Claude
+Code needs a real terminal window, which wasn't taken while the user was testing.
+

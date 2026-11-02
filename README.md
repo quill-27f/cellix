@@ -4,15 +4,14 @@
 [![crates.io](https://img.shields.io/crates/v/cellix)](https://crates.io/crates/cellix)
 [![license](https://img.shields.io/crates/l/cellix)](#license)
 
-**The AI companion IDE for your terminal.** Use it as a Claude Code mod, a Codex plugin or a Gemini
-CLI extension, or on its own with any agent beside it.
+**The AI companion IDE that lives inside your agent.** A Claude Code mod, a Codex plugin and a
+Gemini CLI extension that give your agent a real editor for Markdown, LaTeX, plans and diffs, right
+there in the terminal.
 
 Your agent writes the code and the documents. Cellix is where you read what it did, correct it and
-answer back. Select anything and leave a comment, and the agent gets it with the file, the line and
-the quote. Plans wait for your approval, edits arrive as diffs you accept hunk by hunk, and a turn
-you don't like can be undone. It's all in the terminal, so it works the same over SSH.
-
-![A document in Cellix, with a comment waiting for the agent](docs/images/comments.png)
+answer back. Select any sentence, formula or figure and leave a comment, and the agent gets it with
+the file, the line and the quote. Plans wait for your approval, edits arrive as diffs you accept hunk
+by hunk, and a turn you don't like can be undone. It works the same over SSH.
 
 ## Install
 
@@ -22,44 +21,66 @@ cargo install cellix --locked        # anywhere Rust runs
 ```
 
 Static Linux binaries for servers are on the [releases page](https://github.com/quill-27f/cellix/releases).
-Then, in a project:
+
+## Add it to your agent
 
 ```sh
-cellix            # the current folder
-cellix src/lib.rs # with a file open
+cellix setup claude   # then restart Claude Code, and /cellix opens it
+cellix setup codex    # then run /hooks once in Codex to trust it
+cellix setup gemini   # then restart Gemini CLI
 ```
+
+| Agent | What it adds |
+|---|---|
+| Claude Code | A mod. Cellix opens as a pane beside the conversation, and by itself when Claude proposes an edit or a plan. Your selection reaches the prompt, and every turn is checkpointed |
+| Codex | A plugin. Your comments reach its prompts, plans wait for your review, and turns and test runs show in Review |
+| Gemini CLI | An extension that does the same, holding plans as it leaves plan mode |
+| Anything else | `cellix plan`, `cellix comments --take` and `cellix reply`, which any agent can call |
+
+The pane needs what only Claude Code offers. With Codex and Gemini CLI, run Cellix in a split beside
+them, or let it run them, as under [On its own](#on-its-own).
 
 It looks its best in a terminal with Kitty graphics, such as Ghostty, Kitty or WezTerm, where it
 draws real pixels. Anywhere else it falls back to text cells.
 
-## Connect your agent
+## Write documents with your agent
 
-| Agent | How | What you get |
-|---|---|---|
-| Claude Code | `cellix setup --install` | A mod: Cellix as a pane inside Claude, proposed edits as diffs, plans to approve, your selection in the prompt, every turn checkpointed |
-| Codex | Settings, Integrations, Install, then `/hooks` once in Codex to trust it | A plugin: your comments in its prompts, plans held for review, turns and test runs in Review |
-| Gemini CLI | Settings, Integrations, Install | An extension: the same, with plans held as it leaves plan mode |
-| Anything else | `cellix plan`, `cellix comments --take`, `cellix reply` | A small CLI any agent can call |
+Markdown and LaTeX open as a page you type on, and the file underneath stays plain text, so the agent
+edits what you edit and git sees every change.
 
-Or run any of them inside Cellix. The icons at the top right put the real program in a pane beside
-your file, along with a terminal and a browser.
+![A document, with a comment waiting for the agent](docs/images/comments.png)
 
-![An agent list in the side pane](docs/images/agents.png)
+- **Ask about anything on the page.** Select text, a formula, a diagram or a figure, then Comment or
+  Ask Agent. The answer lands under your question, as a thread beside the page.
+- **See suggestions as suggestions.** Track Changes keeps edits in the text itself, as CriticMarkup or
+  the `changes` package, to accept or reject one at a time.
+- **Real math and diagrams.** Formulas are typeset as you write, with no TeX installed. Mermaid,
+  Graphviz and SVG draw from pure Rust, and TikZ builds in the background.
+- **Whole papers.** Sections, citations, equations, theorems and figures across `\input` files, Cite
+  from your `.bib`, Build PDF with SyncTeX both ways, and export from Markdown to PDF or a web page.
+- **Offline spelling and grammar**, tables, images you can paste or drag, callouts and footnotes.
 
-## What's in it
+![A paper on the page, in the dark theme](docs/images/paper.png)
 
-- **Review.** Changes against HEAD or any agent turn, hunk by hunk, with the tests the agent ran.
-- **Comments on anything.** Text, pictures, diagrams, formulas and PDFs, the same way in every format.
-- **Source Control.** Stage, commit, push and pull, as in VS Code.
-- **Writing.** Markdown and LaTeX as a page you type on, with typeset math, diagrams, citations, track
-  changes and PDF builds.
-- **Data.** CSV as a table with Excel's keys, and notebooks on a real Jupyter kernel.
-- **An editor.** Highlighting and suggestions in every file type, language servers, a minimap, Vim and
-  Neovim modes.
+`samples/writing.md` and `samples/paper/main.tex` use all of it. [Writing](#writing) has the details.
+
+## Review what it did
+
+- **Plans** open as a page with Approve and Send back, and your edits and comments go with the answer.
+- **Diffs** stack hunk by hunk, against HEAD or any agent turn, with the tests the agent ran.
+- **Source Control** stages, commits, pushes and pulls, as in VS Code.
+- **Data and notebooks.** CSV as a table with Excel's keys, and notebooks on a real Jupyter kernel.
 
 ![Source Control, with a diff beside it](docs/images/source-control.png)
 
-![A paper in the dark theme](docs/images/paper.png)
+## On its own
+
+Cellix is also a full editor you can run alone: `cellix` in a project, or `cellix src/lib.rs` for a
+file. It has highlighting and suggestions in every file type, language servers, a minimap, and Vim
+and Neovim modes. The icons at the top right put a real agent, a terminal or a browser in a pane
+beside your file.
+
+![Cellix on its own, with agents to start in the side pane](docs/images/agents.png)
 
 Cellix is young. Everything here is built and tested, but it hasn't had much real use yet, and not
 on a real SSH link. [docs/PROGRESS.md](docs/PROGRESS.md) says what has and hasn't been proven.

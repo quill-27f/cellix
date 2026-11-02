@@ -1,6 +1,6 @@
 [package]
 name = "cellix"
-description = "The AI companion IDE for your terminal: a Claude Code mod, Codex plugin and Gemini CLI extension"
+description = "The AI companion IDE inside your agent: a Claude Code mod, Codex plugin and Gemini CLI extension"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

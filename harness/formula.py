@@ -17,7 +17,7 @@ def entry(target):
 
 
 formula = f'''class Cellix < Formula
-  desc "AI companion IDE for your terminal"
+  desc "AI companion IDE inside your coding agent"
   homepage "https://github.com/quill-27f/cellix"
   version "{version}"
   license any_of: ["MIT", "Apache-2.0"]

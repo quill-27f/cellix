@@ -47,7 +47,8 @@ Usage: cellix [--wait] [files]
   cellix plan <file>        Holds a plan for review, and prints the verdict
   cellix comments [--take]  Review comments, as JSON
   cellix open <file>        Opens a file in the running Cellix
-  cellix setup [--install|--remove]  Connects Claude Code
+  cellix setup [claude|codex|gemini]  Connects an agent
+  cellix setup --remove     Disconnects Claude Code
 ";
 
 /// `cellix plan <file>` holds a plan until the reviewer decides. It exits 0 on approval,
@@ -109,6 +110,32 @@ fn setup(install: bool) -> ExitCode {
     println!("Or try it in one session:");
     println!("  claude --ide --plugin-dir {}", folder.display());
     ExitCode::SUCCESS
+}
+
+/// `cellix setup codex` and `gemini` do what their Install buttons in Settings do.
+fn setup_agent(agent: &str) -> ExitCode {
+    let var = |name: &str| std::env::var(name).ok();
+    let (done, next) = if agent == "codex" {
+        (
+            cellix::integrations::install_codex(var),
+            "Run /hooks once in Codex to trust its hooks.",
+        )
+    } else {
+        (
+            cellix::integrations::install_gemini(var),
+            "Restart Gemini CLI to load it.",
+        )
+    };
+    match done {
+        Ok(()) => {
+            println!("Installed. {next}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("cellix: could not install: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 /// `cellix hook <kind>` is what the Claude Code plugin calls. It always succeeds, because a
@@ -176,7 +203,8 @@ fn main() -> ExitCode {
             };
         }
         ["setup"] => return setup(false),
-        ["setup", "--install"] => return setup(true),
+        ["setup", "--install" | "claude"] => return setup(true),
+        ["setup", agent @ ("codex" | "gemini")] => return setup_agent(agent),
         ["setup", "--remove"] => {
             return match cellix::integrations::remove_claude(|name| std::env::var(name).ok()) {
                 Ok(()) => {
