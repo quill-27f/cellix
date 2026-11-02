@@ -24,6 +24,7 @@ mod review;
 mod search;
 mod settings;
 mod settings_page;
+mod slow;
 mod snippets;
 mod source;
 mod spell;

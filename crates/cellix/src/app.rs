@@ -98,6 +98,8 @@ const FILE_TABS_ROOM: u16 = 24;
 /// Rows the window needs before the pane can stand under the file, and its share of them.
 const STACK_HEIGHT: u16 = 16;
 const STACK_SHARE: u16 = 45;
+/// Rows each side keeps, however far the line between them is dragged.
+const STACK_LEAST: u16 = 6;
 const APPROVE: &str = "[Approve]";
 const FIND_WIDTH: u16 = 46;
 const CONFIRM_WIDTH: u16 = 56;
@@ -4319,7 +4321,8 @@ impl App {
         let left = self.main_left();
         let height = self.size.1.saturating_sub(1);
         if self.dock_under() {
-            let rows = height * STACK_SHARE / 100;
+            let rows = self.dock.height.unwrap_or(height * STACK_SHARE / 100);
+            let rows = rows.clamp(STACK_LEAST, height - STACK_LEAST);
             let room = self.size.0.saturating_sub(left);
             return Some(Rect::new(left, height - rows, room, rows));
         }
@@ -4480,6 +4483,20 @@ impl App {
         self.agents.scan(self.workspace.root());
     }
 
+    /// Whether the pointer is on the line between the file and the pane. It's easy to miss,
+    /// so the row or column before it counts, and so does an empty stretch of the tab row.
+    fn on_dock_edge(&self, x: u16, y: u16) -> bool {
+        let Some(area) = self.dock_area() else {
+            return false;
+        };
+        if self.dock_under() {
+            let empty_title = y == area.y && self.dock.hit(area, x).is_none();
+            let on_strip = self.action_at(x, y).is_some();
+            return !on_strip && x >= area.x && (y + 1 == area.y || empty_title);
+        }
+        (x == area.x || x + 1 == area.x) && y > area.y && y < area.bottom()
+    }
+
     /// Asks to close a tab of the pane, checking first if that would stop something.
     fn close_session_tab(&mut self, index: usize) {
         if !self.dock.sessions[index].busy() {
@@ -4506,7 +4523,11 @@ impl App {
         let (x, y) = (mouse.x, mouse.y);
         let dragging = matches!(self.drag, Drag::Dock | Drag::Session);
         if mouse.kind == MouseKind::Drag && self.drag == Drag::Dock {
-            self.dock.width = Some(self.size.0.saturating_sub(x));
+            if self.dock_under() {
+                self.dock.height = Some(self.size.1.saturating_sub(y + 1));
+            } else {
+                self.dock.width = Some(self.size.0.saturating_sub(x));
+            }
             self.fit_dock();
             return true;
         }
@@ -4522,8 +4543,8 @@ impl App {
             return true;
         }
         // The line between the two sides is easy to miss, so the column before it counts.
-        let on_edge = (x == area.x || x + 1 == area.x) && !self.dock_under();
-        if on_edge && y > area.y && y < area.bottom() && mouse.kind == MouseKind::Left {
+        let on_edge = self.on_dock_edge(x, y);
+        if on_edge && mouse.kind == MouseKind::Left {
             self.drag = Drag::Dock;
             return true;
         }
@@ -4757,6 +4778,7 @@ impl App {
             .filter(|(cell, ..)| cell.x >= area.x && area.y == 0);
         let end = held.map_or(area.right().saturating_sub(PANE_CLOSE), |(cell, ..)| cell.x);
         self.dock.tabs_end.set(end);
+        self.dock.tabs_flush.set(self.dock_under());
         self.dock.draw_tabs(grid, area, self.hover, theme);
         let line = if self.dock_under() {
             Bounds::cells(area.x as f32, area.y as f32, area.w as f32, 0.0)
@@ -6808,6 +6830,8 @@ impl App {
             ..Font::default()
         };
         let wide = |name: &str| self.measure.width(name, font) + 3.0;
+        let cut = self.dock_area().filter(|a| y == a.y);
+        let cut = cut.and_then(|area| self.dock.cut_name(area, x));
         // Where each one goes: its name, left edge and top, in cells and rows.
         let spot = match &self.overlay {
             Overlay::Find(_) => {
@@ -6822,6 +6846,10 @@ impl App {
                     (*name, left, area.y as f32 + 2.5)
                 })
             }
+            Overlay::None if cut.is_some() => cut.as_deref().map(|name| {
+                let left = (x as f32).min(self.size.0 as f32 - wide(name) - 0.5);
+                (name, left, self.dock_area().map_or(0, |a| a.y) as f32 + 1.2)
+            }),
             Overlay::None if self.action_at(x, y).is_some() => {
                 let actions = self.pane_actions();
                 let found = actions.iter().find(|(cell, ..)| cell.contains(x, y));
@@ -8220,6 +8248,13 @@ impl App {
         };
         if !matches!(self.overlay, Overlay::None) {
             return ARROW;
+        }
+        if self.on_dock_edge(x, y) {
+            return if self.dock_under() {
+                "ns-resize"
+            } else {
+                "ew-resize"
+            };
         }
         let on_chip = self
             .selection_bar()
@@ -12502,6 +12537,65 @@ mod tests {
             tabs.iter().all(|(_, _, tab)| tab.right() <= first),
             "{tabs:?}"
         );
+    }
+
+    #[test]
+    fn the_line_above_a_stacked_pane_can_be_dragged() {
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (72, 40));
+        app.run(Command::ListAgents);
+        let pane = app.dock_area().unwrap();
+        app.handle(mouse(MouseKind::Left, 30, pane.y - 1));
+        app.handle(mouse(MouseKind::Drag, 30, 10));
+        app.handle(mouse(MouseKind::Up, 30, 10));
+        let pane = app.dock_area().unwrap();
+        assert_eq!((pane.y, app.main_area().bottom()), (10, 10));
+        app.hover = Some((30, pane.y - 1));
+        assert_eq!(app.pointer(), "ns-resize");
+    }
+
+    #[test]
+    fn a_stacked_pane_leaves_both_sides_some_room() {
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (72, 40));
+        app.run(Command::ListAgents);
+        app.dock.height = Some(500);
+        assert_eq!(app.main_area().h, STACK_LEAST);
+        app.dock.height = Some(1);
+        assert_eq!(app.dock_area().unwrap().h, STACK_LEAST);
+    }
+
+    #[test]
+    fn the_tab_in_front_keeps_its_name_and_the_others_say_theirs_on_hover() {
+        let (_dir, mut app) = project();
+        with_a_shell(&mut app);
+        app.run(Command::ShowComments);
+        app.run(Command::ListAgents);
+        let _ = screen(&app);
+        let area = app.dock_area().unwrap();
+        let tabs = app.dock.view_tabs_for_test(area);
+        let agents = tabs.iter().find(|tab| tab.0 == Front::Agents).unwrap();
+        assert_eq!(agents.2.w, 11, "it's in front");
+        let comments = tabs.iter().find(|tab| tab.0 == Front::Comments).unwrap();
+        assert!(comments.2.w < 13, "the rest give way");
+        let name = app.dock.cut_name(area, comments.2.x + 1);
+        assert_eq!(name.as_deref(), Some("Comments"));
+        assert_eq!(
+            app.dock.cut_name(area, agents.2.x + 1),
+            None,
+            "it shows in full"
+        );
+    }
+
+    #[test]
+    fn a_stacked_panes_tabs_line_up_with_the_files() {
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (72, 40));
+        app.run(Command::ListAgents);
+        let _ = screen(&app);
+        let pane = app.dock_area().unwrap();
+        let (_, _, tab) = app.dock.view_tabs_for_test(pane)[0];
+        assert_eq!(tab.x, app.main_area().x);
     }
 
     #[test]

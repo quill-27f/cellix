@@ -30,6 +30,18 @@
         ]
       }
     ],
+    "BeforeTool": [
+      {
+        "matcher": "exit_plan_mode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cellix hook --agent Gemini plan 2>/dev/null || true",
+            "timeout": 86400000
+          }
+        ]
+      }
+    ],
     "AfterTool": [
       {
         "matcher": "run_shell_command",

@@ -2049,5 +2049,89 @@
     "title": "A read from before a change doesn't undo it",
     "test": "a_read_from_before_a_change_doesnt_undo_it",
     "passes": true
+  },
+  {
+    "id": "slow-log",
+    "milestone": 9,
+    "title": "Slow frames are noted with where the time went",
+    "test": "a_quick_frame_isnt_noted_and_a_slow_one_says_where_it_went",
+    "passes": true
+  },
+  {
+    "id": "slow-log-limit",
+    "milestone": 9,
+    "title": "The slow frame log stops at its limit",
+    "test": "the_log_stops_at_its_limit",
+    "passes": true
+  },
+  {
+    "id": "plan-gemini",
+    "milestone": 9,
+    "title": "Gemini plans are held on leaving plan mode",
+    "test": "gemini_is_held_at_leaving_plan_mode_and_told_what_to_change",
+    "passes": true
+  },
+  {
+    "id": "plan-gemini-edit",
+    "milestone": 9,
+    "title": "An edit to a Gemini plan goes back in its file",
+    "test": "an_edit_to_geminis_plan_goes_back_in_its_file",
+    "passes": true
+  },
+  {
+    "id": "plan-codex",
+    "milestone": 9,
+    "title": "Codex plans are held when its turn ends",
+    "test": "a_plan_from_codex_is_held_when_its_turn_ends",
+    "passes": true
+  },
+  {
+    "id": "plan-codex-approve",
+    "milestone": 9,
+    "title": "Approving a Codex plan lets its turn end",
+    "test": "approving_a_codex_plan_lets_its_turn_end",
+    "passes": true
+  },
+  {
+    "id": "plan-codex-ordinary",
+    "milestone": 9,
+    "title": "An ordinary Codex turn is not held",
+    "test": "an_ordinary_codex_turn_isnt_held",
+    "passes": true
+  },
+  {
+    "id": "plan-timeouts",
+    "milestone": 9,
+    "title": "Plan hooks allow time for a person to read",
+    "test": "plan_hooks_are_given_time_for_a_person_to_read",
+    "passes": true
+  },
+  {
+    "id": "stack-drag",
+    "milestone": 9,
+    "title": "The line above a stacked pane can be dragged",
+    "test": "the_line_above_a_stacked_pane_can_be_dragged",
+    "passes": true
+  },
+  {
+    "id": "stack-limits",
+    "milestone": 9,
+    "title": "A stacked pane leaves both sides some room",
+    "test": "a_stacked_pane_leaves_both_sides_some_room",
+    "passes": true
+  },
+  {
+    "id": "stack-align",
+    "milestone": 9,
+    "title": "A stacked pane lines up with the file",
+    "test": "a_stacked_panes_tabs_line_up_with_the_files",
+    "passes": true
+  },
+  {
+    "id": "tabs-front",
+    "milestone": 9,
+    "title": "The front tab keeps its name, others show it on hover",
+    "test": "the_tab_in_front_keeps_its_name_and_the_others_say_theirs_on_hover",
+    "passes": true
   }
 ]

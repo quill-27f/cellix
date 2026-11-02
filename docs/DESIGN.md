@@ -365,8 +365,11 @@ the file.
   only happens when the user asks.
 - Codex: a plugin in a local marketplace, installed with Codex's own commands. It runs
   hooks for status, turns, comments and test runs, once the user trusts them with `/hooks`.
+  A plan is no tool call there, so its Stop hook holds a `<proposed_plan>` block. Sending it
+  back starts another turn, and approving leaves implementing it for the user to ask for.
 - Gemini CLI: an extension with the same hooks, installed with its own command. Its folder
   trust question isn't covered by `--consent`, and the user's click is the answer to it.
+  `BeforeTool` on `exit_plan_mode` holds the plan, and Gemini still asks for its own approval.
 - The icons at the top right, as in a desktop app, reach the comments, a terminal, Review, the
   browser and the agents. The pane stands under the file when the window is too narrow to have
   them side by side. The Agents icon opens the side pane. With nothing running, it lists what's running elsewhere,

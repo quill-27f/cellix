@@ -15,6 +15,7 @@ Comments on documents are conversations. `cellix threads` prints the open ones a
 one with `cellix reply <id> "your answer"`, and it lands under the comment, beside the document.
 It fails if there's no such comment, so read the result.
 
-To have a plan reviewed before you start, write it to a Markdown file and run
+A `<proposed_plan>` reaches the reviewer by itself when your turn ends. For any other plan, write
+it to a Markdown file and run
 `cellix plan <file>`. It waits for the reviewer. It prints `Approved.` when you can go ahead, and
 exits 1 with what to change when the plan is sent back.

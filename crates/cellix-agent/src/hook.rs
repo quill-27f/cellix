@@ -1,7 +1,7 @@
 //! `cellix hook <kind>`: what Claude Code's hooks call. Nothing here may disturb the agent,
 //! so with no Cellix running every kind quietly does nothing but keep its checkpoints.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use cellix_review::{Comment, Thread, checkpoint};
@@ -142,9 +142,8 @@ fn on_prompt(roots: &[PathBuf], input: &Value) -> Option<String> {
     Some(output.to_string())
 }
 
-/// Holds the plan until the reviewer decides. With no Cellix, Claude Code asks as usual.
-fn on_plan(roots: &[PathBuf], input: &Value) -> Option<String> {
-    let plan = input["tool_input"]["plan"].as_str()?;
+/// Holds a plan until the reviewer decides, and gives back the verdict and any text with it.
+fn review_plan(roots: &[PathBuf], input: &Value, plan: &str) -> Option<(String, Option<String>)> {
     let socket = roots.iter().map(|r| socket_path(r)).find(|s| s.exists())?;
     let session: String = input["session_id"]
         .as_str()
@@ -159,10 +158,16 @@ fn on_plan(roots: &[PathBuf], input: &Value) -> Option<String> {
     std::fs::write(&path, plan).ok()?;
     tell(roots, input, AgentState::NeedsYou, PLAN_WAITING);
     let reply = ask(roots, &format!("plan {}", path.display()))?;
-    // A PreToolUse answer wouldn't do: Claude Code still shows its own plan dialog.
     let (verdict, text) = reply.split_once(' ').unwrap_or((&reply, "null"));
-    let text: Option<String> = serde_json::from_str(text).ok()?;
-    let decision = match (verdict, text) {
+    Some((verdict.to_string(), serde_json::from_str(text).ok()?))
+}
+
+/// Claude Code's plan, from its permission request. With no Cellix, it asks as usual.
+fn on_plan(roots: &[PathBuf], input: &Value) -> Option<String> {
+    let plan = input["tool_input"]["plan"].as_str()?;
+    let (verdict, text) = review_plan(roots, input, plan)?;
+    // A PreToolUse answer wouldn't do: Claude Code still shows its own plan dialog.
+    let decision = match (verdict.as_str(), text) {
         ("send-back", Some(message)) => json!({"behavior": "deny", "message": message}),
         ("approve", edited) => {
             // Claude Code only counts an approval as the user's answer if it carries the input.
@@ -179,6 +184,50 @@ fn on_plan(roots: &[PathBuf], input: &Value) -> Option<String> {
         "decision": decision,
     }});
     Some(output.to_string())
+}
+
+/// Gemini CLI's plan, as it goes to leave plan mode. It keeps plans in a file, so an edited
+/// one is written back there, and Gemini still asks for its own approval afterwards.
+fn on_gemini_plan(roots: &[PathBuf], input: &Value) -> Option<String> {
+    let path = PathBuf::from(input["tool_input"]["plan_path"].as_str()?);
+    let path = match input["cwd"].as_str() {
+        Some(folder) => Path::new(folder).join(path),
+        None => path,
+    };
+    let plan = std::fs::read_to_string(&path).ok()?;
+    let (verdict, text) = review_plan(roots, input, &plan)?;
+    let output = match (verdict.as_str(), text) {
+        ("send-back", Some(reason)) => json!({"decision": "deny", "reason": reason}),
+        ("approve", edited) => {
+            if let Some(edited) = edited {
+                std::fs::write(&path, edited).ok()?;
+            }
+            json!({"decision": "allow"})
+        }
+        _ => return None,
+    };
+    Some(output.to_string())
+}
+
+/// The plan in a message from Codex, which has no tool for proposing one.
+fn proposed_plan(message: &str) -> Option<&str> {
+    let (_, rest) = message.split_once("<proposed_plan>")?;
+    let (plan, _) = rest.split_once("</proposed_plan>")?;
+    Some(plan.trim())
+}
+
+/// Codex ends its turn on a plan, so that's when it's held. Sending it back starts another
+/// turn with the reviewer's words. Approving lets the turn end, and implementing it is still
+/// the user's to ask for in Codex.
+fn on_codex_stop(roots: &[PathBuf], input: &Value) -> Option<String> {
+    let plan = proposed_plan(input["last_assistant_message"].as_str()?)?;
+    let (verdict, text) = review_plan(roots, input, plan)?;
+    match (verdict.as_str(), text) {
+        ("send-back", Some(reason)) => {
+            Some(json!({"decision": "block", "reason": reason}).to_string())
+        }
+        _ => None,
+    }
 }
 
 /// Whether a command's exit is really that of its last stage, such as `tail`, and not the
@@ -249,6 +298,7 @@ pub fn handle_for(agent: &str, kind: &str, stdin: &str) -> Option<String> {
     match kind {
         "session-start" => tell(&roots, &input, AgentState::Idle, "Ready"),
         "prompt" => return on_prompt(&roots, &input),
+        "plan" if agent == "Gemini" => return on_gemini_plan(&roots, &input),
         "plan" => return on_plan(&roots, &input),
         "notify" => {
             let detail = input["message"].as_str().unwrap_or("Needs your attention");
@@ -256,7 +306,12 @@ pub fn handle_for(agent: &str, kind: &str, stdin: &str) -> Option<String> {
         }
         "tool-done" => on_tool(&roots, &input, true),
         "tool-failed" => on_tool(&roots, &input, false),
-        "stop" => tell(&roots, &input, AgentState::Idle, "Finished"),
+        "stop" => {
+            tell(&roots, &input, AgentState::Idle, "Finished");
+            if agent == "Codex" {
+                return on_codex_stop(&roots, &input);
+            }
+        }
         "session-end" => tell(&roots, &input, AgentState::Ended, "Ended"),
         _ => {}
     }
@@ -362,6 +417,119 @@ mod tests {
         assert_eq!(answer["hookEventName"], "PermissionRequest");
         assert_eq!(answer["decision"]["behavior"], "deny");
         assert_eq!(answer["decision"]["message"], "Split step two");
+    }
+
+    /// Runs a hook on a thread, and answers the plan it holds with `decision`.
+    fn answered(
+        agent: &'static str,
+        kind: &'static str,
+        hook: String,
+        decision: Decision,
+    ) -> (Option<String>, String) {
+        let root = hook_root(&hook);
+        let server = start(&root, Arc::default()).unwrap();
+        let waiting = std::thread::spawn(move || handle_for(agent, kind, &hook));
+        loop {
+            if let Request::Plan { path, reply } = server
+                .requests
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+            {
+                let held = std::fs::read_to_string(path).unwrap();
+                reply.send(decision).unwrap();
+                return (waiting.join().unwrap(), held);
+            }
+        }
+    }
+
+    fn hook_root(hook: &str) -> PathBuf {
+        let parsed: Value = serde_json::from_str(hook).unwrap();
+        PathBuf::from(parsed["cwd"].as_str().unwrap())
+    }
+
+    fn gemini_plan(root: &Path, text: &str) -> String {
+        let plan = root.join("plan.md");
+        std::fs::write(&plan, text).unwrap();
+        input(root, json!({"tool_input": {"plan_path": plan}}))
+    }
+
+    #[test]
+    fn gemini_is_held_at_leaving_plan_mode_and_told_what_to_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let hook = gemini_plan(&root, "# G\n");
+        let sent = Decision::SendBack("Fewer steps".into());
+        let (output, held) = answered("Gemini", "plan", hook, sent);
+        assert_eq!(held, "# G\n");
+        let parsed: Value = serde_json::from_str(&output.unwrap()).unwrap();
+        assert_eq!(parsed["decision"], "deny");
+        assert_eq!(parsed["reason"], "Fewer steps");
+    }
+
+    #[test]
+    fn an_edit_to_geminis_plan_goes_back_in_its_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let hook = gemini_plan(&root, "# Old\n");
+        let edited = Decision::Approve(Some("# New\n".into()));
+        let (output, _) = answered("Gemini", "plan", hook, edited);
+        let parsed: Value = serde_json::from_str(&output.unwrap()).unwrap();
+        assert_eq!(parsed["decision"], "allow");
+        assert_eq!(
+            std::fs::read_to_string(root.join("plan.md")).unwrap(),
+            "# New\n"
+        );
+    }
+
+    #[test]
+    fn a_plan_from_codex_is_held_when_its_turn_ends() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let message = "Here it is.\n\n<proposed_plan>\n# C\n</proposed_plan>\n";
+        let hook = input(&root, json!({"last_assistant_message": message}));
+        let sent = Decision::SendBack("Say why".into());
+        let (output, held) = answered("Codex", "stop", hook, sent);
+        assert_eq!(held, "# C");
+        let parsed: Value = serde_json::from_str(&output.unwrap()).unwrap();
+        assert_eq!(parsed["decision"], "block");
+        assert_eq!(parsed["reason"], "Say why");
+    }
+
+    #[test]
+    fn approving_a_codex_plan_lets_its_turn_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let message = "<proposed_plan>\n# C\n</proposed_plan>";
+        let hook = input(&root, json!({"last_assistant_message": message}));
+        let (output, _) = answered("Codex", "stop", hook, Decision::Approve(None));
+        assert_eq!(output, None);
+    }
+
+    #[test]
+    fn an_ordinary_codex_turn_isnt_held() {
+        assert_eq!(proposed_plan("Done, the tests pass."), None);
+        assert_eq!(proposed_plan("<proposed_plan>cut off"), None);
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let _server = start(&root, Arc::default()).unwrap();
+        let hook = input(&root, json!({"last_assistant_message": "All done."}));
+        assert_eq!(handle_for("Codex", "stop", &hook), None);
+    }
+
+    #[test]
+    fn plan_hooks_are_given_time_for_a_person_to_read() {
+        let hooks = |text: &str| serde_json::from_str::<Value>(text).unwrap();
+        let gemini = hooks(include_str!(
+            "../../../integrations/gemini/hooks/hooks.json"
+        ));
+        let before = &gemini["hooks"]["BeforeTool"][0];
+        assert_eq!(before["matcher"], "exit_plan_mode");
+        assert_eq!(
+            before["hooks"][0]["timeout"], 86_400_000,
+            "Gemini counts milliseconds"
+        );
+        let codex = hooks(include_str!("../../../integrations/codex/hooks/hooks.json"));
+        assert_eq!(codex["hooks"]["Stop"][0]["hooks"][0]["timeout"], 86_400);
     }
 
     #[test]

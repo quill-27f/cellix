@@ -429,3 +429,18 @@ CI failed once on `with_nothing_staged_commit_takes_everything`. It was a real r
 background `git status` takes the index lock, so a commit at that moment was refused. Every read now
 sets `GIT_OPTIONAL_LOCKS=0`, which also keeps Cellix out of the way of an agent's own commits, and a
 read started before a change is dropped, so it can't put the old state back.
+
+Finishing the open items. Plans are now held for Codex and Gemini too. Gemini's goes through
+`BeforeTool` on `exit_plan_mode`, and Gemini still asks for its own approval afterwards. Codex has no
+plan tool, so its Stop hook holds a `<proposed_plan>` block: sending back starts another turn, and
+approving leaves implementing it for the user to ask for. Both were tested with hook input built
+from the docs, not a real run, because Codex's hooks need the user's `/hooks` trust and Gemini isn't
+installed. If Codex strips the tags from `last_assistant_message`, its hook just never fires.
+
+A stacked pane's line can be dragged. In a narrow pane the tab in front keeps its name, and the
+others show theirs on hover. Pane tabs share the file tabs' text and close button, and line up with
+them when stacked.
+
+The comment lag still can't be reproduced. The release build answered in 3 to 10 ms on the page and
+about 5 ms in a comment, short or 600 characters long. So `~/.cache/cellix/slow-frames.log` now notes
+any frame over 50 ms with where the time went, timings only, started afresh each run.

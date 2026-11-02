@@ -52,7 +52,7 @@
           {
             "type": "command",
             "command": "cellix hook --agent Codex stop 2>/dev/null || true",
-            "timeout": 10
+            "timeout": 86400
           }
         ]
       }

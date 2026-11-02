@@ -43,6 +43,8 @@ const AGENTS_WIDTH: u16 = 11;
 const PDF_WIDTH: u16 = 8;
 const LOG_WIDTH: u16 = 8;
 const PROBLEMS_WIDTH: u16 = 13;
+/// Where a tab's name starts, as on the file's tabs.
+const TAB_TEXT: f32 = 1.5;
 /// How narrow a session's tab can get, sharing the row with others.
 const SMALLEST_TAB: u16 = 6;
 /// The button that closes the pane.
@@ -939,6 +941,10 @@ pub struct Dock {
     pub comments_tab: bool,
     /// The column tabs stop at, for what stands past them.
     pub tabs_end: Cell<u16>,
+    /// Whether the tabs start flush, under the file's, with no line beside them.
+    pub tabs_flush: Cell<bool>,
+    /// Rows the pane was dragged to, standing under the file.
+    pub height: Option<u16>,
 }
 
 impl Dock {
@@ -1101,22 +1107,73 @@ impl Dock {
         session.name.chars().count() as u16 + TAB_PADDING * 2 + CLOSE_WIDTH
     }
 
-    /// What each tab gets when they can't all have what they'd like, so none falls off the end.
-    fn tab_share(&self, area: Rect) -> Option<u16> {
+    fn tabs_start(&self, area: Rect) -> u16 {
+        area.x + u16::from(!self.tabs_flush.get())
+    }
+
+    /// How wide each tab would like to be, views and then sessions.
+    fn wanted_widths(&self) -> Vec<u16> {
+        let views = self.views().into_iter().map(|view| view.2);
+        views
+            .chain(self.sessions.iter().map(Self::session_width))
+            .collect()
+    }
+
+    /// What each tab gets, views and then sessions. Out of room, the one in front keeps its
+    /// whole name and the rest share what's left, so none falls off the end.
+    fn tab_widths(&self, area: Rect) -> Vec<u16> {
+        let mut widths = self.wanted_widths();
+        let room = self
+            .tabs_end
+            .get()
+            .saturating_sub(self.tabs_start(area) + NEW_WIDTH);
+        if self.tabs_end.get() == 0 || widths.iter().sum::<u16>() <= room {
+            return widths;
+        }
         let views = self.views();
-        let wanted = views.iter().map(|view| view.2).sum::<u16>()
-            + self.sessions.iter().map(Self::session_width).sum::<u16>();
-        let room = self.tabs_end.get().saturating_sub(area.x + 1 + NEW_WIDTH);
-        let count = (views.len() + self.sessions.len()).max(1) as u16;
-        (self.tabs_end.get() > 0 && wanted > room).then(|| (room / count).max(SMALLEST_TAB))
+        let shown = |view: &(Front, &str, u16)| {
+            self.front == view.0 || (view.0 == Front::Agents && self.listing())
+        };
+        let front = views.iter().position(shown).or_else(|| {
+            let session = self.active.filter(|_| self.front == Front::Session)?;
+            Some(views.len() + session)
+        });
+        let kept = front.map_or(0, |index| widths[index]);
+        let others = (widths.len() - usize::from(front.is_some())).max(1) as u16;
+        let each = (room.saturating_sub(kept) / others).max(SMALLEST_TAB);
+        for (index, width) in widths.iter_mut().enumerate() {
+            if Some(index) != front {
+                *width = (*width).min(each);
+            }
+        }
+        widths
+    }
+
+    /// The full name of a tab too narrow to show it, for a tooltip.
+    pub fn cut_name(&self, area: Rect, x: u16) -> Option<String> {
+        let wanted = self.wanted_widths();
+        let widths = self.tab_widths(area);
+        let views = self.views();
+        let names = views
+            .iter()
+            .map(|view| view.1)
+            .chain(self.sessions.iter().map(|s| s.name.as_str()));
+        let mut at = self.tabs_start(area);
+        for ((name, width), full) in names.zip(widths).zip(wanted) {
+            if x >= at && x < at + width {
+                return (width < full).then(|| name.to_string());
+            }
+            at += width;
+        }
+        None
     }
 
     /// Each view's tab, where it stands.
     fn view_tabs(&self, area: Rect) -> Vec<(Front, &'static str, Rect)> {
-        let mut x = area.x + 1;
-        let share = self.tab_share(area);
-        let tabs = self.views().into_iter().map(|(front, name, width)| {
-            let width = share.map_or(width, |each| each.min(width));
+        let mut x = self.tabs_start(area);
+        let widths = self.tab_widths(area);
+        let views = self.views().into_iter().zip(widths);
+        let tabs = views.map(|((front, name, _), width)| {
             let tab = Rect::new(x, area.y, width, 1);
             x += width;
             (front, name, tab)
@@ -1141,7 +1198,7 @@ impl Dock {
             .iter()
             .map(|view| view.2.w)
             .sum::<u16>();
-        area.x + 1 + views
+        self.tabs_start(area) + views
     }
 
     /// Takes a view's tab away, and what it shows.
@@ -1212,12 +1269,11 @@ impl Dock {
     /// Each tab as (start, end) columns.
     fn tabs(&self, area: Rect) -> Vec<(u16, u16)> {
         let mut x = self.first_tab(area);
-        let share = self.tab_share(area);
+        let widths = self.tab_widths(area);
         self.sessions
             .iter()
-            .map(|s| {
-                let full = Self::session_width(s);
-                let width = share.map_or(full, |each| each.min(full));
+            .zip(widths.into_iter().skip(self.views().len()))
+            .map(|(_, width)| {
                 let tab = (x, x + width);
                 x += width;
                 tab
@@ -1270,16 +1326,16 @@ impl Dock {
             }
             let quiet = Style {
                 fg: if on { theme.text.fg } else { theme.gutter.fg },
-                bold: on,
                 ..theme.tab
             };
             let close = tab.right().saturating_sub(CLOSE_WIDTH + 1);
-            if view == Front::Comments && count > 0 {
-                let name = format!("{name} {count}");
-                grid.label(tab.x + 1, area.y, &name, quiet, close);
+            let text = if view == Front::Comments && count > 0 {
+                format!("{name} {count}")
             } else {
-                grid.label(tab.x + 1, area.y, name, quiet, close);
-            }
+                name.to_string()
+            };
+            let at = tab.x as f32 + TAB_TEXT;
+            grid.label_at(at, tab.x + 2, area.y, &text, quiet, close, 100);
             if on || hovered {
                 let plain = Style {
                     bold: false,
@@ -1294,10 +1350,7 @@ impl Dock {
             let tab = Rect::new(start, area.y, end - start, 1);
             let hovered = hover.is_some_and(|h| tab.contains(h.0, h.1));
             let style = if active {
-                Style {
-                    bold: true,
-                    ..theme.text
-                }
+                theme.text
             } else {
                 Style {
                     fg: theme.gutter.fg,
@@ -1323,7 +1376,16 @@ impl Dock {
                 style
             };
             let close = end.saturating_sub(CLOSE_WIDTH + 1);
-            grid.label(start + TAB_PADDING, area.y, &session.name, shown, close);
+            let at = start as f32 + TAB_TEXT;
+            grid.label_at(
+                at,
+                start + TAB_PADDING,
+                area.y,
+                &session.name,
+                shown,
+                close,
+                100,
+            );
             if hovered || active {
                 let quiet = Style {
                     fg: theme.gutter.fg,

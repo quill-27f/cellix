@@ -1,7 +1,7 @@
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use cellix_input::{Event, Key, KeyEvent, Mods, MouseEvent, MouseKind};
@@ -283,6 +283,8 @@ pub fn run(options: Options) -> io::Result<()> {
     let mut display = Display::detect(app.settings.tier.as_deref(), smooth)?;
     let mut backend = display.backend();
     let mut out = io::stdout();
+    let mut slow = crate::slow::Log::start();
+    let mut phases = crate::slow::Phases::default();
     app.set_measure(display.measure());
     // Only the direct tier moves by less than a line, so elsewhere a notch stays short.
     app.wheel_lines = if display.placement == Some(Placement::Direct) {
@@ -327,11 +329,17 @@ pub fn run(options: Options) -> io::Result<()> {
         if redraw {
             let (width, height) = app.size();
             let mut grid = Grid::new(width, height, app.background());
+            let started = Instant::now();
             app.draw(&mut grid);
+            phases.draw = started.elapsed();
+            let started = Instant::now();
             if let (Some((area, rows)), Some(from)) = (app.take_scroll(), &shown) {
                 backend.scroll(from, &grid, area, rows, &mut out)?;
             }
             backend.present(&grid, &mut out)?;
+            phases.present = started.elapsed();
+            slow.note(&phases);
+            phases = crate::slow::Phases::default();
             shown = Some(grid);
             if let Some(text) = app.outgoing_clipboard.take() {
                 let encoded = base64::engine::general_purpose::STANDARD.encode(text);
@@ -354,6 +362,7 @@ pub fn run(options: Options) -> io::Result<()> {
         } else {
             POLL
         })? {
+            let started = Instant::now();
             // Drain everything queued, so a fast wheel doesn't redraw per event.
             loop {
                 let event = ct::read()?;
@@ -377,13 +386,18 @@ pub fn run(options: Options) -> io::Result<()> {
                     break;
                 }
             }
+            phases.events += started.elapsed();
             redraw = true;
         } else if last_tick.elapsed() >= TICK {
-            last_tick = std::time::Instant::now();
+            let started = Instant::now();
+            last_tick = started;
             app.handle(Event::Tick);
+            phases.events += started.elapsed();
             redraw = true;
         }
+        let started = Instant::now();
         redraw |= app.poll();
+        phases.poll += started.elapsed();
         if let Some(server) = &server {
             while let Ok(request) = server.requests.try_recv() {
                 app.serve(request);
