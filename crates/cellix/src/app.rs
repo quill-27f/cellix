@@ -25,12 +25,13 @@ use cellix_review::{
 use cellix_agent::hook::comments_message;
 use cellix_agent::ide::{IdeCall, IdeServer};
 use cellix_agent::{Decision, Request, SharedComments, TestRun};
+use cellix_doc::latex::ENGINES;
 use cellix_doc::table::{Align, Edit as TableEdit};
 
 use serde_json::{Value, json};
 
 use crate::agents::{Agents, Hit as AgentHit};
-use crate::dock::{Dock, Session, TabHit};
+use crate::dock::{Dock, Front, Session, TabHit};
 use crate::editor::{Editor, Marks};
 use crate::explorer::Explorer;
 use crate::find::Find;
@@ -38,7 +39,8 @@ use crate::menu::{Action as MenuAction, Item as MenuItem, Menu};
 use crate::neovim::{self, Neovim};
 use crate::palette::{COMMANDS, Input, Item, Palette, input, popup, raised};
 use crate::panels::{MathPanel, SYMBOLS, TablePicker};
-use crate::rendered;
+use crate::pdfview::PdfView;
+use crate::rendered::{self, Dialect};
 use crate::review::{Hit, Review};
 use crate::search::{self, Field, Search};
 use crate::settings::{SERVERS, Settings, default_server, formatter};
@@ -305,6 +307,14 @@ fn ran_well(command: &[String], arg: &str) -> bool {
         .is_ok_and(|s| s.success())
 }
 
+/// How a build of a paper went.
+struct Build {
+    file: PathBuf,
+    worked: bool,
+    said: String,
+    took: std::time::Duration,
+}
+
 /// All application state. It has no terminal: tests send events and read the grid.
 pub struct App {
     pub workspace: Workspace,
@@ -375,6 +385,10 @@ pub struct App {
     plan: Option<PendingPlan>,
     /// The side pane, where agents and shells run.
     dock: Dock,
+    /// A build under way.
+    build: Option<std::sync::mpsc::Receiver<Build>>,
+    /// A file made only for a build, to remove once it's done.
+    remove_after_build: Option<PathBuf>,
     /// The comments on this project, kept with it.
     threads: Vec<Thread>,
     /// The file couldn't be read, so saving would lose what's in it.
@@ -482,6 +496,8 @@ impl App {
             told_selection: None,
             plan: None,
             dock: Dock::default(),
+            build: None,
+            remove_after_build: None,
             threads,
             threads_broken,
             tests: Vec::new(),
@@ -561,6 +577,10 @@ impl App {
     }
 
     pub fn open(&mut self, path: &Path) -> io::Result<()> {
+        if path.extension().is_some_and(|e| e == "pdf") {
+            self.show_pdf(path);
+            return Ok(());
+        }
         self.settings_page = None;
         if let Some(i) = self
             .editors
@@ -823,7 +843,8 @@ impl App {
         let terminal = self.dock.poll(&self.theme);
         let searched = self.search.poll();
         let reviewed = self.review.as_mut().is_some_and(Review::poll);
-        let installed = self.poll_install() | self.poll_browser() | self.poll_offer();
+        let installed =
+            self.poll_install() | self.poll_browser() | self.poll_offer() | self.poll_build();
         let mut events = Vec::new();
         for client in self.servers.values() {
             events.extend(client.events.try_iter());
@@ -2410,6 +2431,13 @@ impl App {
                 self.branch_changed(&name, result);
             }
             Some(Item::NewBranch) => self.ask("New branch", PromptAction::NewBranch),
+            Some(Item::Citation(key, _)) => {
+                let area = self.focused_area();
+                if let Some(editor) = self.editor_mut() {
+                    editor.prepare_edit(area);
+                    editor.insert_text(&format!("\\cite{{{key}}}"));
+                }
+            }
             Some(Item::Gap) | None => {}
         }
     }
@@ -2460,10 +2488,9 @@ impl App {
         let result = match &prompt.action {
             PromptAction::Image => {
                 let area = self.focused_area();
-                let image = format!("![]({name})");
                 if let Some(editor) = self.editor_mut() {
                     editor.prepare_edit(area);
-                    editor.insert_block(&image, 2);
+                    editor.insert_image(name);
                 }
                 Ok(())
             }
@@ -2605,6 +2632,8 @@ impl App {
                 }
             }
             Command::ShowAgents => self.toggle_dock(),
+            Command::BuildPdf => self.build_pdf(),
+            Command::ExportPdf => self.export_pdf(),
             Command::FocusAgent => {
                 let wanted = !self.dock.focused;
                 self.dock.open |= wanted;
@@ -2869,7 +2898,7 @@ impl App {
                 self.dock.sessions.push(session);
                 self.dock.active = Some(self.dock.sessions.len() - 1);
                 self.dock.focused = true;
-                self.dock.comments = false;
+                self.dock.front = Front::Session;
             }
             Err(e) => self.say(format!("Could not start {name}: {e}")),
         }
@@ -2880,6 +2909,9 @@ impl App {
         if let Some(screen) = self.dock_screen() {
             for session in &mut self.dock.sessions {
                 session.resize((screen.w, screen.h));
+            }
+            if let (Some(view), Some(cell)) = (&mut self.dock.pdf, self.measure.cell_pixels()) {
+                view.fit(screen.w, cell);
             }
         }
     }
@@ -2930,16 +2962,20 @@ impl App {
                     Some(TabHit::Tab(index)) => {
                         self.dock.active = Some(index);
                         self.dock.focused = true;
-                        self.dock.comments = false;
+                        self.dock.front = Front::Session;
                     }
                     Some(TabHit::Close(index)) => self.dock.close(index),
                     Some(TabHit::New) => {
                         self.dock.active = None;
                         self.dock.focused = false;
-                        self.dock.comments = false;
+                        self.dock.front = Front::Session;
                     }
                     Some(TabHit::Comments) => {
-                        self.dock.comments = !self.dock.comments;
+                        self.dock.front = Front::Comments;
+                        self.dock.focused = false;
+                    }
+                    Some(TabHit::Pdf) => {
+                        self.dock.front = Front::Pdf;
                         self.dock.focused = false;
                     }
                     None => {}
@@ -2951,7 +2987,18 @@ impl App {
             self.drag = Drag::Dock;
             return true;
         }
-        if self.dock.comments {
+        if self.dock.front == Front::Pdf {
+            let rows = match mouse.kind {
+                MouseKind::ScrollUp => -3.0,
+                MouseKind::ScrollDown => 3.0,
+                _ => 0.0,
+            };
+            if let Some(view) = &mut self.dock.pdf {
+                view.scroll(rows);
+            }
+            return true;
+        }
+        if self.dock.front == Front::Comments {
             let screen = self.dock_screen().unwrap_or(area);
             match mouse.kind {
                 MouseKind::Left => {
@@ -3039,7 +3086,11 @@ impl App {
             Bounds::cells(area.x as f32, area.y as f32, 0.0, area.h as f32),
             theme.border,
         );
-        if self.dock.comments {
+        if let (Front::Pdf, Some(view)) = (self.dock.front, &self.dock.pdf) {
+            view.draw(grid, screen, self.measure.in_cells(), theme);
+            return;
+        }
+        if self.dock.front == Front::Comments {
             let look = (&*self.measure, theme);
             let top = self.dock.comments_top;
             threads::draw(grid, screen, &threads, top, self.hover, look);
@@ -3315,7 +3366,7 @@ impl App {
             });
             self.save_threads();
             self.dock.open = true;
-            self.dock.comments = true;
+            self.dock.front = Front::Comments;
             self.dock.focused = false;
             return;
         }
@@ -3373,7 +3424,7 @@ impl App {
                         self.say("Sent to the agent. Its answer lands here");
                     }
                     _ => {
-                        self.dock.comments = false;
+                        self.dock.front = Front::Session;
                         self.dock.active = None;
                         self.say("Start an agent here first");
                     }
@@ -4088,7 +4139,7 @@ impl App {
                 run("Format Document", Command::FormatDocument)
                     .when(server || language.is_some_and(|l| formatter(l).is_some())),
             ]);
-            if language == Some("Markdown") {
+            if matches!(language, Some("Markdown" | "LaTeX")) {
                 items.push(run("Show Page", Command::MarkdownPreview));
             }
             items.extend(edit);
@@ -4690,7 +4741,7 @@ impl App {
             Overlay::None => self
                 .toolbar_row()
                 .filter(|_| y == 1)
-                .and_then(|row| toolbar::hit(row, x))
+                .and_then(|row| toolbar::hit(row, x, self.page_dialect()))
                 .map(|button| {
                     let name = button.name;
                     let middle = button.x as f32 + button.width as f32 / 2.0;
@@ -5101,7 +5152,15 @@ impl App {
         grid.fill(Rect::new(main.x, 1, main.w, 1), style);
         if let Some(row) = self.toolbar_row() {
             let (paragraph, active) = self.editors[self.active()].caret_formats();
-            toolbar::draw(grid, row, (paragraph, &active), self.hover, &self.theme);
+            let dialect = self.page_dialect();
+            toolbar::draw(
+                grid,
+                row,
+                (paragraph, &active),
+                dialect,
+                self.hover,
+                &self.theme,
+            );
             return;
         }
         grid.label_at(
@@ -5125,12 +5184,227 @@ impl App {
     }
 
     fn click_toolbar(&mut self, x: u16) -> bool {
-        let button = self.toolbar_row().and_then(|row| toolbar::hit(row, x));
+        let dialect = self.page_dialect();
+        let button = self
+            .toolbar_row()
+            .and_then(|row| toolbar::hit(row, x, dialect));
         let Some(button) = button else {
             return false;
         };
         self.use_tool(button.tool, button.x);
         true
+    }
+
+    fn page_dialect(&self) -> Dialect {
+        let editor = self.editors.get(self.active());
+        editor.map(Editor::dialect).unwrap_or_default()
+    }
+
+    /// The keys in the project's bibliographies, to pick one to cite.
+    fn show_citations(&mut self) {
+        let root = self.workspace.root().to_path_buf();
+        let folders = [root.clone(), root.join("references"), root.join("bib")];
+        let mut items = Vec::new();
+        for folder in folders {
+            let Ok(entries) = std::fs::read_dir(folder) else {
+                continue;
+            };
+            for path in entries.flatten().map(|e| e.path()) {
+                if path.extension().is_some_and(|e| e == "bib")
+                    && let Ok(text) = std::fs::read_to_string(&path)
+                {
+                    let name = self.relative(&path);
+                    let keys = cellix_doc::latex::bib_keys(&text);
+                    items.extend(keys.into_iter().map(|k| Item::Citation(k, name.clone())));
+                }
+            }
+        }
+        if items.is_empty() {
+            self.say("No .bib file in this project yet");
+            return;
+        }
+        self.overlay = Overlay::Palette(Palette::asking(items, "Cite"));
+    }
+
+    /// What builds papers here, ready to take a file.
+    fn latex_engine(&self) -> Option<Vec<String>> {
+        if let Some(engine) = &self.settings.latex_engine {
+            return Some(engine.clone());
+        }
+        let var = |name: &str| std::env::var(name).ok();
+        let found = ENGINES
+            .iter()
+            .find(|engine| crate::integrations::on_path(engine[0], var))?;
+        Some(found.iter().map(ToString::to_string).collect())
+    }
+
+    /// Runs a LaTeX file through the engine on a thread, and shows the PDF when it's done.
+    fn start_build(&mut self, file: PathBuf) {
+        if self.build.is_some() {
+            self.say("A build is already running");
+            return;
+        }
+        let Some(mut engine) = self.latex_engine() else {
+            self.note_missing("LaTeX");
+            self.not_now.retain(|l| l != "LaTeX");
+            self.say("Building needs a LaTeX engine");
+            return;
+        };
+        let (done, result) = std::sync::mpsc::channel();
+        let name = file.file_name().map(PathBuf::from).unwrap_or_default();
+        let folder = file.parent().map(Path::to_path_buf).unwrap_or_default();
+        engine.push(name.display().to_string());
+        self.say(format!("Building {}…", name.display()));
+        let started = std::time::Instant::now();
+        std::thread::spawn(move || {
+            let output = std::process::Command::new(&engine[0])
+                .args(&engine[1..])
+                .current_dir(&folder)
+                .stdin(std::process::Stdio::null())
+                .output();
+            let (worked, said) = match output {
+                Ok(done) => (
+                    done.status.success(),
+                    format!(
+                        "{}{}",
+                        String::from_utf8_lossy(&done.stdout),
+                        String::from_utf8_lossy(&done.stderr)
+                    ),
+                ),
+                Err(e) => (false, format!("error: {e}")),
+            };
+            let _ = done.send(Build {
+                file,
+                worked,
+                said,
+                took: started.elapsed(),
+            });
+        });
+        self.build = Some(result);
+    }
+
+    fn build_pdf(&mut self) {
+        let Some(editor) = self.editors.get(self.active()) else {
+            return;
+        };
+        let Some(path) = editor.buffer.path().map(Path::to_path_buf) else {
+            self.say("Save the file first");
+            return;
+        };
+        if editor.dialect() != Dialect::Latex {
+            self.say("Build works on LaTeX files. Export to PDF works on Markdown");
+            return;
+        }
+        let root = cellix_doc::latex::root_of(&path, &editor.buffer.text());
+        self.save();
+        self.start_build(root);
+    }
+
+    /// Markdown goes through LaTeX, so its math comes out as well as a paper's.
+    fn export_pdf(&mut self) {
+        let Some(editor) = self.editors.get(self.active()) else {
+            return;
+        };
+        let Some(path) = editor.buffer.path().map(Path::to_path_buf) else {
+            self.say("Save the file first");
+            return;
+        };
+        if editor.dialect() == Dialect::Latex {
+            self.build_pdf();
+            return;
+        }
+        let tex = cellix_doc::latex::from_markdown(&editor.buffer.text());
+        let out = path.with_extension("tex");
+        if out.exists() {
+            self.say(format!(
+                "{} is already there, so nothing was written",
+                self.relative(&out)
+            ));
+            return;
+        }
+        match std::fs::write(&out, tex) {
+            Ok(()) => {
+                self.remove_after_build = Some(out.clone());
+                self.start_build(out);
+            }
+            Err(e) => self.say(format!("Could not write the LaTeX file: {e}")),
+        }
+    }
+
+    /// Takes in a finished build: the PDF beside the source, or its errors on their lines.
+    fn poll_build(&mut self) -> bool {
+        let finished = self
+            .build
+            .as_ref()
+            .and_then(|result| result.try_recv().ok());
+        let Some(build) = finished else {
+            return false;
+        };
+        self.build = None;
+        if let Some(path) = self.remove_after_build.take() {
+            let _ = std::fs::remove_file(path);
+        }
+        let folder = build
+            .file
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        let problems = cellix_doc::latex::problems(&build.said, &folder);
+        let mut by_file: HashMap<PathBuf, Vec<Diagnostic>> = HashMap::new();
+        for problem in &problems {
+            by_file
+                .entry(problem.file.clone())
+                .or_default()
+                .push(Diagnostic {
+                    line: problem.line.saturating_sub(1),
+                    column: 0,
+                    message: problem.message.clone(),
+                    severity: 1,
+                });
+        }
+        self.diagnostics
+            .retain(|p, _| p.extension().is_none_or(|e| e != "tex"));
+        self.diagnostics.extend(by_file);
+        let pdf = build.file.with_extension("pdf");
+        if build.worked && pdf.exists() {
+            self.show_pdf(&pdf);
+            self.say(format!("Built in {:.1} s", build.took.as_secs_f32()));
+        } else if let Some(first) = problems.first() {
+            self.go_to_problem(first);
+        } else {
+            let last = build.said.lines().rfind(|l| !l.trim().is_empty());
+            self.say(format!(
+                "The build failed: {}",
+                last.unwrap_or("no output").trim()
+            ));
+        }
+        true
+    }
+
+    fn go_to_problem(&mut self, problem: &cellix_doc::latex::Problem) {
+        let name = self.relative(&problem.file);
+        if self.open(&problem.file).is_ok() {
+            let area = self.focused_area();
+            if let Some(editor) = self.editor_mut() {
+                editor.go_to_line(problem.line, area);
+            }
+        }
+        self.say(format!("{name}:{}: {}", problem.line, problem.message));
+    }
+
+    /// Shows a PDF in the side pane, keeping the place if it's the one already there.
+    fn show_pdf(&mut self, path: &Path) {
+        self.dock.open = true;
+        self.dock.front = Front::Pdf;
+        self.dock.focused = false;
+        let same = self.dock.pdf.as_ref().is_some_and(|p| p.path == path);
+        if !same {
+            self.dock.pdf = Some(PdfView::new(path));
+        }
+        let width = self.dock_screen().map_or(40, |a| a.w);
+        if let (Some(view), Some(cell)) = (&mut self.dock.pdf, self.measure.cell_pixels()) {
+            view.load(width, cell);
+        }
     }
 
     fn use_tool(&mut self, tool: Tool, x: u16) {
@@ -5161,13 +5435,18 @@ impl App {
                 });
             }
             Tool::Comment => self.run(Command::AddComment),
+            Tool::Cite => self.show_citations(),
+            Tool::Build => self.run(Command::BuildPdf),
             Tool::Export => {
-                let items = vec![MenuItem::run("Open in Browser", Command::OpenInBrowser)];
+                let items = vec![
+                    MenuItem::run("Export to PDF", Command::ExportPdf),
+                    MenuItem::run("Open in Browser", Command::OpenInBrowser),
+                ];
                 self.show_menu(below, items);
             }
             Tool::More => {
                 let row = self.toolbar_row().unwrap_or_default();
-                let items = toolbar::overflow(row)
+                let items = toolbar::overflow(row, self.page_dialect())
                     .into_iter()
                     .map(|(name, tool)| MenuItem::new(name, MenuAction::Tool(tool)))
                     .collect();
@@ -7240,7 +7519,7 @@ mod tests {
         app.run(Command::Move(cellix_input::Direction::WordRight, true));
         let grid = screen(&app);
         let row = app.toolbar_row().unwrap();
-        let first = toolbar::layout(row)[1].x;
+        let first = toolbar::layout(row, Dialect::Markdown)[1].x;
         assert_eq!(grid.row_text(1).chars().nth(first as usize + 1), Some('B'));
         app.handle(mouse(MouseKind::Left, first + 1, 1));
         assert_eq!(app.active_text().as_deref(), Some("**one** two\n"));
@@ -7255,7 +7534,10 @@ mod tests {
 
     fn click_tool(app: &mut App, name: &str) {
         let row = app.toolbar_row().unwrap();
-        let button = toolbar::layout(row).into_iter().find(|b| b.name == name);
+        let dialect = app.page_dialect();
+        let button = toolbar::layout(row, dialect)
+            .into_iter()
+            .find(|b| b.name == name);
         let button = button.unwrap_or_else(|| panic!("no {name}"));
         app.handle(mouse(MouseKind::Left, button.x + 1, 1));
     }
@@ -7437,12 +7719,12 @@ mod tests {
         let (_dir, mut app) = page_app("The cache goes first.\n");
         comment_on(&mut app, "Why first");
         session(&mut app, "echo ready; read line; echo got:$line; sleep 9");
-        app.dock.comments = true;
+        app.dock.front = Front::Comments;
         let id = app.threads[0].id;
         app.thread_hit(ThreadHit::Ask(id));
-        app.dock.comments = false;
+        app.dock.front = Front::Session;
         shows(&mut app, "cellix reply 1");
-        app.dock.comments = true;
+        app.dock.front = Front::Comments;
         app.serve(Request::Reply {
             id,
             author: "Claude Code".into(),
@@ -7483,6 +7765,134 @@ mod tests {
         let (x, y) = find(&screen(&app), "Ask agent");
         app.handle(mouse(MouseKind::Left, x, y));
         assert!(screen(&app).text().contains("Start an agent here first"));
+    }
+
+    fn paper_app(text: &str) -> (TempDir, App) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("paper.tex");
+        fs::write(&path, text).unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (170, 40));
+        // Stands in for a LaTeX engine: writes a real PDF, or fails as tectonic does.
+        let sample = dir.path().join("sample.pdf");
+        fs::write(&sample, cellix_doc::pdf::sample()).unwrap();
+        let script = format!(
+            "if grep -q bad \"$1\"; then echo 'error: paper.tex:2: Undefined control sequence'; exit 1; fi; cp {} \"${{1%.tex}}.pdf\"",
+            sample.display()
+        );
+        app.settings.latex_engine = Some(vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            script,
+            "engine".to_string(),
+        ]);
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        app.open(&path).unwrap();
+        (dir, app)
+    }
+
+    fn built(app: &mut App) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.build.is_some() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the build never ended"
+            );
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn a_paper_builds_into_a_pdf() {
+        let (dir, mut app) = paper_app("\\begin{document}\nHello\n\\end{document}\n");
+        click_tool(&mut app, "Build PDF");
+        built(&mut app);
+        assert!(dir.path().join("paper.pdf").exists());
+        assert_eq!(app.dock.front, Front::Pdf);
+        assert!(app.dock.pdf.is_some());
+    }
+
+    #[test]
+    fn a_failed_build_lands_on_its_line() {
+        let (_dir, mut app) = paper_app("\\begin{document}\nbad\n\\end{document}\n");
+        app.run(Command::BuildPdf);
+        built(&mut app);
+        assert!(screen(&app).text().contains("Undefined control sequence"));
+        assert_eq!(app.cursor_line().unwrap().1, 2);
+        assert!(app.dock.pdf.is_none());
+    }
+
+    #[test]
+    fn a_pdf_shows_beside_its_source() {
+        let (dir, mut app) = paper_app("\\begin{document}\nHello\n\\end{document}\n");
+        let sample = dir.path().join("sample.pdf");
+        app.open(&sample).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.dock.pdf.as_ref().unwrap().pages_ready() == 0 {
+            assert!(std::time::Instant::now() < deadline, "no page");
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let pictures = screen(&app)
+            .paint
+            .iter()
+            .filter(|p| matches!(p, cellix_render::Paint::Image { .. }))
+            .count();
+        assert_eq!(pictures, 1);
+        assert_eq!(app.editors.len(), 1, "the source stays open");
+    }
+
+    #[test]
+    fn a_paper_formats_in_latex() {
+        for (tool, want) in [
+            ("Bold", "\\textbf{word} tail\n"),
+            ("Italic", "\\emph{word} tail\n"),
+            ("Code", "\\texttt{word} tail\n"),
+            (
+                "Bullet List",
+                "\\begin{itemize}\n  \\item word tail\n\\end{itemize}\n",
+            ),
+        ] {
+            let (_dir, mut app) = paper_app("word tail\n");
+            click_tool(&mut app, tool);
+            assert_eq!(app.active_text().as_deref(), Some(want), "{tool}");
+        }
+        let (_dir, mut app) = paper_app("word tail\n");
+        app.run(Command::Format(Format::Level(1)));
+        assert_eq!(app.active_text().as_deref(), Some("\\section{word tail}\n"));
+        app.run(Command::Format(Format::Level(2)));
+        assert_eq!(
+            app.active_text().as_deref(),
+            Some("\\subsection{word tail}\n")
+        );
+        app.run(Command::Format(Format::Level(0)));
+        assert_eq!(app.active_text().as_deref(), Some("word tail\n"));
+    }
+
+    #[test]
+    fn citations_come_from_the_bibliography() {
+        let (dir, mut app) = paper_app("See\n");
+        fs::write(dir.path().join("refs.bib"), "@article{knuth84,\n}\n").unwrap();
+        app.run(Command::Move(cellix_input::Direction::LineEnd, false));
+        click_tool(&mut app, "Cite");
+        assert!(screen(&app).text().contains("knuth84"));
+        enter(&mut app);
+        assert_eq!(app.active_text().as_deref(), Some("See\\cite{knuth84}\n"));
+    }
+
+    #[test]
+    fn markdown_exports_to_pdf() {
+        let (dir, mut app) = paper_app("x\n");
+        let path = dir.path().join("note.md");
+        fs::write(&path, "# Note\n\nWith $x^2$.\n").unwrap();
+        app.open(&path).unwrap();
+        app.run(Command::ExportPdf);
+        built(&mut app);
+        assert!(dir.path().join("note.pdf").exists());
+        assert!(
+            !dir.path().join("note.tex").exists(),
+            "the middle step is gone"
+        );
     }
 
     #[test]

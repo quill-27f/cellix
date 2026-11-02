@@ -10,6 +10,8 @@ use std::sync::Arc;
 use cellix_lang::{Registry, Token};
 use cellix_render::{Bitmap, Font, INTERFACE_SIZE, Measure, Pixels};
 
+mod tex;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tone {
     Text,
@@ -322,9 +324,29 @@ pub struct Library {
     images: HashMap<(PathBuf, u32), Option<Figure>>,
 }
 
+/// What a page is written in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Dialect {
+    #[default]
+    Markdown,
+    Latex,
+}
+
+impl Dialect {
+    /// The dialect of a file, if it opens as a page.
+    pub fn of(path: &Path) -> Option<Self> {
+        match path.extension()?.to_str()? {
+            "md" | "markdown" | "mdx" => Some(Self::Markdown),
+            "tex" | "ltx" => Some(Self::Latex),
+            _ => None,
+        }
+    }
+}
+
 /// What a page needs beyond its text.
 #[derive(Default)]
 pub struct Extras<'a> {
+    pub dialect: Dialect,
     /// The span showing as source, because the caret is in it.
     pub open: Option<(usize, usize)>,
     /// Where relative image paths start.
@@ -455,7 +477,7 @@ fn inline(chars: &[char], offset: usize, look: Look, context: &Context, out: &mu
             link(rest, at, look, context, out)
         } else if rest[0] == '$' && (i == 0 || chars[i - 1] != '\\') {
             math_end(rest).map(|end| {
-                inline_formula(&rest[..=end], at, context, out);
+                formula_span(&rest[..=end], 1, at, context, out);
                 end + 1
             })
         } else {
@@ -493,12 +515,13 @@ fn link(
     Some(end + 1)
 }
 
-/// `$...$`: a picture of the formula, or its source when the caret is in it, when it won't
-/// typeset, or on the cell tier.
-fn inline_formula(span: &[char], at: usize, context: &Context, out: &mut Vec<Glyph>) {
+/// A formula in running text, with delimiters `edge` chars long: a picture of it, or its
+/// source when the caret is in it, when it won't typeset, or on the cell tier.
+fn formula_span(span: &[char], edge: usize, at: usize, context: &Context, out: &mut Vec<Glyph>) {
     let range = (at, at + span.len());
     context.extras.spans.borrow_mut().push(range);
-    let inner: String = span[1..span.len() - 1].iter().collect();
+    let body = &span[edge..span.len() - edge];
+    let inner: String = body.iter().collect();
     let code = Look {
         tone: Tone::Code,
         font: Font {
@@ -514,8 +537,8 @@ fn inline_formula(span: &[char], at: usize, context: &Context, out: &mut Vec<Gly
         return;
     }
     let Some(figure) = context.formula(&inner, false) else {
-        for (n, c) in span[1..span.len() - 1].iter().enumerate() {
-            out.push(glyph(*c, Some(at + 1 + n), code));
+        for (n, c) in body.iter().enumerate() {
+            out.push(glyph(*c, Some(at + edge + n), code));
         }
         return;
     };
@@ -608,8 +631,6 @@ fn is_table_rule(line: &str) -> bool {
 
 /// Lays out a table with its pipes and rule hidden: real columns, with padding.
 fn table(lines: &[(usize, &str)], first: usize, context: &Context, rows: &mut Vec<Row>) {
-    /// Space between a cell's edge and its text, in cells.
-    const PADDING: f32 = 1.0;
     let mut parsed: Vec<Vec<Vec<Glyph>>> = Vec::new();
     let mut starts: Vec<Vec<usize>> = Vec::new();
     for (index, (offset, line)) in lines.iter().enumerate() {
@@ -637,6 +658,27 @@ fn table(lines: &[(usize, &str)], first: usize, context: &Context, rows: &mut Ve
                 .collect(),
         );
     }
+    let places: Vec<(usize, usize)> = (0..parsed.len())
+        .map(|index| {
+            let source = if index == 0 { 0 } else { index + 1 };
+            (
+                first + source,
+                lines[source].0 + lines[source].1.chars().count(),
+            )
+        })
+        .collect();
+    place_table(parsed, starts, &places, rows);
+}
+
+/// Sets a table's cells in columns. Each row has its line and where that line ends.
+fn place_table(
+    parsed: Vec<Vec<Vec<Glyph>>>,
+    starts: Vec<Vec<usize>>,
+    places: &[(usize, usize)],
+    rows: &mut Vec<Row>,
+) {
+    /// Space between a cell's edge and its text, in cells.
+    const PADDING: f32 = 1.0;
     let count = parsed.iter().map(Vec::len).max().unwrap_or(0);
     let mut columns = vec![0.0f32];
     for c in 0..count {
@@ -648,8 +690,7 @@ fn table(lines: &[(usize, &str)], first: usize, context: &Context, rows: &mut Ve
         columns.push(columns[c] + widest.ceil() + PADDING * 2.0);
     }
     for (index, cells) in parsed.iter().enumerate() {
-        let source = if index == 0 { 0 } else { index + 1 };
-        let (offset, text) = lines[source];
+        let (line, line_end) = places[index];
         let mut glyphs = Vec::new();
         for (c, left) in columns.iter().take(count).enumerate() {
             if c > 0 {
@@ -669,7 +710,7 @@ fn table(lines: &[(usize, &str)], first: usize, context: &Context, rows: &mut Ve
             .flatten()
             .filter_map(|g| g.at)
             .max()
-            .map_or(offset + text.chars().count(), |at| at + 1);
+            .map_or(line_end, |at| at + 1);
         rows.push(Row {
             glyphs,
             cells: starts[index].clone(),
@@ -678,7 +719,7 @@ fn table(lines: &[(usize, &str)], first: usize, context: &Context, rows: &mut Ve
                 columns: columns.clone(),
                 header: index == 0,
             }),
-            ..Row::new(first + source, end)
+            ..Row::new(line, end)
         });
     }
 }
@@ -910,6 +951,10 @@ pub fn layout_with(
     let mut rows = Vec::new();
     if proportional {
         rows.push(spacer(0, 0));
+    }
+    if extras.dialect == Dialect::Latex {
+        tex::layout(&lines, width, &context, &mut rows);
+        return rows;
     }
     let mut i = 0;
     // Front matter shows as dimmed text, with its delimiters hidden.

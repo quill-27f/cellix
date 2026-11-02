@@ -28,6 +28,7 @@ alacritty_terminal = "0.26"
 portable-pty = "0.9"
 
 [dev-dependencies]
+cellix-doc = { path = "../cellix-doc", features = ["fixtures"] }
 tempfile = "3"
 vt100 = "0.16"
 

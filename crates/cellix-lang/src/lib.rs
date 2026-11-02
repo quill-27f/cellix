@@ -443,12 +443,15 @@ enum Lines {
     Docker,
     Ini,
     Ignore,
+    Latex,
 }
 
 fn lines_for(path: &Path) -> Option<Lines> {
     let name = path.file_name()?.to_str()?;
     let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-    if name.starts_with(".env") || extension == "env" {
+    if matches!(extension, "tex" | "ltx" | "bib") {
+        Some(Lines::Latex)
+    } else if name.starts_with(".env") || extension == "env" {
         Some(Lines::Env)
     } else if name == "Dockerfile" || name.starts_with("Dockerfile.") || extension == "dockerfile" {
         Some(Lines::Docker)
@@ -570,6 +573,7 @@ impl Registry {
             Some(Lines::Docker) => Some("Dockerfile"),
             Some(Lines::Ini) => Some("INI"),
             Some(Lines::Ignore) => Some("Ignore"),
+            Some(Lines::Latex) => Some("LaTeX"),
             None => Some(SPECS[Self::spec_for(path)?].name),
         }
     }

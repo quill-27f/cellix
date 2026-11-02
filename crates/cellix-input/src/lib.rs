@@ -151,6 +151,10 @@ pub enum Command {
     OpenInBrowser,
     /// Moves the keyboard between the file and the side pane.
     FocusAgent,
+    /// Builds the paper in view, and shows the PDF.
+    BuildPdf,
+    /// Writes the document as a PDF beside it.
+    ExportPdf,
     ToggleComment,
     MoveLineUp,
     MoveLineDown,

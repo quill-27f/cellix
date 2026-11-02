@@ -25,6 +25,8 @@ pub struct Settings {
     pub language_servers: HashMap<String, Vec<String>>,
     /// Languages whose support the user said not to offer again.
     pub declined_languages: Vec<String>,
+    /// What builds a paper, taking the file last. Without it, the first engine found.
+    pub latex_engine: Option<Vec<String>>,
 }
 
 fn read(path: &Path) -> Option<Settings> {
@@ -41,6 +43,7 @@ impl Settings {
         self.browser = other.browser.or(self.browser.take());
         self.language_servers.extend(other.language_servers);
         self.declined_languages.extend(other.declined_languages);
+        self.latex_engine = other.latex_engine.or(self.latex_engine.take());
     }
 
     /// The user's own settings file.
@@ -97,7 +100,7 @@ const fn server(
 }
 
 /// The popular servers. A language without one still has colour and word completion.
-pub const SERVERS: [Server; 26] = [
+pub const SERVERS: [Server; 27] = [
     server(
         &["Rust"],
         &["rust-analyzer"],
@@ -191,6 +194,7 @@ pub const SERVERS: [Server; 26] = [
         &["docker-langserver", "--stdio"],
         "npm install -g dockerfile-language-server-nodejs",
     ),
+    server(&["LaTeX"], &["texlab"], "brew install texlab tectonic"),
     server(
         &["Markdown"],
         &["marksman", "server"],

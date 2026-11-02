@@ -786,28 +786,28 @@
   {
     "id": "tex-page",
     "milestone": 8,
-    "passes": false,
+    "passes": true,
     "test": "latex_opens_as_an_editable_page",
     "title": "LaTeX opens as an editable page"
   },
   {
     "id": "tex-build",
     "milestone": 8,
-    "passes": false,
+    "passes": true,
     "test": "a_paper_builds_into_a_pdf",
     "title": "A paper builds into a PDF with errors on their lines"
   },
   {
     "id": "pdf-view",
     "milestone": 8,
-    "passes": false,
+    "passes": true,
     "test": "a_pdf_shows_beside_its_source",
     "title": "A PDF shows beside its source"
   },
   {
     "id": "export-pdf",
     "milestone": 8,
-    "passes": false,
+    "passes": true,
     "test": "markdown_exports_to_pdf",
     "title": "Markdown exports to PDF"
   }

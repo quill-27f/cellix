@@ -29,6 +29,8 @@ pub enum Item {
     NewBranch,
     /// A blank row with a line through it, between groups.
     Gap,
+    /// A key to cite, and where it comes from.
+    Citation(String, String),
 }
 
 impl Item {
@@ -36,7 +38,7 @@ impl Item {
         match self {
             Self::File(_, label) => label,
             Self::Command(label, _) => label,
-            Self::Branch(name, _) => name,
+            Self::Branch(name, _) | Self::Citation(name, _) => name,
             Self::NewBranch => "New branch…",
             Self::Gap => "",
         }
@@ -47,7 +49,7 @@ impl Item {
         match self {
             Self::File(..) | Self::NewBranch | Self::Gap => None,
             Self::Command(_, command) => keys_of(*command),
-            Self::Branch(_, when) => Some(when),
+            Self::Branch(_, when) | Self::Citation(_, when) => Some(when),
         }
     }
 }
@@ -81,7 +83,7 @@ pub fn keys_of(command: Command) -> Option<&'static str> {
     })
 }
 
-pub const COMMANDS: [(&str, Command); 51] = [
+pub const COMMANDS: [(&str, Command); 53] = [
     ("Save", Command::Save),
     ("Undo", Command::Undo),
     ("Redo", Command::Redo),
@@ -100,6 +102,8 @@ pub const COMMANDS: [(&str, Command); 51] = [
     ("Toggle Markdown Source", Command::MarkdownPreview),
     ("Open in Browser", Command::OpenInBrowser),
     ("Focus Agent Pane", Command::FocusAgent),
+    ("Build PDF", Command::BuildPdf),
+    ("Export to PDF", Command::ExportPdf),
     ("Find in File", Command::FindInFile),
     ("Toggle Comment", Command::ToggleComment),
     ("Duplicate Line", Command::DuplicateLine),

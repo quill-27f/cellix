@@ -5,6 +5,7 @@
 use cellix_input::Format;
 use cellix_render::{Bounds, Font, Grid, Icon, Paint, Rect, Rgb, Style, units};
 
+use crate::rendered::Dialect;
 use crate::theme::Theme;
 
 /// A button's width, with air either side of its mark.
@@ -27,6 +28,8 @@ pub enum Tool {
     Comment,
     Export,
     More,
+    Cite,
+    Build,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -124,6 +127,8 @@ const BUTTONS: [Button; 14] = [
 ];
 
 const EXPORT: Button = icon(Tool::Export, "Export", Icon::Export, false);
+const CITE: Button = icon(Tool::Cite, "Cite", Icon::Cite, false);
+const BUILD: Button = icon(Tool::Build, "Build PDF", Icon::Play, false);
 const MORE: Button = icon(Tool::More, "More", Icon::More, false);
 
 /// A button on screen.
@@ -144,8 +149,19 @@ fn placed(button: &Button, x: u16) -> Placed {
     }
 }
 
+/// The tools for a kind of document. A paper cites where a note has tasks.
+fn buttons(dialect: Dialect) -> impl Iterator<Item = &'static Button> {
+    BUTTONS.iter().map(move |button| {
+        if dialect == Dialect::Latex && button.tool == Tool::Format(Format::Task) {
+            &CITE
+        } else {
+            button
+        }
+    })
+}
+
 /// The buttons that fit in `row`, styles first and Export at the far end.
-pub fn layout(row: Rect) -> Vec<Placed> {
+pub fn layout(row: Rect, dialect: Dialect) -> Vec<Placed> {
     let mut out = vec![Placed {
         tool: Tool::Styles,
         name: "Paragraph Style",
@@ -153,10 +169,12 @@ pub fn layout(row: Rect) -> Vec<Placed> {
         width: STYLES_WIDTH,
     }];
     let export = row.right().saturating_sub(WIDTH + 1);
+    let build = dialect == Dialect::Latex;
+    let edge = export.saturating_sub(if build { WIDTH } else { 0 });
     let mut end = row.x + 1 + STYLES_WIDTH + GAP;
-    let last = export.saturating_sub(WIDTH + GAP);
+    let last = edge.saturating_sub(WIDTH + GAP);
     let mut hidden = false;
-    for button in &BUTTONS {
+    for button in buttons(dialect) {
         let x = end + if button.gap { GAP } else { 0 };
         if hidden || x + WIDTH > last {
             hidden = true;
@@ -168,22 +186,24 @@ pub fn layout(row: Rect) -> Vec<Placed> {
     if hidden {
         out.push(placed(&MORE, end + GAP));
     }
+    if build {
+        out.push(placed(&BUILD, edge));
+    }
     out.push(placed(&EXPORT, export));
     out
 }
 
 /// The buttons that didn't fit, for the menu at the end.
-pub fn overflow(row: Rect) -> Vec<(&'static str, Tool)> {
-    let shown = layout(row);
-    BUTTONS
-        .iter()
+pub fn overflow(row: Rect, dialect: Dialect) -> Vec<(&'static str, Tool)> {
+    let shown = layout(row, dialect);
+    buttons(dialect)
         .filter(|b| !shown.iter().any(|p| p.tool == b.tool))
         .map(|b| (b.name, b.tool))
         .collect()
 }
 
-pub fn hit(row: Rect, x: u16) -> Option<Placed> {
-    layout(row)
+pub fn hit(row: Rect, x: u16, dialect: Dialect) -> Option<Placed> {
+    layout(row, dialect)
         .into_iter()
         .find(|p| x >= p.x && x < p.x + p.width)
 }
@@ -269,6 +289,8 @@ fn fallback(icon: Icon) -> &'static str {
         Icon::Comment => "◆",
         Icon::Export => "↓",
         Icon::More => "…",
+        Icon::Cite => "[",
+        Icon::Play => "▶",
         _ => "?",
     }
 }
@@ -279,11 +301,12 @@ pub fn draw(
     grid: &mut Grid,
     row: Rect,
     (paragraph, active): (&str, &[Format]),
+    dialect: Dialect,
     hover: Option<(u16, u16)>,
     theme: &Theme,
 ) {
     let base = theme.breadcrumb;
-    let all = layout(row);
+    let all = layout(row, dialect);
     for button in &all {
         let cell = Rect::new(button.x, row.y, button.width, 1);
         let on_it = hover.is_some_and(|h| cell.contains(h.0, h.1));
@@ -318,9 +341,8 @@ pub fn draw(
             });
             continue;
         }
-        let face = BUTTONS
-            .iter()
-            .chain([&EXPORT, &MORE])
+        let face = buttons(dialect)
+            .chain([&EXPORT, &MORE, &BUILD])
             .find(|b| b.tool == button.tool)
             .map(|b| b.face);
         if let Some(face) = face {
@@ -343,9 +365,9 @@ mod tests {
     #[test]
     fn a_wide_bar_shows_everything() {
         let row = Rect::new(10, 1, 100, 1);
-        let buttons = layout(row);
+        let buttons = layout(row, Dialect::Markdown);
         assert_eq!(buttons.len(), BUTTONS.len() + 2);
-        assert!(overflow(row).is_empty());
+        assert!(overflow(row, Dialect::Markdown).is_empty());
         assert_eq!(buttons.last().unwrap().tool, Tool::Export);
         assert_eq!(
             buttons.last().unwrap().x + WIDTH + 1,
@@ -357,9 +379,9 @@ mod tests {
     #[test]
     fn what_doesnt_fit_moves_to_the_menu() {
         let row = Rect::new(0, 1, 40, 1);
-        let buttons = layout(row);
+        let buttons = layout(row, Dialect::Markdown);
         assert!(buttons.iter().any(|b| b.tool == Tool::More));
-        let hidden = overflow(row);
+        let hidden = overflow(row, Dialect::Markdown);
         assert_eq!(buttons.len() - 3 + hidden.len(), BUTTONS.len());
         assert!(hidden.iter().any(|(name, _)| *name == "Comment"));
         for pair in buttons.windows(2) {
@@ -370,8 +392,18 @@ mod tests {
     #[test]
     fn a_click_finds_its_button() {
         let row = Rect::new(0, 1, 100, 1);
-        let bold = layout(row)[1];
-        assert_eq!(hit(row, bold.x + 1).map(|p| p.name), Some("Bold"));
-        assert_eq!(hit(row, 60), None);
+        let bold = layout(row, Dialect::Markdown)[1];
+        let found = hit(row, bold.x + 1, Dialect::Markdown);
+        assert_eq!(found.map(|p| p.name), Some("Bold"));
+        assert_eq!(hit(row, 60, Dialect::Markdown), None);
+    }
+
+    #[test]
+    fn a_paper_cites_and_builds() {
+        let row = Rect::new(0, 1, 100, 1);
+        let tools: Vec<Tool> = layout(row, Dialect::Latex).iter().map(|b| b.tool).collect();
+        assert!(tools.contains(&Tool::Cite));
+        assert!(tools.contains(&Tool::Build));
+        assert!(!tools.contains(&Tool::Format(Format::Task)));
     }
 }

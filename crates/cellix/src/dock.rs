@@ -18,6 +18,7 @@ use cellix_render::{Bounds, Grid, Rect, Rgb, Style};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use unicode_width::UnicodeWidthStr;
 
+use crate::pdfview::PdfView;
 use crate::theme::Theme;
 
 /// Columns the file beside the pane always keeps.
@@ -31,6 +32,7 @@ const TAB_PADDING: u16 = 2;
 const CLOSE_WIDTH: u16 = 2;
 /// The Comments tab at the far end.
 const COMMENTS_WIDTH: u16 = 13;
+const PDF_WIDTH: u16 = 5;
 
 /// Light and dark versions of the sixteen colours, chosen to read on the sheet.
 const DARK: [Rgb; 16] = [
@@ -546,6 +548,16 @@ pub enum TabHit {
     Close(usize),
     New,
     Comments,
+    Pdf,
+}
+
+/// What the pane shows besides its sessions.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Front {
+    #[default]
+    Session,
+    Comments,
+    Pdf,
 }
 
 /// The side pane: its tabs, and whether it's open and has the keyboard.
@@ -558,8 +570,10 @@ pub struct Dock {
     pub active: Option<usize>,
     /// Set by dragging the pane's edge.
     pub width: Option<u16>,
-    /// The comments stand in front of any session.
-    pub comments: bool,
+    /// What stands in front of any session.
+    pub front: Front,
+    /// The PDF being worked on.
+    pub pdf: Option<PdfView>,
     /// How far the comments have scrolled.
     pub comments_top: usize,
 }
@@ -594,7 +608,7 @@ impl Dock {
     }
 
     pub fn poll(&mut self, theme: &Theme) -> bool {
-        let mut changed = false;
+        let mut changed = self.pdf.as_mut().is_some_and(PdfView::poll);
         for session in &mut self.sessions {
             changed |= session.poll(theme);
         }
@@ -632,6 +646,9 @@ impl Dock {
         if x + COMMENTS_WIDTH >= area.right() {
             return Some(TabHit::Comments);
         }
+        if self.pdf.is_some() && x + COMMENTS_WIDTH + PDF_WIDTH >= area.right() {
+            return Some(TabHit::Pdf);
+        }
         let tabs = self.tabs(area);
         for (index, (start, end)) in tabs.iter().enumerate() {
             if x >= *start && x < *end {
@@ -663,7 +680,24 @@ impl Dock {
             COMMENTS_WIDTH,
             1,
         );
-        if self.comments {
+        if self.pdf.is_some() {
+            let tab = Rect::new(comments.x.saturating_sub(PDF_WIDTH), area.y, PDF_WIDTH, 1);
+            let on = self.front == Front::Pdf;
+            if on {
+                grid.fill(tab, theme.sidebar);
+            } else if hover.is_some_and(|h| tab.contains(h.0, h.1)) {
+                let bounds = Bounds::inset(tab, 0.1, 0.1);
+                grid.panel(bounds, 16, Some(theme.row_hover), None);
+            }
+            let quiet = Style {
+                fg: if on { theme.text.fg } else { theme.gutter.fg },
+                bold: on,
+                ..theme.tab
+            };
+            grid.label(tab.x + 1, area.y, "PDF", quiet, comments.x);
+        }
+        let on_comments = self.front == Front::Comments;
+        if on_comments {
             grid.fill(comments, theme.sidebar);
         } else if hover.is_some_and(|h| comments.contains(h.0, h.1)) {
             grid.panel(
@@ -679,18 +713,18 @@ impl Dock {
             "Comments".to_string()
         };
         let quiet = Style {
-            fg: if self.comments {
+            fg: if on_comments {
                 theme.text.fg
             } else {
                 theme.gutter.fg
             },
-            bold: self.comments,
+            bold: on_comments,
             ..theme.tab
         };
         grid.label(comments.x + 1, area.y, &name, quiet, area.right());
         for (index, (start, end)) in self.tabs(area).into_iter().enumerate() {
             let session = &self.sessions[index];
-            let active = self.active == Some(index) && !self.comments;
+            let active = self.active == Some(index) && self.front == Front::Session;
             let tab = Rect::new(start, area.y, end - start, 1);
             let hovered = hover.is_some_and(|h| tab.contains(h.0, h.1));
             let style = if active {
@@ -744,7 +778,7 @@ impl Dock {
             );
         }
         let style = Style {
-            fg: if (self.active.is_none() && !self.comments) || on_it {
+            fg: if (self.active.is_none() && self.front == Front::Session) || on_it {
                 theme.text.fg
             } else {
                 theme.gutter.fg

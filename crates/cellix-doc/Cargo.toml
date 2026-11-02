@@ -7,9 +7,13 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+hayro = "0.8"
 latex-rust = { version = "3.0.1", features = ["png"] }
 png = "0.18.1"
 pulldown-cmark = { version = "0.13.6", default-features = false, features = ["html"] }
+
+[features]
+fixtures = []
 
 [lints]
 workspace = true

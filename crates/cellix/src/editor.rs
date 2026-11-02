@@ -14,7 +14,7 @@ use cellix_review::LineChange;
 use unicode_width::UnicodeWidthChar;
 
 use crate::panels::Symbol;
-use crate::rendered::{self, Extras, Figure, Glyph, Intent, Library, Row, Tone};
+use crate::rendered::{self, Dialect, Extras, Figure, Glyph, Intent, Library, Row, Tone};
 use crate::theme::Theme;
 
 const TAB_WIDTH: usize = 4;
@@ -119,8 +119,7 @@ fn display_width(c: char, column: usize) -> usize {
 
 impl Editor {
     pub fn new(buffer: Buffer, measure: Rc<dyn Measure>, registry: Rc<Registry>) -> Self {
-        let extension = buffer.path().and_then(Path::extension);
-        let is_markdown = extension.is_some_and(|e| e == "md" || e == "markdown");
+        let is_page = buffer.path().is_some_and(|p| Dialect::of(p).is_some());
         Self {
             buffer,
             selections: Selections::default(),
@@ -135,7 +134,7 @@ impl Editor {
             worker: OnceCell::new(),
             asked: Cell::new(u64::MAX),
             spans_bytes: Cell::new(0),
-            rendered: is_markdown,
+            rendered: is_page,
             minimap_on: true,
             page: RefCell::new(None),
             library: RefCell::default(),
@@ -370,10 +369,16 @@ impl Editor {
             .clamp(1, MAX_PAGE_WIDTH) as usize
     }
 
+    pub fn dialect(&self) -> Dialect {
+        let path = self.buffer.path();
+        path.and_then(Dialect::of).unwrap_or_default()
+    }
+
     /// Lays the page out, with `open` showing as source.
     fn lay_out(&self, text: &str, width: usize, open: Option<(usize, usize)>) -> LaidOut {
         let folder = self.buffer.path().and_then(Path::parent);
         let extras = Extras {
+            dialect: self.dialect(),
             open,
             folder,
             library: Some(&self.library),
@@ -1216,8 +1221,131 @@ impl Editor {
         self.selections.set_single(Selection::cursor(at));
     }
 
+    /// Wraps the word or selection in a command, or takes it back out.
+    fn toggle_command(&mut self, open: &str) {
+        let primary = self.selections.primary();
+        let (start, end) = if primary.is_empty() {
+            self.buffer.word_at(primary.head)
+        } else {
+            (primary.start(), primary.end())
+        };
+        let size = open.chars().count();
+        let rope = self.buffer.rope();
+        let inside = start >= size
+            && rope.slice(start - size..start) == open
+            && rope.get_char(end) == Some('}');
+        let inner = rope.slice(start..end).to_string();
+        let length = end - start;
+        let selected = if inside {
+            let (from, to) = (start - size, end + 1);
+            self.buffer
+                .replace_range(&mut self.selections, from, to, &inner);
+            from
+        } else {
+            let text = format!("{open}{inner}}}");
+            self.buffer
+                .replace_range(&mut self.selections, start, end, &text);
+            start + size
+        };
+        self.selections.set_single(Selection {
+            anchor: selected,
+            head: selected + length,
+            goal: None,
+        });
+    }
+
+    /// The caret's line and its text, with any section command taken off.
+    fn line_as_text(&self) -> (usize, String) {
+        let rope = self.buffer.rope();
+        let line = rope.char_to_line(self.selections.primary().head);
+        let text = self.line_text(line);
+        let plain = text
+            .split_once('{')
+            .filter(|_| text.trim_start().starts_with("\\"))
+            .and_then(|(_, rest)| rest.trim_end().strip_suffix('}'))
+            .unwrap_or(&text)
+            .to_string();
+        (line, plain)
+    }
+
+    fn set_section(&mut self, level: u8) {
+        let (line, plain) = self.line_as_text();
+        let start = self.buffer.rope().line_to_char(line);
+        let end = start + self.line_text(line).chars().count();
+        let text = match level {
+            1 => format!("\\section{{{plain}}}"),
+            2 => format!("\\subsection{{{plain}}}"),
+            3 => format!("\\subsubsection{{{plain}}}"),
+            _ => plain,
+        };
+        self.buffer
+            .replace_range(&mut self.selections, start, end, &text);
+        let at = start + text.chars().count();
+        self.selections.set_single(Selection::cursor(at));
+    }
+
+    /// Puts the selected lines in an environment, each one an `\\item` if it's a list.
+    fn wrap_environment(&mut self, name: &str, items: bool) {
+        let primary = self.selections.primary();
+        let rope = self.buffer.rope();
+        let first = rope.char_to_line(primary.start());
+        let last = rope.char_to_line(primary.end());
+        let start = rope.line_to_char(first);
+        let end = rope.line_to_char(last) + self.line_text(last).chars().count();
+        let mut text = format!("\\begin{{{name}}}\n");
+        for line in first..=last {
+            let lead = if items { "  \\item " } else { "  " };
+            text.push_str(&format!("{lead}{}\n", self.line_text(line).trim()));
+        }
+        text.push_str(&format!("\\end{{{name}}}"));
+        self.buffer
+            .replace_range(&mut self.selections, start, end, &text);
+        let at = start + text.chars().count() - name.len() - 7;
+        self.selections.set_single(Selection::cursor(at));
+    }
+
+    fn format_latex(&mut self, format: Format) {
+        match format {
+            Format::Bold => self.toggle_command("\\textbf{"),
+            Format::Italic => self.toggle_command("\\emph{"),
+            Format::Code => self.toggle_command("\\texttt{"),
+            Format::Strikethrough => self.toggle_command("\\sout{"),
+            Format::Link => {
+                let primary = self.selections.primary();
+                let (start, end) = if primary.is_empty() {
+                    self.buffer.word_at(primary.head)
+                } else {
+                    (primary.start(), primary.end())
+                };
+                let text = self.buffer.rope().slice(start..end).to_string();
+                let link = format!("\\href{{https://}}{{{text}}}");
+                self.buffer
+                    .replace_range(&mut self.selections, start, end, &link);
+                let at = start + "\\href{".len();
+                self.selections.set_single(Selection {
+                    anchor: at,
+                    head: at + "https://".len(),
+                    goal: None,
+                });
+            }
+            Format::Bullet | Format::Task => self.wrap_environment("itemize", true),
+            Format::Numbered => self.wrap_environment("enumerate", true),
+            Format::Quote => self.wrap_environment("quote", false),
+            Format::CodeBlock => self.wrap_environment("verbatim", false),
+            Format::Level(level) => self.set_section(level),
+            Format::Heading => self.set_section(1),
+            Format::PlainText => self.set_section(0),
+            Format::Rule => self.insert_block("\\bigskip\\hrule\\bigskip", 0),
+            Format::Table => self.insert_table(3, 3),
+        }
+    }
+
     pub fn format(&mut self, format: Format, area: Rect) {
         self.prepare_edit(area);
+        if self.dialect() == Dialect::Latex {
+            self.format_latex(format);
+            return;
+        }
         match format {
             Format::Bold => self.toggle_inline("**"),
             Format::Italic => self.toggle_inline("*"),
@@ -1266,6 +1394,24 @@ impl Editor {
         self.selections.set_single(Selection::cursor(spot));
     }
 
+    /// Adds an image: a figure with a caption in a paper, a plain image in a note.
+    pub fn insert_image(&mut self, path: &str) {
+        if self.dialect() == Dialect::Latex {
+            let figure = format!(
+                "\\begin{{figure}}[h]\n  \\centering\n  \\includegraphics[width=\\linewidth]{{{path}}}\n  \\caption{{}}\n\\end{{figure}}"
+            );
+            let caret = figure.find("\\caption{}").unwrap_or(0) + "\\caption{".len();
+            self.insert_block(&figure, caret);
+        } else {
+            self.insert_block(&format!("![]({path})"), 2);
+        }
+    }
+
+    /// Types text where the caret is.
+    pub fn insert_text(&mut self, text: &str) {
+        self.buffer.replace(&mut self.selections, text);
+    }
+
     /// Whether the caret is inside a formula showing as source.
     pub fn in_formula(&self) -> bool {
         self.page
@@ -1277,9 +1423,14 @@ impl Editor {
     /// Inserts a symbol or template. Inside a formula it goes in where the caret is, and
     /// anywhere else it starts a new formula.
     pub fn insert_math(&mut self, symbol: &Symbol) {
+        let display = if self.dialect() == Dialect::Latex {
+            ("\\begin{equation}\n", "\n\\end{equation}")
+        } else {
+            ("$$\n", "\n$$")
+        };
         let (open, close, block) = match (self.in_formula(), symbol.block) {
             (true, _) => ("", "", false),
-            (false, true) => ("$$\n", "\n$$", true),
+            (false, true) => (display.0, display.1, true),
             (false, false) => ("$", "$", false),
         };
         let chars = symbol.text.chars().count();
@@ -1425,6 +1576,12 @@ impl Editor {
 
     /// Adds a new table below this line, with its first heading selected to type over.
     pub fn insert_table(&mut self, rows: usize, columns: usize) {
+        if self.dialect() == Dialect::Latex {
+            let table = cellix_doc::latex::new_table(rows, columns);
+            let first = table.find("Column 1").unwrap_or(0);
+            self.insert_block(&table, first);
+            return;
+        }
         let table = cellix_doc::table::new_table(rows, columns);
         self.insert_block(&table, 2);
         let head = self.selections.primary().head;

@@ -12,6 +12,7 @@ mod neovim;
 mod palette;
 pub mod pane;
 mod panels;
+mod pdfview;
 pub mod plugin;
 mod rendered;
 mod review;
