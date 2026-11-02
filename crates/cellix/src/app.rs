@@ -52,6 +52,10 @@ use crate::threads::{self, Draft, Hit as ThreadHit};
 use crate::toolbar::{self, Tool};
 
 const ACTIVITY_WIDTH: u16 = 5;
+/// The list an empty window shows, its width, the rows above it, and the height it needs.
+const WELCOME_WIDTH: u16 = 44;
+const WELCOME_LEAD_ROWS: u16 = 4;
+const WELCOME_MIN_HEIGHT: u16 = 16;
 /// Activity bar buttons, with what each one runs.
 const ACTIVITY: [(Icon, Command); 6] = [
     (Icon::Files, Command::ToggleSidebar),
@@ -89,6 +93,8 @@ const OFFER_WIDTH: u16 = 46;
 const OFFER_HEIGHT: u16 = 4;
 const OFFER_BUTTON_ROW: u16 = 3;
 const OFFER_BUTTONS: [&str; 3] = ["Install", "Not now", "Never"];
+/// Columns at the end of the pane's title that close it.
+const PANE_CLOSE_REACH: u16 = 3;
 /// A tooltip's height in rows, and the size of its text.
 const TOOLTIP_HEIGHT: f32 = 1.22;
 const TOOLTIP_SIZE: u8 = 92;
@@ -501,6 +507,8 @@ pub struct App {
     clipboard_image: Vec<String>,
     /// The answer to quitting was to leave things running.
     keep_running: bool,
+    /// Whether how the two sides work together has been said yet.
+    pane_explained: bool,
     /// What runs sessions so they can outlive Cellix: Cellix itself, away from tests.
     host_program: Option<PathBuf>,
     /// Checks spelling and grammar, started when a page first needs it.
@@ -546,6 +554,7 @@ impl App {
             review: None,
             clipboard_image: clipboard_image_command(),
             keep_running: false,
+            pane_explained: false,
             host_program: std::env::current_exe().ok().filter(|_| !cfg!(test)),
             spell: None,
             spell_on: cfg!(not(test)) && settings.spell_check != Some(false),
@@ -2953,6 +2962,20 @@ impl App {
                     self.say("No plan is waiting for review");
                 }
             }
+            Command::ShowGuide => {
+                let folder = self.built_folder.with_file_name("guide");
+                let opened = crate::guide::write(&folder).and_then(|path| self.open(&path));
+                if let Err(e) = opened {
+                    self.say(format!("Could not open the guide: {e}"));
+                }
+            }
+            Command::NewDocument => {
+                let root = self.workspace.root().to_path_buf();
+                self.ask(
+                    "New document, such as notes.md",
+                    PromptAction::NewFile(root),
+                );
+            }
             Command::ToggleSpelling => {
                 self.spell_on = !self.spell_on;
                 let on = self.spell_on;
@@ -3313,6 +3336,15 @@ impl App {
         self.start_session(name, &launch, &env, &root);
     }
 
+    /// The first time something starts, says how the two sides work together.
+    fn explain_pane(&mut self, name: &str) {
+        if !std::mem::replace(&mut self.pane_explained, true) {
+            self.say(format!(
+                "{name} is on the right. Click it to type there, or press Ctrl+` to switch"
+            ));
+        }
+    }
+
     fn start_session(&mut self, name: &str, argv: &[String], env: &[String], folder: &Path) {
         self.dock.open = true;
         let size = self.dock_screen().map_or((80, 24), |a| (a.w, a.h));
@@ -3344,6 +3376,9 @@ impl App {
                 self.dock.active = Some(self.dock.sessions.len() - 1);
                 self.dock.focused = true;
                 self.dock.front = Front::Session;
+                if name != BROWSER {
+                    self.explain_pane(name);
+                }
             }
             Err(e) => self.say(format!("Could not start {name}: {e}")),
         }
@@ -4611,6 +4646,7 @@ impl App {
                     self.click_search(area, x, y);
                 }
             }
+            MouseKind::Left if !in_sidebar && self.click_welcome(x, y) => {}
             MouseKind::Left if in_sidebar && self.sidebar_view == SidebarView::Outline => {
                 self.click_outline(y);
             }
@@ -5547,7 +5583,7 @@ impl App {
                         .draw(grid, area, self.hover, &*self.measure, theme);
                 }
                 SidebarView::Outline => {
-                    let here = self.outline_here();
+                    let here = (self.outline_here(), !self.editors.is_empty());
                     self.outline.draw(grid, area, here, self.hover, theme);
                 }
             }
@@ -5650,6 +5686,14 @@ impl App {
                     let left = area.right() as f32 - wide(name);
                     (*name, left, area.y as f32 + 2.5)
                 })
+            }
+            Overlay::None
+                if self.dock_area().is_some_and(|a| {
+                    y == a.y && x + PANE_CLOSE_REACH >= a.right() && x < a.right()
+                }) =>
+            {
+                let name = "Close pane. What runs here keeps running.";
+                Some((name, self.size.0 as f32 - wide(name) - 0.5, 1.2))
             }
             Overlay::None if rail.w > 0 && rail.contains(x, y) => {
                 let icon = (0..ACTIVITY.len()).find(|i| {
@@ -6587,49 +6631,127 @@ impl App {
         }
     }
 
-    fn draw_welcome(&self, grid: &mut Grid) {
-        const ROWS: [(&str, &str); 4] = [
-            ("Ctrl+P", "Open a file"),
-            ("Ctrl+Shift+P", "Commands"),
-            ("Ctrl+G", "Review changes"),
-            ("Ctrl+Shift+F", "Search the project"),
-        ];
-        /// Columns from a shortcut to what it does.
-        const KEYS_WIDTH: u16 = 10;
-        const WIDTH: u16 = 24;
+    /// What to do next with nothing open, which depends on what's already going.
+    fn welcome_lead(&self) -> String {
+        let running = self.dock.sessions.iter().find(|s| s.agent());
+        match running {
+            Some(agent) => format!(
+                "{} is running. Click a file on the left to work on it together.",
+                agent.name
+            ),
+            None if self.dock.session().is_some() => {
+                "Click a file on the left to open it beside the terminal.".to_string()
+            }
+            None => "Open a file, or start an agent to work beside it.".to_string(),
+        }
+    }
+
+    /// The actions of an empty window, as a row of the screen and what each does.
+    fn welcome_rows(&self) -> Vec<(u16, &'static str, Option<&'static str>, Command)> {
         let main = self.main_area();
-        if main.h < 12 {
+        if main.h < WELCOME_MIN_HEIGHT {
+            return Vec::new();
+        }
+        let top = main.y + main.h / 4 + WELCOME_LEAD_ROWS;
+        let has_agent = self.dock.sessions.iter().any(Session::agent);
+        let mut rows = vec![
+            ("Open a File", Some("Ctrl+P"), Command::QuickOpen),
+            ("New Document", None, Command::NewDocument),
+        ];
+        if !has_agent {
+            rows.push(("Start an Agent", None, Command::ShowAgents));
+        }
+        rows.extend([
+            ("Review Changes", Some("Ctrl+G"), Command::OpenDiff),
+            (
+                "Search the Project",
+                Some("Ctrl+Shift+F"),
+                Command::FindInProject,
+            ),
+            (
+                "All Commands",
+                Some("Ctrl+Shift+P"),
+                Command::CommandPalette,
+            ),
+            ("Getting Started", None, Command::ShowGuide),
+        ]);
+        rows.iter()
+            .enumerate()
+            .map(|(i, (name, keys, command))| (top + i as u16, *name, *keys, *command))
+            .collect()
+    }
+
+    /// Where the actions of an empty window stand.
+    fn welcome_box(&self) -> Rect {
+        let main = self.main_area();
+        let width = WELCOME_WIDTH.min(main.w.saturating_sub(4));
+        Rect::new(
+            main.x + main.w.saturating_sub(width) / 2,
+            main.y,
+            width,
+            main.h,
+        )
+    }
+
+    /// Runs the action of an empty window under a click.
+    fn click_welcome(&mut self, x: u16, y: u16) -> bool {
+        if !self.editors.is_empty() || !self.welcome_box().contains(x, y) {
+            return false;
+        }
+        let rows = self.welcome_rows();
+        let Some((.., command)) = rows.iter().find(|row| row.0 == y) else {
+            return false;
+        };
+        self.run(*command);
+        true
+    }
+
+    fn draw_welcome(&self, grid: &mut Grid) {
+        let main = self.main_area();
+        if main.h < WELCOME_MIN_HEIGHT {
             return;
         }
         let theme = &self.theme;
-        let y = main.y + main.h / 3;
-        let x = main.x + main.w.saturating_sub(WIDTH) / 2;
+        let area = self.welcome_box();
+        let y = main.y + main.h / 4;
+        let x = area.x;
         let title = Style {
             bold: true,
             ..theme.text
         };
-        grid.label_at(x as f32, x, y, "Cellix", title, main.right(), 180);
-        let keys = Style {
-            fg: theme.text.fg,
-            ..theme.text
-        };
-        let description = Style {
+        grid.label_at(x as f32, x, y, "Cellix", title, area.right(), 180);
+        let quiet = Style {
             fg: theme.gutter.fg,
             ..theme.text
         };
-        for (i, (key, what)) in ROWS.iter().enumerate() {
-            let line = y + 2 + i as u16;
-            let second = x + KEYS_WIDTH;
-            grid.label_at(x as f32, x, line, key, keys, second, 95);
-            grid.label_at(
-                second as f32,
-                second,
-                line,
-                what,
-                description,
-                main.right(),
-                95,
-            );
+        grid.label_at(
+            x as f32,
+            x,
+            y + 2,
+            &self.welcome_lead(),
+            quiet,
+            main.right(),
+            95,
+        );
+        for (line, name, keys, _) in self.welcome_rows() {
+            let row = Rect::new(area.x, line, area.w, 1);
+            if self.hover.is_some_and(|h| row.contains(h.0, h.1)) {
+                let wash = Bounds::cells(
+                    area.x as f32 - 0.6,
+                    line as f32 + 0.04,
+                    area.w as f32 + 1.2,
+                    0.92,
+                );
+                grid.panel(wash, 16, Some(theme.row_hover), None);
+            }
+            let link = Style {
+                fg: theme.accent,
+                ..theme.text
+            };
+            grid.label_at(x as f32, x, line, name, link, area.right(), 95);
+            if let Some(keys) = keys {
+                grid.label_right(area.right(), line, keys, quiet, 90);
+            }
         }
     }
 
@@ -8645,7 +8767,7 @@ mod tests {
         app.serve(Request::Agent(agent(Working, "Working")));
         assert!(!screen(&app).text().contains("needs you"));
         app.serve(Request::Agent(agent(Ended, "Ended")));
-        assert!(screen(&app).text().contains("No agents running"));
+        assert!(screen(&app).text().contains("HOW IT WORKS"));
     }
 
     #[test]
@@ -9857,6 +9979,76 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_window_says_what_to_do_and_its_actions_are_clickable() {
+        let (_dir, mut app) = project();
+        let text = screen(&app).text();
+        assert!(
+            text.contains("Start an Agent") && text.contains("Getting Started"),
+            "{text}"
+        );
+        let rows = app.welcome_rows();
+        let (y, ..) = rows.iter().find(|row| row.1 == "Start an Agent").unwrap();
+        let x = app.welcome_box().x + 1;
+        app.handle(mouse(MouseKind::Left, x, *y));
+        assert!(app.dock.open, "the row does what it says");
+    }
+
+    #[test]
+    fn the_agents_panel_explains_itself_before_anything_runs() {
+        let (_dir, mut app) = project();
+        app.run(Command::ShowAgents);
+        let text = screen(&app).text();
+        for want in [
+            "HOW IT WORKS",
+            "Start an agent below",
+            "Click a file on the left",
+        ] {
+            assert!(text.contains(want), "{want}: {text}");
+        }
+        assert!(text.contains("Terminal"), "{text}");
+    }
+
+    #[test]
+    fn with_an_agent_running_and_nothing_open_the_next_step_is_named() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("alpha.txt"), "x\n").unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        let script = "printf ready; sleep 30";
+        let argv = ["sh".to_string(), "-c".to_string(), script.to_string()];
+        let root = app.workspace.root().to_path_buf();
+        app.start_session("Claude Code", &argv, &[], &root);
+        shows(&mut app, "ready");
+        assert!(app.welcome_lead().contains("Claude Code is running"));
+        assert!(app.welcome_lead().contains("Click a file on the left"));
+        let names: Vec<_> = app.welcome_rows().iter().map(|row| row.1).collect();
+        assert!(!names.contains(&"Start an Agent"), "{names:?}");
+    }
+
+    #[test]
+    fn the_first_start_says_how_the_sides_work_together() {
+        let (_dir, mut app) = project();
+        let root = app.workspace.root().to_path_buf();
+        app.start_session("Stand-in", &["sh".to_string()], &[], &root);
+        assert!(screen(&app).text().contains("Ctrl+`"));
+    }
+
+    #[test]
+    fn the_guide_opens_as_a_page() {
+        let (dir, mut app) = project();
+        app.built_folder = dir.path().join("figures");
+        app.run(Command::ShowGuide);
+        assert!(app.editors[0].rendered);
+        assert!(app.active_text().unwrap().contains("Work beside an agent"));
+    }
+
+    #[test]
+    fn a_new_document_starts_from_the_empty_window() {
+        let (_dir, mut app) = project();
+        app.run(Command::NewDocument);
+        assert!(screen(&app).text().contains("New document"));
+    }
+
+    #[test]
     fn a_page_counts_words() {
         let (_dir, app) = page_app("one two three\n");
         assert!(screen(&app).text().contains("3 words"));
@@ -9942,11 +10134,7 @@ mod tests {
         let (x, y) = find(&screen(&app), "Resolve");
         app.handle(mouse(MouseKind::Left, x, y));
         assert!(app.threads[0].resolved);
-        assert!(
-            screen(&app)
-                .text()
-                .contains("Select text and press Comment")
-        );
+        assert!(screen(&app).text().contains("No comments yet"));
     }
 
     #[test]
@@ -11610,7 +11798,7 @@ while True:
         let (_dir, mut app) = project();
         app.run(Command::ShowAgents);
         let text = screen(&app).text();
-        assert!(text.contains("No agents running"), "{text}");
+        assert!(text.contains("HOW IT WORKS"), "{text}");
     }
 
     #[test]
@@ -11699,7 +11887,8 @@ while True:
 
     #[test]
     fn icons_say_what_they_are() {
-        let (_dir, mut app) = project();
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
         app.handle(mouse(MouseKind::Move, 2, 4));
         assert!(screen(&app).text().contains("Search"), "the rail's names");
         app.handle(mouse(MouseKind::Move, 40, 12));

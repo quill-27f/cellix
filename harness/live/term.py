@@ -152,14 +152,15 @@ class Screen:
             del self.placements[key]
 
     def picture(self):
-        width, height = COLS * CW, ROWS * CH
+        # The whole window: Ghostty lets an image run over its right and bottom padding.
+        width, height = COLS * CW + PAD_X * 2, ROWS * CH + PAD_Y * 2
         canvas = bytearray(BG * (width * height))
         for (image, _), p in sorted(self.placements.items(), key=lambda i: (i[1]["z"], i[1]["order"])):
             if image not in self.images:
                 continue
             iw, ih, rgb = self.images[image]
             sw, sh = p["sw"] or iw, p["sh"] or ih
-            left, top = p["col"] * CW, p["row"] * CH + p["y_off"]
+            left, top = PAD_X + p["col"] * CW, PAD_Y + p["row"] * CH + p["y_off"]
             for line in range(sh):
                 y = top + line
                 if not 0 <= y < height:
@@ -171,18 +172,14 @@ class Screen:
 
 
 def png(path, width, height, rgb):
-    outer_w, outer_h = width + PAD_X * 2, height + PAD_Y * 2
-    side, band = BG * PAD_X, BG * outer_w
-    rows = [band] * PAD_Y
-    rows += [side + rgb[y * width * 3:(y + 1) * width * 3] + side for y in range(height)]
-    rows += [band] * PAD_Y
+    rows = [rgb[y * width * 3:(y + 1) * width * 3] for y in range(height)]
     raw = b"".join(b"\0" + r for r in rows)
 
     def chunk(tag, data):
         body = tag + data
         return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
 
-    header = struct.pack(">IIBBBBB", outer_w, outer_h, 8, 2, 0, 0, 0)
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
     with open(path, "wb") as f:
         f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header))
         f.write(chunk(b"IDAT", zlib.compress(raw, 3)) + chunk(b"IEND", b""))

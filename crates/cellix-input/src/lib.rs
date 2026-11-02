@@ -178,6 +178,10 @@ pub enum Command {
     CloseDock,
     /// Shows the document's headings in the sidebar.
     ShowOutline,
+    /// Opens the guide to getting started.
+    ShowGuide,
+    /// Starts a new document.
+    NewDocument,
     /// Keeps typing in this document as suggested changes.
     ToggleTracking,
     AcceptChange,

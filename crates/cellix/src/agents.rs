@@ -12,6 +12,12 @@ use crate::theme::Theme;
 const SECTION_SIZE: u8 = 80;
 const DETAIL_SIZE: u8 = 85;
 /// Agents that can be started from here, as what the panel calls them and their programs.
+/// What the side pane is for, in the order it happens.
+const STEPS: [&str; 3] = [
+    "Start an agent below. It runs here.",
+    "Click a file on the left to open it beside it.",
+    "Ask in the agent, or comment on what you select.",
+];
 const AGENTS: [(&str, &str); 3] = [
     ("Claude Code", "claude"),
     ("Codex", "codex"),
@@ -40,7 +46,7 @@ enum Line {
     Section(&'static str),
     Gap,
     /// The note that takes the running list's place.
-    Nothing,
+    Step(usize),
     /// An index into `running`.
     Reporting(usize),
     /// An agent found running, which reports nothing.
@@ -127,14 +133,17 @@ impl Agents {
         seen.into_iter().skip(self.running.len()).collect()
     }
 
-    /// The panel, top to bottom. Drawing and clicking share this. With nothing running, a
-    /// way to start something comes straight after saying so.
+    /// The panel, top to bottom. Drawing and clicking share this. With nothing running, it
+    /// says what this is for and how it goes, and a way to start comes straight after.
     fn lines(&self) -> Vec<Line> {
-        let mut lines = vec![Line::Title("Agents"), Line::Gap, Line::Section("RUNNING")];
+        let mut lines = vec![Line::Title("Agents"), Line::Gap];
         let silent = self.silent();
         let idle = self.running.is_empty() && silent.is_empty();
         if idle {
-            lines.push(Line::Nothing);
+            lines.push(Line::Section("HOW IT WORKS"));
+            lines.extend((0..STEPS.len()).map(Line::Step));
+        } else {
+            lines.push(Line::Section("RUNNING"));
         }
         lines.extend((0..self.running.len()).map(Line::Reporting));
         lines.extend(silent.into_iter().map(Line::Silent));
@@ -177,7 +186,7 @@ impl Agents {
 
     fn height(&self, line: &Line) -> u16 {
         match line {
-            Line::Nothing | Line::Reporting(_) | Line::Silent(_) => 2,
+            Line::Reporting(_) | Line::Silent(_) | Line::Start(_) => 2,
             // One worktree is just this folder, so it needs no second line to tell them apart.
             Line::Tree(_) if self.worktrees.len() > 1 => 2,
             _ => 1,
@@ -211,22 +220,10 @@ impl Agents {
                 Line::Section(text) => {
                     grid.label_at(side as f32, side, y, text, dim, area.right(), SECTION_SIZE);
                 }
-                Line::Nothing => {
-                    grid.label(side, y, "No agents running", dim, area.right());
-                    let note = if self.installed.is_empty() {
-                        "Install one, then review what it changes."
-                    } else {
-                        "Start one below, then review what it changes."
-                    };
-                    grid.label_at(
-                        side as f32,
-                        side,
-                        y + 1,
-                        note,
-                        dim,
-                        area.right(),
-                        DETAIL_SIZE,
-                    );
+                Line::Step(index) => {
+                    let number = (index + 1).to_string();
+                    grid.label(side, y, &number, dim, side + 2);
+                    grid.label(side + 2, y, STEPS[index], theme.sidebar, area.right());
                 }
                 Line::Reporting(index) => {
                     let agent = &self.running[index];
@@ -265,8 +262,15 @@ impl Agents {
                         ..theme.sidebar
                     };
                     grid.label(side, y, "+", plus, side + 2);
-                    let label = self.installed[index].0;
+                    let (label, program) = self.installed[index];
                     grid.label(side + 2, y, label, theme.sidebar, area.right());
+                    let note = if program == SHELL.1 {
+                        "A plain terminal in this project"
+                    } else {
+                        "Starts here, working on this project"
+                    };
+                    let x = (side + 2) as f32;
+                    grid.label_at(x, side + 2, y + 1, note, dim, area.right(), DETAIL_SIZE);
                 }
             }
             y += rows;

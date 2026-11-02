@@ -235,7 +235,9 @@ pub fn draw(
                 grid.label_at(text_x as f32, text_x, y, hint, inner_dim, right, SMALL);
             }
             Line::Empty => {
-                grid.label(side, y, "Select text and press Comment.", dim, right);
+                grid.label(side, y, "No comments yet.", dim, right);
+                let hint = "Select text in a file, then press Alt+C.";
+                grid.label_at(side as f32, side, y + 1, hint, dim, right, SMALL);
             }
             Line::Quote(_, quote) => {
                 let bar = Bounds::cells(text_x as f32, y as f32 + 0.16, 0.22, 0.68);

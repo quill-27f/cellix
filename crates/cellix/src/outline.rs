@@ -110,7 +110,7 @@ impl Outline {
         &self,
         grid: &mut Grid,
         area: Rect,
-        here: Option<usize>,
+        (here, opened): (Option<usize>, bool),
         hover: Option<(u16, u16)>,
         theme: &Theme,
     ) {
@@ -126,7 +126,11 @@ impl Outline {
         };
         if self.headings.is_empty() {
             let y = area.y + HEADER_ROWS;
-            let note = "No headings here yet";
+            let note = if opened {
+                "No headings here yet"
+            } else {
+                "Open a document to see its headings"
+            };
             grid.label(area.x + LEFT, y, note, quiet, area.right());
             return;
         }

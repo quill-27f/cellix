@@ -1370,5 +1370,47 @@
     "title": "A dead host leaves nothing behind",
     "test": "a_dead_host_leaves_nothing_behind",
     "passes": true
+  },
+  {
+    "id": "guide-empty",
+    "milestone": 9,
+    "title": "An empty window says what to do and its actions are clickable",
+    "test": "an_empty_window_says_what_to_do_and_its_actions_are_clickable",
+    "passes": true
+  },
+  {
+    "id": "guide-agents",
+    "milestone": 9,
+    "title": "The agents panel explains itself before anything runs",
+    "test": "the_agents_panel_explains_itself_before_anything_runs",
+    "passes": true
+  },
+  {
+    "id": "guide-next",
+    "milestone": 9,
+    "title": "With an agent running and nothing open, the next step is named",
+    "test": "with_an_agent_running_and_nothing_open_the_next_step_is_named",
+    "passes": true
+  },
+  {
+    "id": "guide-first",
+    "milestone": 9,
+    "title": "The first start says how the sides work together",
+    "test": "the_first_start_says_how_the_sides_work_together",
+    "passes": true
+  },
+  {
+    "id": "guide-page",
+    "milestone": 9,
+    "title": "Getting Started opens as a page",
+    "test": "the_guide_opens_as_a_page",
+    "passes": true
+  },
+  {
+    "id": "guide-new",
+    "milestone": 9,
+    "title": "A new document starts from the empty window",
+    "test": "a_new_document_starts_from_the_empty_window",
+    "passes": true
   }
 ]

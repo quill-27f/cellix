@@ -132,7 +132,15 @@ A page uses the pane's full width. A line break inside a paragraph shows as a sp
 keeps the newline's source position, so a hard-wrapped file fills the page and saves
 unchanged. On a page, arrows and Home and End move by what's shown.
 
-### Documents
+### Guidance
+
+Nothing should leave someone wondering what to do next. An empty window lists its actions as rows
+that can be clicked, and its first line changes with what's going: with an agent running and no
+file open, it says to click a file on the left. The agents panel says how working beside an agent
+goes before offering to start one. The first start says how to move between the two sides. Every
+panel says what would fill it. Getting Started is a real page, so reading it shows what a page does.
+
+## Documents
 
 A Jupyter notebook opens as a page too, with what each cell printed and drew under it. Its cells
 become Markdown with a hidden line above each, and saving puts the text back into the JSON beside
