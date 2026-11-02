@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use cellix_core::{Buffer, Motion, Selection, Selections};
+use cellix_doc::changes::{self, Change, Kind, Syntax};
 use cellix_doc::latex::Project;
 use cellix_doc::table::Edit as TableEdit;
 use cellix_input::{Command, Direction, Format};
@@ -118,6 +119,8 @@ pub struct Editor {
     library: RefCell<Library>,
     /// Whether the sheet is dark, which diagrams are drawn for.
     dark: Cell<bool>,
+    /// Whether typing here is kept as suggested changes.
+    pub tracking: bool,
     /// Where built pieces of LaTeX are kept.
     pub built: Option<PathBuf>,
     /// Pieces of LaTeX this page is waiting for, for the app to have built.
@@ -192,6 +195,7 @@ impl Editor {
             page: RefCell::new(None),
             library: RefCell::default(),
             dark: Cell::new(false),
+            tracking: false,
             built: None,
             wanted: RefCell::default(),
             quoted: RefCell::default(),
@@ -905,6 +909,14 @@ impl Editor {
             self.prepare_for_command(command, text_area);
             let handled = match command {
                 Command::Move(direction, extend) => self.move_on_page(text_area, direction, extend),
+                Command::DeleteBackward if self.tracking => {
+                    self.tracked_delete(false);
+                    true
+                }
+                Command::DeleteForward if self.tracking => {
+                    self.tracked_delete(true);
+                    true
+                }
                 Command::Newline => {
                     self.enter_on_page();
                     true
@@ -1055,6 +1067,10 @@ impl Editor {
     /// Types a character, closing brackets and quotes, wrapping a selection in them, and
     /// stepping over a closing one that's already there.
     pub fn type_char(&mut self, c: char) {
+        if self.tracking && self.rendered {
+            self.tracked_type(c.encode_utf8(&mut [0; 4]));
+            return;
+        }
         let primary = self.selections.primary();
         let close = match c {
             '(' => Some(')'),
@@ -1550,6 +1566,223 @@ impl Editor {
         } else {
             self.insert_block(&format!("![]({path})"), 2);
         }
+    }
+
+    fn syntax(&self) -> Syntax {
+        match self.dialect() {
+            Dialect::Latex => Syntax::Latex,
+            Dialect::Markdown => Syntax::Critic,
+        }
+    }
+
+    fn changes(&self) -> Vec<Change> {
+        changes::find(&self.buffer.text(), self.syntax())
+    }
+
+    /// The change the caret is in or right after.
+    pub fn change_at_caret(&self) -> Option<Change> {
+        let head = self.selections.primary().head;
+        let holds = |c: &Change| c.start <= head && head <= c.end;
+        self.changes().into_iter().find(holds)
+    }
+
+    /// Keeps or drops the change at the caret.
+    pub fn settle_change(&mut self, accept: bool) {
+        let Some(change) = self.change_at_caret() else {
+            return;
+        };
+        let kept = if accept { &change.new } else { &change.old };
+        self.buffer
+            .replace_range(&mut self.selections, change.start, change.end, kept);
+        let at = change.start + kept.chars().count();
+        self.selections.set_single(Selection::cursor(at));
+    }
+
+    /// Keeps or drops every change, and says how many there were.
+    pub fn settle_all_changes(&mut self, accept: bool) -> usize {
+        let text = self.buffer.text();
+        let count = changes::find(&text, self.syntax()).len();
+        if count > 0 {
+            let settled = changes::settle_all(&text, self.syntax(), accept);
+            let total = self.buffer.rope().len_chars();
+            self.buffer
+                .replace_range(&mut self.selections, 0, total, &settled);
+            let head = self.selections.primary().head.min(settled.chars().count());
+            self.selections.set_single(Selection::cursor(head));
+        }
+        count
+    }
+
+    /// Turns tracking on or off. A paper needs the package that prints its marks.
+    pub fn toggle_tracking(&mut self) -> bool {
+        self.tracking = !self.tracking;
+        let text = self.buffer.text();
+        if self.tracking
+            && self.dialect() == Dialect::Latex
+            && !text.contains("{changes}")
+            && let Some(at) = text.find("\\begin{document}")
+        {
+            let at = text[..at].chars().count();
+            let mut selections = self.selections.clone();
+            self.buffer
+                .replace_range(&mut selections, at, at, "\\usepackage{changes}\n");
+        }
+        self.tracking
+    }
+
+    /// Where typing goes: a caret inside something crossed out stands after it.
+    fn tracked_head(&self, changes: &[Change]) -> usize {
+        let head = self.selections.primary().head;
+        let deleted = changes
+            .iter()
+            .find(|c| c.kind == Kind::Delete && c.start < head && head < c.end);
+        deleted.map_or(head, |c| c.end)
+    }
+
+    /// Pastes as a suggestion.
+    pub fn tracked_paste(&mut self, text: &str) {
+        self.tracked_type(text);
+    }
+
+    /// Adds text as a suggestion, joining the one the caret is at the end of.
+    fn tracked_type(&mut self, text: &str) {
+        if !self.selections.primary().is_empty() {
+            self.tracked_delete(false);
+            let changes = self.changes();
+            let head = self.selections.primary().head;
+            if let Some(change) = changes.iter().find(|c| c.start == head) {
+                self.selections.set_single(Selection::cursor(change.end));
+            }
+        }
+        let changes = self.changes();
+        let head = self.tracked_head(&changes);
+        let (open, close) = self.syntax().insertion();
+        let closing = close.chars().count();
+        let joins = changes
+            .iter()
+            .find(|c| c.kind == Kind::Insert && c.start < head && head <= c.end);
+        let (at, typed) = match joins {
+            Some(change) => (head.min(change.end - closing), text.to_string()),
+            None => (head, format!("{open}{text}{close}")),
+        };
+        self.buffer
+            .replace_range(&mut self.selections, at, at, &typed);
+        let caret = match joins {
+            Some(_) => at + text.chars().count(),
+            None => at + open.chars().count() + text.chars().count(),
+        };
+        self.selections.set_single(Selection::cursor(caret));
+    }
+
+    /// Crosses out what's selected or next to the caret. Words the suggestion added simply
+    /// go, since nobody has seen them yet.
+    fn tracked_delete(&mut self, forward: bool) {
+        let primary = self.selections.primary();
+        let changes = self.changes();
+        let (open, close) = self.syntax().deletion();
+        if !primary.is_empty() {
+            let text = self
+                .buffer
+                .rope()
+                .slice(primary.start()..primary.end())
+                .to_string();
+            let lines: Vec<String> = text
+                .split('\n')
+                .map(|line| {
+                    if line.is_empty() {
+                        String::new()
+                    } else {
+                        format!("{open}{line}{close}")
+                    }
+                })
+                .collect();
+            let start = primary.start();
+            self.buffer.replace_range(
+                &mut self.selections,
+                start,
+                primary.end(),
+                &lines.join("\n"),
+            );
+            self.selections.set_single(Selection::cursor(start));
+            return;
+        }
+        let head = self.selections.primary().head;
+        let total = self.buffer.rope().len_chars();
+        // Step over what's already crossed out, as the page shows it as gone.
+        let settled = changes.iter().find(|c| {
+            c.kind == Kind::Delete
+                && if forward {
+                    c.start <= head && head < c.end
+                } else {
+                    c.start < head && head <= c.end
+                }
+        });
+        let head = settled.map_or(head, |c| if forward { c.end } else { c.start });
+        let at = if forward {
+            (head < total).then_some(head)
+        } else {
+            head.checked_sub(1)
+        };
+        let Some(at) = at else {
+            return;
+        };
+        let (added_open, added_close) = self.syntax().insertion();
+        let added = changes.iter().find(|c| {
+            let inner =
+                (c.start + added_open.chars().count())..(c.end - added_close.chars().count());
+            c.kind == Kind::Insert && (inner.contains(&at) || (!forward && head == c.end))
+        });
+        if let Some(change) = added {
+            // The last of a suggestion takes its markers with it.
+            if change.new.chars().count() <= 1 {
+                self.buffer
+                    .replace_range(&mut self.selections, change.start, change.end, "");
+                self.selections.set_single(Selection::cursor(change.start));
+                return;
+            }
+            let inner_end = change.end - added_close.chars().count();
+            let at = if head == change.end {
+                inner_end - 1
+            } else {
+                at
+            };
+            self.buffer
+                .replace_range(&mut self.selections, at, at + 1, "");
+            self.selections.set_single(Selection::cursor(at));
+            return;
+        }
+        let Some(gone) = self.char_at(at) else {
+            return;
+        };
+        if gone == '\n' {
+            self.buffer
+                .replace_range(&mut self.selections, at, at + 1, "");
+            self.selections.set_single(Selection::cursor(at));
+            return;
+        }
+        // Next to a crossing out, it joins that one.
+        let opening = open.chars().count();
+        if let (false, Some(change)) = (
+            forward,
+            changes
+                .iter()
+                .find(|c| c.kind == Kind::Delete && c.start == head),
+        ) {
+            let joined = format!("{open}{gone}");
+            self.buffer
+                .replace_range(&mut self.selections, at, change.start + opening, &joined);
+            self.selections.set_single(Selection::cursor(at));
+            return;
+        }
+        let crossed = format!("{open}{gone}{close}");
+        self.buffer
+            .replace_range(&mut self.selections, at, at + 1, &crossed);
+        let caret = if forward {
+            at + crossed.chars().count()
+        } else {
+            at
+        };
+        self.selections.set_single(Selection::cursor(caret));
     }
 
     /// The line that names the image the caret is on. A paper's figure counts as a whole.

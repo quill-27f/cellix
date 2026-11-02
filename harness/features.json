@@ -1167,5 +1167,47 @@
     "title": "Footnotes and raised text reach the PDF",
     "test": "footnotes_and_raised_text_reach_the_paper",
     "passes": true
+  },
+  {
+    "id": "track-type",
+    "milestone": 9,
+    "title": "Typing with Track Changes on is kept as one suggestion",
+    "test": "typing_with_tracking_on_is_kept_as_one_suggestion",
+    "passes": true
+  },
+  {
+    "id": "track-delete",
+    "milestone": 9,
+    "title": "Deleting with Track Changes on crosses out",
+    "test": "deleting_with_tracking_on_crosses_out",
+    "passes": true
+  },
+  {
+    "id": "track-replace",
+    "milestone": 9,
+    "title": "Replacing a selection shows old and new",
+    "test": "a_selection_replaced_with_tracking_on_shows_both",
+    "passes": true
+  },
+  {
+    "id": "track-settle",
+    "milestone": 9,
+    "title": "Changes are accepted and rejected from their menu",
+    "test": "changes_are_accepted_and_rejected_from_their_menu",
+    "passes": true
+  },
+  {
+    "id": "track-all",
+    "milestone": 9,
+    "title": "All changes can be settled at once",
+    "test": "all_changes_can_be_settled_at_once",
+    "passes": true
+  },
+  {
+    "id": "track-paper",
+    "milestone": 9,
+    "title": "A paper tracks changes with its own package",
+    "test": "a_paper_tracks_changes_with_its_own_package",
+    "passes": true
   }
 ]

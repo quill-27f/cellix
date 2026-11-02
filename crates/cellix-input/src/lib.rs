@@ -178,6 +178,12 @@ pub enum Command {
     CloseDock,
     /// Shows the document's headings in the sidebar.
     ShowOutline,
+    /// Keeps typing in this document as suggested changes.
+    ToggleTracking,
+    AcceptChange,
+    RejectChange,
+    AcceptAllChanges,
+    RejectAllChanges,
     ReviewPreviousTurn,
     UndoTurn,
     Commit,

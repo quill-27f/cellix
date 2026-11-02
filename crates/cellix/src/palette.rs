@@ -85,7 +85,7 @@ pub fn keys_of(command: Command) -> Option<&'static str> {
     })
 }
 
-pub const COMMANDS: [(&str, Command); 56] = [
+pub const COMMANDS: [(&str, Command); 61] = [
     ("Save", Command::Save),
     ("Undo", Command::Undo),
     ("Redo", Command::Redo),
@@ -128,6 +128,11 @@ pub const COMMANDS: [(&str, Command); 56] = [
     ("Show Agents", Command::ShowAgents),
     ("Close Side Pane", Command::CloseDock),
     ("Show Outline", Command::ShowOutline),
+    ("Toggle Track Changes", Command::ToggleTracking),
+    ("Accept Change", Command::AcceptChange),
+    ("Reject Change", Command::RejectChange),
+    ("Accept All Changes", Command::AcceptAllChanges),
+    ("Reject All Changes", Command::RejectAllChanges),
     ("Review Previous Agent Turn", Command::ReviewPreviousTurn),
     ("Undo Agent Turn", Command::UndoTurn),
     ("Commit Staged Changes", Command::Commit),

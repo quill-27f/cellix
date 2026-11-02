@@ -136,7 +136,9 @@ unchanged. On a page, arrows and Home and End move by what's shown.
 
 Pages read more than CommonMark: strikethrough, `==highlight==`, `H~2~O`, `x^2^`, footnotes, GitHub
 callouts such as `> [!NOTE]`, and CriticMarkup for tracked changes. All of it is still plain text in
-the file, and it reaches the web page and the PDF.
+the file, and it reaches the web page and the PDF. Track Changes keeps edits as suggestions in the
+text itself, as CriticMarkup or the `changes` package, so they travel with the file and any tool,
+agents included, can read them.
 
 The Outline in the sidebar lists a document's headings, or a paper's sections, and a click goes
 there. The side pane keeps what the last build said in a Log tab, and a line that names a place

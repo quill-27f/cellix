@@ -27,6 +27,7 @@ pub enum Tool {
     Diagram,
     Math,
     Comment,
+    Track,
     Export,
     More,
     Cite,
@@ -75,7 +76,7 @@ const fn icon(tool: Tool, name: &'static str, icon: Icon, gap: bool) -> Button {
     }
 }
 
-const BUTTONS: [Button; 15] = [
+const BUTTONS: [Button; 16] = [
     mark(Tool::Format(Format::Bold), "Bold", "B", false),
     Button {
         tool: Tool::Format(Format::Italic),
@@ -126,6 +127,7 @@ const BUTTONS: [Button; 15] = [
     icon(Tool::Diagram, "Diagram", Icon::Diagram, false),
     icon(Tool::Format(Format::Rule), "Divider", Icon::Rule, false),
     icon(Tool::Comment, "Comment", Icon::Comment, true),
+    icon(Tool::Track, "Track Changes", Icon::Track, false),
 ];
 
 const EXPORT: Button = icon(Tool::Export, "Export", Icon::Export, false);
@@ -308,7 +310,7 @@ fn fallback(icon: Icon) -> &'static str {
 pub fn draw(
     grid: &mut Grid,
     row: Rect,
-    (paragraph, active): (&str, &[Format]),
+    (paragraph, active, tracking): (&str, &[Format], bool),
     dialect: Dialect,
     hover: Option<(u16, u16)>,
     theme: &Theme,
@@ -318,7 +320,11 @@ pub fn draw(
     for button in &all {
         let cell = Rect::new(button.x, row.y, button.width, 1);
         let on_it = hover.is_some_and(|h| cell.contains(h.0, h.1));
-        let on = matches!(button.tool, Tool::Format(f) if active.contains(&f));
+        let on = match button.tool {
+            Tool::Format(format) => active.contains(&format),
+            Tool::Track => tracking,
+            _ => false,
+        };
         if on_it || on {
             let fill = if on { theme.pick } else { theme.popup_hover };
             grid.panel(Bounds::inset(cell, 0.12, 0.1), 16, Some(fill), None);

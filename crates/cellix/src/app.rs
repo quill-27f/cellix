@@ -1863,7 +1863,11 @@ impl App {
                 let area = self.focused_area();
                 if let Some(editor) = self.editor_mut() {
                     editor.prepare_edit(area);
-                    editor.buffer.replace(&mut editor.selections, text);
+                    if editor.tracking && editor.rendered {
+                        editor.tracked_paste(text);
+                    } else {
+                        editor.buffer.replace(&mut editor.selections, text);
+                    }
                 }
                 self.reveal();
             }
@@ -2857,6 +2861,30 @@ impl App {
                     );
                 } else {
                     self.say("No plan is waiting for review");
+                }
+            }
+            Command::ToggleTracking => {
+                if let Some(editor) = self.editor_mut() {
+                    let on = editor.toggle_tracking();
+                    self.say(if on {
+                        "Track changes is on: edits are kept as suggestions"
+                    } else {
+                        "Track changes is off"
+                    });
+                }
+            }
+            Command::AcceptChange | Command::RejectChange => {
+                let accept = command == Command::AcceptChange;
+                if let Some(editor) = self.editor_mut() {
+                    editor.settle_change(accept);
+                }
+            }
+            Command::AcceptAllChanges | Command::RejectAllChanges => {
+                let accept = command == Command::AcceptAllChanges;
+                if let Some(editor) = self.editor_mut() {
+                    let count = editor.settle_all_changes(accept);
+                    let done = if accept { "Accepted" } else { "Rejected" };
+                    self.say(format!("{done} {count} changes"));
                 }
             }
             Command::ShowAgents => self.toggle_dock(),
@@ -4712,6 +4740,16 @@ impl App {
         ];
         let mut items = Vec::new();
         if editor.rendered {
+            if editor.change_at_caret().is_some() {
+                items.extend([
+                    run("Accept Change", Command::AcceptChange),
+                    run("Reject Change", Command::RejectChange),
+                    run("Accept All Changes", Command::AcceptAllChanges).after_rule(),
+                    run("Reject All Changes", Command::RejectAllChanges),
+                ]);
+                items.extend(agent);
+                return items;
+            }
             if editor.image_at_caret() {
                 let size = |name, percent| MenuItem::new(name, MenuAction::ImageWidth(percent));
                 items.extend([
@@ -5831,10 +5869,11 @@ impl App {
         if let Some(row) = self.toolbar_row() {
             let (paragraph, active) = self.editors[self.active()].caret_formats();
             let dialect = self.page_dialect();
+            let tracking = self.editors[self.active()].tracking;
             toolbar::draw(
                 grid,
                 row,
-                (paragraph, &active),
+                (paragraph, &active, tracking),
                 dialect,
                 self.hover,
                 &self.theme,
@@ -6290,6 +6329,7 @@ impl App {
                 self.show_menu((x, 3), items);
             }
             Tool::Comment => self.run(Command::AddComment),
+            Tool::Track => self.run(Command::ToggleTracking),
             Tool::Cite => self.show_citations(),
             Tool::Build => self.run(Command::BuildPdf),
             Tool::Export => {
@@ -6452,7 +6492,9 @@ impl App {
                 language.to_string(),
                 "UTF-8".to_string(),
                 // A writer counts words, and has no use for indent width.
-                if editor.rendered {
+                if editor.tracking {
+                    "Tracking changes".to_string()
+                } else if editor.rendered {
                     let words = editor.buffer.text().split_whitespace().count();
                     format!("{words} words")
                 } else {
@@ -9323,6 +9365,98 @@ mod tests {
         let (_dir, app) = picture_page(source);
         assert_eq!(text_with(&app, crate::rendered::Tone::Inserted), "addednew");
         assert_eq!(text_with(&app, crate::rendered::Tone::Deleted), "goneold");
+    }
+
+    fn tracking_page(text: &str) -> (TempDir, App) {
+        let (dir, mut app) = page_app(text);
+        app.run(Command::ToggleTracking);
+        (dir, app)
+    }
+
+    #[test]
+    fn typing_with_tracking_on_is_kept_as_one_suggestion() {
+        let (_dir, mut app) = tracking_page("Hello world\n");
+        let (x, y) = cell_of(&app, "world");
+        app.handle(mouse(MouseKind::Left, x, y));
+        typed(&mut app, "big ");
+        assert_eq!(app.active_text().unwrap(), "Hello {++big ++}world\n");
+        key(&mut app, Key::Backspace);
+        assert_eq!(app.active_text().unwrap(), "Hello {++big++}world\n");
+        for _ in 0..3 {
+            key(&mut app, Key::Backspace);
+        }
+        assert_eq!(
+            app.active_text().unwrap(),
+            "Hello world\n",
+            "the last of it takes the marks"
+        );
+    }
+
+    #[test]
+    fn deleting_with_tracking_on_crosses_out() {
+        let (_dir, mut app) = tracking_page("one two\n");
+        let (x, y) = cell_of(&app, "two");
+        app.handle(mouse(MouseKind::Left, x + 3, y));
+        for _ in 0..3 {
+            key(&mut app, Key::Backspace);
+        }
+        assert_eq!(app.active_text().unwrap(), "one {--two--}\n");
+    }
+
+    #[test]
+    fn a_selection_replaced_with_tracking_on_shows_both() {
+        let (_dir, mut app) = tracking_page("one two three\n");
+        let (x, y) = cell_of(&app, "two");
+        double_click(&mut app, x + 1, y);
+        typed(&mut app, "2");
+        assert_eq!(app.active_text().unwrap(), "one {--two--}{++2++} three\n");
+    }
+
+    #[test]
+    fn changes_are_accepted_and_rejected_from_their_menu() {
+        let (_dir, mut app) = page_app("Keep {++added++} and {--gone--} end\n");
+        let (x, y) = cell_of(&app, "added");
+        app.handle(mouse(MouseKind::Right, x + 1, y));
+        let (mx, my) = find(&screen(&app), "Accept Change");
+        app.handle(mouse(MouseKind::Left, mx + 1, my));
+        assert_eq!(
+            app.active_text().unwrap(),
+            "Keep added and {--gone--} end\n"
+        );
+        let (x, y) = cell_of(&app, "gone");
+        app.handle(mouse(MouseKind::Right, x + 1, y));
+        let (mx, my) = find(&screen(&app), "Reject Change");
+        app.handle(mouse(MouseKind::Left, mx + 1, my));
+        assert_eq!(app.active_text().unwrap(), "Keep added and gone end\n");
+    }
+
+    #[test]
+    fn all_changes_can_be_settled_at_once() {
+        let (_dir, mut app) = page_app("a {++b++} c {--d--} e {~~f~>g~~}\n");
+        app.run(Command::AcceptAllChanges);
+        assert_eq!(app.active_text().unwrap(), "a b c  e g\n");
+        assert!(screen(&app).text().contains("Accepted 3 changes"));
+    }
+
+    #[test]
+    fn a_paper_tracks_changes_with_its_own_package() {
+        let dir = tempfile::tempdir().unwrap();
+        let source =
+            "\\documentclass{article}\n\\begin{document}\nSome words here\n\\end{document}\n";
+        fs::write(dir.path().join("paper.tex"), source).unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        app.open(&dir.path().join("paper.tex")).unwrap();
+        app.run(Command::ToggleTracking);
+        assert!(
+            app.active_text()
+                .unwrap()
+                .contains("\\usepackage{changes}\n")
+        );
+        let (x, y) = cell_of(&app, "words");
+        app.handle(mouse(MouseKind::Left, x, y));
+        typed(&mut app, "new ");
+        let text = app.active_text().unwrap();
+        assert!(text.contains("Some \\added{new }words"), "{text}");
     }
 
     #[test]

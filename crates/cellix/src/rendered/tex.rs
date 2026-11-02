@@ -260,6 +260,33 @@ fn command(rest: &[char], at: usize, look: Look, context: &Context, out: &mut Ve
             inline(&rest[start + 1..end], at + start + 1, look, context, out);
             return end + 1;
         }
+        "added" => {
+            let tone = Look {
+                tone: Tone::Inserted,
+                ..look
+            };
+            inline(inner, start, tone, context, out);
+        }
+        "deleted" => {
+            let tone = Look {
+                tone: Tone::Deleted,
+                ..look
+            };
+            inline(inner, start, tone, context, out);
+        }
+        "replaced" => {
+            let second = (rest.get(close + 1) == Some(&'{'))
+                .then(|| matching(rest, close + 1))
+                .flatten();
+            let Some(end) = second else {
+                return close + 1;
+            };
+            let tone = |tone| Look { tone, ..look };
+            let old = &rest[close + 2..end];
+            inline(old, at + close + 2, tone(Tone::Deleted), context, out);
+            inline(inner, start, tone(Tone::Inserted), context, out);
+            return end + 1;
+        }
         "textbf" => inline(inner, start, bold(look), context, out),
         "emph" | "textit" | "textsl" => inline(inner, start, italic(look), context, out),
         "underline" => {
