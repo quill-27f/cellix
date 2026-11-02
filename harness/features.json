@@ -1699,5 +1699,82 @@
     "title": "A project's own Python comes first",
     "test": "a_projects_own_python_comes_first",
     "passes": true
+  },
+  {
+    "id": "ask-pending",
+    "milestone": 9,
+    "title": "Asking with no agent goes to the one you start",
+    "test": "asking_with_no_agent_goes_to_the_one_you_start",
+    "passes": true
+  },
+  {
+    "id": "ask-outside",
+    "milestone": 9,
+    "title": "Asking when an agent works outside the pane leaves it for its next prompt",
+    "test": "asking_when_an_agent_works_outside_the_pane_leaves_it_for_its_next_prompt",
+    "passes": true
+  },
+  {
+    "id": "pane-close-views",
+    "milestone": 9,
+    "title": "The tabs for a PDF and a log close",
+    "test": "the_tabs_for_a_pdf_and_a_log_close",
+    "passes": true
+  },
+  {
+    "id": "problems",
+    "milestone": 9,
+    "title": "The count of problems opens them, and a row goes there",
+    "test": "the_count_of_problems_opens_them_and_a_row_goes_there",
+    "passes": true
+  },
+  {
+    "id": "pointer",
+    "milestone": 9,
+    "title": "The pointer says what a place is",
+    "test": "the_pointer_says_what_a_place_is",
+    "passes": true
+  },
+  {
+    "id": "minimap-pictures",
+    "milestone": 9,
+    "title": "A minimap shows a document's pictures",
+    "test": "a_minimap_shows_a_documents_pictures",
+    "passes": true
+  },
+  {
+    "id": "sheet-tab",
+    "milestone": 9,
+    "title": "Tab moves along a row and selects what it lands on",
+    "test": "tab_moves_along_a_row_and_on_to_the_next_replacing_what_it_lands_on",
+    "passes": true
+  },
+  {
+    "id": "sheet-back",
+    "milestone": 9,
+    "title": "Shift+Tab goes back a cell",
+    "test": "shift_tab_goes_back_a_cell",
+    "passes": true
+  },
+  {
+    "id": "sheet-row",
+    "milestone": 9,
+    "title": "Tab past the last cell adds a row",
+    "test": "tab_past_the_last_cell_adds_a_row",
+    "passes": true
+  },
+  {
+    "id": "sheet-enter",
+    "milestone": 9,
+    "title": "Enter goes down the column and adds a row at the bottom",
+    "test": "enter_goes_down_the_column_and_adds_a_row_at_the_bottom",
+    "passes": true
+  },
+  {
+    "id": "sheet-markdown",
+    "milestone": 9,
+    "title": "A Markdown table moves the same way",
+    "test": "a_markdown_table_moves_the_same_way",
+    "passes": true
   }
 ]

@@ -119,6 +119,10 @@ fn lines(
         if thread.told == Some(thread.replies.len()) && !agent.is_empty() && thread.waiting_answer()
         {
             out.push(Line::Status(format!("Waiting for {agent}…")));
+        } else if thread.asked && thread.waiting_answer() {
+            out.push(Line::Status(format!(
+                "{agent} sees this with its next prompt"
+            )));
         }
         if let Some(reply) = draft.filter(|d| d.thread == Some(id)) {
             draft_lines(reply, width, measure, &mut out);

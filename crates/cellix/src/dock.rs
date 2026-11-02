@@ -39,8 +39,9 @@ const COUNT_WIDTH: u16 = 2;
 /// The button that starts something, and the tab it becomes while that list shows.
 const NEW_WIDTH: u16 = 3;
 const AGENTS_WIDTH: u16 = 8;
-const PDF_WIDTH: u16 = 5;
-const LOG_WIDTH: u16 = 5;
+const PDF_WIDTH: u16 = 8;
+const LOG_WIDTH: u16 = 8;
+const PROBLEMS_WIDTH: u16 = 13;
 /// The button that closes the pane.
 const HIDE_WIDTH: u16 = 3;
 /// What the pane's browser tab is called.
@@ -168,6 +169,8 @@ pub struct Session {
     output: Receiver<Vec<u8>>,
     finished: Receiver<()>,
     pub exited: bool,
+    /// When it last wrote anything, which says when it's settled.
+    wrote: Option<std::time::Instant>,
     size: (u16, u16),
     cell: CellPixels,
     selection: Option<(Spot, Spot)>,
@@ -284,6 +287,7 @@ impl Session {
             output,
             finished,
             exited: false,
+            wrote: None,
             size,
             cell,
             selection: None,
@@ -291,6 +295,11 @@ impl Session {
             protocol: Protocol::default(),
             pictures: Vec::new(),
         }
+    }
+
+    /// Whether it has started and gone quiet, so it's ready for what's typed at it.
+    pub fn settled(&self, quiet: std::time::Duration) -> bool {
+        self.wrote.is_some_and(|at| at.elapsed() >= quiet)
     }
 
     /// Whether this can be left running after Cellix goes.
@@ -432,6 +441,7 @@ impl Session {
         let mut changed = false;
         while let Ok(bytes) = self.output.try_recv() {
             self.take_in(&bytes);
+            self.wrote = Some(std::time::Instant::now());
             changed = true;
         }
         let events = self.events.0.lock().map(|mut e| std::mem::take(&mut *e));
@@ -851,8 +861,9 @@ pub enum TabHit {
     Close(usize),
     New,
     Comments,
-    Pdf,
-    Log,
+    /// A view that comes and goes, and the × on its tab.
+    View(Front),
+    CloseView(Front),
     /// The pane's own close button, at the far end.
     Hide,
 }
@@ -866,6 +877,8 @@ pub enum Front {
     Pdf,
     /// What the last build said.
     Log,
+    /// Errors and warnings across the project.
+    Problems,
 }
 
 /// The side pane: its tabs, and whether it's open and has the keyboard.
@@ -893,6 +906,9 @@ pub struct Dock {
     /// What the last build said, how far it has scrolled, and where its paths start.
     pub log: Vec<String>,
     pub log_top: usize,
+    /// Whether the problems have a tab, and how far they've scrolled.
+    pub problems: bool,
+    pub problems_top: usize,
     pub log_folder: std::path::PathBuf,
 }
 
@@ -995,24 +1011,61 @@ impl Dock {
         }
     }
 
-    /// Where the log's tab goes, if there's a log.
-    fn log_tab(&self, area: Rect) -> Option<Rect> {
-        let pdf = if self.pdf.is_some() { PDF_WIDTH } else { 0 };
-        (!self.log.is_empty()).then(|| {
-            Rect::new(
-                area.x + 1 + self.comments_width() + pdf,
-                area.y,
-                LOG_WIDTH,
-                1,
-            )
-        })
+    /// The views with a tab just now, in order, each with its name and width.
+    fn views(&self) -> Vec<(Front, &'static str, u16)> {
+        let mut views = Vec::new();
+        if self.pdf.is_some() {
+            views.push((Front::Pdf, "PDF", PDF_WIDTH));
+        }
+        if !self.log.is_empty() {
+            views.push((Front::Log, "Log", LOG_WIDTH));
+        }
+        if self.problems {
+            views.push((Front::Problems, "Problems", PROBLEMS_WIDTH));
+        }
+        views
+    }
+
+    /// Each view's tab, where it stands.
+    fn view_tabs(&self, area: Rect) -> Vec<(Front, &'static str, Rect)> {
+        let mut x = area.x + 1 + self.comments_width();
+        let tabs = self.views().into_iter().map(|(front, name, width)| {
+            let tab = Rect::new(x, area.y, width, 1);
+            x += width;
+            (front, name, tab)
+        });
+        tabs.collect()
+    }
+
+    #[cfg(test)]
+    pub fn view_tabs_for_test(&self, area: Rect) -> Vec<(Front, &'static str, Rect)> {
+        self.view_tabs(area)
     }
 
     /// Where sessions' tabs start, after the fixed ones.
     fn first_tab(&self, area: Rect) -> u16 {
-        let pdf = if self.pdf.is_some() { PDF_WIDTH } else { 0 };
-        let log = if self.log.is_empty() { 0 } else { LOG_WIDTH };
-        area.x + 1 + self.comments_width() + pdf + log
+        let views = self.views().iter().map(|view| view.2).sum::<u16>();
+        area.x + 1 + self.comments_width() + views
+    }
+
+    /// Takes a view's tab away, and what it shows.
+    pub fn close_view(&mut self, view: Front) {
+        match view {
+            Front::Pdf => {
+                self.pdf = None;
+                self.pdf_spot = None;
+            }
+            Front::Log => self.log.clear(),
+            Front::Problems => self.problems = false,
+            Front::Session | Front::Comments => {}
+        }
+        if self.front == view {
+            self.front = if self.active.is_some() {
+                Front::Session
+            } else {
+                Front::Comments
+            };
+        }
     }
 
     /// The log line at a row of the screen.
@@ -1082,14 +1135,15 @@ impl Dock {
         if x < area.x + 1 + self.comments_width() {
             return Some(TabHit::Comments);
         }
-        if self
-            .log_tab(area)
-            .is_some_and(|tab| x >= tab.x && x < tab.right())
-        {
-            return Some(TabHit::Log);
-        }
-        if x < self.first_tab(area) {
-            return Some(TabHit::Pdf);
+        for (view, _, tab) in self.view_tabs(area) {
+            if x >= tab.x && x < tab.right() {
+                let on_close = x + CLOSE_WIDTH + 1 >= tab.right();
+                return Some(if on_close {
+                    TabHit::CloseView(view)
+                } else {
+                    TabHit::View(view)
+                });
+            }
         }
         let tabs = self.tabs(area);
         for (index, (start, end)) in tabs.iter().enumerate() {
@@ -1112,12 +1166,12 @@ impl Dock {
         let row = Rect::new(area.x, area.y, area.w, 1);
         grid.fill(row, theme.tab);
         let comments = Rect::new(area.x + 1, area.y, self.comments_width(), 1);
-        if self.pdf.is_some() {
-            let tab = Rect::new(comments.right(), area.y, PDF_WIDTH, 1);
-            let on = self.front == Front::Pdf;
+        for (view, name, tab) in self.view_tabs(area) {
+            let on = self.front == view;
+            let hovered = hover.is_some_and(|h| tab.contains(h.0, h.1));
             if on {
                 grid.fill(tab, theme.sidebar);
-            } else if hover.is_some_and(|h| tab.contains(h.0, h.1)) {
+            } else if hovered {
                 let bounds = Bounds::inset(tab, 0.1, 0.1);
                 grid.panel(bounds, 16, Some(theme.row_hover), None);
             }
@@ -1126,22 +1180,15 @@ impl Dock {
                 bold: on,
                 ..theme.tab
             };
-            grid.label(tab.x + 1, area.y, "PDF", quiet, tab.right());
-        }
-        if let Some(tab) = self.log_tab(area) {
-            let on = self.front == Front::Log;
-            if on {
-                grid.fill(tab, theme.sidebar);
-            } else if hover.is_some_and(|h| tab.contains(h.0, h.1)) {
-                let bounds = Bounds::inset(tab, 0.1, 0.1);
-                grid.panel(bounds, 16, Some(theme.row_hover), None);
+            let close = tab.right().saturating_sub(CLOSE_WIDTH + 1);
+            grid.label(tab.x + 1, area.y, name, quiet, close);
+            if on || hovered {
+                let plain = Style {
+                    bold: false,
+                    ..quiet
+                };
+                grid.label(close, area.y, "×", plain, tab.right());
             }
-            let quiet = Style {
-                fg: if on { theme.text.fg } else { theme.gutter.fg },
-                bold: on,
-                ..theme.tab
-            };
-            grid.label(tab.x + 1, area.y, "Log", quiet, tab.right());
         }
         let on_comments = self.front == Front::Comments;
         if on_comments {

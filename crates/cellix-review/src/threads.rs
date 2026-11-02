@@ -32,6 +32,9 @@ pub struct Thread {
     /// How many replies it had when an agent was last told of it.
     #[serde(default)]
     pub told: Option<usize>,
+    /// Someone pressed Ask agent, and no agent has it yet.
+    #[serde(default)]
+    pub asked: bool,
 }
 
 impl Thread {
@@ -138,6 +141,7 @@ mod tests {
             }],
             resolved: false,
             told: None,
+            asked: false,
         }
     }
 

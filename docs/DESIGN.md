@@ -143,6 +143,11 @@ this works the same in code, Markdown, LaTeX, data and notebooks. A PDF or image
 takes a comment too, from a button or a right click, and a paper's PDF lands it on the source line
 behind that place, so it stays put through every rebuild.
 
+## The pointer
+
+Cellix tells the terminal which pointer to show with OSC 22: a hand on what can be pressed, a bar on
+text, an arrow elsewhere. Left to itself a terminal picks one from its own state, which can stick.
+
 ## Guidance
 
 Nothing should leave someone wondering what to do next. An empty window lists its actions as rows
@@ -160,7 +165,9 @@ passes lines of JSON between Jupyter's client library and Cellix, using the proj
 it has one. Outputs land under each cell as they come, and are saved with the notebook.
 
 CSV and TSV files open as a table on the same page, with cells edited in place and rows and columns
-from the menu. A long file shows its first 2,000 rows and says so.
+from the menu. A long file shows its first 2,000 rows and says so. Every table moves like a sheet:
+Tab and Shift+Tab go along the row and select what they land on, so typing replaces it, Enter goes
+down the column, and going past the end adds a row.
 
 Spelling and grammar come from Harper, which runs here with no network. What isn't prose is blanked
 out first, keeping every char in place, so a finding lands on the right word in the source. It runs

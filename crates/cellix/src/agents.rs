@@ -105,6 +105,13 @@ impl Agents {
         }
     }
 
+    /// The agent working on this project outside the pane, if there is one. It hears about
+    /// comments through its hooks, with its next prompt.
+    pub fn outside(&self) -> Option<String> {
+        let reporting = self.running.first().map(|a| a.agent.clone());
+        reporting.or_else(|| self.silent().into_iter().next())
+    }
+
     pub fn needing_you(&self) -> usize {
         let waiting = |a: &&AgentEvent| a.state == AgentState::NeedsYou;
         self.running.iter().filter(waiting).count()

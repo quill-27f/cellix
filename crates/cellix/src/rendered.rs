@@ -2240,6 +2240,66 @@ pub fn next_cell(rows: &[Row], pos: usize) -> Option<usize> {
     after.find(|at| *at > pos)
 }
 
+/// The table cell before the one at `pos`, for Shift+Tab.
+pub fn previous_cell(rows: &[Row], pos: usize) -> Option<usize> {
+    let (row, _) = locate(rows, pos);
+    let here = rows.get(row)?;
+    if here.cells.is_empty() {
+        return None;
+    }
+    let first = (0..=row)
+        .rev()
+        .take_while(|n| !rows[*n].cells.is_empty() || !rows[*n].stop)
+        .last()?;
+    let mut before = rows[first..=row]
+        .iter()
+        .flat_map(|r| r.cells.iter().copied());
+    let current = here.cells[here.cell_holding(pos)?];
+    before.rfind(|at| *at < current)
+}
+
+/// The cell under the one at `pos`, for Enter.
+pub fn cell_below(rows: &[Row], pos: usize) -> Option<usize> {
+    let (row, _) = locate(rows, pos);
+    let here = rows.get(row)?;
+    let column = here.cell_holding(pos)?;
+    let below = rows[row + 1..].iter().find(|r| !r.cells.is_empty());
+    let between = rows[row + 1..]
+        .iter()
+        .take_while(|r| r.cells.is_empty())
+        .all(|r| !r.stop);
+    let below = below.filter(|_| between)?;
+    below.cells.get(column.min(below.cells.len() - 1)).copied()
+}
+
+/// The start of a column of the row at `pos`, for a row just added.
+pub fn cell_in_row(rows: &[Row], pos: usize, column: usize) -> Option<usize> {
+    let (row, _) = locate(rows, pos);
+    let cells = &rows.get(row)?.cells;
+    cells.get(column.min(cells.len().checked_sub(1)?)).copied()
+}
+
+/// Which column of its row `pos` is in.
+pub fn cell_column(rows: &[Row], pos: usize) -> Option<usize> {
+    let (row, _) = locate(rows, pos);
+    rows.get(row)?.cell_holding(pos)
+}
+
+/// What a cell holds, as a range to select, so typing replaces it as it does in a sheet.
+pub fn cell_range(rows: &[Row], start: usize) -> (usize, usize) {
+    let (row, _) = locate(rows, start);
+    let Some(here) = rows.get(row) else {
+        return (start, start);
+    };
+    let Some(index) = here.cell_holding(start) else {
+        return (start, start);
+    };
+    let end = here.cells.get(index + 1).copied().unwrap_or(usize::MAX);
+    let held = here.glyphs.iter().filter_map(|g| g.at);
+    let last = held.filter(|at| (start..end).contains(at)).max();
+    (start, last.map_or(start, |at| at + 1))
+}
+
 /// What Enter should do on a line, and Backspace at its start.
 pub enum Intent {
     /// Start the next line with this marker.

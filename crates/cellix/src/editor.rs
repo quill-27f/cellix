@@ -122,6 +122,8 @@ pub struct Editor {
     library: RefCell<Library>,
     /// Whether the sheet is dark, which diagrams are drawn for.
     dark: Cell<bool>,
+    /// How wide the text was drawn, for what's drawn beside it.
+    view_width: Cell<u16>,
     /// Whether typing here is kept as suggested changes.
     pub tracking: bool,
     /// The notebook this page was read from, which saving writes back into.
@@ -207,6 +209,7 @@ impl Editor {
             page: RefCell::new(None),
             library: RefCell::default(),
             dark: Cell::new(false),
+            view_width: Cell::new(0),
             tracking: false,
             notebook: None,
             issues: (0, Vec::new()),
@@ -367,6 +370,58 @@ impl Editor {
         out
     }
 
+    /// Pictures in the map, small, where they stand in the document.
+    fn draw_minimap_pictures(
+        &self,
+        grid: &mut Grid,
+        track: Rect,
+        (margin, width): (f32, f32),
+        theme: &Theme,
+    ) {
+        if !self.rendered {
+            return;
+        }
+        let area = self.text_area(Rect::new(
+            track.x.saturating_sub(self.view_width.get()),
+            track.y,
+            self.view_width.get() + track.w,
+            track.h,
+        ));
+        let page = self.page(area);
+        let figures = self.figures();
+        let per_row = MINIMAP_LINES_PER_ROW as f32;
+        let capacity = track.h as f32 * per_row;
+        let squeeze = (capacity / page.len().max(1) as f32).min(1.0);
+        let column = width / MINIMAP_COLUMNS as f32;
+        let clip = Bounds::cells(
+            track.x as f32,
+            track.y as f32,
+            track.w as f32,
+            track.h as f32,
+        );
+        for (index, row) in page.iter().enumerate() {
+            let Some((figure, x)) = row.figure else {
+                continue;
+            };
+            let Some(figure) = figures.get(figure) else {
+                continue;
+            };
+            let top = track.y as f32 + index as f32 * squeeze / per_row;
+            let bounds = Bounds::cells(
+                track.x as f32 + margin + x * column,
+                top,
+                figure.width * column,
+                figure.height * squeeze / per_row,
+            );
+            grid.paint.push(Paint::Image {
+                bounds,
+                clip,
+                bitmap: figure.bitmap.clone(),
+                color: dimmed(theme.text.fg, theme.text.bg),
+            });
+        }
+    }
+
     fn draw_minimap(&self, grid: &mut Grid, full: Rect, theme: &Theme) {
         let text = self.text_area(full);
         let track = Rect::new(text.right(), full.y, full.w - text.w, full.h);
@@ -400,6 +455,7 @@ impl Editor {
         let width = track.w as f32 - margin * 1.5;
         let view = Bounds::cells(track.x as f32 + margin - 0.3, top, width + 0.6, span);
         grid.panel(view, 12, Some(theme.minimap_view), Some(theme.popup_border));
+        self.draw_minimap_pictures(grid, track, (margin, width), theme);
         if let Some((_, rows)) = self.minimap.borrow().as_ref() {
             for (row, strips) in rows.iter().enumerate().filter(|(_, s)| !s.is_empty()) {
                 let bounds = Bounds::cells(
@@ -842,7 +898,17 @@ impl Editor {
             return;
         }
         if let Some(cell) = rendered::next_cell(&rows, head) {
-            self.selections.set_single(Selection::cursor(cell));
+            self.select_cell(area, cell);
+            return;
+        }
+        // Past the last cell comes a new row, as in a sheet.
+        if self.selection_in_table(area) {
+            self.edit_table(TableEdit::RowBelow);
+            let rows = self.page(area);
+            let head = self.selections.primary().head;
+            if let Some(cell) = rendered::cell_in_row(&rows, head, 0) {
+                self.select_cell(area, cell);
+            }
             return;
         }
         let (line, start) = self.line_of_head();
@@ -852,6 +918,41 @@ impl Editor {
             self.selections.set_single(Selection::cursor(head + 2));
         } else {
             self.buffer.type_text(&mut self.selections, "    ");
+        }
+    }
+
+    /// Whether the caret is in a table the page is showing.
+    fn selection_in_table(&self, area: Rect) -> bool {
+        let rows = self.page(area);
+        let head = self.selections.primary().head;
+        rendered::cell_column(&rows, head).is_some() && self.table_at_caret().is_some()
+    }
+
+    /// Lands on a cell with what it holds selected, so typing replaces it.
+    fn select_cell(&mut self, area: Rect, cell: usize) {
+        let rows = self.page(area);
+        let (anchor, head) = rendered::cell_range(&rows, cell);
+        self.selections.set_single(Selection {
+            anchor,
+            head,
+            goal: None,
+        });
+    }
+
+    /// Enter in a table: the same column one row down, with a new row past the last.
+    fn next_row(&mut self, area: Rect) {
+        let rows = self.page(area);
+        let head = self.selections.primary().start();
+        let column = rendered::cell_column(&rows, head).unwrap_or(0);
+        if let Some(cell) = rendered::cell_below(&rows, head) {
+            self.select_cell(area, cell);
+            return;
+        }
+        self.edit_table(TableEdit::RowBelow);
+        let rows = self.page(area);
+        let head = self.selections.primary().head;
+        if let Some(cell) = rendered::cell_in_row(&rows, head, column) {
+            self.select_cell(area, cell);
         }
     }
 
@@ -1043,6 +1144,18 @@ impl Editor {
                 }
                 Command::DeleteForward if self.tracking => {
                     self.tracked_delete(true);
+                    true
+                }
+                Command::Newline if self.selection_in_table(text_area) => {
+                    self.next_row(text_area);
+                    true
+                }
+                Command::Outdent if self.selection_in_table(text_area) => {
+                    let rows = self.page(text_area);
+                    let start = self.selections.primary().start();
+                    if let Some(cell) = rendered::previous_cell(&rows, start) {
+                        self.select_cell(text_area, cell);
+                    }
                     true
                 }
                 Command::Newline => {
@@ -2455,6 +2568,7 @@ impl Editor {
         let full = area;
         let area = self.text_area(full);
         self.view_rows.set(area.h);
+        self.view_width.set(area.w);
         let dark = !theme.is_light();
         if self.dark.replace(dark) != dark {
             *self.page.borrow_mut() = None;
@@ -2934,12 +3048,22 @@ impl Editor {
                     }
                 }
                 Tone::Check(checked) => {
-                    let bounds = Bounds::cells(x, y as f32 + 0.2, 1.1, 0.6);
-                    let fill = checked.then_some(theme.accent);
-                    grid.panel(bounds, 16, fill, Some(theme.gutter.fg));
+                    // Square on screen: a row is about twice as tall as a column is wide.
+                    const SIDE: f32 = 0.56;
+                    let cell = self.measure.cell_pixels().unwrap_or((1, 2));
+                    let across = SIDE * cell.1 as f32 / cell.0.max(1) as f32;
+                    let left = x + ((width - across) / 2.0).max(0.0);
+                    let top = y as f32 + (1.0 - SIDE) / 2.0;
+                    let bounds = Bounds::cells(left, top, across, SIDE);
+                    let (fill, edge) = if checked {
+                        (Some(theme.accent), Some(theme.accent))
+                    } else {
+                        (None, Some(theme.gutter.fg))
+                    };
+                    grid.panel(bounds, 22, fill, edge);
                     if checked {
                         grid.paint.push(cellix_render::Paint::Icon {
-                            bounds: Bounds::cells(x + 0.15, y as f32 + 0.22, 1.0, 0.56),
+                            bounds,
                             icon: Icon::Check,
                             color: theme.button_text,
                         });

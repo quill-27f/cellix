@@ -217,6 +217,12 @@ enum Leaving {
 }
 
 /// What a dialog's button does.
+/// A row of the Problems tab.
+enum ProblemRow {
+    File(String),
+    Item(PathBuf, Diagnostic),
+}
+
 #[derive(Clone)]
 enum Choice {
     Cancel,
@@ -558,6 +564,8 @@ pub struct App {
     keep_running: bool,
     /// Whether how the two sides work together has been said yet.
     pane_explained: bool,
+    /// A comment waiting for an agent to be started.
+    pending_ask: Option<u32>,
     /// What runs sessions so they can outlive Cellix: Cellix itself, away from tests.
     host_program: Option<PathBuf>,
     /// A kernel for each notebook that has run something, by its file.
@@ -606,6 +614,7 @@ impl App {
             ticks: 0,
             review: None,
             clipboard_image: clipboard_image_command(),
+            pending_ask: None,
             keep_running: false,
             kernels: HashMap::new(),
             kernel_command: None,
@@ -1000,6 +1009,20 @@ impl App {
     }
 
     /// Sends edits to servers and handles their replies. Returns true if anything changed.
+    /// Hands a waiting comment to the agent that was started for it, once it's ready to hear.
+    fn poll_pending_ask(&mut self) -> bool {
+        const QUIET: std::time::Duration = std::time::Duration::from_millis(1200);
+        let Some(id) = self.pending_ask else {
+            return false;
+        };
+        let ready = self.dock.agent_mut().is_some_and(|s| s.settled(QUIET));
+        if ready {
+            self.pending_ask = None;
+            self.thread_hit(ThreadHit::Ask(id));
+        }
+        ready
+    }
+
     /// Sends the page in view to be checked once typing pauses, and takes in what comes back.
     fn poll_spell(&mut self) -> bool {
         const PAUSE: std::time::Duration = std::time::Duration::from_millis(500);
@@ -1311,7 +1334,8 @@ impl App {
             | self.poll_build()
             | self.poll_snippets()
             | self.poll_spell()
-            | self.poll_kernels();
+            | self.poll_kernels()
+            | self.poll_pending_ask();
         let mut events = Vec::new();
         for client in self.servers.values() {
             events.extend(client.events.try_iter());
@@ -2363,6 +2387,7 @@ impl App {
                     replies: Vec::new(),
                     resolved: false,
                     told: draft.code.then_some(0),
+                    asked: false,
                 });
                 asked = draft.ask.then_some(id);
             }
@@ -4055,16 +4080,24 @@ impl App {
                         self.dock.front = Front::Comments;
                         self.dock.focused = false;
                     }
-                    Some(TabHit::Pdf) => {
-                        self.dock.front = Front::Pdf;
+                    Some(TabHit::View(view)) => {
+                        self.dock.front = view;
                         self.dock.focused = false;
                     }
-                    Some(TabHit::Log) => {
-                        self.dock.front = Front::Log;
-                        self.dock.focused = false;
-                    }
+                    Some(TabHit::CloseView(view)) => self.dock.close_view(view),
                     None => {}
                 }
+            }
+            return true;
+        }
+        if self.dock.front == Front::Problems {
+            match mouse.kind {
+                MouseKind::ScrollUp => {
+                    self.dock.problems_top = self.dock.problems_top.saturating_sub(3);
+                }
+                MouseKind::ScrollDown => self.dock.problems_top += 3,
+                MouseKind::Left => self.click_problem(y),
+                _ => {}
             }
             return true;
         }
@@ -4251,6 +4284,10 @@ impl App {
         }
         if self.dock.front == Front::Log {
             self.dock.draw_log(grid, screen, self.hover, theme);
+            return;
+        }
+        if self.dock.front == Front::Problems {
+            self.draw_problems(grid, screen);
             return;
         }
         if self.dock.front == Front::Comments {
@@ -4594,6 +4631,7 @@ impl App {
             replies: Vec::new(),
             resolved: false,
             told: (!page).then_some(0),
+            asked: false,
         });
         self.save_threads();
         if page {
@@ -4693,10 +4731,23 @@ impl App {
                         self.save_threads();
                         self.say("Sent to the agent. Its answer lands here");
                     }
+                    // Something's already at work on this project, outside the pane. Its
+                    // hook hands it this comment, so there's nothing to start.
+                    _ if self.agents.outside().is_some() => {
+                        let name = self.agents.outside().unwrap_or_default();
+                        if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
+                            thread.asked = true;
+                        }
+                        self.save_threads();
+                        self.dock.front = Front::Comments;
+                        self.say(format!("{name} sees this with its next prompt"));
+                    }
+                    // Nobody to ask yet: it goes to whichever agent starts.
                     _ => {
+                        self.pending_ask = Some(id);
                         self.dock.front = Front::Session;
                         self.dock.active = None;
-                        self.say("Start an agent here. It sees this comment with your next prompt");
+                        self.say("Pick an agent, and your comment goes to it when it's ready");
                     }
                 }
             }
@@ -5122,6 +5173,12 @@ impl App {
                 .is_some_and(|(at, end)| x >= at && x < end);
             if mouse.kind == MouseKind::Left && on_branch {
                 self.run(Command::SwitchBranch);
+            }
+            let on_problems = self
+                .status_problems()
+                .is_some_and(|(at, end)| x >= at && x < end);
+            if mouse.kind == MouseKind::Left && on_problems {
+                self.toggle_problems();
             }
             return;
         }
@@ -7091,6 +7148,116 @@ impl App {
         true
     }
 
+    /// Every problem known, file by file, as rows of the Problems tab.
+    fn problem_rows(&self) -> Vec<ProblemRow> {
+        let mut files: Vec<&PathBuf> = self.diagnostics.keys().collect();
+        files.sort();
+        let mut rows = Vec::new();
+        for file in files {
+            let mut found = self.diagnostics[file].clone();
+            if found.is_empty() {
+                continue;
+            }
+            found.sort_by_key(|d| (d.severity, d.line));
+            rows.push(ProblemRow::File(self.relative(file)));
+            let items = found.into_iter().map(|d| ProblemRow::Item(file.clone(), d));
+            rows.extend(items);
+        }
+        rows
+    }
+
+    fn draw_problems(&self, grid: &mut Grid, screen: Rect) {
+        let theme = &self.theme;
+        grid.fill(screen, theme.sidebar);
+        let rows = self.problem_rows();
+        let quiet = Style {
+            fg: theme.gutter.fg,
+            ..theme.sidebar
+        };
+        if rows.is_empty() {
+            grid.label(
+                screen.x + 2,
+                screen.y + 1,
+                "No problems here",
+                quiet,
+                screen.right(),
+            );
+            return;
+        }
+        let shown = rows.iter().skip(self.dock.problems_top);
+        for (index, row) in shown.take(screen.h as usize).enumerate() {
+            let y = screen.y + index as u16;
+            let line = Rect::new(screen.x, y, screen.w, 1);
+            if self.hover.is_some_and(|h| line.contains(h.0, h.1)) {
+                grid.panel(
+                    Bounds::inset(line, 0.4, 0.06),
+                    12,
+                    Some(theme.row_hover),
+                    None,
+                );
+            }
+            match row {
+                ProblemRow::File(name) => {
+                    let bold = Style {
+                        bold: true,
+                        ..theme.sidebar
+                    };
+                    grid.label(screen.x + 1, y, name, bold, screen.right());
+                }
+                ProblemRow::Item(_, problem) => {
+                    let colour = if problem.severity == 1 {
+                        theme.deleted()
+                    } else {
+                        theme.attention
+                    };
+                    let mark = Style {
+                        fg: colour,
+                        ..theme.sidebar
+                    };
+                    grid.label(screen.x + 2, y, "●", mark, screen.x + 4);
+                    let at = format!("{}  ", problem.line + 1);
+                    let text = grid.label(screen.x + 4, y, &at, quiet, screen.right());
+                    grid.label(text, y, &problem.message, theme.sidebar, screen.right());
+                }
+            }
+        }
+    }
+
+    /// A problem goes to its place.
+    fn click_problem(&mut self, y: u16) {
+        let Some(screen) = self.dock_screen() else {
+            return;
+        };
+        let Some(row) = y.checked_sub(screen.y) else {
+            return;
+        };
+        let rows = self.problem_rows();
+        let picked = rows.get(self.dock.problems_top + row as usize);
+        if let Some(ProblemRow::Item(file, problem)) = picked {
+            let line = problem.line + 1;
+            if self.open(file).is_ok() {
+                let area = self.focused_area();
+                if let Some(editor) = self.editor_mut() {
+                    editor.go_to_line(line, area);
+                }
+            }
+            self.dock.focused = false;
+        }
+    }
+
+    /// Opens or closes the list of problems, from the count in the status bar.
+    fn toggle_problems(&mut self) {
+        if self.dock.open && self.dock.front == Front::Problems {
+            self.dock.close_view(Front::Problems);
+            return;
+        }
+        self.dock.problems = true;
+        self.dock.problems_top = 0;
+        self.dock.open = true;
+        self.dock.front = Front::Problems;
+        self.dock.focused = false;
+    }
+
     /// A line of the build's log that names a place goes there.
     fn log_click(&mut self, y: u16) {
         let Some(line) = self.dock_screen().and_then(|s| self.dock.log_line(s, y)) else {
@@ -7471,6 +7638,15 @@ impl App {
         }
         let mut x = start;
         if let Some(problems) = &problems {
+            if let Some((at, end)) = self.status_problems()
+                && self
+                    .hover
+                    .is_some_and(|h| h.1 == y && h.0 >= at && h.0 < end)
+            {
+                let chip = Rect::new(at, y, end.saturating_sub(at + 1), 1);
+                let wash = Bounds::inset(chip, -0.3, 0.12);
+                grid.panel(wash, 16, Some(self.theme.row_hover), None);
+            }
             x = grid.label(x, y, problems, bar, right_x);
         }
         let needs_you = waiting > 0 && message.is_empty() && self.neovim_line.is_empty();
@@ -7487,6 +7663,64 @@ impl App {
         };
         grid.label_at(x as f32, x, y, left, bar, right_x.saturating_sub(1), 90);
         grid.label_right(width.saturating_sub(1), y, &right, bar, 90);
+    }
+
+    /// Where the count of problems sits in the status bar, as (start, end) columns.
+    fn status_problems(&self) -> Option<(u16, u16)> {
+        let count: usize = self.diagnostics.values().map(Vec::len).sum();
+        if count == 0 || self.compact() {
+            return None;
+        }
+        let at = self.status_branch().map_or(1, |(_, end)| end + 1);
+        Some((at, at + format!("⊗ {count}  ").chars().count() as u16))
+    }
+
+    /// The pointer for what's under it: a hand for what can be pressed, a bar for text.
+    pub fn pointer(&self) -> &'static str {
+        const ARROW: &str = "default";
+        const HAND: &str = "pointer";
+        const TEXT: &str = "text";
+        let Some((x, y)) = self.hover else {
+            return ARROW;
+        };
+        if !matches!(self.overlay, Overlay::None) {
+            return ARROW;
+        }
+        let on_chip = self
+            .selection_bar()
+            .is_some_and(|(comment, ask)| comment.contains(x, y) || ask.contains(x, y))
+            || self
+                .picture_comment()
+                .is_some_and(|(chip, _)| chip.contains(x, y))
+            || self
+                .run_button()
+                .is_some_and(|(chip, _)| chip.contains(x, y))
+            || self.view_comment().is_some_and(|chip| chip.contains(x, y));
+        let status = y + 1 == self.size.1
+            && (self
+                .status_branch()
+                .is_some_and(|(at, end)| x >= at && x < end)
+                || self
+                    .status_problems()
+                    .is_some_and(|(at, end)| x >= at && x < end));
+        let dock = self.dock_area().filter(|a| a.contains(x, y));
+        let dock_title = dock.is_some_and(|a| y == a.y);
+        let in_rail = self.activity_area().contains(x, y);
+        let in_sidebar = self.sidebar_area().is_some_and(|a| a.contains(x, y));
+        let in_tabs = self.tabs_area().contains(x, y);
+        let in_toolbar = self.toolbar_row().is_some_and(|r| r.contains(x, y));
+        if on_chip || status || dock_title || in_rail || in_sidebar || in_tabs || in_toolbar {
+            return HAND;
+        }
+        if dock.is_some() {
+            let writing = self.dock.front == Front::Session && self.dock.session().is_some();
+            return if writing { TEXT } else { ARROW };
+        }
+        let in_file = self.review.is_none()
+            && self.settings_page.is_none()
+            && !self.editors.is_empty()
+            && self.pane_at(x, y).is_some();
+        if in_file { TEXT } else { ARROW }
     }
 
     /// Where the branch sits in the status bar, as (start, end) columns.
@@ -8744,7 +8978,7 @@ mod tests {
         typed(&mut app, "x");
         assert_eq!(
             app.active_text().unwrap(),
-            "| a | xb |\n|---|---|\n| c | d |\n"
+            "| a | x |\n|---|---|\n| c | d |\n"
         );
     }
 
@@ -10984,6 +11218,101 @@ mod tests {
     }
 
     #[test]
+    fn the_pointer_says_what_a_place_is() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        let (x, y) = find(&screen(&app), "first");
+        app.handle(mouse(MouseKind::Move, x, y));
+        assert_eq!(app.pointer(), "text");
+        app.handle(mouse(MouseKind::Move, 2, 4));
+        assert_eq!(app.pointer(), "pointer");
+        let (x, y) = find(&screen(&app), "beta.rs");
+        app.handle(mouse(MouseKind::Move, x, y));
+        assert_eq!(app.pointer(), "pointer");
+        app.handle(Event::Tick);
+        app.run(Command::CommandPalette);
+        app.handle(mouse(MouseKind::Move, 90, 30));
+        assert_eq!(app.pointer(), "default", "a dialog is in the way");
+    }
+
+    #[test]
+    fn a_minimap_shows_a_documents_pictures() {
+        let mut text = "![Plot](plot.png)\n\n".to_string();
+        text.push_str(&"line\n\n".repeat(80));
+        let (_dir, app) = picture_page(&text);
+        let _ = screen(&app);
+        assert_eq!(
+            pictures(&app).len(),
+            2,
+            "the picture, and its place in the map"
+        );
+    }
+
+    fn sheet_keys(source: &str) -> (TempDir, App) {
+        let (dir, mut app) = data_app("runs.csv", source);
+        let (x, y) = find(&screen(&app), "alpha");
+        app.handle(mouse(MouseKind::Left, x, y));
+        (dir, app)
+    }
+
+    #[test]
+    fn tab_moves_along_a_row_and_on_to_the_next_replacing_what_it_lands_on() {
+        let (_dir, mut app) = sheet_keys("name,loss\nalpha,1\nbeta,2\n");
+        key(&mut app, Key::Tab);
+        assert_eq!(app.selected_text().as_deref(), Some("1"));
+        key(&mut app, Key::Tab);
+        assert_eq!(app.selected_text().as_deref(), Some("beta"));
+        typed(&mut app, "gamma");
+        assert_eq!(app.active_text().unwrap(), "name,loss\nalpha,1\ngamma,2\n");
+    }
+
+    #[test]
+    fn shift_tab_goes_back_a_cell() {
+        let (_dir, mut app) = sheet_keys("name,loss\nalpha,1\n");
+        key(&mut app, Key::Tab);
+        key(&mut app, Key::BackTab);
+        assert_eq!(app.selected_text().as_deref(), Some("alpha"));
+    }
+
+    #[test]
+    fn tab_past_the_last_cell_adds_a_row() {
+        let (_dir, mut app) = sheet_keys("name,loss\nalpha,1\n");
+        key(&mut app, Key::Tab);
+        key(&mut app, Key::Tab);
+        typed(&mut app, "new");
+        assert_eq!(app.active_text().unwrap(), "name,loss\nalpha,1\nnew,\n");
+    }
+
+    #[test]
+    fn enter_goes_down_the_column_and_adds_a_row_at_the_bottom() {
+        let (_dir, mut app) = sheet_keys("name,loss\nalpha,1\nbeta,2\n");
+        key(&mut app, Key::Tab);
+        key(&mut app, Key::Enter);
+        assert_eq!(app.selected_text().as_deref(), Some("2"));
+        key(&mut app, Key::Enter);
+        typed(&mut app, "3");
+        assert_eq!(
+            app.active_text().unwrap(),
+            "name,loss\nalpha,1\nbeta,2\n,3\n"
+        );
+    }
+
+    #[test]
+    fn a_markdown_table_moves_the_same_way() {
+        let source = "| Name | Loss |\n|---|---|\n| alpha | one |\n";
+        let (_dir, mut app) = page_app(source);
+        let (x, y) = cell_of(&app, "alpha");
+        app.handle(mouse(MouseKind::Left, x, y));
+        key(&mut app, Key::Tab);
+        assert_eq!(app.selected_text().as_deref(), Some("one"));
+        key(&mut app, Key::Tab);
+        typed(&mut app, "next");
+        let text = app.active_text().unwrap();
+        assert_eq!(text.lines().count(), 4, "{text}");
+        assert!(text.lines().nth(3).unwrap().contains("next"), "{text}");
+    }
+
+    #[test]
     fn a_picture_in_the_pane_takes_a_comment() {
         let dir = tempfile::tempdir().unwrap();
         let mut app = App::new(dir.path().to_path_buf(), (150, 44));
@@ -11146,7 +11475,7 @@ mod tests {
         app.start_session(crate::agents::SHELL.0, &shell, &[], &root);
         app.dock.front = Front::Comments;
         app.thread_hit(ThreadHit::Ask(app.threads[0].id));
-        assert!(screen(&app).text().contains("Start an agent here"));
+        assert!(screen(&app).text().contains("Pick an agent"));
         std::thread::sleep(std::time::Duration::from_millis(300));
         assert!(!dir.path().join("PWNED").exists(), "it ran as a command");
     }
@@ -11221,12 +11550,87 @@ mod tests {
     }
 
     #[test]
-    fn asking_with_no_agent_points_at_starting_one() {
+    fn asking_with_no_agent_goes_to_the_one_you_start() {
+        let (dir, mut app) = page_app("line\n");
+        comment_on(&mut app, "Note for later");
+        let (x, y) = find(&screen(&app), "Ask agent");
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert!(screen(&app).text().contains("Pick an agent"));
+        let script = "printf ready; cat > heard.txt";
+        let argv = ["sh".to_string(), "-c".to_string(), script.to_string()];
+        let root = app.workspace.root().to_path_buf();
+        app.start_session("Stand-in", &argv, &[], &root);
+        let log = dir.path().join("heard.txt");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        while !fs::read_to_string(&log)
+            .unwrap_or_default()
+            .contains("Note for later")
+        {
+            assert!(std::time::Instant::now() < deadline, "it never went");
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn asking_when_an_agent_works_outside_the_pane_leaves_it_for_its_next_prompt() {
         let (_dir, mut app) = page_app("line\n");
+        app.serve(Request::Agent(agent(
+            cellix_agent::AgentState::Working,
+            "Working",
+        )));
         comment_on(&mut app, "Note");
         let (x, y) = find(&screen(&app), "Ask agent");
         app.handle(mouse(MouseKind::Left, x, y));
-        assert!(screen(&app).text().contains("Start an agent here"));
+        assert_eq!(app.dock.front, Front::Comments, "it stays with the comment");
+        assert!(app.threads[0].asked);
+        let text = screen(&app).text();
+        assert!(text.contains("sees this with its next prompt"), "{text}");
+    }
+
+    #[test]
+    fn the_tabs_for_a_pdf_and_a_log_close() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("paper.pdf"), cellix_doc::pdf::sample()).unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 44));
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(10, 20)));
+        app.open(&dir.path().join("paper.pdf")).unwrap();
+        app.dock.log = vec!["built".to_string()];
+        let area = app.dock_area().unwrap();
+        let (tab, x) = {
+            let (front, _, tab) = app.dock.view_tabs_for_test(area)[0];
+            (front, tab.right() - 2)
+        };
+        assert_eq!(tab, Front::Pdf);
+        app.handle(mouse(MouseKind::Left, x, area.y));
+        assert!(app.dock.pdf.is_none());
+        let (_, _, log) = app.dock.view_tabs_for_test(area)[0];
+        app.handle(mouse(MouseKind::Left, log.right() - 2, area.y));
+        assert!(app.dock.log.is_empty());
+    }
+
+    #[test]
+    fn the_count_of_problems_opens_them_and_a_row_goes_there() {
+        let (dir, mut app) = project();
+        let file = dir.path().join("alpha.txt");
+        app.open(&file).unwrap();
+        app.diagnostics.insert(
+            file.clone(),
+            vec![Diagnostic {
+                line: 1,
+                column: 0,
+                message: "Something broke here".to_string(),
+                severity: 1,
+            }],
+        );
+        let (at, _) = app.status_problems().unwrap();
+        let bottom = app.size.1 - 1;
+        app.handle(mouse(MouseKind::Left, at, bottom));
+        assert_eq!(app.dock.front, Front::Problems);
+        let grid = screen(&app);
+        let (x, y) = find(&grid, "Something broke");
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert_eq!(app.cursor_line().unwrap().1, 2);
     }
 
     fn paper_app(text: &str) -> (TempDir, App) {

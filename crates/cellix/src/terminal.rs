@@ -301,6 +301,7 @@ pub fn run(options: Options) -> io::Result<()> {
     }
     let mouse_cell = |display: &Display| display.cell.filter(|_| pixel_mouse);
     let mut redraw = true;
+    let mut shape = None;
     let mut last_tick = std::time::Instant::now();
     let mut shown: Option<Grid> = None;
     let ghostty = std::env::var("TERM").is_ok_and(|t| t.contains("ghostty"));
@@ -336,6 +337,12 @@ pub fn run(options: Options) -> io::Result<()> {
                 let encoded = base64::engine::general_purpose::STANDARD.encode(text);
                 write!(out, "\x1b]52;c;{encoded}\x07")?;
             }
+            // The terminal's own idea of the pointer drifts, so it's told each time.
+            let pointer = app.pointer();
+            if shape != Some(pointer) {
+                write!(out, "\x1b]22;{pointer}\x1b\\")?;
+                shape = Some(pointer);
+            }
             out.flush()?;
             redraw = false;
         }
@@ -356,6 +363,10 @@ pub fn run(options: Options) -> io::Result<()> {
                     && display.placement == Some(Placement::Placeholder)
                 {
                     backend.invalidate();
+                }
+                // Coming back, or typing, can leave the terminal showing a pointer of its own.
+                if matches!(event, ct::Event::FocusGained | ct::Event::Key(_)) {
+                    shape = None;
                 }
                 match translate(event, mouse_cell(&display)).map(|e| cmd_left(e, ghostty)) {
                     // The size check above handles it, and compares against the old size.
@@ -380,6 +391,8 @@ pub fn run(options: Options) -> io::Result<()> {
             }
         }
     }
+    write!(out, "\x1b]22;default\x1b\\")?;
+    out.flush()?;
     drop(_session);
     app.finish()
 }
