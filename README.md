@@ -1,23 +1,70 @@
 # Cellix
 
-A terminal-native editor for agentic development: review what the agent planned and
-changed, correct it, and keep working without leaving your terminal, even over SSH.
+[![ci](https://github.com/quill-27f/cellix/actions/workflows/ci.yml/badge.svg)](https://github.com/quill-27f/cellix/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/cellix)](https://crates.io/crates/cellix)
+[![license](https://img.shields.io/crates/l/cellix)](#license)
 
-The name joins cell and pixel: it renders pixels in the terminal and falls back to text
-cells.
+**The AI companion IDE for your terminal.** Use it as a Claude Code mod, a Codex plugin or a Gemini
+CLI extension, or on its own with any agent beside it.
 
-Status: the full feature set is built and tested, and it hasn't yet been used over a real
-SSH link. See [docs/PROGRESS.md](docs/PROGRESS.md) for what has and hasn't been proven.
+Your agent writes the code and the documents. Cellix is where you read what it did, correct it and
+answer back. Select anything and leave a comment, and the agent gets it with the file, the line and
+the quote. Plans wait for your approval, edits arrive as diffs you accept hunk by hunk, and a turn
+you don't like can be undone. It's all in the terminal, so it works the same over SSH.
 
-## Try it
+![A document in Cellix, with a comment waiting for the agent](docs/images/comments.png)
+
+## Install
 
 ```sh
-cargo install --path crates/cellix
+brew install quill-27f/tap/cellix    # macOS and Linux
+cargo install cellix --locked        # anywhere Rust runs
+```
+
+Static Linux binaries for servers are on the [releases page](https://github.com/quill-27f/cellix/releases).
+Then, in a project:
+
+```sh
 cellix            # the current folder
 cellix src/lib.rs # with a file open
 ```
 
-A static Linux binary comes from the `release` workflow, for a server with no Rust on it.
+It looks its best in a terminal with Kitty graphics, such as Ghostty, Kitty or WezTerm, where it
+draws real pixels. Anywhere else it falls back to text cells.
+
+## Connect your agent
+
+| Agent | How | What you get |
+|---|---|---|
+| Claude Code | `cellix setup --install` | A mod: Cellix as a pane inside Claude, proposed edits as diffs, plans to approve, your selection in the prompt, every turn checkpointed |
+| Codex | Settings, Integrations, Install, then `/hooks` once in Codex to trust it | A plugin: your comments in its prompts, plans held for review, turns and test runs in Review |
+| Gemini CLI | Settings, Integrations, Install | An extension: the same, with plans held as it leaves plan mode |
+| Anything else | `cellix plan`, `cellix comments --take`, `cellix reply` | A small CLI any agent can call |
+
+Or run any of them inside Cellix. The icons at the top right put the real program in a pane beside
+your file, along with a terminal and a browser.
+
+![An agent list in the side pane](docs/images/agents.png)
+
+## What's in it
+
+- **Review.** Changes against HEAD or any agent turn, hunk by hunk, with the tests the agent ran.
+- **Comments on anything.** Text, pictures, diagrams, formulas and PDFs, the same way in every format.
+- **Source Control.** Stage, commit, push and pull, as in VS Code.
+- **Writing.** Markdown and LaTeX as a page you type on, with typeset math, diagrams, citations, track
+  changes and PDF builds.
+- **Data.** CSV as a table with Excel's keys, and notebooks on a real Jupyter kernel.
+- **An editor.** Highlighting and suggestions in every file type, language servers, a minimap, Vim and
+  Neovim modes.
+
+![Source Control, with a diff beside it](docs/images/source-control.png)
+
+![A paper in the dark theme](docs/images/paper.png)
+
+Cellix is young. Everything here is built and tested, but it hasn't had much real use yet, and not
+on a real SSH link. [docs/PROGRESS.md](docs/PROGRESS.md) says what has and hasn't been proven.
+
+## Keys
 
 | Keys | Action |
 |---|---|
@@ -62,7 +109,8 @@ breaks. The toolbar has bold, italic, code, heading, list, task and quote, and
 Toggle Markdown Source in the palette shows the raw file.
 
 Under 70 columns, as beside an agent, the sidebar becomes a drawer behind the `☰` button
-and review stacks changes in one column.
+and review stacks changes in one column. In a window too narrow for the side pane, it stands
+under the file, and its top edge can be dragged.
 
 The mouse works everywhere: click files, tabs and hunks, drag to select, and right-click
 the explorer to create, rename or delete.
@@ -103,9 +151,10 @@ line of any error. Clicking the PDF goes to that place in the source. Set `latex
 settings file to use your own command. Export to PDF does the same for Markdown, through LaTeX, with
 diagrams and footnotes.
 
-**Data and notebooks.** CSV and TSV files open as a table you can edit in place. A Jupyter notebook
-opens as a page with each cell's output under it, and saving keeps those outputs. Cells don't run
-here: a shell in the side pane can do that.
+**Data and notebooks.** CSV and TSV files open as a table you can edit in place, with Tab and Enter
+moving as they do in Excel. Show Source at the top right goes between the table and the file. A
+Jupyter notebook opens as a page with each cell's output under it, and its bar runs cells on a real
+kernel, with Jupyter's keys. It needs `jupyter_client` and `ipykernel` in the project's Python.
 
 ## Working with an agent
 
@@ -125,16 +174,22 @@ runs a real browser there with `terminal-browser` if it's installed.
 
 Getting Started, in the command palette or on the empty window, is a short guide.
 
+## Source Control
+
+The Git icon on the left lists staged and unstaged files with a box for the message, and hovering
+over a file offers stage, unstage and discard. Enter commits what's staged, or everything if nothing
+is. The button beside Commit pushes, pulls or publishes, and clicking a file shows its diff. Ctrl+G
+opens the full Review, which reads what changed hunk by hunk.
+
 ## Over SSH
 
 Everything runs on the server, and your local terminal only draws the result. This setup
-hasn't been tried on a real SSH link yet. On the server, you need Rust, git and tmux, plus
-Claude Code if you want the agent features:
+hasn't been tried on a real SSH link yet. On the server, you need tmux, plus Claude Code if you
+want the agent features. Take the static binary from the
+[releases page](https://github.com/quill-27f/cellix/releases), or use `cargo install`:
 
 ```sh
-git clone https://github.com/quill-27f/cellix.git
-cd cellix
-cargo install --path crates/cellix
+cargo install cellix --locked
 
 # Pixels through tmux, no focus warning from Claude Code, click to switch panes
 cat >> ~/.tmux.conf <<'CONF'
@@ -209,7 +264,7 @@ minimap, so the code keeps the room.
 - **Comments** go with `Send Comments to Agent`, or with your next prompt.
 - **Turns** are checkpointed. Review shows what each prompt changed, and `Undo Agent Turn`
   puts the tree back, keeping a checkpoint of what it replaced.
-- **Agents** (the robot icon) is what's happening here: who's running in this folder, who
+- **Agents** (the robot icon at the top right) is what's happening here: who's running in this folder, who
   needs you, and every worktree. Agents started without a plugin still show up, found by
   their working folder. Agents that are installed can be started from the bottom of it.
 - **Tests** an agent runs appear in review with their results.
@@ -232,10 +287,15 @@ published protocol, so a Claude Code update could change it. It was built agains
 
 ### Codex and Gemini CLI
 
-Settings, Integrations has an Install button for each, or the plugin's source is under
-`integrations/`. They report what the agent is doing, record a turn for each prompt, show
-test runs in review, and hand the agent your comments. They don't get the pane or plan
-review, which rely on what only Claude Code offers.
+Settings, Integrations has an Install button for each, and the plugins' source is under
+`crates/cellix/integrations/`. They report what the agent is doing, record a turn for each prompt,
+show test runs in review, and hand the agent your comments.
+
+Plans are held for review too. Gemini CLI stops as it leaves plan mode, and still asks for its own
+approval afterwards. Codex has no plan tool, so its plan is held when its turn ends: sending it back
+starts another turn with your notes, and approving leaves implementing it for you to ask for. Neither
+has been tried on a live agent yet. `cellix plan <file>` always works. The pane itself needs what
+only Claude Code offers.
 
 Codex asks you to trust a plugin's hooks before running them, so run `/hooks` in Codex once
 after installing. Restart Gemini CLI to load its extension. Google now points people to
@@ -266,8 +326,19 @@ config, which then needs a reload.
 tmux needs `set -g allow-passthrough on` for pixels, as shown under [Over SSH](#over-ssh).
 Without it, Cellix uses text cells.
 
-See [docs/DESIGN.md](docs/DESIGN.md) for the design and [AGENTS.md](AGENTS.md) for how to
-work on it.
+If something stalls, `~/.cache/cellix/slow-frames.log` holds every frame over 50 ms with where the
+time went. It's timings only, and it starts afresh each run.
+
+## Contributing
+
+Build from a clone with `cargo install --path crates/cellix`. [AGENTS.md](AGENTS.md) says how the
+project is worked on, with `harness/x` running everything, and [docs/DESIGN.md](docs/DESIGN.md) says
+what it is and why. Bug reports with a screenshot help most.
+
+## License
+
+Cellix is under either the [MIT](LICENSE-MIT) or the [Apache 2.0](LICENSE-APACHE) license, at your
+option.
 
 Cellix embeds [Inter](crates/cellix-render/fonts/LICENSE-Inter.txt) and
 [JetBrains Mono](crates/cellix-render/fonts/LICENSE-JetBrainsMono.txt), both under the SIL

@@ -3,7 +3,7 @@
 use std::path::Path;
 
 fn plugin_file(path: &str) -> String {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../integrations/claude-code");
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("integrations/claude-code");
     std::fs::read_to_string(root.join(path)).unwrap()
 }
 

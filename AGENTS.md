@@ -59,6 +59,7 @@ If a design decision changes, update `docs/DESIGN.md` in the same commit.
 | Path | Holds |
 |---|---|
 | `crates/` | The workspace; `docs/DESIGN.md` lists each crate's role |
+| `crates/cellix/integrations` | The Claude Code, Codex and Gemini CLI plugins, built into the binary |
 | `harness/x` | Task runner |
 | `harness/guard.sh` | Resource guard |
 | `harness/features.json` | Feature ledger, the source of truth for progress |

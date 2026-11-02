@@ -457,3 +457,10 @@ main loop. The old scroll tests were rewritten for it: `regions_scroll_by_pixels
 notch landing mid-glide and turning round. Checked in the headless terminal, including mid-scroll on
 a typeset page, about 2 MB/s there. Unverified: how it feels in a real Ghostty, which is the point of
 it, and only editors glide. Lists, Review and the pane still move by lines.
+
+Getting ready to go public. The history holds no secrets, personal paths or personal email, and all
+726 dependencies have permissive or file-level licences. The plugins moved into
+`crates/cellix/integrations`, since `cargo publish` packs only what's inside a crate. The release
+workflow builds four targets and writes a Homebrew formula from their checksums, and publishes to the
+tap and crates.io only where their tokens are set. The README leads with what Cellix is to an agent.
+

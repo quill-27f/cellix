@@ -520,7 +520,7 @@ mod tests {
     fn plan_hooks_are_given_time_for_a_person_to_read() {
         let hooks = |text: &str| serde_json::from_str::<Value>(text).unwrap();
         let gemini = hooks(include_str!(
-            "../../../integrations/gemini/hooks/hooks.json"
+            "../../cellix/integrations/gemini/hooks/hooks.json"
         ));
         let before = &gemini["hooks"]["BeforeTool"][0];
         assert_eq!(before["matcher"], "exit_plan_mode");
@@ -528,7 +528,9 @@ mod tests {
             before["hooks"][0]["timeout"], 86_400_000,
             "Gemini counts milliseconds"
         );
-        let codex = hooks(include_str!("../../../integrations/codex/hooks/hooks.json"));
+        let codex = hooks(include_str!(
+            "../../cellix/integrations/codex/hooks/hooks.json"
+        ));
         assert_eq!(codex["hooks"]["Stop"][0]["hooks"][0]["timeout"], 86_400);
     }
 

@@ -6,23 +6,23 @@ use std::path::{Path, PathBuf};
 const FILES: [(&str, &str); 5] = [
     (
         ".claude-plugin/plugin.json",
-        include_str!("../../../integrations/claude-code/.claude-plugin/plugin.json"),
+        include_str!("../integrations/claude-code/.claude-plugin/plugin.json"),
     ),
     (
         "hooks/hooks.json",
-        include_str!("../../../integrations/claude-code/hooks/hooks.json"),
+        include_str!("../integrations/claude-code/hooks/hooks.json"),
     ),
     (
         "hooks/register.tsx",
-        include_str!("../../../integrations/claude-code/hooks/register.tsx"),
+        include_str!("../integrations/claude-code/hooks/register.tsx"),
     ),
     (
         "hooks/pane-input.tsx",
-        include_str!("../../../integrations/claude-code/hooks/pane-input.tsx"),
+        include_str!("../integrations/claude-code/hooks/pane-input.tsx"),
     ),
     (
         "skills/cellix-review/SKILL.md",
-        include_str!("../../../integrations/claude-code/skills/cellix-review/SKILL.md"),
+        include_str!("../integrations/claude-code/skills/cellix-review/SKILL.md"),
     ),
 ];
 
@@ -30,34 +30,34 @@ const FILES: [(&str, &str); 5] = [
 const CODEX_FILES: [(&str, &str); 4] = [
     (
         "plugins/cellix/plugin.json",
-        include_str!("../../../integrations/codex/plugin.json"),
+        include_str!("../integrations/codex/plugin.json"),
     ),
     (
         "plugins/cellix/hooks/hooks.json",
-        include_str!("../../../integrations/codex/hooks/hooks.json"),
+        include_str!("../integrations/codex/hooks/hooks.json"),
     ),
     (
         "plugins/cellix/skills/cellix-review/SKILL.md",
-        include_str!("../../../integrations/codex/skills/cellix-review/SKILL.md"),
+        include_str!("../integrations/codex/skills/cellix-review/SKILL.md"),
     ),
     (
         ".agents/plugins/marketplace.json",
-        include_str!("../../../integrations/codex/marketplace.json"),
+        include_str!("../integrations/codex/marketplace.json"),
     ),
 ];
 
 const GEMINI_FILES: [(&str, &str); 3] = [
     (
         "gemini-extension.json",
-        include_str!("../../../integrations/gemini/gemini-extension.json"),
+        include_str!("../integrations/gemini/gemini-extension.json"),
     ),
     (
         "hooks/hooks.json",
-        include_str!("../../../integrations/gemini/hooks/hooks.json"),
+        include_str!("../integrations/gemini/hooks/hooks.json"),
     ),
     (
         "GEMINI.md",
-        include_str!("../../../integrations/gemini/GEMINI.md"),
+        include_str!("../integrations/gemini/GEMINI.md"),
     ),
 ];
 
@@ -137,9 +137,9 @@ mod tests {
     #[test]
     fn every_agent_is_told_the_commands_that_exist() {
         let texts = [
-            include_str!("../../../integrations/claude-code/skills/cellix-review/SKILL.md"),
-            include_str!("../../../integrations/codex/skills/cellix-review/SKILL.md"),
-            include_str!("../../../integrations/gemini/GEMINI.md"),
+            include_str!("../integrations/claude-code/skills/cellix-review/SKILL.md"),
+            include_str!("../integrations/codex/skills/cellix-review/SKILL.md"),
+            include_str!("../integrations/gemini/GEMINI.md"),
         ];
         let main = include_str!("main.rs");
         for text in texts {
