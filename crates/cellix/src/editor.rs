@@ -50,7 +50,12 @@ pub struct Marks {
 }
 
 /// A page's rows, its figures, and where its formulas and images are.
-type LaidOut = (Rc<Vec<Row>>, Vec<Figure>, Vec<(usize, usize)>);
+type LaidOut = (
+    Rc<Vec<Row>>,
+    Vec<Figure>,
+    Vec<(usize, usize)>,
+    Option<usize>,
+);
 
 /// A laid-out page, and what it was made for.
 struct PageCache {
@@ -62,6 +67,8 @@ struct PageCache {
     figures: Rc<Vec<Figure>>,
     /// Every formula and image, which the caret opens by moving into.
     spans: Rc<Vec<(usize, usize)>>,
+    /// The picture of a formula being edited in a line.
+    preview: Option<usize>,
 }
 
 /// One open document and where the view is within it.
@@ -182,7 +189,14 @@ impl Editor {
 
     /// Whether a pane has room for a minimap, which only pixels can draw.
     fn shows_minimap(&self, area: Rect) -> bool {
-        self.minimap_on && !self.measure.in_cells() && area.w >= MIN_MINIMAP_PANE
+        // A document that fits has nothing for a minimap to show.
+        let fits = self.rendered && {
+            let cache = self.page.borrow();
+            cache
+                .as_ref()
+                .is_some_and(|p| p.rows.len() <= area.h as usize)
+        };
+        self.minimap_on && !self.measure.in_cells() && area.w >= MIN_MINIMAP_PANE && !fits
     }
 
     /// Where text goes in `area`: all of it, less the minimap or the scrollbar.
@@ -457,6 +471,7 @@ impl Editor {
             Rc::new(rows),
             extras.figures.into_inner(),
             extras.spans.into_inner(),
+            extras.preview.into_inner(),
         )
     }
 
@@ -472,7 +487,7 @@ impl Editor {
             .is_none_or(|c| c.revision != revision || c.width != width);
         if stale {
             let text = self.buffer.text();
-            let (rows, figures, spans) = self.lay_out(&text, width, None);
+            let (rows, figures, spans, _) = self.lay_out(&text, width, None);
             *cache = Some(PageCache {
                 revision,
                 width,
@@ -480,6 +495,7 @@ impl Editor {
                 rows,
                 figures: Rc::new(figures),
                 spans: Rc::new(spans),
+                preview: None,
             });
         }
         let page = cache.as_mut().expect("laid out above");
@@ -490,10 +506,11 @@ impl Editor {
             .find(|s| s.0 < head && head < s.1);
         if open != page.open {
             let text = self.buffer.text();
-            let (rows, figures, _) = self.lay_out(&text, width, open);
+            let (rows, figures, _, preview) = self.lay_out(&text, width, open);
             page.open = open;
             page.rows = rows;
             page.figures = Rc::new(figures);
+            page.preview = preview;
         }
         page.rows.clone()
     }
@@ -630,9 +647,26 @@ impl Editor {
     }
 
     /// Tab moves between table cells, and otherwise indents.
+    /// The next empty `{}` of a formula being edited, for Tab.
+    fn next_slot(&self, head: usize) -> Option<usize> {
+        let cache = self.page.borrow();
+        let (_, end) = cache.as_ref()?.open?;
+        let rope = self.buffer.rope();
+        let text: Vec<char> = rope
+            .slice(head..end.min(rope.len_chars()))
+            .chars()
+            .collect();
+        let found = text.windows(2).skip(1).position(|w| w == ['{', '}'])?;
+        Some(head + found + 2)
+    }
+
     fn tab_on_page(&mut self, area: Rect) {
         let rows = self.page(area);
         let head = self.selections.primary().head;
+        if let Some(slot) = self.next_slot(head) {
+            self.selections.set_single(Selection::cursor(slot));
+            return;
+        }
         if let Some(cell) = rendered::next_cell(&rows, head) {
             self.selections.set_single(Selection::cursor(cell));
             return;
@@ -1504,7 +1538,17 @@ impl Editor {
         };
         let chars = symbol.text.chars().count();
         let caret = symbol.caret.min(chars) + open.chars().count();
-        let text = format!("{open}{}{close}", symbol.text);
+        // What's selected goes in the template's first slot, rather than being replaced.
+        let selected = self.selected_text().unwrap_or_default();
+        let slot = symbol.caret < chars && !selected.is_empty();
+        let body = if slot {
+            let at: String = symbol.text.chars().take(symbol.caret).collect();
+            let rest: String = symbol.text.chars().skip(symbol.caret).collect();
+            format!("{at}{selected}{rest}")
+        } else {
+            symbol.text.to_string()
+        };
+        let text = format!("{open}{body}{close}");
         if block {
             self.insert_block(&text, caret);
             return;
@@ -1965,6 +2009,7 @@ impl Editor {
         if focused && primary.is_empty() && caret_row >= self.top {
             let y = area.y as usize + caret_row - self.top;
             let x = left as f32 + caret_x;
+            self.draw_preview(grid, area, (x, y as f32), theme);
             if y < area.bottom() as usize && x < area.right() as f32 {
                 let row = &rows[caret_row];
                 let size = row.glyphs.first().map_or(100, |g| g.font.size) as f32 / 100.0;
@@ -1976,6 +2021,42 @@ impl Editor {
                 }
             }
         }
+    }
+
+    /// Shows what the formula under the caret looks like, just below its line.
+    fn draw_preview(&self, grid: &mut Grid, area: Rect, (x, y): (f32, f32), theme: &Theme) {
+        let cache = self.page.borrow();
+        let Some(page) = cache.as_ref() else {
+            return;
+        };
+        let Some(figure) = page.preview.and_then(|index| page.figures.get(index)) else {
+            return;
+        };
+        const PADDING: (f32, f32) = (1.0, 0.3);
+        let (width, height) = (
+            figure.width + PADDING.0 * 2.0,
+            figure.height + PADDING.1 * 2.0,
+        );
+        let left = x.min(area.right() as f32 - width - 1.0).max(area.x as f32);
+        let top = y + 1.2;
+        let clip = Bounds::cells(area.x as f32, area.y as f32, area.w as f32, area.h as f32);
+        grid.popup(
+            Bounds::cells(left, top, width, height),
+            22,
+            theme.popup,
+            theme.popup_border,
+        );
+        grid.paint.push(Paint::Image {
+            bounds: Bounds::cells(
+                left + PADDING.0,
+                top + PADDING.1,
+                figure.width,
+                figure.height,
+            ),
+            clip,
+            bitmap: figure.bitmap.clone(),
+            color: theme.text.fg,
+        });
     }
 
     /// The small `#` beside a heading, sitting on the heading's baseline.
@@ -2024,7 +2105,7 @@ impl Editor {
             Tone::Block(Some(token)) => theme.token(token),
             Tone::Link | Tone::Check(_) => theme.accent,
             Tone::Dim | Tone::TableLine => theme.gutter.fg,
-            Tone::Formula { .. } => theme.text.fg,
+            Tone::Formula { .. } | Tone::Source => theme.text.fg,
         };
         let selected = |at: Option<usize>| {
             at.is_some_and(|at| {
@@ -2126,7 +2207,7 @@ impl Editor {
                     }
                 }
                 _ => {
-                    if g.tone == Tone::Code {
+                    if matches!(g.tone, Tone::Code | Tone::Source) {
                         let pill = Bounds::cells(x - 0.2, text_y + 0.14, width + 0.4, 0.72);
                         grid.panel(pill, 14, Some(theme.code_bg), None);
                     }

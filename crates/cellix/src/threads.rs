@@ -23,14 +23,29 @@ pub enum Hit {
 
 /// One row of the panel.
 enum Line {
-    Title,
     Empty,
     Quote(u32, String),
     Text(u32, String),
     Author(u32, String),
+    Status(String),
+    Input(String),
+    Hint,
     Buttons(u32),
     Gap,
 }
+
+/// A comment or reply being written, in place, so what it's about stays in view.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Draft {
+    /// The thread it answers. None starts a new one.
+    pub thread: Option<u32>,
+    pub file: String,
+    pub line: usize,
+    pub quote: String,
+    pub text: String,
+}
+
+const NEW_DRAFT: u32 = 0;
 
 /// Breaks text into rows no wider than `width`, at spaces.
 fn wrap(text: &str, width: f32, measure: &dyn Measure) -> Vec<String> {
@@ -56,20 +71,53 @@ fn wrap(text: &str, width: f32, measure: &dyn Measure) -> Vec<String> {
     rows
 }
 
-fn lines(threads: &[&Thread], width: f32, measure: &dyn Measure) -> Vec<Line> {
-    let mut out = vec![Line::Title, Line::Gap];
-    if threads.is_empty() {
+/// What a comment is about, with a stand-in for a blank line.
+fn quote_of(quote: &str, line: usize) -> String {
+    if quote.is_empty() {
+        format!("Line {line}")
+    } else {
+        quote.to_string()
+    }
+}
+
+fn draft_lines(draft: &Draft, width: f32, measure: &dyn Measure, out: &mut Vec<Line>) {
+    let text = wrap(&format!("{} ", draft.text), width, measure);
+    out.extend(text.into_iter().map(Line::Input));
+    out.push(Line::Hint);
+}
+
+fn lines(
+    threads: &[&Thread],
+    draft: Option<&Draft>,
+    agent: &str,
+    width: f32,
+    measure: &dyn Measure,
+) -> Vec<Line> {
+    let mut out = vec![Line::Gap];
+    if let Some(new) = draft.filter(|d| d.thread.is_none()) {
+        out.push(Line::Quote(NEW_DRAFT, quote_of(&new.quote, new.line)));
+        draft_lines(new, width, measure, &mut out);
+        out.push(Line::Buttons(NEW_DRAFT));
+        out.push(Line::Gap);
+    } else if threads.is_empty() {
         out.push(Line::Empty);
     }
     for thread in threads {
         let id = thread.id;
-        out.push(Line::Quote(id, thread.quote.clone()));
+        out.push(Line::Quote(id, quote_of(&thread.quote, thread.line)));
         let text = wrap(&thread.text, width, measure);
         out.extend(text.into_iter().map(|row| Line::Text(id, row)));
         for reply in &thread.replies {
             out.push(Line::Author(id, reply.author.clone()));
             let text = wrap(&reply.text, width, measure);
             out.extend(text.into_iter().map(|row| Line::Text(id, row)));
+        }
+        if thread.told == Some(thread.replies.len()) && !agent.is_empty() && thread.waiting_answer()
+        {
+            out.push(Line::Status(format!("Waiting for {agent}…")));
+        }
+        if let Some(reply) = draft.filter(|d| d.thread == Some(id)) {
+            draft_lines(reply, width, measure, &mut out);
         }
         out.push(Line::Buttons(id));
         out.push(Line::Gap);
@@ -94,13 +142,13 @@ fn buttons(area: Rect) -> Vec<(&'static str, String, u16)> {
 
 pub fn hit(
     area: Rect,
-    threads: &[&Thread],
+    (threads, draft, agent): (&[&Thread], Option<&Draft>, &str),
     top: usize,
     (x, y): (u16, u16),
     measure: &dyn Measure,
 ) -> Option<Hit> {
     let width = area.w.saturating_sub(SIDE * 2 + 2) as f32;
-    let all = lines(threads, width, measure);
+    let all = lines(threads, draft, agent, width, measure);
     let row = top + y.checked_sub(area.y)? as usize;
     match all.get(row)? {
         Line::Buttons(id) => {
@@ -121,14 +169,14 @@ pub fn hit(
 pub fn draw(
     grid: &mut Grid,
     area: Rect,
-    threads: &[&Thread],
+    (threads, draft, agent): (&[&Thread], Option<&Draft>, &str),
     top: usize,
     hover: Option<(u16, u16)>,
     (measure, theme): (&dyn Measure, &Theme),
 ) {
     grid.fill(area, theme.sidebar);
     let width = area.w.saturating_sub(SIDE * 2 + 2) as f32;
-    let all = lines(threads, width, measure);
+    let all = lines(threads, draft, agent, width, measure);
     let (side, right) = (area.x + SIDE, area.right().saturating_sub(SIDE));
     let dim = Style {
         fg: theme.gutter.fg,
@@ -170,9 +218,21 @@ pub fn draw(
         }
         let text_x = side + 1;
         match line {
-            Line::Title => {
-                let name = Style { bold: true, ..body };
-                grid.label(side, y, "Comments", name, right);
+            Line::Status(text) => {
+                grid.label_at(text_x as f32, text_x, y, text, inner_dim, right, SMALL);
+            }
+            Line::Input(text) => {
+                grid.label(text_x, y, text, inner, right);
+                let last = matches!(all.get(index + 1), Some(Line::Hint));
+                if last {
+                    let font = Font::default();
+                    let x = text_x as f32 + measure.width(text.trim_end(), font);
+                    grid.set_caret(x, y, 0.62);
+                }
+            }
+            Line::Hint => {
+                let hint = "Enter sends. Shift+Enter starts a new line. Esc cancels.";
+                grid.label_at(text_x as f32, text_x, y, hint, inner_dim, right, SMALL);
             }
             Line::Empty => {
                 grid.label(side, y, "Select text and press Comment.", dim, right);
@@ -193,16 +253,22 @@ pub fn draw(
                 };
                 grid.label_at(text_x as f32, text_x, y, name, strong, right, SMALL);
             }
+            Line::Buttons(NEW_DRAFT) => {}
             Line::Buttons(_) => {
                 for (label, cells, x) in buttons(area) {
                     let width = cells.chars().count() as u16;
                     let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
-                    let fill = if on_it {
-                        theme.popup_hover
-                    } else {
-                        theme.quiet_button(theme.text.bg)
+                    let main = label == "Ask agent";
+                    let fill = match (main, on_it) {
+                        (true, _) => theme.button,
+                        (false, true) => theme.popup_hover,
+                        (false, false) => theme.quiet_button(theme.text.bg),
                     };
-                    let style = Style { bg: fill, ..inner };
+                    let style = Style {
+                        bg: fill,
+                        fg: if main { theme.button_text } else { inner.fg },
+                        ..inner
+                    };
                     grid.button(x, y, &cells, label, fill, style);
                 }
             }

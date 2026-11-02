@@ -28,6 +28,8 @@ pub enum Tone {
     Check(bool),
     /// Space or a table's column line, which the pixel tiers don't paint as text.
     TableLine,
+    /// A formula's source while it's being edited.
+    Source,
     /// A typeset formula, as an index into the page's figures, and its width in 64ths.
     Formula {
         index: u16,
@@ -333,6 +335,8 @@ pub struct Figure {
 #[derive(Default)]
 pub struct Library {
     formulas: HashMap<(String, bool), Option<Figure>>,
+    /// The last formula that typeset at each place, to hold while its source is half typed.
+    last_good: HashMap<usize, Figure>,
     images: HashMap<(PathBuf, u32), Option<Figure>>,
 }
 
@@ -372,6 +376,8 @@ pub struct Extras<'a> {
     pub library: Option<&'a RefCell<Library>>,
     /// Filled in by layout.
     pub figures: RefCell<Vec<Figure>>,
+    /// The picture of a formula being edited in a line, filled in by layout.
+    pub preview: RefCell<Option<usize>>,
     /// Every formula and image in the page, as source ranges, filled in by layout.
     pub spans: RefCell<Vec<(usize, usize)>>,
 }
@@ -438,6 +444,10 @@ fn math_end(chars: &[char]) -> Option<usize> {
             && !chars[*i - 1].is_whitespace()
             && !chars.get(*i + 1).is_some_and(char::is_ascii_digit)
     })
+}
+
+fn extras_preview(context: &Context, figure: Option<usize>) {
+    *context.extras.preview.borrow_mut() = figure;
 }
 
 /// Finds a closing marker in `chars` at or after `from`.
@@ -548,7 +558,7 @@ fn formula_span(span: &[char], edge: usize, at: usize, context: &Context, out: &
     let body = &span[edge..span.len() - edge];
     let inner: String = body.iter().collect();
     let code = Look {
-        tone: Tone::Code,
+        tone: Tone::Source,
         font: Font {
             mono: true,
             ..Font::default()
@@ -559,6 +569,9 @@ fn formula_span(span: &[char], edge: usize, at: usize, context: &Context, out: &
         for (n, c) in span.iter().enumerate() {
             out.push(glyph(*c, Some(at + n), code));
         }
+        // What it'll look like, while it's being typed.
+        let shown = context.formula_or_last(&inner, false, at);
+        extras_preview(context, shown);
         return;
     }
     let Some(figure) = context.formula(&inner, false) else {
@@ -822,6 +835,26 @@ impl Context<'_> {
         figure.map(|f| self.keep(f))
     }
 
+    /// A formula, or the last good one at this place. Typing `\\frac{` shouldn't make the
+    /// picture vanish and the page jump until the brace closes.
+    fn formula_or_last(&self, source: &str, display: bool, place: usize) -> Option<usize> {
+        let found = self.formula(source, display);
+        let Some(library) = self.extras.library else {
+            return found;
+        };
+        match found {
+            Some(index) => {
+                let figure = self.extras.figures.borrow()[index].clone();
+                library.borrow_mut().last_good.insert(place, figure);
+                Some(index)
+            }
+            None => {
+                let figure = library.borrow().last_good.get(&place).cloned()?;
+                Some(self.keep(figure))
+            }
+        }
+    }
+
     /// Why a formula won't typeset.
     fn formula_error(&self, source: &str) -> Option<String> {
         let expanded = self.extras.project.as_ref().map(|p| p.expand(source));
@@ -897,17 +930,20 @@ fn image_line(line: &str) -> Option<(usize, &str, &str)> {
 fn margin_numbers(
     numbers: &[Option<String>],
     first: usize,
+    height: f32,
     width: f32,
     context: &Context,
     rows: &mut [Row],
 ) {
-    let count = numbers.len().max(1);
-    let span = rows.len().saturating_sub(first).max(1);
+    let count = numbers.len().max(1) as f32;
     for (index, number) in numbers.iter().enumerate() {
         let Some(number) = number else {
             continue;
         };
-        let row = first + (index * 2 + 1) * span / (count * 2);
+        // In the middle of its share of the picture, which starts a little into its row.
+        let middle = 0.2 + height * (index as f32 + 0.5) / count;
+        let row = first + middle.floor() as usize;
+        let number = number.replace('$', "").replace("\\ast", "∗");
         let mut mark = decoration(&format!("({number})"), Tone::Dim);
         measure_glyphs(&mut mark, context.measure);
         let shown: f32 = mark.iter().map(|g| g.advance).sum();
@@ -1113,9 +1149,15 @@ pub fn layout_with(
             if open || context.cell().is_none() {
                 code_rows(&lines[i..=last], i, "", &context, None, &mut rows);
             }
-            if let Some(figure) = context.formula(&formula, true) {
+            if let Some(figure) = context.formula_or_last(&formula, true, offset) {
                 // Opening still shows the result, under the source being typed.
-                figure_rows(figure, &context, (i, offset + 1, end), width, &mut rows);
+                let inside = if last > i { lines[i + 1].0 } else { offset + 2 };
+                let at = rows.len();
+                figure_rows(figure, &context, (i, inside, end), width, &mut rows);
+                let mut count = 0;
+                let numbers = cellix_doc::latex::equation_rows(&formula, false, &mut count);
+                let shown = context.extras.figures.borrow()[figure].height;
+                margin_numbers(&numbers, at, shown, width, &context, &mut rows);
                 if open {
                     let start = rows.iter().rposition(|r| r.figure.is_some());
                     if let Some(row) = start.and_then(|at| rows.get_mut(at)) {
@@ -1788,7 +1830,7 @@ body",
         let source = "Energy is $E = mc^2$ here.";
         let (rows, figures, _) = typeset(source, Some((10, 20)));
         assert_eq!(formulas(&rows), 0);
-        assert!(figures.is_empty());
+        assert_eq!(figures.len(), 1, "a preview, under the line being typed");
         let shown: String = rows.iter().map(text).collect();
         assert!(shown.contains("$E = mc^2$"), "{shown}");
     }

@@ -72,7 +72,11 @@ impl TablePicker {
                     1,
                 );
                 let on = row < rows && column < columns;
-                let fill = if on { theme.pick } else { theme.popup_hover };
+                let fill = if on {
+                    theme.selection
+                } else {
+                    theme.popup_hover
+                };
                 let border = if on { theme.accent } else { theme.popup_border };
                 let bounds = Bounds::inset(square, 0.2, 0.1);
                 grid.panel(bounds, 8, Some(fill), Some(border));
@@ -142,7 +146,7 @@ const fn block(
     }
 }
 
-pub const SYMBOLS: [Symbol; 60] = [
+pub const SYMBOLS: [Symbol; 70] = [
     template("Fraction", r"\frac{a}{b}", r"\frac{}{}", 6),
     template("Square root", r"\sqrt{x}", r"\sqrt{}", 6),
     template("Power", "x^{n}", "^{}", 2),
@@ -223,6 +227,16 @@ pub const SYMBOLS: [Symbol; 60] = [
     symbol("Implies", r"\Rightarrow"),
     symbol("For all", r"\forall"),
     symbol("Exists", r"\exists"),
+    symbol("Tensor", r"\otimes"),
+    symbol("Direct sum", r"\oplus"),
+    symbol("Subset or equal", r"\subseteq"),
+    symbol("Maps to", r"\mapsto"),
+    symbol("Left and right arrow", r"\leftrightarrow"),
+    symbol("If and only if", r"\Leftrightarrow"),
+    symbol("Empty set", r"\emptyset"),
+    symbol("Much less", r"\ll"),
+    symbol("Tilde", r"\sim"),
+    symbol("Dots", r"\ldots"),
 ];
 
 const COLUMNS: u16 = 10;

@@ -46,7 +46,7 @@ use crate::search::{self, Field, Search};
 use crate::settings::{SERVERS, Settings, default_server, formatter};
 use crate::settings_page::{Control, Found, SettingsPage, Values};
 use crate::theme::Theme;
-use crate::threads::{self, Hit as ThreadHit};
+use crate::threads::{self, Draft, Hit as ThreadHit};
 use crate::toolbar::{self, Tool};
 
 const ACTIVITY_WIDTH: u16 = 5;
@@ -138,7 +138,6 @@ enum PromptAction {
     NewBranch,
     Image,
     Link,
-    Reply(u32),
 }
 
 struct Prompt {
@@ -662,6 +661,10 @@ impl App {
     /// Remembers that a language could have a server, so opening it can offer one. Markdown
     /// is left out: a page needs nothing from a server.
     fn note_missing(&mut self, language: &'static str) {
+        // A paper needs an engine to build, which the Build button asks about when it does.
+        if language == "LaTeX" && self.build.is_none() && self.latex_engine().is_some() {
+            return;
+        }
         let server = SERVERS.iter().position(|s| s.languages.contains(&language));
         if let Some(server) = server.filter(|_| language != "Markdown") {
             self.missing_servers.insert(language, server);
@@ -683,10 +686,10 @@ impl App {
     }
 
     fn offer_area(&self) -> Rect {
-        let sheet = self.sheet_area();
+        // The window's corner, so opening the side pane doesn't move it over the writing.
         Rect::new(
-            sheet.right().saturating_sub(OFFER_WIDTH + 2),
-            sheet.bottom().saturating_sub(OFFER_HEIGHT + 1),
+            self.size.0.saturating_sub(OFFER_WIDTH + 2),
+            self.size.1.saturating_sub(OFFER_HEIGHT + 2),
             OFFER_WIDTH,
             OFFER_HEIGHT,
         )
@@ -830,7 +833,7 @@ impl App {
                 bg: fill,
                 ..base
             };
-            grid.large_button(*x, y, cells, label, fill, style);
+            grid.button(*x, y, cells, label, fill, style);
         }
     }
 
@@ -1731,6 +1734,10 @@ impl App {
     }
 
     fn paste(&mut self, text: &str) {
+        if let Some(draft) = &mut self.dock.draft {
+            draft.text.push_str(text);
+            return;
+        }
         if self.dock.focused
             && matches!(self.overlay, Overlay::None)
             && let Some(session) = self.dock.session_mut()
@@ -1847,7 +1854,60 @@ impl App {
         }
     }
 
+    /// Types into the comment being written. Returns true if there is one.
+    fn draft_key(&mut self, key: KeyEvent) -> bool {
+        let Some(draft) = &mut self.dock.draft else {
+            return false;
+        };
+        match key.key {
+            Key::Esc => self.dock.draft = None,
+            Key::Enter if key.mods.shift || key.mods.alt => draft.text.push('\n'),
+            Key::Enter => {
+                let draft = self.dock.draft.take().expect("checked above");
+                self.finish_draft(draft);
+            }
+            Key::Backspace => {
+                draft.text.pop();
+            }
+            Key::Char(c) if !key.mods.ctrl => draft.text.push(c),
+            _ => {}
+        }
+        true
+    }
+
+    fn finish_draft(&mut self, draft: Draft) {
+        let text = draft.text.trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        match draft.thread {
+            Some(id) => {
+                if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
+                    thread.replies.push(Reply {
+                        author: YOU.to_string(),
+                        text,
+                    });
+                }
+            }
+            None => self.threads.push(Thread {
+                id: cellix_review::threads::next_id(&self.threads),
+                file: draft.file,
+                line: draft.line,
+                quote: draft.quote,
+                text,
+                replies: Vec::new(),
+                resolved: false,
+                told: None,
+            }),
+        }
+        self.threads_seen = None;
+        self.save_threads();
+    }
+
     fn key(&mut self, key: KeyEvent) {
+        if matches!(self.overlay, Overlay::None) && self.draft_key(key) {
+            return;
+        }
         if self.dock.focused && matches!(self.overlay, Overlay::None) {
             // The session gets everything but what moves away from it.
             let leaves = matches!(
@@ -2592,18 +2652,6 @@ impl App {
                 }
                 Ok(())
             }
-            PromptAction::Reply(id) => {
-                if let Some(thread) = self.threads.iter_mut().find(|t| t.id == *id)
-                    && !name.is_empty()
-                {
-                    thread.replies.push(Reply {
-                        author: YOU.to_string(),
-                        text: name.to_string(),
-                    });
-                    self.save_threads();
-                }
-                Ok(())
-            }
             _ if name.is_empty() => Ok(()),
             PromptAction::NewBranch => {
                 let result = create_branch(self.workspace.root(), name);
@@ -3087,10 +3135,12 @@ impl App {
             match mouse.kind {
                 MouseKind::Left => {
                     let threads = self.open_threads();
+                    let agent = self.dock.agent_name();
+                    let threads = (threads.as_slice(), self.dock.draft.as_ref(), agent.as_str());
                     let spot = (x, y);
                     let hit = threads::hit(
                         screen,
-                        &threads,
+                        threads,
                         self.dock.comments_top,
                         spot,
                         &*self.measure,
@@ -3128,6 +3178,7 @@ impl App {
                     session.wheel(up, spot);
                 }
             }
+            MouseKind::Left if mouse.mods.ctrl => self.open_session_path(x, y),
             MouseKind::Left => {
                 self.dock.focused = true;
                 self.drag = Drag::Session;
@@ -3136,6 +3187,29 @@ impl App {
             _ => {}
         }
         true
+    }
+
+    /// Opens the `file:line` under a Ctrl+click in a session.
+    fn open_session_path(&mut self, x: u16, y: u16) {
+        let spot = self.session_spot(x, y);
+        let found = self.dock.session().and_then(|s| s.path_at(spot));
+        let Some((file, line)) = found else {
+            return;
+        };
+        let path = self.workspace.root().join(&file);
+        if !path.is_file() {
+            self.say(format!("No file called {file} here"));
+            return;
+        }
+        if let Err(e) = self.open(&path) {
+            self.say(format!("Could not open {file}: {e}"));
+            return;
+        }
+        let area = self.focused_area();
+        if let (Some(line), Some(editor)) = (line, self.editor_mut()) {
+            editor.go_to_line(line, area);
+        }
+        self.dock.focused = false;
     }
 
     fn session_spot(&self, x: u16, y: u16) -> (u16, u16) {
@@ -3185,7 +3259,9 @@ impl App {
         if self.dock.front == Front::Comments {
             let look = (&*self.measure, theme);
             let top = self.dock.comments_top;
-            threads::draw(grid, screen, &threads, top, self.hover, look);
+            let agent = self.dock.agent_name();
+            let shown = (threads.as_slice(), self.dock.draft.as_ref(), agent.as_str());
+            threads::draw(grid, screen, shown, top, self.hover, look);
             return;
         }
         match self.dock.session() {
@@ -3557,7 +3633,15 @@ impl App {
                 }
                 self.dock.focused = false;
             }
-            ThreadHit::Reply(id) => self.ask("Reply", PromptAction::Reply(id)),
+            ThreadHit::Reply(id) => {
+                self.dock.draft = Some(Draft {
+                    thread: Some(id),
+                    file: String::new(),
+                    line: 0,
+                    quote: String::new(),
+                    text: String::new(),
+                });
+            }
             ThreadHit::Ask(id) => {
                 let message = self
                     .threads
@@ -3619,6 +3703,27 @@ impl App {
     fn prompt_comment_at_cursor(&mut self) {
         if let Some((path, line)) = self.cursor_line() {
             let file = self.relative(&path);
+            let answering = self.plan.is_some() || self.wait_file.is_some();
+            let page = self.editors.get(self.active()).filter(|e| e.rendered);
+            if let Some(editor) = page.filter(|_| !answering) {
+                // Written beside the page, so the text it's about stays in view.
+                let quote = editor
+                    .selected_text()
+                    .unwrap_or_else(|| editor.line_text(line.saturating_sub(1)));
+                let quote = quote.lines().next().unwrap_or_default().trim().to_string();
+                self.dock.open = true;
+                self.dock.front = Front::Comments;
+                self.dock.focused = false;
+                self.dock.comments_top = 0;
+                self.dock.draft = Some(Draft {
+                    thread: None,
+                    file,
+                    line,
+                    quote,
+                    text: String::new(),
+                });
+                return;
+            }
             self.ask(
                 &format!("Comment on line {line}"),
                 PromptAction::Comment(file, line),
@@ -5651,6 +5756,7 @@ impl App {
         match tool {
             Tool::Format(format) => self.run(Command::Format(format)),
             Tool::Styles => {
+                let below = (x, 3);
                 let level =
                     |name, level| MenuItem::run(name, Command::Format(Format::Level(level)));
                 let items = vec![
@@ -5677,6 +5783,7 @@ impl App {
             Tool::Cite => self.show_citations(),
             Tool::Build => self.run(Command::BuildPdf),
             Tool::Export => {
+                let below = (x, 3);
                 let items = vec![
                     MenuItem::run("Export to PDF", Command::ExportPdf),
                     MenuItem::run("Open in Browser", Command::OpenInBrowser),
@@ -7417,9 +7524,8 @@ mod tests {
     fn a_pane_tab_closes_and_stops_its_program() {
         let (_dir, mut app) = project();
         session(&mut app, "echo ready; sleep 9");
-        let area = app.dock_area().unwrap();
-        let (_, end) = (area.x + 1, area.x + 1 + 8 + 6);
-        app.handle(mouse(MouseKind::Left, end - 2, 0));
+        let (x, _) = find(&screen(&app), "Stand-in");
+        app.handle(mouse(MouseKind::Left, x + 9, 0));
         assert_eq!(app.dock.sessions.len(), 1, "it asks first");
         let (x, y) = find(&screen(&app), "Stop");
         app.handle(mouse(MouseKind::Left, x + 1, y + 1));
@@ -7834,6 +7940,7 @@ mod tests {
     #[test]
     fn a_narrow_pane_keeps_every_tool_in_a_menu() {
         let (_dir, mut app) = page_app("word\n");
+        app.handle(Event::Resize(100, 40));
         app.run(Command::ShowAgents);
         click_tool(&mut app, "More");
         let text = screen(&app).text();
@@ -7914,7 +8021,7 @@ mod tests {
         assert_eq!(pictures(&app), 1, "typeset, with the caret away");
         let editor = app.editor_mut().unwrap();
         editor.selections.set_single(Selection::cursor(6));
-        assert_eq!(pictures(&app), 0, "open, as source");
+        assert_eq!(pictures(&app), 1, "open, with its preview");
         let source = |p: &cellix_render::Paint| matches!(p, cellix_render::Paint::Text { text, .. } if text == "$x^2$");
         assert!(screen(&app).paint.iter().any(source));
         typed(&mut app, "+1");
@@ -7922,6 +8029,7 @@ mod tests {
         let editor = app.editor_mut().unwrap();
         editor.selections.set_single(Selection::cursor(0));
         assert_eq!(pictures(&app), 1, "and it closes on leaving");
+        assert!(!screen(&app).paint.iter().any(source));
         assert!(area.w > 0);
     }
 
@@ -8066,6 +8174,81 @@ mod tests {
             "and go with the review"
         );
         assert!(!app.threads[0].waiting(), "so no agent hears of it twice");
+    }
+
+    #[test]
+    fn a_path_in_a_session_opens_at_its_line() {
+        let (_dir, mut app) = project();
+        session(
+            &mut app,
+            "echo ready; echo 'error in beta.rs:1: broken'; sleep 9",
+        );
+        shows(&mut app, "beta.rs:1");
+        let (x, y) = find(&screen(&app), "beta.rs:1");
+        let mut press = mouse(MouseKind::Left, x + 2, y);
+        if let Event::Mouse(m) = &mut press {
+            m.mods.ctrl = true;
+        }
+        app.handle(press);
+        assert!(app.active_text().unwrap().contains("fn main"));
+    }
+
+    #[test]
+    fn a_comment_is_written_beside_what_it_is_about() {
+        let (_dir, mut app) = page_app("the cache goes first\n");
+        app.run(Command::AddComment);
+        let text = screen(&app).text();
+        assert!(text.contains("the cache goes first"), "{text}");
+        assert!(text.contains("Enter sends"), "{text}");
+        assert!(matches!(app.overlay, Overlay::None), "no floating box");
+        typed(&mut app, "One");
+        app.handle(Event::Key(KeyEvent {
+            key: Key::Enter,
+            mods: Mods {
+                shift: true,
+                ..Mods::default()
+            },
+        }));
+        typed(&mut app, "Two");
+        enter(&mut app);
+        assert_eq!(app.threads[0].text, "One\nTwo");
+        assert!(app.dock.draft.is_none());
+    }
+
+    #[test]
+    fn tab_walks_a_templates_slots_and_a_selection_fills_the_first() {
+        let (_dir, mut app) = page_app("x\n");
+        app.run(Command::Move(cellix_input::Direction::LineEnd, false));
+        click_tool(&mut app, "Formula");
+        let Overlay::Math(panel) = &app.overlay else {
+            panic!("no panel");
+        };
+        let area = panel.area();
+        app.handle(mouse(MouseKind::Left, area.x + 2, area.y));
+        typed(&mut app, "a");
+        screen(&app);
+        app.run(Command::Indent);
+        typed(&mut app, "b");
+        assert_eq!(app.active_text().as_deref(), Some("x$\\frac{a}{b}$\n"));
+    }
+
+    #[test]
+    fn a_half_typed_formula_keeps_its_last_picture() {
+        let (_dir, mut app) = page_app("$$\nx^2\n$$\n");
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        let pictures = |app: &App| {
+            screen(app)
+                .paint
+                .iter()
+                .filter(|p| matches!(p, cellix_render::Paint::Image { .. }))
+                .count()
+        };
+        assert_eq!(pictures(&app), 1);
+        let editor = app.editor_mut().unwrap();
+        editor.selections.set_single(Selection::cursor(3));
+        assert_eq!(pictures(&app), 1, "open, with the result under it");
+        typed(&mut app, "\\frac{");
+        assert_eq!(pictures(&app), 1, "and it holds while the source is broken");
     }
 
     #[test]

@@ -20,6 +20,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::pdfview::PdfView;
 use crate::theme::Theme;
+use crate::threads::Draft;
 
 /// Columns the file beside the pane always keeps.
 const MIN_MAIN: u16 = 44;
@@ -384,6 +385,28 @@ impl Session {
         Some(lines.join("\n"))
     }
 
+    /// The `file:line` or file under a column of a visible row, as tracebacks and compilers
+    /// print them.
+    pub fn path_at(&self, (x, y): Spot) -> Option<(String, Option<usize>)> {
+        let rows = self.rows();
+        let chars: Vec<char> = rows.get(y as usize)?.chars().collect();
+        let x = x as usize;
+        let edge = |c: &char| c.is_whitespace() || "\"'`()[]<>,".contains(*c);
+        if chars.get(x).is_none_or(edge) {
+            return None;
+        }
+        let start = chars[..x].iter().rposition(edge).map_or(0, |i| i + 1);
+        let end = chars[x..]
+            .iter()
+            .position(edge)
+            .map_or(chars.len(), |i| x + i);
+        let word: String = chars[start..end].iter().collect();
+        let word = word.trim_end_matches(':');
+        let mut parts = word.split(':');
+        let file = parts.next()?.to_string();
+        Some((file, parts.next().and_then(|n| n.parse().ok())))
+    }
+
     /// The screen as text, one string a row.
     pub fn rows(&self) -> Vec<String> {
         let offset = self.term.grid().display_offset() as i32;
@@ -607,6 +630,8 @@ pub struct Dock {
     pub pdf: Option<PdfView>,
     /// How far the comments have scrolled.
     pub comments_top: usize,
+    /// A comment or reply being written.
+    pub draft: Option<Draft>,
 }
 
 impl Dock {
@@ -634,6 +659,12 @@ impl Dock {
         let front = self.active.filter(|i| usable(&self.sessions[*i]));
         let index = front.or_else(|| self.sessions.iter().position(usable))?;
         self.sessions.get_mut(index)
+    }
+
+    /// What to call the agent an answer will come from.
+    pub fn agent_name(&self) -> String {
+        let agent = self.sessions.iter().find(|s| !s.exited && !s.shell);
+        agent.map_or_else(|| "the agent".to_string(), |s| s.name.clone())
     }
 
     pub fn running(&self) -> bool {
@@ -676,9 +707,15 @@ impl Dock {
         };
     }
 
+    /// Where sessions' tabs start, after the fixed ones.
+    fn first_tab(&self, area: Rect) -> u16 {
+        let pdf = if self.pdf.is_some() { PDF_WIDTH } else { 0 };
+        area.x + 1 + COMMENTS_WIDTH + pdf
+    }
+
     /// Each tab as (start, end) columns.
     fn tabs(&self, area: Rect) -> Vec<(u16, u16)> {
-        let mut x = area.x + 1;
+        let mut x = self.first_tab(area);
         self.sessions
             .iter()
             .map(|s| {
@@ -691,10 +728,10 @@ impl Dock {
     }
 
     pub fn hit(&self, area: Rect, x: u16) -> Option<TabHit> {
-        if x + COMMENTS_WIDTH >= area.right() {
+        if x < area.x + 1 + COMMENTS_WIDTH {
             return Some(TabHit::Comments);
         }
-        if self.pdf.is_some() && x + COMMENTS_WIDTH + PDF_WIDTH >= area.right() {
+        if x < self.first_tab(area) {
             return Some(TabHit::Pdf);
         }
         let tabs = self.tabs(area);
@@ -708,7 +745,7 @@ impl Dock {
                 });
             }
         }
-        let end = tabs.last().map_or(area.x + 1, |t| t.1);
+        let end = tabs.last().map_or(self.first_tab(area), |t| t.1);
         (x >= end && x < end + 3).then_some(TabHit::New)
     }
 
@@ -722,14 +759,9 @@ impl Dock {
     ) {
         let row = Rect::new(area.x, area.y, area.w, 1);
         grid.fill(row, theme.tab);
-        let comments = Rect::new(
-            area.right().saturating_sub(COMMENTS_WIDTH),
-            area.y,
-            COMMENTS_WIDTH,
-            1,
-        );
+        let comments = Rect::new(area.x + 1, area.y, COMMENTS_WIDTH, 1);
         if self.pdf.is_some() {
-            let tab = Rect::new(comments.x.saturating_sub(PDF_WIDTH), area.y, PDF_WIDTH, 1);
+            let tab = Rect::new(comments.right(), area.y, PDF_WIDTH, 1);
             let on = self.front == Front::Pdf;
             if on {
                 grid.fill(tab, theme.sidebar);
@@ -742,7 +774,7 @@ impl Dock {
                 bold: on,
                 ..theme.tab
             };
-            grid.label(tab.x + 1, area.y, "PDF", quiet, comments.x);
+            grid.label(tab.x + 1, area.y, "PDF", quiet, tab.right());
         }
         let on_comments = self.front == Front::Comments;
         if on_comments {
@@ -769,7 +801,7 @@ impl Dock {
             bold: on_comments,
             ..theme.tab
         };
-        grid.label(comments.x + 1, area.y, &name, quiet, area.right());
+        grid.label(comments.x + 1, area.y, &name, quiet, comments.right());
         for (index, (start, end)) in self.tabs(area).into_iter().enumerate() {
             let session = &self.sessions[index];
             let active = self.active == Some(index) && self.front == Front::Session;
@@ -814,7 +846,7 @@ impl Dock {
                 grid.label(close, area.y, "×", quiet, end);
             }
         }
-        let plus = self.tabs(area).last().map_or(area.x + 1, |t| t.1);
+        let plus = self.tabs(area).last().map_or(self.first_tab(area), |t| t.1);
         let button = Rect::new(plus, area.y, 3, 1);
         let on_it = hover.is_some_and(|h| button.contains(h.0, h.1));
         if on_it {

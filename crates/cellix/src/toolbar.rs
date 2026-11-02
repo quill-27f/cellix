@@ -15,7 +15,7 @@ const GAP: u16 = 1;
 /// How wide the paragraph style's button is.
 const STYLES_WIDTH: u16 = 12;
 /// Icons are drawn at this share of a row.
-const ICON_SIZE: f32 = 0.56;
+const ICON_SIZE: f32 = 0.66;
 const MARK_SIZE: u8 = 100;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -183,8 +183,14 @@ pub fn layout(row: Rect, dialect: Dialect) -> Vec<Placed> {
         out.push(placed(button, x));
         end = x + WIDTH;
     }
-    if hidden {
-        out.push(placed(&MORE, end + GAP));
+    // One button left over fits where the menu would go, and needs no menu.
+    let left: Vec<&Button> = buttons(dialect)
+        .filter(|b| !out.iter().any(|p| p.tool == b.tool))
+        .collect();
+    match left.as_slice() {
+        [] => {}
+        [one] => out.push(placed(one, end + GAP)),
+        _ => out.push(placed(&MORE, end + GAP)),
     }
     if build {
         out.push(placed(&BUILD, edge));

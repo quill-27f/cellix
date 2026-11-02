@@ -250,13 +250,13 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("43-light-hover-menu", [["right", 60, 12], ["move", 64, 19]], CODE_FILE, background="eff1f5")
     shoot("40-hover-find", [["keys", CTRL("f")], ["keys", "item"], ["move", 112, 3]], CODE_FILE)
 
-    FORMULA, TABLE = (84, 1), (88, 1)
+    FORMULA, TABLE = (77, 1), (80, 1)
     shoot("44-note", [], NOTE_FILE, size="150x44", background="eff1f5")
     shoot("45-note-dark", [], NOTE_FILE, size="150x44")
     shoot("46-formula-open", [["click", 90, 13], ["wait", 0.5]], NOTE_FILE, size="150x44")
     shoot("47-math-panel", [["click", *FORMULA]], NOTE_FILE, size="150x44", background="eff1f5")
     shoot("48-table-picker", [["click", *TABLE], ["move", 100, 7]], NOTE_FILE, size="150x44")
-    shoot("49-table-menu", [["right", 56, 31]], NOTE_FILE, size="150x44", background="eff1f5")
+    shoot("49-table-menu", [["right", 41, 29]], NOTE_FILE, size="150x44", background="eff1f5")
     comment = [["click", 90, 5], ["keys", "\\eOP"], ["keys", "add comment"], ["keys", "\r"]]
     comment += [["keys", "Is this true for multi-head attention?\r"], ["wait", 0.5]]
     shoot("50-comments", comment, NOTE_FILE, size="150x44", background="eff1f5")
@@ -264,7 +264,7 @@ with tempfile.TemporaryDirectory() as scratch:
     shell = [["click", RAIL_X, AGENTS], ["wait", 0.6]]
     shoot("52-paper", [], PAPER_FILE, size="150x44", background="eff1f5")
     shoot("53-paper-dark", [], PAPER_FILE, size="150x44")
-    build = [["click", 164, 1], ["wait", 8]]
+    build = [["click", 164, 1], ["wait", 22]]
     shoot("54-paper-pdf", build, PAPER_FILE, size="170x44", background="eff1f5")
-    shoot("55-paper-cite", [["click", 74, 1]], PAPER_FILE, size="150x44", background="eff1f5")
+    shoot("55-paper-cite", [["click", 69, 1]], PAPER_FILE, size="150x44", background="eff1f5")
     shoot("56-narrow-note", [["click", RAIL_X, AGENTS], ["wait", 0.6]], NOTE_FILE, size="100x34")

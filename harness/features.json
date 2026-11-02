@@ -880,5 +880,33 @@
     "passes": true,
     "test": "images_open_beside_the_file_and_binaries_say_what_they_are",
     "title": "Images open beside the file"
+  },
+  {
+    "id": "comment-inline",
+    "milestone": 8,
+    "passes": true,
+    "test": "a_comment_is_written_beside_what_it_is_about",
+    "title": "Comments are written beside what they are about"
+  },
+  {
+    "id": "formula-held",
+    "milestone": 8,
+    "passes": true,
+    "test": "a_half_typed_formula_keeps_its_last_picture",
+    "title": "A half-typed formula keeps its last picture"
+  },
+  {
+    "id": "formula-slots",
+    "milestone": 8,
+    "passes": true,
+    "test": "tab_walks_a_templates_slots_and_a_selection_fills_the_first",
+    "title": "Tab walks a template and a selection fills it"
+  },
+  {
+    "id": "session-paths",
+    "milestone": 8,
+    "passes": true,
+    "test": "a_path_in_a_session_opens_at_its_line",
+    "title": "A path in a session opens at its line"
   }
 ]

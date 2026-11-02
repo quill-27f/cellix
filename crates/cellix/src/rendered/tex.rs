@@ -572,7 +572,7 @@ impl Page<'_, '_> {
             let lines = &self.lines[first..=last];
             code_rows(lines, first, "", context, None, self.rows);
         }
-        let Some(figure) = context.formula(inner, true) else {
+        let Some(figure) = context.formula_or_last(inner, true, start) else {
             if !open && context.cell().is_some() {
                 self.source(first, last);
             }
@@ -582,12 +582,18 @@ impl Page<'_, '_> {
             return;
         };
         let at = self.rows.len();
-        let place = (first, start + 1, end);
-        figure_rows(figure, context, place, self.width, self.rows);
+        // A click lands in the formula, not on the line that opens its environment.
+        let inside = if last > first {
+            self.lines[first + 1].0
+        } else {
+            start + 1
+        };
+        figure_rows(figure, context, (first, inside, end), self.width, self.rows);
         if open {
             self.rows[at].stop = false;
         }
-        margin_numbers(&numbers, at, self.width, context, self.rows);
+        let height = context.extras.figures.borrow()[figure].height;
+        margin_numbers(&numbers, at, height, self.width, context, self.rows);
     }
 
     /// A list of what's in a `figure`: the image and its caption.
@@ -818,7 +824,7 @@ impl Page<'_, '_> {
         if let Some(at) = line.find(&after) {
             let rest = &line[at + after.len()..];
             if let Some((note, _)) = rest.split_once(']') {
-                title = format!("{title} ({note})");
+                title = format!("{title} ({})", note.replace("--", "–"));
             }
         }
         let mut lead = decoration(&format!("{title}. "), Tone::Text);

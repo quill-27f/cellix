@@ -148,9 +148,11 @@ impl Agents {
         if idle {
             starts(&mut lines);
         }
-        lines.push(Line::Gap);
-        lines.push(Line::Section("WORKTREES"));
-        lines.extend((0..self.worktrees.len()).map(Line::Tree));
+        if !self.worktrees.is_empty() {
+            lines.push(Line::Gap);
+            lines.push(Line::Section("WORKTREES"));
+            lines.extend((0..self.worktrees.len()).map(Line::Tree));
+        }
         if !idle {
             starts(&mut lines);
         }

@@ -44,6 +44,11 @@ impl Thread {
             && last.is_none_or(|r| r.author == YOU)
     }
 
+    /// Whether the last word so far was the person's, so an agent's answer is still due.
+    pub fn waiting_answer(&self) -> bool {
+        !self.resolved && self.replies.last().is_none_or(|r| r.author == YOU)
+    }
+
     /// Moves the thread to where its quoted text is now, the nearest place if it appears
     /// more than once. Text that's gone leaves it where it was.
     pub fn follow(&mut self, text: &str) {
