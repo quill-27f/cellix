@@ -1560,9 +1560,33 @@ impl Editor {
         self.selections.set_single(Selection::cursor(start + caret));
     }
 
+    /// The `tabular` the caret is in, read the same way as a Markdown table.
+    fn tabular_at_caret(&self) -> Option<(usize, usize, usize, usize)> {
+        let head = self.selections.primary().head;
+        let rope = self.buffer.rope();
+        let line = rope.char_to_line(head);
+        let first = (0..=line)
+            .rev()
+            .find(|n| self.line_text(*n).contains("\\begin{tabular}"))?;
+        let last =
+            (line..rope.len_lines()).find(|n| self.line_text(*n).contains("\\end{tabular}"))?;
+        let row = (first..line)
+            .filter(|n| self.line_text(*n).contains("\\\\"))
+            .count();
+        let before: String = self
+            .line_text(line)
+            .chars()
+            .take(head - rope.line_to_char(line))
+            .collect();
+        Some((first, last, row, before.matches('&').count()))
+    }
+
     /// The table the caret is in, as its first and last lines and the caret's row and
     /// column, with the header as row zero and the rule left out.
     pub fn table_at_caret(&self) -> Option<(usize, usize, usize, usize)> {
+        if self.dialect() == Dialect::Latex {
+            return self.tabular_at_caret();
+        }
         let head = self.selections.primary().head;
         let rope = self.buffer.rope();
         let line = rope.char_to_line(head);
@@ -1604,6 +1628,14 @@ impl Editor {
         let start = rope.line_to_char(first);
         let end = rope.line_to_char(last) + self.line_text(last).chars().count();
         let text = rope.slice(start..end).to_string();
+        if self.dialect() == Dialect::Latex {
+            let table = cellix_doc::latex::edit_tabular(&text, row, column, edit);
+            let table = table.unwrap_or_default();
+            self.buffer
+                .replace_range(&mut self.selections, start, end, &table);
+            self.selections.set_single(Selection::cursor(start));
+            return;
+        }
         match cellix_doc::table::apply(&text, row, column, edit) {
             Some((table, row, column)) => {
                 self.buffer

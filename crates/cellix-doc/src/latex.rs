@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::table::{Align, Edit};
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 /// A problem from a build, at a line counting from one.
@@ -175,7 +176,7 @@ pub fn equation_rows(source: &str, numbered: bool, equations: &mut usize) -> Vec
         .collect()
 }
 
-/// A display's rows: one for an `equation`, one for each `\\\\` of an `align`.
+/// A display's rows: one for an `equation`, one for each `\\` of an `align`.
 fn display_rows(source: &str) -> Vec<&str> {
     if !source.contains("{align") && !source.contains("{gather") {
         return vec![source];
@@ -683,6 +684,79 @@ fn escape(text: &str) -> String {
     out
 }
 
+/// Changes a `tabular`, given its lines from `\begin` to `\end`, and the row and column the
+/// caret is in, counting rows of cells. None means the table is gone.
+pub fn edit_tabular(text: &str, row: usize, column: usize, edit: Edit) -> Option<String> {
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    let is_row = |line: &String| line.contains("\\\\");
+    let rows: Vec<usize> = (0..lines.len()).filter(|i| is_row(&lines[*i])).collect();
+    let at = *rows.get(row.min(rows.len().checked_sub(1)?))?;
+    let cells = |line: &str| line.split("\\\\").next().unwrap_or("").matches('&').count() + 1;
+    let columns = cells(&lines[at]);
+    let blank = || format!("    {} \\\\", vec![""; columns].join(" & "));
+    let spec = |lines: &mut [String], change: &dyn Fn(&mut Vec<char>)| {
+        let line = &lines[0];
+        let open = line.rfind('{').unwrap_or(0) + 1;
+        let close = line.rfind('}').unwrap_or(line.len());
+        let mut letters: Vec<char> = line[open..close].chars().collect();
+        change(&mut letters);
+        let letters: String = letters.into_iter().collect();
+        lines[0] = format!("{}{letters}{}", &line[..open], &line[close..]);
+    };
+    match edit {
+        Edit::RowAbove => lines.insert(at, blank()),
+        Edit::RowBelow => lines.insert(at + 1, blank()),
+        Edit::DeleteRow if rows.len() == 1 => return None,
+        Edit::DeleteRow => {
+            lines.remove(at);
+        }
+        Edit::ColumnLeft | Edit::ColumnRight | Edit::DeleteColumn => {
+            if edit == Edit::DeleteColumn && columns == 1 {
+                return None;
+            }
+            let right = usize::from(edit == Edit::ColumnRight);
+            for index in rows {
+                let line = lines[index].clone();
+                let (body, _) = line.split_once("\\\\").unwrap_or((&line, ""));
+                let mut parts: Vec<String> =
+                    body.split('&').map(|c| c.trim().to_string()).collect();
+                if edit == Edit::DeleteColumn {
+                    if column < parts.len() {
+                        parts.remove(column);
+                    }
+                } else {
+                    parts.insert((column + right).min(parts.len()), String::new());
+                }
+                lines[index] = format!("    {} \\\\", parts.join(" & "));
+            }
+            spec(&mut lines, &|letters| {
+                let spot = (column + right).min(letters.len());
+                if edit == Edit::DeleteColumn {
+                    if column < letters.len() {
+                        letters.remove(column);
+                    }
+                } else {
+                    letters.insert(spot, 'l');
+                }
+            });
+        }
+        Edit::Align(align) => {
+            let letter = match align {
+                Align::Right => 'r',
+                Align::Centre => 'c',
+                _ => 'l',
+            };
+            spec(&mut lines, &|letters| {
+                if let Some(slot) = letters.get_mut(column) {
+                    *slot = letter;
+                }
+            });
+        }
+        Edit::Delete => return None,
+    }
+    Some(lines.join("\n"))
+}
+
 /// A new table, ready to fill in.
 pub fn new_table(rows: usize, columns: usize) -> String {
     let columns = columns.max(1);
@@ -806,6 +880,24 @@ pub fn from_markdown(markdown: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_tabular_edits_like_a_table() {
+        let text = "\\begin{tabular}{lr}\n    \\hline\n    A & B \\\\\n    1 & 2 \\\\\n    \\hline\n\\end{tabular}";
+        let more = edit_tabular(text, 1, 0, Edit::RowBelow).unwrap();
+        assert_eq!(more.matches("\\\\").count(), 3, "{more}");
+        let wider = edit_tabular(text, 0, 0, Edit::ColumnRight).unwrap();
+        assert!(wider.contains("{llr}"), "{wider}");
+        assert!(wider.contains("A &  & B"), "{wider}");
+        let narrower = edit_tabular(text, 0, 1, Edit::DeleteColumn).unwrap();
+        assert!(narrower.contains("{l}"), "{narrower}");
+        assert!(!narrower.contains('B'), "{narrower}");
+        let aligned = edit_tabular(text, 0, 0, Edit::Align(Align::Centre)).unwrap();
+        assert!(aligned.contains("{cr}"), "{aligned}");
+        let fewer = edit_tabular(text, 1, 0, Edit::DeleteRow).unwrap();
+        assert!(!fewer.contains('1'), "{fewer}");
+        assert_eq!(edit_tabular(text, 0, 0, Edit::Delete), None);
+    }
 
     #[test]
     fn a_new_table_has_its_size() {

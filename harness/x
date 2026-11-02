@@ -28,7 +28,9 @@ case $task in
       cargo test --workspace' ;;
   test) guard test cargo test --workspace "$@" ;;
   build) guard build cargo build --workspace "$@" ;;
-  run) exec cargo run -p cellix -- "$@" ;;
+  run)
+    guard build cargo build -p cellix || exit $?
+    exec target/debug/cellix "$@" ;;
   snapshot) guard snapshot cargo run -q -p cellix --example snapshot -- "$@" ;;
   tour)
     out=${1:-target/tour}
@@ -36,13 +38,35 @@ case $task in
     guard tour python3 -I harness/live/tour.py "$root/target/debug/cellix" "$out" ;;
   mux) guard mux cargo test -p cellix --test mux -- --ignored --test-threads=1 "$@" ;;
   verify)
-    "$0" check || exit 1
-    list=$(guard list cargo test --workspace -- --list 2>/dev/null) || exit 1
+    # Results come from the gate's own log, and its exit from PIPESTATUS, so nothing that
+    # reads this output can turn a failure into a pass.
+    state=$(git rev-parse --git-common-dir)/cellix-guard
+    mkdir -p "$state"
+    log=$state/verify.log
+    rm -f "$state/verified"
+    "$0" check 2>&1 | tee "$log"
+    code=${PIPESTATUS[0]}
+    [ "$code" = 0 ] || exit "$code"
     missing=0
+    unproven=
     for t in $(jq -r '.[] | select(.passes) | .test' "$features"); do
-      printf '%s\n' "$list" | grep -q "$t: test" || { echo "missing test: $t"; missing=1; }
+      if grep -Eq "^test ([a-z_0-9]+::)*$t \.\.\. ok$" "$log"; then continue; fi
+      if grep -Eq "^test ([a-z_0-9]+::)*$t \.\.\. ignored" "$log"; then
+        unproven="$unproven $t"
+      else
+        echo "did not pass: $t"
+        missing=1
+      fi
     done
-    [ "$missing" = 0 ] || { echo "verify failed: features marked passing have no test"; exit 1; }
+    [ "$missing" = 0 ] || { echo "verify failed: a feature marked passing did not pass"; exit 1; }
+    [ -z "$unproven" ] || echo "ignored, so unproven by this run:$unproven"
+    # The commit hook compares against this, so only what was really verified can land.
+    git config core.hooksPath harness/githooks
+    if git diff --quiet; then
+      git write-tree > "$state/verified"
+    else
+      echo "not stamped: stage your changes before verifying, so what's checked is what lands"
+    fi
     echo "verify ok: $(jq '[.[] | select(.passes)] | length' "$features") of $(jq length "$features") features" ;;
   next)
     jq -r '[.[] | select(.passes | not)] | sort_by(.milestone) | first //

@@ -155,6 +155,8 @@ pub enum Command {
     BuildPdf,
     /// Writes the document as a PDF beside it.
     ExportPdf,
+    /// Scrolls the PDF to the line the caret is on.
+    ShowInPdf,
     ToggleComment,
     MoveLineUp,
     MoveLineDown,

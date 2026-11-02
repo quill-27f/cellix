@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 
 use cellix_doc::pdf::{Document, Page};
+use cellix_doc::synctex::Map;
 use cellix_render::{Bitmap, Bounds, Grid, Paint, Pixels, Rect, Style};
 
 use crate::theme::Theme;
@@ -13,9 +14,23 @@ use crate::theme::Theme;
 const GAP: f32 = 0.6;
 const SIDE: f32 = 1.0;
 
+/// How much one press of the zoom buttons changes the size.
+const ZOOM_STEP: f32 = 0.25;
+const ZOOM_RANGE: (f32, f32) = (0.5, 3.0);
+
+/// What a click in the view lands on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Hit {
+    ZoomOut,
+    ZoomIn,
+    Fit,
+    /// A place on a page, in PDF points from its top left.
+    Page(usize, f32, f32),
+}
+
 enum Update {
-    /// How many pages there are.
-    Count(usize),
+    /// The size of each page, in points.
+    Sizes(Vec<(f32, f32)>),
     Done(usize, Page),
     Failed(String),
 }
@@ -23,6 +38,11 @@ enum Update {
 pub struct PdfView {
     pub path: PathBuf,
     pages: Vec<Option<(Bitmap, f32, f32)>>,
+    sizes: Vec<(f32, f32)>,
+    /// 1.0 fits the pane's width.
+    zoom: f32,
+    /// Maps pages to source lines, where the engine wrote one.
+    sync: Option<Map>,
     updates: Option<Receiver<Update>>,
     /// The size pages were asked for: their width in cells, and a cell's pixels.
     fit: (u16, (u32, u32)),
@@ -54,11 +74,20 @@ fn image_page(path: &Path, width: u32) -> Result<Page, String> {
     })
 }
 
+/// Where the zoom controls sit in the bar, as (minus, plus, fit) columns.
+fn buttons(area: Rect) -> (u16, u16, u16) {
+    let fit = area.right().saturating_sub(5);
+    (fit.saturating_sub(10), fit.saturating_sub(3), fit)
+}
+
 impl PdfView {
     pub fn new(path: &Path) -> Self {
         Self {
             path: path.to_path_buf(),
             pages: Vec::new(),
+            sizes: Vec::new(),
+            zoom: 1.0,
+            sync: None,
             updates: None,
             fit: (0, (0, 0)),
             top: 0.0,
@@ -77,13 +106,15 @@ impl PdfView {
         self.generation += 1;
         self.updates = Some(updates);
         self.error = None;
-        let pixels = (width as f32 - SIDE * 2.0).max(1.0) as u32 * cell.0;
+        let pixels = (width as f32 - SIDE * 2.0).max(1.0) * self.zoom;
+        let pixels = pixels as u32 * cell.0;
         self.seen = modified(&self.path);
+        self.sync = Map::beside(&self.path);
         std::thread::spawn(move || {
             if !path.extension().is_some_and(|e| e == "pdf") {
                 let _ = match image_page(&path, pixels) {
                     Ok(page) => sender
-                        .send(Update::Count(1))
+                        .send(Update::Sizes(vec![(page.width as f32, page.height as f32)]))
                         .and_then(|()| sender.send(Update::Done(0, page))),
                     Err(e) => sender.send(Update::Failed(e)),
                 };
@@ -99,7 +130,8 @@ impl PdfView {
                     return;
                 }
             };
-            let _ = sender.send(Update::Count(document.pages()));
+            let sizes = (0..document.pages()).filter_map(|p| document.size(p));
+            let _ = sender.send(Update::Sizes(sizes.collect()));
             for index in 0..document.pages() {
                 let Some(page) = document.render(index, pixels) else {
                     continue;
@@ -136,7 +168,10 @@ impl PdfView {
         while let Ok(update) = updates.try_recv() {
             changed = true;
             match update {
-                Update::Count(count) => self.pages.resize(count, None),
+                Update::Sizes(sizes) => {
+                    self.pages.resize(sizes.len(), None);
+                    self.sizes = sizes;
+                }
                 Update::Failed(e) => self.error = Some(e),
                 Update::Done(index, page) => {
                     let bitmap = Bitmap {
@@ -160,6 +195,84 @@ impl PdfView {
     #[cfg(test)]
     pub fn pages_ready(&self) -> usize {
         self.pages.iter().flatten().count()
+    }
+
+    /// Changes the size, and draws the pages again at it.
+    pub fn zoom(&mut self, hit: Hit) {
+        self.zoom = match hit {
+            Hit::ZoomIn => self.zoom + ZOOM_STEP,
+            Hit::ZoomOut => self.zoom - ZOOM_STEP,
+            _ => 1.0,
+        }
+        .clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);
+        let (width, cell) = self.fit;
+        self.load(width, cell);
+    }
+
+    /// The source line under a place on a page.
+    pub fn source_at(&self, page: usize, x: f32, y: f32) -> Option<(PathBuf, usize)> {
+        self.sync.as_ref()?.to_source(page, x, y)
+    }
+
+    /// Scrolls to where a source line landed. Returns false if it's not known.
+    pub fn show_source(&mut self, file: &Path, line: usize) -> bool {
+        let Some((page, y)) = self.sync.as_ref().and_then(|map| map.to_pdf(file, line)) else {
+            return false;
+        };
+        let above: f32 = self.pages[..page.min(self.pages.len())]
+            .iter()
+            .flatten()
+            .map(|(_, _, height)| height + GAP)
+            .sum();
+        let within = match (self.pages.get(page), self.sizes.get(page)) {
+            (Some(Some((_, _, height))), Some((_, points))) => y / points * height,
+            _ => 0.0,
+        };
+        self.top = (above + within - 6.0).max(0.0);
+        true
+    }
+
+    /// The page at the top of the view, counting from one.
+    fn page_in_view(&self) -> usize {
+        let mut y = 0.0;
+        for (index, page) in self.pages.iter().flatten().enumerate() {
+            y += page.2 + GAP;
+            if y > self.top + 1.0 {
+                return index + 1;
+            }
+        }
+        self.pages.len().max(1)
+    }
+
+    /// What's at a place in the view.
+    pub fn hit(&self, area: Rect, x: u16, y: u16) -> Option<Hit> {
+        if y == area.y {
+            let (minus, plus, fit) = buttons(area);
+            return if x == minus {
+                Some(Hit::ZoomOut)
+            } else if x == plus {
+                Some(Hit::ZoomIn)
+            } else if x >= fit && x < fit + 3 {
+                Some(Hit::Fit)
+            } else {
+                None
+            };
+        }
+        let mut top = area.y as f32 + 1.0 + GAP - self.top;
+        for (index, page) in self.pages.iter().enumerate() {
+            let Some((_, width, height)) = page else {
+                continue;
+            };
+            if (y as f32) >= top && (y as f32) < top + height {
+                let left = area.x as f32 + (area.w as f32 - width) / 2.0;
+                let (points_x, points_y) = self.sizes.get(index).copied()?;
+                let across = (x as f32 - left).max(0.0) / width * points_x;
+                let down = (y as f32 - top) / height * points_y;
+                return Some(Hit::Page(index, across, down));
+            }
+            top += height + GAP;
+        }
+        None
     }
 
     pub fn scroll(&mut self, rows: f32) {
@@ -200,6 +313,21 @@ impl PdfView {
             grid.label(left, area.y + 1, "Reading the PDF…", quiet, area.right());
             return;
         }
+        let bar = Rect::new(area.x, area.y, area.w, 1);
+        grid.fill(bar, theme.tab);
+        let (minus, plus, fit) = buttons(area);
+        let quiet_bar = Style {
+            fg: theme.status.fg,
+            ..theme.tab
+        };
+        let count = format!("Page {} of {}", self.page_in_view(), self.pages.len());
+        grid.label(left, area.y, &count, quiet_bar, minus.saturating_sub(1));
+        grid.label(minus, area.y, "−", quiet_bar, minus + 1);
+        let size = format!("{:.0}%", self.zoom * 100.0);
+        grid.label(minus + 2, area.y, &size, quiet_bar, plus);
+        grid.label(plus, area.y, "+", quiet_bar, plus + 1);
+        grid.label(fit, area.y, "Fit", quiet_bar, area.right());
+        let area = Rect::new(area.x, area.y + 1, area.w, area.h.saturating_sub(1));
         let clip = Bounds::cells(area.x as f32, area.y as f32, area.w as f32, area.h as f32);
         let mut y = area.y as f32 + GAP - self.top;
         for page in self.pages.iter().flatten() {

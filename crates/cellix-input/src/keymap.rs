@@ -26,6 +26,7 @@ pub fn simple_keymap(event: KeyEvent) -> Option<Command> {
         Key::PageDown => Move(Direction::PageDown, shift),
         Key::Char('`') if mods.ctrl => FocusAgent,
         Key::Char('b' | 'B') if mods.ctrl && mods.alt => BuildPdf,
+        Key::Char('j' | 'J') if mods.ctrl && mods.alt => ShowInPdf,
         Key::Enter => Newline,
         Key::Tab => Indent,
         Key::BackTab => Outdent,

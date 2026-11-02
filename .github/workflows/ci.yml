@@ -15,7 +15,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      - run: cargo test --workspace 2>&1 | tee test.log
+        shell: bash -o pipefail {0}
+      - name: Every feature marked passing passed
+        shell: bash
+        run: |
+          for t in $(jq -r '.[] | select(.passes) | .test' harness/features.json); do
+            grep -Eq "^test ([a-z_0-9]+::)*$t \.\.\. (ok|ignored)" test.log || { echo "did not pass: $t"; exit 1; }
+          done
 
   macos:
     # macOS minutes cost ten times as much on a private repo, so main only.

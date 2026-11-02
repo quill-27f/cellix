@@ -39,7 +39,7 @@ use crate::menu::{Action as MenuAction, Item as MenuItem, Menu};
 use crate::neovim::{self, Neovim};
 use crate::palette::{COMMANDS, Input, Item, Palette, input, popup, raised};
 use crate::panels::{MathPanel, SYMBOLS, TablePicker};
-use crate::pdfview::PdfView;
+use crate::pdfview::{Hit as PdfHit, PdfView};
 use crate::rendered::{self, Dialect, Target};
 use crate::review::{Hit, Review};
 use crate::search::{self, Field, Search};
@@ -2752,6 +2752,19 @@ impl App {
             Command::ShowAgents => self.toggle_dock(),
             Command::BuildPdf => self.build_pdf(),
             Command::ExportPdf => self.export_pdf(),
+            Command::ShowInPdf => {
+                let place = self.cursor_line();
+                let shown = match (place, &mut self.dock.pdf) {
+                    (Some((path, line)), Some(view)) => view.show_source(&path, line),
+                    _ => false,
+                };
+                if shown {
+                    self.dock.open = true;
+                    self.dock.front = Front::Pdf;
+                } else {
+                    self.say("Build the PDF first, and this line will show in it");
+                }
+            }
             Command::FocusAgent => {
                 let wanted = !self.dock.focused;
                 self.dock.open |= wanted;
@@ -3128,6 +3141,9 @@ impl App {
             if let Some(view) = &mut self.dock.pdf {
                 view.scroll(rows);
             }
+            if mouse.kind == MouseKind::Left {
+                self.pdf_click(x, y);
+            }
             return true;
         }
         if self.dock.front == Front::Comments {
@@ -3187,6 +3203,34 @@ impl App {
             _ => {}
         }
         true
+    }
+
+    /// A click on a page goes to the line that made it, and the bar sets the size.
+    fn pdf_click(&mut self, x: u16, y: u16) {
+        let screen = self.dock_screen().unwrap_or_default();
+        let hit = self.dock.pdf.as_ref().and_then(|v| v.hit(screen, x, y));
+        match hit {
+            Some(PdfHit::Page(page, across, down)) => {
+                let view = self.dock.pdf.as_ref();
+                let place = view.and_then(|v| v.source_at(page, across, down));
+                let Some((path, line)) = place else {
+                    self.say("Build with SyncTeX to jump from the PDF to the source");
+                    return;
+                };
+                if self.open(&path).is_ok() {
+                    let area = self.focused_area();
+                    if let Some(editor) = self.editor_mut() {
+                        editor.go_to_line(line, area);
+                    }
+                }
+            }
+            Some(zoom) => {
+                if let Some(view) = &mut self.dock.pdf {
+                    view.zoom(zoom);
+                }
+            }
+            None => {}
+        }
     }
 
     /// Opens the `file:line` under a Ctrl+click in a session.
@@ -3961,6 +4005,8 @@ impl App {
             Err(e) => format!("Could not save: {e}"),
         };
         self.say(note);
+        // With its PDF open, saving a paper rebuilds it.
+        self.rebuild_on_save();
         // Sent after any pending edit, so the server checks what was saved.
         self.poll();
         if let Some((language, path, ..)) = self.lsp_target()
@@ -5619,6 +5665,19 @@ impl App {
         self.build = Some(result);
     }
 
+    fn rebuild_on_save(&mut self) {
+        let showing = self.dock.pdf.is_some() && self.build.is_none();
+        let editor = self.editors.get(self.active());
+        let Some(editor) = editor.filter(|e| showing && e.dialect() == Dialect::Latex) else {
+            return;
+        };
+        let Some(path) = editor.buffer.path().map(Path::to_path_buf) else {
+            return;
+        };
+        let root = cellix_doc::latex::root_of(&path, &editor.buffer.text());
+        self.start_build(root);
+    }
+
     fn build_pdf(&mut self) {
         let Some(editor) = self.editors.get(self.active()) else {
             return;
@@ -5633,7 +5692,10 @@ impl App {
         }
         let root = cellix_doc::latex::root_of(&path, &editor.buffer.text());
         self.save();
-        self.start_build(root);
+        // Saving already builds when the PDF is open.
+        if self.build.is_none() {
+            self.start_build(root);
+        }
     }
 
     /// Markdown goes through LaTeX, so its math comes out as well as a paper's.
@@ -8390,6 +8452,70 @@ mod tests {
         assert!(dir.path().join("paper.pdf").exists());
         assert_eq!(app.dock.front, Front::Pdf);
         assert!(app.dock.pdf.is_some());
+    }
+
+    #[test]
+    fn saving_a_paper_rebuilds_its_open_pdf() {
+        let (dir, mut app) = paper_app("\\begin{document}\nHello\n\\end{document}\n");
+        app.run(Command::BuildPdf);
+        built(&mut app);
+        fs::remove_file(dir.path().join("paper.pdf")).unwrap();
+        typed(&mut app, "x");
+        app.run(Command::Save);
+        built(&mut app);
+        assert!(dir.path().join("paper.pdf").exists());
+    }
+
+    #[test]
+    fn clicking_a_pdf_goes_to_its_source() {
+        let (dir, mut app) = paper_app("\\begin{document}\nHello\nAgain\n\\end{document}\n");
+        app.run(Command::BuildPdf);
+        built(&mut app);
+        let source = dir.path().join("paper.tex");
+        let map = format!(
+            "SyncTeX Version:1\nInput:1:{}\nContent:\n!1\n{{1\nh1,3:6578176,6578176:0,0,0\n}}1\n",
+            source.display()
+        );
+        let mut gz = flate2_write(map.as_bytes());
+        fs::write(dir.path().join("paper.synctex.gz"), &mut gz).unwrap();
+        let path = dir.path().join("paper.pdf");
+        app.show_pdf(&path);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.dock.pdf.as_ref().unwrap().pages_ready() == 0 {
+            assert!(std::time::Instant::now() < deadline, "no page");
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let screen_area = app.dock_screen().unwrap();
+        app.handle(mouse(
+            MouseKind::Left,
+            screen_area.x + 20,
+            screen_area.y + 5,
+        ));
+        assert_eq!(app.cursor_line().unwrap().1, 3);
+        app.run(Command::ShowInPdf);
+        assert_eq!(app.dock.front, Front::Pdf);
+    }
+
+    fn flate2_write(bytes: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        gz.write_all(bytes).unwrap();
+        gz.finish().unwrap()
+    }
+
+    #[test]
+    fn a_tabular_has_the_table_menu() {
+        let source = "\\begin{tabular}{ll}\nModel & Size \\\\\nBase & 12 \\\\\n\\end{tabular}\n";
+        let (_dir, mut app) = paper_app(source);
+        screen(&app);
+        let editor = app.editor_mut().unwrap();
+        editor.selections.set_single(Selection::cursor(40));
+        assert!(app.editors[0].table_at_caret().is_some());
+        let editor = app.editor_mut().unwrap();
+        editor.edit_table(TableEdit::RowBelow);
+        let text = app.active_text().unwrap();
+        assert_eq!(text.matches("\\\\").count(), 3, "{text}");
     }
 
     #[test]

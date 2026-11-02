@@ -908,5 +908,26 @@
     "passes": true,
     "test": "a_path_in_a_session_opens_at_its_line",
     "title": "A path in a session opens at its line"
+  },
+  {
+    "id": "pdf-sync",
+    "milestone": 8,
+    "passes": true,
+    "test": "clicking_a_pdf_goes_to_its_source",
+    "title": "Clicking a PDF goes to its source, and back"
+  },
+  {
+    "id": "pdf-rebuild",
+    "milestone": 8,
+    "passes": true,
+    "test": "saving_a_paper_rebuilds_its_open_pdf",
+    "title": "Saving a paper rebuilds its open PDF"
+  },
+  {
+    "id": "tex-table",
+    "milestone": 8,
+    "passes": true,
+    "test": "a_tabular_has_the_table_menu",
+    "title": "A tabular has the table menu"
   }
 ]
