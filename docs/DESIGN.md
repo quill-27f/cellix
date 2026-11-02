@@ -14,7 +14,7 @@ a good-looking, mouse-first editor for reviewing and correcting agent work.
 |---|---|
 | Rendering | Pixels in the terminal through the Kitty graphics protocol, with a cell-based fallback |
 | Rasterizer | Software, on the host (see below) |
-| Agents | Companion: `$VISUAL`, thin plugins, and starting the real agent in a split. Never hosted |
+| Agents | The real program on a PTY in a side pane, plus `$VISUAL` and thin plugins. Its interface is never rebuilt |
 | Editing | Cellix's simple mode by default, optional Vim and Neovim modes |
 | Multiplexers | tmux and Zellij are required targets |
 | Scope | Reviewing and correcting agent work, with everyday editing and LSP. No debugger |
@@ -222,7 +222,10 @@ doesn't need to compete with a full IDE here.
 
 ## Agent integration
 
-Cellix never hosts an agent. It connects to the real tool in three ways, each proven
+Cellix runs the real agent and never rebuilds its interface. The side pane is a terminal on a
+PTY, using `alacritty_terminal` for the screen, so agents update themselves and nothing here
+knows what they look like. Starting one in a host split left the file and the agent in two
+programs, and real use showed that isn't side by side. It connects to the real tool in three ways, each proven
 against Claude Code 2.1.309:
 
 - **Hooks** reach the workspace socket through `cellix hook <kind>`. They checkpoint turns,
@@ -266,12 +269,9 @@ the file.
   hooks for status, turns, comments and test runs, once the user trusts them with `/hooks`.
 - Gemini CLI: an extension with the same hooks, installed with its own command. Its folder
   trust question isn't covered by `--consent`, and the user's click is the answer to it.
-- The Agents panel is about what's happening here, since Cellix comes to the agent. Starting
-  one is a quiet list at the bottom, for the times Cellix is opened first.
-- Running agents: Cellix doesn't host them. `Open Claude Code` and `Open Codex` start the
-  real tool in a split of tmux or Zellij, or a new window of Ghostty, whose splits can't be
-  opened from inside. Anywhere else the command goes on the clipboard. Every update they
-  ship simply arrives.
+- The Agents icon opens the side pane. With nothing running, it lists what's running elsewhere,
+  what can be started and the worktrees.
+- Rebuilding an agent's interface: the side pane shows the real program, so its features arrive with its updates.
 
 ## Crates (proposed)
 

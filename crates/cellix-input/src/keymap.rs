@@ -24,6 +24,7 @@ pub fn simple_keymap(event: KeyEvent) -> Option<Command> {
         Key::PageDown if mods.ctrl => NextTab,
         Key::PageUp => Move(Direction::PageUp, shift),
         Key::PageDown => Move(Direction::PageDown, shift),
+        Key::Char('`') if mods.ctrl => FocusAgent,
         Key::Enter => Newline,
         Key::Tab => Indent,
         Key::BackTab => Outdent,

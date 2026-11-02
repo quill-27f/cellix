@@ -247,8 +247,8 @@
   {
     "id": "agent-host",
     "milestone": 5,
-    "title": "Open Claude Code or Codex beside the editor, in a split of the host",
-    "test": "agents_open_in_a_split_of_the_host",
+    "title": "Agents run in a side pane inside Cellix",
+    "test": "an_agent_runs_beside_the_editor",
     "passes": true
   },
   {
@@ -723,7 +723,7 @@
   {
     "id": "agent-pane",
     "milestone": 8,
-    "passes": false,
+    "passes": true,
     "test": "an_agent_runs_beside_the_editor",
     "title": "An agent runs in a side pane inside the editor"
   },

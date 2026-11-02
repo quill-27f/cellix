@@ -143,6 +143,8 @@ pub enum Command {
     ReplaceInProject,
     MarkdownPreview,
     OpenInBrowser,
+    /// Moves the keyboard between the file and the side pane.
+    FocusAgent,
     ToggleComment,
     MoveLineUp,
     MoveLineDown,

@@ -96,6 +96,11 @@ fn shifted(color: Rgb, by: (i16, i16, i16)) -> Rgb {
 /// VS Code's Modern themes, since that's the look people already know. Surfaces are quiet
 /// and the blue is kept for what's active.
 impl Theme {
+    pub fn is_light(&self) -> bool {
+        let Rgb(r, g, b) = self.text.bg;
+        u16::from(r) + u16::from(g) + u16::from(b) > 3 * 128
+    }
+
     /// Moves every surface by the same amount, so the frame sits exactly on the terminal's
     /// background and the panels keep their distance from it. Text colours stay, since
     /// they're chosen for contrast and a nearby background doesn't change that.

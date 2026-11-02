@@ -29,6 +29,7 @@ use cellix_agent::{Decision, Request, SharedComments, TestRun};
 use serde_json::{Value, json};
 
 use crate::agents::{Agents, Hit as AgentHit};
+use crate::dock::{Dock, Session, TabHit};
 use crate::editor::{Editor, Marks};
 use crate::explorer::Explorer;
 use crate::find::Find;
@@ -99,6 +100,8 @@ const TOOLTIP_SIZE: u8 = 92;
 const FIND_NAMES: [&str; 3] = ["Previous match", "Next match", "Close"];
 const RAIL_NAMES: [&str; 5] = ["Files", "Search", "Review Changes", "Agents", "Settings"];
 const TOOL_NAMES: [&str; 7] = ["Bold", "Italic", "Code", "Heading", "List", "Task", "Quote"];
+/// Below this width, opening the side pane puts the sidebar away.
+const CROWDED_WIDTH: u16 = 120;
 const SIDEBAR_WIDTH: u16 = 28;
 const SIDEBAR_MIN_WIDTH: u16 = 20;
 /// Below this width the window is a side pane, as beside an agent: chrome gives way to
@@ -124,6 +127,10 @@ enum Drag {
     None,
     Text,
     Scrollbar,
+    /// The side pane's edge.
+    Dock,
+    /// A selection in a session.
+    Session,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -149,7 +156,6 @@ struct Prompt {
 enum SidebarView {
     Explorer,
     Search,
-    Agents,
 }
 
 /// Suggestions showing at the caret while typing.
@@ -204,47 +210,6 @@ struct Confirm {
     /// The first is what Enter does until the selection moves.
     buttons: Vec<(&'static str, Choice)>,
     selected: usize,
-}
-
-/// What can open a split for an agent.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SplitHost {
-    Tmux,
-    Zellij,
-    /// A new Ghostty window, since Ghostty's splits can't be opened from inside.
-    Ghostty,
-}
-
-impl SplitHost {
-    fn command(self, agent: &[String], root: &str, env: &[String]) -> Vec<String> {
-        let start: &[&str] = match self {
-            Self::Tmux => &["tmux", "split-window", "-h", "-c", root],
-            Self::Zellij => &["zellij", "run", "-d", "right", "--cwd", root, "--"],
-            Self::Ghostty => &["open", "-na", "Ghostty.app", "--args"],
-        };
-        let mut words: Vec<String> = start.iter().map(ToString::to_string).collect();
-        if self == Self::Ghostty {
-            words.push(format!("--working-directory={root}"));
-            words.push("-e".to_string());
-        }
-        if !env.is_empty() {
-            words.push("env".to_string());
-            words.extend_from_slice(env);
-        }
-        words.extend_from_slice(agent);
-        words
-    }
-}
-
-fn agent_split(var: impl Fn(&str) -> Option<String>) -> Option<SplitHost> {
-    if var("TMUX").is_some_and(|v| !v.is_empty()) {
-        Some(SplitHost::Tmux)
-    } else if var("ZELLIJ").is_some() {
-        Some(SplitHost::Zellij)
-    } else {
-        let ghostty = var("TERM").is_some_and(|t| t.contains("ghostty"));
-        (ghostty && cfg!(target_os = "macos")).then_some(SplitHost::Ghostty)
-    }
 }
 
 /// What the system's clipboard holds, where a local tool can read it. Over SSH that would
@@ -331,37 +296,6 @@ fn store(key: &str, value: serde_json::Value) -> String {
 }
 
 /// Runs a program and waits for it, for short commands whose outcome matters.
-fn run_to_end(program: &str, args: &[&str]) -> bool {
-    std::process::Command::new(program)
-        .args(args)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
-}
-
-/// Starts a program detached from the terminal, and reports whether it could start.
-fn spawn(command: &[String], args: &[&str]) -> bool {
-    let Some((program, fixed)) = command.split_first() else {
-        return false;
-    };
-    let child = std::process::Command::new(program)
-        .args(fixed)
-        .args(args)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
-    match child {
-        Ok(mut child) => {
-            // Reaped on a thread, so it never lingers as a zombie or blocks the interface.
-            std::thread::spawn(move || child.wait());
-            true
-        }
-        Err(_) => false,
-    }
-}
-
 /// Runs a command to its end, for when starting isn't the same as working.
 fn ran_well(command: &[String], arg: &str) -> bool {
     let Some((program, fixed)) = command.split_first() else {
@@ -445,8 +379,8 @@ pub struct App {
     /// The last selection told to Claude Code, to send only changes.
     told_selection: Option<Value>,
     plan: Option<PendingPlan>,
-    /// The tmux pane of an agent Cellix started, with the program to reach it.
-    agent_pane: Option<(String, String)>,
+    /// The side pane, where agents and shells run.
+    dock: Dock,
     tests: Vec<TestRun>,
     /// Where the pointer is, for hover highlights.
     hover: Option<(u16, u16)>,
@@ -546,7 +480,7 @@ impl App {
             queued_diffs: VecDeque::new(),
             told_selection: None,
             plan: None,
-            agent_pane: None,
+            dock: Dock::default(),
             tests: Vec::new(),
             hover: None,
             last_click: None,
@@ -883,6 +817,7 @@ impl App {
             self.ide_call(call);
         }
         self.tell_selection();
+        let terminal = self.dock.poll(&self.theme);
         let searched = self.search.poll();
         let reviewed = self.review.as_mut().is_some_and(Review::poll);
         let installed = self.poll_install() | self.poll_browser() | self.poll_offer();
@@ -890,8 +825,13 @@ impl App {
         for client in self.servers.values() {
             events.extend(client.events.try_iter());
         }
-        let changed =
-            highlighted || called || searched || reviewed || installed || !events.is_empty();
+        let changed = highlighted
+            || called
+            || searched
+            || reviewed
+            || installed
+            || terminal
+            || !events.is_empty();
         for event in events {
             self.lsp_event(event);
         }
@@ -1625,6 +1565,10 @@ impl App {
                 .drawer
                 .then_some(Rect::new(0, 0, self.size.0, activity.h));
         }
+        // Beside an agent, a small window gives its room to the two things being compared.
+        if self.dock.open && self.size.0 < CROWDED_WIDTH {
+            return None;
+        }
         // Review uses the explorer's width: side-by-side code needs it more.
         (self.show_sidebar && self.review.is_none()).then(|| {
             let width = (self.size.0 / 4).clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_WIDTH);
@@ -1632,15 +1576,21 @@ impl App {
         })
     }
 
-    fn main_area(&self) -> Rect {
-        let x = match self.sidebar_area() {
+    /// Where the main area starts.
+    fn main_left(&self) -> u16 {
+        match self.sidebar_area() {
             Some(area) if !self.compact() => area.right(),
             _ => self.activity_area().right(),
-        };
+        }
+    }
+
+    fn main_area(&self) -> Rect {
+        let x = self.main_left();
+        let beside = self.dock_area().map_or(0, |a| a.w);
         Rect::new(
             x,
             0,
-            self.size.0.saturating_sub(x),
+            self.size.0.saturating_sub(x + beside),
             self.size.1.saturating_sub(1),
         )
     }
@@ -1724,9 +1674,17 @@ impl App {
             Event::Resize(w, h) => self.size = (w, h),
             Event::Tick => self.tick(),
         }
+        self.fit_dock();
     }
 
     fn paste(&mut self, text: &str) {
+        if self.dock.focused
+            && matches!(self.overlay, Overlay::None)
+            && let Some(session) = self.dock.session_mut()
+        {
+            session.paste(text);
+            return;
+        }
         match &mut self.overlay {
             Overlay::Palette(palette) => {
                 palette.query.push_str(text);
@@ -1833,6 +1791,19 @@ impl App {
     }
 
     fn key(&mut self, key: KeyEvent) {
+        if self.dock.focused && matches!(self.overlay, Overlay::None) {
+            // The session gets everything but what moves away from it.
+            let leaves = matches!(
+                simple_keymap(key),
+                Some(Command::FocusAgent | Command::CommandPalette | Command::Quit)
+            );
+            if !leaves {
+                if let Some(session) = self.dock.session_mut() {
+                    session.key(key);
+                }
+                return;
+            }
+        }
         // These two work from anywhere, even with a palette or prompt open.
         let leaving = matches!(simple_keymap(key), Some(Command::Quit | Command::CloseTab));
         if !matches!(self.overlay, Overlay::None) && !leaving {
@@ -2593,16 +2564,11 @@ impl App {
                     self.say("No plan is waiting for review");
                 }
             }
-            Command::ShowAgents => {
-                self.review = None;
-                self.settings_page = None;
-                self.search.focus = None;
-                self.sidebar_view = SidebarView::Agents;
-                self.show_sidebar = true;
-                self.drawer = self.compact();
-                self.agents.worktrees = worktrees(self.workspace.root());
-                self.agents.look_for_agents();
-                self.agents.scan(self.workspace.root());
+            Command::ShowAgents => self.toggle_dock(),
+            Command::FocusAgent => {
+                let wanted = !self.dock.focused;
+                self.dock.open |= wanted;
+                self.dock.focused = wanted && self.dock.session().is_some();
             }
             Command::OpenGemini => self.open_agent("gemini"),
             Command::OpenSettings => {
@@ -2817,38 +2783,187 @@ impl App {
         (env, launch)
     }
 
+    /// The side pane's rectangle, title row included.
+    fn dock_area(&self) -> Option<Rect> {
+        let left = self.main_left();
+        let height = self.size.1.saturating_sub(1);
+        let width = self.dock.width_in(self.size.0.saturating_sub(left));
+        (width > 0).then(|| Rect::new(self.size.0 - width, 0, width, height))
+    }
+
+    /// Where a session's screen goes.
+    fn dock_screen(&self) -> Option<Rect> {
+        self.dock_area().map(|a| {
+            Rect::new(
+                a.x + 1,
+                a.y + 1,
+                a.w.saturating_sub(1),
+                a.h.saturating_sub(1),
+            )
+        })
+    }
+
+    /// Runs the real program in the side pane, so it updates itself and works as it does
+    /// anywhere else, with the file still in view.
     fn open_agent(&mut self, agent: &str) {
-        let root = self.workspace.root().to_string_lossy().into_owned();
-        let host = agent_split(|name| std::env::var(name).ok());
-        let (env, launch) = self.agent_launch(agent);
-        let Some(command) = host.map(|host| host.command(&launch, &root, &env)) else {
-            // Nothing here can open a window for it, so hand over the command instead.
-            let line = launch.join(" ");
-            self.copy_text(line, "");
-            self.say(format!(
-                "Copied the command: paste it in a terminal to start {agent}"
-            ));
+        let root = self.workspace.root().to_path_buf();
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string());
+        let (name, env, launch) = if agent == crate::agents::SHELL.1 {
+            (crate::agents::SHELL.0, Vec::new(), vec![shell])
+        } else {
+            let (env, launch) = self.agent_launch(agent);
+            (crate::agents::display_name(agent), env, launch)
+        };
+        self.start_session(name, &launch, &env, &root);
+    }
+
+    fn start_session(&mut self, name: &str, argv: &[String], env: &[String], folder: &Path) {
+        self.dock.open = true;
+        let size = self.dock_screen().map_or((80, 24), |a| (a.w, a.h));
+        match Session::start(name, argv, env, folder, size) {
+            Ok(session) => {
+                self.dock.sessions.push(session);
+                self.dock.active = Some(self.dock.sessions.len() - 1);
+                self.dock.focused = true;
+            }
+            Err(e) => self.say(format!("Could not start {name}: {e}")),
+        }
+    }
+
+    /// Keeps each session as big as the pane it's in.
+    fn fit_dock(&mut self) {
+        if let Some(screen) = self.dock_screen() {
+            for session in &mut self.dock.sessions {
+                session.resize((screen.w, screen.h));
+            }
+        }
+    }
+
+    /// Opens or closes the side pane. With nothing running it shows what can be started.
+    fn toggle_dock(&mut self) {
+        self.dock.open = !self.dock.open;
+        self.dock.focused = self.dock.open && self.dock.session().is_some();
+        if self.dock.open {
+            self.agents.worktrees = worktrees(self.workspace.root());
+            self.agents.look_for_agents();
+            self.agents.scan(self.workspace.root());
+        }
+    }
+
+    /// Everything the pane does with the pointer. Returns true if it took the event.
+    fn dock_mouse(&mut self, mouse: MouseEvent) -> bool {
+        let Some(area) = self.dock_area() else {
+            return false;
+        };
+        let (x, y) = (mouse.x, mouse.y);
+        let dragging = matches!(self.drag, Drag::Dock | Drag::Session);
+        if mouse.kind == MouseKind::Drag && self.drag == Drag::Dock {
+            self.dock.width = Some(self.size.0.saturating_sub(x));
+            self.fit_dock();
+            return true;
+        }
+        if mouse.kind == MouseKind::Up && dragging {
+            let was = std::mem::replace(&mut self.drag, Drag::None);
+            if was == Drag::Session {
+                self.dock_session_mouse(mouse);
+            }
+            return true;
+        }
+        if mouse.kind == MouseKind::Drag && self.drag == Drag::Session {
+            self.dock_session_mouse(mouse);
+            return true;
+        }
+        if !area.contains(x, y) {
+            if mouse.kind == MouseKind::Left {
+                self.dock.focused = false;
+            }
+            return false;
+        }
+        if y == area.y {
+            if mouse.kind == MouseKind::Left {
+                match self.dock.hit(area, x) {
+                    Some(TabHit::Tab(index)) => {
+                        self.dock.active = Some(index);
+                        self.dock.focused = true;
+                    }
+                    Some(TabHit::Close(index)) => self.dock.close(index),
+                    Some(TabHit::New) => {
+                        self.dock.active = None;
+                        self.dock.focused = false;
+                    }
+                    None => {}
+                }
+            }
+            return true;
+        }
+        if x == area.x && matches!(mouse.kind, MouseKind::Left) {
+            self.drag = Drag::Dock;
+            return true;
+        }
+        if self.dock.session().is_none() {
+            if mouse.kind == MouseKind::Left {
+                let screen = self.dock_screen().unwrap_or(area);
+                match self.agents.hit(screen, y) {
+                    Some(AgentHit::Start(program)) => self.open_agent(program),
+                    Some(AgentHit::Worktree(path)) => {
+                        self.review = Some(self.new_review(path));
+                    }
+                    None => {}
+                }
+            }
+            return true;
+        }
+        match mouse.kind {
+            MouseKind::ScrollUp | MouseKind::ScrollDown => {
+                let up = mouse.kind == MouseKind::ScrollUp;
+                let spot = self.session_spot(x, y);
+                if let Some(session) = self.dock.session_mut() {
+                    session.wheel(up, spot);
+                }
+            }
+            MouseKind::Left => {
+                self.dock.focused = true;
+                self.drag = Drag::Session;
+                self.dock_session_mouse(mouse);
+            }
+            _ => {}
+        }
+        true
+    }
+
+    fn session_spot(&self, x: u16, y: u16) -> (u16, u16) {
+        let screen = self.dock_screen().unwrap_or_default();
+        (
+            x.saturating_sub(screen.x).min(screen.w.saturating_sub(1)),
+            y.saturating_sub(screen.y).min(screen.h.saturating_sub(1)),
+        )
+    }
+
+    fn dock_session_mouse(&mut self, mouse: MouseEvent) {
+        let spot = self.session_spot(mouse.x, mouse.y);
+        let copied = self
+            .dock
+            .session_mut()
+            .and_then(|session| session.mouse(mouse.kind, spot));
+        if let Some(text) = copied {
+            self.copy_text(text, "Copied");
+        }
+    }
+
+    fn draw_dock(&self, grid: &mut Grid) {
+        let (Some(area), Some(screen)) = (self.dock_area(), self.dock_screen()) else {
             return;
         };
-        if host == Some(SplitHost::Tmux) {
-            // Asking tmux for the new pane's id is what lets comments be sent to it later.
-            let (program, args) = command.split_first().expect("commands aren't empty");
-            let output = std::process::Command::new(program)
-                .args(["split-window", "-P", "-F", "#{pane_id}"])
-                .args(&args[1..])
-                .output();
-            match output {
-                Ok(done) if done.status.success() => {
-                    let pane = String::from_utf8_lossy(&done.stdout).trim().to_string();
-                    self.agent_pane = Some((program.clone(), pane));
-                    self.say(format!("Opened {agent}"));
-                }
-                _ => self.say(format!("Could not start {agent}")),
-            }
-        } else if spawn(&command, &[]) {
-            self.say(format!("Opened {agent}"));
-        } else {
-            self.say(format!("Could not start {agent}"));
+        let theme = &self.theme;
+        grid.fill(area, theme.text);
+        self.dock.draw_tabs(grid, area, self.hover, theme);
+        grid.hairline(
+            Bounds::cells(area.x as f32, area.y as f32, 0.0, area.h as f32),
+            theme.border,
+        );
+        match self.dock.session() {
+            Some(session) => session.draw(grid, screen, theme, self.dock.focused),
+            None => self.agents.draw(grid, screen, self.hover, theme),
         }
     }
 
@@ -2909,23 +3024,16 @@ impl App {
             self.say("No comments to send");
             return;
         }
-        let Some((program, pane)) = self.agent_pane.clone() else {
+        let Some(session) = self.dock.agent_mut() else {
             self.say("Comments will go with your next prompt to the agent");
             return;
         };
         // Sent as one line, because a newline in a prompt box would submit it early.
-        let message = comments_message(&comments).replace('\n', " ");
-        let sent = run_to_end(&program, &["send-keys", "-t", &pane, "-l", &message])
-            && run_to_end(&program, &["send-keys", "-t", &pane, "Enter"]);
-        if sent {
-            if let Ok(mut pending) = self.comments.lock() {
-                pending.clear();
-            }
-            self.say(format!("Sent {} comments to the agent", comments.len()));
-        } else {
-            self.agent_pane = None;
-            self.say("The agent's pane is gone, so comments will wait for your next prompt");
+        session.send_line(&comments_message(&comments).replace('\n', " "));
+        if let Ok(mut pending) = self.comments.lock() {
+            pending.clear();
         }
+        self.say(format!("Sent {} comments to the agent", comments.len()));
     }
 
     fn new_review(&self, root: PathBuf) -> Review {
@@ -3366,6 +3474,9 @@ impl App {
         if mouse.kind == MouseKind::Left && self.click_offer(mouse.x, mouse.y) {
             return;
         }
+        if mouse.x != u16::MAX && self.dock_mouse(mouse) {
+            return;
+        }
         if let Some(area) = self.suggest_area() {
             let on_row = area.contains(mouse.x, mouse.y) && mouse.kind == MouseKind::Left;
             let row = mouse.y.saturating_sub(area.y + 1) as usize;
@@ -3470,17 +3581,6 @@ impl App {
                         let total = self.scrolled.map_or(0, |(_, r)| r) + rows;
                         self.scrolled = Some((text, total));
                     }
-                }
-            }
-            MouseKind::Left if in_sidebar && self.sidebar_view == SidebarView::Agents => {
-                let hit = self.sidebar_area().and_then(|a| self.agents.hit(a, y));
-                match hit {
-                    Some(AgentHit::Start(program)) => self.open_agent(program),
-                    Some(AgentHit::Worktree(path)) => {
-                        self.review = Some(self.new_review(path));
-                        self.drawer = false;
-                    }
-                    None => {}
                 }
             }
             MouseKind::Left if in_sidebar && self.sidebar_view == SidebarView::Search => {
@@ -4241,9 +4341,9 @@ impl App {
                     self.search
                         .draw(grid, area, self.hover, &*self.measure, theme);
                 }
-                SidebarView::Agents => self.agents.draw(grid, area, self.hover, theme),
             }
         }
+        self.draw_dock(grid);
         if let Some(page) = &self.settings_page {
             self.draw_settings_tab(grid);
             let (chosen, keymap, smooth_scroll, minimap) = self.settings_values();
@@ -4485,11 +4585,7 @@ impl App {
                         && self.review.is_none()
                         && self.sidebar_view == SidebarView::Search
                 }
-                Command::ShowAgents => {
-                    self.show_sidebar
-                        && self.review.is_none()
-                        && self.sidebar_view == SidebarView::Agents
-                }
+                Command::ShowAgents => self.dock.open,
                 Command::OpenDiff => self.review.is_some(),
                 Command::OpenSettings => self.settings_page.is_some(),
                 _ => false,
@@ -5016,6 +5112,11 @@ impl App {
     fn status_branch(&self) -> Option<(u16, u16)> {
         let name = self.branch.as_ref()?.chars().count() as u16;
         Some((1, 1 + 2 + name.min(STATUS_BRANCH_WIDTH) + 1))
+    }
+
+    /// Whether something in the side pane may write at any moment.
+    pub fn has_session(&self) -> bool {
+        self.dock.running()
     }
 
     pub fn rename_running(&self) -> bool {
@@ -6459,17 +6560,89 @@ mod tests {
         assert!(grid.cell(x, y).style.painted);
     }
 
+    /// Starts a stand-in for an agent, and waits until it has drawn `ready`.
+    fn session(app: &mut App, script: &str) {
+        let argv = ["sh".to_string(), "-c".to_string(), script.to_string()];
+        let root = app.workspace.root().to_path_buf();
+        app.start_session("Stand-in", &argv, &[], &root);
+        shows(app, "ready");
+    }
+
+    fn shows(app: &mut App, want: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            app.poll();
+            app.fit_dock();
+            let text = screen(app).text();
+            if text.contains(want) {
+                return;
+            }
+            assert!(std::time::Instant::now() < deadline, "no {want}: {text}");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
     #[test]
-    fn agents_open_in_a_split_of_the_host() {
-        let tmux = |k: &str| (k == "TMUX").then(|| "/tmp/t,1,0".to_string());
-        assert_eq!(agent_split(tmux), Some(SplitHost::Tmux));
-        assert_eq!(
-            SplitHost::Tmux.command(&["claude".to_string()], "/w", &[]),
-            ["tmux", "split-window", "-h", "-c", "/w", "claude"]
+    fn an_agent_runs_beside_the_editor() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        session(&mut app, "echo ready; read line; echo got:$line; sleep 9");
+        let text = screen(&app).text();
+        assert!(
+            text.contains("first line"),
+            "the file stays in view: {text}"
         );
-        let zellij = |k: &str| (k == "ZELLIJ").then(|| "0".to_string());
-        assert_eq!(agent_split(zellij), Some(SplitHost::Zellij));
-        assert_eq!(agent_split(|_| None), None);
+        assert!(text.contains("Stand-in"), "{text}");
+        typed(&mut app, "hello");
+        enter(&mut app);
+        shows(&mut app, "got:hello");
+        let (x, y) = find(&screen(&app), "first line");
+        app.handle(mouse(MouseKind::Left, x, y));
+        typed(&mut app, "Z");
+        assert!(
+            screen(&app).text().contains("Z"),
+            "the file has the keys again"
+        );
+        assert!(app.editors[0].buffer.text().contains('Z'));
+        app.run(Command::FocusAgent);
+        assert!(app.dock.focused);
+    }
+
+    #[test]
+    fn the_rail_opens_the_pane_and_it_starts_a_shell() {
+        let (_dir, mut app) = project();
+        app.run(Command::ShowAgents);
+        let grid = screen(&app);
+        assert!(grid.text().contains("Terminal"), "{}", grid.text());
+        assert!(app.main_area().w < 80, "the file makes room");
+        let (x, y) = find(&grid, "Terminal");
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert_eq!(app.dock.sessions.len(), 1);
+        assert!(app.dock.focused);
+        app.run(Command::ShowAgents);
+        assert_eq!(app.main_area().right(), 100, "closing gives the room back");
+        assert_eq!(app.dock.sessions.len(), 1, "and leaves it running");
+    }
+
+    #[test]
+    fn a_pane_tab_closes_and_stops_its_program() {
+        let (_dir, mut app) = project();
+        session(&mut app, "echo ready; sleep 9");
+        let area = app.dock_area().unwrap();
+        let (_, end) = (area.x + 1, area.x + 1 + 8 + 6);
+        app.handle(mouse(MouseKind::Left, end - 2, 0));
+        assert!(app.dock.sessions.is_empty());
+    }
+
+    #[test]
+    fn text_selected_in_a_session_is_copied() {
+        let (_dir, mut app) = project();
+        session(&mut app, "echo ready; sleep 9");
+        let (x, y) = find(&screen(&app), "ready");
+        app.handle(mouse(MouseKind::Left, x, y));
+        app.handle(mouse(MouseKind::Drag, x + 4, y));
+        app.handle(mouse(MouseKind::Up, x + 4, y));
+        assert_eq!(app.clipboard, "ready");
     }
 
     #[test]
@@ -6698,24 +6871,14 @@ mod tests {
     #[test]
     fn comments_are_sent_to_the_agent_pane() {
         let (dir, mut app) = project();
-        let log = dir.path().join("sent.txt");
-        let script = dir.path().join("fake-tmux");
-        fs::write(
-            &script,
-            format!("#!/bin/sh\necho \"$@\" >> {}\n", log.display()),
-        )
-        .unwrap();
-        fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-        app.agent_pane = Some((script.display().to_string(), "%7".into()));
         app.open(&dir.path().join("alpha.txt")).unwrap();
         app.run(Command::AddComment);
         typed(&mut app, "Why this");
         enter(&mut app);
+        session(&mut app, "echo ready; read line; echo got:$line; sleep 9");
         app.run(Command::SendToAgent);
-        let sent = fs::read_to_string(&log).unwrap();
-        assert!(sent.contains("-t %7 -l"), "{sent}");
-        assert!(sent.contains("alpha.txt:1: Why this"), "{sent}");
-        assert!(sent.trim_end().ends_with("Enter"), "{sent}");
+        shows(&mut app, "got:");
+        assert!(screen(&app).text().contains("Why this"));
         assert!(app.comments.lock().unwrap().is_empty());
     }
 
@@ -7367,10 +7530,12 @@ mod tests {
     }
 
     #[test]
-    fn claude_starts_with_the_port_to_connect_to() {
-        let agent = ["claude".to_string()];
-        let command = SplitHost::Tmux.command(&agent, "/w", &["P=1".to_string()]);
-        assert_eq!(command[5..], ["env", "P=1", "claude"]);
+    fn claude_starts_with_cellix_on_its_path() {
+        let (_dir, app) = project();
+        let (env, launch) = app.agent_launch("claude");
+        assert_eq!(launch[0], "claude");
+        assert!(env.iter().any(|e| e.starts_with("PATH=")), "{env:?}");
+        assert!(app.agent_launch("codex").0.is_empty());
     }
 
     #[test]
@@ -8256,28 +8421,6 @@ while True:
         app.run(Command::ShowAgents);
         let text = screen(&app).text();
         assert!(text.contains("No agents running"), "{text}");
-    }
-
-    #[test]
-    fn ghostty_gets_a_new_window_for_an_agent() {
-        let var = |name: &str| (name == "TERM").then(|| "xterm-ghostty".to_string());
-        if cfg!(target_os = "macos") {
-            assert_eq!(agent_split(var), Some(SplitHost::Ghostty));
-        }
-        let launch = ["claude".to_string()];
-        let words = SplitHost::Ghostty.command(&launch, "/work", &["A=1".to_string()]);
-        let expected = [
-            "open",
-            "-na",
-            "Ghostty.app",
-            "--args",
-            "--working-directory=/work",
-            "-e",
-            "env",
-            "A=1",
-            "claude",
-        ];
-        assert_eq!(words, expected);
     }
 
     #[test]

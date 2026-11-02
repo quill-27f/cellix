@@ -31,8 +31,10 @@ const REMOTE_SCROLL_FRAMES: u32 = 2;
 const SCROLL_PAUSE: Duration = Duration::from_millis(7);
 /// How long to wait for input before checking on language servers.
 const POLL: Duration = Duration::from_millis(50);
-/// Polls between ticks, so background file checks run about twice a second.
-const POLLS_PER_TICK: u32 = 10;
+/// How long to wait with a session in the side pane, whose output should feel typed.
+const SESSION_POLL: Duration = Duration::from_millis(8);
+/// Background file checks run about twice a second.
+const TICK: Duration = Duration::from_millis(500);
 
 /// Restores the terminal however the loop ends, including on panic.
 struct Session;
@@ -293,7 +295,7 @@ pub fn run(options: Options) -> io::Result<()> {
     }
     let mouse_cell = |display: &Display| display.cell.filter(|_| pixel_mouse);
     let mut redraw = true;
-    let mut polls = 0;
+    let mut last_tick = std::time::Instant::now();
     let mut shown: Option<Grid> = None;
     let ghostty = std::env::var("TERM").is_ok_and(|t| t.contains("ghostty"));
     loop {
@@ -334,7 +336,11 @@ pub fn run(options: Options) -> io::Result<()> {
         if app.quit {
             break;
         }
-        if ct::poll(POLL)? {
+        if ct::poll(if app.has_session() {
+            SESSION_POLL
+        } else {
+            POLL
+        })? {
             // Drain everything queued, so a fast wheel doesn't redraw per event.
             loop {
                 match translate(ct::read()?, mouse_cell(&display)).map(|e| cmd_left(e, ghostty)) {
@@ -347,13 +353,10 @@ pub fn run(options: Options) -> io::Result<()> {
                 }
             }
             redraw = true;
-        } else {
-            polls += 1;
-            if polls >= POLLS_PER_TICK {
-                polls = 0;
-                app.handle(Event::Tick);
-                redraw = true;
-            }
+        } else if last_tick.elapsed() >= TICK {
+            last_tick = std::time::Instant::now();
+            app.handle(Event::Tick);
+            redraw = true;
         }
         redraw |= app.poll();
         if let Some(server) = &server {

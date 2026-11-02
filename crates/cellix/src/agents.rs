@@ -17,6 +17,14 @@ const AGENTS: [(&str, &str); 3] = [
     ("Codex", "codex"),
     ("Gemini CLI", "gemini"),
 ];
+/// What the panel calls a plain shell, and what stands for it in `Hit::Start`.
+pub const SHELL: (&str, &str) = ("Terminal", "shell");
+
+/// What the panel calls a program.
+pub fn display_name(program: &str) -> &'static str {
+    let named = AGENTS.iter().find(|(_, p)| *p == program);
+    named.map_or(SHELL.0, |(name, _)| name)
+}
 
 /// What a click in the panel lands on.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -313,6 +321,7 @@ impl Agents {
             .iter()
             .copied()
             .filter(|(_, program)| integrations::on_path(program, var))
+            .chain([SHELL])
             .collect();
     }
 }

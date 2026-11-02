@@ -95,8 +95,9 @@ cd your-project
 cellix
 ```
 
-Inside Cellix, press Ctrl+Shift+P or F1 and choose `Open Claude Code`. It opens in a tmux
-split, already connected to Cellix.
+Click the Agents icon, or press Ctrl+Shift+P and choose `Open Claude Code`. The real program
+opens in a side pane beside your file, already connected to Cellix. Ctrl+` moves the keyboard
+between the two, and the side pane also runs Codex, Gemini CLI or a plain shell.
 
 If pixels look wrong or scrolling is heavy, these commands help:
 
@@ -157,9 +158,8 @@ each update travels as a PNG, so it costs more than the standalone app on a slow
 
 ## Beside an agent
 
-Running Cellix on its own inside tmux or Zellij also works: `Open Claude Code` in the
-palette starts the real tool in a split, connected to Cellix. `Open Codex` starts Codex
-there without these connections.
+Running Cellix on its own works just as well: the Agents icon opens a side pane, and
+Claude Code, Codex, Gemini CLI or a shell runs there as the real program.
 
 Set `VISUAL="cellix --wait"` so Ctrl+G in Claude Code opens plans in Cellix. Comments are
 written back into the file when you quit. Any other agent can run `cellix comments --take`

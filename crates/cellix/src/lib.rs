@@ -2,6 +2,7 @@
 
 mod agents;
 mod app;
+mod dock;
 mod editor;
 mod explorer;
 mod find;
