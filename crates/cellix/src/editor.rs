@@ -4,6 +4,7 @@ use std::path::Path;
 use std::rc::Rc;
 
 use cellix_core::{Buffer, Motion, Selection, Selections};
+use cellix_doc::latex::Project;
 use cellix_doc::table::Edit as TableEdit;
 use cellix_input::{Command, Direction, Format};
 use cellix_lang::{Registry, Span, Worker};
@@ -14,7 +15,7 @@ use cellix_review::LineChange;
 use unicode_width::UnicodeWidthChar;
 
 use crate::panels::Symbol;
-use crate::rendered::{self, Dialect, Extras, Figure, Glyph, Intent, Library, Row, Tone};
+use crate::rendered::{self, Dialect, Extras, Figure, Glyph, Intent, Library, Row, Target, Tone};
 use crate::theme::Theme;
 
 const TAB_WIDTH: usize = 4;
@@ -107,6 +108,9 @@ pub struct Editor {
     library: RefCell<Library>,
     /// Text comments are about, as char ranges, tinted on a page.
     pub quoted: RefCell<Vec<(usize, usize)>>,
+    /// The paper this file belongs to, and the revision it was read at.
+    project: RefCell<Option<(u64, Rc<Project>)>>,
+    show_preamble: bool,
     measure: Rc<dyn Measure>,
     registry: Rc<Registry>,
     /// The revision last sent to a language server.
@@ -123,7 +127,24 @@ fn display_width(c: char, column: usize) -> usize {
 
 impl Editor {
     pub fn new(buffer: Buffer, measure: Rc<dyn Measure>, registry: Rc<Registry>) -> Self {
-        let is_page = buffer.path().is_some_and(|p| Dialect::of(p).is_some());
+        // A file of definitions is code: it has no page to show.
+        let definitions = |text: &str| {
+            let lines = text.lines().filter(|l| !l.trim().is_empty());
+            let marks = [
+                "\\newcommand",
+                "\\renewcommand",
+                "\\def",
+                "\\usepackage",
+                "\\Declare",
+            ];
+            let (total, defining) = lines.fold((0, 0), |(total, defining), line| {
+                let is = marks.iter().any(|m| line.trim_start().starts_with(m));
+                (total + 1, defining + usize::from(is))
+            });
+            total > 0 && defining * 2 > total
+        };
+        let is_page =
+            buffer.path().is_some_and(|p| Dialect::of(p).is_some()) && !definitions(&buffer.text());
         Self {
             buffer,
             selections: Selections::default(),
@@ -144,6 +165,8 @@ impl Editor {
             page: RefCell::new(None),
             library: RefCell::default(),
             quoted: RefCell::default(),
+            project: RefCell::new(None),
+            show_preamble: false,
             measure,
             registry,
             synced: 0,
@@ -375,6 +398,41 @@ impl Editor {
             .clamp(1, MAX_PAGE_WIDTH) as usize
     }
 
+    /// The paper this file is part of, read again once each time the file is saved.
+    fn project(&self, text: &str) -> Rc<Project> {
+        let saved = self.buffer.is_dirty();
+        let mut cache = self.project.borrow_mut();
+        if let Some((revision, project)) = cache.as_ref()
+            && (saved || *revision == self.buffer.revision())
+        {
+            return project.clone();
+        }
+        let project = match self.buffer.path() {
+            Some(path) if !saved => {
+                let root = cellix_doc::latex::root_of(path, text);
+                Project::read(&root)
+            }
+            _ => Project::from_text(text),
+        };
+        let project = Rc::new(project);
+        *cache = Some((self.buffer.revision(), project.clone()));
+        project
+    }
+
+    /// Where a clickable row leads, if there's one at this place on screen.
+    pub fn row_target(&self, area: Rect, y: u16) -> Option<Target> {
+        let area = self.text_area(area);
+        let rows = self.page(area);
+        let row = self.top + y.saturating_sub(area.y) as usize;
+        rows.get(row)?.target.clone()
+    }
+
+    /// Shows or hides a paper's preamble.
+    pub fn toggle_preamble(&mut self) {
+        self.show_preamble = !self.show_preamble;
+        *self.page.borrow_mut() = None;
+    }
+
     pub fn dialect(&self) -> Dialect {
         let path = self.buffer.path();
         path.and_then(Dialect::of).unwrap_or_default()
@@ -383,8 +441,12 @@ impl Editor {
     /// Lays the page out, with `open` showing as source.
     fn lay_out(&self, text: &str, width: usize, open: Option<(usize, usize)>) -> LaidOut {
         let folder = self.buffer.path().and_then(Path::parent);
+        let dialect = self.dialect();
         let extras = Extras {
-            dialect: self.dialect(),
+            dialect,
+            project: (dialect == Dialect::Latex).then(|| self.project(text)),
+            file: self.buffer.path(),
+            preamble: self.show_preamble,
             open,
             folder,
             library: Some(&self.library),

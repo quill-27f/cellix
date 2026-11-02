@@ -255,6 +255,7 @@ dependencies = [
  "latex-rust",
  "png 0.18.1",
  "pulldown-cmark",
+ "tempfile",
 ]
 
 [[package]]

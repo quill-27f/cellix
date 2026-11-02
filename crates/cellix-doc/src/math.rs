@@ -36,6 +36,62 @@ fn with_font<T>(run: impl FnOnce(&MathFont) -> Result<T, String>) -> Result<T, S
 /// Environments that only number or wrap math, which the page has no use for.
 const WRAPPERS: [&str; 4] = ["equation", "equation*", "displaymath", "math"];
 
+/// Commands the engine doesn't have, as what it does. Longest names first where one is the
+/// start of another. The page is a preview, and a near match beats losing a whole display.
+const SUBSTITUTES: [(&str, &str); 25] = [
+    ("\\operatorname*", "\\operatorname"),
+    ("\\argmin", "\\operatorname{arg\\,min}"),
+    ("\\argmax", "\\operatorname{arg\\,max}"),
+    ("\\bm{", "\\mathbf{"),
+    ("\\boldsymbol{", "\\mathbf{"),
+    ("\\mathds{", "\\mathbb{"),
+    ("\\coloneqq", ":="),
+    ("\\eqqcolon", "=:"),
+    ("\\varinjlim", "\\lim"),
+    ("\\varprojlim", "\\lim"),
+    ("\\xmapsto", "\\xrightarrow"),
+    ("\\llbracket", "[\\!["),
+    ("\\rrbracket", "]\\!]"),
+    ("\\bmod", "\\operatorname{mod}"),
+    ("\\qed", "\\square"),
+    ("\\middle", ""),
+    ("\\displaystyle", ""),
+    ("\\textstyle", ""),
+    ("\\nonumber", ""),
+    ("\\notag", ""),
+    ("\\limits", ""),
+    ("\\nolimits", ""),
+    ("{dcases}", "{cases}"),
+    ("{rcases}", "{cases}"),
+    ("{smallmatrix}", "{matrix}"),
+];
+
+/// Takes `\name{...}` out of `text`, with `keep` deciding what stands in its place.
+fn strip_command(text: &mut String, name: &str, keep: bool) {
+    let open = format!("{name}{{");
+    while let Some(at) = text.find(&open) {
+        let start = at + open.len();
+        let mut depth = 1;
+        let mut end = None;
+        for (i, c) in text[start..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => depth -= 1,
+                _ => {}
+            }
+            if depth == 0 {
+                end = Some(start + i);
+                break;
+            }
+        }
+        let Some(end) = end else {
+            return;
+        };
+        let inner = text[start..end].to_string();
+        text.replace_range(at..=end, if keep { &inner } else { "" });
+    }
+}
+
 /// What the math engine reads: `\label` has no picture, and `equation` only numbers.
 fn prepared(source: &str) -> String {
     let mut text = source.trim().to_string();
@@ -48,15 +104,27 @@ fn prepared(source: &str) -> String {
             text = inner.trim().to_string();
         }
     }
-    while let Some(at) = text.find("\\label{") {
-        let Some(end) = text[at..].find('}') else {
-            break;
-        };
-        text.replace_range(at..at + end + 1, "");
+    // Numbers belong in the margin, where the page puts them.
+    strip_command(&mut text, "\\label", false);
+    strip_command(&mut text, "\\tag", false);
+    strip_command(&mut text, "\\tag*", false);
+    strip_command(&mut text, "\\smash", true);
+    strip_command(&mut text, "\\mathop", true);
+    strip_command(&mut text, "\\mathrel", true);
+    strip_command(&mut text, "\\mathbin", true);
+    for (from, to) in SUBSTITUTES {
+        text = text.replace(from, to);
     }
-    text.replace("align*}", "align}")
-        .replace("gather*}", "gather}")
-        .replace("multline*}", "multline}")
+    // Numbered environments number themselves, and restart in every block, so they all go
+    // through the one that doesn't.
+    for name in [
+        "align", "gather", "multline", "alignat", "flalign", "eqnarray",
+    ] {
+        text = text
+            .replace(&format!("{{{name}*}}"), "{aligned}")
+            .replace(&format!("{{{name}}}"), "{aligned}");
+    }
+    text.replace("{gathered}", "{aligned}")
 }
 
 fn pixels(dim: &Dim, em: u32) -> f64 {
@@ -166,6 +234,27 @@ mod tests {
         ] {
             render(source, true, 22).unwrap_or_else(|e| panic!("{source}: {e}"));
         }
+    }
+
+    #[test]
+    fn what_the_engine_lacks_has_a_stand_in() {
+        for source in [
+            r"\operatorname*{arg\,max}_x f(x)",
+            r"\argmin_{\theta} \mathcal{L}(\theta)",
+            r"\bm{x}^\top \mathds{1}",
+            r"a \coloneqq b",
+            r"\begin{dcases} a \\\\ b \end{dcases}",
+            r"x \bmod y",
+            r"\begin{align} a &= b \tag{2} \\\\ c &= d \notag \end{align}",
+        ] {
+            render(source, true, 22).unwrap_or_else(|e| panic!("{source}: {e}"));
+        }
+    }
+
+    #[test]
+    fn numbers_are_left_to_the_margin() {
+        assert_eq!(prepared(r"E = mc^2 \tag{2}").trim(), "E = mc^2");
+        assert!(prepared(r"\begin{align} a \end{align}").contains("{aligned}"));
     }
 
     #[test]

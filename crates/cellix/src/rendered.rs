@@ -5,8 +5,10 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 
+use cellix_doc::latex::Project;
 use cellix_lang::{Registry, Token};
 use cellix_render::{Bitmap, Font, INTERFACE_SIZE, Measure, Pixels};
 
@@ -141,6 +143,15 @@ pub struct Row {
     /// A picture that starts on this row, as an index into the page's figures, and its
     /// column.
     pub figure: Option<(usize, f32)>,
+    /// What clicking this row opens, as a path or a place in the document.
+    pub target: Option<Target>,
+}
+
+/// What a clickable row leads to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Target {
+    File(PathBuf),
+    Preamble,
 }
 
 impl Row {
@@ -161,6 +172,7 @@ impl Row {
             cells: Vec::new(),
             table: None,
             figure: None,
+            target: None,
         }
     }
 
@@ -347,13 +359,17 @@ impl Dialect {
 #[derive(Default)]
 pub struct Extras<'a> {
     pub dialect: Dialect,
+    /// The paper this file belongs to.
+    pub project: Option<Rc<Project>>,
+    /// The file being laid out.
+    pub file: Option<&'a Path>,
+    /// Shows a paper's preamble as source.
+    pub preamble: bool,
     /// The span showing as source, because the caret is in it.
     pub open: Option<(usize, usize)>,
     /// Where relative image paths start.
     pub folder: Option<&'a Path>,
     pub library: Option<&'a RefCell<Library>>,
-    /// What each LaTeX label will number to, filled in before the paper is laid out.
-    pub labels: RefCell<HashMap<String, String>>,
     /// Filled in by layout.
     pub figures: RefCell<Vec<Figure>>,
     /// Every formula and image in the page, as source ranges, filled in by layout.
@@ -378,8 +394,15 @@ fn figure_of(formula: &cellix_doc::math::Formula, cell: (u32, u32)) -> Figure {
 
 /// Reads an image and sets it to fit the page, keeping its shape.
 fn load_image(path: &Path, cell: (u32, u32), width: f32) -> Option<Figure> {
-    let image = image::open(path).ok()?.to_rgba8();
     let wanted = (width * cell.0 as f32) as u32;
+    let image = if path.extension().is_some_and(|e| e == "pdf") {
+        let document = cellix_doc::pdf::Document::open(std::fs::read(path).ok()?).ok()?;
+        let page = document.render(0, wanted)?;
+        let pixels = page.rgba.as_ref().clone();
+        image::RgbaImage::from_raw(page.width, page.height, pixels)?
+    } else {
+        image::open(path).ok()?.to_rgba8()
+    };
     let image = if image.width() > wanted {
         let height = image.height() * wanted / image.width();
         image::imageops::thumbnail(&image, wanted, height.max(1))
@@ -669,7 +692,15 @@ fn table(lines: &[(usize, &str)], first: usize, context: &Context, rows: &mut Ve
             )
         })
         .collect();
-    place_table(parsed, starts, &places, rows);
+    let aligns: Vec<char> = split_cells(lines[1].1)
+        .iter()
+        .map(|(_, cell)| match (cell.first(), cell.last()) {
+            (Some(':'), Some(':')) => 'c',
+            (_, Some(':')) => 'r',
+            _ => 'l',
+        })
+        .collect();
+    place_table(parsed, starts, &places, &aligns, rows);
 }
 
 /// Sets a table's cells in columns. Each row has its line and where that line ends.
@@ -677,6 +708,7 @@ fn place_table(
     parsed: Vec<Vec<Vec<Glyph>>>,
     starts: Vec<Vec<usize>>,
     places: &[(usize, usize)],
+    aligns: &[char],
     rows: &mut Vec<Row>,
 ) {
     /// Space between a cell's edge and its text, in cells.
@@ -701,7 +733,14 @@ fn place_table(
                 bar[0].advance = 1.0;
                 glyphs.extend(bar);
             }
-            let mut x = left + PADDING;
+            let width: f32 = cells.get(c).into_iter().flatten().map(|g| g.advance).sum();
+            let room = (columns[c + 1] - left - PADDING * 2.0 - width).max(0.0);
+            let shift = match aligns.get(c) {
+                Some('r') => room,
+                Some('c') => room / 2.0,
+                _ => 0.0,
+            };
+            let mut x = left + PADDING + shift;
             for g in cells.get(c).into_iter().flatten() {
                 glyphs.push(Glyph { x, ..*g });
                 x += g.advance;
@@ -762,6 +801,8 @@ impl Context<'_> {
     /// Typesets a formula for this page, and returns its index among the figures.
     fn formula(&self, source: &str, display: bool) -> Option<usize> {
         let cell = self.cell()?;
+        let expanded = self.extras.project.as_ref().map(|p| p.expand(source));
+        let source = expanded.as_deref().unwrap_or(source);
         let make = || {
             // Display math stands a little larger, as it does in print.
             let scale = if display { 1.2 } else { 1.05 };
@@ -781,10 +822,29 @@ impl Context<'_> {
         figure.map(|f| self.keep(f))
     }
 
-    /// Loads an image for this page, and returns its index among the figures.
+    /// Why a formula won't typeset.
+    fn formula_error(&self, source: &str) -> Option<String> {
+        let expanded = self.extras.project.as_ref().map(|p| p.expand(source));
+        let source = expanded.as_deref().unwrap_or(source);
+        cellix_doc::math::render(source, true, 20).err()
+    }
+
+    /// Loads an image for this page, and returns its index among the figures. LaTeX names
+    /// files without their extension, and a figure is often a PDF.
     fn image(&self, source: &str, width: f32) -> Option<usize> {
         let cell = self.cell()?;
-        let path = self.extras.folder?.join(source);
+        let folder = self.extras.folder?;
+        let named = folder.join(source);
+        let path = ["", "png", "jpg", "jpeg", "pdf", "webp"]
+            .iter()
+            .map(|extension| {
+                if extension.is_empty() {
+                    named.clone()
+                } else {
+                    named.with_extension(extension)
+                }
+            })
+            .find(|path| path.is_file())?;
         let make = || load_image(&path, cell, width);
         let figure = match self.extras.library {
             Some(library) => library
@@ -831,6 +891,35 @@ fn image_line(line: &str) -> Option<(usize, &str, &str)> {
     let rest = text.strip_prefix("![")?.strip_suffix(')')?;
     let (alt, path) = rest.split_once("](")?;
     (!path.contains(' ')).then_some((line.len() - line.trim_start().len(), alt, path))
+}
+
+/// Sets equation numbers at the right margin, spread down the picture's rows.
+fn margin_numbers(
+    numbers: &[Option<String>],
+    first: usize,
+    width: f32,
+    context: &Context,
+    rows: &mut [Row],
+) {
+    let count = numbers.len().max(1);
+    let span = rows.len().saturating_sub(first).max(1);
+    for (index, number) in numbers.iter().enumerate() {
+        let Some(number) = number else {
+            continue;
+        };
+        let row = first + (index * 2 + 1) * span / (count * 2);
+        let mut mark = decoration(&format!("({number})"), Tone::Dim);
+        measure_glyphs(&mut mark, context.measure);
+        let shown: f32 = mark.iter().map(|g| g.advance).sum();
+        let mut x = width - shown;
+        for g in &mut mark {
+            g.x = x;
+            x += g.advance;
+        }
+        if let Some(row) = rows.get_mut(row) {
+            row.glyphs.extend(mark);
+        }
+    }
 }
 
 /// A picture's rows: the first carries it and a caret stop, and the rest make its room.

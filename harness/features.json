@@ -810,5 +810,75 @@
     "passes": true,
     "test": "markdown_exports_to_pdf",
     "title": "Markdown exports to PDF"
+  },
+  {
+    "id": "comments-never-shell",
+    "milestone": 8,
+    "passes": true,
+    "test": "a_comment_never_reaches_a_shell",
+    "title": "Comments only ever reach agents, never a shell"
+  },
+  {
+    "id": "save-conflict",
+    "milestone": 8,
+    "passes": true,
+    "test": "saving_never_erases_a_change_made_on_disk",
+    "title": "Saving never erases a change made on disk"
+  },
+  {
+    "id": "quit-confirms",
+    "milestone": 8,
+    "passes": true,
+    "test": "quitting_asks_before_stopping_a_running_job",
+    "title": "Quitting asks before stopping a running job"
+  },
+  {
+    "id": "thread-anchor",
+    "milestone": 8,
+    "passes": true,
+    "test": "a_comment_follows_its_text",
+    "title": "A comment follows its text"
+  },
+  {
+    "id": "agents-told",
+    "milestone": 8,
+    "passes": true,
+    "test": "every_agent_is_told_the_commands_that_exist",
+    "title": "Every agent is told the commands that exist"
+  },
+  {
+    "id": "tex-project",
+    "milestone": 8,
+    "passes": true,
+    "test": "a_paper_is_read_across_its_files",
+    "title": "A paper is read across its files"
+  },
+  {
+    "id": "tex-theorems",
+    "milestone": 8,
+    "passes": true,
+    "test": "theorems_and_proofs_read_as_themselves",
+    "title": "Theorems and proofs read as themselves"
+  },
+  {
+    "id": "tex-numbers",
+    "milestone": 8,
+    "passes": true,
+    "test": "sections_and_references_show_their_numbers",
+    "title": "Sections and references show their numbers"
+  },
+  {
+    "id": "math-standins",
+    "milestone": 8,
+    "passes": true,
+    "test": "what_the_engine_lacks_has_a_stand_in",
+    "title": "Commands the engine lacks have stand-ins"
+  },
+  {
+    "id": "image-pane",
+    "milestone": 8,
+    "passes": true,
+    "test": "images_open_beside_the_file_and_binaries_say_what_they_are",
+    "title": "Images open beside the file"
   }
 ]

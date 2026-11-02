@@ -40,7 +40,7 @@ use crate::neovim::{self, Neovim};
 use crate::palette::{COMMANDS, Input, Item, Palette, input, popup, raised};
 use crate::panels::{MathPanel, SYMBOLS, TablePicker};
 use crate::pdfview::PdfView;
-use crate::rendered::{self, Dialect};
+use crate::rendered::{self, Dialect, Target};
 use crate::review::{Hit, Review};
 use crate::search::{self, Field, Search};
 use crate::settings::{SERVERS, Settings, default_server, formatter};
@@ -4072,6 +4072,26 @@ impl App {
                 self.search.focus = None;
                 self.focus = pane;
                 let area = self.focused_area();
+                let target = self
+                    .editors
+                    .get(self.active())
+                    .filter(|e| e.rendered)
+                    .and_then(|e| e.row_target(area, y));
+                match target {
+                    Some(Target::File(path)) => {
+                        if let Err(e) = self.open(&path) {
+                            self.say(format!("Could not open it: {e}"));
+                        }
+                        return;
+                    }
+                    Some(Target::Preamble) => {
+                        if let Some(editor) = self.editor_mut() {
+                            editor.toggle_preamble();
+                        }
+                        return;
+                    }
+                    None => {}
+                }
                 let clicks = self.count_click(x, y);
                 if let Some(editor) = self.editor_mut() {
                     if editor.on_scrollbar(area, x) {
@@ -5415,8 +5435,18 @@ impl App {
                     && let Ok(text) = std::fs::read_to_string(&path)
                 {
                     let name = self.relative(&path);
-                    let keys = cellix_doc::latex::bib_keys(&text);
-                    items.extend(keys.into_iter().map(|k| Item::Citation(k, name.clone())));
+                    let entries = cellix_doc::latex::bib_entries(&text);
+                    items.extend(entries.into_iter().map(|e| {
+                        let note = format!("{}: {}", e.short(), e.title);
+                        Item::Citation(
+                            e.key,
+                            if e.title.is_empty() {
+                                name.clone()
+                            } else {
+                                note
+                            },
+                        )
+                    }));
                 }
             }
         }
@@ -5567,17 +5597,25 @@ impl App {
             .retain(|p, _| p.extension().is_none_or(|e| e != "tex"));
         self.diagnostics.extend(by_file);
         let pdf = build.file.with_extension("pdf");
+        let log = std::fs::read_to_string(build.file.with_extension("log")).unwrap_or_default();
+        let warned = cellix_doc::latex::warnings(&format!("{}\n{log}", build.said)).len();
         if build.worked && pdf.exists() {
             self.show_pdf(&pdf);
-            self.say(format!("Built in {:.1} s", build.took.as_secs_f32()));
+            let seconds = build.took.as_secs_f32();
+            self.say(match warned {
+                0 => format!("Built in {seconds:.1} s"),
+                1 => format!("Built in {seconds:.1} s, with a warning"),
+                many => format!("Built in {seconds:.1} s, with {many} warnings"),
+            });
         } else if let Some(first) = problems.first() {
             self.go_to_problem(first);
         } else {
+            // The first error is the cause. What follows is the engine giving up.
+            let first = build.said.lines().find(|l| l.starts_with("error:"));
             let last = build.said.lines().rfind(|l| !l.trim().is_empty());
-            self.say(format!(
-                "The build failed: {}",
-                last.unwrap_or("no output").trim()
-            ));
+            let reason = first.or(last).unwrap_or("no output").trim();
+            let reason = reason.trim_start_matches("error: ");
+            self.say(format!("The build failed: {reason}"));
         }
         true
     }

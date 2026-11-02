@@ -3,23 +3,12 @@
 //! recognise shows as source, so nothing in a paper is ever out of reach.
 
 use super::*;
+use cellix_doc::latex::{Counters, equation_rows, is_math};
 
-const MATH: [&str; 11] = [
-    "equation",
-    "equation*",
-    "align",
-    "align*",
-    "gather",
-    "gather*",
-    "multline",
-    "multline*",
-    "displaymath",
-    "eqnarray",
-    "eqnarray*",
-];
 const VERBATIM: [&str; 3] = ["verbatim", "lstlisting", "minted"];
+/// Sectioning commands, with their level for numbering. Paragraphs have no number.
 const SECTIONS: [(&str, usize); 6] = [
-    ("chapter", 1),
+    ("chapter", 0),
     ("section", 1),
     ("subsection", 2),
     ("subsubsection", 3),
@@ -27,7 +16,7 @@ const SECTIONS: [(&str, usize); 6] = [
     ("subparagraph", 5),
 ];
 /// Commands that lay a page out, with nothing to show here.
-const QUIET: [&str; 14] = [
+const QUIET: [&str; 16] = [
     "\\centering",
     "\\noindent",
     "\\newpage",
@@ -42,6 +31,8 @@ const QUIET: [&str; 14] = [
     "\\midrule",
     "\\bottomrule",
     "\\pagebreak",
+    "\\cmidrule",
+    "\\cline",
 ];
 const CITES: [&str; 10] = [
     "cite",
@@ -154,6 +145,22 @@ pub(super) fn inline(
                 out.push(glyph(' ', Some(at), look));
                 i += 1;
             }
+            '-' if chars[i..].starts_with(&['-', '-', '-']) => {
+                out.push(glyph('—', Some(at), look));
+                i += 3;
+            }
+            '-' if chars[i..].starts_with(&['-', '-']) => {
+                out.push(glyph('–', Some(at), look));
+                i += 2;
+            }
+            '`' if chars[i..].starts_with(&['`', '`']) => {
+                out.push(glyph('“', Some(at), look));
+                i += 2;
+            }
+            '\'' if chars[i..].starts_with(&['\'', '\'']) => {
+                out.push(glyph('”', Some(at), look));
+                i += 2;
+            }
             '{' | '}' => i += 1,
             '$' => match math_end(&chars[i..]) {
                 Some(end) => {
@@ -205,8 +212,21 @@ fn command(rest: &[char], at: usize, look: Look, context: &Context, out: &mut Ve
         .then(|| matching(rest, open))
         .flatten();
     let Some(close) = arg else {
-        // Not something with an argument: leave it as it's written.
+        let symbol = match name.as_str() {
+            "ldots" | "dots" => Some("…"),
+            "S" => Some("§"),
+            "LaTeX" => Some("LaTeX"),
+            "TeX" => Some("TeX"),
+            _ => None,
+        };
         let plain = name.chars().count() + 1;
+        if let Some(symbol) = symbol {
+            for (n, c) in symbol.chars().enumerate() {
+                out.push(glyph(c, (n == 0).then_some(at), look));
+            }
+            return plain;
+        }
+        // Not something with an argument: leave it as it's written.
         for (n, c) in rest[..plain.min(rest.len())].iter().enumerate() {
             out.push(glyph(*c, Some(at + n), dim(look)));
         }
@@ -219,7 +239,27 @@ fn command(rest: &[char], at: usize, look: Look, context: &Context, out: &mut Ve
         ..look
     };
     let name = name.trim_end_matches('*');
+    let project = context.extras.project.as_deref();
+    // The last of several arguments, which is the text in `\\multicolumn{2}{c}{Text}`.
+    let last_argument = |mut from: usize, count: usize| {
+        for _ in 1..count {
+            if rest.get(from + 1) != Some(&'{') {
+                return None;
+            }
+            from = matching(rest, from + 1)?;
+        }
+        Some(from)
+    };
     match name {
+        "thanks" => {}
+        "multicolumn" | "multirow" => {
+            let Some(end) = last_argument(close, 3) else {
+                return close + 1;
+            };
+            let start = rest[..end].iter().rposition(|c| *c == '{').unwrap_or(end);
+            inline(&rest[start + 1..end], at + start + 1, look, context, out);
+            return end + 1;
+        }
         "textbf" => inline(inner, start, bold(look), context, out),
         "emph" | "textit" | "textsl" => inline(inner, start, italic(look), context, out),
         "underline" => {
@@ -279,21 +319,37 @@ fn command(rest: &[char], at: usize, look: Look, context: &Context, out: &mut Ve
         }
         _ if CITES.contains(&name) => {
             out.extend(decoration("[", Tone::Link));
-            for (n, c) in inner.iter().enumerate() {
-                out.push(glyph(*c, Some(start + n), link));
+            let key: String = inner.iter().collect();
+            let shown = key.split(',').map(str::trim).map(|key| {
+                project
+                    .and_then(|p| p.citations.get(key).cloned())
+                    .unwrap_or_else(|| key.to_string())
+            });
+            let shown = shown.collect::<Vec<_>>().join("; ");
+            for (n, c) in shown.chars().enumerate() {
+                out.push(glyph(c, (n == 0).then_some(start), link));
             }
             out.extend(decoration("]", Tone::Link));
         }
         _ if REFS.contains(&name) => {
             let key: String = inner.iter().collect();
-            let number = context.extras.labels.borrow().get(&key).cloned();
+            let number = project.and_then(|p| p.labels.get(&key).cloned());
             match number {
                 // What it will print as. The number has no source, so it holds the place.
                 Some(number) => {
-                    let shown = if name == "eqref" {
-                        format!("({number})")
-                    } else {
-                        number
+                    let kind = [
+                        ("eq:", "Equation"),
+                        ("sec:", "Section"),
+                        ("fig:", "Figure"),
+                        ("tab:", "Table"),
+                        ("thm:", "Theorem"),
+                        ("lem:", "Lemma"),
+                    ];
+                    let kind = kind.iter().find(|(prefix, _)| key.starts_with(prefix));
+                    let shown = match (name, kind) {
+                        ("eqref", _) => format!("({number})"),
+                        ("cref" | "Cref", Some((_, kind))) => format!("{kind} {number}"),
+                        _ => number,
                     };
                     for (n, c) in shown.chars().enumerate() {
                         let spot = (n == 0).then_some(start);
@@ -323,11 +379,11 @@ struct Page<'a, 'b> {
     width: f32,
     context: &'a Context<'b>,
     rows: &'a mut Vec<Row>,
-    equations: usize,
-    figures: usize,
-    tables: usize,
-    /// Section, subsection and subsubsection numbers.
-    sections: [usize; 3],
+    /// Numbering so far, carrying on from the files before this one.
+    counters: Counters,
+    project: Rc<Project>,
+    /// What starts the next paragraph, such as "Theorem 2."
+    lead: Vec<Glyph>,
     /// For each list open here, its next number, if it's numbered.
     lists: Vec<Option<u64>>,
     /// Where `\title` and `\author` are, as (line, start, end) char ranges in those lines.
@@ -390,6 +446,7 @@ impl Page<'_, '_> {
         indent: f32,
     ) -> usize {
         let decorated = glyphs.len();
+        glyphs.append(&mut self.lead);
         let (offset, line) = self.lines[first];
         let chars: Vec<char> = line.chars().collect();
         inline(
@@ -510,9 +567,7 @@ impl Page<'_, '_> {
             .strip_prefix("\\[")
             .and_then(|t| t.strip_suffix("\\]"))
             .unwrap_or(inner);
-        if numbered {
-            self.equations += 1;
-        }
+        let numbers = equation_rows(&source, numbered, &mut self.counters.equations);
         if open || context.cell().is_none() {
             let lines = &self.lines[first..=last];
             code_rows(lines, first, "", context, None, self.rows);
@@ -521,36 +576,24 @@ impl Page<'_, '_> {
             if !open && context.cell().is_some() {
                 self.source(first, last);
             }
+            if let Some(reason) = context.formula_error(inner) {
+                self.label(&format!("Can't typeset this: {reason}"), last);
+            }
             return;
         };
         let at = self.rows.len();
-        figure_rows(
-            figure,
-            context,
-            (first, start + 1, end),
-            self.width,
-            self.rows,
-        );
+        let place = (first, start + 1, end);
+        figure_rows(figure, context, place, self.width, self.rows);
         if open {
             self.rows[at].stop = false;
         }
-        if numbered {
-            let mut number = decoration(&format!("({})", self.equations), Tone::Dim);
-            measure_glyphs(&mut number, context.measure);
-            let shown: f32 = number.iter().map(|g| g.advance).sum();
-            let mut x = self.width - shown;
-            for g in &mut number {
-                g.x = x;
-                x += g.advance;
-            }
-            self.rows[at].glyphs.extend(number);
-        }
+        margin_numbers(&numbers, at, self.width, context, self.rows);
     }
 
     /// A list of what's in a `figure`: the image and its caption.
     fn figure(&mut self, first: usize, last: usize) {
-        self.figures += 1;
-        let number = self.figures;
+        self.counters.figures += 1;
+        let number = self.counters.figures;
         let image = (first..=last).find_map(|i| {
             let line = self.lines[i].1;
             let (start, end) = argument(line, "includegraphics")?;
@@ -573,7 +616,8 @@ impl Page<'_, '_> {
     }
 
     fn caption(&mut self, kind: &str, number: usize, first: usize, last: usize) {
-        for index in first..=last {
+        // The last one: a figure's own caption comes after those of its parts.
+        for index in (first..=last).rev() {
             let line = self.lines[index].1;
             let Some((start, end)) = argument(line, "caption") else {
                 continue;
@@ -611,6 +655,12 @@ impl Page<'_, '_> {
         let mut parsed: Vec<Vec<Vec<Glyph>>> = Vec::new();
         let mut starts: Vec<Vec<usize>> = Vec::new();
         let mut places: Vec<(usize, usize)> = Vec::new();
+        let spec = argument(self.lines[first].1, "begin{tabular}");
+        let aligns: Vec<char> = spec.map_or_else(Vec::new, |(start, end)| {
+            let chars: Vec<char> = self.lines[first].1.chars().collect();
+            let letters = chars[start..end].iter().copied();
+            letters.filter(|c| "lcr".contains(*c)).collect()
+        });
         for index in first + 1..last {
             let (offset, line) = self.lines[index];
             let trimmed = line.trim();
@@ -658,7 +708,7 @@ impl Page<'_, '_> {
             starts.push(cell_starts);
             places.push((index, offset + chars.len()));
         }
-        place_table(parsed, starts, &places, self.rows);
+        place_table(parsed, starts, &places, &aligns, self.rows);
     }
 
     fn title_block(&mut self, index: usize) {
@@ -712,6 +762,72 @@ impl Page<'_, '_> {
         self.rows.push(spacer(index, self.lines[index].0));
     }
 
+    fn lead_row(&mut self, mut glyphs: Vec<Glyph>, index: usize) {
+        measure_glyphs(&mut glyphs, self.context.measure);
+        let row = Row::new(index, self.lines[index].0);
+        wrap(
+            Row { stop: false, ..row },
+            glyphs,
+            0.0,
+            self.width,
+            self.rows,
+        );
+    }
+
+    /// `\\input{file}`: a link to the file, since the page shows one file at a time.
+    fn input(&mut self, index: usize, command: &str) {
+        let (offset, line) = self.lines[index];
+        let name = command.trim_start_matches('\\');
+        let Some((start, end)) = argument(line, name) else {
+            self.source(index, index);
+            return;
+        };
+        let chars: Vec<char> = line.chars().collect();
+        let file: String = chars[start..end].iter().collect();
+        let mut glyphs = decoration(&format!("↳ {file}"), Tone::Link);
+        measure_glyphs(&mut glyphs, self.context.measure);
+        let mut x = 0.0;
+        for g in &mut glyphs {
+            g.x = x;
+            x += g.advance;
+        }
+        let folder = self.context.extras.folder.unwrap_or(Path::new(""));
+        let mut path = folder.join(&file);
+        if path.extension().is_none() {
+            path.set_extension("tex");
+        }
+        self.rows.push(Row {
+            glyphs,
+            target: Some(Target::File(path)),
+            ..spacer(index, offset)
+        });
+    }
+
+    /// A theorem-like block: its number leads the first paragraph, and what's inside lays
+    /// out as usual.
+    fn theorem_start(&mut self, index: usize, name: &str, theorem: &cellix_doc::latex::Theorem) {
+        let line = self.lines[index].1;
+        let mut title = theorem.title.clone();
+        if theorem.numbered {
+            let counter = theorem.counter.clone();
+            let count = self.counters.theorems.entry(counter).or_default();
+            *count += 1;
+            title = format!("{title} {count}");
+        }
+        let after = format!("\\begin{{{name}}}[");
+        if let Some(at) = line.find(&after) {
+            let rest = &line[at + after.len()..];
+            if let Some((note, _)) = rest.split_once(']') {
+                title = format!("{title} ({note})");
+            }
+        }
+        let mut lead = decoration(&format!("{title}. "), Tone::Text);
+        for g in &mut lead {
+            g.font.bold = true;
+        }
+        self.lead = lead;
+    }
+
     /// Lays out what starts at line `index`, and returns the line after it.
     fn block(&mut self, index: usize) -> usize {
         let (offset, line) = self.lines[index];
@@ -735,10 +851,26 @@ impl Page<'_, '_> {
                     argument(line, name).or_else(|| argument(line, &format!("{name}*")))
             {
                 let starred = text.starts_with(&star);
-                let number = (!starred)
-                    .then(|| advance(&mut self.sections, level))
-                    .flatten();
-                self.heading(index, level, range, number);
+                let number = (!starred && level < 4).then(|| self.counters.heading(level));
+                // With no chapters, sections are the top of the page.
+                let chapters = self.counters.sections[0] > 0 || level == 0;
+                let shown = (level + usize::from(chapters)).clamp(1, 6);
+                self.heading(index, shown, range, number);
+                return index + 1;
+            }
+        }
+        if !self.lead.is_empty() && breaks_paragraph(line) {
+            let glyphs = std::mem::take(&mut self.lead);
+            self.lead_row(glyphs, index);
+        }
+        if text.starts_with("\\appendix") {
+            self.counters.appendix = true;
+            self.counters.sections = [0; 4];
+            return index + 1;
+        }
+        for command in ["\\input", "\\include"] {
+            if text.starts_with(&format!("{command}{{")) {
+                self.input(index, command);
                 return index + 1;
             }
         }
@@ -755,13 +887,32 @@ impl Page<'_, '_> {
             return index + 1;
         }
         if let Some(name) = env_end(line) {
-            if name == "itemize" || name == "enumerate" {
+            if name == "itemize" || name == "enumerate" || name == "thebibliography" {
                 self.lists.pop();
+            }
+            if name == "proof" {
+                let mut mark = decoration("∎", Tone::Dim);
+                measure_glyphs(&mut mark, self.context.measure);
+                if let Some(g) = mark.first_mut() {
+                    g.x = (self.width - g.advance).max(0.0);
+                }
+                self.rows.push(Row {
+                    glyphs: mark,
+                    ..spacer(index, offset)
+                });
             }
             return index + 1;
         }
-        if text.starts_with("\\item") {
+        if text.starts_with("\\item") || text.starts_with("\\bibitem") {
             return self.item(index);
+        }
+        if text.starts_with("$$") {
+            let last = (index + 1..self.lines.len())
+                .find(|n| self.lines[*n].1.contains("$$"))
+                .filter(|_| text.trim_end() == "$$" || !text[2..].contains("$$"))
+                .unwrap_or(index);
+            self.math(index, last, false);
+            return last + 1;
         }
         if text.starts_with("\\[") {
             let last = (index..self.lines.len())
@@ -779,8 +930,25 @@ impl Page<'_, '_> {
             self.source(index, index);
             return index + 1;
         };
+        if let Some(theorem) = self.project.theorem(name) {
+            self.theorem_start(index, name, &theorem);
+            return index + 1;
+        }
         match name {
-            _ if MATH.contains(&name) => self.math(index, last, !name.ends_with('*')),
+            _ if is_math(name) => self.math(index, last, !name.ends_with('*')),
+            "proof" => {
+                let mut lead = decoration("Proof. ", Tone::Text);
+                for g in &mut lead {
+                    g.font.italic = true;
+                }
+                self.lead = lead;
+                return index + 1;
+            }
+            "thebibliography" => {
+                self.label("References", index);
+                self.lists.push(Some(1));
+                return index + 1;
+            }
             "itemize" => {
                 self.lists.push(None);
                 return index + 1;
@@ -796,7 +964,7 @@ impl Page<'_, '_> {
             "quote" | "quotation" | "center" | "document" => return index + 1,
             "figure" | "figure*" => self.figure(index, last),
             "table" | "table*" => {
-                self.tables += 1;
+                self.counters.tables += 1;
                 let inner = (index..last).find(|n| env_begin(self.lines[*n].1) == Some("tabular"));
                 let close = inner.and_then(|from| {
                     (from..=last).find(|n| self.lines[*n].1.contains("\\end{tabular}"))
@@ -804,7 +972,7 @@ impl Page<'_, '_> {
                 if let (Some(from), Some(to)) = (inner, close) {
                     self.tabular(from, to);
                 }
-                self.caption("Table", self.tables, index, last);
+                self.caption("Table", self.counters.tables, index, last);
             }
             "tabular" => self.tabular(index, last),
             _ if VERBATIM.contains(&name) => {
@@ -819,8 +987,14 @@ impl Page<'_, '_> {
     fn item(&mut self, index: usize) -> usize {
         let (_, line) = self.lines[index];
         let lead = line.chars().take_while(|c| c.is_whitespace()).count();
-        let mut hidden = lead + "\\item".len();
         let chars: Vec<char> = line.chars().collect();
+        let mut hidden = lead + "\\item".len();
+        // `\\bibitem{key}` has its key to step over too.
+        if line.trim_start().starts_with("\\bibitem")
+            && let Some((_, end)) = argument(line, "bibitem")
+        {
+            hidden = end + 1;
+        }
         if chars.get(hidden) == Some(&' ') {
             hidden += 1;
         }
@@ -842,54 +1016,6 @@ impl Page<'_, '_> {
         let glyphs = decoration(&marker, tone);
         self.paragraph(index, hidden, PLAIN, glyphs, depth as f32 * 2.0)
     }
-}
-
-/// Counts a section at `level`, and returns its number as it prints.
-fn advance(sections: &mut [usize; 3], level: usize) -> Option<String> {
-    if !(1..=3).contains(&level) {
-        return None;
-    }
-    sections[level - 1] += 1;
-    sections[level..].fill(0);
-    let parts: Vec<String> = sections[..level].iter().map(ToString::to_string).collect();
-    Some(parts.join("."))
-}
-
-/// Works out what every `\\label` will number to, as LaTeX's own first pass does, so a
-/// reference shows its number even before what it points at has been laid out.
-fn number_labels(lines: &[(usize, &str)]) -> HashMap<String, String> {
-    let mut labels = HashMap::new();
-    let mut sections = [0; 3];
-    let (mut equations, mut figures, mut tables) = (0, 0, 0);
-    let mut current = String::new();
-    for (_, line) in lines {
-        let text = line.trim_start();
-        for (name, level) in SECTIONS {
-            if text.starts_with(&format!("\\{name}{{")) {
-                current = advance(&mut sections, level).unwrap_or_default();
-            }
-        }
-        match env_begin(line) {
-            Some(name) if MATH.contains(&name) && !name.ends_with('*') => {
-                equations += 1;
-                current = equations.to_string();
-            }
-            Some("figure" | "figure*") => {
-                figures += 1;
-                current = figures.to_string();
-            }
-            Some("table" | "table*") => {
-                tables += 1;
-                current = tables.to_string();
-            }
-            _ => {}
-        }
-        if let Some((start, end)) = argument(line, "label") {
-            let chars: Vec<char> = line.chars().collect();
-            labels.insert(chars[start..end].iter().collect(), current.clone());
-        }
-    }
-    labels
 }
 
 /// How many chars of indent a line has.
@@ -927,24 +1053,30 @@ pub(super) fn layout(lines: &[(usize, &str)], width: f32, context: &Context, row
             })
     };
     let (title, author) = (place("title"), place("author"));
-    *context.extras.labels.borrow_mut() = number_labels(lines);
+    let project = context.extras.project.clone().unwrap_or_default();
+    let file = context.extras.file;
+    let counters = file.and_then(|f| project.starts.get(f)).cloned();
     let mut page = Page {
         lines,
         width,
         context,
         rows,
-        equations: 0,
-        figures: 0,
-        tables: 0,
-        sections: [0; 3],
+        counters: counters.unwrap_or_default(),
+        project,
+        lead: Vec::new(),
         lists: Vec::new(),
         title,
         author,
     };
     let mut index = match body {
         Some(found) => {
-            if found > 0 {
-                page.label(&format!("Preamble, {found} lines"), 0);
+            if context.extras.preamble {
+                page.source(0, found.saturating_sub(1));
+            } else if found > 0 {
+                page.label(&format!("▸ Preamble, {found} lines"), 0);
+                if let Some(row) = page.rows.last_mut() {
+                    row.target = Some(Target::Preamble);
+                }
             }
             found + 1
         }
@@ -967,6 +1099,7 @@ mod tests {
     fn page(source: &str) -> Vec<Row> {
         let extras = Extras {
             dialect: Dialect::Latex,
+            project: Some(Rc::new(Project::from_text(source))),
             ..Extras::default()
         };
         layout_with(source, 70, &CellMeasure, &Registry::default(), &extras)
@@ -1071,6 +1204,52 @@ ignored after the end
     }
 
     #[test]
+    fn theorems_and_proofs_read_as_themselves() {
+        let source = "\\newtheorem{thm}{Theorem}\n\\begin{document}\n\\begin{thm}[Big]\nIt holds.\n\\end{thm}\n\\begin{proof}\nObvious.\n\\end{proof}\n\\begin{lemma}\nAlso.\n\\end{lemma}\n\\end{document}\n";
+        let all = shown(source).join("\n");
+        assert!(all.contains("Theorem 1 (Big). It holds."), "{all}");
+        assert!(all.contains("Proof. Obvious."), "{all}");
+        assert!(all.contains('∎'), "{all}");
+        assert!(all.contains("Lemma 1. Also."), "{all}");
+        assert!(!all.contains("\\begin"), "{all}");
+    }
+
+    #[test]
+    fn chapters_and_appendices_number_as_they_print() {
+        let source = "\\chapter{One}\n\\section{A}\n\\appendix\n\\section{Extra}\n";
+        let all = shown(source).join("\n");
+        assert!(all.contains("1  One"), "{all}");
+        assert!(all.contains("1.1  A"), "{all}");
+        assert!(all.contains("A  Extra"), "{all}");
+    }
+
+    #[test]
+    fn punctuation_reads_as_it_prints() {
+        assert_eq!(shown("a---b--c ``q\'\' \\ldots\n")[0], "a—b–c “q” …");
+    }
+
+    #[test]
+    fn a_table_keeps_its_alignment_and_merged_cells() {
+        let source = "\\begin{tabular}{lr}\nName & Value \\\\\n\\cmidrule{1-2}\n\\multicolumn{2}{c}{Merged} \\\\\nA & 12345 \\\\\n\\end{tabular}\n";
+        let rows = page(source);
+        let table: Vec<&Row> = rows.iter().filter(|r| r.table.is_some()).collect();
+        assert_eq!(table.len(), 3, "{:?}", shown(source));
+        assert!(text(table[1]).contains("Merged"), "{}", text(table[1]));
+        let x = |r: &Row, c: char| r.glyphs.iter().find(|g| g.ch == c).unwrap().x;
+        assert!(x(table[0], 'V') > x(table[2], '1') - 0.1 || x(table[0], 'V') > 7.0);
+    }
+
+    #[test]
+    fn an_input_is_a_link_to_its_file() {
+        let rows = page("\\input{sections/one}\n");
+        let row = rows.iter().find(|r| r.target.is_some()).unwrap();
+        assert_eq!(
+            row.target,
+            Some(Target::File(PathBuf::from("sections/one.tex")))
+        );
+    }
+
+    #[test]
     fn list_text_is_set_where_its_glyphs_say() {
         let rows = page("\\begin{itemize}\n\\item One \\textbf{two}\n\\end{itemize}\n");
         let row = rows.iter().find(|r| text(r).contains("One")).unwrap();
@@ -1112,6 +1291,7 @@ Baseline & 91.2 \\
         let m = FontMeasure::new(17, 37);
         let extras = Extras {
             dialect: Dialect::Latex,
+            project: Some(Rc::new(Project::from_text(source))),
             ..Extras::default()
         };
         let rows = layout_with(source, 70, &m, &Registry::default(), &extras);
