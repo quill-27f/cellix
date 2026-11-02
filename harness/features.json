@@ -1426,5 +1426,40 @@
     "title": "A click on an image doesn't size it",
     "test": "a_click_on_the_middle_of_an_image_does_not_size_it",
     "passes": true
+  },
+  {
+    "id": "companion-comment",
+    "milestone": 9,
+    "title": "A selection offers a comment, written beside the page",
+    "test": "a_selection_offers_a_comment_and_writes_it_beside_the_page",
+    "passes": true
+  },
+  {
+    "id": "companion-ask",
+    "milestone": 9,
+    "title": "Ask Agent on a selection goes straight to the agent",
+    "test": "ask_agent_on_a_selection_goes_straight_to_the_agent",
+    "passes": true
+  },
+  {
+    "id": "companion-code",
+    "milestone": 9,
+    "title": "Code can be commented on from a selection",
+    "test": "code_can_be_commented_on_from_a_selection_too",
+    "passes": true
+  },
+  {
+    "id": "companion-picture",
+    "milestone": 9,
+    "title": "A picture can be commented on",
+    "test": "a_picture_can_be_commented_on",
+    "passes": true
+  },
+  {
+    "id": "companion-diagram",
+    "milestone": 9,
+    "title": "A diagram says what it is when commented on",
+    "test": "a_diagram_says_what_it_is_when_commented_on",
+    "passes": true
   }
 ]

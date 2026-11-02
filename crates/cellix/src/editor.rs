@@ -568,9 +568,9 @@ impl Editor {
             .map_or_else(Rc::default, |page| page.figures.clone())
     }
 
-    /// The image a screen row is on: its source line and its box on the screen, as left,
-    /// right, top and bottom. Formulas and diagrams have no size of their own to change.
-    fn image_on_row(&self, area: Rect, y: u16) -> Option<(usize, [f32; 4])> {
+    /// The picture a screen row is on, of any kind: its source line and its box on the
+    /// screen, as left, right, top and bottom.
+    pub fn figure_on_row(&self, area: Rect, y: u16) -> Option<(usize, [f32; 4])> {
         let area = self.text_area(area);
         let rows = self.page(area);
         let figures = self.figures();
@@ -585,17 +585,51 @@ impl Editor {
             if row < top || row > top + figure.height {
                 continue;
             }
-            let text = self.line_text(found.line);
-            let names_one = cellix_doc::figure::image_line(&text).is_some()
-                || self.dialect() == Dialect::Latex && {
-                    let lines = found.line..self.buffer.rope().len_lines();
-                    let mut lines = lines.take(FIGURE_LINES);
-                    lines.any(|n| self.line_text(n).contains("\\includegraphics"))
-                };
             let shown = [left + x, left + x + figure.width, top, top + figure.height];
-            return names_one.then_some((found.line, shown));
+            return Some((found.line, shown));
         }
         None
+    }
+
+    /// The image a screen row is on. Formulas and diagrams have no size of their own to change.
+    fn image_on_row(&self, area: Rect, y: u16) -> Option<(usize, [f32; 4])> {
+        let (line, shown) = self.figure_on_row(area, y)?;
+        let text = self.line_text(line);
+        let names_one = cellix_doc::figure::image_line(&text).is_some()
+            || self.dialect() == Dialect::Latex && {
+                let lines = line..self.buffer.rope().len_lines();
+                let mut lines = lines.take(FIGURE_LINES);
+                lines.any(|n| self.line_text(n).contains("\\includegraphics"))
+            };
+        names_one.then_some((line, shown))
+    }
+
+    /// What a comment on a picture is about, in words an agent can act on.
+    pub fn figure_quote(&self, line: usize) -> String {
+        let text = self.line_text(line);
+        let next = || self.line_text(line + 1).trim().to_string();
+        if let Some(image) = cellix_doc::figure::image_line(&text) {
+            return format!("Image {}", image.path);
+        }
+        let trimmed = text.trim();
+        if let Some(language) = trimmed.strip_prefix("```") {
+            return format!("{} diagram: {}", language.trim(), next());
+        }
+        if trimmed.starts_with("$$") || trimmed.starts_with("\\[") {
+            return format!("Formula: {}", trimmed.trim_matches('$'));
+        }
+        let lines = line..self.buffer.rope().len_lines();
+        let named = lines.take(FIGURE_LINES).find_map(|n| {
+            let source = self.line_text(n);
+            let open = source.find("\\includegraphics")?;
+            let brace = open + source[open..].find('{')?;
+            let close = brace + source[brace..].find('}')?;
+            Some(source[brace + 1..close].to_string())
+        });
+        match named {
+            Some(path) => format!("Image {path}"),
+            None => format!("Figure: {trimmed}"),
+        }
     }
 
     /// Shows a handle on the image under the pointer.

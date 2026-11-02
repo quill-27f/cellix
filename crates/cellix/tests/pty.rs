@@ -338,7 +338,7 @@ fn cli_reads_comments_over_socket() {
     let mut screen = Screen::start(dir.path(), &["hello.txt"]);
     screen.wait_for("hello from a file");
     screen.send(b"\x1bc");
-    screen.wait_for("Comment on line 1");
+    screen.wait_for("Enter sends");
     screen.send(b"from a human\r");
     screen.wait_for("\u{25c6}");
     let cli = |args: &[&str]| {

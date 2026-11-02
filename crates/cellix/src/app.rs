@@ -52,6 +52,9 @@ use crate::threads::{self, Draft, Hit as ThreadHit};
 use crate::toolbar::{self, Tool};
 
 const ACTIVITY_WIDTH: u16 = 5;
+/// The buttons that stand by a selection, and the one on a picture.
+const COMMENT_WIDTH: u16 = 10;
+const ASK_WIDTH: u16 = 11;
 /// The list an empty window shows, its width, the rows above it, and the height it needs.
 const WELCOME_WIDTH: u16 = 44;
 const WELCOME_LEAD_ROWS: u16 = 4;
@@ -2074,6 +2077,7 @@ impl App {
         if text.is_empty() {
             return;
         }
+        let mut asked = None;
         match draft.thread {
             Some(id) => {
                 if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
@@ -2083,19 +2087,181 @@ impl App {
                     });
                 }
             }
-            None => self.threads.push(Thread {
-                id: cellix_review::threads::next_id(&self.threads),
-                file: draft.file,
-                line: draft.line,
-                quote: draft.quote,
-                text,
-                replies: Vec::new(),
-                resolved: false,
-                told: None,
-            }),
+            None => {
+                let id = cellix_review::threads::next_id(&self.threads);
+                if draft.code
+                    && !draft.ask
+                    && let Ok(mut comments) = self.comments.lock()
+                {
+                    comments.push(Comment {
+                        file: draft.file.clone(),
+                        line: draft.line,
+                        text: text.clone(),
+                    });
+                }
+                self.threads.push(Thread {
+                    id,
+                    file: draft.file,
+                    line: draft.line,
+                    quote: draft.quote,
+                    text,
+                    replies: Vec::new(),
+                    resolved: false,
+                    told: draft.code.then_some(0),
+                });
+                asked = draft.ask.then_some(id);
+            }
         }
         self.threads_seen = None;
         self.save_threads();
+        if let Some(id) = asked {
+            self.thread_hit(ThreadHit::Ask(id));
+        }
+    }
+
+    /// Where the buttons by a selection stand: under it, or over it on the last row.
+    fn selection_bar(&self) -> Option<(Rect, Rect)> {
+        let idle = matches!(self.overlay, Overlay::None) && self.drag != Drag::Text;
+        let plain = self.review.is_none() && self.settings_page.is_none();
+        if !idle || !plain || self.dock.draft.is_some() {
+            return None;
+        }
+        let editor = self.editors.get(self.active())?;
+        editor.selected_text().filter(|t| !t.trim().is_empty())?;
+        let area = self.focused_area();
+        let (x, y) = editor.caret_cell(area)?;
+        let y = if y + 1 < area.bottom() {
+            y + 1
+        } else {
+            y.checked_sub(1)?
+        };
+        let width = COMMENT_WIDTH + ASK_WIDTH;
+        let x = (x as u16)
+            .min(area.right().saturating_sub(width + 1))
+            .max(area.x);
+        Some((
+            Rect::new(x, y, COMMENT_WIDTH, 1),
+            Rect::new(x + COMMENT_WIDTH, y, ASK_WIDTH, 1),
+        ))
+    }
+
+    /// The button on the picture under the pointer, and the line that picture is on.
+    fn picture_comment(&self) -> Option<(Rect, usize)> {
+        let (x, y) = self.hover?;
+        if !matches!(self.overlay, Overlay::None) || self.review.is_some() {
+            return None;
+        }
+        let pane = self.pane_at(x, y)?;
+        let editor = self
+            .editors
+            .get(*self.panes.get(pane)?)
+            .filter(|e| e.rendered)?;
+        if self.measure.in_cells() {
+            return None;
+        }
+        let area = self.pane_area(pane);
+        let (line, [left, right, top, _]) = editor.figure_on_row(area, y)?;
+        if (x as f32) < left - 1.0 || (x as f32) > right + COMMENT_WIDTH as f32 {
+            return None;
+        }
+        let beside = (right as u16 + 1).min(area.right().saturating_sub(COMMENT_WIDTH + 2));
+        Some((Rect::new(beside, top as u16, COMMENT_WIDTH, 1), line))
+    }
+
+    fn draw_chip(&self, grid: &mut Grid, chip: Rect, name: &str) {
+        let theme = &self.theme;
+        let on_it = self.hover.is_some_and(|h| chip.contains(h.0, h.1));
+        let style = Style {
+            fg: theme.text.fg,
+            bold: false,
+            ..theme.bar
+        };
+        grid.fill(
+            chip,
+            Style {
+                bg: theme.popup,
+                ..style
+            },
+        );
+        if !self.measure.in_cells() {
+            let fill = if on_it {
+                theme.popup_hover
+            } else {
+                theme.popup
+            };
+            grid.popup(
+                Bounds::inset(chip, 0.04, 0.02),
+                20,
+                fill,
+                theme.popup_border,
+            );
+        }
+        let style = Style {
+            bg: theme.popup,
+            ..style
+        };
+        grid.label(chip.x + 1, chip.y, name, style, chip.right());
+    }
+
+    /// The buttons that stand by what's selected, and on the picture under the pointer.
+    fn draw_companion(&self, grid: &mut Grid) {
+        if let Some((comment, ask)) = self.selection_bar() {
+            self.draw_chip(grid, comment, "Comment");
+            self.draw_chip(grid, ask, "Ask Agent");
+        } else if let Some((chip, _)) = self.picture_comment() {
+            self.draw_chip(grid, chip, "Comment");
+        }
+    }
+
+    /// Takes a click on those buttons.
+    fn click_companion(&mut self, x: u16, y: u16) -> bool {
+        if let Some((comment, ask)) = self.selection_bar() {
+            if comment.contains(x, y) {
+                self.prompt_comment_at_cursor(false);
+                return true;
+            }
+            if ask.contains(x, y) {
+                self.prompt_comment_at_cursor(true);
+                return true;
+            }
+        }
+        match self.picture_comment() {
+            Some((chip, line)) if chip.contains(x, y) => {
+                self.comment_on_picture(line);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Starts a comment on a picture, which has no text to select.
+    fn comment_on_picture(&mut self, line: usize) {
+        let Some(editor) = self.editors.get(self.active()) else {
+            return;
+        };
+        let quote = editor.figure_quote(line);
+        let Some((path, _)) = self.cursor_line() else {
+            return;
+        };
+        let file = self.relative(&path);
+        self.write_comment(Draft {
+            thread: None,
+            file,
+            line: line + 1,
+            quote,
+            text: String::new(),
+            ask: false,
+            code: false,
+        });
+    }
+
+    /// Opens the comments, with one being written.
+    fn write_comment(&mut self, draft: Draft) {
+        self.dock.open = true;
+        self.dock.front = Front::Comments;
+        self.dock.focused = false;
+        self.dock.comments_top = 0;
+        self.dock.draft = Some(draft);
     }
 
     fn key(&mut self, key: KeyEvent) {
@@ -2931,7 +3097,7 @@ impl App {
                     None => Some(self.new_review(self.workspace.root().to_path_buf())),
                 };
             }
-            Command::AddComment => self.prompt_comment_at_cursor(),
+            Command::AddComment => self.prompt_comment_at_cursor(false),
             Command::FindInFile => self.open_find(),
             Command::Format(Format::Link) => self.ask("Link address", PromptAction::Link),
             Command::Format(format) => {
@@ -4135,6 +4301,8 @@ impl App {
                     line: 0,
                     quote: String::new(),
                     text: String::new(),
+                    ask: false,
+                    code: false,
                 });
             }
             ThreadHit::Ask(id) => {
@@ -4195,27 +4363,26 @@ impl App {
         ))
     }
 
-    fn prompt_comment_at_cursor(&mut self) {
+    fn prompt_comment_at_cursor(&mut self, ask: bool) {
         if let Some((path, line)) = self.cursor_line() {
             let file = self.relative(&path);
             let answering = self.plan.is_some() || self.wait_file.is_some();
-            let page = self.editors.get(self.active()).filter(|e| e.rendered);
-            if let Some(editor) = page.filter(|_| !answering) {
-                // Written beside the page, so the text it's about stays in view.
+            let open = self.editors.get(self.active());
+            if let Some(editor) = open.filter(|_| !answering) {
+                // Written beside the file, so the text it's about stays in view.
                 let quote = editor
                     .selected_text()
                     .unwrap_or_else(|| editor.line_text(line.saturating_sub(1)));
                 let quote = quote.lines().next().unwrap_or_default().trim().to_string();
-                self.dock.open = true;
-                self.dock.front = Front::Comments;
-                self.dock.focused = false;
-                self.dock.comments_top = 0;
-                self.dock.draft = Some(Draft {
+                let code = !editor.rendered;
+                self.write_comment(Draft {
                     thread: None,
                     file,
                     line,
                     quote,
                     text: String::new(),
+                    ask,
+                    code,
                 });
                 return;
             }
@@ -4527,6 +4694,9 @@ impl App {
         }
         if !matches!(self.overlay, Overlay::None) {
             self.overlay_mouse(mouse);
+            return;
+        }
+        if mouse.kind == MouseKind::Left && self.click_companion(mouse.x, mouse.y) {
             return;
         }
         if mouse.kind == MouseKind::Left && self.click_offer(mouse.x, mouse.y) {
@@ -5672,6 +5842,7 @@ impl App {
         if self.plan_in_view() {
             self.draw_plan_bar(grid);
         }
+        self.draw_companion(grid);
         self.draw_status(grid);
         self.draw_suggest(grid);
         self.draw_offer(grid);
@@ -7294,6 +7465,7 @@ mod tests {
         app.run(Command::AddComment);
         typed(&mut app, "Why this line");
         enter(&mut app);
+        app.run(Command::CloseDock);
         app.run(Command::OpenDiff);
         let grid = screen(&app);
         let (_, y) = find(&grid, "Why this line");
@@ -10093,6 +10265,114 @@ mod tests {
         let (_dir, mut app) = project();
         app.run(Command::NewDocument);
         assert!(screen(&app).text().contains("New document"));
+    }
+
+    fn select_word(app: &mut App, word: &str) {
+        let (x, y) = find(&screen(app), word);
+        double_click(app, x + 1, y);
+    }
+
+    #[test]
+    fn a_selection_offers_a_comment_and_writes_it_beside_the_page() {
+        let (_dir, mut app) = page_app("# Plan\n\nThe cache goes first.\n");
+        assert!(!screen(&app).text().contains("Ask Agent"));
+        select_word(&mut app, "cache");
+        let grid = screen(&app);
+        assert!(grid.text().contains("Ask Agent"), "{}", grid.text());
+        let (x, y) = find(&grid, "Comment");
+        app.handle(mouse(MouseKind::Left, x, y));
+        typed(&mut app, "Why first");
+        enter(&mut app);
+        assert_eq!(app.threads[0].quote, "cache");
+        assert_eq!(app.threads[0].text, "Why first");
+    }
+
+    #[test]
+    fn ask_agent_on_a_selection_goes_straight_to_the_agent() {
+        let (dir, mut app) = page_app("# Plan\n\nThe cache goes first.\n");
+        session(&mut app, "printf ready; cat > heard.txt");
+        select_word(&mut app, "cache");
+        let (x, y) = find(&screen(&app), "Ask Agent");
+        app.handle(mouse(MouseKind::Left, x, y));
+        typed(&mut app, "Is this right");
+        enter(&mut app);
+        let log = dir.path().join("heard.txt");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let heard = loop {
+            let text = fs::read_to_string(&log).unwrap_or_default();
+            if text.contains("Is this right") {
+                break text;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the agent heard nothing"
+            );
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        assert!(heard.contains("cache"), "what it's about: {heard}");
+        assert!(heard.contains("cellix reply"), "how to answer: {heard}");
+    }
+
+    #[test]
+    fn code_can_be_commented_on_from_a_selection_too() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        select_word(&mut app, "first");
+        let (x, y) = find(&screen(&app), "Comment");
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert_eq!(app.dock.front, Front::Comments);
+        typed(&mut app, "Look here");
+        enter(&mut app);
+        assert_eq!(app.threads[0].quote, "first");
+        assert_eq!(
+            app.comments.lock().unwrap().len(),
+            1,
+            "it goes with the review"
+        );
+    }
+
+    #[test]
+    fn a_picture_can_be_commented_on() {
+        let (_dir, mut app) = picture_page("![Plot](plot.png)\n\nwords\n");
+        let _ = screen(&app);
+        let picture = pictures(&app)[0];
+        let (x, y) = (
+            ((picture.x + picture.w / 2) / 64) as u16,
+            (picture.y / 64) as u16,
+        );
+        app.handle(mouse(MouseKind::Move, x, y));
+        let (chip, _) = app.picture_comment().expect("a button on the picture");
+        app.handle(mouse(MouseKind::Move, chip.x + 1, chip.y));
+        app.handle(mouse(MouseKind::Left, chip.x + 1, chip.y));
+        typed(&mut app, "Axis is wrong");
+        enter(&mut app);
+        assert_eq!(app.threads[0].quote, "Image plot.png");
+        assert_eq!(app.threads[0].line, 1);
+        assert!(app.threads[0].message().contains("Image plot.png"));
+    }
+
+    #[test]
+    fn a_diagram_says_what_it_is_when_commented_on() {
+        let (_dir, mut app) = picture_page(FLOW);
+        let _ = screen(&app);
+        let picture = pictures(&app)[0];
+        let (x, y) = (
+            ((picture.x + picture.w / 2) / 64) as u16,
+            (picture.y / 64) as u16 + 1,
+        );
+        app.handle(mouse(MouseKind::Move, x, y));
+        let (chip, line) = app.picture_comment().expect("a button on the diagram");
+        assert_eq!(line, 2);
+        app.handle(mouse(MouseKind::Left, chip.x + 1, chip.y));
+        assert!(
+            app.dock
+                .draft
+                .as_ref()
+                .unwrap()
+                .quote
+                .contains("flowchart LR")
+        );
     }
 
     #[test]

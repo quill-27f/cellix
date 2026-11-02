@@ -43,6 +43,10 @@ pub struct Draft {
     pub line: usize,
     pub quote: String,
     pub text: String,
+    /// Goes straight to the agent when it's done.
+    pub ask: bool,
+    /// It's about code, so it also goes with the review.
+    pub code: bool,
 }
 
 const NEW_DRAFT: u32 = 0;

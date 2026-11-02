@@ -132,7 +132,15 @@ A page uses the pane's full width. A line break inside a paragraph shows as a sp
 keeps the newline's source position, so a hard-wrapped file fills the page and saves
 unchanged. On a page, arrows and Home and End move by what's shown.
 
-### Guidance
+### Companion
+
+Whatever can be seen can be talked about. A selection, in code or on a page, gets Comment and Ask
+Agent beside it, and a picture, diagram or formula gets a Comment button under the pointer. Comments
+are written in the side pane, with what they're about in view. Ask Agent sends the comment to the
+agent as soon as it's written, with its file, line and quote, and how to answer with `cellix reply`,
+so the answer lands under it. A picture's comment names its file, so the agent can open it.
+
+## Guidance
 
 Nothing should leave someone wondering what to do next. An empty window lists its actions as rows
 that can be clicked, and its first line changes with what's going: with an agent running and no
