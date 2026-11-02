@@ -164,6 +164,9 @@ fn callout_colour(kind: Callout, theme: &Theme) -> Rgb {
     }
 }
 
+/// How far below a paper's figure the line naming its image can be.
+const FIGURE_LINES: usize = 6;
+
 impl Editor {
     pub fn new(buffer: Buffer, measure: Rc<dyn Measure>, registry: Rc<Registry>) -> Self {
         // A file of definitions is code: it has no page to show.
@@ -565,7 +568,73 @@ impl Editor {
             .map_or_else(Rc::default, |page| page.figures.clone())
     }
 
+    /// The image a screen row is on: its source line and its box on the screen, as left,
+    /// right, top and bottom. Formulas and diagrams have no size of their own to change.
+    fn image_on_row(&self, area: Rect, y: u16) -> Option<(usize, [f32; 4])> {
+        let area = self.text_area(area);
+        let rows = self.page(area);
+        let figures = self.figures();
+        let left = (area.x + Self::page_margin(area)) as f32;
+        let row = (y as f32) + 0.5;
+        for (index, found) in rows.iter().enumerate() {
+            let Some((figure, x)) = found.figure else {
+                continue;
+            };
+            let figure = figures.get(figure)?;
+            let top = area.y as f32 + index as f32 - self.top as f32 + 0.2;
+            if row < top || row > top + figure.height {
+                continue;
+            }
+            let text = self.line_text(found.line);
+            let names_one = cellix_doc::figure::image_line(&text).is_some()
+                || self.dialect() == Dialect::Latex && {
+                    let lines = found.line..self.buffer.rope().len_lines();
+                    let mut lines = lines.take(FIGURE_LINES);
+                    lines.any(|n| self.line_text(n).contains("\\includegraphics"))
+                };
+            let shown = [left + x, left + x + figure.width, top, top + figure.height];
+            return names_one.then_some((found.line, shown));
+        }
+        None
+    }
+
+    /// Shows a handle on the image under the pointer.
+    pub fn draw_hover(&self, grid: &mut Grid, area: Rect, hover: (u16, u16), theme: &Theme) {
+        if self.rendered && !self.measure.in_cells() {
+            self.draw_image_handle(grid, area, hover, theme);
+        }
+    }
+
+    /// The image whose right edge is under the pointer, ready to be dragged.
+    pub fn image_edge(&self, area: Rect, x: f32, y: u16) -> Option<usize> {
+        const REACH: f32 = 1.2;
+        let (line, [_, right, ..]) = self.image_on_row(area, y)?;
+        ((x - right).abs() <= REACH).then_some(line)
+    }
+
+    /// Sets an image's width from where its edge was dragged to. A picture stands in the
+    /// middle of the page, so the edge is half its width from there.
+    pub fn drag_image(&mut self, area: Rect, line: usize, x: f32) {
+        const STEP: f32 = 5.0;
+        let page = Self::page_width(self.text_area(area)) as f32;
+        let middle = (area.x + Self::page_margin(self.text_area(area))) as f32 + page / 2.0;
+        let share = (x - middle).max(0.0) * 2.0 / page.max(1.0) * 100.0;
+        let percent = ((share / STEP).round() * STEP).clamp(STEP * 2.0, 100.0) as u32;
+        let at = self.buffer.position(line, 0);
+        self.selections.set_single(Selection::cursor(at));
+        self.set_image_width(percent);
+    }
+
     /// Draws the pictures in view, including those that started above it.
+    fn draw_image_handle(&self, grid: &mut Grid, area: Rect, hover: (u16, u16), theme: &Theme) {
+        let Some((_, [_, right, top, bottom])) = self.image_on_row(area, hover.1) else {
+            return;
+        };
+        let middle = (top + bottom) / 2.0;
+        let handle = Bounds::cells(right + 0.25, middle - 0.8, 0.3, 1.6);
+        grid.panel(handle, 30, Some(theme.accent), None);
+    }
+
     fn draw_figures(&self, grid: &mut Grid, area: Rect, rows: &[Row], theme: &Theme) {
         let figures = self.figures();
         let left = (area.x + Self::page_margin(area)) as f32;

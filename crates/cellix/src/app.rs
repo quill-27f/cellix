@@ -139,6 +139,8 @@ enum Drag {
     Dock,
     /// A selection in a session.
     Session,
+    /// An image's edge, on its source line.
+    Image(usize),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -4726,6 +4728,10 @@ impl App {
                     if editor.click_checkbox(area, fine_x, y) {
                         return;
                     }
+                    if let Some(line) = editor.image_edge(area, x as f32, y) {
+                        self.drag = Drag::Image(line);
+                        return;
+                    }
                     let at = editor.position_at(area, fine_x, y);
                     if clicks > 1 {
                         if clicks == 2 {
@@ -4775,7 +4781,15 @@ impl App {
                     editor.scroll_to_row(area, y);
                 }
             }
-            MouseKind::Up => self.drag = Drag::None,
+            MouseKind::Up => {
+                if let Drag::Image(line) = self.drag {
+                    let area = self.focused_area();
+                    if let Some(editor) = self.editor_mut() {
+                        editor.drag_image(area, line, x as f32);
+                    }
+                }
+                self.drag = Drag::None;
+            }
             _ => {}
         }
     }
@@ -5646,6 +5660,9 @@ impl App {
                     &self.registry,
                     &marks,
                 );
+                if let Some(hover) = self.hover.filter(|h| area.contains(h.0, h.1)) {
+                    editor.draw_hover(grid, area, hover, &self.theme);
+                }
                 if pane + 1 < self.panes.len() {
                     let line = Rect::new(area.right(), area.y, 1, area.h);
                     grid.fill(line, theme.tab);
@@ -9424,6 +9441,36 @@ mod tests {
         );
         let wide = pictures(&app)[0];
         assert!(wide.w > before.w * 4, "{wide:?} {before:?}");
+    }
+
+    #[test]
+    fn dragging_an_images_edge_sizes_it() {
+        let (_dir, mut app) = picture_page("![Plot](plot.png)\n\nwords\n");
+        // The first frame is drawn before the view knows its height.
+        let _ = screen(&app);
+        let before = pictures(&app)[0];
+        let right = ((before.x + before.w) / 64) as u16;
+        let y = (before.y / 64) as u16;
+        app.handle(mouse(MouseKind::Left, right, y));
+        let far = app.main_area().right() - 6;
+        app.handle(mouse(MouseKind::Drag, far, y));
+        app.handle(mouse(MouseKind::Up, far, y));
+        let text = app.active_text().unwrap();
+        assert!(text.contains("{width="), "{text}");
+        assert!(pictures(&app)[0].w > before.w * 4);
+    }
+
+    #[test]
+    fn a_click_on_the_middle_of_an_image_does_not_size_it() {
+        let (_dir, mut app) = picture_page("![Plot](plot.png)\n\nwords\n");
+        let before = pictures(&app)[0];
+        let (x, y) = (
+            ((before.x + before.w / 4) / 64) as u16,
+            (before.y / 64) as u16,
+        );
+        app.handle(mouse(MouseKind::Left, x, y));
+        app.handle(mouse(MouseKind::Up, x, y));
+        assert!(!app.active_text().unwrap().contains("{width="));
     }
 
     #[test]

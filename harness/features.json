@@ -1412,5 +1412,19 @@
     "title": "A new document starts from the empty window",
     "test": "a_new_document_starts_from_the_empty_window",
     "passes": true
+  },
+  {
+    "id": "image-drag",
+    "milestone": 9,
+    "title": "Dragging an image's edge sizes it",
+    "test": "dragging_an_images_edge_sizes_it",
+    "passes": true
+  },
+  {
+    "id": "image-click",
+    "milestone": 9,
+    "title": "A click on an image doesn't size it",
+    "test": "a_click_on_the_middle_of_an_image_does_not_size_it",
+    "passes": true
   }
 ]
