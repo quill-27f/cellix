@@ -19,10 +19,12 @@ pub struct Settings {
     pub smooth_scroll: Option<bool>,
     /// `false` hides the minimap, however wide the window.
     pub minimap: Option<bool>,
-    /// What opens web pages. Without it, terminal-browser opens them in a split.
+    /// What opens web pages, before the system's own browser. `terminal-browser` works here.
     pub browser: Option<Vec<String>>,
     /// Language name to server command, overriding the built-in table.
     pub language_servers: HashMap<String, Vec<String>>,
+    /// Languages whose support the user said not to offer again.
+    pub declined_languages: Vec<String>,
 }
 
 fn read(path: &Path) -> Option<Settings> {
@@ -38,6 +40,7 @@ impl Settings {
         self.tier = other.tier.or(self.tier.take());
         self.browser = other.browser.or(self.browser.take());
         self.language_servers.extend(other.language_servers);
+        self.declined_languages.extend(other.declined_languages);
     }
 
     /// The user's own settings file.

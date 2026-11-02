@@ -87,6 +87,11 @@ const TOOLS: [(&str, Format); 7] = [
     ("❝", Format::Quote),
 ];
 const SEND_BACK: &str = "[Send back]";
+/// The card that offers a language's support.
+const OFFER_WIDTH: u16 = 46;
+const OFFER_HEIGHT: u16 = 4;
+const OFFER_BUTTON_ROW: u16 = 3;
+const OFFER_BUTTONS: [&str; 3] = ["Install", "Not now", "Never"];
 /// A tooltip's height in rows, and the size of its text.
 const TOOLTIP_HEIGHT: f32 = 1.22;
 const TOOLTIP_SIZE: u8 = 92;
@@ -268,13 +273,17 @@ fn install_server(index: usize) -> String {
     let Some(server) = SERVERS.get(index) else {
         return String::new();
     };
+    install_with(server.install, server.command[0])
+}
+
+fn install_with(command: &str, tool: &str) -> String {
     // Not a login shell, whose profile would swap the PATH Cellix was started with.
     let done = std::process::Command::new("sh")
-        .args(["-c", server.install])
+        .args(["-c", command])
         .stdin(std::process::Stdio::null())
         .output();
     match done {
-        Ok(done) if done.status.success() => format!("Installed {}", server.command[0]),
+        Ok(done) if done.status.success() => format!("Installed {tool}"),
         Ok(done) => {
             let said = String::from_utf8_lossy(&done.stderr);
             let first = said.lines().rfind(|l| !l.trim().is_empty());
@@ -351,6 +360,21 @@ fn spawn(command: &[String], args: &[&str]) -> bool {
         }
         Err(_) => false,
     }
+}
+
+/// Runs a command to its end, for when starting isn't the same as working.
+fn ran_well(command: &[String], arg: &str) -> bool {
+    let Some((program, fixed)) = command.split_first() else {
+        return false;
+    };
+    std::process::Command::new(program)
+        .args(fixed)
+        .arg(arg)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
 }
 
 /// All application state. It has no terminal: tests send events and read the grid.
@@ -439,6 +463,18 @@ pub struct App {
     search: Search,
     /// In the compact layout, whether the sidebar is open over the code.
     drawer: bool,
+    /// Languages that could have a server here and don't, with the server's index.
+    missing_servers: HashMap<&'static str, usize>,
+    /// Languages put off until the next run.
+    not_now: Vec<String>,
+    /// The language being installed from its offer, and how that went.
+    offer_install: Option<(&'static str, std::sync::mpsc::Receiver<String>)>,
+    /// Replaces a server's install command, so tests never touch the real package managers.
+    server_install: Option<String>,
+    /// What opens a page when nothing else does.
+    system_browser: Vec<String>,
+    /// A page on its way to the browser, and whether it got there.
+    browser_result: Option<(String, std::sync::mpsc::Receiver<bool>)>,
     /// Set when the user asks to leave.
     pub quit: bool,
 }
@@ -467,6 +503,19 @@ impl App {
             outgoing_clipboard: None,
             ticks: 0,
             review: None,
+            system_browser: vec![
+                if cfg!(target_os = "macos") {
+                    "open"
+                } else {
+                    "xdg-open"
+                }
+                .to_string(),
+            ],
+            browser_result: None,
+            missing_servers: HashMap::new(),
+            not_now: Vec::new(),
+            offer_install: None,
+            server_install: None,
             comments: SharedComments::default(),
             wait_file: None,
             vim: (settings.keymap.as_deref() == Some("vim")).then(Vim::default),
@@ -608,9 +657,14 @@ impl App {
                 .cloned()
                 .or_else(|| default_server(language));
             let root = self.workspace.root().to_path_buf();
+            let custom = self.settings.language_servers.contains_key(language);
             match command.map(|c| Client::start(&c, &root)) {
                 Some(Ok(client)) => {
                     self.servers.insert(language, client);
+                }
+                Some(Err(_)) if !custom => {
+                    self.note_missing(language);
+                    return;
                 }
                 _ => return,
             }
@@ -623,6 +677,181 @@ impl App {
         };
         client.open(path, language, &editor.buffer.text());
         editor.synced = editor.buffer.revision();
+    }
+
+    /// Remembers that a language could have a server, so opening it can offer one. Markdown
+    /// is left out: a page needs nothing from a server.
+    fn note_missing(&mut self, language: &'static str) {
+        let server = SERVERS.iter().position(|s| s.languages.contains(&language));
+        if let Some(server) = server.filter(|_| language != "Markdown") {
+            self.missing_servers.insert(language, server);
+        }
+    }
+
+    /// The language support to offer for what's on screen, as its name and server.
+    fn offer(&self) -> Option<(&'static str, usize)> {
+        if self.settings_page.is_some() || self.review.is_some() || self.overlay_is_open() {
+            return None;
+        }
+        let path = self.editors.get(self.active())?.buffer.path()?;
+        let language = Registry::language_name(path)?;
+        let declined = self.settings.declined_languages.iter();
+        if declined.chain(&self.not_now).any(|l| l == language) {
+            return None;
+        }
+        Some((language, *self.missing_servers.get(language)?))
+    }
+
+    fn offer_area(&self) -> Rect {
+        let sheet = self.sheet_area();
+        Rect::new(
+            sheet.right().saturating_sub(OFFER_WIDTH + 2),
+            sheet.bottom().saturating_sub(OFFER_HEIGHT + 1),
+            OFFER_WIDTH,
+            OFFER_HEIGHT,
+        )
+    }
+
+    /// The offer's buttons, as (label, padded cells, start column).
+    fn offer_buttons(&self) -> Vec<(&'static str, String, u16)> {
+        let area = self.offer_area();
+        let mut x = area.x + 2;
+        OFFER_BUTTONS
+            .iter()
+            .map(|label| {
+                let padding = " ".repeat(CONFIRM_PADDING / 2);
+                let cells = format!("{padding}{label}{padding}");
+                let at = x;
+                x += cells.chars().count() as u16 + 1;
+                (*label, cells, at)
+            })
+            .collect()
+    }
+
+    /// Handles a press on the offer. Returns true if the card took it.
+    fn click_offer(&mut self, x: u16, y: u16) -> bool {
+        let Some((language, server)) = self.offer() else {
+            return false;
+        };
+        let area = self.offer_area();
+        if !area.contains(x, y) {
+            return false;
+        }
+        if self.offer_install.is_some() || y != area.y + OFFER_BUTTON_ROW {
+            return true;
+        }
+        let hit = self
+            .offer_buttons()
+            .into_iter()
+            .find(|(_, cells, at)| x >= *at && x < at + cells.chars().count() as u16);
+        match hit.map(|(label, _, _)| label) {
+            Some("Install") => {
+                let (done, result) = std::sync::mpsc::channel();
+                let command = self.server_install.clone();
+                std::thread::spawn(move || {
+                    let install = command.as_deref().unwrap_or(SERVERS[server].install);
+                    let _ = done.send(install_with(install, SERVERS[server].command[0]));
+                });
+                self.offer_install = Some((language, result));
+            }
+            Some("Not now") => self.not_now.push(language.to_string()),
+            Some("Never") => {
+                self.settings.declined_languages.push(language.to_string());
+                let declined = serde_json::json!(self.settings.declined_languages);
+                let _ = Settings::store("declined_languages", declined);
+            }
+            _ => {}
+        }
+        true
+    }
+
+    /// Takes in a finished install, and connects the files it can now help.
+    fn poll_offer(&mut self) -> bool {
+        let finished = self.offer_install.as_ref().and_then(|(language, result)| {
+            let note = result.try_recv().ok()?;
+            Some((*language, note))
+        });
+        let Some((language, note)) = finished else {
+            return false;
+        };
+        self.offer_install = None;
+        let installed = note.starts_with("Installed");
+        self.say(note);
+        // Whatever happened, it's been asked and answered.
+        self.not_now.push(language.to_string());
+        if installed {
+            self.missing_servers.remove(language);
+            self.attach_open_files();
+        }
+        true
+    }
+
+    fn attach_open_files(&mut self) {
+        let paths: Vec<PathBuf> = self
+            .editors
+            .iter()
+            .filter_map(|e| e.buffer.path().map(Path::to_path_buf))
+            .collect();
+        let active = self.active();
+        for (index, path) in paths.iter().enumerate() {
+            self.set_active(index);
+            self.attach_server(path);
+        }
+        self.set_active(active.min(self.editors.len().saturating_sub(1)));
+    }
+
+    fn draw_offer(&self, grid: &mut Grid) {
+        let Some((language, server)) = self.offer() else {
+            return;
+        };
+        let theme = &self.theme;
+        let area = self.offer_area();
+        crate::palette::raised(grid, area, theme);
+        let base = Style {
+            fg: theme.text.fg,
+            bg: theme.popup,
+            ..theme.bar
+        };
+        let strong = Style { bold: true, ..base };
+        let dim = Style {
+            fg: theme.popup_dim,
+            ..base
+        };
+        let right = area.right().saturating_sub(1);
+        let tool = SERVERS[server].command[0];
+        if self.offer_install.is_some() {
+            let title = format!("Installing {language} support…");
+            grid.label(area.x + 2, area.y + 1, &title, strong, right);
+            let detail = format!("You can keep working while {tool} installs.");
+            grid.label(area.x + 2, area.y + 2, &detail, dim, right);
+            return;
+        }
+        let title = format!("Install {language} support?");
+        grid.label(area.x + 2, area.y, &title, strong, right);
+        let detail = format!("{tool} adds completion, errors and rename.");
+        grid.label(area.x + 2, area.y + 1, &detail, dim, right);
+        let y = area.y + OFFER_BUTTON_ROW;
+        for (index, (label, cells, x)) in self.offer_buttons().iter().enumerate() {
+            let width = cells.chars().count() as u16;
+            let hovered = self
+                .hover
+                .is_some_and(|h| h.1 == y && h.0 >= *x && h.0 < x + width);
+            let fill = match (index, hovered) {
+                (0, _) => theme.button,
+                (_, true) => theme.popup_hover,
+                _ => theme.quiet_button(theme.popup),
+            };
+            let style = Style {
+                fg: if index == 0 {
+                    theme.button_text
+                } else {
+                    theme.text.fg
+                },
+                bg: fill,
+                ..base
+            };
+            grid.large_button(*x, y, cells, label, fill, style);
+        }
     }
 
     /// Sends edits to servers and handles their replies. Returns true if anything changed.
@@ -656,7 +885,7 @@ impl App {
         self.tell_selection();
         let searched = self.search.poll();
         let reviewed = self.review.as_mut().is_some_and(Review::poll);
-        let installed = self.poll_install();
+        let installed = self.poll_install() | self.poll_browser() | self.poll_offer();
         let mut events = Vec::new();
         for client in self.servers.values() {
             events.extend(client.events.try_iter());
@@ -2483,8 +2712,25 @@ impl App {
         }
     }
 
-    /// What "open in browser" means here: the link at the cursor, or this file if it's
-    /// HTML.
+    /// A Markdown file as a page of its own, written beside nothing the user owns.
+    fn write_web_page(&self, path: &Path) -> std::io::Result<PathBuf> {
+        let editor = &self.editors[self.active()];
+        let name = path.file_stem().map(|n| n.to_string_lossy().into_owned());
+        let title = name.unwrap_or_else(|| "Document".to_string());
+        let base = path.parent().map(|p| p.display().to_string());
+        let page = cellix_doc::html::page(
+            &title,
+            &editor.buffer.text(),
+            base.as_deref().unwrap_or_default(),
+        );
+        let folder = std::env::temp_dir().join("cellix-pages");
+        std::fs::create_dir_all(&folder)?;
+        let out = folder.join(format!("{title}.html"));
+        std::fs::write(&out, page)?;
+        Ok(out)
+    }
+
+    /// What "open in browser" means here: the link at the cursor, or this file as a page.
     fn browser_target(&self) -> Option<String> {
         let editor = self.editors.get(self.active())?;
         let rope = editor.buffer.rope();
@@ -2493,8 +2739,14 @@ impl App {
         let text = rope.line(line).to_string();
         rendered::link_at(text.trim_end(), head - rope.line_to_char(line)).or_else(|| {
             let path = editor.buffer.path()?;
-            let extension = path.extension()?.to_str()?;
-            matches!(extension, "html" | "htm").then(|| path.display().to_string())
+            match path.extension()?.to_str()? {
+                "html" | "htm" => Some(path.display().to_string()),
+                "md" | "markdown" | "mdx" => {
+                    let page = self.write_web_page(path).ok()?;
+                    Some(page.display().to_string())
+                }
+                _ => None,
+            }
         })
     }
 
@@ -2503,24 +2755,35 @@ impl App {
             self.say("Nothing to open: put the cursor on a link, or open an HTML file");
             return;
         };
-        let opened = match &self.settings.browser {
-            Some(command) => spawn(command, &[&target]),
-            None => spawn(
-                &["terminal-browser".to_string(), "open".to_string()],
-                &[&target, "--split", "right"],
-            ),
+        let mut commands: Vec<Vec<String>> = self.settings.browser.iter().cloned().collect();
+        commands.push(self.system_browser.clone());
+        // A command can start and still fail, so only its exit says the page opened.
+        let (done, result) = std::sync::mpsc::channel();
+        let page = target.clone();
+        std::thread::spawn(move || {
+            let opened = commands.iter().any(|command| ran_well(command, &page));
+            let _ = done.send(opened);
+        });
+        self.browser_result = Some((target, result));
+    }
+
+    /// Says how a page's opening went, once it's known.
+    fn poll_browser(&mut self) -> bool {
+        let opened = self.browser_result.as_ref().and_then(|(target, result)| {
+            let opened = result.try_recv().ok()?;
+            Some((target.clone(), opened))
+        });
+        let Some((target, opened)) = opened else {
+            return false;
         };
-        // Without terminal-browser, the system's browser still gets the page.
-        let fallback = if cfg!(target_os = "macos") {
-            "open"
+        self.browser_result = None;
+        let name = target.rsplit('/').next().unwrap_or(&target).to_string();
+        self.say(if opened {
+            format!("Opened {name} in the browser")
         } else {
-            "xdg-open"
-        };
-        if opened || spawn(&[fallback.to_string()], &[&target]) {
-            self.say(format!("Opened {target}"));
-        } else {
-            self.say("Could not open a browser");
-        }
+            "No browser would open. Set `browser` in the settings file".to_string()
+        });
+        true
     }
 
     /// Runs the real agent beside the editor, in a split of whatever hosts Cellix. Hosting
@@ -3098,6 +3361,9 @@ impl App {
         }
         if !matches!(self.overlay, Overlay::None) {
             self.overlay_mouse(mouse);
+            return;
+        }
+        if mouse.kind == MouseKind::Left && self.click_offer(mouse.x, mouse.y) {
             return;
         }
         if let Some(area) = self.suggest_area() {
@@ -3827,17 +4093,7 @@ impl App {
         page.note.clone_from(&note);
         page.found = Found::look();
         self.say(note);
-        let paths: Vec<PathBuf> = self
-            .editors
-            .iter()
-            .filter_map(|e| e.buffer.path().map(Path::to_path_buf))
-            .collect();
-        let active = self.active();
-        for (index, path) in paths.iter().enumerate() {
-            self.set_active(index);
-            self.attach_server(path);
-        }
-        self.set_active(active.min(self.editors.len().saturating_sub(1)));
+        self.attach_open_files();
         true
     }
 
@@ -4054,6 +4310,7 @@ impl App {
         }
         self.draw_status(grid);
         self.draw_suggest(grid);
+        self.draw_offer(grid);
         self.draw_overlay(grid);
         self.draw_tooltip(grid);
     }
@@ -6063,6 +6320,102 @@ mod tests {
             },
         }));
         assert_eq!(wait_for_file(&log), "https://a.b/c");
+    }
+
+    #[test]
+    fn a_markdown_file_opens_in_the_browser_as_a_page() {
+        let (_dir, mut app, log) = browser_app("# Title\n\nA formula: $x^2$\n", "notes.md");
+        app.run(Command::OpenInBrowser);
+        let opened = wait_for_file(&log);
+        assert!(opened.ends_with("notes.html"), "{opened}");
+        let page = fs::read_to_string(opened).unwrap();
+        assert!(page.contains("<h1>Title</h1>"));
+        assert!(page.contains("<svg"), "the formula is typeset");
+    }
+
+    #[test]
+    fn a_failed_browser_falls_back_to_the_system_one() {
+        let (dir, mut app, log) = browser_app("<h1>hi</h1>\n", "page.html");
+        let script = format!("printf %s \"$1\" > {}", log.display());
+        app.settings.browser = Some(vec!["false".to_string()]);
+        app.system_browser = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            script,
+            "browser".to_string(),
+        ];
+        app.run(Command::OpenInBrowser);
+        let opened = wait_for_file(&log);
+        assert_eq!(opened, dir.path().join("page.html").display().to_string());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !app.poll_browser() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(screen(&app).text().contains("Opened page.html"));
+    }
+
+    #[test]
+    fn a_browser_that_never_works_says_so() {
+        let (_dir, mut app, _log) = browser_app("<h1>hi</h1>\n", "page.html");
+        app.settings.browser = Some(vec!["false".to_string()]);
+        app.system_browser = vec!["false".to_string()];
+        app.run(Command::OpenInBrowser);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !app.poll_browser() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(screen(&app).text().contains("No browser would open"));
+    }
+
+    fn java_project() -> (TempDir, App) {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("Main.java"), "class Main {}\n").unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (120, 30));
+        app.server_install = Some("exit 0".to_string());
+        app.open(&dir.path().join("Main.java")).unwrap();
+        // Whether jdtls is really here doesn't change what happens without it.
+        app.servers.clear();
+        app.note_missing("Java");
+        (dir, app)
+    }
+
+    #[test]
+    fn opening_a_file_offers_its_language_support() {
+        let (_dir, mut app) = java_project();
+        let grid = screen(&app);
+        assert!(grid.text().contains("Install Java support?"));
+        assert!(grid.text().contains("jdtls"));
+        let (x, y) = find(&grid, "Not now");
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert!(!screen(&app).text().contains("Install Java"), "asked once");
+    }
+
+    #[test]
+    fn the_offer_installs_with_a_click() {
+        let (_dir, mut app) = java_project();
+        let at = app.offer_buttons()[0].2;
+        let y = app.offer_area().y + OFFER_BUTTON_ROW;
+        app.handle(mouse(MouseKind::Left, at + 1, y));
+        assert!(screen(&app).text().contains("Installing Java support"));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !app.poll_offer() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let grid = screen(&app);
+        assert!(grid.text().contains("Installed jdtls"));
+        assert!(!grid.text().contains("Install Java"));
+    }
+
+    #[test]
+    fn a_language_can_be_declined_for_good() {
+        let (_dir, mut app) = java_project();
+        let (x, y) = find(&screen(&app), "Never");
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert_eq!(app.settings.declined_languages, ["Java"]);
+        assert!(app.offer().is_none());
     }
 
     #[test]

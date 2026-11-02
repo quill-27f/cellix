@@ -702,21 +702,21 @@
   {
     "id": "browser-fallback",
     "milestone": 8,
-    "passes": false,
+    "passes": true,
     "test": "a_failed_browser_falls_back_to_the_system_one",
     "title": "A browser that fails falls back to the system one"
   },
   {
     "id": "markdown-in-browser",
     "milestone": 8,
-    "passes": false,
+    "passes": true,
     "test": "a_markdown_file_opens_in_the_browser_as_a_page",
     "title": "A Markdown file opens in the browser as a page"
   },
   {
     "id": "language-prompt",
     "milestone": 8,
-    "passes": false,
+    "passes": true,
     "test": "opening_a_file_offers_its_language_support",
     "title": "Opening a file offers to install its language support"
   },

@@ -1,0 +1,15 @@
+[package]
+name = "cellix-doc"
+description = "Documents for Cellix: typeset math, HTML export, LaTeX structure and PDF pages"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+latex-rust = { version = "3.0.1", features = ["png"] }
+png = "0.18.1"
+pulldown-cmark = { version = "0.13.6", default-features = false, features = ["html"] }
+
+[lints]
+workspace = true

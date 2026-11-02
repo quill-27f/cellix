@@ -113,9 +113,11 @@ To turn off smooth scrolling on a slow link, add this to `~/.config/cellix/setti
 
 ## The web
 
-`Open in Browser` in the palette, or Ctrl+click on a link, opens the link at the cursor or
-the current HTML file. It uses [terminal-browser](https://github.com/zenbu-labs/terminal-browser)
-in a split when that's installed, and your system browser otherwise.
+`Open in Browser` in the palette, or Ctrl+click on a link, opens the link at the cursor, the
+current HTML file, or a Markdown file as a page of its own, with its math typeset. Set
+`browser` in the settings file to use another command first, such as
+[terminal-browser](https://github.com/zenbu-labs/terminal-browser). If that fails, the
+system's browser takes over.
 
 ## Inside Claude Code
 

@@ -11,6 +11,7 @@ libc = "0.2.191"
 png = "0.18.1"
 cellix-agent = { path = "../cellix-agent", version = "0.1.0" }
 cellix-core = { path = "../cellix-core", version = "0.1.0" }
+cellix-doc = { path = "../cellix-doc", version = "0.1.0" }
 cellix-input = { path = "../cellix-input", version = "0.1.0" }
 cellix-lang = { path = "../cellix-lang", version = "0.1.0" }
 cellix-render = { path = "../cellix-render", version = "0.1.0" }
