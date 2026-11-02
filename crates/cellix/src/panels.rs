@@ -338,7 +338,7 @@ impl MathPanel {
             );
             if index == shown {
                 let bounds = Bounds::inset(button, 0.2, 0.08);
-                grid.panel(bounds, 14, Some(theme.popup_hover), None);
+                grid.panel(bounds, 14, Some(theme.popup_hover), Some(theme.accent));
             }
             match &self.previews[index] {
                 Some((bitmap, width, height)) => {

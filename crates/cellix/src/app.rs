@@ -3035,6 +3035,17 @@ impl App {
         }
     }
 
+    /// Where a panel goes in the pane: from its edge, so its text lines up with the tabs.
+    fn dock_panel(&self) -> Option<Rect> {
+        let area = self.dock_area()?;
+        Some(Rect::new(
+            area.x,
+            area.y + 1,
+            area.w,
+            area.h.saturating_sub(1),
+        ))
+    }
+
     /// Keeps each session as big as the pane it's in.
     fn fit_dock(&mut self) {
         if let Some(screen) = self.dock_screen() {
@@ -3147,7 +3158,7 @@ impl App {
             return true;
         }
         if self.dock.front == Front::Comments {
-            let screen = self.dock_screen().unwrap_or(area);
+            let screen = self.dock_panel().unwrap_or(area);
             match mouse.kind {
                 MouseKind::Left => {
                     let threads = self.open_threads();
@@ -3305,7 +3316,8 @@ impl App {
             let top = self.dock.comments_top;
             let agent = self.dock.agent_name();
             let shown = (threads.as_slice(), self.dock.draft.as_ref(), agent.as_str());
-            threads::draw(grid, screen, shown, top, self.hover, look);
+            let panel = self.dock_panel().unwrap_or(screen);
+            threads::draw(grid, panel, shown, top, self.hover, look);
             return;
         }
         match self.dock.session() {
@@ -3315,7 +3327,10 @@ impl App {
                     session.draw_ended(grid, screen, theme);
                 }
             }
-            None => self.agents.draw(grid, screen, self.hover, theme),
+            None => {
+                let panel = self.dock_panel().unwrap_or(screen);
+                self.agents.draw(grid, panel, self.hover, theme);
+            }
         }
     }
 
@@ -5586,7 +5601,14 @@ impl App {
     /// The keys in the project's bibliographies, to pick one to cite.
     fn show_citations(&mut self) {
         let root = self.workspace.root().to_path_buf();
-        let folders = [root.clone(), root.join("references"), root.join("bib")];
+        let beside = self
+            .editors
+            .get(self.active())
+            .and_then(|e| e.buffer.path())
+            .and_then(Path::parent)
+            .map(Path::to_path_buf);
+        let mut folders = vec![root.clone(), root.join("references"), root.join("bib")];
+        folders.extend(beside.filter(|folder| *folder != root));
         let mut items = Vec::new();
         for folder in folders {
             let Ok(entries) = std::fs::read_dir(folder) else {

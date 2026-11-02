@@ -298,3 +298,33 @@ last entry said it couldn't. A real window proved it, and the app now fills to t
 bottom edges with no config. Match edge is gone, with its test
 `the_window_is_filled_once_and_keeps_the_config`, because the feature no longer exists. Its
 ledger entry now points at `tiles_only_leave_the_text_area_on_ghostty`.
+
+Documents became the main surface. Markdown and LaTeX share one editable page, with typeset math
+from pure Rust, a toolbar, a formula panel, table tools and images. A side pane runs agents and
+shells on a real PTY, holds comment threads an agent answers with `cellix reply`, and shows PDFs.
+`tectonic` builds were run for real through the binary: the PDF appears beside the page, a click
+on it lands near the source line, and an error lands on its line.
+
+Seven reviewers then used the real binary. They found what tests hadn't, and these are fixed:
+Ask agent ran a comment's words in a shell, Ctrl+S could erase an edit made on disk, Ctrl+Q killed
+running jobs, `cellix reply` reported success for a comment that didn't exist, agents weren't told
+threads existed, and comments lost their place. The gate slipped once this round, when a commit
+went through because a script read the exit of `tail`. `harness/x verify` now reads each ledger
+test's result from the log, and a pre-commit hook refuses any tree it didn't stamp.
+
+Tests changed because behaviour did: `agents_open_in_a_split_of_the_host`,
+`ghostty_gets_a_new_window_for_an_agent` and `claude_starts_with_the_port_to_connect_to` went with
+launching in host splits, and `comments_are_sent_to_the_agent_pane` now drives the side pane.
+
+Unverified: real Claude Code, Codex or Gemini in the side pane, and a real agent answering with
+`cellix reply`. Real Ghostty after the side pane and page work, since the screen was locked.
+Over SSH. `sample` papers needing packages outside tectonic's cache.
+
+Not done, from the reviews: Chinese and Japanese stay blank in cells (Korean works), so the font
+fallback still isn't reaching them. Align spacing and big-operator limits are the math engine's.
+tikzcd and commutative diagrams stay as source. Jobs don't outlive Cellix. No static Linux binary,
+so a GPU box needs Rust. No CSV or notebook view. No tracked changes, spell check, outline or
+build log panel. Codex and Gemini have `cellix plan` but no plan-held hook. The harness's headless
+terminal clips the status band, which a real window doesn't.
+
+Next: the user tests Claude Code, Codex and SSH.

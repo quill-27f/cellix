@@ -985,7 +985,7 @@ fn figure_rows(
         ..Row::new(line, end)
     });
     // A click anywhere on the picture means the picture.
-    for _ in 1..(height + 0.6).ceil() as usize {
+    for _ in 1..(height + 0.4).ceil() as usize {
         rows.push(spacer(line, at));
     }
 }

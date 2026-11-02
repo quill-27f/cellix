@@ -15,7 +15,7 @@ const GAP: u16 = 1;
 /// How wide the paragraph style's button is.
 const STYLES_WIDTH: u16 = 12;
 /// Icons are drawn at this share of a row.
-const ICON_SIZE: f32 = 0.66;
+const ICON_SIZE: f32 = 0.72;
 const MARK_SIZE: u8 = 100;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

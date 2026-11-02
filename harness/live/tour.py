@@ -180,7 +180,7 @@ def shoot(name, steps, *args, size="120x40", background="1e1e2e"):
     }
     env.pop("CLAUDE_CONFIG_DIR", None)
     command = ["python3", "-I", f"{here}/term.py", f.name, binary, *args]
-    subprocess.run(command, cwd=ROOT, env=env, timeout=30, stdout=subprocess.DEVNULL)
+    subprocess.run(command, cwd=ROOT, env=env, timeout=70, stdout=subprocess.DEVNULL)
     os.unlink(f.name)
     print(name, flush=True)
 
@@ -264,7 +264,7 @@ with tempfile.TemporaryDirectory() as scratch:
     shell = [["click", RAIL_X, AGENTS], ["wait", 0.6]]
     shoot("52-paper", [], PAPER_FILE, size="150x44", background="eff1f5")
     shoot("53-paper-dark", [], PAPER_FILE, size="150x44")
-    build = [["click", 164, 1], ["wait", 22]]
+    build = [["click", 164, 1], ["wait", 45]]
     shoot("54-paper-pdf", build, PAPER_FILE, size="170x44", background="eff1f5")
     shoot("55-paper-cite", [["click", 69, 1]], PAPER_FILE, size="150x44", background="eff1f5")
     shoot("56-narrow-note", [["click", RAIL_X, AGENTS], ["wait", 0.6]], NOTE_FILE, size="100x34")

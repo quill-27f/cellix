@@ -32,7 +32,7 @@ const WHEEL_LINES: i32 = 3;
 const TAB_PADDING: u16 = 2;
 const CLOSE_WIDTH: u16 = 2;
 /// The Comments tab at the far end.
-const COMMENTS_WIDTH: u16 = 13;
+const COMMENTS_WIDTH: u16 = 11;
 const PDF_WIDTH: u16 = 5;
 
 /// Light and dark versions of the sixteen colours, chosen to read on the sheet.
