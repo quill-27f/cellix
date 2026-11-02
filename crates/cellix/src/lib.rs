@@ -20,6 +20,7 @@ mod settings;
 mod settings_page;
 mod terminal;
 mod theme;
+mod threads;
 mod toolbar;
 
 pub use app::App;

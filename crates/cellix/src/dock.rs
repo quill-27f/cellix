@@ -29,6 +29,8 @@ const SHARE: u16 = 46;
 const WHEEL_LINES: i32 = 3;
 const TAB_PADDING: u16 = 2;
 const CLOSE_WIDTH: u16 = 2;
+/// The Comments tab at the far end.
+const COMMENTS_WIDTH: u16 = 13;
 
 /// Light and dark versions of the sixteen colours, chosen to read on the sheet.
 const DARK: [Rgb; 16] = [
@@ -543,6 +545,7 @@ pub enum TabHit {
     Tab(usize),
     Close(usize),
     New,
+    Comments,
 }
 
 /// The side pane: its tabs, and whether it's open and has the keyboard.
@@ -555,6 +558,10 @@ pub struct Dock {
     pub active: Option<usize>,
     /// Set by dragging the pane's edge.
     pub width: Option<u16>,
+    /// The comments stand in front of any session.
+    pub comments: bool,
+    /// How far the comments have scrolled.
+    pub comments_top: usize,
 }
 
 impl Dock {
@@ -622,6 +629,9 @@ impl Dock {
     }
 
     pub fn hit(&self, area: Rect, x: u16) -> Option<TabHit> {
+        if x + COMMENTS_WIDTH >= area.right() {
+            return Some(TabHit::Comments);
+        }
         let tabs = self.tabs(area);
         for (index, (start, end)) in tabs.iter().enumerate() {
             if x >= *start && x < *end {
@@ -638,12 +648,49 @@ impl Dock {
     }
 
     /// The title row, in the frame's colour, with tabs like the editor's.
-    pub fn draw_tabs(&self, grid: &mut Grid, area: Rect, hover: Option<(u16, u16)>, theme: &Theme) {
+    pub fn draw_tabs(
+        &self,
+        grid: &mut Grid,
+        area: Rect,
+        (hover, count): (Option<(u16, u16)>, usize),
+        theme: &Theme,
+    ) {
         let row = Rect::new(area.x, area.y, area.w, 1);
         grid.fill(row, theme.tab);
+        let comments = Rect::new(
+            area.right().saturating_sub(COMMENTS_WIDTH),
+            area.y,
+            COMMENTS_WIDTH,
+            1,
+        );
+        if self.comments {
+            grid.fill(comments, theme.sidebar);
+        } else if hover.is_some_and(|h| comments.contains(h.0, h.1)) {
+            grid.panel(
+                Bounds::inset(comments, 0.1, 0.1),
+                16,
+                Some(theme.row_hover),
+                None,
+            );
+        }
+        let name = if count > 0 {
+            format!("Comments {count}")
+        } else {
+            "Comments".to_string()
+        };
+        let quiet = Style {
+            fg: if self.comments {
+                theme.text.fg
+            } else {
+                theme.gutter.fg
+            },
+            bold: self.comments,
+            ..theme.tab
+        };
+        grid.label(comments.x + 1, area.y, &name, quiet, area.right());
         for (index, (start, end)) in self.tabs(area).into_iter().enumerate() {
             let session = &self.sessions[index];
-            let active = self.active == Some(index);
+            let active = self.active == Some(index) && !self.comments;
             let tab = Rect::new(start, area.y, end - start, 1);
             let hovered = hover.is_some_and(|h| tab.contains(h.0, h.1));
             let style = if active {
@@ -697,7 +744,7 @@ impl Dock {
             );
         }
         let style = Style {
-            fg: if self.active.is_none() || on_it {
+            fg: if (self.active.is_none() && !self.comments) || on_it {
                 theme.text.fg
             } else {
                 theme.gutter.fg

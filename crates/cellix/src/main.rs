@@ -127,6 +127,12 @@ fn main() -> ExitCode {
         ["pane-send", input] => return client(&format!("pane {input}"), None),
         ["comments", "--take", rest @ ..] => return client("take", rest.first().copied()),
         ["comments", rest @ ..] => return client("comments", rest.first().copied()),
+        ["threads"] => return client("threads", None),
+        ["reply", id, text @ ..] if !text.is_empty() => {
+            let author = std::env::var("CELLIX_AGENT").unwrap_or_else(|_| "Agent".to_string());
+            let text = text.join(" ").replace('\n', "\\n");
+            return client(&format!("reply {id} {author}\t{text}"), None);
+        }
         ["open", file, rest @ ..] => {
             let path = std::path::absolute(file).unwrap_or_else(|_| PathBuf::from(file));
             return client(&format!("open {}", path.display()), rest.first().copied());

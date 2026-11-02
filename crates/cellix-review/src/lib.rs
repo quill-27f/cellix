@@ -3,6 +3,7 @@
 mod diff;
 mod git;
 mod history;
+pub mod threads;
 
 pub use diff::{
     FileDiff, Hunk, LineChange, Row, RowKind, Side, hunk_patch, line_changes, rank_changes,
@@ -14,6 +15,7 @@ pub use git::{
     worktrees,
 };
 pub use history::{Turn, changed_since, checkpoint, restore, text_at, turns};
+pub use threads::{Reply, Thread};
 
 use serde::{Deserialize, Serialize};
 

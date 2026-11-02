@@ -18,8 +18,8 @@ use cellix_render::{
     TOP_RIGHT,
 };
 use cellix_review::{
-    Comment, append_comments, blame_line, branches, changed_files, create_branch, current_branch,
-    head_text, restore, switch_branch, turns, worktrees,
+    Comment, Reply, Thread, append_comments, blame_line, branches, changed_files, create_branch,
+    current_branch, head_text, restore, switch_branch, turns, worktrees,
 };
 
 use cellix_agent::hook::comments_message;
@@ -44,6 +44,7 @@ use crate::search::{self, Field, Search};
 use crate::settings::{SERVERS, Settings, default_server, formatter};
 use crate::settings_page::{Control, Found, SettingsPage, Values};
 use crate::theme::Theme;
+use crate::threads::{self, Hit as ThreadHit};
 use crate::toolbar::{self, Tool};
 
 const ACTIVITY_WIDTH: u16 = 5;
@@ -134,6 +135,7 @@ enum PromptAction {
     SendBackPlan,
     NewBranch,
     Image,
+    Reply(u32),
 }
 
 struct Prompt {
@@ -373,6 +375,10 @@ pub struct App {
     plan: Option<PendingPlan>,
     /// The side pane, where agents and shells run.
     dock: Dock,
+    /// The comments on this project, kept with it.
+    threads: Vec<Thread>,
+    /// The file couldn't be read, so saving would lose what's in it.
+    threads_broken: bool,
     tests: Vec<TestRun>,
     /// Where the pointer is, for hover highlights.
     hover: Option<(u16, u16)>,
@@ -412,6 +418,9 @@ impl App {
         let workspace = Workspace::new(root);
         let mut explorer = Explorer::default();
         explorer.refresh(&workspace);
+        let threads = cellix_review::threads::load(workspace.root());
+        let threads_broken = threads.is_err();
+        let threads = threads.unwrap_or_default();
         let mut app = Self {
             workspace,
             explorer,
@@ -473,6 +482,8 @@ impl App {
             told_selection: None,
             plan: None,
             dock: Dock::default(),
+            threads,
+            threads_broken,
             tests: Vec::new(),
             hover: None,
             last_click: None,
@@ -2498,6 +2509,18 @@ impl App {
                 }
                 Ok(())
             }
+            PromptAction::Reply(id) => {
+                if let Some(thread) = self.threads.iter_mut().find(|t| t.id == *id)
+                    && !name.is_empty()
+                {
+                    thread.replies.push(Reply {
+                        author: "You".to_string(),
+                        text: name.to_string(),
+                    });
+                    self.save_threads();
+                }
+                Ok(())
+            }
             _ if name.is_empty() => Ok(()),
             PromptAction::NewBranch => {
                 let result = create_branch(self.workspace.root(), name);
@@ -2775,19 +2798,23 @@ impl App {
     /// this Cellix and load the plugin, with `cellix` on the path for the plugin's hooks.
     fn agent_launch(&self, agent: &str) -> (Vec<String>, Vec<String>) {
         let mut launch = vec![agent.to_string()];
-        if agent != "claude" {
-            return (Vec::new(), launch);
-        }
-        let mut env = Vec::new();
-        if let Some(ide) = &self.ide {
-            env.push(format!("CLAUDE_CODE_SSE_PORT={}", ide.port));
-            env.push("ENABLE_IDE_INTEGRATION=true".to_string());
-        }
+        // Any agent can answer a comment with `cellix reply`, under its own name.
+        let mut env = vec![format!(
+            "CELLIX_AGENT={}",
+            crate::agents::display_name(agent)
+        )];
         let own_folder = std::env::current_exe()
             .ok()
             .and_then(|exe| exe.parent().map(|folder| folder.display().to_string()));
         if let (Some(folder), Ok(path)) = (own_folder, std::env::var("PATH")) {
             env.push(format!("PATH={folder}:{path}"));
+        }
+        if agent != "claude" {
+            return (env, launch);
+        }
+        if let Some(ide) = &self.ide {
+            env.push(format!("CLAUDE_CODE_SSE_PORT={}", ide.port));
+            env.push("ENABLE_IDE_INTEGRATION=true".to_string());
         }
         // Once installed, Claude Code already loads it, and loading it twice would run
         // every hook twice.
@@ -2842,6 +2869,7 @@ impl App {
                 self.dock.sessions.push(session);
                 self.dock.active = Some(self.dock.sessions.len() - 1);
                 self.dock.focused = true;
+                self.dock.comments = false;
             }
             Err(e) => self.say(format!("Could not start {name}: {e}")),
         }
@@ -2902,10 +2930,16 @@ impl App {
                     Some(TabHit::Tab(index)) => {
                         self.dock.active = Some(index);
                         self.dock.focused = true;
+                        self.dock.comments = false;
                     }
                     Some(TabHit::Close(index)) => self.dock.close(index),
                     Some(TabHit::New) => {
                         self.dock.active = None;
+                        self.dock.focused = false;
+                        self.dock.comments = false;
+                    }
+                    Some(TabHit::Comments) => {
+                        self.dock.comments = !self.dock.comments;
                         self.dock.focused = false;
                     }
                     None => {}
@@ -2915,6 +2949,31 @@ impl App {
         }
         if x == area.x && matches!(mouse.kind, MouseKind::Left) {
             self.drag = Drag::Dock;
+            return true;
+        }
+        if self.dock.comments {
+            let screen = self.dock_screen().unwrap_or(area);
+            match mouse.kind {
+                MouseKind::Left => {
+                    let threads = self.open_threads();
+                    let spot = (x, y);
+                    let hit = threads::hit(
+                        screen,
+                        &threads,
+                        self.dock.comments_top,
+                        spot,
+                        &*self.measure,
+                    );
+                    if let Some(hit) = hit {
+                        self.thread_hit(hit);
+                    }
+                }
+                MouseKind::ScrollUp => {
+                    self.dock.comments_top = self.dock.comments_top.saturating_sub(3);
+                }
+                MouseKind::ScrollDown => self.dock.comments_top += 3,
+                _ => {}
+            }
             return true;
         }
         if self.dock.session().is_none() {
@@ -2973,11 +3032,19 @@ impl App {
         };
         let theme = &self.theme;
         grid.fill(area, theme.text);
-        self.dock.draw_tabs(grid, area, self.hover, theme);
+        let threads = self.open_threads();
+        self.dock
+            .draw_tabs(grid, area, (self.hover, threads.len()), theme);
         grid.hairline(
             Bounds::cells(area.x as f32, area.y as f32, 0.0, area.h as f32),
             theme.border,
         );
+        if self.dock.comments {
+            let look = (&*self.measure, theme);
+            let top = self.dock.comments_top;
+            threads::draw(grid, screen, &threads, top, self.hover, look);
+            return;
+        }
         match self.dock.session() {
             Some(session) => session.draw(grid, screen, theme, self.dock.focused),
             None => self.agents.draw(grid, screen, self.hover, theme),
@@ -3228,13 +3295,101 @@ impl App {
     }
 
     fn add_comment(&mut self, file: String, line: usize, text: String) {
+        // A plan's comments are its answer, and `--wait` writes them into the file.
+        let answering = self.plan.is_some() || self.wait_file.is_some();
+        let page = self.editors.get(self.active()).filter(|e| e.rendered);
+        if let Some(editor) = page.filter(|_| !answering) {
+            // A document's comments become conversations, kept beside it.
+            let quote = editor
+                .selected_text()
+                .unwrap_or_else(|| editor.line_text(line.saturating_sub(1)));
+            let quote = quote.lines().next().unwrap_or_default().trim().to_string();
+            self.threads.push(Thread {
+                id: cellix_review::threads::next_id(&self.threads),
+                file,
+                line,
+                quote,
+                text,
+                replies: Vec::new(),
+                resolved: false,
+            });
+            self.save_threads();
+            self.dock.open = true;
+            self.dock.comments = true;
+            self.dock.focused = false;
+            return;
+        }
         if let Ok(mut comments) = self.comments.lock() {
             comments.push(Comment { file, line, text });
         }
     }
 
+    fn save_threads(&mut self) {
+        if self.threads_broken {
+            self.say("The comments file can't be read, so new comments aren't being saved");
+            return;
+        }
+        if let Err(e) = cellix_review::threads::save(self.workspace.root(), &self.threads) {
+            self.say(format!("Could not save comments: {e}"));
+        }
+    }
+
+    /// The open comments on the file in view, top to bottom.
+    fn open_threads(&self) -> Vec<&Thread> {
+        let file = self
+            .editors
+            .get(self.active())
+            .and_then(|e| e.buffer.path())
+            .map(|p| self.relative(p));
+        let mut threads: Vec<&Thread> = self
+            .threads
+            .iter()
+            .filter(|t| !t.resolved && file.as_ref().is_none_or(|f| *f == t.file))
+            .collect();
+        threads.sort_by_key(|t| t.line);
+        threads
+    }
+
+    fn thread_hit(&mut self, hit: ThreadHit) {
+        match hit {
+            ThreadHit::Open(id) => {
+                let line = self.threads.iter().find(|t| t.id == id).map(|t| t.line);
+                let area = self.focused_area();
+                if let (Some(line), Some(editor)) = (line, self.editor_mut()) {
+                    editor.go_to_line(line, area);
+                }
+                self.dock.focused = false;
+            }
+            ThreadHit::Reply(id) => self.ask("Reply", PromptAction::Reply(id)),
+            ThreadHit::Ask(id) => {
+                let message = self
+                    .threads
+                    .iter()
+                    .find(|t| t.id == id)
+                    .map(Thread::message);
+                match (message, self.dock.agent_mut()) {
+                    (Some(message), Some(session)) => {
+                        session.send_line(&message);
+                        self.say("Sent to the agent. Its answer lands here");
+                    }
+                    _ => {
+                        self.dock.comments = false;
+                        self.dock.active = None;
+                        self.say("Start an agent here first");
+                    }
+                }
+            }
+            ThreadHit::Resolve(id) => {
+                if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
+                    thread.resolved = true;
+                }
+                self.save_threads();
+            }
+        }
+    }
+
     fn comment_lines(&self, file: &str) -> Vec<usize> {
-        self.comments.lock().map_or_else(
+        let waiting = self.comments.lock().map_or_else(
             |_| Vec::new(),
             |c| {
                 c.iter()
@@ -3242,7 +3397,12 @@ impl App {
                     .map(|c| c.line)
                     .collect()
             },
-        )
+        );
+        let threads = self
+            .threads
+            .iter()
+            .filter(|t| !t.resolved && t.file == file);
+        waiting.into_iter().chain(threads.map(|t| t.line)).collect()
     }
 
     fn cursor_line(&self) -> Option<(PathBuf, usize)> {
@@ -3283,6 +3443,24 @@ impl App {
                 }
             }
             Request::CommentsTaken => self.say("An agent took the review comments"),
+            Request::Reply { id, author, text } => {
+                match self.threads.iter_mut().find(|t| t.id == id) {
+                    Some(thread) => {
+                        thread.replies.push(Reply {
+                            author: author.clone(),
+                            text,
+                        });
+                        self.save_threads();
+                        self.say(format!("{author} answered a comment"));
+                    }
+                    None => self.say(format!("{author} answered a comment that's gone")),
+                }
+            }
+            Request::Threads(reply) => {
+                let open: Vec<&Thread> = self.threads.iter().filter(|t| !t.resolved).collect();
+                let json = serde_json::to_string(&open).unwrap_or_else(|_| "[]".to_string());
+                let _ = reply.send(json);
+            }
             // Only the pane loop reads these, and it handles them before they get here.
             Request::Pane(_) => {}
             Request::Agent(event) => self.agents.update(event),
@@ -7229,6 +7407,84 @@ mod tests {
         assert!((1..30).contains(&at), "inside the formula: {at}");
     }
 
+    fn comment_on(app: &mut App, text: &str) {
+        app.run(Command::AddComment);
+        typed(app, text);
+        enter(app);
+    }
+
+    #[test]
+    fn comments_are_threads_beside_the_page() {
+        let (dir, mut app) = page_app("# Plan\n\nThe cache goes first.\n");
+        app.handle(mouse(MouseKind::Left, 40, 5));
+        let (x, y) = find(&screen(&app), "The cache");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        comment_on(&mut app, "Why first");
+        let text = screen(&app).text();
+        assert!(text.contains("Why first"), "{text}");
+        assert!(
+            text.contains("The cache goes first."),
+            "the line it's about"
+        );
+        assert!(text.contains("Comments 1"), "{text}");
+        let again = App::new(dir.path().to_path_buf(), (150, 40));
+        assert_eq!(again.threads.len(), 1, "kept with the project");
+        assert_eq!(again.threads[0].text, "Why first");
+    }
+
+    #[test]
+    fn an_agent_replies_to_a_comment() {
+        let (_dir, mut app) = page_app("The cache goes first.\n");
+        comment_on(&mut app, "Why first");
+        session(&mut app, "echo ready; read line; echo got:$line; sleep 9");
+        app.dock.comments = true;
+        let id = app.threads[0].id;
+        app.thread_hit(ThreadHit::Ask(id));
+        app.dock.comments = false;
+        shows(&mut app, "cellix reply 1");
+        app.dock.comments = true;
+        app.serve(Request::Reply {
+            id,
+            author: "Claude Code".into(),
+            text: "It saves a read.".into(),
+        });
+        let text = screen(&app).text();
+        assert!(text.contains("It saves a read."), "{text}");
+        assert!(text.contains("Claude Code"), "{text}");
+        let (sender, answer) = std::sync::mpsc::channel();
+        app.serve(Request::Threads(sender));
+        assert!(answer.recv().unwrap().contains("Why first"));
+    }
+
+    #[test]
+    fn a_thread_can_be_answered_and_resolved_with_its_buttons() {
+        let (_dir, mut app) = page_app("line\n");
+        comment_on(&mut app, "Note");
+        let (x, y) = find(&screen(&app), "Reply");
+        app.handle(mouse(MouseKind::Left, x, y));
+        typed(&mut app, "Noted");
+        enter(&mut app);
+        assert_eq!(app.threads[0].replies[0].text, "Noted");
+        assert_eq!(app.threads[0].replies[0].author, "You");
+        let (x, y) = find(&screen(&app), "Resolve");
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert!(app.threads[0].resolved);
+        assert!(
+            screen(&app)
+                .text()
+                .contains("Select text and press Comment")
+        );
+    }
+
+    #[test]
+    fn asking_with_no_agent_points_at_starting_one() {
+        let (_dir, mut app) = page_app("line\n");
+        comment_on(&mut app, "Note");
+        let (x, y) = find(&screen(&app), "Ask agent");
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert!(screen(&app).text().contains("Start an agent here first"));
+    }
+
     #[test]
     fn the_math_panel_inserts_templates() {
         let (_dir, mut app) = page_app("x\n");
@@ -7803,7 +8059,8 @@ mod tests {
         let (env, launch) = app.agent_launch("claude");
         assert_eq!(launch[0], "claude");
         assert!(env.iter().any(|e| e.starts_with("PATH=")), "{env:?}");
-        assert!(app.agent_launch("codex").0.is_empty());
+        let (env, _) = app.agent_launch("codex");
+        assert!(env.iter().any(|e| e == "CELLIX_AGENT=Codex"), "{env:?}");
     }
 
     #[test]

@@ -772,14 +772,14 @@
   {
     "id": "doc-threads",
     "milestone": 8,
-    "passes": false,
+    "passes": true,
     "test": "comments_are_threads_beside_the_page",
     "title": "Comments on a document are threads beside it"
   },
   {
     "id": "agent-replies",
     "milestone": 8,
-    "passes": false,
+    "passes": true,
     "test": "an_agent_replies_to_a_comment",
     "title": "An agent can reply to a comment"
   },

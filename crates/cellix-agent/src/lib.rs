@@ -1,5 +1,6 @@
 //! The local socket any agent can use to reach a running Cellix. One line in, one line
-//! out: `comments`, `take` (comments, then clear them) or `open <path>`.
+//! out: `comments`, `take` (comments, then clear them), `threads`, `reply <id> <author>` then
+//! a tab and the text, or `open <path>`.
 
 use std::env;
 use std::fs;
@@ -64,6 +65,14 @@ pub enum Request {
     Test(TestRun),
     /// Input for a Cellix running as a pane, as the mod's JSON.
     Pane(String),
+    /// An agent answering a comment.
+    Reply {
+        id: u32,
+        author: String,
+        text: String,
+    },
+    /// Wants the comments on the project, as JSON.
+    Threads(Sender<String>),
     /// A plan is waiting. The connection stays open until `reply` is answered or dropped.
     Plan {
         path: PathBuf,
@@ -108,6 +117,23 @@ fn answer(line: &str, comments: &SharedComments, requests: &Sender<Request>) -> 
         }
         (Some("open"), Some(path)) => {
             let _ = requests.send(Request::Open(PathBuf::from(path)));
+            Ok("ok".into())
+        }
+        (Some("threads"), None) => {
+            let (reply, threads) = channel();
+            let _ = requests.send(Request::Threads(reply));
+            Ok(threads.recv().unwrap_or_else(|_| "[]".to_string()))
+        }
+        (Some("reply"), Some(rest)) => {
+            let Some((head, text)) = rest.split_once('\t') else {
+                return Ok("error: reply needs an id, an author and text".into());
+            };
+            let (id, author) = head.split_once(' ').unwrap_or((head, "Agent"));
+            let Ok(id) = id.parse() else {
+                return Ok("error: reply needs a comment's number".into());
+            };
+            let (author, text) = (author.to_string(), text.replace("\\n", "\n"));
+            let _ = requests.send(Request::Reply { id, author, text });
             Ok("ok".into())
         }
         (Some("pane"), Some(json)) => {
