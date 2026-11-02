@@ -7,6 +7,7 @@ mod editor;
 mod explorer;
 mod find;
 pub mod integrations;
+mod kitty;
 mod menu;
 mod neovim;
 mod palette;

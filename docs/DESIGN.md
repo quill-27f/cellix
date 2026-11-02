@@ -240,6 +240,11 @@ doesn't need to compete with a full IDE here.
 
 ## Agent integration
 
+The side pane's terminal also reads the Kitty graphics protocol, so a program in it can draw
+pictures. That is how `terminal-browser` shows a real browser inside Cellix, and how a plot from a
+training run shows in a shell. Frames become bitmaps on the `Grid`'s paint list like any other
+image, so a terminal without pictures falls back to the system browser.
+
 Cellix runs the real agent and never rebuilds its interface. The side pane is a terminal on a
 PTY, using `alacritty_terminal` for the screen, so agents update themselves and nothing here
 knows what they look like. Starting one in a host split left the file and the agent in two

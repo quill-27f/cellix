@@ -19,6 +19,7 @@ cellix-render = { path = "../cellix-render", version = "0.1.0" }
 cellix-review = { path = "../cellix-review", version = "0.1.0" }
 cellix-term = { path = "../cellix-term", version = "0.1.0" }
 base64 = "0.22"
+flate2 = "1"
 crossterm = "0.29"
 unicode-width = "0.2"
 serde = { version = "1.0.229", features = ["derive"] }
@@ -28,7 +29,6 @@ alacritty_terminal = "0.26"
 portable-pty = "0.9"
 
 [dev-dependencies]
-flate2 = "1"
 cellix-doc = { path = "../cellix-doc", features = ["fixtures"] }
 tempfile = "3"
 vt100 = "0.16"

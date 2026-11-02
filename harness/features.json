@@ -957,5 +957,26 @@
     "title": "The side pane closes from its title row and keeps its sessions running",
     "test": "the_side_pane_closes_from_its_own_title_and_keeps_what_runs",
     "passes": true
+  },
+  {
+    "id": "pane-browser",
+    "milestone": 9,
+    "title": "A web page opens in a real browser inside the side pane",
+    "test": "a_page_opens_in_the_side_pane_and_its_frames_show",
+    "passes": true
+  },
+  {
+    "id": "pane-graphics",
+    "milestone": 9,
+    "title": "A program in the side pane can draw pictures with the Kitty protocol",
+    "test": "a_program_in_the_pane_is_told_graphics_work",
+    "passes": true
+  },
+  {
+    "id": "pane-colours",
+    "milestone": 9,
+    "title": "Programs in the side pane are told the real background colour",
+    "test": "a_program_is_told_the_real_background",
+    "passes": true
   }
 ]

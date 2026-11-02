@@ -31,7 +31,7 @@ use cellix_doc::table::{Align, Edit as TableEdit};
 use serde_json::{Value, json};
 
 use crate::agents::{Agents, Hit as AgentHit};
-use crate::dock::{Dock, Front, Session, TabHit};
+use crate::dock::{BROWSER, CellPixels, Dock, Front, Session, TabHit};
 use crate::editor::{Editor, Marks};
 use crate::explorer::Explorer;
 use crate::find::Find;
@@ -300,6 +300,15 @@ fn store(key: &str, value: serde_json::Value) -> String {
 
 /// Runs a program and waits for it, for short commands whose outcome matters.
 /// Runs a command to its end, for when starting isn't the same as working.
+/// Whether a program can be started by name.
+fn on_path(program: &str) -> bool {
+    if program.contains('/') {
+        return Path::new(program).is_file();
+    }
+    let paths = std::env::var_os("PATH").unwrap_or_default();
+    std::env::split_paths(&paths).any(|folder| folder.join(program).is_file())
+}
+
 fn ran_well(command: &[String], arg: &str) -> bool {
     let Some((program, fixed)) = command.split_first() else {
         return false;
@@ -2926,11 +2935,44 @@ impl App {
         })
     }
 
+    /// The command that shows a page inside Cellix, if this terminal can show one. A browser
+    /// named in the settings is someone's choice, so it comes first.
+    fn pane_browser(&self) -> Option<Vec<String>> {
+        let chosen = self.settings.browser.as_ref().and_then(|c| c.first());
+        let wanted = chosen.is_none_or(|program| program.ends_with("terminal-browser"));
+        self.measure.cell_pixels().and(wanted.then(|| {
+            let program = chosen.map_or("terminal-browser", String::as_str);
+            vec![program.to_string(), "open".into(), "--no-merge".into()]
+        }))
+    }
+
+    /// Opens a page in the side pane, in place of any page already there.
+    fn open_in_pane(&mut self, target: &str) -> bool {
+        let Some(mut argv) = self.pane_browser() else {
+            return false;
+        };
+        if !on_path(&argv[0]) {
+            return false;
+        }
+        argv.push(target.to_string());
+        let old = self.dock.sessions.iter().position(|s| s.browser);
+        if let Some(index) = old {
+            self.dock.close(index);
+        }
+        let root = self.workspace.root().to_path_buf();
+        self.start_session(BROWSER, &argv, &[], &root);
+        self.dock.front == Front::Session
+            && self.dock.session().is_some_and(|session| session.browser)
+    }
+
     fn open_in_browser(&mut self) {
         let Some(target) = self.browser_target() else {
             self.say("Nothing to open: put the cursor on a link, or open an HTML file");
             return;
         };
+        if self.open_in_pane(&target) {
+            return;
+        }
         let mut commands: Vec<Vec<String>> = self.settings.browser.iter().cloned().collect();
         commands.push(self.system_browser.clone());
         // A command can start and still fail, so only its exit says the page opened.
@@ -3034,7 +3076,7 @@ impl App {
     fn start_session(&mut self, name: &str, argv: &[String], env: &[String], folder: &Path) {
         self.dock.open = true;
         let size = self.dock_screen().map_or((80, 24), |a| (a.w, a.h));
-        match Session::start(name, argv, env, folder, size) {
+        match Session::start(name, argv, env, folder, size, self.cell_size()) {
             Ok(session) => {
                 self.dock.sessions.push(session);
                 self.dock.active = Some(self.dock.sessions.len() - 1);
@@ -3056,11 +3098,18 @@ impl App {
         ))
     }
 
+    /// Pixels in a cell, for programs that draw pictures.
+    fn cell_size(&self) -> CellPixels {
+        let cell = self.measure.cell_pixels().unwrap_or_default();
+        (cell.0 as u16, cell.1 as u16)
+    }
+
     /// Keeps each session as big as the pane it's in.
     fn fit_dock(&mut self) {
         if let Some(screen) = self.dock_screen() {
+            let cell = self.cell_size();
             for session in &mut self.dock.sessions {
-                session.resize((screen.w, screen.h));
+                session.resize((screen.w, screen.h), cell);
             }
             if let (Some(view), Some(cell)) = (&mut self.dock.pdf, self.measure.cell_pixels()) {
                 view.fit(screen.w, cell);
@@ -4092,6 +4141,12 @@ impl App {
     fn mouse(&mut self, mouse: MouseEvent) {
         if mouse.kind == MouseKind::Move {
             self.hover = Some((mouse.x, mouse.y));
+            let in_pane = self
+                .dock_screen()
+                .is_some_and(|a| a.contains(mouse.x, mouse.y));
+            if in_pane && self.dock.front == Front::Session {
+                self.dock_session_mouse(mouse);
+            }
             return;
         }
         if !matches!(self.overlay, Overlay::None) {
@@ -7504,6 +7559,91 @@ mod tests {
         let page = fs::read_to_string(opened).unwrap();
         assert!(page.contains("<h1>Title</h1>"));
         assert!(page.contains("<svg"), "the formula is typeset");
+    }
+
+    /// A page and a stand-in for the browser that draws one, which says what it was asked
+    /// to open and then shows a frame the way the real one does.
+    fn pane_browser_app() -> (TempDir, App) {
+        let (dir, mut app, _log) = browser_app("<h1>hi</h1>\n", "page.html");
+        let program = dir.path().join("terminal-browser");
+        fs::write(
+            &program,
+            "#!/bin/sh\nprintf 'showing %s' \"$(basename \"$3\")\"\n\
+             printf '\\033_Ga=T,f=24,s=1,v=1,i=1,p=1,C=1,q=2;AQID\\033\\\\'\nsleep 30\n",
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+        app.settings.browser = Some(vec![program.display().to_string()]);
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(10, 20)));
+        (dir, app)
+    }
+
+    #[test]
+    fn a_page_opens_in_the_side_pane_and_its_frames_show() {
+        let (_dir, mut app) = pane_browser_app();
+        app.run(Command::OpenInBrowser);
+        assert!(app.dock.open);
+        assert_eq!(app.dock.session().unwrap().name, BROWSER);
+        shows(&mut app, "showing page.html");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let count = |app: &App| {
+            let grid = screen(app);
+            let images =
+                |p: &&cellix_render::Paint| matches!(p, cellix_render::Paint::Image { .. });
+            grid.paint.iter().filter(images).count()
+        };
+        while count(&app) == 0 {
+            assert!(std::time::Instant::now() < deadline, "no frame");
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        // Opening another page replaces it rather than piling up tabs.
+        app.run(Command::OpenInBrowser);
+        let browsers = app.dock.sessions.iter().filter(|s| s.browser).count();
+        assert_eq!(browsers, 1);
+    }
+
+    #[test]
+    fn a_comment_never_reaches_a_browser() {
+        let (_dir, mut app) = pane_browser_app();
+        app.run(Command::OpenInBrowser);
+        assert!(app.dock.agent_mut().is_none());
+        assert!(app.dock.busy().is_empty(), "closing a page loses no work");
+    }
+
+    #[test]
+    fn a_terminal_without_pictures_keeps_the_system_browser() {
+        let (dir, mut app, log) = browser_app("<h1>hi</h1>\n", "page.html");
+        let script = format!("printf %s \"$1\" > {}", log.display());
+        app.settings.browser = Some(vec!["terminal-browser".to_string()]);
+        app.system_browser = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            script,
+            "browser".to_string(),
+        ];
+        app.settings.browser = None;
+        app.run(Command::OpenInBrowser);
+        assert_eq!(
+            wait_for_file(&log),
+            dir.path().join("page.html").display().to_string()
+        );
+        assert!(!app.dock.open);
+    }
+
+    #[test]
+    fn a_program_in_the_pane_is_told_graphics_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        let script = "stty -echo -icanon min 1; \
+            printf '\\033_Gi=9,a=q,t=d,f=24,s=1,v=1;AAAA\\033\\\\'; \
+            r=$(dd bs=1 count=11 2>/dev/null | tr -d '\\033\\\\'); printf 'ready %s' \"$r\"; sleep 30";
+        session(
+            &mut app,
+            &script.replace("ready %s", "said %s; printf ready"),
+        );
+        assert!(screen(&app).text().contains("_Gi=9;OK"));
     }
 
     #[test]

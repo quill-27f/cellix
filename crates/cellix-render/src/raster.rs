@@ -547,6 +547,23 @@ impl Target<'_> {
             .min(self.width as i32)
             .min(right);
         let (ax, ay) = (width as f32 / s.w, height as f32 / s.h);
+        // A frame made for exactly this size is a copy, which keeps a live page cheap.
+        if bitmap.kind == Pixels::Rgba && (ax - 1.0).abs() < 0.002 && (ay - 1.0).abs() < 0.002 {
+            let (left, top) = (s.x.round() as i32, s.y.round() as i32);
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let (u, v) = (x - left, y - top);
+                    if u < 0 || v < 0 || u as usize >= width || v as usize >= height {
+                        continue;
+                    }
+                    let at = (v as usize * width + u as usize) * 4;
+                    if let Some(p) = bitmap.pixels.get(at..at + 4) {
+                        self.blend(x, y, Rgb(p[0], p[1], p[2]), p[3]);
+                    }
+                }
+            }
+            return;
+        }
         for y in y0..y1 {
             for x in x0..x1 {
                 let u = (x as f32 + 0.5 - s.x) * ax - 0.5;

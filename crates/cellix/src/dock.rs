@@ -14,10 +14,11 @@ use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor, Rgb as TermRgb};
 use cellix_input::{Key, KeyEvent, MouseKind};
-use cellix_render::{Bounds, Grid, Rect, Rgb, Style};
+use cellix_render::{Bitmap, Bounds, Grid, Paint, Rect, Rgb, Style};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use unicode_width::UnicodeWidthStr;
 
+use crate::kitty::{Outcome, Piece, Protocol, Scanner, Shown};
 use crate::pdfview::PdfView;
 use crate::theme::Theme;
 use crate::threads::Draft;
@@ -36,6 +37,10 @@ const COMMENTS_WIDTH: u16 = 11;
 const PDF_WIDTH: u16 = 5;
 /// The button that closes the pane.
 const HIDE_WIDTH: u16 = 3;
+/// What the pane's browser tab is called.
+pub const BROWSER: &str = "Browser";
+/// Pictures kept per session, oldest going first.
+const MAX_PICTURES: usize = 64;
 
 /// Light and dark versions of the sixteen colours, chosen to read on the sheet.
 const DARK: [Rgb; 16] = [
@@ -110,11 +115,31 @@ impl Dimensions for Size {
 /// A place in the visible text, as (column, row).
 type Spot = (u16, u16);
 
+/// Pixels in a cell, and none when the terminal outside can't show pictures.
+pub type CellPixels = (u16, u16);
+
+/// A picture a program put on its screen.
+struct Picture {
+    image: u32,
+    placement: u32,
+    bitmap: Bitmap,
+    /// Where it starts: counting from the top of the scrollback, so it scrolls with the text.
+    line: usize,
+    column: u16,
+    /// How big it stands, in cells.
+    columns: f32,
+    rows: f32,
+    /// Whether it belongs to the screen a full-screen program uses.
+    alternate: bool,
+}
+
 /// A program running on a PTY, and the screen it has drawn.
 pub struct Session {
     pub name: String,
     /// A plain shell, which runs what it's sent. Comments must never reach one.
     pub shell: bool,
+    /// A browser, which is neither something to send comments to nor work to lose.
+    pub browser: bool,
     term: Term<Events>,
     parser: Processor,
     events: Events,
@@ -126,15 +151,19 @@ pub struct Session {
     finished: Receiver<()>,
     pub exited: bool,
     size: (u16, u16),
+    cell: CellPixels,
     selection: Option<(Spot, Spot)>,
+    scanner: Scanner,
+    protocol: Protocol,
+    pictures: Vec<Picture>,
 }
 
-fn pty_size((columns, rows): (u16, u16)) -> PtySize {
+fn pty_size((columns, rows): (u16, u16), (width, height): CellPixels) -> PtySize {
     PtySize {
         rows,
         cols: columns,
-        pixel_width: 0,
-        pixel_height: 0,
+        pixel_width: columns.saturating_mul(width),
+        pixel_height: rows.saturating_mul(height),
     }
 }
 
@@ -146,9 +175,10 @@ impl Session {
         env: &[String],
         folder: &Path,
         size: (u16, u16),
+        cell: CellPixels,
     ) -> io::Result<Self> {
         let pair = native_pty_system()
-            .openpty(pty_size(size))
+            .openpty(pty_size(size, cell))
             .map_err(failed)?;
         let (program, args) = argv.split_first().ok_or(io::ErrorKind::InvalidInput)?;
         let mut command = CommandBuilder::new(program);
@@ -188,6 +218,7 @@ impl Session {
         };
         Ok(Self {
             shell: name == crate::agents::SHELL.0,
+            browser: name == BROWSER,
             name: name.to_string(),
             term: Term::new(Config::default(), &dimensions, events.clone()),
             parser: Processor::new(),
@@ -200,14 +231,126 @@ impl Session {
             finished,
             exited: false,
             size,
+            cell,
             selection: None,
+            scanner: Scanner::default(),
+            protocol: Protocol::default(),
+            pictures: Vec::new(),
         })
+    }
+
+    /// Whether comments can go here.
+    pub fn agent(&self) -> bool {
+        !self.exited && !self.shell && !self.browser
+    }
+
+    /// Takes in what the program wrote, with its pictures lifted out in order, so a reply
+    /// goes back ahead of anything the terminal says about what came after.
+    fn take_in(&mut self, bytes: &[u8]) {
+        for piece in self.scanner.feed(bytes) {
+            match piece {
+                Piece::Text(text) => {
+                    self.answer_about_cells(&text);
+                    self.forget_on_clear(&text);
+                    self.parser.advance(&mut self.term, &text);
+                }
+                Piece::Graphics(command) => {
+                    let outcome = self.protocol.command(&command);
+                    self.follow(outcome);
+                }
+            }
+        }
+    }
+
+    /// The one size question the terminal emulator leaves unanswered.
+    fn answer_about_cells(&mut self, text: &[u8]) {
+        if self.cell.0 > 0 && contains(text, b"\x1b[16t") {
+            let reply = format!("\x1b[6;{};{}t", self.cell.1, self.cell.0);
+            self.write(reply.as_bytes());
+        }
+    }
+
+    /// Clearing a screen takes its pictures with it.
+    fn forget_on_clear(&mut self, text: &[u8]) {
+        if contains(text, b"\x1b[2J") || contains(text, b"\x1b[3J") || contains(text, b"\x1bc") {
+            let alternate = self.term.mode().contains(TermMode::ALT_SCREEN);
+            self.pictures.retain(|p| p.alternate != alternate);
+        }
+    }
+
+    fn follow(&mut self, outcome: Outcome) {
+        if let Some(reply) = outcome.reply {
+            self.write(reply.as_bytes());
+        }
+        match outcome.delete {
+            Some(Some(image)) => self.pictures.retain(|p| p.image != image),
+            Some(None) => self.pictures.clear(),
+            None => {}
+        }
+        if let Some(shown) = outcome.show {
+            self.place(shown);
+        }
+    }
+
+    /// Puts a picture at the cursor, in place of the one it updates.
+    fn place(&mut self, shown: Shown) {
+        let (width, height) = (self.cell.0.max(1) as f32, self.cell.1.max(1) as f32);
+        let columns = shown
+            .columns
+            .map_or(shown.bitmap.width as f32 / width, f32::from);
+        let rows = shown
+            .rows
+            .map_or(shown.bitmap.height as f32 / height, f32::from);
+        let grid = self.term.grid();
+        let cursor = grid.cursor.point;
+        let line = grid.history_size() + cursor.line.0.max(0) as usize;
+        let same = |p: &Picture| p.image == shown.image && p.placement == shown.placement;
+        self.pictures.retain(|p| !same(p));
+        if self.pictures.len() >= MAX_PICTURES {
+            self.pictures.remove(0);
+        }
+        self.pictures.push(Picture {
+            image: shown.image,
+            placement: shown.placement,
+            bitmap: shown.bitmap,
+            line,
+            column: cursor.column.0 as u16,
+            columns,
+            rows,
+            alternate: self.term.mode().contains(TermMode::ALT_SCREEN),
+        });
+        if !shown.cursor_stays {
+            let down = "\r\n".repeat(rows.ceil() as usize);
+            self.parser.advance(&mut self.term, down.as_bytes());
+        }
+    }
+
+    fn draw_pictures(&self, grid: &mut Grid, area: Rect, theme: &Theme) {
+        let alternate = self.term.mode().contains(TermMode::ALT_SCREEN);
+        let top = self.term.grid().history_size() as i64 - self.term.grid().display_offset() as i64;
+        for picture in self.pictures.iter().filter(|p| p.alternate == alternate) {
+            let row = picture.line as i64 - top;
+            if row >= area.h as i64 || row + picture.rows.ceil() as i64 <= 0 {
+                continue;
+            }
+            grid.paint.push(Paint::Image {
+                bounds: Bounds::cells(
+                    (area.x + picture.column) as f32,
+                    area.y as f32 + row as f32,
+                    picture.columns,
+                    picture.rows,
+                ),
+                clip: Bounds::inset(area, 0.0, 0.0),
+                bitmap: picture.bitmap.clone(),
+                color: theme.text.fg,
+            });
+        }
     }
 
     /// Whether closing this would stop something: an agent, or a shell running a command
     /// rather than waiting at its prompt.
     pub fn busy(&self) -> bool {
-        if self.exited {
+        if self.exited || self.browser {
             return false;
         }
         let front = self.master.process_group_leader();
@@ -223,7 +366,7 @@ impl Session {
     pub fn poll(&mut self, theme: &Theme) -> bool {
         let mut changed = false;
         while let Ok(bytes) = self.output.try_recv() {
-            self.parser.advance(&mut self.term, &bytes);
+            self.take_in(&bytes);
             changed = true;
         }
         let events = self.events.0.lock().map(|mut e| std::mem::take(&mut *e));
@@ -231,11 +374,7 @@ impl Session {
             match event {
                 TermEvent::PtyWrite(text) => self.write(text.as_bytes()),
                 TermEvent::ColorRequest(index, format) => {
-                    let color = if index == 11 {
-                        theme.text.bg
-                    } else {
-                        theme.text.fg
-                    };
+                    let color = asked_colour(index, theme);
                     let reply = format(TermRgb {
                         r: color.0,
                         g: color.1,
@@ -247,8 +386,8 @@ impl Session {
                     let reply = format(WindowSize {
                         num_lines: self.size.1,
                         num_cols: self.size.0,
-                        cell_width: 1,
-                        cell_height: 1,
+                        cell_width: self.cell.0.max(1),
+                        cell_height: self.cell.1.max(1),
                     });
                     self.write(reply.as_bytes());
                 }
@@ -262,13 +401,14 @@ impl Session {
         changed
     }
 
-    pub fn resize(&mut self, size: (u16, u16)) {
-        if size == self.size || size.0 == 0 || size.1 == 0 {
+    pub fn resize(&mut self, size: (u16, u16), cell: CellPixels) {
+        if (size == self.size && cell == self.cell) || size.0 == 0 || size.1 == 0 {
             return;
         }
         self.size = size;
+        self.cell = cell;
         self.selection = None;
-        let _ = self.master.resize(pty_size(size));
+        let _ = self.master.resize(pty_size(size, cell));
         self.term.resize(Size {
             columns: size.0 as usize,
             lines: size.1 as usize,
@@ -333,6 +473,13 @@ impl Session {
                 MouseKind::Left => self.report_mouse(0, spot, true),
                 MouseKind::Up => self.report_mouse(0, spot, false),
                 MouseKind::Drag => self.report_mouse(32, spot, true),
+                MouseKind::Right => {
+                    self.report_mouse(2, spot, true);
+                    self.report_mouse(2, spot, false);
+                }
+                MouseKind::Move if self.term.mode().contains(TermMode::MOUSE_MOTION) => {
+                    self.report_mouse(35, spot, true);
+                }
                 _ => {}
             }
             return None;
@@ -427,7 +574,7 @@ impl Session {
     }
 
     fn color(&self, color: Color, theme: &Theme, default: Rgb) -> Rgb {
-        let palette = if theme.is_light() { &LIGHT } else { &DARK };
+        let palette = palette_of(theme);
         match color {
             Color::Spec(c) => Rgb(c.r, c.g, c.b),
             Color::Indexed(index) => indexed(index, palette),
@@ -495,6 +642,7 @@ impl Session {
                 grid.put_str(area.x + x, area.y + y, shown, style, area.right());
             }
         }
+        self.draw_pictures(grid, area, theme);
     }
 
     /// Says a finished agent is finished, on the row under what it last showed.
@@ -521,6 +669,25 @@ impl Drop for Session {
     fn drop(&mut self) {
         self.stop();
     }
+}
+
+fn palette_of(theme: &Theme) -> &'static [Rgb; 16] {
+    if theme.is_light() { &LIGHT } else { &DARK }
+}
+
+/// The colour a program asks for. Programs read the background to choose their own look, so
+/// these are the sheet's, and a palette entry is what the pane really draws for that number.
+fn asked_colour(index: usize, theme: &Theme) -> Rgb {
+    match index {
+        _ if index == NamedColor::Background as usize => theme.text.bg,
+        _ if index == NamedColor::Foreground as usize => theme.text.fg,
+        _ if index == NamedColor::Cursor as usize => theme.text.fg,
+        _ => indexed(index.min(255) as u8, palette_of(theme)),
+    }
+}
+
+fn contains(text: &[u8], wanted: &[u8]) -> bool {
+    text.windows(wanted.len()).any(|w| w == wanted)
 }
 
 fn failed(error: impl std::fmt::Display) -> io::Error {
@@ -659,15 +826,14 @@ impl Dock {
     /// The agent comments go to: the one in front, or the first still running. A shell would
     /// run a comment's words as commands, so it never counts.
     pub fn agent_mut(&mut self) -> Option<&mut Session> {
-        let usable = |s: &Session| !s.exited && !s.shell;
-        let front = self.active.filter(|i| usable(&self.sessions[*i]));
-        let index = front.or_else(|| self.sessions.iter().position(usable))?;
+        let front = self.active.filter(|i| self.sessions[*i].agent());
+        let index = front.or_else(|| self.sessions.iter().position(Session::agent))?;
         self.sessions.get_mut(index)
     }
 
     /// What to call the agent an answer will come from.
     pub fn agent_name(&self) -> String {
-        let agent = self.sessions.iter().find(|s| !s.exited && !s.shell);
+        let agent = self.sessions.iter().find(|s| s.agent());
         agent.map_or_else(|| "the agent".to_string(), |s| s.name.clone())
     }
 
@@ -687,7 +853,8 @@ impl Dock {
             changed |= session.poll(theme);
         }
         // A shell that's finished has nothing left to show. An agent may have said why.
-        while let Some(index) = self.sessions.iter().position(|s| s.exited && s.shell) {
+        let done = |s: &Session| s.exited && (s.shell || s.browser);
+        while let Some(index) = self.sessions.iter().position(done) {
             self.close(index);
             changed = true;
         }
@@ -906,6 +1073,16 @@ impl Dock {
 mod tests {
     use super::*;
     use cellix_input::Mods;
+
+    #[test]
+    fn a_program_is_told_the_real_background() {
+        let theme = Theme::named(Some("light"));
+        let background = NamedColor::Background as usize;
+        assert_eq!(asked_colour(background, &theme), theme.text.bg);
+        let foreground = NamedColor::Foreground as usize;
+        assert_eq!(asked_colour(foreground, &theme), theme.text.fg);
+        assert_eq!(asked_colour(11, &theme), LIGHT[11]);
+    }
 
     #[test]
     fn keys_become_what_a_terminal_sends() {
