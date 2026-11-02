@@ -1912,7 +1912,12 @@ impl App {
             // The session gets everything but what moves away from it.
             let leaves = matches!(
                 simple_keymap(key),
-                Some(Command::FocusAgent | Command::CommandPalette | Command::Quit)
+                Some(
+                    Command::FocusAgent
+                        | Command::CloseDock
+                        | Command::CommandPalette
+                        | Command::Quit
+                )
             );
             if !leaves {
                 if let Some(session) = self.dock.session_mut() {
@@ -2750,6 +2755,11 @@ impl App {
                 }
             }
             Command::ShowAgents => self.toggle_dock(),
+            // Hiding stops nothing: what runs here keeps running, and the pane comes back.
+            Command::CloseDock => {
+                self.dock.open = false;
+                self.dock.focused = false;
+            }
             Command::BuildPdf => self.build_pdf(),
             Command::ExportPdf => self.export_pdf(),
             Command::ShowInPdf => {
@@ -3107,6 +3117,7 @@ impl App {
         if y == area.y {
             if mouse.kind == MouseKind::Left {
                 match self.dock.hit(area, x) {
+                    Some(TabHit::Hide) => self.run(Command::CloseDock),
                     Some(TabHit::Tab(index)) => {
                         self.dock.active = Some(index);
                         self.dock.focused = true;
@@ -7288,6 +7299,70 @@ mod tests {
     }
 
     #[test]
+    fn an_empty_cell_takes_a_click_and_keeps_what_is_typed() {
+        let source = "| Alpha | Beta |\n|---|---|\n| one | two |\n";
+        let (_dir, mut app) = page_app(source);
+        let menu = |app: &mut App, name: &str| {
+            let (x, y) = cell_of(app, "two");
+            app.handle(mouse(MouseKind::Right, x + 1, y));
+            let (x, y) = find(&screen(app), name);
+            app.handle(mouse(MouseKind::Left, x, y));
+        };
+        menu(&mut app, "Insert Row Below");
+        menu(&mut app, "Insert Column Right");
+        // Three columns and a blank row: click the row's first cell, under "one".
+        let (x, y) = cell_of(&app, "one");
+        app.handle(mouse(MouseKind::Left, x, y + 1));
+        typed(&mut app, "first");
+        let text = app.active_text().unwrap();
+        let row = text.lines().nth(3).unwrap().to_string();
+        assert!(row.starts_with("| first"), "{text}");
+        assert_eq!(row.matches('|').count(), 4, "{text}");
+        // Now the new column, in the row above: right of "two" is an empty cell.
+        let (x, y) = cell_of(&app, "two");
+        app.handle(mouse(MouseKind::Left, x + 12, y));
+        typed(&mut app, "more");
+        let text = app.active_text().unwrap();
+        let row = text.lines().nth(2).unwrap().to_string();
+        assert!(row.contains("two") && row.contains("more"), "{text}");
+        assert!(
+            row.find("two") < row.find("more") && row.trim_end().ends_with('|'),
+            "{text}"
+        );
+        assert_eq!(row.matches('|').count(), 4, "{text}");
+    }
+
+    #[test]
+    fn arrows_walk_through_empty_cells() {
+        let source = "| A | B |\n|---|---|\n|     |     |\n";
+        let (_dir, mut app) = page_app(source);
+        let (x, y) = cell_of(&app, "A");
+        app.handle(mouse(MouseKind::Left, x, y + 1));
+        key(&mut app, Key::Right);
+        typed(&mut app, "x");
+        let text = app.active_text().unwrap();
+        let row = text.lines().nth(2).unwrap();
+        assert_eq!(row.matches('|').count(), 3, "{text}");
+        assert!(row.split('|').nth(2).unwrap().contains('x'), "{text}");
+    }
+
+    #[test]
+    fn a_tabular_edit_leaves_the_caret_in_the_new_cell() {
+        let source = "\\begin{tabular}{ll}\n  A & B \\\\\n  1 & 2 \\\\\n\\end{tabular}\n";
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("paper.tex");
+        fs::write(&path, source).unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        app.open(&path).unwrap();
+        let (x, y) = cell_of(&app, "2");
+        app.handle(mouse(MouseKind::Left, x, y));
+        app.editors[0].edit_table(TableEdit::RowBelow);
+        typed(&mut app, "new");
+        let text = app.active_text().unwrap();
+        assert!(text.lines().nth(3).unwrap().contains("new"), "{text}");
+    }
+
+    #[test]
     fn tab_moves_between_table_cells() {
         let (_dir, mut app) = page("| a | b |\n|---|---|\n| c | d |\n");
         key(&mut app, Key::Tab);
@@ -7772,6 +7847,34 @@ mod tests {
             detail: detail.into(),
             folder: "/w".into(),
         }
+    }
+
+    #[test]
+    fn the_side_pane_closes_from_its_own_title_and_keeps_what_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        app.open_agent(crate::agents::SHELL.1);
+        let area = app.dock_area().unwrap();
+        assert!(app.dock.focused);
+        assert!(screen(&app).text().lines().next().unwrap().contains('×'));
+        app.handle(mouse(MouseKind::Left, area.right() - 2, area.y));
+        assert!(!app.dock.open && !app.dock.focused);
+        assert_eq!(app.dock.sessions.len(), 1, "closing the pane stops nothing");
+        assert!(app.dock_area().is_none());
+        app.run(Command::ShowAgents);
+        assert!(app.dock.open);
+        assert!(!app.dock.sessions[0].exited);
+        // From the keyboard too, even with the keys going to the program in the pane.
+        app.dock.focused = true;
+        app.handle(Event::Key(cellix_input::KeyEvent {
+            key: Key::Char('`'),
+            mods: cellix_input::Mods {
+                ctrl: true,
+                shift: true,
+                alt: false,
+            },
+        }));
+        assert!(!app.dock.open);
     }
 
     #[test]

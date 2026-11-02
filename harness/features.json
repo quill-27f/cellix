@@ -929,5 +929,33 @@
     "passes": true,
     "test": "a_tabular_has_the_table_menu",
     "title": "A tabular has the table menu"
+  },
+  {
+    "id": "empty-cells",
+    "milestone": 9,
+    "title": "An empty table cell takes a click and keeps what is typed",
+    "test": "an_empty_cell_takes_a_click_and_keeps_what_is_typed",
+    "passes": true
+  },
+  {
+    "id": "empty-cell-arrows",
+    "milestone": 9,
+    "title": "Arrow keys stop in empty table cells",
+    "test": "arrows_walk_through_empty_cells",
+    "passes": true
+  },
+  {
+    "id": "tabular-caret",
+    "milestone": 9,
+    "title": "A tabular edit leaves the caret in the new cell",
+    "test": "a_tabular_edit_leaves_the_caret_in_the_new_cell",
+    "passes": true
+  },
+  {
+    "id": "pane-close",
+    "milestone": 9,
+    "title": "The side pane closes from its title row and keeps its sessions running",
+    "test": "the_side_pane_closes_from_its_own_title_and_keeps_what_runs",
+    "passes": true
   }
 ]

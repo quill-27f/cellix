@@ -1633,7 +1633,10 @@ impl Editor {
             let table = table.unwrap_or_default();
             self.buffer
                 .replace_range(&mut self.selections, start, end, &table);
-            self.selections.set_single(Selection::cursor(start));
+            let row = row + usize::from(edit == TableEdit::RowBelow);
+            let column = column + usize::from(edit == TableEdit::ColumnRight);
+            let at = cellix_doc::latex::tabular_cell_offset(&table, row, column);
+            self.selections.set_single(Selection::cursor(start + at));
             return;
         }
         match cellix_doc::table::apply(&text, row, column, edit) {

@@ -777,6 +777,32 @@ pub fn new_table(rows: usize, columns: usize) -> String {
     out
 }
 
+/// Where a cell's text starts in a `tabular`'s lines, in chars.
+pub fn tabular_cell_offset(text: &str, row: usize, column: usize) -> usize {
+    let is_row = |line: &&str| line.contains("\\\\");
+    let mut at = 0;
+    let mut seen = 0;
+    for line in text.split('\n') {
+        if is_row(&line) {
+            if seen == row {
+                let chars: Vec<char> = line.chars().collect();
+                let mut start = 0;
+                let mut bars = 0;
+                while bars < column && start < chars.len() {
+                    bars += usize::from(chars[start] == '&');
+                    start += 1;
+                }
+                let spaces = chars[start..].iter().take_while(|c| **c == ' ').count();
+                let stops = matches!(chars.get(start + spaces), Some('&' | '\\'));
+                return at + start + spaces.min(if stops { 1 } else { spaces });
+            }
+            seen += 1;
+        }
+        at += line.chars().count() + 1;
+    }
+    0
+}
+
 const HEADER: &str = "\\documentclass[11pt]{article}\n\\usepackage{amsmath,amssymb,graphicx,hyperref}\n\\usepackage[margin=1in]{geometry}\n\\usepackage{booktabs}\n\\usepackage[normalem]{ulem}\n\\begin{document}\n";
 
 /// Markdown as a LaTeX document. Math goes through untouched, which is the point.

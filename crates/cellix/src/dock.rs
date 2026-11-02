@@ -34,6 +34,8 @@ const CLOSE_WIDTH: u16 = 2;
 /// The Comments tab at the far end.
 const COMMENTS_WIDTH: u16 = 11;
 const PDF_WIDTH: u16 = 5;
+/// The button that closes the pane.
+const HIDE_WIDTH: u16 = 3;
 
 /// Light and dark versions of the sixteen colours, chosen to read on the sheet.
 const DARK: [Rgb; 16] = [
@@ -603,6 +605,8 @@ pub enum TabHit {
     New,
     Comments,
     Pdf,
+    /// The pane's own close button, at the far end.
+    Hide,
 }
 
 /// What the pane shows besides its sessions.
@@ -728,6 +732,9 @@ impl Dock {
     }
 
     pub fn hit(&self, area: Rect, x: u16) -> Option<TabHit> {
+        if x + HIDE_WIDTH >= area.right() {
+            return Some(TabHit::Hide);
+        }
         if x < area.x + 1 + COMMENTS_WIDTH {
             return Some(TabHit::Comments);
         }
@@ -866,6 +873,32 @@ impl Dock {
             ..theme.tab
         };
         grid.label(plus + 1, area.y, "+", style, area.right());
+        // Drawn last, over any tabs that reach this far, so it can always be found.
+        let hide = Rect::new(
+            area.right().saturating_sub(HIDE_WIDTH),
+            area.y,
+            HIDE_WIDTH,
+            1,
+        );
+        grid.fill(hide, theme.tab);
+        let on_it = hover.is_some_and(|h| hide.contains(h.0, h.1));
+        if on_it {
+            grid.panel(
+                Bounds::inset(hide, 0.1, 0.1),
+                16,
+                Some(theme.row_hover),
+                None,
+            );
+        }
+        let style = Style {
+            fg: if on_it {
+                theme.text.fg
+            } else {
+                theme.gutter.fg
+            },
+            ..theme.tab
+        };
+        grid.label(hide.x + 1, area.y, "×", style, hide.right());
     }
 }
 

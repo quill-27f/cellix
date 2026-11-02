@@ -110,6 +110,8 @@ fn measure_glyphs(glyphs: &mut [Glyph], measure: &dyn Measure) {
 pub struct TableRow {
     /// The left edge of each column, then the right edge of the table.
     pub columns: Vec<f32>,
+    /// Where an empty cell's caret stands in each column, which alignment moves.
+    pub carets: Vec<f32>,
     pub header: bool,
 }
 
@@ -178,7 +180,26 @@ impl Row {
         }
     }
 
+    /// The cell a source position is in.
+    fn cell_holding(&self, pos: usize) -> Option<usize> {
+        self.cells.iter().rposition(|start| *start <= pos)
+    }
+
+    /// Whether a cell shows nothing, which leaves its start the only way to reach it.
+    fn cell_is_empty(&self, index: usize) -> bool {
+        let start = self.cells[index];
+        let end = self.cells.get(index + 1).copied().unwrap_or(usize::MAX);
+        let mut places = self.glyphs.iter().filter_map(|g| g.at);
+        !places.any(|at| (start..end).contains(&at))
+    }
+
     fn caret_x(&self, pos: usize) -> f32 {
+        if let (Some(table), Some(index)) = (&self.table, self.cell_holding(pos))
+            && self.cell_is_empty(index)
+            && let Some(x) = table.carets.get(index)
+        {
+            return *x;
+        }
         let mut before: Option<(usize, f32)> = None;
         for g in &self.glyphs {
             if g.at.is_some_and(|at| at >= pos) {
@@ -201,12 +222,14 @@ impl Row {
         if let (Some(_), Some(at)) = (self.figure, self.glyphs.first().and_then(|g| g.at)) {
             return at;
         }
+        // Past the table's edge still means its last column.
         let cell = self.table.as_ref().and_then(|t| {
-            let index = t.columns.iter().rposition(|x| *x <= column)?;
-            Some((t.columns[index], t.columns.get(index + 1).copied()?))
+            let last = t.columns.len().checked_sub(2)?;
+            let index = t.columns.iter().rposition(|x| *x <= column)?.min(last);
+            Some((t.columns[index], t.columns[index + 1], index))
         });
         let in_scope = |g: &&Glyph| {
-            g.at.is_some() && cell.is_none_or(|(left, right)| g.x >= left && g.x < right)
+            g.at.is_some() && cell.is_none_or(|(left, right, _)| g.x >= left && g.x < right)
         };
         let mut last = None;
         for g in self.glyphs.iter().filter(in_scope) {
@@ -217,6 +240,7 @@ impl Row {
         }
         match (last, cell) {
             (Some(at), Some(_)) => at + 1,
+            (None, Some((.., index))) => self.cells.get(index).copied().unwrap_or(self.end),
             _ => self.end,
         }
     }
@@ -655,6 +679,10 @@ fn split_cells(line: &str) -> Vec<(usize, Vec<char>)> {
         .into_iter()
         .map(|(start, cell)| {
             let lead = cell.iter().take_while(|c| **c == ' ').count();
+            // An empty cell's caret stands one space in, so typed text stays clear of the bar.
+            if lead == cell.len() {
+                return (start + lead.min(1), Vec::new());
+            }
             let tail = cell.iter().rev().take_while(|c| **c == ' ').count();
             let end = cell.len().saturating_sub(tail).max(lead);
             (start + lead, cell[lead..end].to_vec())
@@ -736,6 +764,14 @@ fn place_table(
             .fold(3.0f32, f32::max);
         columns.push(columns[c] + widest.ceil() + PADDING * 2.0);
     }
+    let shift = |c: usize, room: f32| match aligns.get(c) {
+        Some('r') => room,
+        Some('c') => room / 2.0,
+        _ => 0.0,
+    };
+    let carets: Vec<f32> = (0..count)
+        .map(|c| columns[c] + PADDING + shift(c, columns[c + 1] - columns[c] - PADDING * 2.0))
+        .collect();
     for (index, cells) in parsed.iter().enumerate() {
         let (line, line_end) = places[index];
         let mut glyphs = Vec::new();
@@ -748,29 +784,27 @@ fn place_table(
             }
             let width: f32 = cells.get(c).into_iter().flatten().map(|g| g.advance).sum();
             let room = (columns[c + 1] - left - PADDING * 2.0 - width).max(0.0);
-            let shift = match aligns.get(c) {
-                Some('r') => room,
-                Some('c') => room / 2.0,
-                _ => 0.0,
-            };
-            let mut x = left + PADDING + shift;
+            let mut x = left + PADDING + shift(c, room);
             for g in cells.get(c).into_iter().flatten() {
                 glyphs.push(Glyph { x, ..*g });
                 x += g.advance;
             }
         }
-        let end = cells
-            .iter()
-            .flatten()
-            .filter_map(|g| g.at)
+        // The row runs to its last cell, written in or not, and never past the closing bar.
+        let written = cells.iter().flatten().filter_map(|g| g.at).max();
+        let end = written
+            .map(|at| at + 1)
+            .into_iter()
+            .chain(starts[index].last().copied())
             .max()
-            .map_or(line_end, |at| at + 1);
+            .unwrap_or(line_end);
         rows.push(Row {
             glyphs,
             cells: starts[index].clone(),
             lead: PADDING,
             table: Some(TableRow {
                 columns: columns.clone(),
+                carets: carets.clone(),
                 header: index == 0,
             }),
             ..Row::new(line, end)
@@ -1390,7 +1424,14 @@ fn stops(rows: &[Row]) -> Vec<usize> {
                     _ => None,
                 });
             let starts = r.glyphs.iter().filter_map(|g| g.at);
-            starts.chain(ends).chain([r.end]).collect::<Vec<_>>()
+            let empty = (0..r.cells.len())
+                .filter(|index| r.cell_is_empty(*index))
+                .map(|index| r.cells[index]);
+            starts
+                .chain(ends)
+                .chain(empty)
+                .chain([r.end])
+                .collect::<Vec<_>>()
         })
         .collect();
     all.sort_unstable();

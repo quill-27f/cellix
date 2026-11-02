@@ -175,6 +175,7 @@ pub enum Command {
     ApprovePlan,
     SendBackPlan,
     ShowAgents,
+    CloseDock,
     ReviewPreviousTurn,
     UndoTurn,
     Commit,
