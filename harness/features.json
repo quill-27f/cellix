@@ -1846,5 +1846,145 @@
     "title": "Commits to push show, and Push goes through",
     "test": "commits_to_push_show_and_push_goes_through",
     "passes": true
+  },
+  {
+    "id": "pane-list-filled",
+    "milestone": 9,
+    "title": "The list of agents fills however the pane opened",
+    "test": "the_plus_lists_what_can_start_however_the_pane_opened",
+    "passes": true
+  },
+  {
+    "id": "pane-start-replaces",
+    "milestone": 9,
+    "title": "Starting from the list puts the agent in its place",
+    "test": "starting_from_the_list_puts_the_agent_in_its_place",
+    "passes": true
+  },
+  {
+    "id": "pane-middle",
+    "milestone": 9,
+    "title": "Middle click closes a pane tab",
+    "test": "a_middle_click_closes_a_tab_in_the_pane",
+    "passes": true
+  },
+  {
+    "id": "pane-middle-busy",
+    "milestone": 9,
+    "title": "Middle click on a busy tab asks first",
+    "test": "a_middle_click_on_a_busy_tab_asks_first",
+    "passes": true
+  },
+  {
+    "id": "strip-shut",
+    "milestone": 9,
+    "title": "Icons at the top right work with the pane shut",
+    "test": "the_icons_at_the_top_right_are_there_with_the_pane_shut",
+    "passes": true
+  },
+  {
+    "id": "strip-close",
+    "milestone": 9,
+    "title": "The icons leave the pane's close button clear",
+    "test": "the_icons_stand_clear_of_the_panes_close_button",
+    "passes": true
+  },
+  {
+    "id": "strip-rail",
+    "milestone": 9,
+    "title": "The Agents icon moved from the rail to the strip",
+    "test": "the_rail_has_no_agents_icon_and_the_strip_shows_when_one_needs_you",
+    "passes": true
+  },
+  {
+    "id": "strip-narrow",
+    "milestone": 9,
+    "title": "A narrow pane leaves the icons by the file's tabs",
+    "test": "a_narrow_pane_leaves_the_icons_at_the_end_of_the_files_tabs",
+    "passes": true
+  },
+  {
+    "id": "strip-review",
+    "milestone": 9,
+    "title": "Review keeps its title buttons clear of the icons",
+    "test": "a_review_keeps_its_buttons_clear_of_the_icons",
+    "passes": true
+  },
+  {
+    "id": "strip-tabs",
+    "milestone": 9,
+    "title": "Pane tabs share their row with the icons",
+    "test": "tabs_in_the_pane_share_the_row_with_the_icons",
+    "passes": true
+  },
+  {
+    "id": "term-icon",
+    "milestone": 9,
+    "title": "The terminal icon starts one and then finds it",
+    "test": "the_terminal_icon_starts_one_and_then_finds_it",
+    "passes": true
+  },
+  {
+    "id": "term-ctrl-j",
+    "milestone": 9,
+    "title": "Ctrl+J brings a terminal up and puts it away",
+    "test": "ctrl_j_brings_a_terminal_up_and_puts_it_away",
+    "passes": true
+  },
+  {
+    "id": "term-agent-newline",
+    "milestone": 9,
+    "title": "Ctrl+J stays a new line for an agent",
+    "test": "ctrl_j_stays_a_new_line_for_an_agent",
+    "passes": true
+  },
+  {
+    "id": "term-palette",
+    "milestone": 9,
+    "title": "The palette reaches the terminal",
+    "test": "the_palette_reaches_the_terminal",
+    "passes": true
+  },
+  {
+    "id": "stack-under",
+    "milestone": 9,
+    "title": "A narrow window puts the pane under the file",
+    "test": "a_narrow_window_puts_the_pane_under_the_file",
+    "passes": true
+  },
+  {
+    "id": "stack-size",
+    "milestone": 9,
+    "title": "A session under the file gets its real size",
+    "test": "a_session_under_the_file_is_told_its_real_size",
+    "passes": true
+  },
+  {
+    "id": "stack-short",
+    "milestone": 9,
+    "title": "A short narrow window gives the pane all of it",
+    "test": "a_short_narrow_window_gives_the_pane_all_of_it",
+    "passes": true
+  },
+  {
+    "id": "pic-sync",
+    "milestone": 9,
+    "title": "A picture in a synchronized update lands where it moved to",
+    "test": "a_picture_inside_a_synchronized_update_lands_where_the_update_moved_to",
+    "passes": true
+  },
+  {
+    "id": "pic-layers",
+    "milestone": 9,
+    "title": "Pictures honour pixel offsets and layers",
+    "test": "pictures_stand_in_their_cells_and_draw_in_their_layers",
+    "passes": true
+  },
+  {
+    "id": "pic-placement",
+    "milestone": 9,
+    "title": "Deleting one placement leaves the rest",
+    "test": "taking_one_placement_away_leaves_the_rest",
+    "passes": true
   }
 ]

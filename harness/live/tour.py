@@ -12,7 +12,8 @@ here = os.path.dirname(os.path.abspath(__file__))
 os.makedirs(out, exist_ok=True)
 CTRL = lambda c: chr(ord(c) - 96)
 RAIL_X = 2
-SEARCH, OUTLINE, REVIEW, AGENTS = 4, 7, 10, 13
+SEARCH, OUTLINE, REVIEW = 4, 7, 10
+LIST_AGENTS = [["keys", "\x1b[112;6u"], ["wait", 0.3], ["keys", "List Agents"], ["wait", 0.3], ["keys", "\r"]]
 
 CODE = """//! A bounded queue.
 use std::collections::VecDeque;
@@ -219,10 +220,12 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("11-find", [["keys", CTRL("f")], ["keys", "item"]], CODE_FILE)
     shoot("12-search", [["click", RAIL_X, SEARCH]], CODE_FILE)
     shoot("13-review", [["keys", "\u0007"], ["wait", 0.4]], CODE_FILE)
+    shoot("13-strip-hover", [["move", 150, 0], ["wait", 0.4]], CODE_FILE)
+    shoot("13-stacked-pane", [*LIST_AGENTS, ["wait", 0.6]], CODE_FILE, size="72x44")
     shoot("13-source-control", [["click", RAIL_X, REVIEW], ["wait", 0.8]], CODE_FILE)
     shoot("13-source-message", [["click", RAIL_X, REVIEW], ["wait", 0.8], ["click", 14, 3],
                                 ["keys", "Say what changed and why"], ["move", 14, 15], ["wait", 0.3]], CODE_FILE)
-    shoot("14-agents", [["click", RAIL_X, AGENTS], ["wait", 0.5]], CODE_FILE)
+    shoot("14-agents", [*LIST_AGENTS, ["wait", 0.5]], CODE_FILE)
     shoot("15-settings-appearance", settings, CODE_FILE)
     shoot("16-settings-editor", [*settings, ["click", 45, 4]], CODE_FILE)
     shoot("17-settings-integrations", [*settings, ["click", 45, 5]], CODE_FILE)
@@ -247,7 +250,7 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("36-hover-accept", [["keys", "\u0007"], ["wait", 0.6], ["move", 114, 1]], CODE_FILE)
     shoot("37-hover-settings", [*settings, ["click", 45, 4], ["move", 80, 16]], CODE_FILE)
     shoot("38-hover-dialog", [["keys", "x"], ["keys", CTRL("q")], ["move", 70, 17]], CODE_FILE)
-    shoot("39-hover-agents", [["click", RAIL_X, AGENTS], ["wait", 0.5], ["move", 12, 12]], CODE_FILE)
+    shoot("39-hover-agents", [*LIST_AGENTS, ["wait", 0.5], ["move", 12, 12]], CODE_FILE)
     shoot("41-hover-tab-close", [["move", 42, 0]], CODE_FILE)
     shoot("42-hover-install", [*settings, ["click", 45, 4], ["move", 113, 16]], CODE_FILE)
     shoot("43-light-hover-menu", [["right", 60, 12], ["move", 64, 19]], CODE_FILE, background="eff1f5")
@@ -263,14 +266,14 @@ with tempfile.TemporaryDirectory() as scratch:
     comment = [["click", 90, 5], ["keys", "\\eOP"], ["keys", "add comment"], ["keys", "\r"]]
     comment += [["keys", "Is this true for multi-head attention?\r"], ["wait", 0.5]]
     shoot("50-comments", comment, NOTE_FILE, size="150x44", background="eff1f5")
-    shoot("51-agent-list", [["click", RAIL_X, AGENTS], ["wait", 0.6]], NOTE_FILE, size="150x44")
-    shell = [["click", RAIL_X, AGENTS], ["wait", 0.6]]
+    shoot("51-agent-list", [*LIST_AGENTS, ["wait", 0.6]], NOTE_FILE, size="150x44")
+    shell = [*LIST_AGENTS, ["wait", 0.6]]
     shoot("52-paper", [], PAPER_FILE, size="150x44", background="eff1f5")
     shoot("53-paper-dark", [], PAPER_FILE, size="150x44")
     build = [["click", 164, 1], ["wait", 45]]
     shoot("54-paper-pdf", build, PAPER_FILE, size="170x44", background="eff1f5")
     shoot("55-paper-cite", [["click", 69, 1]], PAPER_FILE, size="150x44", background="eff1f5")
-    shoot("56-narrow-note", [["click", RAIL_X, AGENTS], ["wait", 0.6]], NOTE_FILE, size="100x34")
+    shoot("56-narrow-note", [*LIST_AGENTS, ["wait", 0.6]], NOTE_FILE, size="100x34")
 
     # The samples, which use everything a page can do.
     samples = os.path.join(ROOT, "samples")
@@ -279,7 +282,7 @@ with tempfile.TemporaryDirectory() as scratch:
     PAPER = os.path.join(samples, "paper", "main.tex")
     light = {"size": "150x44", "background": "eff1f5"}
     shoot("57-welcome", [], **light)
-    start_shell = [["click", RAIL_X, AGENTS], ["wait", 0.6], ["click", 125, 13], ["wait", 1.5]]
+    start_shell = [*LIST_AGENTS, ["wait", 0.6], ["click", 125, 13], ["wait", 1.5]]
     shoot("58-welcome-with-shell", start_shell, **light)
     shoot("59-sample-top", [], WRITING, **light)
     for number, (name, notches) in enumerate(

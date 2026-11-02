@@ -2,6 +2,7 @@
 //! with one doesn't mean leaving the other. The program is the real one, on a real PTY, and
 //! it updates itself: nothing here knows what Claude Code looks like.
 
+use std::cell::Cell;
 use std::io::{self, Read, Write};
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver};
@@ -19,7 +20,7 @@ use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_s
 use unicode_width::UnicodeWidthStr;
 
 use crate::hold::Held;
-use crate::kitty::{Outcome, Piece, Protocol, Scanner, Shown};
+use crate::kitty::{Delete, Outcome, Piece, Protocol, Scanner, Shown};
 use crate::pdfview::PdfView;
 use crate::theme::Theme;
 use crate::threads::Draft;
@@ -38,16 +39,18 @@ const COMMENTS_WIDTH: u16 = 10;
 const COUNT_WIDTH: u16 = 2;
 /// The button that starts something, and the tab it becomes while that list shows.
 const NEW_WIDTH: u16 = 3;
-const AGENTS_WIDTH: u16 = 8;
+const AGENTS_WIDTH: u16 = 11;
 const PDF_WIDTH: u16 = 8;
 const LOG_WIDTH: u16 = 8;
 const PROBLEMS_WIDTH: u16 = 13;
+/// How narrow a session's tab can get, sharing the row with others.
+const SMALLEST_TAB: u16 = 6;
 /// The button that closes the pane.
 const HIDE_WIDTH: u16 = 3;
 /// What the pane's browser tab is called.
 pub const BROWSER: &str = "Browser";
 /// Pictures kept per session, oldest going first.
-const MAX_PICTURES: usize = 64;
+const MAX_PICTURES: usize = 512;
 
 /// Light and dark versions of the sixteen colours, chosen to read on the sheet.
 const DARK: [Rgb; 16] = [
@@ -148,6 +151,10 @@ struct Picture {
     /// How big it stands, in cells.
     columns: f32,
     rows: f32,
+    /// How far into its first cell it starts, as parts of a cell.
+    offset: (f32, f32),
+    /// Which pictures it covers: those with lower numbers.
+    layer: i32,
     /// Whether it belongs to the screen a full-screen program uses.
     alternate: bool,
 }
@@ -323,6 +330,9 @@ impl Session {
                     self.parser.advance(&mut self.term, &text);
                 }
                 Piece::Graphics(command) => {
+                    // Text inside a synchronized update waits in the parser, cursor moves
+                    // included, and a picture goes wherever the cursor is.
+                    self.parser.stop_sync(&mut self.term);
                     let outcome = self.protocol.command(&command);
                     self.follow(outcome);
                 }
@@ -351,8 +361,12 @@ impl Session {
             self.write(reply.as_bytes());
         }
         match outcome.delete {
-            Some(Some(image)) => self.pictures.retain(|p| p.image != image),
-            Some(None) => self.pictures.clear(),
+            Some(Delete::All) => self.pictures.clear(),
+            Some(Delete::Image(image)) => self.pictures.retain(|p| p.image != image),
+            Some(Delete::Placement(image, placement)) => {
+                let same = |p: &Picture| p.image == image && p.placement == placement;
+                self.pictures.retain(|p| !same(p));
+            }
             None => {}
         }
         if let Some(shown) = outcome.show {
@@ -385,6 +399,11 @@ impl Session {
             column: cursor.column.0 as u16,
             columns,
             rows,
+            offset: (
+                f32::from(shown.offset.0) / width,
+                f32::from(shown.offset.1) / height,
+            ),
+            layer: shown.layer,
             alternate: self.term.mode().contains(TermMode::ALT_SCREEN),
         });
         if !shown.cursor_stays {
@@ -396,15 +415,18 @@ impl Session {
     fn draw_pictures(&self, grid: &mut Grid, area: Rect, theme: &Theme) {
         let alternate = self.term.mode().contains(TermMode::ALT_SCREEN);
         let top = self.term.grid().history_size() as i64 - self.term.grid().display_offset() as i64;
-        for picture in self.pictures.iter().filter(|p| p.alternate == alternate) {
+        let mut pictures: Vec<&Picture> = self.pictures.iter().collect();
+        pictures.retain(|p| p.alternate == alternate);
+        pictures.sort_by_key(|p| p.layer);
+        for picture in pictures {
             let row = picture.line as i64 - top;
-            if row >= area.h as i64 || row + picture.rows.ceil() as i64 <= 0 {
+            if row >= area.h as i64 || row + (picture.rows.ceil() as i64) < 0 {
                 continue;
             }
             grid.paint.push(Paint::Image {
                 bounds: Bounds::cells(
-                    (area.x + picture.column) as f32,
-                    area.y as f32 + row as f32,
+                    (area.x + picture.column) as f32 + picture.offset.0,
+                    area.y as f32 + row as f32 + picture.offset.1,
                     picture.columns,
                     picture.rows,
                 ),
@@ -879,6 +901,8 @@ pub enum Front {
     Log,
     /// Errors and warnings across the project.
     Problems,
+    /// What can be started, and what's running elsewhere.
+    Agents,
 }
 
 /// The side pane: its tabs, and whether it's open and has the keyboard.
@@ -900,7 +924,7 @@ pub struct Dock {
     /// How far the comments have scrolled.
     pub comments_top: usize,
     /// How many comments are open, which the tab shows.
-    pub comment_count: std::cell::Cell<usize>,
+    pub comment_count: Cell<usize>,
     /// A comment or reply being written.
     pub draft: Option<Draft>,
     /// What the last build said, how far it has scrolled, and where its paths start.
@@ -910,6 +934,10 @@ pub struct Dock {
     pub problems: bool,
     pub problems_top: usize,
     pub log_folder: std::path::PathBuf,
+    /// Whether the list of agents has a tab.
+    pub agents_tab: bool,
+    /// The column tabs stop at, for what stands past them.
+    pub tabs_end: Cell<u16>,
 }
 
 impl Dock {
@@ -920,6 +948,16 @@ impl Dock {
         }
         let wanted = self.width.unwrap_or(room * SHARE / 100);
         wanted.clamp(MIN_WIDTH, room - MIN_MAIN)
+    }
+
+    /// Whether there's too little room for the pane to stand beside the file.
+    pub fn too_narrow(&self, room: u16) -> bool {
+        self.open && room < MIN_MAIN + MIN_WIDTH
+    }
+
+    /// Whether this view is what the pane shows.
+    pub fn showing(&self, view: Front) -> bool {
+        self.open && (self.front == view || (view == Front::Agents && self.listing()))
     }
 
     pub fn session(&self) -> Option<&Session> {
@@ -998,22 +1036,25 @@ impl Dock {
         COMMENTS_WIDTH + if count > 0 { digits + 1 } else { 0 }
     }
 
-    /// Whether the list of what can be started is showing.
-    fn listing(&self) -> bool {
-        self.active.is_none() && self.front == Front::Session
+    /// Whether the list of what can be started is showing. With nothing running, it's what
+    /// the pane has to show.
+    pub fn listing(&self) -> bool {
+        self.front == Front::Agents || (self.active.is_none() && self.front == Front::Session)
     }
 
-    fn new_width(&self) -> u16 {
-        if self.listing() {
-            AGENTS_WIDTH
-        } else {
-            NEW_WIDTH
-        }
+    /// Brings the list of agents forward, in a tab that stays until it's closed or used.
+    pub fn show_list(&mut self) {
+        self.agents_tab = true;
+        self.front = Front::Agents;
+        self.focused = false;
     }
 
     /// The views with a tab just now, in order, each with its name and width.
     fn views(&self) -> Vec<(Front, &'static str, u16)> {
         let mut views = Vec::new();
+        if self.agents_tab || self.listing() {
+            views.push((Front::Agents, "Agents", AGENTS_WIDTH));
+        }
         if self.pdf.is_some() {
             views.push((Front::Pdf, "PDF", PDF_WIDTH));
         }
@@ -1038,6 +1079,11 @@ impl Dock {
     }
 
     #[cfg(test)]
+    pub fn new_button_for_test(&self, area: Rect) -> u16 {
+        self.tabs(area).last().map_or(self.first_tab(area), |t| t.1)
+    }
+
+    #[cfg(test)]
     pub fn view_tabs_for_test(&self, area: Rect) -> Vec<(Front, &'static str, Rect)> {
         self.view_tabs(area)
     }
@@ -1050,6 +1096,7 @@ impl Dock {
 
     /// Takes a view's tab away, and what it shows.
     pub fn close_view(&mut self, view: Front) {
+        let showing = self.front == view || (view == Front::Agents && self.listing());
         match view {
             Front::Pdf => {
                 self.pdf = None;
@@ -1057,9 +1104,10 @@ impl Dock {
             }
             Front::Log => self.log.clear(),
             Front::Problems => self.problems = false,
+            Front::Agents => self.agents_tab = false,
             Front::Session | Front::Comments => {}
         }
-        if self.front == view {
+        if showing {
             self.front = if self.active.is_some() {
                 Front::Session
             } else {
@@ -1117,10 +1165,18 @@ impl Dock {
     /// Each tab as (start, end) columns.
     fn tabs(&self, area: Rect) -> Vec<(u16, u16)> {
         let mut x = self.first_tab(area);
+        let full = |s: &Session| s.name.chars().count() as u16 + TAB_PADDING * 2 + CLOSE_WIDTH;
+        let wanted = self.sessions.iter().map(full).sum::<u16>();
+        let room = self.tabs_end.get().saturating_sub(x + NEW_WIDTH);
+        // Out of room, they share what there is, so none falls off the end.
+        let share = (self.tabs_end.get() > 0 && wanted > room).then(|| {
+            let each = room / self.sessions.len().max(1) as u16;
+            each.max(SMALLEST_TAB)
+        });
         self.sessions
             .iter()
             .map(|s| {
-                let width = s.name.chars().count() as u16 + TAB_PADDING * 2 + CLOSE_WIDTH;
+                let width = share.map_or(full(s), |each| each.min(full(s)));
                 let tab = (x, x + width);
                 x += width;
                 tab
@@ -1157,7 +1213,7 @@ impl Dock {
             }
         }
         let end = tabs.last().map_or(self.first_tab(area), |t| t.1);
-        (x >= end && x < end + self.new_width()).then_some(TabHit::New)
+        (x >= end && x < end + NEW_WIDTH).then_some(TabHit::New)
     }
 
     /// The title row, in the frame's colour, with tabs like the editor's.
@@ -1167,7 +1223,7 @@ impl Dock {
         grid.fill(row, theme.tab);
         let comments = Rect::new(area.x + 1, area.y, self.comments_width(), 1);
         for (view, name, tab) in self.view_tabs(area) {
-            let on = self.front == view;
+            let on = self.front == view || (view == Front::Agents && self.listing());
             let hovered = hover.is_some_and(|h| tab.contains(h.0, h.1));
             if on {
                 grid.fill(tab, theme.sidebar);
@@ -1261,12 +1317,9 @@ impl Dock {
             }
         }
         let plus = self.tabs(area).last().map_or(self.first_tab(area), |t| t.1);
-        let button = Rect::new(plus, area.y, self.new_width(), 1);
+        let button = Rect::new(plus, area.y, NEW_WIDTH, 1);
         let on_it = hover.is_some_and(|h| button.contains(h.0, h.1));
-        let listing = self.listing();
-        if listing {
-            grid.fill(button, theme.sidebar);
-        } else if on_it {
+        if on_it {
             grid.panel(
                 Bounds::inset(button, 0.1, 0.1),
                 16,
@@ -1275,16 +1328,14 @@ impl Dock {
             );
         }
         let style = Style {
-            fg: if listing || on_it {
+            fg: if on_it {
                 theme.text.fg
             } else {
                 theme.gutter.fg
             },
-            bold: listing,
             ..theme.tab
         };
-        let name = if listing { "Agents" } else { "+" };
-        grid.label(plus + 1, area.y, name, style, area.right());
+        grid.label(plus + 1, area.y, "+", style, area.right());
         // Drawn last, over any tabs that reach this far, so it can always be found.
         let hide = Rect::new(
             area.right().saturating_sub(HIDE_WIDTH),
@@ -1318,6 +1369,91 @@ impl Dock {
 mod tests {
     use super::*;
     use cellix_input::Mods;
+    use cellix_render::UNIT;
+
+    /// Runs something that writes `stream`, and waits for `count` pictures to arrive.
+    fn pictures_from(stream: &[u8], count: usize) -> (tempfile::TempDir, Session) {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("stream");
+        std::fs::write(&file, stream).unwrap();
+        let script = format!("cat '{}'; sleep 5", file.display());
+        let argv = ["sh".to_string(), "-c".to_string(), script];
+        let mut session =
+            Session::start("Test", &argv, &[], dir.path(), (80, 24), (10, 20)).unwrap();
+        let theme = Theme::named(Some("light"));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while session.pictures.len() < count {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the pictures never came"
+            );
+            session.poll(&theme);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        (dir, session)
+    }
+
+    /// A one pixel picture, as a program sends it.
+    fn pixel(control: &str) -> Vec<u8> {
+        format!("\x1b_Ga=T,f=24,s=1,v=1,C=1,q=2,{control};AQID\x1b\\").into_bytes()
+    }
+
+    #[test]
+    fn a_picture_inside_a_synchronized_update_lands_where_the_update_moved_to() {
+        let mut stream = b"\x1b[?2026h\x1b[3;5H".to_vec();
+        stream.extend(pixel("i=1"));
+        stream.extend(b"\x1b[7;9H");
+        stream.extend(pixel("i=2"));
+        stream.extend(b"\x1b[?2026l");
+        let (_dir, session) = pictures_from(&stream, 2);
+        let spots: Vec<_> = session
+            .pictures
+            .iter()
+            .map(|p| (p.line, p.column))
+            .collect();
+        assert_eq!(spots, [(2, 4), (6, 8)]);
+    }
+
+    #[test]
+    fn pictures_stand_in_their_cells_and_draw_in_their_layers() {
+        let mut stream = b"\x1b[3;5H".to_vec();
+        stream.extend(pixel("i=1,z=5,X=5,Y=10"));
+        stream.extend(pixel("i=2,z=1"));
+        let (_dir, session) = pictures_from(&stream, 2);
+        let theme = Theme::named(Some("light"));
+        let mut grid = Grid::new(80, 24, theme.text);
+        session.draw_pictures(&mut grid, Rect::new(0, 0, 80, 24), &theme);
+        let places: Vec<(f32, f32)> = grid
+            .paint
+            .iter()
+            .filter_map(|p| match p {
+                Paint::Image { bounds, .. } => Some(bounds),
+                _ => None,
+            })
+            .map(|b| (b.x as f32 / UNIT as f32, b.y as f32 / UNIT as f32))
+            .collect();
+        assert_eq!(
+            places,
+            [(4.0, 2.0), (4.5, 2.5)],
+            "the lower layer goes first"
+        );
+    }
+
+    #[test]
+    fn taking_one_placement_away_leaves_the_rest() {
+        let mut stream = pixel("i=1,p=1");
+        stream.extend(pixel("i=1,p=2"));
+        stream.extend(pixel("i=2,p=1"));
+        stream.extend(b"\x1b_Ga=d,d=i,i=1,p=2,q=2\x1b\\");
+        stream.extend(pixel("i=3"));
+        let (_dir, session) = pictures_from(&stream, 3);
+        let left: Vec<_> = session
+            .pictures
+            .iter()
+            .map(|p| (p.image, p.placement))
+            .collect();
+        assert_eq!(left, [(1, 1), (2, 1), (3, 0)]);
+    }
 
     #[test]
     fn a_program_is_told_the_real_background() {

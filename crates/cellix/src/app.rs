@@ -68,18 +68,37 @@ const WELCOME_WIDTH: u16 = 44;
 const WELCOME_LEAD_ROWS: u16 = 4;
 const WELCOME_MIN_HEIGHT: u16 = 16;
 /// Activity bar buttons, with what each one runs.
-const ACTIVITY: [(Icon, Command); 6] = [
+const ACTIVITY: [(Icon, Command); 5] = [
     (Icon::Files, Command::ToggleSidebar),
     (Icon::Search, Command::FindInProject),
     (Icon::Outline, Command::ShowOutline),
     (Icon::Git, Command::ShowSourceControl),
-    (Icon::Agents, Command::ShowAgents),
     (Icon::Settings, Command::OpenSettings),
 ];
 /// Cells each activity icon spans.
 const ACTIVITY_ICON: (u8, u8) = (3, 2);
 /// Rows from one activity icon to the next.
 const ACTIVITY_STEP: u16 = 3;
+/// What's in reach at the top right, as in a desktop app, whatever the pane is showing.
+const PANE_ACTIONS: [(Icon, Command, &str); 5] = [
+    (Icon::Comment, Command::ShowComments, "Comments"),
+    (Icon::Terminal, Command::ToggleTerminal, "Terminal (Ctrl+J)"),
+    (Icon::Diff, Command::OpenDiff, "Review Changes (Ctrl+G)"),
+    (Icon::Globe, Command::ShowBrowser, "Browser"),
+    (Icon::Agents, Command::ListAgents, "Agents"),
+];
+/// Columns each of those takes.
+const ACTION_WIDTH: u16 = 4;
+/// Where the pane's own close button stands, which they keep clear of.
+const PANE_CLOSE: u16 = 3;
+/// How wide the pane must be to hold them and still have room for its tabs. Narrower, they
+/// stand at the end of the file's tabs.
+const PANE_HOLDS_ACTIONS: u16 = 50;
+/// Columns kept for tabs beside them.
+const TABS_ROOM: u16 = 24;
+/// Rows the window needs before the pane can stand under the file, and its share of them.
+const STACK_HEIGHT: u16 = 16;
+const STACK_SHARE: u16 = 45;
 const APPROVE: &str = "[Approve]";
 const FIND_WIDTH: u16 = 46;
 const CONFIRM_WIDTH: u16 = 56;
@@ -111,14 +130,7 @@ const TOOLTIP_HEIGHT: f32 = 1.22;
 const TOOLTIP_SIZE: u8 = 92;
 /// What each button is called, in order, since they're only icons and marks.
 const FIND_NAMES: [&str; 3] = ["Previous match", "Next match", "Close"];
-const RAIL_NAMES: [&str; 6] = [
-    "Files",
-    "Search",
-    "Outline",
-    "Source Control",
-    "Agents",
-    "Settings",
-];
+const RAIL_NAMES: [&str; 5] = ["Files", "Search", "Outline", "Source Control", "Settings"];
 /// Below this width, opening the side pane puts the sidebar away.
 const CROWDED_WIDTH: u16 = 120;
 const SIDEBAR_WIDTH: u16 = 28;
@@ -2329,19 +2341,147 @@ impl App {
 
     fn main_area(&self) -> Rect {
         let x = self.main_left();
-        let beside = self.dock_area().map_or(0, |a| a.w);
-        Rect::new(
-            x,
-            0,
-            self.size.0.saturating_sub(x + beside),
-            self.size.1.saturating_sub(1),
-        )
+        let height = self.size.1.saturating_sub(1);
+        match self.dock_area() {
+            Some(dock) if self.dock_under() => {
+                Rect::new(x, 0, self.size.0.saturating_sub(x), dock.y)
+            }
+            dock => Rect::new(
+                x,
+                0,
+                self.size.0.saturating_sub(x + dock.map_or(0, |a| a.w)),
+                height,
+            ),
+        }
+    }
+
+    /// Whether the pane stands under the file, for a window too narrow to have them side by
+    /// side, as when it's sharing a terminal with an agent. A short one has no room for that
+    /// either, so there the pane takes the window.
+    fn dock_under(&self) -> bool {
+        let room = self.size.0.saturating_sub(self.main_left());
+        self.dock.too_narrow(room) && self.size.1 > STACK_HEIGHT
     }
 
     fn tabs_area(&self) -> Rect {
         let main = self.main_area();
         let inset = if self.compact() { MENU_BUTTON } else { 0 };
-        Rect::new(main.x + inset, main.y, main.w.saturating_sub(inset), 1)
+        let actions = self.pane_actions();
+        let shared = actions.first().filter(|(cell, ..)| cell.x < main.right());
+        let end = shared.map_or(main.right(), |(cell, ..)| cell.x);
+        let width = end.saturating_sub(main.x + inset);
+        Rect::new(main.x + inset, main.y, width, 1)
+    }
+
+    /// The icons at the top right, each with where it stands.
+    fn pane_actions(&self) -> Vec<(Rect, Icon, Command, &'static str)> {
+        let main = self.main_area();
+        let pane = self
+            .dock_area()
+            .filter(|pane| !self.dock_under() && pane.w >= PANE_HOLDS_ACTIONS);
+        let (left, end) = pane.map_or((main.x, main.right()), |pane| {
+            (pane.x, pane.right() - PANE_CLOSE)
+        });
+        let start = end.checked_sub(ACTION_WIDTH * PANE_ACTIONS.len() as u16);
+        let Some(start) = start.filter(|x| *x >= left + TABS_ROOM) else {
+            return Vec::new();
+        };
+        let cell = |i: usize| Rect::new(start + ACTION_WIDTH * i as u16, 0, ACTION_WIDTH, 1);
+        let actions = PANE_ACTIONS.iter().enumerate();
+        actions
+            .map(|(i, (icon, command, name))| (cell(i), *icon, *command, *name))
+            .collect()
+    }
+
+    fn action_at(&self, x: u16, y: u16) -> Option<Command> {
+        let actions = self.pane_actions();
+        let found = actions.into_iter().find(|(cell, ..)| cell.contains(x, y));
+        found.map(|(_, _, command, _)| command)
+    }
+
+    /// Whether what an icon stands for is showing.
+    fn action_on(&self, command: Command) -> bool {
+        let session = self
+            .dock
+            .session()
+            .filter(|_| self.dock.showing(Front::Session));
+        match command {
+            Command::ShowComments => self.dock.showing(Front::Comments),
+            Command::ToggleTerminal => session.is_some_and(|s| s.shell),
+            Command::OpenDiff => self.review.is_some(),
+            Command::ShowBrowser => session.is_some_and(|s| s.browser),
+            Command::ListAgents => self.dock.showing(Front::Agents),
+            _ => false,
+        }
+    }
+
+    fn draw_pane_actions(&self, grid: &mut Grid) {
+        let theme = &self.theme;
+        for (cell, icon, command, _) in self.pane_actions() {
+            let hovered = self.hover.is_some_and(|h| cell.contains(h.0, h.1));
+            let on = self.action_on(command);
+            grid.fill(cell, theme.tab);
+            if on || hovered {
+                let fill = if on { theme.pick } else { theme.row_hover };
+                grid.panel(Bounds::inset(cell, 0.1, 0.08), 16, Some(fill), None);
+            }
+            let color = if on || hovered {
+                theme.text.fg
+            } else {
+                theme.status.fg
+            };
+            toolbar::draw_icon(grid, icon, cell, color, theme.tab);
+            if command == Command::ListAgents && self.agents.needing_you() > 0 {
+                let dot = Bounds::cells(cell.right() as f32 - 1.2, 0.1, 0.8, 0.4);
+                grid.panel(dot, 22, Some(theme.attention), None);
+            }
+        }
+    }
+
+    /// Columns of the file's row the icons stand in.
+    fn actions_over_main(&self) -> u16 {
+        let main = self.main_area();
+        let actions = self.pane_actions();
+        let first = actions.first().filter(|(cell, ..)| cell.x < main.right());
+        first.map_or(0, |(cell, ..)| main.right() - cell.x)
+    }
+
+    /// Brings up the terminal, or starts one. Pressed again, it takes the keyboard, and then
+    /// puts itself away, as VS Code's does.
+    fn toggle_terminal(&mut self) {
+        let shell = self.dock.sessions.iter().position(|s| s.shell && !s.exited);
+        let Some(index) = shell else {
+            self.open_agent(crate::agents::SHELL.1);
+            return;
+        };
+        let showing = self.dock.showing(Front::Session) && self.dock.active == Some(index);
+        if showing && self.dock.focused {
+            self.dock.open = false;
+            self.dock.focused = false;
+            return;
+        }
+        self.dock.active = Some(index);
+        self.dock.open = true;
+        self.dock.front = Front::Session;
+        self.dock.focused = true;
+    }
+
+    /// Brings up the pane's browser, on the page in view if it hasn't got one yet.
+    fn show_browser(&mut self) {
+        let browser = self.dock.sessions.iter().position(|s| s.browser);
+        let showing = self.dock.showing(Front::Session) && self.dock.active == browser;
+        match browser {
+            Some(_) if showing => self.run(Command::CloseDock),
+            Some(index) => {
+                self.dock.active = Some(index);
+                self.dock.open = true;
+                self.dock.front = Front::Session;
+                self.dock.focused = true;
+            }
+            None if self.browser_target().is_some() => self.open_in_browser(),
+            None if self.open_in_pane("about:blank") => {}
+            None => self.say("There's no browser that can run in the pane here"),
+        }
     }
 
     /// Rows above the code: tabs, and breadcrumbs when there's room for them.
@@ -2472,6 +2612,10 @@ impl App {
     fn tick(&mut self) {
         if let Some(view) = &mut self.dock.pdf {
             view.refresh();
+        }
+        // The pane opens from many places, and this list mustn't depend on which.
+        if self.dock.open && self.dock.listing() && !self.agents.looked() {
+            self.refresh_agents();
         }
         let mut note = None;
         let mut reloaded = Vec::new();
@@ -2885,8 +3029,9 @@ impl App {
         }
         if self.dock.focused && matches!(self.overlay, Overlay::None) {
             // The session gets everything but what moves away from it.
+            let command = simple_keymap(key);
             let leaves = matches!(
-                simple_keymap(key),
+                command,
                 Some(
                     Command::FocusAgent
                         | Command::CloseDock
@@ -2894,6 +3039,9 @@ impl App {
                         | Command::Quit
                 )
             );
+            // Agents take Ctrl+J for a new line, so it's only ever the terminal's own.
+            let shell = self.dock.session().is_some_and(|s| s.shell);
+            let leaves = leaves || (shell && command == Some(Command::ToggleTerminal));
             if !leaves {
                 if let Some(session) = self.dock.session_mut() {
                     session.key(key);
@@ -3827,6 +3975,25 @@ impl App {
                 }
             }
             Command::ShowAgents => self.toggle_dock(),
+            Command::ToggleTerminal => self.toggle_terminal(),
+            Command::NewTerminal => self.open_agent(crate::agents::SHELL.1),
+            Command::ShowBrowser => self.show_browser(),
+            Command::ShowComments if self.dock.showing(Front::Comments) => {
+                self.run(Command::CloseDock);
+            }
+            Command::ShowComments => {
+                self.dock.open = true;
+                self.dock.front = Front::Comments;
+                self.dock.focused = false;
+            }
+            Command::ListAgents if self.dock.showing(Front::Agents) => {
+                self.run(Command::CloseDock);
+            }
+            Command::ListAgents => {
+                self.dock.open = true;
+                self.refresh_agents();
+                self.dock.show_list();
+            }
             // Hiding stops nothing: what runs here keeps running, and the pane comes back.
             Command::CloseDock => {
                 self.dock.open = false;
@@ -4133,6 +4300,11 @@ impl App {
     fn dock_area(&self) -> Option<Rect> {
         let left = self.main_left();
         let height = self.size.1.saturating_sub(1);
+        if self.dock_under() {
+            let rows = height * STACK_SHARE / 100;
+            let room = self.size.0.saturating_sub(left);
+            return Some(Rect::new(left, height - rows, room, rows));
+        }
         let width = self.dock.width_in(self.size.0.saturating_sub(left));
         (width > 0).then(|| Rect::new(self.size.0 - width, 0, width, height))
     }
@@ -4203,6 +4375,7 @@ impl App {
                 self.dock.active = Some(self.dock.sessions.len() - 1);
                 self.dock.focused = true;
                 self.dock.front = Front::Session;
+                self.dock.agents_tab = false;
                 if name != BROWSER {
                     self.explain_pane(name);
                 }
@@ -4278,10 +4451,33 @@ impl App {
         self.dock.open = !self.dock.open;
         self.dock.focused = self.dock.open && self.dock.session().is_some();
         if self.dock.open {
-            self.agents.worktrees = worktrees(self.workspace.root());
-            self.agents.look_for_agents();
-            self.agents.scan(self.workspace.root());
+            self.refresh_agents();
         }
+    }
+
+    /// Finds out what can be started and what's running.
+    fn refresh_agents(&mut self) {
+        self.agents.worktrees = worktrees(self.workspace.root());
+        self.agents.look_for_agents();
+        self.agents.scan(self.workspace.root());
+    }
+
+    /// Asks to close a tab of the pane, checking first if that would stop something.
+    fn close_session_tab(&mut self, index: usize) {
+        if !self.dock.sessions[index].busy() {
+            self.dock.close(index);
+            return;
+        }
+        let name = self.dock.sessions[index].name.clone();
+        self.overlay = Overlay::Confirm(Confirm {
+            title: format!("Stop {name}?"),
+            detail: "What it's doing will stop.".to_string(),
+            buttons: vec![
+                ("Cancel", Choice::Cancel),
+                ("Stop", Choice::CloseSession(index)),
+            ],
+            selected: 0,
+        });
     }
 
     /// Everything the pane does with the pointer. Returns true if it took the event.
@@ -4308,7 +4504,7 @@ impl App {
             return true;
         }
         // The line between the two sides is easy to miss, so the column before it counts.
-        let on_edge = x == area.x || x + 1 == area.x;
+        let on_edge = (x == area.x || x + 1 == area.x) && !self.dock_under();
         if on_edge && y > area.y && y < area.bottom() && mouse.kind == MouseKind::Left {
             self.drag = Drag::Dock;
             return true;
@@ -4320,6 +4516,17 @@ impl App {
             return false;
         }
         if y == area.y {
+            if mouse.kind == MouseKind::Middle {
+                match self.dock.hit(area, x) {
+                    Some(TabHit::Tab(index) | TabHit::Close(index)) => {
+                        self.close_session_tab(index);
+                    }
+                    Some(TabHit::View(view) | TabHit::CloseView(view)) => {
+                        self.dock.close_view(view);
+                    }
+                    _ => {}
+                }
+            }
             if mouse.kind == MouseKind::Left {
                 match self.dock.hit(area, x) {
                     Some(TabHit::Hide) => self.run(Command::CloseDock),
@@ -4328,23 +4535,10 @@ impl App {
                         self.dock.focused = true;
                         self.dock.front = Front::Session;
                     }
-                    Some(TabHit::Close(index)) if self.dock.sessions[index].busy() => {
-                        let name = self.dock.sessions[index].name.clone();
-                        self.overlay = Overlay::Confirm(Confirm {
-                            title: format!("Stop {name}?"),
-                            detail: "What it's doing will stop.".to_string(),
-                            buttons: vec![
-                                ("Cancel", Choice::Cancel),
-                                ("Stop", Choice::CloseSession(index)),
-                            ],
-                            selected: 0,
-                        });
-                    }
-                    Some(TabHit::Close(index)) => self.dock.close(index),
-                    Some(TabHit::New) => {
-                        self.dock.active = None;
-                        self.dock.focused = false;
-                        self.dock.front = Front::Session;
+                    Some(TabHit::Close(index)) => self.close_session_tab(index),
+                    Some(TabHit::New | TabHit::View(Front::Agents)) => {
+                        self.refresh_agents();
+                        self.dock.show_list();
                     }
                     Some(TabHit::Comments) => {
                         self.dock.front = Front::Comments;
@@ -4425,7 +4619,7 @@ impl App {
             }
             return true;
         }
-        if self.dock.session().is_none() {
+        if self.dock.listing() {
             if mouse.kind == MouseKind::Left {
                 let screen = self.dock_screen().unwrap_or(area);
                 match self.agents.hit(screen, y) {
@@ -4543,11 +4737,19 @@ impl App {
         );
         let threads = self.open_threads();
         self.dock.comment_count.set(threads.len());
+        let actions = self.pane_actions();
+        let held = actions
+            .first()
+            .filter(|(cell, ..)| cell.x >= area.x && area.y == 0);
+        let end = held.map_or(area.right().saturating_sub(PANE_CLOSE), |(cell, ..)| cell.x);
+        self.dock.tabs_end.set(end);
         self.dock.draw_tabs(grid, area, self.hover, theme);
-        grid.hairline(
-            Bounds::cells(area.x as f32, area.y as f32, 0.0, area.h as f32),
-            theme.border,
-        );
+        let line = if self.dock_under() {
+            Bounds::cells(area.x as f32, area.y as f32, area.w as f32, 0.0)
+        } else {
+            Bounds::cells(area.x as f32, area.y as f32, 0.0, area.h as f32)
+        };
+        grid.hairline(line, theme.border);
         if let (Front::Pdf, Some(view)) = (self.dock.front, &self.dock.pdf) {
             view.draw(grid, screen, self.measure.in_cells(), theme);
             return;
@@ -4569,7 +4771,7 @@ impl App {
             threads::draw(grid, panel, shown, top, self.hover, look);
             return;
         }
-        match self.dock.session() {
+        match self.dock.session().filter(|_| !self.dock.listing()) {
             Some(session) => {
                 session.draw(grid, screen, theme, self.dock.focused);
                 if session.exited {
@@ -5015,8 +5217,8 @@ impl App {
                     // Nobody to ask yet: it goes to whichever agent starts.
                     _ => {
                         self.pending_ask = Some(id);
-                        self.dock.front = Front::Session;
-                        self.dock.active = None;
+                        self.refresh_agents();
+                        self.dock.show_list();
                         self.say("Pick an agent, and your comment goes to it when it's ready");
                     }
                 }
@@ -5397,6 +5599,12 @@ impl App {
             return;
         }
         if mouse.kind == MouseKind::Left && self.click_offer(mouse.x, mouse.y) {
+            return;
+        }
+        if mouse.kind == MouseKind::Left
+            && let Some(command) = self.action_at(mouse.x, mouse.y)
+        {
+            self.run(command);
             return;
         }
         if mouse.x != u16::MAX && self.dock_mouse(mouse) {
@@ -6509,6 +6717,7 @@ impl App {
         }
         if let Some(review) = &self.review {
             let comments = self.comments.lock().map(|c| c.clone()).unwrap_or_default();
+            review.title_room.set(self.actions_over_main());
             review.draw(grid, self.main_area(), self.hover, theme, &comments);
             self.draw_status(grid);
             self.draw_overlay(grid);
@@ -6565,6 +6774,7 @@ impl App {
         self.draw_status(grid);
         self.draw_suggest(grid);
         self.draw_offer(grid);
+        self.draw_pane_actions(grid);
         self.draw_overlay(grid);
         self.draw_tooltip(grid);
     }
@@ -6592,6 +6802,15 @@ impl App {
                 name.map(|name| {
                     let left = area.right() as f32 - wide(name);
                     (*name, left, area.y as f32 + 2.5)
+                })
+            }
+            Overlay::None if self.action_at(x, y).is_some() => {
+                let actions = self.pane_actions();
+                let found = actions.iter().find(|(cell, ..)| cell.contains(x, y));
+                found.map(|(cell, _, _, name)| {
+                    let middle = cell.x as f32 + cell.w as f32 / 2.0;
+                    let left = middle - wide(name) / 2.0;
+                    (*name, left.min(self.size.0 as f32 - wide(name) - 0.5), 1.2)
                 })
             }
             Overlay::None
@@ -6764,7 +6983,6 @@ impl App {
                 Command::ShowSourceControl => {
                     self.show_sidebar && self.sidebar_view == SidebarView::Source
                 }
-                Command::ShowAgents => self.dock.open,
                 Command::OpenDiff => self.review.is_some(),
                 Command::OpenSettings => self.settings_page.is_some(),
                 _ => false,
@@ -6834,10 +7052,6 @@ impl App {
                     (color, false),
                     font,
                 );
-            }
-            if *command == Command::ShowAgents && self.agents.needing_you() > 0 {
-                let dot = Bounds::cells(area.x as f32 + 3.0, y as f32 + 0.1, 0.8, 0.4);
-                grid.panel(dot, 22, Some(self.theme.attention), None);
             }
         }
     }
@@ -7732,6 +7946,7 @@ impl App {
         if !has_agent {
             rows.push(("Start an Agent", None, Command::ShowAgents));
         }
+        rows.push(("Open a Terminal", Some("Ctrl+J"), Command::ToggleTerminal));
         rows.extend([
             ("Review Changes", Some("Ctrl+G"), Command::OpenDiff),
             (
@@ -12139,6 +12354,286 @@ mod tests {
         assert!(text.contains("sees this with its next prompt"), "{text}");
     }
 
+    /// Runs a shell in the pane, with the keyboard left on the file.
+    fn with_a_shell(app: &mut App) {
+        let sh = ["sh".to_string()];
+        let root = app.workspace.root().to_path_buf();
+        app.start_session(crate::agents::SHELL.0, &sh, &[], &root);
+        app.dock.focused = false;
+    }
+
+    /// Clicks an icon at the top right.
+    fn press_action(app: &mut App, wanted: Command) {
+        let actions = app.pane_actions();
+        let found = actions.iter().find(|(_, _, command, _)| *command == wanted);
+        let (cell, ..) = found.expect("the icon is there");
+        app.handle(mouse(MouseKind::Left, cell.x + 1, cell.y));
+    }
+
+    fn ctrl_j(app: &mut App) {
+        app.handle(Event::Key(KeyEvent {
+            key: Key::Char('j'),
+            mods: Mods {
+                ctrl: true,
+                ..Mods::default()
+            },
+        }));
+    }
+
+    #[test]
+    fn the_icons_at_the_top_right_are_there_with_the_pane_shut() {
+        let (_dir, mut app) = project();
+        assert!(!app.dock.open);
+        let right = app.size.0;
+        assert_eq!(app.pane_actions().last().unwrap().0.right(), right);
+        assert!(
+            app.tabs_area().right() <= app.pane_actions()[0].0.x,
+            "tabs stop short"
+        );
+        press_action(&mut app, Command::ShowComments);
+        assert!(app.dock.showing(Front::Comments));
+        press_action(&mut app, Command::ShowComments);
+        assert!(!app.dock.open);
+    }
+
+    #[test]
+    fn the_rail_has_no_agents_icon_and_the_strip_shows_when_one_needs_you() {
+        assert!(ACTIVITY.iter().all(|(icon, _)| *icon != Icon::Agents));
+        let names = PANE_ACTIONS.iter().map(|(icon, ..)| *icon);
+        assert!(names.collect::<Vec<_>>().contains(&Icon::Agents));
+    }
+
+    #[test]
+    fn a_narrow_pane_leaves_the_icons_at_the_end_of_the_files_tabs() {
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (110, 30));
+        app.run(Command::ListAgents);
+        let pane = app.dock_area().unwrap();
+        assert!(pane.w < PANE_HOLDS_ACTIONS);
+        assert_eq!(app.pane_actions().last().unwrap().0.right(), pane.x);
+    }
+
+    #[test]
+    fn a_review_keeps_its_buttons_clear_of_the_icons() {
+        let (_dir, mut app) = reviewed();
+        app.run(Command::OpenDiff);
+        let _ = screen(&app);
+        assert_eq!(
+            app.actions_over_main(),
+            ACTION_WIDTH * PANE_ACTIONS.len() as u16
+        );
+    }
+
+    #[test]
+    fn tabs_in_the_pane_share_the_row_with_the_icons() {
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (170, 40));
+        let root = app.workspace.root().to_path_buf();
+        let cat = ["cat".to_string()];
+        for name in ["Claude Code", "Codex", "Gemini CLI", "Another Agent"] {
+            app.start_session(name, &cat, &[], &root);
+        }
+        let _ = screen(&app);
+        let area = app.dock_area().unwrap();
+        let first = app.pane_actions()[0].0.x;
+        assert!(first > area.x, "the icons are in the pane's row");
+        assert!(
+            app.dock.new_button_for_test(area) < first,
+            "nothing falls under them"
+        );
+    }
+
+    #[test]
+    fn a_tiny_window_goes_without_the_icons() {
+        let (dir, _) = project();
+        let app = App::new(dir.path().to_path_buf(), (40, 30));
+        assert!(app.pane_actions().is_empty());
+    }
+
+    #[test]
+    fn the_icons_stand_clear_of_the_panes_close_button() {
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (170, 40));
+        app.run(Command::ListAgents);
+        let area = app.dock_area().unwrap();
+        assert_eq!(
+            app.pane_actions().last().unwrap().0.right(),
+            area.right() - PANE_CLOSE
+        );
+        app.handle(mouse(MouseKind::Left, area.right() - 2, area.y));
+        assert!(!app.dock.open, "the close button still closes");
+    }
+
+    #[test]
+    fn the_terminal_icon_starts_one_and_then_finds_it() {
+        let (_dir, mut app) = project();
+        press_action(&mut app, Command::ToggleTerminal);
+        assert_eq!(app.dock.sessions.len(), 1);
+        assert!(app.dock.session().unwrap().shell && app.dock.focused);
+        app.dock.focused = false;
+        app.dock.front = Front::Comments;
+        press_action(&mut app, Command::ToggleTerminal);
+        assert_eq!(app.dock.sessions.len(), 1, "it doesn't start a second");
+        assert!(app.dock.showing(Front::Session) && app.dock.focused);
+        assert!(app.action_on(Command::ToggleTerminal));
+    }
+
+    #[test]
+    fn ctrl_j_brings_a_terminal_up_and_puts_it_away() {
+        let (_dir, mut app) = project();
+        ctrl_j(&mut app);
+        assert!(app.dock.open && app.dock.focused);
+        ctrl_j(&mut app);
+        assert!(!app.dock.open, "typing in the terminal didn't swallow it");
+        ctrl_j(&mut app);
+        assert!(app.dock.open);
+        assert_eq!(app.dock.sessions.len(), 1, "the same terminal comes back");
+    }
+
+    #[test]
+    fn ctrl_j_stays_a_new_line_for_an_agent() {
+        let (_dir, mut app) = project();
+        let cat = ["cat".to_string()];
+        let root = app.workspace.root().to_path_buf();
+        app.start_session("Claude Code", &cat, &[], &root);
+        ctrl_j(&mut app);
+        assert!(app.dock.focused && app.dock.open);
+        assert_eq!(app.dock.sessions.len(), 1);
+    }
+
+    #[test]
+    fn the_palette_reaches_the_terminal() {
+        let names = crate::palette::COMMANDS.iter().map(|(name, _)| *name);
+        let names: Vec<&str> = names.collect();
+        assert!(names.contains(&"Toggle Terminal") && names.contains(&"New Terminal"));
+    }
+
+    #[test]
+    fn an_empty_window_offers_a_terminal() {
+        let (_dir, app) = project();
+        assert!(screen(&app).text().contains("Open a Terminal"));
+    }
+
+    #[test]
+    fn a_narrow_window_puts_the_pane_under_the_file() {
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (70, 40));
+        app.show_sidebar = false;
+        app.run(Command::ListAgents);
+        let (main, pane) = (app.main_area(), app.dock_area().unwrap());
+        assert_eq!(main.bottom(), pane.y, "one under the other");
+        assert_eq!((main.w, pane.w), (pane.w, main.w), "both take the width");
+        assert_eq!(pane.right(), 70);
+        assert_eq!(pane.bottom(), 39, "down to the status bar");
+        assert!(screen(&app).text().contains("START AN AGENT"));
+    }
+
+    #[test]
+    fn a_session_under_the_file_is_told_its_real_size() {
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (70, 40));
+        app.show_sidebar = false;
+        with_a_shell(&mut app);
+        let screen = app.dock_screen().unwrap();
+        assert!(screen.h < 20 && screen.w > 60, "{screen:?}");
+    }
+
+    #[test]
+    fn a_short_narrow_window_gives_the_pane_all_of_it() {
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (70, 14));
+        app.show_sidebar = false;
+        app.run(Command::ListAgents);
+        assert_eq!(app.dock_area().unwrap().y, 0);
+    }
+
+    #[test]
+    fn a_wide_window_keeps_the_pane_beside_the_file() {
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        app.run(Command::ListAgents);
+        let (main, pane) = (app.main_area(), app.dock_area().unwrap());
+        assert_eq!((pane.y, main.right()), (0, pane.x));
+    }
+
+    #[test]
+    fn the_plus_lists_what_can_start_however_the_pane_opened() {
+        let (_dir, mut app) = project();
+        app.dock.open = true;
+        app.dock.front = Front::Comments;
+        let area = app.dock_area().unwrap();
+        let plus = app.dock.new_button_for_test(area);
+        app.handle(mouse(MouseKind::Left, plus, area.y));
+        assert!(app.dock.listing());
+        assert!(screen(&app).text().contains("START AN AGENT"));
+    }
+
+    #[test]
+    fn the_agents_list_is_a_tab_that_stays() {
+        let (_dir, mut app) = project();
+        with_a_shell(&mut app);
+        let area = app.dock_area().unwrap();
+        let plus = app.dock.new_button_for_test(area);
+        app.handle(mouse(MouseKind::Left, plus, area.y));
+        assert!(
+            app.dock.session().is_some(),
+            "the shell keeps running behind it"
+        );
+        let tabs = app.dock.view_tabs_for_test(area);
+        assert_eq!(tabs[0].0, Front::Agents);
+        let agents = tabs[0].2;
+        let (x, _) = find(&screen(&app), "Comments");
+        app.handle(mouse(MouseKind::Left, x, area.y));
+        assert_eq!(app.dock.front, Front::Comments);
+        assert!(
+            screen(&app).row_text(area.y).contains("Agents"),
+            "it's still there"
+        );
+        app.handle(mouse(MouseKind::Left, agents.x + 1, area.y));
+        assert!(app.dock.listing());
+        assert!(screen(&app).text().contains("START AN AGENT"));
+        app.handle(mouse(MouseKind::Left, agents.right() - 2, area.y));
+        assert!(!app.dock.agents_tab);
+        assert_eq!(app.dock.front, Front::Session);
+    }
+
+    #[test]
+    fn starting_from_the_list_puts_the_agent_in_its_place() {
+        let (_dir, mut app) = project();
+        app.dock.open = true;
+        app.dock.show_list();
+        with_a_shell(&mut app);
+        assert!(!app.dock.agents_tab);
+        assert!(!app.dock.listing());
+    }
+
+    #[test]
+    fn a_middle_click_closes_a_tab_in_the_pane() {
+        let (_dir, mut app) = project();
+        with_a_shell(&mut app);
+        app.dock.problems = true;
+        let area = app.dock_area().unwrap();
+        let (_, _, problems) = app.dock.view_tabs_for_test(area)[0];
+        app.handle(mouse(MouseKind::Middle, problems.x + 1, area.y));
+        assert!(!app.dock.problems);
+        let (x, _) = find(&screen(&app), "Terminal");
+        app.handle(mouse(MouseKind::Middle, x, area.y));
+        assert!(app.dock.sessions.is_empty());
+    }
+
+    #[test]
+    fn a_middle_click_on_a_busy_tab_asks_first() {
+        let (_dir, mut app) = project();
+        let sleeper = ["sleep".to_string(), "30".to_string()];
+        let root = app.workspace.root().to_path_buf();
+        app.start_session("Job", &sleeper, &[], &root);
+        let area = app.dock_area().unwrap();
+        let (x, _) = find(&screen(&app), "Job");
+        app.handle(mouse(MouseKind::Middle, x, area.y));
+        assert_eq!(app.dock.sessions.len(), 1);
+        assert!(screen(&app).text().contains("Stop Job?"));
+    }
+
     #[test]
     fn the_tabs_for_a_pdf_and_a_log_close() {
         let dir = tempfile::tempdir().unwrap();
@@ -13770,7 +14265,11 @@ while True:
     fn the_gear_opens_settings_and_they_apply_at_once() {
         let (_dir, mut app) = project();
         let area = app.activity_area();
-        app.handle(mouse(MouseKind::Left, 2, App::rail_row(5, area)));
+        app.handle(mouse(
+            MouseKind::Left,
+            2,
+            App::rail_row(ACTIVITY.len() - 1, area),
+        ));
         assert!(screen(&app).text().contains("Appearance"));
         let (x, y) = find(&screen(&app), "Light");
         app.handle(mouse(MouseKind::Left, x, y));

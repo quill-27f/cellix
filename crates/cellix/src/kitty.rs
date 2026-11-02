@@ -98,14 +98,26 @@ pub struct Shown {
     pub rows: Option<u16>,
     /// Whether the cursor stays where it was.
     pub cursor_stays: bool,
+    /// Pixels into the cell it starts in, across and down.
+    pub offset: (u16, u16),
+    /// Which pictures it covers: those with lower numbers.
+    pub layer: i32,
+}
+
+/// What a delete command takes away.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Delete {
+    All,
+    Image(u32),
+    /// One place an image is shown. The image stays, to be shown again.
+    Placement(u32, u32),
 }
 
 /// What a command comes to.
 #[derive(Debug, Default)]
 pub struct Outcome {
     pub show: Option<Shown>,
-    /// Pictures to take away: all of them, or those of one image.
-    pub delete: Option<Option<u32>>,
+    pub delete: Option<Delete>,
     /// What to write back to the program.
     pub reply: Option<String>,
 }
@@ -124,6 +136,10 @@ impl Header {
     }
 
     fn number(&self, key: char) -> Option<u32> {
+        self.0.get(&key)?.parse().ok()
+    }
+
+    fn signed(&self, key: char) -> Option<i32> {
         self.0.get(&key)?.parse().ok()
     }
 
@@ -208,16 +224,29 @@ impl Protocol {
                     ..Outcome::default()
                 },
             },
+            // A capital letter frees the image as well as taking it off the screen.
             'd' => {
-                let one = matches!(header.letter('d', 'a'), 'i' | 'I').then_some(image);
-                match one {
-                    Some(id) => {
-                        self.stored.remove(&id);
+                let kind = header.letter('d', 'a');
+                let delete = match kind {
+                    'i' | 'I' => {
+                        if kind == 'I' {
+                            self.stored.remove(&image);
+                        }
+                        let placement = header.number('p').filter(|p| *p > 0);
+                        Some(
+                            placement.map_or(Delete::Image(image), |p| Delete::Placement(image, p)),
+                        )
                     }
-                    None => self.stored.clear(),
-                }
+                    'a' | 'A' => {
+                        if kind == 'A' {
+                            self.stored.clear();
+                        }
+                        Some(Delete::All)
+                    }
+                    _ => None,
+                };
                 Outcome {
-                    delete: Some(one),
+                    delete,
                     ..Outcome::default()
                 }
             }
@@ -235,6 +264,8 @@ fn shown(header: &Header, image: u32, bitmap: Bitmap) -> Shown {
         columns: cells('c').filter(|n| *n > 0),
         rows: cells('r').filter(|n| *n > 0),
         cursor_stays: header.number('C') == Some(1),
+        offset: (cells('X').unwrap_or(0), cells('Y').unwrap_or(0)),
+        layer: header.signed('z').unwrap_or(0),
     }
 }
 
@@ -450,8 +481,30 @@ mod tests {
         protocol.command(&command("a=t,f=24,s=1,v=1,i=4,q=2", &[1, 2, 3]));
         assert!(protocol.command(b"a=p,i=4,q=2").show.is_some());
         let outcome = protocol.command(b"a=d,d=i,i=4");
-        assert_eq!(outcome.delete, Some(Some(4)));
+        assert_eq!(outcome.delete, Some(Delete::Image(4)));
+        assert!(
+            protocol.command(b"a=p,i=4,q=2").show.is_some(),
+            "only a capital frees it"
+        );
+        let outcome = protocol.command(b"a=d,d=I,i=4");
+        assert_eq!(outcome.delete, Some(Delete::Image(4)));
         assert!(protocol.command(b"a=p,i=4,q=2").show.is_none());
+    }
+
+    #[test]
+    fn one_placement_can_go_and_others_arent_touched_by_what_isnt_understood() {
+        let mut protocol = Protocol::default();
+        let outcome = protocol.command(b"a=d,d=i,i=4,p=2,q=2");
+        assert_eq!(outcome.delete, Some(Delete::Placement(4, 2)));
+        assert_eq!(protocol.command(b"a=d,d=z,z=1,q=2").delete, None);
+    }
+
+    #[test]
+    fn a_picture_says_where_in_its_cell_it_starts_and_what_it_covers() {
+        let mut protocol = Protocol::default();
+        let raw = command("a=T,f=24,s=1,v=1,i=1,C=1,X=7,Y=3,z=-2", &[1, 2, 3]);
+        let shown = protocol.command(&raw).show.unwrap();
+        assert_eq!((shown.offset, shown.layer), ((7, 3), -2));
     }
 
     #[test]

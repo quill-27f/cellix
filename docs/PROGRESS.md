@@ -388,3 +388,23 @@ and the tour's review scenes now use Ctrl+G, with two new scenes for the panel.
 
 Unverified: push and pull against a real server with credentials, only a local bare repository was
 tried. Partial staging of lines isn't in the panel; hunks can still be staged from Review.
+
+Later in round seven. The right pane got a set of icons at the top right, like the Claude desktop
+app's: Comments, Terminal, Review, Browser, Agents. They replace the Agents icon on the rail, and
+the agent-needs-you dot moved with it. Ctrl+J brings a terminal up and puts it away, except in an
+agent, where it stays a new line. Middle click closes pane tabs. Agents is now a real tab. Its list
+was only filled when the pane opened through its toggle, so Ask Agent dead-ended on an empty list.
+
+In a window too narrow for side by side, the pane stands under the file. A short window gives it
+everything, and the edge can't be dragged there yet.
+
+The browser was broken only under Ghostty, where it draws in tiles: rectangles at pixel offsets in
+z order. The terminal emulator holds text back during a synchronized update, cursor moves included,
+so every tile landed in one spot. It's flushed before a picture now, and offsets, layers and
+single placements are honoured. `stored_images_show_on_request_and_can_be_deleted` changed: a
+lowercase delete keeps the image, as the protocol says, so the test now uses the capital.
+
+Not reproduced: lag typing a comment after Ask Agent. Frames took under 25 ms in a debug build, with
+one frame per key and less data than typing on the page. Unverified: a real Ghostty for the browser,
+which ran headless with Ghostty's environment set. This commit holds several features, because the
+pane changes touch the same code and verifying each alone wasn't worth the load on this machine.

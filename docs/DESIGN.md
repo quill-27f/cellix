@@ -367,7 +367,9 @@ the file.
   hooks for status, turns, comments and test runs, once the user trusts them with `/hooks`.
 - Gemini CLI: an extension with the same hooks, installed with its own command. Its folder
   trust question isn't covered by `--consent`, and the user's click is the answer to it.
-- The Agents icon opens the side pane. With nothing running, it lists what's running elsewhere,
+- The icons at the top right, as in a desktop app, reach the comments, a terminal, Review, the
+  browser and the agents. The pane stands under the file when the window is too narrow to have
+  them side by side. The Agents icon opens the side pane. With nothing running, it lists what's running elsewhere,
   what can be started and the worktrees.
 - Rebuilding an agent's interface: the side pane shows the real program, so its features arrive with its updates.
 

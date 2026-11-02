@@ -24,6 +24,7 @@ A static Linux binary comes from the `release` workflow, for a server with no Ru
 | Ctrl+P | Go to a file |
 | Ctrl+Shift+P, F1 or Alt+P | Command palette |
 | Ctrl+G | Review changes against HEAD |
+| Ctrl+J | Bring up or put away a terminal in the side pane |
 | Alt+C, or select text | Comment on what's selected |
 | Ctrl+F | Find in the file |
 | Ctrl+Shift+F | Search the project |
@@ -113,7 +114,7 @@ pointer, and a PDF or image in the side pane takes one too. Comments are threads
 kept in `.cellix/threads.json`. Ask Agent sends yours to the agent with its file, line and quote, the
 agent answers with `cellix reply <id> "text"`, and the answer lands under your question.
 
-The Agents icon starts a real agent or a shell in the side pane, beside your file. Press Ctrl+` to
+The icons at the top right start a real agent, a terminal or a browser in the side pane, beside your file. Press Ctrl+` to
 move the keyboard between the two, and the × at the top right, or Ctrl+Shift+`, to hide the pane.
 Hiding stops nothing. What runs there outlives Cellix too: quitting offers Keep Running, a dropped SSH
 connection keeps everything, and the next Cellix in that folder finds it with what it printed.
@@ -155,7 +156,7 @@ cd your-project
 cellix
 ```
 
-Click the Agents icon, or press Ctrl+Shift+P and choose `Open Claude Code`. The real program
+Click the Agents icon at the top right, or press Ctrl+Shift+P and choose `Open Claude Code`. The real program
 opens in a side pane beside your file, already connected to Cellix. Ctrl+` moves the keyboard
 between the two, and the side pane also runs Codex, Gemini CLI or a plain shell.
 
@@ -218,7 +219,7 @@ each update travels as a PNG, so it costs more than the standalone app on a slow
 
 ## Beside an agent
 
-Running Cellix on its own works just as well: the Agents icon opens a side pane, and
+Running Cellix on its own works just as well: the Agents icon at the top right opens a side pane, and
 Claude Code, Codex, Gemini CLI or a shell runs there as the real program.
 
 Set `VISUAL="cellix --wait"` so Ctrl+G in Claude Code opens plans in Cellix. Comments are

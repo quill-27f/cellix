@@ -180,6 +180,16 @@ pub enum Command {
     ShowOutline,
     /// Shows what's changed, to stage and commit, in the sidebar.
     ShowSourceControl,
+    /// Brings a terminal up in the pane, starting one if there is none, or puts it away.
+    ToggleTerminal,
+    /// Starts another terminal in the pane.
+    NewTerminal,
+    /// Brings the comments up in the pane, or puts them away.
+    ShowComments,
+    /// Brings the pane's browser up, or starts one, or puts it away.
+    ShowBrowser,
+    /// Brings the list of agents up in the pane, or puts it away.
+    ListAgents,
     /// Runs the notebook cell the caret is in.
     RunCell,
     /// Clears what every cell printed.

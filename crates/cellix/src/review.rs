@@ -84,6 +84,8 @@ type LineTokens = Vec<(usize, usize, Token)>;
 pub struct Review {
     /// The Source Control panel stands beside this, so it has no list of its own.
     pub beside_panel: bool,
+    /// Columns the title row leaves free at its end, for what stands there.
+    pub title_room: Cell<u16>,
     /// A file to show once the changes have been read.
     wanted: Option<PathBuf>,
     root: PathBuf,
@@ -262,6 +264,7 @@ impl Review {
             reading: None,
             hover: Cell::new(None),
             beside_panel: false,
+            title_room: Cell::new(0),
             wanted: None,
         };
         review.refresh();
@@ -295,6 +298,7 @@ impl Review {
             hover: Cell::new(None),
             tokens: (Vec::new(), Vec::new()),
             beside_panel: false,
+            title_room: Cell::new(0),
             wanted: None,
         };
         review.reload_proposal();
@@ -674,7 +678,14 @@ impl Review {
         (accept, accept.saturating_sub(REJECT.len() as u16 + 1))
     }
 
+    /// The body with its width cut to what the title row may use.
+    fn title_body(&self, body: Rect) -> Rect {
+        let width = body.w.saturating_sub(self.title_room.get());
+        Rect::new(body.x, body.y, width, body.h)
+    }
+
     fn title_hit(&self, body: Rect, x: u16) -> Option<Hit> {
+        let body = self.title_body(body);
         if self.is_proposal() {
             let (accept, reject) = Self::button_spots(body);
             return if x >= accept {
@@ -741,6 +752,7 @@ impl Review {
     }
 
     fn draw_title(&self, grid: &mut Grid, body: Rect, narrow: bool, theme: &Theme) {
+        let body = self.title_body(body);
         let y = body.y;
         let strong = Style {
             bold: true,

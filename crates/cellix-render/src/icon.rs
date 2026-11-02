@@ -44,6 +44,8 @@ pub enum Icon {
     Restart = 34,
     AddCell = 35,
     AddText = 36,
+    Terminal = 37,
+    Diff = 38,
 }
 
 /// One cell of an icon that is `width` by `height` cells.
@@ -395,6 +397,15 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
         Icon::ReplaceAll => path(p, &[(3.0, 8.0), (19.5, 8.0), (15.0, 3.5)])
             .min(path(p, &[(21.0, 16.0), (4.5, 16.0), (9.0, 20.5)])),
         Icon::Check => path(p, &[(4.5, 12.5), (9.5, 17.5), (19.5, 6.5)]),
+        Icon::Terminal => path(p, &[(3.5, 6.0), (10.0, 12.0), (3.5, 18.0)]).min(segment(
+            p,
+            (12.5, 18.0),
+            (20.5, 18.0),
+        )),
+        Icon::Diff => rounded(p, (3.0, 3.0), (21.0, 21.0), 4.0)
+            .min(segment(p, (12.0, 6.5), (12.0, 12.5)))
+            .min(segment(p, (9.0, 9.5), (15.0, 9.5)))
+            .min(segment(p, (9.0, 16.5), (15.0, 16.5))),
         Icon::Globe => {
             let (x, y) = ((p.0 - 12.0) / 4.5, (p.1 - 12.0) / 9.5);
             let meridian = ((x * x + y * y).sqrt() - 1.0).abs() * 4.5;

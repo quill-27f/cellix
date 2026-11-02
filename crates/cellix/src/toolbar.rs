@@ -334,8 +334,17 @@ fn fallback(icon: Icon) -> &'static str {
         Icon::More => "…",
         Icon::Cite => "[",
         Icon::Play => "▶",
+        Icon::Terminal => ">",
+        Icon::Diff => "±",
+        Icon::Globe => "◍",
+        Icon::Agents => "◎",
         _ => "?",
     }
+}
+
+/// One icon in the middle of `cell`, the same size as the bar's.
+pub fn draw_icon(grid: &mut Grid, icon: Icon, cell: Rect, color: Rgb, style: Style) {
+    draw_face(grid, Face::Icon(icon), cell, color, style);
 }
 
 /// Draws the bar across `row`. `style` names the caret's paragraph, and `active` the formats

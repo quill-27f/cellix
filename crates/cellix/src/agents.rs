@@ -320,6 +320,11 @@ impl Agents {
         }
     }
 
+    /// Whether anyone has looked for what can be started yet.
+    pub fn looked(&self) -> bool {
+        !self.installed.is_empty()
+    }
+
     /// Finds which agents can be started, which only changes when the panel opens.
     pub fn look_for_agents(&mut self) {
         let var = |name: &str| std::env::var(name).ok();
