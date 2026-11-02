@@ -38,10 +38,12 @@ const WRAPPERS: [&str; 4] = ["equation", "equation*", "displaymath", "math"];
 
 /// Commands the engine doesn't have, as what it does. Longest names first where one is the
 /// start of another. The page is a preview, and a near match beats losing a whole display.
-const SUBSTITUTES: [(&str, &str); 25] = [
-    ("\\operatorname*", "\\operatorname"),
-    ("\\argmin", "\\operatorname{arg\\,min}"),
-    ("\\argmax", "\\operatorname{arg\\,max}"),
+const SUBSTITUTES: [(&str, &str); 24] = [
+    // In `\operatorname` a thin space prints as a comma, so these stay in math.
+    ("\\operatorname*{", "\\mathrm{"),
+    ("\\operatorname{arg\\,", "\\mathrm{arg\\,"),
+    ("\\argmin", "\\mathrm{arg\\,min}"),
+    ("\\argmax", "\\mathrm{arg\\,max}"),
     ("\\bm{", "\\mathbf{"),
     ("\\boldsymbol{", "\\mathbf{"),
     ("\\mathds{", "\\mathbb{"),
@@ -59,12 +61,85 @@ const SUBSTITUTES: [(&str, &str); 25] = [
     ("\\textstyle", ""),
     ("\\nonumber", ""),
     ("\\notag", ""),
-    ("\\limits", ""),
-    ("\\nolimits", ""),
     ("{dcases}", "{cases}"),
     ("{rcases}", "{cases}"),
     ("{smallmatrix}", "{matrix}"),
 ];
+
+/// Operators whose limits stand under them in a display. The engine only does this for `\lim`.
+const UNDER: [&str; 8] = [
+    "\\max",
+    "\\min",
+    "\\sup",
+    "\\inf",
+    "\\limsup",
+    "\\liminf",
+    "\\mathrm{arg\\,min}",
+    "\\mathrm{arg\\,max}",
+];
+
+/// A script at the start of `text`: its text, and how far it runs.
+fn script(text: &str) -> Option<(&str, usize)> {
+    let mut chars = text.char_indices();
+    match chars.next()?.1 {
+        '{' => {
+            let mut depth = 0;
+            for (at, c) in text.char_indices() {
+                depth += match c {
+                    '{' => 1,
+                    '}' => -1,
+                    _ => 0,
+                };
+                if depth == 0 {
+                    return Some((&text[1..at], at + 1));
+                }
+            }
+            None
+        }
+        '\\' => {
+            let end = chars
+                .find(|(_, c)| !c.is_ascii_alphabetic())
+                .map_or(text.len(), |(at, _)| at);
+            Some((&text[..end], end))
+        }
+        c => Some((&text[..c.len_utf8()], c.len_utf8())),
+    }
+}
+
+/// Sets `\max_{x}` as a stack, so its limit stands under it the way TeX puts it.
+fn limits_under(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find('\\') {
+        out.push_str(&rest[..at]);
+        rest = &rest[at..];
+        let found = UNDER.iter().find(|name| {
+            rest.strip_prefix(**name)
+                .is_some_and(|after| !after.starts_with(|c: char| c.is_ascii_alphabetic()))
+        });
+        let stacked = found.and_then(|name| {
+            let after = rest[name.len()..].trim_start();
+            let after = after.strip_prefix("\\limits").unwrap_or(after).trim_start();
+            let (under, used) = script(after.strip_prefix('_')?.trim_start())?;
+            let spaces = after.len() - 1 - after[1..].trim_start().len();
+            let tail = &after[1 + spaces + used..];
+            Some((format!("\\underset{{{under}}}{{{name}}}"), tail))
+        });
+        match stacked {
+            Some((stack, tail)) => {
+                out.push_str(&stack);
+                rest = tail;
+            }
+            None => {
+                let step = found.map_or(1, |name| name.len());
+                out.push_str(&rest[..step]);
+                rest = &rest[step..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
 
 /// Takes `\name{...}` out of `text`, with `keep` deciding what stands in its place.
 fn strip_command(text: &mut String, name: &str, keep: bool) {
@@ -93,7 +168,7 @@ fn strip_command(text: &mut String, name: &str, keep: bool) {
 }
 
 /// What the math engine reads: `\label` has no picture, and `equation` only numbers.
-fn prepared(source: &str) -> String {
+fn prepared(source: &str, display: bool) -> String {
     let mut text = source.trim().to_string();
     for name in WRAPPERS {
         let (open, close) = (format!("\\begin{{{name}}}"), format!("\\end{{{name}}}"));
@@ -124,7 +199,8 @@ fn prepared(source: &str) -> String {
             .replace(&format!("{{{name}*}}"), "{aligned}")
             .replace(&format!("{{{name}}}"), "{aligned}");
     }
-    text.replace("{gathered}", "{aligned}")
+    let text = text.replace("{gathered}", "{aligned}");
+    if display { limits_under(&text) } else { text }
 }
 
 fn pixels(dim: &Dim, em: u32) -> f64 {
@@ -151,7 +227,7 @@ fn decode(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
 
 /// Typesets a formula with `em` pixels to the em.
 pub fn render(source: &str, display: bool, em: u32) -> Result<Formula, String> {
-    let text = prepared(source);
+    let text = prepared(source, display);
     if text.is_empty() {
         return Err("empty formula".to_string());
     }
@@ -185,7 +261,7 @@ pub fn render(source: &str, display: bool, em: u32) -> Result<Formula, String> {
 
 /// A formula as self-contained SVG, for pages that leave Cellix.
 pub fn svg(source: &str, display: bool) -> Result<String, String> {
-    let text = prepared(source);
+    let text = prepared(source, display);
     with_font(|font| {
         let mut options = SvgOptions::new();
         options.display = display;
@@ -200,6 +276,32 @@ pub fn svg(source: &str, display: bool) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn limits_stand_under_operators_in_a_display() {
+        let beside = render(r"\max_{x \in X} f", false, 30).unwrap();
+        let under = render(r"\max_{x \in X} f", true, 30).unwrap();
+        assert!(under.height > beside.height + 10);
+        let wide = render(r"\argmin_{\theta} f + \min_x g + \max^2", true, 30).unwrap();
+        assert!(wide.height > beside.height + 10);
+        assert_eq!(
+            prepared(r"\max_{x}^2 \maximum", true),
+            r"\underset{x}{\max}^2 \maximum"
+        );
+        assert_eq!(prepared(r"\min\limits_a b", true), r"\underset{a}{\min} b");
+    }
+
+    #[test]
+    fn a_thin_space_in_an_operators_name_is_not_a_comma() {
+        let text = prepared(r"\operatorname{arg\,min} + \operatorname*{arg\,max}", false);
+        assert!(!text.contains("operatorname"), "{text}");
+    }
+
+    #[test]
+    fn asking_for_limits_never_breaks_a_formula() {
+        assert!(render(r"\sum\limits_{i=1}^n x", false, 30).is_ok());
+        assert!(render(r"\sum\nolimits_{i=1}^n x", true, 30).is_ok());
+    }
 
     #[test]
     fn a_formula_comes_out_as_real_coverage() {
@@ -253,8 +355,8 @@ mod tests {
 
     #[test]
     fn numbers_are_left_to_the_margin() {
-        assert_eq!(prepared(r"E = mc^2 \tag{2}").trim(), "E = mc^2");
-        assert!(prepared(r"\begin{align} a \end{align}").contains("{aligned}"));
+        assert_eq!(prepared(r"E = mc^2 \tag{2}", true).trim(), "E = mc^2");
+        assert!(prepared(r"\begin{align} a \end{align}", true).contains("{aligned}"));
     }
 
     #[test]

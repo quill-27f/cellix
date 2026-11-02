@@ -1237,5 +1237,26 @@
     "title": "Spell check skips what isn't prose in a paper",
     "test": "a_papers_commands_go_and_its_words_stay",
     "passes": true
+  },
+  {
+    "id": "math-limits",
+    "milestone": 9,
+    "title": "Limits stand under max, min, sup and arg min in a display",
+    "test": "limits_stand_under_operators_in_a_display",
+    "passes": true
+  },
+  {
+    "id": "math-argmin",
+    "milestone": 9,
+    "title": "arg min no longer prints a comma",
+    "test": "a_thin_space_in_an_operators_name_is_not_a_comma",
+    "passes": true
+  },
+  {
+    "id": "math-limits-flags",
+    "milestone": 9,
+    "title": "Asking for limits never breaks a formula",
+    "test": "asking_for_limits_never_breaks_a_formula",
+    "passes": true
   }
 ]
