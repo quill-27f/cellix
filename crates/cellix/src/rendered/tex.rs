@@ -5,6 +5,9 @@
 use super::*;
 use cellix_doc::latex::{Counters, equation_rows, is_math};
 
+/// Space before a label beside a heading, in cells.
+const LABEL_GAP: f32 = 0.8;
+
 const VERBATIM: [&str; 3] = ["verbatim", "lstlisting", "minted"];
 /// Sectioning commands, with their level for numbering. Paragraphs have no number.
 const SECTIONS: [(&str, usize); 6] = [
@@ -334,7 +337,10 @@ fn command(rest: &[char], at: usize, look: Look, context: &Context, out: &mut Ve
                 },
                 underline: false,
             };
-            out.push(glyph(' ', None, quiet));
+            // Clear of what it labels, by more than a space that small.
+            let mut gap = glyph(' ', None, quiet);
+            gap.advance = LABEL_GAP;
+            out.push(gap);
             for (n, c) in inner.iter().enumerate() {
                 out.push(glyph(*c, Some(start + n), quiet));
             }
@@ -740,7 +746,17 @@ impl Page<'_, '_> {
             );
             measure_glyphs(&mut glyphs, self.context.measure);
             let template = Row::new(index, offset + chars.len());
+            let first = self.rows.len();
             wrap(template, glyphs, 0.0, self.width, self.rows);
+            // Under a picture in the middle of the page, as a Markdown image's caption is.
+            for row in &mut self.rows[first..] {
+                let reach = row.glyphs.last().map_or(0.0, |g| g.x + g.advance);
+                let shift = ((self.width - reach) / 2.0).max(0.0);
+                for g in &mut row.glyphs {
+                    g.x += shift;
+                }
+                row.lead += shift;
+            }
             return;
         }
     }
@@ -991,10 +1007,19 @@ impl Page<'_, '_> {
                 if let Some(g) = mark.first_mut() {
                     g.x = (self.width - g.advance).max(0.0);
                 }
-                self.rows.push(Row {
-                    glyphs: mark,
-                    ..spacer(index, offset)
+                // It closes the proof's last line, unless that line runs out to the margin.
+                let last = self.rows.iter_mut().rfind(|r| r.stop);
+                let room = last.filter(|r| {
+                    let reach = r.glyphs.last().map_or(0.0, |g| g.x + g.advance);
+                    r.figure.is_none() && r.table.is_none() && reach + 2.0 < self.width
                 });
+                match room {
+                    Some(row) => row.glyphs.extend(mark),
+                    None => self.rows.push(Row {
+                        glyphs: mark,
+                        ..spacer(index, offset)
+                    }),
+                }
             }
             return index + 1;
         }

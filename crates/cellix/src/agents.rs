@@ -42,7 +42,6 @@ pub enum Hit {
 
 /// A row or two of the panel.
 enum Line {
-    Title(&'static str),
     Section(&'static str),
     Gap,
     /// The note that takes the running list's place.
@@ -136,7 +135,8 @@ impl Agents {
     /// The panel, top to bottom. Drawing and clicking share this. With nothing running, it
     /// says what this is for and how it goes, and a way to start comes straight after.
     fn lines(&self) -> Vec<Line> {
-        let mut lines = vec![Line::Title("Agents"), Line::Gap];
+        // The pane's tab already says what this is.
+        let mut lines = vec![Line::Gap];
         let silent = self.silent();
         let idle = self.running.is_empty() && silent.is_empty();
         if idle {
@@ -210,13 +210,6 @@ impl Agents {
             let hovered = hover.is_some_and(|h| row.contains(h.0, h.1));
             match line {
                 Line::Gap => {}
-                Line::Title(text) => {
-                    let name = Style {
-                        bold: true,
-                        ..theme.sidebar
-                    };
-                    grid.label(side, y, text, name, area.right());
-                }
                 Line::Section(text) => {
                     grid.label_at(side as f32, side, y, text, dim, area.right(), SECTION_SIZE);
                 }

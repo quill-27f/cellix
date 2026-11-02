@@ -369,3 +369,7 @@ lines, not JSON ones. Cells don't run. Jobs held for a project are only found fr
 
 Next: the user plays with `samples/` and tests Claude Code, Codex and SSH.
 
+Round six, continued while the user tests. The design review's smaller items went in: the end of a
+proof closes its last line, captions stand in the middle of the page, labels clear their headings,
+text scrolling under the toolbar has a line to go under, and the agents list reads as a tab.
+

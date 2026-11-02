@@ -33,8 +33,12 @@ const SHARE: u16 = 46;
 const WHEEL_LINES: i32 = 3;
 const TAB_PADDING: u16 = 2;
 const CLOSE_WIDTH: u16 = 2;
-/// The Comments tab at the far end.
-const COMMENTS_WIDTH: u16 = 11;
+/// The Comments tab at the far end, and what a count adds to it.
+const COMMENTS_WIDTH: u16 = 10;
+const COUNT_WIDTH: u16 = 2;
+/// The button that starts something, and the tab it becomes while that list shows.
+const NEW_WIDTH: u16 = 3;
+const AGENTS_WIDTH: u16 = 8;
 const PDF_WIDTH: u16 = 5;
 const LOG_WIDTH: u16 = 5;
 /// The button that closes the pane.
@@ -882,6 +886,8 @@ pub struct Dock {
     pub pdf_spot: Option<(usize, f32, f32)>,
     /// How far the comments have scrolled.
     pub comments_top: usize,
+    /// How many comments are open, which the tab shows.
+    pub comment_count: std::cell::Cell<usize>,
     /// A comment or reply being written.
     pub draft: Option<Draft>,
     /// What the last build said, how far it has scrolled, and where its paths start.
@@ -970,18 +976,43 @@ impl Dock {
         };
     }
 
+    fn comments_width(&self) -> u16 {
+        let count = self.comment_count.get();
+        let digits = if count > 9 { COUNT_WIDTH } else { 1 };
+        COMMENTS_WIDTH + if count > 0 { digits + 1 } else { 0 }
+    }
+
+    /// Whether the list of what can be started is showing.
+    fn listing(&self) -> bool {
+        self.active.is_none() && self.front == Front::Session
+    }
+
+    fn new_width(&self) -> u16 {
+        if self.listing() {
+            AGENTS_WIDTH
+        } else {
+            NEW_WIDTH
+        }
+    }
+
     /// Where the log's tab goes, if there's a log.
     fn log_tab(&self, area: Rect) -> Option<Rect> {
         let pdf = if self.pdf.is_some() { PDF_WIDTH } else { 0 };
-        (!self.log.is_empty())
-            .then(|| Rect::new(area.x + 1 + COMMENTS_WIDTH + pdf, area.y, LOG_WIDTH, 1))
+        (!self.log.is_empty()).then(|| {
+            Rect::new(
+                area.x + 1 + self.comments_width() + pdf,
+                area.y,
+                LOG_WIDTH,
+                1,
+            )
+        })
     }
 
     /// Where sessions' tabs start, after the fixed ones.
     fn first_tab(&self, area: Rect) -> u16 {
         let pdf = if self.pdf.is_some() { PDF_WIDTH } else { 0 };
         let log = if self.log.is_empty() { 0 } else { LOG_WIDTH };
-        area.x + 1 + COMMENTS_WIDTH + pdf + log
+        area.x + 1 + self.comments_width() + pdf + log
     }
 
     /// The log line at a row of the screen.
@@ -1048,7 +1079,7 @@ impl Dock {
         if x + HIDE_WIDTH >= area.right() {
             return Some(TabHit::Hide);
         }
-        if x < area.x + 1 + COMMENTS_WIDTH {
+        if x < area.x + 1 + self.comments_width() {
             return Some(TabHit::Comments);
         }
         if self
@@ -1072,20 +1103,15 @@ impl Dock {
             }
         }
         let end = tabs.last().map_or(self.first_tab(area), |t| t.1);
-        (x >= end && x < end + 3).then_some(TabHit::New)
+        (x >= end && x < end + self.new_width()).then_some(TabHit::New)
     }
 
     /// The title row, in the frame's colour, with tabs like the editor's.
-    pub fn draw_tabs(
-        &self,
-        grid: &mut Grid,
-        area: Rect,
-        (hover, count): (Option<(u16, u16)>, usize),
-        theme: &Theme,
-    ) {
+    pub fn draw_tabs(&self, grid: &mut Grid, area: Rect, hover: Option<(u16, u16)>, theme: &Theme) {
+        let count = self.comment_count.get();
         let row = Rect::new(area.x, area.y, area.w, 1);
         grid.fill(row, theme.tab);
-        let comments = Rect::new(area.x + 1, area.y, COMMENTS_WIDTH, 1);
+        let comments = Rect::new(area.x + 1, area.y, self.comments_width(), 1);
         if self.pdf.is_some() {
             let tab = Rect::new(comments.right(), area.y, PDF_WIDTH, 1);
             let on = self.front == Front::Pdf;
@@ -1188,9 +1214,12 @@ impl Dock {
             }
         }
         let plus = self.tabs(area).last().map_or(self.first_tab(area), |t| t.1);
-        let button = Rect::new(plus, area.y, 3, 1);
+        let button = Rect::new(plus, area.y, self.new_width(), 1);
         let on_it = hover.is_some_and(|h| button.contains(h.0, h.1));
-        if on_it {
+        let listing = self.listing();
+        if listing {
+            grid.fill(button, theme.sidebar);
+        } else if on_it {
             grid.panel(
                 Bounds::inset(button, 0.1, 0.1),
                 16,
@@ -1199,14 +1228,16 @@ impl Dock {
             );
         }
         let style = Style {
-            fg: if (self.active.is_none() && self.front == Front::Session) || on_it {
+            fg: if listing || on_it {
                 theme.text.fg
             } else {
                 theme.gutter.fg
             },
+            bold: listing,
             ..theme.tab
         };
-        grid.label(plus + 1, area.y, "+", style, area.right());
+        let name = if listing { "Agents" } else { "+" };
+        grid.label(plus + 1, area.y, name, style, area.right());
         // Drawn last, over any tabs that reach this far, so it can always be found.
         let hide = Rect::new(
             area.right().saturating_sub(HIDE_WIDTH),

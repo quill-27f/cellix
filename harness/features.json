@@ -1594,5 +1594,33 @@
     "title": "British spelling is not a mistake",
     "test": "british_spelling_is_not_a_mistake",
     "passes": true
+  },
+  {
+    "id": "tex-qed",
+    "milestone": 9,
+    "title": "The end of a proof closes its last line",
+    "test": "the_end_of_a_proof_closes_its_last_line",
+    "passes": true
+  },
+  {
+    "id": "tex-caption",
+    "milestone": 9,
+    "title": "A caption stands in the middle of the page",
+    "test": "a_caption_stands_in_the_middle_of_the_page",
+    "passes": true
+  },
+  {
+    "id": "pane-agents-tab",
+    "milestone": 9,
+    "title": "The list of agents reads as a tab of its own",
+    "test": "the_list_of_agents_reads_as_a_tab_of_its_own",
+    "passes": true
+  },
+  {
+    "id": "hook-stray",
+    "milestone": 9,
+    "title": "A hook with no details asks nothing of a running Cellix",
+    "test": "a_hook_with_no_details_asks_nothing_of_a_running_cellix",
+    "passes": true
   }
 ]

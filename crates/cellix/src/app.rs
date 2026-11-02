@@ -3976,8 +3976,8 @@ impl App {
             },
         );
         let threads = self.open_threads();
-        self.dock
-            .draw_tabs(grid, area, (self.hover, threads.len()), theme);
+        self.dock.comment_count.set(threads.len());
+        self.dock.draw_tabs(grid, area, self.hover, theme);
         grid.hairline(
             Bounds::cells(area.x as f32, area.y as f32, 0.0, area.h as f32),
             theme.border,
@@ -6432,6 +6432,12 @@ impl App {
             let (paragraph, active) = self.editors[self.active()].caret_formats();
             let dialect = self.page_dialect();
             let tracking = self.editors[self.active()].tracking;
+            // Text scrolled under the bar needs a line to go under.
+            if self.editors[self.active()].top() > 0 {
+                let edge = row.y as f32 + 1.0;
+                let line = Bounds::cells(row.x as f32, edge, row.w as f32, 0.0);
+                grid.hairline(line, self.theme.popup_border);
+            }
             toolbar::draw(
                 grid,
                 row,
@@ -10563,6 +10569,54 @@ mod tests {
         app.open(&dir.path().join("paper.tex")).unwrap();
         waits_for(&mut app, |app| !pictures(app).is_empty());
         assert!(painted_text(&app).contains("Algorithm 1"));
+    }
+
+    fn tex_rows(source: &str) -> (TempDir, App) {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("paper.tex"), source).unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(10, 20)));
+        app.open(&dir.path().join("paper.tex")).unwrap();
+        (dir, app)
+    }
+
+    #[test]
+    fn the_end_of_a_proof_closes_its_last_line() {
+        let (_dir, app) =
+            tex_rows("\\begin{document}\n\\begin{proof}\nShort.\n\\end{proof}\n\\end{document}\n");
+        let rows = app.editors[0].page_rows(app.focused_area());
+        let row = rows
+            .iter()
+            .find(|r| r.glyphs.iter().any(|g| g.ch == '∎'))
+            .unwrap();
+        assert!(
+            row.glyphs.iter().any(|g| g.ch == 'S'),
+            "on the same row as the words"
+        );
+    }
+
+    #[test]
+    fn a_caption_stands_in_the_middle_of_the_page() {
+        let (_dir, app) = tex_rows(
+            "\\begin{document}\n\\begin{figure}\n\\caption{Short}\n\\end{figure}\n\\end{document}\n",
+        );
+        let rows = app.editors[0].page_rows(app.focused_area());
+        let row = rows
+            .iter()
+            .find(|r| r.glyphs.iter().any(|g| g.ch == 'F'))
+            .unwrap();
+        assert!(row.glyphs[0].x > 20.0, "{}", row.glyphs[0].x);
+    }
+
+    #[test]
+    fn the_list_of_agents_reads_as_a_tab_of_its_own() {
+        let (_dir, mut app) = project();
+        app.run(Command::ShowAgents);
+        let grid = screen(&app);
+        let area = app.dock_area().unwrap();
+        assert!(grid.row_text(area.y).contains("Agents"), "{}", grid.text());
+        // The panel doesn't say it twice.
+        assert!(!grid.row_text(area.y + 1).contains("Agents"));
     }
 
     #[test]

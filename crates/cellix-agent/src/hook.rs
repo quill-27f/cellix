@@ -238,9 +238,11 @@ pub fn handle(kind: &str, stdin: &str) -> Option<String> {
 
 /// Handles one hook from a named agent, and returns what to print for it, if anything.
 pub fn handle_for(agent: &str, kind: &str, stdin: &str) -> Option<String> {
-    let mut input: Value = serde_json::from_str(stdin).unwrap_or(json!({}));
+    // Without its details this can't be told from a stray call, and nothing here should
+    // guess which project it's about, least of all from the folder it happens to run in.
+    let mut input: Value = serde_json::from_str(stdin).ok()?;
     if !input.is_object() {
-        input = json!({});
+        return None;
     }
     input[AGENT_KEY] = json!(agent);
     let roots = roots(&input);
@@ -304,6 +306,14 @@ mod tests {
         let plan = input(dir.path(), json!({"tool_input": {"plan": "# P"}}));
         assert_eq!(handle("plan", &plan), None, "Claude Code asks as usual");
         assert_eq!(handle("prompt", "not json"), None);
+    }
+
+    #[test]
+    fn a_hook_with_no_details_asks_nothing_of_a_running_cellix() {
+        for kind in ["prompt", "plan", "stop"] {
+            assert_eq!(handle(kind, "not json"), None);
+            assert_eq!(handle(kind, "[1, 2]"), None);
+        }
     }
 
     #[test]
