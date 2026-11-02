@@ -399,3 +399,13 @@ the file.
 4. LSP, project search, Claude Code plugin.
 5. Vim mode, then Neovim mode.
 6. The agent loop and the IDE connection.
+
+## Scrolling
+
+A wheel notch used to play a fixed animation that held up the main loop, so a trackpad's stream
+of events came through in bursts. Scrolling is now a target and a position. Input moves the target,
+and the view closes on it on every frame with an exponential ease, so a new notch redirects the
+motion and turning round never jumps. The rows it moves are the whole-row tiles the terminal already
+holds, shown through a crop and a pixel offset, so a frame is a line of text per row and nothing is
+drawn. The page underneath is already at the end and only catches up now and then, because a typeset
+page is expensive to redraw. Typing or a click ends the glide at once.

@@ -1,8 +1,9 @@
+use std::collections::btree_map::Entry;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::io::{self, Write};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use cellix_render::{Grid, Image, Rasterizer, Rect, Rgb, UNIT};
@@ -23,12 +24,20 @@ const DIACRITIC_ZERO: char = '\u{305}';
 const SCROLL_LAYER: u32 = 1;
 /// Placement ids for a scrolling region, clear of the row placements.
 const FIRST_STRIP: usize = 100_000;
+/// Rows of the page a glide can tell apart, which wrap round far out of sight.
+const STRIP_ROWS: i32 = 1 << 20;
+/// Pixels from the end at which a glide counts as there.
+const ARRIVED: f32 = 0.5;
+/// Screens of rows kept around the view, so turning round needs nothing sent.
+const KEPT_SCREENS: i32 = 3;
 
 /// How a region animates. Direct placement only, since only that can sit between cells.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Smooth {
-    pub frames: u32,
-    pub pause: Duration,
+    /// How often it moves.
+    pub frame: Duration,
+    /// How quickly it closes on where it's going: about two thirds of the way in this time.
+    pub ease: Duration,
 }
 
 /// How far tiles reach past the text area. Ghostty doesn't clip images, so a tile can cover
@@ -48,6 +57,22 @@ struct Tile {
     id: u32,
     bytes: usize,
     last_used: u64,
+}
+
+/// A scroll under way. Its rows are tiles the terminal already has, shown through a crop and
+/// a pixel offset, so moving costs a line of text per row and nothing has to be drawn. The
+/// screen underneath is already at the end, and this stands over it until it gets there.
+struct Glide {
+    area: Rect,
+    /// The rows of the page it's seen, counted from the top of the view when it started.
+    rows: BTreeMap<i32, u32>,
+    /// Where the view's heading, in rows from the start.
+    target: i32,
+    /// Where it is, in pixels from the start.
+    at: f32,
+    last: Instant,
+    /// The rows with a placement to take away.
+    placed: HashSet<i32>,
 }
 
 /// How tiles reach the screen. See the tier table in `docs/DESIGN.md`.
@@ -76,6 +101,9 @@ pub struct PixelBackend<R> {
     /// Whether region placements are waiting to be removed by the next present.
     scrolling: bool,
     bleed: Bleed,
+    glide: Option<Glide>,
+    /// A cell's size in pixels, from the tiles.
+    cell: Option<(i32, i32)>,
 }
 
 /// What a row looks like, as a key: rows with the same key draw the same pixels.
@@ -119,6 +147,8 @@ impl<R: Rasterizer> PixelBackend<R> {
             smooth: None,
             scrolling: false,
             bleed: Bleed::default(),
+            glide: None,
+            cell: None,
         }
     }
 
@@ -244,8 +274,12 @@ impl<R: Rasterizer> PixelBackend<R> {
         }
         let id = self.new_id();
         let image = self.rasterizer.row(grid, y);
-        let image = self.bled(image, grid, y);
         let cols = grid.width();
+        self.cell = Some((
+            (image.width / cols.max(1) as usize) as i32,
+            image.height as i32,
+        ));
+        let image = self.bled(image, grid, y);
         self.transmit(out, id, &image);
         if self.placement == Placement::Placeholder {
             self.apc(out, &format!("a=p,U=1,i={id},c={cols},r=1,q=2"), b"");
@@ -262,41 +296,20 @@ impl<R: Rasterizer> PixelBackend<R> {
         id
     }
 
-    /// The tile for part of a row, shared with any row that looks the same.
-    fn region_tile(&mut self, out: &mut Vec<u8>, grid: &Grid, y: u16, area: Rect) -> (u32, Image) {
-        let image = self.rasterizer.row(grid, y);
-        let cell = image.width / grid.width().max(1) as usize;
-        let (left, width) = (area.x as usize * cell, area.w as usize * cell);
-        let mut rgb = Vec::with_capacity(width * image.height * 3);
-        for line in image.rgb.chunks_exact(image.width * 3) {
-            rgb.extend_from_slice(&line[left * 3..(left + width) * 3]);
-        }
-        let crop = Image {
-            width,
-            height: image.height,
-            rgb,
-        };
-        let mut hasher = DefaultHasher::new();
-        crop.rgb.hash(&mut hasher);
-        let key = hasher.finish();
-        if let Some(tile) = self.tiles.get_mut(&key) {
-            tile.last_used = self.frame;
-            return (tile.id, crop);
-        }
-        let id = self.new_id();
-        self.transmit(out, id, &crop);
-        self.used += crop.rgb.len();
-        let bytes = crop.rgb.len();
-        let last_used = self.frame;
-        self.tiles.insert(
-            key,
-            Tile {
-                id,
-                bytes,
-                last_used,
-            },
-        );
-        (id, crop)
+    /// A glide from what's on screen now, whose rows are in the terminal already.
+    fn start_glide(&self, area: Rect) -> Option<Glide> {
+        let shown = (area.y..area.bottom()).enumerate().map(|(index, y)| {
+            let id = (*self.shown.get(y as usize)?)?;
+            Some((index as i32, id))
+        });
+        Some(Glide {
+            area,
+            rows: shown.collect::<Option<_>>()?,
+            target: 0,
+            at: 0.0,
+            last: Instant::now(),
+            placed: HashSet::new(),
+        })
     }
 
     fn new_id(&mut self) -> u32 {
@@ -343,6 +356,7 @@ impl<R: Rasterizer> Backend for PixelBackend<R> {
             self.apc(&mut bytes, "a=d,d=A,q=2", b"");
             bytes.extend_from_slice(b"\x1b[2J");
             self.tiles.clear();
+            self.glide = None;
             self.used = 0;
             self.shown = vec![None; grid.height() as usize];
             self.size = size;
@@ -369,6 +383,7 @@ impl<R: Rasterizer> Backend for PixelBackend<R> {
         if std::mem::take(&mut self.scrolling) {
             self.apc(&mut bytes, &format!("a=d,d=z,z={SCROLL_LAYER},q=2"), b"");
         }
+        on_screen.extend(self.glide.iter().flat_map(|g| g.rows.values().copied()));
         self.evict(&mut bytes, &on_screen);
         bytes.extend_from_slice(b"\x1b[?2026l");
         out.write_all(&bytes)?;
@@ -383,86 +398,106 @@ impl<R: Rasterizer> Backend for PixelBackend<R> {
         rows: i32,
         out: &mut dyn Write,
     ) -> io::Result<()> {
-        let height = area.h as i32;
         let same_size = (from.width(), from.height()) == (to.width(), to.height());
-        let Some(smooth) = self.smooth.filter(|_| {
-            same_size && rows != 0 && rows.abs() < height && self.size == (to.width(), to.height())
-        }) else {
+        let can_glide = self.smooth.is_some()
+            && self.cell.is_some()
+            && same_size
+            && self.size == (to.width(), to.height())
+            && rows != 0
+            && rows.abs() < area.h as i32;
+        if !can_glide || self.glide.as_ref().is_some_and(|g| g.area != area) {
+            self.settle();
             return Ok(());
-        };
-        let moved = rows.unsigned_abs() as u16;
-        // The rows of both grids in one strip, top to bottom. Most appear in both.
-        let lines = area.y..area.bottom();
-        let strip: Vec<(&Grid, u16)> = if rows > 0 {
-            let fresh = lines.clone().skip(area.h as usize - moved as usize);
-            lines
-                .map(|y| (from, y))
-                .chain(fresh.map(|y| (to, y)))
-                .collect()
-        } else {
-            let fresh = lines.clone().take(moved as usize);
-            fresh
-                .map(|y| (to, y))
-                .chain(lines.map(|y| (from, y)))
-                .collect()
+        }
+        let Some(mut glide) = self.glide.take().or_else(|| self.start_glide(area)) else {
+            return Ok(());
         };
         let mut bytes = Vec::new();
-        let tiles: Vec<(u32, Image)> = strip
-            .iter()
-            .map(|(grid, y)| self.region_tile(&mut bytes, grid, *y, area))
-            .collect();
-        let Some(cell_height) = tiles.first().map(|(_, image)| image.height as i32) else {
+        glide.target += rows;
+        for (index, y) in (area.y..area.bottom()).enumerate() {
+            let row = glide.target + index as i32;
+            if let Entry::Vacant(place) = glide.rows.entry(row) {
+                place.insert(self.tile(&mut bytes, row_key(to, y), to, y));
+            }
+        }
+        self.glide = Some(glide);
+        out.write_all(&bytes)?;
+        out.flush()
+    }
+
+    fn gliding(&self) -> Option<Duration> {
+        self.glide.as_ref()?;
+        self.smooth.map(|smooth| smooth.frame)
+    }
+
+    fn glide(&mut self, now: Instant, out: &mut dyn Write) -> io::Result<()> {
+        let (Some(mut glide), Some(smooth), Some((cell_w, cell_h))) =
+            (self.glide.take(), self.smooth, self.cell)
+        else {
             return Ok(());
         };
-        let travel = rows.abs() * cell_height;
-        let window = height * cell_height;
-        let mut placed = HashSet::new();
-        self.scrolling = true;
-        for frame in 1..=smooth.frames {
-            // At a steady pace, so one notch running into the next doesn't pulse.
-            let progress = frame as f32 / smooth.frames as f32;
-            let moved_by = (travel as f32 * progress).round() as i32;
-            let offset = if rows > 0 {
-                moved_by
-            } else {
-                travel - moved_by
-            };
-            bytes.extend_from_slice(b"\x1b[?2026h");
-            for (index, (id, image)) in tiles.iter().enumerate() {
-                let top = index as i32 * cell_height - offset;
-                let number = FIRST_STRIP + index;
-                let (clip_top, clip_end) = ((-top).max(0), cell_height.min(window - top));
-                if clip_top >= clip_end {
-                    if placed.remove(&index) {
-                        self.apc(&mut bytes, &format!("a=d,d=i,i={id},p={number},q=2"), b"");
-                    }
-                    continue;
+        let target = (glide.target * cell_h) as f32;
+        let window = glide.area.h as i32 * cell_h;
+        // A long way behind, as after a hard flick, it would only look like lag.
+        glide.at = glide
+            .at
+            .clamp(target - window as f32, target + window as f32);
+        let passed = now.duration_since(glide.last).as_secs_f32();
+        glide.last = now;
+        let left = (-passed / smooth.ease.as_secs_f32()).exp();
+        glide.at = target + (glide.at - target) * left;
+        if (glide.at - target).abs() < ARRIVED {
+            glide.at = target;
+        }
+        let at = glide.at.round() as i32;
+        let across = i32::from(glide.area.x) * cell_w;
+        let wide = i32::from(glide.area.w) * cell_w;
+        let mut bytes = b"\x1b[?2026h".to_vec();
+        for (&row, &id) in &glide.rows {
+            let top = row * cell_h - at;
+            let (clip_top, clip_end) = ((-top).max(0), cell_h.min(window - top));
+            let number = FIRST_STRIP + row.rem_euclid(STRIP_ROWS) as usize;
+            if clip_top >= clip_end {
+                if glide.placed.remove(&row) {
+                    self.apc(&mut bytes, &format!("a=d,d=i,i={id},p={number},q=2"), b"");
                 }
-                let pixel = top.max(0);
-                let row = area.y as i32 + pixel / cell_height;
-                let _ = write!(bytes, "\x1b[{};{}H", row + 1, area.x + 1);
-                let control = format!(
-                    "a=p,i={id},p={number},x=0,y={clip_top},w={},h={},Y={},z={SCROLL_LAYER},C=1,q=2",
-                    image.width,
-                    clip_end - clip_top,
-                    pixel % cell_height,
-                );
-                self.apc(&mut bytes, &control, b"");
-                placed.insert(index);
+                continue;
             }
-            bytes.extend_from_slice(b"\x1b[?2026l");
-            out.write_all(&bytes)?;
-            out.flush()?;
-            bytes.clear();
-            if frame < smooth.frames {
-                std::thread::sleep(smooth.pause);
-            }
+            let pixel = top.max(0);
+            let y = i32::from(glide.area.y) + pixel / cell_h;
+            let _ = write!(bytes, "\x1b[{};{}H", y + 1, glide.area.x + 1);
+            let control = format!(
+                "a=p,i={id},p={number},x={across},y={clip_top},w={wide},h={},Y={},z={SCROLL_LAYER},C=1,q=2",
+                clip_end - clip_top,
+                pixel % cell_h,
+            );
+            self.apc(&mut bytes, &control, b"");
+            glide.placed.insert(row);
+        }
+        bytes.extend_from_slice(b"\x1b[?2026l");
+        out.write_all(&bytes)?;
+        out.flush()?;
+        // What's far behind has no way back into view before it's drawn again.
+        let reach = glide.area.h as i32 * KEPT_SCREENS;
+        let view = at / cell_h;
+        glide
+            .rows
+            .retain(|row, _| (row - view).abs() <= reach || glide.placed.contains(row));
+        if glide.at == target {
+            self.scrolling = true;
+        } else {
+            self.glide = Some(glide);
         }
         Ok(())
     }
 
+    fn settle(&mut self) {
+        self.scrolling |= self.glide.take().is_some();
+    }
+
     fn invalidate(&mut self) {
         self.size = (0, 0);
+        self.glide = None;
     }
 }
 
@@ -517,10 +552,14 @@ mod tests {
         h: 6,
     };
 
-    fn smooth(frames: u32) -> PixelBackend<Sized> {
-        let pause = Duration::ZERO;
-        PixelBackend::new(Sized, Placement::Direct, DEFAULT_QUOTA)
-            .with_smooth(Smooth { frames, pause })
+    const STEP: Duration = Duration::from_millis(8);
+    const SMOOTH: Smooth = Smooth {
+        frame: STEP,
+        ease: Duration::from_millis(40),
+    };
+
+    fn smooth() -> PixelBackend<Sized> {
+        PixelBackend::new(Sized, Placement::Direct, DEFAULT_QUOTA).with_smooth(SMOOTH)
     }
 
     fn scroll(b: &mut PixelBackend<Sized>, from: &Grid, to: &Grid, rows: i32) -> String {
@@ -602,14 +641,24 @@ mod tests {
         );
     }
 
+    /// Runs `count` frames of a glide, and gives back what they sent.
+    fn frames(b: &mut PixelBackend<Sized>, count: u32) -> String {
+        let mut out = Vec::new();
+        for _ in 0..count {
+            let now = b.glide.as_ref().map_or_else(Instant::now, |g| g.last) + STEP;
+            b.glide(now, &mut out).unwrap();
+        }
+        String::from_utf8(out).unwrap()
+    }
+
     #[test]
     fn regions_scroll_by_pixels() {
-        let mut b = smooth(4);
+        let mut b = smooth();
         let (from, to) = (pane(0), pane(3));
         present_sized(&mut b, &from);
-        let moving = scroll(&mut b, &from, &to, 3);
+        scroll(&mut b, &from, &to, 3);
+        let moving = frames(&mut b, 4);
         assert_eq!(count(&moving, "\x1b[?2026h"), 4, "every frame is atomic");
-        assert!(count(&moving, ",Y=") > 0);
         let offsets: HashSet<String> = moving
             .split(",Y=")
             .skip(1)
@@ -628,6 +677,8 @@ mod tests {
             !moving.contains(";1H"),
             "the sidebar's column is never touched"
         );
+        frames(&mut b, 200);
+        assert_eq!(b.gliding(), None, "it gets there");
         let settled = present_sized(&mut b, &to);
         assert_eq!(
             count(&settled, "a=d,d=z,z=1"),
@@ -638,21 +689,91 @@ mod tests {
     }
 
     #[test]
-    fn a_region_clips_at_its_edges() {
-        let mut b = smooth(2);
+    fn a_glide_moves_quickly_at_first_and_settles_gently() {
+        let mut b = smooth();
+        let (from, to) = (pane(0), pane(3));
+        present_sized(&mut b, &from);
+        scroll(&mut b, &from, &to, 3);
+        let mut places = vec![0.0];
+        while b.gliding().is_some() {
+            frames(&mut b, 1);
+            places.push(b.glide.as_ref().map_or(48.0, |g| g.at));
+            assert!(places.len() < 80, "it takes too long: {places:?}");
+        }
+        let steps: Vec<f32> = places.windows(2).map(|p| p[1] - p[0]).collect();
+        assert!(
+            steps.iter().all(|step| *step >= 0.0),
+            "never back: {steps:?}"
+        );
+        assert!(steps[0] > steps[steps.len() / 2], "it eases: {steps:?}");
+    }
+
+    #[test]
+    fn a_new_notch_carries_on_from_where_it_is() {
+        let mut b = smooth();
+        let (first, second, third) = (pane(0), pane(2), pane(4));
+        present_sized(&mut b, &first);
+        scroll(&mut b, &first, &second, 2);
+        frames(&mut b, 3);
+        let at = b.glide.as_ref().unwrap().at;
+        scroll(&mut b, &second, &third, 2);
+        let glide = b.glide.as_ref().unwrap();
+        assert_eq!((glide.at, glide.target), (at, 4), "no restart, no jump");
+    }
+
+    #[test]
+    fn the_wrong_way_turns_round_smoothly() {
+        let mut b = smooth();
+        let (first, second) = (pane(0), pane(2));
+        present_sized(&mut b, &first);
+        scroll(&mut b, &first, &second, 2);
+        frames(&mut b, 3);
+        let at = b.glide.as_ref().unwrap().at;
+        scroll(&mut b, &second, &first, -2);
+        frames(&mut b, 1);
+        let now = b.glide.as_ref().unwrap().at;
+        assert!(now < at && now > 0.0, "{at} then {now}");
+    }
+
+    #[test]
+    fn scrolling_only_sends_what_the_terminal_hasnt_seen() {
+        let mut b = smooth();
         let (from, to) = (pane(0), pane(1));
         present_sized(&mut b, &from);
-        let moving = scroll(&mut b, &from, &to, 1);
-        // Halfway through, the top row has lost its top half.
-        assert!(moving.contains(",y=8,w=96,h=8,"), "{moving:?}");
+        let sent = count(&scroll(&mut b, &from, &to, 1), "a=t,");
+        assert!(sent <= 1, "at most the one new row, not {sent}");
+        assert_eq!(
+            count(&frames(&mut b, 5), "a=t,"),
+            0,
+            "moving costs no pictures"
+        );
+    }
+
+    #[test]
+    fn a_region_clips_at_its_edges() {
+        let mut b = smooth();
+        let (from, to) = (pane(0), pane(1));
+        present_sized(&mut b, &from);
+        scroll(&mut b, &from, &to, 1);
+        let moving = frames(&mut b, 3);
+        assert!(
+            moving.contains(",x=64,y="),
+            "only the pane's columns: {moving:?}"
+        );
+        let clipped = moving
+            .split(",y=")
+            .skip(1)
+            .any(|rest| !rest.starts_with("0,"));
+        assert!(clipped, "the top row loses its top part: {moving:?}");
     }
 
     #[test]
     fn scrolling_back_needs_nothing_new() {
-        let mut b = smooth(3);
+        let mut b = smooth();
         let (from, to) = (pane(0), pane(2));
         present_sized(&mut b, &from);
         scroll(&mut b, &from, &to, 2);
+        frames(&mut b, 200);
         present_sized(&mut b, &to);
         let back = scroll(&mut b, &to, &from, -2);
         assert_eq!(
@@ -663,16 +784,43 @@ mod tests {
     }
 
     #[test]
+    fn typing_ends_a_glide_at_once() {
+        let mut b = smooth();
+        let (from, to) = (pane(0), pane(3));
+        present_sized(&mut b, &from);
+        scroll(&mut b, &from, &to, 3);
+        frames(&mut b, 1);
+        b.settle();
+        assert_eq!(b.gliding(), None);
+        assert_eq!(count(&present_sized(&mut b, &to), "a=d,d=z,z=1"), 1);
+    }
+
+    #[test]
+    fn tiles_a_glide_is_showing_arent_thrown_away() {
+        let mut b = smooth();
+        let (from, to) = (pane(0), pane(3));
+        present_sized(&mut b, &from);
+        scroll(&mut b, &from, &to, 3);
+        b.quota = 0;
+        let held: Vec<u32> = b.glide.as_ref().unwrap().rows.values().copied().collect();
+        let sent = present_sized(&mut b, &to);
+        for id in held {
+            assert!(
+                !sent.contains(&format!("a=d,d=I,i={id},")),
+                "{id} is on show"
+            );
+        }
+    }
+
+    #[test]
     fn a_jump_past_the_region_or_a_tier_without_pixels_doesnt_animate() {
-        let mut b = smooth(3);
+        let mut b = smooth();
         let (from, to) = (pane(0), pane(9));
         present_sized(&mut b, &from);
         assert_eq!(scroll(&mut b, &from, &to, 9), "");
+        assert_eq!(b.gliding(), None);
         let tmux =
-            PixelBackend::new(Sized, Placement::Placeholder, DEFAULT_QUOTA).with_smooth(Smooth {
-                frames: 3,
-                pause: Duration::ZERO,
-            });
+            PixelBackend::new(Sized, Placement::Placeholder, DEFAULT_QUOTA).with_smooth(SMOOTH);
         assert_eq!(tmux.smooth, None);
     }
 

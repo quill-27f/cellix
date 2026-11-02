@@ -2175,5 +2175,47 @@
     "title": "The source of a page offers the way back in its menu",
     "test": "the_source_of_a_page_offers_the_way_back_on_a_right_click",
     "passes": true
+  },
+  {
+    "id": "glide-eases",
+    "milestone": 9,
+    "title": "Scrolling eases to a stop",
+    "test": "a_glide_moves_quickly_at_first_and_settles_gently",
+    "passes": true
+  },
+  {
+    "id": "glide-carry",
+    "milestone": 9,
+    "title": "A new notch carries on from where the scroll is",
+    "test": "a_new_notch_carries_on_from_where_it_is",
+    "passes": true
+  },
+  {
+    "id": "glide-turn",
+    "milestone": 9,
+    "title": "Scrolling turns round smoothly",
+    "test": "the_wrong_way_turns_round_smoothly",
+    "passes": true
+  },
+  {
+    "id": "glide-cheap",
+    "milestone": 9,
+    "title": "Scrolling sends only rows the terminal hasn't seen",
+    "test": "scrolling_only_sends_what_the_terminal_hasnt_seen",
+    "passes": true
+  },
+  {
+    "id": "glide-settle",
+    "milestone": 9,
+    "title": "Typing ends a scroll at once",
+    "test": "typing_ends_a_glide_at_once",
+    "passes": true
+  },
+  {
+    "id": "glide-evict",
+    "milestone": 9,
+    "title": "Tiles in a scroll aren't thrown away",
+    "test": "tiles_a_glide_is_showing_arent_thrown_away",
+    "passes": true
   }
 ]

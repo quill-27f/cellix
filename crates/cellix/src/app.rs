@@ -2448,7 +2448,7 @@ impl App {
             // With no tab to say so, the icon does.
             let waiting = match command {
                 Command::ListAgents => self.agents.needing_you() > 0,
-                Command::ShowComments => self.dock.comment_count.get() > 0,
+                Command::ShowComments => self.dock.comment_count.get() > 0 && !on,
                 _ => false,
             };
             if waiting {

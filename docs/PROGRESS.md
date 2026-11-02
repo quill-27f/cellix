@@ -450,3 +450,10 @@ the end of the path row now goes between page and source, and the source's right
 same. A click on a lit rail icon closes the left side, as in VS Code. Ctrl+B does too, unless words
 are picked on a page, where it stays Bold. `ctrl_b_is_bold_on_a_page` became
 `ctrl_b_is_bold_on_words_picked_on_a_page` for that, and the Outline test's second press closes now.
+
+Scrolling is now a glide, as `docs/DESIGN.md` describes, in place of four fixed steps that blocked the
+main loop. The old scroll tests were rewritten for it: `regions_scroll_by_pixels` and
+`a_region_clips_at_its_edges` assert the same things frame by frame, and new ones cover the ease, a
+notch landing mid-glide and turning round. Checked in the headless terminal, including mid-scroll on
+a typeset page, about 2 MB/s there. Unverified: how it feels in a real Ghostty, which is the point of
+it, and only editors glide. Lists, Review and the pane still move by lines.

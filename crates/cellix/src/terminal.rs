@@ -25,11 +25,13 @@ use crossterm::terminal::{
 
 use crate::App;
 
-/// Steps in a wheel notch's animation. It stays short, because a trackpad's stream sends
-/// the next notch as this one ends, and a long ease would pulse.
-const SCROLL_FRAMES: u32 = 4;
-const REMOTE_SCROLL_FRAMES: u32 = 2;
-const SCROLL_PAUSE: Duration = Duration::from_millis(7);
+/// How often a scroll moves. Over a network each frame costs a round of placements.
+const SCROLL_FRAME: Duration = Duration::from_millis(8);
+const REMOTE_SCROLL_FRAME: Duration = Duration::from_millis(33);
+/// How quickly a scroll closes on where it's going, which gives VS Code's feel of about 125 ms.
+const SCROLL_EASE: Duration = Duration::from_millis(40);
+/// How often the page under a scroll is brought up to date while it moves.
+const SCROLL_PRESENT: Duration = Duration::from_millis(120);
 /// How long to wait for input before checking on language servers.
 const POLL: Duration = Duration::from_millis(50);
 /// How long to wait with a session in the side pane, whose output should feel typed.
@@ -189,14 +191,13 @@ impl Display {
             pixel_mouse: env.pixel_mouse,
             light: env.light,
             background: env.background,
-            // Over a network each frame costs a round of placements, so send fewer.
             smooth: smooth.then(|| Smooth {
-                frames: if std::env::var_os("SSH_CONNECTION").is_some() {
-                    REMOTE_SCROLL_FRAMES
+                frame: if std::env::var_os("SSH_CONNECTION").is_some() {
+                    REMOTE_SCROLL_FRAME
                 } else {
-                    SCROLL_FRAMES
+                    SCROLL_FRAME
                 },
-                pause: SCROLL_PAUSE,
+                ease: SCROLL_EASE,
             }),
         })
     }
@@ -204,8 +205,8 @@ impl Display {
     /// Turns the wheel's animation on or off.
     fn set_smooth(&mut self, on: bool) {
         self.smooth = on.then_some(Smooth {
-            frames: SCROLL_FRAMES,
-            pause: SCROLL_PAUSE,
+            frame: SCROLL_FRAME,
+            ease: SCROLL_EASE,
         });
     }
 
@@ -285,6 +286,7 @@ pub fn run(options: Options) -> io::Result<()> {
     let mut out = io::stdout();
     let mut slow = crate::slow::Log::start();
     let mut phases = crate::slow::Phases::default();
+    let mut last_present = Instant::now();
     app.set_measure(display.measure());
     // Only the direct tier moves by less than a line, so elsewhere a notch stays short.
     app.wheel_lines = if display.placement == Some(Placement::Direct) {
@@ -336,7 +338,11 @@ pub fn run(options: Options) -> io::Result<()> {
             if let (Some((area, rows)), Some(from)) = (app.take_scroll(), &shown) {
                 backend.scroll(from, &grid, area, rows, &mut out)?;
             }
-            backend.present(&grid, &mut out)?;
+            // Under a scroll the page can wait, so the time goes on moving it.
+            if backend.gliding().is_none() || last_present.elapsed() >= SCROLL_PRESENT {
+                backend.present(&grid, &mut out)?;
+                last_present = Instant::now();
+            }
             phases.present = started.elapsed();
             slow.note(&phases);
             phases = crate::slow::Phases::default();
@@ -357,15 +363,29 @@ pub fn run(options: Options) -> io::Result<()> {
         if app.quit {
             break;
         }
-        if ct::poll(if app.has_session() {
+        let wait = backend.gliding().unwrap_or(if app.has_session() {
             SESSION_POLL
         } else {
             POLL
-        })? {
+        });
+        if ct::poll(wait)? {
             let started = Instant::now();
             // Drain everything queued, so a fast wheel doesn't redraw per event.
             loop {
                 let event = ct::read()?;
+                // Anything but the wheel or a passing pointer may change what's under a scroll.
+                let passing = matches!(
+                    &event,
+                    ct::Event::Mouse(mouse) if matches!(
+                        mouse.kind,
+                        ct::MouseEventKind::Moved
+                            | ct::MouseEventKind::ScrollUp
+                            | ct::MouseEventKind::ScrollDown
+                    )
+                );
+                if !passing {
+                    backend.settle();
+                }
                 // A multiplexer forgets images when a client leaves, so a new one starts
                 // with an empty window until everything is sent again.
                 if matches!(event, ct::Event::FocusGained)
@@ -398,6 +418,11 @@ pub fn run(options: Options) -> io::Result<()> {
         let started = Instant::now();
         redraw |= app.poll();
         phases.poll += started.elapsed();
+        if backend.gliding().is_some() {
+            backend.glide(Instant::now(), &mut out)?;
+            // Arrived, so the page underneath takes over.
+            redraw |= backend.gliding().is_none();
+        }
         if let Some(server) = &server {
             while let Ok(request) = server.requests.try_recv() {
                 app.serve(request);
