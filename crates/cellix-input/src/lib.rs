@@ -182,6 +182,8 @@ pub enum Command {
     ToggleTracking,
     AcceptChange,
     RejectChange,
+    /// Turns spelling and grammar checks on or off.
+    ToggleSpelling,
     AcceptAllChanges,
     RejectAllChanges,
     ReviewPreviousTurn,

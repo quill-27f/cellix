@@ -6,6 +6,7 @@ use std::rc::Rc;
 use cellix_core::{Buffer, Motion, Selection, Selections};
 use cellix_doc::changes::{self, Change, Kind, Syntax};
 use cellix_doc::latex::Project;
+use cellix_doc::prose::{Issue, Source};
 use cellix_doc::table::Edit as TableEdit;
 use cellix_input::{Command, Direction, Format};
 use cellix_lang::{Registry, Span, Worker};
@@ -121,6 +122,10 @@ pub struct Editor {
     dark: Cell<bool>,
     /// Whether typing here is kept as suggested changes.
     pub tracking: bool,
+    /// Spelling and grammar, for the revision they were checked at.
+    pub issues: (u64, Vec<Issue>),
+    /// The revision last sent to be checked.
+    pub checked: u64,
     /// Where built pieces of LaTeX are kept.
     pub built: Option<PathBuf>,
     /// Pieces of LaTeX this page is waiting for, for the app to have built.
@@ -196,6 +201,8 @@ impl Editor {
             library: RefCell::default(),
             dark: Cell::new(false),
             tracking: false,
+            issues: (0, Vec::new()),
+            checked: 0,
             built: None,
             wanted: RefCell::default(),
             quoted: RefCell::default(),
@@ -1568,6 +1575,55 @@ impl Editor {
         }
     }
 
+    /// What's wrong with this revision of the text.
+    fn current_issues(&self) -> &[Issue] {
+        if self.issues.0 == self.buffer.revision() {
+            &self.issues.1
+        } else {
+            &[]
+        }
+    }
+
+    /// What this document is written in, for the prose checker.
+    pub fn prose_source(&self) -> Source {
+        match self.dialect() {
+            Dialect::Latex => Source::Latex,
+            Dialect::Markdown => Source::Markdown,
+        }
+    }
+
+    /// The spelling or grammar issue at the caret.
+    pub fn issue_at_caret(&self) -> Option<&Issue> {
+        let head = self.selections.primary().head;
+        let holds = |issue: &&Issue| issue.start <= head && head <= issue.end;
+        self.current_issues().iter().find(holds)
+    }
+
+    /// The words of a range of the document.
+    pub fn words_in(&self, start: usize, end: usize) -> String {
+        self.buffer.rope().slice(start..end).to_string()
+    }
+
+    /// Puts a suggested word in place, and forgets the issue it settles.
+    pub fn apply_fix(&mut self, start: usize, end: usize, text: &str) {
+        self.buffer
+            .replace_range(&mut self.selections, start, end, text);
+        let at = start + text.chars().count();
+        self.selections.set_single(Selection::cursor(at));
+    }
+
+    /// Takes a word off the list of what's wrong, wherever it stands.
+    pub fn forget_issues(&mut self, word: &str) {
+        let wanted = word.to_lowercase();
+        let rope = self.buffer.rope().clone();
+        self.issues.1.retain(|issue| {
+            rope.slice(issue.start..issue.end)
+                .to_string()
+                .to_lowercase()
+                != wanted
+        });
+    }
+
     fn syntax(&self) -> Syntax {
         match self.dialect() {
             Dialect::Latex => Syntax::Latex,
@@ -2546,6 +2602,10 @@ impl Editor {
                 quoted(at).then_some(theme.pick)
             }
         };
+        let issues = self.current_issues();
+        let flagged = |at: Option<usize>| {
+            at.is_some_and(|at| issues.iter().any(|i| at >= i.start && at < i.end))
+        };
         // Cells carry the text for the cell tier, and for tests. Pixels come from paint.
         for g in &row.glyphs {
             let style = cellix_render::Style {
@@ -2553,7 +2613,7 @@ impl Editor {
                 bg: mark(g.at).filter(|_| !proportional).unwrap_or(bg),
                 bold: g.font.bold,
                 italic: g.font.italic,
-                underline: g.underline,
+                underline: g.underline || flagged(g.at),
                 painted: proportional,
             };
             let x = left + g.x as u16;
@@ -2564,6 +2624,23 @@ impl Editor {
         }
         let text_y = y as f32 + if row.tall { TALL_DROP } else { 0.0 };
         let right = area.right() as f32;
+        for issue in issues {
+            let inside = |g: &&Glyph| g.at.is_some_and(|at| at >= issue.start && at < issue.end);
+            let mut word = row.glyphs.iter().filter(inside);
+            let Some(first) = word.next() else {
+                continue;
+            };
+            let last = word.next_back().unwrap_or(first);
+            let x = origin + first.x;
+            let width = last.x + last.advance - first.x;
+            let colour = if issue.spelling {
+                theme.deleted()
+            } else {
+                theme.accent
+            };
+            let line = Bounds::cells(x, text_y + 0.9, width, 0.07);
+            grid.panel(line, 0, Some(colour), None);
+        }
         let mut i = 0;
         while i < row.glyphs.len() {
             let g = row.glyphs[i];

@@ -7,5 +7,6 @@ pub mod html;
 pub mod latex;
 pub mod math;
 pub mod pdf;
+pub mod prose;
 pub mod synctex;
 pub mod table;

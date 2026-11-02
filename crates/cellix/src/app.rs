@@ -93,7 +93,14 @@ const TOOLTIP_HEIGHT: f32 = 1.22;
 const TOOLTIP_SIZE: u8 = 92;
 /// What each button is called, in order, since they're only icons and marks.
 const FIND_NAMES: [&str; 3] = ["Previous match", "Next match", "Close"];
-const RAIL_NAMES: [&str; 5] = ["Files", "Search", "Review Changes", "Agents", "Settings"];
+const RAIL_NAMES: [&str; 6] = [
+    "Files",
+    "Search",
+    "Outline",
+    "Review Changes",
+    "Agents",
+    "Settings",
+];
 /// Below this width, opening the side pane puts the sidebar away.
 const CROWDED_WIDTH: u16 = 120;
 const SIDEBAR_WIDTH: u16 = 28;
@@ -489,6 +496,11 @@ pub struct App {
     system_browser: Vec<String>,
     /// What saves the clipboard's picture to the file named last.
     clipboard_image: Vec<String>,
+    /// Checks spelling and grammar, started when a page first needs it.
+    spell: Option<crate::spell::Spell>,
+    spell_on: bool,
+    /// When the text last changed, so checks wait for a pause.
+    last_edit: (u64, std::time::Instant),
     /// Where pieces of LaTeX built for pages are kept, and what builds them.
     built_folder: PathBuf,
     snippets: Option<crate::snippets::Worker>,
@@ -526,6 +538,9 @@ impl App {
             ticks: 0,
             review: None,
             clipboard_image: clipboard_image_command(),
+            spell: None,
+            spell_on: cfg!(not(test)) && settings.spell_check != Some(false),
+            last_edit: (0, std::time::Instant::now()),
             built_folder: crate::snippets::default_folder(),
             snippets: None,
             system_browser: vec![
@@ -905,6 +920,48 @@ impl App {
     }
 
     /// Sends edits to servers and handles their replies. Returns true if anything changed.
+    /// Sends the page in view to be checked once typing pauses, and takes in what comes back.
+    fn poll_spell(&mut self) -> bool {
+        const PAUSE: std::time::Duration = std::time::Duration::from_millis(500);
+        if !self.spell_on {
+            return false;
+        }
+        let mut changed = false;
+        while let Some(found) = self.spell.as_ref().and_then(crate::spell::Spell::poll) {
+            let same = |e: &&mut Editor| e.buffer.path() == Some(found.file.as_path());
+            if let Some(editor) = self.editors.iter_mut().find(same) {
+                editor.issues = (found.revision, found.issues);
+                changed = true;
+            }
+        }
+        let Some(editor) = self.editors.get(self.active()) else {
+            return changed;
+        };
+        let revision = editor.buffer.revision();
+        if self.last_edit.0 != revision {
+            self.last_edit = (revision, std::time::Instant::now());
+        }
+        let due = editor.rendered
+            && editor.checked != revision + 1
+            && self.last_edit.1.elapsed()
+                >= if revision == 0 {
+                    Default::default()
+                } else {
+                    PAUSE
+                };
+        let Some(file) = editor.buffer.path().filter(|_| due).map(Path::to_path_buf) else {
+            return changed;
+        };
+        let (text, source) = (editor.buffer.text(), editor.prose_source());
+        let spell = self
+            .spell
+            .get_or_insert_with(|| crate::spell::Spell::start(Settings::words_file()));
+        spell.check(file, revision, text, source);
+        let active = self.active();
+        self.editors[active].checked = revision + 1;
+        changed
+    }
+
     /// Passes on what pages are waiting for, and sets them again as it comes.
     fn poll_snippets(&mut self) -> bool {
         let wanted: Vec<_> = self.editors.iter().flat_map(Editor::take_wanted).collect();
@@ -967,7 +1024,8 @@ impl App {
             | self.poll_browser()
             | self.poll_offer()
             | self.poll_build()
-            | self.poll_snippets();
+            | self.poll_snippets()
+            | self.poll_spell();
         let mut events = Vec::new();
         for client in self.servers.values() {
             events.extend(client.events.try_iter());
@@ -2863,6 +2921,20 @@ impl App {
                     self.say("No plan is waiting for review");
                 }
             }
+            Command::ToggleSpelling => {
+                self.spell_on = !self.spell_on;
+                let on = self.spell_on;
+                for editor in &mut self.editors {
+                    editor.issues.1.clear();
+                    editor.checked = 0;
+                }
+                let _ = Settings::store("spell_check", json!(on));
+                self.say(if on {
+                    "Spell check is on"
+                } else {
+                    "Spell check is off"
+                });
+            }
             Command::ToggleTracking => {
                 if let Some(editor) = self.editor_mut() {
                     let on = editor.toggle_tracking();
@@ -4740,6 +4812,27 @@ impl App {
         ];
         let mut items = Vec::new();
         if editor.rendered {
+            if let Some(issue) = editor.issue_at_caret() {
+                let word = editor.words_in(issue.start, issue.end);
+                for fix in &issue.fixes {
+                    let shown = if fix.is_empty() {
+                        "Remove"
+                    } else {
+                        fix.as_str()
+                    };
+                    let action = MenuAction::Fix(issue.start, issue.end, fix.clone());
+                    items.push(MenuItem::new(shown.to_string(), action));
+                }
+                if issue.spelling {
+                    items.push(
+                        MenuItem::new("Add to Dictionary", MenuAction::Learn(word)).after_rule(),
+                    );
+                }
+                let last = items.last_mut();
+                if let Some(item) = last.filter(|_| !issue.spelling) {
+                    item.rule = false;
+                }
+            }
             if editor.change_at_caret().is_some() {
                 items.extend([
                     run("Accept Change", Command::AcceptChange),
@@ -4900,6 +4993,19 @@ impl App {
         match action {
             MenuAction::Run(command) => self.run(command),
             MenuAction::Tool(tool) => self.use_tool(tool, self.main_area().x),
+            MenuAction::Fix(start, end, text) => {
+                if let Some(editor) = self.editor_mut() {
+                    editor.apply_fix(start, end, &text);
+                }
+            }
+            MenuAction::Learn(word) => {
+                if let Some(spell) = &self.spell {
+                    spell.learn(&word);
+                }
+                for editor in &mut self.editors {
+                    editor.forget_issues(&word);
+                }
+            }
             MenuAction::ImageWidth(percent) => {
                 if let Some(editor) = self.editor_mut() {
                     editor.set_image_width(percent);
@@ -6317,14 +6423,14 @@ impl App {
             Tool::Diagram if self.page_dialect() == Dialect::Latex => {
                 let templates = cellix_doc::diagram::PAPER_TEMPLATES.iter().enumerate();
                 let items = templates
-                    .map(|(index, (name, _))| MenuItem::new(name, MenuAction::PaperDiagram(index)))
+                    .map(|(index, (name, _))| MenuItem::new(*name, MenuAction::PaperDiagram(index)))
                     .collect();
                 self.show_menu((x, 3), items);
             }
             Tool::Diagram => {
                 let templates = cellix_doc::diagram::TEMPLATES.iter().enumerate();
                 let items = templates
-                    .map(|(index, (name, ..))| MenuItem::new(name, MenuAction::Diagram(index)))
+                    .map(|(index, (name, ..))| MenuItem::new(*name, MenuAction::Diagram(index)))
                     .collect();
                 self.show_menu((x, 3), items);
             }
@@ -9457,6 +9563,48 @@ mod tests {
         typed(&mut app, "new ");
         let text = app.active_text().unwrap();
         assert!(text.contains("Some \\added{new }words"), "{text}");
+    }
+
+    /// A page whose words have been checked for real.
+    fn checked_page(text: &str) -> (TempDir, App) {
+        let (dir, mut app) = page_app(text);
+        app.spell_on = true;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while app.editors[0].issues.1.is_empty() {
+            assert!(std::time::Instant::now() < deadline, "nothing was found");
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        (dir, app)
+    }
+
+    #[test]
+    fn a_misspelled_word_is_underlined_and_its_menu_fixes_it() {
+        let (_dir, mut app) = checked_page("This sentence has a mispelled word in it.\n");
+        let grid = screen(&app);
+        let (x, y) = find(&grid, "mispelled");
+        assert!(grid.cell(x, y).style.underline, "marked where it stands");
+        app.handle(mouse(MouseKind::Right, x + 1, y));
+        let menu = screen(&app);
+        let (mx, my) = find(&menu, "misspelled");
+        assert!(menu.text().contains("Add to Dictionary"));
+        app.handle(mouse(MouseKind::Left, mx + 1, my));
+        assert_eq!(
+            app.active_text().unwrap(),
+            "This sentence has a misspelled word in it.\n"
+        );
+    }
+
+    #[test]
+    fn a_word_added_to_the_dictionary_stops_being_marked() {
+        let (_dir, mut app) = checked_page("This sentence has a mispelled word in it.\n");
+        let grid = screen(&app);
+        let (x, y) = find(&grid, "mispelled");
+        app.handle(mouse(MouseKind::Right, x + 1, y));
+        let (mx, my) = find(&screen(&app), "Add to Dictionary");
+        app.handle(mouse(MouseKind::Left, mx + 1, my));
+        let (x, y) = find(&screen(&app), "mispelled");
+        assert!(!screen(&app).cell(x, y).style.underline);
     }
 
     #[test]

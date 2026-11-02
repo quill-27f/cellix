@@ -19,6 +19,8 @@ pub struct Settings {
     pub smooth_scroll: Option<bool>,
     /// `false` hides the minimap, however wide the window.
     pub minimap: Option<bool>,
+    /// `false` turns off spelling and grammar on pages.
+    pub spell_check: Option<bool>,
     /// What opens web pages, before the system's own browser. `terminal-browser` works here.
     pub browser: Option<Vec<String>>,
     /// Language name to server command, overriding the built-in table.
@@ -41,9 +43,19 @@ impl Settings {
         self.keymap = other.keymap.or(self.keymap.take());
         self.tier = other.tier.or(self.tier.take());
         self.browser = other.browser.or(self.browser.take());
+        self.spell_check = other.spell_check.or(self.spell_check.take());
         self.language_servers.extend(other.language_servers);
         self.declined_languages.extend(other.declined_languages);
         self.latex_engine = other.latex_engine.or(self.latex_engine.take());
+    }
+
+    /// The words the user has said are right.
+    pub fn words_file() -> Option<PathBuf> {
+        if cfg!(test) {
+            return None;
+        }
+        let home = PathBuf::from(std::env::var_os("HOME")?);
+        Some(home.join(".config/cellix/words.txt"))
     }
 
     /// The user's own settings file.

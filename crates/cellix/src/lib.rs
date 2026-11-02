@@ -22,6 +22,7 @@ mod search;
 mod settings;
 mod settings_page;
 mod snippets;
+mod spell;
 mod terminal;
 mod theme;
 mod threads;

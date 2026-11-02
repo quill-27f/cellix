@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use std::path::PathBuf;
 
 use cellix_doc::table::Edit as TableEdit;
@@ -42,13 +44,17 @@ pub enum Action {
     Diagram(usize),
     /// Adds a drawing to a paper from a template.
     PaperDiagram(usize),
+    /// Puts a suggested word in place of a range of the document.
+    Fix(usize, usize, String),
+    /// Stops counting a word as wrong.
+    Learn(String),
 }
 
 /// One row. `None` for an action shows what can't be done here, rather than hiding it, so
 /// the menu keeps its shape from file to file.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Item {
-    pub label: &'static str,
+    pub label: Cow<'static, str>,
     pub keys: Option<&'static str>,
     pub action: Option<Action>,
     /// A line above this row, starting a new group.
@@ -56,13 +62,13 @@ pub struct Item {
 }
 
 impl Item {
-    pub fn new(label: &'static str, action: Action) -> Self {
+    pub fn new(label: impl Into<Cow<'static, str>>, action: Action) -> Self {
         let keys = match action {
             Action::Run(command) => keys_of(command),
             _ => None,
         };
         Self {
-            label,
+            label: label.into(),
             keys,
             action: Some(action),
             rule: false,
@@ -131,7 +137,7 @@ impl Menu {
         };
         let row = |item: &Item| {
             let keys = item.keys.map_or(0.0, |k| measure.width(k, small) + GAP);
-            measure.width(item.label, plain) + keys
+            measure.width(&item.label, plain) + keys
         };
         let widest = items.iter().map(row).fold(0.0, f32::max);
         ((widest + INSET * 2.0).ceil() as u16 + 1).max(MIN_WIDTH)
@@ -218,7 +224,7 @@ impl Menu {
             }
             let style = if usable { base } else { greyed };
             let x = area.x as f32 + INSET;
-            grid.label_at(x, area.x + 1, y, item.label, style, area.right(), 100);
+            grid.label_at(x, area.x + 1, y, &item.label, style, area.right(), 100);
             if let Some(keys) = item.keys {
                 let right = area.right().saturating_sub(1);
                 let shown = if usable { keys_style } else { greyed };

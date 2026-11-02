@@ -1209,5 +1209,33 @@
     "title": "A paper tracks changes with its own package",
     "test": "a_paper_tracks_changes_with_its_own_package",
     "passes": true
+  },
+  {
+    "id": "spell-fix",
+    "milestone": 9,
+    "title": "A misspelled word is underlined and its menu fixes it",
+    "test": "a_misspelled_word_is_underlined_and_its_menu_fixes_it",
+    "passes": true
+  },
+  {
+    "id": "spell-learn",
+    "milestone": 9,
+    "title": "A word added to the dictionary stops being marked",
+    "test": "a_word_added_to_the_dictionary_stops_being_marked",
+    "passes": true
+  },
+  {
+    "id": "spell-prose",
+    "milestone": 9,
+    "title": "Spell check skips what isn't prose in Markdown",
+    "test": "prose_stays_where_it_was_and_the_rest_goes",
+    "passes": true
+  },
+  {
+    "id": "spell-tex",
+    "milestone": 9,
+    "title": "Spell check skips what isn't prose in a paper",
+    "test": "a_papers_commands_go_and_its_words_stay",
+    "passes": true
   }
 ]
