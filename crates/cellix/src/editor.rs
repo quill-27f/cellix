@@ -7,7 +7,7 @@ use std::rc::Rc;
 use cellix_core::{Buffer, Motion, Selection, Selections};
 use cellix_doc::changes::{self, Change, Kind, Syntax};
 use cellix_doc::latex::Project;
-use cellix_doc::notebook::Notebook;
+use cellix_doc::notebook::{Marker, Notebook, marker};
 use cellix_doc::prose::{Issue, Source};
 use cellix_doc::table::Edit as TableEdit;
 use cellix_input::{Command, Direction, Format};
@@ -589,6 +589,18 @@ impl Editor {
             return Some((found.line, shown));
         }
         None
+    }
+
+    /// The source line of the code block a screen row is in, and the screen row its first
+    /// row is on.
+    pub fn code_block_on_row(&self, area: Rect, y: u16) -> Option<(usize, u16)> {
+        let area = self.text_area(area);
+        let rows = self.page(area);
+        let index = self.top + y.checked_sub(area.y)? as usize;
+        let row = rows.get(index).filter(|r| r.shaded)?;
+        let first = (0..=index).rev().take_while(|n| rows[*n].shaded).last()?;
+        let top = first.max(self.top) - self.top;
+        Some((row.line, area.y + top as u16))
     }
 
     /// The image a screen row is on. Formulas and diagrams have no size of their own to change.
@@ -1720,6 +1732,39 @@ impl Editor {
         self.notebook = Some(notebook);
         *self.page.borrow_mut() = None;
         self.buffer.reload_as(&mut self.selections, page)
+    }
+
+    /// The cell a source line is in, as its marker's line, what it says of itself and its
+    /// code. None for a line that isn't in a code cell.
+    pub fn code_cell_at(&self, line: usize) -> Option<(usize, Marker, String)> {
+        self.notebook.as_ref()?;
+        let last = self.buffer.rope().len_lines();
+        let top = (0..=line.min(last.saturating_sub(1)))
+            .rev()
+            .find(|n| marker(&self.line_text(*n)).is_some())?;
+        let mark = marker(&self.line_text(top)).filter(|m| m.code)?;
+        let lines = (top + 1..last).map(|n| self.line_text(n));
+        let lines: Vec<String> = lines.take_while(|text| marker(text).is_none()).collect();
+        let open = lines.iter().position(|l| l.starts_with("```"))?;
+        let close = lines.iter().rposition(|l| l.trim() == "```")?;
+        (close > open).then(|| (top, mark, lines[open + 1..close].join("\n")))
+    }
+
+    /// Every code cell, top to bottom, as its number and code.
+    pub fn code_cells(&self) -> Vec<(Marker, String)> {
+        let lines = 0..self.buffer.rope().len_lines();
+        let tops = lines.filter(|n| marker(&self.line_text(*n)).is_some_and(|m| m.code));
+        let cells = tops.filter_map(|n| self.code_cell_at(n));
+        cells.map(|(_, mark, code)| (mark, code)).collect()
+    }
+
+    /// Writes new cells into the file, so they have numbers of their own to run as.
+    pub fn number_new_cells(&mut self) -> io::Result<()> {
+        let head = self.selections.primary().head;
+        self.save()?;
+        self.reload()?;
+        self.selections.set_single(Selection::cursor(head));
+        Ok(())
     }
 
     /// Adds a code cell below this line.

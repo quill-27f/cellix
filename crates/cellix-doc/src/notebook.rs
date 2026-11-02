@@ -19,6 +19,8 @@ pub enum Output {
 pub struct Notebook {
     json: Value,
     pub language: String,
+    /// Cells waiting for or in the kernel.
+    pub running: Vec<usize>,
 }
 
 /// The hidden line above a cell.
@@ -117,7 +119,47 @@ impl Notebook {
             .and_then(Value::as_str)
             .unwrap_or("python")
             .to_string();
-        Ok(Self { json, language })
+        Ok(Self {
+            json,
+            language,
+            running: Vec::new(),
+        })
+    }
+
+    /// The kernel's name, as the notebook gives it.
+    pub fn kernel(&self) -> String {
+        let name = self.json.pointer("/metadata/kernelspec/name");
+        name.and_then(Value::as_str)
+            .unwrap_or("python3")
+            .to_string()
+    }
+
+    /// Clears what a cell last printed, as it starts again.
+    pub fn clear_outputs(&mut self, cell: usize) {
+        self.json["cells"][cell]["outputs"] = json!([]);
+    }
+
+    /// Adds something a running cell printed or drew, joining text to the text before it.
+    pub fn add_output(&mut self, cell: usize, output: Value) {
+        let Some(list) = self.json["cells"][cell]["outputs"].as_array_mut() else {
+            return;
+        };
+        let stream = |value: &Value| value["output_type"] == "stream";
+        if let Some(last) = list.last_mut()
+            && stream(last)
+            && stream(&output)
+            && last["name"] == output["name"]
+        {
+            let text = joined(last.get("text")) + &joined(output.get("text"));
+            last["text"] = json!(text);
+            return;
+        }
+        list.push(output);
+    }
+
+    /// Notes the number a cell ran as.
+    pub fn set_count(&mut self, cell: usize, count: Option<u64>) {
+        self.json["cells"][cell]["execution_count"] = json!(count);
     }
 
     fn cells(&self) -> &[Value] {
@@ -300,6 +342,23 @@ mod tests {
         assert_eq!(cells[1]["outputs"].as_array().unwrap().len(), 4);
         assert_eq!(joined(Some(&cells[2]["source"])), "x = 1");
         assert_eq!(cells[2]["cell_type"], "code");
+    }
+
+    #[test]
+    fn a_cell_run_again_replaces_what_it_printed() {
+        let mut notebook = Notebook::read(SAMPLE).unwrap();
+        notebook.clear_outputs(1);
+        let line = |text: &str| json!({"output_type": "stream", "name": "stdout", "text": text});
+        notebook.add_output(1, line("one\n"));
+        notebook.add_output(1, line("two\n"));
+        notebook.set_count(1, Some(9));
+        assert_eq!(
+            notebook.outputs(1),
+            [Output::Text("one\ntwo\n".to_string())]
+        );
+        assert_eq!(notebook.count(1), Some(9));
+        let written: Value = serde_json::from_str(&notebook.write(&notebook.page())).unwrap();
+        assert_eq!(written["cells"][1]["execution_count"], 9);
     }
 
     #[test]

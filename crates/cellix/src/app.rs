@@ -26,7 +26,7 @@ use cellix_agent::hook::comments_message;
 use cellix_agent::ide::{IdeCall, IdeServer};
 use cellix_agent::{Decision, Request, SharedComments, TestRun};
 use cellix_doc::latex::ENGINES;
-use cellix_doc::notebook::Notebook;
+use cellix_doc::notebook::{Marker, Notebook};
 use cellix_doc::table::{Align, Edit as TableEdit};
 
 use serde_json::{Value, json};
@@ -36,6 +36,7 @@ use crate::dock::{BROWSER, CellPixels, Dock, Front, Session, TabHit};
 use crate::editor::{Editor, Marks};
 use crate::explorer::Explorer;
 use crate::find::Find;
+use crate::kernel::{self, Event as KernelEvent, Kernel};
 use crate::menu::{Action as MenuAction, Item as MenuItem, Menu};
 use crate::neovim::{self, Neovim};
 use crate::outline::Outline;
@@ -55,6 +56,7 @@ use crate::toolbar::{self, Tool};
 const ACTIVITY_WIDTH: u16 = 5;
 /// The buttons that stand by a selection, and the one on a picture.
 const COMMENT_WIDTH: u16 = 10;
+const RUN_WIDTH: u16 = 6;
 /// The row the Comment button stands on over a PDF, clear of its zoom buttons.
 const VIEW_COMMENT_ROW: u16 = 2;
 const ASK_WIDTH: u16 = 11;
@@ -558,6 +560,10 @@ pub struct App {
     pane_explained: bool,
     /// What runs sessions so they can outlive Cellix: Cellix itself, away from tests.
     host_program: Option<PathBuf>,
+    /// A kernel for each notebook that has run something, by its file.
+    kernels: HashMap<PathBuf, Kernel>,
+    /// Stands in for the kernel's runner in tests.
+    kernel_command: Option<Vec<String>>,
     /// Checks spelling and grammar, started when a page first needs it.
     spell: Option<crate::spell::Spell>,
     spell_on: bool,
@@ -601,6 +607,8 @@ impl App {
             review: None,
             clipboard_image: clipboard_image_command(),
             keep_running: false,
+            kernels: HashMap::new(),
+            kernel_command: None,
             pane_explained: false,
             host_program: std::env::current_exe().ok().filter(|_| !cfg!(test)),
             spell: None,
@@ -1035,6 +1043,210 @@ impl App {
         changed
     }
 
+    fn active_file(&self) -> Option<PathBuf> {
+        let editor = self.editors.get(self.active())?;
+        editor.buffer.path().map(Path::to_path_buf)
+    }
+
+    /// This notebook's kernel, started if it needs to be.
+    fn kernel_for_notebook(&mut self) -> Option<PathBuf> {
+        let file = self.active_file()?;
+        if !self.kernels.contains_key(&file) {
+            let folder = file.parent().map(Path::to_path_buf).unwrap_or_default();
+            let editor = self.editors.get(self.active())?;
+            let name = editor.notebook.as_ref()?.kernel();
+            let started = match &self.kernel_command {
+                Some(command) => Kernel::start_command(command, &folder),
+                None => {
+                    let python = kernel::python_for(&folder, self.workspace.root());
+                    Kernel::start(&python, &folder, &name)
+                }
+            };
+            match started {
+                Ok(kernel) => {
+                    self.kernels.insert(file.clone(), kernel);
+                }
+                Err(e) => {
+                    self.say(format!("Could not start Python: {e}"));
+                    return None;
+                }
+            }
+        }
+        Some(file)
+    }
+
+    /// Sends cells to the kernel, marking them as running.
+    fn send_cells(&mut self, cells: Vec<(Marker, String)>) {
+        let Some(file) = self.kernel_for_notebook() else {
+            return;
+        };
+        for (mark, code) in cells {
+            let Some(number) = mark.cell else {
+                continue;
+            };
+            if let Some(book) = self.editor_mut().and_then(|e| e.notebook.as_mut()) {
+                book.clear_outputs(number);
+                book.running.push(number);
+            }
+            let Some(kernel) = self.kernels.get_mut(&file) else {
+                return;
+            };
+            if let Err(e) = kernel.run(number, &code) {
+                self.say(format!("The kernel has gone: {e}"));
+                self.kernels.remove(&file);
+                return;
+            }
+        }
+        if let Some(editor) = self.editor_mut() {
+            editor.refresh_page();
+        }
+    }
+
+    /// Gives cells added since the file was read a number, so they can hold their outputs.
+    fn number_cells(&mut self) -> bool {
+        let Some(editor) = self.editor_mut() else {
+            return false;
+        };
+        if editor
+            .code_cells()
+            .iter()
+            .all(|(mark, _)| mark.cell.is_some())
+        {
+            return true;
+        }
+        match editor.number_new_cells() {
+            Ok(()) => true,
+            Err(e) => {
+                self.say(format!("Could not save the notebook: {e}"));
+                false
+            }
+        }
+    }
+
+    fn run_cell(&mut self) {
+        if !self.number_cells() {
+            return;
+        }
+        let line = self
+            .cursor_line()
+            .map_or(0, |(_, line)| line.saturating_sub(1));
+        let cell = self
+            .editors
+            .get(self.active())
+            .and_then(|e| e.code_cell_at(line));
+        match cell {
+            Some((_, mark, code)) => self.send_cells(vec![(mark, code)]),
+            None => self.say("Put the caret in a code cell to run it"),
+        }
+    }
+
+    fn run_all_cells(&mut self) {
+        if !self.number_cells() {
+            return;
+        }
+        let cells = self.editors.get(self.active()).map(Editor::code_cells);
+        match cells.filter(|cells| !cells.is_empty()) {
+            Some(cells) => self.send_cells(cells),
+            None => self.say("This notebook has no code cells"),
+        }
+    }
+
+    /// Takes in what kernels have to say.
+    fn poll_kernels(&mut self) -> bool {
+        let files: Vec<PathBuf> = self.kernels.keys().cloned().collect();
+        let mut changed = false;
+        for file in files {
+            let events: Vec<KernelEvent> = self.kernels[&file].events.try_iter().collect();
+            for event in events {
+                changed = true;
+                self.kernel_event(&file, event);
+            }
+        }
+        changed
+    }
+
+    fn kernel_event(&mut self, file: &Path, event: KernelEvent) {
+        let editor = self
+            .editors
+            .iter_mut()
+            .find(|e| e.buffer.path() == Some(file));
+        let Some(editor) = editor else {
+            return;
+        };
+        let Some(book) = editor.notebook.as_mut() else {
+            return;
+        };
+        match event {
+            KernelEvent::Ready => {}
+            KernelEvent::Output(cell, output) => book.add_output(cell, output),
+            KernelEvent::Clear(cell) => book.clear_outputs(cell),
+            KernelEvent::Done(cell, count) => {
+                book.set_count(cell, count);
+                book.running.retain(|n| *n != cell);
+                // Outputs aren't in the text, so nothing else would ever write them.
+                if book.running.is_empty() && !editor.buffer.is_dirty() {
+                    let _ = editor.save();
+                }
+            }
+            KernelEvent::Missing | KernelEvent::Failed(_) => {
+                book.running.clear();
+                editor.refresh_page();
+                self.kernels.remove(file);
+                if let KernelEvent::Failed(reason) = event {
+                    self.say(format!("The kernel wouldn't start: {reason}"));
+                } else {
+                    self.offer_jupyter(file);
+                }
+                return;
+            }
+        }
+        editor.refresh_page();
+    }
+
+    /// Running cells needs Jupyter, which is the project's to install, so it says what it
+    /// would run and does it where it can be watched.
+    fn offer_jupyter(&mut self, file: &Path) {
+        let folder = file.parent().unwrap_or(Path::new("."));
+        let python = kernel::python_for(folder, self.workspace.root());
+        let install = vec![
+            python.display().to_string(),
+            "-m".to_string(),
+            "pip".to_string(),
+            "install".to_string(),
+            "ipykernel".to_string(),
+            "jupyter_client".to_string(),
+        ];
+        let items = vec![
+            MenuItem::new(
+                "Install Jupyter in the Side Pane",
+                MenuAction::InPane("Install Jupyter".to_string(), install),
+            ),
+            MenuItem::run("Show Agents", Command::ShowAgents),
+        ];
+        self.say(format!(
+            "Running cells needs Jupyter, which {} doesn't have",
+            python.display()
+        ));
+        let main = self.main_area();
+        self.show_menu((main.x + 4, main.y + 3), items);
+    }
+
+    /// The Run button on the code cell under the pointer, and a line in that cell.
+    fn run_button(&self) -> Option<(Rect, usize)> {
+        let (x, y) = self.hover?;
+        if !matches!(self.overlay, Overlay::None) {
+            return None;
+        }
+        let pane = self.pane_at(x, y)?;
+        let editor = self.editors.get(*self.panes.get(pane)?)?;
+        editor.notebook.as_ref()?;
+        let area = self.pane_area(pane);
+        let (line, top) = editor.code_block_on_row(area, y)?;
+        editor.code_cell_at(line)?;
+        let right = area.right().saturating_sub(RUN_WIDTH + 4);
+        Some((Rect::new(right, top, RUN_WIDTH, 1), line))
+    }
+
     /// Passes on what pages are waiting for, and sets them again as it comes.
     fn poll_snippets(&mut self) -> bool {
         let wanted: Vec<_> = self.editors.iter().flat_map(Editor::take_wanted).collect();
@@ -1098,7 +1310,8 @@ impl App {
             | self.poll_offer()
             | self.poll_build()
             | self.poll_snippets()
-            | self.poll_spell();
+            | self.poll_spell()
+            | self.poll_kernels();
         let mut events = Vec::new();
         for client in self.servers.values() {
             events.extend(client.events.try_iter());
@@ -2309,6 +2522,9 @@ impl App {
         if let Some(chip) = self.view_comment() {
             self.draw_chip(grid, chip, "Comment");
         }
+        if let Some((chip, _)) = self.run_button() {
+            self.draw_chip(grid, chip, "Run");
+        }
         if let Some((comment, ask)) = self.selection_bar() {
             self.draw_chip(grid, comment, "Comment");
             self.draw_chip(grid, ask, "Ask Agent");
@@ -2321,6 +2537,15 @@ impl App {
     fn click_companion(&mut self, x: u16, y: u16) -> bool {
         if self.view_comment().is_some_and(|chip| chip.contains(x, y)) {
             self.comment_on_view();
+            return true;
+        }
+        if let Some((chip, line)) = self.run_button().filter(|(chip, _)| chip.contains(x, y)) {
+            let _ = chip;
+            let area = self.focused_area();
+            if let Some(editor) = self.editor_mut() {
+                editor.go_to_line(line + 1, area);
+            }
+            self.run_cell();
             return true;
         }
         if let Some((comment, ask)) = self.selection_bar() {
@@ -3248,6 +3473,22 @@ impl App {
                     );
                 } else {
                     self.say("No plan is waiting for review");
+                }
+            }
+            Command::RunCell => self.run_cell(),
+            Command::RunAllCells => self.run_all_cells(),
+            Command::InterruptKernel => {
+                if let Some(kernel) = self.active_file().and_then(|f| self.kernels.get(&f)) {
+                    kernel.interrupt();
+                }
+            }
+            Command::RestartKernel => {
+                if let Some(file) = self.active_file() {
+                    self.kernels.remove(&file);
+                    self.say("The kernel will start again with the next cell");
+                }
+                if let Some(book) = self.editor_mut().and_then(|e| e.notebook.as_mut()) {
+                    book.running.clear();
                 }
             }
             Command::ShowGuide => {
@@ -5299,7 +5540,13 @@ impl App {
                 return items;
             }
             if notebook {
-                items.push(MenuItem::new("Add Code Cell", MenuAction::AddCodeCell));
+                items.extend([
+                    run("Run Cell", Command::RunCell),
+                    run("Run All Cells", Command::RunAllCells),
+                    run("Interrupt Kernel", Command::InterruptKernel),
+                    run("Restart Kernel", Command::RestartKernel),
+                    MenuItem::new("Add Code Cell", MenuAction::AddCodeCell).after_rule(),
+                ]);
             }
             items.push(run("Show Source", Command::MarkdownPreview));
             items.extend(edit);
@@ -5463,6 +5710,10 @@ impl App {
                 for editor in &mut self.editors {
                     editor.forget_issues(&word);
                 }
+            }
+            MenuAction::InPane(name, argv) => {
+                let root = self.workspace.root().to_path_buf();
+                self.start_session(&name, &argv, &[], &root);
             }
             MenuAction::AddCodeCell => {
                 let area = self.focused_area();
@@ -10335,6 +10586,79 @@ mod tests {
             text.contains("Other words.") && !text.contains("cell_type"),
             "{text}"
         );
+    }
+
+    /// A stand-in for the kernel's runner that speaks its side of the conversation.
+    fn fake_runner(dir: &Path, first: &str) -> Vec<String> {
+        let script = dir.join("runner.py");
+        let body = format!(
+            "import json, sys\nprint(json.dumps({first}), flush=True)\nfor line in sys.stdin:\n    job = json.loads(line)\n    print(json.dumps({{'id': job['id'], 'output': {{'output_type': 'stream', 'name': 'stdout', 'text': 'ran: ' + job['code'] + '\\n'}}}}), flush=True)\n    print(json.dumps({{'id': job['id'], 'done': True, 'count': 41}}), flush=True)\n"
+        );
+        fs::write(&script, body).unwrap();
+        vec![
+            "python3".to_string(),
+            "-I".to_string(),
+            script.display().to_string(),
+        ]
+    }
+
+    fn cell_ran(app: &mut App, wanted: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !screen(app).text().contains(wanted) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{}",
+                screen(app).text()
+            );
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn a_cell_runs_and_its_output_lands_under_it_and_in_the_file() {
+        let (dir, mut app) = data_app("run.ipynb", NOTEBOOK);
+        app.kernel_command = Some(fake_runner(dir.path(), "{'ready': True}"));
+        let (x, y) = find(&screen(&app), "train()");
+        app.handle(mouse(MouseKind::Left, x, y));
+        app.run(Command::RunCell);
+        assert!(screen(&app).text().contains("Running"));
+        cell_ran(&mut app, "ran: import torch");
+        let text = screen(&app).text();
+        assert!(
+            !text.contains("epoch one loss"),
+            "the old output went: {text}"
+        );
+        assert!(text.contains("python  [41]"), "{text}");
+        let saved = fs::read_to_string(dir.path().join("run.ipynb")).unwrap();
+        let json: Value = serde_json::from_str(&saved).unwrap();
+        assert_eq!(json["cells"][1]["execution_count"], 41);
+        assert_eq!(json["cells"][1]["outputs"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_new_cell_runs_and_keeps_its_output() {
+        let (dir, mut app) = data_app("run.ipynb", NOTEBOOK);
+        app.kernel_command = Some(fake_runner(dir.path(), "{'ready': True}"));
+        let area = app.focused_area();
+        let lines = app.active_text().unwrap().lines().count();
+        app.editors[0].go_to_line(lines, area);
+        app.editors[0].insert_code_cell();
+        typed(&mut app, "fresh()");
+        app.run(Command::RunCell);
+        cell_ran(&mut app, "ran: fresh()");
+        let saved = fs::read_to_string(dir.path().join("run.ipynb")).unwrap();
+        let json: Value = serde_json::from_str(&saved).unwrap();
+        assert_eq!(json["cells"].as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn a_python_without_jupyter_offers_to_install_it_where_it_can_be_seen() {
+        let (dir, mut app) = data_app("run.ipynb", NOTEBOOK);
+        app.kernel_command = Some(fake_runner(dir.path(), "{'missing': True}"));
+        app.run(Command::RunAllCells);
+        cell_ran(&mut app, "Install Jupyter in the Side Pane");
+        assert!(!screen(&app).text().contains("Running…"));
     }
 
     #[test]

@@ -155,7 +155,9 @@ panel says what would fill it. Getting Started is a real page, so reading it sho
 
 A Jupyter notebook opens as a page too, with what each cell printed and drew under it. Its cells
 become Markdown with a hidden line above each, and saving puts the text back into the JSON beside
-the outputs it already had. Cells don't run here: a shell in the side pane can do that.
+the outputs it already had. Cells run in a real Jupyter kernel, through a small Python program that
+passes lines of JSON between Jupyter's client library and Cellix, using the project's own Python if
+it has one. Outputs land under each cell as they come, and are saved with the notebook.
 
 CSV and TSV files open as a table on the same page, with cells edited in place and rows and columns
 from the menu. A long file shows its first 2,000 rows and says so.

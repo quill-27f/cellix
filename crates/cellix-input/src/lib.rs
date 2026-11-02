@@ -178,6 +178,13 @@ pub enum Command {
     CloseDock,
     /// Shows the document's headings in the sidebar.
     ShowOutline,
+    /// Runs the notebook cell the caret is in.
+    RunCell,
+    RunAllCells,
+    /// Stops what the notebook's kernel is doing.
+    InterruptKernel,
+    /// Starts the notebook's kernel again, forgetting what it held.
+    RestartKernel,
     /// Opens the guide to getting started.
     ShowGuide,
     /// Starts a new document.

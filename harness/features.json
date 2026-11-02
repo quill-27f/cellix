@@ -1664,5 +1664,40 @@
     "title": "A taken IDE port is given up",
     "test": "a_port_someone_else_took_is_given_up",
     "passes": true
+  },
+  {
+    "id": "nb-run",
+    "milestone": 9,
+    "title": "A cell runs and its output lands under it and in the file",
+    "test": "a_cell_runs_and_its_output_lands_under_it_and_in_the_file",
+    "passes": true
+  },
+  {
+    "id": "nb-new",
+    "milestone": 9,
+    "title": "A new cell runs and keeps its output",
+    "test": "a_new_cell_runs_and_keeps_its_output",
+    "passes": true
+  },
+  {
+    "id": "nb-jupyter",
+    "milestone": 9,
+    "title": "A Python without Jupyter offers to install it",
+    "test": "a_python_without_jupyter_offers_to_install_it_where_it_can_be_seen",
+    "passes": true
+  },
+  {
+    "id": "nb-again",
+    "milestone": 9,
+    "title": "A cell run again replaces what it printed",
+    "test": "a_cell_run_again_replaces_what_it_printed",
+    "passes": true
+  },
+  {
+    "id": "nb-python",
+    "milestone": 9,
+    "title": "A project's own Python comes first",
+    "test": "a_projects_own_python_comes_first",
+    "passes": true
   }
 ]

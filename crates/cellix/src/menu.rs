@@ -49,6 +49,8 @@ pub enum Action {
     /// Stops counting a word as wrong.
     Learn(String),
     AddCodeCell,
+    /// Runs a program in the side pane, to set something up.
+    InPane(String, Vec<String>),
 }
 
 /// One row. `None` for an action shows what can't be done here, rather than hiding it, so

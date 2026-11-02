@@ -9,6 +9,7 @@ mod find;
 mod guide;
 pub mod hold;
 pub mod integrations;
+mod kernel;
 mod kitty;
 mod menu;
 mod neovim;

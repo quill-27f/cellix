@@ -1767,7 +1767,13 @@ pub fn layout_with(
                 drawing = Some((drawn, (i, inside, end)));
             }
             if !language.is_empty() {
-                let mut label = decoration(language, Tone::Dim);
+                // A cell says when it ran, as Jupyter's `[3]` does.
+                let count = extras.notebook.zip(cell).and_then(|(b, n)| b.count(n));
+                let shown = count.map_or_else(
+                    || language.to_string(),
+                    |count| format!("{language}  [{count}]"),
+                );
+                let mut label = decoration(&shown, Tone::Dim);
                 for g in &mut label {
                     g.font.size = 78;
                 }
@@ -1796,6 +1802,9 @@ pub fn layout_with(
                 let end = lines[last].0 + lines[last].1.chars().count();
                 let outputs = book.outputs(number);
                 cell_outputs(&outputs, (close.min(last), end), width, &context, &mut rows);
+                if book.running.contains(&number) {
+                    rows.push(note_row("Running…", close.min(last), end, &context));
+                }
             }
             // Being written, it stands under its source, and says what's wrong with it.
             match drawing {
