@@ -237,6 +237,8 @@ impl Held {
 struct Shared {
     kept: VecDeque<u8>,
     client: Option<UnixStream>,
+    /// Counts clients, so one leaving can't take the place of the next.
+    visit: u64,
     exited: bool,
     at_prompt: bool,
 }
@@ -367,8 +369,9 @@ pub fn serve(socket: &Path) -> io::Result<()> {
         std::thread::sleep(Duration::from_millis(100));
         if let Ok(mut shared) = ended.lock() {
             shared.exited = true;
+            // Only someone who really heard it lets the host go. Otherwise it waits to say so.
+            shared.tell(EXITED, &[]);
             if shared.client.is_some() {
-                shared.tell(EXITED, &[]);
                 finish(&place);
             }
         }
@@ -387,13 +390,22 @@ pub fn serve(socket: &Path) -> io::Result<()> {
                 continue;
             }
             shared.client = Some(outgoing);
+            shared.visit += 1;
             if shared.exited {
                 shared.tell(EXITED, &[]);
                 finish(socket);
             }
         }
-        let (writer, master) = (writer.clone(), master.clone());
-        std::thread::spawn(move || serve_client(stream, &writer, &master, pid));
+        let visit = shared.lock().map_or(0, |shared| shared.visit);
+        let (writer, master, leaving) = (writer.clone(), master.clone(), shared.clone());
+        std::thread::spawn(move || {
+            serve_client(stream, &writer, &master, pid);
+            if let Ok(mut shared) = leaving.lock()
+                && shared.visit == visit
+            {
+                shared.client = None;
+            }
+        });
     }
     Ok(())
 }
