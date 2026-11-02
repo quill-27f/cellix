@@ -133,4 +133,20 @@ mod tests {
         let home = |name: &str| (name == "HOME").then(|| "/h".to_string());
         assert_eq!(data_dir(home), Some(PathBuf::from("/h/.local/share")));
     }
+
+    #[test]
+    fn every_agent_is_told_the_commands_that_exist() {
+        let texts = [
+            include_str!("../../../integrations/claude-code/skills/cellix-review/SKILL.md"),
+            include_str!("../../../integrations/codex/skills/cellix-review/SKILL.md"),
+            include_str!("../../../integrations/gemini/GEMINI.md"),
+        ];
+        let main = include_str!("main.rs");
+        for text in texts {
+            for command in ["threads", "reply", "plan", "comments", "open"] {
+                assert!(text.contains(&format!("`cellix {command}")), "{command}");
+                assert!(main.contains(&format!("[\"{command}\"")), "{command}");
+            }
+        }
+    }
 }

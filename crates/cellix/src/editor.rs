@@ -97,12 +97,16 @@ pub struct Editor {
     spans_bytes: Cell<usize>,
     /// Show Markdown as an editable page rather than its source, as Xcode does.
     pub rendered: bool,
+    /// The file changed on disk under unsaved edits, so saving would erase that change.
+    pub conflict: bool,
     /// Whether the minimap may show, given the room.
     pub minimap_on: bool,
     /// The laid-out page, for one revision and width.
     page: RefCell<Option<PageCache>>,
     /// Formulas and images already drawn, so typing doesn't redo them.
     library: RefCell<Library>,
+    /// Text comments are about, as char ranges, tinted on a page.
+    pub quoted: RefCell<Vec<(usize, usize)>>,
     measure: Rc<dyn Measure>,
     registry: Rc<Registry>,
     /// The revision last sent to a language server.
@@ -135,9 +139,11 @@ impl Editor {
             asked: Cell::new(u64::MAX),
             spans_bytes: Cell::new(0),
             rendered: is_page,
+            conflict: false,
             minimap_on: true,
             page: RefCell::new(None),
             library: RefCell::default(),
+            quoted: RefCell::default(),
             measure,
             registry,
             synced: 0,
@@ -1310,24 +1316,7 @@ impl Editor {
             Format::Italic => self.toggle_command("\\emph{"),
             Format::Code => self.toggle_command("\\texttt{"),
             Format::Strikethrough => self.toggle_command("\\sout{"),
-            Format::Link => {
-                let primary = self.selections.primary();
-                let (start, end) = if primary.is_empty() {
-                    self.buffer.word_at(primary.head)
-                } else {
-                    (primary.start(), primary.end())
-                };
-                let text = self.buffer.rope().slice(start..end).to_string();
-                let link = format!("\\href{{https://}}{{{text}}}");
-                self.buffer
-                    .replace_range(&mut self.selections, start, end, &link);
-                let at = start + "\\href{".len();
-                self.selections.set_single(Selection {
-                    anchor: at,
-                    head: at + "https://".len(),
-                    goal: None,
-                });
-            }
+            Format::Link => self.make_link("https://"),
             Format::Bullet | Format::Task => self.wrap_environment("itemize", true),
             Format::Numbered => self.wrap_environment("enumerate", true),
             Format::Quote => self.wrap_environment("quote", false),
@@ -1354,13 +1343,13 @@ impl Editor {
             Format::CodeBlock => self.fence_lines(),
             Format::Table => self.insert_table(3, 3),
             Format::Rule => self.insert_block("---", 3),
-            Format::Link => self.make_link(),
+            Format::Link => self.make_link("https://"),
             _ => self.toggle_lines(format),
         }
     }
 
-    /// `[text](url)`, with the address selected to type over.
-    fn make_link(&mut self) {
+    /// Makes the word or selection a link to `address`.
+    pub fn make_link(&mut self, address: &str) {
         let primary = self.selections.primary();
         let (start, end) = if primary.is_empty() {
             self.buffer.word_at(primary.head)
@@ -1368,15 +1357,33 @@ impl Editor {
             (primary.start(), primary.end())
         };
         let text = self.buffer.rope().slice(start..end).to_string();
-        let link = format!("[{text}](https://)");
+        let link = if self.dialect() == Dialect::Latex {
+            format!("\\href{{{address}}}{{{text}}}")
+        } else {
+            format!("[{text}]({address})")
+        };
         self.buffer
             .replace_range(&mut self.selections, start, end, &link);
-        let address = start + text.chars().count() + 3;
-        self.selections.set_single(Selection {
-            anchor: address,
-            head: address + "https://".len(),
-            goal: None,
-        });
+        let after = start + link.chars().count();
+        self.selections.set_single(Selection::cursor(after));
+    }
+
+    /// Finds where each comment's quote is, for tinting it.
+    pub fn set_quotes(&self, quotes: &[(usize, String)]) {
+        let rope = self.buffer.rope();
+        let mut ranges = Vec::new();
+        for (line, quote) in quotes {
+            let index = line.saturating_sub(1);
+            if quote.is_empty() || index >= rope.len_lines() {
+                continue;
+            }
+            let text = self.line_text(index);
+            if let Some(at) = text.find(quote.as_str()) {
+                let start = rope.line_to_char(index) + text[..at].chars().count();
+                ranges.push((start, start + quote.chars().count()));
+            }
+        }
+        *self.quoted.borrow_mut() = ranges;
     }
 
     /// Puts text in a block of its own below this line, with the caret `caret` chars in.
@@ -1862,13 +1869,13 @@ impl Editor {
                 let mark = if row.tall { y + 1 } else { y };
                 self.draw_change(grid, left as f32 - 1.4, mark, *change, theme);
             }
-            if marks.comments.contains(&(row.line + 1)) {
+            if first_row && marks.comments.contains(&(row.line + 1)) {
                 let mark = cellix_render::Style {
                     fg: theme.accent,
                     bg,
                     ..theme.text
                 };
-                grid.put_str(area.x, y, "◆", mark, left);
+                grid.put_str(area.x + 1, y, "◆", mark, left);
             }
             // Xcode shows a heading's level in the margin, beside the caret.
             let commented = marks.comments.contains(&(row.line + 1));
@@ -1967,11 +1974,16 @@ impl Editor {
         let found = |at: Option<usize>| {
             at.is_some_and(|at| self.found.iter().any(|f| at >= f.0 && at < f.1))
         };
+        let quoted = |at: Option<usize>| {
+            at.is_some_and(|at| self.quoted.borrow().iter().any(|q| at >= q.0 && at < q.1))
+        };
         let mark = |at: Option<usize>| {
             if selected(at) {
                 Some(theme.selection)
+            } else if found(at) {
+                Some(theme.found)
             } else {
-                found(at).then_some(theme.found)
+                quoted(at).then_some(theme.pick)
             }
         };
         // Cells carry the text for the cell tier, and for tests. Pixels come from paint.

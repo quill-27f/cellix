@@ -110,12 +110,15 @@ type Spot = (u16, u16);
 /// A program running on a PTY, and the screen it has drawn.
 pub struct Session {
     pub name: String,
+    /// A plain shell, which runs what it's sent. Comments must never reach one.
+    pub shell: bool,
     term: Term<Events>,
     parser: Processor,
     events: Events,
     writer: Box<dyn Write + Send>,
     master: Box<dyn MasterPty + Send>,
     killer: Box<dyn ChildKiller + Send + Sync>,
+    pid: Option<u32>,
     output: Receiver<Vec<u8>>,
     finished: Receiver<()>,
     pub exited: bool,
@@ -158,6 +161,7 @@ impl Session {
         let mut child = pair.slave.spawn_command(command).map_err(failed)?;
         drop(pair.slave);
         let killer = child.clone_killer();
+        let pid = child.process_id();
         let mut reader = pair.master.try_clone_reader().map_err(failed)?;
         let writer = pair.master.take_writer().map_err(failed)?;
         let (sender, output) = mpsc::channel();
@@ -180,6 +184,7 @@ impl Session {
             lines: size.1 as usize,
         };
         Ok(Self {
+            shell: name == crate::agents::SHELL.0,
             name: name.to_string(),
             term: Term::new(Config::default(), &dimensions, events.clone()),
             parser: Processor::new(),
@@ -187,12 +192,23 @@ impl Session {
             writer,
             master: pair.master,
             killer,
+            pid,
             output,
             finished,
             exited: false,
             size,
             selection: None,
         })
+    }
+
+    /// Whether closing this would stop something: an agent, or a shell running a command
+    /// rather than waiting at its prompt.
+    pub fn busy(&self) -> bool {
+        if self.exited {
+            return false;
+        }
+        let front = self.master.process_group_leader();
+        !self.shell || front.is_none() || front.map(|p| p as u32) != self.pid
     }
 
     pub fn write(&mut self, bytes: &[u8]) {
@@ -456,6 +472,21 @@ impl Session {
         }
     }
 
+    /// Says a finished agent is finished, on the row under what it last showed.
+    pub fn draw_ended(&self, grid: &mut Grid, area: Rect, theme: &Theme) {
+        let row = Rect::new(area.x, area.bottom().saturating_sub(1), area.w, 1);
+        let note = Style {
+            fg: theme.gutter.fg,
+            ..theme.tab
+        };
+        grid.fill(row, theme.tab);
+        let text = format!(
+            "{} has ended. Close this tab, or press + for another.",
+            self.name
+        );
+        grid.label(row.x + 1, row.y, &text, note, row.right());
+    }
+
     pub fn stop(&mut self) {
         let _ = self.killer.kill();
     }
@@ -596,10 +627,12 @@ impl Dock {
         self.sessions.get_mut(self.active?)
     }
 
-    /// The session comments go to: the one in front, or the first still running.
+    /// The agent comments go to: the one in front, or the first still running. A shell would
+    /// run a comment's words as commands, so it never counts.
     pub fn agent_mut(&mut self) -> Option<&mut Session> {
-        let front = self.active.filter(|i| !self.sessions[*i].exited);
-        let index = front.or_else(|| self.sessions.iter().position(|s| !s.exited))?;
+        let usable = |s: &Session| !s.exited && !s.shell;
+        let front = self.active.filter(|i| usable(&self.sessions[*i]));
+        let index = front.or_else(|| self.sessions.iter().position(usable))?;
         self.sessions.get_mut(index)
     }
 
@@ -607,10 +640,21 @@ impl Dock {
         self.sessions.iter().any(|s| !s.exited)
     }
 
+    /// The names of what would stop if the pane closed.
+    pub fn busy(&self) -> Vec<String> {
+        let busy = self.sessions.iter().filter(|s| s.busy());
+        busy.map(|s| s.name.clone()).collect()
+    }
+
     pub fn poll(&mut self, theme: &Theme) -> bool {
         let mut changed = self.pdf.as_mut().is_some_and(PdfView::poll);
         for session in &mut self.sessions {
             changed |= session.poll(theme);
+        }
+        // A shell that's finished has nothing left to show. An agent may have said why.
+        while let Some(index) = self.sessions.iter().position(|s| s.exited && s.shell) {
+            self.close(index);
+            changed = true;
         }
         changed
     }
@@ -626,6 +670,10 @@ impl Dock {
             other => other,
         };
         self.focused &= self.active.is_some();
+        self.front = match (self.front, self.active) {
+            (Front::Session, None) => Front::Session,
+            (front, _) => front,
+        };
     }
 
     /// Each tab as (start, end) columns.

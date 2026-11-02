@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+/// Who the person at the keyboard is, in a thread.
+pub const YOU: &str = "You";
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Reply {
     pub author: String,
@@ -26,9 +29,39 @@ pub struct Thread {
     pub replies: Vec<Reply>,
     #[serde(default)]
     pub resolved: bool,
+    /// How many replies it had when an agent was last told of it.
+    #[serde(default)]
+    pub told: Option<usize>,
 }
 
 impl Thread {
+    /// Whether it's waiting on an agent: open, new since it was last told, and not already
+    /// answered by one.
+    pub fn waiting(&self) -> bool {
+        let last = self.replies.last();
+        !self.resolved
+            && self.told != Some(self.replies.len())
+            && last.is_none_or(|r| r.author == YOU)
+    }
+
+    /// Moves the thread to where its quoted text is now, the nearest place if it appears
+    /// more than once. Text that's gone leaves it where it was.
+    pub fn follow(&mut self, text: &str) {
+        if self.quote.is_empty() {
+            return;
+        }
+        let distance = |line: usize| line.abs_diff(self.line);
+        let found = text
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| line.contains(&self.quote))
+            .map(|(index, _)| index + 1)
+            .min_by_key(|line| distance(*line));
+        if let Some(line) = found {
+            self.line = line;
+        }
+    }
+
     /// The thread as a message for an agent, on one line, with how to answer.
     pub fn message(&self) -> String {
         let mut text = format!(
@@ -64,6 +97,14 @@ pub fn save(root: &Path, threads: &[Thread]) -> io::Result<()> {
     let path = file(root);
     if let Some(folder) = path.parent() {
         fs::create_dir_all(folder)?;
+        // A conversation isn't a change to the project, so it stays out of review.
+        let ignore = folder.join(".gitignore");
+        if !ignore.exists() {
+            fs::write(
+                ignore,
+                "threads.json\nthreads.json.tmp\nplans/\n.gitignore\n",
+            )?;
+        }
     }
     let scratch = path.with_extension("json.tmp");
     fs::write(&scratch, serde_json::to_string_pretty(threads)?)?;
@@ -91,7 +132,39 @@ mod tests {
                 text: "It saves a read.".into(),
             }],
             resolved: false,
+            told: None,
         }
+    }
+
+    #[test]
+    fn a_thread_waits_only_for_what_an_agent_hasnt_seen() {
+        let mut thread = thread();
+        assert!(!thread.waiting(), "an agent answered last");
+        thread.replies.push(Reply {
+            author: YOU.into(),
+            text: "And for writes?".into(),
+        });
+        assert!(thread.waiting());
+        thread.told = Some(thread.replies.len());
+        assert!(!thread.waiting(), "told once");
+        thread.replies.clear();
+        thread.told = None;
+        assert!(thread.waiting(), "a new comment");
+        thread.resolved = true;
+        assert!(!thread.waiting());
+    }
+
+    #[test]
+    fn a_thread_follows_its_text() {
+        let mut thread = thread();
+        thread.line = 2;
+        thread.follow("new\nnew\nnew\nabout the cache here\n");
+        assert_eq!(thread.line, 4);
+        thread.line = 6;
+        thread.follow("the cache\nx\nx\nx\nx\nx\nthe cache\n");
+        assert_eq!(thread.line, 7, "the nearest of two");
+        thread.follow("nothing like it\n");
+        assert_eq!(thread.line, 7, "gone, so it stays");
     }
 
     #[test]

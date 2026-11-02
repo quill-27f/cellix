@@ -132,6 +132,24 @@ A page uses the pane's full width. A line break inside a paragraph shows as a sp
 keeps the newline's source position, so a hard-wrapped file fills the page and saves
 unchanged. On a page, arrows and Home and End move by what's shown.
 
+### Documents
+
+Markdown and LaTeX share one page: `rendered.rs` lays out Markdown and `rendered/tex.rs` lays out
+LaTeX, into the same rows of glyphs that each remember their source position. So clicks, selection
+and editing work the same in both, and the file is always the document.
+
+LaTeX on the page is a reading of the source, not a compiler. Commands it knows hide, and anything
+else shows as source, so a paper can never lose text to the page. Numbers come from a first pass
+over the labels, as LaTeX's own does. The PDF is the truth for how a paper prints.
+
+Formulas are pictures made by `latex-rust`, in pure Rust with STIX Two Math in the binary, because
+pixels are drawn on the host and a server has no TeX. A picture holds one place in the text, inside
+its source, so reaching it from either side opens it. PDFs draw with `hayro`, also pure Rust.
+Building a PDF uses a real engine, since only TeX typesets TeX, and Cellix offers to install one.
+
+A comment on a document is a thread kept in `.cellix/threads.json`. Comments on plans and `--wait`
+files stay as they were, because they're an answer the agent is waiting for.
+
 ## Surfaces
 
 The rail and the status bar are the frame, in the terminal's own colour, so window padding
@@ -282,7 +300,8 @@ the file.
 | `cellix-render` | Layout, paint, tile cache, software rasterizer |
 | `cellix-term` | Probing, Kitty direct, Kitty placeholder and cell backends |
 | `cellix-lang` | Tree-sitter, LSP, language registry |
-| `cellix-review` | Plans, diffs, comments |
+| `cellix-doc` | Typeset math, PDF pages, HTML and LaTeX export, table editing |
+| `cellix-review` | Plans, diffs, comments, threads |
 | `cellix-agent` | Socket, hooks, IDE server |
 | `cellix` | Binary and app views |
 

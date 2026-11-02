@@ -29,6 +29,29 @@ pub struct PdfView {
     pub top: f32,
     pub error: Option<String>,
     generation: u64,
+    /// When the file last changed, as of the last load.
+    seen: Option<std::time::SystemTime>,
+}
+
+fn modified(path: &Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
+/// An image as a page, no wider than `width` pixels.
+fn image_page(path: &Path, width: u32) -> Result<Page, String> {
+    let image = image::open(path).map_err(|e| e.to_string())?.to_rgba8();
+    let image = if image.width() > width {
+        let height = image.height() * width / image.width();
+        image::imageops::thumbnail(&image, width, height.max(1))
+    } else {
+        image
+    };
+    let (width, height) = image.dimensions();
+    Ok(Page {
+        width,
+        height,
+        rgba: std::sync::Arc::new(image.into_raw()),
+    })
 }
 
 impl PdfView {
@@ -41,6 +64,7 @@ impl PdfView {
             top: 0.0,
             error: None,
             generation: 0,
+            seen: None,
         }
     }
 
@@ -54,7 +78,17 @@ impl PdfView {
         self.updates = Some(updates);
         self.error = None;
         let pixels = (width as f32 - SIDE * 2.0).max(1.0) as u32 * cell.0;
+        self.seen = modified(&self.path);
         std::thread::spawn(move || {
+            if !path.extension().is_some_and(|e| e == "pdf") {
+                let _ = match image_page(&path, pixels) {
+                    Ok(page) => sender
+                        .send(Update::Count(1))
+                        .and_then(|()| sender.send(Update::Done(0, page))),
+                    Err(e) => sender.send(Update::Failed(e)),
+                };
+                return;
+            }
             let opened = std::fs::read(&path)
                 .map_err(|e| e.to_string())
                 .and_then(Document::open);
@@ -75,6 +109,14 @@ impl PdfView {
                 }
             }
         });
+    }
+
+    /// Reloads if the file has changed, as a plot does while a run writes it.
+    pub fn refresh(&mut self) {
+        let (width, cell) = self.fit;
+        if width > 0 && modified(&self.path) != self.seen {
+            self.load(width, cell);
+        }
     }
 
     /// Reloads if the pane has changed size.

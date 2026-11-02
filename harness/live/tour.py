@@ -64,6 +64,78 @@ fn main() {}
 """
 
 
+NOTE = r"""# Attention Is a Weighted Average
+
+We study a model where each output is $y_i = \sum_{j} \alpha_{ij} x_j$ and the weights sum to one, for inputs of $n$ tokens.
+
+## Scaled dot product
+
+The weights come from a softmax over similarity scores:
+
+$$
+\alpha_{ij} = \frac{\exp\left(q_i^\top k_j / \sqrt{d}\right)}{\sum_{\ell=1}^{n} \exp\left(q_i^\top k_\ell / \sqrt{d}\right)}
+$$
+
+For a matrix $A \in \mathbb{R}^{n \times d}$ the cost is $O(n^2 d)$.
+
+$$
+\begin{aligned}
+\nabla_\theta \mathcal{L} &= \mathbb{E}\left[ \nabla_\theta \log p_\theta(x) \right] \\
+\sigma^2 &= \frac{1}{n} \sum_{i=1}^{n} (x_i - \bar{x})^2
+\end{aligned}
+$$
+
+## Results
+
+| Model | Accuracy | Params |
+|---|---|---|
+| Baseline | 91.2 | 1.2M |
+| Attention | **94.8** | 1.4M |
+
+- [x] Reproduce the baseline
+- [ ] Add a learning curve
+"""
+PAPER = r"""\documentclass{article}
+\usepackage{amsmath,graphicx}
+\title{Attention Is a Weighted Average}
+\author{Ada Lovelace}
+\begin{document}
+\maketitle
+\begin{abstract}
+We show that scaled dot product attention is a weighted average, and measure what that costs.
+\end{abstract}
+
+\section{Introduction}\label{sec:intro}
+Each output is $y_i = \sum_j \alpha_{ij} x_j$, as in~\cite{knuth84}. The weights are \emph{learned} and sum to one, see Equation~\ref{eq:weights}.
+
+\begin{equation}
+  \alpha_{ij} = \frac{\exp(q_i^\top k_j / \sqrt{d})}{\sum_{\ell} \exp(q_i^\top k_\ell / \sqrt{d})}
+  \label{eq:weights}
+\end{equation}
+
+\section{Results}
+\begin{itemize}
+  \item Accuracy improves by \textbf{3.6} points.
+  \item The cost grows with $n^2$.
+\end{itemize}
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lrr}
+    \hline
+    Model & Accuracy & Params \\
+    \hline
+    Baseline & 91.2 & 1.2M \\
+    Attention & 94.8 & 1.4M \\
+    \hline
+  \end{tabular}
+  \caption{Accuracy on the test set.}
+\end{table}
+
+\end{document}
+"""
+
+
 def git(root, *args):
     identity = ["-c", "user.name=tour", "-c", "user.email=tour@example.com"]
     subprocess.run(["git", *identity, *args], cwd=root, check=True, capture_output=True)
@@ -104,6 +176,7 @@ def shoot(name, steps, *args, size="120x40", background="1e1e2e"):
         "HOME": HOME,
         "TERM_SIZE": size,
         "TERM_BG": background,
+        "TERM_PADDING": "10x24",
     }
     env.pop("CLAUDE_CONFIG_DIR", None)
     command = ["python3", "-I", f"{here}/term.py", f.name, binary, *args]
@@ -118,6 +191,18 @@ with tempfile.TemporaryDirectory() as scratch:
     os.makedirs(HOME)
     project(ROOT)
     CODE_FILE, PAGE_FILE = "src/queue.rs", "README.md"
+    NOTE_FILE, PAPER_FILE = "docs/attention.md", "docs/main.tex"
+    os.makedirs(f"{ROOT}/docs", exist_ok=True)
+    for name, text in [(NOTE_FILE, NOTE), (PAPER_FILE, PAPER)]:
+        with open(f"{ROOT}/{name}", "w") as f:
+            f.write(text)
+    with open(f"{ROOT}/docs/refs.bib", "w") as f:
+        f.write("@book{knuth84,\n  title={The TeXbook},\n}\n")
+    # Building needs TeX's packages, which only the real home folder has fetched.
+    real = os.path.expanduser("~/Library/Caches/Tectonic")
+    if os.path.isdir(real):
+        os.makedirs(f"{HOME}/Library/Caches", exist_ok=True)
+        os.symlink(real, f"{HOME}/Library/Caches/Tectonic")
     GEAR = (RAIL_X, 36)
     settings = [["click", *GEAR]]
 
@@ -164,3 +249,22 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("42-hover-install", [*settings, ["click", 45, 4], ["move", 113, 16]], CODE_FILE)
     shoot("43-light-hover-menu", [["right", 60, 12], ["move", 64, 19]], CODE_FILE, background="eff1f5")
     shoot("40-hover-find", [["keys", CTRL("f")], ["keys", "item"], ["move", 112, 3]], CODE_FILE)
+
+    FORMULA, TABLE = (84, 1), (88, 1)
+    shoot("44-note", [], NOTE_FILE, size="150x44", background="eff1f5")
+    shoot("45-note-dark", [], NOTE_FILE, size="150x44")
+    shoot("46-formula-open", [["click", 90, 13], ["wait", 0.5]], NOTE_FILE, size="150x44")
+    shoot("47-math-panel", [["click", *FORMULA]], NOTE_FILE, size="150x44", background="eff1f5")
+    shoot("48-table-picker", [["click", *TABLE], ["move", 100, 7]], NOTE_FILE, size="150x44")
+    shoot("49-table-menu", [["right", 56, 31]], NOTE_FILE, size="150x44", background="eff1f5")
+    comment = [["click", 90, 5], ["keys", "\\eOP"], ["keys", "add comment"], ["keys", "\r"]]
+    comment += [["keys", "Is this true for multi-head attention?\r"], ["wait", 0.5]]
+    shoot("50-comments", comment, NOTE_FILE, size="150x44", background="eff1f5")
+    shoot("51-agent-list", [["click", RAIL_X, AGENTS], ["wait", 0.6]], NOTE_FILE, size="150x44")
+    shell = [["click", RAIL_X, AGENTS], ["wait", 0.6]]
+    shoot("52-paper", [], PAPER_FILE, size="150x44", background="eff1f5")
+    shoot("53-paper-dark", [], PAPER_FILE, size="150x44")
+    build = [["click", 164, 1], ["wait", 8]]
+    shoot("54-paper-pdf", build, PAPER_FILE, size="170x44", background="eff1f5")
+    shoot("55-paper-cite", [["click", 74, 1]], PAPER_FILE, size="150x44", background="eff1f5")
+    shoot("56-narrow-note", [["click", RAIL_X, AGENTS], ["wait", 0.6]], NOTE_FILE, size="100x34")

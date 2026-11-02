@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use cellix_review::{Comment, checkpoint};
+use cellix_review::{Comment, Thread, checkpoint};
 use serde_json::{Value, json};
 
 use crate::{AgentEvent, AgentState, TestRun, request, socket_path};
@@ -45,7 +45,14 @@ fn roots(input: &Value) -> Vec<PathBuf> {
         .map(PathBuf::from)
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_default();
-    let cwd = cwd.canonicalize().unwrap_or(cwd);
+    workspaces(&cwd)
+}
+
+/// The folders a Cellix for `folder` might be serving: it, then its repository's root.
+pub fn workspaces(folder: &std::path::Path) -> Vec<PathBuf> {
+    let cwd = folder
+        .canonicalize()
+        .unwrap_or_else(|_| folder.to_path_buf());
     let mut roots = vec![cwd.clone()];
     let top = Command::new("git")
         .arg("-C")
@@ -111,14 +118,26 @@ fn on_prompt(roots: &[PathBuf], input: &Value) -> Option<String> {
         checkpoint(root, &label(prompt));
     }
     tell(roots, input, AgentState::Working, "Working");
-    let reply = ask(roots, "take")?;
-    let comments: Vec<Comment> = serde_json::from_str(&reply).ok()?;
-    if comments.is_empty() {
+    let comments: Vec<Comment> = ask(roots, "take")
+        .and_then(|reply| serde_json::from_str(&reply).ok())
+        .unwrap_or_default();
+    let threads: Vec<Thread> = ask(roots, "take-threads")
+        .and_then(|reply| serde_json::from_str(&reply).ok())
+        .unwrap_or_default();
+    let mut context = String::new();
+    if !comments.is_empty() {
+        context.push_str(&comments_message(&comments));
+    }
+    for thread in &threads {
+        context.push_str(&thread.message());
+        context.push('\n');
+    }
+    if context.is_empty() {
         return None;
     }
     let output = json!({"hookSpecificOutput": {
         "hookEventName": "UserPromptSubmit",
-        "additionalContext": comments_message(&comments),
+        "additionalContext": context,
     }});
     Some(output.to_string())
 }
@@ -162,6 +181,20 @@ fn on_plan(roots: &[PathBuf], input: &Value) -> Option<String> {
     Some(output.to_string())
 }
 
+/// Whether a command's exit is really that of its last stage, such as `tail`, and not the
+/// tests'. With `pipefail` the shell reports the failure itself.
+fn piped(command: &str) -> bool {
+    let bare = command.replace("||", "");
+    bare.contains('|') && !command.contains("pipefail")
+}
+
+/// What failing tests print, for when the exit can't be trusted.
+fn reads_as_failed(output: &str) -> bool {
+    ["FAILED", "failures:", "test result: F", " failed", "FAIL "]
+        .iter()
+        .any(|mark| output.contains(mark))
+}
+
 fn on_tool(roots: &[PathBuf], input: &Value, passed: bool) {
     let command = input["tool_input"]["command"].as_str().unwrap_or("");
     if !is_test_command(command) {
@@ -179,7 +212,10 @@ fn on_tool(roots: &[PathBuf], input: &Value, passed: bool) {
     let exit = response["exit_code"]
         .as_i64()
         .or(response["exitCode"].as_i64());
-    let passed = passed && exit.unwrap_or(0) == 0 && response["error"].is_null();
+    let passed = passed
+        && exit.unwrap_or(0) == 0
+        && response["error"].is_null()
+        && !(piped(command) && reads_as_failed(text));
     let start = text
         .char_indices()
         .rev()
@@ -230,6 +266,15 @@ mod tests {
     use super::*;
     use crate::{Decision, Request, SharedComments, start};
     use std::path::Path;
+
+    #[test]
+    fn a_pipe_hides_a_failed_test_and_the_output_gives_it_away() {
+        assert!(piped("cargo test | tail"));
+        assert!(!piped("cargo test || true"));
+        assert!(!piped("set -o pipefail; cargo test | tail"));
+        assert!(reads_as_failed("test result: FAILED. 1 passed; 2 failed"));
+        assert!(!reads_as_failed("test result: ok. 9 passed; 0 ignored"));
+    }
     use std::sync::Arc;
     use std::time::Duration;
 

@@ -13,14 +13,70 @@ fn workspace_root(dir: Option<&str>) -> std::io::Result<PathBuf> {
 
 /// `cellix comments [--take] [dir]` and `cellix open <file> [dir]` talk to a running Cellix.
 fn client(request: &str, dir: Option<&str>) -> ExitCode {
-    let reply = workspace_root(dir).and_then(|root| cellix_agent::request(&root, request));
-    match reply {
+    match ask(request, dir) {
+        Ok(reply) if reply.starts_with("error:") => {
+            eprintln!("cellix: {}", reply.trim_start_matches("error: "));
+            ExitCode::FAILURE
+        }
         Ok(reply) => {
             println!("{reply}");
             ExitCode::SUCCESS
         }
         Err(e) => {
             eprintln!("cellix: no running Cellix for this workspace: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Asks the Cellix serving this folder. From a subfolder, that's the repository's root.
+fn ask(request: &str, dir: Option<&str>) -> std::io::Result<String> {
+    let root = workspace_root(dir)?;
+    let mut tried = cellix_agent::hook::workspaces(&root).into_iter();
+    let first = tried.next().unwrap_or(root);
+    tried.fold(cellix_agent::request(&first, request), |answer, next| {
+        answer.or_else(|_| cellix_agent::request(&next, request))
+    })
+}
+
+const USAGE: &str = "\
+Usage: cellix [--wait] [files]
+
+  cellix threads            The comments on this project, as JSON
+  cellix reply <id> <text>  Answers a comment, beside the document
+  cellix plan <file>        Holds a plan for review, and prints the verdict
+  cellix comments [--take]  Review comments, as JSON
+  cellix open <file>        Opens a file in the running Cellix
+  cellix setup [--install|--remove]  Connects Claude Code
+";
+
+/// `cellix plan <file>` holds a plan until the reviewer decides. It exits 0 on approval,
+/// printing the plan if it was edited, and 1 when it's sent back, with what to change.
+fn plan(file: &str) -> ExitCode {
+    let path = std::path::absolute(file).unwrap_or_else(|_| PathBuf::from(file));
+    let reply = match ask(&format!("plan {}", path.display()), None) {
+        Ok(reply) => reply,
+        Err(e) => {
+            eprintln!("cellix: no running Cellix for this workspace: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let (verdict, text) = reply.split_once(' ').unwrap_or((&reply, "null"));
+    let text: Option<String> = serde_json::from_str(text).unwrap_or(None);
+    match verdict {
+        "approve" => {
+            println!("Approved.");
+            if let Some(text) = text {
+                println!("The reviewer edited the plan to read:\n{text}");
+            }
+            ExitCode::SUCCESS
+        }
+        "send-back" => {
+            println!("Sent back: {}", text.unwrap_or_default());
+            ExitCode::FAILURE
+        }
+        _ => {
+            eprintln!("cellix: the plan wasn't reviewed");
             ExitCode::FAILURE
         }
     }
@@ -127,7 +183,12 @@ fn main() -> ExitCode {
         ["pane-send", input] => return client(&format!("pane {input}"), None),
         ["comments", "--take", rest @ ..] => return client("take", rest.first().copied()),
         ["comments", rest @ ..] => return client("comments", rest.first().copied()),
+        ["--help" | "-h" | "help"] => {
+            print!("{USAGE}");
+            return ExitCode::SUCCESS;
+        }
         ["threads"] => return client("threads", None),
+        ["plan", file] => return plan(file),
         ["reply", id, text @ ..] if !text.is_empty() => {
             let author = std::env::var("CELLIX_AGENT").unwrap_or_else(|_| "Agent".to_string());
             let text = text.join(" ").replace('\n', "\\n");

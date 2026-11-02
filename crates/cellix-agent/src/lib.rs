@@ -1,6 +1,6 @@
 //! The local socket any agent can use to reach a running Cellix. One line in, one line
-//! out: `comments`, `take` (comments, then clear them), `threads`, `reply <id> <author>` then
-//! a tab and the text, or `open <path>`.
+//! out: `comments`, `take` (comments, then clear them), `threads`, `take-threads` (those an
+//! agent hasn't seen), `reply <id> <author>` then a tab and the text, or `open <path>`.
 
 use std::env;
 use std::fs;
@@ -17,6 +17,10 @@ use serde::{Deserialize, Serialize};
 
 pub mod hook;
 pub mod ide;
+
+/// How long a request waits on the app, which may be busy or gone. An agent's hook must never
+/// hang on it.
+const ANSWER_TIME: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Comments shared between the app and the socket thread.
 pub type SharedComments = Arc<Mutex<Vec<Comment>>>;
@@ -70,9 +74,13 @@ pub enum Request {
         id: u32,
         author: String,
         text: String,
+        /// Whether that comment exists, so an answer can't vanish with a success.
+        found: Sender<bool>,
     },
     /// Wants the comments on the project, as JSON.
     Threads(Sender<String>),
+    /// Wants the comments no agent has seen, as JSON, and marks them seen.
+    TakeThreads(Sender<String>),
     /// A plan is waiting. The connection stays open until `reply` is answered or dropped.
     Plan {
         path: PathBuf,
@@ -122,7 +130,16 @@ fn answer(line: &str, comments: &SharedComments, requests: &Sender<Request>) -> 
         (Some("threads"), None) => {
             let (reply, threads) = channel();
             let _ = requests.send(Request::Threads(reply));
-            Ok(threads.recv().unwrap_or_else(|_| "[]".to_string()))
+            Ok(threads
+                .recv_timeout(ANSWER_TIME)
+                .unwrap_or_else(|_| "[]".to_string()))
+        }
+        (Some("take-threads"), None) => {
+            let (reply, threads) = channel();
+            let _ = requests.send(Request::TakeThreads(reply));
+            Ok(threads
+                .recv_timeout(ANSWER_TIME)
+                .unwrap_or_else(|_| "[]".to_string()))
         }
         (Some("reply"), Some(rest)) => {
             let Some((head, text)) = rest.split_once('\t') else {
@@ -133,8 +150,17 @@ fn answer(line: &str, comments: &SharedComments, requests: &Sender<Request>) -> 
                 return Ok("error: reply needs a comment's number".into());
             };
             let (author, text) = (author.to_string(), text.replace("\\n", "\n"));
-            let _ = requests.send(Request::Reply { id, author, text });
-            Ok("ok".into())
+            let (found, answer) = channel();
+            let _ = requests.send(Request::Reply {
+                id,
+                author,
+                text,
+                found,
+            });
+            Ok(match answer.recv_timeout(ANSWER_TIME) {
+                Ok(true) => "ok".to_string(),
+                _ => format!("error: there's no comment {id}"),
+            })
         }
         (Some("pane"), Some(json)) => {
             let _ = requests.send(Request::Pane(json.to_string()));

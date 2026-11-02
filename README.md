@@ -63,6 +63,27 @@ and review stacks changes in one column.
 The mouse works everywhere: click files, tabs and hunks, drag to select, and right-click
 the explorer to create, rename or delete.
 
+## Writing
+
+Markdown and LaTeX files both open as a page you type on. Formulas are typeset, images and
+tables show as themselves, and the file underneath stays plain text. Put the caret in a formula
+and its source opens with the result under it. Math comes from pure Rust and fonts in the
+binary, so it works on a server with no TeX.
+
+The toolbar above a page holds paragraph styles, formats, lists, a panel of symbols and formula
+templates, a table size picker, images and comments. Right-click in a table to add rows and
+columns, align them, or delete them.
+
+A `.tex` file shows its sections, numbers, citations, equations, figures and tables, and anything
+Cellix doesn't recognise stays visible as source. **Cite** lists the keys in your `.bib` files.
+**Build PDF**, or Ctrl+Alt+B, runs `tectonic`, `latexmk` or `pdflatex`, shows the PDF in the side
+pane, and goes to the line of any error. Set `latex_engine` in the settings file to use your own
+command. Export to PDF does the same for Markdown, through LaTeX.
+
+To review a document with an agent, comment on it. The comment becomes a thread beside the page,
+kept in `.cellix/threads.json`. **Ask agent** sends it to the agent in the side pane, which answers
+with `cellix reply <id> "text"`, and the answer lands under your question.
+
 ## Over SSH
 
 Everything runs on the server, and your local terminal only draws the result. This setup

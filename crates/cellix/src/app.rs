@@ -18,8 +18,8 @@ use cellix_render::{
     TOP_RIGHT,
 };
 use cellix_review::{
-    Comment, Reply, Thread, append_comments, blame_line, branches, changed_files, create_branch,
-    current_branch, head_text, restore, switch_branch, turns, worktrees,
+    Comment, Reply, Thread, YOU, append_comments, blame_line, branches, changed_files,
+    create_branch, current_branch, head_text, restore, switch_branch, turns, worktrees,
 };
 
 use cellix_agent::hook::comments_message;
@@ -137,6 +137,7 @@ enum PromptAction {
     SendBackPlan,
     NewBranch,
     Image,
+    Link,
     Reply(u32),
 }
 
@@ -196,6 +197,13 @@ enum Choice {
     Save(Leaving),
     Discard(Leaving),
     Delete(PathBuf),
+    /// Save over a change made on disk.
+    Overwrite,
+    /// Take the change made on disk, and lose the unsaved edits.
+    Reload,
+    /// Quit, stopping what's running in the side pane.
+    Stop,
+    CloseSession(usize),
     Undo(String),
 }
 
@@ -385,12 +393,16 @@ pub struct App {
     plan: Option<PendingPlan>,
     /// The side pane, where agents and shells run.
     dock: Dock,
+    /// The user agreed to stop what's running, for this quit.
+    stop_confirmed: bool,
     /// A build under way.
     build: Option<std::sync::mpsc::Receiver<Build>>,
     /// A file made only for a build, to remove once it's done.
     remove_after_build: Option<PathBuf>,
     /// The comments on this project, kept with it.
     threads: Vec<Thread>,
+    /// The editor and revision comments were last placed for.
+    threads_seen: Option<(usize, u64)>,
     /// The file couldn't be read, so saving would lose what's in it.
     threads_broken: bool,
     tests: Vec<TestRun>,
@@ -496,9 +508,11 @@ impl App {
             told_selection: None,
             plan: None,
             dock: Dock::default(),
+            stop_confirmed: false,
             build: None,
             remove_after_build: None,
             threads,
+            threads_seen: None,
             threads_broken,
             tests: Vec::new(),
             hover: None,
@@ -577,7 +591,9 @@ impl App {
     }
 
     pub fn open(&mut self, path: &Path) -> io::Result<()> {
-        if path.extension().is_some_and(|e| e == "pdf") {
+        let picture = ["pdf", "png", "jpg", "jpeg", "gif", "webp"];
+        let extension = path.extension().and_then(|e| e.to_str());
+        if extension.is_some_and(|e| picture.contains(&e.to_lowercase().as_str())) {
             self.show_pdf(path);
             return Ok(());
         }
@@ -590,7 +606,14 @@ impl App {
             self.set_active(i);
             return Ok(());
         }
-        let buffer = Buffer::open(path)?;
+        let buffer = Buffer::open(path).map_err(|e| {
+            if e.kind() != io::ErrorKind::InvalidData {
+                return e;
+            }
+            let size = std::fs::metadata(path).map_or(0, |m| m.len());
+            let megabytes = size as f64 / 1_000_000.0;
+            io::Error::other(format!("it's a binary file of {megabytes:.1} MB"))
+        })?;
         let mut editor = Editor::new(buffer, self.measure.clone(), self.registry.clone());
         editor.minimap_on = self.settings.minimap != Some(false);
         self.load_committed(&mut editor);
@@ -1378,6 +1401,11 @@ impl App {
 
     /// Recomputes what shows from what's known, without asking any server.
     fn rank_suggestions(&mut self) {
+        // Prose isn't code: a word that completes itself gets in a writer's way.
+        if self.on_page() && !self.suggest_asked {
+            self.close_suggestions();
+            return;
+        }
         let Some((typed, _)) = self.typed_word() else {
             self.close_suggestions();
             return;
@@ -1699,6 +1727,7 @@ impl App {
             Event::Tick => self.tick(),
         }
         self.fit_dock();
+        self.follow_threads();
     }
 
     fn paste(&mut self, text: &str) {
@@ -1731,6 +1760,9 @@ impl App {
     }
 
     fn tick(&mut self) {
+        if let Some(view) = &mut self.dock.pdf {
+            view.refresh();
+        }
         let mut note = None;
         let mut reloaded = Vec::new();
         for editor in &mut self.editors {
@@ -1743,6 +1775,7 @@ impl App {
                     editor.title()
                 ));
                 editor.buffer.acknowledge_disk();
+                editor.conflict = true;
             } else {
                 note = Some(match editor.buffer.reload(&mut editor.selections) {
                     Ok(()) => {
@@ -2056,6 +2089,21 @@ impl App {
     fn choose(&mut self, choice: Choice) {
         match choice {
             Choice::Cancel => {}
+            Choice::Overwrite => self.write_file(),
+            Choice::Reload => {
+                if let Some(editor) = self.editor_mut() {
+                    editor.conflict = false;
+                    let reloaded = editor.buffer.reload(&mut editor.selections);
+                    if let Err(e) = reloaded {
+                        self.say(format!("Could not reload: {e}"));
+                    }
+                }
+            }
+            Choice::Stop => {
+                self.stop_confirmed = true;
+                self.run(Command::Quit);
+            }
+            Choice::CloseSession(index) => self.dock.close(index),
             Choice::Save(leaving) => {
                 self.save_dirty(leaving == Leaving::CloseTab);
                 self.leave(leaving);
@@ -2486,6 +2534,14 @@ impl App {
     fn finish_prompt(&mut self, prompt: Prompt) {
         let name = prompt.input.trim();
         let result = match &prompt.action {
+            PromptAction::Link => {
+                let area = self.focused_area();
+                if let Some(editor) = self.editor_mut().filter(|_| !name.is_empty()) {
+                    editor.prepare_edit(area);
+                    editor.make_link(name);
+                }
+                Ok(())
+            }
             PromptAction::Image => {
                 let area = self.focused_area();
                 if let Some(editor) = self.editor_mut() {
@@ -2541,7 +2597,7 @@ impl App {
                     && !name.is_empty()
                 {
                     thread.replies.push(Reply {
-                        author: "You".to_string(),
+                        author: YOU.to_string(),
                         text: name.to_string(),
                     });
                     self.save_threads();
@@ -2581,6 +2637,15 @@ impl App {
     pub fn run(&mut self, command: Command) {
         let area = self.focused_area();
         match command {
+            Command::Quit if !self.stop_confirmed && !self.dock.busy().is_empty() => {
+                let names = self.dock.busy().join(", ");
+                self.overlay = Overlay::Confirm(Confirm {
+                    title: "Stop what's running?".to_string(),
+                    detail: format!("{names} will stop if you quit."),
+                    buttons: vec![("Cancel", Choice::Cancel), ("Stop and Quit", Choice::Stop)],
+                    selected: 0,
+                });
+            }
             Command::Quit if self.editors.iter().any(|e| e.buffer.is_dirty()) => {
                 self.confirm_leaving(Leaving::Quit);
             }
@@ -2605,11 +2670,16 @@ impl App {
             }
             Command::AddComment => self.prompt_comment_at_cursor(),
             Command::FindInFile => self.open_find(),
+            Command::Format(Format::Link) => self.ask("Link address", PromptAction::Link),
             Command::Format(format) => {
                 let area = self.focused_area();
                 if let Some(editor) = self.editor_mut() {
                     editor.format(format, area);
                 }
+            }
+            // On a page these keys mean what they mean in any writing tool.
+            Command::ToggleSidebar if self.on_page() => {
+                self.run(Command::Format(Format::Bold));
             }
             Command::SendToAgent => self.send_to_agent(),
             Command::ApprovePlan => {
@@ -2950,6 +3020,12 @@ impl App {
             self.dock_session_mouse(mouse);
             return true;
         }
+        // The line between the two sides is easy to miss, so the column before it counts.
+        let on_edge = x == area.x || x + 1 == area.x;
+        if on_edge && y > area.y && y < area.bottom() && mouse.kind == MouseKind::Left {
+            self.drag = Drag::Dock;
+            return true;
+        }
         if !area.contains(x, y) {
             if mouse.kind == MouseKind::Left {
                 self.dock.focused = false;
@@ -2963,6 +3039,18 @@ impl App {
                         self.dock.active = Some(index);
                         self.dock.focused = true;
                         self.dock.front = Front::Session;
+                    }
+                    Some(TabHit::Close(index)) if self.dock.sessions[index].busy() => {
+                        let name = self.dock.sessions[index].name.clone();
+                        self.overlay = Overlay::Confirm(Confirm {
+                            title: format!("Stop {name}?"),
+                            detail: "What it's doing will stop.".to_string(),
+                            buttons: vec![
+                                ("Cancel", Choice::Cancel),
+                                ("Stop", Choice::CloseSession(index)),
+                            ],
+                            selected: 0,
+                        });
                     }
                     Some(TabHit::Close(index)) => self.dock.close(index),
                     Some(TabHit::New) => {
@@ -2981,10 +3069,6 @@ impl App {
                     None => {}
                 }
             }
-            return true;
-        }
-        if x == area.x && matches!(mouse.kind, MouseKind::Left) {
-            self.drag = Drag::Dock;
             return true;
         }
         if self.dock.front == Front::Pdf {
@@ -3078,7 +3162,15 @@ impl App {
             return;
         };
         let theme = &self.theme;
-        grid.fill(area, theme.text);
+        let on_session = self.dock.front == Front::Session && self.dock.session().is_some();
+        grid.fill(
+            area,
+            if on_session {
+                theme.text
+            } else {
+                theme.sidebar
+            },
+        );
         let threads = self.open_threads();
         self.dock
             .draw_tabs(grid, area, (self.hover, threads.len()), theme);
@@ -3097,7 +3189,12 @@ impl App {
             return;
         }
         match self.dock.session() {
-            Some(session) => session.draw(grid, screen, theme, self.dock.focused),
+            Some(session) => {
+                session.draw(grid, screen, theme, self.dock.focused);
+                if session.exited {
+                    session.draw_ended(grid, screen, theme);
+                }
+            }
             None => self.agents.draw(grid, screen, self.hover, theme),
         }
     }
@@ -3126,12 +3223,29 @@ impl App {
         text
     }
 
+    /// Keeps an approved plan with the project: the agent's copy goes when the session does,
+    /// and it's what the work gets checked against.
+    fn keep_plan(&self, path: &Path, decision: &Decision) {
+        let text = match decision {
+            Decision::Approve(Some(edited)) => edited.clone(),
+            _ => std::fs::read_to_string(path).unwrap_or_default(),
+        };
+        let folder = self.workspace.root().join(".cellix/plans");
+        let count = std::fs::read_dir(&folder).map_or(0, Iterator::count);
+        let name = format!("{:03}.md", count + 1);
+        let _ =
+            std::fs::create_dir_all(&folder).and_then(|()| std::fs::write(folder.join(name), text));
+    }
+
     /// Answers the waiting agent and closes the plan.
     fn finish_plan(&mut self, decision: Decision) {
         let Some(plan) = self.plan.take() else {
             self.say("No plan is waiting for review");
             return;
         };
+        if matches!(decision, Decision::Approve(_)) {
+            self.keep_plan(&plan.path, &decision);
+        }
         let _ = plan.reply.send(decision);
         self.agents.plan_answered();
         let file = self.relative(&plan.path);
@@ -3348,31 +3462,63 @@ impl App {
     fn add_comment(&mut self, file: String, line: usize, text: String) {
         // A plan's comments are its answer, and `--wait` writes them into the file.
         let answering = self.plan.is_some() || self.wait_file.is_some();
-        let page = self.editors.get(self.active()).filter(|e| e.rendered);
-        if let Some(editor) = page.filter(|_| !answering) {
-            // A document's comments become conversations, kept beside it.
-            let quote = editor
-                .selected_text()
-                .unwrap_or_else(|| editor.line_text(line.saturating_sub(1)));
-            let quote = quote.lines().next().unwrap_or_default().trim().to_string();
-            self.threads.push(Thread {
-                id: cellix_review::threads::next_id(&self.threads),
-                file,
-                line,
-                quote,
-                text,
-                replies: Vec::new(),
-                resolved: false,
-            });
-            self.save_threads();
+        let Some(editor) = self.editors.get(self.active()).filter(|_| !answering) else {
+            if let Ok(mut comments) = self.comments.lock() {
+                comments.push(Comment { file, line, text });
+            }
+            return;
+        };
+        // Every comment shows beside its file. A document's is a conversation there, and
+        // code's also goes with the review, so an agent is told of it by that road.
+        let page = editor.rendered;
+        let quote = editor
+            .selected_text()
+            .unwrap_or_else(|| editor.line_text(line.saturating_sub(1)));
+        let quote = quote.lines().next().unwrap_or_default().trim().to_string();
+        self.threads.push(Thread {
+            id: cellix_review::threads::next_id(&self.threads),
+            file: file.clone(),
+            line,
+            quote,
+            text: text.clone(),
+            replies: Vec::new(),
+            resolved: false,
+            told: (!page).then_some(0),
+        });
+        self.save_threads();
+        if page {
             self.dock.open = true;
             self.dock.front = Front::Comments;
             self.dock.focused = false;
-            return;
-        }
-        if let Ok(mut comments) = self.comments.lock() {
+        } else if let Ok(mut comments) = self.comments.lock() {
             comments.push(Comment { file, line, text });
         }
+    }
+
+    /// Keeps comments on their text as the document changes.
+    fn follow_threads(&mut self) {
+        let Some(editor) = self.editors.get(self.active()) else {
+            return;
+        };
+        let revision = editor.buffer.revision();
+        if self.threads_seen == Some((self.active(), revision)) {
+            return;
+        }
+        let Some(file) = editor.buffer.path().map(|p| self.relative(p)) else {
+            return;
+        };
+        let text = editor.buffer.text();
+        let mut quotes = Vec::new();
+        for thread in self
+            .threads
+            .iter_mut()
+            .filter(|t| t.file == file && !t.resolved)
+        {
+            thread.follow(&text);
+            quotes.push((thread.line, thread.quote.clone()));
+        }
+        editor.set_quotes(&quotes);
+        self.threads_seen = Some((self.active(), revision));
     }
 
     fn save_threads(&mut self) {
@@ -3421,12 +3567,16 @@ impl App {
                 match (message, self.dock.agent_mut()) {
                     (Some(message), Some(session)) => {
                         session.send_line(&message);
+                        if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
+                            thread.told = Some(thread.replies.len());
+                        }
+                        self.save_threads();
                         self.say("Sent to the agent. Its answer lands here");
                     }
                     _ => {
                         self.dock.front = Front::Session;
                         self.dock.active = None;
-                        self.say("Start an agent here first");
+                        self.say("Start an agent here. It sees this comment with your next prompt");
                     }
                 }
             }
@@ -3494,17 +3644,33 @@ impl App {
                 }
             }
             Request::CommentsTaken => self.say("An agent took the review comments"),
-            Request::Reply { id, author, text } => {
-                match self.threads.iter_mut().find(|t| t.id == id) {
-                    Some(thread) => {
-                        thread.replies.push(Reply {
-                            author: author.clone(),
-                            text,
-                        });
-                        self.save_threads();
-                        self.say(format!("{author} answered a comment"));
-                    }
-                    None => self.say(format!("{author} answered a comment that's gone")),
+            Request::Reply {
+                id,
+                author,
+                text,
+                found,
+            } => {
+                let thread = self.threads.iter_mut().find(|t| t.id == id);
+                let _ = found.send(thread.is_some());
+                if let Some(thread) = thread {
+                    thread.replies.push(Reply {
+                        author: author.clone(),
+                        text,
+                    });
+                    self.save_threads();
+                    self.say(format!("{author} answered a comment"));
+                }
+            }
+            Request::TakeThreads(reply) => {
+                let mut sent = Vec::new();
+                for thread in self.threads.iter_mut().filter(|t| t.waiting()) {
+                    thread.told = Some(thread.replies.len());
+                    sent.push(thread.clone());
+                }
+                let json = serde_json::to_string(&sent).unwrap_or_else(|_| "[]".to_string());
+                let _ = reply.send(json);
+                if !sent.is_empty() {
+                    self.save_threads();
                 }
             }
             Request::Threads(reply) => {
@@ -3655,9 +3821,36 @@ impl App {
     }
 
     fn save(&mut self) {
+        if self.editors.get(self.active()).is_some_and(|e| e.conflict) {
+            self.confirm_conflict();
+            return;
+        }
+        self.write_file();
+    }
+
+    /// Asks before saving over a change made while this file had unsaved edits.
+    fn confirm_conflict(&mut self) {
+        let Some(editor) = self.editors.get(self.active()) else {
+            return;
+        };
+        self.overlay = Overlay::Confirm(Confirm {
+            title: format!("{} changed on disk", editor.title()),
+            detail: "Something else edited it while you were. Saving replaces that edit."
+                .to_string(),
+            buttons: vec![
+                ("Cancel", Choice::Cancel),
+                ("Reload Theirs", Choice::Reload),
+                ("Overwrite", Choice::Overwrite),
+            ],
+            selected: 0,
+        });
+    }
+
+    fn write_file(&mut self) {
         let Some(editor) = self.editor_mut() else {
             return;
         };
+        editor.conflict = false;
         let note = match editor.buffer.save() {
             Ok(()) => format!("Saved {}", editor.title()),
             Err(e) => format!("Could not save: {e}"),
@@ -4667,7 +4860,9 @@ impl App {
                 }
                 let file = editor.buffer.path().map(|p| self.relative(p));
                 let marks = Marks {
-                    comments: file.map_or_else(Vec::new, |f| self.comment_lines(&f)),
+                    comments: file
+                        .as_ref()
+                        .map_or_else(Vec::new, |f| self.comment_lines(f)),
                     errors: editor
                         .buffer
                         .path()
@@ -5193,6 +5388,12 @@ impl App {
         };
         self.use_tool(button.tool, button.x);
         true
+    }
+
+    /// Whether the keyboard is on a document's page.
+    fn on_page(&self) -> bool {
+        let page = self.editors.get(self.active()).is_some_and(|e| e.rendered);
+        page && self.review.is_none() && self.settings_page.is_none() && self.search.focus.is_none()
     }
 
     fn page_dialect(&self) -> Dialect {
@@ -7181,6 +7382,14 @@ mod tests {
         let area = app.dock_area().unwrap();
         let (_, end) = (area.x + 1, area.x + 1 + 8 + 6);
         app.handle(mouse(MouseKind::Left, end - 2, 0));
+        assert_eq!(app.dock.sessions.len(), 1, "it asks first");
+        let (x, y) = find(&screen(&app), "Stop");
+        app.handle(mouse(MouseKind::Left, x + 1, y + 1));
+        let Overlay::Confirm(_) = app.overlay else {
+            assert!(app.dock.sessions.is_empty());
+            return;
+        };
+        app.choose(Choice::CloseSession(0));
         assert!(app.dock.sessions.is_empty());
     }
 
@@ -7558,7 +7767,6 @@ mod tests {
             ("Italic", "*word* tail\n"),
             ("Strikethrough", "~~word~~ tail\n"),
             ("Code", "`word` tail\n"),
-            ("Link", "[word](https://) tail\n"),
             ("Bullet List", "- word tail\n"),
             ("Numbered List", "1. word tail\n"),
             ("Task List", "- [ ] word tail\n"),
@@ -7725,17 +7933,168 @@ mod tests {
         app.dock.front = Front::Session;
         shows(&mut app, "cellix reply 1");
         app.dock.front = Front::Comments;
+        let (found, known) = std::sync::mpsc::channel();
         app.serve(Request::Reply {
             id,
             author: "Claude Code".into(),
             text: "It saves a read.".into(),
+            found: found.clone(),
         });
+        assert_eq!(known.try_recv(), Ok(true));
+        app.serve(Request::Reply {
+            id: 99,
+            author: "Claude Code".into(),
+            text: "Lost".into(),
+            found,
+        });
+        assert_eq!(known.try_recv(), Ok(false), "a wrong number is an error");
         let text = screen(&app).text();
         assert!(text.contains("It saves a read."), "{text}");
         assert!(text.contains("Claude Code"), "{text}");
         let (sender, answer) = std::sync::mpsc::channel();
         app.serve(Request::Threads(sender));
         assert!(answer.recv().unwrap().contains("Why first"));
+    }
+
+    #[test]
+    fn saving_never_erases_a_change_made_on_disk() {
+        let (dir, mut app) = project();
+        let path = dir.path().join("alpha.txt");
+        app.open(&path).unwrap();
+        typed(&mut app, "mine ");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(&path, "theirs\n").unwrap();
+        app.handle(Event::Tick);
+        app.run(Command::Save);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "theirs\n", "it asks");
+        assert!(screen(&app).text().contains("changed on disk"));
+        app.overlay = Overlay::None;
+        app.choose(Choice::Overwrite);
+        assert!(fs::read_to_string(&path).unwrap().starts_with("mine"));
+    }
+
+    #[test]
+    fn quitting_asks_before_stopping_a_running_job() {
+        let (_dir, mut app) = project();
+        session(&mut app, "echo ready; sleep 9");
+        app.run(Command::Quit);
+        assert!(!app.quit);
+        assert!(screen(&app).text().contains("Stand-in will stop"));
+        app.overlay = Overlay::None;
+        app.choose(Choice::Stop);
+        assert!(app.quit);
+    }
+
+    #[test]
+    fn a_shell_that_exits_closes_its_tab() {
+        let (_dir, mut app) = project();
+        let root = app.workspace.root().to_path_buf();
+        let argv = ["sh".to_string(), "-c".to_string(), "exit 0".to_string()];
+        app.start_session(crate::agents::SHELL.0, &argv, &[], &root);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !app.dock.sessions.is_empty() {
+            assert!(std::time::Instant::now() < deadline);
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn images_open_beside_the_file_and_binaries_say_what_they_are() {
+        let (dir, mut app) = project();
+        let image = image::RgbaImage::from_pixel(8, 8, image::Rgba([1, 2, 3, 255]));
+        image.save(dir.path().join("loss.png")).unwrap();
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        app.open(&dir.path().join("loss.png")).unwrap();
+        assert_eq!(app.dock.front, Front::Pdf);
+        assert!(app.editors.is_empty());
+        fs::write(dir.path().join("best.pt"), [0xff, 0xfe, 0x00, 0xff]).unwrap();
+        let said = app
+            .open(&dir.path().join("best.pt"))
+            .unwrap_err()
+            .to_string();
+        assert!(said.contains("binary file"), "{said}");
+    }
+
+    #[test]
+    fn code_comments_show_in_the_panel_too() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        comment_on(&mut app, "Why this");
+        assert_eq!(app.threads.len(), 1);
+        assert_eq!(
+            app.comments.lock().unwrap().len(),
+            1,
+            "and go with the review"
+        );
+        assert!(!app.threads[0].waiting(), "so no agent hears of it twice");
+    }
+
+    #[test]
+    fn a_comment_never_reaches_a_shell() {
+        let (dir, mut app) = page_app("line\n");
+        comment_on(&mut app, "Odd; touch PWNED");
+        let root = app.workspace.root().to_path_buf();
+        let shell = ["sh".to_string()];
+        app.start_session(crate::agents::SHELL.0, &shell, &[], &root);
+        app.dock.front = Front::Comments;
+        app.thread_hit(ThreadHit::Ask(app.threads[0].id));
+        assert!(screen(&app).text().contains("Start an agent here"));
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(!dir.path().join("PWNED").exists(), "it ran as a command");
+    }
+
+    #[test]
+    fn a_comment_follows_its_text() {
+        let (_dir, mut app) = page_app("one\n\nthe cache goes first\n");
+        let (x, y) = find(&screen(&app), "the cache");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        comment_on(&mut app, "Why");
+        assert_eq!(app.threads[0].line, 3);
+        app.run(Command::Move(cellix_input::Direction::Top, false));
+        enter(&mut app);
+        enter(&mut app);
+        assert_eq!(app.threads[0].line, 5);
+    }
+
+    #[test]
+    fn a_link_asks_for_its_address() {
+        let (_dir, mut app) = page_app("word tail\n");
+        click_tool(&mut app, "Link");
+        typed(&mut app, "https://a.b");
+        enter(&mut app);
+        assert_eq!(
+            app.active_text().as_deref(),
+            Some("[word](https://a.b) tail\n")
+        );
+    }
+
+    #[test]
+    fn ctrl_b_is_bold_on_a_page() {
+        let (_dir, mut app) = page_app("word tail\n");
+        app.handle(Event::Key(KeyEvent::ctrl('b')));
+        assert_eq!(app.active_text().as_deref(), Some("**word** tail\n"));
+    }
+
+    #[test]
+    fn prose_has_no_code_completion() {
+        let (_dir, mut app) = page_app("somewhere\n\n");
+        app.run(Command::Move(cellix_input::Direction::Bottom, false));
+        typed(&mut app, "som");
+        assert!(app.suggest.is_none());
+    }
+
+    #[test]
+    fn a_new_comment_reaches_the_agent_once() {
+        let (_dir, mut app) = page_app("line\n");
+        comment_on(&mut app, "Note");
+        let take = |app: &mut App| {
+            let (sender, answer) = std::sync::mpsc::channel();
+            app.serve(Request::TakeThreads(sender));
+            answer.recv().unwrap()
+        };
+        assert!(take(&mut app).contains("Note"));
+        assert_eq!(take(&mut app), "[]", "only once");
     }
 
     #[test]
@@ -7764,7 +8123,7 @@ mod tests {
         comment_on(&mut app, "Note");
         let (x, y) = find(&screen(&app), "Ask agent");
         app.handle(mouse(MouseKind::Left, x, y));
-        assert!(screen(&app).text().contains("Start an agent here first"));
+        assert!(screen(&app).text().contains("Start an agent here"));
     }
 
     fn paper_app(text: &str) -> (TempDir, App) {
