@@ -7,7 +7,7 @@ mod probe;
 
 pub use cells::CellBackend;
 pub use detect::detect;
-pub use pixels::{DEFAULT_QUOTA, PixelBackend, Placement, Smooth, row_key};
+pub use pixels::{Bleed, DEFAULT_QUOTA, PixelBackend, Placement, Smooth, row_key};
 pub use probe::{Env, Multiplexer, Tier, select_tier};
 
 use std::io::{self, Write};

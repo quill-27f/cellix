@@ -94,9 +94,6 @@ const TOOLTIP_SIZE: u8 = 92;
 const FIND_NAMES: [&str; 3] = ["Previous match", "Next match", "Close"];
 const RAIL_NAMES: [&str; 5] = ["Files", "Search", "Review Changes", "Agents", "Settings"];
 const TOOL_NAMES: [&str; 7] = ["Bold", "Italic", "Code", "Heading", "List", "Task", "Quote"];
-/// How far the status bar's text sits below the middle of its row, because the terminal's
-/// padding below it is the same colour and reads as part of the bar.
-const STATUS_DROP: f32 = 0.12;
 const SIDEBAR_WIDTH: u16 = 28;
 const SIDEBAR_MIN_WIDTH: u16 = 20;
 /// Below this width the window is a side pane, as beside an agent: chrome gives way to
@@ -3765,18 +3762,9 @@ impl App {
                     |()| "Done. Reload Ghostty's config with Cmd+Shift+,".to_string(),
                 );
             }
-            Control::GhosttyFill => {
-                note = crate::integrations::fill_ghostty_window(var).map_or_else(
-                    |e| format!("Couldn't: {e}"),
-                    |()| "Done. Reload Ghostty's config with Cmd+Shift+,".to_string(),
-                );
-            }
         }
         if let Some(page) = &mut self.settings_page {
-            if matches!(
-                control,
-                Control::ClaudeCode | Control::Ghostty | Control::GhosttyFill
-            ) {
+            if matches!(control, Control::ClaudeCode | Control::Ghostty) {
                 page.found = Found::look();
             }
             page.note = note;
@@ -4631,10 +4619,6 @@ impl App {
         let width = self.size.0;
         let bar = self.theme.status;
         grid.fill(Rect::new(0, y, width, 1), bar);
-        grid.hairline(
-            Bounds::cells(0.0, y as f32, width as f32, 0.0),
-            self.theme.border,
-        );
         let message = self.message.borrow();
         let at_cursor = self.cursor_line().and_then(|(path, line)| {
             let items = self.diagnostics.get(&path)?;
@@ -4749,9 +4733,7 @@ impl App {
             let color = if hovered { self.theme.text.fg } else { bar.fg };
             let shown = Style { fg: color, ..bar };
             grid.glyph(at as f32, y, Icon::Git, color, "⎇", bar);
-            grid.drop_last(STATUS_DROP);
             grid.label_at(at as f32 + 1.8, at + 2, y, branch, shown, end, 90);
-            grid.drop_last(STATUS_DROP);
         }
         let mut x = start;
         if let Some(problems) = &problems {
@@ -4770,9 +4752,7 @@ impl App {
             bar
         };
         grid.label_at(x as f32, x, y, left, bar, right_x.saturating_sub(1), 90);
-        grid.drop_last(STATUS_DROP);
         grid.label_right(width.saturating_sub(1), y, &right, bar, 90);
-        grid.drop_last(STATUS_DROP);
     }
 
     /// Where the branch sits in the status bar, as (start, end) columns.

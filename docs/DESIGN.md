@@ -143,10 +143,12 @@ Paint can't go under text, so a rounded surface is coloured cells with its corne
 back in the colour behind. Icon pills work the same way. Floating panels reach past their
 rows in paint, which gives them padding that a row of cells couldn't.
 
-A terminal app can't draw in the terminal's padding, so the frame is really the terminal's
-background. Tiles sit on cells given their edge colours, which lets Ghostty carry them into
-the padding with `window-padding-color = extend`. That's the user's choice in Settings,
-because it applies to every Ghostty window.
+Ghostty doesn't clip images, so on Ghostty tiles reach past the text area: each row runs on
+into the right padding in its edge colour, and the last row runs on to the bottom of the
+window, with the status text moved down to the middle of that band. Left and top padding
+can't be reached, since an image can't start before the grid, and that's why the frame there
+is the terminal's own background. Other terminals clip or keep this to themselves, so
+nothing changes there. Ghostty's config is never touched.
 
 A tile is keyed by what its row shows, and paint can stand in several rows, so a row with
 paint on it keys by its own number too.

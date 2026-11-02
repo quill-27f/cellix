@@ -195,12 +195,6 @@ wheel jump by lines, for a slow link, and `minimap: false` hides the minimap.
 `language_servers` maps a language to a command, and
 `browser` replaces the command that opens web pages.
 
-A terminal app can't draw in the terminal's own padding, so Cellix sits inside a thin frame
-of the terminal's colour. In Ghostty, `Fill window` under Integrations adds
-`window-padding-color = extend` and `window-padding-balance = true` to its config, which
-carries Cellix's colours out to the window's edge. That setting applies to every Ghostty
-window, so it's your choice.
-
 Ghostty keeps Cmd+D to open a split, so Cellix never sees it and Ctrl+D is the way to select
 the next match. `Free Cmd+D` under Integrations adds `keybind = super+d=unbind` to Ghostty's
 config, which then needs a reload.

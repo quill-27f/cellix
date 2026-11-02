@@ -7,6 +7,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use cellix_term::Bleed;
 use serde_json::{Map, Value, json};
 
 /// Loads a folder as a plugin in every session, which `--plugin-dir` does for one.
@@ -14,11 +15,6 @@ const PLUGIN_DIRS: &str = "CLAUDE_CODE_PLUGIN_DIRS";
 /// Connects to a running Cellix on its own, which `--ide` does for one session.
 const AUTO_CONNECT: &str = "CLAUDE_CODE_AUTO_CONNECT_IDE";
 const GHOSTTY_FREE_CMD_D: &str = "keybind = super+d=unbind";
-/// Fills Ghostty's padding with the colours at the window's edge, so Cellix reaches it.
-const GHOSTTY_FILL: [&str; 2] = [
-    "window-padding-color = extend",
-    "window-padding-balance = true",
-];
 const CODEX_PLUGIN: &str = "cellix@cellix";
 
 fn config_dir(var: &impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
@@ -235,13 +231,30 @@ pub fn ghostty_keeps_cmd_d(var: impl Fn(&str) -> Option<String>) -> Option<bool>
     Some(!text.lines().any(frees))
 }
 
-/// Whether this is Ghostty, and it still leaves its padding in the terminal's colour.
-pub fn ghostty_keeps_padding(var: impl Fn(&str) -> Option<String>) -> Option<bool> {
-    let ghostty = var("TERM").is_some_and(|t| t.contains("ghostty"));
-    let config = ghostty_config(&var).filter(|_| ghostty)?;
-    let text = fs::read_to_string(config).unwrap_or_default();
-    let set = |line: &str| line.replace(' ', "") == GHOSTTY_FILL[0].replace(' ', "");
-    Some(!text.lines().any(set))
+/// How far tiles should reach past the text area. Only Ghostty is known to draw images over
+/// its padding. The bottom padding isn't reported, so the band is taken as the row, the
+/// configured padding, and half a row of what's left over, which is the average.
+pub fn window_bleed(var: impl Fn(&str) -> Option<String>, cell_height: usize) -> Bleed {
+    if !var("TERM").is_some_and(|t| t.contains("ghostty")) {
+        return Bleed::default();
+    }
+    let text = ghostty_config(&var)
+        .and_then(|path| fs::read_to_string(path).ok())
+        .unwrap_or_default();
+    let padding = text
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .filter(|(key, _)| key.trim() == "window-padding-y")
+        .filter_map(|(_, value)| value.rsplit(',').next()?.trim().parse::<usize>().ok())
+        .next_back()
+        .unwrap_or(2);
+    // Points in the config, and pixels here. Retina screens have tall cells.
+    let scale = if cell_height >= 24 { 2 } else { 1 };
+    Bleed {
+        cols: 8,
+        rows: 3,
+        drop: (padding * scale + cell_height / 2) / 2,
+    }
 }
 
 fn append_to_ghostty(lines: &[&str], var: &impl Fn(&str) -> Option<String>) -> io::Result<()> {
@@ -268,11 +281,6 @@ fn append_to_ghostty(lines: &[&str], var: &impl Fn(&str) -> Option<String>) -> i
 /// Adds the line that lets Cmd+D through. Ghostty picks it up when its config reloads.
 pub fn free_cmd_d(var: impl Fn(&str) -> Option<String>) -> io::Result<()> {
     append_to_ghostty(&[GHOSTTY_FREE_CMD_D], &var)
-}
-
-/// Lets colour reach the window's edge. This applies to every Ghostty window.
-pub fn fill_ghostty_window(var: impl Fn(&str) -> Option<String>) -> io::Result<()> {
-    append_to_ghostty(&GHOSTTY_FILL, &var)
 }
 
 #[cfg(test)]
@@ -368,17 +376,19 @@ mod tests {
     }
 
     #[test]
-    fn the_window_is_filled_once_and_keeps_the_config() {
+    fn tiles_only_leave_the_text_area_on_ghostty() {
         let (dir, var) = home();
-        let config = dir.path().join(".config/ghostty/config");
-        fs::create_dir_all(config.parent().unwrap()).unwrap();
-        fs::write(&config, "window-padding-x = 10\n").unwrap();
-        assert_eq!(ghostty_keeps_padding(&var), Some(true));
-        fill_ghostty_window(&var).unwrap();
-        assert_eq!(ghostty_keeps_padding(&var), Some(false));
-        let text = fs::read_to_string(&config).unwrap();
-        assert!(text.starts_with("window-padding-x = 10\n"));
-        assert!(text.contains("window-padding-color = extend"));
+        fs::create_dir_all(dir.path().join(".config/ghostty")).unwrap();
+        fs::write(
+            dir.path().join(".config/ghostty/config"),
+            "font-size = 14\nwindow-padding-y = 8\n",
+        )
+        .unwrap();
+        let bleed = window_bleed(&var, 36);
+        assert!(bleed.cols > 0 && bleed.rows > 0);
+        assert_eq!(bleed.drop, (16 + 18) / 2);
+        let other = |name: &str| (name == "TERM").then(|| "xterm-kitty".to_string());
+        assert_eq!(window_bleed(other, 36), Bleed::default());
     }
 
     #[test]

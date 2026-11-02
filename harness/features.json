@@ -675,8 +675,8 @@
     "id": "edge-fill",
     "milestone": 7,
     "passes": true,
-    "test": "the_window_is_filled_once_and_keeps_the_config",
-    "title": "Ghostty padding can take the colours at the window edge"
+    "test": "tiles_only_leave_the_text_area_on_ghostty",
+    "title": "Filling the window needs no change to Ghostty's config"
   },
   {
     "id": "hover-everywhere",
@@ -691,5 +691,124 @@
     "passes": true,
     "test": "icons_say_what_they_are",
     "title": "Icon buttons say what they are"
+  },
+  {
+    "id": "window-fills",
+    "milestone": 8,
+    "passes": true,
+    "test": "the_window_fills_to_its_edges",
+    "title": "The app reaches the window edges in Ghostty"
+  },
+  {
+    "id": "browser-fallback",
+    "milestone": 8,
+    "passes": false,
+    "test": "a_failed_browser_falls_back_to_the_system_one",
+    "title": "A browser that fails falls back to the system one"
+  },
+  {
+    "id": "markdown-in-browser",
+    "milestone": 8,
+    "passes": false,
+    "test": "a_markdown_file_opens_in_the_browser_as_a_page",
+    "title": "A Markdown file opens in the browser as a page"
+  },
+  {
+    "id": "language-prompt",
+    "milestone": 8,
+    "passes": false,
+    "test": "opening_a_file_offers_its_language_support",
+    "title": "Opening a file offers to install its language support"
+  },
+  {
+    "id": "agent-pane",
+    "milestone": 8,
+    "passes": false,
+    "test": "an_agent_runs_beside_the_editor",
+    "title": "An agent runs in a side pane inside the editor"
+  },
+  {
+    "id": "doc-toolbar",
+    "milestone": 8,
+    "passes": false,
+    "test": "the_toolbar_writes_every_format",
+    "title": "Documents have a full toolbar on top"
+  },
+  {
+    "id": "table-editing",
+    "milestone": 8,
+    "passes": false,
+    "test": "tables_grow_and_shrink_from_the_menu",
+    "title": "Table rows and columns change from the context menu"
+  },
+  {
+    "id": "table-picker",
+    "milestone": 8,
+    "passes": false,
+    "test": "a_new_table_comes_from_the_size_picker",
+    "title": "A new table comes from a size picker"
+  },
+  {
+    "id": "math-render",
+    "milestone": 8,
+    "passes": false,
+    "test": "formulas_show_typeset_and_open_on_the_caret",
+    "title": "Formulas show typeset and open for editing on the caret"
+  },
+  {
+    "id": "math-panel",
+    "milestone": 8,
+    "passes": false,
+    "test": "the_math_panel_inserts_templates",
+    "title": "A panel inserts symbols and formula templates"
+  },
+  {
+    "id": "page-images",
+    "milestone": 8,
+    "passes": false,
+    "test": "images_show_in_the_page",
+    "title": "Images show in the page"
+  },
+  {
+    "id": "doc-threads",
+    "milestone": 8,
+    "passes": false,
+    "test": "comments_are_threads_beside_the_page",
+    "title": "Comments on a document are threads beside it"
+  },
+  {
+    "id": "agent-replies",
+    "milestone": 8,
+    "passes": false,
+    "test": "an_agent_replies_to_a_comment",
+    "title": "An agent can reply to a comment"
+  },
+  {
+    "id": "tex-page",
+    "milestone": 8,
+    "passes": false,
+    "test": "latex_opens_as_an_editable_page",
+    "title": "LaTeX opens as an editable page"
+  },
+  {
+    "id": "tex-build",
+    "milestone": 8,
+    "passes": false,
+    "test": "a_paper_builds_into_a_pdf",
+    "title": "A paper builds into a PDF with errors on their lines"
+  },
+  {
+    "id": "pdf-view",
+    "milestone": 8,
+    "passes": false,
+    "test": "a_pdf_shows_beside_its_source",
+    "title": "A PDF shows beside its source"
+  },
+  {
+    "id": "export-pdf",
+    "milestone": 8,
+    "passes": false,
+    "test": "markdown_exports_to_pdf",
+    "title": "Markdown exports to PDF"
   }
 ]

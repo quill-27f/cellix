@@ -7,7 +7,8 @@ use base64::Engine;
 use cellix_input::{Event, Key, KeyEvent, Mods, MouseEvent, MouseKind};
 use cellix_render::{CellMeasure, FontMeasure, Grid, Measure, SoftwareRasterizer};
 use cellix_term::{
-    Backend, CellBackend, DEFAULT_QUOTA, PixelBackend, Placement, Smooth, Tier, detect, select_tier,
+    Backend, Bleed, CellBackend, DEFAULT_QUOTA, PixelBackend, Placement, Smooth, Tier, detect,
+    select_tier,
 };
 use crossterm::event::{
     self as ct, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste,
@@ -156,6 +157,7 @@ struct Display {
     light: Option<bool>,
     background: Option<(u8, u8, u8)>,
     smooth: Option<Smooth>,
+    bleed: Bleed,
 }
 
 impl Display {
@@ -172,7 +174,11 @@ impl Display {
             Tier::Cells => None,
         };
         let cell = env.cell.or_else(window_cell);
+        let bleed = cell.map_or_else(Bleed::default, |cell| {
+            crate::integrations::window_bleed(|k| std::env::var(k).ok(), cell.1)
+        });
         Ok(Self {
+            bleed,
             placement,
             cell,
             pixel_mouse: env.pixel_mouse,
@@ -210,7 +216,8 @@ impl Display {
     fn backend(&self) -> Box<dyn Backend> {
         let pixels = self.placement.zip(self.cell).and_then(|(placement, cell)| {
             let rasterizer = SoftwareRasterizer::new(cell.0, cell.1)?;
-            let backend = PixelBackend::new(rasterizer, placement, DEFAULT_QUOTA);
+            let backend =
+                PixelBackend::new(rasterizer, placement, DEFAULT_QUOTA).with_bleed(self.bleed);
             Some(match self.smooth {
                 Some(smooth) => backend.with_smooth(smooth),
                 None => backend,

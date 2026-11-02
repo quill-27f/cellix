@@ -31,6 +31,19 @@ pub struct Smooth {
     pub pause: Duration,
 }
 
+/// How far tiles reach past the text area. Ghostty doesn't clip images, so a tile can cover
+/// its right and bottom padding, which no cell can. Left and top stay out of reach, and the
+/// frame there is the terminal's own colour.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Bleed {
+    /// Columns past the right edge.
+    pub cols: u16,
+    /// Rows past the bottom edge.
+    pub rows: u16,
+    /// Pixels the last row's content moves down, to centre it in the band it now fills.
+    pub drop: usize,
+}
+
 struct Tile {
     id: u32,
     bytes: usize,
@@ -62,8 +75,7 @@ pub struct PixelBackend<R> {
     smooth: Option<Smooth>,
     /// Whether region placements are waiting to be removed by the next present.
     scrolling: bool,
-    /// The colours last given to the cells under the tiles, along the window's edges.
-    edges: Vec<Rgb>,
+    bleed: Bleed,
 }
 
 /// What a row looks like, as a key: rows with the same key draw the same pixels.
@@ -106,8 +118,16 @@ impl<R: Rasterizer> PixelBackend<R> {
             frame: 0,
             smooth: None,
             scrolling: false,
-            edges: Vec::new(),
+            bleed: Bleed::default(),
         }
+    }
+
+    /// Only direct placement can leave the text area: placeholders are cells.
+    pub fn with_bleed(mut self, bleed: Bleed) -> Self {
+        if self.placement == Placement::Direct {
+            self.bleed = bleed;
+        }
+        self
     }
 
     pub fn with_smooth(mut self, smooth: Smooth) -> Self {
@@ -148,11 +168,12 @@ impl<R: Rasterizer> PixelBackend<R> {
         }
     }
 
-    fn place(&self, out: &mut Vec<u8>, id: u32, y: u16, cols: u16) {
+    fn place(&self, out: &mut Vec<u8>, id: u32, y: u16, cols: u16, rows: u16) {
         let _ = write!(out, "\x1b[{};1H", y + 1);
         match self.placement {
             Placement::Direct => {
-                let control = format!("a=p,i={id},p={},c={cols},r=1,C=1,q=2", y + 1);
+                let cols = cols + self.bleed.cols;
+                let control = format!("a=p,i={id},p={},c={cols},r={rows},C=1,q=2", y + 1);
                 self.apc(out, &control, b"");
             }
             Placement::Placeholder => {
@@ -168,31 +189,51 @@ impl<R: Rasterizer> PixelBackend<R> {
         }
     }
 
-    /// Gives the cells under the tiles their colours along the window's edges. Tiles can't
-    /// reach a terminal's padding, but a terminal can extend cell colours into it, as
-    /// Ghostty does with `window-padding-color = extend`. Elsewhere nothing shows.
-    fn paint_edges(&mut self, out: &mut Vec<u8>, grid: &Grid) {
-        let (width, height) = (grid.width() as usize, grid.height() as usize);
-        self.edges.resize(width * height, Rgb(0, 0, 0));
-        let mut wrote = false;
-        for y in 0..height {
-            let row = grid.row(y as u16);
-            for (x, cell) in row.iter().enumerate() {
-                // Ghostty extends a row only when every cell in it has a colour.
-                let on_edge = y == 0 || y + 1 == height || x == 0 || x + 1 == width;
-                let at = y * width + x;
-                if !on_edge || self.edges[at] == cell.style.bg {
-                    continue;
-                }
-                self.edges[at] = cell.style.bg;
-                let Rgb(r, g, b) = cell.style.bg;
-                let _ = write!(out, "\x1b[{};{}H\x1b[48;2;{r};{g};{b}m ", y + 1, x + 1);
-                wrote = true;
+    /// A row's image, grown to cover the padding beyond it in the colours at the edge.
+    fn bled(&self, image: Image, grid: &Grid, y: u16) -> Image {
+        let Bleed { cols, rows, drop } = self.bleed;
+        let cells = grid.row(y);
+        let (Some(last), true) = (cells.last(), cols > 0 || rows > 0) else {
+            return image;
+        };
+        let cell = image.width / cells.len();
+        let width = image.width + cols as usize * cell;
+        let paint = |line: &mut Vec<u8>, from: usize, to: usize, color: Rgb| {
+            for _ in from..to {
+                line.extend_from_slice(&[color.0, color.1, color.2]);
             }
+        };
+        let mut rgb = Vec::new();
+        if y + 1 != grid.height() {
+            for line in image.rgb.chunks_exact(image.width * 3) {
+                rgb.extend_from_slice(line);
+                paint(&mut rgb, image.width, width, last.style.bg);
+            }
+            return Image {
+                width,
+                rgb,
+                ..image
+            };
         }
-        if wrote {
-            out.extend_from_slice(b"\x1b[0m");
+        // The bar's own colours run on below it, column by column.
+        let height = image.height * (1 + rows as usize);
+        let drop = drop.min(height - image.height);
+        let mut plain = Vec::with_capacity(width * 3);
+        for c in cells {
+            paint(&mut plain, 0, cell, c.style.bg);
         }
+        paint(&mut plain, image.width, width, last.style.bg);
+        for _ in 0..drop {
+            rgb.extend_from_slice(&plain);
+        }
+        for line in image.rgb.chunks_exact(image.width * 3) {
+            rgb.extend_from_slice(line);
+            paint(&mut rgb, image.width, width, last.style.bg);
+        }
+        for _ in drop + image.height..height {
+            rgb.extend_from_slice(&plain);
+        }
+        Image { width, height, rgb }
     }
 
     /// Returns the tile for a row, rasterizing and sending it only if it's new.
@@ -203,6 +244,7 @@ impl<R: Rasterizer> PixelBackend<R> {
         }
         let id = self.new_id();
         let image = self.rasterizer.row(grid, y);
+        let image = self.bled(image, grid, y);
         let cols = grid.width();
         self.transmit(out, id, &image);
         if self.placement == Placement::Placeholder {
@@ -304,15 +346,13 @@ impl<R: Rasterizer> Backend for PixelBackend<R> {
             self.used = 0;
             self.shown = vec![None; grid.height() as usize];
             self.size = size;
-            self.edges.clear();
-        }
-        if self.placement == Placement::Direct {
-            self.paint_edges(&mut bytes, grid);
         }
         self.frame += 1;
         let mut on_screen = HashSet::new();
         for y in 0..grid.height() {
-            let key = row_key(grid, y);
+            let bottom = y + 1 == grid.height() && self.bleed.rows > 0;
+            // The last row's tile is taller than the same row anywhere else.
+            let key = row_key(grid, y).rotate_left(u32::from(bottom));
             let id = self.tile(&mut bytes, key, grid, y);
             on_screen.insert(id);
             if self.shown[y as usize] != Some(id) {
@@ -321,7 +361,8 @@ impl<R: Rasterizer> Backend for PixelBackend<R> {
                 if let (Placement::Direct, Some(old)) = (self.placement, self.shown[y as usize]) {
                     self.apc(&mut bytes, &format!("a=d,d=i,i={old},p={},q=2", y + 1), b"");
                 }
-                self.place(&mut bytes, id, y, grid.width());
+                let rows = 1 + if bottom { self.bleed.rows } else { 0 };
+                self.place(&mut bytes, id, y, grid.width(), rows);
                 self.shown[y as usize] = Some(id);
             }
         }
@@ -492,6 +533,52 @@ mod tests {
         let mut out = Vec::new();
         b.present(grid, &mut out).unwrap();
         String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn the_window_fills_to_its_edges() {
+        let mut b = PixelBackend::new(Sized, Placement::Direct, DEFAULT_QUOTA).with_bleed(Bleed {
+            cols: 2,
+            rows: 1,
+            drop: 3,
+        });
+        let grid = Grid::new(12, 2, Style::default());
+        let output = present_sized(&mut b, &grid);
+        let widths: Vec<String> = output
+            .split("\x1b_G")
+            .filter_map(|c| field(c, "s"))
+            .collect();
+        let tall: Vec<String> = output
+            .split("\x1b_G")
+            .filter_map(|c| field(c, "v"))
+            .collect();
+        assert!(
+            widths.iter().all(|w| w == "112"),
+            "two more cells: {widths:?}"
+        );
+        assert!(
+            tall.contains(&"32".to_string()),
+            "the last row takes two: {tall:?}"
+        );
+        assert!(tall.contains(&"16".to_string()));
+        let placed: Vec<&str> = output
+            .split("\x1b_G")
+            .filter(|c| c.starts_with("a=p"))
+            .collect();
+        assert!(placed.iter().all(|c| c.contains(",c=14,")), "{placed:?}");
+        assert!(placed[1].contains(",r=2,"), "{placed:?}");
+        let mut placeholders = PixelBackend::new(Sized, Placement::Placeholder, DEFAULT_QUOTA)
+            .with_bleed(Bleed {
+                cols: 2,
+                rows: 1,
+                drop: 3,
+            });
+        assert_eq!(
+            placeholders.bleed,
+            Bleed::default(),
+            "placeholders are cells"
+        );
+        let _ = present_sized(&mut placeholders, &grid);
     }
 
     #[test]

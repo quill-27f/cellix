@@ -291,3 +291,10 @@ which needs a sign-in. Antigravity CLI, which Google says replaces Gemini CLI, i
 
 Next: the user checks the window fill, and trusts the Codex hooks.
 
+## 2026-11-02: fifth round, writing and side-by-side work
+
+Ghostty doesn't clip images, so a terminal app can reach its padding after all, which the
+last entry said it couldn't. A real window proved it, and the app now fills to the right and
+bottom edges with no config. Match edge is gone, with its test
+`the_window_is_filled_once_and_keeps_the_config`, because the feature no longer exists. Its
+ledger entry now points at `tiles_only_leave_the_text_area_on_ghostty`.

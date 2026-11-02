@@ -79,7 +79,6 @@ pub enum Control {
     Codex,
     Gemini,
     Ghostty,
-    GhosttyFill,
     /// A language server to install, as an index into `SERVERS`.
     InstallServer(usize),
     /// A command to put on the clipboard.
@@ -106,8 +105,6 @@ pub struct Found {
     pub gemini_installed: bool,
     /// Whether Ghostty keeps Cmd+D, when this is Ghostty.
     pub ghostty_keeps_cmd_d: Option<bool>,
-    /// Whether Ghostty's padding stays empty, when this is Ghostty.
-    pub ghostty_keeps_padding: Option<bool>,
     /// For each of `SERVERS`, whether it's installed.
     pub servers: Vec<bool>,
 }
@@ -123,7 +120,6 @@ impl Found {
             gemini: integrations::on_path("gemini", var),
             gemini_installed: integrations::gemini_installed(var),
             ghostty_keeps_cmd_d: integrations::ghostty_keeps_cmd_d(var),
-            ghostty_keeps_padding: integrations::ghostty_keeps_padding(var),
             servers: SERVERS
                 .iter()
                 .map(|s| integrations::on_path(s.command[0], var))
@@ -229,23 +225,6 @@ impl SettingsPage {
             Control::Gemini,
             "Shows its work in Agents, and hands it your comments.",
         ));
-        match found.ghostty_keeps_padding {
-            Some(true) => blocks.push(Block {
-                name: "Ghostty window",
-                state: "Window edge not matched",
-                tone: Tone::Quiet,
-                detail: "Paints the window's edge in Cellix's colours, in every window.",
-                action: Some(("Match edge", false, Control::GhosttyFill)),
-            }),
-            Some(false) => blocks.push(Block {
-                name: "Ghostty window",
-                state: "Edge matched",
-                tone: Tone::Good,
-                detail: "Cellix's colours reach the window's edge.",
-                action: None,
-            }),
-            None => {}
-        }
         match found.ghostty_keeps_cmd_d {
             Some(true) => blocks.push(Block {
                 name: "Ghostty keys",
