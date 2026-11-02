@@ -134,6 +134,9 @@ unchanged. On a page, arrows and Home and End move by what's shown.
 
 ### Documents
 
+CSV and TSV files open as a table on the same page, with cells edited in place and rows and columns
+from the menu. A long file shows its first 2,000 rows and says so.
+
 Spelling and grammar come from Harper, which runs here with no network. What isn't prose is blanked
 out first, keeping every char in place, so a finding lands on the right word in the source. It runs
 on its own thread after a pause in typing. Words added to the dictionary go in

@@ -17,6 +17,7 @@ use cellix_render::{Bitmap, Font, INTERFACE_SIZE, Measure, Pixels};
 
 use crate::snippets::{Snippet, State};
 
+mod data;
 mod tex;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -441,6 +442,8 @@ pub enum Dialect {
     #[default]
     Markdown,
     Latex,
+    /// Rows of fields, split by this.
+    Data(char),
 }
 
 impl Dialect {
@@ -449,8 +452,15 @@ impl Dialect {
         match path.extension()?.to_str()? {
             "md" | "markdown" | "mdx" => Some(Self::Markdown),
             "tex" | "ltx" => Some(Self::Latex),
+            "csv" => Some(Self::Data(',')),
+            "tsv" => Some(Self::Data('\t')),
             _ => None,
         }
+    }
+
+    /// Whether this is writing, with a toolbar, comments on prose and the like.
+    pub fn is_writing(self) -> bool {
+        !matches!(self, Self::Data(_))
     }
 }
 
@@ -1549,6 +1559,10 @@ pub fn layout_with(
     }
     if extras.dialect == Dialect::Latex {
         tex::layout(&lines, width, &context, &mut rows);
+        return rows;
+    }
+    if let Dialect::Data(separator) = extras.dialect {
+        data::layout(&lines, separator, width, &context, &mut rows);
         return rows;
     }
     let mut i = 0;

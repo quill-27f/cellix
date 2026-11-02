@@ -193,6 +193,83 @@ pub fn apply(text: &str, row: usize, column: usize, edit: Edit) -> Option<(Strin
     Some((print(&table), row, column))
 }
 
+/// Which field a row of data is at, given the text before the caret.
+pub fn field_of(before: &str, separator: char) -> usize {
+    let mut quoted = false;
+    let mut field = 0;
+    for c in before.chars() {
+        quoted ^= c == '"';
+        field += usize::from(c == separator && !quoted);
+    }
+    field
+}
+
+fn field_split(line: &str, separator: char) -> Vec<String> {
+    let mut out = vec![String::new()];
+    let mut quoted = false;
+    for c in line.chars() {
+        quoted ^= c == '"';
+        if c == separator && !quoted {
+            out.push(String::new());
+        } else if let Some(field) = out.last_mut() {
+            field.push(c);
+        }
+    }
+    out
+}
+
+/// Changes rows of data, and says where the caret goes, in chars. None leaves it as it was:
+/// data keeps at least one row and column, and has no alignment to change.
+pub fn edit_rows(
+    text: &str,
+    separator: char,
+    row: usize,
+    column: usize,
+    edit: Edit,
+) -> Option<(String, usize)> {
+    let mut rows: Vec<Vec<String>> = text
+        .lines()
+        .map(|line| field_split(line, separator))
+        .collect();
+    let columns = rows.iter().map(Vec::len).max()?;
+    for cells in &mut rows {
+        cells.resize(columns, String::new());
+    }
+    let (mut row, mut column) = (row.min(rows.len() - 1), column.min(columns - 1));
+    match edit {
+        Edit::RowAbove => rows.insert(row, vec![String::new(); columns]),
+        Edit::RowBelow => {
+            row += 1;
+            rows.insert(row, vec![String::new(); columns]);
+        }
+        Edit::ColumnLeft | Edit::ColumnRight => {
+            column += usize::from(edit == Edit::ColumnRight);
+            for cells in &mut rows {
+                cells.insert(column, String::new());
+            }
+        }
+        Edit::DeleteRow if rows.len() > 1 => {
+            rows.remove(row);
+            row = row.min(rows.len() - 1);
+        }
+        Edit::DeleteColumn if columns > 1 => {
+            for cells in &mut rows {
+                cells.remove(column);
+            }
+            column = column.min(columns - 2);
+        }
+        _ => return None,
+    }
+    let glue = separator.to_string();
+    let lines: Vec<String> = rows.iter().map(|cells| cells.join(&glue)).collect();
+    let before: usize = lines[..row].iter().map(|l| l.chars().count() + 1).sum();
+    let inside: usize = rows[row][..column]
+        .iter()
+        .map(|cell| cell.chars().count() + 1)
+        .sum();
+    Some((lines.join("\n"), before + inside))
+}
+
 /// A new, empty table with a header row.
 pub fn new_table(rows: usize, columns: usize) -> String {
     let rows = rows.max(2);
@@ -303,6 +380,28 @@ mod tests {
         assert_eq!(chars[at - 1], ' ');
         let first = cell_offset(&text, 0, 0);
         assert_eq!(chars[first], 'A');
+    }
+
+    #[test]
+    fn rows_of_data_grow_and_shrink() {
+        let text = "a,b\n1,2";
+        let (grown, at) = edit_rows(text, ',', 1, 0, Edit::RowBelow).unwrap();
+        assert_eq!(grown, "a,b\n1,2\n,");
+        assert_eq!(at, 8);
+        let (wider, at) = edit_rows(text, ',', 1, 0, Edit::ColumnRight).unwrap();
+        assert_eq!(wider, "a,,b\n1,,2");
+        assert_eq!(at, 7);
+        let (less, _) = edit_rows(text, ',', 1, 1, Edit::DeleteColumn).unwrap();
+        assert_eq!(less, "a\n1");
+        assert_eq!(edit_rows("a,b", ',', 0, 0, Edit::DeleteRow), None);
+        assert_eq!(edit_rows(text, ',', 0, 0, Edit::Align(Align::Left)), None);
+    }
+
+    #[test]
+    fn a_quoted_comma_is_not_a_new_field() {
+        assert_eq!(field_of("\"a,b\",c", ','), 1);
+        let (wider, _) = edit_rows("\"a,b\",c", ',', 0, 1, Edit::DeleteColumn).unwrap();
+        assert_eq!(wider, "\"a,b\"");
     }
 
     #[test]

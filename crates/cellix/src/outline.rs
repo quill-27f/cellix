@@ -78,6 +78,7 @@ pub fn of(text: &str, dialect: Dialect) -> Vec<Heading> {
     match dialect {
         Dialect::Markdown => markdown(text),
         Dialect::Latex => latex(text),
+        Dialect::Data(_) => Vec::new(),
     }
 }
 

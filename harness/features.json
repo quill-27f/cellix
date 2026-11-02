@@ -1258,5 +1258,40 @@
     "title": "Asking for limits never breaks a formula",
     "test": "asking_for_limits_never_breaks_a_formula",
     "passes": true
+  },
+  {
+    "id": "csv-page",
+    "milestone": 9,
+    "title": "A CSV opens as a table and its cells edit in place",
+    "test": "a_csv_opens_as_a_table_and_its_cells_edit_in_place",
+    "passes": true
+  },
+  {
+    "id": "csv-tsv",
+    "milestone": 9,
+    "title": "A TSV and its empty cells work the same",
+    "test": "a_tsv_and_its_empty_cells_work_the_same",
+    "passes": true
+  },
+  {
+    "id": "csv-menu",
+    "milestone": 9,
+    "title": "Rows and columns are added to data from the menu",
+    "test": "rows_are_added_to_data_from_the_menu",
+    "passes": true
+  },
+  {
+    "id": "csv-long",
+    "milestone": 9,
+    "title": "A long data file shows its first rows and says so",
+    "test": "a_long_file_shows_its_first_rows_and_says_so",
+    "passes": true
+  },
+  {
+    "id": "csv-quotes",
+    "milestone": 9,
+    "title": "Quoted fields keep their commas",
+    "test": "quotes_are_hidden_and_commas_inside_them_stay",
+    "passes": true
   }
 ]

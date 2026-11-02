@@ -942,6 +942,7 @@ impl App {
             self.last_edit = (revision, std::time::Instant::now());
         }
         let due = editor.rendered
+            && editor.dialect().is_writing()
             && editor.checked != revision + 1
             && self.last_edit.1.elapsed()
                 >= if revision == 0 {
@@ -4859,6 +4860,19 @@ impl App {
             items.push(run("Show Source", Command::MarkdownPreview));
             items.extend(edit);
             let format = |name, format| run(name, Command::Format(format));
+            let data = !editor.dialect().is_writing();
+            if data {
+                let table = |name, edit| MenuItem::new(name, MenuAction::Table(edit));
+                items.extend([
+                    table("Insert Row Above", TableEdit::RowAbove).after_rule(),
+                    table("Insert Row Below", TableEdit::RowBelow),
+                    table("Insert Column Left", TableEdit::ColumnLeft),
+                    table("Insert Column Right", TableEdit::ColumnRight),
+                    table("Delete Row", TableEdit::DeleteRow).after_rule(),
+                    table("Delete Column", TableEdit::DeleteColumn),
+                ]);
+                return items;
+            }
             if editor.table_at_caret().is_some() {
                 let table = |name, edit| MenuItem::new(name, MenuAction::Table(edit));
                 items.extend([
@@ -6000,7 +6014,10 @@ impl App {
     /// The row the document toolbar sits in, if the page in view has one.
     fn toolbar_row(&self) -> Option<Rect> {
         let main = self.main_area();
-        let page = self.editors.get(self.active()).is_some_and(|e| e.rendered);
+        let page = self
+            .editors
+            .get(self.active())
+            .is_some_and(|e| e.rendered && e.dialect().is_writing());
         let room = main.w >= toolbar::MIN_WIDTH;
         (page && room && self.chrome_rows() == 2 && !self.plan_in_view())
             .then(|| Rect::new(main.x, 1, main.w, 1))
@@ -9605,6 +9622,70 @@ mod tests {
         app.handle(mouse(MouseKind::Left, mx + 1, my));
         let (x, y) = find(&screen(&app), "mispelled");
         assert!(!screen(&app).cell(x, y).style.underline);
+    }
+
+    fn data_app(name: &str, text: &str) -> (TempDir, App) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(name);
+        fs::write(&path, text).unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        app.open(&path).unwrap();
+        (dir, app)
+    }
+
+    #[test]
+    fn a_csv_opens_as_a_table_and_its_cells_edit_in_place() {
+        let (_dir, mut app) = data_app("runs.csv", "model,loss\nalpha,0.25\nbeta,0.5\n");
+        let grid = screen(&app);
+        let text = grid.text();
+        assert!(text.contains('│'), "{text}");
+        assert!(!text.contains("alpha,0.25"), "{text}");
+        let (x, y) = find(&grid, "beta");
+        app.handle(mouse(MouseKind::Left, x + 4, y));
+        typed(&mut app, "s");
+        assert_eq!(
+            app.active_text().unwrap(),
+            "model,loss\nalpha,0.25\nbetas,0.5\n"
+        );
+    }
+
+    #[test]
+    fn a_tsv_and_its_empty_cells_work_the_same() {
+        let (_dir, mut app) = data_app("runs.tsv", "model\tloss\nalpha\t\n");
+        let (x, y) = find(&screen(&app), "loss");
+        app.handle(mouse(MouseKind::Left, x, y + 1));
+        typed(&mut app, "9");
+        assert_eq!(app.active_text().unwrap(), "model\tloss\nalpha\t9\n");
+    }
+
+    #[test]
+    fn rows_are_added_to_data_from_the_menu() {
+        let (_dir, mut app) = data_app("runs.csv", "model,loss\nalpha,1\n");
+        let (x, y) = find(&screen(&app), "alpha");
+        app.handle(mouse(MouseKind::Right, x + 1, y));
+        let (mx, my) = find(&screen(&app), "Insert Row Below");
+        app.handle(mouse(MouseKind::Left, mx + 1, my));
+        assert_eq!(app.active_text().unwrap(), "model,loss\nalpha,1\n,\n");
+    }
+
+    #[test]
+    fn a_long_file_shows_its_first_rows_and_says_so() {
+        let mut text = "id,value\n".to_string();
+        for n in 0..3000 {
+            text.push_str(&format!("{n},1\n"));
+        }
+        let (_dir, app) = data_app("big.csv", &text);
+        let rows = app.editors[0].page_rows(app.focused_area());
+        assert_eq!(rows.iter().filter(|r| r.table.is_some()).count(), 2000);
+        let last: String = rows
+            .iter()
+            .rfind(|r| !r.glyphs.is_empty())
+            .unwrap()
+            .glyphs
+            .iter()
+            .map(|g| g.ch)
+            .collect();
+        assert!(last.contains("first 2000 of 3001 rows"), "{last}");
     }
 
     #[test]

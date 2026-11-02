@@ -1588,7 +1588,7 @@ impl Editor {
     pub fn prose_source(&self) -> Source {
         match self.dialect() {
             Dialect::Latex => Source::Latex,
-            Dialect::Markdown => Source::Markdown,
+            _ => Source::Markdown,
         }
     }
 
@@ -1627,7 +1627,7 @@ impl Editor {
     fn syntax(&self) -> Syntax {
         match self.dialect() {
             Dialect::Latex => Syntax::Latex,
-            Dialect::Markdown => Syntax::Critic,
+            _ => Syntax::Critic,
         }
     }
 
@@ -2014,6 +2014,22 @@ impl Editor {
         if self.dialect() == Dialect::Latex {
             return self.tabular_at_caret();
         }
+        if let Dialect::Data(separator) = self.dialect() {
+            let head = self.selections.primary().head;
+            let rope = self.buffer.rope();
+            let line = rope.char_to_line(head);
+            let last = (0..rope.len_lines())
+                .rev()
+                .find(|n| !self.line_text(*n).is_empty())
+                .unwrap_or(0);
+            let before = rope.slice(rope.line_to_char(line)..head).to_string();
+            return Some((
+                0,
+                last,
+                line,
+                cellix_doc::table::field_of(&before, separator),
+            ));
+        }
         let head = self.selections.primary().head;
         let rope = self.buffer.rope();
         let line = rope.char_to_line(head);
@@ -2055,6 +2071,16 @@ impl Editor {
         let start = rope.line_to_char(first);
         let end = rope.line_to_char(last) + self.line_text(last).chars().count();
         let text = rope.slice(start..end).to_string();
+        if let Dialect::Data(separator) = self.dialect() {
+            if let Some((table, at)) =
+                cellix_doc::table::edit_rows(&text, separator, row, column, edit)
+            {
+                self.buffer
+                    .replace_range(&mut self.selections, start, end, &table);
+                self.selections.set_single(Selection::cursor(start + at));
+            }
+            return;
+        }
         if self.dialect() == Dialect::Latex {
             let table = cellix_doc::latex::edit_tabular(&text, row, column, edit);
             let table = table.unwrap_or_default();
