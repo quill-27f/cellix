@@ -1118,5 +1118,54 @@
     "title": "A failed build leaves its log in the pane",
     "test": "a_failed_build_leaves_its_log_in_the_pane",
     "passes": true
+  },
+  {
+    "id": "marks-page",
+    "milestone": 9,
+    "title": "Strikethrough, highlight, subscript and superscript stand on the page",
+    "test": "writing_marks_stand_on_the_page_with_their_markers_hidden",
+    "passes": true
+  },
+  {
+    "id": "marks-paths",
+    "milestone": 9,
+    "title": "A path keeps its tildes",
+    "test": "a_price_and_a_path_keep_their_tildes",
+    "passes": true
+  },
+  {
+    "id": "footnotes",
+    "milestone": 9,
+    "title": "Footnotes are numbered as they're cited",
+    "test": "footnotes_are_numbered_as_they_are_cited",
+    "passes": true
+  },
+  {
+    "id": "callouts",
+    "milestone": 9,
+    "title": "Callouts have their title and colour",
+    "test": "a_callout_has_its_title_and_colour",
+    "passes": true
+  },
+  {
+    "id": "changes-page",
+    "milestone": 9,
+    "title": "Tracked changes stand on the page",
+    "test": "tracked_changes_stand_on_the_page",
+    "passes": true
+  },
+  {
+    "id": "marks-web",
+    "milestone": 9,
+    "title": "Writing marks reach the web page",
+    "test": "writing_marks_reach_the_web_page",
+    "passes": true
+  },
+  {
+    "id": "marks-pdf",
+    "milestone": 9,
+    "title": "Footnotes and raised text reach the PDF",
+    "test": "footnotes_and_raised_text_reach_the_paper",
+    "passes": true
   }
 ]

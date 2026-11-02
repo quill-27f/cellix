@@ -96,6 +96,33 @@ fn shifted(color: Rgb, by: (i16, i16, i16)) -> Rgb {
 /// VS Code's Modern themes, since that's the look people already know. Surfaces are quiet
 /// and the blue is kept for what's active.
 impl Theme {
+    /// Text a tracked change adds.
+    pub fn inserted(&self) -> Rgb {
+        if self.is_light() {
+            Rgb(0x1a, 0x7f, 0x37)
+        } else {
+            Rgb(0x56, 0xd3, 0x64)
+        }
+    }
+
+    /// Text a tracked change takes away.
+    pub fn deleted(&self) -> Rgb {
+        if self.is_light() {
+            Rgb(0xcf, 0x22, 0x2e)
+        } else {
+            Rgb(0xf8, 0x51, 0x49)
+        }
+    }
+
+    /// What highlighted text stands on.
+    pub fn highlighter(&self) -> Rgb {
+        if self.is_light() {
+            Rgb(0xff, 0xec, 0x9e)
+        } else {
+            Rgb(0x6b, 0x5a, 0x1d)
+        }
+    }
+
     pub fn is_light(&self) -> bool {
         let Rgb(r, g, b) = self.text.bg;
         u16::from(r) + u16::from(g) + u16::from(b) > 3 * 128

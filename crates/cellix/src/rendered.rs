@@ -40,6 +40,55 @@ pub enum Tone {
         index: u16,
         width: u16,
     },
+    /// Text with a line through it.
+    Struck,
+    /// Text behind a highlighter.
+    Marked,
+    /// Text set small and raised, or small and lowered.
+    Raised,
+    Lowered,
+    /// A footnote's number where it's cited.
+    Footnote,
+    /// A callout's title, by its kind.
+    Callout(Callout),
+    /// Text a tracked change adds, and text it takes away.
+    Inserted,
+    Deleted,
+}
+
+/// The kinds of GitHub's callouts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Callout {
+    Note,
+    Tip,
+    Important,
+    Warning,
+    Caution,
+}
+
+impl Callout {
+    /// The kind a quote's first line names, as `[!NOTE]`.
+    fn named(line: &str) -> Option<Self> {
+        let name = line.trim().strip_prefix("[!")?.strip_suffix(']')?;
+        match name.to_ascii_uppercase().as_str() {
+            "NOTE" => Some(Self::Note),
+            "TIP" => Some(Self::Tip),
+            "IMPORTANT" => Some(Self::Important),
+            "WARNING" => Some(Self::Warning),
+            "CAUTION" => Some(Self::Caution),
+            _ => None,
+        }
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            Self::Note => "Note",
+            Self::Tip => "Tip",
+            Self::Important => "Important",
+            Self::Warning => "Warning",
+            Self::Caution => "Caution",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -140,6 +189,8 @@ pub struct Row {
     pub rule: bool,
     /// Has a quote's bar.
     pub quote: bool,
+    /// The kind of callout this row is part of, which colours its bar.
+    pub callout: Option<Callout>,
     /// A heading's level, or zero.
     pub heading: u8,
     /// Text stands two rows tall, centred across this row and an empty one under it.
@@ -175,6 +226,7 @@ impl Row {
             shaded: false,
             rule: false,
             quote: false,
+            callout: None,
             heading: 0,
             tall: false,
             checkbox: None,
@@ -425,6 +477,8 @@ pub struct Extras<'a> {
     pub built: Option<&'a Path>,
     /// Pieces of LaTeX this page is waiting for.
     pub wanted: RefCell<Vec<Snippet>>,
+    /// Footnotes in the order they're first met.
+    pub footnotes: RefCell<Vec<String>>,
     /// Filled in by layout.
     pub figures: RefCell<Vec<Figure>>,
     /// The picture of a formula being edited in a line, filled in by layout.
@@ -618,7 +672,68 @@ fn inline(chars: &[char], offset: usize, look: Look, context: &Context, out: &mu
             },
             ..look
         };
-        let used = if rest.starts_with(&['*', '*']) {
+        let toned = |tone: Tone, size: Option<u8>| Look {
+            tone,
+            font: Font {
+                size: size.unwrap_or(look.font.size),
+                ..look.font
+            },
+            ..look
+        };
+        // A word's own tilde or caret, like `x~y z~`, is left alone: these hug their text.
+        let tight = |marker: char| {
+            rest[0] == marker
+                && (2..rest.len().min(32))
+                    .find(|n| rest[*n] == marker)
+                    .is_some_and(|n| rest[1..n].iter().all(|c| !c.is_whitespace()))
+        };
+        let used = if rest.starts_with(&['{', '+', '+']) {
+            critic(
+                rest,
+                &['+', '+', '}'],
+                toned(Tone::Inserted, None),
+                at,
+                context,
+                out,
+            )
+        } else if rest.starts_with(&['{', '-', '-']) {
+            critic(
+                rest,
+                &['-', '-', '}'],
+                toned(Tone::Deleted, None),
+                at,
+                context,
+                out,
+            )
+        } else if rest.starts_with(&['{', '=', '=']) {
+            critic(
+                rest,
+                &['=', '=', '}'],
+                toned(Tone::Marked, None),
+                at,
+                context,
+                out,
+            )
+        } else if rest.starts_with(&['{', '>', '>']) {
+            critic(
+                rest,
+                &['<', '<', '}'],
+                toned(Tone::Dim, Some(85)),
+                at,
+                context,
+                out,
+            )
+        } else if rest.starts_with(&['{', '~', '~']) {
+            replacement(rest, look, at, context, out)
+        } else if rest.starts_with(&['~', '~']) {
+            wrap(&['~', '~'], toned(Tone::Struck, None), out)
+        } else if rest.starts_with(&['=', '=']) && rest.get(2).is_some_and(|c| *c != ' ') {
+            wrap(&['=', '='], toned(Tone::Marked, None), out)
+        } else if tight('~') {
+            wrap(&['~'], toned(Tone::Lowered, Some(72)), out)
+        } else if tight('^') {
+            wrap(&['^'], toned(Tone::Raised, Some(72)), out)
+        } else if rest.starts_with(&['*', '*']) {
             wrap(&['*', '*'], bold, out)
         } else if rest.starts_with(&['_', '_']) {
             wrap(&['_', '_'], bold, out)
@@ -644,6 +759,8 @@ fn inline(chars: &[char], offset: usize, look: Look, context: &Context, out: &mu
                 }
                 close + 1
             })
+        } else if rest.starts_with(&['[', '^']) {
+            footnote(rest, at, look, context, out)
         } else if rest[0] == '[' {
             link(rest, at, look, context, out)
         } else if rest[0] == '$' && (i == 0 || chars[i - 1] != '\\') {
@@ -662,6 +779,86 @@ fn inline(chars: &[char], offset: usize, look: Look, context: &Context, out: &mu
             }
         }
     }
+}
+
+/// A tracked change or highlight of the form `{++text++}`, with its markers hidden.
+fn critic(
+    rest: &[char],
+    close: &[char],
+    look: Look,
+    at: usize,
+    context: &Context,
+    out: &mut Vec<Glyph>,
+) -> Option<usize> {
+    let end = (3..rest.len()).find(|i| rest[*i..].starts_with(close))?;
+    inline(&rest[3..end], at + 3, look, context, out);
+    Some(end + close.len())
+}
+
+/// `{~~old~>new~~}`: what's going, then what's coming.
+fn replacement(
+    rest: &[char],
+    look: Look,
+    at: usize,
+    context: &Context,
+    out: &mut Vec<Glyph>,
+) -> Option<usize> {
+    let arrow = (3..rest.len()).find(|i| rest[*i..].starts_with(&['~', '>']))?;
+    let end = (arrow..rest.len()).find(|i| rest[*i..].starts_with(&['~', '~', '}']))?;
+    let tone = |tone| Look { tone, ..look };
+    inline(&rest[3..arrow], at + 3, tone(Tone::Deleted), context, out);
+    inline(
+        &rest[arrow + 2..end],
+        at + arrow + 2,
+        tone(Tone::Inserted),
+        context,
+        out,
+    );
+    Some(end + 3)
+}
+
+/// `[^id]`: the footnote's number, counted in the order they're cited.
+fn footnote(
+    rest: &[char],
+    at: usize,
+    look: Look,
+    context: &Context,
+    out: &mut Vec<Glyph>,
+) -> Option<usize> {
+    let close = rest.iter().position(|c| *c == ']')?;
+    let id: String = rest[2..close].iter().collect();
+    if id.is_empty() || id.contains(' ') || rest.get(close + 1) == Some(&':') {
+        return None;
+    }
+    let number = context.footnote_number(&id);
+    let shown = Look {
+        tone: Tone::Footnote,
+        font: Font {
+            size: 72,
+            ..look.font
+        },
+        ..look
+    };
+    for (n, c) in number.to_string().chars().enumerate() {
+        out.push(glyph(
+            c,
+            Some(at + 2 + n.min(id.chars().count() - 1)),
+            shown,
+        ));
+    }
+    Some(close + 1)
+}
+
+/// A footnote's text: `[^id]: words`, with where the words start.
+fn footnote_definition(line: &str) -> Option<(String, usize)> {
+    let rest = line.strip_prefix("[^")?;
+    let close = rest.find("]:")?;
+    let id = &rest[..close];
+    (!id.is_empty() && !id.contains(' ')).then(|| {
+        let after = &rest[close + 2..];
+        let spaces = after.chars().take_while(|c| *c == ' ').count();
+        (id.to_string(), id.chars().count() + 4 + spaces)
+    })
 }
 
 /// `[text](url)`: shows the text and hides the rest.
@@ -949,6 +1146,18 @@ impl Context<'_> {
     /// A cell's pixels, or None on the cell tier, which has no pictures.
     fn cell(&self) -> Option<(u32, u32)> {
         self.measure.cell_pixels()
+    }
+
+    /// A footnote's number: the next one the first time it's met.
+    fn footnote_number(&self, id: &str) -> usize {
+        let mut seen = self.extras.footnotes.borrow_mut();
+        match seen.iter().position(|known| known == id) {
+            Some(index) => index + 1,
+            None => {
+                seen.push(id.to_string());
+                seen.len()
+            }
+        }
     }
 
     fn keep(&self, figure: Figure) -> usize {
@@ -1343,6 +1552,7 @@ pub fn layout_with(
         return rows;
     }
     let mut i = 0;
+    let mut callout = None;
     // Front matter shows as dimmed text, with its delimiters hidden.
     if lines[0].1 == "---"
         && let Some(close) = (1..lines.len()).find(|n| lines[*n].1 == "---")
@@ -1565,9 +1775,53 @@ pub fn layout_with(
             continue;
         }
         let chars: Vec<char> = line.chars().collect();
+        if let Some((id, start)) = footnote_definition(line) {
+            let number = context.footnote_number(&id);
+            let mut glyphs = decoration(&number.to_string(), Tone::Footnote);
+            for g in &mut glyphs {
+                g.font.size = 72;
+            }
+            glyphs.extend(decoration(" ", Tone::TableLine));
+            let small = Look {
+                font: Font {
+                    size: 88,
+                    ..Font::default()
+                },
+                ..PLAIN
+            };
+            let decorated = glyphs.len();
+            inline(
+                &chars[start.min(chars.len())..],
+                offset + start,
+                small,
+                &context,
+                &mut glyphs,
+            );
+            measure_glyphs(&mut glyphs, measure);
+            let lead: f32 = glyphs[..decorated].iter().map(|g| g.advance).sum();
+            wrap(
+                Row::new(i, offset + chars.len()),
+                glyphs,
+                lead,
+                width,
+                &mut rows,
+            );
+            i += 1;
+            continue;
+        }
         let found = prefix(line);
+        let title = found
+            .as_ref()
+            .filter(|p| matches!(p.marker, Marker::Quote))
+            .and_then(|p| Callout::named(&line[p.hidden.min(line.len())..]));
+        if matches!(found.as_ref().map(|p| &p.marker), Some(Marker::Quote)) {
+            callout = title.or(callout);
+        } else {
+            callout = None;
+        }
         let mut glyphs = Vec::new();
         let mut template = Row::new(i, offset + chars.len());
+        template.callout = callout;
         let mut lead_extra = 0.0;
         let (hidden, look) = match &found {
             None => (0, PLAIN),
@@ -1618,7 +1872,14 @@ pub fn layout_with(
                 (p.hidden, look)
             }
         };
+        let hidden = if title.is_some() { chars.len() } else { hidden };
         let decorated = glyphs.len();
+        if let Some(kind) = title {
+            glyphs.extend(decoration(kind.title(), Tone::Callout(kind)));
+            for g in &mut glyphs {
+                g.font.bold = true;
+            }
+        }
         inline(
             &chars[hidden..],
             offset + hidden,

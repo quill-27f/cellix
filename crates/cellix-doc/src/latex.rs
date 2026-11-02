@@ -890,7 +890,31 @@ pub fn tabular_cell_offset(text: &str, row: usize, column: usize) -> usize {
     0
 }
 
-const HEADER: &str = "\\documentclass[11pt]{article}\n\\usepackage{amsmath,amssymb,graphicx,hyperref}\n\\usepackage[margin=1in]{geometry}\n\\usepackage{booktabs}\n\\usepackage[normalem]{ulem}\n\\begin{document}\n";
+const HEADER: &str = "\\documentclass[11pt]{article}\n\\usepackage{amsmath,amssymb,graphicx,hyperref}\n\\usepackage[margin=1in]{geometry}\n\\usepackage{booktabs,xcolor,tikz,tikz-cd}\n\\usepackage[normalem]{ulem}\n\\begin{document}\n";
+
+/// A tag from Markdown's marks, as LaTeX.
+fn tag_in_latex(tag: &str) -> Option<&'static str> {
+    Some(match tag {
+        "<sub>" => "\\textsubscript{",
+        "<sup>" => "\\textsuperscript{",
+        "<mark>" => "\\colorbox{yellow}{",
+        "<ins>" => "\\textcolor{green!50!black}{",
+        "<del>" => "\\textcolor{red}{\\sout{",
+        "</del>" => "}}",
+        "</sub>" | "</sup>" | "</mark>" | "</ins>" => "}",
+        _ => return None,
+    })
+}
+
+/// What each footnote says, by its name.
+fn footnote_texts(markdown: &str) -> HashMap<String, String> {
+    let definitions = markdown.lines().filter_map(|line| {
+        let rest = line.strip_prefix("[^")?;
+        let (id, text) = rest.split_once("]:")?;
+        Some((id.to_string(), text.trim().to_string()))
+    });
+    definitions.collect()
+}
 
 /// Markdown as a LaTeX document, with diagrams as source.
 pub fn from_markdown(markdown: &str) -> String {
@@ -910,12 +934,18 @@ pub fn from_markdown_with(
     let options = Options::ENABLE_TABLES
         | Options::ENABLE_TASKLISTS
         | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_FOOTNOTES
+        | Options::ENABLE_GFM
         | Options::ENABLE_MATH;
+    // A footnote goes in where it's cited, so its text is found first.
+    let notes = footnote_texts(&markdown);
+    let markdown = crate::html::marked(&markdown);
     let mut out = String::from(HEADER);
     let mut verbatim = false;
     let mut columns = 0;
     let mut cell = 0;
     let mut diagram: Option<(Kind, String)> = None;
+    let mut skipping = false;
     for event in Parser::new_ext(&markdown, options) {
         if let Some((kind, source)) = &mut diagram {
             match event {
@@ -951,6 +981,16 @@ pub fn from_markdown_with(
             Event::End(TagEnd::Strong | TagEnd::Emphasis | TagEnd::Strikethrough) => {
                 out.push('}');
             }
+            Event::InlineHtml(tag) if tag_in_latex(&tag).is_some() => {
+                out.push_str(tag_in_latex(&tag).unwrap_or_default());
+            }
+            Event::FootnoteReference(id) => {
+                let text = notes.get(id.as_ref()).map_or("", String::as_str);
+                out.push_str(&format!("\\footnote{{{}}}", escape(text)));
+            }
+            Event::Start(Tag::FootnoteDefinition(_)) => skipping = true,
+            Event::End(TagEnd::FootnoteDefinition) => skipping = false,
+            _ if skipping => {}
             Event::Start(Tag::Link { dest_url, .. }) => {
                 out.push_str(&format!("\\href{{{}}}{{", escape(&dest_url)));
             }
@@ -1044,6 +1084,15 @@ mod tests {
         assert!(!tex.contains("geometry"));
         assert!(!tex.contains("later"));
         assert!(tex.ends_with("\\end{document}\n"));
+    }
+
+    #[test]
+    fn footnotes_and_raised_text_reach_the_paper() {
+        let tex = from_markdown("Water H~2~O and x^2^ here[^a].\n\n[^a]: Worth saying.\n");
+        assert!(tex.contains("\\textsubscript{2}"), "{tex}");
+        assert!(tex.contains("\\textsuperscript{2}"), "{tex}");
+        assert!(tex.contains("\\footnote{Worth saying.}"), "{tex}");
+        assert_eq!(tex.matches("Worth saying").count(), 1, "{tex}");
     }
 
     #[test]

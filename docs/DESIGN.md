@@ -134,6 +134,10 @@ unchanged. On a page, arrows and Home and End move by what's shown.
 
 ### Documents
 
+Pages read more than CommonMark: strikethrough, `==highlight==`, `H~2~O`, `x^2^`, footnotes, GitHub
+callouts such as `> [!NOTE]`, and CriticMarkup for tracked changes. All of it is still plain text in
+the file, and it reaches the web page and the PDF.
+
 The Outline in the sidebar lists a document's headings, or a paper's sections, and a click goes
 there. The side pane keeps what the last build said in a Log tab, and a line that names a place
 goes to it. Wide glyphs are looked up as sans-serif rather than monospace in the cells: asked for a

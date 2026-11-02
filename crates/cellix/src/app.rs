@@ -9253,6 +9253,78 @@ mod tests {
         assert_eq!(app.cursor_line().unwrap().1, 3);
     }
 
+    fn tones_on_page(app: &App) -> Vec<(char, crate::rendered::Tone)> {
+        let area = app.focused_area();
+        let rows = app.editors[0].page_rows(area);
+        rows.iter()
+            .flat_map(|r| r.glyphs.iter().map(|g| (g.ch, g.tone)))
+            .collect()
+    }
+
+    fn text_with(app: &App, tone: crate::rendered::Tone) -> String {
+        let tones = tones_on_page(app);
+        tones
+            .iter()
+            .filter(|(_, t)| *t == tone)
+            .map(|(c, _)| *c)
+            .collect()
+    }
+
+    #[test]
+    fn writing_marks_stand_on_the_page_with_their_markers_hidden() {
+        let source = "~~gone~~ ==key== H~2~O x^2^ here\n";
+        let (_dir, app) = picture_page(source);
+        assert_eq!(text_with(&app, crate::rendered::Tone::Struck), "gone");
+        assert_eq!(text_with(&app, crate::rendered::Tone::Marked), "key");
+        assert_eq!(text_with(&app, crate::rendered::Tone::Lowered), "2");
+        assert_eq!(text_with(&app, crate::rendered::Tone::Raised), "2");
+        let shown: String = tones_on_page(&app).iter().map(|(c, _)| *c).collect();
+        assert!(!shown.contains('~') && !shown.contains('='), "{shown}");
+    }
+
+    #[test]
+    fn a_price_and_a_path_keep_their_tildes() {
+        let (_dir, app) = picture_page("see ~/notes and ~/work today\n");
+        let shown: String = tones_on_page(&app).iter().map(|(c, _)| *c).collect();
+        assert!(shown.contains("~/notes and ~/work"), "{shown}");
+    }
+
+    #[test]
+    fn footnotes_are_numbered_as_they_are_cited() {
+        let source = "First[^b] and second[^a].\n\n[^a]: Words of a.\n[^b]: Words of b.\n";
+        let (_dir, app) = picture_page(source);
+        assert_eq!(text_with(&app, crate::rendered::Tone::Footnote), "1221");
+        let shown: String = tones_on_page(&app).iter().map(|(c, _)| *c).collect();
+        assert!(shown.contains("Words of a."), "{shown}");
+        assert!(!shown.contains("[^"), "{shown}");
+    }
+
+    #[test]
+    fn a_callout_has_its_title_and_colour() {
+        let source = "> [!WARNING]\n> Mind the gap.\n\nAfter.\n";
+        let (_dir, app) = picture_page(source);
+        assert_eq!(
+            text_with(
+                &app,
+                crate::rendered::Tone::Callout(crate::rendered::Callout::Warning)
+            ),
+            "Warning"
+        );
+        let shown: String = tones_on_page(&app).iter().map(|(c, _)| *c).collect();
+        assert!(!shown.contains("[!"), "{shown}");
+        let area = app.focused_area();
+        let rows = app.editors[0].page_rows(area);
+        assert_eq!(rows.iter().filter(|r| r.callout.is_some()).count(), 2);
+    }
+
+    #[test]
+    fn tracked_changes_stand_on_the_page() {
+        let source = "Keep {++added++} and {--gone--} and {~~old~>new~~}.\n";
+        let (_dir, app) = picture_page(source);
+        assert_eq!(text_with(&app, crate::rendered::Tone::Inserted), "addednew");
+        assert_eq!(text_with(&app, crate::rendered::Tone::Deleted), "goneold");
+    }
+
     #[test]
     fn a_page_counts_words() {
         let (_dir, app) = page_app("one two three\n");

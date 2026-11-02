@@ -15,7 +15,9 @@ use cellix_review::LineChange;
 use unicode_width::UnicodeWidthChar;
 
 use crate::panels::Symbol;
-use crate::rendered::{self, Dialect, Extras, Figure, Glyph, Intent, Library, Row, Target, Tone};
+use crate::rendered::{
+    self, Callout, Dialect, Extras, Figure, Glyph, Intent, Library, Row, Target, Tone,
+};
 use crate::snippets::Snippet;
 use crate::theme::Theme;
 
@@ -136,6 +138,17 @@ fn display_width(c: char, column: usize) -> usize {
         TAB_WIDTH - column % TAB_WIDTH
     } else {
         c.width().unwrap_or(0)
+    }
+}
+
+/// The colour a callout's bar and title take.
+fn callout_colour(kind: Callout, theme: &Theme) -> Rgb {
+    match kind {
+        Callout::Note => theme.accent,
+        Callout::Tip => theme.inserted(),
+        Callout::Important => Rgb(0x88, 0x57, 0xe0),
+        Callout::Warning => Rgb(0xc0, 0x86, 0x10),
+        Callout::Caution => theme.deleted(),
     }
 }
 
@@ -558,6 +571,12 @@ impl Editor {
                 color: theme.text.fg,
             });
         }
+    }
+
+    /// The page as it stands, for tests to read.
+    #[cfg(test)]
+    pub fn page_rows(&self, area: Rect) -> Rc<Vec<Row>> {
+        self.page(self.text_area(area))
     }
 
     /// What this page is waiting on LaTeX for.
@@ -2157,7 +2176,8 @@ impl Editor {
             }
             if row.quote {
                 let bar = Bounds::cells(left as f32 + 0.1, y as f32 + 0.08, 0.3, 0.84);
-                grid.panel(bar, 12, Some(theme.popup_border), None);
+                let colour = row.callout.map(|kind| callout_colour(kind, theme));
+                grid.panel(bar, 12, Some(colour.unwrap_or(theme.popup_border)), None);
             }
             // A tall heading on the last row would reach into the status bar, which paint
             // can't be clipped by, so it waits until it fits.
@@ -2264,7 +2284,12 @@ impl Editor {
             Tone::Block(Some(token)) => theme.token(token),
             Tone::Link | Tone::Check(_) => theme.accent,
             Tone::Dim | Tone::TableLine => theme.gutter.fg,
-            Tone::Formula { .. } | Tone::Source => theme.text.fg,
+            Tone::Formula { .. } | Tone::Source | Tone::Marked => theme.text.fg,
+            Tone::Struck | Tone::Raised | Tone::Lowered => theme.text.fg,
+            Tone::Footnote => theme.accent,
+            Tone::Callout(kind) => callout_colour(kind, theme),
+            Tone::Inserted => theme.inserted(),
+            Tone::Deleted => theme.deleted(),
         };
         let selected = |at: Option<usize>| {
             at.is_some_and(|at| {
@@ -2370,8 +2395,22 @@ impl Editor {
                         let pill = Bounds::cells(x - 0.2, text_y + 0.14, width + 0.4, 0.72);
                         grid.panel(pill, 14, Some(theme.code_bg), None);
                     }
-                    let color = (fg_of(g.tone), g.underline);
-                    grid.text_run((x, text_y), right, &text, color, g.font);
+                    if g.tone == Tone::Marked {
+                        let pill = Bounds::cells(x - 0.1, text_y + 0.1, width + 0.2, 0.8);
+                        grid.panel(pill, 8, Some(theme.highlighter()), None);
+                    }
+                    let shift = match g.tone {
+                        Tone::Raised | Tone::Footnote => -0.2,
+                        Tone::Lowered => 0.2,
+                        _ => 0.0,
+                    };
+                    let inked = g.underline || g.tone == Tone::Inserted;
+                    let color = (fg_of(g.tone), inked);
+                    grid.text_run((x, text_y + shift), right, &text, color, g.font);
+                    if matches!(g.tone, Tone::Struck | Tone::Deleted) {
+                        let line = Bounds::cells(x, text_y + 0.5, width, 0.0);
+                        grid.hairline(line, fg_of(g.tone));
+                    }
                 }
             }
             i = end;

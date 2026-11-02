@@ -27,6 +27,19 @@ th, td { border: 1px solid var(--line); padding: .4em .8em; } th { background: v
 .math { text-align: center; margin: 1.2em 0; overflow-x: auto; }
 .diagram { text-align: center; margin: 1.2em 0; padding: 1em; overflow-x: auto; }
 .diagram svg { max-width: 100%; height: auto; }
+mark { background: #ffec9e; color: #1f2328; padding: 0 .15em; border-radius: 3px; }
+ins { color: #1a7f37; } del { color: #cf222e; } .note { color: var(--dim); font-size: .85em; }
+blockquote[class^=markdown-alert] { color: inherit; border-left-width: 4px; }
+blockquote[class^=markdown-alert]::before { display: block; font-weight: 600; margin-top: .6em; }
+.markdown-alert-note { border-color: var(--link); } .markdown-alert-note::before { content: 'Note'; }
+.markdown-alert-tip { border-color: #1a7f37; } .markdown-alert-tip::before { content: 'Tip'; }
+.markdown-alert-important { border-color: #8857e0; }
+.markdown-alert-important::before { content: 'Important'; }
+.markdown-alert-warning { border-color: #c08610; }
+.markdown-alert-warning::before { content: 'Warning'; }
+.markdown-alert-caution { border-color: #cf222e; }
+.markdown-alert-caution::before { content: 'Caution'; }
+.footnote-definition { font-size: .88em; color: var(--dim); }
 hr { border: 0; border-top: 1px solid var(--line); margin: 2em 0; }
 ";
 
@@ -54,12 +67,84 @@ fn drawn(kind: diagram::Kind, source: &str) -> String {
     }
 }
 
+/// `H~2~O` and `x^2^` as tags, leaving alone any tilde or caret that doesn't hug its text.
+fn raised(line: &str, marker: char, tag: &str) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let mut out = String::with_capacity(line.len());
+    let (mut i, mut code) = (0, false);
+    while i < chars.len() {
+        code ^= chars[i] == '`' || chars[i] == '$';
+        let close = (chars[i] == marker && !code)
+            .then(|| (i + 2..chars.len().min(i + 32)).find(|n| chars[*n] == marker))
+            .flatten()
+            .filter(|n| {
+                chars[i + 1..*n]
+                    .iter()
+                    .all(|c| !c.is_whitespace() && *c != marker)
+            });
+        match close {
+            Some(close) => {
+                let inner: String = chars[i + 1..close].iter().collect();
+                out.push_str(&format!("<{tag}>{inner}</{tag}>"));
+                i = close + 1;
+            }
+            None => {
+                out.push(chars[i]);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Highlights, tracked changes and raised text, which Markdown doesn't know, as the HTML
+/// they mean. The paper reads the same tags.
+pub fn marked(markdown: &str) -> String {
+    let pairs = [
+        ("{++", "<ins>"),
+        ("++}", "</ins>"),
+        ("{--", "<del>"),
+        ("--}", "</del>"),
+        ("{==", "<mark>"),
+        ("==}", "</mark>"),
+        ("{~~", "<del>"),
+        ("~>", "</del><ins>"),
+        ("~~}", "</ins>"),
+        ("{>>", "<span class=\"note\">"),
+        ("<<}", "</span>"),
+    ];
+    let mut out = String::with_capacity(markdown.len());
+    let mut code = false;
+    for line in markdown.split_inclusive('\n') {
+        if line.trim_start().starts_with("```") {
+            code = !code;
+        }
+        if code {
+            out.push_str(line);
+            continue;
+        }
+        let mut text = line.to_string();
+        for (from, to) in pairs {
+            text = text.replace(from, to);
+        }
+        let text = raised(&raised(&text, '~', "sub"), '^', "sup");
+        let mut parts = text.split("==");
+        out.push_str(parts.next().unwrap_or(""));
+        for (index, part) in parts.enumerate() {
+            out.push_str(if index % 2 == 0 { "<mark>" } else { "</mark>" });
+            out.push_str(part);
+        }
+    }
+    out
+}
+
 /// The body of a Markdown document. Formulas that won't parse stay as their source.
 pub fn body(markdown: &str) -> String {
     let options = Options::ENABLE_TABLES
         | Options::ENABLE_TASKLISTS
         | Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_FOOTNOTES
+        | Options::ENABLE_GFM
         | Options::ENABLE_MATH;
     let sized = figure::rewrite_sized(markdown, |image, width| {
         format!(
@@ -68,6 +153,7 @@ pub fn body(markdown: &str) -> String {
             escape(image.alt)
         )
     });
+    let sized = marked(&sized);
     let mut events = Vec::new();
     let mut open: Option<(diagram::Kind, String)> = None;
     for event in Parser::new_ext(&sized, options) {
@@ -131,6 +217,24 @@ mod tests {
         assert!(html.contains("<svg"), "{html}");
         assert!(!html.contains("flowchart"), "{html}");
         assert!(html.contains("style=\"width:40%\""), "{html}");
+    }
+
+    #[test]
+    fn writing_marks_reach_the_web_page() {
+        let html = body(
+            "==key== H~2~O x^2^ {++new++}{--old--}[^a]\n\n[^a]: Note.\n\n> [!WARNING]\n> Careful.\n",
+        );
+        for want in [
+            "<mark>key</mark>",
+            "<sub>2</sub>",
+            "<sup>2</sup>",
+            "<ins>new</ins>",
+            "<del>old</del>",
+            "markdown-alert-warning",
+            "Note.",
+        ] {
+            assert!(html.contains(want), "{want}: {html}");
+        }
     }
 
     #[test]
