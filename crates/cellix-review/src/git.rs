@@ -15,6 +15,9 @@ pub(crate) fn git(root: &Path, args: &[&str]) -> Option<String> {
         .arg("-C")
         .arg(root)
         .args(args)
+        // This runs all the time, beside whatever else is using the repository. Left to
+        // itself, `git status` takes the index lock, and a commit at that moment is refused.
+        .env("GIT_OPTIONAL_LOCKS", "0")
         .output()
         .ok()?;
     output
@@ -416,6 +419,14 @@ pub fn blame_line(root: &Path, path: &Path, line: usize) -> Option<String> {
 pub(crate) mod tests {
     use super::*;
     use std::fs;
+
+    #[test]
+    fn reading_never_takes_the_lock_a_commit_needs() {
+        let dir = repo();
+        let told = ["-c", "alias.told=!printenv GIT_OPTIONAL_LOCKS", "told"];
+        let told = git(dir.path(), &told);
+        assert_eq!(told.as_deref().map(str::trim), Some("0"));
+    }
 
     pub(crate) fn repo() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();

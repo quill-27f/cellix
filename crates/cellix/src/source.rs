@@ -95,6 +95,12 @@ impl Source {
         self.reading = Some(reading);
     }
 
+    /// Reads again after a change, so what was already on its way can't undo it.
+    pub fn reread(&mut self, root: &Path) {
+        self.reading = None;
+        self.refresh(root);
+    }
+
     /// Takes in what was read. Returns true if it changed anything.
     pub fn poll(&mut self) -> bool {
         let Some(read) = self.reading.as_ref().and_then(|r| r.try_recv().ok()) else {
@@ -459,5 +465,28 @@ impl Source {
                 grid.label(discard, y, "↺", theme.sidebar, discard + 2);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_read_from_before_a_change_doesnt_undo_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (late, reading) = mpsc::channel();
+        let mut source = Source {
+            reading: Some(reading),
+            ..Source::default()
+        };
+        source.reread(dir.path());
+        let stale = Entry {
+            path: PathBuf::from("gone.txt"),
+            index: 'M',
+            worktree: ' ',
+        };
+        // The channel it came down was dropped, so nothing can arrive by it.
+        assert!(late.send((vec![stale], Remote::default())).is_err());
     }
 }

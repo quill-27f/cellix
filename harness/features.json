@@ -2035,5 +2035,19 @@
     "title": "Tabs in a narrow pane stay clear of the icons",
     "test": "every_tab_in_a_narrow_pane_keeps_its_close_button_clear_of_the_icons",
     "passes": true
+  },
+  {
+    "id": "scm-no-lock",
+    "milestone": 9,
+    "title": "Reading the repository never takes the lock a commit needs",
+    "test": "reading_never_takes_the_lock_a_commit_needs",
+    "passes": true
+  },
+  {
+    "id": "scm-stale",
+    "milestone": 9,
+    "title": "A read from before a change doesn't undo it",
+    "test": "a_read_from_before_a_change_doesnt_undo_it",
+    "passes": true
   }
 ]

@@ -424,3 +424,8 @@ and a folder set after the name as drawn. A notebook's dividers come from its ow
 being read from the page bar's. Tabs in a narrow pane share the row, so long names are cut short
 there. The tour gained scenes for hover, staged files and the diff beside the panel, and 13-review
 was a tour timing problem, not a repaint bug: the shot came before the first key landed.
+
+CI failed once on `with_nothing_staged_commit_takes_everything`. It was a real race: the panel's
+background `git status` takes the index lock, so a commit at that moment was refused. Every read now
+sets `GIT_OPTIONAL_LOCKS=0`, which also keeps Cellix out of the way of an agent's own commits, and a
+read started before a change is dropped, so it can't put the old state back.

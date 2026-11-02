@@ -1406,7 +1406,7 @@ impl App {
     /// Reads the repository now, since something just changed it.
     fn source_settled(&mut self) {
         self.source.entries = cellix_review::status_entries(self.workspace.root());
-        self.source.refresh(self.workspace.root());
+        self.source.reread(self.workspace.root());
         if let Some(review) = &mut self.review {
             review.refresh();
         }
