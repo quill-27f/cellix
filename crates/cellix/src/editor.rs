@@ -1,11 +1,13 @@
 use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::HashMap;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use cellix_core::{Buffer, Motion, Selection, Selections};
 use cellix_doc::changes::{self, Change, Kind, Syntax};
 use cellix_doc::latex::Project;
+use cellix_doc::notebook::Notebook;
 use cellix_doc::prose::{Issue, Source};
 use cellix_doc::table::Edit as TableEdit;
 use cellix_input::{Command, Direction, Format};
@@ -122,6 +124,8 @@ pub struct Editor {
     dark: Cell<bool>,
     /// Whether typing here is kept as suggested changes.
     pub tracking: bool,
+    /// The notebook this page was read from, which saving writes back into.
+    pub notebook: Option<Notebook>,
     /// Spelling and grammar, for the revision they were checked at.
     pub issues: (u64, Vec<Issue>),
     /// The revision last sent to be checked.
@@ -201,6 +205,7 @@ impl Editor {
             library: RefCell::default(),
             dark: Cell::new(false),
             tracking: false,
+            notebook: None,
             issues: (0, Vec::new()),
             checked: 0,
             built: None,
@@ -500,6 +505,7 @@ impl Editor {
             library: Some(&self.library),
             dark: self.dark.get(),
             built: self.built.as_deref(),
+            notebook: self.notebook.as_ref(),
             ..Extras::default()
         };
         let rows = rendered::layout_with(text, width, &*self.measure, &self.registry, &extras);
@@ -1573,6 +1579,46 @@ impl Editor {
         } else {
             self.insert_block(&format!("![]({path})"), 2);
         }
+    }
+
+    /// Writes this file, through its notebook if it has one.
+    pub fn save(&mut self) -> io::Result<()> {
+        match &self.notebook {
+            Some(notebook) => {
+                let written = notebook.write(&self.buffer.text());
+                self.buffer.save_as(&written)
+            }
+            None => self.buffer.save(),
+        }
+    }
+
+    /// Takes the file back from disk, through its notebook if it has one.
+    pub fn reload(&mut self) -> io::Result<()> {
+        let notebook = self.notebook.is_some();
+        let read = self
+            .buffer
+            .path()
+            .filter(|_| notebook)
+            .map(std::fs::read_to_string);
+        let Some(text) = read else {
+            return self.buffer.reload(&mut self.selections);
+        };
+        let notebook = Notebook::read(&text?).map_err(io::Error::other)?;
+        let page = notebook.page();
+        self.notebook = Some(notebook);
+        *self.page.borrow_mut() = None;
+        self.buffer.reload_as(&mut self.selections, page)
+    }
+
+    /// Adds a code cell below this line.
+    pub fn insert_code_cell(&mut self) {
+        let language = self
+            .notebook
+            .as_ref()
+            .map_or("python", |n| n.language.as_str());
+        let cell = cellix_doc::notebook::new_code_cell(language);
+        let caret = cell.find("\n\n").map_or(0, |at| at + 1);
+        self.insert_block(&cell, caret);
     }
 
     /// What's wrong with this revision of the text.

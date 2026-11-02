@@ -48,6 +48,7 @@ pub enum Action {
     Fix(usize, usize, String),
     /// Stops counting a word as wrong.
     Learn(String),
+    AddCodeCell,
 }
 
 /// One row. `None` for an action shows what can't be done here, rather than hiding it, so

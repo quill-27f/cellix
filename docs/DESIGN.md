@@ -134,6 +134,10 @@ unchanged. On a page, arrows and Home and End move by what's shown.
 
 ### Documents
 
+A Jupyter notebook opens as a page too, with what each cell printed and drew under it. Its cells
+become Markdown with a hidden line above each, and saving puts the text back into the JSON beside
+the outputs it already had. Cells don't run here: a shell in the side pane can do that.
+
 CSV and TSV files open as a table on the same page, with cells edited in place and rows and columns
 from the menu. A long file shows its first 2,000 rows and says so.
 

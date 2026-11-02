@@ -843,6 +843,7 @@ dependencies = [
 name = "cellix-doc"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "flate2",
  "harper-core",
  "hayro",
@@ -852,6 +853,8 @@ dependencies = [
  "png 0.18.1",
  "pulldown-cmark",
  "resvg",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 

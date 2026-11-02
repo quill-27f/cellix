@@ -12,6 +12,7 @@ use std::sync::Arc;
 use cellix_doc::diagram::{Kind, Raster};
 use cellix_doc::figure::image_line;
 use cellix_doc::latex::Project;
+use cellix_doc::notebook::{self, Notebook, Output};
 use cellix_lang::{Registry, Token};
 use cellix_render::{Bitmap, Font, INTERFACE_SIZE, Measure, Pixels};
 
@@ -450,7 +451,7 @@ impl Dialect {
     /// The dialect of a file, if it opens as a page.
     pub fn of(path: &Path) -> Option<Self> {
         match path.extension()?.to_str()? {
-            "md" | "markdown" | "mdx" => Some(Self::Markdown),
+            "md" | "markdown" | "mdx" | "ipynb" => Some(Self::Markdown),
             "tex" | "ltx" => Some(Self::Latex),
             "csv" => Some(Self::Data(',')),
             "tsv" => Some(Self::Data('\t')),
@@ -489,6 +490,8 @@ pub struct Extras<'a> {
     pub wanted: RefCell<Vec<Snippet>>,
     /// Footnotes in the order they're first met.
     pub footnotes: RefCell<Vec<String>>,
+    /// The notebook this page is, for what its cells printed.
+    pub notebook: Option<&'a Notebook>,
     /// Filled in by layout.
     pub figures: RefCell<Vec<Figure>>,
     /// The picture of a formula being edited in a line, filled in by layout.
@@ -1265,6 +1268,41 @@ impl Context<'_> {
         }
     }
 
+    /// A picture a notebook cell drew.
+    fn cell_picture(&self, bytes: &[u8], width: f32) -> Option<usize> {
+        let cell = self.cell()?;
+        let wanted = (width * cell.0 as f32) as u32;
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        bytes.hash(&mut hasher);
+        let key = hasher.finish();
+        let make = || {
+            let image = image::load_from_memory(bytes).ok()?.to_rgba8();
+            let image = if image.width() > wanted {
+                let height = image.height() * wanted / image.width();
+                image::imageops::thumbnail(&image, wanted, height.max(1))
+            } else {
+                image
+            };
+            let (width, height) = image.dimensions();
+            let raster = Raster {
+                width,
+                height,
+                rgba: image.into_raw(),
+            };
+            Some(figure_of_raster(raster, key, cell))
+        };
+        let figure = match self.extras.library {
+            Some(library) => library
+                .borrow_mut()
+                .built
+                .entry((key, wanted))
+                .or_insert_with(make)
+                .clone(),
+            None => make(),
+        };
+        figure.map(|f| self.keep(f))
+    }
+
     /// A piece of LaTeX for this page, once it's been built. Asking is what starts the build.
     fn built(&self, body: &str, width: f32) -> Built {
         let (Some(cell), Some(folder)) = (self.cell(), self.extras.built) else {
@@ -1484,6 +1522,56 @@ fn code_rows(
     }
 }
 
+/// What a notebook's cell printed and drew, under it.
+fn cell_outputs(
+    outputs: &[Output],
+    (line, at): (usize, usize),
+    width: f32,
+    context: &Context,
+    rows: &mut Vec<Row>,
+) {
+    /// Lines of printed text shown before the rest is left out.
+    const MOST: usize = 40;
+    for output in outputs {
+        match output {
+            Output::Text(text) | Output::Error(text) => {
+                let tone = if matches!(output, Output::Error(_)) {
+                    Tone::Deleted
+                } else {
+                    Tone::Dim
+                };
+                let lines: Vec<&str> = text.lines().collect();
+                for shown in lines.iter().take(MOST) {
+                    let mut row = note_row(shown, line, at, context);
+                    for g in &mut row.glyphs {
+                        g.tone = tone;
+                        g.font.mono = true;
+                    }
+                    measure_glyphs(&mut row.glyphs, context.measure);
+                    let mut x = CODE_PADDING;
+                    for g in &mut row.glyphs {
+                        g.x = x;
+                        x += g.advance;
+                    }
+                    rows.push(row);
+                }
+                if lines.len() > MOST {
+                    let more = format!("{} more lines", lines.len() - MOST);
+                    rows.push(note_row(&more, line, at, context));
+                }
+            }
+            Output::Image(bytes) => {
+                if let Some(figure) = context.cell_picture(bytes, width.min(90.0)) {
+                    figure_rows(figure, context, (line, at, at), width, rows);
+                    if let Some(row) = rows.iter_mut().rfind(|r| r.figure.is_some()) {
+                        row.stop = false;
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// A fenced block of TikZ as LaTeX, in its environment unless it brought its own.
 fn fenced_tikz(language: &str, source: &str) -> String {
     let name = if language == "tikzcd" {
@@ -1567,6 +1655,8 @@ pub fn layout_with(
     }
     let mut i = 0;
     let mut callout = None;
+    // The notebook cell the next fence belongs to.
+    let mut cell = None;
     // Front matter shows as dimmed text, with its delimiters hidden.
     if lines[0].1 == "---"
         && let Some(close) = (1..lines.len()).find(|n| lines[*n].1 == "---")
@@ -1584,6 +1674,12 @@ pub fn layout_with(
     while i < lines.len() {
         let (offset, line) = lines[i];
         let trimmed = line.trim_start();
+        // The line that says which cell this is isn't part of the document.
+        if let (Some(_), Some(mark)) = (extras.notebook, notebook::marker(line)) {
+            cell = mark.cell.filter(|_| mark.code);
+            i += 1;
+            continue;
+        }
         if let Some(language) = trimmed.strip_prefix("```") {
             let language = language.trim();
             let close = (i + 1..lines.len())
@@ -1660,6 +1756,12 @@ pub fn layout_with(
                 None,
                 &mut rows,
             );
+            if let (Some(book), Some(number)) = (extras.notebook, cell.take()) {
+                let last = close.min(lines.len() - 1);
+                let end = lines[last].0 + lines[last].1.chars().count();
+                let outputs = book.outputs(number);
+                cell_outputs(&outputs, (close.min(last), end), width, &context, &mut rows);
+            }
             // Being written, it stands under its source, and says what's wrong with it.
             match drawing {
                 Some((Ok(figure), place)) => {

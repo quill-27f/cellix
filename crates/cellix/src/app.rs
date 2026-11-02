@@ -26,6 +26,7 @@ use cellix_agent::hook::comments_message;
 use cellix_agent::ide::{IdeCall, IdeServer};
 use cellix_agent::{Decision, Request, SharedComments, TestRun};
 use cellix_doc::latex::ENGINES;
+use cellix_doc::notebook::Notebook;
 use cellix_doc::table::{Align, Edit as TableEdit};
 
 use serde_json::{Value, json};
@@ -694,9 +695,16 @@ impl App {
             let megabytes = size as f64 / 1_000_000.0;
             io::Error::other(format!("it's a binary file of {megabytes:.1} MB"))
         })?;
+        let book = path.extension().is_some_and(|e| e == "ipynb");
+        let book = book.then(|| Notebook::read(&buffer.text()).ok()).flatten();
+        let buffer = match &book {
+            Some(book) => Buffer::open_as(path, &book.page())?,
+            None => buffer,
+        };
         let mut editor = Editor::new(buffer, self.measure.clone(), self.registry.clone());
         editor.minimap_on = self.settings.minimap != Some(false);
         editor.built = Some(self.built_folder.clone());
+        editor.notebook = book;
         self.load_committed(&mut editor);
         self.editors.push(editor);
         self.set_active(self.editors.len() - 1);
@@ -1951,7 +1959,7 @@ impl App {
                 editor.buffer.acknowledge_disk();
                 editor.conflict = true;
             } else {
-                note = Some(match editor.buffer.reload(&mut editor.selections) {
+                note = Some(match editor.reload() {
                     Ok(()) => {
                         reloaded.extend(editor.buffer.path().map(Path::to_path_buf));
                         format!("Reloaded {}", editor.title())
@@ -2325,7 +2333,7 @@ impl App {
             Choice::Reload => {
                 if let Some(editor) = self.editor_mut() {
                     editor.conflict = false;
-                    let reloaded = editor.buffer.reload(&mut editor.selections);
+                    let reloaded = editor.reload();
                     if let Err(e) = reloaded {
                         self.say(format!("Could not reload: {e}"));
                     }
@@ -4340,7 +4348,7 @@ impl App {
             return;
         };
         editor.conflict = false;
-        let note = match editor.buffer.save() {
+        let note = match editor.save() {
             Ok(()) => format!("Saved {}", editor.title()),
             Err(e) => format!("Could not save: {e}"),
         };
@@ -4807,6 +4815,7 @@ impl App {
             run("Copy", Command::Copy).when(selected),
             run("Paste", Command::Paste),
         ];
+        let notebook = editor.notebook.is_some();
         let agent = [
             run("Add Comment", Command::AddComment).after_rule(),
             run("Send Selection to Agent", Command::MentionSelection).when(selected),
@@ -4856,6 +4865,9 @@ impl App {
                 ]);
                 items.extend(agent);
                 return items;
+            }
+            if notebook {
+                items.push(MenuItem::new("Add Code Cell", MenuAction::AddCodeCell));
             }
             items.push(run("Show Source", Command::MarkdownPreview));
             items.extend(edit);
@@ -5019,6 +5031,14 @@ impl App {
                 for editor in &mut self.editors {
                     editor.forget_issues(&word);
                 }
+            }
+            MenuAction::AddCodeCell => {
+                let area = self.focused_area();
+                if let Some(editor) = self.editor_mut() {
+                    editor.prepare_edit(area);
+                    editor.insert_code_cell();
+                }
+                self.reveal();
             }
             MenuAction::ImageWidth(percent) => {
                 if let Some(editor) = self.editor_mut() {
@@ -9686,6 +9706,77 @@ mod tests {
             .map(|g| g.ch)
             .collect();
         assert!(last.contains("first 2000 of 3001 rows"), "{last}");
+    }
+
+    const NOTEBOOK: &str = r##"{
+ "cells": [
+  {"cell_type": "markdown", "metadata": {}, "source": ["# Training run\n", "\n", "Some words.\n"]},
+  {"cell_type": "code", "execution_count": 3, "metadata": {},
+   "outputs": [
+    {"output_type": "stream", "name": "stdout", "text": ["epoch one loss\n"]},
+    {"output_type": "error", "ename": "E", "evalue": "v", "traceback": ["Boom happened"]}
+   ],
+   "source": ["import torch\n", "train()"]}
+ ],
+ "metadata": {"kernelspec": {"language": "python", "name": "python3"}},
+ "nbformat": 4, "nbformat_minor": 5
+}"##;
+
+    #[test]
+    fn a_notebook_opens_as_a_page_with_its_outputs() {
+        let (_dir, app) = data_app("run.ipynb", NOTEBOOK);
+        let text = screen(&app).text();
+        assert!(
+            text.contains("Training run") && text.contains("import torch"),
+            "{text}"
+        );
+        assert!(
+            text.contains("epoch one loss") && text.contains("Boom happened"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("cell_type") && !text.contains("<!--"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn saving_a_notebook_keeps_its_json_and_its_outputs() {
+        let (dir, mut app) = data_app("run.ipynb", NOTEBOOK);
+        let (x, y) = find(&screen(&app), "train()");
+        app.handle(mouse(MouseKind::Left, x, y));
+        typed(&mut app, "re");
+        app.run(Command::Save);
+        let saved = fs::read_to_string(dir.path().join("run.ipynb")).unwrap();
+        let json: Value = serde_json::from_str(&saved).unwrap();
+        let cell = &json["cells"][1];
+        assert_eq!(cell["outputs"].as_array().unwrap().len(), 2, "{saved}");
+        assert_eq!(cell["source"], json!(["import torch\n", "retrain()"]));
+        assert_eq!(cell["execution_count"], 3);
+        assert_eq!(json["nbformat_minor"], 5);
+        assert!(!app.editors[0].buffer.is_dirty());
+        assert!(screen(&app).text().contains("epoch one loss"));
+    }
+
+    #[test]
+    fn a_notebook_changed_on_disk_reads_again_as_a_page() {
+        let (dir, mut app) = data_app("run.ipynb", NOTEBOOK);
+        let path = dir.path().join("run.ipynb");
+        let changed = NOTEBOOK.replace("Some words.", "Other words.");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(&path, changed).unwrap();
+        app.editors[0].reload().unwrap();
+        let text = app.active_text().unwrap();
+        assert!(
+            text.contains("Other words.") && !text.contains("cell_type"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_broken_notebook_opens_as_text() {
+        let (_dir, app) = data_app("bad.ipynb", "{ not json");
+        assert_eq!(app.active_text().unwrap(), "{ not json");
     }
 
     #[test]

@@ -1293,5 +1293,47 @@
     "title": "Quoted fields keep their commas",
     "test": "quotes_are_hidden_and_commas_inside_them_stay",
     "passes": true
+  },
+  {
+    "id": "nb-page",
+    "milestone": 9,
+    "title": "A notebook opens as a page with its outputs",
+    "test": "a_notebook_opens_as_a_page_with_its_outputs",
+    "passes": true
+  },
+  {
+    "id": "nb-save",
+    "milestone": 9,
+    "title": "Saving a notebook keeps its JSON and outputs",
+    "test": "saving_a_notebook_keeps_its_json_and_its_outputs",
+    "passes": true
+  },
+  {
+    "id": "nb-reload",
+    "milestone": 9,
+    "title": "A notebook changed on disk reads again as a page",
+    "test": "a_notebook_changed_on_disk_reads_again_as_a_page",
+    "passes": true
+  },
+  {
+    "id": "nb-broken",
+    "milestone": 9,
+    "title": "A broken notebook opens as text",
+    "test": "a_broken_notebook_opens_as_text",
+    "passes": true
+  },
+  {
+    "id": "nb-roundtrip",
+    "milestone": 9,
+    "title": "Saving an unchanged notebook loses nothing",
+    "test": "nothing_changed_is_nothing_lost",
+    "passes": true
+  },
+  {
+    "id": "nb-add",
+    "milestone": 9,
+    "title": "A notebook edit reaches its cell and a new cell is added",
+    "test": "an_edit_reaches_its_cell_and_a_new_cell_is_added",
+    "passes": true
   }
 ]

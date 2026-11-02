@@ -51,6 +51,14 @@ impl Buffer {
         Ok(buffer)
     }
 
+    /// Opens a file through something that reads it into other text, like a notebook.
+    pub fn open_as(path: &Path, text: &str) -> io::Result<Self> {
+        let mut buffer = Self::from_text(text);
+        buffer.disk_mtime = fs::metadata(path)?.modified().ok();
+        buffer.path = Some(path.to_path_buf());
+        Ok(buffer)
+    }
+
     pub fn rope(&self) -> &Rope {
         &self.rope
     }
@@ -77,13 +85,18 @@ impl Buffer {
     }
 
     pub fn save(&mut self) -> io::Result<()> {
+        self.save_as(&self.rope.to_string())
+    }
+
+    /// Saves `text` as what this buffer stands for on disk.
+    pub fn save_as(&mut self, text: &str) -> io::Result<()> {
         let path = self
             .path
             .as_ref()
             .ok_or_else(|| io::Error::other("buffer has no file"))?;
         // Write beside the target and rename, so a crash can't truncate the file.
         let tmp = path.with_extension("cellix-tmp");
-        fs::write(&tmp, self.rope.to_string())?;
+        fs::write(&tmp, text)?;
         if let Ok(meta) = fs::metadata(path) {
             fs::set_permissions(&tmp, meta.permissions())?;
         }
@@ -114,6 +127,15 @@ impl Buffer {
             .clone()
             .ok_or_else(|| io::Error::other("buffer has no file"))?;
         let text = fs::read_to_string(&path)?;
+        self.reload_as(selections, text)
+    }
+
+    /// Replaces the contents with what the file on disk comes to.
+    pub fn reload_as(&mut self, selections: &mut Selections, text: String) -> io::Result<()> {
+        let path = self
+            .path
+            .clone()
+            .ok_or_else(|| io::Error::other("buffer has no file"))?;
         let before = selections.clone();
         self.push_edits(
             vec![Edit {
