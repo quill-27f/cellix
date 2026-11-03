@@ -645,3 +645,9 @@ old version, where it used to point at whatever is on that line now. Plan commen
 not the private folder it's held in, and comments reach the agent in file and line order, each as
 `file line N, on "quote": text`. `cellix comments` gives `quote` and `removed`, and the skill says
 so. Open: plan comments still don't carry into the plan's next version as threads.
+
+Rejections with a reason. Reject on a hunk in Review deleted the agent's code at one click and told
+it nothing, and rejecting a proposed change only answered DIFF_REJECTED. Both now ask "Why reject
+it?": Enter rejects, Esc keeps it, and a reason goes to the agent as a comment on the first line
+that changed, with its quote, so it doesn't try the same again. Three tests that clicked Reject
+now press Enter after it.

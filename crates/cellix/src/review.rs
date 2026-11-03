@@ -318,6 +318,28 @@ impl Review {
         self.top = self.top.min(self.diff.rows.len().saturating_sub(1));
     }
 
+    /// Where a hunk is, counting lines from one, and its first line: what was added, or what
+    /// was removed when nothing was.
+    pub fn hunk_place(&self, hunk: usize) -> Option<(usize, String, bool)> {
+        let hunk = self.diff.hunks.get(hunk)?;
+        let old: Vec<&str> = self.old.lines().collect();
+        let new: Vec<&str> = self.new.lines().collect();
+        // Past the context the hunk carries, to the first line that changed.
+        let mut at = 0;
+        while at < hunk.old_len.min(hunk.new_len)
+            && old.get(hunk.old_start + at) == new.get(hunk.new_start + at)
+        {
+            at += 1;
+        }
+        let (lines, start, removed) = if at < hunk.new_len {
+            (&new, hunk.new_start + at, false)
+        } else {
+            (&old, hunk.old_start + at, true)
+        };
+        let line = lines.get(start).map_or("", |l| l.trim()).to_string();
+        Some((start + 1, line, removed))
+    }
+
     pub fn is_proposal(&self) -> bool {
         self.proposal.is_some()
     }

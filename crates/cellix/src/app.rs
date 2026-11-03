@@ -198,6 +198,10 @@ enum PromptAction {
     Commit,
     GoToLine,
     SendBackPlan,
+    /// Turn down a hunk in Review, with the reason going to the agent.
+    RejectHunk(usize),
+    /// Turn down the change Claude Code proposed, with the reason going to it.
+    RejectProposal,
     NewBranch,
     Image,
     Link,
@@ -302,6 +306,9 @@ fn engines_for(name: Option<&str>, vim_may_use_neovim: bool) -> (Option<Vim>, Op
     let vim = (name == Some("vim") && neovim.is_none()).then(Vim::default);
     (vim, neovim)
 }
+
+/// Asked before a change is turned down: Enter turns it down, Esc keeps it.
+const REJECT_ASK: &str = "Why reject it? Enter rejects, Esc keeps it";
 
 /// The browser Cellix runs in the pane, and its own installer, from its releases page, for
 /// macOS and Linux alike.
@@ -4346,6 +4353,17 @@ impl App {
                 }
                 Ok(())
             }
+            PromptAction::RejectHunk(hunk) => {
+                let hunk = *hunk;
+                self.note_rejection(hunk, name);
+                self.reject(hunk);
+                Ok(())
+            }
+            PromptAction::RejectProposal => {
+                self.note_rejection(0, name);
+                self.reject_proposal();
+                Ok(())
+            }
             _ if name.is_empty() => Ok(()),
             PromptAction::NewBranch => {
                 let result = create_branch(self.workspace.root(), name);
@@ -6092,7 +6110,7 @@ impl App {
         match review.hit(area, x, y, &comments) {
             Some(Hit::File(index)) => review.select(index),
             Some(Hit::AcceptProposal) => self.accept_proposal(),
-            Some(Hit::RejectProposal) => self.reject_proposal(),
+            Some(Hit::RejectProposal) => self.ask(REJECT_ASK, PromptAction::RejectProposal),
             Some(Hit::Accept(hunk)) if review.is_proposal() => {
                 if review.keep_proposed(hunk) {
                     self.accept_proposal();
@@ -6112,7 +6130,7 @@ impl App {
             Some(Hit::Base(base)) => review.set_base(base),
             Some(Hit::Commit) => self.ask("Commit message", PromptAction::Commit),
             Some(Hit::Test(index)) => self.show_test_output(index),
-            Some(Hit::Reject(hunk)) => self.reject(hunk),
+            Some(Hit::Reject(hunk)) => self.ask(REJECT_ASK, PromptAction::RejectHunk(hunk)),
             Some(Hit::PreviousFile) => review.step_file(-1),
             Some(Hit::NextFile) => review.step_file(1),
             Some(Hit::Line(file, line, quote, removed)) => {
@@ -6138,6 +6156,32 @@ impl App {
 
     /// Puts one hunk back on disk. Refuses if the file has unsaved edits, which the
     /// rejection would silently overwrite.
+    /// Tells the agent why a change was turned down, as a comment on where it was, so it
+    /// doesn't try the same again. No reason, no comment.
+    fn note_rejection(&mut self, hunk: usize, reason: &str) {
+        let Some(review) = &self.review else {
+            return;
+        };
+        let (Some(path), Some((line, quote, removed))) =
+            (review.current_path(), review.hunk_place(hunk))
+        else {
+            return;
+        };
+        if reason.trim().is_empty() {
+            return;
+        }
+        let comment = Comment {
+            file: path.to_string_lossy().into_owned(),
+            line,
+            text: format!("I rejected this change: {}", reason.trim()),
+            quote,
+            removed,
+        };
+        if let Ok(mut comments) = self.comments.lock() {
+            comments.push(comment);
+        }
+    }
+
     fn reject(&mut self, hunk: usize) {
         let Some(review) = &self.review else {
             return;
@@ -9616,6 +9660,8 @@ mod tests {
         app.run(Command::OpenDiff);
         let (x, y) = find(&screen(&app), "[Reject]");
         app.handle(mouse(MouseKind::Left, x + 1, y));
+        // It asks why, and Enter turns it down.
+        enter(&mut app);
         assert_eq!(
             fs::read_to_string(dir.path().join("alpha.txt")).unwrap(),
             "first line\nsecond line\n"
@@ -9719,6 +9765,8 @@ mod tests {
         app.run(Command::OpenDiff);
         let (x, y) = find(&screen(&app), "[Reject]");
         app.handle(mouse(MouseKind::Left, x + 1, y));
+        // It asks why, and Enter turns it down.
+        enter(&mut app);
         assert!(
             fs::read_to_string(dir.path().join("alpha.txt"))
                 .unwrap()
@@ -14920,6 +14968,27 @@ mod tests {
     }
 
     #[test]
+    fn rejecting_asks_why_and_tells_the_agent() {
+        let (dir, mut app) = project();
+        let old: String = (0..10).map(|i| format!("line {i}\n")).collect();
+        fs::write(dir.path().join("alpha.txt"), &old).unwrap();
+        let new = old.replace("line 2\n", "two\n");
+        let answer = propose(&mut app, diff_args(&dir, "t", &new));
+        let (x, y) = find(&screen(&app), "Reject");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        assert!(answer.try_recv().is_err(), "nothing yet: it asks first");
+        assert!(screen(&app).text().contains("Why reject it?"));
+        typed(&mut app, "keep the numbering");
+        enter(&mut app);
+        assert_eq!(answer.try_recv().unwrap()[0], "DIFF_REJECTED");
+        let comments = app.comments.lock().unwrap().clone();
+        assert_eq!(comments.len(), 1, "{comments:?}");
+        assert_eq!(comments[0].line, 3);
+        assert_eq!(comments[0].quote, "two");
+        assert!(comments[0].text.contains("keep the numbering"));
+    }
+
+    #[test]
     fn a_rejected_hunk_leaves_the_rest_of_the_proposal() {
         let (dir, mut app) = project();
         let old: String = (0..40).map(|i| format!("line {i}\n")).collect();
@@ -15124,6 +15193,8 @@ mod tests {
         assert_eq!(find(&grid, "second line").1 + 1, find(&grid, "CHANGED").1);
         let (x, y) = find(&grid, "[Reject]");
         app.handle(mouse(MouseKind::Left, x + 1, y));
+        // It asks why, and Enter turns it down.
+        enter(&mut app);
         assert!(screen(&app).text().contains("No changes"));
     }
 

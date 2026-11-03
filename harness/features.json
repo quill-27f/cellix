@@ -2651,5 +2651,12 @@
     "title": "Comments reach an agent in order with what they're about",
     "test": "comments_reach_an_agent_in_order_with_what_they_are_about",
     "passes": true
+  },
+  {
+    "id": "reject-with-reason",
+    "milestone": 10,
+    "title": "Rejecting asks why and tells the agent",
+    "test": "rejecting_asks_why_and_tells_the_agent",
+    "passes": true
   }
 ]
