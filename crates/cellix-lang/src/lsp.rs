@@ -38,6 +38,8 @@ pub enum LspEvent {
     References(Vec<(PathBuf, usize, usize)>),
     /// The edits that format a file.
     Formatted(PathBuf, Vec<TextEdit>),
+    /// What the server says about the symbol at a place: its type, signature and docs.
+    Hover(String),
     /// The server refused a request, in its own words.
     Failed(String),
 }
@@ -50,6 +52,7 @@ enum Pending {
     Rename,
     References,
     Formatting(PathBuf),
+    Hover,
 }
 
 /// Holds messages until the server has answered `initialize`, as the protocol requires.
@@ -171,6 +174,32 @@ fn parse_location(result: &Value) -> Option<LspEvent> {
     };
     let (line, column) = position(&range["start"]);
     Some(LspEvent::Definition(path_of(uri)?, line, column))
+}
+
+/// A hover's contents as plain lines: Markdown's code fences go, and the code stays.
+fn parse_hover(result: &Value) -> Option<LspEvent> {
+    let contents = result.get("contents")?;
+    let piece = |value: &Value| -> String {
+        match value {
+            Value::String(text) => text.clone(),
+            Value::Object(map) => map
+                .get("value")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            _ => String::new(),
+        }
+    };
+    let text = match contents {
+        Value::Array(parts) => parts.iter().map(piece).collect::<Vec<_>>().join("\n\n"),
+        other => piece(other),
+    };
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("```"))
+        .collect();
+    let text = lines.join("\n").trim().to_string();
+    (!text.is_empty()).then_some(LspEvent::Hover(text))
 }
 
 fn parse_references(result: &Value) -> LspEvent {
@@ -309,6 +338,7 @@ fn read_loop(
                 None
             }
             Some(Pending::Definition) => parse_location(result),
+            Some(Pending::Hover) => parse_hover(result),
             Some(Pending::Completion) => Some(parse_completion(result)),
             Some(Pending::Rename) => Some(parse_rename(result)),
             Some(Pending::References) => Some(parse_references(result)),
@@ -378,6 +408,7 @@ impl Client {
                     "textDocument": {
                         "publishDiagnostics": {},
                         "definition": {},
+                        "hover": {"contentFormat": ["plaintext", "markdown"]},
                         "completion": {},
                         "rename": {},
                         "references": {},
@@ -455,6 +486,11 @@ impl Client {
             "textDocument": {"uri": uri(path)},
             "position": {"line": line, "character": column},
         })
+    }
+
+    pub fn hover(&mut self, path: &Path, line: usize, column: usize) {
+        let params = Self::at(path, line, column);
+        self.request("textDocument/hover", params, Pending::Hover);
     }
 
     pub fn definition(&mut self, path: &Path, line: usize, column: usize) {
@@ -549,6 +585,21 @@ mod tests {
         let value = read_message(&mut raw.as_bytes()).unwrap();
         assert_eq!(value["id"], 1);
         assert!(read_message(&mut "".as_bytes()).is_none());
+    }
+
+    #[test]
+    fn a_hover_reads_as_plain_lines() {
+        let markup = json!({"contents": {"kind": "markdown", "value": "```rust\nfn add(a: i32) -> i32\n```\nAdds one."}});
+        assert_eq!(
+            parse_hover(&markup),
+            Some(LspEvent::Hover("fn add(a: i32) -> i32\nAdds one.".into()))
+        );
+        let old = json!({"contents": [{"language": "c", "value": "int total"}, "The sum."]});
+        assert_eq!(
+            parse_hover(&old),
+            Some(LspEvent::Hover("int total\n\nThe sum.".into()))
+        );
+        assert_eq!(parse_hover(&json!({"contents": ""})), None);
     }
 
     #[test]

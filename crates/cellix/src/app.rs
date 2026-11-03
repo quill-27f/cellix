@@ -688,6 +688,12 @@ pub struct App {
     pane_explained: bool,
     /// A comment waiting for an agent to be started.
     pending_ask: Option<u32>,
+    /// Where the pointer rests, since when, and whether the server has been asked about it.
+    rest: Option<((u16, u16), std::time::Instant, bool)>,
+    /// What the server said about the symbol there, and the cell it's about.
+    hover_info: Option<(String, (u16, u16))>,
+    /// The cell a hover was asked for, so its answer lands there.
+    hover_at: Option<(u16, u16)>,
     /// Places left by jumps, for Go Back, and the ones Go Back left, for Go Forward.
     back: Vec<(PathBuf, usize)>,
     forward: Vec<(PathBuf, usize)>,
@@ -755,6 +761,9 @@ impl App {
             comment_quote: None,
             back: Vec::new(),
             forward: Vec::new(),
+            rest: None,
+            hover_info: None,
+            hover_at: None,
             sync_result: None,
             keep_running: false,
             kernels: HashMap::new(),
@@ -2088,6 +2097,11 @@ impl App {
                     }
                 }
             }
+            LspEvent::Hover(text) => {
+                if let Some(at) = self.hover_at.take() {
+                    self.hover_info = Some((text, at));
+                }
+            }
             LspEvent::Completion(labels) => {
                 self.server_words = labels;
                 self.rank_suggestions();
@@ -2271,6 +2285,7 @@ impl App {
         };
         match command {
             Command::GoToDefinition => client.definition(&path, line, column),
+            Command::ShowHover => client.hover(&path, line, column),
             Command::GoToReferences => client.references(&path, line, column),
             _ => client.completion(&path, line, column),
         }
@@ -2817,6 +2832,7 @@ impl App {
         if !passive {
             self.message.borrow_mut().clear();
         }
+        self.follow_rest(&event);
         let wheel = matches!(
             event,
             Event::Mouse(MouseEvent {
@@ -4649,6 +4665,15 @@ impl App {
                 }
             }
             Command::GoToDefinition | Command::GoToReferences => self.lsp_request(command),
+            Command::ShowHover => {
+                let area = self.focused_area();
+                let caret = self
+                    .editors
+                    .get(self.active())
+                    .and_then(|e| e.caret_cell(area));
+                self.hover_at = caret.map(|(x, y)| (x as u16, y));
+                self.lsp_request(command);
+            }
             Command::FormatDocument => self.format_document(),
             Command::Complete => {
                 self.suggest_asked = true;
@@ -6174,6 +6199,126 @@ impl App {
 
     /// Puts one hunk back on disk. Refuses if the file has unsaved edits, which the
     /// rejection would silently overwrite.
+    /// Asks the language server about the symbol under the pointer once it has rested there,
+    /// as VS Code's hover does. Any key or move clears what it said.
+    fn follow_rest(&mut self, event: &Event) {
+        const REST: std::time::Duration = std::time::Duration::from_millis(600);
+        match event {
+            Event::Key(_) => {
+                self.hover_info = None;
+                self.rest = None;
+            }
+            Event::Mouse(MouseEvent {
+                kind: MouseKind::Move,
+                x,
+                y,
+                ..
+            }) => {
+                let cell = (*x, *y);
+                if self.rest.map(|r| r.0) != Some(cell) {
+                    self.rest = Some((cell, std::time::Instant::now(), false));
+                    if self.hover_info.as_ref().is_some_and(|(_, at)| *at != cell) {
+                        self.hover_info = None;
+                    }
+                }
+            }
+            Event::Mouse(_) => self.hover_info = None,
+            Event::Tick => {
+                let Some((cell, since, false)) = self.rest else {
+                    return;
+                };
+                if since.elapsed() < REST || !matches!(self.overlay, Overlay::None) {
+                    return;
+                }
+                self.rest = Some((cell, since, true));
+                self.hover_on(cell);
+            }
+            _ => {}
+        }
+    }
+
+    /// Asks the server about the code at a cell, if it's code with a server.
+    fn hover_on(&mut self, (x, y): (u16, u16)) {
+        let Some(pane) = self.pane_at(x, y) else {
+            return;
+        };
+        let Some(index) = self.panes.get(pane).copied() else {
+            return;
+        };
+        let area = self.pane_area(pane);
+        let Some(editor) = self.editors.get(index).filter(|e| !e.rendered) else {
+            return;
+        };
+        let Some(path) = editor.buffer.path().map(Path::to_path_buf) else {
+            return;
+        };
+        let Some(language) = Registry::language_name(&path) else {
+            return;
+        };
+        let at = editor.position_at(area, x as f32, y);
+        let rope = editor.buffer.rope();
+        let line = rope.char_to_line(at);
+        let column = at - rope.line_to_char(line);
+        // Past the end of a line is no symbol.
+        if rope
+            .line(line)
+            .chars()
+            .nth(column)
+            .is_none_or(char::is_whitespace)
+        {
+            return;
+        }
+        if let Some(client) = self.servers.get_mut(language) {
+            self.hover_at = Some((x, y));
+            client.hover(&path, line, column);
+        }
+    }
+
+    /// What the server said, on a panel beside the place it's about.
+    fn draw_hover(&self, grid: &mut Grid) {
+        const WIDTH: usize = 72;
+        const LINES: usize = 12;
+        let Some((text, (x, y))) = &self.hover_info else {
+            return;
+        };
+        let mut lines: Vec<String> = Vec::new();
+        for line in text.lines() {
+            let chars: Vec<char> = line.chars().collect();
+            if chars.is_empty() {
+                lines.push(String::new());
+            }
+            for chunk in chars.chunks(WIDTH) {
+                lines.push(chunk.iter().collect());
+            }
+        }
+        lines.truncate(LINES);
+        let wide = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as u16 + 2;
+        let high = lines.len() as u16;
+        let (width, height) = self.size;
+        let left = (*x).min(width.saturating_sub(wide + 1));
+        // Under the line it's about, or over it when that runs off the bottom.
+        let top = if y + 2 + high < height {
+            y + 2
+        } else {
+            y.saturating_sub(high + 1)
+        };
+        let area = Rect::new(left, top, wide, high);
+        crate::palette::raised(grid, area, &self.theme);
+        let theme = &self.theme;
+        for (n, line) in lines.iter().enumerate() {
+            let style = Style {
+                fg: if n == 0 {
+                    theme.text.fg
+                } else {
+                    theme.popup_dim
+                },
+                bg: theme.popup,
+                ..theme.bar
+            };
+            grid.put_str(area.x + 1, area.y + n as u16, line, style, area.right());
+        }
+    }
+
     /// Where the caret is, as a file and a place in it.
     fn here(&self) -> Option<(PathBuf, usize)> {
         let editor = self.editors.get(self.active())?;
@@ -7632,6 +7777,7 @@ impl App {
         self.draw_companion(grid);
         self.draw_status(grid);
         self.draw_suggest(grid);
+        self.draw_hover(grid);
         self.draw_offer(grid);
         self.draw_pane_actions(grid);
         self.draw_overlay(grid);
@@ -15054,6 +15200,24 @@ mod tests {
         let answer = propose(&mut app, diff_args(&dir, "t", "first line\nsecond\n"));
         app.run(Command::RejectProposal);
         assert_eq!(answer.try_recv().unwrap(), vec!["DIFF_REJECTED", "t"]);
+    }
+
+    #[test]
+    fn a_hover_shows_beside_its_place_until_a_key() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("beta.rs")).unwrap();
+        app.hover_at = Some((40, 3));
+        app.lsp_event(LspEvent::Hover("fn main()\nWhere it starts.".into()));
+        let text = screen(&app).text();
+        assert!(
+            text.contains("fn main()") && text.contains("Where it starts."),
+            "{text}"
+        );
+        key(&mut app, Key::Right);
+        assert!(
+            !screen(&app).text().contains("Where it starts."),
+            "a key clears it"
+        );
     }
 
     #[test]

@@ -2679,5 +2679,19 @@
     "title": "Go Back returns from a jump and Go Forward repeats it",
     "test": "go_back_returns_from_a_jump_and_go_forward_repeats_it",
     "passes": true
+  },
+  {
+    "id": "lsp-hover-parse",
+    "milestone": 10,
+    "title": "A hover reads as plain lines",
+    "test": "a_hover_reads_as_plain_lines",
+    "passes": true
+  },
+  {
+    "id": "lsp-hover-show",
+    "milestone": 10,
+    "title": "A hover shows beside its place until a key",
+    "test": "a_hover_shows_beside_its_place_until_a_key",
+    "passes": true
   }
 ]

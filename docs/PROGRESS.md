@@ -663,3 +663,8 @@ A jump list. Go to Definition, Go to Line and opening a search result remember w
 from; Go Back (Ctrl+-) returns there and Go Forward (Ctrl+Shift+-) repeats the jump, both also in
 the palette. Without the kitty keyboard protocol a terminal sends Ctrl+- as Ctrl+/, which toggles
 a comment, so there the palette is the way. A hundred places are kept.
+
+Hover. Resting the pointer on code for 600 ms asks its language server about the symbol there,
+and the answer (type, signature, docs, with Markdown's fences taken out) shows on a panel under
+it until a key or a move away. Show Hover in the palette asks about the symbol at the caret.
+Unverified: a real server's hover; only the parsing and the panel are tested.
