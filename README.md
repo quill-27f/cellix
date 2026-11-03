@@ -8,6 +8,13 @@
 Gemini CLI extension that give your agent a real editor for Markdown, LaTeX, plans and diffs, right
 there in the terminal.
 
+Agents now write code, documents and papers faster than anyone can read them, so review is the
+bottleneck, and that's where careless work slips through. Slop isn't what agents write; it's what
+nobody read closely. Cellix makes reading and correcting their work fast, inside the agent you
+already use, so you stay the author and the agent stays the assistant: plans are reviewed before any
+code exists, edits arrive as suggestions rather than silent rewrites, and your comments go straight
+back to the agent. No switching to a GUI IDE to check what happened in the terminal.
+
 Your agent writes the code and the documents. Cellix is where you read what it did, correct it and
 answer back. Select any sentence, formula or figure and leave a comment, and the agent gets it with
 the file, the line and the quote. Plans wait for your approval, edits arrive as diffs you accept hunk
