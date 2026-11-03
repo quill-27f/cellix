@@ -26,3 +26,9 @@ accept or reject, so edit the file as usual. To suggest a rewrite without making
 the document as a suggestion: in Markdown `{~~old~>new~~}`, `{++added++}` and `{--removed--}`,
 and in LaTeX `\replaced{new}{old}`, `\added{text}` and `\deleted{text}`. Cellix shows each one
 with Accept and Reject.
+
+When the reviewer asks you to check their review, answer each of their comments with
+`cellix reply <id> "Agree (<kind>): <why>"` or `cellix reply <id> "Disagree (<kind>): <why>"`, where
+<kind> is Clarity, Correctness, Evidence, Structure or Reproducibility. Then suggest comments they
+missed with `cellix suggest <file> <line> <kind> "<exact words>" "<comment>"`, favouring kinds they
+haven't covered. Suggestions appear with Keep and Dismiss; don't edit the document yourself.

@@ -35,6 +35,13 @@ pub struct Thread {
     /// Someone pressed Ask agent, and no agent has it yet.
     #[serde(default)]
     pub asked: bool,
+    /// What kind of comment it is, as a reviewer sorts them: Clarity, Correctness, Evidence,
+    /// Structure or Reproducibility. Empty until someone says.
+    #[serde(default)]
+    pub kind: String,
+    /// The agent that suggested it, while it's only a suggestion. Empty for the reviewer's own.
+    #[serde(default)]
+    pub suggested_by: String,
 }
 
 impl Thread {
@@ -195,6 +202,8 @@ mod tests {
             resolved: false,
             told: None,
             asked: false,
+            kind: String::new(),
+            suggested_by: String::new(),
         }
     }
 

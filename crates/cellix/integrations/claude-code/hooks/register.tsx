@@ -72,6 +72,12 @@ async function line($: Engine, text: string) {
     })
   } else if (kind === 'png') {
     await show($, { png: rest[0] })
+  } else if (kind === 'prompt') {
+    // Cellix asking the agent something, as Check my review does: a turn of its own.
+    const prompt = JSON.parse(rest.join(' ')) as string
+    $.clock.after(0, () => {
+      void $.prompt.submit({ text: prompt }).catch(() => undefined)
+    })
   } else if (kind === 'attention' && rest[0] === 'send') {
     await sendComments($)
   } else if (kind === 'attention') {

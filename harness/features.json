@@ -2763,5 +2763,19 @@
     "title": "Code lists its symbols in the Outline",
     "test": "code_lists_its_symbols_in_the_outline",
     "passes": true
+  },
+  {
+    "id": "review-check",
+    "milestone": 10,
+    "title": "A review check asks the agent, and its suggestions can be kept",
+    "test": "a_review_check_asks_the_agent_and_its_suggestions_can_be_kept",
+    "passes": true
+  },
+  {
+    "id": "review-verdict",
+    "milestone": 10,
+    "title": "A verdict reads its word and kind",
+    "test": "a_verdict_reads_its_word_and_kind",
+    "passes": true
   }
 ]

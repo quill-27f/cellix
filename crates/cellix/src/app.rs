@@ -321,6 +321,26 @@ fn browser_installed() -> bool {
     cfg!(test) || crate::integrations::on_path(BROWSER_TOOL, var)
 }
 
+/// What an agent is asked when the reviewer presses Check my review.
+fn review_prompt(file: &str, mine: &[&Thread]) -> String {
+    let mut text = format!("I'm reviewing {file} in Cellix. Read it, then help with my review.\n");
+    if mine.is_empty() {
+        text.push_str("I haven't commented yet.\n");
+    } else {
+        text.push_str("For each of my comments, answer with `cellix reply <id> \"Agree (<kind>): <why>\"` or `cellix reply <id> \"Disagree (<kind>): <why>\"`, where <kind> is Clarity, Correctness, Evidence, Structure or Reproducibility:\n");
+        for thread in mine {
+            text.push_str(&format!(
+                "- {} line {}, on \"{}\": {}\n",
+                thread.id, thread.line, thread.quote, thread.text
+            ));
+        }
+    }
+    text.push_str(&format!(
+        "Then suggest up to five comments a careful reviewer would add that I haven't, favouring kinds I haven't covered, each with `cellix suggest {file} <line> <kind> \"<exact words it's about>\" \"<comment>\"`. Don't edit the document."
+    ));
+    text
+}
+
 /// A plan's earlier versions, `Plan v1.md` and on beside `Plan.md`, oldest first.
 fn plan_versions(path: &Path) -> Vec<PathBuf> {
     let stem = path
@@ -688,6 +708,10 @@ pub struct App {
     pane_explained: bool,
     /// A comment waiting for an agent to be started.
     pending_ask: Option<u32>,
+    /// A review check waiting for an agent to be started.
+    pending_review: Option<String>,
+    /// A prompt for the agent this Cellix is a pane in, for the mod to submit.
+    outgoing_prompt: Option<String>,
     /// Code's symbols from its language server, for the Outline, and the file and revision
     /// last asked about, so it's asked once a change.
     symbols: HashMap<PathBuf, Vec<crate::outline::Heading>>,
@@ -761,6 +785,8 @@ impl App {
             review: None,
             clipboard_image: clipboard_image_command(),
             pending_ask: None,
+            pending_review: None,
+            outgoing_prompt: None,
             export_to: None,
             comment_quote: None,
             back: Vec::new(),
@@ -1247,6 +1273,14 @@ impl App {
     /// Hands a waiting comment to the agent that was started for it, once it's ready to hear.
     fn poll_pending_ask(&mut self) -> bool {
         const QUIET: std::time::Duration = std::time::Duration::from_millis(1200);
+        if self.pending_review.is_some() && self.dock.agent_mut().is_some_and(|s| s.settled(QUIET))
+        {
+            let text = self.pending_review.take().unwrap_or_default();
+            if let Some(session) = self.dock.agent_mut() {
+                session.send_line(&text.replace('\n', " "));
+            }
+            return true;
+        }
         let Some(id) = self.pending_ask else {
             return false;
         };
@@ -3190,6 +3224,8 @@ impl App {
                     resolved: false,
                     told: draft.code.then_some(0),
                     asked: false,
+                    kind: String::new(),
+                    suggested_by: String::new(),
                 });
                 asked = draft.ask.then_some(id);
             }
@@ -5884,6 +5920,8 @@ impl App {
                 resolved: false,
                 told: Some(0),
                 asked: false,
+                kind: String::new(),
+                suggested_by: String::new(),
             });
             self.save_threads();
         }
@@ -5910,6 +5948,8 @@ impl App {
             resolved: false,
             told: (!page).then_some(0),
             asked: false,
+            kind: String::new(),
+            suggested_by: String::new(),
         });
         self.save_threads();
         if page {
@@ -6029,6 +6069,20 @@ impl App {
                     }
                 }
             }
+            ThreadHit::Check => self.check_review(),
+            ThreadHit::Keep(id) => {
+                if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
+                    thread.suggested_by.clear();
+                }
+                self.save_threads();
+                self.say("Kept as your comment");
+            }
+            ThreadHit::Dismiss(id) => {
+                if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
+                    thread.resolved = true;
+                }
+                self.save_threads();
+            }
             ThreadHit::Resolve(id) => {
                 if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
                     thread.resolved = true;
@@ -6036,6 +6090,45 @@ impl App {
                 self.save_threads();
             }
         }
+    }
+
+    /// Asks the agent to check the reviewer's comments on the document in view, and to
+    /// suggest the ones a careful reviewer would add, each through the command line.
+    fn check_review(&mut self) {
+        let Some(path) = self
+            .editors
+            .get(self.active())
+            .and_then(|e| e.buffer.path())
+            .map(Path::to_path_buf)
+        else {
+            self.say("Open the document you're reviewing first");
+            return;
+        };
+        let file = self.relative(&path);
+        let mine: Vec<&Thread> = self
+            .threads
+            .iter()
+            .filter(|t| t.file == file && !t.resolved && t.suggested_by.is_empty())
+            .collect();
+        let text = review_prompt(&file, &mine);
+        // Inside Claude Code, the mod submits it; with an agent in the pane, it's typed there.
+        if self.in_pane {
+            self.outgoing_prompt = Some(text);
+            self.say("Asked the agent to check your review");
+        } else if let Some(session) = self.dock.agent_mut() {
+            session.send_line(&text.replace('\n', " "));
+            self.say("Asked the agent to check your review");
+        } else {
+            self.pending_review = Some(text);
+            self.refresh_agents();
+            self.dock.show_list();
+            self.say("Pick an agent, and it checks your review when it's ready");
+        }
+    }
+
+    /// The prompt for the mod to submit to the agent it runs in, once.
+    pub fn take_outgoing_prompt(&mut self) -> Option<String> {
+        self.outgoing_prompt.take()
     }
 
     fn comment_lines(&self, file: &str) -> Vec<usize> {
@@ -6113,6 +6206,43 @@ impl App {
                 }
             }
             Request::CommentsTaken => self.say("An agent took the review comments"),
+            Request::Suggest {
+                file,
+                line,
+                kind,
+                quote,
+                text,
+                author,
+                made,
+            } => {
+                let path = Path::new(&file);
+                let file = if path.is_absolute() {
+                    self.relative(path)
+                } else {
+                    file
+                };
+                let id = cellix_review::threads::next_id(&self.threads);
+                self.threads.push(Thread {
+                    id,
+                    file,
+                    line: line.max(1),
+                    quote,
+                    text,
+                    replies: Vec::new(),
+                    resolved: false,
+                    // The agent wrote it, so it has nothing to be told.
+                    told: Some(0),
+                    asked: false,
+                    kind,
+                    suggested_by: author.clone(),
+                });
+                self.save_threads();
+                let _ = made.send(id);
+                self.dock.show_comments();
+                self.say(format!(
+                    "{author} suggested a comment: keep it or dismiss it"
+                ));
+            }
             Request::Reply {
                 id,
                 author,
@@ -6122,6 +6252,12 @@ impl App {
                 let thread = self.threads.iter_mut().find(|t| t.id == id);
                 let _ = found.send(thread.is_some());
                 if let Some(thread) = thread {
+                    // A verdict on a comment may say what kind of comment it is.
+                    if thread.kind.is_empty()
+                        && let Some((_, kind, _)) = crate::threads::verdict(&text)
+                    {
+                        thread.kind = kind.to_string();
+                    }
                     thread.replies.push(Reply {
                         author: author.clone(),
                         text,
@@ -15360,6 +15496,49 @@ mod tests {
         let text = screen(&app).text();
         assert!(text.contains("main") && text.contains("helper"), "{text}");
         assert!(!text.contains("No headings here yet"), "{text}");
+    }
+
+    #[test]
+    fn a_review_check_asks_the_agent_and_its_suggestions_can_be_kept() {
+        let (_dir, mut app) = page_app("# Claim\n\nOur method is better on every benchmark.\n");
+        select_word(&mut app, "better");
+        app.run(Command::AddComment);
+        typed(&mut app, "By how much?");
+        enter(&mut app);
+        app.in_pane = true;
+        app.thread_hit(ThreadHit::Check);
+        let prompt = app.take_outgoing_prompt().expect("a prompt for the agent");
+        assert!(
+            prompt.contains("By how much?") && prompt.contains("cellix suggest note.md"),
+            "{prompt}"
+        );
+        let id = app.threads[0].id;
+        let (found, _) = std::sync::mpsc::channel();
+        app.serve(Request::Reply {
+            id,
+            author: "Claude".into(),
+            text: "Disagree (Evidence): the table gives it".into(),
+            found,
+        });
+        assert_eq!(app.threads[0].kind, "Evidence");
+        let (made, number) = std::sync::mpsc::channel();
+        app.serve(Request::Suggest {
+            file: "note.md".into(),
+            line: 3,
+            kind: "Evidence".into(),
+            quote: "every benchmark".into(),
+            text: "Name the benchmarks.".into(),
+            author: "Claude".into(),
+            made,
+        });
+        let suggested = number.recv().unwrap();
+        let text = screen(&app).text();
+        assert!(text.contains("Suggested by Claude"), "{text}");
+        assert!(text.contains("pushes back"), "{text}");
+        assert!(text.contains("Keep") && text.contains("Dismiss"), "{text}");
+        app.thread_hit(ThreadHit::Keep(suggested));
+        let kept = app.threads.iter().find(|t| t.id == suggested).unwrap();
+        assert!(kept.suggested_by.is_empty(), "now the reviewer's own");
     }
 
     #[test]

@@ -288,6 +288,13 @@ pub fn run(root: &Path) -> io::Result<()> {
             if let Some(line) = frames.line(&grid, remote)? {
                 writeln!(out, "{line}")?;
             }
+            if let Some(prompt) = app.take_outgoing_prompt() {
+                writeln!(
+                    out,
+                    "prompt {}",
+                    serde_json::to_string(&prompt).unwrap_or_default()
+                )?;
+            }
             if let Some(reason) = app.take_attention() {
                 writeln!(out, "attention {reason}")?;
             }

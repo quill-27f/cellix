@@ -9,6 +9,16 @@ use crate::theme::Theme;
 const SIDE: u16 = 2;
 const CARD_RADIUS: u8 = 22;
 const BUTTONS: [&str; 3] = ["Reply", "Ask agent", "Resolve"];
+const CHOICES: [&str; 2] = ["Keep", "Dismiss"];
+const CHECK: &str = "Check my review";
+/// The kinds of comment a careful review covers, in the order the strip shows them.
+pub const KINDS: [&str; 5] = [
+    "Clarity",
+    "Correctness",
+    "Evidence",
+    "Structure",
+    "Reproducibility",
+];
 const BUTTON_PADDING: usize = 1;
 const SMALL: u8 = 85;
 
@@ -19,11 +29,40 @@ pub enum Hit {
     Reply(u32),
     Ask(u32),
     Resolve(u32),
+    /// Asks the agent to check the review and suggest more.
+    Check,
+    /// Takes an agent's suggestion as the reviewer's own, or drops it.
+    Keep(u32),
+    Dismiss(u32),
+}
+
+/// An agent's verdict on a comment, from how its reply starts: `Agree (Evidence): …` or
+/// `Disagree: …`. Gives what to show, the kind if it names one, and the rest of the reply.
+pub fn verdict(text: &str) -> Option<(&'static str, &str, &str)> {
+    let (shown, rest) = match text.strip_prefix("Agree") {
+        Some(rest) => ("agrees", rest),
+        None => ("pushes back", text.strip_prefix("Disagree")?),
+    };
+    let rest = rest.trim_start();
+    let (kind, rest) = match rest.strip_prefix('(').and_then(|r| r.split_once(')')) {
+        Some((kind, after)) => (kind.trim(), after),
+        None => ("", rest),
+    };
+    let rest = rest.trim_start_matches(':').trim_start();
+    Some((shown, kind, rest))
 }
 
 /// One row of the panel.
 enum Line {
     Empty,
+    /// The button that asks the agent to check the review.
+    Check(usize),
+    /// How many comments of each kind there are, so what's not covered stands out.
+    Coverage(Vec<(&'static str, usize)>),
+    /// Above a suggestion: who suggested it, and its kind.
+    Suggested(u32, String),
+    /// Keep and Dismiss, under a suggestion.
+    Choices(u32),
     Quote(u32, String),
     Text(u32, String),
     Author(u32, String),
@@ -98,6 +137,15 @@ fn lines(
     measure: &dyn Measure,
 ) -> Vec<Line> {
     let mut out = vec![Line::Gap];
+    if !threads.is_empty() {
+        let mine = threads.iter().filter(|t| t.suggested_by.is_empty()).count();
+        out.push(Line::Check(mine));
+        let count = |kind: &str| threads.iter().filter(|t| t.kind == kind).count();
+        out.push(Line::Coverage(
+            KINDS.iter().map(|k| (*k, count(k))).collect(),
+        ));
+        out.push(Line::Gap);
+    }
     if let Some(new) = draft.filter(|d| d.thread.is_none()) {
         out.push(Line::Quote(NEW_DRAFT, quote_of(&new.quote, new.line)));
         draft_lines(new, width, measure, &mut out);
@@ -108,12 +156,29 @@ fn lines(
     }
     for thread in threads {
         let id = thread.id;
+        let suggested = !thread.suggested_by.is_empty();
+        if suggested {
+            let kind = if thread.kind.is_empty() {
+                String::new()
+            } else {
+                format!(" · {}", thread.kind)
+            };
+            out.push(Line::Suggested(
+                id,
+                format!("Suggested by {}{kind}", thread.suggested_by),
+            ));
+        }
         out.push(Line::Quote(id, quote_of(&thread.quote, thread.line)));
         let text = wrap(&thread.text, width, measure);
         out.extend(text.into_iter().map(|row| Line::Text(id, row)));
         for reply in &thread.replies {
-            out.push(Line::Author(id, reply.author.clone()));
-            let text = wrap(&reply.text, width, measure);
+            // A verdict reads as one: "Claude agrees", then why.
+            let (author, body) = match verdict(&reply.text) {
+                Some((shown, _, rest)) => (format!("{} {shown}", reply.author), rest),
+                None => (reply.author.clone(), reply.text.as_str()),
+            };
+            out.push(Line::Author(id, author));
+            let text = wrap(body, width, measure);
             out.extend(text.into_iter().map(|row| Line::Text(id, row)));
         }
         if thread.told == Some(thread.replies.len()) && !agent.is_empty() && thread.waiting_answer()
@@ -127,7 +192,11 @@ fn lines(
         if let Some(reply) = draft.filter(|d| d.thread == Some(id)) {
             draft_lines(reply, width, measure, &mut out);
         }
-        out.push(Line::Buttons(id));
+        out.push(if suggested {
+            Line::Choices(id)
+        } else {
+            Line::Buttons(id)
+        });
         out.push(Line::Gap);
     }
     out
@@ -135,8 +204,12 @@ fn lines(
 
 /// Each button as (label, padded cells, start column).
 fn buttons(area: Rect) -> Vec<(&'static str, String, u16)> {
+    row_of(area, &BUTTONS)
+}
+
+fn row_of(area: Rect, labels: &[&'static str]) -> Vec<(&'static str, String, u16)> {
     let mut x = area.x + SIDE + 1;
-    BUTTONS
+    labels
         .iter()
         .map(|label| {
             let padding = " ".repeat(BUTTON_PADDING);
@@ -169,7 +242,22 @@ pub fn hit(
                 _ => Some(Hit::Resolve(*id)),
             }
         }
-        Line::Quote(id, _) | Line::Text(id, _) | Line::Author(id, _) => Some(Hit::Open(*id)),
+        Line::Choices(id) => {
+            let pressed = row_of(area, &CHOICES)
+                .into_iter()
+                .find(|(_, cells, at)| x >= *at && x < at + cells.chars().count() as u16);
+            match pressed?.0 {
+                "Keep" => Some(Hit::Keep(*id)),
+                _ => Some(Hit::Dismiss(*id)),
+            }
+        }
+        Line::Check(_) => {
+            let (_, cells, at) = row_of(area, &[CHECK]).pop()?;
+            (x >= at && x < at + cells.chars().count() as u16).then_some(Hit::Check)
+        }
+        Line::Quote(id, _) | Line::Text(id, _) | Line::Author(id, _) | Line::Suggested(id, _) => {
+            Some(Hit::Open(*id))
+        }
         _ => None,
     }
 }
@@ -195,15 +283,22 @@ pub fn draw(
     let mut start = None;
     for (index, line) in all.iter().enumerate() {
         match line {
-            Line::Quote(..) => start = Some(index),
-            Line::Buttons(_) => {
+            Line::Suggested(..) => start = Some(index),
+            Line::Quote(..) if start.is_none() => start = Some(index),
+            Line::Buttons(_) | Line::Choices(_) => {
                 if let Some(first) = start.take() {
                     let y = area.y as f32 + first as f32 - top as f32;
                     let height = (index - first + 1) as f32;
                     let bounds =
                         Bounds::cells(side as f32, y - 0.1, (right - side) as f32, height + 0.35);
+                    // A suggestion's card has the accent's edge until it's kept.
+                    let edge = if matches!(line, Line::Choices(_)) {
+                        theme.accent
+                    } else {
+                        theme.border
+                    };
                     if y + height > area.y as f32 && y < area.bottom() as f32 {
-                        grid.panel(bounds, CARD_RADIUS, Some(theme.text.bg), Some(theme.border));
+                        grid.panel(bounds, CARD_RADIUS, Some(theme.text.bg), Some(edge));
                     }
                 }
             }
@@ -263,6 +358,68 @@ pub fn draw(
                 };
                 grid.label_at(text_x as f32, text_x, y, name, strong, right, SMALL);
             }
+            Line::Check(mine) => {
+                for (label, cells, x) in row_of(area, &[CHECK]) {
+                    let fill = theme.button;
+                    let style = Style {
+                        bg: fill,
+                        fg: theme.button_text,
+                        ..body
+                    };
+                    grid.button(x, y, &cells, label, fill, style);
+                    let note = format!("{mine} of yours");
+                    let after = x + cells.chars().count() as u16 + 2;
+                    grid.label_at(after as f32, after, y, &note, dim, right, SMALL);
+                }
+            }
+            Line::Coverage(kinds) => {
+                // Each kind and its count; a kind with none is in the warning colour.
+                let mut x = side as f32 + 0.5;
+                for (kind, count) in kinds {
+                    let text = format!("{kind} {count}");
+                    let style = Style {
+                        fg: if *count == 0 {
+                            theme.attention
+                        } else {
+                            theme.text.fg
+                        },
+                        ..body
+                    };
+                    let cell = x.floor() as u16;
+                    grid.label_at(x, cell, y, &text, style, right, SMALL);
+                    x += measure.width(
+                        &text,
+                        Font {
+                            size: SMALL,
+                            ..Font::default()
+                        },
+                    ) + 1.2;
+                }
+            }
+            Line::Suggested(_, label) => {
+                let accent = Style {
+                    fg: theme.accent,
+                    ..inner
+                };
+                grid.label_at(text_x as f32, text_x, y, label, accent, right, SMALL);
+            }
+            Line::Choices(_) => {
+                for (label, cells, x) in row_of(area, &CHOICES) {
+                    let width = cells.chars().count() as u16;
+                    let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
+                    let fill = if on_it {
+                        theme.popup_hover
+                    } else {
+                        theme.quiet_button(theme.text.bg)
+                    };
+                    let style = Style {
+                        bg: fill,
+                        fg: inner.fg,
+                        ..inner
+                    };
+                    grid.button(x, y, &cells, label, fill, style);
+                }
+            }
             Line::Buttons(NEW_DRAFT) => {}
             Line::Buttons(_) => {
                 for (label, cells, x) in buttons(area) {
@@ -291,6 +448,16 @@ pub fn draw(
 mod tests {
     use super::*;
     use cellix_render::CellMeasure;
+
+    #[test]
+    fn a_verdict_reads_its_word_and_kind() {
+        assert_eq!(
+            verdict("Agree (Evidence): yes"),
+            Some(("agrees", "Evidence", "yes"))
+        );
+        assert_eq!(verdict("Disagree: no"), Some(("pushes back", "", "no")));
+        assert_eq!(verdict("Thanks"), None);
+    }
 
     #[test]
     fn text_wraps_at_spaces() {

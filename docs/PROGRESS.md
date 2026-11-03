@@ -699,3 +699,14 @@ The review's open items.
 Unverified with a real server: document symbols.
 
 Release 0.2.2.
+
+Review with the agent as a second reader. Check my review, at the top of the Comments pane, asks the
+agent to answer each of the reviewer's comments with `cellix reply <id> "Agree (<kind>): …"` or
+`"Disagree (<kind>): …"`, and to add the comments a careful reviewer would, with the new
+`cellix suggest <file> <line> <kind> "<words>" "<comment>"`. Verdicts read as "Claude agrees" or
+"Claude pushes back" and set the comment's kind; suggestions show "Suggested by Claude · Evidence"
+on an accent-edged card with Keep and Dismiss. A strip counts comments by kind (Clarity,
+Correctness, Evidence, Structure, Reproducibility), a kind with none in the warning colour. Inside
+Claude Code the mod submits the prompt as a turn; with an agent in the pane it's typed there; with
+none, it waits for the one you start. The skill and README say how. Designed on the Claude Design
+canvas first.

@@ -77,6 +77,16 @@ pub enum Request {
         /// Whether that comment exists, so an answer can't vanish with a success.
         found: Sender<bool>,
     },
+    /// An agent suggesting a comment the reviewer didn't make. Answers with its number.
+    Suggest {
+        file: String,
+        line: usize,
+        kind: String,
+        quote: String,
+        text: String,
+        author: String,
+        made: Sender<u32>,
+    },
     /// Wants the comments on the project, as JSON.
     Threads(Sender<String>),
     /// Wants the comments no agent has seen, as JSON, and marks them seen.
@@ -160,6 +170,24 @@ fn answer(line: &str, comments: &SharedComments, requests: &Sender<Request>) -> 
             Ok(match answer.recv_timeout(ANSWER_TIME) {
                 Ok(true) => "ok".to_string(),
                 _ => format!("error: there's no comment {id}"),
+            })
+        }
+        (Some("suggest"), Some(json)) => {
+            let value: serde_json::Value = serde_json::from_str(json)?;
+            let field = |name: &str| value[name].as_str().unwrap_or_default().to_string();
+            let (made, answer) = channel();
+            let _ = requests.send(Request::Suggest {
+                file: field("file"),
+                line: value["line"].as_u64().unwrap_or(1) as usize,
+                kind: field("kind"),
+                quote: field("quote"),
+                text: field("text"),
+                author: field("author"),
+                made,
+            });
+            Ok(match answer.recv_timeout(ANSWER_TIME) {
+                Ok(id) => format!("ok {id}"),
+                Err(_) => "error: Cellix didn't take the suggestion".to_string(),
             })
         }
         (Some("pane"), Some(json)) => {

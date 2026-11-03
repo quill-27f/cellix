@@ -44,6 +44,8 @@ Usage: cellix [--wait] [files]
 
   cellix threads            The comments on this project, as JSON
   cellix reply <id> <text>  Answers a comment, beside the document
+  cellix suggest <file> <line> <kind> <quote> <text>
+                            Suggests a comment the reviewer can keep or dismiss
   cellix plan <file>        Holds a plan for review, and prints the verdict
   cellix comments [--take]  Review comments, as JSON
   cellix open <file>        Opens a file in the running Cellix
@@ -230,6 +232,18 @@ fn main() -> ExitCode {
             let author = std::env::var("CELLIX_AGENT").unwrap_or_else(|_| "Agent".to_string());
             let text = text.join(" ").replace('\n', "\\n");
             return client(&format!("reply {id} {author}\t{text}"), None);
+        }
+        ["suggest", file, line, kind, quote, text @ ..] if !text.is_empty() => {
+            let author = std::env::var("CELLIX_AGENT").unwrap_or_else(|_| "Agent".to_string());
+            let json = serde_json::json!({
+                "file": file,
+                "line": line.parse::<usize>().unwrap_or(1),
+                "kind": kind,
+                "quote": quote,
+                "text": text.join(" "),
+                "author": author,
+            });
+            return client(&format!("suggest {json}"), None);
         }
         ["open", file, rest @ ..] => {
             let path = std::path::absolute(file).unwrap_or_else(|_| PathBuf::from(file));

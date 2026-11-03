@@ -73,6 +73,21 @@ edits what you edit and git sees every change.
 
 `samples/writing.md` and `samples/paper/main.tex` use all of it. [Writing](#writing) has the details.
 
+## Review a document or paper, with the agent as your second reader
+
+You read and you comment; the agent checks your review and points at what you missed. Select any
+words and Comment as you go, then press **Check my review** in the Comments pane.
+
+- **Each of your comments gets a verdict.** The agent answers under it, *agrees* or *pushes back*,
+  with why, so a weak point is caught before it reaches the author.
+- **It suggests what you missed.** Comments you didn't make arrive marked *Suggested by Claude*, with
+  their kind, to **Keep** as your own or **Dismiss**.
+- **Coverage you can see.** A strip counts your comments by kind (Clarity, Correctness, Evidence,
+  Structure, Reproducibility), and a kind with none stands out, so the review isn't only about
+  wording.
+- **The words stay yours.** The agent never edits the document while it reviews; it only comments,
+  through `cellix reply` and `cellix suggest`, which any agent can call.
+
 ## Review what it did
 
 - **Plans** open as a page with Approve and Send back, and your edits and comments go with the answer.
