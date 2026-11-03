@@ -11,8 +11,9 @@ binary, out = sys.argv[1], os.path.abspath(sys.argv[2])
 here = os.path.dirname(os.path.abspath(__file__))
 os.makedirs(out, exist_ok=True)
 CTRL = lambda c: chr(ord(c) - 96)
-RAIL_X = 2
-SEARCH, OUTLINE, REVIEW = 4, 7, 10
+RAIL_X = 1
+# One row each since the rail's redesign, Files on the first.
+SEARCH, OUTLINE, REVIEW = 1, 2, 3
 LIST_AGENTS = [["keys", "\x1b[112;6u"], ["wait", 0.3], ["keys", "List Agents"], ["wait", 0.3], ["keys", "\r"]]
 
 CODE = """//! A bounded queue.
@@ -204,7 +205,7 @@ with tempfile.TemporaryDirectory() as scratch:
     if os.path.isdir(real):
         os.makedirs(f"{HOME}/Library/Caches", exist_ok=True)
         os.symlink(real, f"{HOME}/Library/Caches/Tectonic")
-    GEAR = (RAIL_X, 36)
+    GEAR = (RAIL_X, 37)
     settings = [["click", *GEAR]]
 
     shoot("01-welcome", [])
