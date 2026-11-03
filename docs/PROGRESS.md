@@ -668,3 +668,17 @@ Hover. Resting the pointer on code for 600 ms asks its language server about the
 and the answer (type, signature, docs, with Markdown's fences taken out) shows on a panel under
 it until a key or a move away. Show Hover in the palette asks about the symbol at the caret.
 Unverified: a real server's hover; only the parsing and the panel are tested.
+
+Hover, checked against a real rust-analyzer: the panel showed but its text was hidden under the
+panel's own paint (the test read cells, so it passed); the text is painted now, and Markdown's
+rules and doubled blank lines are dropped. It shows the crate, the signature and the doc comment.
+
+Shortcuts. Ctrl+A selected everything in every test, LaTeX source included; on a Mac in Ghostty,
+Cmd+A is Ghostty's own (it selects the terminal's text), as Cmd+D was, so Settings' Ghostty card
+now frees both. Added VS Code's everyday keys that were missing: Ctrl+Shift+K deletes the line,
+Ctrl+Enter and Ctrl+Shift+Enter open a line below or above, Ctrl+Shift+L selects every occurrence,
+Ctrl+Alt+Up and Down add a cursor, F8 and Shift+F8 walk a file's problems, Ctrl+N is a new
+document, Ctrl+, is Settings, Ctrl+] and Ctrl+[ indent and outdent, and Ctrl+Tab switches tabs.
+Several need the kitty keyboard protocol to be told apart; elsewhere they're in the palette.
+Still different from VS Code: Ctrl+G opens Review (VS Code's Go to Line is Ctrl+L here) and
+Ctrl+H stays Backspace.

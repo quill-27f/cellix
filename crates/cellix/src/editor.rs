@@ -1259,6 +1259,39 @@ impl Editor {
             Command::MoveLineUp => self.move_line(-1),
             Command::MoveLineDown => self.move_line(1),
             Command::DuplicateLine => self.duplicate_line(),
+            Command::DeleteLine => self.delete_line(),
+            Command::InsertLineBelow | Command::InsertLineAbove => {
+                self.insert_line(command == Command::InsertLineAbove);
+            }
+            Command::SelectAllMatches => {
+                // Next match until no new one comes.
+                self.buffer.select_next_match(&mut self.selections);
+                if !self.selections.primary().is_empty() {
+                    loop {
+                        let before = self.selections.len();
+                        self.buffer.select_next_match(&mut self.selections);
+                        if self.selections.len() == before {
+                            break;
+                        }
+                    }
+                }
+            }
+            Command::AddCursorAbove | Command::AddCursorBelow => {
+                let rope = self.buffer.rope();
+                let primary = self.selections.primary();
+                let line = rope.char_to_line(primary.head);
+                let column = primary.head - rope.line_to_char(line);
+                let next = if command == Command::AddCursorAbove {
+                    line.checked_sub(1)
+                } else {
+                    Some(line + 1).filter(|l| *l < rope.len_lines())
+                };
+                if let Some(next) = next {
+                    let width = self.line_text(next).chars().count();
+                    let at = rope.line_to_char(next) + column.min(width);
+                    self.selections.add(Selection::cursor(at));
+                }
+            }
             Command::Indent => self.buffer.type_text(&mut self.selections, "    "),
             Command::Outdent => self.outdent(),
             Command::DeleteWordLeft => self.delete_to(Motion::WordLeft),
@@ -1525,6 +1558,54 @@ impl Editor {
         self.buffer
             .replace_range(&mut self.selections, from, to, &text);
         self.selections.set_single(Selection::cursor(moved));
+    }
+
+    /// Takes out the lines the selection touches, newline and all.
+    fn delete_line(&mut self) {
+        let (first, last, start, _) = self.selected_lines();
+        let rope = self.buffer.rope();
+        let lines = rope.len_lines();
+        let end = if last + 1 < lines {
+            rope.line_to_char(last + 1)
+        } else {
+            rope.len_chars()
+        };
+        // The last line takes the newline before it instead.
+        let start = if end == rope.len_chars() && first > 0 && start > 0 {
+            start - 1
+        } else {
+            start
+        };
+        self.buffer
+            .replace_range(&mut self.selections, start, end, "");
+        let rope = self.buffer.rope();
+        let line = first.min(rope.len_lines().saturating_sub(1));
+        self.selections
+            .set_single(Selection::cursor(rope.line_to_char(line)));
+    }
+
+    /// Opens a line below this one, or above, at its indent, and goes there.
+    fn insert_line(&mut self, above: bool) {
+        let (first, last, start, end) = self.selected_lines();
+        let line = if above { first } else { last };
+        let indent: String = self
+            .line_text(line)
+            .chars()
+            .take_while(|c| *c == ' ' || *c == '\t')
+            .collect();
+        let (at, text) = if above {
+            (start, format!("{indent}\n"))
+        } else {
+            (end, format!("\n{indent}"))
+        };
+        self.buffer
+            .replace_range(&mut self.selections, at, at, &text);
+        let caret = if above {
+            start + indent.chars().count()
+        } else {
+            at + text.chars().count()
+        };
+        self.selections.set_single(Selection::cursor(caret));
     }
 
     fn duplicate_line(&mut self) {

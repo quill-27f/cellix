@@ -194,10 +194,18 @@ fn parse_hover(result: &Value) -> Option<LspEvent> {
         Value::Array(parts) => parts.iter().map(piece).collect::<Vec<_>>().join("\n\n"),
         other => piece(other),
     };
-    let lines: Vec<&str> = text
-        .lines()
-        .filter(|line| !line.trim_start().starts_with("```"))
-        .collect();
+    // Fences and rules are Markdown's, and one blank line is enough between parts.
+    let mut lines: Vec<&str> = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") || trimmed == "---" {
+            continue;
+        }
+        if trimmed.is_empty() && lines.last().is_none_or(|l| l.trim().is_empty()) {
+            continue;
+        }
+        lines.push(line);
+    }
     let text = lines.join("\n").trim().to_string();
     (!text.is_empty()).then_some(LspEvent::Hover(text))
 }
@@ -593,6 +601,13 @@ mod tests {
         assert_eq!(
             parse_hover(&markup),
             Some(LspEvent::Hover("fn add(a: i32) -> i32\nAdds one.".into()))
+        );
+        let rust = json!({"contents": {"kind": "markdown", "value": "```rust\nhov\n```\n\n```rust\nfn add_one(x: i32) -> i32\n```\n\n---\n\nAdds one."}});
+        assert_eq!(
+            parse_hover(&rust),
+            Some(LspEvent::Hover(
+                "hov\n\nfn add_one(x: i32) -> i32\n\nAdds one.".into()
+            ))
         );
         let old = json!({"contents": [{"language": "c", "value": "int total"}, "The sum."]});
         assert_eq!(

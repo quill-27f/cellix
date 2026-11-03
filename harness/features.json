@@ -2693,5 +2693,26 @@
     "title": "A hover shows beside its place until a key",
     "test": "a_hover_shows_beside_its_place_until_a_key",
     "passes": true
+  },
+  {
+    "id": "vscode-shortcuts",
+    "milestone": 10,
+    "title": "VS Code's everyday shortcuts are here",
+    "test": "vs_codes_everyday_shortcuts_are_here",
+    "passes": true
+  },
+  {
+    "id": "line-shortcuts",
+    "milestone": 10,
+    "title": "Line shortcuts edit as VS Code does",
+    "test": "line_shortcuts_edit_as_vs_code_does",
+    "passes": true
+  },
+  {
+    "id": "f8-problems",
+    "milestone": 10,
+    "title": "F8 walks the problems in a file",
+    "test": "f8_walks_the_problems_in_a_file",
+    "passes": true
   }
 ]

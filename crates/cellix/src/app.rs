@@ -4476,6 +4476,8 @@ impl App {
             }
             Command::AddComment => self.prompt_comment_at_cursor(false),
             Command::FindInFile => self.open_find(),
+            Command::NextProblem => self.step_problem(true),
+            Command::PreviousProblem => self.step_problem(false),
             Command::GoBack => self.travel(true),
             Command::GoForward => self.travel(false),
             Command::ReplaceInFile => {
@@ -6315,8 +6317,42 @@ impl App {
                 bg: theme.popup,
                 ..theme.bar
             };
-            grid.put_str(area.x + 1, area.y + n as u16, line, style, area.right());
+            // Painted like the panel's other text, so the panel's paint doesn't cover it.
+            grid.label(area.x + 1, area.y + n as u16, line, style, area.right());
         }
+    }
+
+    /// Moves to the next problem the language server reported in this file, or the one
+    /// before, going round at the ends, and says what it is.
+    fn step_problem(&mut self, forward: bool) {
+        let Some((path, head)) = self.here() else {
+            return;
+        };
+        let mut lines: Vec<(usize, String)> = self
+            .diagnostics
+            .get(&path)
+            .map(|found| found.iter().map(|d| (d.line, d.message.clone())).collect())
+            .unwrap_or_default();
+        lines.sort();
+        lines.dedup_by_key(|(line, _)| *line);
+        let Some(editor) = self.editors.get(self.active()) else {
+            return;
+        };
+        let here = editor.buffer.rope().char_to_line(head);
+        let next = if forward {
+            lines.iter().find(|(l, _)| *l > here).or(lines.first())
+        } else {
+            lines.iter().rev().find(|(l, _)| *l < here).or(lines.last())
+        };
+        let Some((line, message)) = next.cloned() else {
+            self.say("No problems in this file");
+            return;
+        };
+        let area = self.focused_area();
+        if let Some(editor) = self.editor_mut() {
+            editor.go_to_line(line + 1, area);
+        }
+        self.say(message);
     }
 
     /// Where the caret is, as a file and a place in it.
@@ -14607,6 +14643,27 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_a_selects_everything_in_a_paper_shown_either_way() {
+        let text = "\\documentclass{article}\n\\begin{document}\nHello there.\n\\end{document}\n";
+        let (_dir, mut app) = paper_app(text);
+        let ctrl_a = Event::Key(KeyEvent {
+            key: Key::Char('a'),
+            mods: cellix_input::Mods {
+                ctrl: true,
+                ..cellix_input::Mods::default()
+            },
+        });
+        screen(&app);
+        app.handle(ctrl_a.clone());
+        assert_eq!(app.selected_text().as_deref(), Some(text), "on the page");
+        key(&mut app, Key::Right);
+        app.run(Command::MarkdownPreview);
+        screen(&app);
+        app.handle(ctrl_a);
+        assert_eq!(app.selected_text().as_deref(), Some(text), "in the source");
+    }
+
+    #[test]
     fn closing_a_reference_at_a_lines_end_keeps_the_caret_there() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("paper.tex");
@@ -15218,6 +15275,58 @@ mod tests {
             !screen(&app).text().contains("Where it starts."),
             "a key clears it"
         );
+    }
+
+    #[test]
+    fn line_shortcuts_edit_as_vs_code_does() {
+        let (dir, mut app) = project();
+        let path = dir.path().join("lines.txt");
+        fs::write(&path, "one\n    two\nthree\n").unwrap();
+        app.open(&path).unwrap();
+        app.run(Command::Move(cellix_input::Direction::Down, false));
+        app.run(Command::InsertLineBelow);
+        typed(&mut app, "x");
+        assert_eq!(app.active_text().unwrap(), "one\n    two\n    x\nthree\n");
+        app.run(Command::DeleteLine);
+        assert_eq!(app.active_text().unwrap(), "one\n    two\nthree\n");
+        app.run(Command::InsertLineAbove);
+        typed(&mut app, "y");
+        assert_eq!(app.active_text().unwrap(), "one\n    two\ny\nthree\n");
+        app.run(Command::AddCursorBelow);
+        assert_eq!(app.editors[app.active()].selections.len(), 2);
+        let animals = dir.path().join("animals.txt");
+        fs::write(&animals, "cat dog cat bird cat\n").unwrap();
+        app.open(&animals).unwrap();
+        app.run(Command::SelectAllMatches);
+        assert_eq!(app.editors[app.active()].selections.len(), 3, "every cat");
+    }
+
+    #[test]
+    fn f8_walks_the_problems_in_a_file() {
+        let (dir, mut app) = project();
+        let path = dir.path().join("alpha.txt");
+        app.open(&path).unwrap();
+        let problem = |line: usize, message: &str| cellix_lang::lsp::Diagnostic {
+            line,
+            column: 0,
+            message: message.to_string(),
+            severity: 1,
+        };
+        app.diagnostics.insert(
+            path.canonicalize().unwrap_or(path.clone()),
+            vec![problem(1, "second is wrong")],
+        );
+        app.diagnostics
+            .insert(path.clone(), vec![problem(1, "second is wrong")]);
+        app.run(Command::NextProblem);
+        assert_eq!(
+            app.editors[app.active()]
+                .buffer
+                .rope()
+                .char_to_line(app.editors[app.active()].selections.primary().head),
+            1
+        );
+        assert!(screen(&app).text().contains("second is wrong"));
     }
 
     #[test]

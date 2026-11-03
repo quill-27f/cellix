@@ -165,6 +165,19 @@ pub enum Command {
     MoveLineUp,
     MoveLineDown,
     DuplicateLine,
+    /// VS Code's Ctrl+Shift+K.
+    DeleteLine,
+    /// A new line below this one, or above, without splitting it: Ctrl+Enter, Ctrl+Shift+Enter.
+    InsertLineBelow,
+    InsertLineAbove,
+    /// Every place the selection or word appears, as cursors: Ctrl+Shift+L.
+    SelectAllMatches,
+    /// A cursor on the line above or below as well: Ctrl+Alt+Up and Down.
+    AddCursorAbove,
+    AddCursorBelow,
+    /// The next problem in the file, or the one before: F8, Shift+F8.
+    NextProblem,
+    PreviousProblem,
     GoToLine,
     DeleteWordLeft,
     DeleteWordRight,

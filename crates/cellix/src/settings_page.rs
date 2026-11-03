@@ -250,16 +250,16 @@ impl SettingsPage {
         match found.ghostty_keeps_cmd_d {
             Some(true) => blocks.push(Block {
                 name: "Ghostty keys",
-                state: "Cmd+D goes to Ghostty",
+                state: "Cmd+A and Cmd+D go to Ghostty",
                 tone: Tone::Quiet,
-                detail: "Ghostty keeps Cmd+D for itself. Ctrl+D always works.",
-                action: Some(("Free Cmd+D", false, Control::Ghostty)),
+                detail: "Ghostty keeps Cmd+A and Cmd+D for itself. Ctrl+A and Ctrl+D always work.",
+                action: Some(("Free Them", false, Control::Ghostty)),
             }),
             Some(false) => blocks.push(Block {
                 name: "Ghostty keys",
-                state: "Cmd+D is free",
+                state: "Cmd+A and Cmd+D are free",
                 tone: Tone::Good,
-                detail: "Reload Ghostty's config if Cmd+D doesn't select yet.",
+                detail: "Reload Ghostty's config if they don't select yet.",
                 action: None,
             }),
             None => {}

@@ -14,7 +14,9 @@ use serde_json::{Map, Value, json};
 const PLUGIN_DIRS: &str = "CLAUDE_CODE_PLUGIN_DIRS";
 /// Connects to a running Cellix on its own, which `--ide` does for one session.
 const AUTO_CONNECT: &str = "CLAUDE_CODE_AUTO_CONNECT_IDE";
-const GHOSTTY_FREE_CMD_D: &str = "keybind = super+d=unbind";
+/// Ghostty keeps Cmd+A (select the terminal's text) and Cmd+D (split) for itself, so an editor
+/// inside never sees Select All or Select Next Match.
+const GHOSTTY_FREE: [&str; 2] = ["keybind = super+d=unbind", "keybind = super+a=unbind"];
 const CODEX_PLUGIN: &str = "cellix@cellix";
 
 fn config_dir(var: &impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
@@ -227,8 +229,11 @@ pub fn ghostty_keeps_cmd_d(var: impl Fn(&str) -> Option<String>) -> Option<bool>
     let ghostty = var("TERM").is_some_and(|t| t.contains("ghostty"));
     let config = ghostty_config(&var).filter(|_| ghostty)?;
     let text = fs::read_to_string(config).unwrap_or_default();
-    let frees = |line: &str| line.replace(' ', "") == GHOSTTY_FREE_CMD_D.replace(' ', "");
-    Some(!text.lines().any(frees))
+    let has = |wanted: &str| {
+        text.lines()
+            .any(|line| line.replace(' ', "") == wanted.replace(' ', ""))
+    };
+    Some(!GHOSTTY_FREE.iter().all(|line| has(line)))
 }
 
 /// How far tiles should reach past the text area. Only Ghostty is known to draw images over
@@ -280,7 +285,14 @@ fn append_to_ghostty(lines: &[&str], var: &impl Fn(&str) -> Option<String>) -> i
 
 /// Adds the line that lets Cmd+D through. Ghostty picks it up when its config reloads.
 pub fn free_cmd_d(var: impl Fn(&str) -> Option<String>) -> io::Result<()> {
-    append_to_ghostty(&[GHOSTTY_FREE_CMD_D], &var)
+    let config = ghostty_config(&var).and_then(|path| fs::read_to_string(path).ok());
+    let text = config.unwrap_or_default();
+    let has = |wanted: &str| {
+        text.lines()
+            .any(|line| line.replace(' ', "") == wanted.replace(' ', ""))
+    };
+    let missing: Vec<&str> = GHOSTTY_FREE.iter().copied().filter(|l| !has(l)).collect();
+    append_to_ghostty(&missing, &var)
 }
 
 #[cfg(test)]
@@ -371,7 +383,16 @@ mod tests {
         assert_eq!(ghostty_keeps_cmd_d(&var), Some(false));
         assert_eq!(
             fs::read_to_string(&config).unwrap(),
-            format!("font-size = 14\n{GHOSTTY_FREE_CMD_D}\n")
+            format!("font-size = 14\n{}\n{}\n", GHOSTTY_FREE[0], GHOSTTY_FREE[1]),
+            "Cmd+D and Cmd+A, each once"
+        );
+        free_cmd_d(&var).unwrap();
+        assert_eq!(
+            fs::read_to_string(&config)
+                .unwrap()
+                .matches("unbind")
+                .count(),
+            2
         );
     }
 

@@ -11,6 +11,8 @@ pub fn simple_keymap(event: KeyEvent) -> Option<Command> {
         Key::Right if word => Move(Direction::WordRight, shift),
         Key::Left => Move(Direction::Left, shift),
         Key::Right => Move(Direction::Right, shift),
+        Key::Up if mods.ctrl && mods.alt => AddCursorAbove,
+        Key::Down if mods.ctrl && mods.alt => AddCursorBelow,
         Key::Down if mods.alt && shift => DuplicateLine,
         Key::Up if mods.alt => MoveLineUp,
         Key::Down if mods.alt => MoveLineDown,
@@ -30,7 +32,12 @@ pub fn simple_keymap(event: KeyEvent) -> Option<Command> {
         Key::Char('b' | 'B') if mods.ctrl && mods.alt => BuildPdf,
         Key::Char('j' | 'J') if mods.ctrl && mods.alt => ShowInPdf,
         Key::Char('j') if mods.ctrl => ToggleTerminal,
+        Key::Enter if mods.ctrl && shift => InsertLineAbove,
+        Key::Enter if mods.ctrl => InsertLineBelow,
         Key::Enter => Newline,
+        // Where the terminal tells Ctrl+Tab from Tab, it changes tab as in VS Code.
+        Key::Tab if mods.ctrl => NextTab,
+        Key::BackTab if mods.ctrl => PreviousTab,
         Key::Tab => Indent,
         Key::BackTab => Outdent,
         Key::Backspace if word => DeleteWordLeft,
@@ -52,6 +59,8 @@ pub fn simple_keymap(event: KeyEvent) -> Option<Command> {
         Key::Esc => Cancel,
         Key::F(1) => CommandPalette,
         Key::F(2) => RenameSymbol,
+        Key::F(8) if shift => PreviousProblem,
+        Key::F(8) => NextProblem,
         Key::F(12) if shift => GoToReferences,
         Key::F(12) => GoToDefinition,
         Key::Char(' ') if mods.ctrl => Complete,
@@ -60,6 +69,8 @@ pub fn simple_keymap(event: KeyEvent) -> Option<Command> {
         // As in VS Code. Telling these from Ctrl+P needs the Kitty keyboard protocol.
         Key::Char('p' | 'P') if mods.ctrl && mods.shift => CommandPalette,
         Key::Char('f' | 'F') if mods.ctrl && mods.shift => FindInProject,
+        Key::Char('k' | 'K') if mods.ctrl && mods.shift => DeleteLine,
+        Key::Char('l' | 'L') if mods.ctrl && mods.shift => SelectAllMatches,
         Key::Char(c) if mods.ctrl => match c.to_ascii_lowercase() {
             // Ghostty sends these for Cmd+Backspace and Cmd+Right, and they're the
             // Mac's own text shortcuts everywhere else.
@@ -86,6 +97,11 @@ pub fn simple_keymap(event: KeyEvent) -> Option<Command> {
             // Without the kitty protocol Ctrl+\ arrives as the byte 0x1c, read as Ctrl+4.
             '\\' | '4' => SplitPane,
             'o' => FocusNextPane,
+            'n' => NewDocument,
+            ',' => OpenSettings,
+            ']' => Indent,
+            // Ctrl+[ only arrives as itself with the kitty protocol; elsewhere it's Escape.
+            '[' => Outdent,
             _ => return None,
         },
         _ => return None,
@@ -96,6 +112,46 @@ pub fn simple_keymap(event: KeyEvent) -> Option<Command> {
 mod tests {
     use super::*;
     use crate::Mods;
+
+    #[test]
+    fn vs_codes_everyday_shortcuts_are_here() {
+        let key = |key, ctrl, shift, alt| {
+            simple_keymap(KeyEvent {
+                key,
+                mods: Mods { ctrl, shift, alt },
+            })
+        };
+        let ctrl = |c| key(Key::Char(c), true, false, false);
+        let ctrl_shift = |c| key(Key::Char(c), true, true, false);
+        assert_eq!(ctrl('a'), Some(Command::SelectAll));
+        assert_eq!(ctrl('n'), Some(Command::NewDocument));
+        assert_eq!(ctrl(','), Some(Command::OpenSettings));
+        assert_eq!(ctrl(']'), Some(Command::Indent));
+        assert_eq!(ctrl_shift('K'), Some(Command::DeleteLine));
+        assert_eq!(ctrl_shift('L'), Some(Command::SelectAllMatches));
+        assert_eq!(
+            key(Key::Enter, true, false, false),
+            Some(Command::InsertLineBelow)
+        );
+        assert_eq!(
+            key(Key::Enter, true, true, false),
+            Some(Command::InsertLineAbove)
+        );
+        assert_eq!(
+            key(Key::Up, true, false, true),
+            Some(Command::AddCursorAbove)
+        );
+        assert_eq!(
+            key(Key::Down, true, false, true),
+            Some(Command::AddCursorBelow)
+        );
+        assert_eq!(
+            key(Key::F(8), false, false, false),
+            Some(Command::NextProblem)
+        );
+        assert_eq!(key(Key::Tab, true, false, false), Some(Command::NextTab));
+        assert_eq!(key(Key::Tab, false, false, false), Some(Command::Indent));
+    }
 
     #[test]
     fn ctrl_backslash_splits_in_either_encoding() {
