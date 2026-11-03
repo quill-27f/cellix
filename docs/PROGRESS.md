@@ -697,3 +697,5 @@ The review's open items.
 - Code's Outline lists its symbols from the language server (documentSymbol, nested ones under
   their parent), asked once per change, where it said "No headings here yet".
 Unverified with a real server: document symbols.
+
+Release 0.2.2.
