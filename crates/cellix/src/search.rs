@@ -11,10 +11,10 @@ use crate::palette::{Input, input};
 use crate::theme::Theme;
 
 /// Rows above the results: title, query, replacement, summary.
-const HEADER_ROWS: u16 = 6;
+const HEADER_ROWS: u16 = 5;
 const REPLACE_ALL: &str = "All";
-/// The replace field, a row clear of the search field.
-const REPLACE_ROW: u16 = 3;
+/// The replace field, straight under the search field.
+const REPLACE_ROW: u16 = 2;
 /// Columns for each of the switches at the search field's end.
 const SWITCH: u16 = 3;
 
@@ -57,9 +57,10 @@ pub struct Search {
 }
 
 /// Where the switches start, at the search field's end.
+/// They sit inside the search field's end, a column clear of its edge.
 fn switches_start(area: Rect) -> u16 {
     area.right()
-        .saturating_sub(1 + SWITCH * SWITCHES.len() as u16)
+        .saturating_sub(2 + SWITCH * SWITCHES.len() as u16)
 }
 
 /// The three switches from `at`, each lit while it's on. The Find bar draws them too.
@@ -77,15 +78,13 @@ pub fn draw_switches(
         let cell = Rect::new(left, y, SWITCH, 1);
         let on = options.is_on(index);
         let hovered = hover.is_some_and(|h| cell.contains(h.0, h.1));
-        let fill = if on {
-            Some(theme.pick)
+        // Off has no chip, hover a quiet one, and on the selection's colour with a focus edge,
+        // so the three states never read alike.
+        let chip = Bounds::inset(cell, 0.15, 0.17);
+        if on {
+            grid.panel(chip, 14, Some(theme.pick), Some(theme.focus));
         } else if hovered {
-            Some(theme.row_hover)
-        } else {
-            None
-        };
-        if fill.is_some() {
-            grid.panel(Bounds::inset(cell, 0.1, 0.06), 14, fill, None);
+            grid.panel(chip, 14, Some(theme.popup_hover), None);
         }
         let style = Style {
             fg: if on { theme.text.fg } else { theme.gutter.fg },
@@ -229,7 +228,7 @@ impl Search {
         let width = if field == Field::Replace {
             end.saturating_sub(area.x + 5)
         } else {
-            switches_start(area).saturating_sub(area.x + 1)
+            end.saturating_sub(area.x + 1)
         };
         let line = Rect::new(area.x + 1, y, width, 1);
         let box_state = Input {
@@ -269,7 +268,10 @@ impl Search {
             (switches_start(area), area.y + 1),
             self.options,
             hover,
-            theme.sidebar,
+            Style {
+                bg: theme.input,
+                ..theme.sidebar
+            },
             theme,
         );
         self.draw_box(

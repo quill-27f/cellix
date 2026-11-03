@@ -208,8 +208,10 @@ impl Grid {
     /// A rounded box inside `rect`, with square corners cleaned up behind it.
     pub fn field(&mut self, rect: Rect, behind: Rgb, fill: Rgb, border: Rgb) {
         self.panel(Bounds::inset(rect, 0.0, 0.0), 0, Some(behind), None);
+        // Inset a little from its row, so fields stacked in rows next to each other keep
+        // their air.
         self.panel(
-            Bounds::inset(rect, 0.15, 0.03),
+            Bounds::inset(rect, 0.15, 0.11),
             22,
             Some(fill),
             Some(border),

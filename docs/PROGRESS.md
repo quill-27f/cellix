@@ -572,3 +572,12 @@ LaTeX in the IDE. The file tree leaves out what a build writes beside a paper (`
 `.synctex.gz`, `.fls` and the rest) when the paper is there, and keeps a `.log` with no paper. A
 paper's right-click menu names LaTeX's own things, Typewriter, Paragraph, Section and Verbatim, and
 offers Insert Citation, Build PDF and Show in PDF, where it had Markdown's menu.
+
+Find and Search polish, from the ui-expert review of the tour. The switches sit inside the search
+field's end, off with no chip, hovered with a quiet one and on with the selection colour and a
+focus edge. Replace and Replace All are buttons straight after a replace field as wide as the find
+field, and the ⇄ toggle stays lit while the replace row is open. Every input field is inset a few
+pixels in its row, so stacked fields keep their air, and the Search panel's replace field sits
+straight under its search field. The Find bar's tooltips sit under their button, clear of the bar.
+A paper's menu puts Insert in its own group. Not done from the review: a slimmer Find bar, search
+snippets that keep context with an ellipsis, and one colour for matches in the editor and the panel.

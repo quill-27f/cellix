@@ -280,6 +280,7 @@ with tempfile.TemporaryDirectory() as scratch:
     build = [["click", 164, 1], ["wait", 45]]
     shoot("54-paper-pdf", build, PAPER_FILE, size="170x44", background="eff1f5")
     shoot("55-paper-cite", [["click", 69, 1]], PAPER_FILE, size="150x44", background="eff1f5")
+    shoot("55-paper-menu", [["right", 70, 14]], PAPER_FILE, size="150x44", background="eff1f5")
     shoot("56-narrow-note", [*LIST_AGENTS, ["wait", 0.6]], NOTE_FILE, size="100x34")
 
     # The samples, which use everything a page can do.

@@ -108,7 +108,7 @@ const STACK_SHARE: u16 = 45;
 /// Rows each side keeps, however far the line between them is dragged.
 const STACK_LEAST: u16 = 6;
 const APPROVE: &str = "[Approve]";
-const FIND_WIDTH: u16 = 60;
+const FIND_WIDTH: u16 = 64;
 const CONFIRM_WIDTH: u16 = 56;
 const CONFIRM_HEIGHT: u16 = 6;
 /// Columns around a dialog button's label.
@@ -126,7 +126,11 @@ const SUGGEST_WIDTH: u16 = 42;
 const FIND_BUTTON: u16 = 3;
 const FIND_BUTTONS: [&str; 4] = ["↑", "↓", "⇄", "×"];
 /// The replace row's buttons, and their widths.
-const REPLACE_BUTTONS: [(&str, u16); 2] = [("Replace", 9), ("All", 5)];
+const REPLACE_BUTTONS: [(&str, u16); 2] = [("Replace", 9), ("Replace All", 13)];
+/// Columns kept for the Find bar's count, "12 of 340" or "No results".
+const FIND_COUNT: u16 = 11;
+/// The three search switches, three columns each.
+const SWITCHES_WIDTH: u16 = 9;
 const SEND_BACK: &str = "[Send back]";
 /// The card that offers a language's support.
 const OFFER_WIDTH: u16 = 46;
@@ -139,7 +143,12 @@ const PANE_CLOSE_REACH: u16 = 3;
 const TOOLTIP_HEIGHT: f32 = 1.22;
 const TOOLTIP_SIZE: u8 = 92;
 /// What each button is called, in order, since they're only icons and marks.
-const FIND_NAMES: [&str; 4] = ["Previous match", "Next match", "Replace (Ctrl+R)", "Close"];
+const FIND_NAMES: [&str; 4] = [
+    "Previous match",
+    "Next match",
+    "Toggle Replace (Ctrl+R)",
+    "Close",
+];
 const RAIL_NAMES: [&str; 5] = ["Files", "Search", "Outline", "Source Control", "Settings"];
 /// Below this width, opening the side pane puts the sidebar away.
 const CROWDED_WIDTH: u16 = 120;
@@ -3946,25 +3955,22 @@ impl App {
         Rect::new(x, pane.y, width, if replacing { 4 } else { 3 })
     }
 
-    /// Where the switches start on the Find bar's first row.
-    fn find_switches(area: Rect) -> u16 {
-        area.right() - FIND_BUTTON * FIND_BUTTONS.len() as u16 - 1 - 3 * 3 - 1
-    }
-
-    /// Where the replace row's buttons start.
-    fn replace_buttons(area: Rect) -> u16 {
-        let width: u16 = REPLACE_BUTTONS.iter().map(|(_, w)| w).sum();
-        area.right().saturating_sub(width + 1)
+    /// The Find bar's parts: the field, where the switches start inside it, and where the
+    /// count and then the buttons start. The replace row's field is as wide as the find field,
+    /// with its buttons straight after.
+    fn find_layout(area: Rect) -> (Rect, u16, u16, u16) {
+        let first = area.right() - FIND_BUTTON * FIND_BUTTONS.len() as u16 - 1;
+        let count = first.saturating_sub(FIND_COUNT);
+        let field = Rect::new(area.x + 1, area.y + 1, count.saturating_sub(area.x + 2), 1);
+        let switches = field.right().saturating_sub(SWITCHES_WIDTH + 1);
+        (field, switches, count, first)
     }
 
     fn draw_find(&self, grid: &mut Grid, find: &Find) {
         let theme = &self.theme;
         let area = self.find_bar_for(find.replace.is_some());
         popup(grid, area, theme);
-        let count = find.count_label();
-        let switches = Self::find_switches(area);
-        let field = switches.saturating_sub(area.x + 2 + count.chars().count() as u16 + 1);
-        let line = Rect::new(area.x + 1, area.y + 1, field, 1);
+        let (line, switches, count_x, first) = Self::find_layout(area);
         let text = Input {
             text: &find.query,
             hint: "Find",
@@ -3977,53 +3983,78 @@ impl App {
             bg: theme.popup,
             ..theme.bar
         };
-        grid.label(line.right() + 1, area.y + 1, &count, base, switches);
+        // Inside the field's end, as VS Code has them.
         crate::search::draw_switches(
             grid,
             (switches, area.y + 1),
             find.options,
             self.hover,
-            base,
+            Style {
+                bg: theme.input,
+                ..base
+            },
             theme,
         );
+        grid.label(count_x + 1, area.y + 1, &find.count_label(), base, first);
         if let Some(with) = &find.replace {
-            let buttons = Self::replace_buttons(area);
-            // As wide as the find field, so the two read as a pair.
-            let width = field.min(buttons.saturating_sub(area.x + 2));
-            let line = Rect::new(area.x + 1, area.y + 2, width, 1);
+            let row = Rect::new(line.x, area.y + 2, line.w, 1);
             let text = Input {
                 text: with,
                 hint: "Replace",
                 focused: find.in_replace,
                 behind: theme.popup,
             };
-            input(grid, line, &text, &*self.measure, theme);
-            let mut x = buttons;
+            input(grid, row, &text, &*self.measure, theme);
+            let mut x = row.right() + 1;
             for (label, width) in REPLACE_BUTTONS {
                 let button = Rect::new(x, area.y + 2, width, 1);
-                if self.hover.is_some_and(|h| button.contains(h.0, h.1)) {
-                    let pill = Bounds::inset(button, 0.1, 0.055);
-                    grid.panel(pill, 18, Some(theme.popup_hover), None);
-                }
+                let fill = if self.hover.is_some_and(|h| button.contains(h.0, h.1)) {
+                    theme.popup_hover
+                } else {
+                    theme.quiet_button(theme.popup)
+                };
+                grid.panel(Bounds::inset(button, 0.15, 0.17), 14, Some(fill), None);
                 let style = Style {
                     fg: theme.text.fg,
+                    bg: fill,
                     ..base
                 };
-                grid.label(x + 1, area.y + 2, label, style, x + width);
-                x += width;
+                // Centred in its chip, by the label's real width.
+                let font = Font {
+                    size: 95,
+                    ..Font::default()
+                };
+                let inside = (width as f32 - self.measure.width(label, font)) / 2.0;
+                let first = x + ((width - label.chars().count() as u16) / 2);
+                grid.label_at(
+                    x as f32 + inside,
+                    first,
+                    area.y + 2,
+                    label,
+                    style,
+                    x + width,
+                    95,
+                );
+                x += width + 1;
             }
         }
-        let mut x = area.right() - FIND_BUTTON * FIND_BUTTONS.len() as u16 - 1;
-        for label in FIND_BUTTONS {
+        let mut x = first;
+        for (index, label) in FIND_BUTTONS.iter().enumerate() {
             let button = Rect::new(x, area.y + 1, FIND_BUTTON, 1);
             let on_it = self.hover.is_some_and(|h| button.contains(h.0, h.1));
-            if on_it {
+            // The replace toggle stays lit while its row is open.
+            let lit = index == 2 && find.replace.is_some();
+            if lit {
+                let chip = Bounds::inset(button, 0.1, 0.17);
+                grid.panel(chip, 14, Some(theme.pick), Some(theme.focus));
+            } else if on_it {
                 let pill = Bounds::inset(button, 0.1, 0.055);
                 grid.panel(pill, 18, Some(theme.popup_hover), None);
             }
-            let style = if on_it {
+            let style = if on_it || lit {
                 Style {
                     fg: theme.text.fg,
+                    bg: if lit { theme.pick } else { base.bg },
                     ..base
                 }
             } else {
@@ -4036,11 +4067,10 @@ impl App {
 
     fn click_find(&mut self, mut find: Find, x: u16, y: u16) {
         let area = self.find_bar_for(find.replace.is_some());
-        let first = area.right() - FIND_BUTTON * FIND_BUTTONS.len() as u16 - 1;
-        let switches = Self::find_switches(area);
+        let (field, switches, _, first) = Self::find_layout(area);
         if find.replace.is_some() && y == area.y + 2 && area.contains(x, y) {
-            let buttons = Self::replace_buttons(area);
-            let all = x >= buttons + REPLACE_BUTTONS[0].1;
+            let buttons = field.right() + 1;
+            let all = x > buttons + REPLACE_BUTTONS[0].1;
             find.in_replace = true;
             self.overlay = Overlay::Find(find);
             if x >= buttons {
@@ -4048,7 +4078,7 @@ impl App {
             }
             return;
         }
-        if y == area.y + 1 && x >= switches && x < switches + 9 {
+        if y == area.y + 1 && x >= switches && x < switches + SWITCHES_WIDTH {
             find.options.flip(((x - switches) / 3) as usize);
             self.overlay = Overlay::Find(find);
             self.search_file();
@@ -6646,7 +6676,7 @@ impl App {
                     format("Paragraph", Format::PlainText).after_rule(),
                     format("Section", Format::Heading),
                     format("Verbatim", Format::CodeBlock),
-                    MenuItem::new("Insert Citation…", MenuAction::Tool(Tool::Cite)),
+                    MenuItem::new("Insert Citation…", MenuAction::Tool(Tool::Cite)).after_rule(),
                     MenuItem::new("Insert Formula…", MenuAction::Tool(Tool::Math)),
                     MenuItem::new("Insert Table…", MenuAction::Tool(Tool::Table)),
                     MenuItem::new("Insert Figure…", MenuAction::Tool(Tool::Image)),
@@ -7359,8 +7389,11 @@ impl App {
                     .filter(|_| y == area.y + 1)
                     .and_then(|t| FIND_NAMES.get(t as usize));
                 name.map(|name| {
-                    let left = area.right() as f32 - wide(name);
-                    (*name, left, area.y as f32 + 2.5)
+                    // Under its button, clear of the bar's edge.
+                    let middle = (first + tool.unwrap_or(0) * FIND_BUTTON) as f32 + 1.5;
+                    let right_edge = self.size.0 as f32 - wide(name) - 0.5;
+                    let left = (middle - wide(name) / 2.0).min(right_edge);
+                    (*name, left, area.bottom() as f32 + 0.3)
                 })
             }
             Overlay::None if cut.is_some() => cut.as_deref().map(|name| {
@@ -15559,8 +15592,13 @@ while True:
 
     #[test]
     fn the_vim_keymap_runs_neovim_when_it_is_installed() {
-        let (vim, neovim) = engines_for(Some("vim"), true);
         let installed = crate::integrations::on_path("nvim", |name| std::env::var(name).ok());
+        // On a loaded machine Neovim can miss its first reply, which is about speed, not the
+        // choice this checks, so it gets a few tries.
+        let (vim, neovim) = (0..3)
+            .map(|_| engines_for(Some("vim"), true))
+            .find(|(_, neovim)| neovim.is_some() == installed)
+            .unwrap_or_else(|| engines_for(Some("vim"), true));
         assert_eq!(neovim.is_some(), installed, "Neovim when it's there");
         assert_eq!(vim.is_some(), !installed, "the built-in mode when it isn't");
     }
