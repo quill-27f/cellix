@@ -62,7 +62,7 @@ edits what you edit and git sees every change.
   from your `.bib`, Build PDF with SyncTeX both ways, and export from Markdown to PDF or a web page.
 - **Offline spelling and grammar**, tables, images you can paste or drag, callouts and footnotes.
 
-![A paper on the page, in the dark theme](docs/images/paper.png)
+![Claude Code adding a citation to a LaTeX paper, with Cellix inside it showing the typeset page](docs/images/latex-inside-claude.png)
 
 `samples/writing.md` and `samples/paper/main.tex` use all of it. [Writing](#writing) has the details.
 
