@@ -1,6 +1,7 @@
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use base64::Engine;
@@ -24,6 +25,24 @@ use crossterm::terminal::{
 };
 
 use crate::App;
+
+/// Set when the terminal hangs up or Cellix is asked to stop. Left to their default, those
+/// signals end the process on the spot and leave the workspace socket behind.
+static STOPPED: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn stop(_: libc::c_int) {
+    STOPPED.store(true, Ordering::Relaxed);
+}
+
+/// Hangs up and stops end the loop, so they leave the way Quit does.
+fn catch_stops() {
+    for signal in [libc::SIGHUP, libc::SIGTERM] {
+        // SAFETY: the handler only stores to an atomic, which is safe in a signal handler.
+        unsafe {
+            libc::signal(signal, stop as *const () as libc::sighandler_t);
+        }
+    }
+}
 
 /// How often a scroll moves. Over a network each frame costs a round of placements.
 const SCROLL_FRAME: Duration = Duration::from_millis(8);
@@ -292,6 +311,7 @@ pub fn run(options: Options) -> io::Result<()> {
         cellix_agent::ide::IdeServer::start_kept(root, &kept).ok()
     });
 
+    catch_stops();
     let _session = Session::start()?;
     let smooth = app.settings.smooth_scroll != Some(false);
     let mut display = Display::detect(app.settings.tier.as_deref(), smooth)?;
@@ -373,7 +393,7 @@ pub fn run(options: Options) -> io::Result<()> {
             out.flush()?;
             redraw = false;
         }
-        if app.quit {
+        if app.quit || STOPPED.load(Ordering::Relaxed) {
             break;
         }
         let wait = backend.gliding().unwrap_or(if app.has_session() {
@@ -381,7 +401,12 @@ pub fn run(options: Options) -> io::Result<()> {
         } else {
             POLL
         });
-        if ct::poll(wait)? {
+        // A signal interrupts the wait; the loop goes round and sees it.
+        let ready = match ct::poll(wait) {
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            ready => ready?,
+        };
+        if ready {
             let started = Instant::now();
             // Drain everything queued, so a fast wheel doesn't redraw per event.
             loop {
@@ -447,8 +472,9 @@ pub fn run(options: Options) -> io::Result<()> {
             }
         }
     }
-    write!(out, "\x1b]22;default\x1b\\")?;
-    out.flush()?;
+    // After a hang-up there's no terminal to tell, and the rest must still happen.
+    let _ = write!(out, "\x1b]22;default\x1b\\");
+    let _ = out.flush();
     drop(_session);
     app.finish()
 }

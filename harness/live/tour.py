@@ -274,6 +274,22 @@ with tempfile.TemporaryDirectory() as scratch:
     comment = [["click", 90, 5], ["keys", "\\eOP"], ["keys", "add comment"], ["keys", "\r"]]
     comment += [["keys", "Is this true for multi-head attention?\r"], ["wait", 0.5]]
     shoot("50-comments", comment, NOTE_FILE, size="150x44", background="eff1f5")
+    # A review the agent has checked: a verdict on the reviewer's comment and a suggestion.
+    review = [
+        {"id": 1, "file": NOTE_FILE, "line": 3, "quote": "the weights sum to one",
+         "text": "Only with softmax weights. Say so.",
+         "replies": [{"author": "Claude", "text": "Agree (Correctness): other normalisers needn't sum to one."}],
+         "resolved": False, "told": 1, "asked": False, "kind": "Correctness", "suggested_by": ""},
+        {"id": 2, "file": NOTE_FILE, "line": 3, "quote": "for inputs of $n$ tokens",
+         "text": "Say how large n gets in the experiments, or the cost claim can't be judged.",
+         "replies": [], "resolved": False, "told": 0, "asked": False, "kind": "Evidence",
+         "suggested_by": "Claude"},
+    ]
+    os.makedirs(f"{ROOT}/.cellix", exist_ok=True)
+    with open(f"{ROOT}/.cellix/threads.json", "w") as f:
+        json.dump(review, f)
+    shoot("50-review", [["keys", "\\eOP"], ["keys", "show comments"], ["keys", "\r"], ["wait", 0.6]],
+          NOTE_FILE, size="150x44")
     shoot("51-agent-list", [*LIST_AGENTS, ["wait", 0.6]], NOTE_FILE, size="150x44")
     shell = [*LIST_AGENTS, ["wait", 0.6]]
     shoot("52-paper", [], PAPER_FILE, size="150x44", background="eff1f5")

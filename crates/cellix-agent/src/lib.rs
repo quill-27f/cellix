@@ -234,7 +234,7 @@ fn serve(
     writeln!(stream, "{}", answer(&line, comments, requests)?)
 }
 
-/// The running server. Dropping it removes the socket file.
+/// The running server. Dropping it removes the socket file, and the plans kept beside it.
 pub struct Server {
     path: PathBuf,
     pub requests: Receiver<Request>,
@@ -243,6 +243,7 @@ pub struct Server {
 impl Drop for Server {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.path);
+        let _ = fs::remove_dir_all(self.path.with_extension(""));
     }
 }
 
@@ -331,6 +332,19 @@ mod tests {
         fs::remove_file(&path).unwrap();
         fs::write(&path, "stale").unwrap();
         assert!(start(dir.path(), Arc::default()).is_ok());
+    }
+
+    #[test]
+    fn a_closed_server_takes_its_plans_with_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = start(dir.path(), Arc::default()).unwrap();
+        let plans = server.path.with_extension("").join("s1");
+        fs::create_dir_all(&plans).unwrap();
+        fs::write(plans.join("Plan.md"), "plan").unwrap();
+        let path = server.path.clone();
+        drop(server);
+        assert!(!path.exists());
+        assert!(!path.with_extension("").exists());
     }
 
     #[test]

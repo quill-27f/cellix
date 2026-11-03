@@ -763,3 +763,10 @@ LaTeX, from the paper author's round three.
 - Strike in a paper adds `\usepackage[normalem]{ulem}`, which `\sout` needs to build.
 Still open: inverse SyncTeX lands a line high (a click resolves to its cell's top), natbib's
 \citet and page notes, and brace-protected author names.
+
+Nothing left behind. Closing the terminal or killing Cellix (SIGHUP, SIGTERM) ended the process
+on the spot, so the workspace socket, the IDE lock and `--wait` comments were skipped; 315 stale
+sockets had piled up in the temp folder, mostly from test runs, which end their child with a
+hang-up. Those signals now end the loop the way Quit does. A closed Cellix also removes the plan
+folders kept beside its socket, of which about 950 were left. The tour gains a shot of the
+Comments pane with a verdict and a suggestion (50-review).

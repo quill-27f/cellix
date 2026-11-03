@@ -333,6 +333,29 @@ fn wait_blocks_until_closed() {
 }
 
 #[test]
+fn a_hang_up_leaves_nothing_behind() {
+    let dir = project();
+    let mut screen = Screen::start(dir.path(), &["hello.txt"]);
+    screen.wait_for("hello from a file");
+    let socket_exists = || {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_cellix"))
+            .arg("comments")
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        output.status.success()
+    };
+    assert!(socket_exists(), "the workspace socket should answer");
+    let pid = screen.child.process_id().unwrap() as i32;
+    // SAFETY: kill only sends a signal to the child this test started.
+    assert_eq!(unsafe { libc::kill(pid, libc::SIGHUP) }, 0);
+    screen.wait_exit();
+    let status = screen.child.wait().unwrap();
+    assert!(status.success(), "{status:?}");
+    assert!(!socket_exists(), "the socket outlived Cellix");
+}
+
+#[test]
 fn cli_reads_comments_over_socket() {
     let dir = project();
     let mut screen = Screen::start(dir.path(), &["hello.txt"]);

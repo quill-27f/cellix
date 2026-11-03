@@ -2861,5 +2861,19 @@
     "title": "Warnings point at their lines, and two authors read as both",
     "test": "warnings_point_at_their_lines",
     "passes": true
+  },
+  {
+    "id": "hang-up-cleans-up",
+    "milestone": 10,
+    "title": "A closed terminal leaves no socket behind",
+    "test": "a_hang_up_leaves_nothing_behind",
+    "passes": true
+  },
+  {
+    "id": "plans-leave-with-server",
+    "milestone": 10,
+    "title": "A closed Cellix takes its plan folders with it",
+    "test": "a_closed_server_takes_its_plans_with_it",
+    "passes": true
   }
 ]
