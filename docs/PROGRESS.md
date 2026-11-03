@@ -750,3 +750,16 @@ server for code actions at the caret, with the problems on its line, and lists t
 with their edits; picking one applies it across files as a rename does. Actions that only name a
 server command are left out, since what they'd do can't be shown first. Unverified with a real
 server.
+
+LaTeX, from the paper author's round three.
+- `\input`, `\include`, `\bibliography`, `\maketitle` and the like on the line after text start
+  their own block, where they ran into the paragraph as raw source and broke numbering.
+- A build's warnings are Problems too, as warnings: tectonic's `warning: file:line:` and LaTeX's
+  undefined references and citations at their input line, so F8 walks them.
+- The references list numbers as the PDF does: sorted by author for the plain styles, in citing
+  order for unsrt, and a key with no entry is "[?]" rather than a number.
+- Two authors cite as "Erdős and Rényi 1959", three or more as "et al."; two tests expected
+  "et al." for two and now expect both names.
+- Strike in a paper adds `\usepackage[normalem]{ulem}`, which `\sout` needs to build.
+Still open: inverse SyncTeX lands a line high (a click resolves to its cell's top), natbib's
+\citet and page notes, and brace-protected author names.

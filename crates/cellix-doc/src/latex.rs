@@ -138,6 +138,8 @@ pub struct Project {
     pub setup: Vec<String>,
     /// Each `.bib` entry as its reference reads: authors, year and title.
     pub references: HashMap<String, String>,
+    /// The `\\bibliographystyle`, which says how references are numbered.
+    pub style: String,
     /// The keys the paper cites, in the order it first cites them.
     pub cited: Vec<String>,
     /// The `.bib` files the paper names with `\\bibliography` or `\\addbibresource`.
@@ -455,6 +457,13 @@ impl Project {
     fn lines(&mut self, text: &str, folder: &Path, counters: &mut Counters, depth: usize) {
         self.setup.extend(setup_of(text));
         self.bibliographies.extend(bibliographies_of(text, folder));
+        if let Some(style) = text.lines().find_map(|l| {
+            let at = l.find("\\bibliographystyle{")?;
+            let rest = &l[at + "\\bibliographystyle{".len()..];
+            rest.split('}').next()
+        }) {
+            self.style = style.trim().to_string();
+        }
         for key in cited_in(text) {
             if !self.cited.contains(&key) {
                 self.cited.push(key);
@@ -597,8 +606,21 @@ impl BibEntry {
             .next()
             .and_then(|name| name.split_whitespace().next_back())
             .unwrap_or(&self.key);
-        let many = self.authors.contains(" and ");
-        let more = if many { " et al." } else { "" };
+        let names: Vec<&str> = self.authors.split(" and ").collect();
+        let surname_of = |name: &str| {
+            let name = if name.contains(',') {
+                name.split(',').next().unwrap_or(name)
+            } else {
+                name.split_whitespace().next_back().unwrap_or(name)
+            };
+            name.trim().to_string()
+        };
+        // Two authors read as both, as natbib prints them; three or more as et al.
+        let more = match names.len() {
+            2 => format!(" and {}", surname_of(names[1])),
+            n if n > 2 => " et al.".to_string(),
+            _ => String::new(),
+        };
         format!("{surname}{more} {}", self.year).trim().to_string()
     }
 }
@@ -908,6 +930,41 @@ pub fn problems(output: &str, folder: &Path) -> Vec<Problem> {
             line: number,
             message: message.trim().to_string(),
         });
+    }
+    found.dedup();
+    found
+}
+
+/// Where a build's warnings point, as problems a reader can walk with F8: tectonic's own
+/// `warning: file:line: …`, and LaTeX's undefined references and citations, at their line in
+/// the file the build started from.
+pub fn warning_places(output: &str, folder: &Path, root: &Path) -> Vec<Problem> {
+    let mut found = Vec::new();
+    for line in output.lines() {
+        if let Some(rest) = line.trim().strip_prefix("warning: ") {
+            found.extend(problems(rest, folder));
+            continue;
+        }
+        if line.contains("undefined on input line")
+            && let Some(at) = line.rfind("input line ")
+        {
+            let number: String = line[at + "input line ".len()..]
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect();
+            if let Ok(number) = number.parse() {
+                let message = line
+                    .trim()
+                    .trim_start_matches("LaTeX Warning: ")
+                    .trim_start_matches("Package natbib Warning: ")
+                    .to_string();
+                found.push(Problem {
+                    file: root.to_path_buf(),
+                    line: number,
+                    message,
+                });
+            }
+        }
     }
     found.dedup();
     found
@@ -1381,9 +1438,25 @@ mod tests {
         let project = Project::read(&root);
         assert_eq!(
             project.citations.get("candes2006").map(String::as_str),
-            Some("Candès et al. 2006")
+            Some("Candès and Tao 2006")
         );
         assert_eq!(detex("G\\\"odel, \\c c and \\ss"), "Gödel, ç and ß");
+    }
+    #[test]
+    fn warnings_point_at_their_lines() {
+        let root = Path::new("/p/main.tex");
+        let output = "warning: sections/results.tex:4: Overfull \\hbox (3pt too wide)\nLaTeX Warning: Reference `sec:x' on page 1 undefined on input line 12.\n";
+        let found = warning_places(output, Path::new("/p"), root);
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert_eq!(found[0].file, Path::new("/p/sections/results.tex"));
+        assert_eq!((found[1].file.as_path(), found[1].line), (root, 12));
+        let entry = BibEntry {
+            key: "er".into(),
+            title: String::new(),
+            authors: "Erd\u{151}s, Paul and R\u{e9}nyi, Alfr\u{e9}d".into(),
+            year: "1959".into(),
+        };
+        assert_eq!(entry.short(), "Erd\u{151}s and R\u{e9}nyi 1959");
     }
 
     #[test]
@@ -1513,7 +1586,7 @@ mod tests {
         assert_eq!(entries[0].key, "knuth84");
         assert_eq!(entries[0].title, "The TeXbook");
         assert_eq!(entries[0].short(), "Knuth 1984");
-        assert_eq!(entries[1].short(), "Lovelace et al. 2020");
+        assert_eq!(entries[1].short(), "Lovelace and Smith 2020");
     }
 
     #[test]

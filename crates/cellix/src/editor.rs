@@ -1861,7 +1861,11 @@ impl Editor {
             Format::Bold => self.toggle_command("\\textbf{"),
             Format::Italic => self.toggle_command("\\emph{"),
             Format::Code => self.toggle_command("\\texttt{"),
-            Format::Strikethrough => self.toggle_command("\\sout{"),
+            Format::Strikethrough => {
+                // `\\sout` is ulem's, which a paper needs to build.
+                self.ensure_package("[normalem]{ulem}", "{ulem}");
+                self.toggle_command("\\sout{");
+            }
             Format::Link => self.make_link("https://"),
             Format::Bullet | Format::Task => self.wrap_environment("itemize", true),
             Format::Numbered => self.wrap_environment("enumerate", true),
@@ -2157,6 +2161,38 @@ impl Editor {
             self.selections.set_single(Selection::cursor(head));
         }
         count
+    }
+
+    /// Adds `\\usepackage<what>` before `\\begin{document}`, unless `known` is already used.
+    fn ensure_package(&mut self, what: &str, known: &str) {
+        let text = self.buffer.text();
+        if text.contains(known) {
+            return;
+        }
+        let Some(at) = text.find("\\begin{document}") else {
+            return;
+        };
+        let at = text[..at].chars().count();
+        let mut selections = self.selections.clone();
+        let line = format!("\\usepackage{what}\n");
+        self.buffer.replace_range(&mut selections, at, at, &line);
+        let length = line.chars().count();
+        // The caret stays on the words it was on.
+        let shifted: Vec<Selection> = self
+            .selections
+            .iter()
+            .map(|s| Selection {
+                anchor: s.anchor + length,
+                head: s.head + length,
+                goal: s.goal,
+            })
+            .collect();
+        if let Some(first) = shifted.first() {
+            self.selections.set_single(*first);
+            for s in &shifted[1..] {
+                self.selections.add(*s);
+            }
+        }
     }
 
     /// Turns tracking on or off. A paper needs the package that prints its marks.

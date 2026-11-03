@@ -2847,5 +2847,19 @@
     "title": "A quick fix is offered and applied",
     "test": "a_quick_fix_is_offered_and_applied",
     "passes": true
+  },
+  {
+    "id": "latex-input-breaks",
+    "milestone": 10,
+    "title": "An input after a line of text is its own",
+    "test": "an_input_after_a_line_of_text_is_its_own",
+    "passes": true
+  },
+  {
+    "id": "latex-warning-places",
+    "milestone": 10,
+    "title": "Warnings point at their lines, and two authors read as both",
+    "test": "warnings_point_at_their_lines",
+    "passes": true
   }
 ]

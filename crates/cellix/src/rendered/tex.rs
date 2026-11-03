@@ -438,6 +438,17 @@ fn breaks_paragraph(line: &str) -> bool {
         || text.starts_with("\\[")
         || text.starts_with("$$")
         || text.starts_with('%')
+        || [
+            "\\input{",
+            "\\include{",
+            "\\bibliography",
+            "\\printbibliography",
+            "\\maketitle",
+            "\\tableofcontents",
+            "\\appendix",
+        ]
+        .iter()
+        .any(|command| text.starts_with(command))
         || QUIET.iter().any(|q| text.starts_with(q))
         || SECTIONS
             .iter()
@@ -470,17 +481,32 @@ impl Page<'_, '_> {
     /// What the paper cites, numbered in the order it cites them, as the list prints.
     fn references(&mut self, index: usize) {
         let offset = self.lines[index].0;
-        let cited = self.project.cited.clone();
-        for (n, key) in cited.iter().enumerate() {
-            let line = match self.project.references.get(key) {
-                Some(reference) => format!("[{}] {reference}", n + 1),
-                None => format!("[{}] {key}: not in the bibliography", n + 1),
-            };
-            let tone = if self.project.references.contains_key(key) {
-                Tone::Text
-            } else {
-                Tone::Failed
-            };
+        let known: Vec<(String, String)> = self
+            .project
+            .cited
+            .iter()
+            .filter_map(|key| Some((key.clone(), self.project.references.get(key)?.clone())))
+            .collect();
+        let mut known = known;
+        // unsrt keeps the order of citing; the plain styles sort by author.
+        let in_order = self.project.style.contains("unsrt");
+        if !in_order {
+            known.sort_by_key(|(_, reference)| reference.to_lowercase());
+        }
+        let missing = self
+            .project
+            .cited
+            .iter()
+            .filter(|key| !self.project.references.contains_key(*key));
+        let mut shown: Vec<(String, bool)> = known
+            .iter()
+            .enumerate()
+            .map(|(n, (_, reference))| (format!("[{}] {reference}", n + 1), true))
+            .collect();
+        // A key with no entry prints as [?], so it gets no number here either.
+        shown.extend(missing.map(|key| (format!("[?] {key}: not in the bibliography"), false)));
+        for (line, found) in shown {
+            let tone = if found { Tone::Text } else { Tone::Failed };
             let mut glyphs = decoration(&line, tone);
             measure_glyphs(&mut glyphs, self.context.measure);
             let template = Row::new(index, offset);
@@ -1437,8 +1463,17 @@ ignored after the end
             all.contains("[1] Knuth, Donald (1984). The TeXbook."),
             "{all}"
         );
-        assert!(all.contains("[2] nobody: not in the bibliography"), "{all}");
+        assert!(all.contains("[?] nobody: not in the bibliography"), "{all}");
         assert!(!all.contains("bibliographystyle"), "{all}");
+    }
+
+    #[test]
+    fn an_input_after_a_line_of_text_is_its_own() {
+        let rows = shown("Some text here.\n\\input{sections/method}\n");
+        let all = rows.join("\n");
+        assert!(all.contains("Some text here."), "{all}");
+        assert!(!all.contains("\\input"), "{all}");
+        assert!(all.contains("↳ sections/method"), "{all}");
     }
 
     #[test]
