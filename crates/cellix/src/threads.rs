@@ -10,6 +10,7 @@ const SIDE: u16 = 2;
 const CARD_RADIUS: u8 = 22;
 const BUTTONS: [&str; 3] = ["Reply", "Ask agent", "Resolve"];
 const CHOICES: [&str; 2] = ["Keep", "Dismiss"];
+const REWRITE: [&str; 2] = ["Apply", "Not this"];
 const CHECK: &str = "Check my review";
 /// The kinds of comment a careful review covers, in the order the strip shows them.
 pub const KINDS: [&str; 5] = [
@@ -34,10 +35,18 @@ pub enum Hit {
     /// Takes an agent's suggestion as the reviewer's own, or drops it.
     Keep(u32),
     Dismiss(u32),
+    /// Puts an agent's rewrite in the document as a suggestion, or turns it down.
+    Apply(u32),
+    Decline(u32),
 }
 
 /// An agent's verdict on a comment, from how its reply starts: `Agree (Evidence): …` or
 /// `Disagree: …`. Gives what to show, the kind if it names one, and the rest of the reply.
+/// The new words of an agent's rewrite, from its reply.
+pub fn rewrite(text: &str) -> Option<&str> {
+    text.strip_prefix("Rewrite: ")
+}
+
 pub fn verdict(text: &str) -> Option<(&'static str, &str, &str)> {
     let (shown, rest) = match text.strip_prefix("Agree") {
         Some(rest) => ("agrees", rest),
@@ -63,6 +72,8 @@ enum Line {
     Suggested(u32, String),
     /// Keep and Dismiss, under a suggestion.
     Choices(u32),
+    /// Apply and Not this, under a rewrite still to be decided.
+    Rewrite(u32),
     Quote(u32, String),
     Text(u32, String),
     Author(u32, String),
@@ -173,9 +184,10 @@ fn lines(
         out.extend(text.into_iter().map(|row| Line::Text(id, row)));
         for reply in &thread.replies {
             // A verdict reads as one: "Claude agrees", then why.
-            let (author, body) = match verdict(&reply.text) {
-                Some((shown, _, rest)) => (format!("{} {shown}", reply.author), rest),
-                None => (reply.author.clone(), reply.text.as_str()),
+            let (author, body) = match (verdict(&reply.text), rewrite(&reply.text)) {
+                (Some((shown, _, rest)), _) => (format!("{} {shown}", reply.author), rest),
+                (_, Some(words)) => (format!("{} suggests a rewrite", reply.author), words),
+                _ => (reply.author.clone(), reply.text.as_str()),
             };
             out.push(Line::Author(id, author));
             let text = wrap(body, width, measure);
@@ -191,6 +203,14 @@ fn lines(
         }
         if let Some(reply) = draft.filter(|d| d.thread == Some(id)) {
             draft_lines(reply, width, measure, &mut out);
+        }
+        // The last word a rewrite: it's for the reviewer to apply or not.
+        if thread
+            .replies
+            .last()
+            .is_some_and(|r| rewrite(&r.text).is_some())
+        {
+            out.push(Line::Rewrite(id));
         }
         out.push(if suggested {
             Line::Choices(id)
@@ -249,6 +269,15 @@ pub fn hit(
             match pressed?.0 {
                 "Keep" => Some(Hit::Keep(*id)),
                 _ => Some(Hit::Dismiss(*id)),
+            }
+        }
+        Line::Rewrite(id) => {
+            let pressed = row_of(area, &REWRITE)
+                .into_iter()
+                .find(|(_, cells, at)| x >= *at && x < at + cells.chars().count() as u16);
+            match pressed?.0 {
+                "Apply" => Some(Hit::Apply(*id)),
+                _ => Some(Hit::Decline(*id)),
             }
         }
         Line::Check(_) => {
@@ -402,6 +431,22 @@ pub fn draw(
                     ..inner
                 };
                 grid.label_at(text_x as f32, text_x, y, label, accent, right, SMALL);
+            }
+            Line::Rewrite(_) => {
+                for (label, cells, x) in row_of(area, &REWRITE) {
+                    let main = label == "Apply";
+                    let fill = if main {
+                        theme.button
+                    } else {
+                        theme.quiet_button(theme.text.bg)
+                    };
+                    let style = Style {
+                        bg: fill,
+                        fg: if main { theme.button_text } else { inner.fg },
+                        ..inner
+                    };
+                    grid.button(x, y, &cells, label, fill, style);
+                }
             }
             Line::Choices(_) => {
                 for (label, cells, x) in row_of(area, &CHOICES) {

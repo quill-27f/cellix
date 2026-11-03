@@ -2976,11 +2976,24 @@ impl App {
                 continue;
             }
             // The agent again, with its last edits still standing untouched as suggestions.
-            let untouched = editor
-                .agent_review
-                .as_ref()
-                .filter(|(_, marked)| *marked == editor.buffer.text())
-                .map(|(base, _)| base.clone());
+            // Untouched, it's marked against the text from before the turn. Once some are
+            // accepted or rejected, against those decisions: the pending ones go back to
+            // what they replace, and the agent's text is marked against that again.
+            let untouched = editor.agent_review.as_ref().and_then(|(base, marked)| {
+                let now = editor.buffer.text();
+                if *marked == now {
+                    return Some(base.clone());
+                }
+                let syntax = editor.change_syntax();
+                let theirs: Vec<(String, String)> = cellix_doc::changes::find(marked, syntax)
+                    .into_iter()
+                    .map(|c| (c.old, c.new))
+                    .collect();
+                let only_decided = cellix_doc::changes::find(&now, syntax)
+                    .iter()
+                    .all(|c| theirs.contains(&(c.old.clone(), c.new.clone())));
+                only_decided.then(|| cellix_doc::changes::settle_all(&now, syntax, false))
+            });
             let disk = editor
                 .buffer
                 .path()
@@ -4117,8 +4130,25 @@ impl App {
         };
         editor.prepare_edit(area);
         let text = editor.buffer.text();
+        // With changes tracked, each replacement is a suggestion like any edit.
+        let tracking = editor.tracking.then(|| editor.change_syntax());
         let from = if all {
-            let replaced = options.replace_all(&matcher, &text, &with);
+            let replaced = match tracking {
+                Some(syntax) => {
+                    let mut out = String::with_capacity(text.len());
+                    let mut last = 0;
+                    for hit in matcher.find_iter(&text) {
+                        let found = hit.as_str();
+                        let new = options.replacement(&matcher, found, &with);
+                        out.push_str(&text[last..hit.start()]);
+                        out.push_str(&cellix_doc::changes::mark(found, &new, syntax));
+                        last = hit.end();
+                    }
+                    out.push_str(&text[last..]);
+                    out
+                }
+                None => options.replace_all(&matcher, &text, &with),
+            };
             if replaced != text {
                 editor.selections.set_single(Selection {
                     anchor: 0,
@@ -4134,6 +4164,10 @@ impl App {
             };
             let found = editor.buffer.rope().slice(start..end).to_string();
             let replacement = options.replacement(&matcher, &found, &with);
+            let replacement = match tracking {
+                Some(syntax) => cellix_doc::changes::mark(&found, &replacement, syntax),
+                None => replacement,
+            };
             editor.selections.set_single(Selection {
                 anchor: start,
                 head: end,
@@ -4571,6 +4605,8 @@ impl App {
             }
             Command::AddComment => self.prompt_comment_at_cursor(false),
             Command::FindInFile => self.open_find(),
+            Command::NextChange => self.step_change(true),
+            Command::PreviousChange => self.step_change(false),
             Command::NextProblem => self.step_problem(true),
             Command::PreviousProblem => self.step_problem(false),
             Command::GoBack => self.travel(true),
@@ -6153,6 +6189,16 @@ impl App {
                 }
             }
             ThreadHit::Check => self.check_review(),
+            ThreadHit::Apply(id) => self.apply_rewrite(id),
+            ThreadHit::Decline(id) => {
+                if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
+                    thread.replies.push(Reply {
+                        author: YOU.to_string(),
+                        text: "Not taking this rewrite.".to_string(),
+                    });
+                }
+                self.save_threads();
+            }
             ThreadHit::Keep(id) => {
                 if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
                     thread.suggested_by.clear();
@@ -6173,6 +6219,56 @@ impl App {
                 self.save_threads();
             }
         }
+    }
+
+    /// Puts an agent's rewrite in place of the words its comment is about, as a suggestion to
+    /// accept or reject like any other, so nothing changes until the reviewer says.
+    fn apply_rewrite(&mut self, id: u32) {
+        let Some(thread) = self.threads.iter().find(|t| t.id == id).cloned() else {
+            return;
+        };
+        let Some(words) = thread
+            .replies
+            .last()
+            .and_then(|r| crate::threads::rewrite(&r.text))
+            .map(str::to_string)
+        else {
+            return;
+        };
+        let path = self.workspace.root().join(&thread.file);
+        if self.open(&path).is_err() {
+            return;
+        }
+        let Some(editor) = self.editor_mut() else {
+            return;
+        };
+        let text = editor.buffer.text();
+        // The quote nearest the line it was on.
+        let near = editor
+            .buffer
+            .rope()
+            .line_to_char(thread.line.saturating_sub(1));
+        let chars: Vec<char> = text.chars().collect();
+        let wanted: Vec<char> = thread.quote.chars().collect();
+        let found = (0..chars.len().saturating_sub(wanted.len().saturating_sub(1)))
+            .filter(|at| !wanted.is_empty() && chars[*at..].starts_with(&wanted))
+            .min_by_key(|at| at.abs_diff(near));
+        let Some(start) = found else {
+            self.say("The words it's about aren't in the document any more");
+            return;
+        };
+        let marked = cellix_doc::changes::mark(&thread.quote, &words, editor.change_syntax());
+        editor
+            .buffer
+            .replace_range(&mut editor.selections, start, start + wanted.len(), &marked);
+        if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
+            thread.replies.push(Reply {
+                author: YOU.to_string(),
+                text: "Applied the rewrite as a suggestion.".to_string(),
+            });
+        }
+        self.save_threads();
+        self.say("The rewrite is in as a suggestion: accept or reject it");
     }
 
     /// Asks the agent to check the reviewer's comments on the document in view, and to
@@ -6596,6 +6692,33 @@ impl App {
             // Painted like the panel's other text, so the panel's paint doesn't cover it.
             grid.label(area.x + 1, area.y + n as u16, line, style, area.right());
         }
+    }
+
+    /// Moves to the next suggestion in the document, or the one before, going round, and says
+    /// which of how many it is.
+    fn step_change(&mut self, forward: bool) {
+        let area = self.focused_area();
+        let Some(editor) = self.editor_mut() else {
+            return;
+        };
+        let changes = cellix_doc::changes::find(&editor.buffer.text(), editor.change_syntax());
+        if changes.is_empty() {
+            self.say("No suggestions in this document");
+            return;
+        }
+        let head = editor.selections.primary().head;
+        let index = if forward {
+            changes.iter().position(|c| c.start > head).unwrap_or(0)
+        } else {
+            changes
+                .iter()
+                .rposition(|c| c.start < head)
+                .unwrap_or(changes.len() - 1)
+        };
+        let start = changes[index].start;
+        editor.selections.set_single(Selection::cursor(start));
+        editor.reveal(area);
+        self.say(format!("Suggestion {} of {}", index + 1, changes.len()));
     }
 
     /// Moves to the next problem the language server reported in this file, or the one
@@ -15711,6 +15834,78 @@ mod tests {
         app.thread_hit(ThreadHit::Keep(suggested));
         let kept = app.threads.iter().find(|t| t.id == suggested).unwrap();
         assert!(kept.suggested_by.is_empty(), "now the reviewer's own");
+    }
+
+    #[test]
+    fn a_rewrite_reply_applies_as_a_suggestion() {
+        let (_dir, mut app) = page_app("Our method is better on every benchmark.\n");
+        select_word(&mut app, "better");
+        app.run(Command::AddComment);
+        typed(&mut app, "Vague");
+        enter(&mut app);
+        let id = app.threads[0].id;
+        let (found, _) = std::sync::mpsc::channel();
+        app.serve(Request::Reply {
+            id,
+            author: "Claude".into(),
+            text: "Rewrite: 3.6 points better".into(),
+            found,
+        });
+        let text = screen(&app).text();
+        assert!(
+            text.contains("suggests a rewrite") && text.contains("Apply"),
+            "{text}"
+        );
+        app.thread_hit(ThreadHit::Apply(id));
+        assert_eq!(
+            app.active_text().unwrap(),
+            "Our method is {~~better~>3.6 points better~~} on every benchmark.\n"
+        );
+    }
+
+    #[test]
+    fn later_agent_edits_join_a_review_already_begun() {
+        let (dir, mut app) = tracking_page("One two.\n\nThree four.\n");
+        let path = dir.path().join("note.md");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(&path, "One TWO.\n\nThree four.\n").unwrap();
+        app.handle(Event::Tick);
+        app.run(Command::AcceptAllChanges);
+        assert_eq!(app.active_text().unwrap(), "One TWO.\n\nThree four.\n");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(&path, "One TWO.\n\nThree FOUR.\n").unwrap();
+        app.handle(Event::Tick);
+        let text = app.active_text().unwrap();
+        assert_eq!(
+            text, "One TWO.\n\nThree {~~four.~>FOUR.~~}\n",
+            "only the new edit is marked"
+        );
+    }
+
+    #[test]
+    fn replace_under_tracking_suggests_and_changes_step_through() {
+        let (_dir, mut app) = tracking_page("a cat, a cat.\n");
+        app.run(Command::ReplaceInFile);
+        typed(&mut app, "cat");
+        app.handle(Event::Key(KeyEvent::plain(Key::Tab)));
+        typed(&mut app, "dog");
+        app.handle(Event::Key(KeyEvent {
+            key: Key::Enter,
+            mods: cellix_input::Mods {
+                alt: true,
+                ..cellix_input::Mods::default()
+            },
+        }));
+        assert_eq!(
+            app.active_text().unwrap(),
+            "a {~~cat~>dog~~}, a {~~cat~>dog~~}.\n"
+        );
+        app.overlay = Overlay::None;
+        app.run(Command::NextChange);
+        assert!(
+            screen(&app).text().contains(" of 2"),
+            "it says which of the two"
+        );
     }
 
     #[test]

@@ -59,6 +59,8 @@ pub fn simple_keymap(event: KeyEvent) -> Option<Command> {
         Key::Esc => Cancel,
         Key::F(1) => CommandPalette,
         Key::F(2) => RenameSymbol,
+        Key::F(5) if mods.alt && shift => PreviousChange,
+        Key::F(5) if mods.alt => NextChange,
         Key::F(8) if shift => PreviousProblem,
         Key::F(8) => NextProblem,
         Key::F(12) if shift => GoToReferences,

@@ -2805,5 +2805,33 @@
     "title": "Inline code keeps its marks as code",
     "test": "inline_code_keeps_its_marks_as_code",
     "passes": true
+  },
+  {
+    "id": "export-no-notes",
+    "milestone": 10,
+    "title": "A reviewer's note stays out of an export",
+    "test": "a_reviewers_note_stays_out_of_an_export",
+    "passes": true
+  },
+  {
+    "id": "reply-rewrite",
+    "milestone": 10,
+    "title": "A rewrite reply applies as a suggestion",
+    "test": "a_rewrite_reply_applies_as_a_suggestion",
+    "passes": true
+  },
+  {
+    "id": "agent-after-review",
+    "milestone": 10,
+    "title": "Later agent edits join a review already begun",
+    "test": "later_agent_edits_join_a_review_already_begun",
+    "passes": true
+  },
+  {
+    "id": "replace-tracked",
+    "milestone": 10,
+    "title": "Replace under tracking suggests, and changes step through",
+    "test": "replace_under_tracking_suggests_and_changes_step_through",
+    "passes": true
   }
 ]

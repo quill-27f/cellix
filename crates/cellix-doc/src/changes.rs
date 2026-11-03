@@ -301,7 +301,7 @@ fn in_line(old: &str, new: &str) -> String {
 }
 
 /// One suggestion in the document's own syntax.
-fn mark(old: &str, new: &str, syntax: Syntax) -> String {
+pub fn mark(old: &str, new: &str, syntax: Syntax) -> String {
     match (syntax, old.is_empty(), new.is_empty()) {
         (_, true, true) => String::new(),
         (Syntax::Critic, true, false) => format!("{{++{new}++}}"),

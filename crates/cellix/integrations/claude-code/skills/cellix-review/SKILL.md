@@ -32,3 +32,7 @@ When the reviewer asks you to check their review, answer each of their comments 
 <kind> is Clarity, Correctness, Evidence, Structure or Reproducibility. Then suggest comments they
 missed with `cellix suggest <file> <line> <kind> "<exact words>" "<comment>"`, favouring kinds they
 haven't covered. Suggestions appear with Keep and Dismiss; don't edit the document yourself.
+
+When a comment asks for different wording, you can answer with the words themselves:
+`cellix reply <id> --suggest "<new words for the quoted text>"`. The reviewer sees Apply, which puts
+your rewrite in the document as a suggestion to accept or reject.

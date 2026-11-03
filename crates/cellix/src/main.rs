@@ -44,6 +44,8 @@ Usage: cellix [--wait] [files]
 
   cellix threads            The comments on this project, as JSON
   cellix reply <id> <text>  Answers a comment, beside the document
+  cellix reply <id> --suggest <text>
+                            Offers a rewrite of the words it's about, to apply
   cellix suggest <file> <line> <kind> <quote> <text>
                             Suggests a comment the reviewer can keep or dismiss
   cellix plan <file>        Holds a plan for review, and prints the verdict
@@ -228,6 +230,12 @@ fn main() -> ExitCode {
         }
         ["threads"] => return client("threads", None),
         ["plan", file] => return plan(file),
+        ["reply", id, "--suggest", text @ ..] if !text.is_empty() => {
+            // A rewrite of the words the comment is about, which the reviewer can apply.
+            let author = std::env::var("CELLIX_AGENT").unwrap_or_else(|_| "Agent".to_string());
+            let text = format!("Rewrite: {}", text.join(" ")).replace('\n', "\\n");
+            return client(&format!("reply {id} {author}\t{text}"), None);
+        }
         ["reply", id, text @ ..] if !text.is_empty() => {
             let author = std::env::var("CELLIX_AGENT").unwrap_or_else(|_| "Agent".to_string());
             let text = text.join(" ").replace('\n', "\\n");

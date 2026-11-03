@@ -732,3 +732,15 @@ Round ten, from the third persona reviews.
 Still open from the reviews: every agent edit as suggestions after a partial review, Replace All
 under tracking, replies that carry rewrites, code actions, references in their own view, inverse
 SyncTeX precision, warnings as Problems, `\input` inside a paragraph, natbib forms.
+
+The writing loop, from the technical writer's round three.
+- Every agent edit arrives as suggestions after a review has begun too: once some are accepted or
+  rejected, the pending ones go back to what they replace and the agent's new text is marked
+  against those decisions. Only typing of your own falls back to "changed on disk".
+- `cellix reply <id> --suggest "<new words>"` answers a comment with a rewrite; the card shows
+  "Claude suggests a rewrite" with Apply, which puts it in place of the quoted words as a
+  suggestion to accept or reject, and Not this.
+- Replace and Replace All under Track Changes write suggestions, not plain edits.
+- Next Change and Previous Change (Alt+F5, Shift+Alt+F5, and the palette) walk the suggestions and
+  say which of how many.
+- A reviewer's `{>>note<<}` stays out of HTML and PDF exports.

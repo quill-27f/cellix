@@ -88,7 +88,7 @@ pub fn keys_of(command: Command) -> Option<&'static str> {
     })
 }
 
-pub const COMMANDS: [(&str, Command); 80] = [
+pub const COMMANDS: [(&str, Command); 82] = [
     ("Save", Command::Save),
     ("Undo", Command::Undo),
     ("Redo", Command::Redo),
@@ -113,6 +113,8 @@ pub const COMMANDS: [(&str, Command); 80] = [
     ("Show Line in PDF", Command::ShowInPdf),
     ("Find in File", Command::FindInFile),
     ("Go Back", Command::GoBack),
+    ("Next Change", Command::NextChange),
+    ("Previous Change", Command::PreviousChange),
     ("Show Hover", Command::ShowHover),
     ("Go Forward", Command::GoForward),
     ("Replace in File", Command::ReplaceInFile),

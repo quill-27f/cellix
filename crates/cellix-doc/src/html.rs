@@ -148,9 +148,25 @@ pub fn marked(markdown: &str) -> String {
     out
 }
 
+/// Text without CriticMarkup's `{>>…<<}` notes.
+fn without_notes(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find("{>>") {
+        let Some(end) = rest[at..].find("<<}") else {
+            break;
+        };
+        out.push_str(rest[..at].trim_end_matches(' '));
+        rest = &rest[at + end + 3..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Markdown's marks in text that isn't code.
 fn marks_in(text: &str, pairs: &[(&str, &str)], highlight: &mut bool) -> String {
-    let mut text = text.to_string();
+    // `{>>note<<}` is a reviewer's note, for the people writing, not the page.
+    let mut text = without_notes(text);
     for (from, to) in pairs {
         text = text.replace(from, to);
     }
@@ -272,6 +288,13 @@ pub fn page_with(title: &str, markdown: &str, base: &str, built: &Built) -> Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reviewers_note_stays_out_of_an_export() {
+        let html = body("Ship it {>>check with infra<<} now.\n");
+        assert!(!html.contains("check with infra"), "{html}");
+        assert!(html.contains("Ship it now."), "{html}");
+    }
 
     #[test]
     fn inline_code_keeps_its_equals_signs() {

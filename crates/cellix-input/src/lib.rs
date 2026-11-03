@@ -175,6 +175,9 @@ pub enum Command {
     /// A cursor on the line above or below as well: Ctrl+Alt+Up and Down.
     AddCursorAbove,
     AddCursorBelow,
+    /// The next suggestion in the document, or the one before: Alt+F5, Shift+Alt+F5.
+    NextChange,
+    PreviousChange,
     /// The next problem in the file, or the one before: F8, Shift+F8.
     NextProblem,
     PreviousProblem,
