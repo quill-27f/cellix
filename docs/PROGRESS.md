@@ -619,3 +619,5 @@ lines coming into view and the columns that stay put, in the same synchronized f
 measures it at under half the bytes of a redraw. `tmux_split_resize_and_pane_switch_keep_the_screen`
 waited for a hint that only shows in an empty window, so it failed before this change; it now
 waits for the status line's far end. Unverified: how it feels over a real SSH link.
+
+Release 0.2.1, for the scroll region.
