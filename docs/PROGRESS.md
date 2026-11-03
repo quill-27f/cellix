@@ -658,3 +658,8 @@ longer leaves every citation red and completion empty. TeX accents in a `.bib` r
 (`Cand\`es` is "Candès"). A paper an agent rewrites rebuilds its open PDF, as saving one does.
 Open from the review: sections in `\input` files don't count toward the root's numbering or show
 in the Outline, and there's no drawn references list.
+
+A jump list. Go to Definition, Go to Line and opening a search result remember where they left
+from; Go Back (Ctrl+-) returns there and Go Forward (Ctrl+Shift+-) repeats the jump, both also in
+the palette. Without the kitty keyboard protocol a terminal sends Ctrl+- as Ctrl+/, which toggles
+a comment, so there the palette is the way. A hundred places are kept.

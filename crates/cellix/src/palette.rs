@@ -69,6 +69,8 @@ pub fn keys_of(command: Command) -> Option<&'static str> {
         Command::SelectAll => "Ctrl+A",
         Command::CloseTab => "Ctrl+W",
         Command::FindInFile => "Ctrl+F",
+        Command::GoBack => "Ctrl+-",
+        Command::GoForward => "Ctrl+Shift+-",
         Command::ReplaceInFile => "Ctrl+R",
         Command::FindInProject => "Ctrl+Shift+F",
         Command::OpenDiff => "Ctrl+G",
@@ -86,7 +88,7 @@ pub fn keys_of(command: Command) -> Option<&'static str> {
     })
 }
 
-pub const COMMANDS: [(&str, Command); 77] = [
+pub const COMMANDS: [(&str, Command); 79] = [
     ("Save", Command::Save),
     ("Undo", Command::Undo),
     ("Redo", Command::Redo),
@@ -110,6 +112,8 @@ pub const COMMANDS: [(&str, Command); 77] = [
     ("Compare Plan Versions", Command::ComparePlanVersions),
     ("Show Line in PDF", Command::ShowInPdf),
     ("Find in File", Command::FindInFile),
+    ("Go Back", Command::GoBack),
+    ("Go Forward", Command::GoForward),
     ("Replace in File", Command::ReplaceInFile),
     ("Toggle Comment", Command::ToggleComment),
     ("Duplicate Line", Command::DuplicateLine),

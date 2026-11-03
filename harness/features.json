@@ -2672,5 +2672,12 @@
     "title": "A paper an agent rewrites rebuilds its open PDF",
     "test": "a_paper_an_agent_rewrites_rebuilds_its_open_pdf",
     "passes": true
+  },
+  {
+    "id": "jump-list",
+    "milestone": 10,
+    "title": "Go Back returns from a jump and Go Forward repeats it",
+    "test": "go_back_returns_from_a_jump_and_go_forward_repeats_it",
+    "passes": true
   }
 ]

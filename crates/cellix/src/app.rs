@@ -688,6 +688,9 @@ pub struct App {
     pane_explained: bool,
     /// A comment waiting for an agent to be started.
     pending_ask: Option<u32>,
+    /// Places left by jumps, for Go Back, and the ones Go Back left, for Go Forward.
+    back: Vec<(PathBuf, usize)>,
+    forward: Vec<(PathBuf, usize)>,
     /// What a comment from Review's line numbers is about, and whether that line was removed.
     comment_quote: Option<(String, bool)>,
     /// Where an exported PDF goes once its hidden build is done.
@@ -750,6 +753,8 @@ impl App {
             pending_ask: None,
             export_to: None,
             comment_quote: None,
+            back: Vec::new(),
+            forward: Vec::new(),
             sync_result: None,
             keep_running: false,
             kernels: HashMap::new(),
@@ -2073,6 +2078,7 @@ impl App {
                 self.diagnostics.insert(path, items);
             }
             LspEvent::Definition(path, line, column) => {
+                self.mark_jump();
                 if self.open(&path).is_ok() {
                     let area = self.focused_area();
                     if let Some(editor) = self.editor_mut() {
@@ -4320,6 +4326,7 @@ impl App {
                 Ok(())
             }
             PromptAction::GoToLine => {
+                self.mark_jump();
                 let area = self.focused_area();
                 if let (Ok(line), Some(editor)) = (name.trim().parse(), self.editor_mut()) {
                     editor.go_to_line(line, area);
@@ -4453,6 +4460,8 @@ impl App {
             }
             Command::AddComment => self.prompt_comment_at_cursor(false),
             Command::FindInFile => self.open_find(),
+            Command::GoBack => self.travel(true),
+            Command::GoForward => self.travel(false),
             Command::ReplaceInFile => {
                 self.open_find();
                 if let Overlay::Find(find) = &mut self.overlay {
@@ -5695,6 +5704,7 @@ impl App {
     }
 
     fn open_match(&mut self, found: &cellix_core::Match) {
+        self.mark_jump();
         if let Err(e) = self.open(&found.path) {
             self.say(format!("Could not open: {e}"));
             return;
@@ -6164,6 +6174,60 @@ impl App {
 
     /// Puts one hunk back on disk. Refuses if the file has unsaved edits, which the
     /// rejection would silently overwrite.
+    /// Where the caret is, as a file and a place in it.
+    fn here(&self) -> Option<(PathBuf, usize)> {
+        let editor = self.editors.get(self.active())?;
+        let path = editor.buffer.path()?.to_path_buf();
+        Some((path, editor.selections.primary().head))
+    }
+
+    /// Remembers where a jump leaves from. A new jump forgets the way forward.
+    fn mark_jump(&mut self) {
+        const KEPT: usize = 100;
+        if let Some(here) = self.here()
+            && self.back.last() != Some(&here)
+        {
+            self.back.push(here);
+            if self.back.len() > KEPT {
+                self.back.remove(0);
+            }
+        }
+        self.forward.clear();
+    }
+
+    /// Goes back to where the last jump left from, or forward again.
+    fn travel(&mut self, back: bool) {
+        let from = if back {
+            &mut self.back
+        } else {
+            &mut self.forward
+        };
+        let Some((path, at)) = from.pop() else {
+            self.say(if back {
+                "Nowhere to go back to"
+            } else {
+                "Nowhere to go forward to"
+            });
+            return;
+        };
+        let here = self.here();
+        let to = if back {
+            &mut self.forward
+        } else {
+            &mut self.back
+        };
+        to.extend(here);
+        if self.open(&path).is_err() {
+            return;
+        }
+        let area = self.focused_area();
+        if let Some(editor) = self.editor_mut() {
+            let at = at.min(editor.buffer.rope().len_chars());
+            editor.selections.set_single(Selection::cursor(at));
+            editor.reveal(area);
+        }
+    }
+
     /// Tells the agent why a change was turned down, as a comment on where it was, so it
     /// doesn't try the same again. No reason, no comment.
     fn note_rejection(&mut self, hunk: usize, reason: &str) {
@@ -14990,6 +15054,26 @@ mod tests {
         let answer = propose(&mut app, diff_args(&dir, "t", "first line\nsecond\n"));
         app.run(Command::RejectProposal);
         assert_eq!(answer.try_recv().unwrap(), vec!["DIFF_REJECTED", "t"]);
+    }
+
+    #[test]
+    fn go_back_returns_from_a_jump_and_go_forward_repeats_it() {
+        let (dir, mut app) = project();
+        let path = dir.path().join("lines.txt");
+        fs::write(&path, "one\ntwo\nthree\nfour\n").unwrap();
+        app.open(&path).unwrap();
+        let head = |app: &App| app.editors[app.active()].selections.primary().head;
+        assert_eq!(head(&app), 0);
+        app.run(Command::GoToLine);
+        typed(&mut app, "3");
+        enter(&mut app);
+        assert_eq!(head(&app), 8, "line 3");
+        app.run(Command::GoBack);
+        assert_eq!(head(&app), 0, "back where the jump left from");
+        app.run(Command::GoForward);
+        assert_eq!(head(&app), 8, "and forward again");
+        app.run(Command::GoForward);
+        assert!(screen(&app).text().contains("Nowhere to go forward to"));
     }
 
     #[test]

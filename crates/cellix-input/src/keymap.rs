@@ -45,6 +45,9 @@ pub fn simple_keymap(event: KeyEvent) -> Option<Command> {
         Key::Char('f') if mods.alt => Move(Direction::WordRight, shift),
         Key::Char('z' | 'Z') if mods.ctrl && mods.shift => Redo,
         // Terminals without the Kitty protocol send Ctrl+/ as Ctrl+_ or Ctrl+7.
+        // Ctrl+- and Ctrl+Shift+-, as in VS Code, where the terminal tells them apart.
+        Key::Char('-') if mods.ctrl && !shift => GoBack,
+        Key::Char('_' | '-') if mods.ctrl && shift => GoForward,
         Key::Char('/' | '_' | '7') if mods.ctrl => ToggleComment,
         Key::Esc => Cancel,
         Key::F(1) => CommandPalette,

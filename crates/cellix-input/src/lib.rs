@@ -226,6 +226,9 @@ pub enum Command {
     OpenSettings,
     SwitchBranch,
     GoToDefinition,
+    /// Back to where the last jump left from, as VS Code's Go Back and Vim's Ctrl+O.
+    GoBack,
+    GoForward,
     GoToReferences,
     FormatDocument,
     Complete,
