@@ -54,7 +54,7 @@ use crate::theme::Theme;
 use crate::threads::{self, Draft, Hit as ThreadHit};
 use crate::toolbar::{self, Bar, Tool};
 
-const ACTIVITY_WIDTH: u16 = 5;
+const ACTIVITY_WIDTH: u16 = 4;
 /// The buttons that stand by a selection, and the one on a picture.
 const COMMENT_WIDTH: u16 = 10;
 const RUN_WIDTH: u16 = 6;
@@ -7233,14 +7233,16 @@ impl App {
                 let color = self.theme.button_text;
                 // On the icon's top right corner, wherever the icon's size puts it.
                 let corner = if self.measure.in_cells() { -0.16 } else { 0.42 };
-                let badge = Bounds::cells(area.x as f32 + 2.9, y as f32 + corner, 1.3, 0.58);
+                // Just past the icon's middle, so it sits on its corner at any rail width.
+                let middle = area.x as f32 + area.w as f32 / 2.0;
+                let badge = Bounds::cells(middle + 0.4, y as f32 + corner, 1.3, 0.58);
                 grid.panel(badge, 30, Some(self.theme.accent), None);
                 let font = Font {
                     bold: true,
                     size: BADGE_SIZE,
                     ..Font::default()
                 };
-                let (x, top) = (area.x as f32 + 3.22, y as f32 + corner - 0.2);
+                let (x, top) = (middle + 0.72, y as f32 + corner - 0.2);
                 grid.text_run(
                     (x, top),
                     area.right() as f32,
@@ -13748,7 +13750,8 @@ mod tests {
         let (x, y) = find(&grid, "word");
         assert!(x <= pane.x + 4, "it starts at the left: {x}");
         let end = grid.row_text(y).trim_end().chars().count() as u16;
-        assert!(end > pane.right() - 10, "it runs across the pane: {end}");
+        // A line breaks between words, so it can stop a word and the minimap's gap short.
+        assert!(end > pane.right() - 12, "it runs across the pane: {end}");
     }
 
     #[test]

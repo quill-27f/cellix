@@ -502,3 +502,7 @@ second Claude Code in the same folder waits on "Starting Cellix…" while the fi
 Cellix, which is worth fixing. The Getting Started guide and `samples/writing.md` still put the
 Agents icon on the left, and now say the top right.
 
+
+The rail is four columns, down from five, with its icons at about half their old size and the pill
+drawn to fit. `a_page_uses_the_whole_width` now allows a line to stop a word and the minimap's gap
+short of the edge: one column less moved where the last word broke, not how wide the page is.
