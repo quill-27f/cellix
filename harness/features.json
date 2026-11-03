@@ -2483,5 +2483,19 @@
     "title": "With tracking on, an agent's edit arrives as suggestions",
     "test": "with_tracking_on_an_agents_edit_arrives_as_suggestions",
     "passes": true
+  },
+  {
+    "id": "plan-versions-kept",
+    "milestone": 10,
+    "title": "Each plan keeps the version before it",
+    "test": "each_plan_keeps_the_one_before_it",
+    "passes": true
+  },
+  {
+    "id": "plan-versions-compare",
+    "milestone": 10,
+    "title": "A plan sent again shows what changed since the last version",
+    "test": "a_plan_sent_again_shows_what_changed_since_the_last_version",
+    "passes": true
   }
 ]

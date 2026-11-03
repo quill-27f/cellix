@@ -157,6 +157,8 @@ pub enum Command {
     BuildPdf,
     /// Writes the document as a PDF beside it.
     ExportPdf,
+    /// The plan in review against the version before it, as suggestions.
+    ComparePlanVersions,
     /// Scrolls the PDF to the line the caret is on.
     ShowInPdf,
     ToggleComment,

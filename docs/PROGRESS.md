@@ -544,3 +544,8 @@ several cursors get no bar. With Track Changes on, a file an agent rewrites arri
 word by word, in CriticMarkup or LaTeX's changes package, to accept or reject before saving. The
 skill tells agents so, and how to write a suggestion themselves. Unverified: a second agent edit
 before the first is settled meets the usual "changed on disk" conflict.
+
+Plan versions. Each plan an agent sends again keeps the one before it, `Plan v1.md` and on, beside
+`Plan.md`, so comments stay on `Plan.md` and follow their text into the new version. The status
+says which version is waiting, and Compare Plan Versions opens what changed as suggestions on a
+page of its own while the plan waits.

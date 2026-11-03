@@ -288,6 +288,23 @@ fn engines_for(name: Option<&str>, vim_may_use_neovim: bool) -> (Option<Vim>, Op
     (vim, neovim)
 }
 
+/// A plan's earlier versions, `Plan v1.md` and on beside `Plan.md`, oldest first.
+fn plan_versions(path: &Path) -> Vec<PathBuf> {
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut versions = Vec::new();
+    for version in 1.. {
+        let earlier = path.with_file_name(format!("{stem} v{version}.md"));
+        if !earlier.exists() {
+            break;
+        }
+        versions.push(earlier);
+    }
+    versions
+}
+
 /// Where an export builds and where its PDF ends up: built beside the document under a hidden
 /// name, so pictures resolve and nothing of the build is left in the project.
 fn export_names(path: &Path) -> (PathBuf, PathBuf) {
@@ -4244,6 +4261,7 @@ impl App {
             }
             Command::BuildPdf => self.build_pdf(),
             Command::ExportPdf => self.export_pdf(),
+            Command::ComparePlanVersions => self.compare_plan_versions(),
             Command::ShowInPdf => {
                 let place = self.cursor_line();
                 let shown = match (place, &mut self.dock.pdf) {
@@ -5671,9 +5689,17 @@ impl App {
                 self.review = None;
                 match self.open(&path) {
                     Ok(()) => {
+                        let earlier = plan_versions(&path).len();
                         self.plan = Some(PendingPlan { path, reply });
                         self.attention = Some("plan");
-                        self.say("An agent is waiting for you to review this plan");
+                        if earlier == 0 {
+                            self.say("An agent is waiting for you to review this plan");
+                        } else {
+                            self.say(format!(
+                                "An agent is waiting on version {} of this plan. Compare Plan Versions shows what changed",
+                                earlier + 1
+                            ));
+                        }
                     }
                     // Dropping `reply` lets the agent ask in its own way.
                     Err(e) => self.say(format!("Could not open the plan: {e}")),
@@ -7943,6 +7969,43 @@ impl App {
         // Saving already builds when the PDF is open.
         if self.build.is_none() {
             self.start_build(root);
+        }
+    }
+
+    /// Opens what changed since the plan's last version, as suggestions on a page of its own.
+    fn compare_plan_versions(&mut self) {
+        let path = match &self.plan {
+            Some(plan) => plan.path.clone(),
+            None => match self
+                .editors
+                .get(self.active())
+                .and_then(|e| e.buffer.path())
+            {
+                Some(path) => path.to_path_buf(),
+                None => return,
+            },
+        };
+        let Some(earlier) = plan_versions(&path).pop() else {
+            self.say("This plan has no earlier version");
+            return;
+        };
+        let old = std::fs::read_to_string(&earlier).unwrap_or_default();
+        let new = std::fs::read_to_string(&path).unwrap_or_default();
+        let marked = cellix_doc::changes::suggest(&old, &new, cellix_doc::changes::Syntax::Critic);
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let changes = path.with_file_name(format!("{stem} changes.md"));
+        match std::fs::write(&changes, marked).and_then(|()| self.open(&changes)) {
+            Ok(()) => self.say(format!(
+                "What changed since {}",
+                earlier
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            )),
+            Err(e) => self.say(format!("Could not compare: {e}")),
         }
     }
 
@@ -10627,6 +10690,24 @@ mod tests {
         app.handle(mouse(MouseKind::Left, x, y + 1));
         let text = screen(&app).text();
         assert!(text.contains("boom at line 3"), "{text}");
+    }
+
+    #[test]
+    fn a_plan_sent_again_shows_what_changed_since_the_last_version() {
+        let (dir, mut app) = project();
+        fs::write(dir.path().join("Plan v1.md"), "# Plan\n\nCache first.\n").unwrap();
+        let path = dir.path().join("Plan.md");
+        fs::write(&path, "# Plan\n\nCache last.\n").unwrap();
+        let (reply, _decision) = std::sync::mpsc::channel();
+        app.serve(Request::Plan { path, reply });
+        let text = screen(&app).text();
+        assert!(text.contains("version 2"), "{text}");
+        app.run(Command::ComparePlanVersions);
+        assert_eq!(
+            app.active_text().unwrap(),
+            "# Plan\n\nCache {~~first.~>last.~~}\n"
+        );
+        assert!(app.plan.is_some(), "the plan still waits");
     }
 
     fn pending_plan(dir: &TempDir, app: &mut App) -> std::sync::mpsc::Receiver<Decision> {

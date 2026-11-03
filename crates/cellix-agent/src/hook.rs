@@ -154,12 +154,28 @@ fn review_plan(roots: &[PathBuf], input: &Value, plan: &str) -> Option<(String, 
     // Beside the socket, because that folder is private and /tmp on a server isn't.
     let folder = socket.with_extension("").join(session);
     std::fs::create_dir_all(&folder).ok()?;
-    let path = folder.join("Plan.md");
-    std::fs::write(&path, plan).ok()?;
+    let path = keep_versions(&folder, plan).ok()?;
     tell(roots, input, AgentState::NeedsYou, PLAN_WAITING);
     let reply = ask(roots, &format!("plan {}", path.display()))?;
     let (verdict, text) = reply.split_once(' ').unwrap_or((&reply, "null"));
     Some((verdict.to_string(), serde_json::from_str(text).ok()?))
+}
+
+/// Writes the plan as `Plan.md`, keeping the one it replaces as `Plan v1.md`, `Plan v2.md` and on,
+/// so a reviewer can see what changed since they sent it back. Comments stay on `Plan.md`.
+fn keep_versions(folder: &Path, plan: &str) -> std::io::Result<PathBuf> {
+    let path = folder.join("Plan.md");
+    if let Ok(old) = std::fs::read_to_string(&path)
+        && old != plan
+    {
+        let mut version = 1;
+        while folder.join(format!("Plan v{version}.md")).exists() {
+            version += 1;
+        }
+        std::fs::write(folder.join(format!("Plan v{version}.md")), old)?;
+    }
+    std::fs::write(&path, plan)?;
+    Ok(path)
 }
 
 /// Claude Code's plan, from its permission request. With no Cellix, it asks as usual.
@@ -323,6 +339,23 @@ mod tests {
     use super::*;
     use crate::{Decision, Request, SharedComments, start};
     use std::path::Path;
+
+    #[test]
+    fn each_plan_keeps_the_one_before_it() {
+        let dir = tempfile::tempdir().unwrap();
+        keep_versions(dir.path(), "first").unwrap();
+        keep_versions(dir.path(), "first").unwrap();
+        assert!(
+            !dir.path().join("Plan v1.md").exists(),
+            "the same plan again is no version"
+        );
+        keep_versions(dir.path(), "second").unwrap();
+        let path = keep_versions(dir.path(), "third").unwrap();
+        assert_eq!(std::fs::read_to_string(path).unwrap(), "third");
+        let read = |name: &str| std::fs::read_to_string(dir.path().join(name)).unwrap();
+        assert_eq!(read("Plan v1.md"), "first");
+        assert_eq!(read("Plan v2.md"), "second");
+    }
 
     #[test]
     fn a_pipe_hides_a_failed_test_and_the_output_gives_it_away() {
