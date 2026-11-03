@@ -100,6 +100,7 @@ pub fn simple_keymap(event: KeyEvent) -> Option<Command> {
             '\\' | '4' => SplitPane,
             'o' => FocusNextPane,
             'n' => NewDocument,
+            '.' => QuickFix,
             ',' => OpenSettings,
             ']' => Indent,
             // Ctrl+[ only arrives as itself with the kitty protocol; elsewhere it's Escape.

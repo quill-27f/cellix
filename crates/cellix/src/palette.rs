@@ -70,6 +70,7 @@ pub fn keys_of(command: Command) -> Option<&'static str> {
         Command::CloseTab => "Ctrl+W",
         Command::FindInFile => "Ctrl+F",
         Command::GoBack => "Ctrl+-",
+        Command::QuickFix => "Ctrl+.",
         Command::GoForward => "Ctrl+Shift+-",
         Command::ReplaceInFile => "Ctrl+R",
         Command::FindInProject => "Ctrl+Shift+F",
@@ -88,7 +89,7 @@ pub fn keys_of(command: Command) -> Option<&'static str> {
     })
 }
 
-pub const COMMANDS: [(&str, Command); 82] = [
+pub const COMMANDS: [(&str, Command); 83] = [
     ("Save", Command::Save),
     ("Undo", Command::Undo),
     ("Redo", Command::Redo),
@@ -116,6 +117,7 @@ pub const COMMANDS: [(&str, Command); 82] = [
     ("Next Change", Command::NextChange),
     ("Previous Change", Command::PreviousChange),
     ("Show Hover", Command::ShowHover),
+    ("Quick Fix…", Command::QuickFix),
     ("Go Forward", Command::GoForward),
     ("Replace in File", Command::ReplaceInFile),
     ("Toggle Comment", Command::ToggleComment),

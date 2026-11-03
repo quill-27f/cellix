@@ -744,3 +744,9 @@ The writing loop, from the technical writer's round three.
 - Next Change and Previous Change (Alt+F5, Shift+Alt+F5, and the palette) walk the suggestions and
   say which of how many.
 - A reviewer's `{>>note<<}` stays out of HTML and PDF exports.
+
+Quick fixes. Quick Fix… (Ctrl+., the palette and the code's right-click menu) asks the language
+server for code actions at the caret, with the problems on its line, and lists the ones that come
+with their edits; picking one applies it across files as a rename does. Actions that only name a
+server command are left out, since what they'd do can't be shown first. Unverified with a real
+server.

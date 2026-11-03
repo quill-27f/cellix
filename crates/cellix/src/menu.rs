@@ -21,6 +21,8 @@ const MIN_WIDTH: u16 = 16;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
     Run(Command),
+    /// One of the language server's fixes, by its place in the list it sent.
+    ServerFix(usize),
     NewFile(PathBuf),
     NewFolder(PathBuf),
     Rename(PathBuf),

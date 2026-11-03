@@ -21,6 +21,9 @@ pub struct Diagnostic {
     pub severity: u64,
 }
 
+/// A fix the language server offers: its title, and its edits by file.
+pub type Fix = (String, Vec<(PathBuf, Vec<TextEdit>)>);
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TextEdit {
     pub start: (usize, usize),
@@ -40,6 +43,8 @@ pub enum LspEvent {
     Formatted(PathBuf, Vec<TextEdit>),
     /// What the server says about the symbol at a place: its type, signature and docs.
     Hover(String),
+    /// The server's fixes and refactors for a place, each a title and its edits.
+    Actions(Vec<Fix>),
     /// A file's symbols, in order, as (name, depth, line).
     Symbols(PathBuf, Vec<(String, usize, usize)>),
     /// The server refused a request, in its own words.
@@ -56,6 +61,7 @@ enum Pending {
     Formatting(PathBuf),
     Hover,
     Symbols(PathBuf),
+    Actions,
 }
 
 /// Holds messages until the server has answered `initialize`, as the protocol requires.
@@ -275,6 +281,27 @@ fn parse_completion(result: &Value) -> LspEvent {
 }
 
 fn parse_rename(result: &Value) -> LspEvent {
+    LspEvent::Rename(workspace_edit(result))
+}
+
+/// The fixes that come with their edits. One that only names a command for the server to run
+/// is left out, since Cellix can't show what it would do first.
+fn parse_actions(result: &Value) -> Vec<Fix> {
+    result
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|action| {
+            let title = action["title"].as_str()?.to_string();
+            let edit = action.get("edit")?;
+            let files = workspace_edit(edit);
+            (!files.is_empty()).then_some((title, files))
+        })
+        .collect()
+}
+
+/// A WorkspaceEdit's changes, by file, in either of its two shapes.
+fn workspace_edit(result: &Value) -> Vec<(PathBuf, Vec<TextEdit>)> {
     let mut files: Vec<(PathBuf, Vec<TextEdit>)> = Vec::new();
     if let Some(changes) = result["changes"].as_object() {
         for (uri, edits) in changes {
@@ -288,7 +315,7 @@ fn parse_rename(result: &Value) -> LspEvent {
             files.push((path, text_edits(&change["edits"])));
         }
     }
-    LspEvent::Rename(files)
+    files
 }
 
 /// rust-analyzer ignores a save that arrives while it's loading, and then a file with
@@ -377,6 +404,7 @@ fn read_loop(
             }
             Some(Pending::Definition) => parse_location(result),
             Some(Pending::Hover) => parse_hover(result),
+            Some(Pending::Actions) => Some(LspEvent::Actions(parse_actions(result))),
             Some(Pending::Symbols(path)) => Some(LspEvent::Symbols(path, parse_symbols(result))),
             Some(Pending::Completion) => Some(parse_completion(result)),
             Some(Pending::Rename) => Some(parse_rename(result)),
@@ -449,6 +477,10 @@ impl Client {
                         "definition": {},
                         "hover": {"contentFormat": ["plaintext", "markdown"]},
                         "documentSymbol": {"hierarchicalDocumentSymbolSupport": true},
+                        "codeAction": {"codeActionLiteralSupport": {"codeActionKind": {"valueSet": [
+                            "", "quickfix", "refactor", "refactor.extract", "refactor.inline",
+                            "refactor.rewrite", "source", "source.organizeImports"
+                        ]}}},
                         "completion": {},
                         "rename": {},
                         "references": {},
@@ -526,6 +558,33 @@ impl Client {
             "textDocument": {"uri": uri(path)},
             "position": {"line": line, "character": column},
         })
+    }
+
+    /// Asks for the fixes at a place, with the problems reported on its line.
+    pub fn code_actions(
+        &mut self,
+        path: &Path,
+        (line, column): (usize, usize),
+        problems: &[(usize, usize, String, u64)],
+    ) {
+        let diagnostics: Vec<Value> = problems
+            .iter()
+            .map(|(line, column, message, severity)| {
+                json!({
+                    "range": {"start": {"line": line, "character": column},
+                              "end": {"line": line, "character": column}},
+                    "message": message,
+                    "severity": severity,
+                })
+            })
+            .collect();
+        let at = json!({"line": line, "character": column});
+        let params = json!({
+            "textDocument": {"uri": uri(path)},
+            "range": {"start": at, "end": at},
+            "context": {"diagnostics": diagnostics},
+        });
+        self.request("textDocument/codeAction", params, Pending::Actions);
     }
 
     /// Asks for a file's symbols, for the Outline.
@@ -653,6 +712,20 @@ mod tests {
         );
         let flat = json!([{"name": "f", "kind": 12, "location": {"uri": "file:///a", "range": {"start": {"line": 3}}}}]);
         assert_eq!(parse_symbols(&flat), vec![("f".into(), 0, 3)]);
+    }
+
+    #[test]
+    fn fixes_come_with_their_edits_and_commands_stay_out() {
+        let actions = json!([
+            {"title": "Add semicolon", "kind": "quickfix", "edit": {"changes": {"file:///a.c": [
+                {"range": {"start": {"line": 2, "character": 9}, "end": {"line": 2, "character": 9}}, "newText": ";"}
+            ]}}},
+            {"title": "Run a command", "command": {"command": "x"}}
+        ]);
+        let found = parse_actions(&actions);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, "Add semicolon");
+        assert_eq!(found[0].1[0].1[0].text, ";");
     }
 
     #[test]

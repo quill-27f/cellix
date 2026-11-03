@@ -714,6 +714,8 @@ pub struct App {
     pending_review: Option<String>,
     /// A prompt for the agent this Cellix is a pane in, for the mod to submit.
     outgoing_prompt: Option<String>,
+    /// The fixes the language server last offered, for the menu that shows them.
+    code_actions: Vec<cellix_lang::lsp::Fix>,
     /// Code's symbols from its language server, for the Outline, and the file and revision
     /// last asked about, so it's asked once a change.
     symbols: HashMap<PathBuf, Vec<crate::outline::Heading>>,
@@ -794,6 +796,7 @@ impl App {
             comment_quote: None,
             back: Vec::new(),
             forward: Vec::new(),
+            code_actions: Vec::new(),
             symbols: HashMap::new(),
             symbols_asked: None,
             rest: None,
@@ -2140,6 +2143,25 @@ impl App {
                     }
                 }
             }
+            LspEvent::Actions(found) => {
+                if found.is_empty() {
+                    self.say("No quick fixes here");
+                    return;
+                }
+                let area = self.focused_area();
+                let at = self
+                    .editors
+                    .get(self.active())
+                    .and_then(|e| e.caret_cell(area))
+                    .map_or((area.x, area.y), |(x, y)| (x as u16, y + 1));
+                let items = found
+                    .iter()
+                    .enumerate()
+                    .map(|(n, (title, _))| MenuItem::new(title.clone(), MenuAction::ServerFix(n)))
+                    .collect();
+                self.code_actions = found;
+                self.show_menu(at, items);
+            }
             LspEvent::Symbols(path, found) => {
                 let headings = found
                     .into_iter()
@@ -2343,6 +2365,17 @@ impl App {
             Command::GoToDefinition => client.definition(&path, line, column),
             Command::ShowHover => client.hover(&path, line, column),
             Command::GoToReferences => client.references(&path, line, column),
+            Command::QuickFix => {
+                let problems: Vec<(usize, usize, String, u64)> = self
+                    .diagnostics
+                    .get(&path)
+                    .into_iter()
+                    .flatten()
+                    .filter(|d| d.line == line)
+                    .map(|d| (d.line, d.column, d.message.clone(), d.severity))
+                    .collect();
+                client.code_actions(&path, (line, column), &problems);
+            }
             _ => client.completion(&path, line, column),
         }
     }
@@ -4816,7 +4849,9 @@ impl App {
                     editor.reveal(area);
                 }
             }
-            Command::GoToDefinition | Command::GoToReferences => self.lsp_request(command),
+            Command::GoToDefinition | Command::GoToReferences | Command::QuickFix => {
+                self.lsp_request(command);
+            }
             Command::ShowHover => {
                 let area = self.focused_area();
                 let caret = self
@@ -7554,6 +7589,7 @@ impl App {
                 run("Go to Definition", Command::GoToDefinition).when(server),
                 run("Go to References", Command::GoToReferences).when(server),
                 run("Rename Symbol", Command::RenameSymbol).when(server),
+                run("Quick Fix…", Command::QuickFix).when(server),
                 run("Format Document", Command::FormatDocument)
                     .when(server || language.is_some_and(|l| formatter(l).is_some())),
             ]);
@@ -7655,6 +7691,18 @@ impl App {
                 if let Some(editor) = self.editor_mut() {
                     editor.apply_fix(start, end, &text);
                 }
+            }
+            MenuAction::ServerFix(index) => {
+                let Some((title, files)) = self.code_actions.get(index).cloned() else {
+                    return;
+                };
+                for (path, edits) in files {
+                    if let Err(e) = self.apply_edits(&path, edits) {
+                        self.say(format!("Could not apply it in {}: {e}", path.display()));
+                        return;
+                    }
+                }
+                self.say(format!("Applied: {title}"));
             }
             MenuAction::Learn(word) => {
                 if let Some(spell) = &self.spell {
@@ -15771,6 +15819,30 @@ mod tests {
         let answer = propose(&mut app, diff_args(&dir, "t", "first line\nsecond\n"));
         app.run(Command::RejectProposal);
         assert_eq!(answer.try_recv().unwrap(), vec!["DIFF_REJECTED", "t"]);
+    }
+
+    #[test]
+    fn a_quick_fix_is_offered_and_applied() {
+        let (dir, mut app) = project();
+        let path = dir.path().join("beta.rs");
+        app.open(&path).unwrap();
+        let path = app.editors[app.active()]
+            .buffer
+            .path()
+            .unwrap()
+            .to_path_buf();
+        let edit = TextEdit {
+            start: (0, 12),
+            end: (0, 12),
+            text: " // fixed".into(),
+        };
+        app.lsp_event(LspEvent::Actions(vec![(
+            "Mark it fixed".into(),
+            vec![(path, vec![edit])],
+        )]));
+        assert!(screen(&app).text().contains("Mark it fixed"));
+        app.menu_action(MenuAction::ServerFix(0));
+        assert_eq!(app.active_text().unwrap(), "fn main() {} // fixed\n");
     }
 
     #[test]

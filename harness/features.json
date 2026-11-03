@@ -2833,5 +2833,19 @@
     "title": "Replace under tracking suggests, and changes step through",
     "test": "replace_under_tracking_suggests_and_changes_step_through",
     "passes": true
+  },
+  {
+    "id": "lsp-actions-parse",
+    "milestone": 10,
+    "title": "Fixes come with their edits, and commands stay out",
+    "test": "fixes_come_with_their_edits_and_commands_stay_out",
+    "passes": true
+  },
+  {
+    "id": "quick-fix",
+    "milestone": 10,
+    "title": "A quick fix is offered and applied",
+    "test": "a_quick_fix_is_offered_and_applied",
+    "passes": true
   }
 ]
