@@ -520,3 +520,10 @@ highlight. A document with pending suggestions asks whether the PDF shows them a
 stand. The PDF builds from a hidden `.name.export.tex` and its log and aux files go, so an existing
 `name.tex` no longer stops an export. Unverified: the latexmk and pdflatex leftovers, on a machine
 without tectonic.
+
+LaTeX. Typing inside `\cite{` or `\ref{` (and `\citep`, `\eqref`, `\cref` and the rest) offers the
+bibliography's keys or the paper's labels, and Enter or Tab puts the whole key in. A brace still
+being typed shows on the page, where it vanished until closed. A reference to no label and a
+citation the bibliography lacks show in the colour of failure, as LaTeX prints `??` and `[?]`.
+latexmk and pdflatex now write SyncTeX, and pdflatex runs BibTeX and again until references settle.
+Unverified: the pdflatex passes on a machine with only pdflatex.

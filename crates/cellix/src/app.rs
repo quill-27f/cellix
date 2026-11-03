@@ -206,6 +206,8 @@ enum SidebarView {
 struct Suggest {
     items: Vec<Candidate>,
     selected: usize,
+    /// Where an accepted suggestion starts replacing, when that isn't the word's start.
+    from: Option<usize>,
 }
 
 /// A change Claude Code is waiting on, shown in the review view.
@@ -2153,8 +2155,52 @@ impl App {
         path.and_then(Registry::language_name).unwrap_or("")
     }
 
+    /// A citation or label key being typed in a paper: which kind, what's typed of it, and where
+    /// it starts.
+    fn reference_slot(&self) -> Option<(cellix_doc::latex::Slot, String, usize)> {
+        let editor = self.editors.get(self.active())?;
+        if editor.dialect() != Dialect::Latex {
+            return None;
+        }
+        let primary = editor.selections.primary();
+        if !primary.is_empty() {
+            return None;
+        }
+        let rope = editor.buffer.rope();
+        let line_start = rope.line_to_char(rope.char_to_line(primary.head));
+        let before = rope.slice(line_start..primary.head).to_string();
+        let (slot, key) = cellix_doc::latex::reference_slot(&before)?;
+        let typed = before.chars().skip(key).collect();
+        Some((slot, typed, line_start + key))
+    }
+
     /// Recomputes what shows from what's known, without asking any server.
     fn rank_suggestions(&mut self) {
+        // Inside `\cite{` and `\ref{` the keys are what's wanted, on a page or not.
+        if let Some((slot, typed, from)) = self.reference_slot() {
+            let project = self
+                .editors
+                .get(self.active())
+                .map(Editor::latex_project)
+                .unwrap_or_default();
+            let keys = match slot {
+                cellix_doc::latex::Slot::Cite => &project.citations,
+                cellix_doc::latex::Slot::Ref => &project.labels,
+            };
+            let mut keys: Vec<String> = keys.keys().cloned().collect();
+            keys.sort();
+            let all = keys.into_iter().map(|label| Candidate {
+                label,
+                source: Source::Key,
+            });
+            let items = complete::rank(&typed, all.collect());
+            self.suggest = (!items.is_empty()).then_some(Suggest {
+                items,
+                selected: 0,
+                from: Some(from),
+            });
+            return;
+        }
         // Prose isn't code: a word that completes itself gets in a writer's way.
         if self.on_page() && !self.suggest_asked {
             self.close_suggestions();
@@ -2203,7 +2249,11 @@ impl App {
             }
         }
         let items = complete::rank(&typed, all);
-        self.suggest = (!items.is_empty()).then_some(Suggest { items, selected: 0 });
+        self.suggest = (!items.is_empty()).then_some(Suggest {
+            items,
+            selected: 0,
+            from: None,
+        });
     }
 
     /// Updates suggestions after a keystroke, and asks the language server too if there is one.
@@ -2229,6 +2279,7 @@ impl App {
     }
 
     fn accept_suggestion(&mut self, index: usize) {
+        let from = self.suggest.as_ref().and_then(|s| s.from);
         let label = self
             .suggest
             .as_ref()
@@ -2236,7 +2287,7 @@ impl App {
             .map(|c| c.label.clone());
         self.close_suggestions();
         if let Some(label) = label {
-            self.insert_completion(&label);
+            self.insert_completion(&label, from);
         }
     }
 
@@ -2332,11 +2383,13 @@ impl App {
         }
     }
 
-    /// Replaces the word before the cursor with a completion.
-    fn insert_completion(&mut self, text: &str) {
+    /// Replaces the word before the cursor with a completion, or what's from `from` on.
+    fn insert_completion(&mut self, text: &str, from: Option<usize>) {
         if let Some(editor) = self.editor_mut() {
             let head = editor.selections.primary().head;
-            let (start, _) = editor.buffer.word_at(head);
+            let start = from
+                .unwrap_or_else(|| editor.buffer.word_at(head).0)
+                .min(head);
             editor.selections.set_single(Selection {
                 anchor: start,
                 head,
@@ -3242,7 +3295,7 @@ impl App {
                 editor.type_char(c);
             }
             self.reveal();
-            if c.is_alphanumeric() || c == '_' {
+            if c.is_alphanumeric() || c == '_' || self.reference_slot().is_some() {
                 self.refresh_suggestions();
             } else {
                 self.close_suggestions();
@@ -7761,11 +7814,28 @@ impl App {
         self.say(format!("Building {}…", name.display()));
         let started = std::time::Instant::now();
         std::thread::spawn(move || {
-            let output = std::process::Command::new(&engine[0])
-                .args(&engine[1..])
-                .current_dir(&folder)
-                .stdin(std::process::Stdio::null())
-                .output();
+            let run = |program: &str, args: &[String]| {
+                std::process::Command::new(program)
+                    .args(args)
+                    .current_dir(&folder)
+                    .stdin(std::process::Stdio::null())
+                    .output()
+            };
+            let mut output = run(&engine[0], &engine[1..]);
+            // pdflatex makes one pass, where tectonic and latexmk go on until references settle.
+            let worked = output.as_ref().is_ok_and(|o| o.status.success());
+            if worked && Path::new(&engine[0]).file_name() == Some(std::ffi::OsStr::new("pdflatex"))
+            {
+                let aux = std::fs::read_to_string(folder.join(&name).with_extension("aux"));
+                let (bibtex, passes) = cellix_doc::latex::more_passes(&aux.unwrap_or_default());
+                if bibtex {
+                    let stem = name.with_extension("").display().to_string();
+                    let _ = run("bibtex", &[stem]);
+                }
+                for _ in 0..passes {
+                    output = run(&engine[0], &engine[1..]);
+                }
+            }
             let (worked, said) = match output {
                 Ok(done) => (
                     done.status.success(),
@@ -13491,6 +13561,37 @@ mod tests {
         assert!(screen(&app).text().contains("knuth84"));
         enter(&mut app);
         assert_eq!(app.active_text().as_deref(), Some("See\\cite{knuth84}\n"));
+    }
+
+    #[test]
+    fn references_and_citations_complete_inside_their_braces() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("refs.bib"), "@article{knuth84,\n}\n").unwrap();
+        let path = dir.path().join("paper.tex");
+        fs::write(&path, "See \n\\section{Intro}\\label{sec:intro}\n").unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (170, 40));
+        app.open(&path).unwrap();
+        // Drawn once as it opens, which reads the paper.
+        screen(&app);
+        let offered = |app: &App, key: &str| {
+            app.suggest
+                .as_ref()
+                .is_some_and(|s| s.items.iter().any(|c| c.label == key))
+        };
+        app.run(Command::Move(cellix_input::Direction::LineEnd, false));
+        typed(&mut app, "\\ref{");
+        assert!(offered(&app, "sec:intro"), "the label is offered");
+        enter(&mut app);
+        typed(&mut app, " \\cite{kn");
+        assert!(offered(&app, "knuth84"), "the key is offered");
+        enter(&mut app);
+        let text = app.active_text().unwrap();
+        assert!(text.contains("\\ref{sec:intro"), "{text}");
+        assert!(text.contains("\\cite{knuth84"), "{text}");
+        assert!(
+            !text.contains("knkn") && !text.contains("sec:sec"),
+            "{text}"
+        );
     }
 
     #[test]

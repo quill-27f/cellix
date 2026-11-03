@@ -2406,5 +2406,40 @@
     "title": "Exporting suggestions asks how",
     "test": "exporting_suggestions_asks_how",
     "passes": true
+  },
+  {
+    "id": "latex-slot",
+    "milestone": 10,
+    "title": "A key being typed inside \\cite and \\ref is found",
+    "test": "a_key_is_being_typed_inside_cite_and_ref",
+    "passes": true
+  },
+  {
+    "id": "latex-passes",
+    "milestone": 10,
+    "title": "pdflatex runs BibTeX and again until references settle",
+    "test": "pdflatex_runs_again_until_references_settle",
+    "passes": true
+  },
+  {
+    "id": "latex-missing",
+    "milestone": 10,
+    "title": "An unknown reference or citation shows as missing",
+    "test": "a_reference_to_nothing_shows_as_missing",
+    "passes": true
+  },
+  {
+    "id": "latex-open-brace",
+    "milestone": 10,
+    "title": "A brace being typed stays on the page",
+    "test": "a_brace_being_typed_stays_on_the_page",
+    "passes": true
+  },
+  {
+    "id": "latex-complete-keys",
+    "milestone": 10,
+    "title": "Labels and citation keys complete inside their braces",
+    "test": "references_and_citations_complete_inside_their_braces",
+    "passes": true
   }
 ]

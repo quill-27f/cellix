@@ -610,17 +610,103 @@ pub fn bib_entries(text: &str) -> Vec<BibEntry> {
     entries
 }
 
-/// The engines Cellix knows, best first, as commands that take the file last.
+/// The engines Cellix knows, best first, as commands that take the file last. Each writes the
+/// SyncTeX map that links the PDF back to the source.
 pub const ENGINES: [&[&str]; 3] = [
     &["tectonic", "-X", "compile", "--synctex", "--keep-logs"],
     &[
         "latexmk",
         "-pdf",
+        "-synctex=1",
         "-interaction=nonstopmode",
         "-file-line-error",
     ],
-    &["pdflatex", "-interaction=nonstopmode", "-file-line-error"],
+    &[
+        "pdflatex",
+        "-synctex=1",
+        "-interaction=nonstopmode",
+        "-file-line-error",
+    ],
 ];
+
+/// The commands that cite, and the ones that refer to a label.
+pub const CITES: [&str; 10] = [
+    "cite",
+    "citep",
+    "citet",
+    "citeauthor",
+    "citeyear",
+    "autocite",
+    "parencite",
+    "textcite",
+    "footcite",
+    "nocite",
+];
+pub const REFS: [&str; 6] = ["ref", "eqref", "cref", "Cref", "autoref", "pageref"];
+
+/// What a pdflatex pass left to do, from its `.aux` file: whether BibTeX has to run, and how many
+/// more passes it takes for citations and references to settle. Tectonic and latexmk do this
+/// themselves.
+pub fn more_passes(aux: &str) -> (bool, usize) {
+    let bibtex = aux.contains("\\bibdata");
+    let passes = if bibtex {
+        2
+    } else {
+        usize::from(aux.contains("\\newlabel") || aux.contains("\\citation"))
+    };
+    (bibtex, passes)
+}
+
+/// Whether a key to a citation or a label is being typed: the text of a line up to the caret
+/// ends inside `\cite{` or `\ref{`. Gives which, and the char where the key being typed starts,
+/// after any keys before it.
+pub fn reference_slot(before: &str) -> Option<(Slot, usize)> {
+    let chars: Vec<char> = before.chars().collect();
+    let open = chars.iter().rposition(|c| *c == '{')?;
+    if chars[open + 1..]
+        .iter()
+        .any(|c| matches!(c, '}' | '\\' | '{'))
+    {
+        return None;
+    }
+    // Past options, as in `\citep[see][p.~3]{`.
+    let mut end = open;
+    while end > 0 && chars[end - 1] == ']' {
+        end = chars[..end].iter().rposition(|c| *c == '[')?;
+    }
+    let name_start = chars[..end]
+        .iter()
+        .rposition(|c| !(c.is_ascii_alphabetic() || *c == '*'))?;
+    if chars[name_start] != '\\' {
+        return None;
+    }
+    let name: String = chars[name_start + 1..end].iter().collect();
+    let name = name.trim_end_matches('*');
+    let slot = if CITES.contains(&name) {
+        Slot::Cite
+    } else if REFS.contains(&name) {
+        Slot::Ref
+    } else {
+        return None;
+    };
+    let key = chars[open + 1..]
+        .iter()
+        .rposition(|c| *c == ',')
+        .map_or(open + 1, |comma| open + 2 + comma);
+    let key = key
+        + chars[key..]
+            .iter()
+            .take_while(|c| c.is_whitespace())
+            .count();
+    Some((slot, key))
+}
+
+/// What goes inside a reference's braces.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Slot {
+    Cite,
+    Ref,
+}
 
 /// Finds `file:line: message` in a build's output. Every engine's errors reduce to this.
 pub fn problems(output: &str, folder: &Path) -> Vec<Problem> {
@@ -1098,6 +1184,24 @@ pub fn from_markdown_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_key_is_being_typed_inside_cite_and_ref() {
+        assert_eq!(reference_slot("See \\cite{kn"), Some((Slot::Cite, 10)));
+        assert_eq!(
+            reference_slot("See \\citep[see][p.~3]{a, kn"),
+            Some((Slot::Cite, 25))
+        );
+        assert_eq!(reference_slot("In \\eqref{"), Some((Slot::Ref, 10)));
+        assert_eq!(reference_slot("\\textbf{bold"), None);
+        assert_eq!(reference_slot("\\ref{done} and"), None);
+    }
+
+    #[test]
+    fn pdflatex_runs_again_until_references_settle() {
+        assert_eq!(more_passes("\\relax\n"), (false, 0));
+        assert_eq!(more_passes("\\newlabel{sec:a}{{1}{1}}\n"), (false, 1));
+        assert_eq!(more_passes("\\citation{k}\n\\bibdata{refs}\n"), (true, 2));
+    }
 
     #[test]
     fn front_matter_becomes_the_title_block() {

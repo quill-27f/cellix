@@ -531,6 +531,11 @@ impl Editor {
         project
     }
 
+    /// The paper this file belongs to, with its labels and citations.
+    pub fn latex_project(&self) -> Rc<Project> {
+        self.project(&self.buffer.text())
+    }
+
     /// Where a clickable row leads, if there's one at this place on screen.
     pub fn row_target(&self, area: Rect, y: u16) -> Option<Target> {
         let area = self.text_area(area);

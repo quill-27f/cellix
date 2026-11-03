@@ -3,7 +3,7 @@
 //! recognise shows as source, so nothing in a paper is ever out of reach.
 
 use super::*;
-use cellix_doc::latex::{Counters, equation_rows, is_math};
+use cellix_doc::latex::{CITES, Counters, REFS, equation_rows, is_math};
 
 /// Space before a label beside a heading, in cells.
 const LABEL_GAP: f32 = 0.8;
@@ -37,19 +37,6 @@ const QUIET: [&str; 16] = [
     "\\cmidrule",
     "\\cline",
 ];
-const CITES: [&str; 10] = [
-    "cite",
-    "citep",
-    "citet",
-    "citeauthor",
-    "citeyear",
-    "autocite",
-    "parencite",
-    "textcite",
-    "footcite",
-    "nocite",
-];
-const REFS: [&str; 6] = ["ref", "eqref", "cref", "Cref", "autoref", "pageref"];
 /// Commands whose argument is just text here.
 const TEXT_COMMANDS: [&str; 6] = ["textrm", "textsf", "textsc", "textnormal", "mbox", "text"];
 
@@ -164,6 +151,11 @@ pub(super) fn inline(
                 out.push(glyph('”', Some(at), look));
                 i += 2;
             }
+            // A brace not yet closed is still being typed, so it shows.
+            '{' if matching(chars, i).is_none() => {
+                out.push(glyph('{', Some(at), dim(look)));
+                i += 1;
+            }
             '{' | '}' => i += 1,
             '$' => match math_end(&chars[i..]) {
                 Some(end) => {
@@ -239,6 +231,10 @@ fn command(rest: &[char], at: usize, look: Look, context: &Context, out: &mut Ve
     let start = at + open + 1;
     let link = Look {
         tone: Tone::Link,
+        ..look
+    };
+    let missing = Look {
+        tone: Tone::Failed,
         ..look
     };
     let name = name.trim_end_matches('*');
@@ -352,15 +348,22 @@ fn command(rest: &[char], at: usize, look: Look, context: &Context, out: &mut Ve
         }
         _ if CITES.contains(&name) => {
             out.extend(decoration("[", Tone::Link));
-            let key: String = inner.iter().collect();
-            let shown = key.split(',').map(str::trim).map(|key| {
-                project
-                    .and_then(|p| p.citations.get(key).cloned())
-                    .unwrap_or_else(|| key.to_string())
-            });
-            let shown = shown.collect::<Vec<_>>().join("; ");
-            for (n, c) in shown.chars().enumerate() {
-                out.push(glyph(c, (n == 0).then_some(start), link));
+            let keys: String = inner.iter().collect();
+            let mut first = true;
+            for (n, key) in keys.split(',').map(str::trim).enumerate() {
+                if n > 0 {
+                    out.extend("; ".chars().map(|c| glyph(c, None, link)));
+                }
+                // A key the bibliography doesn't have prints as `[?]`, so it shows as missing.
+                let (shown, tone) = match project.map(|p| p.citations.get(key)) {
+                    Some(Some(shown)) => (shown.clone(), link),
+                    Some(None) => (key.to_string(), missing),
+                    None => (key.to_string(), link),
+                };
+                for c in shown.chars() {
+                    out.push(glyph(c, first.then_some(start), tone));
+                    first = false;
+                }
             }
             out.extend(decoration("]", Tone::Link));
         }
@@ -389,9 +392,10 @@ fn command(rest: &[char], at: usize, look: Look, context: &Context, out: &mut Ve
                         out.push(glyph(c, spot, link));
                     }
                 }
+                // A label nothing defines prints as `??`, so it shows as missing.
                 None => {
                     for (n, c) in inner.iter().enumerate() {
-                        out.push(glyph(*c, Some(start + n), link));
+                        out.push(glyph(*c, Some(start + n), missing));
                     }
                 }
             }
@@ -1323,6 +1327,24 @@ ignored after the end
         assert!(all.contains("1.1  Inner"), "{all}");
         assert!(all.contains("2  Two"), "{all}");
         assert!(all.contains("See 1.1 and (1) and gone."), "{all}");
+    }
+
+    #[test]
+    fn a_reference_to_nothing_shows_as_missing() {
+        let source =
+            "\\section{One}\\label{sec:one}\nSee \\ref{sec:one}, \\ref{gone} and \\cite{nobody}.\n";
+        let failed: String = page(source)
+            .iter()
+            .flat_map(|row| &row.glyphs)
+            .filter(|g| g.tone == Tone::Failed)
+            .map(|g| g.ch)
+            .collect();
+        assert_eq!(failed, "gonenobody");
+    }
+
+    #[test]
+    fn a_brace_being_typed_stays_on_the_page() {
+        assert_eq!(shown("See \\cite{kn\n")[0], "See \\cite{kn");
     }
 
     #[test]
