@@ -8600,11 +8600,19 @@ impl App {
                 },
                 "UTF-8".to_string(),
                 // A writer counts words, and has no use for indent width.
-                if editor.tracking {
+                if editor.rendered {
+                    let (all, selected) = editor.word_count();
+                    let words = match selected {
+                        Some(selected) => format!("{selected} of {all} words"),
+                        None => format!("{all} words"),
+                    };
+                    if editor.tracking {
+                        format!("Tracking changes  {words}")
+                    } else {
+                        words
+                    }
+                } else if editor.tracking {
                     "Tracking changes".to_string()
-                } else if editor.rendered {
-                    let words = editor.buffer.text().split_whitespace().count();
-                    format!("{words} words")
                 } else {
                     "Spaces: 4".to_string()
                 },
@@ -11696,6 +11704,17 @@ mod tests {
         );
         let text = screen(&app).text();
         assert!(text.contains("accept or reject"), "{text}");
+    }
+
+    #[test]
+    fn the_status_counts_words_and_the_selection() {
+        let (_dir, mut app) =
+            tracking_page("# Title\n\nThe cache goes **first**, then [docs](http://x).\n");
+        let text = screen(&app).text();
+        assert!(text.contains("Tracking changes  7 words"), "{text}");
+        select_word(&mut app, "cache");
+        let text = screen(&app).text();
+        assert!(text.contains("1 of 7 words"), "{text}");
     }
 
     #[test]

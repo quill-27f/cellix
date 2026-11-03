@@ -549,3 +549,10 @@ Plan versions. Each plan an agent sends again keeps the one before it, `Plan v1.
 `Plan.md`, so comments stay on `Plan.md` and follow their text into the new version. The status
 says which version is waiting, and Compare Plan Versions opens what changed as suggestions on a
 page of its own while the plan waits.
+
+Word count. The status counted every run of non-spaces, so `#`, `-`, front matter, code blocks,
+link targets and a paper's preamble, commands, keys and math all counted. It now counts prose:
+Markdown without its markup, code, comments and link targets, and a LaTeX body without comments,
+commands, `\label` and `\cite` keys or math, with pending suggestions taken as accepted. A
+selection shows as "12 of 340 words", and the count stays while tracking changes. Counted once a
+revision. Unverified: a paper split over `\input` files counts only the file in front.

@@ -12,3 +12,4 @@ pub mod pdf;
 pub mod prose;
 pub mod synctex;
 pub mod table;
+pub mod words;

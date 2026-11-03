@@ -2497,5 +2497,26 @@
     "title": "A plan sent again shows what changed since the last version",
     "test": "a_plan_sent_again_shows_what_changed_since_the_last_version",
     "passes": true
+  },
+  {
+    "id": "words-markdown",
+    "milestone": 10,
+    "title": "Markdown counts its prose, not its markup",
+    "test": "markdown_counts_its_prose_not_its_markup",
+    "passes": true
+  },
+  {
+    "id": "words-latex",
+    "milestone": 10,
+    "title": "LaTeX counts the body without commands, math or keys",
+    "test": "latex_counts_the_body_without_commands_math_or_keys",
+    "passes": true
+  },
+  {
+    "id": "words-status",
+    "milestone": 10,
+    "title": "The status counts words, the selection, and keeps them while tracking",
+    "test": "the_status_counts_words_and_the_selection",
+    "passes": true
   }
 ]

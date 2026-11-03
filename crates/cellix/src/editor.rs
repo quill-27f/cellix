@@ -126,6 +126,8 @@ pub struct Editor {
     view_width: Cell<u16>,
     /// Whether typing here is kept as suggested changes.
     pub tracking: bool,
+    /// The word count and the revision it was counted at.
+    words: Cell<Option<(u64, usize)>>,
     /// The notebook this page was read from, which saving writes back into.
     pub notebook: Option<Notebook>,
     /// Spelling and grammar, for the revision they were checked at.
@@ -211,6 +213,7 @@ impl Editor {
             dark: Cell::new(false),
             view_width: Cell::new(0),
             tracking: false,
+            words: Cell::new(None),
             notebook: None,
             issues: (0, Vec::new()),
             checked: 0,
@@ -529,6 +532,25 @@ impl Editor {
         let project = Rc::new(project);
         *cache = Some((self.buffer.revision(), project.clone()));
         project
+    }
+
+    /// Words in the document, and in the selection when there is one. Counted once a revision.
+    pub fn word_count(&self) -> (usize, Option<usize>) {
+        let latex = self.dialect() == Dialect::Latex;
+        let revision = self.buffer.revision();
+        let all = match self.words.get() {
+            Some((counted, words)) if counted == revision => words,
+            _ => {
+                let words = cellix_doc::words::count(&self.buffer.text(), latex);
+                self.words.set(Some((revision, words)));
+                words
+            }
+        };
+        let selected = self
+            .selected_text()
+            .filter(|t| !t.trim().is_empty())
+            .map(|t| cellix_doc::words::count(&t, false));
+        (all, selected)
     }
 
     /// The paper this file belongs to, with its labels and citations.
