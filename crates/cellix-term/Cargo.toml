@@ -10,7 +10,7 @@ repository.workspace = true
 base64 = "0.22"
 flate2 = "1"
 libc = "0.2"
-cellix-render = { path = "../cellix-render", version = "0.1.0" }
+cellix-render = { path = "../cellix-render", version = "0.2.0" }
 
 [lints]
 workspace = true

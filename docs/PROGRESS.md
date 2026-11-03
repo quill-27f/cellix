@@ -609,3 +609,5 @@ file and the Search panel. Not done from the review: palettes' padding, the Revi
 panes, the light theme's mixed palette, and the table caption and minimap fixes.
 
 A table's caption in a paper stays at the left with its table, where it was centred on the page.
+
+Release 0.2.0.
