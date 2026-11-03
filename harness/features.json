@@ -2567,5 +2567,19 @@
     "title": "The plan banner names the agent that sent it",
     "test": "the_plan_banner_names_the_agent_that_sent_it",
     "passes": true
+  },
+  {
+    "id": "tree-hides-latex-leftovers",
+    "milestone": 10,
+    "title": "A paper's build files stay out of the tree",
+    "test": "a_papers_build_files_stay_out_of_the_tree",
+    "passes": true
+  },
+  {
+    "id": "latex-menu",
+    "milestone": 10,
+    "title": "Right-clicking a paper offers LaTeX, not Markdown",
+    "test": "right_clicking_a_paper_offers_latex_not_markdown",
+    "passes": true
   }
 ]

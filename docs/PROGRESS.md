@@ -567,3 +567,8 @@ as the old 0x1c byte, which arrived as Ctrl+4. The tour has shots of both.
 
 The plan banner names the agent whose plan is waiting, from its hook's event, where it always said
 Claude Code.
+
+LaTeX in the IDE. The file tree leaves out what a build writes beside a paper (`.aux`, `.log`,
+`.synctex.gz`, `.fls` and the rest) when the paper is there, and keeps a `.log` with no paper. A
+paper's right-click menu names LaTeX's own things, Typewriter, Paragraph, Section and Verbatim, and
+offers Insert Citation, Build PDF and Show in PDF, where it had Markdown's menu.

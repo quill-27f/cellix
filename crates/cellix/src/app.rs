@@ -6637,6 +6637,25 @@ impl App {
                 items.extend(agent);
                 return items;
             }
+            // A paper's menu names LaTeX's own things, and builds.
+            if editor.dialect() == Dialect::Latex {
+                items.extend([
+                    format("Bold", Format::Bold).after_rule(),
+                    format("Italic", Format::Italic),
+                    format("Typewriter", Format::Code),
+                    format("Paragraph", Format::PlainText).after_rule(),
+                    format("Section", Format::Heading),
+                    format("Verbatim", Format::CodeBlock),
+                    MenuItem::new("Insert Citation…", MenuAction::Tool(Tool::Cite)),
+                    MenuItem::new("Insert Formula…", MenuAction::Tool(Tool::Math)),
+                    MenuItem::new("Insert Table…", MenuAction::Tool(Tool::Table)),
+                    MenuItem::new("Insert Figure…", MenuAction::Tool(Tool::Image)),
+                    run("Build PDF", Command::BuildPdf).after_rule(),
+                    run("Show in PDF", Command::ShowInPdf),
+                ]);
+                items.extend(agent);
+                return items;
+            }
             items.extend([
                 format("Bold", Format::Bold).after_rule(),
                 format("Italic", Format::Italic),
@@ -15316,6 +15335,27 @@ while True:
         assert_eq!(app.editors[0].selections.len(), 3);
         typed(&mut app, "dog");
         assert_eq!(app.active_text().unwrap(), "dog and dog and dog\n");
+    }
+
+    #[test]
+    fn right_clicking_a_paper_offers_latex_not_markdown() {
+        let (_dir, mut app) = paper_app("Some words here.\n");
+        let labels: Vec<String> = app
+            .editor_items()
+            .iter()
+            .filter(|item| item.action.is_some())
+            .map(|item| item.label.to_string())
+            .collect();
+        for item in ["Section", "Insert Citation…", "Build PDF", "Show in PDF"] {
+            assert!(labels.iter().any(|l| l == item), "{item}: {labels:?}");
+        }
+        assert!(!labels.iter().any(|l| l == "Code Block"), "{labels:?}");
+        app.run(Command::Format(Format::Heading));
+        assert!(
+            app.active_text().unwrap().starts_with("\\section{"),
+            "{:?}",
+            app.active_text()
+        );
     }
 
     #[test]

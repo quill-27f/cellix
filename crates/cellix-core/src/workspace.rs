@@ -63,7 +63,8 @@ impl Workspace {
     }
 
     /// Visible rows: directories first, then files. Hidden and ignored files show, as in
-    /// VS Code, because agents often work in them. Only `.git` stays out.
+    /// VS Code, because agents often work in them. Only `.git` stays out, and what LaTeX leaves
+    /// beside a paper.
     pub fn entries(&self) -> Vec<Entry> {
         let mut out = Vec::new();
         self.collect(&self.root, 0, &mut out);
@@ -83,6 +84,7 @@ impl Workspace {
                 (e.into_path(), is_dir)
             })
             .collect();
+        children.retain(|(path, is_dir)| *is_dir || !is_build_leftover(path));
         children.sort_by(|a, b| {
             b.1.cmp(&a.1)
                 .then_with(|| a.0.file_name().cmp(&b.0.file_name()))
@@ -217,9 +219,59 @@ impl Workspace {
     }
 }
 
+/// What a LaTeX build writes beside the paper it built: no one opens these.
+const LEFTOVERS: [&str; 13] = [
+    ".aux",
+    ".log",
+    ".out",
+    ".toc",
+    ".bbl",
+    ".blg",
+    ".fls",
+    ".fdb_latexmk",
+    ".synctex.gz",
+    ".lof",
+    ".lot",
+    ".nav",
+    ".snm",
+];
+
+/// Whether this is one of those, with its paper beside it.
+fn is_build_leftover(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy())
+        .unwrap_or_default();
+    LEFTOVERS.iter().any(|ending| {
+        name.strip_suffix(ending)
+            .is_some_and(|stem| path.with_file_name(format!("{stem}.tex")).exists())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_papers_build_files_stay_out_of_the_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in [
+            "paper.tex",
+            "paper.aux",
+            "paper.synctex.gz",
+            "paper.pdf",
+            "notes.log",
+        ] {
+            fs::write(dir.path().join(name), "").unwrap();
+        }
+        let workspace = Workspace::new(dir.path().to_path_buf());
+        let names: Vec<String> = workspace.entries().into_iter().map(|e| e.name).collect();
+        assert_eq!(
+            names,
+            ["notes.log", "paper.pdf", "paper.tex"],
+            "a log with no paper stays"
+        );
+    }
 
     #[test]
     fn a_project_search_lists_every_match_and_replaces_with_its_options() {
