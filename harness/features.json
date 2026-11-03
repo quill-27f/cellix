@@ -2875,5 +2875,12 @@
     "title": "A closed Cellix takes its plan folders with it",
     "test": "a_closed_server_takes_its_plans_with_it",
     "passes": true
+  },
+  {
+    "id": "unsent-comments-kept",
+    "milestone": 10,
+    "title": "Comments no agent took wait for the next run",
+    "test": "unsent_comments_wait_for_the_next_run",
+    "passes": true
   }
 ]

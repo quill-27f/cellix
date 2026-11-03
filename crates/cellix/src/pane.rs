@@ -260,6 +260,7 @@ pub fn run(root: &Path) -> io::Result<()> {
     let cell = window_cell().unwrap_or(DEFAULT_CELL);
     app.set_measure(Rc::new(FontMeasure::new(cell.0, cell.1)));
     let server = cellix_agent::start(root, app.comments.clone())?;
+    app.restore_unsent();
     app.ide = IdeServer::start(root).ok();
     let folder = cellix_agent::socket_path(root).with_extension("pane");
     fs::create_dir_all(&folder)?;

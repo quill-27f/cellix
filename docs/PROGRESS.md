@@ -770,3 +770,29 @@ sockets had piled up in the temp folder, mostly from test runs, which end their 
 hang-up. Those signals now end the loop the way Quit does. A closed Cellix also removes the plan
 folders kept beside its socket, of which about 950 were left. The tour gains a shot of the
 Comments pane with a verdict and a suggestion (50-review).
+
+The Comments pane, against its design (ui-expert review of the 50-review shot).
+- An agent's answer sits in an inset block under the comment, with its verdict on a chip
+  ("Agrees" in green, "Pushes back" in the attention colour) beside who gave it, in smaller
+  text, starting with a capital. The verdict test now looks for "Pushes back".
+- Every card has a header: "You · Correctness" or "Suggested by Claude · Evidence".
+- Check my review is a rounded button at the right of its row and the pane's only filled
+  button; the note beside it reads "1 yours, 1 suggested". Ask agent is quiet, and Dismiss is
+  a ghost until pointed at.
+- The coverage strip is pills: covered kinds filled, missing ones outlined in the attention
+  colour, wrapping onto a second row in a narrow pane.
+- A suggestion's card has a softer accent edge and a faint accent fill, and no "Waiting"
+  line, since the agent wrote it. Quotes drop math's dollar signs.
+- Cards reach a third of a row past their text, with 12 px corners.
+- The rail's tile is a square short of its row, and the changes badge is larger, ringed, and
+  on the icon's corner rather than against the divider.
+Not done: buttons still size in cells (so the cell tier can show their labels), so their
+padding varies with the label; no robot icon on Check my review; no dashed edges, which the
+renderer can't draw.
+
+Unsent comments survive a restart. Code comments that no agent had taken yet lived only in
+memory. On exit they're kept in the project's cache folder (out of the project), and the next
+Cellix that serves the folder takes them back and says how many are waiting. A plan's answer
+and `--wait` comments aren't kept, since they went where they belonged.
+
+`TOUR_ONLY=50-review,02-code harness/x tour` retakes just those shots.

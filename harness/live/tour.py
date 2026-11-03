@@ -170,6 +170,10 @@ def project(root):
 
 def shoot(name, steps, *args, size="120x40", background="1e1e2e"):
     """Runs one scene and writes `<name>.png`, with `steps` run first."""
+    # TOUR_ONLY=50-review,02-code retakes just those, for a quick look after a change.
+    only = os.environ.get("TOUR_ONLY")
+    if only and name not in only.split(","):
+        return
     script = [*steps, ["wait", 0.3], ["shot", f"{out}/{name}.png"]]
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump(script, f)

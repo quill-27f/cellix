@@ -96,8 +96,11 @@ const ACTION_MARGIN: u16 = 1;
 /// Larger than the top right icons' box, since line icons fill less of theirs, so the two
 /// sets look the same size.
 const RAIL_ICON: f32 = 0.91;
-/// The pill behind the rail icon that's showing, in columns and rows. Pixels only.
-const RAIL_PILL: (f32, f32) = (3.1, 0.98);
+/// The tile behind the rail icon that's showing, in columns and rows: square, a full row, so
+/// the large rail icons keep air inside it. Pixels only.
+const RAIL_PILL: (f32, f32) = (2.15, 1.0);
+/// The same tile for the smaller icons at the top right.
+const ACTION_PILL: (f32, f32) = (1.95, 0.89);
 /// Where the pane's own close button stands, which they keep clear of.
 const PANE_CLOSE: u16 = 3;
 /// Columns kept for tabs beside them, in the pane and over the file. A window with less goes
@@ -2790,7 +2793,7 @@ impl App {
             if on || hovered {
                 // The rail's chip, so the two bars of icons read as one set.
                 let fill = if on { theme.tint } else { theme.row_hover };
-                let (wide, high) = RAIL_PILL;
+                let (wide, high) = ACTION_PILL;
                 let left = cell.x as f32 + (cell.w as f32 - wide) / 2.0;
                 let top = cell.y as f32 + (1.0 - high) / 2.0;
                 grid.panel(
@@ -6537,6 +6540,7 @@ impl App {
 
     /// Writes comments into the `--wait` file. Called once, as the app exits.
     pub fn finish(&self) -> io::Result<()> {
+        self.keep_unsent();
         let Some(path) = &self.wait_file else {
             return Ok(());
         };
@@ -6550,6 +6554,63 @@ impl App {
         }
         let text = std::fs::read_to_string(path)?;
         std::fs::write(path, append_comments(&text, &comments))
+    }
+
+    /// Where the comments no agent has taken yet wait between runs: beside the project's
+    /// sessions, out of the project itself.
+    fn unsent_file(&self) -> PathBuf {
+        crate::hold::folder_of(self.workspace.root()).join("unsent.json")
+    }
+
+    /// Comments no agent has taken yet outlive this run, so the next one still hands them
+    /// over. Only those on the project's own files: a plan's answer went with the plan, and
+    /// `--wait` writes its comments into the file.
+    fn keep_unsent(&self) {
+        let root = self.workspace.root();
+        let waited = self.wait_file.as_deref().map(|p| self.relative(p));
+        let unsent: Vec<Comment> = self.comments.lock().map_or_else(
+            |_| Vec::new(),
+            |c| {
+                c.iter()
+                    .filter(|c| Some(&c.file) != waited.as_ref() && root.join(&c.file).is_file())
+                    .cloned()
+                    .collect()
+            },
+        );
+        let file = self.unsent_file();
+        if unsent.is_empty() {
+            let _ = std::fs::remove_file(&file);
+            return;
+        }
+        let Ok(json) = serde_json::to_string(&unsent) else {
+            return;
+        };
+        if let Some(folder) = file.parent() {
+            let _ = std::fs::create_dir_all(folder);
+        }
+        let _ = std::fs::write(file, json);
+    }
+
+    /// Takes back the comments the last run left unsent. Only the Cellix that serves the
+    /// project does, so a second window doesn't hand them over twice.
+    pub fn restore_unsent(&mut self) {
+        let file = self.unsent_file();
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            return;
+        };
+        let _ = std::fs::remove_file(&file);
+        let kept: Vec<Comment> = serde_json::from_str(&text).unwrap_or_default();
+        if kept.is_empty() {
+            return;
+        }
+        let count = kept.len();
+        if let Ok(mut comments) = self.comments.lock() {
+            comments.extend(kept);
+        }
+        self.say(format!(
+            "{count} comment{} from last time still waiting for an agent",
+            if count == 1 { "" } else { "s" }
+        ));
     }
 
     fn click_review(&mut self, x: u16, y: u16) {
@@ -8564,18 +8625,18 @@ impl App {
                 let chip_right = area.x as f32 + (area.w as f32 + wide) / 2.0;
                 let chip_bottom = y as f32 + (1.0 + high) / 2.0;
                 let width = (self.measure.width(&count, font) + 0.5).max(1.0);
-                let (left, top) = (chip_right - width + 0.25, chip_bottom - 0.4);
-                let ring = Bounds::cells(left - 0.14, top - 0.06, width + 0.28, 0.52);
+                let (left, top) = (chip_right - width + 0.3, chip_bottom - 0.52);
+                let ring = Bounds::cells(left - 0.12, top - 0.06, width + 0.24, 0.58);
                 grid.panel(ring, 30, Some(self.theme.activity.bg), None);
                 grid.panel(
-                    Bounds::cells(left, top, width, 0.4),
+                    Bounds::cells(left, top, width, 0.46),
                     30,
                     Some(self.theme.accent),
                     None,
                 );
                 let text = self.measure.width(&count, font);
                 grid.text_run(
-                    (left + (width - text) / 2.0, top - 0.3),
+                    (left + (width - text) / 2.0, top - 0.27),
                     area.right() as f32 + 1.0,
                     &count,
                     (color, false),
@@ -15831,6 +15892,36 @@ mod tests {
     }
 
     #[test]
+    fn unsent_comments_wait_for_the_next_run() {
+        let (dir, app) = project();
+        let comment = |file: &str| Comment {
+            file: file.into(),
+            line: 1,
+            text: "why?".into(),
+            ..Comment::default()
+        };
+        // One on a project file, and one on a plan that has gone with its hook.
+        app.comments
+            .lock()
+            .unwrap()
+            .extend([comment("alpha.txt"), comment("Plan.md")]);
+        app.finish().unwrap();
+        let mut next = App::new(dir.path().to_path_buf(), (100, 30));
+        next.restore_unsent();
+        let comments = next.comments.lock().unwrap().clone();
+        assert_eq!(comments, vec![comment("alpha.txt")]);
+        assert!(screen(&next).text().contains("from last time"));
+        let mut third = App::new(dir.path().to_path_buf(), (100, 30));
+        third.restore_unsent();
+        assert!(
+            third.comments.lock().unwrap().is_empty(),
+            "handed over once"
+        );
+        // The cache folder is this temporary project's alone.
+        let _ = fs::remove_dir(crate::hold::folder_of(dir.path()));
+    }
+
+    #[test]
     fn a_quick_fix_is_offered_and_applied() {
         let (dir, mut app) = project();
         let path = dir.path().join("beta.rs");
@@ -15910,7 +16001,8 @@ mod tests {
         let suggested = number.recv().unwrap();
         let text = screen(&app).text();
         assert!(text.contains("Suggested by Claude"), "{text}");
-        assert!(text.contains("pushes back"), "{text}");
+        // The verdict is a chip of its own, beside who gave it.
+        assert!(text.contains("Pushes back"), "{text}");
         assert!(text.contains("Keep") && text.contains("Dismiss"), "{text}");
         app.thread_hit(ThreadHit::Keep(suggested));
         let kept = app.threads.iter().find(|t| t.id == suggested).unwrap();
