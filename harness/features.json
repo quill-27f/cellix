@@ -2455,5 +2455,33 @@
     "title": "The Claude Code mod passes its own tests in Claude Code's kit: /cellix-send, /cellix <file>, a second session",
     "test": "the_mod_passes_its_own_tests_in_claude_code",
     "passes": true
+  },
+  {
+    "id": "thread-fuzzy",
+    "milestone": 10,
+    "title": "A thread follows its text when rewrapped or reworded",
+    "test": "a_thread_follows_its_text_when_it_is_rewrapped_or_reworded",
+    "passes": true
+  },
+  {
+    "id": "selection-bar-clear",
+    "milestone": 10,
+    "title": "The selection bar stands clear of every selected line, and not for several cursors",
+    "test": "the_selection_bar_stands_clear_of_every_selected_line",
+    "passes": true
+  },
+  {
+    "id": "suggest-diff",
+    "milestone": 10,
+    "title": "An edit becomes suggestions that accept back to it",
+    "test": "an_edit_becomes_suggestions_that_accept_back_to_it",
+    "passes": true
+  },
+  {
+    "id": "agent-suggestions",
+    "milestone": 10,
+    "title": "With tracking on, an agent's edit arrives as suggestions",
+    "test": "with_tracking_on_an_agents_edit_arrives_as_suggestions",
+    "passes": true
   }
 ]

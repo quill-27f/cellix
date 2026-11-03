@@ -53,18 +53,25 @@ impl Thread {
     }
 
     /// Moves the thread to where its quoted text is now, the nearest place if it appears
-    /// more than once. Text that's gone leaves it where it was.
+    /// more than once. A quote rewrapped across lines is still found, and so is one with a
+    /// word or two changed. Text that's gone leaves it where it was.
     pub fn follow(&mut self, text: &str) {
-        if self.quote.is_empty() {
+        if self.quote.trim().is_empty() {
             return;
         }
-        let distance = |line: usize| line.abs_diff(self.line);
+        let distance = |line: &usize| line.abs_diff(self.line);
         let found = text
             .lines()
             .enumerate()
             .filter(|(_, line)| line.contains(&self.quote))
             .map(|(index, _)| index + 1)
-            .min_by_key(|line| distance(*line));
+            .min_by_key(distance)
+            .or_else(|| {
+                rewrapped(text, &self.quote)
+                    .into_iter()
+                    .min_by_key(distance)
+            })
+            .or_else(|| reworded(text, &self.quote, self.line));
         if let Some(line) = found {
             self.line = line;
         }
@@ -124,6 +131,52 @@ pub fn next_id(threads: &[Thread]) -> u32 {
     threads.iter().map(|t| t.id).max().unwrap_or(0) + 1
 }
 
+/// The lines where the quote starts when line breaks and runs of spaces don't count.
+fn rewrapped(text: &str, quote: &str) -> Vec<usize> {
+    let quote = quote.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut flat = String::with_capacity(text.len());
+    // The line of each byte of `flat`.
+    let mut lines = Vec::with_capacity(text.len());
+    let mut line = 1;
+    for c in text.chars() {
+        if c.is_whitespace() {
+            if !flat.ends_with(' ') && !flat.is_empty() {
+                flat.push(' ');
+                lines.push(line);
+            }
+        } else {
+            flat.push(c);
+            lines.extend(std::iter::repeat_n(line, c.len_utf8()));
+        }
+        if c == '\n' {
+            line += 1;
+        }
+    }
+    flat.match_indices(&quote)
+        .map(|(at, _)| lines[at])
+        .collect()
+}
+
+/// The line that shares most of the quote's words, if it shares most of them: a quote a word or
+/// two was changed in. Ties go to the nearest.
+fn reworded(text: &str, quote: &str, near: usize) -> Option<usize> {
+    let words: Vec<&str> = quote.split_whitespace().collect();
+    // A word or two is too little to tell one line from another.
+    if words.len() < 4 {
+        return None;
+    }
+    let score = |line: &str| {
+        let theirs: Vec<&str> = line.split_whitespace().collect();
+        words.iter().filter(|w| theirs.contains(w)).count()
+    };
+    text.lines()
+        .enumerate()
+        .map(|(index, line)| (score(line), index + 1))
+        .filter(|(shared, _)| shared * 3 >= words.len() * 2)
+        .max_by_key(|(shared, line)| (*shared, std::cmp::Reverse(line.abs_diff(near))))
+        .map(|(_, line)| line)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,6 +227,21 @@ mod tests {
         assert_eq!(thread.line, 7, "the nearest of two");
         thread.follow("nothing like it\n");
         assert_eq!(thread.line, 7, "gone, so it stays");
+    }
+
+    #[test]
+    fn a_thread_follows_its_text_when_it_is_rewrapped_or_reworded() {
+        let mut thread = Thread {
+            quote: "the cache stays warm across runs".into(),
+            line: 1,
+            ..thread()
+        };
+        thread.follow("# Plan\n\nThen the cache stays\nwarm across runs, as before.\n");
+        assert_eq!(thread.line, 3, "rewrapped");
+        thread.follow("# Plan\n\nIntro.\n\nThen the cache stays hot across runs.\n");
+        assert_eq!(thread.line, 5, "a word changed");
+        thread.follow("# Plan\n\nSomething else entirely.\n");
+        assert_eq!(thread.line, 5, "gone, so it stays");
     }
 
     #[test]

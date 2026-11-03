@@ -2755,6 +2755,38 @@ impl App {
                 ));
                 editor.buffer.acknowledge_disk();
                 editor.conflict = true;
+            } else if editor.tracking && editor.rendered {
+                // With changes tracked, an agent's edit is a suggestion like anyone's.
+                let before = editor.buffer.text();
+                note = Some(match editor.reload() {
+                    Ok(()) => {
+                        let after = editor.buffer.text();
+                        let syntax = if editor.dialect() == Dialect::Latex {
+                            cellix_doc::changes::Syntax::Latex
+                        } else {
+                            cellix_doc::changes::Syntax::Critic
+                        };
+                        let marked = cellix_doc::changes::suggest(&before, &after, syntax);
+                        if marked != after {
+                            let head = editor.selections.primary().head;
+                            editor.selections.set_single(Selection {
+                                anchor: 0,
+                                head: editor.buffer.rope().len_chars(),
+                                goal: None,
+                            });
+                            editor.buffer.replace(&mut editor.selections, &marked);
+                            let end = editor.buffer.rope().len_chars();
+                            editor
+                                .selections
+                                .set_single(Selection::cursor(head.min(end)));
+                        }
+                        format!(
+                            "{} changed outside: accept or reject each suggestion, then save",
+                            editor.title()
+                        )
+                    }
+                    Err(e) => format!("Could not reload {}: {e}", editor.title()),
+                });
             } else {
                 note = Some(match editor.reload() {
                     Ok(()) => {
@@ -2969,11 +3001,26 @@ impl App {
             return None;
         }
         let editor = self.editors.get(self.active())?;
+        // A comment is on one place, so several cursors get none.
+        if editor.selections.len() > 1 {
+            return None;
+        }
         editor.selected_text().filter(|t| !t.trim().is_empty())?;
         let area = self.focused_area();
-        let (x, y) = editor.caret_cell(area)?;
-        // Above the words, so it never covers what it's about, unless they're at the top.
-        let y = if y > area.y { y - 1 } else { y + 1 };
+        let primary = editor.selections.primary();
+        let (start, end) = (
+            primary.anchor.min(primary.head),
+            primary.anchor.max(primary.head),
+        );
+        // Above the first selected line, so it never covers what it's about; below the last
+        // when the first is at the top or out of view.
+        let (x, y) = match editor.cell_of(area, start) {
+            Some((x, y)) if y > area.y => (x, y - 1),
+            _ => {
+                let (x, y) = editor.cell_of(area, end)?;
+                (x, (y + 1).min(area.bottom().saturating_sub(1)))
+            }
+        };
         let width = COMMENT_WIDTH + ASK_WIDTH;
         let x = (x as u16)
             .min(area.right().saturating_sub(width + 1))
@@ -11557,6 +11604,20 @@ mod tests {
     }
 
     #[test]
+    fn with_tracking_on_an_agents_edit_arrives_as_suggestions() {
+        let (dir, mut app) = tracking_page("The cache goes first.\n");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(dir.path().join("note.md"), "The cache goes last.\n").unwrap();
+        app.handle(Event::Tick);
+        assert_eq!(
+            app.active_text().unwrap(),
+            "The cache goes {~~first.~>last.~~}\n"
+        );
+        let text = screen(&app).text();
+        assert!(text.contains("accept or reject"), "{text}");
+    }
+
+    #[test]
     fn typing_with_tracking_on_is_kept_as_one_suggestion() {
         let (_dir, mut app) = tracking_page("Hello world\n");
         let (x, y) = cell_of(&app, "world");
@@ -12042,6 +12103,32 @@ mod tests {
         enter(&mut app);
         assert_eq!(app.threads[0].quote, "cache");
         assert_eq!(app.threads[0].text, "Why first");
+    }
+
+    #[test]
+    fn the_selection_bar_stands_clear_of_every_selected_line() {
+        let (dir, mut app) = project();
+        let path = dir.path().join("lines.txt");
+        fs::write(&path, "one\ntwo\nthree\nfour\nfive\n").unwrap();
+        app.open(&path).unwrap();
+        let editor = app.editor_mut().unwrap();
+        // Dragged down from "two" to the end of "four", so the caret is on the last line.
+        editor.selections.set_single(Selection {
+            anchor: 4,
+            head: 18,
+            goal: None,
+        });
+        let grid = screen(&app);
+        let (_, first) = find(&grid, "two");
+        let (comment, _) = app.selection_bar().expect("a bar");
+        assert_eq!(comment.y, first - 1, "above the first selected line");
+        let editor = app.editor_mut().unwrap();
+        editor.selections.add(Selection {
+            anchor: 20,
+            head: 22,
+            goal: None,
+        });
+        assert!(app.selection_bar().is_none(), "several cursors get none");
     }
 
     #[test]

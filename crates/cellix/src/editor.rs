@@ -1497,8 +1497,12 @@ impl Editor {
 
     /// Where the caret is on screen, if it's in view.
     pub fn caret_cell(&self, area: Rect) -> Option<(f32, u16)> {
+        self.cell_of(area, self.selections.primary().head)
+    }
+
+    /// Where a place in the text is on screen, if it's in view.
+    pub fn cell_of(&self, area: Rect, head: usize) -> Option<(f32, u16)> {
         let area = self.text_area(area);
-        let head = self.selections.primary().head;
         let (row, x) = if self.rendered {
             let rows = self.page(area);
             let (row, x) = rendered::locate(&rows, head);

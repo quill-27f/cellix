@@ -13,6 +13,7 @@ layout-rs = "0.1"
 mermaid-rs-renderer = { version = "0.3", default-features = false }
 resvg = "0.47"
 serde = "1"
+similar = "3.2.1"
 serde_json = { version = "1", features = ["preserve_order"] }
 harper-core = "3"
 hayro = "0.8"

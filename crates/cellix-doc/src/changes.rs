@@ -184,6 +184,80 @@ pub fn find(text: &str, syntax: Syntax) -> Vec<Change> {
 }
 
 /// The document with every change kept or dropped.
+/// The change from `old` to `new` as suggestions in `old`, word by word, so whoever reviews it
+/// accepts or rejects each one. Accepting all of them gives `new` back.
+pub fn suggest(old: &str, new: &str, syntax: Syntax) -> String {
+    let diff = similar::TextDiff::from_words(old, new);
+    let mut out = String::with_capacity(new.len() + new.len() / 4);
+    let (mut gone, mut added) = (String::new(), String::new());
+    let flush = |out: &mut String, gone: &mut String, added: &mut String| {
+        // Space at a change's edges stays plain, so the marks sit on words.
+        let lead = common_lead(gone, added).len();
+        let trail = common_trail(&gone[lead..], &added[lead..]).len();
+        out.push_str(&gone[..lead]);
+        let (old, new) = (
+            &gone[lead..gone.len() - trail],
+            &added[lead..added.len() - trail],
+        );
+        out.push_str(&mark(old, new, syntax));
+        out.push_str(&gone[gone.len() - trail..]);
+        gone.clear();
+        added.clear();
+    };
+    for change in diff.iter_all_changes() {
+        match change.tag() {
+            similar::ChangeTag::Equal => {
+                if !gone.is_empty() || !added.is_empty() {
+                    flush(&mut out, &mut gone, &mut added);
+                }
+                out.push_str(change.value());
+            }
+            similar::ChangeTag::Delete => gone.push_str(change.value()),
+            similar::ChangeTag::Insert => added.push_str(change.value()),
+        }
+    }
+    if !gone.is_empty() || !added.is_empty() {
+        flush(&mut out, &mut gone, &mut added);
+    }
+    out
+}
+
+/// One suggestion in the document's own syntax.
+fn mark(old: &str, new: &str, syntax: Syntax) -> String {
+    match (syntax, old.is_empty(), new.is_empty()) {
+        (_, true, true) => String::new(),
+        (Syntax::Critic, true, false) => format!("{{++{new}++}}"),
+        (Syntax::Critic, false, true) => format!("{{--{old}--}}"),
+        (Syntax::Critic, false, false) => format!("{{~~{old}~>{new}~~}}"),
+        (Syntax::Latex, true, false) => format!("\\added{{{new}}}"),
+        (Syntax::Latex, false, true) => format!("\\deleted{{{old}}}"),
+        (Syntax::Latex, false, false) => format!("\\replaced{{{new}}}{{{old}}}"),
+    }
+}
+
+/// The whitespace both start with.
+fn common_lead<'a>(a: &'a str, b: &str) -> &'a str {
+    let n = a
+        .chars()
+        .zip(b.chars())
+        .take_while(|(x, y)| x == y && x.is_whitespace())
+        .map(|(x, _)| x.len_utf8())
+        .sum();
+    &a[..n]
+}
+
+/// The whitespace both end with.
+fn common_trail<'a>(a: &'a str, b: &str) -> &'a str {
+    let n: usize = a
+        .chars()
+        .rev()
+        .zip(b.chars().rev())
+        .take_while(|(x, y)| x == y && x.is_whitespace())
+        .map(|(x, _)| x.len_utf8())
+        .sum();
+    &a[a.len() - n..]
+}
+
 pub fn settle_all(text: &str, syntax: Syntax, accept: bool) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
@@ -200,6 +274,20 @@ pub fn settle_all(text: &str, syntax: Syntax, accept: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn an_edit_becomes_suggestions_that_accept_back_to_it() {
+        let old = "The cache goes first, then the index.\n";
+        let new = "The cache goes last, then the new index.\n";
+        let marked = suggest(old, new, Syntax::Critic);
+        assert_eq!(
+            marked,
+            "The cache goes {~~first,~>last,~~} then the {++new ++}index.\n"
+        );
+        assert_eq!(settle_all(&marked, Syntax::Critic, true), new);
+        assert_eq!(settle_all(&marked, Syntax::Critic, false), old);
+        let tex = suggest("A b c.\n", "A x c.\n", Syntax::Latex);
+        assert_eq!(tex, "A \\replaced{x}{b} c.\n");
+    }
 
     #[test]
     fn markdown_writes_its_changes_in_three_ways() {

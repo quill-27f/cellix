@@ -536,3 +536,11 @@ a Cellix says so, where it said "Starting Cellix…" for good; one Cellix per fo
 because hooks reach a folder's Cellix by its socket. The mod has its own tests,
 `hooks/register.test.tsx`, which `claude plugin test` runs in Claude Code's kit, and the Rust suite
 runs them where Claude Code is installed.
+
+Comments and agent edits. A thread follows its quote when the text is rewrapped across lines or
+has a word or two changed, where it stayed on the old line. The Comment and Ask Agent bar stands
+above the first selected line, where a selection dragged downwards had it over its own words, and
+several cursors get no bar. With Track Changes on, a file an agent rewrites arrives as suggestions,
+word by word, in CriticMarkup or LaTeX's changes package, to accept or reject before saving. The
+skill tells agents so, and how to write a suggestion themselves. Unverified: a second agent edit
+before the first is settled meets the usual "changed on disk" conflict.

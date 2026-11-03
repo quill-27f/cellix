@@ -18,3 +18,9 @@ It fails if there's no such comment, so read the result.
 To have a plan reviewed before you start, write it to a Markdown file and run
 `cellix plan <file>`. It waits for the reviewer. It prints `Approved.` when you can go ahead, and
 exits 1 with what to change when the plan is sent back.
+
+When the reviewer tracks changes in a document, your edits to it show to them as suggestions to
+accept or reject, so edit the file as usual. To suggest a rewrite without making it, write it in
+the document as a suggestion: in Markdown `{~~old~>new~~}`, `{++added++}` and `{--removed--}`,
+and in LaTeX `\replaced{new}{old}`, `\added{text}` and `\deleted{text}`. Cellix shows each one
+with Accept and Reject.
