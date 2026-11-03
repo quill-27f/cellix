@@ -591,3 +591,10 @@ tier shows one glyph per icon. The Find bar is a raised panel just around its ro
 shows Replace, the switches inside the field, the count, then arrow and close icons, and Replace
 and Replace All as icon buttons with their keys in tooltips. Four rail tests clicked fixed rows or
 counted a 3 by 2 icon; they now follow `rail_row` and the 2 by 1 icon.
+
+Browser install. On Linux under tmux, with no browser that would open, Cellix said to set
+`browser` in the settings file. Now, when terminal-browser isn't on the path, the corner card that
+offers language servers offers it, with the same Install, Not now and Never; Install runs its own
+installer (`curl -fsSL https://terminal-browser.sh/install | bash`, from its releases page) and opens
+the browser when it's done. Settings › Integrations has a Browser card with Install too. Unverified:
+the installer on a real Linux machine.

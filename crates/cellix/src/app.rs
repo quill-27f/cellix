@@ -301,6 +301,17 @@ fn engines_for(name: Option<&str>, vim_may_use_neovim: bool) -> (Option<Vim>, Op
     (vim, neovim)
 }
 
+/// The browser Cellix runs in the pane, and its own installer, from its releases page, for
+/// macOS and Linux alike.
+const BROWSER_TOOL: &str = "terminal-browser";
+const BROWSER_INSTALL: &str = "curl -fsSL https://terminal-browser.sh/install | bash";
+
+/// Whether terminal-browser is on the path. Tests never offer it, whatever this machine has.
+fn browser_installed() -> bool {
+    let var = |name: &str| std::env::var(name).ok();
+    cfg!(test) || crate::integrations::on_path(BROWSER_TOOL, var)
+}
+
 /// A plan's earlier versions, `Plan v1.md` and on beside `Plan.md`, oldest first.
 fn plan_versions(path: &Path) -> Vec<PathBuf> {
     let stem = path
@@ -688,6 +699,10 @@ pub struct App {
     snippets: Option<crate::snippets::Worker>,
     /// A page on its way to the browser, and whether it got there.
     browser_result: Option<(String, std::sync::mpsc::Receiver<bool>)>,
+    /// No browser would open and terminal-browser isn't here, so the corner card offers it.
+    browser_offer: bool,
+    /// terminal-browser's installer, running, and what it said.
+    browser_install: Option<std::sync::mpsc::Receiver<String>>,
     /// Set when the user asks to leave.
     pub quit: bool,
 }
@@ -743,6 +758,8 @@ impl App {
                 .to_string(),
             ],
             browser_result: None,
+            browser_offer: false,
+            browser_install: None,
             missing_servers: HashMap::new(),
             not_now: Vec::new(),
             offer_install: None,
@@ -992,8 +1009,17 @@ impl App {
             .collect()
     }
 
+    /// Whether the corner card is offering terminal-browser.
+    fn offering_browser(&self) -> bool {
+        let busy = self.settings_page.is_some() || self.review.is_some() || self.overlay_is_open();
+        self.browser_offer && !busy
+    }
+
     /// Handles a press on the offer. Returns true if the card took it.
     fn click_offer(&mut self, x: u16, y: u16) -> bool {
+        if self.offering_browser() {
+            return self.click_browser_offer(x, y);
+        }
         let Some((language, server)) = self.offer() else {
             return false;
         };
@@ -1027,6 +1053,57 @@ impl App {
             _ => {}
         }
         true
+    }
+
+    fn click_browser_offer(&mut self, x: u16, y: u16) -> bool {
+        let area = self.offer_area();
+        if !area.contains(x, y) {
+            return false;
+        }
+        if self.browser_install.is_some() || y != area.y + OFFER_BUTTON_ROW {
+            return true;
+        }
+        let hit = self
+            .offer_buttons()
+            .into_iter()
+            .find(|(_, cells, at)| x >= *at && x < at + cells.chars().count() as u16);
+        match hit.map(|(label, _, _)| label) {
+            Some("Install") => self.install_browser(),
+            Some("Not now") => self.browser_offer = false,
+            Some("Never") => {
+                self.browser_offer = false;
+                self.settings
+                    .declined_languages
+                    .push(BROWSER_TOOL.to_string());
+                let declined = serde_json::json!(self.settings.declined_languages);
+                let _ = Settings::store("declined_languages", declined);
+            }
+            _ => {}
+        }
+        true
+    }
+
+    /// With no browser to open, offers terminal-browser on the same card as a language server,
+    /// unless it's here or was turned down for good. Returns whether it offered.
+    fn offer_browser(&mut self, installed: bool) -> bool {
+        let declined = self
+            .settings
+            .declined_languages
+            .iter()
+            .any(|l| l == BROWSER_TOOL);
+        self.browser_offer = !installed && !declined;
+        self.browser_offer
+    }
+
+    fn install_browser(&mut self) {
+        if self.browser_install.is_some() {
+            return;
+        }
+        let (done, result) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = done.send(install_with(BROWSER_INSTALL, BROWSER_TOOL));
+        });
+        self.browser_install = Some(result);
     }
 
     /// Takes in a finished install, and connects the files it can now help.
@@ -1065,7 +1142,28 @@ impl App {
     }
 
     fn draw_offer(&self, grid: &mut Grid) {
-        let Some((language, server)) = self.offer() else {
+        // terminal-browser's card is a language's card with its own words.
+        let words = if self.offering_browser() {
+            Some((
+                format!("Install {BROWSER_TOOL}?"),
+                "It runs a real browser in the side pane.".to_string(),
+                format!("Installing {BROWSER_TOOL}…"),
+                "You can keep working while it installs.".to_string(),
+                self.browser_install.is_some(),
+            ))
+        } else {
+            self.offer().map(|(language, server)| {
+                let tool = SERVERS[server].command[0];
+                (
+                    format!("Install {language} support?"),
+                    format!("{tool} adds completion, errors and rename."),
+                    format!("Installing {language} support…"),
+                    format!("You can keep working while {tool} installs."),
+                    self.offer_install.is_some(),
+                )
+            })
+        };
+        let Some((title, detail, busy_title, busy_detail, busy)) = words else {
             return;
         };
         let theme = &self.theme;
@@ -1082,17 +1180,12 @@ impl App {
             ..base
         };
         let right = area.right().saturating_sub(1);
-        let tool = SERVERS[server].command[0];
-        if self.offer_install.is_some() {
-            let title = format!("Installing {language} support…");
-            grid.label(area.x + 2, area.y + 1, &title, strong, right);
-            let detail = format!("You can keep working while {tool} installs.");
-            grid.label(area.x + 2, area.y + 2, &detail, dim, right);
+        if busy {
+            grid.label(area.x + 2, area.y + 1, &busy_title, strong, right);
+            grid.label(area.x + 2, area.y + 2, &busy_detail, dim, right);
             return;
         }
-        let title = format!("Install {language} support?");
         grid.label(area.x + 2, area.y, &title, strong, right);
-        let detail = format!("{tool} adds completion, errors and rename.");
         grid.label(area.x + 2, area.y + 1, &detail, dim, right);
         let y = area.y + OFFER_BUTTON_ROW;
         for (index, (label, cells, x)) in self.offer_buttons().iter().enumerate() {
@@ -2636,6 +2729,7 @@ impl App {
             }
             None if self.browser_target().is_some() => self.open_in_browser(),
             None if self.open_in_pane("about:blank") => {}
+            None if self.offer_browser(browser_installed()) => {}
             None => self.say("There's no browser that can run in the pane here"),
         }
     }
@@ -4677,6 +4771,20 @@ impl App {
 
     /// Says how a page's opening went, once it's known.
     fn poll_browser(&mut self) -> bool {
+        if let Some(note) = self
+            .browser_install
+            .as_ref()
+            .and_then(|r| r.try_recv().ok())
+        {
+            self.browser_install = None;
+            self.browser_offer = false;
+            let installed = note.starts_with("Installed");
+            self.say(note);
+            if installed {
+                self.show_browser();
+            }
+            return true;
+        }
         let opened = self.browser_result.as_ref().and_then(|(target, result)| {
             let opened = result.try_recv().ok()?;
             Some((target.clone(), opened))
@@ -4686,6 +4794,9 @@ impl App {
         };
         self.browser_result = None;
         let name = target.rsplit('/').next().unwrap_or(&target).to_string();
+        if !opened && self.offer_browser(browser_installed()) {
+            return true;
+        }
         self.say(if opened {
             format!("Opened {name} in the browser")
         } else {
@@ -7006,7 +7117,10 @@ impl App {
                 self.copy_text(command.to_string(), "");
                 note = format!("Copied: {command}");
             }
-            Control::Codex | Control::Gemini | Control::InstallServer(_) => {
+            Control::Codex
+            | Control::Gemini
+            | Control::InstallServer(_)
+            | Control::InstallBrowser => {
                 self.start_install(control);
                 return;
             }
@@ -7062,6 +7176,7 @@ impl App {
                     "Installed. Restart Gemini CLI to load it.",
                 ),
                 Control::InstallServer(index) => install_server(index),
+                Control::InstallBrowser => install_with(BROWSER_INSTALL, BROWSER_TOOL),
                 _ => String::new(),
             };
             let _ = sender.send(note);
@@ -10556,6 +10671,29 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert!(screen(&app).text().contains("Opened page.html"));
+    }
+
+    #[test]
+    fn with_no_browser_the_corner_card_offers_terminal_browser() {
+        let (_dir, mut app) = project();
+        assert!(!app.offer_browser(true), "nothing to offer when it's there");
+        assert!(app.offer_browser(false));
+        let text = screen(&app).text();
+        assert!(text.contains("Install terminal-browser?"), "{text}");
+        assert!(
+            !text.contains("curl"),
+            "no command, just the buttons: {text}"
+        );
+        for label in OFFER_BUTTONS {
+            assert!(text.contains(label), "{label}: {text}");
+        }
+        let area = app.offer_area();
+        let (_, _, at) = app.offer_buttons()[1].clone();
+        app.handle(mouse(MouseKind::Left, at + 1, area.y + OFFER_BUTTON_ROW));
+        assert!(
+            !screen(&app).text().contains("Install terminal-browser?"),
+            "Not now"
+        );
     }
 
     #[test]

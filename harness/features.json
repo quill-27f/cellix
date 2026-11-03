@@ -2581,5 +2581,19 @@
     "title": "Right-clicking a paper offers LaTeX, not Markdown",
     "test": "right_clicking_a_paper_offers_latex_not_markdown",
     "passes": true
+  },
+  {
+    "id": "browser-install-offer",
+    "milestone": 10,
+    "title": "With no browser, the corner card offers terminal-browser",
+    "test": "with_no_browser_the_corner_card_offers_terminal_browser",
+    "passes": true
+  },
+  {
+    "id": "browser-install-settings",
+    "milestone": 10,
+    "title": "terminal-browser can be installed from Settings",
+    "test": "the_browser_can_be_installed_from_integrations",
+    "passes": true
   }
 ]

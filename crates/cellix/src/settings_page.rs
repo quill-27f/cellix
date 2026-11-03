@@ -81,6 +81,8 @@ pub enum Control {
     Ghostty,
     /// A language server to install, as an index into `SERVERS`.
     InstallServer(usize),
+    /// terminal-browser, which runs a browser in the side pane.
+    InstallBrowser,
     /// A command to put on the clipboard.
     CopyInstall(&'static str),
 }
@@ -103,6 +105,8 @@ pub struct Found {
     pub codex_installed: bool,
     pub gemini: bool,
     pub gemini_installed: bool,
+    /// Whether terminal-browser is on the path.
+    pub browser: bool,
     /// Whether Ghostty keeps Cmd+D, when this is Ghostty.
     pub ghostty_keeps_cmd_d: Option<bool>,
     /// For each of `SERVERS`, whether it's installed.
@@ -119,6 +123,7 @@ impl Found {
             codex_installed: integrations::codex_installed(var),
             gemini: integrations::on_path("gemini", var),
             gemini_installed: integrations::gemini_installed(var),
+            browser: integrations::on_path("terminal-browser", var),
             ghostty_keeps_cmd_d: integrations::ghostty_keeps_cmd_d(var),
             servers: SERVERS
                 .iter()
@@ -225,6 +230,23 @@ impl SettingsPage {
             Control::Gemini,
             "Shows its work in Agents, and hands it your comments.",
         ));
+        blocks.push(if found.browser {
+            Block {
+                name: "Browser",
+                state: "terminal-browser installed",
+                tone: Tone::Good,
+                detail: "Pages and previews open in the side pane.",
+                action: None,
+            }
+        } else {
+            Block {
+                name: "Browser",
+                state: "terminal-browser not found",
+                tone: Tone::Quiet,
+                detail: "Runs a real browser in the side pane, in any terminal.",
+                action: Some(("Install", true, Control::InstallBrowser)),
+            }
+        });
         match found.ghostty_keeps_cmd_d {
             Some(true) => blocks.push(Block {
                 name: "Ghostty keys",
@@ -920,6 +942,20 @@ mod tests {
         assert!(free(&settings));
         settings.found.ghostty_keeps_cmd_d = Some(false);
         assert!(!free(&settings), "not once it's done");
+    }
+
+    #[test]
+    fn the_browser_can_be_installed_from_integrations() {
+        let mut settings = page(Section::Integrations);
+        let offered = |s: &SettingsPage| {
+            s.controls(AREA)
+                .iter()
+                .any(|c| c.1 == Control::InstallBrowser)
+        };
+        settings.found.browser = false;
+        assert!(offered(&settings));
+        settings.found.browser = true;
+        assert!(!offered(&settings), "not once it's there");
     }
 
     #[test]
