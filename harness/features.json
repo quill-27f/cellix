@@ -2616,5 +2616,19 @@
     "title": "In plain cells a scroll shifts the band and sends only what it must",
     "test": "a_scroll_shifts_the_band_and_sends_only_what_it_must",
     "passes": true
+  },
+  {
+    "id": "neovim-stays-on-file",
+    "milestone": 10,
+    "title": "Neovim never writes another file's lines into the one in view",
+    "test": "neovim_never_writes_another_files_lines_into_this_one",
+    "passes": true
+  },
+  {
+    "id": "caret-after-reference",
+    "milestone": 10,
+    "title": "Closing a reference at a line's end keeps the caret there",
+    "test": "closing_a_reference_at_a_lines_end_keeps_the_caret_there",
+    "passes": true
   }
 ]

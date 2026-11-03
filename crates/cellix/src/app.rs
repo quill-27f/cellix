@@ -3558,6 +3558,14 @@ impl App {
         let Some(state) = self.neovim.as_mut().and_then(Neovim::state) else {
             return;
         };
+        if state.strayed {
+            self.neovim_mode = "NORMAL".to_string();
+            self.neovim_line.clear();
+            self.say(
+                "Open files with Ctrl+P and split with Ctrl+\\: Neovim here edits the file in view",
+            );
+            return;
+        }
         self.neovim_mode = match state.mode.chars().next() {
             Some('i') => "INSERT",
             Some('R') => "REPLACE",
@@ -14253,6 +14261,29 @@ mod tests {
     }
 
     #[test]
+    fn closing_a_reference_at_a_lines_end_keeps_the_caret_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("paper.tex");
+        let text = "\\section{Intro}\\label{sec:intro}\nSee \\Cref{sec:intro}.\n";
+        fs::write(&path, text).unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (170, 40));
+        app.open(&path).unwrap();
+        screen(&app);
+        app.run(Command::Move(cellix_input::Direction::Down, false));
+        app.run(Command::Move(cellix_input::Direction::LineEnd, false));
+        typed(&mut app, " And \\Cref{sec");
+        enter(&mut app);
+        typed(&mut app, "}");
+        screen(&app);
+        typed(&mut app, "XYZ");
+        let text = app.active_text().unwrap();
+        assert!(
+            text.contains("\\Cref{sec:intro}. And \\Cref{sec:intro}XYZ"),
+            "{text}"
+        );
+    }
+
+    #[test]
     fn references_and_citations_complete_inside_their_braces() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("refs.bib"), "@article{knuth84,\n}\n").unwrap();
@@ -14368,6 +14399,38 @@ mod tests {
         fs::write(&path, "one\ntwo\nthree\n").unwrap();
         app.open(&path).unwrap();
         Some((dir, app, path))
+    }
+
+    #[test]
+    fn neovim_never_writes_another_files_lines_into_this_one() {
+        let Some((dir, mut app, path)) = neovim_app() else {
+            return;
+        };
+        let other = dir.path().join("other.txt");
+        fs::write(&other, "elsewhere\n").unwrap();
+        typed(&mut app, ":e other.txt");
+        enter(&mut app);
+        assert!(
+            screen(&app).text().contains("Open files with Ctrl+P"),
+            "it says why"
+        );
+        typed(&mut app, "x");
+        typed(&mut app, ":w");
+        enter(&mut app);
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "ne\ntwo\nthree\n",
+            "still this file"
+        );
+        assert_eq!(fs::read_to_string(&other).unwrap(), "elsewhere\n");
+        typed(&mut app, ":vsplit");
+        enter(&mut app);
+        typed(&mut app, "dd");
+        assert_eq!(
+            app.active_text().unwrap(),
+            "two\nthree\n",
+            "one window, still editing"
+        );
     }
 
     #[test]

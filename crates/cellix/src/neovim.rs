@@ -17,7 +17,16 @@ const RESPONSE: i64 = 1;
 
 /// Everything worth knowing after a key. Lines only come back when they've changed.
 const STATE: &str = r#"
-local tick = ...
+local tick, expected = ...
+-- Cellix shows one file in one window. A command that left it, as :e, :b, :split or
+-- :tabnew do, is undone here, before anything is read back, so another file's lines can
+-- never land in the one Cellix shows.
+local wins = #vim.api.nvim_tabpage_list_wins(0) + #vim.api.nvim_list_tabpages() - 1
+if (expected ~= 0 and vim.api.nvim_get_current_buf() ~= expected) or wins > 1 then
+  pcall(vim.cmd, 'silent! tabonly | silent! only')
+  if expected ~= 0 then pcall(vim.api.nvim_set_current_buf, expected) end
+  return { strayed = true }
+end
 local changed = vim.b.changedtick ~= tick
 return {
   mode = vim.fn.mode(),
@@ -38,6 +47,8 @@ pub struct State {
     pub anchor: (usize, usize),
     pub cmdtype: String,
     pub cmdline: String,
+    /// A command left the file or split the window, and was undone.
+    pub strayed: bool,
     pub lines: Option<Vec<String>>,
 }
 
@@ -98,6 +109,8 @@ pub struct Neovim {
     next_id: i64,
     buffers: HashMap<PathBuf, i64>,
     tick: i64,
+    /// The buffer of the file Cellix shows, which Neovim must stay on.
+    current: i64,
 }
 
 impl Drop for Neovim {
@@ -143,6 +156,7 @@ impl Neovim {
             next_id: 1,
             buffers: HashMap::new(),
             tick: -1,
+            current: 0,
         };
         neovim
             .call("nvim_command", vec!["set noswapfile".into()])
@@ -166,6 +180,7 @@ impl Neovim {
             "nvim_exec2",
             vec![format!("buffer {buffer}").into(), Value::Map(Vec::new())],
         )?;
+        self.current = buffer;
         Some(())
     }
 
@@ -227,8 +242,22 @@ impl Neovim {
         }
         let reply = self.call(
             "nvim_exec_lua",
-            vec![STATE.into(), vec![Value::from(self.tick)].into()],
+            vec![
+                STATE.into(),
+                vec![Value::from(self.tick), Value::from(self.current)].into(),
+            ],
         )?;
+        if field(&reply, "strayed").and_then(Value::as_bool) == Some(true) {
+            return Some(State {
+                mode: "n".to_string(),
+                cursor: (0, 0),
+                anchor: (0, 0),
+                cmdtype: String::new(),
+                cmdline: String::new(),
+                strayed: true,
+                lines: None,
+            });
+        }
         self.tick = field(&reply, "tick")?.as_i64()?;
         let cursor = field(&reply, "cursor")?.as_array()?;
         let anchor = field(&reply, "anchor")?.as_array()?;
@@ -247,6 +276,7 @@ impl Neovim {
             ),
             cmdtype: text(field(&reply, "cmdtype")),
             cmdline: text(field(&reply, "cmdline")),
+            strayed: false,
             lines,
         })
     }

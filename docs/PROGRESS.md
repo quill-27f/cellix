@@ -621,3 +621,12 @@ waited for a hint that only shows in an empty window, so it failed before this c
 waits for the status line's far end. Unverified: how it feels over a real SSH link.
 
 Release 0.2.1, for the scroll region.
+
+Round nine, from the second persona reviews: two ways edits landed in the wrong place. In Neovim
+mode, `:e other` made Neovim's buffer another file while Cellix kept showing this one, so the
+next key copied the other file's lines in and `:w` wrote them over it. After every key Cellix now
+checks Neovim is still on the file in view in one window; a command that left it (`:e`, `:b`,
+`:split`, `:tabnew`) is undone and the status says to open files with Ctrl+P and split with
+Ctrl+\. In LaTeX, closing `\Cref{…}` at a line's end put the caret at the line's start, so the
+next letters went into the line's first reference: snapping the caret now leaves a row's end and a
+glyph's own place where they are.

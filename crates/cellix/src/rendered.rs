@@ -2176,6 +2176,11 @@ pub fn snap(rows: &[Row], pos: usize) -> usize {
     {
         return pos;
     }
+    // A row's end and a glyph's own place are places already. Going through `x` for them
+    // can land elsewhere, as at the end of a reference shown as its number.
+    if pos == row.end || row.glyphs.iter().any(|g| g.at == Some(pos)) {
+        return pos;
+    }
     row.position_at(x)
 }
 
