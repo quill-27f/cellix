@@ -31,6 +31,20 @@ pub struct Cell {
     pub style: Style,
 }
 
+/// Copies a run of cells within the grid's own cells. `Cell` isn't `Copy`, so this clones.
+trait CopyCells {
+    fn copy_within_cells(&mut self, from: std::ops::Range<usize>, to: usize);
+}
+
+impl CopyCells for Vec<Cell> {
+    fn copy_within_cells(&mut self, from: std::ops::Range<usize>, to: usize) {
+        for (n, at) in from.enumerate() {
+            let cell = self[at].clone();
+            self[to + n] = cell;
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Rect {
     pub x: u16,
@@ -81,6 +95,42 @@ pub struct Grid {
 }
 
 impl Grid {
+    /// Moves rows `top..=bottom` up by `by` rows, or down if negative, across the whole width,
+    /// as a terminal's scroll region does. The rows left behind hold nothing any real cell
+    /// matches, so the next diff draws them.
+    pub fn scroll_rows(&mut self, top: u16, bottom: u16, by: i32) {
+        let width = self.width as usize;
+        let (top, bottom) = (
+            top as usize,
+            (bottom as usize).min(self.height as usize - 1),
+        );
+        if top > bottom || by == 0 {
+            return;
+        }
+        let rows = bottom + 1 - top;
+        let n = (by.unsigned_abs() as usize).min(rows);
+        let unknown = Cell {
+            symbol: CompactString::const_new("\u{fffe}"),
+            style: Style::default(),
+        };
+        let row = |y: usize| y * width..(y + 1) * width;
+        if by > 0 {
+            for y in top..bottom + 1 - n {
+                self.cells.copy_within_cells(row(y + n), row(y).start);
+            }
+            for y in bottom + 1 - n..=bottom {
+                self.cells[row(y)].fill(unknown.clone());
+            }
+        } else {
+            for y in (top + n..=bottom).rev() {
+                self.cells.copy_within_cells(row(y - n), row(y).start);
+            }
+            for y in top..top + n {
+                self.cells[row(y)].fill(unknown.clone());
+            }
+        }
+    }
+
     pub fn new(width: u16, height: u16, style: Style) -> Self {
         let blank = Cell {
             symbol: " ".into(),

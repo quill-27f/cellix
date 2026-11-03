@@ -2609,5 +2609,12 @@
     "title": "A table's caption stays with the table on the left",
     "test": "a_tables_caption_stays_with_the_table_on_the_left",
     "passes": true
+  },
+  {
+    "id": "cells-scroll-region",
+    "milestone": 10,
+    "title": "In plain cells a scroll shifts the band and sends only what it must",
+    "test": "a_scroll_shifts_the_band_and_sends_only_what_it_must",
+    "passes": true
   }
 ]

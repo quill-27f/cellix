@@ -97,7 +97,8 @@ fn tmux_split_resize_and_pane_switch_keep_the_screen() {
     tmux.run(&["resize-window", "-x", "140", "-y", "40"]);
     tmux.wait("0:0.0", "hello.txt");
     tmux.run(&["kill-pane", "-t", "0:0.1"]);
-    tmux.wait("0", "Ctrl+G review");
+    // The status line's far end shows only once the whole width is drawn again.
+    tmux.wait("0", "Ln 1, Col 1");
     tmux.run(&["send-keys", "-t", "0", "x"]);
     tmux.wait("0", "xhello from a file");
 }

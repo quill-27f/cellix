@@ -611,3 +611,11 @@ panes, the light theme's mixed palette, and the table caption and minimap fixes.
 A table's caption in a paper stays at the left with its table, where it was centred on the page.
 
 Release 0.2.0.
+
+Scrolling in plain cells, as under tmux over SSH. Each wheel step rewrote every row of the editor,
+which shows as a scan over a slow link. The cell tier now has the terminal shift the band of rows
+the editor spans with a whole-width scroll region, as vim and Claude Code do, and sends only the
+lines coming into view and the columns that stay put, in the same synchronized frame. A test
+measures it at under half the bytes of a redraw. `tmux_split_resize_and_pane_switch_keep_the_screen`
+waited for a hint that only shows in an empty window, so it failed before this change; it now
+waits for the status line's far end. Unverified: how it feels over a real SSH link.
