@@ -1,8 +1,8 @@
 # Cellix
 
 [![ci](https://github.com/quill-27f/cellix/actions/workflows/ci.yml/badge.svg)](https://github.com/quill-27f/cellix/actions/workflows/ci.yml)
-[![crates.io](https://img.shields.io/crates/v/cellix)](https://crates.io/crates/cellix)
-[![license](https://img.shields.io/crates/l/cellix)](#license)
+[![release](https://img.shields.io/github/v/release/quill-27f/cellix)](https://github.com/quill-27f/cellix/releases)
+[![license](https://img.shields.io/badge/license-MIT%20or%20Apache--2.0-blue)](#license)
 
 **The AI companion IDE that lives inside your agent.** A Claude Code mod, a Codex plugin and a
 Gemini CLI extension that give your agent a real editor for Markdown, LaTeX, plans and diffs, right
@@ -17,10 +17,10 @@ by hunk, and a turn you don't like can be undone. It works the same over SSH.
 
 ```sh
 brew install quill-27f/tap/cellix    # macOS and Linux
-cargo install cellix --locked        # anywhere Rust runs
+cargo install --locked --git https://github.com/quill-27f/cellix cellix   # anywhere Rust runs
 ```
 
-Static Linux binaries for servers are on the [releases page](https://github.com/quill-27f/cellix/releases).
+Static binaries for macOS and Linux are on the [releases page](https://github.com/quill-27f/cellix/releases).
 
 ## Add it to your agent
 
@@ -210,7 +210,7 @@ want the agent features. Take the static binary from the
 [releases page](https://github.com/quill-27f/cellix/releases), or use `cargo install`:
 
 ```sh
-cargo install cellix --locked
+cargo install --locked --git https://github.com/quill-27f/cellix cellix
 
 # Pixels through tmux, no focus warning from Claude Code, click to switch panes
 cat >> ~/.tmux.conf <<'CONF'

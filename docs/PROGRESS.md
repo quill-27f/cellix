@@ -488,3 +488,9 @@ on its own comes after. `cellix setup claude`, `codex` and `gemini` make that on
 what the Install buttons do. Its screenshots still show Cellix on its own: a shot from inside Claude
 Code needs a real terminal window, which wasn't taken while the user was testing.
 
+Public, with the user's go-ahead. v0.1.0 is released for macOS and Linux on both architectures, and
+`quill-27f/homebrew-tap` holds a formula checked against the release's checksums. crates.io still has
+the 0.0.1 placeholder until the user publishes with their own token, so the README installs from git
+for now. The README still lacks a screenshot from inside Claude Code: a scripted Ghostty window never
+opened here, and the user is sending one.
+
