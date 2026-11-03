@@ -177,38 +177,25 @@ fn replace(p: Point) -> f32 {
         .min(path(p, &[(22.0, 8.0), (21.4, 9.4), (20.0, 10.0)]))
 }
 
-/// Whether a point is inside a box with round corners.
-fn within(p: Point, min: Point, max: Point, radius: f32) -> bool {
-    let (cx, cy) = ((min.0 + max.0) / 2.0, (min.1 + max.1) / 2.0);
-    let (qx, qy) = (
-        (p.0 - cx).abs() - (max.0 - min.0) / 2.0 + radius,
-        (p.1 - cy).abs() - (max.1 - min.1) / 2.0 + radius,
-    );
-    (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt() + qx.max(qy).min(0.0) < radius
-}
-
-/// Folders and files are solid, as in VS Code's icon themes, so colour can carry the kind.
-fn solid(icon: Icon, p: Point) -> Option<bool> {
-    let folder =
-        || within(p, (2.0, 7.5), (22.0, 20.5), 2.2) || within(p, (2.0, 4.0), (11.0, 11.0), 1.8);
-    match icon {
-        Icon::Folder => Some(folder()),
-        Icon::FolderOpen => Some(folder() && !(p.1 > 10.2 && p.1 < 11.8)),
-        Icon::File => {
-            let page = within(p, (4.5, 2.0), (19.5, 22.0), 2.2);
-            let fold = p.1 - 2.0 < p.0 - 13.5;
-            let line = |y: f32| segment(p, (8.0, y), (16.0, y)) < 1.0;
-            Some(page && !fold && !line(12.5) && !line(16.8))
-        }
-        _ => None,
-    }
-}
-
 /// Half the stroke's width, in 24ths of the icon. The large icons stay fine-lined, and the
 /// small ones are heavier so they keep their weight at a few pixels across.
 fn half_stroke(icon: Icon) -> f32 {
     match icon {
-        Icon::Files | Icon::Search | Icon::Git | Icon::Settings | Icon::Outline => 0.9,
+        Icon::Files
+        | Icon::Search
+        | Icon::Git
+        | Icon::Settings
+        | Icon::Outline
+        | Icon::File
+        | Icon::Folder
+        | Icon::FolderOpen
+        | Icon::ChevronRight
+        | Icon::ChevronDown
+        | Icon::Close
+        | Icon::ArrowUp
+        | Icon::ArrowDown
+        | Icon::Replace
+        | Icon::ReplaceAll => 0.9,
         Icon::Agents => 0.8,
         Icon::Check => 1.7,
         _ => 1.15,
@@ -219,9 +206,6 @@ fn half_stroke(icon: Icon) -> f32 {
 /// round-ended stroke, which is what makes them read as a set.
 pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
     let p = (u * 24.0, v * 24.0);
-    if let Some(ink) = solid(icon, p) {
-        return ink;
-    }
     let distance = match icon {
         // A page with its corner folded, and the edge of one behind it.
         Icon::Files => path(
@@ -286,7 +270,82 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
             .min(segment(p, (15.0, 13.0), (15.0, 15.5)))
             .min(segment(p, (1.5, 14.5), (4.0, 14.5)))
             .min(segment(p, (20.0, 14.5), (22.5, 14.5))),
-        Icon::Folder | Icon::FolderOpen | Icon::File => f32::MAX,
+        // Lucide's file, folder and folder-open.
+        Icon::File => path(
+            p,
+            &[
+                (15.0, 2.0),
+                (6.0, 2.0),
+                (4.6, 2.6),
+                (4.0, 4.0),
+                (4.0, 20.0),
+                (4.6, 21.4),
+                (6.0, 22.0),
+                (18.0, 22.0),
+                (19.4, 21.4),
+                (20.0, 20.0),
+                (20.0, 7.0),
+                (15.0, 2.0),
+            ],
+        )
+        .min(path(
+            p,
+            &[
+                (14.0, 2.0),
+                (14.0, 6.0),
+                (14.6, 7.4),
+                (16.0, 8.0),
+                (20.0, 8.0),
+            ],
+        )),
+        Icon::Folder => path(
+            p,
+            &[
+                (20.0, 20.0),
+                (21.4, 19.4),
+                (22.0, 18.0),
+                (22.0, 8.0),
+                (21.4, 6.6),
+                (20.0, 6.0),
+                (12.1, 6.0),
+                (10.4, 5.1),
+                (9.6, 3.9),
+                (7.9, 3.0),
+                (4.0, 3.0),
+                (2.6, 3.6),
+                (2.0, 5.0),
+                (2.0, 18.0),
+                (2.6, 19.4),
+                (4.0, 20.0),
+                (20.0, 20.0),
+            ],
+        ),
+        Icon::FolderOpen => path(
+            p,
+            &[
+                (6.0, 14.0),
+                (7.5, 11.1),
+                (9.2, 10.0),
+                (20.0, 10.0),
+                (21.9, 12.5),
+                (20.4, 18.5),
+                (18.5, 20.0),
+                (4.0, 20.0),
+                (2.6, 19.4),
+                (2.0, 18.0),
+                (2.0, 5.0),
+                (2.6, 3.6),
+                (4.0, 3.0),
+                (7.9, 3.0),
+                (9.6, 3.9),
+                (10.4, 5.1),
+                (12.1, 6.0),
+                (18.0, 6.0),
+                (19.4, 6.6),
+                (20.0, 8.0),
+                (20.0, 10.0),
+            ],
+        ),
         // A tree of headings.
         Icon::Outline => segment(p, (21.0, 6.0), (8.0, 6.0))
             .min(segment(p, (21.0, 12.0), (13.0, 12.0)))

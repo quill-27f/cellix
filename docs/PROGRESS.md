@@ -598,3 +598,12 @@ offers language servers offers it, with the same Install, Not now and Never; Ins
 installer (`curl -fsSL https://terminal-browser.sh/install | bash`, from its releases page) and opens
 the browser when it's done. Settings › Integrations has a Browser card with Install too. Unverified:
 the installer on a real Linux machine.
+
+UI pass from the whole-app style review. One icon set: files and folders are Lucide outlines,
+chevrons, close, arrows and replace share the rail's line weight, and the rail's icons are sized
+to look as large as the top right strip's (they had looked smaller). The strip's active chip is the
+rail's chip, and its resting icons the rail's colour. The tab in front has an accent along its top.
+With paint, a menu's groups part on a hairline instead of a blank row (the cell tier keeps the
+row), suggestions sit on a panel painted just around their rows, and matches are one colour in the
+file and the Search panel. Not done from the review: palettes' padding, the Review and Agents
+panes, the light theme's mixed palette, and the table caption and minimap fixes.

@@ -2595,5 +2595,12 @@
     "title": "terminal-browser can be installed from Settings",
     "test": "the_browser_can_be_installed_from_integrations",
     "passes": true
+  },
+  {
+    "id": "menu-hairlines",
+    "milestone": 10,
+    "title": "With paint, a menu's groups part on a hairline, not a blank row",
+    "test": "with_paint_groups_part_on_a_hairline_not_a_row",
+    "passes": true
   }
 ]

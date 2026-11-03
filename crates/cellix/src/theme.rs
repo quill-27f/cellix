@@ -309,7 +309,7 @@ impl Default for Theme {
             git_modified: Rgb(240, 180, 90),
             git_added: Rgb(127, 214, 160),
             input: Rgb(30, 30, 46),
-            find_match: Rgb(81, 92, 47),
+            find_match: Rgb(106, 84, 28),
             code_bg: Rgb(34, 34, 52),
             minimap_view: Rgb(72, 74, 110),
             border: Rgb(56, 56, 80),

@@ -112,7 +112,8 @@ impl Menu {
         let width = Self::width(&items, measure).min(screen.w);
         let room = screen.h.saturating_sub(2);
         let rules = items.iter().filter(|i| i.rule).count() as u16;
-        let spaced = items.len() as u16 + rules <= room;
+        // The cell tier has no hairline, so a blank row parts its groups instead.
+        let spaced = measure.in_cells() && items.len() as u16 + rules <= room;
         let height = (items.len() as u16 + if spaced { rules } else { 0 }).min(room);
         let x = x.min(screen.right().saturating_sub(width));
         let bottom = screen.bottom().saturating_sub(1);
@@ -287,6 +288,13 @@ mod tests {
         let menu = Menu::new((1, 1), items(), &CellMeasure, short);
         assert_eq!(menu.area.h, 3);
         assert_eq!(menu.row_at(2, menu.area.y + 2), Some(2));
+    }
+
+    #[test]
+    fn with_paint_groups_part_on_a_hairline_not_a_row() {
+        let measure = cellix_render::FontMeasure::new(17, 37);
+        let menu = Menu::new((1, 1), items(), &measure, SCREEN);
+        assert_eq!(menu.area.h, items().len() as u16, "no blank rows");
     }
 
     #[test]

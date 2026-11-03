@@ -93,9 +93,11 @@ const ACTION_ICON: f32 = 0.62;
 /// Columns kept clear on each side of the whole bar.
 const ACTION_MARGIN: u16 = 1;
 /// Rows tall a rail icon is on the pixel tiers. Text cells keep their block art.
-const RAIL_ICON: f32 = 0.52;
+/// Larger than the top right icons' box, since line icons fill less of theirs, so the two
+/// sets look the same size.
+const RAIL_ICON: f32 = 0.7;
 /// The pill behind the rail icon that's showing, in columns and rows. Pixels only.
-const RAIL_PILL: (f32, f32) = (2.2, 0.86);
+const RAIL_PILL: (f32, f32) = (2.4, 0.94);
 /// Where the pane's own close button stands, which they keep clear of.
 const PANE_CLOSE: u16 = 3;
 /// Columns kept for tabs beside them, in the pane and over the file. A window with less goes
@@ -2438,12 +2440,13 @@ impl App {
         let suggest = self.suggest.as_ref()?;
         let editor = self.editors.get(self.active())?;
         let (x, y) = editor.caret_cell(self.focused_area())?;
-        let height = suggest.items.len() as u16 + 2;
+        let height = suggest.items.len() as u16;
         let bottom = self.size.1.saturating_sub(1);
-        let y = if y + 1 + height <= bottom {
-            y + 1
+        // A row clear of the caret, so the panel's paint stays off the line being typed.
+        let y = if y + 2 + height <= bottom {
+            y + 2
         } else {
-            y.saturating_sub(height)
+            y.saturating_sub(height + 1)
         };
         let x = (x as u16).min(self.size.0.saturating_sub(SUGGEST_WIDTH + 1));
         Some(Rect::new(x, y, SUGGEST_WIDTH.min(self.size.0), height))
@@ -2454,9 +2457,9 @@ impl App {
             return;
         };
         let theme = &self.theme;
-        popup(grid, area, theme);
+        crate::palette::raised(grid, area, theme);
         for (i, item) in suggest.items.iter().enumerate() {
-            let y = area.y + 1 + i as u16;
+            let y = area.y + i as u16;
             let row = Rect::new(area.x, y, area.w, 1);
             let base = Style {
                 fg: theme.text.fg,
@@ -2665,13 +2668,22 @@ impl App {
             let on = self.action_on(command);
             grid.fill(cell, theme.tab);
             if on || hovered {
-                let fill = if on { theme.pick } else { theme.row_hover };
-                grid.panel(Bounds::inset(cell, 0.1, 0.08), 16, Some(fill), None);
+                // The rail's chip, so the two bars of icons read as one set.
+                let fill = if on { theme.tint } else { theme.row_hover };
+                let (wide, high) = RAIL_PILL;
+                let left = cell.x as f32 + (cell.w as f32 - wide) / 2.0;
+                let top = cell.y as f32 + (1.0 - high) / 2.0;
+                grid.panel(
+                    Bounds::cells(left, top, wide, high),
+                    PILL_RADIUS,
+                    Some(fill),
+                    None,
+                );
             }
             let color = if on || hovered {
                 theme.text.fg
             } else {
-                theme.status.fg
+                theme.activity.fg
             };
             toolbar::draw_icon(grid, (icon, ACTION_ICON), cell, color, theme.tab);
             // With no tab to say so, the icon does.
@@ -6248,7 +6260,7 @@ impl App {
         }
         if let Some(area) = self.suggest_area() {
             let on_row = area.contains(mouse.x, mouse.y) && mouse.kind == MouseKind::Left;
-            let row = mouse.y.saturating_sub(area.y + 1) as usize;
+            let row = mouse.y.saturating_sub(area.y) as usize;
             if on_row {
                 self.accept_suggestion(row);
                 return;
@@ -7814,6 +7826,10 @@ impl App {
             let style = if active { theme.tab_active } else { theme.tab };
             let tab = Rect::new(x, area.y, width.min(area.right().saturating_sub(x)), 1);
             grid.fill(tab, style);
+            if active && !self.measure.in_cells() {
+                let edge = Bounds::cells(x as f32, area.y as f32, tab.w as f32, 0.06);
+                grid.panel(edge, 0, Some(theme.accent), None);
+            }
             let editor = &self.editors[i];
             let name = editor.title();
             let close_x = x + width.saturating_sub(2);
