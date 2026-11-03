@@ -294,7 +294,8 @@ with tempfile.TemporaryDirectory() as scratch:
     os.makedirs(f"{ROOT}/.cellix", exist_ok=True)
     with open(f"{ROOT}/.cellix/threads.json", "w") as f:
         json.dump(review, f)
-    shoot("50-review", [["keys", "\\eOP"], ["keys", "show comments"], ["keys", "\r"], ["wait", 0.6]],
+    shoot("50-review", [["wait", 1.5], ["keys", "\\eOP"], ["wait", 0.6], ["keys", "show comments"],
+                        ["wait", 3.0], ["keys", "\r"], ["wait", 3.0]],
           NOTE_FILE, size="150x44")
     shoot("51-agent-list", [*LIST_AGENTS, ["wait", 0.6]], NOTE_FILE, size="150x44")
     shell = [*LIST_AGENTS, ["wait", 0.6]]

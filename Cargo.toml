@@ -4,7 +4,7 @@ exclude = ["spikes", "harness/reserve-crate"]
 resolver = "3"
 
 [workspace.package]
-version = "0.3.0"
+version = "0.3.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/quill-27f/cellix"
@@ -16,6 +16,11 @@ all = "warn"
 # Keeps debug builds small: less disk and less linker memory.
 debug = "line-tables-only"
 split-debuginfo = "unpacked"
+
+# Spelling and grammar run in debug builds and tests too, and unoptimised they take a minute
+# where they should take a second.
+[profile.dev.package.harper-core]
+opt-level = 2
 
 [profile.release]
 lto = "thin"

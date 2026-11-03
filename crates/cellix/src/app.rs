@@ -719,6 +719,9 @@ pub struct App {
     pending_review: Option<String>,
     /// A prompt for the agent this Cellix is a pane in, for the mod to submit.
     outgoing_prompt: Option<String>,
+    /// The changed line a menu was opened on in Review, for its Comment choice: its file,
+    /// number, text, and whether it was taken out.
+    review_line: Option<(String, usize, String, bool)>,
     /// The fixes the language server last offered, for the menu that shows them.
     code_actions: Vec<cellix_lang::lsp::Fix>,
     /// Code's symbols from its language server, for the Outline, and the file and revision
@@ -801,6 +804,7 @@ impl App {
             comment_quote: None,
             back: Vec::new(),
             forward: Vec::new(),
+            review_line: None,
             code_actions: Vec::new(),
             symbols: HashMap::new(),
             symbols_asked: None,
@@ -982,6 +986,9 @@ impl App {
         editor.minimap_on = self.settings.minimap != Some(false);
         editor.built = Some(self.built_folder.clone());
         editor.notebook = book;
+        // Track Changes stays as it was left for this document.
+        let relative = self.relative(path);
+        editor.tracking = editor.rendered && self.tracked_files().contains(&relative);
         self.load_committed(&mut editor);
         self.editors.push(editor);
         self.set_active(self.editors.len() - 1);
@@ -2166,6 +2173,10 @@ impl App {
                     .collect();
                 self.code_actions = found;
                 self.show_menu(at, items);
+                // Asked for from the keyboard, so Enter takes the first, as in VS Code.
+                if let Overlay::Menu(menu) = &mut self.overlay {
+                    menu.selected = Some(0);
+                }
             }
             LspEvent::Symbols(path, found) => {
                 let headings = found
@@ -3280,6 +3291,7 @@ impl App {
                     asked: false,
                     kind: String::new(),
                     suggested_by: String::new(),
+                    copy: (0, 0),
                 });
                 asked = draft.ask.then_some(id);
             }
@@ -4754,6 +4766,15 @@ impl App {
                     if saved && editor.buffer.is_dirty() {
                         let _ = editor.buffer.save();
                     }
+                    let path = editor.buffer.path().map(Path::to_path_buf);
+                    if let Some(file) = path.map(|p| self.relative(&p)) {
+                        let mut tracked = self.tracked_files();
+                        tracked.retain(|f| *f != file);
+                        if on {
+                            tracked.push(file);
+                        }
+                        self.keep_tracked_files(&tracked);
+                    }
                     self.say(if on {
                         "Track changes is on: edits are kept as suggestions"
                     } else {
@@ -6081,6 +6102,7 @@ impl App {
                 asked: false,
                 kind: String::new(),
                 suggested_by: String::new(),
+                copy: (0, 0),
             });
             self.save_threads();
         }
@@ -6109,6 +6131,7 @@ impl App {
             asked: false,
             kind: String::new(),
             suggested_by: String::new(),
+            copy: (0, 0),
         });
         self.save_threads();
         if page {
@@ -6454,6 +6477,7 @@ impl App {
                     asked: false,
                     kind,
                     suggested_by: author.clone(),
+                    copy: (0, 0),
                 });
                 self.save_threads();
                 let _ = made.send(id);
@@ -6556,6 +6580,33 @@ impl App {
         }
         let text = std::fs::read_to_string(path)?;
         std::fs::write(path, append_comments(&text, &comments))
+    }
+
+    /// The documents with Track Changes on, kept beside the project's sessions so it stays as
+    /// it was left. Out of the project itself, since it's how one person works.
+    fn tracked_file(&self) -> PathBuf {
+        crate::hold::folder_of(self.workspace.root()).join("tracking.json")
+    }
+
+    fn tracked_files(&self) -> Vec<String> {
+        std::fs::read_to_string(self.tracked_file())
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default()
+    }
+
+    fn keep_tracked_files(&self, tracked: &[String]) {
+        let file = self.tracked_file();
+        if tracked.is_empty() {
+            let _ = std::fs::remove_file(&file);
+            return;
+        }
+        if let Some(folder) = file.parent() {
+            let _ = std::fs::create_dir_all(folder);
+        }
+        if let Ok(json) = serde_json::to_string(tracked) {
+            let _ = std::fs::write(file, json);
+        }
     }
 
     /// Where the comments no agent has taken yet wait between runs: beside the project's
@@ -6932,6 +6983,69 @@ impl App {
         }
     }
 
+    /// A changed line's own choices: comment on it, or undo just it when most of its hunk is
+    /// right.
+    fn review_line_menu(&mut self, x: u16, y: u16) {
+        let area = self.main_area();
+        let comments = self.comments.lock().map(|c| c.clone()).unwrap_or_default();
+        let Some(review) = &self.review else {
+            return;
+        };
+        if review.is_proposal() {
+            return;
+        }
+        let Some((undo, line, quote)) = review.changed_line_at(area, y, &comments) else {
+            return;
+        };
+        let Some(file) = review
+            .current_path()
+            .map(|p| p.to_string_lossy().into_owned())
+        else {
+            return;
+        };
+        let removed = matches!(undo, cellix_review::LineUndo::Removed { .. });
+        let what = match undo {
+            cellix_review::LineUndo::Added(_) => "Remove This Added Line",
+            cellix_review::LineUndo::Removed { .. } => "Put This Line Back",
+        };
+        let items = vec![
+            MenuItem::new(
+                format!("Comment on Line {line}"),
+                MenuAction::Run(Command::AddComment),
+            ),
+            MenuItem::new(what, MenuAction::RejectLine(undo)),
+        ];
+        self.review_line = Some((file, line, quote, removed));
+        self.show_menu((x, y.saturating_add(1)), items);
+    }
+
+    /// Writes the file with one line of its change undone.
+    fn reject_line(&mut self, undo: cellix_review::LineUndo) {
+        let Some(review) = &self.review else {
+            return;
+        };
+        let Some(path) = review.absolute_path() else {
+            return;
+        };
+        let text = review.line_rejected_text(undo);
+        let dirty = self
+            .editors
+            .iter()
+            .any(|e| e.buffer.path() == Some(path.as_path()) && e.buffer.is_dirty());
+        if dirty {
+            self.say("Save or undo your edits to this file first");
+            return;
+        }
+        let note = match std::fs::write(&path, text) {
+            Ok(()) => "Undid that line of the change".to_string(),
+            Err(e) => format!("Could not write the file: {e}"),
+        };
+        self.say(note);
+        if let Some(review) = &mut self.review {
+            review.refresh();
+        }
+    }
+
     fn reject(&mut self, hunk: usize) {
         let Some(review) = &self.review else {
             return;
@@ -7014,9 +7128,23 @@ impl App {
             return;
         };
         editor.conflict = false;
-        let note = match editor.save() {
-            Ok(()) => format!("Saved {}", editor.title()),
-            Err(e) => format!("Could not save: {e}"),
+        // Open suggestions are saved as the marks that hold them, so whoever opens the file
+        // next sees them too. Saying so keeps that from being a surprise.
+        let open = if editor.rendered {
+            cellix_doc::changes::find(&editor.buffer.text(), editor.change_syntax()).len()
+        } else {
+            0
+        };
+        let note = match (editor.save(), open) {
+            (Ok(()), 0) => format!("Saved {}", editor.title()),
+            (Ok(()), n) => format!(
+                "Saved {}, with {n} suggestion{} still open: {} in the file as marks until \
+                 accepted or rejected",
+                editor.title(),
+                if n == 1 { "" } else { "s" },
+                if n == 1 { "it stays" } else { "they stay" },
+            ),
+            (Err(e), _) => format!("Could not save: {e}"),
         };
         self.say(note);
         // With its PDF open, saving a paper rebuilds it.
@@ -7157,6 +7285,7 @@ impl App {
         if self.review.is_some() && !in_sidebar && self.main_area().contains(x, y) {
             match mouse.kind {
                 MouseKind::Left => self.click_review(x, y),
+                MouseKind::Right => self.review_line_menu(x, y),
                 MouseKind::ScrollUp | MouseKind::ScrollDown => {
                     let delta = if mouse.kind == MouseKind::ScrollUp {
                         -self.wheel_lines
@@ -7668,6 +7797,8 @@ impl App {
     }
 
     fn open_editor_menu(&mut self, x: u16, y: u16) {
+        // A Review line's menu left unanswered isn't what this menu's Comment is about.
+        self.review_line = None;
         let items = self.editor_items();
         if !items.is_empty() {
             self.show_menu((x, y), items);
@@ -7748,6 +7879,16 @@ impl App {
             })
         };
         match action {
+            MenuAction::Run(Command::AddComment) if self.review_line.is_some() => {
+                // Comment on the line the menu was opened on, as a click on its number does.
+                if let Some((file, line, quote, removed)) = self.review_line.take() {
+                    self.comment_quote = Some((quote, removed));
+                    self.ask(
+                        &format!("Comment on line {line}"),
+                        PromptAction::Comment(file, line),
+                    );
+                }
+            }
             MenuAction::Run(command) => self.run(command),
             MenuAction::Tool(tool) => self.use_tool(tool, self.main_area().x),
             MenuAction::Fix(start, end, text) => {
@@ -7767,6 +7908,7 @@ impl App {
                 }
                 self.say(format!("Applied: {title}"));
             }
+            MenuAction::RejectLine(undo) => self.reject_line(undo),
             MenuAction::Learn(word) => {
                 if let Some(spell) = &self.spell {
                     spell.learn(&word);
@@ -15946,6 +16088,30 @@ mod tests {
     }
 
     #[test]
+    fn saving_with_open_suggestions_says_they_stay_as_marks() {
+        let (_dir, mut app) = page_app("One {++new ++}two.\n");
+        app.run(Command::Save);
+        let text = screen(&app).text();
+        assert!(text.contains("1 suggestion still open"), "{text}");
+    }
+
+    #[test]
+    fn track_changes_stays_as_it_was_left_for_a_document() {
+        let (dir, mut app) = page_app("One two.\n");
+        app.run(Command::ToggleTracking);
+        assert!(app.editors[0].tracking);
+        let path = app.editors[0].buffer.path().unwrap().to_path_buf();
+        let mut next = App::new(dir.path().to_path_buf(), (100, 30));
+        next.open(&path).unwrap();
+        assert!(next.editors[0].tracking, "remembered for this document");
+        next.run(Command::ToggleTracking);
+        let mut third = App::new(dir.path().to_path_buf(), (100, 30));
+        third.open(&path).unwrap();
+        assert!(!third.editors[0].tracking, "and remembered off");
+        let _ = fs::remove_dir(crate::hold::folder_of(dir.path()));
+    }
+
+    #[test]
     fn a_quick_fix_is_offered_and_applied() {
         let (dir, mut app) = project();
         let path = dir.path().join("beta.rs");
@@ -15965,7 +16131,8 @@ mod tests {
             vec![(path, vec![edit])],
         )]));
         assert!(screen(&app).text().contains("Mark it fixed"));
-        app.menu_action(MenuAction::ServerFix(0));
+        // The first is ready for Enter, as in VS Code.
+        key(&mut app, Key::Enter);
         assert_eq!(app.active_text().unwrap(), "fn main() {} // fixed\n");
     }
 

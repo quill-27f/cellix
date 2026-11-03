@@ -375,6 +375,19 @@ impl Grid {
             fill,
             border,
             shadow: false,
+            dashed: false,
+        });
+    }
+
+    /// A panel with its border in dashes, for something offered rather than settled.
+    pub fn dashed_panel(&mut self, bounds: Bounds, radius: u8, fill: Option<Rgb>, border: Rgb) {
+        self.paint.push(Paint::Panel {
+            bounds,
+            radius,
+            fill,
+            border: Some(border),
+            shadow: false,
+            dashed: true,
         });
     }
 
@@ -386,6 +399,7 @@ impl Grid {
             fill: Some(fill),
             border: Some(border),
             shadow: true,
+            dashed: false,
         });
     }
 

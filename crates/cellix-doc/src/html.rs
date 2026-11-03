@@ -31,6 +31,8 @@ mark { background: #ffec9e; color: #1f2328; padding: 0 .15em; border-radius: 3px
 ins { color: #1a7f37; } del { color: #cf222e; } .note { color: var(--dim); font-size: .85em; }
 blockquote[class^=markdown-alert] { color: inherit; border-left-width: 4px; }
 blockquote[class^=markdown-alert]::before { display: block; font-weight: 600; margin-top: .6em; }
+blockquote[class^=markdown-alert]:has(> .callout-title)::before { content: none; }
+.callout-title { font-weight: 600; margin-bottom: .2em; }
 .markdown-alert-note { border-color: var(--link); } .markdown-alert-note::before { content: 'Note'; }
 .markdown-alert-tip { border-color: #1a7f37; } .markdown-alert-tip::before { content: 'Tip'; }
 .markdown-alert-important { border-color: #8857e0; }
@@ -42,6 +44,50 @@ blockquote[class^=markdown-alert]::before { display: block; font-weight: 600; ma
 .footnote-definition { font-size: .88em; color: var(--dim); }
 hr { border: 0; border-top: 1px solid var(--line); margin: 2em 0; }
 ";
+
+/// A callout's opening line, `[!NOTE]` or Obsidian's `[!tip]- Title`: GitHub's kind it reads
+/// as, and the title written after it, if any. Obsidian's other kinds map to the nearest of
+/// GitHub's five.
+pub fn callout(line: &str) -> Option<(&'static str, Option<String>)> {
+    let rest = line.trim().strip_prefix("[!")?;
+    let (name, after) = rest.split_once(']')?;
+    let kind = match name.to_ascii_lowercase().as_str() {
+        "note" | "info" | "abstract" | "summary" | "tldr" | "todo" | "example" | "quote"
+        | "cite" => "NOTE",
+        "tip" | "hint" | "success" | "check" | "done" => "TIP",
+        "important" | "question" | "help" | "faq" => "IMPORTANT",
+        "warning" | "attention" => "WARNING",
+        "caution" | "danger" | "error" | "failure" | "fail" | "missing" | "bug" => "CAUTION",
+        _ => return None,
+    };
+    // `-` and `+` only say whether it starts folded.
+    let title = after.trim_start_matches(['-', '+']).trim();
+    Some((kind, (!title.is_empty()).then(|| title.to_string())))
+}
+
+/// Callouts as GitHub writes them, which the parser knows, keeping a title of their own in a
+/// first paragraph the page styles as the heading in place of the kind's name.
+fn callouts(markdown: &str) -> String {
+    let mut out = String::with_capacity(markdown.len());
+    for line in markdown.split_inclusive('\n') {
+        let body = line.trim_end_matches('\n');
+        let quoted = body.trim_start().strip_prefix('>');
+        match quoted.and_then(callout) {
+            Some((kind, title)) => {
+                let lead = &body[..body.len() - body.trim_start().len()];
+                out.push_str(&format!("{lead}> [!{kind}]\n"));
+                if let Some(title) = title {
+                    out.push_str(&format!(
+                        "{lead}> <p class=\"callout-title\">{}</p>\n{lead}>\n",
+                        escape(&title)
+                    ));
+                }
+            }
+            None => out.push_str(line),
+        }
+    }
+    out
+}
 
 fn escape(text: &str) -> String {
     text.replace('&', "&amp;")
@@ -197,6 +243,7 @@ pub fn body_with(markdown: &str, built: &Built) -> String {
         | Options::ENABLE_FOOTNOTES
         | Options::ENABLE_GFM
         | Options::ENABLE_MATH;
+    let markdown = &callouts(markdown);
     let sized = figure::rewrite_sized(markdown, |image, width| {
         format!(
             "<img src=\"{}\" alt=\"{}\" style=\"width:{width}%\">",
@@ -330,6 +377,25 @@ mod tests {
         assert!(html.contains("<svg"), "{html}");
         assert!(!html.contains("flowchart"), "{html}");
         assert!(html.contains("style=\"width:40%\""), "{html}");
+    }
+
+    #[test]
+    fn a_callout_keeps_its_own_title() {
+        let html = body("> [!tip]- Keep it short\n> Say less.\n\n> [!WARNING]\n> Careful.\n");
+        assert!(html.contains("markdown-alert-tip"), "{html}");
+        assert!(
+            html.contains("<p class=\"callout-title\">Keep it short</p>"),
+            "{html}"
+        );
+        assert!(html.contains("Say less."), "{html}");
+        assert!(!html.contains("[!tip]"), "{html}");
+        assert!(html.contains("markdown-alert-warning"), "{html}");
+        assert_eq!(
+            callout("[!bug] Crash"),
+            Some(("CAUTION", Some("Crash".to_string())))
+        );
+        assert_eq!(callout("[!NOTE]"), Some(("NOTE", None)));
+        assert_eq!(callout("[!nonsense]"), None);
     }
 
     #[test]

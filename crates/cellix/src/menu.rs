@@ -50,6 +50,8 @@ pub enum Action {
     Fix(usize, usize, String),
     /// Stops counting a word as wrong.
     Learn(String),
+    /// Undoes one line of a change in Review.
+    RejectLine(cellix_review::LineUndo),
     AddCodeCell,
     /// Runs a program in the side pane, to set something up.
     InPane(String, Vec<String>),

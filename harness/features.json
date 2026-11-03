@@ -2903,5 +2903,96 @@
     "title": "Ctrl keys arrive with tmux extended-keys on",
     "test": "ctrl_keys_arrive_with_tmux_extended_keys_on",
     "passes": true
+  },
+  {
+    "id": "tmux-cell-size-passthrough",
+    "milestone": 10,
+    "title": "The cell size is asked past tmux, so images aren't letterboxed",
+    "test": "the_cell_size_is_asked_past_tmux",
+    "passes": true
+  },
+  {
+    "id": "bib-braced-names",
+    "milestone": 10,
+    "title": "Braced and particled names cite whole",
+    "test": "braced_and_particled_names_cite_whole",
+    "passes": true
+  },
+  {
+    "id": "natbib-forms",
+    "milestone": 10,
+    "title": "natbib citations read as they print",
+    "test": "natbib_citations_read_as_they_print",
+    "passes": true
+  },
+  {
+    "id": "callout-title-export",
+    "milestone": 10,
+    "title": "A callout keeps its own title in exports",
+    "test": "a_callout_keeps_its_own_title",
+    "passes": true
+  },
+  {
+    "id": "callout-title-page",
+    "milestone": 10,
+    "title": "A callout shows its own title on the page",
+    "test": "a_callout_shows_its_own_title",
+    "passes": true
+  },
+  {
+    "id": "save-open-suggestions",
+    "milestone": 10,
+    "title": "Saving with open suggestions says they stay as marks",
+    "test": "saving_with_open_suggestions_says_they_stay_as_marks",
+    "passes": true
+  },
+  {
+    "id": "thread-copy",
+    "milestone": 10,
+    "title": "A sentence written twice keeps its comment on its copy",
+    "test": "a_sentence_written_twice_keeps_its_comment_on_its_copy",
+    "passes": true
+  },
+  {
+    "id": "thread-quote-follows",
+    "milestone": 10,
+    "title": "A reworded quote shows its new words",
+    "test": "a_reworded_quote_shows_its_new_words",
+    "passes": true
+  },
+  {
+    "id": "tracking-remembered",
+    "milestone": 10,
+    "title": "Track Changes stays as it was left for a document",
+    "test": "track_changes_stays_as_it_was_left_for_a_document",
+    "passes": true
+  },
+  {
+    "id": "reject-one-line",
+    "milestone": 10,
+    "title": "One line of a change can be undone",
+    "test": "one_line_of_a_change_can_be_undone",
+    "passes": true
+  },
+  {
+    "id": "codex-approve-changes",
+    "milestone": 10,
+    "title": "Approving a Codex plan with changes hands them over",
+    "test": "approving_a_codex_plan_with_changes_hands_them_over",
+    "passes": true
+  },
+  {
+    "id": "tmux-ctrl-shift",
+    "milestone": 10,
+    "title": "Ctrl+Shift chords arrive under tmux with csi-u keys",
+    "test": "ctrl_shift_chords_arrive_with_csi_u_keys",
+    "passes": true
+  },
+  {
+    "id": "dashed-border",
+    "milestone": 10,
+    "title": "A dashed border has gaps",
+    "test": "a_dashed_border_has_gaps",
+    "passes": true
   }
 ]

@@ -234,12 +234,20 @@ fn proposed_plan(message: &str) -> Option<&str> {
 
 /// Codex ends its turn on a plan, so that's when it's held. Sending it back starts another
 /// turn with the reviewer's words. Approving lets the turn end, and implementing it is still
-/// the user's to ask for in Codex.
+/// the user's to ask for in Codex; approving with changes or notes starts one more turn, so
+/// Codex has them before it's asked.
 fn on_codex_stop(roots: &[PathBuf], input: &Value) -> Option<String> {
     let plan = proposed_plan(input["last_assistant_message"].as_str()?)?;
     let (verdict, text) = review_plan(roots, input, plan)?;
     match (verdict.as_str(), text) {
         ("send-back", Some(reason)) => {
+            Some(json!({"decision": "block", "reason": reason}).to_string())
+        }
+        ("approve", Some(changed)) if changed.trim() != plan.trim() => {
+            let reason = format!(
+                "The reviewer approved your plan with changes. This is the plan to follow \
+                 now; implement it when asked.\n\n{changed}"
+            );
             Some(json!({"decision": "block", "reason": reason}).to_string())
         }
         _ => None,
@@ -548,6 +556,24 @@ mod tests {
         let parsed: Value = serde_json::from_str(&output.unwrap()).unwrap();
         assert_eq!(parsed["decision"], "block");
         assert_eq!(parsed["reason"], "Say why");
+    }
+
+    #[test]
+    fn approving_a_codex_plan_with_changes_hands_them_over() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let message = "<proposed_plan>\n# C\n</proposed_plan>";
+        let hook = input(&root, json!({"last_assistant_message": message}));
+        let changed = "# C\n\n## Reviewer notes\n- Keep the old API.".to_string();
+        let (output, _) = answered("Codex", "stop", hook, Decision::Approve(Some(changed)));
+        let parsed: Value = serde_json::from_str(&output.unwrap()).unwrap();
+        assert_eq!(parsed["decision"], "block");
+        assert!(
+            parsed["reason"]
+                .as_str()
+                .unwrap()
+                .contains("Keep the old API.")
+        );
     }
 
     #[test]

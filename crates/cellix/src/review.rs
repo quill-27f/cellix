@@ -949,6 +949,48 @@ impl Review {
         }
     }
 
+    /// The changed line at a place in the diff, as what undoing it takes, with its line number.
+    pub fn changed_line_at(
+        &self,
+        area: Rect,
+        y: u16,
+        comments: &[Comment],
+    ) -> Option<(cellix_review::LineUndo, usize, String)> {
+        let (_, body) = self.layout(area);
+        let row = y.checked_sub(body.y + 1)? as usize;
+        let stacked = self.stacked(comments);
+        let index = self.top + row;
+        match stacked.get(index)? {
+            Stacked::Line(side, RowKind::Added) => {
+                let undo = cellix_review::LineUndo::Added(side.number - 1);
+                Some((undo, side.number, side.text.trim().to_string()))
+            }
+            Stacked::Line(side, RowKind::Removed) => {
+                // Back before the next line the new text has, or at its end.
+                let next_new = stacked[index + 1..].iter().find_map(|s| match s {
+                    Stacked::Line(side, RowKind::Added | RowKind::Same) => Some(side.number - 1),
+                    Stacked::Header(_) => Some(usize::MAX),
+                    _ => None,
+                });
+                let at = match next_new {
+                    Some(usize::MAX) | None => self.new.lines().count(),
+                    Some(at) => at,
+                };
+                let undo = cellix_review::LineUndo::Removed {
+                    old: side.number - 1,
+                    at,
+                };
+                Some((undo, side.number, side.text.trim().to_string()))
+            }
+            _ => None,
+        }
+    }
+
+    /// The file's text with one line of the change undone, to be written by the caller.
+    pub fn line_rejected_text(&self, undo: cellix_review::LineUndo) -> String {
+        cellix_review::reject_line(&self.old, &self.new, undo)
+    }
+
     pub fn hit(&self, area: Rect, x: u16, y: u16, comments: &[Comment]) -> Option<Hit> {
         let (list, body) = self.layout(area);
         if list.is_some_and(|l| x < l.right()) {

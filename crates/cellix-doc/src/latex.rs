@@ -600,21 +600,12 @@ impl BibEntry {
 
     /// `Knuth 1984`, as a citation reads on the page.
     pub fn short(&self) -> String {
-        let first = self.authors.split(" and ").next().unwrap_or("");
-        let surname = first
-            .split(',')
-            .next()
-            .and_then(|name| name.split_whitespace().next_back())
-            .unwrap_or(&self.key);
         let names: Vec<&str> = self.authors.split(" and ").collect();
-        let surname_of = |name: &str| {
-            let name = if name.contains(',') {
-                name.split(',').next().unwrap_or(name)
-            } else {
-                name.split_whitespace().next_back().unwrap_or(name)
-            };
-            name.trim().to_string()
-        };
+        let surname = names
+            .first()
+            .map(|name| surname_of(name))
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| self.key.clone());
         // Two authors read as both, as natbib prints them; three or more as et al.
         let more = match names.len() {
             2 => format!(" and {}", surname_of(names[1])),
@@ -623,6 +614,54 @@ impl BibEntry {
         };
         format!("{surname}{more} {}", self.year).trim().to_string()
     }
+}
+
+/// What BibTeX takes as a name's family part: all before a comma (`van der Berg, Jan`), or the
+/// last word, where a braced group counts as one (`{World Health Organization}`), without the
+/// braces that only kept it whole.
+fn surname_of(name: &str) -> String {
+    let name = name.trim();
+    let family = if let Some((family, _)) = split_outside_braces(name, ',') {
+        family.trim().to_string()
+    } else if name.ends_with('}') {
+        // The braced group at the end, whole.
+        let mut depth = 0;
+        let mut start = 0;
+        for (at, c) in name.char_indices().rev() {
+            match c {
+                '}' => depth += 1,
+                '{' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        start = at;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        name[start..].to_string()
+    } else {
+        name.split_whitespace()
+            .next_back()
+            .unwrap_or(name)
+            .to_string()
+    };
+    family.replace(['{', '}'], "")
+}
+
+/// Splits at the first `separator` that isn't inside braces.
+fn split_outside_braces(text: &str, separator: char) -> Option<(&str, &str)> {
+    let mut depth = 0;
+    for (at, c) in text.char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => depth -= 1,
+            _ if c == separator && depth == 0 => return Some((&text[..at], &text[at + 1..])),
+            _ => {}
+        }
+    }
+    None
 }
 
 /// The keys a text cites, in order, each once.
@@ -1442,6 +1481,26 @@ mod tests {
         );
         assert_eq!(detex("G\\\"odel, \\c c and \\ss"), "Gödel, ç and ß");
     }
+    #[test]
+    fn braced_and_particled_names_cite_whole() {
+        let entry = |authors: &str| BibEntry {
+            key: "k".into(),
+            title: String::new(),
+            authors: authors.into(),
+            year: "2020".into(),
+        };
+        assert_eq!(
+            entry("{World Health Organization}").short(),
+            "World Health Organization 2020"
+        );
+        assert_eq!(entry("van der Berg, Jan").short(), "van der Berg 2020");
+        assert_eq!(
+            entry("Jan {van der Berg} and Ada Lovelace").short(),
+            "van der Berg and Lovelace 2020"
+        );
+        assert_eq!(entry("Knuth, Donald").short(), "Knuth 2020");
+    }
+
     #[test]
     fn warnings_point_at_their_lines() {
         let root = Path::new("/p/main.tex");

@@ -325,6 +325,44 @@ pub fn reject_hunk(old: &str, new: &str, hunk: &Hunk) -> String {
     out
 }
 
+/// One line of a change to undo.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineUndo {
+    /// A line the change added, by its 0-based place in the new text: it goes.
+    Added(usize),
+    /// A line the change took out, by its 0-based place in the old text: it comes back, before
+    /// the new text's line `at`.
+    Removed { old: usize, at: usize },
+}
+
+/// `new` with one line of a change undone, for when most of a hunk is right.
+pub fn reject_line(old: &str, new: &str, undo: LineUndo) -> String {
+    let mut lines: Vec<String> = new.split_inclusive('\n').map(str::to_string).collect();
+    match undo {
+        LineUndo::Added(at) if at < lines.len() => {
+            lines.remove(at);
+        }
+        LineUndo::Removed { old: index, at } => {
+            if let Some(line) = old.split_inclusive('\n').nth(index) {
+                let mut line = line.to_string();
+                if !line.ends_with('\n') {
+                    line.push('\n');
+                }
+                // The new text's last line may have lost its newline to the line put back.
+                if at >= lines.len()
+                    && let Some(last) = lines.last_mut()
+                    && !last.ends_with('\n')
+                {
+                    last.push('\n');
+                }
+                lines.insert(at.min(lines.len()), line);
+            }
+        }
+        LineUndo::Added(_) => {}
+    }
+    lines.concat()
+}
+
 /// How a line differs from the last commit, for the editor's margin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LineChange {
@@ -358,6 +396,21 @@ pub fn line_changes(old: &str, new: &str) -> Vec<(usize, LineChange)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_line_of_a_change_can_be_undone() {
+        let old = "a\nb\nc\n";
+        let new = "a\nB\nnew\nc\n";
+        assert_eq!(reject_line(old, new, LineUndo::Added(2)), "a\nB\nc\n");
+        assert_eq!(
+            reject_line(old, new, LineUndo::Removed { old: 1, at: 1 }),
+            "a\nb\nB\nnew\nc\n"
+        );
+        assert_eq!(
+            reject_line("a\nz\n", "a", LineUndo::Removed { old: 1, at: 1 }),
+            "a\nz\n"
+        );
+    }
 
     #[test]
     fn line_changes_name_each_kind() {

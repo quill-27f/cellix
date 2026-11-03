@@ -198,9 +198,13 @@ fn command(rest: &[char], at: usize, look: Look, context: &Context, out: &mut Ve
         .take_while(|c| c.is_ascii_alphabetic() || **c == '*')
         .collect();
     let mut open = name.chars().count() + 1;
-    if rest.get(open) == Some(&'[')
+    // Up to two options, as natbib's `\citep[see][p.~3]{key}` has.
+    let mut options: Vec<String> = Vec::new();
+    while options.len() < 2
+        && rest.get(open) == Some(&'[')
         && let Some(close) = rest[open..].iter().position(|c| *c == ']')
     {
+        options.push(rest[open + 1..open + close].iter().collect());
         open += close + 1;
     }
     let arg = (rest.get(open) == Some(&'{'))
@@ -347,7 +351,27 @@ fn command(rest: &[char], at: usize, look: Look, context: &Context, out: &mut Ve
             out.extend(decoration(")", Tone::Dim));
         }
         _ if CITES.contains(&name) => {
-            out.extend(decoration("[", Tone::Link));
+            // The notes, as natbib takes them: one option comes after, two are before and after.
+            let note =
+                |text: &String| Some(text.replace('~', " ")).filter(|t| !t.trim().is_empty());
+            let (before, after) = match options.as_slice() {
+                [after] => (None, note(after)),
+                [before, after] => (note(before), note(after)),
+                _ => (None, None),
+            };
+            // `\citet` reads as part of the sentence, `Knuth (1984)`; the rest as a bracket.
+            let textual = matches!(name, "citet" | "Citet" | "textcite" | "Textcite");
+            let only = match name {
+                "citeauthor" => Some(true),
+                "citeyear" => Some(false),
+                _ => None,
+            };
+            if !textual && only.is_none() {
+                out.extend(decoration("[", Tone::Link));
+            }
+            if let Some(before) = &before {
+                out.extend(format!("{before} ").chars().map(|c| glyph(c, None, link)));
+            }
             let keys: String = inner.iter().collect();
             let mut first = true;
             for (n, key) in keys.split(',').map(str::trim).enumerate() {
@@ -360,12 +384,31 @@ fn command(rest: &[char], at: usize, look: Look, context: &Context, out: &mut Ve
                     Some(None) => (key.to_string(), missing),
                     None => (key.to_string(), link),
                 };
+                // `Knuth 1984` splits into its names and its year.
+                let (names, year) = shown
+                    .rsplit_once(' ')
+                    .filter(|(_, year)| year.chars().next().is_some_and(|c| c.is_ascii_digit()))
+                    .unwrap_or((shown.as_str(), ""));
+                let shown = match (only, textual) {
+                    (Some(true), _) => names.to_string(),
+                    (Some(false), _) if !year.is_empty() => year.to_string(),
+                    (None, true) if !year.is_empty() => {
+                        let after = after.as_ref().map(|a| format!(", {a}")).unwrap_or_default();
+                        format!("{names} ({year}{after})")
+                    }
+                    _ => shown.clone(),
+                };
                 for c in shown.chars() {
                     out.push(glyph(c, first.then_some(start), tone));
                     first = false;
                 }
             }
-            out.extend(decoration("]", Tone::Link));
+            if let Some(after) = after.as_ref().filter(|_| !textual && only.is_none()) {
+                out.extend(format!(", {after}").chars().map(|c| glyph(c, None, link)));
+            }
+            if !textual && only.is_none() {
+                out.extend(decoration("]", Tone::Link));
+            }
         }
         _ if REFS.contains(&name) => {
             let key: String = inner.iter().collect();
@@ -1465,6 +1508,28 @@ ignored after the end
         );
         assert!(all.contains("[?] nobody: not in the bibliography"), "{all}");
         assert!(!all.contains("bibliographystyle"), "{all}");
+    }
+
+    #[test]
+    fn natbib_citations_read_as_they_print() {
+        let line = |source: &str| {
+            let mut project = Project::from_text(source);
+            project
+                .citations
+                .insert("knuth84".into(), "Knuth 1984".into());
+            let extras = Extras {
+                dialect: Dialect::Latex,
+                project: Some(Rc::new(project)),
+                ..Extras::default()
+            };
+            let rows = layout_with(source, 70, &CellMeasure, &Registry::default(), &extras);
+            rows.iter().map(text).collect::<Vec<_>>().join("\n")
+        };
+        assert!(line("See \\citet{knuth84}.").contains("See Knuth (1984)."));
+        assert!(line("See \\citep[p.~3]{knuth84}.").contains("[Knuth 1984, p. 3]"));
+        assert!(line("\\citep[see][ch.~2]{knuth84}").contains("[see Knuth 1984, ch. 2]"));
+        assert!(line("\\citeauthor{knuth84}").contains("Knuth"));
+        assert!(!line("\\citeauthor{knuth84}").contains("1984"));
     }
 
     #[test]

@@ -103,6 +103,8 @@ pub enum Paint {
         fill: Option<Rgb>,
         border: Option<Rgb>,
         shadow: bool,
+        /// The border in dashes.
+        dashed: bool,
     },
     /// A line one device pixel thick, along the top or left of `bounds`.
     Hairline { bounds: Bounds, color: Rgb },

@@ -6,8 +6,8 @@ mod history;
 pub mod threads;
 
 pub use diff::{
-    FileDiff, Hunk, LineChange, Row, RowKind, Side, hunk_patch, line_changes, rank_changes,
-    reject_hunk,
+    FileDiff, Hunk, LineChange, LineUndo, Row, RowKind, Side, hunk_patch, line_changes,
+    rank_changes, reject_hunk, reject_line,
 };
 pub use git::{
     Branch, Change, Entry, Worktree, ahead_behind, blame_line, branches, changed_files, commit,

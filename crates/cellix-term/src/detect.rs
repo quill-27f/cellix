@@ -25,24 +25,48 @@ struct Reply {
     background: Option<(u8, u8, u8)>,
 }
 
+/// Where the questions go.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Asking {
+    /// The terminal itself.
+    Terminal,
+    /// tmux, which answers for the terminal from what it knows.
+    Tmux,
+    /// tmux, with passthrough, so the cell size can be asked of the terminal outside it.
+    TmuxPassthrough,
+}
+
 /// What to ask a terminal. The graphics query goes only where it reaches the terminal
 /// itself: tmux takes that kind of sequence as a window title and shows it in its status bar.
-fn questions(graphics: bool) -> String {
-    let graphics = if graphics {
-        format!("\x1b_Gi={QUERY_ID},s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\")
-    } else {
-        String::new()
+/// tmux makes up a cell size when its own terminal gives none (16 by 32, over a console), and
+/// images sized for that are letterboxed, so with passthrough the cell size goes past it.
+fn questions(asking: Asking) -> String {
+    let (cell, graphics) = match asking {
+        Asking::Terminal => (
+            "\x1b[16t".to_string(),
+            format!("\x1b_Gi={QUERY_ID},s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\"),
+        ),
+        Asking::Tmux => (String::new(), String::new()),
+        Asking::TmuxPassthrough => ("\x1bPtmux;\x1b\x1b[16t\x1b\\".to_string(), String::new()),
     };
-    format!("\x1b[16t\x1b]11;?\x1b\\\x1b[?1016$p{graphics}\x1b[c")
+    format!("{cell}\x1b]11;?\x1b\\\x1b[?1016$p{graphics}\x1b[c")
 }
 
 /// Asks for the cell size and for Kitty graphics, then device attributes, which every
 /// terminal answers, so a terminal without graphics doesn't cost the full timeout.
 /// Expects raw mode. Returns (kitty graphics, cell size).
-fn query_terminal(out: &mut impl Write, graphics: bool) -> io::Result<Reply> {
-    write!(out, "{}", questions(graphics))?;
+fn query_terminal(out: &mut impl Write, asking: Asking) -> io::Result<Reply> {
+    write!(out, "{}", questions(asking))?;
     out.flush()?;
-    let deadline = Instant::now() + REPLY_TIMEOUT;
+    // tmux answers device attributes at once, but the terminal outside answers through it a
+    // round trip later, so that answer is waited for too, a little longer.
+    let outside = asking == Asking::TmuxPassthrough;
+    let timeout = if outside {
+        REPLY_TIMEOUT * 3
+    } else {
+        REPLY_TIMEOUT
+    };
+    let deadline = Instant::now() + timeout;
     let mut reply = Vec::new();
     let mut buf = [0u8; 256];
     while Instant::now() < deadline {
@@ -63,7 +87,7 @@ fn query_terminal(out: &mut impl Write, graphics: bool) -> io::Result<Reply> {
             break;
         }
         reply.extend_from_slice(&buf[..n as usize]);
-        if ends_device_attributes(&reply) {
+        if ends_device_attributes(&reply) && (!outside || parse_cell_size(&reply).is_some()) {
             break;
         }
     }
@@ -133,18 +157,23 @@ pub fn detect(var: impl Fn(&str) -> Option<String>) -> io::Result<Env> {
         let tmux_passthrough = tmux_output(&["show", "-Apv", "allow-passthrough"])
             .is_some_and(|v| v == "on" || v == "all");
         // tmux answers the colour query itself, from what it knows of the terminal.
-        let reply = query_terminal(&mut io::stdout(), false)?;
+        let asking = if tmux_passthrough {
+            Asking::TmuxPassthrough
+        } else {
+            Asking::Tmux
+        };
+        let reply = query_terminal(&mut io::stdout(), asking)?;
         return Ok(Env {
             multiplexer,
             kitty_graphics,
             tmux_passthrough,
-            cell: None,
+            cell: reply.cell,
             pixel_mouse: false,
             light: reply.light,
             background: reply.background,
         });
     }
-    let reply = query_terminal(&mut io::stdout(), true)?;
+    let reply = query_terminal(&mut io::stdout(), Asking::Terminal)?;
     Ok(Env {
         multiplexer,
         kitty_graphics: reply.kitty,
@@ -162,9 +191,20 @@ mod tests {
 
     #[test]
     fn tmux_is_not_asked_about_graphics() {
-        assert!(!questions(false).contains("\x1b_G"));
-        assert!(questions(true).contains("\x1b_Gi=31"));
-        assert!(questions(false).ends_with("\x1b[c"));
+        assert!(!questions(Asking::Tmux).contains("\x1b_G"));
+        assert!(questions(Asking::Terminal).contains("\x1b_Gi=31"));
+        assert!(questions(Asking::Tmux).ends_with("\x1b[c"));
+    }
+
+    #[test]
+    fn the_cell_size_is_asked_past_tmux() {
+        // tmux would answer a plain question with a size it made up.
+        assert!(!questions(Asking::Tmux).contains("[16t"));
+        let past = questions(Asking::TmuxPassthrough);
+        assert!(past.starts_with("\x1bPtmux;\x1b\x1b[16t\x1b\\"), "{past:?}");
+        assert!(!past.contains("\x1b_G"));
+        // As tmux hands the outer terminal's answer back.
+        assert_eq!(parse_cell_size(b"\x1b[?62c\x1b[6;36;17t"), Some((17, 36)));
     }
 
     #[test]

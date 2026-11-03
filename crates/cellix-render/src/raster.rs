@@ -276,6 +276,7 @@ impl SoftwareRasterizer {
                 fill,
                 border,
                 shadow,
+                dashed,
             } => {
                 let shape = Shape {
                     x: scale(bounds.x, cw),
@@ -284,7 +285,7 @@ impl SoftwareRasterizer {
                     h: scale(bounds.h, ch),
                     radius: *radius as f32 * ch / 100.0,
                 };
-                target.panel(shape, *fill, *border, *shadow, ch);
+                target.panel(shape, (*fill, *border), *shadow, *dashed, ch);
             }
             Paint::Hairline { bounds, color } => {
                 let thickness = (ch / 24.0).ceil().max(1.0);
@@ -295,7 +296,7 @@ impl SoftwareRasterizer {
                     h: scale(bounds.h, ch).max(thickness),
                     radius: 0.0,
                 };
-                target.panel(shape, Some(*color), None, false, ch);
+                target.panel(shape, (Some(*color), None), false, false, ch);
             }
             Paint::Text {
                 x,
@@ -329,7 +330,7 @@ impl SoftwareRasterizer {
                         h: thickness,
                         radius: 0.0,
                     };
-                    target.panel(shape, Some(*color), None, false, ch);
+                    target.panel(shape, (Some(*color), None), false, false, ch);
                 }
             }
             Paint::Icon {
@@ -392,7 +393,7 @@ impl SoftwareRasterizer {
                         h: thickness,
                         radius: 0.0,
                     };
-                    target.panel(shape, Some(strip.color), None, false, ch);
+                    target.panel(shape, (Some(strip.color), None), false, false, ch);
                 }
             }
         }
@@ -480,7 +481,22 @@ impl Target<'_> {
         self.rgb[at + 2] = blend(color.2, self.rgb[at + 2], alpha);
     }
 
-    fn panel(&mut self, s: Shape, fill: Option<Rgb>, border: Option<Rgb>, shadow: bool, row: f32) {
+    fn panel(
+        &mut self,
+        s: Shape,
+        (fill, border): (Option<Rgb>, Option<Rgb>),
+        shadow: bool,
+        dashed: bool,
+        row: f32,
+    ) {
+        // Dashes a quarter of a row long, with gaps as long, measured along the edge so every
+        // row of a tall panel continues the same pattern.
+        let dash = (row / 4.0).max(2.0);
+        let on_dash = |x: f32, y: f32| {
+            let along_top = x > s.x + s.radius && x < s.x + s.w - s.radius;
+            let run = if along_top { x - s.x } else { y - s.y };
+            (run / dash).floor() as i64 % 2 == 0
+        };
         let reach = if shadow { row * 0.6 } else { 1.0 };
         let (x0, x1) = (
             (s.x - reach).floor() as i32,
@@ -503,7 +519,9 @@ impl Target<'_> {
                 if let Some(color) = fill {
                     self.blend(x, y, color, inside);
                 }
-                if let Some(color) = border {
+                if let Some(color) = border
+                    && (!dashed || on_dash(x as f32 + 0.5, y as f32 + 0.5))
+                {
                     let edge = ((0.5 - (d + stroke / 2.0).abs() + stroke / 2.0) * 255.0)
                         .clamp(0.0, 255.0) as u8;
                     self.blend(x, y, color, edge);
@@ -776,7 +794,13 @@ impl Rasterizer for SoftwareRasterizer {
                     height: ch,
                     top: y as i32 * ch as i32,
                 };
-                target.panel(shape, Some(caret_color(grid)), None, false, ch as f32);
+                target.panel(
+                    shape,
+                    (Some(caret_color(grid)), None),
+                    false,
+                    false,
+                    ch as f32,
+                );
             }
         }
         Image {
@@ -909,6 +933,26 @@ mod tests {
         let red = |x: usize, y: usize| image.rgb[(y * image.width + x) * 3];
         assert_eq!(red(50, 10), 255, "the middle is filled");
         assert_eq!(red(10, 0), 10, "the corner is cut");
+    }
+
+    #[test]
+    fn a_dashed_border_has_gaps() {
+        let Some(mut r) = rasterizer() else { return };
+        let mut grid = Grid::new(20, 1, style());
+        grid.dashed_panel(
+            crate::paint::Bounds::cells(1.0, 0.0, 18.0, 1.0),
+            10,
+            None,
+            Rgb(255, 0, 0),
+        );
+        let image = r.row(&grid, 0);
+        // Along the top edge, past the corner: some pixels inked, some left.
+        let y = 0;
+        let reds: Vec<u8> = (30..170)
+            .map(|x| image.rgb[(y * image.width + x) * 3])
+            .collect();
+        assert!(reds.iter().any(|r| *r > 200), "dashes are drawn");
+        assert!(reds.iter().any(|r| *r < 60), "with gaps between them");
     }
 
     #[test]

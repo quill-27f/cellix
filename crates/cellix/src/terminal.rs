@@ -223,6 +223,9 @@ fn cmd_left(event: Event, ghostty: bool) -> Event {
 struct Display {
     placement: Option<Placement>,
     cell: Option<(usize, usize)>,
+    /// The terminal said its cell size itself. Under tmux the window's own size can be one
+    /// tmux made up, so a resize doesn't overrule it.
+    told_cell: bool,
     pixel_mouse: bool,
     light: Option<bool>,
     background: Option<(u8, u8, u8)>,
@@ -251,6 +254,7 @@ impl Display {
             bleed,
             placement,
             cell,
+            told_cell: env.cell.is_some() && env.multiplexer == cellix_term::Multiplexer::Tmux,
             pixel_mouse: env.pixel_mouse,
             light: env.light,
             background: env.background,
@@ -389,7 +393,11 @@ pub fn run(options: Options) -> io::Result<()> {
         if now != app.size() {
             app.handle(Event::Resize(now.0, now.1));
             let cell = window_cell();
-            if display.placement.is_some() && cell.is_some() && cell != display.cell {
+            if display.placement.is_some()
+                && !display.told_cell
+                && cell.is_some()
+                && cell != display.cell
+            {
                 display.cell = cell;
                 backend = display.backend();
                 app.set_measure(display.measure());

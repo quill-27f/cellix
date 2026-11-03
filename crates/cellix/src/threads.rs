@@ -1,7 +1,7 @@
 //! The comments on a document, beside it: each one a short conversation with whoever's
 //! working on it, where the agent's answer lands under the question.
 
-use cellix_render::{Bounds, Font, Grid, Measure, Rect, Style};
+use cellix_render::{Bounds, Font, Grid, Icon, Measure, Rect, Style};
 use cellix_review::Thread;
 use cellix_review::threads::YOU;
 
@@ -18,6 +18,8 @@ const BUTTONS: [&str; 3] = ["Reply", "Ask agent", "Resolve"];
 const CHOICES: [&str; 2] = ["Keep", "Dismiss"];
 const REWRITE: [&str; 2] = ["Apply", "Not this"];
 const CHECK: &str = "Check my review";
+/// Columns the agent's icon takes on Check my review.
+const CHECK_ICON: u16 = 2;
 /// The kinds of comment a careful review covers, in the order the strip shows them.
 pub const KINDS: [&str; 5] = [
     "Clarity",
@@ -27,6 +29,10 @@ pub const KINDS: [&str; 5] = [
     "Reproducibility",
 ];
 const BUTTON_PADDING: usize = 1;
+/// Columns either side of a button's text, in pixels, about 24 px.
+const BUTTON_ROOM: f32 = 1.4;
+/// The size buttons set their text at, as `Grid::button` does.
+const BUTTON_TEXT: u8 = 90;
 const SMALL: u8 = 85;
 
 /// What a click in the panel lands on.
@@ -280,14 +286,17 @@ fn lines(
 }
 
 /// Each button as (label, padded cells, start column).
-fn buttons(area: Rect) -> Vec<(&'static str, String, u16)> {
-    row_of(area, &BUTTONS)
+fn buttons(area: Rect, measure: &dyn Measure) -> Vec<(&'static str, String, u16)> {
+    row_of(area, &BUTTONS, measure)
 }
 
-/// Check my review, at the right of its row, as (padded cells, start column).
-fn check_button(area: Rect) -> (String, u16) {
-    let padding = " ".repeat(BUTTON_PADDING);
-    let cells = format!("{padding}{CHECK}{padding}");
+/// Check my review, at the right of its row, as (padded cells, start column). In pixels it
+/// has room for the agent's icon before its words.
+fn check_button(area: Rect, measure: &dyn Measure) -> (String, u16) {
+    let mut cells = button_cells(CHECK, measure);
+    if !measure.in_cells() {
+        cells.push_str(&" ".repeat(CHECK_ICON as usize));
+    }
     let width = cells.chars().count() as u16;
     let x = area
         .right()
@@ -296,13 +305,32 @@ fn check_button(area: Rect) -> (String, u16) {
     (cells, x)
 }
 
-fn row_of(area: Rect, labels: &[&'static str]) -> Vec<(&'static str, String, u16)> {
+/// The cells a button takes: its letters and a space either side where every letter is a
+/// cell, and in pixels its set width with the same room either side, whatever its letters.
+fn button_cells(label: &str, measure: &dyn Measure) -> String {
+    let padding = " ".repeat(BUTTON_PADDING);
+    if measure.in_cells() {
+        return format!("{padding}{label}{padding}");
+    }
+    let font = Font {
+        size: BUTTON_TEXT,
+        ..Font::default()
+    };
+    let width = (measure.width(label, font) + BUTTON_ROOM * 2.0).ceil() as usize;
+    // Hidden under the paint, so only their count matters.
+    " ".repeat(width.max(3))
+}
+
+fn row_of(
+    area: Rect,
+    labels: &[&'static str],
+    measure: &dyn Measure,
+) -> Vec<(&'static str, String, u16)> {
     let mut x = area.x + SIDE + 1;
     labels
         .iter()
         .map(|label| {
-            let padding = " ".repeat(BUTTON_PADDING);
-            let cells = format!("{padding}{label}{padding}");
+            let cells = button_cells(label, measure);
             let at = x;
             x += cells.chars().count() as u16 + 1;
             (*label, cells, at)
@@ -322,7 +350,7 @@ pub fn hit(
     let row = top + y.checked_sub(area.y)? as usize;
     match all.get(row)? {
         Line::Buttons(id) => {
-            let pressed = buttons(area)
+            let pressed = buttons(area, measure)
                 .into_iter()
                 .find(|(_, cells, at)| x >= *at && x < at + cells.chars().count() as u16);
             match pressed?.0 {
@@ -332,7 +360,7 @@ pub fn hit(
             }
         }
         Line::Choices(id) => {
-            let pressed = row_of(area, &CHOICES)
+            let pressed = row_of(area, &CHOICES, measure)
                 .into_iter()
                 .find(|(_, cells, at)| x >= *at && x < at + cells.chars().count() as u16);
             match pressed?.0 {
@@ -341,7 +369,7 @@ pub fn hit(
             }
         }
         Line::Rewrite(id) => {
-            let pressed = row_of(area, &REWRITE)
+            let pressed = row_of(area, &REWRITE, measure)
                 .into_iter()
                 .find(|(_, cells, at)| x >= *at && x < at + cells.chars().count() as u16);
             match pressed?.0 {
@@ -350,7 +378,7 @@ pub fn hit(
             }
         }
         Line::Check(..) => {
-            let (cells, at) = check_button(area);
+            let (cells, at) = check_button(area, measure);
             (x >= at && x < at + cells.chars().count() as u16).then_some(Hit::Check)
         }
         Line::Quote(id, _)
@@ -413,7 +441,11 @@ pub fn draw(
                     } else {
                         (theme.text.bg, theme.border)
                     };
-                    if shown(y, height) {
+                    // Offered, not yet the reviewer's: a suggestion's edge is dashed until kept.
+                    let offered = matches!(line, Line::Choices(_));
+                    if shown(y, height) && offered {
+                        grid.dashed_panel(bounds, CARD_RADIUS, Some(fill), edge);
+                    } else if shown(y, height) {
                         grid.panel(bounds, CARD_RADIUS, Some(fill), Some(edge));
                     }
                 }
@@ -547,7 +579,7 @@ pub fn draw(
                 grid.drop_last(-0.12);
             }
             Line::Check(mine, suggested) => {
-                let (cells, x) = check_button(area);
+                let (cells, x) = check_button(area, measure);
                 // Nothing is painted under the pane, so the button's corners need a ground.
                 let ground = Bounds::cells(x as f32, y as f32, cells.chars().count() as f32, 1.0);
                 grid.panel(ground, 0, Some(body.bg), None);
@@ -557,7 +589,34 @@ pub fn draw(
                     fg: theme.button_text,
                     ..body
                 };
-                grid.button(x, y, &cells, CHECK, fill, style);
+                if measure.in_cells() {
+                    grid.button(x, y, &cells, CHECK, fill, style);
+                } else {
+                    // The pill, then the agent's icon and the words beside it, as one.
+                    grid.button(x, y, &cells, "", fill, style);
+                    let font = Font {
+                        size: BUTTON_TEXT,
+                        ..Font::default()
+                    };
+                    let words = measure.width(CHECK, font);
+                    let whole = cells.chars().count() as f32;
+                    let start = x as f32 + (whole - words - CHECK_ICON as f32) / 2.0;
+                    grid.glyph(start - 0.2, y, Icon::Agents, theme.button_text, " ", style);
+                    let at = start + CHECK_ICON as f32;
+                    let text = Style {
+                        painted: true,
+                        ..style
+                    };
+                    grid.label_at(
+                        at,
+                        at.floor() as u16,
+                        y,
+                        CHECK,
+                        text,
+                        x + whole as u16,
+                        BUTTON_TEXT,
+                    );
+                }
                 let note = match suggested {
                     0 => format!("{mine} of yours"),
                     n => format!("{mine} of yours · {n} suggested"),
@@ -593,7 +652,7 @@ pub fn draw(
                 }
             }
             Line::Rewrite(_) => {
-                for (label, cells, x) in row_of(area, &REWRITE) {
+                for (label, cells, x) in row_of(area, &REWRITE, measure) {
                     let main = label == "Apply";
                     let fill = if main {
                         theme.button
@@ -609,7 +668,7 @@ pub fn draw(
                 }
             }
             Line::Choices(_) => {
-                for (label, cells, x) in row_of(area, &CHOICES) {
+                for (label, cells, x) in row_of(area, &CHOICES, measure) {
                     let width = cells.chars().count() as u16;
                     let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
                     // Keep is the answer; Dismiss stays quiet until it's pointed at.
@@ -634,7 +693,7 @@ pub fn draw(
             Line::Buttons(NEW_DRAFT) => {}
             Line::Buttons(_) => {
                 // Check my review is the panel's one filled button; these are all quiet.
-                for (label, cells, x) in buttons(area) {
+                for (label, cells, x) in buttons(area, measure) {
                     let width = cells.chars().count() as u16;
                     let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
                     let fill = if on_it {

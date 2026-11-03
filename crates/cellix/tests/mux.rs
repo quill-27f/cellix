@@ -117,6 +117,21 @@ fn ctrl_keys_arrive_with_tmux_extended_keys_on() {
 
 #[test]
 #[ignore = "needs tmux"]
+fn ctrl_shift_chords_arrive_with_csi_u_keys() {
+    // As the README sets tmux up: Ctrl+Shift+P opens the commands, not Ctrl+P's files.
+    let dir = project();
+    let options: &[&[&str]] = &[
+        &["set", "-g", "extended-keys", "on"],
+        &["set", "-s", "extended-keys-format", "csi-u"],
+    ];
+    let tmux = Tmux::start_with(dir.path(), "chords", options);
+    tmux.wait("0", "hello from a file");
+    tmux.run(&["send-keys", "-t", "0", "C-S-p"]);
+    tmux.wait("0", "Select All");
+}
+
+#[test]
+#[ignore = "needs tmux"]
 fn tmux_split_resize_and_pane_switch_keep_the_screen() {
     let dir = project();
     let tmux = Tmux::start(dir.path(), "split");

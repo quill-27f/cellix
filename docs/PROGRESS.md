@@ -829,3 +829,35 @@ Unverified on the Fedora machine itself: it has no SSH server and its console wa
 0.3.0 waits for the user to install there.
 
 Release 0.3.0.
+
+The open items, closed for 0.3.1.
+- Under tmux over a console, a line showed under every row of the editor. The console passes
+  only rows and columns, so tmux made up a 16 by 32 cell, and images sized for it were
+  letterboxed into Ghostty's real cells. With passthrough on, Cellix now asks the terminal
+  outside tmux for its cell size (checked by hand: the answer comes back through tmux), and a
+  size the terminal gave isn't overruled by the window's on a resize.
+- Inverse SyncTeX lands on the line clicked: a click counted from its cell's top, most of a
+  line above the pointer, and now counts from its middle.
+- natbib: `\citet` reads `Knuth (1984)`, notes print as `[see Knuth 1984, p. 3]`,
+  `\citeauthor` and `\citeyear` give their part. Up to two options are read for any command.
+- Names cite whole: `{World Health Organization}`, `van der Berg, Jan`, `Jan {van der Berg}`.
+- Callouts with a title of their own (`> [!tip]- Keep it short`) and Obsidian's kinds show
+  their title on the page and keep it in HTML and PDF exports.
+- Saving a document with suggestions still open says they stay in the file as marks.
+- A comment on a sentence written twice stays on its copy while the copies stay as many, and a
+  reworded quote takes its new words, so the card shows what the text says now.
+- Track Changes is remembered per document, in the project's cache folder.
+- One line of a change can be undone: right-click a changed line in Review for Remove This Added
+  Line or Put This Line Back, beside Comment.
+- Approving a Codex plan with changes or notes starts one more turn that hands them over.
+- Quick fixes and the Outline were driven against a real rust-analyzer: Insert explicit type
+  applied, and the Outline listed the file's symbols. Quick Fix's first item is now ready for
+  Enter, as in VS Code.
+- The Comments pane: suggestions have dashed edges (panels can be dashed now), buttons are as
+  wide as their words plus the same room either side in pixels, and Check my review carries the
+  agent's icon.
+- Ctrl+Shift chords under tmux with `extended-keys-format csi-u` are driven in real tmux.
+- Harper builds optimised in debug: unoptimised, the spelling tests took about a minute and
+  failed their deadline on a loaded machine.
+
+Release 0.3.1.

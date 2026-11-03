@@ -73,17 +73,18 @@ pub enum Callout {
 }
 
 impl Callout {
-    /// The kind a quote's first line names, as `[!NOTE]`.
-    fn named(line: &str) -> Option<Self> {
-        let name = line.trim().strip_prefix("[!")?.strip_suffix(']')?;
-        match name.to_ascii_uppercase().as_str() {
-            "NOTE" => Some(Self::Note),
-            "TIP" => Some(Self::Tip),
-            "IMPORTANT" => Some(Self::Important),
-            "WARNING" => Some(Self::Warning),
-            "CAUTION" => Some(Self::Caution),
-            _ => None,
-        }
+    /// The kind a quote's first line names, as `[!NOTE]`, with the title written after it, as
+    /// in Obsidian's `[!tip]- Keep it short`, if there is one.
+    fn named(line: &str) -> Option<(Self, Option<String>)> {
+        let (kind, title) = cellix_doc::html::callout(line)?;
+        let kind = match kind {
+            "NOTE" => Self::Note,
+            "TIP" => Self::Tip,
+            "IMPORTANT" => Self::Important,
+            "WARNING" => Self::Warning,
+            _ => Self::Caution,
+        };
+        Some((kind, title))
     }
 
     fn title(self) -> &'static str {
@@ -2037,7 +2038,7 @@ pub fn layout_with(
             .filter(|p| matches!(p.marker, Marker::Quote))
             .and_then(|p| Callout::named(&line[p.hidden.min(line.len())..]));
         if matches!(found.as_ref().map(|p| &p.marker), Some(Marker::Quote)) {
-            callout = title.or(callout);
+            callout = title.as_ref().map(|(kind, _)| *kind).or(callout);
         } else {
             callout = None;
         }
@@ -2096,8 +2097,9 @@ pub fn layout_with(
         };
         let hidden = if title.is_some() { chars.len() } else { hidden };
         let decorated = glyphs.len();
-        if let Some(kind) = title {
-            glyphs.extend(decoration(kind.title(), Tone::Callout(kind)));
+        if let Some((kind, named)) = &title {
+            let shown = named.as_deref().unwrap_or(kind.title());
+            glyphs.extend(decoration(shown, Tone::Callout(*kind)));
             for g in &mut glyphs {
                 g.font.bold = true;
             }
@@ -2435,6 +2437,21 @@ pub fn hidden_prefix(line: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_callout_shows_its_own_title() {
+        let rows = layout(
+            "> [!tip]- Keep it short\n> Say less.\n",
+            60,
+            &CellMeasure,
+            &Registry::default(),
+        );
+        let all: Vec<String> = rows.iter().map(text).collect();
+        assert!(all[0].contains("Keep it short"), "{all:?}");
+        assert!(!all.concat().contains("[!"), "{all:?}");
+        assert_eq!(rows[0].callout, Some(Callout::Tip));
+        assert!(all[1].contains("Say less."), "{all:?}");
+    }
     use cellix_render::{CellMeasure, FontMeasure};
 
     fn text(row: &Row) -> String {

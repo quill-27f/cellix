@@ -42,6 +42,10 @@ pub struct Thread {
     /// The agent that suggested it, while it's only a suggestion. Empty for the reviewer's own.
     #[serde(default)]
     pub suggested_by: String,
+    /// Which copy of the quote it's on, counting from the top, and how many there were, so a
+    /// sentence written twice keeps its comment on the copy it was made on.
+    #[serde(default)]
+    pub copy: (usize, usize),
 }
 
 impl Thread {
@@ -67,20 +71,40 @@ impl Thread {
             return;
         }
         let distance = |line: &usize| line.abs_diff(self.line);
-        let found = text
+        let copies: Vec<usize> = text
             .lines()
             .enumerate()
             .filter(|(_, line)| line.contains(&self.quote))
             .map(|(index, _)| index + 1)
-            .min_by_key(distance)
-            .or_else(|| {
-                rewrapped(text, &self.quote)
-                    .into_iter()
-                    .min_by_key(distance)
-            })
-            .or_else(|| reworded(text, &self.quote, self.line));
+            .collect();
+        // While the copies stay as many, the same one: lines added above can bring another
+        // copy nearer than this one's new place.
+        let (copy, count) = self.copy;
+        let same = (count == copies.len() && copy < count).then(|| copies[copy]);
+        if let Some(line) = same.or_else(|| copies.iter().copied().min_by_key(distance)) {
+            self.line = line;
+            let copy = copies.iter().position(|l| *l == line).unwrap_or(0);
+            self.copy = (copy, copies.len());
+            return;
+        }
+        let found = rewrapped(text, &self.quote)
+            .into_iter()
+            .min_by_key(distance);
         if let Some(line) = found {
             self.line = line;
+            return;
+        }
+        // Reworded: the quote takes the words it reads as now, so the card shows them.
+        if let Some(line) = reworded(text, &self.quote, self.line) {
+            self.line = line;
+            if let Some(now) = text
+                .lines()
+                .nth(line - 1)
+                .and_then(|l| span_of(l, &self.quote))
+            {
+                self.quote = now;
+            }
+            self.copy = (0, 0);
         }
     }
 
@@ -184,9 +208,52 @@ fn reworded(text: &str, quote: &str, near: usize) -> Option<usize> {
         .map(|(_, line)| line)
 }
 
+/// The stretch of `line` from the first to the last of the quote's words it still has.
+fn span_of(line: &str, quote: &str) -> Option<String> {
+    let words: Vec<&str> = quote.split_whitespace().collect();
+    let mut first = None;
+    let mut last = 0;
+    let mut at = 0;
+    for word in line.split_whitespace() {
+        let start = at + line[at..].find(word)?;
+        let end = start + word.len();
+        at = end;
+        if words.contains(&word) {
+            first.get_or_insert(start);
+            last = end;
+        }
+    }
+    first.map(|first| line[first..last].to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sentence_written_twice_keeps_its_comment_on_its_copy() {
+        let text = "Intro.\nWe use the cache.\nMiddle.\nWe use the cache.\nEnd.\n";
+        let mut on = thread();
+        on.quote = "We use the cache.".into();
+        on.line = 4;
+        on.follow(text);
+        assert_eq!((on.line, on.copy), (4, (1, 2)));
+        // Twenty lines go in above it: its copy is at 24 now, the other nearer its old place.
+        let added = "new line\n".repeat(20);
+        let moved = format!("Intro.\nWe use the cache.\nMiddle.\n{added}We use the cache.\nEnd.\n");
+        on.follow(&moved);
+        assert_eq!(on.line, 24);
+    }
+
+    #[test]
+    fn a_reworded_quote_shows_its_new_words() {
+        let mut on = thread();
+        on.quote = "the weights always sum to one here".into();
+        on.line = 1;
+        on.follow("Note that the weights always add to one here as said.\n");
+        assert_eq!(on.line, 1);
+        assert_eq!(on.quote, "the weights always add to one here");
+    }
 
     fn thread() -> Thread {
         Thread {
@@ -204,6 +271,7 @@ mod tests {
             asked: false,
             kind: String::new(),
             suggested_by: String::new(),
+            copy: (0, 0),
         }
     }
 

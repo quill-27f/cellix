@@ -266,8 +266,10 @@ impl PdfView {
             if (y as f32) >= top && (y as f32) < top + height {
                 let left = area.x as f32 + (area.w as f32 - width) / 2.0;
                 let (points_x, points_y) = self.sizes.get(index).copied()?;
-                let across = (x as f32 - left).max(0.0) / width * points_x;
-                let down = (y as f32 - top) / height * points_y;
+                // From the middle of the cell clicked, not its top left: the top of a row is
+                // already most of a line of text above where the pointer was.
+                let across = (x as f32 + 0.5 - left).max(0.0) / width * points_x;
+                let down = (y as f32 + 0.5 - top) / height * points_y;
                 return Some(Hit::Page(index, across, down));
             }
             top += height + GAP;
