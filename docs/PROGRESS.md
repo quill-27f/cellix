@@ -651,3 +651,10 @@ it nothing, and rejecting a proposed change only answered DIFF_REJECTED. Both no
 it?": Enter rejects, Esc keeps it, and a reason goes to the agent as a comment on the first line
 that changed, with its quote, so it doesn't try the same again. Three tests that clicked Reject
 now press Enter after it.
+
+LaTeX across a project. A paper reads the `.bib` files it names with `\bibliography` or
+`\addbibresource`, wherever they are, as well as any beside it, so a bibliography in `bib/` no
+longer leaves every citation red and completion empty. TeX accents in a `.bib` read as letters
+(`Cand\`es` is "Candès"). A paper an agent rewrites rebuilds its open PDF, as saving one does.
+Open from the review: sections in `\input` files don't count toward the root's numbering or show
+in the Outline, and there's no drawn references list.

@@ -134,6 +134,8 @@ pub struct Project {
     pub citations: HashMap<String, String>,
     /// The paper's own packages and commands, which a piece built alone still needs.
     pub setup: Vec<String>,
+    /// The `.bib` files the paper names with `\\bibliography` or `\\addbibresource`.
+    pub bibliographies: Vec<PathBuf>,
 }
 
 /// The argument of `\name{...}` on a line, as a byte range.
@@ -401,14 +403,19 @@ impl Project {
         let mut counters = Counters::default();
         let folder = root.parent().unwrap_or(Path::new("")).to_path_buf();
         project.walk(root, &folder, &mut counters, 0);
-        for path in std::fs::read_dir(&folder).into_iter().flatten().flatten() {
-            let path = path.path();
-            if path.extension().is_some_and(|e| e == "bib")
-                && let Ok(text) = std::fs::read_to_string(path)
-            {
+        // The ones it names, wherever they are, then any beside it.
+        let beside = std::fs::read_dir(&folder)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|e| e == "bib"));
+        let named = project.bibliographies.clone();
+        for path in named.into_iter().chain(beside) {
+            if let Ok(text) = std::fs::read_to_string(path) {
                 for entry in bib_entries(&text) {
                     let shown = entry.short();
-                    project.citations.insert(entry.key, shown);
+                    project.citations.entry(entry.key).or_insert(shown);
                 }
             }
         }
@@ -436,6 +443,7 @@ impl Project {
 
     fn lines(&mut self, text: &str, folder: &Path, counters: &mut Counters, depth: usize) {
         self.setup.extend(setup_of(text));
+        self.bibliographies.extend(bibliographies_of(text, folder));
         let mut current = String::new();
         let lines: Vec<&str> = text.lines().collect();
         let mut index = 0;
@@ -558,6 +566,99 @@ impl BibEntry {
     }
 }
 
+/// The `.bib` files a text names, as paths from `folder`.
+fn bibliographies_of(text: &str, folder: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    for line in text.lines() {
+        let code = line.split('%').next().unwrap_or("");
+        for command in ["\\bibliography{", "\\addbibresource{"] {
+            let mut rest = code;
+            while let Some(at) = rest.find(command) {
+                let after = &rest[at + command.len()..];
+                let Some(end) = after.find('}') else {
+                    break;
+                };
+                for name in after[..end]
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|n| !n.is_empty())
+                {
+                    let file = if name.ends_with(".bib") {
+                        name.to_string()
+                    } else {
+                        format!("{name}.bib")
+                    };
+                    found.push(folder.join(file));
+                }
+                rest = &after[end..];
+            }
+        }
+    }
+    found
+}
+
+/// TeX's accents in a `.bib` field as the letters they make: `Cand\\`es` reads "Candès".
+fn detex(text: &str) -> String {
+    const ACCENTS: [(char, &str, &str); 7] = [
+        ('`', "aeiouAEIOU", "àèìòùÀÈÌÒÙ"),
+        ('\'', "aeiouyAEIOUY", "áéíóúýÁÉÍÓÚÝ"),
+        ('^', "aeiouAEIOU", "âêîôûÂÊÎÔÛ"),
+        ('"', "aeiouyAEIOU", "äëïöüÿÄËÏÖÜ"),
+        ('~', "anoANO", "ãñõÃÑÕ"),
+        ('c', "cC", "çÇ"),
+        ('v', "csznrCSZNR", "čšžňřČŠŽŇŘ"),
+    ];
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '\\'
+            && let Some(&mark) = chars.get(i + 1)
+        {
+            // `\\c c` and `\\v s` need a space; the others don't.
+            let mut at = i + 2;
+            if mark.is_ascii_alphabetic() && chars.get(at) == Some(&' ') {
+                at += 1;
+            }
+            if let Some((_, from, to)) = ACCENTS.iter().find(|(m, _, _)| *m == mark)
+                && let Some(&letter) = chars.get(at)
+                && let Some(n) = from.chars().position(|c| c == letter)
+                && let Some(made) = to.chars().nth(n)
+            {
+                out.push(made);
+                i = at + 1;
+                continue;
+            }
+            let word: String = chars[i + 1..]
+                .iter()
+                .take_while(|c| c.is_ascii_alphabetic())
+                .collect();
+            let special = match word.as_str() {
+                "ss" => Some("ß"),
+                "o" => Some("ø"),
+                "O" => Some("Ø"),
+                "aa" => Some("å"),
+                "AA" => Some("Å"),
+                "l" => Some("ł"),
+                "L" => Some("Ł"),
+                "ae" => Some("æ"),
+                _ => None,
+            };
+            if let Some(special) = special {
+                out.push_str(special);
+                i += 1 + word.len();
+                if chars.get(i) == Some(&' ') {
+                    i += 1;
+                }
+                continue;
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
 fn field(body: &str, name: &str) -> String {
     let lower = body.to_lowercase();
     let mut from = 0;
@@ -573,7 +674,7 @@ fn field(body: &str, name: &str) -> String {
                 '"' => value[1..].split('"').next().unwrap_or(""),
                 _ => value.split([',', '\n']).next().unwrap_or(""),
             };
-            return text.replace(['{', '}'], "").trim().to_string();
+            return detex(&text.replace(['{', '}'], "")).trim().to_string();
         }
         from = at + name.len();
     }
@@ -1194,6 +1295,24 @@ mod tests {
         assert_eq!(reference_slot("In \\eqref{"), Some((Slot::Ref, 10)));
         assert_eq!(reference_slot("\\textbf{bold"), None);
         assert_eq!(reference_slot("\\ref{done} and"), None);
+    }
+    #[test]
+    fn a_paper_reads_the_bibliography_it_names_and_its_accents() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("bib")).unwrap();
+        std::fs::write(
+            dir.path().join("bib/refs.bib"),
+            "@article{candes2006, author = {Cand\\`es, Emmanuel and Tao, Terence}, year = 2006}\n",
+        )
+        .unwrap();
+        let root = dir.path().join("main.tex");
+        std::fs::write(&root, "\\begin{document}\nSee \\cite{candes2006}.\n\\bibliography{bib/refs}\n\\end{document}\n").unwrap();
+        let project = Project::read(&root);
+        assert_eq!(
+            project.citations.get("candes2006").map(String::as_str),
+            Some("Candès et al. 2006")
+        );
+        assert_eq!(detex("G\\\"odel, \\c c and \\ss"), "Gödel, ç and ß");
     }
 
     #[test]

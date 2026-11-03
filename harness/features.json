@@ -2658,5 +2658,19 @@
     "title": "Rejecting asks why and tells the agent",
     "test": "rejecting_asks_why_and_tells_the_agent",
     "passes": true
+  },
+  {
+    "id": "latex-named-bib",
+    "milestone": 10,
+    "title": "A paper reads the bibliography it names, and its accents",
+    "test": "a_paper_reads_the_bibliography_it_names_and_its_accents",
+    "passes": true
+  },
+  {
+    "id": "agent-edit-rebuilds",
+    "milestone": 10,
+    "title": "A paper an agent rewrites rebuilds its open PDF",
+    "test": "a_paper_an_agent_rewrites_rebuilds_its_open_pdf",
+    "passes": true
   }
 ]

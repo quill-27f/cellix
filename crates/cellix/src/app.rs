@@ -2961,6 +2961,14 @@ impl App {
         if !reloaded.is_empty() {
             self.poll();
         }
+        // And a paper an agent wrote rebuilds, so the PDF beside it stays true.
+        let active = self
+            .editors
+            .get(self.active())
+            .and_then(|e| e.buffer.path());
+        if active.is_some_and(|path| reloaded.iter().any(|p| p == path)) {
+            self.rebuild_on_save();
+        }
         for path in reloaded {
             if let Some(client) =
                 Registry::language_name(&path).and_then(|language| self.servers.get(language))
@@ -14237,6 +14245,23 @@ mod tests {
         assert!(dir.path().join("paper.pdf").exists());
         assert_eq!(app.dock.front, Front::Pdf);
         assert!(app.dock.pdf.is_some());
+    }
+
+    #[test]
+    fn a_paper_an_agent_rewrites_rebuilds_its_open_pdf() {
+        let (dir, mut app) = paper_app("\\begin{document}\nHello\n\\end{document}\n");
+        app.run(Command::BuildPdf);
+        built(&mut app);
+        fs::remove_file(dir.path().join("paper.pdf")).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(
+            dir.path().join("paper.tex"),
+            "\\begin{document}\nHi\n\\end{document}\n",
+        )
+        .unwrap();
+        app.handle(Event::Tick);
+        built(&mut app);
+        assert!(dir.path().join("paper.pdf").exists(), "built again");
     }
 
     #[test]
