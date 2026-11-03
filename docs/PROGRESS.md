@@ -506,3 +506,10 @@ Agents icon on the left, and now say the top right.
 The rail is four columns, down from five, with its icons at about half their old size and the pill
 drawn to fit. `a_page_uses_the_whole_width` now allows a line to stop a word and the minimap's gap
 short of the edge: one column less moved where the last word broke, not how wide the page is.
+
+Round eight, from four persona reviews. The built-in Vim mode corrupted files: `ciw` wasn't known, so
+the letters after it ran as commands and `O` opened a line that took the rest as text. The `vim`
+keymap now runs the real Neovim when it's installed. Without it, the built-in mode knows `iw` and
+`aw`, `w` and `e` as Vim has them, `f`/`t`/`F`/`T`, `V`, `D`, `C`, `J`, `r`, `/` and the `:` commands
+that save, close and go to a line, and anything else is swallowed rather than typed. Its tests run
+the built-in mode whether or not this machine has Neovim.

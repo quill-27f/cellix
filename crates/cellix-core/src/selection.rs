@@ -47,6 +47,10 @@ pub enum Motion {
     Bottom,
     PageUp(usize),
     PageDown(usize),
+    /// The start of the next word, as Vim's `w`.
+    NextWordStart,
+    /// To a character on the same line: forward or back, and stopping just before it.
+    FindChar(char, bool, bool),
 }
 
 /// One or more selections, kept sorted and non-overlapping. The last one added is
@@ -231,7 +235,40 @@ fn step(rope: &Rope, at: usize, goal: usize, motion: Motion) -> usize {
             }
             i
         }
+        Motion::NextWordStart => {
+            let len = rope.len_chars();
+            let mut i = at;
+            while i < len && is_word(rope.char(i)) {
+                i += 1;
+            }
+            while i < len && !is_word(rope.char(i)) && rope.char(i) != '\n' {
+                i += 1;
+            }
+            i
+        }
+        Motion::FindChar(wanted, forward, till) => {
+            let line = rope.char_to_line(at);
+            let (start, end) = (rope.line_to_char(line), line_end(rope, line));
+            let found = if forward {
+                (at + 1..end).find(|&i| rope.char(i) == wanted)
+            } else {
+                (start..at).rev().find(|&i| rope.char(i) == wanted)
+            };
+            match (found, till) {
+                (Some(i), false) => i,
+                (Some(i), true) if forward => i - 1,
+                (Some(i), true) => i + 1,
+                (None, _) => at,
+            }
+        }
     }
+}
+
+/// The last character of a line, before its newline.
+fn line_end(rope: &Rope, line: usize) -> usize {
+    let next = rope.line_to_char((line + 1).min(rope.len_lines()));
+    let has_newline = next > 0 && rope.char(next - 1) == '\n' && line + 1 < rope.len_lines();
+    if has_newline { next - 1 } else { next }
 }
 
 pub(crate) fn is_word(c: char) -> bool {
@@ -241,6 +278,22 @@ pub(crate) fn is_word(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn next_word_start_and_find_char_stay_where_vim_puts_them() {
+        let rope = Rope::from_str("one two_three four\nnext\n");
+        let mut s = Selections::single(Selection::cursor(0));
+        s.apply_motion(&rope, Motion::NextWordStart, false);
+        assert_eq!(s.primary().head, 4);
+        s.apply_motion(&rope, Motion::FindChar('f', true, false), false);
+        assert_eq!(s.primary().head, 14);
+        s.apply_motion(&rope, Motion::FindChar('o', true, true), false);
+        assert_eq!(s.primary().head, 14, "the next o is right beside it");
+        s.apply_motion(&rope, Motion::FindChar('x', true, false), false);
+        assert_eq!(s.primary().head, 14, "not on the line, so it stays");
+        s.apply_motion(&rope, Motion::FindChar('t', false, false), false);
+        assert_eq!(s.primary().head, 8);
+    }
 
     #[test]
     fn vertical_motion_keeps_goal_column() {

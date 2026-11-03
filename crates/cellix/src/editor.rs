@@ -1193,11 +1193,14 @@ impl Editor {
                     Direction::Bottom => Motion::Bottom,
                     Direction::PageUp => Motion::PageUp(page),
                     Direction::PageDown => Motion::PageDown(page),
+                    Direction::NextWordStart => Motion::NextWordStart,
+                    Direction::FindChar(c, forward, till) => Motion::FindChar(c, forward, till),
                 };
                 self.selections
                     .apply_motion(self.buffer.rope(), motion, extend);
             }
             Command::Newline => self.newline(),
+            Command::Type(c) => self.type_char(c),
             Command::ToggleComment => self.toggle_comment(),
             Command::MoveLineUp => self.move_line(-1),
             Command::MoveLineDown => self.move_line(1),

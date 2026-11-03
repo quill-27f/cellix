@@ -122,6 +122,8 @@ pub enum Format {
 pub enum Command {
     Move(Direction, bool),
     Newline,
+    /// Types one character, as a key would.
+    Type(char),
     Indent,
     Outdent,
     DeleteBackward,
@@ -249,4 +251,8 @@ pub enum Direction {
     Bottom,
     PageUp,
     PageDown,
+    /// The start of the next word, as Vim's `w`.
+    NextWordStart,
+    /// To a character on the line: forward or back, and stopping just before it.
+    FindChar(char, bool, bool),
 }

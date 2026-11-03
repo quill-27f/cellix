@@ -2308,5 +2308,54 @@
     "title": "Turning round starts the wheel again",
     "test": "turning_round_starts_again",
     "passes": true
+  },
+  {
+    "id": "vim-ciw",
+    "milestone": 10,
+    "title": "Vim: change inner word replaces just the word",
+    "test": "change_inner_word_replaces_just_the_word",
+    "passes": true
+  },
+  {
+    "id": "vim-safe",
+    "milestone": 10,
+    "title": "Vim: unknown keys in Normal mode never type",
+    "test": "unknown_keys_in_normal_mode_never_type",
+    "passes": true
+  },
+  {
+    "id": "vim-colon",
+    "milestone": 10,
+    "title": "Vim: colon commands save, close and go to a line",
+    "test": "colon_commands_save_close_and_go_to_a_line",
+    "passes": true
+  },
+  {
+    "id": "vim-find",
+    "milestone": 10,
+    "title": "Vim: f and t motions",
+    "test": "find_motions_reach_the_character",
+    "passes": true
+  },
+  {
+    "id": "vim-w-e",
+    "milestone": 10,
+    "title": "Vim: w and e move as in Vim",
+    "test": "w_goes_to_the_next_word_and_e_to_the_end",
+    "passes": true
+  },
+  {
+    "id": "core-motions",
+    "milestone": 10,
+    "title": "Next-word and find-character motions",
+    "test": "next_word_start_and_find_char_stay_where_vim_puts_them",
+    "passes": true
+  },
+  {
+    "id": "vim-neovim",
+    "milestone": 10,
+    "title": "The vim keymap runs Neovim when it is installed",
+    "test": "the_vim_keymap_runs_neovim_when_it_is_installed",
+    "passes": true
   }
 ]

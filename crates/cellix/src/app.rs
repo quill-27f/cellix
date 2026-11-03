@@ -266,6 +266,24 @@ enum Choice {
     Undo(String),
 }
 
+/// The engines behind a keymap. `vim` runs the real Neovim when it's installed, since the
+/// built-in mode is only a subset, and falls back to that subset when it isn't.
+fn keymap_engines(name: Option<&str>) -> (Option<Vim>, Option<Neovim>) {
+    // Tests of the built-in mode mustn't depend on whether this machine has Neovim.
+    engines_for(name, !cfg!(test))
+}
+
+fn engines_for(name: Option<&str>, vim_may_use_neovim: bool) -> (Option<Vim>, Option<Neovim>) {
+    let wanted = match name {
+        Some("neovim") => true,
+        Some("vim") => vim_may_use_neovim,
+        _ => false,
+    };
+    let neovim = wanted.then(|| Neovim::start(&[]).ok()).flatten();
+    let vim = (name == Some("vim") && neovim.is_none()).then(Vim::default);
+    (vim, neovim)
+}
+
 /// What the periodic look at the disk found.
 struct DiskLook {
     entries: Vec<cellix_core::Entry>,
@@ -637,6 +655,7 @@ impl App {
         let threads = cellix_review::threads::load(workspace.root());
         let threads_broken = threads.is_err();
         let threads = threads.unwrap_or_default();
+        let (vim, neovim) = keymap_engines(settings.keymap.as_deref());
         let mut app = Self {
             workspace,
             explorer,
@@ -682,10 +701,8 @@ impl App {
             server_install: None,
             comments: SharedComments::default(),
             wait_file: None,
-            vim: (settings.keymap.as_deref() == Some("vim")).then(Vim::default),
-            neovim: (settings.keymap.as_deref() == Some("neovim"))
-                .then(|| Neovim::start(&[]).ok())
-                .flatten(),
+            vim,
+            neovim,
             neovim_file: None,
             neovim_mode: String::new(),
             neovim_line: String::new(),
@@ -3178,12 +3195,16 @@ impl App {
         if let Some(vim) = &mut self.vim {
             match vim.key(key) {
                 VimAction::Commands(commands) => {
+                    self.neovim_line = vim.command_line().unwrap_or_default().to_string();
                     for command in commands {
                         self.run(command);
                     }
                     return;
                 }
-                VimAction::Pending => return,
+                VimAction::Pending => {
+                    self.neovim_line = vim.command_line().unwrap_or_default().to_string();
+                    return;
+                }
                 VimAction::Passthrough => {}
             }
         }
@@ -6600,10 +6621,7 @@ impl App {
                 note = store("minimap", on.into());
             }
             Control::Keymap(name) => {
-                self.vim = (name == "vim").then(Vim::default);
-                self.neovim = (name == "neovim")
-                    .then(|| Neovim::start(&[]).ok())
-                    .flatten();
+                (self.vim, self.neovim) = keymap_engines(Some(name));
                 if name == "neovim" && self.neovim.is_none() {
                     note = "Neovim wasn't found, so the keymap stayed as it was".to_string();
                 } else {
@@ -14857,6 +14875,14 @@ while True:
             !app.editors[1].minimap_on,
             "and new files follow the setting"
         );
+    }
+
+    #[test]
+    fn the_vim_keymap_runs_neovim_when_it_is_installed() {
+        let (vim, neovim) = engines_for(Some("vim"), true);
+        let installed = crate::integrations::on_path("nvim", |name| std::env::var(name).ok());
+        assert_eq!(neovim.is_some(), installed, "Neovim when it's there");
+        assert_eq!(vim.is_some(), !installed, "the built-in mode when it isn't");
     }
 
     #[test]
