@@ -264,6 +264,7 @@ mod tests {
             file: "a.rs".into(),
             line: 3,
             text: "why?".into(),
+            ..Comment::default()
         }
     }
 

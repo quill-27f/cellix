@@ -2644,5 +2644,12 @@
     "title": "A plan compare never marks across a line",
     "test": "a_plan_compare_never_marks_across_a_line",
     "passes": true
+  },
+  {
+    "id": "comment-format",
+    "milestone": 10,
+    "title": "Comments reach an agent in order with what they're about",
+    "test": "comments_reach_an_agent_in_order_with_what_they_are_about",
+    "passes": true
   }
 ]

@@ -681,6 +681,8 @@ pub struct App {
     pane_explained: bool,
     /// A comment waiting for an agent to be started.
     pending_ask: Option<u32>,
+    /// What a comment from Review's line numbers is about, and whether that line was removed.
+    comment_quote: Option<(String, bool)>,
     /// Where an exported PDF goes once its hidden build is done.
     export_to: Option<PathBuf>,
     /// A push or pull on its way.
@@ -740,6 +742,7 @@ impl App {
             clipboard_image: clipboard_image_command(),
             pending_ask: None,
             export_to: None,
+            comment_quote: None,
             sync_result: None,
             keep_running: false,
             kernels: HashMap::new(),
@@ -3117,6 +3120,8 @@ impl App {
                         file: draft.file.clone(),
                         line: draft.line,
                         text: text.clone(),
+                        quote: draft.quote.clone(),
+                        ..Comment::default()
                     });
                 }
                 self.threads.push(Thread {
@@ -5737,19 +5742,44 @@ impl App {
     fn add_comment(&mut self, file: String, line: usize, text: String) {
         // A plan's comments are its answer, and `--wait` writes them into the file.
         let answering = self.plan.is_some() || self.wait_file.is_some();
-        let Some(editor) = self.editors.get(self.active()).filter(|_| !answering) else {
+        // What it's about, from Review's line or the editor's selection or line.
+        let (quote, removed) = self.comment_quote.take().unwrap_or_else(|| {
+            let quote = self.editors.get(self.active()).map(|editor| {
+                editor
+                    .selected_text()
+                    .unwrap_or_else(|| editor.line_text(line.saturating_sub(1)))
+            });
+            (quote.unwrap_or_default(), false)
+        });
+        let quote = quote.lines().next().unwrap_or_default().trim().to_string();
+        // A plan lives in a private folder, so it goes by its name, not that folder's path.
+        let file = if answering && Path::new(&file).is_absolute() {
+            Path::new(&file)
+                .file_name()
+                .map_or(file.clone(), |n| n.to_string_lossy().into_owned())
+        } else {
+            file
+        };
+        let comment = Comment {
+            file: file.clone(),
+            line,
+            text: text.clone(),
+            quote: quote.clone(),
+            removed,
+        };
+        let Some(editor) = self
+            .editors
+            .get(self.active())
+            .filter(|_| !answering && !removed)
+        else {
             if let Ok(mut comments) = self.comments.lock() {
-                comments.push(Comment { file, line, text });
+                comments.push(comment);
             }
             return;
         };
         // Every comment shows beside its file. A document's is a conversation there, and
         // code's also goes with the review, so an agent is told of it by that road.
         let page = editor.rendered;
-        let quote = editor
-            .selected_text()
-            .unwrap_or_else(|| editor.line_text(line.saturating_sub(1)));
-        let quote = quote.lines().next().unwrap_or_default().trim().to_string();
         self.threads.push(Thread {
             id: cellix_review::threads::next_id(&self.threads),
             file: file.clone(),
@@ -5767,7 +5797,7 @@ impl App {
             self.dock.show_comments();
             self.dock.focused = false;
         } else if let Ok(mut comments) = self.comments.lock() {
-            comments.push(Comment { file, line, text });
+            comments.push(comment);
         }
     }
 
@@ -6085,7 +6115,8 @@ impl App {
             Some(Hit::Reject(hunk)) => self.reject(hunk),
             Some(Hit::PreviousFile) => review.step_file(-1),
             Some(Hit::NextFile) => review.step_file(1),
-            Some(Hit::Line(file, line)) => {
+            Some(Hit::Line(file, line, quote, removed)) => {
+                self.comment_quote = Some((quote, removed));
                 self.ask(
                     &format!("Comment on line {line}"),
                     PromptAction::Comment(file, line),
@@ -9710,7 +9741,9 @@ mod tests {
             Comment {
                 file: "alpha.txt".into(),
                 line: 2,
-                text: "why this".into()
+                text: "why this".into(),
+                quote: "CHANGED".into(),
+                removed: false,
             }
         );
         app.run(Command::OpenDiff);
@@ -11203,7 +11236,10 @@ mod tests {
             panic!("no answer");
         };
         assert!(text.contains("Split it"), "{text}");
-        assert!(text.contains("plan.md:1: Too big"), "{text}");
+        assert!(
+            text.contains("plan.md line 1, on \"# Plan\": Too big"),
+            "{text}"
+        );
         assert!(text.contains("# My Plan"), "{text}");
     }
 

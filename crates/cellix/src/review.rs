@@ -42,7 +42,8 @@ pub enum Hit {
     Reject(usize),
     /// A line number, which starts a comment on that line of the new version, or the old
     /// one if it was deleted.
-    Line(String, usize),
+    /// A line number: the file, the line, its text, and whether the change took it out.
+    Line(String, usize, String, bool),
     /// The text of a line, which a double click opens in its file.
     Text(String, usize),
     /// Compare against this turn, or HEAD for None.
@@ -730,12 +731,13 @@ impl Review {
                     None
                 }
             }
-            Stacked::Line(side, _) => {
+            Stacked::Line(side, kind) => {
                 let file = self.current_path()?.to_string_lossy().into_owned();
                 // Only the numbers: a click in the code is someone reading it.
                 let in_numbers = x < body.x + LINE_NUMBER_WIDTH;
+                let removed = *kind == RowKind::Removed;
                 Some(if in_numbers {
-                    Hit::Line(file, side.number)
+                    Hit::Line(file, side.number, side.text.trim().to_string(), removed)
                 } else {
                     Hit::Text(file, side.number)
                 })

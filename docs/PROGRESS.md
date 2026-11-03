@@ -638,3 +638,10 @@ of edits piles up into one review. Once you've accepted or rejected some, the ne
 Compare Plan Versions diffs by line: lines that went are struck, lines that came are marked new,
 and a line changed in place shows its words, so no mark spans a line and every one renders. Open:
 a suggestion spanning paragraphs in a document still shows its markers.
+
+One comment format. Every comment now carries what it's about: the selected words or the line,
+for code, documents and plans alike. A comment on a line a change removed says so and counts in the
+old version, where it used to point at whatever is on that line now. Plan comments name the plan,
+not the private folder it's held in, and comments reach the agent in file and line order, each as
+`file line N, on "quote": text`. `cellix comments` gives `quote` and `removed`, and the skill says
+so. Open: plan comments still don't carry into the plan's next version as threads.

@@ -21,11 +21,38 @@ pub use threads::{Reply, Thread, YOU};
 use serde::{Deserialize, Serialize};
 
 /// A reviewer's note on one line. `line` counts from 1, like the gutter does.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Comment {
     pub file: String,
     pub line: usize,
     pub text: String,
+    /// What it's about: the words selected, or the line. An agent acts on it without opening
+    /// the file, and it still says which code is meant once the lines move.
+    #[serde(default)]
+    pub quote: String,
+    /// On a line the change took out, so `line` counts in the version before it.
+    #[serde(default)]
+    pub removed: bool,
+}
+
+impl Comment {
+    /// How an agent reads it, on one line.
+    pub fn message(&self) -> String {
+        let place = if self.removed {
+            format!(
+                "{} line {} (a line your change removed)",
+                self.file, self.line
+            )
+        } else {
+            format!("{} line {}", self.file, self.line)
+        };
+        let quote = self.quote.trim();
+        if quote.is_empty() {
+            format!("{place}: {}", self.text)
+        } else {
+            format!("{place}, on \"{quote}\": {}", self.text)
+        }
+    }
 }
 
 /// Appends comments to a document, so an agent that only reads the file back, as with
@@ -52,6 +79,7 @@ mod tests {
             file: "plan.md".into(),
             line: 2,
             text: "Use a queue".into(),
+            ..Comment::default()
         };
         assert_eq!(
             append_comments("# Plan\nstep\n", &[comment]),

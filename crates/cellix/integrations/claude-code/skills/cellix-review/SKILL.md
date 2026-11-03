@@ -4,7 +4,9 @@ description: Read the reviewer's line comments from a running Cellix editor. Use
 ---
 
 Run `cellix comments --take` in the workspace. It prints a JSON array of objects with
-`file`, `line` and `text`, and clears them so they are not handled twice.
+`file`, `line`, `text`, `quote` (the words or line the comment is about) and `removed` (true when
+the line is one your change took out, so `line` counts in the old version), and clears them so
+they are not handled twice.
 
 Address each comment, then say which ones you handled. If the command reports no running
 Cellix, ask the user to open one in this workspace.

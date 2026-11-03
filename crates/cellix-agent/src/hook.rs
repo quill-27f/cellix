@@ -94,11 +94,11 @@ fn tell(roots: &[PathBuf], input: &Value, state: AgentState, detail: &str) {
 /// Comments as a message an agent can act on.
 pub fn comments_message(comments: &[Comment]) -> String {
     let mut text = String::from("Review comments on your changes:\n");
-    for comment in comments {
-        text.push_str(&format!(
-            "- {}:{}: {}\n",
-            comment.file, comment.line, comment.text
-        ));
+    // In file and line order, as they'd be read, not the order they were written.
+    let mut sorted: Vec<&Comment> = comments.iter().collect();
+    sorted.sort_by(|a, b| (&a.file, a.line).cmp(&(&b.file, b.line)));
+    for comment in sorted {
+        text.push_str(&format!("- {}\n", comment.message()));
     }
     text
 }
@@ -382,7 +382,29 @@ mod tests {
             file: "a.rs".into(),
             line: 3,
             text: "why?".into(),
+            ..Comment::default()
         }
+    }
+
+    #[test]
+    fn comments_reach_an_agent_in_order_with_what_they_are_about() {
+        let later = Comment {
+            file: "b.rs".into(),
+            line: 9,
+            text: "wall clock is wrong here".into(),
+            quote: "now = time.time()".into(),
+            removed: true,
+        };
+        let first = Comment {
+            quote: "fn main() {".into(),
+            ..comment()
+        };
+        let message = comments_message(&[later, first]);
+        let a = message
+            .find("a.rs line 3, on \"fn main() {\": why?")
+            .expect(&message);
+        let b = message.find("b.rs line 9 (a line your change removed), on \"now = time.time()\"");
+        assert!(b.is_some_and(|b| b > a), "{message}");
     }
 
     #[test]
@@ -416,7 +438,7 @@ mod tests {
         let context = parsed["hookSpecificOutput"]["additionalContext"]
             .as_str()
             .unwrap();
-        assert!(context.contains("a.rs:3: why?"), "{context}");
+        assert!(context.contains("a.rs line 3: why?"), "{context}");
         assert!(shared.lock().unwrap().is_empty(), "delivered once");
         assert_eq!(handle("prompt", &hook), None);
     }
