@@ -607,3 +607,5 @@ With paint, a menu's groups part on a hairline instead of a blank row (the cell 
 row), suggestions sit on a panel painted just around their rows, and matches are one colour in the
 file and the Search panel. Not done from the review: palettes' padding, the Review and Agents
 panes, the light theme's mixed palette, and the table caption and minimap fixes.
+
+A table's caption in a paper stays at the left with its table, where it was centred on the page.

@@ -752,7 +752,11 @@ impl Page<'_, '_> {
             let template = Row::new(index, offset + chars.len());
             let first = self.rows.len();
             wrap(template, glyphs, 0.0, self.width, self.rows);
-            // Under a picture in the middle of the page, as a Markdown image's caption is.
+            // Under a picture in the middle of the page, as a Markdown image's caption is. A
+            // table sits at the page's left, so its caption stays with it there.
+            if kind == "Table" {
+                return;
+            }
             for row in &mut self.rows[first..] {
                 let reach = row.glyphs.last().map_or(0.0, |g| g.x + g.advance);
                 let shift = ((self.width - reach) / 2.0).max(0.0);
@@ -1345,6 +1349,17 @@ ignored after the end
     #[test]
     fn a_brace_being_typed_stays_on_the_page() {
         assert_eq!(shown("See \\cite{kn\n")[0], "See \\cite{kn");
+    }
+
+    #[test]
+    fn a_tables_caption_stays_with_the_table_on_the_left() {
+        let source = "\\begin{table}\n\\caption{Accuracy}\n\\begin{tabular}{ll}\na & b \\\\\n\\end{tabular}\n\\end{table}\n";
+        let rows = page(source);
+        let caption = rows
+            .iter()
+            .find(|r| text(r).contains("Accuracy"))
+            .expect("a caption");
+        assert!(caption.lead < 1.0, "left, with the table: {}", caption.lead);
     }
 
     #[test]

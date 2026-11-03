@@ -2602,5 +2602,12 @@
     "title": "With paint, a menu's groups part on a hairline, not a blank row",
     "test": "with_paint_groups_part_on_a_hairline_not_a_row",
     "passes": true
+  },
+  {
+    "id": "table-caption-left",
+    "milestone": 10,
+    "title": "A table's caption stays with the table on the left",
+    "test": "a_tables_caption_stays_with_the_table_on_the_left",
+    "passes": true
   }
 ]
