@@ -835,7 +835,9 @@ name = "cellix-core"
 version = "0.1.0"
 dependencies = [
  "ignore",
+ "regex",
  "ropey",
+ "tempfile",
  "unicode-width",
 ]
 

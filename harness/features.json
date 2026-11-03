@@ -2518,5 +2518,54 @@
     "title": "The status counts words, the selection, and keeps them while tracking",
     "test": "the_status_counts_words_and_the_selection",
     "passes": true
+  },
+  {
+    "id": "pattern-switches",
+    "milestone": 10,
+    "title": "Case, whole words and expressions narrow a search",
+    "test": "case_whole_words_and_expressions_narrow_a_search",
+    "passes": true
+  },
+  {
+    "id": "pattern-replace",
+    "milestone": 10,
+    "title": "A replacement takes groups only from an expression",
+    "test": "a_replacement_takes_groups_only_from_an_expression",
+    "passes": true
+  },
+  {
+    "id": "project-search-options",
+    "milestone": 10,
+    "title": "Project search lists every match and replaces with its options",
+    "test": "a_project_search_lists_every_match_and_replaces_with_its_options",
+    "passes": true
+  },
+  {
+    "id": "find-replace",
+    "milestone": 10,
+    "title": "Find replaces one match, then all of them as one edit",
+    "test": "find_replaces_one_match_then_all_of_them",
+    "passes": true
+  },
+  {
+    "id": "ctrl-backslash-legacy",
+    "milestone": 10,
+    "title": "Ctrl+\\ splits in either encoding",
+    "test": "ctrl_backslash_splits_in_either_encoding",
+    "passes": true
+  },
+  {
+    "id": "find-switches",
+    "milestone": 10,
+    "title": "Find switches match case, whole words and expressions",
+    "test": "find_switches_match_case_whole_words_and_expressions",
+    "passes": true
+  },
+  {
+    "id": "plan-banner-agent",
+    "milestone": 10,
+    "title": "The plan banner names the agent that sent it",
+    "test": "the_plan_banner_names_the_agent_that_sent_it",
+    "passes": true
   }
 ]

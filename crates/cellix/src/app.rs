@@ -108,7 +108,7 @@ const STACK_SHARE: u16 = 45;
 /// Rows each side keeps, however far the line between them is dragged.
 const STACK_LEAST: u16 = 6;
 const APPROVE: &str = "[Approve]";
-const FIND_WIDTH: u16 = 46;
+const FIND_WIDTH: u16 = 60;
 const CONFIRM_WIDTH: u16 = 56;
 const CONFIRM_HEIGHT: u16 = 6;
 /// Columns around a dialog button's label.
@@ -124,7 +124,9 @@ const DIRECTORY_MARK: char = '•';
 const BADGE_SIZE: u8 = 62;
 const SUGGEST_WIDTH: u16 = 42;
 const FIND_BUTTON: u16 = 3;
-const FIND_BUTTONS: [&str; 3] = ["↑", "↓", "×"];
+const FIND_BUTTONS: [&str; 4] = ["↑", "↓", "⇄", "×"];
+/// The replace row's buttons, and their widths.
+const REPLACE_BUTTONS: [(&str, u16); 2] = [("Replace", 9), ("All", 5)];
 const SEND_BACK: &str = "[Send back]";
 /// The card that offers a language's support.
 const OFFER_WIDTH: u16 = 46;
@@ -137,7 +139,7 @@ const PANE_CLOSE_REACH: u16 = 3;
 const TOOLTIP_HEIGHT: f32 = 1.22;
 const TOOLTIP_SIZE: u8 = 92;
 /// What each button is called, in order, since they're only icons and marks.
-const FIND_NAMES: [&str; 3] = ["Previous match", "Next match", "Close"];
+const FIND_NAMES: [&str; 4] = ["Previous match", "Next match", "Replace (Ctrl+R)", "Close"];
 const RAIL_NAMES: [&str; 5] = ["Files", "Search", "Outline", "Source Control", "Settings"];
 /// Below this width, opening the side pane puts the sidebar away.
 const CROWDED_WIDTH: u16 = 120;
@@ -2064,6 +2066,7 @@ impl App {
                 path,
                 line,
                 column,
+                len: 0,
                 text,
             });
         }
@@ -2726,8 +2729,10 @@ impl App {
             }
             Overlay::Prompt(prompt) => prompt.input.push_str(text),
             Overlay::Find(find) => {
-                find.query.push_str(text);
-                self.search_file();
+                find.field_mut().push_str(text);
+                if !find.in_replace {
+                    self.search_file();
+                }
             }
             _ => {
                 // A file dropped on a terminal arrives as its path.
@@ -3785,6 +3790,7 @@ impl App {
     }
 
     fn find_key(&mut self, mut find: Find, key: KeyEvent) {
+        let mut searched = false;
         match key.key {
             Key::Esc => {
                 if let Some(editor) = self.editor_mut() {
@@ -3792,21 +3798,88 @@ impl App {
                 }
                 return;
             }
+            Key::Char(c) if key.mods.alt && find.options.flip_key(c) => searched = true,
+            Key::Tab | Key::BackTab if find.replace.is_some() => find.in_replace = !find.in_replace,
+            Key::Enter if find.in_replace && key.mods.alt => {
+                self.overlay = Overlay::Find(find);
+                self.replace_in_file(true);
+                return;
+            }
+            Key::Enter if find.in_replace => {
+                self.overlay = Overlay::Find(find);
+                self.replace_in_file(false);
+                return;
+            }
             Key::Enter if key.mods.shift => find.step(-1),
             Key::Enter | Key::Down => find.step(1),
             Key::Up => find.step(-1),
             Key::Backspace => {
-                find.query.pop();
+                find.field_mut().pop();
+                searched = !find.in_replace;
             }
-            Key::Char(c) if !key.mods.ctrl && !key.mods.alt => find.query.push(c),
+            Key::Char(c) if !key.mods.ctrl && !key.mods.alt => {
+                find.field_mut().push(c);
+                searched = !find.in_replace;
+            }
             _ => {}
         }
         self.overlay = Overlay::Find(find);
-        if matches!(key.key, Key::Backspace | Key::Char(_)) {
+        if searched {
             self.search_file();
         } else {
             self.show_match();
         }
+    }
+
+    /// Replaces the match in view and moves to the next, or replaces every one, as one edit.
+    fn replace_in_file(&mut self, all: bool) {
+        let Overlay::Find(find) = &self.overlay else {
+            return;
+        };
+        let with = find.replace.clone().unwrap_or_default();
+        let (options, selected, count) = (find.options, find.selected(), find.matches.len());
+        let Ok(matcher) = options.matcher(&find.query) else {
+            return;
+        };
+        let area = self.focused_area();
+        let Some(editor) = self.editor_mut() else {
+            return;
+        };
+        editor.prepare_edit(area);
+        let text = editor.buffer.text();
+        let from = if all {
+            let replaced = options.replace_all(&matcher, &text, &with);
+            if replaced != text {
+                editor.selections.set_single(Selection {
+                    anchor: 0,
+                    head: editor.buffer.rope().len_chars(),
+                    goal: None,
+                });
+                editor.buffer.replace(&mut editor.selections, &replaced);
+            }
+            0
+        } else {
+            let Some((start, end)) = selected else {
+                return;
+            };
+            let found = editor.buffer.rope().slice(start..end).to_string();
+            let replacement = options.replacement(&matcher, &found, &with);
+            editor.selections.set_single(Selection {
+                anchor: start,
+                head: end,
+                goal: None,
+            });
+            editor.buffer.replace(&mut editor.selections, &replacement);
+            start + replacement.chars().count()
+        };
+        let text = editor.buffer.text();
+        if let Overlay::Find(find) = &mut self.overlay {
+            find.search(&text, from);
+        }
+        if all {
+            self.say(format!("Replaced {count}"));
+        }
+        self.show_match();
     }
 
     /// Searches the open file for the query as it stands.
@@ -3861,24 +3934,41 @@ impl App {
     }
 
     fn find_bar(&self) -> Rect {
+        let replacing = matches!(&self.overlay, Overlay::Find(f) if f.replace.is_some());
+        self.find_bar_for(replacing)
+    }
+
+    /// The Find bar, a row taller with the replace row.
+    fn find_bar_for(&self, replacing: bool) -> Rect {
         let pane = self.focused_area();
         let width = FIND_WIDTH.min(pane.w);
         let x = pane.right().saturating_sub(width + 1).max(pane.x);
-        Rect::new(x, pane.y, width, 3)
+        Rect::new(x, pane.y, width, if replacing { 4 } else { 3 })
+    }
+
+    /// Where the switches start on the Find bar's first row.
+    fn find_switches(area: Rect) -> u16 {
+        area.right() - FIND_BUTTON * FIND_BUTTONS.len() as u16 - 1 - 3 * 3 - 1
+    }
+
+    /// Where the replace row's buttons start.
+    fn replace_buttons(area: Rect) -> u16 {
+        let width: u16 = REPLACE_BUTTONS.iter().map(|(_, w)| w).sum();
+        area.right().saturating_sub(width + 1)
     }
 
     fn draw_find(&self, grid: &mut Grid, find: &Find) {
         let theme = &self.theme;
-        let area = self.find_bar();
+        let area = self.find_bar_for(find.replace.is_some());
         popup(grid, area, theme);
         let count = find.count_label();
-        let right = FIND_BUTTONS.len() as u16 * FIND_BUTTON + count.chars().count() as u16 + 2;
-        let field = area.w.saturating_sub(right + 2);
+        let switches = Self::find_switches(area);
+        let field = switches.saturating_sub(area.x + 2 + count.chars().count() as u16 + 1);
         let line = Rect::new(area.x + 1, area.y + 1, field, 1);
         let text = Input {
             text: &find.query,
             hint: "Find",
-            focused: true,
+            focused: !find.in_replace,
             behind: theme.popup,
         };
         input(grid, line, &text, &*self.measure, theme);
@@ -3887,7 +3977,42 @@ impl App {
             bg: theme.popup,
             ..theme.bar
         };
-        grid.label(line.right() + 1, area.y + 1, &count, base, area.right());
+        grid.label(line.right() + 1, area.y + 1, &count, base, switches);
+        crate::search::draw_switches(
+            grid,
+            (switches, area.y + 1),
+            find.options,
+            self.hover,
+            base,
+            theme,
+        );
+        if let Some(with) = &find.replace {
+            let buttons = Self::replace_buttons(area);
+            // As wide as the find field, so the two read as a pair.
+            let width = field.min(buttons.saturating_sub(area.x + 2));
+            let line = Rect::new(area.x + 1, area.y + 2, width, 1);
+            let text = Input {
+                text: with,
+                hint: "Replace",
+                focused: find.in_replace,
+                behind: theme.popup,
+            };
+            input(grid, line, &text, &*self.measure, theme);
+            let mut x = buttons;
+            for (label, width) in REPLACE_BUTTONS {
+                let button = Rect::new(x, area.y + 2, width, 1);
+                if self.hover.is_some_and(|h| button.contains(h.0, h.1)) {
+                    let pill = Bounds::inset(button, 0.1, 0.055);
+                    grid.panel(pill, 18, Some(theme.popup_hover), None);
+                }
+                let style = Style {
+                    fg: theme.text.fg,
+                    ..base
+                };
+                grid.label(x + 1, area.y + 2, label, style, x + width);
+                x += width;
+            }
+        }
         let mut x = area.right() - FIND_BUTTON * FIND_BUTTONS.len() as u16 - 1;
         for label in FIND_BUTTONS {
             let button = Rect::new(x, area.y + 1, FIND_BUTTON, 1);
@@ -3910,15 +4035,44 @@ impl App {
     }
 
     fn click_find(&mut self, mut find: Find, x: u16, y: u16) {
-        let area = self.find_bar();
+        let area = self.find_bar_for(find.replace.is_some());
         let first = area.right() - FIND_BUTTON * FIND_BUTTONS.len() as u16 - 1;
+        let switches = Self::find_switches(area);
+        if find.replace.is_some() && y == area.y + 2 && area.contains(x, y) {
+            let buttons = Self::replace_buttons(area);
+            let all = x >= buttons + REPLACE_BUTTONS[0].1;
+            find.in_replace = true;
+            self.overlay = Overlay::Find(find);
+            if x >= buttons {
+                self.replace_in_file(all);
+            }
+            return;
+        }
+        if y == area.y + 1 && x >= switches && x < switches + 9 {
+            find.options.flip(((x - switches) / 3) as usize);
+            self.overlay = Overlay::Find(find);
+            self.search_file();
+            return;
+        }
         let key = if area.contains(x, y) && x >= first && y == area.y + 1 {
             match (x - first) / FIND_BUTTON {
                 0 => Key::Up,
                 1 => Key::Down,
+                2 => {
+                    find.replace = match find.replace {
+                        Some(_) => None,
+                        None => Some(String::new()),
+                    };
+                    find.in_replace = find.replace.is_some() && !find.query.is_empty();
+                    self.overlay = Overlay::Find(find);
+                    return;
+                }
                 _ => Key::Esc,
             }
         } else {
+            if area.contains(x, y) && y == area.y + 1 {
+                find.in_replace = false;
+            }
             self.overlay = Overlay::Find(find);
             return;
         };
@@ -4134,6 +4288,13 @@ impl App {
             }
             Command::AddComment => self.prompt_comment_at_cursor(false),
             Command::FindInFile => self.open_find(),
+            Command::ReplaceInFile => {
+                self.open_find();
+                if let Overlay::Find(find) = &mut self.overlay {
+                    find.in_replace = !find.query.is_empty();
+                    find.replace = Some(String::new());
+                }
+            }
             Command::Format(Format::Link) => self.ask("Link address", PromptAction::Link),
             Command::Format(format) => {
                 let area = self.focused_area();
@@ -5278,6 +5439,14 @@ impl App {
 
     /// Keys for the search boxes. Returns false to let a shortcut through.
     fn search_key(&mut self, key: KeyEvent) -> bool {
+        if let Key::Char(c) = key.key
+            && key.mods.alt
+            && !key.mods.ctrl
+            && self.search.options.flip_key(c)
+        {
+            self.search.start();
+            return true;
+        }
         if key.mods.ctrl || key.mods.alt {
             return false;
         }
@@ -5326,7 +5495,10 @@ impl App {
             .filter(|e| e.buffer.is_dirty())
             .filter_map(|e| e.buffer.path().map(Path::to_path_buf))
             .collect();
-        match self.workspace.replace_all(&query, &with, &dirty) {
+        match self
+            .workspace
+            .replace_all(&query, &with, self.search.options, &dirty)
+        {
             Ok(count) => {
                 let skipped = if dirty.is_empty() {
                     String::new()
@@ -5376,6 +5548,10 @@ impl App {
     fn click_search(&mut self, area: Rect, x: u16, y: u16) {
         match self.search.hit(area, x, y) {
             Some(search::Hit::Field(field)) => self.search.focus = Some(field),
+            Some(search::Hit::Switch(switch)) => {
+                self.search.options.flip(switch);
+                self.search.start();
+            }
             Some(search::Hit::ReplaceAll) => self.replace_all(),
             Some(search::Hit::File(path)) => self.search.toggle_file(path),
             Some(search::Hit::Match(found)) => self.open_match(&found),
@@ -7532,10 +7708,11 @@ impl App {
             fg: theme.status.fg,
             ..theme.tab
         };
+        let author = self.agents.plan_author().unwrap_or("An agent");
         let end = grid.label(
             main.x + 2,
             main.y,
-            "Claude Code is waiting on this plan",
+            &format!("{author} is waiting on this plan"),
             strong,
             main.right(),
         );
@@ -10701,6 +10878,20 @@ mod tests {
     }
 
     #[test]
+    fn the_plan_banner_names_the_agent_that_sent_it() {
+        let (dir, mut app) = project();
+        let mut event = agent(
+            cellix_agent::AgentState::NeedsYou,
+            cellix_agent::hook::PLAN_WAITING,
+        );
+        event.agent = "Codex".into();
+        app.serve(Request::Agent(event));
+        let _decision = pending_plan(&dir, &mut app);
+        let text = screen(&app).text();
+        assert!(text.contains("Codex is waiting on this plan"), "{text}");
+    }
+
+    #[test]
     fn a_plan_sent_again_shows_what_changed_since_the_last_version() {
         let (dir, mut app) = project();
         fs::write(dir.path().join("Plan v1.md"), "# Plan\n\nCache first.\n").unwrap();
@@ -10819,6 +11010,70 @@ mod tests {
             app.comments.lock().unwrap().len(),
             1,
             "the prompt hook takes them"
+        );
+    }
+
+    fn alt(c: char) -> Event {
+        Event::Key(KeyEvent {
+            key: Key::Char(c),
+            mods: cellix_input::Mods {
+                alt: true,
+                ..cellix_input::Mods::default()
+            },
+        })
+    }
+
+    #[test]
+    fn find_replaces_one_match_then_all_of_them() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        app.run(Command::ReplaceInFile);
+        typed(&mut app, "LINE");
+        app.handle(Event::Key(KeyEvent::plain(Key::Tab)));
+        typed(&mut app, "row");
+        assert!(
+            screen(&app).text().contains("1 of 2"),
+            "any case by default"
+        );
+        enter(&mut app);
+        assert_eq!(app.active_text().unwrap(), "first row\nsecond line\n");
+        app.handle(Event::Key(KeyEvent {
+            key: Key::Enter,
+            mods: cellix_input::Mods {
+                alt: true,
+                ..cellix_input::Mods::default()
+            },
+        }));
+        assert_eq!(app.active_text().unwrap(), "first row\nsecond row\n");
+        app.run(Command::Undo);
+        assert_eq!(
+            app.active_text().unwrap(),
+            "first row\nsecond line\n",
+            "one edit"
+        );
+    }
+
+    #[test]
+    fn find_switches_match_case_whole_words_and_expressions() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        app.run(Command::FindInFile);
+        typed(&mut app, "lin");
+        assert!(screen(&app).text().contains("1 of 2"));
+        app.handle(alt('w'));
+        assert!(
+            screen(&app).text().contains("No results"),
+            "not a whole word"
+        );
+        app.handle(alt('w'));
+        app.handle(alt('r'));
+        typed(&mut app, "(");
+        assert!(screen(&app).text().contains("Invalid"));
+        app.handle(Event::Key(KeyEvent::plain(Key::Backspace)));
+        typed(&mut app, "e$");
+        assert!(
+            screen(&app).text().contains("1 of 2"),
+            "an expression per line"
         );
     }
 

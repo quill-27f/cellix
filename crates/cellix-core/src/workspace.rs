@@ -1,3 +1,4 @@
+use crate::pattern::{Options, char_ranges};
 use std::collections::BTreeSet;
 use std::fs;
 use std::io;
@@ -22,6 +23,8 @@ pub struct Match {
     pub line: usize,
     /// Char offset of the hit within `text`.
     pub column: usize,
+    /// Chars the hit covers, or none for a place found some other way.
+    pub len: usize,
     pub text: String,
 }
 
@@ -115,14 +118,15 @@ impl Workspace {
             .collect()
     }
 
-    /// Lines containing `query`, in path order. Binary files are skipped.
-    pub fn search(&self, query: &str) -> Vec<Match> {
+    /// Every place `query` matches, in path order, one for each match on a line. Binary files
+    /// are skipped.
+    pub fn search(&self, query: &str, options: Options) -> Vec<Match> {
         let mut files = self.files();
         files.sort();
         let mut found = Vec::new();
-        if query.is_empty() {
+        let Ok(matcher) = options.matcher(query) else {
             return found;
-        }
+        };
         for path in files {
             if fs::metadata(&path).is_ok_and(|m| m.len() > MAX_FILE_BYTES) {
                 continue;
@@ -131,11 +135,12 @@ impl Workspace {
                 continue;
             };
             for (line, content) in text.lines().enumerate() {
-                if let Some(byte) = content.find(query) {
+                for (start, end) in char_ranges(&matcher, content, MAX_MATCHES) {
                     found.push(Match {
                         path: path.clone(),
                         line,
-                        column: content[..byte].chars().count(),
+                        column: start,
+                        len: end - start,
                         text: content.to_string(),
                     });
                     if found.len() >= MAX_MATCHES {
@@ -148,11 +153,17 @@ impl Workspace {
     }
 
     /// Replaces `query` in every file except `skip`, and returns how many changed.
-    pub fn replace_all(&self, query: &str, with: &str, skip: &[PathBuf]) -> io::Result<usize> {
+    pub fn replace_all(
+        &self,
+        query: &str,
+        with: &str,
+        options: Options,
+        skip: &[PathBuf],
+    ) -> io::Result<usize> {
         let mut changed = 0;
-        if query.is_empty() {
+        let Ok(matcher) = options.matcher(query) else {
             return Ok(changed);
-        }
+        };
         for path in self.files() {
             if skip.contains(&path) {
                 continue;
@@ -160,8 +171,8 @@ impl Workspace {
             let Ok(text) = fs::read_to_string(&path) else {
                 continue;
             };
-            if text.contains(query) {
-                fs::write(&path, text.replace(query, with))?;
+            if matcher.is_match(&text) {
+                fs::write(&path, options.replace_all(&matcher, &text, with))?;
                 changed += 1;
             }
         }
@@ -203,5 +214,29 @@ impl Workspace {
         } else {
             fs::remove_file(path)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_project_search_lists_every_match_and_replaces_with_its_options() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("a.txt"), "foo Foo food\n").unwrap();
+        let workspace = Workspace::new(dir.path().to_path_buf());
+        let found = workspace.search("foo", Options::default());
+        assert_eq!(found.len(), 3, "each match on the line");
+        assert_eq!((found[1].column, found[1].len), (4, 3));
+        let whole = Options {
+            whole: true,
+            case: true,
+            ..Options::default()
+        };
+        assert_eq!(workspace.search("foo", whole).len(), 1);
+        workspace.replace_all("foo", "bar", whole, &[]).unwrap();
+        let text = fs::read_to_string(dir.path().join("a.txt")).unwrap();
+        assert_eq!(text, "bar Foo food\n");
     }
 }

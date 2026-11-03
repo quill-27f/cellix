@@ -76,9 +76,12 @@ pub fn simple_keymap(event: KeyEvent) -> Option<Command> {
             'w' => CloseTab,
             'p' => QuickOpen,
             'f' => FindInFile,
+            // Ctrl+H is Backspace in too many terminals.
+            'r' => ReplaceInFile,
             'b' => ToggleSidebar,
             'g' => OpenDiff,
-            '\\' => SplitPane,
+            // Without the kitty protocol Ctrl+\ arrives as the byte 0x1c, read as Ctrl+4.
+            '\\' | '4' => SplitPane,
             'o' => FocusNextPane,
             _ => return None,
         },
@@ -90,6 +93,19 @@ pub fn simple_keymap(event: KeyEvent) -> Option<Command> {
 mod tests {
     use super::*;
     use crate::Mods;
+
+    #[test]
+    fn ctrl_backslash_splits_in_either_encoding() {
+        let ctrl = |c| KeyEvent {
+            key: Key::Char(c),
+            mods: Mods {
+                ctrl: true,
+                ..Mods::default()
+            },
+        };
+        assert_eq!(simple_keymap(ctrl('\\')), Some(Command::SplitPane));
+        assert_eq!(simple_keymap(ctrl('4')), Some(Command::SplitPane));
+    }
 
     #[test]
     fn option_shift_f_formats_and_option_f_still_moves() {

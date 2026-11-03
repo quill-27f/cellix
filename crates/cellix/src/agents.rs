@@ -96,6 +96,12 @@ impl Agents {
         }
     }
 
+    /// Which agent's plan is waiting, by its name.
+    pub fn plan_author(&self) -> Option<&str> {
+        let waiting = self.running.iter().rev().find(|a| a.detail == PLAN_WAITING);
+        waiting.map(|a| a.agent.as_str())
+    }
+
     /// The answer went back, so the agent is working again before any hook says so.
     pub fn plan_answered(&mut self) {
         let waiting = self.running.iter_mut().filter(|a| a.detail == PLAN_WAITING);

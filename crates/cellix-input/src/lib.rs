@@ -171,6 +171,8 @@ pub enum Command {
     DeleteToLineStart,
     DeleteToLineEnd,
     FindInFile,
+    /// Find with the replace row open.
+    ReplaceInFile,
     Format(Format),
     SendToAgent,
     MentionSelection,

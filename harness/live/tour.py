@@ -219,6 +219,9 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("10-branches", [["click", 3, 39]], CODE_FILE)
     shoot("11-find", [["keys", CTRL("f")], ["keys", "item"]], CODE_FILE)
     shoot("12-search", [["click", RAIL_X, SEARCH]], CODE_FILE)
+    replacing = [["keys", CTRL("r")], ["keys", "item"], ["keys", "\t"], ["keys", "entry"]]
+    shoot("11-replace", replacing, CODE_FILE)
+    shoot("12-search-switches", [["click", RAIL_X, SEARCH], ["keys", "item"], ["keys", "\x1bw"], ["wait", 0.6]], CODE_FILE)
     shoot("13-review", [["keys", "\u0007"], ["wait", 1.2]], CODE_FILE)
     shoot("13-strip-hover", [["wait", 0.8], ["move", 99, 0], ["wait", 0.4]], CODE_FILE)
     git_tab = [["click", RAIL_X, REVIEW], ["wait", 0.8]]

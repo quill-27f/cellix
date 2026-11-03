@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, channel};
 use std::thread;
 
+use cellix_core::pattern::{Options, SWITCHES};
 use cellix_core::{Match, Workspace};
 use cellix_render::{Bounds, Font, Grid, Icon, Measure, Rect, Style};
 
@@ -14,6 +15,8 @@ const HEADER_ROWS: u16 = 6;
 const REPLACE_ALL: &str = "All";
 /// The replace field, a row clear of the search field.
 const REPLACE_ROW: u16 = 3;
+/// Columns for each of the switches at the search field's end.
+const SWITCH: u16 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Field {
@@ -25,6 +28,8 @@ pub enum Field {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Hit {
     Field(Field),
+    /// One of the switches: case, whole word, regular expression.
+    Switch(usize),
     ReplaceAll,
     File(PathBuf),
     Match(Match),
@@ -40,6 +45,7 @@ pub struct Search {
     root: PathBuf,
     pub query: String,
     pub replace: String,
+    pub options: Options,
     /// Which box has the keyboard, if any.
     pub focus: Option<Field>,
     results: Vec<Match>,
@@ -50,12 +56,53 @@ pub struct Search {
     incoming: Option<Receiver<(u64, Vec<Match>)>>,
 }
 
+/// Where the switches start, at the search field's end.
+fn switches_start(area: Rect) -> u16 {
+    area.right()
+        .saturating_sub(1 + SWITCH * SWITCHES.len() as u16)
+}
+
+/// The three switches from `at`, each lit while it's on. The Find bar draws them too.
+pub fn draw_switches(
+    grid: &mut Grid,
+    at: (u16, u16),
+    options: Options,
+    hover: Option<(u16, u16)>,
+    base: Style,
+    theme: &Theme,
+) {
+    let (x, y) = at;
+    for (index, label) in SWITCHES.iter().enumerate() {
+        let left = x + index as u16 * SWITCH;
+        let cell = Rect::new(left, y, SWITCH, 1);
+        let on = options.is_on(index);
+        let hovered = hover.is_some_and(|h| cell.contains(h.0, h.1));
+        let fill = if on {
+            Some(theme.pick)
+        } else if hovered {
+            Some(theme.row_hover)
+        } else {
+            None
+        };
+        if fill.is_some() {
+            grid.panel(Bounds::inset(cell, 0.1, 0.06), 14, fill, None);
+        }
+        let style = Style {
+            fg: if on { theme.text.fg } else { theme.gutter.fg },
+            bg: if on { theme.pick } else { base.bg },
+            ..base
+        };
+        grid.label(left + 1, y, label, style, left + SWITCH);
+    }
+}
+
 impl Search {
     pub fn new(root: PathBuf) -> Self {
         Self {
             root,
             query: String::new(),
             replace: String::new(),
+            options: Options::default(),
             focus: None,
             results: Vec::new(),
             collapsed: HashSet::new(),
@@ -82,10 +129,10 @@ impl Search {
             return;
         }
         let (sender, receiver) = channel();
-        let (generation, query) = (self.generation, self.query.clone());
+        let (generation, query, options) = (self.generation, self.query.clone(), self.options);
         let workspace = Workspace::new(self.root.clone());
         thread::spawn(move || {
-            let _ = sender.send((generation, workspace.search(&query)));
+            let _ = sender.send((generation, workspace.search(&query, options)));
         });
         self.incoming = Some(receiver);
     }
@@ -146,6 +193,9 @@ impl Search {
 
     pub fn hit(&self, area: Rect, x: u16, y: u16) -> Option<Hit> {
         match y.checked_sub(area.y)? {
+            1 if x >= switches_start(area) && x < area.right().saturating_sub(1) => Some(
+                Hit::Switch(((x - switches_start(area)) / SWITCH).min(2) as usize),
+            ),
             1 => Some(Hit::Field(Field::Query)),
             REPLACE_ROW if x + REPLACE_ALL.len() as u16 + 2 >= area.right() => {
                 Some(Hit::ReplaceAll)
@@ -179,7 +229,7 @@ impl Search {
         let width = if field == Field::Replace {
             end.saturating_sub(area.x + 5)
         } else {
-            end.saturating_sub(area.x + 1)
+            switches_start(area).saturating_sub(area.x + 1)
         };
         let line = Rect::new(area.x + 1, y, width, 1);
         let box_state = Input {
@@ -214,6 +264,14 @@ impl Search {
             80,
         );
         self.draw_box(grid, area, area.y + 1, Field::Query, measure, theme);
+        draw_switches(
+            grid,
+            (switches_start(area), area.y + 1),
+            self.options,
+            hover,
+            theme.sidebar,
+            theme,
+        );
         self.draw_box(
             grid,
             area,
@@ -250,6 +308,11 @@ impl Search {
         let found = self.results.len();
         let summary = if self.incoming.is_some() {
             "Searching…".to_string()
+        } else if let Err(why) = self.options.matcher(&self.query)
+            && self.options.regex
+            && !self.query.is_empty()
+        {
+            why
         } else if self.query.is_empty() {
             String::new()
         } else if found == 0 {
@@ -369,7 +432,12 @@ impl Search {
                 break;
             }
         }
-        let end = (column + self.query.chars().count()).min(chars.len());
+        let length = if found.len > 0 {
+            found.len
+        } else {
+            self.query.chars().count()
+        };
+        let end = (column + length).min(chars.len());
         let before: String = chars[from..column].iter().collect();
         let hit: String = chars[column..end].iter().collect();
         let after: String = chars[end..].iter().collect();

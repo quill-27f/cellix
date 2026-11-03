@@ -556,3 +556,14 @@ Markdown without its markup, code, comments and link targets, and a LaTeX body w
 commands, `\label` and `\cite` keys or math, with pending suggestions taken as accepted. A
 selection shows as "12 of 340 words", and the count stays while tracking changes. Counted once a
 revision. Unverified: a paper split over `\input` files counts only the file in front.
+
+Search. Find in a file and Search in the project share one matcher, with VS Code's three switches:
+Match Case, Match Whole Word and Use Regular Expression, as buttons and as Alt+C, Alt+W and Alt+R.
+Find gains a replace row, on Ctrl+R or its ⇄ button (Ctrl+H is Backspace in too many terminals):
+Enter replaces the match in view and moves on, Alt+Enter or All replaces every one as one edit,
+and a regular expression's `$1` takes its group. Project search lists every match on a line, not
+the first, and Replace All uses the switches. Ctrl+\ splits the editor where the terminal sends it
+as the old 0x1c byte, which arrived as Ctrl+4. The tour has shots of both.
+
+The plan banner names the agent whose plan is waiting, from its hook's event, where it always said
+Claude Code.

@@ -1,36 +1,42 @@
 /// Most matches kept, so a one-letter search in a huge file stays quick.
 const MAX_MATCHES: usize = 10_000;
 
-/// Find in the current file. Matches are char ranges, ignoring case.
+use cellix_core::pattern::{Options, char_ranges};
+
+/// Find in the current file, and replace when that row is open. Matches are char ranges.
 #[derive(Default)]
 pub struct Find {
     pub query: String,
     pub matches: Vec<(usize, usize)>,
     pub current: usize,
-}
-
-fn folded(c: char) -> char {
-    c.to_lowercase().next().unwrap_or(c)
+    pub options: Options,
+    /// What matches become, while the replace row shows.
+    pub replace: Option<String>,
+    /// The replace field has the keyboard.
+    pub in_replace: bool,
+    /// Why the query can't be searched for, as a regular expression that doesn't parse.
+    pub invalid: Option<String>,
 }
 
 impl Find {
     /// Searches again, keeping to the first match at or after `from`.
     pub fn search(&mut self, text: &str, from: usize) {
-        let wanted: Vec<char> = self.query.chars().map(folded).collect();
-        let chars: Vec<char> = text.chars().map(folded).collect();
         self.matches.clear();
-        if !wanted.is_empty() {
-            let mut at = 0;
-            while at + wanted.len() <= chars.len() && self.matches.len() < MAX_MATCHES {
-                if chars[at..at + wanted.len()] == wanted[..] {
-                    self.matches.push((at, at + wanted.len()));
-                    at += wanted.len();
-                } else {
-                    at += 1;
-                }
-            }
+        self.invalid = None;
+        match self.options.matcher(&self.query) {
+            Ok(matcher) => self.matches = char_ranges(&matcher, text, MAX_MATCHES),
+            Err(why) if !self.query.is_empty() => self.invalid = Some(why),
+            Err(_) => {}
         }
         self.current = self.matches.iter().position(|m| m.0 >= from).unwrap_or(0);
+    }
+
+    /// The field that has the keyboard.
+    pub fn field_mut(&mut self) -> &mut String {
+        match &mut self.replace {
+            Some(with) if self.in_replace => with,
+            _ => &mut self.query,
+        }
     }
 
     pub fn step(&mut self, delta: isize) {
@@ -45,7 +51,9 @@ impl Find {
     }
 
     pub fn count_label(&self) -> String {
-        if self.matches.is_empty() {
+        if self.invalid.is_some() {
+            "Invalid".to_string()
+        } else if self.matches.is_empty() {
             "No results".to_string()
         } else {
             format!("{} of {}", self.current + 1, self.matches.len())

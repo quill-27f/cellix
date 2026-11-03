@@ -1,6 +1,7 @@
 //! Editing model: text buffers, selections, undo and the workspace tree.
 
 mod buffer;
+pub mod pattern;
 mod selection;
 mod workspace;
 

@@ -10,6 +10,10 @@ repository.workspace = true
 ropey = "1"
 unicode-width = "0.2"
 ignore = "0.4"
+regex = "1"
+
+[dev-dependencies]
+tempfile = "3"
 
 [lints]
 workspace = true
