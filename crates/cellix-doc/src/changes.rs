@@ -61,6 +61,13 @@ fn critic(chars: &[char]) -> Vec<Change> {
     let mut found = Vec::new();
     let mut at = 0;
     while at + 2 < chars.len() {
+        // A code span's text is code, marks and all.
+        if chars[at] == '`'
+            && let Some(close) = chars[at + 1..].iter().position(|c| *c == '`')
+        {
+            at += close + 2;
+            continue;
+        }
         let change = if starts(chars, at, "{++") {
             find_text(chars, at + 3, "++}").map(|close| Change {
                 start: at,
@@ -345,6 +352,15 @@ pub fn settle_all(text: &str, syntax: Syntax, accept: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn inline_code_keeps_its_marks_as_code() {
+        let text = "Use `a {++b++} c` and {++d++}.";
+        assert_eq!(
+            settle_all(text, Syntax::Critic, true),
+            "Use `a {++b++} c` and d."
+        );
+    }
+
     #[test]
     fn a_plan_compare_never_marks_across_a_line() {
         let old = "# Plan\n\n1. Add a clock.\n2. Make it injectable so tests pass.\n3. Drop the windows.\n";

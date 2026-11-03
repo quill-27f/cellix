@@ -710,3 +710,25 @@ Correctness, Evidence, Structure, Reproducibility), a kind with none in the warn
 Claude Code the mod submits the prompt as a turn; with an agent in the pane it's typed there; with
 none, it waits for the one you start. The skill and README say how. Designed on the Claude Design
 canvas first.
+
+Round ten, from the third persona reviews.
+- Plan comments reached the agent on Send back only for a plan inside the project: a plan held
+  through an agent hook lives in a private folder, and its comments were named by file name but
+  looked up by full path, so Send back went without them and the bar said "No comments". One
+  helper names them now, and a test holds the plan outside the project.
+- Approve carries the reviewer's comments, as a "Reviewer notes" section of the approved plan, so
+  a caveat reaches the agent before the work rather than with the next prompt.
+- Neovim mode: `:q!`, `:wq!`, `:x!`, `:qa!`, `ZZ` and `ZQ` ended the embedded Neovim and `:bd`
+  emptied or `:bw` locked the buffer; `:w!`, `:up` and `:wa` didn't save. Each now goes through
+  Cellix (save, close the tab, quit), and a buffer Neovim wiped is made again.
+- Under tmux Cellix asks for modifyOtherKeys as well as kitty's flags, which tmux passes on with
+  `extended-keys on` (the README's tmux setup now sets it), so Ctrl+Shift chords stop arriving
+  unshifted. Unverified in a real tmux with the option set.
+- Ctrl+R with Find open shows the replace row, where it was swallowed.
+- Accept All and export leave inline code alone: marks inside a code span are code.
+- Turning on Track Changes in a saved paper saves the `\usepackage{changes}` it adds, so the
+  agent's next edit still arrives as suggestions.
+- The rail is four columns, with icons 1.3 times larger, as the user asked.
+Still open from the reviews: every agent edit as suggestions after a partial review, Replace All
+under tracking, replies that carry rewrites, code actions, references in their own view, inverse
+SyncTeX precision, warnings as Problems, `\input` inside a paragraph, natbib forms.

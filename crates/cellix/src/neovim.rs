@@ -166,7 +166,15 @@ impl Neovim {
 
     /// Makes a file's buffer current, creating it if it's new.
     pub fn show(&mut self, path: &Path) -> Option<()> {
-        let existing = self.buffers.get(path).copied();
+        // A buffer `:bwipeout` took is gone, and a new one stands in.
+        let known = self.buffers.get(path).copied();
+        let valid = |neovim: &mut Self, buffer: i64| {
+            neovim
+                .call("nvim_buf_is_valid", vec![buffer.into()])
+                .and_then(|v| v.as_bool())
+                == Some(true)
+        };
+        let existing = known.filter(|b| valid(self, *b));
         let buffer = match existing {
             Some(buffer) => buffer,
             None => {

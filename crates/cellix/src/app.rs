@@ -54,7 +54,7 @@ use crate::theme::Theme;
 use crate::threads::{self, Draft, Hit as ThreadHit};
 use crate::toolbar::{self, Bar, Tool};
 
-const ACTIVITY_WIDTH: u16 = 3;
+const ACTIVITY_WIDTH: u16 = 4;
 /// The buttons that stand by a selection, and the one on a picture.
 const COMMENT_WIDTH: u16 = 10;
 const RUN_WIDTH: u16 = 6;
@@ -95,9 +95,9 @@ const ACTION_MARGIN: u16 = 1;
 /// Rows tall a rail icon is on the pixel tiers. Text cells keep their block art.
 /// Larger than the top right icons' box, since line icons fill less of theirs, so the two
 /// sets look the same size.
-const RAIL_ICON: f32 = 0.7;
+const RAIL_ICON: f32 = 0.91;
 /// The pill behind the rail icon that's showing, in columns and rows. Pixels only.
-const RAIL_PILL: (f32, f32) = (2.4, 0.94);
+const RAIL_PILL: (f32, f32) = (3.1, 0.98);
 /// Where the pane's own close button stands, which they keep clear of.
 const PANE_CLOSE: u16 = 3;
 /// Columns kept for tabs beside them, in the pane and over the file. A window with less goes
@@ -708,6 +708,8 @@ pub struct App {
     pane_explained: bool,
     /// A comment waiting for an agent to be started.
     pending_ask: Option<u32>,
+    /// A `Z` typed in Neovim's normal mode, waiting to see if it's `ZZ` or `ZQ`.
+    neovim_z: bool,
     /// A review check waiting for an agent to be started.
     pending_review: Option<String>,
     /// A prompt for the agent this Cellix is a pane in, for the mod to submit.
@@ -786,6 +788,7 @@ impl App {
             clipboard_image: clipboard_image_command(),
             pending_ask: None,
             pending_review: None,
+            neovim_z: false,
             outgoing_prompt: None,
             export_to: None,
             comment_quote: None,
@@ -3618,10 +3621,14 @@ impl App {
         // The `:` commands that mean something to the app, not to a scratch buffer.
         if key.key == Key::Enter && !self.neovim_line.is_empty() {
             let command = match self.neovim_line.as_str() {
-                "w" => Some(vec![Command::Save]),
-                "q" => Some(vec![Command::CloseTab]),
-                "wq" | "x" => Some(vec![Command::Save, Command::CloseTab]),
-                "qa" => Some(vec![Command::Quit]),
+                "w" | "w!" | "up" | "update" | "wa" | "wall" => Some(vec![Command::Save]),
+                "q" | "q!" | "close" | "bd" | "bd!" | "bw" | "bw!" | "bdelete" | "bwipeout" => {
+                    Some(vec![Command::CloseTab])
+                }
+                "wq" | "wq!" | "x" | "x!" | "xit" | "exit" => {
+                    Some(vec![Command::Save, Command::CloseTab])
+                }
+                "qa" | "qa!" | "qall" | "quitall" | "wqa" | "xa" => Some(vec![Command::Quit]),
                 _ => None,
             };
             if let Some(commands) = command {
@@ -3634,6 +3641,32 @@ impl App {
                     self.run(command);
                 }
                 return true;
+            }
+        }
+        // `ZZ` and `ZQ` would end Neovim: they save and close, or close, the tab instead.
+        if self.neovim_mode == "NORMAL" && self.neovim_line.is_empty() {
+            let z = self.neovim_z;
+            self.neovim_z = false;
+            match (z, key.key) {
+                (false, Key::Char('Z')) if !key.mods.ctrl && !key.mods.alt => {
+                    self.neovim_z = true;
+                    return true;
+                }
+                (true, Key::Char('Z')) => {
+                    self.run(Command::Save);
+                    self.run(Command::CloseTab);
+                    return true;
+                }
+                (true, Key::Char('Q')) => {
+                    self.run(Command::CloseTab);
+                    return true;
+                }
+                (true, _) => {
+                    if let Some(neovim) = &mut self.neovim {
+                        neovim.input("Z");
+                    }
+                }
+                _ => {}
             }
         }
         let same_file = self.neovim_file.as_ref().map(|f| f.0.as_path()) == Some(path.as_path());
@@ -3666,6 +3699,9 @@ impl App {
         if state.strayed {
             self.neovim_mode = "NORMAL".to_string();
             self.neovim_line.clear();
+            // Neovim may have emptied or wiped the buffer on its way out, so the next key
+            // shows the file again and sends its text.
+            self.neovim_file = None;
             self.say(
                 "Open files with Ctrl+P and split with Ctrl+\\: Neovim here edits the file in view",
             );
@@ -4029,6 +4065,10 @@ impl App {
                 return;
             }
             Key::Char(c) if key.mods.alt && find.options.flip_key(c) => searched = true,
+            Key::Char('r' | 'R') if key.mods.ctrl => {
+                find.replace = Some(find.replace.take().unwrap_or_default());
+                find.in_replace = !find.query.is_empty();
+            }
             Key::Tab | Key::BackTab if find.replace.is_some() => find.in_replace = !find.in_replace,
             Key::Enter if find.in_replace && key.mods.alt => {
                 self.overlay = Overlay::Find(find);
@@ -4561,6 +4601,19 @@ impl App {
                     .iter()
                     .find(|e| path.is_some() && e.buffer.path() == path && e.buffer.is_dirty())
                     .map(|e| e.buffer.text());
+                // Comments made before approving go with the plan, so the agent has them
+                // before the work, not after it.
+                let notes = path.map(|p| self.plan_notes(p)).unwrap_or_default();
+                let edited = if notes.is_empty() {
+                    edited
+                } else {
+                    let plan =
+                        edited.or_else(|| path.and_then(|p| std::fs::read_to_string(p).ok()));
+                    Some(format!(
+                        "{}\n\n## Reviewer notes\n\n{notes}",
+                        plan.unwrap_or_default().trim_end()
+                    ))
+                };
                 self.finish_plan(Decision::Approve(edited));
             }
             Command::SendBackPlan => {
@@ -4620,7 +4673,13 @@ impl App {
             }
             Command::ToggleTracking => {
                 if let Some(editor) = self.editor_mut() {
+                    let saved = !editor.buffer.is_dirty();
                     let on = editor.toggle_tracking();
+                    // A paper gains `\\usepackage{changes}`; saved before, saved after, so an
+                    // agent's next edit still arrives as suggestions.
+                    if saved && editor.buffer.is_dirty() {
+                        let _ = editor.buffer.save();
+                    }
                     self.say(if on {
                         "Track changes is on: edits are kept as suggestions"
                     } else {
@@ -5499,7 +5558,7 @@ impl App {
 
     /// The comments on a plan and any edits to it, as an answer the agent can act on.
     fn plan_feedback(&self, path: &Path, note: &str) -> String {
-        let file = self.relative(path);
+        let file = self.comment_file(path);
         let mut comments = self
             .comments
             .lock()
@@ -5519,6 +5578,20 @@ impl App {
             text.push_str(&editor.buffer.text());
         }
         text
+    }
+
+    /// The reviewer's comments on a plan, one line each with what they're about.
+    fn plan_notes(&self, path: &Path) -> String {
+        let file = self.comment_file(path);
+        let comments = self
+            .comments
+            .lock()
+            .map_or_else(|_| Vec::new(), |c| c.clone());
+        let mut mine: Vec<&Comment> = comments.iter().filter(|c| c.file == file).collect();
+        mine.sort_by_key(|c| c.line);
+        mine.iter()
+            .map(|c| format!("- {}\n", c.message()))
+            .collect()
     }
 
     /// Keeps an approved plan with the project: the agent's copy goes when the session does,
@@ -5546,7 +5619,7 @@ impl App {
         }
         let _ = plan.reply.send(decision);
         self.agents.plan_answered();
-        let file = self.relative(&plan.path);
+        let file = self.comment_file(&plan.path);
         if let Ok(mut comments) = self.comments.lock() {
             comments.retain(|c| c.file != file);
         }
@@ -5872,6 +5945,18 @@ impl App {
         }
     }
 
+    /// How comments name a file: from the project's root, or by its name alone when it's
+    /// outside, as a plan held in a private folder is.
+    fn comment_file(&self, path: &Path) -> String {
+        let relative = self.relative(path);
+        if Path::new(&relative).is_absolute() {
+            path.file_name()
+                .map_or(relative, |n| n.to_string_lossy().into_owned())
+        } else {
+            relative
+        }
+    }
+
     fn relative(&self, path: &Path) -> String {
         path.strip_prefix(self.workspace.root())
             .unwrap_or(path)
@@ -5894,9 +5979,7 @@ impl App {
         let quote = quote.lines().next().unwrap_or_default().trim().to_string();
         // A plan lives in a private folder, so it goes by its name, not that folder's path.
         let file = if answering && Path::new(&file).is_absolute() {
-            Path::new(&file)
-                .file_name()
-                .map_or(file.clone(), |n| n.to_string_lossy().into_owned())
+            self.comment_file(Path::new(&file))
         } else {
             file
         };
@@ -11739,6 +11822,95 @@ mod tests {
         assert_eq!(carried[0].text, "Too big");
         assert_eq!(carried[0].quote, "# Plan");
         assert!(!carried[0].waiting(), "the agent heard it with the plan");
+    }
+
+    #[test]
+    fn a_plan_held_outside_the_project_sends_its_comments_and_approves_with_notes() {
+        let (_dir, mut app) = project();
+        let held = tempfile::tempdir().unwrap();
+        let path = held.path().join("Plan.md");
+        fs::write(&path, "# Plan\n\nDelete the old function\n").unwrap();
+        let (reply, decision) = std::sync::mpsc::channel();
+        app.serve(Request::Plan {
+            path: path.clone(),
+            reply,
+        });
+        app.run(Command::AddComment);
+        typed(&mut app, "Keep it for now");
+        enter(&mut app);
+        app.run(Command::ApprovePlan);
+        let Ok(Decision::Approve(Some(text))) = decision.try_recv() else {
+            panic!("approved with the plan and its notes");
+        };
+        assert!(text.contains("## Reviewer notes"), "{text}");
+        assert!(text.contains("Keep it for now"), "{text}");
+        let (reply, decision) = std::sync::mpsc::channel();
+        app.serve(Request::Plan { path, reply });
+        app.run(Command::AddComment);
+        typed(&mut app, "Split it");
+        enter(&mut app);
+        let (x, y) = find(&screen(&app), SEND_BACK);
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        typed(&mut app, "See comments");
+        enter(&mut app);
+        let Ok(Decision::SendBack(text)) = decision.try_recv() else {
+            panic!("no answer");
+        };
+        assert!(
+            text.contains("Split it"),
+            "the comment goes with it: {text}"
+        );
+    }
+
+    #[test]
+    fn neovim_ends_and_wipes_go_through_cellix() {
+        let Some((_dir, mut app, path)) = neovim_app() else {
+            return;
+        };
+        typed(&mut app, ":bd");
+        enter(&mut app);
+        assert!(app.editors.is_empty(), ":bd closes the tab");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "one\ntwo\nthree\n",
+            "and empties nothing"
+        );
+        app.open(&path).unwrap();
+        typed(&mut app, "x");
+        typed(&mut app, ":w!");
+        enter(&mut app);
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "ne\ntwo\nthree\n",
+            ":w! saves"
+        );
+        typed(&mut app, "xZZ");
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "e\ntwo\nthree\n",
+            "ZZ saves"
+        );
+        assert!(app.editors.is_empty(), "and closes the tab");
+    }
+
+    #[test]
+    fn ctrl_r_opens_replace_with_find_already_open() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        app.run(Command::FindInFile);
+        typed(&mut app, "line");
+        app.handle(Event::Key(KeyEvent {
+            key: Key::Char('r'),
+            mods: cellix_input::Mods {
+                ctrl: true,
+                ..cellix_input::Mods::default()
+            },
+        }));
+        let Overlay::Find(find) = &app.overlay else {
+            panic!("Find is still open");
+        };
+        assert!(find.replace.is_some() && find.in_replace);
+        assert_eq!(find.query, "line", "nothing typed into the query");
     }
 
     #[test]

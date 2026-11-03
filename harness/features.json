@@ -2777,5 +2777,33 @@
     "title": "A verdict reads its word and kind",
     "test": "a_verdict_reads_its_word_and_kind",
     "passes": true
+  },
+  {
+    "id": "plan-outside-project",
+    "milestone": 10,
+    "title": "A plan held outside the project sends its comments, and approves with notes",
+    "test": "a_plan_held_outside_the_project_sends_its_comments_and_approves_with_notes",
+    "passes": true
+  },
+  {
+    "id": "neovim-ends",
+    "milestone": 10,
+    "title": "Neovim's ends and wipes go through Cellix",
+    "test": "neovim_ends_and_wipes_go_through_cellix",
+    "passes": true
+  },
+  {
+    "id": "find-ctrl-r",
+    "milestone": 10,
+    "title": "Ctrl+R opens Replace with Find already open",
+    "test": "ctrl_r_opens_replace_with_find_already_open",
+    "passes": true
+  },
+  {
+    "id": "critic-code",
+    "milestone": 10,
+    "title": "Inline code keeps its marks as code",
+    "test": "inline_code_keeps_its_marks_as_code",
+    "passes": true
   }
 ]

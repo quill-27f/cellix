@@ -58,6 +58,11 @@ impl Session {
             // and Cmd keys then can't be told apart: F1 and Alt+P still open commands.
             PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
         )?;
+        // tmux ignores kitty's flags but passes modified keys on with its extended-keys, once
+        // asked this way, so Ctrl+Shift+P stops arriving as Ctrl+P.
+        if std::env::var_os("TMUX").is_some() {
+            execute!(io::stdout(), Print("\x1b[>4;2m"))?;
+        }
         Ok(Self)
     }
 }
@@ -68,6 +73,11 @@ impl Drop for Session {
             io::stdout(),
             PopKeyboardEnhancementFlags,
             Print("\x1b[?1016l"),
+            Print(if std::env::var_os("TMUX").is_some() {
+                "\x1b[>4;0m"
+            } else {
+                ""
+            }),
             DisableBracketedPaste,
             DisableMouseCapture,
             DisableFocusChange,
