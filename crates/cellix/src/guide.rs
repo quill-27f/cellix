@@ -12,7 +12,7 @@ Cellix is an editor for working beside agents, and for writing. Everything here 
 
 ## Work beside an agent
 
-1. Click the **Agents** icon on the left, the fourth one down.
+1. Click the **Agents** icon at the top right, the last of the five.
 2. Pick an agent. It starts on the right, in this project, and it's the real program.
 3. Click a file in the sidebar. It opens beside the agent, so you see what it changes as it changes it.
 4. Press `Ctrl+`` ` to move the keyboard between the file and the agent.

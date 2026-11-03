@@ -494,3 +494,11 @@ the 0.0.1 placeholder until the user publishes with their own token, so the READ
 for now. The README still lacks a screenshot from inside Claude Code: a scripted Ghostty window never
 opened here, and the user is sending one.
 
+The README opens with a real screenshot of Cellix inside Claude Code: a Ghostty window started with
+`open -na`, Claude Code fed its keys through `harness/live/pty_inject.py`, the window captured with
+`screencapture -l`, in a scratch folder the user trusted. Ghostty's own binary started from a script
+never opened a window. `/cellix` takes no file, so `/cellix-open <file>` is the one for a document. A
+second Claude Code in the same folder waits on "Starting Cellix…" while the first still holds its
+Cellix, which is worth fixing. The Getting Started guide and `samples/writing.md` still put the
+Agents icon on the left, and now say the top right.
+

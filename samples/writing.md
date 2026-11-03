@@ -8,7 +8,7 @@ author: Try changing anything here
 Click anywhere and type. This file is yours to break: nothing here is precious. Each section says what to **try**, so you can use it as a checklist.
 
 > [!TIP]
-> Open the Agents icon on the left and start an agent beside this page, then select any words here. **Comment** and **Ask Agent** appear next to them.
+> Open the Agents icon at the top right and start an agent beside this page, then select any words here. **Comment** and **Ask Agent** appear next to them.
 
 ## Text
 
@@ -218,7 +218,7 @@ These words are wrong on purpose: this sentance has a mispelled word, and this a
 
 ## Comments with an agent
 
-1. Start an agent from the Agents icon.
+1. Start an agent from the Agents icon at the top right.
 2. Select words here and press **Ask Agent**.
 3. Write your question and press Enter.
 4. Its answer lands under your comment in the side pane.

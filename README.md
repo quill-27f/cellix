@@ -13,6 +13,8 @@ answer back. Select any sentence, formula or figure and leave a comment, and the
 the file, the line and the quote. Plans wait for your approval, edits arrive as diffs you accept hunk
 by hunk, and a turn you don't like can be undone. It works the same over SSH.
 
+![Claude Code rewriting a paragraph, with Cellix inside it showing the page and the change](docs/images/inside-claude.png)
+
 ## Install
 
 ```sh
