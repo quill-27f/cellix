@@ -46,6 +46,9 @@ pub enum Icon {
     AddText = 36,
     Terminal = 37,
     Diff = 38,
+    Replace = 39,
+    ArrowUp = 40,
+    ArrowDown = 41,
 }
 
 /// One cell of an icon that is `width` by `height` cells.
@@ -106,7 +109,10 @@ impl Piece {
             Icon::Outline => 5,
             other => (other as usize).min(3),
         };
-        if self.width == 1 {
+        if self.width == 1 || self.height == 1 {
+            if self.column > 0 {
+                return " ";
+            }
             return match self.icon {
                 Icon::Files => "▤",
                 Icon::Search => "⌕",
@@ -156,42 +162,19 @@ fn rounded(p: Point, min: Point, max: Point, radius: f32) -> f32 {
     (outside + qx.max(qy).min(0.0) - radius).abs()
 }
 
-/// A page with its top right corner folded, starting at `x` across and `top` down.
-fn page(p: Point, left: f32, right: f32, top: f32, bottom: f32) -> f32 {
-    const FOLD: f32 = 4.5;
-    const CORNER: f32 = 1.5;
-    let (fold_x, fold_y) = (right - FOLD, top + FOLD);
-    let outline = path(
-        p,
-        &[
-            (fold_x, top),
-            (left + CORNER, top),
-            (left, top + CORNER),
-            (left, bottom - CORNER),
-            (left + CORNER, bottom),
-            (right - CORNER, bottom),
-            (right, bottom - CORNER),
-            (right, fold_y),
-            (fold_x, top),
-        ],
-    );
-    outline.min(path(p, &[(fold_x, top), (fold_x, fold_y), (right, fold_y)]))
-}
-
-/// A ring, a hub and eight short teeth. Traced teeth turn to whiskers at this size.
-fn gear(p: Point) -> f32 {
-    const CENTRE: Point = (12.0, 12.0);
-    const BODY: f32 = 6.6;
-    const REACH: f32 = 9.8;
-    const TEETH: usize = 8;
-    /// Each tooth is heavier than the line, so it reads as a solid part of the wheel.
-    const TOOTH_EXTRA: f32 = 0.55;
-    let (x, y) = (p.0 - CENTRE.0, p.1 - CENTRE.1);
-    let step = std::f32::consts::TAU / TEETH as f32;
-    let nearest = (y.atan2(x) / step).round() * step;
-    let at = |radius: f32| (12.0 + radius * nearest.cos(), 12.0 + radius * nearest.sin());
-    let tooth = segment(p, at(BODY), at(REACH)) - TOOTH_EXTRA;
-    ring(p, CENTRE, BODY).min(ring(p, CENTRE, 2.6)).min(tooth)
+/// A box at the bottom left, an arrow turning up from it, and the corners of the box it
+/// becomes at the top right.
+fn replace(p: Point) -> f32 {
+    rounded(p, (2.0, 14.0), (10.0, 22.0), 2.0)
+        .min(path(
+            p,
+            &[(6.0, 10.0), (6.0, 5.0), (6.9, 2.9), (9.0, 2.0), (10.0, 2.0)],
+        ))
+        .min(path(p, &[(3.0, 7.0), (6.0, 10.0), (9.0, 7.0)]))
+        .min(path(p, &[(14.0, 4.0), (14.6, 2.6), (16.0, 2.0)]))
+        .min(path(p, &[(16.0, 10.0), (14.6, 9.4), (14.0, 8.0)]))
+        .min(path(p, &[(20.0, 2.0), (21.4, 2.6), (22.0, 4.0)]))
+        .min(path(p, &[(22.0, 8.0), (21.4, 9.4), (20.0, 10.0)]))
 }
 
 /// Whether a point is inside a box with round corners.
@@ -225,7 +208,8 @@ fn solid(icon: Icon, p: Point) -> Option<bool> {
 /// small ones are heavier so they keep their weight at a few pixels across.
 fn half_stroke(icon: Icon) -> f32 {
     match icon {
-        Icon::Files | Icon::Search | Icon::Git | Icon::Settings | Icon::Agents => 0.8,
+        Icon::Files | Icon::Search | Icon::Git | Icon::Settings | Icon::Outline => 0.9,
+        Icon::Agents => 0.8,
         Icon::Check => 1.7,
         _ => 1.15,
     }
@@ -239,11 +223,45 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
         return ink;
     }
     let distance = match icon {
-        Icon::Files => {
-            let back = path(p, &[(9.0, 2.5), (15.0, 2.5), (20.5, 8.0), (20.5, 17.5)]);
-            back.min(page(p, 4.0, 16.0, 6.5, 21.5))
-        }
-        Icon::Search => ring(p, (10.5, 10.5), 7.0).min(segment(p, (15.6, 15.6), (21.0, 21.0))),
+        // A page with its corner folded, and the edge of one behind it.
+        Icon::Files => path(
+            p,
+            &[
+                (9.0, 18.0),
+                (7.6, 17.4),
+                (7.0, 16.0),
+                (7.0, 4.0),
+                (7.6, 2.6),
+                (9.0, 2.0),
+                (16.0, 2.0),
+                (20.0, 6.0),
+                (20.0, 16.0),
+                (19.4, 17.4),
+                (18.0, 18.0),
+                (9.0, 18.0),
+            ],
+        )
+        .min(path(
+            p,
+            &[
+                (20.0, 7.0),
+                (17.0, 7.0),
+                (15.6, 6.4),
+                (15.0, 5.0),
+                (15.0, 2.0),
+            ],
+        ))
+        .min(path(
+            p,
+            &[
+                (3.0, 7.6),
+                (3.0, 20.4),
+                (3.5, 21.5),
+                (4.6, 22.0),
+                (14.4, 22.0),
+            ],
+        )),
+        Icon::Search => ring(p, (11.0, 11.0), 7.0).min(segment(p, (16.65, 16.65), (20.0, 20.0))),
         Icon::Git => {
             let joint = (9.0, 9.0);
             let quarter = p.0 >= joint.0 && p.1 >= joint.1;
@@ -257,7 +275,11 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
                 .min(segment(p, (6.0, 3.0), (6.0, 15.0)))
                 .min(curve)
         }
-        Icon::Settings => gear(p),
+        // Two sliders, as settings are in most of today's apps.
+        Icon::Settings => segment(p, (20.0, 7.0), (11.0, 7.0))
+            .min(segment(p, (14.0, 17.0), (5.0, 17.0)))
+            .min(ring(p, (17.0, 17.0), 3.0))
+            .min(ring(p, (7.0, 7.0), 3.0)),
         Icon::Agents => rounded(p, (4.0, 8.5), (20.0, 20.5), 3.0)
             .min(path(p, &[(12.0, 8.5), (12.0, 3.5), (8.5, 3.5)]))
             .min(segment(p, (9.0, 13.0), (9.0, 15.5)))
@@ -265,9 +287,30 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
             .min(segment(p, (1.5, 14.5), (4.0, 14.5)))
             .min(segment(p, (20.0, 14.5), (22.5, 14.5))),
         Icon::Folder | Icon::FolderOpen | Icon::File => f32::MAX,
-        Icon::Outline => path(p, &[(4.0, 6.0), (20.0, 6.0)])
-            .min(path(p, &[(8.0, 12.0), (20.0, 12.0)]))
-            .min(path(p, &[(12.0, 18.0), (20.0, 18.0)])),
+        // A tree of headings.
+        Icon::Outline => segment(p, (21.0, 6.0), (8.0, 6.0))
+            .min(segment(p, (21.0, 12.0), (13.0, 12.0)))
+            .min(segment(p, (21.0, 18.0), (13.0, 18.0)))
+            .min(path(
+                p,
+                &[
+                    (3.0, 6.0),
+                    (3.0, 10.0),
+                    (3.6, 11.4),
+                    (5.0, 12.0),
+                    (8.0, 12.0),
+                ],
+            ))
+            .min(path(
+                p,
+                &[
+                    (3.0, 10.0),
+                    (3.0, 16.0),
+                    (3.6, 17.4),
+                    (5.0, 18.0),
+                    (8.0, 18.0),
+                ],
+            )),
         Icon::ListBullet => (circle(p, (5.0, 6.5)) - 0.4)
             .min(circle(p, (5.0, 12.0)) - 0.4)
             .min(circle(p, (5.0, 17.5)) - 0.4)
@@ -394,8 +437,40 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
         Icon::Close => {
             segment(p, (6.5, 6.5), (17.5, 17.5)).min(segment(p, (17.5, 6.5), (6.5, 17.5)))
         }
-        Icon::ReplaceAll => path(p, &[(3.0, 8.0), (19.5, 8.0), (15.0, 3.5)])
-            .min(path(p, &[(21.0, 16.0), (4.5, 16.0), (9.0, 20.5)])),
+        Icon::Replace => replace(p),
+        Icon::ArrowUp => path(p, &[(5.0, 12.0), (12.0, 5.0), (19.0, 12.0)]).min(segment(
+            p,
+            (12.0, 5.0),
+            (12.0, 19.0),
+        )),
+        Icon::ArrowDown => path(p, &[(19.0, 12.0), (12.0, 19.0), (5.0, 12.0)]).min(segment(
+            p,
+            (12.0, 5.0),
+            (12.0, 19.0),
+        )),
+        Icon::ReplaceAll => replace(p)
+            .min(path(
+                p,
+                &[
+                    (14.0, 14.0),
+                    (15.4, 14.6),
+                    (16.0, 16.0),
+                    (16.0, 20.0),
+                    (15.4, 21.4),
+                    (14.0, 22.0),
+                ],
+            ))
+            .min(path(
+                p,
+                &[
+                    (20.0, 14.0),
+                    (21.4, 14.6),
+                    (22.0, 16.0),
+                    (22.0, 20.0),
+                    (21.4, 21.4),
+                    (20.0, 22.0),
+                ],
+            )),
         Icon::Check => path(p, &[(4.5, 12.5), (9.5, 17.5), (19.5, 6.5)]),
         Icon::Terminal => path(p, &[(3.5, 6.0), (10.0, 12.0), (3.5, 18.0)]).min(segment(
             p,

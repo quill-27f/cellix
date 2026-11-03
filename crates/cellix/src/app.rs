@@ -54,7 +54,7 @@ use crate::theme::Theme;
 use crate::threads::{self, Draft, Hit as ThreadHit};
 use crate::toolbar::{self, Bar, Tool};
 
-const ACTIVITY_WIDTH: u16 = 4;
+const ACTIVITY_WIDTH: u16 = 3;
 /// The buttons that stand by a selection, and the one on a picture.
 const COMMENT_WIDTH: u16 = 10;
 const RUN_WIDTH: u16 = 6;
@@ -76,9 +76,9 @@ const ACTIVITY: [(Icon, Command); 5] = [
     (Icon::Settings, Command::OpenSettings),
 ];
 /// Cells each activity icon spans.
-const ACTIVITY_ICON: (u8, u8) = (3, 2);
+const ACTIVITY_ICON: (u8, u8) = (2, 1);
 /// Rows from one activity icon to the next.
-const ACTIVITY_STEP: u16 = 3;
+const ACTIVITY_STEP: u16 = 1;
 /// What's in reach at the top right, as in a desktop app, whatever the pane is showing.
 const PANE_ACTIONS: [(Icon, Command, &str); 5] = [
     (Icon::Comment, Command::ShowComments, "Comments"),
@@ -93,9 +93,9 @@ const ACTION_ICON: f32 = 0.62;
 /// Columns kept clear on each side of the whole bar.
 const ACTION_MARGIN: u16 = 1;
 /// Rows tall a rail icon is on the pixel tiers. Text cells keep their block art.
-const RAIL_ICON: f32 = 0.66;
+const RAIL_ICON: f32 = 0.52;
 /// The pill behind the rail icon that's showing, in columns and rows. Pixels only.
-const RAIL_PILL: (f32, f32) = (2.6, 1.3);
+const RAIL_PILL: (f32, f32) = (2.2, 0.86);
 /// Where the pane's own close button stands, which they keep clear of.
 const PANE_CLOSE: u16 = 3;
 /// Columns kept for tabs beside them, in the pane and over the file. A window with less goes
@@ -108,7 +108,7 @@ const STACK_SHARE: u16 = 45;
 /// Rows each side keeps, however far the line between them is dragged.
 const STACK_LEAST: u16 = 6;
 const APPROVE: &str = "[Approve]";
-const FIND_WIDTH: u16 = 64;
+const FIND_WIDTH: u16 = 58;
 const CONFIRM_WIDTH: u16 = 56;
 const CONFIRM_HEIGHT: u16 = 6;
 /// Columns around a dialog button's label.
@@ -121,12 +121,12 @@ const TAB_PADDING: u16 = 5;
 const PILL_RADIUS: u8 = 30;
 /// What the explorer's status holds for a folder with changes inside, not a file.
 const DIRECTORY_MARK: char = '•';
-const BADGE_SIZE: u8 = 62;
+const BADGE_SIZE: u8 = 56;
 const SUGGEST_WIDTH: u16 = 42;
-const FIND_BUTTON: u16 = 3;
-const FIND_BUTTONS: [&str; 4] = ["↑", "↓", "⇄", "×"];
-/// The replace row's buttons, and their widths.
-const REPLACE_BUTTONS: [(&str, u16); 2] = [("Replace", 9), ("Replace All", 13)];
+const FIND_BUTTON: u16 = 2;
+const FIND_BUTTONS: [Icon; 3] = [Icon::ArrowUp, Icon::ArrowDown, Icon::Close];
+/// Columns for the chevron that shows the replace row.
+const FIND_CHEVRON: u16 = 2;
 /// Columns kept for the Find bar's count, "12 of 340" or "No results".
 const FIND_COUNT: u16 = 11;
 /// The three search switches, three columns each.
@@ -143,11 +143,13 @@ const PANE_CLOSE_REACH: u16 = 3;
 const TOOLTIP_HEIGHT: f32 = 1.22;
 const TOOLTIP_SIZE: u8 = 92;
 /// What each button is called, in order, since they're only icons and marks.
-const FIND_NAMES: [&str; 4] = [
-    "Previous match",
-    "Next match",
+const FIND_NAMES: [&str; 6] = [
+    "Previous Match (Shift+Enter)",
+    "Next Match (Enter)",
+    "Close (Escape)",
     "Toggle Replace (Ctrl+R)",
-    "Close",
+    "Replace (Enter)",
+    "Replace All (Alt+Enter)",
 ];
 const RAIL_NAMES: [&str; 5] = ["Files", "Search", "Outline", "Source Control", "Settings"];
 /// Below this width, opening the side pane puts the sidebar away.
@@ -3952,25 +3954,52 @@ impl App {
         let pane = self.focused_area();
         let width = FIND_WIDTH.min(pane.w);
         let x = pane.right().saturating_sub(width + 1).max(pane.x);
-        Rect::new(x, pane.y, width, if replacing { 4 } else { 3 })
+        // Just its rows: the panel is painted around them, so it's no taller than it needs.
+        Rect::new(x, pane.y + 1, width, if replacing { 2 } else { 1 })
     }
 
     /// The Find bar's parts: the field, where the switches start inside it, and where the
-    /// count and then the buttons start. The replace row's field is as wide as the find field,
-    /// with its buttons straight after.
+    /// count and then the buttons start. A chevron stands before the field, and the replace
+    /// row's field is as wide, with its two buttons straight after.
     fn find_layout(area: Rect) -> (Rect, u16, u16, u16) {
         let first = area.right() - FIND_BUTTON * FIND_BUTTONS.len() as u16 - 1;
         let count = first.saturating_sub(FIND_COUNT);
-        let field = Rect::new(area.x + 1, area.y + 1, count.saturating_sub(area.x + 2), 1);
+        let left = area.x + 1 + FIND_CHEVRON;
+        let field = Rect::new(left, area.y, count.saturating_sub(left + 1), 1);
         let switches = field.right().saturating_sub(SWITCHES_WIDTH + 1);
         (field, switches, count, first)
+    }
+
+    /// One of the Find bar's icon buttons, with a wash under the pointer and a lit chip when on.
+    fn find_button(&self, grid: &mut Grid, cell: Rect, icon: Icon, lit: bool) {
+        let theme = &self.theme;
+        let hovered = self.hover.is_some_and(|h| cell.contains(h.0, h.1));
+        let chip = Bounds::inset(cell, 0.2, 0.15);
+        if lit {
+            grid.panel(chip, 14, Some(theme.pick), Some(theme.focus));
+        } else if hovered {
+            grid.panel(chip, 14, Some(theme.popup_hover), None);
+        }
+        let base = Style {
+            fg: theme.text.fg,
+            bg: if lit { theme.pick } else { theme.popup },
+            ..theme.bar
+        };
+        toolbar::draw_icon(grid, (icon, 0.5), cell, theme.text.fg, base);
     }
 
     fn draw_find(&self, grid: &mut Grid, find: &Find) {
         let theme = &self.theme;
         let area = self.find_bar_for(find.replace.is_some());
-        popup(grid, area, theme);
+        crate::palette::raised(grid, area, theme);
         let (line, switches, count_x, first) = Self::find_layout(area);
+        let chevron = if find.replace.is_some() {
+            Icon::ChevronDown
+        } else {
+            Icon::ChevronRight
+        };
+        let toggle = Rect::new(area.x + 1, area.y, FIND_CHEVRON, 1);
+        self.find_button(grid, toggle, chevron, false);
         let text = Input {
             text: &find.query,
             hint: "Find",
@@ -3986,7 +4015,7 @@ impl App {
         // Inside the field's end, as VS Code has them.
         crate::search::draw_switches(
             grid,
-            (switches, area.y + 1),
+            (switches, area.y),
             find.options,
             self.hover,
             Style {
@@ -3995,9 +4024,14 @@ impl App {
             },
             theme,
         );
-        grid.label(count_x + 1, area.y + 1, &find.count_label(), base, first);
+        grid.label(count_x + 1, area.y, &find.count_label(), base, first);
+        let mut x = first;
+        for icon in FIND_BUTTONS {
+            self.find_button(grid, Rect::new(x, area.y, FIND_BUTTON, 1), icon, false);
+            x += FIND_BUTTON;
+        }
         if let Some(with) = &find.replace {
-            let row = Rect::new(line.x, area.y + 2, line.w, 1);
+            let row = Rect::new(line.x, area.y + 1, line.w, 1);
             let text = Input {
                 text: with,
                 hint: "Replace",
@@ -4006,101 +4040,49 @@ impl App {
             };
             input(grid, row, &text, &*self.measure, theme);
             let mut x = row.right() + 1;
-            for (label, width) in REPLACE_BUTTONS {
-                let button = Rect::new(x, area.y + 2, width, 1);
-                let fill = if self.hover.is_some_and(|h| button.contains(h.0, h.1)) {
-                    theme.popup_hover
-                } else {
-                    theme.quiet_button(theme.popup)
-                };
-                grid.panel(Bounds::inset(button, 0.15, 0.17), 14, Some(fill), None);
-                let style = Style {
-                    fg: theme.text.fg,
-                    bg: fill,
-                    ..base
-                };
-                // Centred in its chip, by the label's real width.
-                let font = Font {
-                    size: 95,
-                    ..Font::default()
-                };
-                let inside = (width as f32 - self.measure.width(label, font)) / 2.0;
-                let first = x + ((width - label.chars().count() as u16) / 2);
-                grid.label_at(
-                    x as f32 + inside,
-                    first,
-                    area.y + 2,
-                    label,
-                    style,
-                    x + width,
-                    95,
-                );
-                x += width + 1;
+            for icon in [Icon::Replace, Icon::ReplaceAll] {
+                self.find_button(grid, Rect::new(x, area.y + 1, FIND_BUTTON, 1), icon, false);
+                x += FIND_BUTTON;
             }
-        }
-        let mut x = first;
-        for (index, label) in FIND_BUTTONS.iter().enumerate() {
-            let button = Rect::new(x, area.y + 1, FIND_BUTTON, 1);
-            let on_it = self.hover.is_some_and(|h| button.contains(h.0, h.1));
-            // The replace toggle stays lit while its row is open.
-            let lit = index == 2 && find.replace.is_some();
-            if lit {
-                let chip = Bounds::inset(button, 0.1, 0.17);
-                grid.panel(chip, 14, Some(theme.pick), Some(theme.focus));
-            } else if on_it {
-                let pill = Bounds::inset(button, 0.1, 0.055);
-                grid.panel(pill, 18, Some(theme.popup_hover), None);
-            }
-            let style = if on_it || lit {
-                Style {
-                    fg: theme.text.fg,
-                    bg: if lit { theme.pick } else { base.bg },
-                    ..base
-                }
-            } else {
-                base
-            };
-            grid.label(x + 1, area.y + 1, label, style, area.right());
-            x += FIND_BUTTON;
         }
     }
 
     fn click_find(&mut self, mut find: Find, x: u16, y: u16) {
         let area = self.find_bar_for(find.replace.is_some());
         let (field, switches, _, first) = Self::find_layout(area);
-        if find.replace.is_some() && y == area.y + 2 && area.contains(x, y) {
+        let toggle = Rect::new(area.x + 1, area.y, FIND_CHEVRON, 1);
+        if toggle.contains(x, y) {
+            find.replace = match find.replace {
+                Some(_) => None,
+                None => Some(String::new()),
+            };
+            find.in_replace = find.replace.is_some() && !find.query.is_empty();
+            self.overlay = Overlay::Find(find);
+            return;
+        }
+        if find.replace.is_some() && y == area.y + 1 && area.contains(x, y) {
             let buttons = field.right() + 1;
-            let all = x > buttons + REPLACE_BUTTONS[0].1;
             find.in_replace = true;
             self.overlay = Overlay::Find(find);
-            if x >= buttons {
-                self.replace_in_file(all);
+            if x >= buttons && x < buttons + 2 * FIND_BUTTON {
+                self.replace_in_file(x >= buttons + FIND_BUTTON);
             }
             return;
         }
-        if y == area.y + 1 && x >= switches && x < switches + SWITCHES_WIDTH {
+        if y == area.y && x >= switches && x < switches + SWITCHES_WIDTH {
             find.options.flip(((x - switches) / 3) as usize);
             self.overlay = Overlay::Find(find);
             self.search_file();
             return;
         }
-        let key = if area.contains(x, y) && x >= first && y == area.y + 1 {
+        let key = if area.contains(x, y) && x >= first && y == area.y {
             match (x - first) / FIND_BUTTON {
                 0 => Key::Up,
                 1 => Key::Down,
-                2 => {
-                    find.replace = match find.replace {
-                        Some(_) => None,
-                        None => Some(String::new()),
-                    };
-                    find.in_replace = find.replace.is_some() && !find.query.is_empty();
-                    self.overlay = Overlay::Find(find);
-                    return;
-                }
                 _ => Key::Esc,
             }
         } else {
-            if area.contains(x, y) && y == area.y + 1 {
+            if area.contains(x, y) && y == area.y {
                 find.in_replace = false;
             }
             self.overlay = Overlay::Find(find);
@@ -7383,17 +7365,27 @@ impl App {
         let spot = match &self.overlay {
             Overlay::Find(_) => {
                 let area = self.find_bar();
-                let first = area.right() - FIND_BUTTON * FIND_BUTTONS.len() as u16 - 1;
-                let tool = x.checked_sub(first).map(|at| at / FIND_BUTTON);
-                let name = tool
-                    .filter(|_| y == area.y + 1)
-                    .and_then(|t| FIND_NAMES.get(t as usize));
-                name.map(|name| {
+                let (field, _, _, first) = Self::find_layout(area);
+                let replacing = area.h > 1;
+                // Each button's name and the column it starts at.
+                let mut buttons: Vec<(&str, u16, u16)> = vec![(FIND_NAMES[3], area.x + 1, area.y)];
+                for (n, name) in FIND_NAMES[..3].iter().enumerate() {
+                    buttons.push((*name, first + n as u16 * FIND_BUTTON, area.y));
+                }
+                if replacing {
+                    let at = field.right() + 1;
+                    buttons.push((FIND_NAMES[4], at, area.y + 1));
+                    buttons.push((FIND_NAMES[5], at + FIND_BUTTON, area.y + 1));
+                }
+                let found = buttons
+                    .into_iter()
+                    .find(|(_, left, row)| y == *row && x >= *left && x < left + FIND_BUTTON);
+                found.map(|(name, left, _)| {
                     // Under its button, clear of the bar's edge.
-                    let middle = (first + tool.unwrap_or(0) * FIND_BUTTON) as f32 + 1.5;
+                    let middle = left as f32 + 1.5;
                     let right_edge = self.size.0 as f32 - wide(name) - 0.5;
-                    let left = (middle - wide(name) / 2.0).min(right_edge);
-                    (*name, left, area.bottom() as f32 + 0.3)
+                    let start = (middle - wide(name) / 2.0).min(right_edge);
+                    (name, start, area.bottom() as f32 + 0.3)
                 })
             }
             Overlay::None if cut.is_some() => cut.as_deref().map(|name| {
@@ -7424,11 +7416,11 @@ impl App {
                 });
                 icon.map(|i| {
                     let top = Self::rail_row(i, rail) as f32;
-                    // The middle of a two-row icon.
+                    // Level with the icon's middle.
                     (
                         RAIL_NAMES[i],
                         rail.right() as f32 + 1.0,
-                        top + 1.0 - TOOLTIP_HEIGHT / 2.0,
+                        top + 0.5 - TOOLTIP_HEIGHT / 2.0,
                     )
                 })
             }
@@ -7535,9 +7527,10 @@ impl App {
 
     /// Where an icon goes. The last one is Settings, which sits at the bottom given room.
     fn rail_row(index: usize, area: Rect) -> u16 {
-        let stacked = 1 + index as u16 * ACTIVITY_STEP;
+        // The first level with the sidebar's header, as the design has it.
+        let stacked = area.y + index as u16 * ACTIVITY_STEP;
         if index + 1 == ACTIVITY.len() {
-            stacked.max(area.bottom().saturating_sub(3))
+            stacked.max(area.bottom().saturating_sub(2))
         } else {
             stacked
         }
@@ -7555,6 +7548,19 @@ impl App {
             return;
         }
         grid.fill(area, self.theme.activity);
+        if !self.measure.in_cells() {
+            // A hairline between the rail and the sidebar, half way to the border's colour.
+            let (a, b) = (self.theme.activity.bg, self.theme.border);
+            let mix = |x: u8, y: u8| ((u16::from(x) + u16::from(y)) / 2) as u8;
+            let line = Rgb(mix(a.0, b.0), mix(a.1, b.1), mix(a.2, b.2));
+            let edge = Bounds::cells(
+                area.right() as f32 - 0.08,
+                area.y as f32,
+                0.08,
+                area.h as f32,
+            );
+            grid.panel(edge, 0, Some(line), None);
+        }
         for (i, (icon, command)) in ACTIVITY.iter().enumerate() {
             let y = Self::rail_row(i, area);
             if y + 1 >= area.bottom() {
@@ -7564,9 +7570,7 @@ impl App {
             let row = Rect::new(area.x, y, area.w, ACTIVITY_ICON.1 as u16);
             let hovered = self.hover.is_some_and(|h| row.contains(h.0, h.1));
             let style = Style {
-                fg: if on {
-                    self.theme.activity_active
-                } else if hovered {
+                fg: if on || hovered {
                     self.theme.text.fg
                 } else {
                     self.theme.activity.fg
@@ -7629,22 +7633,32 @@ impl App {
             let changed = self.changed_count();
             if *command == Command::ShowSourceControl && changed > 0 {
                 let color = self.theme.button_text;
-                // On the icon's top right corner, wherever the icon's size puts it.
-                let corner = if self.measure.in_cells() { -0.16 } else { 0.42 };
-                // Just past the icon's middle, so it sits on its corner at any rail width.
-                let middle = area.x as f32 + area.w as f32 / 2.0;
-                let badge = Bounds::cells(middle + 0.4, y as f32 + corner, 1.3, 0.58);
-                grid.panel(badge, 30, Some(self.theme.accent), None);
                 let font = Font {
                     bold: true,
                     size: BADGE_SIZE,
                     ..Font::default()
                 };
-                let (x, top) = (middle + 0.72, y as f32 + corner - 0.2);
+                let count = changed.min(99).to_string();
+                // On the chip's bottom right corner, ringed in the rail's colour so it stands
+                // clear of the icon.
+                let (wide, high) = RAIL_PILL;
+                let chip_right = area.x as f32 + (area.w as f32 + wide) / 2.0;
+                let chip_bottom = y as f32 + (1.0 + high) / 2.0;
+                let width = (self.measure.width(&count, font) + 0.5).max(1.0);
+                let (left, top) = (chip_right - width + 0.25, chip_bottom - 0.4);
+                let ring = Bounds::cells(left - 0.14, top - 0.06, width + 0.28, 0.52);
+                grid.panel(ring, 30, Some(self.theme.activity.bg), None);
+                grid.panel(
+                    Bounds::cells(left, top, width, 0.4),
+                    30,
+                    Some(self.theme.accent),
+                    None,
+                );
+                let text = self.measure.width(&count, font);
                 grid.text_run(
-                    (x, top),
-                    area.right() as f32,
-                    &changed.to_string(),
+                    (left + (width - text) / 2.0, top - 0.3),
+                    area.right() as f32 + 1.0,
+                    &count,
                     (color, false),
                     font,
                 );
@@ -9940,9 +9954,10 @@ mod tests {
     #[test]
     fn activity_bar_switches_between_explorer_and_search() {
         let (_dir, mut app) = project();
-        app.handle(mouse(MouseKind::Left, 2, 1 + ACTIVITY_STEP));
+        let rail = app.activity_area();
+        app.handle(mouse(MouseKind::Left, 1, App::rail_row(1, rail)));
         assert!(screen(&app).text().contains("SEARCH"));
-        app.handle(mouse(MouseKind::Left, 2, 1));
+        app.handle(mouse(MouseKind::Left, 1, App::rail_row(0, rail)));
         assert!(screen(&app).text().contains("alpha.txt"));
     }
 
@@ -14740,9 +14755,10 @@ mod tests {
     fn activity_bar_opens_review_by_mouse() {
         let (dir, mut app) = project();
         git(dir.path(), &["init", "-q"]);
-        app.handle(mouse(MouseKind::Left, 2, 1 + ACTIVITY_STEP * 3));
+        let rail = app.activity_area();
+        app.handle(mouse(MouseKind::Left, 1, App::rail_row(3, rail)));
         assert!(app.sidebar_view == SidebarView::Source);
-        app.handle(mouse(MouseKind::Left, 2, 1));
+        app.handle(mouse(MouseKind::Left, 1, App::rail_row(0, rail)));
         assert!(app.sidebar_view == SidebarView::Explorer);
     }
 
@@ -14751,10 +14767,10 @@ mod tests {
         let (_dir, app) = project();
         let grid = screen(&app);
         let pieces = (0..ACTIVITY_WIDTH)
-            .flat_map(|x| (0..3).map(move |y| (x, y)))
+            .flat_map(|x| (0..1).map(move |y| (x, y)))
             .filter(|(x, y)| cellix_render::Piece::decode(&grid.cell(*x, *y).symbol).is_some())
             .count();
-        assert_eq!(pieces, 6, "a 3 by 2 icon");
+        assert_eq!(pieces, 2, "a 2 by 1 icon, one row each since the redesign");
     }
 
     /// A project in a side pane the size of an agent's mod panel.
@@ -15715,7 +15731,8 @@ while True:
     fn icons_say_what_they_are() {
         let (dir, mut app) = project();
         app.open(&dir.path().join("alpha.txt")).unwrap();
-        app.handle(mouse(MouseKind::Move, 2, 4));
+        let rail = app.activity_area();
+        app.handle(mouse(MouseKind::Move, 1, App::rail_row(1, rail)));
         assert!(screen(&app).text().contains("Search"), "the rail's names");
         app.handle(mouse(MouseKind::Move, 40, 12));
         assert!(!screen(&app).text().contains("Review Changes"));

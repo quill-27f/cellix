@@ -40,7 +40,6 @@ pub struct Theme {
     /// Lines that moved rather than changed.
     pub moved: Rgb,
     pub activity: Style,
-    pub activity_active: Rgb,
     pub status: Style,
     pub breadcrumb: Style,
     /// Background of the line holding the cursor.
@@ -218,7 +217,6 @@ impl Theme {
             removed_word: Rgb(250, 185, 185),
             moved: Rgb(226, 232, 250),
             activity: style(Rgb(94, 94, 108), frame),
-            activity_active: Rgb(47, 91, 196),
             status: style(Rgb(94, 94, 108), frame),
             breadcrumb: style(Rgb(110, 110, 110), bg),
             line: Rgb(245, 245, 245),
@@ -299,8 +297,7 @@ impl Default for Theme {
             added_word: Rgb(60, 102, 86),
             removed_word: Rgb(116, 62, 72),
             moved: Rgb(38, 46, 70),
-            activity: style(Rgb(154, 154, 178), frame),
-            activity_active: Rgb(143, 180, 255),
+            activity: style(Rgb(127, 132, 156), frame),
             status: style(Rgb(154, 154, 178), frame),
             breadcrumb: style(Rgb(154, 154, 178), bg),
             line: Rgb(50, 50, 75),
@@ -392,7 +389,9 @@ mod tests {
     fn activity_icons_stay_readable() {
         for theme in [Theme::named(Some("light")), Theme::default()] {
             let bg = brightness(theme.activity.bg) as i32;
-            assert!((brightness(theme.activity_active) as i32 - bg).abs() > 120);
+            // The one showing is the text colour on its chip.
+            let chip = brightness(theme.tint) as i32;
+            assert!((brightness(theme.text.fg) as i32 - chip).abs() > 120);
             assert!((brightness(theme.activity.fg) as i32 - bg).abs() > 60);
         }
     }

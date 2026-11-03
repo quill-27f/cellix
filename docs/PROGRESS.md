@@ -581,3 +581,13 @@ pixels in its row, so stacked fields keep their air, and the Search panel's repl
 straight under its search field. The Find bar's tooltips sit under their button, clear of the bar.
 A paper's menu puts Insert in its own group. Not done from the review: a slimmer Find bar, search
 snippets that keep context with an ellipsis, and one colour for matches in the editor and the panel.
+
+Rail and Find bar, rebuilt from the Claude Design canvas (https://claude.ai/artifact/LsovugNAutxD4dna8ZGGSV),
+options C and A, which the user picked. The rail is three columns with Lucide-style line icons
+(files, search, a tree of headings, a branch, two sliders for settings) one terminal row apart and
+level with the sidebar's header, the one showing on a small chip, resting icons dimmer, the change
+count on the chip's corner ringed in the rail's colour, and a hairline against the sidebar. The cell
+tier shows one glyph per icon. The Find bar is a raised panel just around its rows: a chevron that
+shows Replace, the switches inside the field, the count, then arrow and close icons, and Replace
+and Replace All as icon buttons with their keys in tooltips. Four rail tests clicked fixed rows or
+counted a 3 by 2 icon; they now follow `rail_row` and the 2 by 1 icon.
