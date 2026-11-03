@@ -242,6 +242,7 @@ set -g allow-passthrough on
 set -g focus-events on
 set -g mouse on
 set -g extended-keys on   # so Ctrl+Shift+P, Ctrl+Shift+F and the like reach Cellix
+set -s extended-keys-format csi-u   # the form Cellix reads them in (tmux 3.5 and later)
 CONF
 tmux source-file ~/.tmux.conf 2>/dev/null   # only needed if tmux is already running
 

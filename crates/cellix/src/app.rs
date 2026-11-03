@@ -77,8 +77,10 @@ const ACTIVITY: [(Icon, Command); 5] = [
 ];
 /// Cells each activity icon spans.
 const ACTIVITY_ICON: (u8, u8) = (2, 1);
-/// Rows from one activity icon to the next.
-const ACTIVITY_STEP: u16 = 1;
+/// Rows from one activity icon to the next: room between them, in VS Code's proportions.
+/// Cells can't place half a row, so there it's two.
+const ACTIVITY_STEP: f32 = 1.5;
+const ACTIVITY_STEP_CELLS: f32 = 2.0;
 /// What's in reach at the top right, as in a desktop app, whatever the pane is showing.
 const PANE_ACTIONS: [(Icon, Command, &str); 5] = [
     (Icon::Comment, Command::ShowComments, "Comments"),
@@ -8114,10 +8116,7 @@ impl App {
 
     fn click_activity(&mut self, y: u16) {
         let area = self.activity_area();
-        let index = (0..ACTIVITY.len()).find(|i| {
-            let top = Self::rail_row(*i, area);
-            y >= top && y < top + ACTIVITY_STEP
-        });
+        let index = self.rail_at(y, area);
         if let Some((_, command)) = index.and_then(|i| ACTIVITY.get(i)) {
             let settings = *command == Command::OpenSettings;
             let lit = !settings && self.settings_page.is_none() && self.rail_on(*command);
@@ -8390,12 +8389,8 @@ impl App {
                 Some((name, self.size.0 as f32 - wide(name) - 0.5, 1.2))
             }
             Overlay::None if rail.w > 0 && rail.contains(x, y) => {
-                let icon = (0..ACTIVITY.len()).find(|i| {
-                    let top = Self::rail_row(*i, rail);
-                    y >= top && y < top + u16::from(ACTIVITY_ICON.1)
-                });
-                icon.map(|i| {
-                    let top = Self::rail_row(i, rail) as f32;
+                self.rail_at(y, rail).map(|i| {
+                    let top = self.rail_top(i, rail);
                     // Level with the icon's middle.
                     (
                         RAIL_NAMES[i],
@@ -8505,15 +8500,38 @@ impl App {
         input(grid, line, &field, &*self.measure, &self.theme);
     }
 
-    /// Where an icon goes. The last one is Settings, which sits at the bottom given room.
-    fn rail_row(index: usize, area: Rect) -> u16 {
+    /// The top of an icon's row, which can fall half way down a cell. The last one is
+    /// Settings, which sits at the bottom given room.
+    fn rail_top(&self, index: usize, area: Rect) -> f32 {
+        let step = if self.measure.in_cells() {
+            ACTIVITY_STEP_CELLS
+        } else {
+            ACTIVITY_STEP
+        };
         // The first level with the sidebar's header, as the design has it.
-        let stacked = area.y + index as u16 * ACTIVITY_STEP;
+        let stacked = area.y as f32 + index as f32 * step;
         if index + 1 == ACTIVITY.len() {
-            stacked.max(area.bottom().saturating_sub(2))
+            stacked.max(area.bottom().saturating_sub(2) as f32)
         } else {
             stacked
         }
+    }
+
+    /// The row an icon's middle is on, for clicking it.
+    #[cfg(test)]
+    fn rail_row(&self, index: usize, area: Rect) -> u16 {
+        (self.rail_top(index, area) + 0.5).floor() as u16
+    }
+
+    /// The icon a row belongs to: each owns the rows whose middle is nearer it than the next.
+    fn rail_at(&self, y: u16, area: Rect) -> Option<usize> {
+        let middle = y as f32 + 0.5;
+        (0..ACTIVITY.len())
+            .min_by(|a, b| {
+                let off = |i: usize| (self.rail_top(i, area) + 0.5 - middle).abs();
+                off(*a).total_cmp(&off(*b))
+            })
+            .filter(|i| (self.rail_top(*i, area) + 0.5 - middle).abs() < 1.0)
     }
 
     /// How many files differ from HEAD, for the badge on the rail.
@@ -8542,13 +8560,18 @@ impl App {
             grid.panel(edge, 0, Some(line), None);
         }
         for (i, (icon, command)) in ACTIVITY.iter().enumerate() {
-            let y = Self::rail_row(i, area);
+            let top = self.rail_top(i, area);
+            let y = top.floor() as u16;
+            // How far below its cell the icon sits, for the paint that can.
+            let lift = top - y as f32;
             if y + 1 >= area.bottom() {
                 break;
             }
             let on = self.rail_on(*command);
             let row = Rect::new(area.x, y, area.w, ACTIVITY_ICON.1 as u16);
-            let hovered = self.hover.is_some_and(|h| row.contains(h.0, h.1));
+            let hovered = self
+                .hover
+                .is_some_and(|h| area.contains(h.0, h.1) && self.rail_at(h.1, area) == Some(i));
             let style = Style {
                 fg: if on || hovered {
                     self.theme.text.fg
@@ -8575,8 +8598,8 @@ impl App {
                 // With pixels, the pill is paint and sized to the icon.
                 let (wide, high) = RAIL_PILL;
                 let left = area.x as f32 + (area.w as f32 - wide) / 2.0;
-                let top = y as f32 + (row.h as f32 - high) / 2.0;
-                let pill = Bounds::cells(left, top, wide, high);
+                let pill_top = top + (row.h as f32 - high) / 2.0;
+                let pill = Bounds::cells(left, pill_top, wide, high);
                 grid.panel(pill, PILL_RADIUS, Some(fill), None);
             } else if wash.is_some() {
                 // Icons are cells, so the pill is too: the rail's full width, with paint
@@ -8609,6 +8632,7 @@ impl App {
                     ..style
                 };
                 toolbar::draw_icon(grid, shape, cell, style.fg, plain);
+                grid.drop_last(lift);
             }
             let changed = self.changed_count();
             if *command == Command::ShowSourceControl && changed > 0 {
@@ -8623,7 +8647,7 @@ impl App {
                 // clear of the icon.
                 let (wide, high) = RAIL_PILL;
                 let chip_right = area.x as f32 + (area.w as f32 + wide) / 2.0;
-                let chip_bottom = y as f32 + (1.0 + high) / 2.0;
+                let chip_bottom = top + (1.0 + high) / 2.0;
                 let width = (self.measure.width(&count, font) + 0.5).max(1.0);
                 let (left, top) = (chip_right - width + 0.3, chip_bottom - 0.52);
                 let ring = Bounds::cells(left - 0.12, top - 0.06, width + 0.24, 0.58);
@@ -10954,9 +10978,9 @@ mod tests {
     fn activity_bar_switches_between_explorer_and_search() {
         let (_dir, mut app) = project();
         let rail = app.activity_area();
-        app.handle(mouse(MouseKind::Left, 1, App::rail_row(1, rail)));
+        app.handle(mouse(MouseKind::Left, 1, app.rail_row(1, rail)));
         assert!(screen(&app).text().contains("SEARCH"));
-        app.handle(mouse(MouseKind::Left, 1, App::rail_row(0, rail)));
+        app.handle(mouse(MouseKind::Left, 1, app.rail_row(0, rail)));
         assert!(screen(&app).text().contains("alpha.txt"));
     }
 
@@ -14415,7 +14439,7 @@ mod tests {
         for (row, (_, command)) in ACTIVITY.iter().copied().enumerate().take(4) {
             let (_dir, mut app) = page_app("# Title\n\nword tail\n");
             let area = app.activity_area();
-            let y = App::rail_row(row, area);
+            let y = app.rail_row(row, area);
             if !app.rail_on(command) {
                 app.handle(mouse(MouseKind::Left, 2, y));
             }
@@ -14433,7 +14457,7 @@ mod tests {
         let (_dir, mut app) = reviewed();
         app.run(Command::OpenDiff);
         let area = app.activity_area();
-        app.handle(mouse(MouseKind::Left, 2, App::rail_row(3, area)));
+        app.handle(mouse(MouseKind::Left, 2, app.rail_row(3, area)));
         assert!(app.review.is_none());
     }
 
@@ -16309,9 +16333,9 @@ mod tests {
         let (dir, mut app) = project();
         git(dir.path(), &["init", "-q"]);
         let rail = app.activity_area();
-        app.handle(mouse(MouseKind::Left, 1, App::rail_row(3, rail)));
+        app.handle(mouse(MouseKind::Left, 1, app.rail_row(3, rail)));
         assert!(app.sidebar_view == SidebarView::Source);
-        app.handle(mouse(MouseKind::Left, 1, App::rail_row(0, rail)));
+        app.handle(mouse(MouseKind::Left, 1, app.rail_row(0, rail)));
         assert!(app.sidebar_view == SidebarView::Explorer);
     }
 
@@ -17115,7 +17139,7 @@ while True:
         app.handle(mouse(
             MouseKind::Left,
             2,
-            App::rail_row(ACTIVITY.len() - 1, area),
+            app.rail_row(ACTIVITY.len() - 1, area),
         ));
         assert!(screen(&app).text().contains("Appearance"));
         let (x, y) = find(&screen(&app), "Light");
@@ -17287,7 +17311,7 @@ while True:
         let (dir, mut app) = project();
         app.open(&dir.path().join("alpha.txt")).unwrap();
         let rail = app.activity_area();
-        app.handle(mouse(MouseKind::Move, 1, App::rail_row(1, rail)));
+        app.handle(mouse(MouseKind::Move, 1, app.rail_row(1, rail)));
         assert!(screen(&app).text().contains("Search"), "the rail's names");
         app.handle(mouse(MouseKind::Move, 40, 12));
         assert!(!screen(&app).text().contains("Review Changes"));

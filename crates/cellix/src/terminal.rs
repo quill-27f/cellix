@@ -35,13 +35,34 @@ extern "C" fn stop(_: libc::c_int) {
 }
 
 /// Hangs up and stops end the loop, so they leave the way Quit does.
-fn catch_stops() {
+///
+/// A stop that lands while crossterm waits for input is retried inside crossterm, and if the
+/// terminal then closes, crossterm reads its end over and over and never returns, so the loop
+/// never sees the stop. A watch outside the loop ends Cellix after a moment in that case,
+/// clearing `left` (the socket and the like) as the loop would have.
+fn catch_stops(left: Vec<PathBuf>) {
     for signal in [libc::SIGHUP, libc::SIGTERM] {
         // SAFETY: the handler only stores to an atomic, which is safe in a signal handler.
         unsafe {
             libc::signal(signal, stop as *const () as libc::sighandler_t);
         }
     }
+    std::thread::spawn(move || {
+        while !STOPPED.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        // The loop sees a stop within a frame; leaving normally ends this thread with it.
+        std::thread::sleep(Duration::from_secs(2));
+        // In case the terminal is still there after all, it gets itself back.
+        let _ = disable_raw_mode();
+        let _ = write!(io::stdout(), "\x1b[?1049l\x1b[?25h");
+        let _ = io::stdout().flush();
+        for path in left {
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_dir_all(&path);
+        }
+        std::process::exit(0);
+    });
 }
 
 /// How often a scroll moves. Over a network each frame costs a round of placements.
@@ -78,12 +99,22 @@ impl Session {
             PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
         )?;
         // tmux ignores kitty's flags but passes modified keys on with its extended-keys, once
-        // asked this way, so Ctrl+Shift+P stops arriving as Ctrl+P.
-        if std::env::var_os("TMUX").is_some() {
+        // asked this way, so Ctrl+Shift+P stops arriving as Ctrl+P. Only in the csi-u form:
+        // the xterm form, tmux's default, is one crossterm can't read, and every Ctrl key
+        // would be lost.
+        if std::env::var_os("TMUX").is_some() && tmux_keys_readable() {
             execute!(io::stdout(), Print("\x1b[>4;2m"))?;
         }
         Ok(Self)
     }
+}
+
+/// Whether tmux sends extended keys in the form crossterm reads.
+fn tmux_keys_readable() -> bool {
+    let output = std::process::Command::new("tmux")
+        .args(["show", "-sv", "extended-keys-format"])
+        .output();
+    output.is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim() == "csi-u")
 }
 
 impl Drop for Session {
@@ -314,7 +345,14 @@ pub fn run(options: Options) -> io::Result<()> {
         cellix_agent::ide::IdeServer::start_kept(root, &kept).ok()
     });
 
-    catch_stops();
+    let mut left = Vec::new();
+    if server.is_some() {
+        let socket = cellix_agent::socket_path(app.workspace.root());
+        left.push(socket.with_extension(""));
+        left.push(socket);
+    }
+    left.extend(app.ide.as_ref().map(|ide| ide.lock().to_path_buf()));
+    catch_stops(left);
     let _session = Session::start()?;
     let smooth = app.settings.smooth_scroll != Some(false);
     let mut display = Display::detect(app.settings.tier.as_deref(), smooth)?;

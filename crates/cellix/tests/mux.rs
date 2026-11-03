@@ -10,21 +10,38 @@ struct Tmux {
 
 impl Tmux {
     fn start(dir: &Path, name: &str) -> Self {
+        Self::start_with(dir, name, &[])
+    }
+
+    /// Starts with server options set first, as `set -g` lines in a tmux.conf would.
+    fn start_with(dir: &Path, name: &str, options: &[&[&str]]) -> Self {
         let tmux = Self {
             socket: format!("cellix-test-{}-{name}", std::process::id()),
         };
         let cellix = env!("CARGO_BIN_EXE_cellix");
-        tmux.run(&[
-            "new-session",
-            "-d",
-            "-x",
-            "100",
-            "-y",
-            "30",
-            "-c",
-            dir.to_str().unwrap(),
-            &format!("{cellix} hello.txt"),
-        ]);
+        let mut args = vec!["start-server"];
+        for option in options {
+            args.push(";");
+            args.extend_from_slice(option);
+        }
+        args.push(";");
+        tmux.run(
+            &[
+                &args[..],
+                &[
+                    "new-session",
+                    "-d",
+                    "-x",
+                    "100",
+                    "-y",
+                    "30",
+                    "-c",
+                    dir.to_str().unwrap(),
+                    &format!("{cellix} hello.txt"),
+                ],
+            ]
+            .concat(),
+        );
         tmux
     }
 
@@ -82,6 +99,20 @@ fn tmux_typing_and_saving_work() {
     tmux.wait("0", "Saved hello.txt");
     let saved = std::fs::read_to_string(dir.path().join("hello.txt")).unwrap();
     assert_eq!(saved, "abc hello from a file\n");
+}
+
+#[test]
+#[ignore = "needs tmux"]
+fn ctrl_keys_arrive_with_tmux_extended_keys_on() {
+    // As the README sets it up, with tmux's own default, the xterm form, for the keys.
+    let dir = project();
+    let options: &[&[&str]] = &[&["set", "-g", "extended-keys", "on"]];
+    let tmux = Tmux::start_with(dir.path(), "extended", options);
+    tmux.wait("0", "hello from a file");
+    tmux.run(&["send-keys", "-t", "0", "abc "]);
+    tmux.wait("0", "abc hello from a file");
+    tmux.run(&["send-keys", "-t", "0", "C-s"]);
+    tmux.wait("0", "Saved hello.txt");
 }
 
 #[test]

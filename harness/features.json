@@ -2882,5 +2882,26 @@
     "title": "Comments no agent took wait for the next run",
     "test": "unsent_comments_wait_for_the_next_run",
     "passes": true
+  },
+  {
+    "id": "stop-with-closed-terminal",
+    "milestone": 10,
+    "title": "A stop as the terminal closes still ends Cellix",
+    "test": "a_stop_as_the_terminal_closes_still_ends_cellix",
+    "passes": true
+  },
+  {
+    "id": "tmux-no-graphics-probe",
+    "milestone": 10,
+    "title": "tmux is not asked about graphics, so its title stays clean",
+    "test": "tmux_is_not_asked_about_graphics",
+    "passes": true
+  },
+  {
+    "id": "tmux-extended-keys-xterm",
+    "milestone": 10,
+    "title": "Ctrl keys arrive with tmux extended-keys on",
+    "test": "ctrl_keys_arrive_with_tmux_extended_keys_on",
+    "passes": true
   }
 ]

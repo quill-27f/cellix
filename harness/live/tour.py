@@ -13,7 +13,7 @@ os.makedirs(out, exist_ok=True)
 CTRL = lambda c: chr(ord(c) - 96)
 RAIL_X = 1
 # One row each since the rail's redesign, Files on the first.
-SEARCH, OUTLINE, REVIEW = 1, 2, 3
+SEARCH, OUTLINE, REVIEW = 2, 3, 5  # a row and a half apart, at their middles
 LIST_AGENTS = [["keys", "\x1b[112;6u"], ["wait", 0.3], ["keys", "List Agents"], ["wait", 0.3], ["keys", "\r"]]
 
 CODE = """//! A bounded queue.
@@ -275,8 +275,10 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("47-math-panel", [["click", *FORMULA]], NOTE_FILE, size="150x44", background="eff1f5")
     shoot("48-table-picker", [["click", *TABLE], ["move", 100, 7]], NOTE_FILE, size="150x44")
     shoot("49-table-menu", [["right", 41, 29]], NOTE_FILE, size="150x44", background="eff1f5")
-    comment = [["click", 90, 5], ["keys", "\\eOP"], ["keys", "add comment"], ["keys", "\r"]]
-    comment += [["keys", "Is this true for multi-head attention?\r"], ["wait", 0.5]]
+    # A debug build presents a page of math slowly, so each step is given time to land.
+    comment = [["wait", 1.5], ["click", 90, 5], ["wait", 0.6], ["keys", "\\eOP"], ["wait", 0.6]]
+    comment += [["keys", "add comment"], ["keys", "\r"], ["wait", 0.6]]
+    comment += [["keys", "Is this true for multi-head attention?\r"], ["wait", 1.0]]
     shoot("50-comments", comment, NOTE_FILE, size="150x44", background="eff1f5")
     # A review the agent has checked: a verdict on the reviewer's comment and a suggestion.
     review = [

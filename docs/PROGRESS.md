@@ -796,3 +796,36 @@ Cellix that serves the folder takes them back and says how many are waiting. A p
 and `--wait` comments aren't kept, since they went where they belonged.
 
 `TOUR_ONLY=50-review,02-code harness/x tour` retakes just those shots.
+
+A stop that never finished. Catching SIGHUP and SIGTERM (above) let a stop land while
+crossterm waited for input; crossterm retries the wait, and when the terminal had closed by
+then it read the closed end forever at full CPU and never returned to the loop. A harness
+script that stops Cellix and closes its terminal left 10 of 12 running; closing a terminal
+window could do the same. A watch now ends Cellix two seconds after a stop if the loop hasn't,
+clearing the socket, plan folders and IDE lock first and giving a live terminal back; the same
+script leaves none. `a_stop_as_the_terminal_closes_still_ends_cellix` drives that through the
+real binary. Found because about forty leaked tour processes, three spinning, starved the spell
+tests; those processes are left for the user to end.
+
+The 50-comments tour shot gives each step time to land: on a loaded machine its click and keys
+arrived before the debug build had drawn the note.
+
+From the user's Fedora machine (a Vitrine console, tmux inside, Ghostty outside).
+- Ctrl keys were lost under tmux with `extended-keys on`, as the README sets it up. Cellix asked
+  tmux for extended keys, and tmux 3.5+ sends them in the xterm form by default
+  (`ESC[27;5;113~`), which crossterm can't read, so Ctrl+Q, Ctrl+S and the rest went nowhere.
+  Cellix now asks only when tmux's `extended-keys-format` is `csi-u`, and the README sets it.
+  `ctrl_keys_arrive_with_tmux_extended_keys_on` drives the real binary in a real tmux; by hand,
+  Ctrl+S failed before and saves after.
+- The graphics probe went to tmux too, which showed it as the window title (`Gi=31,s=1,...`
+  in the status bar). Under tmux it's no longer sent.
+- Over a console or SSH, tmux's TERM for the client can be a stand-in (`vt220` there) when the
+  machine lacks Ghostty's terminfo. Cellix now also reads `client_termtype`, which tmux takes
+  from the terminal itself (`ghostty 1.4.0`), before falling back to cells.
+- The rail spaces its icons a row and a half apart (option A on the canvas, picked by the
+  user), two rows in the cell tier, which can't place half rows. Each icon owns the rows nearest
+  its middle for clicks and hover. The tour's rail rows moved with it.
+Unverified on the Fedora machine itself: it has no SSH server and its console was in use, so
+0.3.0 waits for the user to install there.
+
+Release 0.3.0.

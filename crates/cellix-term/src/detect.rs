@@ -25,14 +25,22 @@ struct Reply {
     background: Option<(u8, u8, u8)>,
 }
 
+/// What to ask a terminal. The graphics query goes only where it reaches the terminal
+/// itself: tmux takes that kind of sequence as a window title and shows it in its status bar.
+fn questions(graphics: bool) -> String {
+    let graphics = if graphics {
+        format!("\x1b_Gi={QUERY_ID},s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\")
+    } else {
+        String::new()
+    };
+    format!("\x1b[16t\x1b]11;?\x1b\\\x1b[?1016$p{graphics}\x1b[c")
+}
+
 /// Asks for the cell size and for Kitty graphics, then device attributes, which every
 /// terminal answers, so a terminal without graphics doesn't cost the full timeout.
 /// Expects raw mode. Returns (kitty graphics, cell size).
-fn query_terminal(out: &mut impl Write) -> io::Result<Reply> {
-    write!(
-        out,
-        "\x1b[16t\x1b]11;?\x1b\\\x1b[?1016$p\x1b_Gi={QUERY_ID},s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c"
-    )?;
+fn query_terminal(out: &mut impl Write, graphics: bool) -> io::Result<Reply> {
+    write!(out, "{}", questions(graphics))?;
     out.flush()?;
     let deadline = Instant::now() + REPLY_TIMEOUT;
     let mut reply = Vec::new();
@@ -116,12 +124,16 @@ pub fn detect(var: impl Fn(&str) -> Option<String>) -> io::Result<Env> {
     let multiplexer = Multiplexer::detect(var);
     if multiplexer == Multiplexer::Tmux {
         // tmux swallows replies from the terminal outside it, so ask tmux instead.
-        let client = tmux_output(&["display", "-p", "#{client_termname}"]).unwrap_or_default();
+        // The terminal's own name where tmux heard it, as well as its TERM: over SSH, TERM is
+        // often a stand-in like xterm-256color when the server lacks the terminal's terminfo.
+        let client = tmux_output(&["display", "-p", "#{client_termname} #{client_termtype}"])
+            .unwrap_or_default()
+            .to_lowercase();
         let kitty_graphics = KITTY_TERMINALS.iter().any(|t| client.contains(t));
         let tmux_passthrough = tmux_output(&["show", "-Apv", "allow-passthrough"])
             .is_some_and(|v| v == "on" || v == "all");
         // tmux answers the colour query itself, from what it knows of the terminal.
-        let reply = query_terminal(&mut io::stdout())?;
+        let reply = query_terminal(&mut io::stdout(), false)?;
         return Ok(Env {
             multiplexer,
             kitty_graphics,
@@ -132,7 +144,7 @@ pub fn detect(var: impl Fn(&str) -> Option<String>) -> io::Result<Env> {
             background: reply.background,
         });
     }
-    let reply = query_terminal(&mut io::stdout())?;
+    let reply = query_terminal(&mut io::stdout(), true)?;
     Ok(Env {
         multiplexer,
         kitty_graphics: reply.kitty,
@@ -147,6 +159,13 @@ pub fn detect(var: impl Fn(&str) -> Option<String>) -> io::Result<Env> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tmux_is_not_asked_about_graphics() {
+        assert!(!questions(false).contains("\x1b_G"));
+        assert!(questions(true).contains("\x1b_Gi=31"));
+        assert!(questions(false).ends_with("\x1b[c"));
+    }
 
     #[test]
     fn device_attributes_reply_is_recognised() {

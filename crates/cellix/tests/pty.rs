@@ -355,6 +355,88 @@ fn a_hang_up_leaves_nothing_behind() {
     assert!(!socket_exists(), "the socket outlived Cellix");
 }
 
+/// Stops Cellix the way a closing terminal does: a stop, and the terminal gone straight
+/// after. Gives whether it exited, after a few tries, since the stop has to land while it
+/// waits for input. It used to read the closed terminal forever.
+fn stopped_and_closed(dir: &Path) -> bool {
+    use std::ffi::CString;
+    let binary = CString::new(env!("CARGO_BIN_EXE_cellix")).unwrap();
+    let folder = CString::new(dir.as_os_str().as_encoded_bytes()).unwrap();
+    let argv = [binary.as_ptr(), std::ptr::null()];
+    let mut master = 0;
+    let mut size = libc::winsize {
+        ws_row: 30,
+        ws_col: 100,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    // SAFETY: the child only changes folder and execs, with everything it needs made before
+    // the fork.
+    let pid = unsafe {
+        libc::forkpty(
+            &mut master,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut size,
+        )
+    };
+    if pid == 0 {
+        unsafe {
+            libc::chdir(folder.as_ptr());
+            libc::execv(binary.as_ptr(), argv.as_ptr());
+            libc::_exit(127);
+        }
+    }
+    assert!(pid > 0, "forkpty failed");
+    // Read what it draws, so it never waits on a full terminal, until it's settled.
+    let started = Instant::now();
+    let mut buffer = [0u8; 65536];
+    while started.elapsed() < Duration::from_millis(2500) {
+        let mut ready = libc::pollfd {
+            fd: master,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one pollfd, and a buffer as long as the read asks for.
+        unsafe {
+            if libc::poll(&mut ready, 1, 50) > 0 {
+                libc::read(master, buffer.as_mut_ptr().cast(), buffer.len());
+            }
+        }
+    }
+    // SAFETY: the child this test started, and the terminal it opened for it.
+    unsafe {
+        libc::kill(pid, libc::SIGTERM);
+        libc::close(master);
+    }
+    let deadline = Instant::now() + Duration::from_secs(6);
+    while Instant::now() < deadline {
+        let mut status = 0;
+        // SAFETY: waits only on that child.
+        if unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) } == pid {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // SAFETY: as above; it's left running only if the test has already failed.
+    unsafe {
+        libc::kill(pid, libc::SIGKILL);
+        libc::waitpid(pid, std::ptr::null_mut(), 0);
+    }
+    false
+}
+
+#[test]
+fn a_stop_as_the_terminal_closes_still_ends_cellix() {
+    let dir = project();
+    for attempt in 1..=3 {
+        assert!(
+            stopped_and_closed(dir.path()),
+            "attempt {attempt}: still running"
+        );
+    }
+}
+
 #[test]
 fn cli_reads_comments_over_socket() {
     let dir = project();

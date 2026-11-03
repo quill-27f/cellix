@@ -62,6 +62,13 @@ pub struct IdeServer {
     pub calls: Receiver<IdeCall>,
 }
 
+impl IdeServer {
+    /// The lock file that tells Claude Code this Cellix is here.
+    pub fn lock(&self) -> &Path {
+        &self.lock
+    }
+}
+
 impl Drop for IdeServer {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.lock);
