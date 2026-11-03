@@ -2630,5 +2630,19 @@
     "title": "Closing a reference at a line's end keeps the caret there",
     "test": "closing_a_reference_at_a_lines_end_keeps_the_caret_there",
     "passes": true
+  },
+  {
+    "id": "agent-turn-review",
+    "milestone": 10,
+    "title": "An agent's edits in one turn pile up as one review",
+    "test": "an_agents_edits_in_one_turn_pile_up_as_one_review",
+    "passes": true
+  },
+  {
+    "id": "plan-compare-lines",
+    "milestone": 10,
+    "title": "A plan compare never marks across a line",
+    "test": "a_plan_compare_never_marks_across_a_line",
+    "passes": true
   }
 ]

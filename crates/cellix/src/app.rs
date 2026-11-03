@@ -2887,6 +2887,27 @@ impl App {
             if !editor.buffer.changed_on_disk() {
                 continue;
             }
+            // The agent again, with its last edits still standing untouched as suggestions.
+            let untouched = editor
+                .agent_review
+                .as_ref()
+                .filter(|(_, marked)| *marked == editor.buffer.text())
+                .map(|(base, _)| base.clone());
+            let disk = editor
+                .buffer
+                .path()
+                .and_then(|path| std::fs::read_to_string(path).ok());
+            if let (Some(base), Some(disk), true) = (untouched, disk, editor.tracking) {
+                let marked = cellix_doc::changes::suggest(&base, &disk, editor.change_syntax());
+                editor.set_all_text(&marked);
+                editor.buffer.acknowledge_disk();
+                editor.agent_review = Some((base, marked));
+                note = Some(format!(
+                    "{} changed again: its edits so far stand as suggestions",
+                    editor.title()
+                ));
+                continue;
+            }
             if editor.buffer.is_dirty() {
                 note = Some(format!(
                     "{} changed on disk, keeping your edits",
@@ -2900,24 +2921,11 @@ impl App {
                 note = Some(match editor.reload() {
                     Ok(()) => {
                         let after = editor.buffer.text();
-                        let syntax = if editor.dialect() == Dialect::Latex {
-                            cellix_doc::changes::Syntax::Latex
-                        } else {
-                            cellix_doc::changes::Syntax::Critic
-                        };
-                        let marked = cellix_doc::changes::suggest(&before, &after, syntax);
+                        let marked =
+                            cellix_doc::changes::suggest(&before, &after, editor.change_syntax());
                         if marked != after {
-                            let head = editor.selections.primary().head;
-                            editor.selections.set_single(Selection {
-                                anchor: 0,
-                                head: editor.buffer.rope().len_chars(),
-                                goal: None,
-                            });
-                            editor.buffer.replace(&mut editor.selections, &marked);
-                            let end = editor.buffer.rope().len_chars();
-                            editor
-                                .selections
-                                .set_single(Selection::cursor(head.min(end)));
+                            editor.set_all_text(&marked);
+                            editor.agent_review = Some((before, marked));
                         }
                         format!(
                             "{} changed outside: accept or reject each suggestion, then save",
@@ -8373,7 +8381,7 @@ impl App {
         };
         let old = std::fs::read_to_string(&earlier).unwrap_or_default();
         let new = std::fs::read_to_string(&path).unwrap_or_default();
-        let marked = cellix_doc::changes::suggest(&old, &new, cellix_doc::changes::Syntax::Critic);
+        let marked = cellix_doc::changes::compare(&old, &new);
         let stem = path
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
@@ -12199,6 +12207,25 @@ mod tests {
         select_word(&mut app, "cache");
         let text = screen(&app).text();
         assert!(text.contains("1 of 7 words"), "{text}");
+    }
+
+    #[test]
+    fn an_agents_edits_in_one_turn_pile_up_as_one_review() {
+        let (dir, mut app) = tracking_page("The cache goes first.\n\nKeep it small.\n");
+        let path = dir.path().join("note.md");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(&path, "The cache goes last.\n\nKeep it small.\n").unwrap();
+        app.handle(Event::Tick);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(&path, "The cache goes last.\n\nKeep it tiny.\n").unwrap();
+        app.handle(Event::Tick);
+        let text = app.active_text().unwrap();
+        assert!(text.contains("{~~first.~>last.~~}"), "{text}");
+        assert!(text.contains("{~~small.~>tiny.~~}"), "{text}");
+        assert!(
+            !screen(&app).text().contains("keeping your edits"),
+            "no conflict"
+        );
     }
 
     #[test]

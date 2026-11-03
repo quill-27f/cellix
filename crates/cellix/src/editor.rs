@@ -126,6 +126,10 @@ pub struct Editor {
     view_width: Cell<u16>,
     /// Whether typing here is kept as suggested changes.
     pub tracking: bool,
+    /// While an agent's edits stand as suggestions nobody has touched: the text from before
+    /// its first edit, and the buffer as Cellix last marked it. A later edit from the same
+    /// turn is marked against that text again, so the edits pile up into one review.
+    pub agent_review: Option<(String, String)>,
     /// The word count and the revision it was counted at.
     words: Cell<Option<(u64, usize)>>,
     /// The notebook this page was read from, which saving writes back into.
@@ -213,6 +217,7 @@ impl Editor {
             dark: Cell::new(false),
             view_width: Cell::new(0),
             tracking: false,
+            agent_review: None,
             words: Cell::new(None),
             notebook: None,
             issues: (0, Vec::new()),
@@ -551,6 +556,28 @@ impl Editor {
             .filter(|t| !t.trim().is_empty())
             .map(|t| cellix_doc::words::count(&t, false));
         (all, selected)
+    }
+
+    /// How this document writes a suggestion.
+    pub fn change_syntax(&self) -> cellix_doc::changes::Syntax {
+        if self.dialect() == Dialect::Latex {
+            cellix_doc::changes::Syntax::Latex
+        } else {
+            cellix_doc::changes::Syntax::Critic
+        }
+    }
+
+    /// Replaces the whole text as one edit, keeping the caret where it was as far as it can.
+    pub fn set_all_text(&mut self, text: &str) {
+        let head = self.selections.primary().head;
+        self.selections.set_single(Selection {
+            anchor: 0,
+            head: self.buffer.rope().len_chars(),
+            goal: None,
+        });
+        self.buffer.replace(&mut self.selections, text);
+        let end = self.buffer.rope().len_chars();
+        self.selections.set_single(Selection::cursor(head.min(end)));
     }
 
     /// The paper this file belongs to, with its labels and citations.

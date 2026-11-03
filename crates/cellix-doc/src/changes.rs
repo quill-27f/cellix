@@ -222,6 +222,77 @@ pub fn suggest(old: &str, new: &str, syntax: Syntax) -> String {
     out
 }
 
+/// The change from `old` to `new` for reading, line by line: a line that went is struck, a
+/// line that came is marked new, and a line changed in place shows its words. No mark spans a
+/// line, so every one renders. Accepting it all doesn't give `new` back exactly; it's a view.
+pub fn compare(old: &str, new: &str) -> String {
+    let diff = similar::TextDiff::from_lines(old, new);
+    let mut out = String::new();
+    for op in diff.ops() {
+        let (gone, came) = (op.old_range(), op.new_range());
+        let old_lines: Vec<&str> = old.lines().collect();
+        let new_lines: Vec<&str> = new.lines().collect();
+        match op.tag() {
+            similar::DiffTag::Equal => {
+                for line in &new_lines[came] {
+                    out.push_str(line);
+                    out.push('\n');
+                }
+            }
+            _ => {
+                let (gone, came) = (&old_lines[gone], &new_lines[came]);
+                // Pairs read as edits in place, and what's over as lines that went or came.
+                let paired = gone.len().min(came.len());
+                for (a, b) in gone.iter().zip(came.iter()).take(paired) {
+                    out.push_str(&in_line(a, b));
+                    out.push('\n');
+                }
+                for line in &gone[paired..] {
+                    out.push_str(&whole(line, "{--", "--}"));
+                    out.push('\n');
+                }
+                for line in &came[paired..] {
+                    out.push_str(&whole(line, "{++", "++}"));
+                    out.push('\n');
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A line wholly marked, keeping a list item's or heading's marker outside, so it still reads
+/// as one.
+fn whole(line: &str, open: &str, close: &str) -> String {
+    if line.trim().is_empty() {
+        return line.to_string();
+    }
+    let lead = line.len() - line.trim_start().len();
+    let body = &line[lead..];
+    let marker = ["- ", "* ", "+ ", "#"]
+        .iter()
+        .find(|m| body.starts_with(**m))
+        .map(|m| {
+            if *m == "#" {
+                body.len() - body.trim_start_matches('#').trim_start().len()
+            } else {
+                m.len()
+            }
+        })
+        .or_else(|| {
+            let digits = body.chars().take_while(char::is_ascii_digit).count();
+            (digits > 0 && body[digits..].starts_with(". ")).then_some(digits + 2)
+        })
+        .unwrap_or(0);
+    let (keep, rest) = body.split_at(marker);
+    format!("{}{keep}{open}{rest}{close}", &line[..lead])
+}
+
+/// One line changed in place, as word suggestions.
+fn in_line(old: &str, new: &str) -> String {
+    suggest(old, new, Syntax::Critic)
+}
+
 /// One suggestion in the document's own syntax.
 fn mark(old: &str, new: &str, syntax: Syntax) -> String {
     match (syntax, old.is_empty(), new.is_empty()) {
@@ -274,6 +345,24 @@ pub fn settle_all(text: &str, syntax: Syntax, accept: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_plan_compare_never_marks_across_a_line() {
+        let old = "# Plan\n\n1. Add a clock.\n2. Make it injectable so tests pass.\n3. Drop the windows.\n";
+        let new = "# Plan\n\n1. Add a clock.\n2. Make the clock injectable.\n";
+        let shown = compare(old, new);
+        for line in shown.lines() {
+            let opens = line.matches("{~~").count()
+                + line.matches("{++").count()
+                + line.matches("{--").count();
+            let closes = line.matches("~~}").count()
+                + line.matches("++}").count()
+                + line.matches("--}").count();
+            assert_eq!(opens, closes, "a mark spans a line: {line:?}\n{shown}");
+        }
+        assert!(shown.contains("3. {--Drop the windows.--}"), "{shown}");
+        assert!(shown.contains("1. Add a clock."), "{shown}");
+    }
+
     #[test]
     fn an_edit_becomes_suggestions_that_accept_back_to_it() {
         let old = "The cache goes first, then the index.\n";

@@ -630,3 +630,11 @@ checks Neovim is still on the file in view in one window; a command that left it
 Ctrl+\. In LaTeX, closing `\Cref{…}` at a line's end put the caret at the line's start, so the
 next letters went into the line's first reference: snapping the caret now leaves a row's end and a
 glyph's own place where they are.
+
+Agent turns and plan compare. With Track Changes on, a second edit from the agent in the same turn
+met "changed on disk" and a choice between losing it or the review. While the agent's suggestions
+stand untouched, a later edit is now marked against the text from before its first one, so a turn
+of edits piles up into one review. Once you've accepted or rejected some, the next edit still asks.
+Compare Plan Versions diffs by line: lines that went are struck, lines that came are marked new,
+and a line changed in place shows its words, so no mark spans a line and every one renders. Open:
+a suggestion spanning paragraphs in a document still shows its markers.
