@@ -93,7 +93,9 @@ const ACTION_ICON: f32 = 0.62;
 /// Columns kept clear on each side of the whole bar.
 const ACTION_MARGIN: u16 = 1;
 /// Rows tall a rail icon is on the pixel tiers. Text cells keep their block art.
-const RAIL_ICON: f32 = 1.2;
+const RAIL_ICON: f32 = 0.66;
+/// The pill behind the rail icon that's showing, in columns and rows. Pixels only.
+const RAIL_PILL: (f32, f32) = (2.6, 1.3);
 /// Where the pane's own close button stands, which they keep clear of.
 const PANE_CLOSE: u16 = 3;
 /// Columns kept for tabs beside them, in the pane and over the file. A window with less goes
@@ -7176,7 +7178,7 @@ impl App {
             let wash = on.then_some(self.theme.tint);
             let wash = wash.or(hovered.then_some(self.theme.row_hover));
             let style = wash.map_or(style, |bg| Style { bg, ..style });
-            if on {
+            if on && self.measure.in_cells() {
                 // Only the cell tier needs the bar, since pixels have the pill.
                 let bar = Style {
                     fg: self.theme.accent,
@@ -7187,7 +7189,14 @@ impl App {
                     grid.put_str(area.x, y + row, "▌", bar, area.right());
                 }
             }
-            if wash.is_some() {
+            if let Some(fill) = wash.filter(|_| !self.measure.in_cells()) {
+                // With pixels, the pill is paint and sized to the icon.
+                let (wide, high) = RAIL_PILL;
+                let left = area.x as f32 + (area.w as f32 - wide) / 2.0;
+                let top = y as f32 + (row.h as f32 - high) / 2.0;
+                let pill = Bounds::cells(left, top, wide, high);
+                grid.panel(pill, PILL_RADIUS, Some(fill), None);
+            } else if wash.is_some() {
                 // Icons are cells, so the pill is too: the rail's full width, with paint
                 // bringing it in half a column at each side.
                 let across = Rect::new(area.x, y, area.w, row.h);
@@ -7212,19 +7221,26 @@ impl App {
             } else {
                 let cell = Rect::new(area.x, y, area.w, row.h);
                 let shape = (*icon, RAIL_ICON);
-                toolbar::draw_icon(grid, shape, cell, style.fg, style);
+                // The pill is paint now, so the cells under it keep the rail's own colour.
+                let plain = Style {
+                    bg: self.theme.activity.bg,
+                    ..style
+                };
+                toolbar::draw_icon(grid, shape, cell, style.fg, plain);
             }
             let changed = self.changed_count();
             if *command == Command::ShowSourceControl && changed > 0 {
                 let color = self.theme.button_text;
-                let badge = Bounds::cells(area.x as f32 + 3.0, y as f32 - 0.16, 1.3, 0.58);
+                // On the icon's top right corner, wherever the icon's size puts it.
+                let corner = if self.measure.in_cells() { -0.16 } else { 0.42 };
+                let badge = Bounds::cells(area.x as f32 + 2.9, y as f32 + corner, 1.3, 0.58);
                 grid.panel(badge, 30, Some(self.theme.accent), None);
                 let font = Font {
                     bold: true,
                     size: BADGE_SIZE,
                     ..Font::default()
                 };
-                let (x, top) = (area.x as f32 + 3.32, y as f32 - 0.36);
+                let (x, top) = (area.x as f32 + 3.22, y as f32 + corner - 0.2);
                 grid.text_run(
                     (x, top),
                     area.right() as f32,
