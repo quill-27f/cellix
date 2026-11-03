@@ -2714,5 +2714,54 @@
     "title": "F8 walks the problems in a file",
     "test": "f8_walks_the_problems_in_a_file",
     "passes": true
+  },
+  {
+    "id": "suggestion-across-paragraphs",
+    "milestone": 10,
+    "title": "A suggestion across paragraphs shows without its markers",
+    "test": "a_suggestion_across_paragraphs_shows_without_its_markers",
+    "passes": true
+  },
+  {
+    "id": "plan-comments-carry",
+    "milestone": 10,
+    "title": "A plan's comments carry into its next version",
+    "test": "a_plans_comments_carry_into_its_next_version",
+    "passes": true
+  },
+  {
+    "id": "latex-input-numbering",
+    "milestone": 10,
+    "title": "Sections in an input file count toward the paper",
+    "test": "sections_in_an_input_file_count_toward_the_paper",
+    "passes": true
+  },
+  {
+    "id": "latex-outline-inputs",
+    "milestone": 10,
+    "title": "A paper's outline has its input files and no labels",
+    "test": "a_papers_outline_has_its_input_files_and_no_labels",
+    "passes": true
+  },
+  {
+    "id": "latex-references-list",
+    "milestone": 10,
+    "title": "A paper's references list what it cites",
+    "test": "a_papers_references_list_what_it_cites",
+    "passes": true
+  },
+  {
+    "id": "lsp-symbols-parse",
+    "milestone": 10,
+    "title": "Symbols come in order with their depth",
+    "test": "symbols_come_in_order_with_their_depth",
+    "passes": true
+  },
+  {
+    "id": "outline-code-symbols",
+    "milestone": 10,
+    "title": "Code lists its symbols in the Outline",
+    "test": "code_lists_its_symbols_in_the_outline",
+    "passes": true
   }
 ]

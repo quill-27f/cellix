@@ -688,6 +688,10 @@ pub struct App {
     pane_explained: bool,
     /// A comment waiting for an agent to be started.
     pending_ask: Option<u32>,
+    /// Code's symbols from its language server, for the Outline, and the file and revision
+    /// last asked about, so it's asked once a change.
+    symbols: HashMap<PathBuf, Vec<crate::outline::Heading>>,
+    symbols_asked: Option<(PathBuf, u64)>,
     /// Where the pointer rests, since when, and whether the server has been asked about it.
     rest: Option<((u16, u16), std::time::Instant, bool)>,
     /// What the server said about the symbol there, and the cell it's about.
@@ -761,6 +765,8 @@ impl App {
             comment_quote: None,
             back: Vec::new(),
             forward: Vec::new(),
+            symbols: HashMap::new(),
+            symbols_asked: None,
             rest: None,
             hover_info: None,
             hover_at: None,
@@ -2096,6 +2102,19 @@ impl App {
                         editor.reveal(area);
                     }
                 }
+            }
+            LspEvent::Symbols(path, found) => {
+                let headings = found
+                    .into_iter()
+                    .map(|(title, depth, line)| crate::outline::Heading {
+                        level: (depth + 1).min(6) as u8,
+                        title,
+                        line,
+                        file: None,
+                    })
+                    .collect();
+                self.symbols.insert(path, headings);
+                self.refresh_outline();
             }
             LspEvent::Hover(text) => {
                 if let Some(at) = self.hover_at.take() {
@@ -5580,7 +5599,23 @@ impl App {
             self.outline.headings.clear();
             return;
         };
-        self.outline.headings = crate::outline::of(&editor.buffer.text(), editor.dialect());
+        // Code has no headings: its symbols stand in, from its language server.
+        if !editor.has_page()
+            && let Some(path) = editor.buffer.path().map(Path::to_path_buf)
+        {
+            let revision = editor.buffer.revision();
+            let language = Registry::language_name(&path);
+            let asked = self.symbols_asked.as_ref() == Some(&(path.clone(), revision));
+            if !asked && let Some(client) = language.and_then(|l| self.servers.get_mut(l)) {
+                client.symbols(&path);
+                self.symbols_asked = Some((path.clone(), revision));
+            }
+            self.outline.headings = self.symbols.get(&path).cloned().unwrap_or_default();
+            return;
+        }
+        let folder = editor.buffer.path().and_then(Path::parent);
+        self.outline.headings =
+            crate::outline::of_in(&editor.buffer.text(), editor.dialect(), folder);
     }
 
     fn outline_here(&self) -> Option<usize> {
@@ -5597,9 +5632,15 @@ impl App {
         let Some(area) = self.sidebar_area() else {
             return;
         };
-        let Some(line) = self.outline.at(area, y).map(|heading| heading.line) else {
+        let Some((line, file)) = self.outline.at(area, y).map(|h| (h.line, h.file.clone())) else {
             return;
         };
+        // A heading in an `\\input` file opens that file.
+        if let Some(file) = file
+            && self.open(&file).is_err()
+        {
+            return;
+        }
         self.drawer = false;
         let text = self.focused_area();
         if let Some(editor) = self.editor_mut() {
@@ -5830,6 +5871,22 @@ impl App {
             quote: quote.clone(),
             removed,
         };
+        // A plan's comment also stays on the plan as a thread, so the next version shows it
+        // and whether it was dealt with. The agent hears of it with the plan, so it's told.
+        if let Some(plan) = self.plan.as_ref().map(|p| p.path.clone()) {
+            self.threads.push(Thread {
+                id: cellix_review::threads::next_id(&self.threads),
+                file: self.relative(&plan),
+                line,
+                quote: quote.clone(),
+                text: text.clone(),
+                replies: Vec::new(),
+                resolved: false,
+                told: Some(0),
+                asked: false,
+            });
+            self.save_threads();
+        }
         let Some(editor) = self
             .editors
             .get(self.active())
@@ -11523,6 +11580,32 @@ mod tests {
     }
 
     #[test]
+    fn a_plans_comments_carry_into_its_next_version() {
+        let (dir, mut app) = project();
+        let _decision = pending_plan(&dir, &mut app);
+        app.run(Command::AddComment);
+        typed(&mut app, "Too big");
+        enter(&mut app);
+        let (x, y) = find(&screen(&app), SEND_BACK);
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        typed(&mut app, "Split it");
+        enter(&mut app);
+        let path = dir.path().join("plan.md");
+        fs::write(&path, "# Plan\n\nstep one, split\n").unwrap();
+        let (reply, _again) = std::sync::mpsc::channel();
+        app.serve(Request::Plan {
+            path: path.clone(),
+            reply,
+        });
+        let file = app.relative(&path);
+        let carried: Vec<_> = app.threads.iter().filter(|t| t.file == file).collect();
+        assert_eq!(carried.len(), 1, "{:?}", app.threads);
+        assert_eq!(carried[0].text, "Too big");
+        assert_eq!(carried[0].quote, "# Plan");
+        assert!(!carried[0].waiting(), "the agent heard it with the plan");
+    }
+
+    #[test]
     fn sending_a_plan_back_carries_comments_and_edits() {
         let (dir, mut app) = project();
         let decision = pending_plan(&dir, &mut app);
@@ -15257,6 +15340,26 @@ mod tests {
         let answer = propose(&mut app, diff_args(&dir, "t", "first line\nsecond\n"));
         app.run(Command::RejectProposal);
         assert_eq!(answer.try_recv().unwrap(), vec!["DIFF_REJECTED", "t"]);
+    }
+
+    #[test]
+    fn code_lists_its_symbols_in_the_outline() {
+        let (dir, mut app) = project();
+        let path = dir.path().join("beta.rs");
+        app.open(&path).unwrap();
+        let path = app.editors[app.active()]
+            .buffer
+            .path()
+            .unwrap()
+            .to_path_buf();
+        app.lsp_event(LspEvent::Symbols(
+            path,
+            vec![("main".into(), 0, 0), ("helper".into(), 1, 0)],
+        ));
+        app.run(Command::ShowOutline);
+        let text = screen(&app).text();
+        assert!(text.contains("main") && text.contains("helper"), "{text}");
+        assert!(!text.contains("No headings here yet"), "{text}");
     }
 
     #[test]

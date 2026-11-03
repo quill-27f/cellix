@@ -682,3 +682,18 @@ document, Ctrl+, is Settings, Ctrl+] and Ctrl+[ indent and outdent, and Ctrl+Tab
 Several need the kitty keyboard protocol to be told apart; elsewhere they're in the palette.
 Still different from VS Code: Ctrl+G opens Review (VS Code's Go to Line is Ctrl+L here) and
 Ctrl+H stays Backspace.
+
+The review's open items.
+- A suggestion that runs across paragraphs shows as one: the page finds such marks over the whole
+  document, tones what's inside them in every paragraph and hides their markers.
+- A plan's comments carry into its next version: each is kept as a thread on the plan, marked as
+  told since the agent heard it with the plan, and follows its quote into the new text.
+- Sections in `\input` files count toward the paper: the page numbers on from where the file
+  ends. The Outline lists an input file's headings in place (a click opens that file) and stops
+  a title at its own closing brace, so `\label{…}` after it stays out.
+- `\bibliography` shows "References" with every cited entry, numbered in citing order, as
+  authors (year). title; a key the bibliography lacks says so in red. `\bibliographystyle` is
+  hidden, where it ran the next line into raw source.
+- Code's Outline lists its symbols from the language server (documentSymbol, nested ones under
+  their parent), asked once per change, where it said "No headings here yet".
+Unverified with a real server: document symbols.

@@ -15,6 +15,8 @@ pub struct Heading {
     pub level: u8,
     pub title: String,
     pub line: usize,
+    /// The file it's in, when that's an `\\input` file and not the one in view.
+    pub file: Option<std::path::PathBuf>,
 }
 
 /// A heading's words, without what only the source needs.
@@ -38,13 +40,19 @@ fn markdown(text: &str) -> Vec<Heading> {
                 level: hashes as u8,
                 title: plain(&trimmed[hashes..]),
                 line,
+                file: None,
             });
         }
     }
     found
 }
 
-fn latex(text: &str) -> Vec<Heading> {
+fn latex(
+    text: &str,
+    folder: Option<&std::path::Path>,
+    file: Option<&std::path::Path>,
+    depth: usize,
+) -> Vec<Heading> {
     const LEVELS: [(&str, u8); 5] = [
         ("\\chapter", 1),
         ("\\section", 2),
@@ -55,6 +63,22 @@ fn latex(text: &str) -> Vec<Heading> {
     let mut found = Vec::new();
     for (line, source) in text.lines().enumerate() {
         let code = source.split('%').next().unwrap_or("").trim_start();
+        // An input file's headings stand where it's read in.
+        if let Some(folder) = folder.filter(|_| depth < 8) {
+            for command in ["\\input{", "\\include{"] {
+                let Some(name) = code.strip_prefix(command).and_then(|r| r.split('}').next())
+                else {
+                    continue;
+                };
+                let mut path = folder.join(name.trim());
+                if path.extension().is_none() {
+                    path.set_extension("tex");
+                }
+                if let Ok(inner) = std::fs::read_to_string(&path) {
+                    found.extend(latex(&inner, Some(folder), Some(&path), depth + 1));
+                }
+            }
+        }
         for (command, level) in LEVELS {
             let Some(rest) = code.strip_prefix(command) else {
                 continue;
@@ -63,21 +87,37 @@ fn latex(text: &str) -> Vec<Heading> {
             let Some(title) = rest.strip_prefix('{') else {
                 continue;
             };
-            let title = title.rsplit_once('}').map_or(title, |(words, _)| words);
+            // To the brace that closes it, so a `\\label` after it stays out.
+            let mut depth = 0;
+            let end = title.char_indices().find(|(_, c)| match c {
+                '{' => {
+                    depth += 1;
+                    false
+                }
+                '}' if depth == 0 => true,
+                '}' => {
+                    depth -= 1;
+                    false
+                }
+                _ => false,
+            });
+            let title = end.map_or(title, |(at, _)| &title[..at]);
             found.push(Heading {
                 level,
                 title: plain(title),
                 line,
+                file: file.map(std::path::Path::to_path_buf),
             });
         }
     }
     found
 }
 
-pub fn of(text: &str, dialect: Dialect) -> Vec<Heading> {
+/// The headings, with a paper's `\\input` files read from `folder` and their headings in place.
+pub fn of_in(text: &str, dialect: Dialect, folder: Option<&std::path::Path>) -> Vec<Heading> {
     match dialect {
         Dialect::Markdown => markdown(text),
-        Dialect::Latex => latex(text),
+        Dialect::Latex => latex(text, folder, None, 0),
         Dialect::Data(_) => Vec::new(),
     }
 }
@@ -169,11 +209,24 @@ impl Outline {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_papers_outline_has_its_input_files_and_no_labels() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("method.tex"), "\\section{Method}\n").unwrap();
+        let text = "\\section{Introduction}\\label{sec:intro}\n\\input{method}\n\\section{End}\n";
+        let found = of_in(text, Dialect::Latex, Some(dir.path()));
+        let titles: Vec<&str> = found.iter().map(|h| h.title.as_str()).collect();
+        assert_eq!(titles, ["Introduction", "Method", "End"]);
+        assert_eq!(
+            found[1].file.as_deref(),
+            Some(dir.path().join("method.tex").as_path())
+        );
+    }
 
     #[test]
     fn markdown_headings_skip_code() {
         let text = "# One\n\n```sh\n# not this\n```\n\n## Two **bold**\n";
-        let found = of(text, Dialect::Markdown);
+        let found = of_in(text, Dialect::Markdown, None);
         assert_eq!(found.len(), 2);
         assert_eq!(found[1].title, "Two bold");
         assert_eq!(found[1].level, 2);
@@ -183,7 +236,7 @@ mod tests {
     #[test]
     fn a_paper_has_its_sections() {
         let text = "\\section{Intro}\\label{s}\n% \\section{Old}\n\\subsection*{Detail}\n";
-        let found = of(text, Dialect::Latex);
+        let found = of_in(text, Dialect::Latex, None);
         assert_eq!(found.len(), 2, "{found:?}");
         assert_eq!(found[0].level, 2);
         assert_eq!(found[1].title, "Detail");
@@ -191,7 +244,7 @@ mod tests {
 
     #[test]
     fn the_caret_is_under_the_last_heading_above_it() {
-        let found = of("# A\n\ntext\n\n# B\n", Dialect::Markdown);
+        let found = of_in("# A\n\ntext\n\n# B\n", Dialect::Markdown, None);
         assert_eq!(current(&found, 2), Some(0));
         assert_eq!(current(&found, 4), Some(1));
     }

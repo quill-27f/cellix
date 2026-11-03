@@ -467,6 +467,27 @@ impl Page<'_, '_> {
         });
     }
 
+    /// What the paper cites, numbered in the order it cites them, as the list prints.
+    fn references(&mut self, index: usize) {
+        let offset = self.lines[index].0;
+        let cited = self.project.cited.clone();
+        for (n, key) in cited.iter().enumerate() {
+            let line = match self.project.references.get(key) {
+                Some(reference) => format!("[{}] {reference}", n + 1),
+                None => format!("[{}] {key}: not in the bibliography", n + 1),
+            };
+            let tone = if self.project.references.contains_key(key) {
+                Tone::Text
+            } else {
+                Tone::Failed
+            };
+            let mut glyphs = decoration(&line, tone);
+            measure_glyphs(&mut glyphs, self.context.measure);
+            let template = Row::new(index, offset);
+            wrap(template, glyphs, 0.0, self.width, self.rows);
+        }
+    }
+
     /// The source of some lines, for what has no page form.
     fn source(&mut self, first: usize, last: usize) {
         let lines = &self.lines[first..=last];
@@ -915,6 +936,10 @@ impl Page<'_, '_> {
         if path.extension().is_none() {
             path.set_extension("tex");
         }
+        // What the file numbers, this one numbers on from.
+        if let Some(after) = self.project.after.get(&path) {
+            self.counters = after.clone();
+        }
         self.rows.push(Row {
             glyphs,
             target: Some(Target::File(path)),
@@ -1001,8 +1026,13 @@ impl Page<'_, '_> {
             self.label("Table of contents", index);
             return index + 1;
         }
+        // Says how references print, which the list below doesn't need.
+        if text.starts_with("\\bibliographystyle{") {
+            return index + 1;
+        }
         if text.starts_with("\\bibliography{") || text.starts_with("\\printbibliography") {
             self.label("References", index);
+            self.references(index);
             return index + 1;
         }
         if let Some(name) = env_end(line) {
@@ -1360,6 +1390,55 @@ ignored after the end
             .find(|r| text(r).contains("Accuracy"))
             .expect("a caption");
         assert!(caption.lead < 1.0, "left, with the table: {}", caption.lead);
+    }
+
+    #[test]
+    fn sections_in_an_input_file_count_toward_the_paper() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("two.tex"), "\\section{Two}\n").unwrap();
+        let root = dir.path().join("main.tex");
+        let source =
+            "\\begin{document}\n\\section{One}\n\\input{two}\n\\section{Three}\n\\end{document}\n";
+        std::fs::write(&root, source).unwrap();
+        let extras = Extras {
+            dialect: Dialect::Latex,
+            project: Some(Rc::new(Project::read(&root))),
+            file: Some(&root),
+            folder: Some(dir.path()),
+            ..Extras::default()
+        };
+        let rows = layout_with(source, 70, &CellMeasure, &Registry::default(), &extras);
+        let all = rows.iter().map(text).collect::<Vec<_>>().join("\n");
+        assert!(all.contains("3  Three"), "{all}");
+    }
+
+    #[test]
+    fn a_papers_references_list_what_it_cites() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("refs.bib"),
+            "@book{knuth84, author = {Knuth, Donald}, title = {The TeXbook}, year = 1984}\n",
+        )
+        .unwrap();
+        let root = dir.path().join("main.tex");
+        let source = "\\begin{document}\nSee \\cite{knuth84} and \\cite{nobody}.\n\n\\bibliographystyle{plain}\n\\bibliography{refs}\n\\end{document}\n";
+        std::fs::write(&root, source).unwrap();
+        let extras = Extras {
+            dialect: Dialect::Latex,
+            project: Some(Rc::new(Project::read(&root))),
+            file: Some(&root),
+            folder: Some(dir.path()),
+            ..Extras::default()
+        };
+        let rows = layout_with(source, 70, &CellMeasure, &Registry::default(), &extras);
+        let all = rows.iter().map(text).collect::<Vec<_>>().join("\n");
+        assert!(all.contains("References"), "{all}");
+        assert!(
+            all.contains("[1] Knuth, Donald (1984). The TeXbook."),
+            "{all}"
+        );
+        assert!(all.contains("[2] nobody: not in the bibliography"), "{all}");
+        assert!(!all.contains("bibliographystyle"), "{all}");
     }
 
     #[test]

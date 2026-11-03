@@ -130,10 +130,16 @@ pub struct Project {
     pub labels: HashMap<String, String>,
     /// Numbering as each file starts.
     pub starts: HashMap<PathBuf, Counters>,
+    /// Numbering as each file ends, so the file that `\\input`s it numbers on from there.
+    pub after: HashMap<PathBuf, Counters>,
     /// What each citation key shows as: author and year.
     pub citations: HashMap<String, String>,
     /// The paper's own packages and commands, which a piece built alone still needs.
     pub setup: Vec<String>,
+    /// Each `.bib` entry as its reference reads: authors, year and title.
+    pub references: HashMap<String, String>,
+    /// The keys the paper cites, in the order it first cites them.
+    pub cited: Vec<String>,
     /// The `.bib` files the paper names with `\\bibliography` or `\\addbibresource`.
     pub bibliographies: Vec<PathBuf>,
 }
@@ -414,6 +420,10 @@ impl Project {
         for path in named.into_iter().chain(beside) {
             if let Ok(text) = std::fs::read_to_string(path) {
                 for entry in bib_entries(&text) {
+                    project
+                        .references
+                        .entry(entry.key.clone())
+                        .or_insert_with(|| entry.reference());
                     let shown = entry.short();
                     project.citations.entry(entry.key).or_insert(shown);
                 }
@@ -439,11 +449,17 @@ impl Project {
         }
         self.starts.insert(path.to_path_buf(), counters.clone());
         self.lines(&text, folder, counters, depth);
+        self.after.insert(path.to_path_buf(), counters.clone());
     }
 
     fn lines(&mut self, text: &str, folder: &Path, counters: &mut Counters, depth: usize) {
         self.setup.extend(setup_of(text));
         self.bibliographies.extend(bibliographies_of(text, folder));
+        for key in cited_in(text) {
+            if !self.cited.contains(&key) {
+                self.cited.push(key);
+            }
+        }
         let mut current = String::new();
         let lines: Vec<&str> = text.lines().collect();
         let mut index = 0;
@@ -552,6 +568,27 @@ pub struct BibEntry {
 }
 
 impl BibEntry {
+    /// `Knuth, Donald (1984). The TeXbook.`, as a references list reads.
+    pub fn reference(&self) -> String {
+        let authors = self.authors.replace(" and ", "; ");
+        let year = if self.year.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", self.year)
+        };
+        let title = if self.title.is_empty() {
+            String::new()
+        } else {
+            format!(" {}.", self.title.trim_end_matches('.'))
+        };
+        let lead = if authors.is_empty() {
+            self.key.clone()
+        } else {
+            authors
+        };
+        format!("{lead}{year}.{title}")
+    }
+
     /// `Knuth 1984`, as a citation reads on the page.
     pub fn short(&self) -> String {
         let first = self.authors.split(" and ").next().unwrap_or("");
@@ -564,6 +601,40 @@ impl BibEntry {
         let more = if many { " et al." } else { "" };
         format!("{surname}{more} {}", self.year).trim().to_string()
     }
+}
+
+/// The keys a text cites, in order, each once.
+fn cited_in(text: &str) -> Vec<String> {
+    let mut keys = Vec::new();
+    for line in text.lines() {
+        let code = line.split('%').next().unwrap_or("");
+        let mut rest = code;
+        while let Some(at) = rest.find('\\') {
+            let after = &rest[at + 1..];
+            let name: String = after
+                .chars()
+                .take_while(char::is_ascii_alphabetic)
+                .collect();
+            rest = &after[name.len()..];
+            if !CITES.contains(&name.as_str()) {
+                continue;
+            }
+            // Past any options, as in `\\citep[see][p.~3]{key}`.
+            while rest.starts_with('[') {
+                rest = rest.find(']').map_or("", |end| &rest[end + 1..]);
+            }
+            let Some(inner) = rest.strip_prefix('{').and_then(|r| r.split_once('}')) else {
+                continue;
+            };
+            for key in inner.0.split(',').map(str::trim).filter(|k| !k.is_empty()) {
+                if !keys.iter().any(|k| k == key) {
+                    keys.push(key.to_string());
+                }
+            }
+            rest = inner.1;
+        }
+    }
+    keys
 }
 
 /// The `.bib` files a text names, as paths from `folder`.

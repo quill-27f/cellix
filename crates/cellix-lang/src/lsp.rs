@@ -40,6 +40,8 @@ pub enum LspEvent {
     Formatted(PathBuf, Vec<TextEdit>),
     /// What the server says about the symbol at a place: its type, signature and docs.
     Hover(String),
+    /// A file's symbols, in order, as (name, depth, line).
+    Symbols(PathBuf, Vec<(String, usize, usize)>),
     /// The server refused a request, in its own words.
     Failed(String),
 }
@@ -53,6 +55,7 @@ enum Pending {
     References,
     Formatting(PathBuf),
     Hover,
+    Symbols(PathBuf),
 }
 
 /// Holds messages until the server has answered `initialize`, as the protocol requires.
@@ -174,6 +177,33 @@ fn parse_location(result: &Value) -> Option<LspEvent> {
     };
     let (line, column) = position(&range["start"]);
     Some(LspEvent::Definition(path_of(uri)?, line, column))
+}
+
+/// A file's symbols, nested ones under their parent, whichever shape the server sends: the
+/// tree of `DocumentSymbol`s or the flat `SymbolInformation` list.
+fn parse_symbols(result: &Value) -> Vec<(String, usize, usize)> {
+    fn walk(items: &[Value], depth: usize, out: &mut Vec<(String, usize, usize)>) {
+        for item in items {
+            let Some(name) = item.get("name").and_then(Value::as_str) else {
+                continue;
+            };
+            let range = item
+                .get("selectionRange")
+                .or_else(|| item.get("range"))
+                .or_else(|| item.get("location").and_then(|l| l.get("range")));
+            let line = range.and_then(|r| r["start"]["line"].as_u64()).unwrap_or(0) as usize;
+            out.push((name.to_string(), depth, line));
+            if let Some(children) = item.get("children").and_then(Value::as_array) {
+                walk(children, depth + 1, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    if let Some(items) = result.as_array() {
+        walk(items, 0, &mut out);
+    }
+    out.sort_by_key(|(_, _, line)| *line);
+    out
 }
 
 /// A hover's contents as plain lines: Markdown's code fences go, and the code stays.
@@ -347,6 +377,7 @@ fn read_loop(
             }
             Some(Pending::Definition) => parse_location(result),
             Some(Pending::Hover) => parse_hover(result),
+            Some(Pending::Symbols(path)) => Some(LspEvent::Symbols(path, parse_symbols(result))),
             Some(Pending::Completion) => Some(parse_completion(result)),
             Some(Pending::Rename) => Some(parse_rename(result)),
             Some(Pending::References) => Some(parse_references(result)),
@@ -417,6 +448,7 @@ impl Client {
                         "publishDiagnostics": {},
                         "definition": {},
                         "hover": {"contentFormat": ["plaintext", "markdown"]},
+                        "documentSymbol": {"hierarchicalDocumentSymbolSupport": true},
                         "completion": {},
                         "rename": {},
                         "references": {},
@@ -494,6 +526,16 @@ impl Client {
             "textDocument": {"uri": uri(path)},
             "position": {"line": line, "character": column},
         })
+    }
+
+    /// Asks for a file's symbols, for the Outline.
+    pub fn symbols(&mut self, path: &Path) {
+        let params = json!({"textDocument": {"uri": uri(path)}});
+        self.request(
+            "textDocument/documentSymbol",
+            params,
+            Pending::Symbols(path.to_path_buf()),
+        );
     }
 
     pub fn hover(&mut self, path: &Path, line: usize, column: usize) {
@@ -593,6 +635,24 @@ mod tests {
         let value = read_message(&mut raw.as_bytes()).unwrap();
         assert_eq!(value["id"], 1);
         assert!(read_message(&mut "".as_bytes()).is_none());
+    }
+
+    #[test]
+    fn symbols_come_in_order_with_their_depth() {
+        let tree = json!([{"name": "Queue", "kind": 23, "range": {"start": {"line": 4}},
+            "selectionRange": {"start": {"line": 5}},
+            "children": [{"name": "push", "kind": 6, "range": {"start": {"line": 9}}}]},
+            {"name": "main", "kind": 12, "range": {"start": {"line": 1}}}]);
+        assert_eq!(
+            parse_symbols(&tree),
+            vec![
+                ("main".into(), 0, 1),
+                ("Queue".into(), 0, 5),
+                ("push".into(), 1, 9)
+            ]
+        );
+        let flat = json!([{"name": "f", "kind": 12, "location": {"uri": "file:///a", "range": {"start": {"line": 3}}}}]);
+        assert_eq!(parse_symbols(&flat), vec![("f".into(), 0, 3)]);
     }
 
     #[test]

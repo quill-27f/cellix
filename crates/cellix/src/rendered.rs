@@ -671,6 +671,14 @@ fn inline(chars: &[char], offset: usize, look: Look, context: &Context, out: &mu
     while i < chars.len() {
         let rest = &chars[i..];
         let at = offset + i;
+        // Inside a suggestion that started or ends in another block.
+        if let Some(shown) = context.across(at) {
+            if let Some(tone) = shown {
+                out.push(glyph(chars[i], Some(at), Look { tone, ..look }));
+            }
+            i += 1;
+            continue;
+        }
         let wrap = |marker: &[char], next: Look, out: &mut Vec<Glyph>| {
             let open = marker.len();
             let close = closing(rest, open, marker)?;
@@ -1169,6 +1177,38 @@ struct Context<'a> {
     measure: &'a dyn Measure,
     registry: &'a Registry,
     extras: &'a Extras<'a>,
+    /// Suggestions that run across lines, which no one block sees whole: where each starts and
+    /// ends, its kind, and where a replacement's arrow is.
+    spanning: Vec<Spanning>,
+}
+
+/// A suggestion running across lines, as char places in the document.
+struct Spanning {
+    start: usize,
+    end: usize,
+    kind: cellix_doc::changes::Kind,
+    arrow: usize,
+}
+
+impl Context<'_> {
+    /// How a char inside a suggestion that runs across lines shows: as what it marks, or
+    /// hidden when it's one of the suggestion's own markers. None outside them.
+    fn across(&self, at: usize) -> Option<Option<Tone>> {
+        use cellix_doc::changes::Kind;
+        let span = self.spanning.iter().find(|s| at >= s.start && at < s.end)?;
+        let marker = at < span.start + 3
+            || at >= span.end - 3
+            || (span.kind == Kind::Replace && (span.arrow..span.arrow + 2).contains(&at));
+        if marker {
+            return Some(None);
+        }
+        Some(Some(match span.kind {
+            Kind::Insert => Tone::Inserted,
+            Kind::Delete => Tone::Deleted,
+            Kind::Replace if at < span.arrow => Tone::Deleted,
+            Kind::Replace => Tone::Inserted,
+        }))
+    }
 }
 
 impl Context<'_> {
@@ -1663,10 +1703,32 @@ pub fn layout_with(
     registry: &Registry,
     extras: &Extras,
 ) -> Vec<Row> {
+    // Only Markdown's marks are found here; a paper's go through its own commands.
+    let spanning = if extras.dialect == Dialect::Latex {
+        Vec::new()
+    } else {
+        cellix_doc::changes::find(text, cellix_doc::changes::Syntax::Critic)
+            .into_iter()
+            .filter(|change| {
+                let chars = text
+                    .chars()
+                    .skip(change.start)
+                    .take(change.end - change.start);
+                chars.into_iter().any(|c| c == '\n')
+            })
+            .map(|change| Spanning {
+                arrow: change.start + 3 + change.old.chars().count(),
+                start: change.start,
+                end: change.end,
+                kind: change.kind,
+            })
+            .collect()
+    };
     let context = Context {
         measure,
         registry,
         extras,
+        spanning,
     };
     let proportional = !measure.in_cells();
     let width = width as f32;
@@ -2385,6 +2447,27 @@ mod tests {
 
     fn texts(source: &str) -> Vec<String> {
         page(source, 40).iter().map(text).collect()
+    }
+
+    #[test]
+    fn a_suggestion_across_paragraphs_shows_without_its_markers() {
+        let source = "Keep.\n\n{++New para one.\n\nNew para two.++}\n\n{--Gone one.\n\nGone two.--}\n\nEnd.\n";
+        let rows = page(source, 40);
+        let all: String = rows.iter().map(text).collect::<Vec<_>>().join("\n");
+        for marker in ["{++", "++}", "{--", "--}"] {
+            assert!(!all.contains(marker), "{marker} shows: {all}");
+        }
+        let tone_of = |word: &str| {
+            let row = rows.iter().find(|r| text(r).contains(word)).expect(word);
+            row.glyphs
+                .iter()
+                .find(|g| g.ch.is_alphabetic())
+                .map(|g| g.tone)
+        };
+        assert_eq!(tone_of("New para two."), Some(Tone::Inserted));
+        assert_eq!(tone_of("New para one."), Some(Tone::Inserted));
+        assert_eq!(tone_of("Gone two."), Some(Tone::Deleted));
+        assert_ne!(tone_of("End."), Some(Tone::Inserted));
     }
 
     #[test]
