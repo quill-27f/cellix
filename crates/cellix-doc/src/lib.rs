@@ -3,6 +3,7 @@
 pub mod changes;
 pub mod diagram;
 pub mod figure;
+pub mod front;
 pub mod html;
 pub mod latex;
 pub mod math;

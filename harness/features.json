@@ -2357,5 +2357,54 @@
     "title": "The vim keymap runs Neovim when it is installed",
     "test": "the_vim_keymap_runs_neovim_when_it_is_installed",
     "passes": true
+  },
+  {
+    "id": "front-split",
+    "milestone": 10,
+    "title": "Front matter gives a title and the rest",
+    "test": "front_matter_gives_a_title_and_the_rest",
+    "passes": true
+  },
+  {
+    "id": "front-none",
+    "milestone": 10,
+    "title": "A document without front matter is left alone",
+    "test": "a_document_without_it_is_left_alone",
+    "passes": true
+  },
+  {
+    "id": "export-code-eq",
+    "milestone": 10,
+    "title": "Export keeps == inside inline code",
+    "test": "inline_code_keeps_its_equals_signs",
+    "passes": true
+  },
+  {
+    "id": "export-html-title",
+    "milestone": 10,
+    "title": "HTML export sets front matter as a title",
+    "test": "front_matter_is_a_title_not_a_heading_of_keys",
+    "passes": true
+  },
+  {
+    "id": "export-latex-title",
+    "milestone": 10,
+    "title": "PDF export sets front matter as a title block",
+    "test": "front_matter_becomes_the_title_block",
+    "passes": true
+  },
+  {
+    "id": "export-hidden",
+    "milestone": 10,
+    "title": "Export builds out of sight",
+    "test": "an_export_builds_out_of_sight_and_lands_beside_the_document",
+    "passes": true
+  },
+  {
+    "id": "export-suggestions",
+    "milestone": 10,
+    "title": "Exporting suggestions asks how",
+    "test": "exporting_suggestions_asks_how",
+    "passes": true
   }
 ]

@@ -124,6 +124,7 @@ pub fn marked(markdown: &str) -> String {
     ];
     let mut out = String::with_capacity(markdown.len());
     let mut code = false;
+    let mut highlight = false;
     for line in markdown.split_inclusive('\n') {
         if line.trim_start().starts_with("```") {
             code = !code;
@@ -132,17 +133,34 @@ pub fn marked(markdown: &str) -> String {
             out.push_str(line);
             continue;
         }
-        let mut text = line.to_string();
-        for (from, to) in pairs {
-            text = text.replace(from, to);
+        // Inline code keeps its text exactly: `a == b` is code, not a highlight.
+        for (index, piece) in line.split('`').enumerate() {
+            if index > 0 {
+                out.push('`');
+            }
+            if index % 2 == 1 {
+                out.push_str(piece);
+            } else {
+                out.push_str(&marks_in(piece, &pairs, &mut highlight));
+            }
         }
-        let text = raised(&raised(&text, '~', "sub"), '^', "sup");
-        let mut parts = text.split("==");
-        out.push_str(parts.next().unwrap_or(""));
-        for (index, part) in parts.enumerate() {
-            out.push_str(if index % 2 == 0 { "<mark>" } else { "</mark>" });
-            out.push_str(part);
-        }
+    }
+    out
+}
+
+/// Markdown's marks in text that isn't code.
+fn marks_in(text: &str, pairs: &[(&str, &str)], highlight: &mut bool) -> String {
+    let mut text = text.to_string();
+    for (from, to) in pairs {
+        text = text.replace(from, to);
+    }
+    let text = raised(&raised(&text, '~', "sub"), '^', "sup");
+    let mut parts = text.split("==");
+    let mut out = parts.next().unwrap_or("").to_string();
+    for part in parts {
+        *highlight = !*highlight;
+        out.push_str(if *highlight { "<mark>" } else { "</mark>" });
+        out.push_str(part);
     }
     out
 }
@@ -170,8 +188,25 @@ pub fn body_with(markdown: &str, built: &Built) -> String {
             escape(image.alt)
         )
     });
-    let sized = marked(&sized);
+    let (front, sized) = crate::front::split(&sized);
+    let sized = marked(sized);
     let mut events = Vec::new();
+    if let Some(title) = &front.title {
+        events.push(Event::Html(
+            format!("<h1 class=\"title\">{}</h1>\n", escape(title)).into(),
+        ));
+    }
+    let byline: Vec<&str> = [&front.author, &front.date]
+        .into_iter()
+        .flatten()
+        .map(String::as_str)
+        .collect();
+    if !byline.is_empty() {
+        let byline = escape(&byline.join(" · "));
+        events.push(Event::Html(
+            format!("<p class=\"byline\">{byline}</p>\n").into(),
+        ));
+    }
     let mut open: Option<(diagram::Kind, String)> = None;
     let mut tikz: Option<(String, String)> = None;
     for event in Parser::new_ext(&sized, options) {
@@ -237,6 +272,21 @@ pub fn page_with(title: &str, markdown: &str, base: &str, built: &Built) -> Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inline_code_keeps_its_equals_signs() {
+        let html = body("Check `hits == misses` and ==this==.\n");
+        assert!(html.contains("hits == misses"), "{html}");
+        assert_eq!(html.matches("<mark>").count(), 1, "{html}");
+    }
+
+    #[test]
+    fn front_matter_is_a_title_not_a_heading_of_keys() {
+        let html = body("---\ntitle: The Plan\nauthor: Ada\n---\n\nWords.\n");
+        assert!(html.contains("<h1 class=\"title\">The Plan</h1>"), "{html}");
+        assert!(html.contains("Ada"), "{html}");
+        assert!(!html.contains("title:"), "{html}");
+    }
 
     #[test]
     fn a_page_carries_tables_tasks_and_math() {

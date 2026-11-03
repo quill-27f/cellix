@@ -513,3 +513,10 @@ keymap now runs the real Neovim when it's installed. Without it, the built-in mo
 `aw`, `w` and `e` as Vim has them, `f`/`t`/`F`/`T`, `V`, `D`, `C`, `J`, `r`, `/` and the `:` commands
 that save, close and go to a line, and anything else is swallowed rather than typed. Its tests run
 the built-in mode whether or not this machine has Neovim.
+
+Export. Front matter becomes the title, author and date in both the HTML page and the PDF, where it
+printed as a heading of `key: value` lines. `==` inside inline code stays code instead of a
+highlight. A document with pending suggestions asks whether the PDF shows them accepted or as they
+stand. The PDF builds from a hidden `.name.export.tex` and its log and aux files go, so an existing
+`name.tex` no longer stops an export. Unverified: the latexmk and pdflatex leftovers, on a machine
+without tectonic.

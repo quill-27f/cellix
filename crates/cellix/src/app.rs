@@ -262,6 +262,8 @@ enum Choice {
     KeepRunning,
     /// Throw away a file's changes, deleting it if git never knew it.
     DiscardFile(PathBuf, bool),
+    /// Export to PDF, with suggestions accepted or as they stand.
+    ExportPdf(bool),
     CloseSession(usize),
     Undo(String),
 }
@@ -282,6 +284,17 @@ fn engines_for(name: Option<&str>, vim_may_use_neovim: bool) -> (Option<Vim>, Op
     let neovim = wanted.then(|| Neovim::start(&[]).ok()).flatten();
     let vim = (name == Some("vim") && neovim.is_none()).then(Vim::default);
     (vim, neovim)
+}
+
+/// Where an export builds and where its PDF ends up: built beside the document under a hidden
+/// name, so pictures resolve and nothing of the build is left in the project.
+fn export_names(path: &Path) -> (PathBuf, PathBuf) {
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let hidden = path.with_file_name(format!(".{stem}.export.tex"));
+    (hidden, path.with_extension("pdf"))
 }
 
 /// What the periodic look at the disk found.
@@ -623,6 +636,8 @@ pub struct App {
     pane_explained: bool,
     /// A comment waiting for an agent to be started.
     pending_ask: Option<u32>,
+    /// Where an exported PDF goes once its hidden build is done.
+    export_to: Option<PathBuf>,
     /// A push or pull on its way.
     sync_result: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     /// What runs sessions so they can outlive Cellix: Cellix itself, away from tests.
@@ -675,6 +690,7 @@ impl App {
             review: None,
             clipboard_image: clipboard_image_command(),
             pending_ask: None,
+            export_to: None,
             sync_result: None,
             keep_running: false,
             kernels: HashMap::new(),
@@ -3417,6 +3433,7 @@ impl App {
                 self.stop_confirmed = true;
                 self.run(Command::Quit);
             }
+            Choice::ExportPdf(accepted) => self.export_pdf_with(accepted),
             Choice::DiscardFile(path, untracked) => {
                 let root = self.workspace.root().to_path_buf();
                 if let Err(why) = cellix_review::discard(&root, &path, untracked) {
@@ -7803,8 +7820,36 @@ impl App {
         }
     }
 
-    /// Markdown goes through LaTeX, so its math comes out as well as a paper's.
+    /// Markdown goes through LaTeX, so its math comes out as well as a paper's. Suggestions
+    /// not yet settled are asked about first, since a PDF would print them as they stand.
     fn export_pdf(&mut self) {
+        let Some(editor) = self.editors.get(self.active()) else {
+            return;
+        };
+        if editor.dialect() == Dialect::Latex {
+            self.build_pdf();
+            return;
+        }
+        let text = editor.buffer.text();
+        let settled =
+            cellix_doc::changes::settle_all(&text, cellix_doc::changes::Syntax::Critic, true);
+        if settled == text {
+            self.export_pdf_with(false);
+            return;
+        }
+        self.overlay = Overlay::Confirm(Confirm {
+            title: "This document has suggestions".to_string(),
+            detail: "The PDF can show them accepted, or as they stand.".to_string(),
+            buttons: vec![
+                ("Accept All in the PDF", Choice::ExportPdf(true)),
+                ("Show Them", Choice::ExportPdf(false)),
+                ("Cancel", Choice::Cancel),
+            ],
+            selected: 0,
+        });
+    }
+
+    fn export_pdf_with(&mut self, accepted: bool) {
         let Some(editor) = self.editors.get(self.active()) else {
             return;
         };
@@ -7812,22 +7857,17 @@ impl App {
             self.say("Save the file first");
             return;
         };
-        if editor.dialect() == Dialect::Latex {
-            self.build_pdf();
-            return;
-        }
-        let out = path.with_extension("tex");
-        if out.exists() {
-            self.say(format!(
-                "{} is already there, so nothing was written",
-                self.relative(&out)
-            ));
-            return;
-        }
+        // Built under a hidden name, so nothing of the build is left in the project.
+        let (out, pdf) = export_names(&path);
         // LaTeX can't read a diagram, so each goes in as a picture beside the document.
         let folder = out.parent().map(Path::to_path_buf).unwrap_or_default();
         let mut made = vec![out.clone()];
-        let text = svg_as_pictures(&editor.buffer.text(), &folder, &mut made);
+        let mut text = editor.buffer.text();
+        if accepted {
+            text =
+                cellix_doc::changes::settle_all(&text, cellix_doc::changes::Syntax::Critic, true);
+        }
+        let text = svg_as_pictures(&text, &folder, &mut made);
         let tex = cellix_doc::latex::from_markdown_with(&text, &mut |kind, source| {
             let name = format!(".diagram-{}.png", made.len());
             let file = folder.join(&name);
@@ -7838,6 +7878,7 @@ impl App {
         match std::fs::write(&out, tex) {
             Ok(()) => {
                 self.remove_after_build = made;
+                self.export_to = Some(pdf);
                 self.start_build(out);
             }
             Err(e) => self.say(format!("Could not write the LaTeX file: {e}")),
@@ -7884,6 +7925,20 @@ impl App {
         let pdf = build.file.with_extension("pdf");
         let log = std::fs::read_to_string(build.file.with_extension("log")).unwrap_or_default();
         let warned = cellix_doc::latex::warnings(&format!("{}\n{log}", build.said)).len();
+        // An export was built under a hidden name: the PDF takes the document's, and the rest
+        // of the build goes.
+        let pdf = match self.export_to.take() {
+            Some(target) => {
+                if pdf.exists() {
+                    let _ = std::fs::rename(&pdf, &target);
+                }
+                for leftover in ["log", "aux", "out", "synctex.gz", "fls", "fdb_latexmk"] {
+                    let _ = std::fs::remove_file(build.file.with_extension(leftover));
+                }
+                target
+            }
+            None => pdf,
+        };
         if build.worked && pdf.exists() {
             self.show_pdf(&pdf);
             let seconds = build.took.as_secs_f32();
@@ -12964,6 +13019,22 @@ mod tests {
         let grid = screen(&app);
         let text = app.editors[0].scroll_region(app.pane_area(0));
         assert!(grid.bands.contains(&text.x) && grid.bands.contains(&text.right()));
+    }
+
+    #[test]
+    fn an_export_builds_out_of_sight_and_lands_beside_the_document() {
+        let (tex, pdf) = export_names(Path::new("/p/rfc.md"));
+        assert_eq!(tex, Path::new("/p/.rfc.export.tex"));
+        assert_eq!(pdf, Path::new("/p/rfc.pdf"));
+    }
+
+    #[test]
+    fn exporting_suggestions_asks_how() {
+        let (_dir, mut app) = page_app("Keep {++this++} here.\n");
+        app.run(Command::ExportPdf);
+        let text = screen(&app).text();
+        assert!(text.contains("This document has suggestions"), "{text}");
+        assert!(text.contains("Accept All in the PDF"), "{text}");
     }
 
     #[test]

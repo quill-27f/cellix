@@ -938,10 +938,20 @@ pub fn from_markdown_with(
         | Options::ENABLE_FOOTNOTES
         | Options::ENABLE_GFM
         | Options::ENABLE_MATH;
+    let (front, markdown) = crate::front::split(&markdown);
     // A footnote goes in where it's cited, so its text is found first.
-    let notes = footnote_texts(&markdown);
-    let markdown = crate::html::marked(&markdown);
+    let notes = footnote_texts(markdown);
+    let markdown = crate::html::marked(markdown);
     let mut out = String::from(HEADER);
+    if !front.is_empty() {
+        let field = |value: &Option<String>| value.as_deref().map(escape).unwrap_or_default();
+        out.push_str(&format!(
+            "\\title{{{}}}\n\\author{{{}}}\n\\date{{{}}}\n\\maketitle\n",
+            field(&front.title),
+            field(&front.author),
+            field(&front.date)
+        ));
+    }
     let mut verbatim = false;
     let mut columns = 0;
     let mut cell = 0;
@@ -1088,6 +1098,17 @@ pub fn from_markdown_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn front_matter_becomes_the_title_block() {
+        let tex = from_markdown_with(
+            "---\ntitle: The Plan\nauthor: Ada\n---\n\nWords.\n",
+            &mut |_, _| None,
+        );
+        assert!(tex.contains("\\title{The Plan}"), "{tex}");
+        assert!(tex.contains("\\maketitle"), "{tex}");
+        assert!(!tex.contains("title:"), "{tex}");
+    }
 
     #[test]
     fn a_piece_built_alone_keeps_the_papers_setup_and_not_its_page() {
