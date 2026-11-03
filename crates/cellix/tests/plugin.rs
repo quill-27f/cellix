@@ -48,9 +48,33 @@ fn claude_mod_bridge_loads() {
     assert_eq!(hooks["modules"][0], "./register.tsx");
     let module = plugin_file("hooks/register.tsx");
     assert!(module.contains("export const register"));
-    for command in ["cellix", "cellix-comments", "cellix-open"] {
+    for command in ["cellix", "cellix-comments", "cellix-open", "cellix-send"] {
         assert!(module.contains(&format!("name: '{command}'")), "{command}");
     }
     // The socket is the mod's only way in, so a Cellix that isn't running must read as that.
     assert!(module.contains("Cellix is not running"));
+    // A second session in the same folder can't start one, and must say so, not wait.
+    assert!(module.contains("already open for this folder"));
+}
+
+/// The mod's own tests, `hooks/*.test.tsx`, run in Claude Code's kit, which loads the mod as a
+/// session does and answers its calls. Skipped where Claude Code isn't installed.
+#[test]
+fn the_mod_passes_its_own_tests_in_claude_code() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("integrations/claude-code");
+    let run = std::process::Command::new("claude")
+        .args(["plugin", "test"])
+        .arg(&root)
+        .output();
+    let Ok(run) = run else {
+        eprintln!("skipped: Claude Code isn't installed");
+        return;
+    };
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(run.status.success(), "{said}");
+    assert!(said.contains(" 0 fail"), "{said}");
 }

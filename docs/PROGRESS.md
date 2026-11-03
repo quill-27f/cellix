@@ -527,3 +527,12 @@ being typed shows on the page, where it vanished until closed. A reference to no
 citation the bibliography lacks show in the colour of failure, as LaTeX prints `??` and `[?]`.
 latexmk and pdflatex now write SyncTeX, and pdflatex runs BibTeX and again until references settle.
 Unverified: the pdflatex passes on a machine with only pdflatex.
+
+Claude Code mod. `/cellix <file>` opens the file, where the argument was ignored. `/cellix-send`
+and the pane's Send to Agent start a turn, and the prompt hook adds the comments to it, where they
+waited for the next prompt. Claude Code refuses a prompt from inside a command, which would wait on
+the turn the command holds, so it starts just after. A second session in a folder that already has
+a Cellix says so, where it said "Starting Cellix…" for good; one Cellix per folder stays the rule,
+because hooks reach a folder's Cellix by its socket. The mod has its own tests,
+`hooks/register.test.tsx`, which `claude plugin test` runs in Claude Code's kit, and the Rust suite
+runs them where Claude Code is installed.

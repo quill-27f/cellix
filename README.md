@@ -274,8 +274,9 @@ keeps everything else in the file, and `cellix setup --remove` takes the two lin
 Restart Claude Code to pick it up. To try it in one session instead, `cellix setup` prints
 the command.
 
-Then `/cellix` opens the pane, and `/cellix-open <file>` opens a file in it. It also opens
-by itself when Claude proposes an edit or a plan. Click the pane to type there, and press
+Then `/cellix` opens the pane, and `/cellix <file>` opens a file in it. It also opens
+by itself when Claude proposes an edit or a plan. Comments go to Claude with your next
+prompt, or straight away with `/cellix-send` or the pane's Send to Agent. Click the pane to type there, and press
 Esc to go back to Claude. Under 110 columns the pane drops the sidebar, and under 90 the
 minimap, so the code keeps the room.
 

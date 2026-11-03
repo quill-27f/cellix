@@ -2441,5 +2441,19 @@
     "title": "Labels and citation keys complete inside their braces",
     "test": "references_and_citations_complete_inside_their_braces",
     "passes": true
+  },
+  {
+    "id": "pane-send-turn",
+    "milestone": 10,
+    "title": "Sending comments inside Claude Code starts a turn",
+    "test": "inside_claude_code_sending_starts_a_turn_for_the_comments",
+    "passes": true
+  },
+  {
+    "id": "mod-own-tests",
+    "milestone": 10,
+    "title": "The Claude Code mod passes its own tests in Claude Code's kit: /cellix-send, /cellix <file>, a second session",
+    "test": "the_mod_passes_its_own_tests_in_claude_code",
+    "passes": true
   }
 ]

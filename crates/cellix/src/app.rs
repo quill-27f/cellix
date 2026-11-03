@@ -5072,6 +5072,15 @@ impl App {
             self.say("No comments to send");
             return;
         }
+        // Inside Claude Code the mod starts a turn, and the prompt hook takes the comments.
+        if self.in_pane {
+            self.attention = Some("send");
+            self.say(format!(
+                "Sending {} comments to Claude Code",
+                comments.len()
+            ));
+            return;
+        }
         let Some(session) = self.dock.agent_mut() else {
             self.say("Comments will go with your next prompt to the agent");
             return;
@@ -10658,6 +10667,23 @@ mod tests {
         app.run(Command::SendToAgent);
         assert!(screen(&app).text().contains("next prompt"));
         assert_eq!(app.comments.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn inside_claude_code_sending_starts_a_turn_for_the_comments() {
+        let (dir, mut app) = project();
+        app.in_pane = true;
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        app.run(Command::AddComment);
+        typed(&mut app, "Now please");
+        enter(&mut app);
+        app.run(Command::SendToAgent);
+        assert_eq!(app.take_attention(), Some("send"));
+        assert_eq!(
+            app.comments.lock().unwrap().len(),
+            1,
+            "the prompt hook takes them"
+        );
     }
 
     fn ide(tool: &str, args: Value) -> (IdeCall, std::sync::mpsc::Receiver<Vec<String>>) {
