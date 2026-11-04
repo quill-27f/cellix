@@ -83,28 +83,46 @@ fn config_dir() -> Option<PathBuf> {
     configured.or_else(|| Some(PathBuf::from(std::env::var_os("HOME")?).join(".claude")))
 }
 
-/// A path as a file URL. A Windows path starts with its drive, `file:///C:/x`.
+/// A path as a file URL. A Windows path starts with its drive, `file:///C:/x`, and a share's
+/// names its server as the URL's host, `file://server/share/x`.
 pub fn file_url(path: &Path) -> String {
-    let text = path.display().to_string();
-    if cfg!(windows) {
-        format!("file:///{}", text.replace('\\', "/"))
-    } else {
-        format!("file://{text}")
+    file_url_for(&path.display().to_string(), cfg!(windows))
+}
+
+fn file_url_for(text: &str, windows: bool) -> String {
+    if !windows {
+        return format!("file://{text}");
+    }
+    let text = text.replace('\\', "/");
+    match text.strip_prefix("//") {
+        Some(share) => format!("file://{share}"),
+        None => format!("file:///{text}"),
     }
 }
 
 /// The path a file URL names, or the text as it is if it isn't one.
 pub fn url_path(text: &str) -> &str {
+    url_path_for(text, cfg!(windows))
+}
+
+fn url_path_for(text: &str, windows: bool) -> &str {
     let Some(path) = text.strip_prefix("file://") else {
         return text;
     };
-    // `file:///C:/x` is `C:/x`, which Windows takes.
-    let drive = path
-        .strip_prefix('/')
-        .filter(|rest| rest.get(1..2) == Some(":"));
-    match drive {
-        Some(rest) if cfg!(windows) => rest,
-        _ => path,
+    if !windows {
+        return path;
+    }
+    match path.strip_prefix('/') {
+        // `file:///C:/x` is `C:/x`, which Windows takes.
+        Some(rest) if rest.get(1..2) == Some(":") => rest,
+        // `file:////server/share` and `file://///server/share` are shares written the long way.
+        Some(rest) if rest.starts_with('/') => {
+            let names = rest.trim_start_matches('/');
+            &text[text.len() - names.len() - 2..]
+        }
+        Some(_) => path,
+        // `file://server/share/x` names a share, `//server/share/x`.
+        None => &text["file:".len()..],
     }
 }
 
@@ -537,6 +555,32 @@ mod tests {
         assert_eq!(file_url(Path::new(r"C:\x\y.md")), "file:///C:/x/y.md");
         #[cfg(unix)]
         assert_eq!(file_url(Path::new("/x/y.md")), "file:///x/y.md");
+    }
+
+    /// Windows paths, drives and shares alike, on every platform.
+    #[test]
+    fn windows_file_urls_name_drives_and_shares() {
+        let cases = [
+            (r"C:\x\y.md", "file:///C:/x/y.md", "C:/x/y.md"),
+            (
+                r"\\server\share\y.md",
+                "file://server/share/y.md",
+                "//server/share/y.md",
+            ),
+        ];
+        for (path, url, back) in cases {
+            assert_eq!(file_url_for(path, true), url);
+            assert_eq!(url_path_for(url, true), back);
+        }
+        assert_eq!(
+            url_path_for("file://///server/share/y.md", true),
+            "//server/share/y.md"
+        );
+        assert_eq!(
+            url_path_for("file:////server/share/y.md", true),
+            "//server/share/y.md"
+        );
+        assert_eq!(url_path_for("file:///x/y.md", false), "/x/y.md");
     }
 
     #[test]

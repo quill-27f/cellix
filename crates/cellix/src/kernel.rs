@@ -107,19 +107,30 @@ pub fn python_for(folder: &Path, root: &Path) -> PathBuf {
         .chain(var)
         .map(|venv| venv.join(VENV_PYTHON))
         .find(|python| python.is_file());
-    local.unwrap_or_else(|| PathBuf::from(PYTHON))
+    local.unwrap_or_else(|| {
+        let var = |name: &str| std::env::var(name).ok();
+        PathBuf::from(system_python(cfg!(windows), |program| {
+            crate::integrations::on_path(program, var)
+        }))
+    })
 }
 
-/// Where a virtual environment keeps its Python, and the one on the path. Windows puts it in
-/// `Scripts`, and its installer names it `python`.
+/// The Python on the path. Windows' installer names it `python`, and puts the `py` launcher
+/// beside it. Where Python isn't installed, `python` is Windows' own stand-in that only offers
+/// the Store, so the launcher comes first.
+fn system_python(windows: bool, on_path: impl Fn(&str) -> bool) -> &'static str {
+    match windows {
+        true if on_path("py") => "py",
+        true => "python",
+        false => "python3",
+    }
+}
+
+/// Where a virtual environment keeps its Python. Windows puts it in `Scripts`.
 #[cfg(unix)]
 const VENV_PYTHON: &str = "bin/python";
-#[cfg(unix)]
-const PYTHON: &str = "python3";
 #[cfg(not(unix))]
 const VENV_PYTHON: &str = "Scripts/python.exe";
-#[cfg(not(unix))]
-const PYTHON: &str = "python";
 
 pub struct Kernel {
     /// Only signalled on Unix, but held everywhere: it's this kernel's runner.
@@ -230,5 +241,13 @@ mod tests {
         std::fs::create_dir_all(python.parent().unwrap()).unwrap();
         std::fs::write(&python, "").unwrap();
         assert_eq!(python_for(dir.path(), dir.path()), python);
+    }
+
+    /// Without a project's own, Windows asks the `py` launcher, never the Store's stand-in.
+    #[test]
+    fn windows_prefers_the_py_launcher() {
+        assert_eq!(system_python(true, |p| p == "py"), "py");
+        assert_eq!(system_python(true, |_| false), "python");
+        assert_eq!(system_python(false, |_| true), "python3");
     }
 }

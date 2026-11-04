@@ -3134,5 +3134,19 @@
     "title": "Codex and Gemini hooks are written so PowerShell runs them on Windows",
     "test": "codex_and_gemini_hooks_run_in_powershell_on_windows",
     "passes": true
+  },
+  {
+    "id": "windows-py-launcher",
+    "milestone": 10,
+    "title": "Notebooks on Windows without a venv run the py launcher, not the Store's python stand-in",
+    "test": "windows_prefers_the_py_launcher",
+    "passes": true
+  },
+  {
+    "id": "windows-share-urls",
+    "milestone": 10,
+    "title": "Windows share paths become file://server/share URLs and read back",
+    "test": "windows_file_urls_name_drives_and_shares",
+    "passes": true
   }
 ]
