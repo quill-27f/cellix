@@ -9317,41 +9317,57 @@ impl App {
         }
     }
 
-    /// The keys in the project's bibliographies, to pick one to cite.
+    /// The keys in the project's bibliographies, to pick one to cite: the ones the paper names,
+    /// from its root's folder, then any in the usual places.
     fn show_citations(&mut self) {
         let root = self.workspace.root().to_path_buf();
-        let beside = self
-            .editors
-            .get(self.active())
-            .and_then(|e| e.buffer.path())
+        let editor = self.editors.get(self.active());
+        let path = editor.and_then(|e| e.buffer.path()).map(Path::to_path_buf);
+        let named = match (editor, &path) {
+            (Some(editor), Some(path)) if editor.dialect() == Dialect::Latex => {
+                let paper = cellix_doc::latex::root_of(path, &editor.buffer.text());
+                cellix_doc::latex::Project::read(&paper).bibliographies
+            }
+            _ => Vec::new(),
+        };
+        let beside = path
+            .as_deref()
             .and_then(Path::parent)
             .map(Path::to_path_buf);
         let mut folders = vec![root.clone(), root.join("references"), root.join("bib")];
         folders.extend(beside.filter(|folder| *folder != root));
+        let found = folders.into_iter().flat_map(|folder| {
+            std::fs::read_dir(folder)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|e| e == "bib"))
+        });
+        let mut seen: Vec<PathBuf> = Vec::new();
         let mut items = Vec::new();
-        for folder in folders {
-            let Ok(entries) = std::fs::read_dir(folder) else {
+        for path in named.into_iter().chain(found) {
+            let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+            if seen.contains(&canonical) {
+                continue;
+            }
+            seen.push(canonical);
+            let Ok(text) = std::fs::read_to_string(&path) else {
                 continue;
             };
-            for path in entries.flatten().map(|e| e.path()) {
-                if path.extension().is_some_and(|e| e == "bib")
-                    && let Ok(text) = std::fs::read_to_string(&path)
-                {
-                    let name = self.relative(&path);
-                    let entries = cellix_doc::latex::bib_entries(&text);
-                    items.extend(entries.into_iter().map(|e| {
-                        let note = format!("{}: {}", e.short(), e.title);
-                        Item::Citation(
-                            e.key,
-                            if e.title.is_empty() {
-                                name.clone()
-                            } else {
-                                note
-                            },
-                        )
-                    }));
-                }
-            }
+            let name = self.relative(&path);
+            let entries = cellix_doc::latex::bib_entries(&text);
+            items.extend(entries.into_iter().map(|e| {
+                let note = format!("{}: {}", e.short(), e.title);
+                Item::Citation(
+                    e.key,
+                    if e.title.is_empty() {
+                        name.clone()
+                    } else {
+                        note
+                    },
+                )
+            }));
         }
         if items.is_empty() {
             self.say("No .bib file in this project yet");
@@ -15832,6 +15848,28 @@ mod tests {
         assert!(screen(&app).text().contains("knuth84"));
         enter(&mut app);
         assert_eq!(app.active_text().as_deref(), Some("See\\cite{knuth84}\n"));
+    }
+
+    #[test]
+    fn citations_come_from_the_bibliography_the_paper_names() {
+        let (dir, mut app) = paper_app(
+            "\\documentclass{article}\n\\usepackage{biblatex}\n\\addbibresource[backend=biber]{lit/library.bib}\n\\begin{document}\n\\input{sections/intro}\n\\end{document}\n",
+        );
+        fs::create_dir(dir.path().join("lit")).unwrap();
+        fs::write(
+            dir.path().join("lit/library.bib"),
+            "@article{lamport94,\n title={LaTeX}, author={Leslie Lamport}, year={1994}\n}\n",
+        )
+        .unwrap();
+        fs::create_dir(dir.path().join("sections")).unwrap();
+        let intro = dir.path().join("sections/intro.tex");
+        fs::write(&intro, "See\n").unwrap();
+        app.open(&intro).unwrap();
+        app.run(Command::Move(cellix_input::Direction::LineEnd, false));
+        click_tool(&mut app, "Cite");
+        assert!(screen(&app).text().contains("lamport94"));
+        enter(&mut app);
+        assert_eq!(app.active_text().as_deref(), Some("See\\cite{lamport94}\n"));
     }
 
     #[test]

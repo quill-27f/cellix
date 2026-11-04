@@ -698,18 +698,34 @@ fn cited_in(text: &str) -> Vec<String> {
     keys
 }
 
-/// The `.bib` files a text names, as paths from `folder`.
+/// The `.bib` files a text names, as paths from `folder`: `\\bibliography{a,b}`, or
+/// biblatex's `\\addbibresource[options]{a.bib}`.
 fn bibliographies_of(text: &str, folder: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
     for line in text.lines() {
-        let code = line.split('%').next().unwrap_or("");
-        for command in ["\\bibliography{", "\\addbibresource{"] {
+        let code = crate::paper::uncommented(line);
+        for command in ["\\bibliography", "\\addbibresource"] {
             let mut rest = code;
             while let Some(at) = rest.find(command) {
-                let after = &rest[at + command.len()..];
-                let Some(end) = after.find('}') else {
+                let mut after = &rest[at + command.len()..];
+                rest = after;
+                // Not `\\bibliographystyle`.
+                if after.starts_with(|c: char| c.is_ascii_alphabetic()) {
+                    continue;
+                }
+                after = after.trim_start();
+                while let Some(options) = after.strip_prefix('[') {
+                    after = options
+                        .find(']')
+                        .map_or("", |end| options[end + 1..].trim_start());
+                }
+                let Some(inner) = after.strip_prefix('{') else {
+                    continue;
+                };
+                let Some(end) = inner.find('}') else {
                     break;
                 };
+                let after = inner;
                 for name in after[..end]
                     .split(',')
                     .map(str::trim)
@@ -1750,6 +1766,20 @@ mod tests {
         assert_eq!(
             project.labels["sec:again"], "3",
             "a file that takes itself in, once"
+        );
+    }
+
+    #[test]
+    fn a_paper_names_its_bibliographies_with_options_and_comments() {
+        let text = "\\addbibresource[backend=biber]{lit/library.bib}\n\\bibliographystyle{plain}\n% \\bibliography{old}\n\\bibliography{a, ../shared/b}\n";
+        let found = bibliographies_of(text, Path::new("/w"));
+        assert_eq!(
+            found,
+            [
+                Path::new("/w/lit/library.bib"),
+                Path::new("/w/a.bib"),
+                Path::new("/w/../shared/b.bib"),
+            ]
         );
     }
 

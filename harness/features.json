@@ -3092,5 +3092,12 @@
     "title": "Build PDF first saves every open file of the same paper with unsaved edits, so the PDF is built from what is on screen",
     "test": "building_saves_the_papers_other_open_files",
     "passes": true
+  },
+  {
+    "id": "cite-named-bibliographies",
+    "milestone": 10,
+    "title": "Cite offers the keys in the .bib files a paper names with \\bibliography or \\addbibresource[options], read from its root folder, from any of its files",
+    "test": "citations_come_from_the_bibliography_the_paper_names",
+    "passes": true
   }
 ]
