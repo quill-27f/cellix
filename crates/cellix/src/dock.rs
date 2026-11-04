@@ -952,6 +952,10 @@ pub struct Dock {
     pub tabs_flush: Cell<bool>,
     /// Rows the pane was dragged to, standing under the file.
     pub height: Option<u16>,
+    /// When the hint on moving a page wider than the pane showed, and whether it's done
+    /// with: it shows once a run.
+    pub pan_hint: Option<std::time::Instant>,
+    pub pan_hint_done: bool,
 }
 
 impl Dock {

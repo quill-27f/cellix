@@ -1043,3 +1043,27 @@ twelve columns like the other views' name, padding and ×. With an image, its te
 names the file instead of counting pages, and a click on it no longer says to build with
 SyncTeX. Build PDF, Export to PDF and Show in PDF keep their names: they are about PDFs. The
 tour has a new shot, `90-preview-image`. Next: panning a zoomed page.
+
+## 2026-11-04: Panning the Preview
+
+Zoomed past the pane, a page was cut off at the right with no way across. The Preview now keeps
+a sideways offset. A left press on the pages pans once it moves three quarters of a column or a
+row, so a click without a drag still goes to the source through SyncTeX, now on release
+(`clicking_a_pdf_goes_to_its_source` sends the release it always should have). Shift+wheel and
+the new `ScrollLeft`/`ScrollRight` kinds go across; elsewhere those kinds are ignored and don't
+clear messages or spoil a scroll on its way, so a trackpad's drift can't jitter the editor. Thin
+thumbs like the editor's sit over the bottom and right edges and can be dragged. "Drag to move
+around · Shift+scroll goes sideways" floats at the bottom the first time a page is too wide,
+once a run, for five seconds or until the first pan. A press in the Preview gives it the keyboard,
+where Space and other plain keys do nothing and the arrows move the page; Esc gives it back, and
+Esc during a drag puts the page back. Inside Claude Code the mod's pointer down, move and up
+carry positions, so a drag pans there too (tested through `pane::translate`).
+
+The tour's new shots (`91-preview-zoomed`, `92-preview-panned`) and a design review caught a
+moved page drawing its outline over the file beside the pane, a page that fits still moving up
+and down (scrolling now stops when the last page's bottom is in view), pages sliding up against
+the bar's text, and thumbs touching the corners; all fixed. The thumbs keep the editor's colour.
+
+Unverified: a real terminal's sideways wheel and Shift+wheel (crossterm's kinds are tested, a
+live trackpad isn't), and the pan inside a live Claude Code session. Pages don't show on the
+cell tier, so neither does panning. Next: maximizing the pane and an editor.

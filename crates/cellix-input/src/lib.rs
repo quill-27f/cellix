@@ -70,6 +70,10 @@ pub enum MouseKind {
     Move,
     ScrollUp,
     ScrollDown,
+    /// The wheel tipped sideways, or a trackpad moving across. Only what can move sideways
+    /// uses these: elsewhere a trackpad's drift as it scrolls down would jitter the view.
+    ScrollLeft,
+    ScrollRight,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

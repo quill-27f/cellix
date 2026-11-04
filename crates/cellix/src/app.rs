@@ -180,7 +180,7 @@ const MULTI_CLICK: std::time::Duration = std::time::Duration::from_millis(400);
 const EXPLORER_REFRESH_TICKS: u32 = 4;
 
 /// Which part of the screen a press started in, so a drag stays with it.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq)]
 enum Drag {
     None,
     Text,
@@ -191,7 +191,29 @@ enum Drag {
     Session,
     /// An image's edge, on its source line.
     Image(usize),
+    /// A press on the Preview's pages, which pans once it moves.
+    Preview,
+    /// One of the Preview's scrollbars.
+    PreviewBar(PdfHit),
 }
+
+/// Where a press in the Preview started, and where the pages stood then. It pans only once
+/// it has moved this far, so a click still goes to the source.
+#[derive(Clone, Copy)]
+struct PreviewPress {
+    x: u16,
+    y: u16,
+    fine_x: f32,
+    left: f32,
+    top: f32,
+    panning: bool,
+}
+
+/// How far a press must move before it pans, in columns. Rows are whole, so any row counts.
+const PAN_START: f32 = 0.75;
+/// How long the hint on moving a wide page stays, unless a pan sends it away first.
+const PAN_HINT: std::time::Duration = std::time::Duration::from_secs(5);
+const PAN_HINT_TEXT: &str = "Drag to move around · Shift+scroll goes sideways";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum PromptAction {
@@ -690,6 +712,8 @@ pub struct App {
     tests: Vec<TestRun>,
     /// Where the pointer is, for hover highlights.
     hover: Option<(u16, u16)>,
+    /// A press in the Preview, until it's let go.
+    preview_press: Option<PreviewPress>,
     /// The last press in text, with where it was and how many it made in a row.
     last_click: Option<(std::time::Instant, u16, u16, u8)>,
     /// The Settings page, when it stands in place of the file.
@@ -882,6 +906,7 @@ impl App {
             tests: Vec::new(),
             hover: None,
             last_click: None,
+            preview_press: None,
             settings_page: None,
             terminal_look: (None, None),
             smooth_change: None,
@@ -1837,7 +1862,8 @@ impl App {
             | self.poll_kernels()
             | self.poll_source()
             | self.poll_disk()
-            | self.poll_pending_ask();
+            | self.poll_pending_ask()
+            | self.poll_pan_hint();
         let mut events = Vec::new();
         for client in self.servers.values() {
             events.extend(client.events.try_iter());
@@ -2937,7 +2963,10 @@ impl App {
             event,
             Event::Tick
                 | Event::Mouse(MouseEvent {
-                    kind: MouseKind::Move | MouseKind::Up,
+                    kind: MouseKind::Move
+                        | MouseKind::Up
+                        | MouseKind::ScrollLeft
+                        | MouseKind::ScrollRight,
                     ..
                 })
         );
@@ -2948,7 +2977,10 @@ impl App {
         let wheel = matches!(
             event,
             Event::Mouse(MouseEvent {
-                kind: MouseKind::ScrollUp | MouseKind::ScrollDown,
+                kind: MouseKind::ScrollUp
+                    | MouseKind::ScrollDown
+                    | MouseKind::ScrollLeft
+                    | MouseKind::ScrollRight,
                 ..
             })
         );
@@ -2963,6 +2995,7 @@ impl App {
             Event::Resize(w, h) => self.size = (w, h),
             Event::Tick => self.tick(),
         }
+        self.poll_pan_hint();
         self.fit_dock();
         self.follow_threads();
     }
@@ -3567,7 +3600,17 @@ impl App {
     }
 
     fn key(&mut self, key: KeyEvent) {
+        if key.key == Key::Esc && self.cancel_drag() {
+            return;
+        }
         if matches!(self.overlay, Overlay::None) && self.draft_key(key) {
+            return;
+        }
+        if self.dock.focused
+            && self.dock.showing(Front::Pdf)
+            && matches!(self.overlay, Overlay::None)
+            && self.preview_key(key)
+        {
             return;
         }
         if self.source_key(key) {
@@ -5315,7 +5358,7 @@ impl App {
                 session.resize((screen.w, screen.h), cell);
             }
             if let (Some(view), Some(cell)) = (&mut self.dock.pdf, self.measure.cell_pixels()) {
-                view.fit(screen.w, cell);
+                view.fit((screen.w, screen.h), cell);
             }
         }
     }
@@ -5395,6 +5438,11 @@ impl App {
             self.dock_session_mouse(mouse);
             return true;
         }
+        let in_preview = matches!(self.drag, Drag::Preview | Drag::PreviewBar(_));
+        if in_preview && matches!(mouse.kind, MouseKind::Drag | MouseKind::Up) {
+            self.preview_mouse(mouse);
+            return true;
+        }
         // The line between the two sides is easy to miss, so the column before it counts.
         let on_edge = self.on_dock_edge(x, y);
         if on_edge && mouse.kind == MouseKind::Left {
@@ -5463,21 +5511,7 @@ impl App {
             return true;
         }
         if self.dock.front == Front::Pdf {
-            let rows = match mouse.kind {
-                MouseKind::ScrollUp => -3.0,
-                MouseKind::ScrollDown => 3.0,
-                _ => 0.0,
-            };
-            if let Some(view) = &mut self.dock.pdf {
-                view.scroll(rows);
-            }
-            if mouse.kind == MouseKind::Left {
-                self.pdf_click(x, y);
-            }
-            if mouse.kind == MouseKind::Right {
-                self.note_view_spot(x, y);
-                self.comment_on_view();
-            }
+            self.preview_mouse(mouse);
             return true;
         }
         if self.dock.front == Front::Comments {
@@ -5539,6 +5573,192 @@ impl App {
         true
     }
 
+    /// The pointer in the Preview. A press on the pages pans once it moves, and goes to the
+    /// source when it's let go where it started; the wheel tipped sideways, or with Shift,
+    /// moves across.
+    fn preview_mouse(&mut self, mouse: MouseEvent) {
+        let (Some(screen), Some(view)) = (self.dock_screen(), self.dock.pdf.as_mut()) else {
+            return;
+        };
+        let (x, y) = (mouse.x, mouse.y);
+        let wide = view.wide(screen.w);
+        let sideways = match (mouse.kind, mouse.mods.shift) {
+            (MouseKind::ScrollUp, true) | (MouseKind::ScrollLeft, _) => -crate::pdfview::SIDEWAYS,
+            (MouseKind::ScrollDown, true) | (MouseKind::ScrollRight, _) => crate::pdfview::SIDEWAYS,
+            _ => 0.0,
+        };
+        match (mouse.kind, self.drag) {
+            (MouseKind::ScrollUp | MouseKind::ScrollDown, _) if sideways == 0.0 => {
+                let rows = if mouse.kind == MouseKind::ScrollUp {
+                    -3.0
+                } else {
+                    3.0
+                };
+                view.pan(0.0, rows);
+            }
+            (MouseKind::ScrollUp | MouseKind::ScrollDown | MouseKind::ScrollLeft, _)
+            | (MouseKind::ScrollRight, _) => {
+                view.pan(sideways, 0.0);
+                self.dock.pan_hint_done |= wide;
+            }
+            (MouseKind::Left, _) => {
+                // The keyboard comes here too, so a Space held for a drag types nothing.
+                self.dock.focused = true;
+                match view.hit(screen, x, y) {
+                    Some(zoom @ (PdfHit::ZoomIn | PdfHit::ZoomOut | PdfHit::Fit)) => {
+                        view.zoom(zoom);
+                        // Still zooming, the hint stays as long again.
+                        if self.dock.pan_hint.is_some() {
+                            self.dock.pan_hint = Some(std::time::Instant::now());
+                        }
+                    }
+                    Some(bar @ (PdfHit::Sideways | PdfHit::Upright)) => {
+                        view.follow_bar(bar, screen, mouse.fine_x, y);
+                        self.drag = Drag::PreviewBar(bar);
+                    }
+                    _ if y > screen.y => {
+                        self.preview_press = Some(PreviewPress {
+                            x,
+                            y,
+                            fine_x: mouse.fine_x,
+                            left: view.left,
+                            top: view.top,
+                            panning: false,
+                        });
+                        self.drag = Drag::Preview;
+                    }
+                    _ => {}
+                }
+            }
+            (MouseKind::Drag, Drag::PreviewBar(bar)) => {
+                view.follow_bar(bar, screen, mouse.fine_x, y);
+            }
+            (MouseKind::Drag, Drag::Preview) => {
+                let Some(press) = &mut self.preview_press else {
+                    return;
+                };
+                let across = mouse.fine_x - press.fine_x;
+                let down = f32::from(y) - f32::from(press.y);
+                press.panning |= across.abs() >= PAN_START || y != press.y;
+                if press.panning {
+                    view.place(press.left - across, press.top - down);
+                    self.dock.pan_hint_done |= wide;
+                }
+            }
+            (MouseKind::Up, _) => {
+                let was = std::mem::replace(&mut self.drag, Drag::None);
+                let press = self.preview_press.take();
+                if let (Drag::Preview, Some(press)) = (was, press)
+                    && !press.panning
+                {
+                    self.pdf_click(press.x, press.y);
+                }
+            }
+            (MouseKind::Right, _) => {
+                self.note_view_spot(x, y);
+                self.comment_on_view();
+            }
+            _ => {}
+        }
+    }
+
+    /// Keys while the Preview has the keyboard. The arrows move the pages, Esc gives the
+    /// keyboard back to the file, and Space and other plain keys do nothing, so they never
+    /// land in the file or a session out of sight. Returns false for keys that work anywhere.
+    fn preview_key(&mut self, key: KeyEvent) -> bool {
+        let step = match key.key {
+            Key::Left => Some((-crate::pdfview::SIDEWAYS, 0.0)),
+            Key::Right => Some((crate::pdfview::SIDEWAYS, 0.0)),
+            Key::Up => Some((0.0, -3.0)),
+            Key::Down => Some((0.0, 3.0)),
+            _ => None,
+        };
+        if let (Some((across, down)), false) = (step, key.mods.ctrl || key.mods.alt) {
+            if let Some(view) = &mut self.dock.pdf {
+                view.pan(across, down);
+            }
+            return true;
+        }
+        if key.key == Key::Esc {
+            self.dock.focused = false;
+            return true;
+        }
+        // A chord means something wherever it's pressed, and it's about the file again.
+        let chord = key.mods.ctrl || key.mods.alt || matches!(key.key, Key::F(_));
+        if chord && simple_keymap(key).is_some() {
+            self.dock.focused = false;
+            return false;
+        }
+        true
+    }
+
+    /// Lets go of a press in the Preview, putting the pages back where they were. Returns
+    /// whether there was one.
+    fn cancel_drag(&mut self) -> bool {
+        if self.drag != Drag::Preview {
+            return false;
+        }
+        self.drag = Drag::None;
+        if let (Some(press), Some(view)) = (self.preview_press.take(), &mut self.dock.pdf) {
+            view.place(press.left, press.top);
+        }
+        true
+    }
+
+    /// Shows the hint on moving a page the first time one is wider than the pane, and takes
+    /// it away a few seconds later. Once a run. Returns whether it came or went.
+    fn poll_pan_hint(&mut self) -> bool {
+        if self.dock.pan_hint_done {
+            return false;
+        }
+        let wide = self.dock.showing(Front::Pdf)
+            && self
+                .dock_screen()
+                .zip(self.dock.pdf.as_ref())
+                .is_some_and(|(screen, view)| view.wide(screen.w));
+        match self.dock.pan_hint {
+            None if wide => {
+                self.dock.pan_hint = Some(std::time::Instant::now());
+                true
+            }
+            Some(since) if since.elapsed() >= PAN_HINT => {
+                self.dock.pan_hint_done = true;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The hint on moving a page wider than the pane, floating over the bottom of the pages.
+    fn draw_pan_hint(&self, grid: &mut Grid, screen: Rect) {
+        if self.dock.pan_hint.is_none() || self.dock.pan_hint_done || self.measure.in_cells() {
+            return;
+        }
+        let font = Font {
+            size: TOOLTIP_SIZE,
+            ..Font::default()
+        };
+        let wide = self.measure.width(PAN_HINT_TEXT, font) + 3.0;
+        if wide + 2.0 > f32::from(screen.w) {
+            return;
+        }
+        let left = f32::from(screen.x) + (f32::from(screen.w) - wide) / 2.0;
+        // Clear of the scrollbar under it.
+        let top = f32::from(screen.bottom()) - 1.0 - TOOLTIP_HEIGHT;
+        let theme = &self.theme;
+        let bounds = Bounds::cells(left, top, wide, TOOLTIP_HEIGHT);
+        grid.popup(bounds, 24, theme.popup, theme.popup_border);
+        let text_top = top + (TOOLTIP_HEIGHT - 1.0) / 2.0;
+        let colour = (theme.popup_dim, false);
+        grid.text_run(
+            (left + 1.5, text_top),
+            left + wide,
+            PAN_HINT_TEXT,
+            colour,
+            font,
+        );
+    }
+
     /// A click on a page goes to the line that made it, and the bar sets the size.
     fn pdf_click(&mut self, x: u16, y: u16) {
         let screen = self.dock_screen().unwrap_or_default();
@@ -5556,18 +5776,19 @@ impl App {
                     return;
                 };
                 if self.open(&path).is_ok() {
+                    self.dock.focused = false;
                     let area = self.focused_area();
                     if let Some(editor) = self.editor_mut() {
                         editor.go_to_line(line, area);
                     }
                 }
             }
-            Some(zoom) => {
+            Some(zoom @ (PdfHit::ZoomIn | PdfHit::ZoomOut | PdfHit::Fit)) => {
                 if let Some(view) = &mut self.dock.pdf {
                     view.zoom(zoom);
                 }
             }
-            None => {}
+            _ => {}
         }
     }
 
@@ -5647,6 +5868,7 @@ impl App {
         grid.hairline(line, theme.border);
         if let (Front::Pdf, Some(view)) = (self.dock.front, &self.dock.pdf) {
             view.draw(grid, screen, self.measure.in_cells(), theme);
+            self.draw_pan_hint(grid, screen);
             return;
         }
         if self.dock.front == Front::Log {
@@ -7400,6 +7622,9 @@ impl App {
         }
         // The wheel over a pane comes with no position, so it means the file in front.
         if mouse.x == u16::MAX {
+            if !matches!(mouse.kind, MouseKind::ScrollUp | MouseKind::ScrollDown) {
+                return;
+            }
             let delta = if mouse.kind == MouseKind::ScrollUp {
                 -1
             } else {
@@ -10367,6 +10592,16 @@ impl App {
         };
         if !matches!(self.overlay, Overlay::None) {
             return ARROW;
+        }
+        if self.drag == Drag::Preview && self.preview_press.is_some_and(|p| p.panning) {
+            return "grabbing";
+        }
+        let on_pages = self.dock.showing(Front::Pdf)
+            && self.dock_screen().is_some_and(|s| {
+                y > s.y && s.contains(x, y) && self.dock.pdf.as_ref().is_some_and(|v| v.wide(s.w))
+            });
+        if on_pages {
+            return "grab";
         }
         if self.on_dock_edge(x, y) {
             return if self.dock_under() {
@@ -15113,6 +15348,254 @@ mod tests {
         assert!(bar.contains("loss.png"), "the bar names the image: {bar}");
     }
 
+    /// A wide image beside a page, zoomed until it's wider than the pane.
+    fn zoomed_preview() -> (TempDir, App) {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("results.txt"), "The loss settles.\n").unwrap();
+        let image = image::RgbaImage::from_pixel(2000, 1800, image::Rgba([200, 30, 30, 255]));
+        image.save(dir.path().join("loss.png")).unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 44));
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(10, 20)));
+        app.open(&dir.path().join("results.txt")).unwrap();
+        app.open(&dir.path().join("loss.png")).unwrap();
+        preview_read(&mut app);
+        let screen_area = app.dock_screen().unwrap();
+        assert!(
+            !app.dock.pdf.as_ref().unwrap().wide(screen_area.w),
+            "fits at first"
+        );
+        let plus = (0..screen_area.w)
+            .map(|dx| screen_area.x + dx)
+            .find(|x| {
+                let view = app.dock.pdf.as_ref().unwrap();
+                view.hit(screen_area, *x, screen_area.y) == Some(PdfHit::ZoomIn)
+            })
+            .unwrap();
+        for _ in 0..4 {
+            app.handle(mouse(MouseKind::Left, plus, screen_area.y));
+            app.handle(mouse(MouseKind::Up, plus, screen_area.y));
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !app.dock.pdf.as_ref().unwrap().wide(screen_area.w) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "never grew past the pane"
+            );
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        // Zooming keeps the middle in view; these start from the page's left edge.
+        app.dock.pdf.as_mut().unwrap().place(0.0, 0.0);
+        (dir, app)
+    }
+
+    /// The scrollbar thumbs drawn over the Preview: (sideways, upright).
+    fn preview_thumbs(app: &App) -> (Vec<cellix_render::Bounds>, Vec<cellix_render::Bounds>) {
+        let screen_area = app.dock_screen().unwrap();
+        let left = i32::from(screen_area.x) * 64;
+        let thumbs: Vec<_> = screen(app)
+            .paint
+            .iter()
+            .filter_map(|p| match p {
+                Paint::Panel {
+                    bounds,
+                    fill: Some(fill),
+                    ..
+                } if *fill == app.theme.scrollbar && bounds.x >= left => Some(*bounds),
+                _ => None,
+            })
+            .collect();
+        thumbs.into_iter().partition(|b| b.w > b.h)
+    }
+
+    #[test]
+    fn a_zoomed_preview_pans_by_dragging_and_a_click_still_clicks() {
+        let (_dir, mut app) = zoomed_preview();
+        let screen_area = app.dock_screen().unwrap();
+        // The page is cut off at the right, so it says how to see the rest.
+        assert!(painted_text(&app).contains(PAN_HINT_TEXT));
+        let (sideways, _) = preview_thumbs(&app);
+        assert_eq!(sideways.len(), 1, "a thumb under the pages");
+        let before = pictures(&app)[0];
+        let (x, y) = (screen_area.x + 30, screen_area.y + 6);
+        // A press and release in one place is a click, and moves nothing.
+        app.handle(mouse(MouseKind::Left, x, y));
+        app.handle(mouse(MouseKind::Up, x, y));
+        assert_eq!(pictures(&app)[0], before);
+        // Dragged, the page follows the pointer.
+        app.handle(mouse(MouseKind::Left, x, y));
+        app.handle(mouse(MouseKind::Drag, x - 10, y));
+        app.handle(mouse(MouseKind::Up, x - 10, y));
+        let after = pictures(&app)[0];
+        assert_eq!(after.x, before.x - 10 * 64, "ten columns along");
+        assert!((app.dock.pdf.as_ref().unwrap().left - 10.0).abs() < 0.01);
+        let (moved, _) = preview_thumbs(&app);
+        assert!(moved[0].x > sideways[0].x, "the thumb moves with it");
+        // The page's outline stops at the pane, however far the page has moved.
+        let dock_x = i32::from(app.dock_area().unwrap().x) * 64;
+        let below_bar = i32::from(screen_area.y + 1) * 64;
+        let spills = screen(&app).paint.iter().any(|p| match p {
+            Paint::Hairline { bounds, color } => {
+                *color == app.theme.border && bounds.x < dock_x - 64 && bounds.y > below_bar
+            }
+            Paint::Panel {
+                bounds,
+                border: Some(color),
+                ..
+            } => *color == app.theme.border && bounds.x < dock_x,
+            _ => false,
+        });
+        assert!(!spills, "nothing of the page beside the pane");
+        // The first pan sends the hint away, for the rest of the run.
+        assert!(!painted_text(&app).contains(PAN_HINT_TEXT));
+        // It never pans past the page's edge.
+        app.handle(mouse(MouseKind::Left, x, y));
+        app.handle(mouse(MouseKind::Drag, x + 60, y));
+        app.handle(mouse(MouseKind::Up, x + 60, y));
+        assert_eq!(app.dock.pdf.as_ref().unwrap().left, 0.0);
+    }
+
+    #[test]
+    fn the_pan_hint_goes_by_itself() {
+        let (_dir, mut app) = zoomed_preview();
+        assert!(painted_text(&app).contains(PAN_HINT_TEXT));
+        app.dock.pan_hint = Some(std::time::Instant::now() - PAN_HINT);
+        assert!(app.poll());
+        assert!(!painted_text(&app).contains(PAN_HINT_TEXT));
+    }
+
+    #[test]
+    fn escape_puts_a_page_back_mid_drag() {
+        let (_dir, mut app) = zoomed_preview();
+        let screen_area = app.dock_screen().unwrap();
+        let (x, y) = (screen_area.x + 30, screen_area.y + 6);
+        app.handle(mouse(MouseKind::Left, x, y));
+        app.handle(mouse(MouseKind::Drag, x - 10, y));
+        app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
+        assert_eq!(app.dock.pdf.as_ref().unwrap().left, 0.0);
+        app.handle(mouse(MouseKind::Drag, x - 20, y));
+        assert_eq!(app.dock.pdf.as_ref().unwrap().left, 0.0, "the drag is over");
+    }
+
+    #[test]
+    fn shift_and_the_sideways_wheel_move_a_wide_page_across() {
+        let (_dir, mut app) = zoomed_preview();
+        let screen_area = app.dock_screen().unwrap();
+        let (x, y) = (screen_area.x + 30, screen_area.y + 6);
+        let left = |app: &App| app.dock.pdf.as_ref().unwrap().left;
+        let shifted = |kind| {
+            Event::Mouse(MouseEvent {
+                kind,
+                x,
+                y,
+                fine_x: f32::from(x),
+                mods: Mods {
+                    shift: true,
+                    ..Mods::default()
+                },
+            })
+        };
+        app.handle(shifted(MouseKind::ScrollDown));
+        assert_eq!(left(&app), crate::pdfview::SIDEWAYS);
+        app.handle(mouse(MouseKind::ScrollRight, x, y));
+        assert_eq!(left(&app), crate::pdfview::SIDEWAYS * 2.0);
+        app.handle(mouse(MouseKind::ScrollLeft, x, y));
+        app.handle(shifted(MouseKind::ScrollUp));
+        assert_eq!(left(&app), 0.0);
+        // The plain wheel still goes down the page.
+        app.handle(mouse(MouseKind::ScrollDown, x, y));
+        assert_eq!(left(&app), 0.0);
+        assert!(app.dock.pdf.as_ref().unwrap().top > 0.0);
+    }
+
+    #[test]
+    fn the_thumb_under_a_wide_page_drags_it_across() {
+        let (_dir, mut app) = zoomed_preview();
+        let screen_area = app.dock_screen().unwrap();
+        let bottom = screen_area.bottom() - 1;
+        app.handle(mouse(MouseKind::Left, screen_area.x + 1, bottom));
+        assert_eq!(app.dock.pdf.as_ref().unwrap().left, 0.0);
+        app.handle(mouse(MouseKind::Drag, screen_area.right() - 1, bottom));
+        app.handle(mouse(MouseKind::Up, screen_area.right() - 1, bottom));
+        let view = app.dock.pdf.as_ref().unwrap();
+        assert!(view.left > 0.0);
+        // At the far end, the page's right edge is in view.
+        let picture = pictures(&app)[0];
+        let right = (picture.x + picture.w) / 64;
+        assert!(right <= i32::from(screen_area.right()), "{right}");
+        assert!(right >= i32::from(screen_area.right()) - 2, "{right}");
+    }
+
+    #[test]
+    fn space_in_the_preview_types_nothing() {
+        let (_dir, mut app) = zoomed_preview();
+        let screen_area = app.dock_screen().unwrap();
+        let (x, y) = (screen_area.x + 30, screen_area.y + 6);
+        app.handle(mouse(MouseKind::Left, x, y));
+        app.handle(mouse(MouseKind::Up, x, y));
+        typed(&mut app, " ");
+        app.handle(mouse(MouseKind::Left, x, y));
+        app.handle(mouse(MouseKind::Drag, x - 8, y));
+        app.handle(mouse(MouseKind::Up, x - 8, y));
+        typed(&mut app, " ");
+        assert_eq!(app.active_text().unwrap(), "The loss settles.\n");
+        assert!(
+            app.dock.pdf.as_ref().unwrap().left > 0.0,
+            "Space and a drag pans"
+        );
+        // Esc gives the keyboard back to the file.
+        app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
+        typed(&mut app, "x");
+        assert_eq!(app.active_text().unwrap(), "xThe loss settles.\n");
+    }
+
+    #[test]
+    fn sideways_drift_leaves_the_editor_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let text: String = (0..200).map(|i| format!("line {i}\n")).collect();
+        fs::write(dir.path().join("long.txt"), &text).unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (100, 30));
+        app.open(&dir.path().join("long.txt")).unwrap();
+        app.say("Saved");
+        app.handle(mouse(MouseKind::ScrollDown, 50, 10));
+        let top = app.editors[0].top();
+        let scrolled = app.scrolled;
+        for kind in [MouseKind::ScrollRight, MouseKind::ScrollLeft] {
+            app.handle(mouse(kind, 50, 10));
+        }
+        assert_eq!(app.editors[0].top(), top);
+        assert_eq!(app.scrolled, scrolled, "a scroll on its way isn't spoilt");
+        // A wheel with no place, as inside Claude Code, never goes sideways into the file.
+        app.handle(mouse(MouseKind::ScrollRight, u16::MAX, u16::MAX));
+        assert_eq!(app.editors[0].top(), top);
+    }
+
+    #[test]
+    fn a_pane_drag_inside_claude_code_pans_the_preview() {
+        let (_dir, mut app) = zoomed_preview();
+        let screen_area = app.dock_screen().unwrap();
+        let (x, y) = (screen_area.x + 30, screen_area.y + 6);
+        let pointer = |kind: &str, x: u16, button: Option<&str>| crate::pane::Input::Pointer {
+            kind: kind.to_string(),
+            x,
+            y,
+            fine: Some(f32::from(x) + 0.5),
+            button: button.map(str::to_string),
+        };
+        let steps = [
+            pointer("move", x, None),
+            pointer("down", x, Some("left")),
+            pointer("move", x - 12, Some("left")),
+            pointer("up", x - 12, Some("left")),
+        ];
+        for input in steps {
+            for event in crate::pane::translate(input) {
+                app.handle(event);
+            }
+        }
+        assert!((app.dock.pdf.as_ref().unwrap().left - 12.0).abs() < 0.01);
+    }
+
     #[test]
     fn a_picture_in_the_pane_takes_a_comment() {
         let dir = tempfile::tempdir().unwrap();
@@ -16145,11 +16628,10 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         let screen_area = app.dock_screen().unwrap();
-        app.handle(mouse(
-            MouseKind::Left,
-            screen_area.x + 20,
-            screen_area.y + 5,
-        ));
+        let (x, y) = (screen_area.x + 20, screen_area.y + 5);
+        app.handle(mouse(MouseKind::Left, x, y));
+        // The jump waits for the release, since the press might yet become a pan.
+        app.handle(mouse(MouseKind::Up, x, y));
         assert_eq!(app.cursor_line().unwrap().1, 3);
         app.run(Command::ShowInPdf);
         assert_eq!(app.dock.front, Front::Pdf);

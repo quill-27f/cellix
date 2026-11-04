@@ -3253,5 +3253,68 @@
     "title": "Clicking an image in the Preview doesn't ask for SyncTeX",
     "test": "clicking_an_image_does_not_ask_for_synctex",
     "passes": true
+  },
+  {
+    "id": "preview-pan-drag",
+    "milestone": 10,
+    "title": "A zoomed page in the Preview pans when dragged, and a click without a drag still clicks",
+    "test": "a_zoomed_preview_pans_by_dragging_and_a_click_still_clicks",
+    "passes": true
+  },
+  {
+    "id": "preview-pan-hint",
+    "milestone": 10,
+    "title": "The hint on moving a wide page goes by itself",
+    "test": "the_pan_hint_goes_by_itself",
+    "passes": true
+  },
+  {
+    "id": "preview-pan-escape",
+    "milestone": 10,
+    "title": "Escape puts a page back mid-drag",
+    "test": "escape_puts_a_page_back_mid_drag",
+    "passes": true
+  },
+  {
+    "id": "preview-sideways-wheel",
+    "milestone": 10,
+    "title": "Shift+scroll and a sideways wheel move a wide page across",
+    "test": "shift_and_the_sideways_wheel_move_a_wide_page_across",
+    "passes": true
+  },
+  {
+    "id": "preview-scrollbar",
+    "milestone": 10,
+    "title": "The thumb under a wide page drags it across",
+    "test": "the_thumb_under_a_wide_page_drags_it_across",
+    "passes": true
+  },
+  {
+    "id": "preview-space",
+    "milestone": 10,
+    "title": "Space in the Preview types nothing, so Space+drag pans",
+    "test": "space_in_the_preview_types_nothing",
+    "passes": true
+  },
+  {
+    "id": "sideways-drift",
+    "milestone": 10,
+    "title": "A trackpad's sideways drift leaves the editor alone",
+    "test": "sideways_drift_leaves_the_editor_alone",
+    "passes": true
+  },
+  {
+    "id": "preview-pan-pane",
+    "milestone": 10,
+    "title": "Dragging inside Claude Code pans the Preview",
+    "test": "a_pane_drag_inside_claude_code_pans_the_preview",
+    "passes": true
+  },
+  {
+    "id": "wheel-sideways-input",
+    "milestone": 10,
+    "title": "The wheel tipped sideways reaches the app as itself",
+    "test": "the_wheel_tipped_sideways_arrives_as_itself",
+    "passes": true
   }
 ]

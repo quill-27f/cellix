@@ -201,7 +201,8 @@ fn translate(event: ct::Event, pixels: Option<(usize, usize)>) -> Option<Event> 
                 MouseEventKind::Moved => MouseKind::Move,
                 MouseEventKind::ScrollUp => MouseKind::ScrollUp,
                 MouseEventKind::ScrollDown => MouseKind::ScrollDown,
-                _ => return None,
+                MouseEventKind::ScrollLeft => MouseKind::ScrollLeft,
+                MouseEventKind::ScrollRight => MouseKind::ScrollRight,
             };
             let (x, y, fine_x) = match pixels {
                 Some((cw, ch)) => {
@@ -542,4 +543,31 @@ pub fn run(options: Options) -> io::Result<()> {
     let _ = out.flush();
     drop(_session);
     app.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_wheel_tipped_sideways_arrives_as_itself() {
+        let sideways = |kind| {
+            let event = ct::Event::Mouse(ct::MouseEvent {
+                kind,
+                column: 5,
+                row: 3,
+                modifiers: KeyModifiers::SHIFT,
+            });
+            translate(event, None)
+        };
+        let Some(Event::Mouse(left)) = sideways(MouseEventKind::ScrollLeft) else {
+            panic!("dropped");
+        };
+        assert_eq!((left.kind, left.x, left.y), (MouseKind::ScrollLeft, 5, 3));
+        let Some(Event::Mouse(right)) = sideways(MouseEventKind::ScrollRight) else {
+            panic!("dropped");
+        };
+        assert_eq!(right.kind, MouseKind::ScrollRight);
+        assert!(right.mods.shift);
+    }
 }

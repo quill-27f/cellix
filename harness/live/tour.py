@@ -357,6 +357,13 @@ with tempfile.TemporaryDirectory() as scratch:
     with open(f"{ROOT}/{RESULTS}", "w") as f:
         f.write("# Training loss\n\nThe loss settles after 40k steps.\n\n![Loss by step](../figures/loss.png)\n")
     shoot("90-preview-image", [["wait", 1.0]], RESULTS, LOSS, size="150x44")
+    # Zoomed past the pane's width: the thumb under it, and the hint on moving around.
+    ZOOM_IN = (142, 1)
+    # A debug build reads the picture slowly, and each zoom reads it again.
+    zoomed = [["wait", 2.0]] + [["click", *ZOOM_IN], ["wait", 1.0]] * 4 + [["wait", 1.0]]
+    shoot("91-preview-zoomed", zoomed, RESULTS, LOSS, size="150x44")
+    shoot("92-preview-panned", [*zoomed, ["drag", 125, 20, 105, 14], ["wait", 0.6]], RESULTS, LOSS,
+          size="150x44")
 
     # The samples, which use everything a page can do.
     samples = os.path.join(ROOT, "samples")

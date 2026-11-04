@@ -224,7 +224,8 @@ your LaTeX engine in the background, and kept, so typing never waits.
 tables, across `\input` files, and anything Cellix doesn't recognise stays visible as source. **Cite**
 lists the keys in your `.bib` files. **Build PDF**, or Ctrl+Alt+B, runs `tectonic`, `latexmk` or
 `pdflatex`, shows the PDF in the side pane's Preview, keeps what the build said in a Log tab, and goes to the
-line of any error. Clicking the PDF goes to that place in the source. Set `latex_engine` in the
+line of any error. Clicking the PDF goes to that place in the source. Zoomed past the pane's
+width, a page moves when dragged, and Shift+scroll or a sideways scroll goes across. Set `latex_engine` in the
 settings file to use your own command. Export to PDF does the same for Markdown, through LaTeX, with
 diagrams and footnotes.
 
