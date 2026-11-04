@@ -9596,7 +9596,17 @@ impl App {
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_default();
-        let problems = cellix_doc::latex::problems(&build.said, &folder);
+        let mut problems = cellix_doc::latex::problems(&build.said, &folder);
+        // An export's LaTeX is gone by now, and its lines aren't the document's, so its errors
+        // are only told, with nothing to jump to.
+        let exported = self.export_to.is_some();
+        let hidden: Vec<String> = if exported {
+            let (lost, kept) = problems.into_iter().partition(|p| p.file == build.file);
+            problems = kept;
+            lost.into_iter().map(|p| p.message).collect()
+        } else {
+            Vec::new()
+        };
         self.dock.log = build.said.lines().map(str::to_string).collect();
         self.dock.log_top = 0;
         self.dock.log_folder = folder.clone();
@@ -9615,6 +9625,9 @@ impl App {
         let pdf = build.file.with_extension("pdf");
         let log = std::fs::read_to_string(build.file.with_extension("log")).unwrap_or_default();
         for place in cellix_doc::latex::warning_places(&build.said, &log, &folder, &build.file) {
+            if exported && place.file == build.file {
+                continue;
+            }
             by_file.entry(place.file).or_default().push(Diagnostic {
                 line: place.line.saturating_sub(1),
                 column: 0,
@@ -9630,8 +9643,12 @@ impl App {
         // of the build goes.
         let pdf = match self.export_to.take() {
             Some(target) => {
-                if pdf.exists() {
+                // pdflatex and latexmk write a PDF despite errors: that one never replaces the
+                // last good export.
+                if build.worked && pdf.exists() {
                     let _ = std::fs::rename(&pdf, &target);
+                } else {
+                    let _ = std::fs::remove_file(&pdf);
                 }
                 let leftovers = [
                     "log",
@@ -9664,6 +9681,11 @@ impl App {
             self.dock.front = Front::Log;
             self.dock.focused = false;
             self.go_to_problem(first);
+        } else if let Some(message) = hidden.first() {
+            self.dock.open = true;
+            self.dock.front = Front::Log;
+            self.dock.focused = false;
+            self.say(format!("The PDF wasn't made: {message}"));
         } else {
             self.dock.open = true;
             self.dock.front = Front::Log;
@@ -9802,6 +9824,11 @@ impl App {
 
     fn go_to_problem(&mut self, problem: &cellix_doc::latex::Problem) {
         let name = self.relative(&problem.file);
+        // A file the build has since removed would only open empty.
+        if !problem.file.is_file() {
+            self.say(format!("{name}:{}: {}", problem.line, problem.message));
+            return;
+        }
         if self.open(&problem.file).is_ok() {
             let area = self.focused_area();
             if let Some(editor) = self.editor_mut() {
@@ -15845,6 +15872,50 @@ mod tests {
         assert!(
             !dir.path().join("note.tex").exists(),
             "the middle step is gone"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_failed_export_keeps_the_last_good_pdf() {
+        let (dir, mut app) = paper_app("x\n");
+        let path = dir.path().join("note.md");
+        fs::write(&path, "# Note\n\nWith $x^2$.\n").unwrap();
+        fs::write(dir.path().join("note.pdf"), "the good one").unwrap();
+        // As pdflatex in nonstop mode: a PDF is written all the same, and the run fails.
+        let reply =
+            "echo broken > \"${1%.tex}.pdf\"; echo \"./$1:7: Undefined control sequence.\"; exit 1";
+        app.settings.latex_engine = Some(fake_latex(dir.path(), reply));
+        app.open(&path).unwrap();
+        app.run(Command::ExportPdf);
+        built(&mut app);
+        assert_eq!(
+            fs::read_to_string(dir.path().join("note.pdf")).unwrap(),
+            "the good one"
+        );
+        assert!(!dir.path().join("note.cellix-export.pdf").exists());
+        assert!(!dir.path().join("note.cellix-export.tex").exists());
+        let grid = screen(&app);
+        assert!(
+            grid.text()
+                .contains("The PDF wasn't made: Undefined control sequence."),
+            "{}",
+            grid.text()
+        );
+        assert_eq!(app.dock.front, Front::Log);
+        // The log names the hidden file: a click there says the error, and opens nothing.
+        let (x, y) = find(&grid, "cellix-export.tex:7:");
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert!(
+            app.editors
+                .iter()
+                .all(|e| e.buffer.path() == Some(path.as_path())
+                    || e.buffer.path().is_some_and(|p| p.ends_with("paper.tex"))),
+            "only the note and the paper are open"
+        );
+        assert!(
+            app.problem_rows().is_empty(),
+            "no problem in a missing file"
         );
     }
 

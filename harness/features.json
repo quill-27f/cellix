@@ -3066,6 +3066,13 @@
     "passes": true
   },
   {
+    "id": "export-failure-keeps-pdf",
+    "milestone": 10,
+    "title": "A failed Markdown export keeps the last good PDF, and its errors jump nowhere missing",
+    "test": "a_failed_export_keeps_the_last_good_pdf",
+    "passes": true
+  },
+  {
     "id": "export-packages-outside-code",
     "milestone": 10,
     "title": "An export loads packages for what it emits, not for code shown in code blocks",
