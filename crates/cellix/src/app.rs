@@ -6262,16 +6262,20 @@ impl App {
             return;
         };
         let file = self.relative(path);
-        let mut open = false;
+        let (mut carried, mut open) = (false, false);
         for thread in self.threads.iter_mut().filter(|t| t.file == file) {
             thread.carry(&text, replaced);
+            carried = true;
             open |= !thread.resolved;
         }
-        if !open {
+        if !carried {
             return;
         }
         self.threads_seen = None;
         self.save_threads();
+        if !open {
+            return;
+        }
         self.dock.open = true;
         self.dock.show_comments();
         self.dock.focused = false;
@@ -6306,14 +6310,15 @@ impl App {
     fn thread_hit(&mut self, hit: ThreadHit) {
         match hit {
             ThreadHit::Open(id) => {
-                // Words the plan dropped are only in what changed, so that's where it goes.
+                // Words the plan changed or dropped are only in what changed, so that's where
+                // it goes, whether or not the plan still waits.
                 let earlier = self
                     .threads
                     .iter()
                     .find(|t| t.id == id)
-                    .and_then(|t| t.earlier);
-                if earlier.is_some() && self.plan.is_some() {
-                    self.compare_plan_with(earlier);
+                    .and_then(|t| Some((t.earlier?, self.workspace.root().join(&t.file))));
+                if let Some((version, path)) = earlier {
+                    self.compare_plan_with(Some(&path), Some(version));
                     self.dock.focused = false;
                     return;
                 }
@@ -9503,14 +9508,16 @@ impl App {
 
     /// Opens what changed since the plan's last version, as suggestions on a page of its own.
     fn compare_plan_versions(&mut self) {
-        self.compare_plan_with(None);
+        self.compare_plan_with(None, None);
     }
 
-    /// What changed since a given earlier version of the plan, or the last one.
-    fn compare_plan_with(&mut self, version: Option<usize>) {
-        let path = match &self.plan {
-            Some(plan) => plan.path.clone(),
-            None => match self
+    /// What changed since a given earlier version of a plan, or the last one. The plan is the
+    /// one given, else the one waiting, else the one in view.
+    fn compare_plan_with(&mut self, plan: Option<&Path>, version: Option<usize>) {
+        let path = match (plan, &self.plan) {
+            (Some(path), _) => path.to_path_buf(),
+            (None, Some(plan)) => plan.path.clone(),
+            (None, None) => match self
                 .editors
                 .get(self.active())
                 .and_then(|e| e.buffer.path())
@@ -12681,6 +12688,71 @@ mod tests {
             text.contains("waiting for you to review this plan"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn a_plans_resolved_moves_are_saved_and_a_dropped_comment_opens_the_comparison_later() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        let held = tempfile::tempdir().unwrap();
+        let first = "# Plan\n\nCache first.\n\nShip it.\n";
+        let comments = [
+            ("Cache first.", "Why first"),
+            ("Ship it.", "Ship when green"),
+        ];
+        let next = "# Plan\n\nWrite the tests.\n\nThen the parser.\n\nShip it.\n";
+        let path = plan_sent_again(&mut app, held.path(), (first, &comments), next);
+        let file = app.relative(&path);
+        let id = |app: &App, text: &str| app.threads.iter().find(|t| t.text == text).unwrap().id;
+        app.thread_hit(ThreadHit::Resolve(id(&app, "Ship when green")));
+        // Version 3 moves the resolved one again, and nothing on it is open.
+        app.thread_hit(ThreadHit::Resolve(id(&app, "Why first")));
+        let (x, y) = find(&screen(&app), SEND_BACK);
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        typed(&mut app, "Again");
+        enter(&mut app);
+        cellix_agent::hook::keep_versions(
+            held.path(),
+            "# Plan\n\nOne.\n\nTwo.\n\nThree.\n\nShip it.\n",
+        )
+        .unwrap();
+        let (reply, _decision) = std::sync::mpsc::channel();
+        app.serve(Request::Plan {
+            path: path.clone(),
+            reply,
+        });
+        let saved = cellix_review::threads::load(dir.path()).unwrap();
+        let shipped = saved.iter().find(|t| t.text == "Ship when green").unwrap();
+        assert_eq!(
+            (shipped.file.as_str(), shipped.line),
+            (file.as_str(), 9),
+            "its move is kept"
+        );
+        // A dropped comment, reopened: the agent hears the version, not a line it isn't on.
+        let gone = app
+            .threads
+            .iter_mut()
+            .find(|t| t.text == "Why first")
+            .unwrap();
+        gone.resolved = false;
+        let message = gone.message();
+        assert!(
+            message.contains("(made on version 1; version 2 dropped these words)"),
+            "{message}"
+        );
+        assert!(!message.contains(" line "), "{message}");
+        // With the plan no longer waiting, its card still opens what changed.
+        app.run(Command::CloseTab);
+        assert!(app.plan.is_none());
+        if !app.dock.showing(Front::Comments) {
+            app.run(Command::ShowComments);
+        }
+        let (x, y) = find(&screen(&app), "Why first");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        let compared = app.active_text().unwrap();
+        assert!(compared.contains("Cache first."), "{compared}");
+        let open = app.editors[app.active()].buffer.path().unwrap();
+        assert!(open.ends_with("Plan changes.md"), "{}", open.display());
     }
 
     #[test]

@@ -3106,5 +3106,12 @@
     "title": "A plan after an approved one starts at version one",
     "test": "a_plan_after_an_approved_one_starts_at_version_one",
     "passes": true
+  },
+  {
+    "id": "plan-thread-carry-saved",
+    "milestone": 10,
+    "title": "A plan's resolved threads' moves are saved, and a dropped comment opens the comparison with no plan waiting",
+    "test": "a_plans_resolved_moves_are_saved_and_a_dropped_comment_opens_the_comparison_later",
+    "passes": true
   }
 ]
