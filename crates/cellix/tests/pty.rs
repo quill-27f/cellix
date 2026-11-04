@@ -377,7 +377,8 @@ fn stopped_and_closed(dir: &Path) -> bool {
             &mut master,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
-            &mut size,
+            // Linux takes the size as const and macOS as mut.
+            (&raw mut size) as _,
         )
     };
     if pid == 0 {
