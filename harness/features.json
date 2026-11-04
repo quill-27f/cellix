@@ -3239,5 +3239,40 @@
     "title": "A missing .bib is reported by real BibTeX (TeX Live, CI only)",
     "test": "pdflatex_says_when_bibtex_finds_no_bib",
     "passes": true
+  },
+  {
+    "id": "paper-root-walk",
+    "milestone": 10,
+    "title": "A split paper is read as LaTeX reads it: its root is a document that really takes the file in, and \\input is followed the same way, without braces, name.tex first and once per loop, by the word count, outline and numbering, with other open files unsaved",
+    "test": "a_section_belongs_to_the_root_that_really_takes_it_in",
+    "passes": true
+  },
+  {
+    "id": "paper-files-cached",
+    "milestone": 10,
+    "title": "Counting a split paper as you type reads its other files again only once their size or time of change does",
+    "test": "a_papers_files_are_read_again_only_once_they_change",
+    "passes": true
+  },
+  {
+    "id": "changes-package-really-loaded",
+    "milestone": 10,
+    "title": "Tracking a paper adds the changes package unless a real, uncommented \\usepackage loads it, and puts it before the real \\begin{document}",
+    "test": "the_changes_package_goes_in_unless_it_is_really_loaded",
+    "passes": true
+  },
+  {
+    "id": "build-saves-paper",
+    "milestone": 10,
+    "title": "Build PDF first saves every open file of the same paper with unsaved edits, so the PDF is built from what is on screen",
+    "test": "building_saves_the_papers_other_open_files",
+    "passes": true
+  },
+  {
+    "id": "cite-named-bibliographies",
+    "milestone": 10,
+    "title": "Cite offers the keys in the .bib files a paper names with \\bibliography or \\addbibresource[options], read from its root folder, from any of its files",
+    "test": "citations_come_from_the_bibliography_the_paper_names",
+    "passes": true
   }
 ]

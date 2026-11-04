@@ -1034,3 +1034,30 @@ stamp, and the commit hook refused verified work. Each worktree now keeps its ow
 folder, and every tree that passes gets a stamp of its own under `cellix-guard/verified.d`, kept
 a week. The hook still accepts the old single stamp, which worktrees on an older harness write.
 Unverified beyond this commit's own gate: two worktrees verifying at the same moment.
+
+## 2026-11-04: papers split over files, read as LaTeX reads them
+
+Fixes from a review of how a paper over several files is handled.
+
+- A section's root is a whole document that really `\input`s or `\include`s it, looked for in its
+  folder and up to three above, no higher than a repository's top. It was the first
+  `\documentclass` file one folder up whose text mentioned the section's name, and since tracking
+  changes writes `\usepackage{changes}` into the root, that could edit an unrelated file.
+  `% !TeX root` is read in any case.
+- One paper walk, `cellix_doc::paper`, serves the word count, outline and numbering: `\input name`
+  without braces, `name.tex` tried before `name`, inputs anywhere on a line, a file that takes
+  itself in read once. The word count reads other open files of the paper unsaved, and keeps the
+  rest by size and time of change instead of reading them on every keystroke.
+- The changes package goes in unless a real, uncommented `\usepackage` loads it, before the real
+  `\begin{document}`.
+- Build PDF first saves the paper's other open files with unsaved edits.
+- Cite reads the `.bib` files the paper names, `\addbibresource[options]` included, from its root.
+
+Unverified: the outline still reads `\input` files from the open file's folder, not the root's,
+and the numbering and outline read other files from disk, not their unsaved tabs. The root search
+stops at `.git`, not at the workspace, since `root_of` doesn't know the workspace. No UI changed,
+so no tour was run.
+
+Harness: `harness/x verify` keeps its stamp and log in the shared git dir, so a verify started in
+another worktree clears the stamp and overwrites the log mid-run, failing verifies that passed.
+Next: give each worktree its own stamp and log.

@@ -337,17 +337,49 @@ fn common_trail<'a>(a: &'a str, b: &str) -> &'a str {
 }
 
 /// A paper with the `changes` package its marks print with, just before its document begins.
-/// None when it has it already, or has no preamble to put it in.
+/// None when it loads it already, or has no preamble to put it in. Comments don't count.
 pub fn with_package(text: &str) -> Option<String> {
-    if text.contains("{changes}") {
-        return None;
+    let mut offset = 0;
+    let mut begin = None;
+    for line in text.split_inclusive('\n') {
+        let code = crate::paper::uncommented(line);
+        if loads_changes(code) {
+            return None;
+        }
+        if begin.is_none()
+            && let Some(at) = code.find("\\begin{document}")
+        {
+            begin = Some(offset + at);
+        }
+        offset += line.len();
     }
-    let at = text.find("\\begin{document}")?;
+    let at = begin?;
     Some(format!(
         "{}\\usepackage{{changes}}\n{}",
         &text[..at],
         &text[at..]
     ))
+}
+
+/// Whether a line, without its comment, loads `changes` with `\usepackage[...]{...}`.
+fn loads_changes(code: &str) -> bool {
+    let mut rest = code;
+    while let Some(at) = rest.find("\\usepackage") {
+        let mut after = rest[at + "\\usepackage".len()..].trim_start();
+        if after.starts_with('[') {
+            after = after
+                .find(']')
+                .map_or("", |end| after[end + 1..].trim_start());
+        }
+        if let Some(inner) = after.strip_prefix('{')
+            && let Some((names, _)) = inner.split_once('}')
+            && names.split(',').any(|name| name.trim() == "changes")
+        {
+            return true;
+        }
+        rest = &rest[at + 1..];
+    }
+    false
 }
 
 pub fn settle_all(text: &str, syntax: Syntax, accept: bool) -> String {
@@ -435,6 +467,45 @@ mod tests {
         assert_eq!(
             settle_all(text, Syntax::Latex, false),
             "x  y old z was {nested}"
+        );
+    }
+
+    #[test]
+    fn the_changes_package_goes_in_unless_it_is_really_loaded() {
+        let paper = |preamble: &str| {
+            format!(
+                "\\documentclass{{article}}\n{preamble}\\begin{{document}}\nx\n\\end{{document}}\n"
+            )
+        };
+        for loaded in [
+            "\\usepackage{changes}\n",
+            "\\usepackage[final]{changes}\n",
+            "\\usepackage [markup=underlined] {xcolor, changes}\n",
+        ] {
+            assert_eq!(with_package(&paper(loaded)), None, "{loaded}");
+        }
+        for not_loaded in [
+            "% \\usepackage{changes}\n",
+            "\\label{changes}\n",
+            "\\usepackage{changesets}\n",
+        ] {
+            let with = with_package(&paper(not_loaded)).expect(not_loaded);
+            assert!(
+                with.contains("\\usepackage{changes}\n\\begin{document}"),
+                "{with}"
+            );
+        }
+        let commented =
+            "\\documentclass{article}\n% \\begin{document} comes later\n\\begin{document}\nx\n";
+        assert_eq!(
+            with_package(commented).unwrap(),
+            "\\documentclass{article}\n% \\begin{document} comes later\n\\usepackage{changes}\n\\begin{document}\nx\n",
+            "after the comment, before the real one"
+        );
+        assert_eq!(
+            with_package("% \\begin{document}\nx\n"),
+            None,
+            "no preamble"
         );
     }
 

@@ -9375,41 +9375,57 @@ impl App {
         }
     }
 
-    /// The keys in the project's bibliographies, to pick one to cite.
+    /// The keys in the project's bibliographies, to pick one to cite: the ones the paper names,
+    /// from its root's folder, then any in the usual places.
     fn show_citations(&mut self) {
         let root = self.workspace.root().to_path_buf();
-        let beside = self
-            .editors
-            .get(self.active())
-            .and_then(|e| e.buffer.path())
+        let editor = self.editors.get(self.active());
+        let path = editor.and_then(|e| e.buffer.path()).map(Path::to_path_buf);
+        let named = match (editor, &path) {
+            (Some(editor), Some(path)) if editor.dialect() == Dialect::Latex => {
+                let paper = cellix_doc::latex::root_of(path, &editor.buffer.text());
+                cellix_doc::latex::Project::read(&paper).bibliographies
+            }
+            _ => Vec::new(),
+        };
+        let beside = path
+            .as_deref()
             .and_then(Path::parent)
             .map(Path::to_path_buf);
         let mut folders = vec![root.clone(), root.join("references"), root.join("bib")];
         folders.extend(beside.filter(|folder| *folder != root));
+        let found = folders.into_iter().flat_map(|folder| {
+            std::fs::read_dir(folder)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|e| e == "bib"))
+        });
+        let mut seen: Vec<PathBuf> = Vec::new();
         let mut items = Vec::new();
-        for folder in folders {
-            let Ok(entries) = std::fs::read_dir(folder) else {
+        for path in named.into_iter().chain(found) {
+            let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+            if seen.contains(&canonical) {
+                continue;
+            }
+            seen.push(canonical);
+            let Ok(text) = std::fs::read_to_string(&path) else {
                 continue;
             };
-            for path in entries.flatten().map(|e| e.path()) {
-                if path.extension().is_some_and(|e| e == "bib")
-                    && let Ok(text) = std::fs::read_to_string(&path)
-                {
-                    let name = self.relative(&path);
-                    let entries = cellix_doc::latex::bib_entries(&text);
-                    items.extend(entries.into_iter().map(|e| {
-                        let note = format!("{}: {}", e.short(), e.title);
-                        Item::Citation(
-                            e.key,
-                            if e.title.is_empty() {
-                                name.clone()
-                            } else {
-                                note
-                            },
-                        )
-                    }));
-                }
-            }
+            let name = self.relative(&path);
+            let entries = cellix_doc::latex::bib_entries(&text);
+            items.extend(entries.into_iter().map(|e| {
+                let note = format!("{}: {}", e.short(), e.title);
+                Item::Citation(
+                    e.key,
+                    if e.title.is_empty() {
+                        name.clone()
+                    } else {
+                        note
+                    },
+                )
+            }));
         }
         if items.is_empty() {
             self.say("No .bib file in this project yet");
@@ -9546,6 +9562,39 @@ impl App {
         self.start_build(root);
     }
 
+    /// Saves the paper's other open files with unsaved edits, so a build reads them as they
+    /// stand, as LaTeX Workshop does. One changed on disk meanwhile is left for its own tab.
+    fn save_paper(&mut self, root: &Path) {
+        let active = self.active();
+        let mut saved = Vec::new();
+        let mut failed = Vec::new();
+        for (index, editor) in self.editors.iter_mut().enumerate() {
+            let Some(path) = editor.buffer.path().map(Path::to_path_buf) else {
+                continue;
+            };
+            if index == active
+                || !editor.buffer.is_dirty()
+                || editor.conflict
+                || editor.dialect() != Dialect::Latex
+            {
+                continue;
+            }
+            let theirs = cellix_doc::latex::root_of(&path, &editor.buffer.text());
+            if !cellix_doc::paper::same_file(&theirs, root) {
+                continue;
+            }
+            match editor.save() {
+                Ok(()) => saved.push(editor.title()),
+                Err(e) => failed.push(format!("{}: {e}", editor.title())),
+            }
+        }
+        if !failed.is_empty() {
+            self.say(format!("Could not save {}", failed.join(", ")));
+        } else if !saved.is_empty() {
+            self.say(format!("Saved {}", saved.join(", ")));
+        }
+    }
+
     fn build_pdf(&mut self) {
         let Some(editor) = self.editors.get(self.active()) else {
             return;
@@ -9559,6 +9608,7 @@ impl App {
             return;
         }
         let root = cellix_doc::latex::root_of(&path, &editor.buffer.text());
+        self.save_paper(&root);
         self.save();
         // Saving already builds when the PDF is open.
         if self.build.is_none() {
@@ -10255,7 +10305,8 @@ impl App {
                 "UTF-8".to_string(),
                 // A writer counts words, and has no use for indent width.
                 if editor.rendered {
-                    let (all, selected, paper) = editor.word_count();
+                    let others: Vec<&Editor> = self.editors.iter().collect();
+                    let (all, selected, paper) = editor.word_count(&others);
                     // A paper over several files counts whole, and says so.
                     let whole = if paper { " in the paper" } else { "" };
                     let words = match selected {
@@ -16038,6 +16089,72 @@ mod tests {
     }
 
     #[test]
+    fn a_section_belongs_to_the_root_that_really_takes_it_in() {
+        let (dir, mut app) = paper_app(
+            "\\documentclass{article}\n\\begin{document}\nOne two.\n\\input sections/intro\n\\end{document}\n",
+        );
+        let root = dir.path().join("paper.tex");
+        // A whole document first by name, which mentions the section but doesn't take it in.
+        let notes = dir.path().join("a-notes.tex");
+        let notes_text =
+            "\\documentclass{article}\n\\begin{document}\nThe intro is long.\n\\end{document}\n";
+        fs::write(&notes, notes_text).unwrap();
+        fs::create_dir(dir.path().join("sections")).unwrap();
+        let intro = dir.path().join("sections/intro.tex");
+        fs::write(&intro, "Three four five.\n").unwrap();
+
+        // The section's unsaved words count from the root's tab.
+        app.open(&intro).unwrap();
+        typed(&mut app, "Zero ");
+        app.open(&root).unwrap();
+        let text = screen(&app).text();
+        assert!(text.contains("6 words in the paper"), "{text}");
+
+        app.open(&intro).unwrap();
+        app.run(Command::ToggleTracking);
+        assert_eq!(
+            fs::read_to_string(&notes).unwrap(),
+            notes_text,
+            "left alone"
+        );
+        let on_disk = fs::read_to_string(&root).unwrap();
+        assert!(
+            on_disk.contains("\\usepackage{changes}\n\\begin{document}"),
+            "{on_disk}"
+        );
+    }
+
+    #[test]
+    fn building_saves_the_papers_other_open_files() {
+        let (dir, mut app) = paper_app(
+            "\\documentclass{article}\n\\begin{document}\n\\input{intro}\n\\end{document}\n",
+        );
+        let root = dir.path().join("paper.tex");
+        let intro = dir.path().join("intro.tex");
+        fs::write(&intro, "Old.\n").unwrap();
+        let other = dir.path().join("other.tex");
+        fs::write(&other, "Elsewhere.\n").unwrap();
+        app.open(&other).unwrap();
+        typed(&mut app, "Unsaved ");
+        app.open(&intro).unwrap();
+        typed(&mut app, "New ");
+        app.open(&root).unwrap();
+        click_tool(&mut app, "Build PDF");
+        built(&mut app);
+        assert_eq!(
+            fs::read_to_string(&intro).unwrap(),
+            "New Old.\n",
+            "built as it stands"
+        );
+        assert_eq!(
+            fs::read_to_string(&other).unwrap(),
+            "Elsewhere.\n",
+            "not part of the paper"
+        );
+        assert!(dir.path().join("paper.pdf").exists());
+    }
+
+    #[test]
     fn saving_a_paper_rebuilds_its_open_pdf() {
         let (dir, mut app) = paper_app("\\begin{document}\nHello\n\\end{document}\n");
         app.run(Command::BuildPdf);
@@ -16167,6 +16284,28 @@ mod tests {
         assert!(screen(&app).text().contains("knuth84"));
         enter(&mut app);
         assert_eq!(app.active_text().as_deref(), Some("See\\cite{knuth84}\n"));
+    }
+
+    #[test]
+    fn citations_come_from_the_bibliography_the_paper_names() {
+        let (dir, mut app) = paper_app(
+            "\\documentclass{article}\n\\usepackage{biblatex}\n\\addbibresource[backend=biber]{lit/library.bib}\n\\begin{document}\n\\input{sections/intro}\n\\end{document}\n",
+        );
+        fs::create_dir(dir.path().join("lit")).unwrap();
+        fs::write(
+            dir.path().join("lit/library.bib"),
+            "@article{lamport94,\n title={LaTeX}, author={Leslie Lamport}, year={1994}\n}\n",
+        )
+        .unwrap();
+        fs::create_dir(dir.path().join("sections")).unwrap();
+        let intro = dir.path().join("sections/intro.tex");
+        fs::write(&intro, "See\n").unwrap();
+        app.open(&intro).unwrap();
+        app.run(Command::Move(cellix_input::Direction::LineEnd, false));
+        click_tool(&mut app, "Cite");
+        assert!(screen(&app).text().contains("lamport94"));
+        enter(&mut app);
+        assert_eq!(app.active_text().as_deref(), Some("See\\cite{lamport94}\n"));
     }
 
     #[test]
