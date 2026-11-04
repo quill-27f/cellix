@@ -16002,6 +16002,36 @@ mod tests {
     }
 
     #[test]
+    fn the_maximize_button_stays_while_the_preview_is_zoomed_and_panned() {
+        let (_dir, mut app) = zoomed_preview();
+        let has_button = |app: &App| {
+            let area = app.dock_area().unwrap();
+            let x = i32::from(app.dock.maximize_button(area)) * 64;
+            let row = i32::from(area.y);
+            screen(app).paint.iter().any(|p| {
+                matches!(p, Paint::Icon { bounds, icon: Icon::Maximize, .. }
+                    if bounds.x >= x && bounds.x < x + 3 * 64 && bounds.y / 64 == row)
+            })
+        };
+        assert!(has_button(&app), "zoomed");
+        let screen_area = app.dock_screen().unwrap();
+        let (x, y) = (screen_area.x + 30, screen_area.y + 6);
+        app.handle(mouse(MouseKind::Left, x, y));
+        app.handle(mouse(MouseKind::Drag, x - 10, y + 3));
+        app.handle(mouse(MouseKind::Up, x - 10, y + 3));
+        assert!(app.dock.pdf.as_ref().unwrap().left > 0.0);
+        assert!(has_button(&app), "panned");
+        // Hovered, as a pointer on its way to it leaves it.
+        let area = app.dock_area().unwrap();
+        app.handle(mouse(
+            MouseKind::Move,
+            app.dock.maximize_button(area) + 1,
+            area.y,
+        ));
+        assert!(has_button(&app), "hovered");
+    }
+
+    #[test]
     fn the_pan_hint_goes_by_itself() {
         let (_dir, mut app) = zoomed_preview();
         assert!(painted_text(&app).contains(PAN_HINT_TEXT));

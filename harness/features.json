@@ -3379,5 +3379,12 @@
     "title": "The side pane's tabs reorder by dragging",
     "test": "pane_tabs_reorder_by_dragging",
     "passes": true
+  },
+  {
+    "id": "maximize-button-zoomed",
+    "milestone": 10,
+    "title": "The pane's maximize button stays drawn while the Preview is zoomed and panned",
+    "test": "the_maximize_button_stays_while_the_preview_is_zoomed_and_panned",
+    "passes": true
   }
 ]

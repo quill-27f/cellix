@@ -1114,3 +1114,7 @@ Preview fits its page to the width when docked under, so a tall page scrolls the
 
 Unverified: drags in a real terminal and inside Claude Code beyond the tour's headless terminal.
 In the tour's debug build the frame after a whole-layout change can take over a second.
+
+The pane's maximize button looked missing in `91-preview-zoomed` and `92-preview-panned`. Those
+two shots were taken before Maximize was built and never retaken; retaken, the button is there.
+A test now holds it drawn while the Preview is zoomed, panned and hovered.
