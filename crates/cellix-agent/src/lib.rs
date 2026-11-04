@@ -144,29 +144,45 @@ pub(crate) fn new_token() -> io::Result<String> {
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// Who this is, to keep each user's sockets apart.
+/// The folder the sockets live in, which only this user can enter. On Unix it's named for
+/// the user in the shared temp folder, and made private.
 #[cfg(unix)]
-fn user() -> String {
+fn sockets_folder() -> PathBuf {
     // SAFETY: getuid has no preconditions and cannot fail.
-    unsafe { libc::getuid() }.to_string()
+    let uid = unsafe { libc::getuid() };
+    env::temp_dir().join(format!("cellix-{uid}"))
 }
 
-/// Who this is, to keep each user's sockets apart. Windows gives each user a temp folder of
-/// their own as well.
 #[cfg(not(unix))]
-fn user() -> String {
-    let name = env::var("USERNAME").unwrap_or_default();
-    name.chars().filter(|c| c.is_ascii_alphanumeric()).collect()
+fn sockets_folder() -> PathBuf {
+    windows_sockets_folder(|name| env::var(name).ok())
+}
+
+/// The folder the sockets live in on Windows: the user's own local app data, which only they
+/// and administrators can read, wherever TEMP has been pointed.
+#[cfg_attr(unix, allow(dead_code))]
+fn windows_sockets_folder(var: impl Fn(&str) -> Option<String>) -> PathBuf {
+    let local = var("LOCALAPPDATA")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from);
+    local
+        .or_else(|| {
+            Some(
+                PathBuf::from(var("USERPROFILE")?)
+                    .join("AppData")
+                    .join("Local"),
+            )
+        })
+        .unwrap_or_else(env::temp_dir)
+        .join("cellix")
+        .join("sockets")
 }
 
 /// One socket per workspace, in a directory only this user can enter.
 pub fn socket_path(root: &Path) -> PathBuf {
     // `\\?\C:\x` and `C:\x` are one folder, so they share a socket. Unix paths are as they are.
     let root = dunce::simplified(root);
-    let uid = user();
-    env::temp_dir()
-        .join(format!("cellix-{uid}"))
-        .join(format!("{:016x}.sock", fnv(&root.to_string_lossy())))
+    sockets_folder().join(format!("{:016x}.sock", fnv(&root.to_string_lossy())))
 }
 
 fn answer(line: &str, comments: &SharedComments, requests: &Sender<Request>) -> io::Result<String> {
@@ -339,7 +355,7 @@ fn private_folder(dir: &Path) -> io::Result<()> {
             .create(dir)?;
         fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
     }
-    // Inside the user's own temp folder, which only they and administrators can read.
+    // Inside the user's own local app data, which only they and administrators can read.
     #[cfg(not(unix))]
     fs::DirBuilder::new().recursive(true).create(dir)
 }
@@ -752,6 +768,33 @@ mod tests {
             drop(second);
             assert!(!path.exists(), "{transport:?}");
         }
+    }
+
+    /// Windows keeps sockets in the user's local app data, not wherever TEMP points, and
+    /// doesn't name the folder for the user at all.
+    #[test]
+    fn windows_keeps_sockets_in_local_app_data() {
+        let var = |name: &str| match name {
+            "LOCALAPPDATA" => Some(r"C:\Users\Zoë\AppData\Local".to_string()),
+            "TEMP" => Some(r"D:\shared".to_string()),
+            _ => None,
+        };
+        let local = PathBuf::from(r"C:\Users\Zoë\AppData\Local");
+        assert_eq!(
+            windows_sockets_folder(var),
+            local.join("cellix").join("sockets")
+        );
+        let profile = |name: &str| (name == "USERPROFILE").then(|| r"C:\Users\Zoë".to_string());
+        let local = PathBuf::from(r"C:\Users\Zoë").join("AppData").join("Local");
+        assert_eq!(
+            windows_sockets_folder(profile),
+            local.join("cellix").join("sockets")
+        );
+        #[cfg(not(unix))]
+        assert_eq!(
+            socket_path(Path::new(r"C:\x")).parent(),
+            Some(windows_sockets_folder(|n| env::var(n).ok()).as_path())
+        );
     }
 
     #[test]

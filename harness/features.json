@@ -3120,5 +3120,12 @@
     "title": "A paste through a real terminal lands in the file exactly as pasted",
     "test": "pty_bracketed_paste_inserts_verbatim",
     "passes": true
+  },
+  {
+    "id": "sockets-local-app-data",
+    "milestone": 10,
+    "title": "Windows keeps socket notes in the user's local app data, not wherever TEMP points",
+    "test": "windows_keeps_sockets_in_local_app_data",
+    "passes": true
   }
 ]
