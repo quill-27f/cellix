@@ -262,6 +262,12 @@ beside the panel with no list of its own.
 Cellix often lives in a pane beside an agent, so width decides the layout. Under 70
 columns the activity bar goes, the sidebar becomes a drawer over the code, splits collapse
 to the focused pane, the status bar keeps only what fits, and review stacks changes.
+The side pane or one editor can be maximized, from the pane's own tab row or a double-click on
+a tab, while running only. The icons at the top right never move for it. Whatever asks for a
+hidden part, such as one of those icons or opening a file, restores first, so nothing opens
+out of sight. The side pane stands under the file when it's dragged there, as well as when the
+window is too narrow; that choice lasts while running. Panes split side by side only, so a tab
+dropped on a file splits left or right, and there is no split below.
 
 ### Markdown
 

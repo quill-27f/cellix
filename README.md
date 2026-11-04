@@ -188,7 +188,9 @@ Toggle Markdown Source in the palette shows the raw file.
 
 Under 70 columns, as beside an agent, the sidebar becomes a drawer behind the `☰` button
 and review stacks changes in one column. In a window too narrow for the side pane, it stands
-under the file, and its top edge can be dragged.
+under the file, and its top edge can be dragged. Drag one of its tabs over the bottom half of the
+file to put it there in any window, and onto the right edge to put it back. A file's tab dragged
+along the tab bar moves there, and dropped on a file it opens a pane beside it, or shows there.
 
 The mouse works everywhere: click files, tabs and hunks, drag to select, and right-click
 the explorer to create, rename or delete.
@@ -225,8 +227,9 @@ your LaTeX engine in the background, and kept, so typing never waits.
 tables, across `\input` files, and anything Cellix doesn't recognise stays visible as source. **Cite**
 lists the keys in the `.bib` files your paper names, and any others in the project. **Build PDF**,
 or Ctrl+Alt+B, saves the paper's open files, runs `tectonic`, `latexmk` or `pdflatex`, shows the PDF
-in the side pane, keeps what the build said in a Log tab, and goes to the line of any error.
-Clicking the PDF goes to that place in the source. Set `latex_engine` in the settings file to use
+in the side pane's Preview, keeps what the build said in a Log tab, and goes to the line of any error.
+Clicking the PDF goes to that place in the source. Zoomed past the pane's
+width, a page moves when dragged, and Shift+scroll or a sideways scroll goes across. Set `latex_engine` in the settings file to use
 your own command. Export to PDF does the same for Markdown, through LaTeX, with
 diagrams and footnotes.
 
@@ -239,12 +242,14 @@ kernel, with Jupyter's keys. It needs `jupyter_client` and `ipykernel` in the pr
 
 Whatever you can see, you can talk about, the same way in every file type. Select text and **Comment**
 and **Ask Agent** appear beside it. A picture, diagram or formula has a Comment button under the
-pointer, and a PDF or image in the side pane takes one too. Comments are threads in the side pane,
+pointer, and a PDF or image in the side pane's Preview takes one too. Comments are threads in the side pane,
 kept in `.cellix/threads.json`. Ask Agent sends yours to the agent with its file, line and quote, the
 agent answers with `cellix reply <id> "text"`, and the answer lands under your question.
 
 The icons at the top right start a real agent, a terminal or a browser in the side pane, beside your file. Press Ctrl+` to
 move the keyboard between the two, and the × at the top right, or Ctrl+Shift+`, to hide the pane.
+The button after the pane's own tabs, or a double-click on one of them, lets the pane take the
+window; a double-click on a file's tab does the same for the file. Do it again to restore.
 Hiding stops nothing. What runs there outlives Cellix too (not yet on Windows): quitting offers Keep Running, a dropped SSH
 connection keeps everything, and the next Cellix in that folder finds it with what it printed.
 

@@ -403,6 +403,23 @@ impl Grid {
         });
     }
 
+    /// A see-through wash of `color` over `bounds`, `alpha` out of 255, with a border.
+    pub fn wash(
+        &mut self,
+        bounds: Bounds,
+        radius: u8,
+        (color, alpha): (Rgb, u8),
+        border: Option<Rgb>,
+    ) {
+        self.paint.push(Paint::Wash {
+            bounds,
+            radius,
+            color,
+            alpha,
+            border,
+        });
+    }
+
     pub fn hairline(&mut self, bounds: Bounds, color: Rgb) {
         self.paint.push(Paint::Hairline { bounds, color });
     }

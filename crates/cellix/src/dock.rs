@@ -39,8 +39,12 @@ const COMMENTS_WIDTH: u16 = 10;
 const COUNT_WIDTH: u16 = 2;
 /// The button that starts something, and the tab it becomes while that list shows.
 const NEW_WIDTH: u16 = 3;
+/// The button after it that maximizes the pane.
+const MAXIMIZE_WIDTH: u16 = 3;
+/// The column between it and the +, so the row keeps one step between its tabs and buttons.
+const MAXIMIZE_GAP: u16 = 1;
 const AGENTS_WIDTH: u16 = 11;
-const PDF_WIDTH: u16 = 8;
+const PREVIEW_WIDTH: u16 = 12;
 const LOG_WIDTH: u16 = 8;
 const PROBLEMS_WIDTH: u16 = 13;
 /// Where a tab's name starts, as on the file's tabs.
@@ -885,12 +889,27 @@ fn key_bytes(key: KeyEvent, application: bool) -> Vec<u8> {
     text.into_bytes()
 }
 
+/// Where something at `index` ends up when one thing moves from `from` to `to`.
+pub fn moved(index: usize, from: usize, to: usize) -> usize {
+    if index == from {
+        to
+    } else if from < index && index <= to {
+        index - 1
+    } else if to <= index && index < from {
+        index + 1
+    } else {
+        index
+    }
+}
+
 /// What a click in the pane's title row lands on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TabHit {
     Tab(usize),
     Close(usize),
     New,
+    /// The button that maximizes the pane, and restores it.
+    Maximize,
     /// A view that comes and goes, and the × on its tab.
     View(Front),
     CloseView(Front),
@@ -925,7 +944,7 @@ pub struct Dock {
     pub width: Option<u16>,
     /// What stands in front of any session.
     pub front: Front,
-    /// The PDF being worked on.
+    /// The PDF or image in the Preview.
     pub pdf: Option<PdfView>,
     /// The place on a page last pointed at, for a comment on it.
     pub pdf_spot: Option<(usize, f32, f32)>,
@@ -952,7 +971,24 @@ pub struct Dock {
     pub tabs_flush: Cell<bool>,
     /// Rows the pane was dragged to, standing under the file.
     pub height: Option<u16>,
+    /// When the hint on moving a page wider than the pane showed, and whether it's done
+    /// with: it shows once a run.
+    pub pan_hint: Option<std::time::Instant>,
+    pub pan_hint_done: bool,
+    /// Dragged under the file, where it stands even with room beside it. Kept while running.
+    pub under: bool,
+    /// The order of the views' tabs, once one has been dragged.
+    pub view_order: Vec<Front>,
 }
+
+/// The views' tabs in the order they come in until one is dragged.
+const VIEW_ORDER: [Front; 5] = [
+    Front::Comments,
+    Front::Agents,
+    Front::Pdf,
+    Front::Log,
+    Front::Problems,
+];
 
 impl Dock {
     /// How wide the pane is in a window `room` columns wide past the sidebar.
@@ -1098,7 +1134,7 @@ impl Dock {
             views.push((Front::Agents, "Agents", AGENTS_WIDTH));
         }
         if self.pdf.is_some() {
-            views.push((Front::Pdf, "PDF", PDF_WIDTH));
+            views.push((Front::Pdf, "Preview", PREVIEW_WIDTH));
         }
         if !self.log.is_empty() {
             views.push((Front::Log, "Log", LOG_WIDTH));
@@ -1106,7 +1142,62 @@ impl Dock {
         if self.problems {
             views.push((Front::Problems, "Problems", PROBLEMS_WIDTH));
         }
+        // A sort that keeps ties in place, so views never dragged keep their own order.
+        let rank = |front: &Front| self.view_order.iter().position(|v| v == front);
+        views.sort_by_key(|view| rank(&view.0).unwrap_or(usize::MAX));
         views
+    }
+
+    /// Where a tab dragged along the row would go, among the views' tabs or the sessions':
+    /// the index it would take, and the column between tabs where it would stand.
+    pub fn slot(&self, area: Rect, x: u16, views: bool) -> (usize, u16) {
+        let spans: Vec<(u16, u16)> = if views {
+            let tabs = self.view_tabs(area);
+            tabs.iter().map(|t| (t.2.x, t.2.right())).collect()
+        } else {
+            self.tabs(area)
+        };
+        for (index, (start, end)) in spans.iter().enumerate() {
+            if x < (start + end) / 2 {
+                return (index, *start);
+            }
+        }
+        let end = spans.last().map_or(self.first_tab(area), |t| t.1);
+        (spans.len(), end)
+    }
+
+    /// Moves a view's tab to `to` among the views' tabs, counted before it moves.
+    pub fn move_view(&mut self, view: Front, to: usize) {
+        let mut order: Vec<Front> = self.views().iter().map(|v| v.0).collect();
+        let Some(from) = order.iter().position(|v| *v == view) else {
+            return;
+        };
+        order.remove(from);
+        let to = if to > from { to - 1 } else { to };
+        order.insert(to.min(order.len()), view);
+        let rest = VIEW_ORDER
+            .into_iter()
+            .filter(|v| !order.contains(v))
+            .collect::<Vec<_>>();
+        order.extend(rest);
+        self.view_order = order;
+    }
+
+    /// Moves a session's tab to `to` among the sessions' tabs, counted before it moves.
+    pub fn move_session(&mut self, from: usize, to: usize) {
+        if from >= self.sessions.len() {
+            return;
+        }
+        let to = if to > from { to - 1 } else { to }.min(self.sessions.len() - 1);
+        let session = self.sessions.remove(from);
+        self.sessions.insert(to, session);
+        self.active = self.active.map(|active| moved(active, from, to));
+    }
+
+    /// What a view's tab is called.
+    pub fn view_name(&self, view: Front) -> &'static str {
+        let views = self.views();
+        views.iter().find(|v| v.0 == view).map_or("", |v| v.1)
     }
 
     /// How wide a session's tab would like to be.
@@ -1133,7 +1224,7 @@ impl Dock {
         let room = self
             .tabs_end
             .get()
-            .saturating_sub(self.tabs_start(area) + NEW_WIDTH);
+            .saturating_sub(self.tabs_start(area) + NEW_WIDTH + MAXIMIZE_GAP + MAXIMIZE_WIDTH);
         if self.tabs_end.get() == 0 || widths.iter().sum::<u16>() <= room {
             return widths;
         }
@@ -1186,6 +1277,11 @@ impl Dock {
             (front, name, tab)
         });
         tabs.collect()
+    }
+
+    /// Where the button that maximizes the pane starts.
+    pub fn maximize_button(&self, area: Rect) -> u16 {
+        self.tabs(area).last().map_or(self.first_tab(area), |t| t.1) + NEW_WIDTH + MAXIMIZE_GAP
     }
 
     #[cfg(test)]
@@ -1314,11 +1410,21 @@ impl Dock {
             }
         }
         let end = tabs.last().map_or(self.first_tab(area), |t| t.1);
-        (x >= end && x < end + NEW_WIDTH).then_some(TabHit::New)
+        if x >= end && x < end + NEW_WIDTH {
+            return Some(TabHit::New);
+        }
+        let maximize = end + NEW_WIDTH + MAXIMIZE_GAP;
+        (x >= maximize && x < maximize + MAXIMIZE_WIDTH).then_some(TabHit::Maximize)
     }
 
     /// The title row, in the frame's colour, with tabs like the editor's.
-    pub fn draw_tabs(&self, grid: &mut Grid, area: Rect, hover: Option<(u16, u16)>, theme: &Theme) {
+    pub fn draw_tabs(
+        &self,
+        grid: &mut Grid,
+        area: Rect,
+        (hover, maximized): (Option<(u16, u16)>, bool),
+        theme: &Theme,
+    ) {
         let count = self.comment_count.get();
         let row = Rect::new(area.x, area.y, area.w, 1);
         grid.fill(row, theme.tab);
@@ -1421,6 +1527,31 @@ impl Dock {
             ..theme.tab
         };
         grid.label(plus + 1, area.y, "+", style, area.right());
+        // Maximized, it stands on the chip a selected icon has, so it's plain how to get back.
+        let button = Rect::new(plus + NEW_WIDTH + MAXIMIZE_GAP, area.y, MAXIMIZE_WIDTH, 1);
+        let on_it = hover.is_some_and(|h| button.contains(h.0, h.1));
+        if maximized || on_it {
+            let fill = if maximized {
+                theme.tint
+            } else {
+                theme.row_hover
+            };
+            // Two cells around the icon: about square, as the rail's and the strip's chips are.
+            let chip = Bounds::cells(button.x as f32 + 0.5, area.y as f32 + 0.12, 2.0, 0.76);
+            grid.panel(chip, 22, Some(fill), None);
+        }
+        let icon = if maximized {
+            Icon::Minimize
+        } else {
+            Icon::Maximize
+        };
+        let fg = if maximized || on_it {
+            theme.text.fg
+        } else {
+            theme.gutter.fg
+        };
+        // The size of the icons at the top right, which it stands among.
+        crate::toolbar::draw_icon(grid, (icon, 0.62), button, fg, theme.tab);
         // Drawn last, over any tabs that reach this far, so it can always be found.
         let hide = Rect::new(
             area.right().saturating_sub(HIDE_WIDTH),

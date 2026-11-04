@@ -3358,5 +3358,152 @@
     "title": "Windows share paths become file://server/share URLs and read back",
     "test": "windows_file_urls_name_drives_and_shares",
     "passes": true
+  },
+  {
+    "id": "preview-name",
+    "milestone": 10,
+    "title": "The side pane's PDF and image view is called Preview, and says image for an image",
+    "test": "the_preview_is_called_preview_and_says_image_for_an_image",
+    "passes": true
+  },
+  {
+    "id": "preview-image-click",
+    "milestone": 10,
+    "title": "Clicking an image in the Preview doesn't ask for SyncTeX",
+    "test": "clicking_an_image_does_not_ask_for_synctex",
+    "passes": true
+  },
+  {
+    "id": "preview-pan-drag",
+    "milestone": 10,
+    "title": "A zoomed page in the Preview pans when dragged, and a click without a drag still clicks",
+    "test": "a_zoomed_preview_pans_by_dragging_and_a_click_still_clicks",
+    "passes": true
+  },
+  {
+    "id": "preview-pan-hint",
+    "milestone": 10,
+    "title": "The hint on moving a wide page goes by itself",
+    "test": "the_pan_hint_goes_by_itself",
+    "passes": true
+  },
+  {
+    "id": "preview-pan-escape",
+    "milestone": 10,
+    "title": "Escape puts a page back mid-drag",
+    "test": "escape_puts_a_page_back_mid_drag",
+    "passes": true
+  },
+  {
+    "id": "preview-sideways-wheel",
+    "milestone": 10,
+    "title": "Shift+scroll and a sideways wheel move a wide page across",
+    "test": "shift_and_the_sideways_wheel_move_a_wide_page_across",
+    "passes": true
+  },
+  {
+    "id": "preview-scrollbar",
+    "milestone": 10,
+    "title": "The thumb under a wide page drags it across",
+    "test": "the_thumb_under_a_wide_page_drags_it_across",
+    "passes": true
+  },
+  {
+    "id": "preview-space",
+    "milestone": 10,
+    "title": "Space in the Preview types nothing, so Space+drag pans",
+    "test": "space_in_the_preview_types_nothing",
+    "passes": true
+  },
+  {
+    "id": "sideways-drift",
+    "milestone": 10,
+    "title": "A trackpad's sideways drift leaves the editor alone",
+    "test": "sideways_drift_leaves_the_editor_alone",
+    "passes": true
+  },
+  {
+    "id": "preview-pan-pane",
+    "milestone": 10,
+    "title": "Dragging inside Claude Code pans the Preview",
+    "test": "a_pane_drag_inside_claude_code_pans_the_preview",
+    "passes": true
+  },
+  {
+    "id": "wheel-sideways-input",
+    "milestone": 10,
+    "title": "The wheel tipped sideways reaches the app as itself",
+    "test": "the_wheel_tipped_sideways_arrives_as_itself",
+    "passes": true
+  },
+  {
+    "id": "maximize-pane",
+    "milestone": 10,
+    "title": "The side pane maximizes from its button and a double-click on its tab",
+    "test": "the_side_pane_maximizes_from_its_button_and_its_tab",
+    "passes": true
+  },
+  {
+    "id": "maximize-editor",
+    "milestone": 10,
+    "title": "A double-click on an editor tab maximizes it, and the palette has both",
+    "test": "double_clicking_an_editor_tab_maximizes_it",
+    "passes": true
+  },
+  {
+    "id": "maximize-restores",
+    "milestone": 10,
+    "title": "Opening what a maximized part hides restores first",
+    "test": "opening_what_a_maximized_part_hides_restores_first",
+    "passes": true
+  },
+  {
+    "id": "tab-drag-reorder",
+    "milestone": 10,
+    "title": "Dragging an editor tab reorders it, with a bar, a ghost and a status line",
+    "test": "dragging_an_editor_tab_reorders_with_a_bar_and_says_so",
+    "passes": true
+  },
+  {
+    "id": "tab-drag-cells",
+    "milestone": 10,
+    "title": "Dragging a tab works on the cell tier",
+    "test": "a_tab_drag_works_on_the_cell_tier",
+    "passes": true
+  },
+  {
+    "id": "tab-drag-split",
+    "milestone": 10,
+    "title": "A tab dropped beside a pane splits there and moves into it, or shows in another pane",
+    "test": "dropping_a_tab_beside_a_pane_splits_and_moves_it",
+    "passes": true
+  },
+  {
+    "id": "tab-drag-escape",
+    "milestone": 10,
+    "title": "Escape cancels a tab drag",
+    "test": "escape_cancels_a_tab_drag",
+    "passes": true
+  },
+  {
+    "id": "pane-drag-under",
+    "milestone": 10,
+    "title": "Dragging a side pane tab docks the pane under the file, and back on the right",
+    "test": "dragging_a_pane_tab_docks_the_pane_under_the_file_and_back",
+    "passes": true
+  },
+  {
+    "id": "pane-tab-reorder",
+    "milestone": 10,
+    "title": "The side pane's tabs reorder by dragging",
+    "test": "pane_tabs_reorder_by_dragging",
+    "passes": true
+  },
+  {
+    "id": "maximize-button-zoomed",
+    "milestone": 10,
+    "title": "The pane's maximize button stays drawn while the Preview is zoomed and panned",
+    "test": "the_maximize_button_stays_while_the_preview_is_zoomed_and_panned",
+    "passes": true
   }
 ]

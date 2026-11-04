@@ -1103,3 +1103,87 @@ an approved plan's thread was filed under `.cellix/plans\001.md`. Cellix named w
 with the platform's separator, so on Windows a thread or comment said `docs\x.md` while git, the
 agents and saved threads say `docs/x.md`. Paths in comments and threads now use `/` everywhere,
 which Windows reads as well.
+
+## 2026-11-04: The Preview
+
+The side pane's tab for a PDF or an image was called "PDF" even for an image. It's Preview now,
+twelve columns like the other views' name, padding and ×. With an image, its texts say "image"
+("Reading the image…", "This image can't be shown.", "Image ready:" on the cell tier), its bar
+names the file instead of counting pages, and a click on it no longer says to build with
+SyncTeX. Build PDF, Export to PDF and Show in PDF keep their names: they are about PDFs. The
+tour has a new shot, `90-preview-image`. Next: panning a zoomed page.
+
+## 2026-11-04: Panning the Preview
+
+Zoomed past the pane, a page was cut off at the right with no way across. The Preview now keeps
+a sideways offset. A left press on the pages pans once it moves three quarters of a column or a
+row, so a click without a drag still goes to the source through SyncTeX, now on release
+(`clicking_a_pdf_goes_to_its_source` sends the release it always should have). Shift+wheel and
+the new `ScrollLeft`/`ScrollRight` kinds go across; elsewhere those kinds are ignored and don't
+clear messages or spoil a scroll on its way, so a trackpad's drift can't jitter the editor. Thin
+thumbs like the editor's sit over the bottom and right edges and can be dragged. "Drag to move
+around · Shift+scroll goes sideways" floats at the bottom the first time a page is too wide,
+once a run, for five seconds or until the first pan. A press in the Preview gives it the keyboard,
+where Space and other plain keys do nothing and the arrows move the page; Esc gives it back, and
+Esc during a drag puts the page back. Inside Claude Code the mod's pointer down, move and up
+carry positions, so a drag pans there too (tested through `pane::translate`).
+
+The tour's new shots (`91-preview-zoomed`, `92-preview-panned`) and a design review caught a
+moved page drawing its outline over the file beside the pane, a page that fits still moving up
+and down (scrolling now stops when the last page's bottom is in view), pages sliding up against
+the bar's text, and thumbs touching the corners; all fixed. The thumbs keep the editor's colour.
+
+Unverified: a real terminal's sideways wheel and Shift+wheel (crossterm's kinds are tested, a
+live trackpad isn't), and the pan inside a live Claude Code session. Pages don't show on the
+cell tier, so neither does panning. Next: maximizing the pane and an editor.
+
+## 2026-11-04: Maximize
+
+The side pane's tab row ends with a maximize-2 button after its +, which makes the pane fill
+everything right of the activity rail. Maximized, it shows minimize-2 on the selected chip, with
+the tooltip "Restore or double-click the tab", and the status bar says which file is hidden. A
+double-click on one of the pane's tabs does the same. A double-click on an editor's tab maximizes
+that editor, hiding the sidebar, the other split panes and the side pane, and again restores.
+The palette has Toggle Maximized Side Pane and Toggle Maximized Editor; no keys. Double-clicks
+use the existing time and place window. The icons at the top right stay put. What's shown is
+compared before and after every event and every agent call: a hidden part asked for (the pane
+behind an editor, the sidebar, a file behind the pane, Review, Settings, a split) restores first.
+Kept while running only. The tour has `93-pane-maximized`, `94-pane-restore-hover` and
+`95-editor-maximized`; a design review made the button's chip square and its icon the strip's
+size, gave it one step from the +, moved the tooltip clear of the bar's text, and named the
+hidden parts in the status bar for an editor too.
+
+Unverified: in the tour's debug build, a double-click on the tab of a Markdown page with a
+picture didn't register, though it does in a test and on a code file. Multi-clicks are timed when
+each press is handled, so a slow frame between the two presses can split them; a release build
+wasn't tried. Next: dragging tabs.
+
+## 2026-11-04: Dragging tabs and the side pane
+
+A press on a tab becomes a drag after two columns or a row, so clicks and double-clicks are
+unchanged. A file's tab dropped on the tab bar moves there, with a 2 px accent bar where it would
+go; on the left or right half of a pane it opens a new pane on that side and moves there, the old
+pane showing its neighbour; in the middle third of another pane it shows there. Cellix has one tab
+bar for all panes, so "another pane's tab bar" became that middle drop. Panes only split side by
+side (`Command::SplitPane` appends one, and `pane_area` divides the width), so there's no bottom
+split; a split needs 20 columns a pane. The side pane's tabs move along their own row, views among
+views and sessions among sessions. Dragged over the bottom half of the file, a side pane tab docks
+the whole pane under it, reusing the narrow layout (`dock.under`), and on the right edge puts it
+back; kept while running. While dragging: a ghost chip at the pointer, an accent wash at about 14%
+with a 2 px border where it would land (a new `Paint::Wash`, since panels are opaque), and the
+status bar saying what dropping does. Esc cancels. On the cell tier the bar is `▏`, the wash tints
+cell backgrounds and the ghost is a label.
+
+The tour has `96-tab-drag-split`, `97-tab-drag-reorder`, `98-pane-drag-under` and
+`99-pane-under` (a new `press`/`hold` step in `term.py` holds a drag mid-way). A design review
+moved the insertion bar off the sidebar's edge, put the ghost below and right of the pointer so
+it hides nothing aimed at, and made the docking wash cover where the pane will really stand.
+Left as they are: the dragged tab isn't dimmed, the minimap shows through a split wash, and the
+Preview fits its page to the width when docked under, so a tall page scrolls there.
+
+Unverified: drags in a real terminal and inside Claude Code beyond the tour's headless terminal.
+In the tour's debug build the frame after a whole-layout change can take over a second.
+
+The pane's maximize button looked missing in `91-preview-zoomed` and `92-preview-panned`. Those
+two shots were taken before Maximize was built and never retaken; retaken, the button is there.
+A test now holds it drawn while the Preview is zoomed, panned and hovered.

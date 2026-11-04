@@ -287,6 +287,22 @@ impl SoftwareRasterizer {
                 };
                 target.panel(shape, (*fill, *border), *shadow, *dashed, ch);
             }
+            Paint::Wash {
+                bounds,
+                radius,
+                color,
+                alpha,
+                border,
+            } => {
+                let shape = Shape {
+                    x: scale(bounds.x, cw),
+                    y: scale(bounds.y, ch),
+                    w: scale(bounds.w, cw),
+                    h: scale(bounds.h, ch),
+                    radius: *radius as f32 * ch / 100.0,
+                };
+                target.wash(shape, (*color, *alpha), *border, ch);
+            }
             Paint::Hairline { bounds, color } => {
                 let thickness = (ch / 24.0).ceil().max(1.0);
                 let shape = Shape {
@@ -525,6 +541,26 @@ impl Target<'_> {
                     let edge = ((0.5 - (d + stroke / 2.0).abs() + stroke / 2.0) * 255.0)
                         .clamp(0.0, 255.0) as u8;
                     self.blend(x, y, color, edge);
+                }
+            }
+        }
+    }
+
+    /// A see-through fill with round corners, and a border twice a panel's weight.
+    fn wash(&mut self, s: Shape, (color, alpha): (Rgb, u8), border: Option<Rgb>, row: f32) {
+        let (x0, x1) = (s.x.floor() as i32 - 1, (s.x + s.w).ceil() as i32 + 1);
+        let y0 = (s.y.floor() as i32 - 1).max(self.top);
+        let y1 = ((s.y + s.h).ceil() as i32 + 1).min(self.top + self.height as i32);
+        let stroke = (row / 15.0).max(2.0);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let d = rounded_distance(&s, x as f32 + 0.5, y as f32 + 0.5);
+                let inside = (0.5 - d).clamp(0.0, 1.0);
+                self.blend(x, y, color, (inside * alpha as f32) as u8);
+                if let Some(edge_color) = border {
+                    // The border runs just inside the edge.
+                    let along = (0.5 - (d + stroke / 2.0).abs() + stroke / 2.0).clamp(0.0, 1.0);
+                    self.blend(x, y, edge_color, (along * 255.0) as u8);
                 }
             }
         }
@@ -933,6 +969,23 @@ mod tests {
         let red = |x: usize, y: usize| image.rgb[(y * image.width + x) * 3];
         assert_eq!(red(50, 10), 255, "the middle is filled");
         assert_eq!(red(10, 0), 10, "the corner is cut");
+    }
+
+    #[test]
+    fn a_wash_lets_what_is_under_it_show() {
+        let Some(mut r) = rasterizer() else { return };
+        let mut grid = Grid::new(20, 2, style());
+        let bounds = crate::paint::Bounds::cells(1.0, 0.0, 18.0, 2.0);
+        grid.wash(bounds, 10, (Rgb(255, 0, 0), 64), Some(Rgb(0, 0, 255)));
+        let image = r.row(&grid, 0);
+        let at = |x: usize, y: usize| {
+            let i = (y * image.width + x) * 3;
+            (image.rgb[i], image.rgb[i + 1], image.rgb[i + 2])
+        };
+        let middle = at(image.width / 2, image.height - 1);
+        assert!(middle.0 > 0 && middle.0 < 200, "a little red: {middle:?}");
+        let edge = at(image.width / 2, 0);
+        assert!(edge.2 > 200, "the border: {edge:?}");
     }
 
     #[test]
