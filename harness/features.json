@@ -3099,5 +3099,12 @@
     "title": "Agents in the side pane find cellix first on a PATH joined as the platform joins it",
     "test": "claude_starts_with_cellix_on_its_path",
     "passes": true
+  },
+  {
+    "id": "close-keeps-comments",
+    "milestone": 10,
+    "title": "Closing the terminal or window keeps unsent comments and removes the socket, on Windows through a console handler",
+    "test": "closing_the_terminal_keeps_unsent_comments",
+    "passes": true
   }
 ]

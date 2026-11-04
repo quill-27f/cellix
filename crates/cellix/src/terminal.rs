@@ -70,9 +70,48 @@ fn catch_stops(left: Vec<PathBuf>) {
     });
 }
 
-/// Windows has no hang-up to catch: closing the window ends Cellix where it stands. What it
-/// leaves is harmless, because the next Cellix here finds no one answering and replaces it.
-#[cfg(not(unix))]
+/// Set once Cellix has kept what it must and cleared what it leaves, so a closing console
+/// can let Windows end it.
+#[cfg(windows)]
+static FINISHED: AtomicBool = AtomicBool::new(false);
+
+/// How long a closing console waits for Cellix to finish. Windows ends the process at about
+/// five seconds whatever the handler is doing.
+#[cfg(windows)]
+const CLOSE_GRACE: Duration = Duration::from_millis(4500);
+
+/// Closing the window, logging off or shutting down ends the loop as Quit does, and Windows
+/// waits while it finishes, since it ends the process as soon as this returns.
+#[cfg(windows)]
+unsafe extern "system" fn console_closing(kind: u32) -> windows_sys::core::BOOL {
+    use windows_sys::Win32::System::Console::{
+        CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT,
+    };
+    if !matches!(
+        kind,
+        CTRL_CLOSE_EVENT | CTRL_LOGOFF_EVENT | CTRL_SHUTDOWN_EVENT
+    ) {
+        return 0;
+    }
+    STOPPED.store(true, Ordering::Relaxed);
+    let started = Instant::now();
+    while !FINISHED.load(Ordering::Relaxed) && started.elapsed() < CLOSE_GRACE {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    1
+}
+
+/// Windows has no hang-up signal: a closing console calls a handler instead. The loop finishes
+/// as it would on Quit, so unsent comments are kept and the socket and lock files go.
+#[cfg(windows)]
+fn catch_stops(_left: Vec<PathBuf>) {
+    // SAFETY: the handler only touches atomics and sleeps, which any thread may do.
+    unsafe {
+        windows_sys::Win32::System::Console::SetConsoleCtrlHandler(Some(console_closing), 1);
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
 fn catch_stops(_left: Vec<PathBuf>) {}
 
 /// How often a scroll moves. Over a network each frame costs a round of placements.
@@ -414,143 +453,155 @@ pub fn run(options: Options) -> io::Result<()> {
     let mut last_tick = std::time::Instant::now();
     let mut shown: Option<Grid> = None;
     let ghostty = std::env::var("TERM").is_ok_and(|t| t.contains("ghostty"));
-    loop {
-        // Polled as well as signalled: a resize during slow startup is otherwise lost.
-        let now = size()?;
-        if now != app.size() {
-            app.handle(Event::Resize(now.0, now.1));
-            let cell = window_cell();
-            if display.placement.is_some()
-                && !display.told_cell
-                && cell.is_some()
-                && cell != display.cell
-            {
-                display.cell = cell;
-                backend = display.backend();
-                app.set_measure(display.measure());
-            }
-            backend.invalidate();
-            redraw = true;
-        }
-        if let Some(on) = app.take_smooth_change() {
-            display.set_smooth(on);
-            backend = display.backend();
-            redraw = true;
-        }
-        if redraw {
-            let (width, height) = app.size();
-            let mut grid = Grid::new(width, height, app.background());
-            let started = Instant::now();
-            app.draw(&mut grid);
-            phases.draw = started.elapsed();
-            let started = Instant::now();
-            if let (Some((area, rows)), Some(from)) = (app.take_scroll(), &shown) {
-                backend.scroll(from, &grid, area, rows, &mut out)?;
-            }
-            // Under a scroll the page can wait, so the time goes on moving it.
-            if backend.gliding().is_none() || last_present.elapsed() >= SCROLL_PRESENT {
-                backend.present(&grid, &mut out)?;
-                last_present = Instant::now();
-            }
-            phases.present = started.elapsed();
-            slow.note(&phases);
-            phases = crate::slow::Phases::default();
-            shown = Some(grid);
-            if let Some(text) = app.outgoing_clipboard.take() {
-                let encoded = base64::engine::general_purpose::STANDARD.encode(text);
-                write!(out, "\x1b]52;c;{encoded}\x07")?;
-            }
-            // The terminal's own idea of the pointer drifts, so it's told each time.
-            let pointer = app.pointer();
-            if shape != Some(pointer) {
-                write!(out, "\x1b]22;{pointer}\x1b\\")?;
-                shape = Some(pointer);
-            }
-            out.flush()?;
-            redraw = false;
-        }
-        if app.quit || STOPPED.load(Ordering::Relaxed) {
-            break;
-        }
-        let wait = backend.gliding().unwrap_or(if app.has_session() {
-            SESSION_POLL
-        } else {
-            POLL
-        });
-        // A signal interrupts the wait; the loop goes round and sees it.
-        let ready = match ct::poll(wait) {
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-            ready => ready?,
-        };
-        if ready {
-            let started = Instant::now();
-            // Drain everything queued, so a fast wheel doesn't redraw per event.
-            loop {
-                let event = ct::read()?;
-                // Anything but the wheel or a passing pointer may change what's under a scroll.
-                // A trackpad wanders sideways as it goes, so those count as the wheel too.
-                let passing = matches!(
-                    &event,
-                    ct::Event::Mouse(mouse) if matches!(
-                        mouse.kind,
-                        ct::MouseEventKind::Moved
-                            | ct::MouseEventKind::ScrollUp
-                            | ct::MouseEventKind::ScrollDown
-                            | ct::MouseEventKind::ScrollLeft
-                            | ct::MouseEventKind::ScrollRight
-                    )
-                );
-                if !passing {
-                    backend.settle();
-                }
-                // A multiplexer forgets images when a client leaves, so a new one starts
-                // with an empty window until everything is sent again.
-                if matches!(event, ct::Event::FocusGained)
-                    && display.placement == Some(Placement::Placeholder)
+    // The loop's errors still come back, but only after what Quit does: a console closing
+    // under Cellix can fail its last frame.
+    #[allow(clippy::redundant_closure_call)]
+    let ended = (|| -> io::Result<()> {
+        loop {
+            // Polled as well as signalled: a resize during slow startup is otherwise lost.
+            let now = size()?;
+            if now != app.size() {
+                app.handle(Event::Resize(now.0, now.1));
+                let cell = window_cell();
+                if display.placement.is_some()
+                    && !display.told_cell
+                    && cell.is_some()
+                    && cell != display.cell
                 {
-                    backend.invalidate();
+                    display.cell = cell;
+                    backend = display.backend();
+                    app.set_measure(display.measure());
                 }
-                // Coming back, or typing, can leave the terminal showing a pointer of its own.
-                if matches!(event, ct::Event::FocusGained | ct::Event::Key(_)) {
-                    shape = None;
-                }
-                match translate(event, mouse_cell(&display)).map(|e| cmd_left(e, ghostty)) {
-                    // The size check above handles it, and compares against the old size.
-                    Some(Event::Resize(..)) | None => {}
-                    Some(event) => app.handle(event),
-                }
-                // A stream of input mustn't hold up the frames it's asking for.
-                if started.elapsed() >= INPUT_SLICE || !ct::poll(Duration::ZERO)? {
-                    break;
-                }
-            }
-            phases.events += started.elapsed();
-            redraw = true;
-        } else if last_tick.elapsed() >= TICK {
-            let started = Instant::now();
-            last_tick = started;
-            app.handle(Event::Tick);
-            phases.events += started.elapsed();
-            redraw = true;
-        }
-        let started = Instant::now();
-        redraw |= app.poll();
-        phases.poll += started.elapsed();
-        if backend.gliding().is_some() {
-            backend.glide(Instant::now(), &mut out)?;
-            // Arrived, so the page underneath takes over.
-            redraw |= backend.gliding().is_none();
-        }
-        if let Some(server) = &server {
-            while let Ok(request) = server.requests.try_recv() {
-                app.serve(request);
+                backend.invalidate();
                 redraw = true;
             }
+            if let Some(on) = app.take_smooth_change() {
+                display.set_smooth(on);
+                backend = display.backend();
+                redraw = true;
+            }
+            if redraw {
+                let (width, height) = app.size();
+                let mut grid = Grid::new(width, height, app.background());
+                let started = Instant::now();
+                app.draw(&mut grid);
+                phases.draw = started.elapsed();
+                let started = Instant::now();
+                if let (Some((area, rows)), Some(from)) = (app.take_scroll(), &shown) {
+                    backend.scroll(from, &grid, area, rows, &mut out)?;
+                }
+                // Under a scroll the page can wait, so the time goes on moving it.
+                if backend.gliding().is_none() || last_present.elapsed() >= SCROLL_PRESENT {
+                    backend.present(&grid, &mut out)?;
+                    last_present = Instant::now();
+                }
+                phases.present = started.elapsed();
+                slow.note(&phases);
+                phases = crate::slow::Phases::default();
+                shown = Some(grid);
+                if let Some(text) = app.outgoing_clipboard.take() {
+                    let encoded = base64::engine::general_purpose::STANDARD.encode(text);
+                    write!(out, "\x1b]52;c;{encoded}\x07")?;
+                }
+                // The terminal's own idea of the pointer drifts, so it's told each time.
+                let pointer = app.pointer();
+                if shape != Some(pointer) {
+                    write!(out, "\x1b]22;{pointer}\x1b\\")?;
+                    shape = Some(pointer);
+                }
+                out.flush()?;
+                redraw = false;
+            }
+            if app.quit || STOPPED.load(Ordering::Relaxed) {
+                break;
+            }
+            let wait = backend.gliding().unwrap_or(if app.has_session() {
+                SESSION_POLL
+            } else {
+                POLL
+            });
+            // A signal interrupts the wait; the loop goes round and sees it.
+            let ready = match ct::poll(wait) {
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                ready => ready?,
+            };
+            if ready {
+                let started = Instant::now();
+                // Drain everything queued, so a fast wheel doesn't redraw per event.
+                loop {
+                    let event = ct::read()?;
+                    // Anything but the wheel or a passing pointer may change what's under a scroll.
+                    // A trackpad wanders sideways as it goes, so those count as the wheel too.
+                    let passing = matches!(
+                        &event,
+                        ct::Event::Mouse(mouse) if matches!(
+                            mouse.kind,
+                            ct::MouseEventKind::Moved
+                                | ct::MouseEventKind::ScrollUp
+                                | ct::MouseEventKind::ScrollDown
+                                | ct::MouseEventKind::ScrollLeft
+                                | ct::MouseEventKind::ScrollRight
+                        )
+                    );
+                    if !passing {
+                        backend.settle();
+                    }
+                    // A multiplexer forgets images when a client leaves, so a new one starts
+                    // with an empty window until everything is sent again.
+                    if matches!(event, ct::Event::FocusGained)
+                        && display.placement == Some(Placement::Placeholder)
+                    {
+                        backend.invalidate();
+                    }
+                    // Coming back, or typing, can leave the terminal showing a pointer of its own.
+                    if matches!(event, ct::Event::FocusGained | ct::Event::Key(_)) {
+                        shape = None;
+                    }
+                    match translate(event, mouse_cell(&display)).map(|e| cmd_left(e, ghostty)) {
+                        // The size check above handles it, and compares against the old size.
+                        Some(Event::Resize(..)) | None => {}
+                        Some(event) => app.handle(event),
+                    }
+                    // A stream of input mustn't hold up the frames it's asking for.
+                    if started.elapsed() >= INPUT_SLICE || !ct::poll(Duration::ZERO)? {
+                        break;
+                    }
+                }
+                phases.events += started.elapsed();
+                redraw = true;
+            } else if last_tick.elapsed() >= TICK {
+                let started = Instant::now();
+                last_tick = started;
+                app.handle(Event::Tick);
+                phases.events += started.elapsed();
+                redraw = true;
+            }
+            let started = Instant::now();
+            redraw |= app.poll();
+            phases.poll += started.elapsed();
+            if backend.gliding().is_some() {
+                backend.glide(Instant::now(), &mut out)?;
+                // Arrived, so the page underneath takes over.
+                redraw |= backend.gliding().is_none();
+            }
+            if let Some(server) = &server {
+                while let Ok(request) = server.requests.try_recv() {
+                    app.serve(request);
+                    redraw = true;
+                }
+            }
         }
-    }
+        Ok(())
+    })();
     // After a hang-up there's no terminal to tell, and the rest must still happen.
     let _ = write!(out, "\x1b]22;default\x1b\\");
     let _ = out.flush();
     drop(_session);
-    app.finish()
+    let finished = app.finish();
+    // Before Windows ends the process, which it does as soon as a closing console is let go.
+    drop(app.ide.take());
+    drop(server);
+    #[cfg(windows)]
+    FINISHED.store(true, Ordering::Relaxed);
+    ended.and(finished)
 }
