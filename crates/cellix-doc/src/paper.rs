@@ -93,16 +93,31 @@ pub fn same_file(a: &Path, b: &Path) -> bool {
     a == b || matches!((a.canonicalize(), b.canonicalize()), (Ok(a), Ok(b)) if a == b)
 }
 
-/// A paper's files as read from the disk.
+/// A paper's files as read from the disk, each kept until its size or time of change does, so
+/// counting a long paper again as one file is typed in costs a look at each, not a read.
 #[derive(Default)]
 pub struct Files {
     canonical: HashMap<PathBuf, PathBuf>,
+    texts: HashMap<PathBuf, (Stamp, Rc<str>)>,
 }
 
+/// When a file last changed, and its size.
+type Stamp = (Option<std::time::SystemTime>, u64);
+
 impl Files {
-    /// A file's text.
+    /// A file's text, read again only once it has changed.
     pub fn text(&mut self, path: &Path) -> Option<Rc<str>> {
-        std::fs::read_to_string(path).ok().map(Rc::from)
+        let meta = std::fs::metadata(path).ok()?;
+        let stamp = (meta.modified().ok(), meta.len());
+        if let Some((known, text)) = self.texts.get(path)
+            && *known == stamp
+            && stamp.0.is_some()
+        {
+            return Some(text.clone());
+        }
+        let text: Rc<str> = std::fs::read_to_string(path).ok()?.into();
+        self.texts.insert(path.to_path_buf(), (stamp, text.clone()));
+        Some(text)
     }
 
     /// The one way a file's path is written, so the same file is known however it's named.
@@ -255,6 +270,31 @@ mod tests {
         assert!(names("\\\\input{a} \\includeonly{b}").is_empty());
         assert!(names("\\input").is_empty());
         assert!(names("\\input{unclosed").is_empty());
+    }
+
+    #[test]
+    fn a_papers_files_are_read_again_only_once_they_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("intro.tex");
+        std::fs::write(&path, "one").unwrap();
+        let mut files = Files::default();
+        assert_eq!(files.text(&path).as_deref(), Some("one"));
+        // Rewritten behind its back with the same size and time: still the copy it kept.
+        let then = std::fs::metadata(&path).unwrap().modified().unwrap();
+        std::fs::write(&path, "two").unwrap();
+        let file = std::fs::File::options().write(true).open(&path).unwrap();
+        file.set_modified(then).unwrap();
+        assert_eq!(files.text(&path).as_deref(), Some("one"), "not read again");
+        let later = then + std::time::Duration::from_secs(2);
+        file.set_modified(later).unwrap();
+        assert_eq!(
+            files.text(&path).as_deref(),
+            Some("two"),
+            "changed, so read"
+        );
+        std::fs::write(&path, "three!").unwrap();
+        file.set_modified(later).unwrap();
+        assert_eq!(files.text(&path).as_deref(), Some("three!"), "a new size");
     }
 
     #[test]
