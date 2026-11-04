@@ -52,8 +52,9 @@ curl -fL https://github.com/quill-27f/cellix/releases/latest/download/cellix-$(u
 On Windows, `cargo install` as above (it needs the Visual Studio C++ build tools). From the next
 release, you can also take `cellix-x86_64-pc-windows-msvc.zip` from the releases page and put
 `cellix.exe` in a folder on your `PATH`. Windows is a preview. Its tests pass on a Windows CI
-runner, but it hasn't been run in Windows Terminal yet, and on CI a mouse click never reached it,
-so the mouse may not work. It draws text cells only, so the pane inside Claude Code isn't available
+runner, but it hasn't been run in a real Windows Terminal yet. On CI a click reaches it through the
+ConPTY Windows Terminal ships, though not through Windows' older built-in console, so the mouse
+should work in Windows Terminal and may not elsewhere. It draws text cells only, so the pane inside Claude Code isn't available
 there; run Cellix on its own. The agent plugins haven't been tried on Windows, and what runs in the
 side pane ends when Cellix does. [Tell us how it goes](https://github.com/quill-27f/cellix/issues).
 

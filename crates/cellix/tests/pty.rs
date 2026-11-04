@@ -188,11 +188,14 @@ fn pty_shows_file_contents() {
     screen.wait_exit();
 }
 
-/// Ignored on Windows: on the runner, a click sent to the system's ConPTY as an SGR mouse
-/// report never reached Cellix, though keys did. CI tries it again through Microsoft's own
-/// ConPTY; see docs/PROGRESS.md.
+/// Ignored on Windows by default: the runner's built-in console passes no clicks on, though
+/// keys arrive. CI's "PTY tests through Windows Terminal's ConPTY" step runs it through the
+/// ConPTY Windows Terminal ships, where the click arrives.
 #[test]
-#[cfg_attr(windows, ignore = "the system ConPTY passes no clicks on")]
+#[cfg_attr(
+    windows,
+    ignore = "the built-in console passes no clicks on; CI runs it through Windows Terminal's ConPTY"
+)]
 fn pty_mouse_click_opens_file_and_typing_saves() {
     let dir = project();
     let mut screen = Screen::start(dir.path(), &[]);

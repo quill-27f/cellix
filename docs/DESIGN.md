@@ -381,9 +381,13 @@ the file.
 
 On Windows the socket is a port on 127.0.0.1, because Rust's standard library has no Unix
 sockets there and a named pipe could only be tested on Windows. A file where the socket would
-be, in the user's own temp folder, names the port and a 128-bit token, and a connection that
-doesn't give the token first is dropped. It's plain std, so one test proves it on every
-platform; Unix keeps its socket. Windows has no session host yet, so programs in the side pane
+be, in the user's local app data, names the port, two 128-bit tokens and Cellix's process. Each
+end proves itself before anything else is said: the client gives its token, and a connection
+that doesn't is dropped; Cellix answers with its own, and until it does the client asks nothing,
+so whatever takes the port after a Cellix has gone can't pass for it. A note whose process has
+ended, or whose port refuses or answers wrongly, is removed, and every request but a plan has a
+few seconds at most. It's plain std, so the tests prove it on every platform; Unix keeps its
+socket. Windows has no session host yet, so programs in the side pane
 run on ConPTY under Cellix and end with it. Cellix sends Windows no terminal queries: keys
 arrive as console events, and ConPTY passes on no graphics, so Windows starts on the cell tier
 with Cellix's own colours.
