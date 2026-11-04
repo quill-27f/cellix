@@ -44,17 +44,20 @@ cargo install --locked --git https://github.com/quill-27f/cellix cellix   # anyw
 Or take the static binary, which needs nothing else on the machine. On Linux:
 
 ```sh
-curl -L https://github.com/quill-27f/cellix/releases/latest/download/cellix-$(uname -m | sed s/arm64/aarch64/)-unknown-linux-musl.tar.gz \
-  | tar xz -C ~/.local/bin cellix
+mkdir -p ~/.local/bin
+curl -fL https://github.com/quill-27f/cellix/releases/latest/download/cellix-$(uname -m | sed s/arm64/aarch64/)-unknown-linux-musl.tar.gz \
+  | tar xz -C ~/.local/bin ./cellix
 ```
 
-On Windows, `cargo install` as above (it needs the Visual Studio C++ build tools), or take
-`cellix-x86_64-pc-windows-msvc.zip` from the releases page and put `cellix.exe` in a folder on
-your `PATH`. Windows is a preview: its tests pass on a Windows CI runner, but it hasn't been tried
-in Windows Terminal yet, so tell us how it goes. It uses the cell tier there, and what runs in its
-side pane ends when Cellix does.
+On Windows, `cargo install` as above (it needs the Visual Studio C++ build tools). From the next
+release, you can also take `cellix-x86_64-pc-windows-msvc.zip` from the releases page and put
+`cellix.exe` in a folder on your `PATH`. Windows is a preview. Its tests pass on a Windows CI
+runner, but it hasn't been run in Windows Terminal yet, and on CI a mouse click never reached it,
+so the mouse may not work. It draws text cells only, so the pane inside Claude Code isn't available
+there; run Cellix on its own. The agent plugins haven't been tried on Windows, and what runs in the
+side pane ends when Cellix does. [Tell us how it goes](https://github.com/quill-27f/cellix/issues).
 
-Every build for macOS, Linux and Windows is on the [releases page](https://github.com/quill-27f/cellix/releases),
+Every build is on the [releases page](https://github.com/quill-27f/cellix/releases),
 with what changed in [CHANGELOG.md](CHANGELOG.md).
 
 ## Add it to your agent
@@ -133,9 +136,10 @@ beside your file.
 
 ![Cellix on its own, with agents to start in the side pane](docs/images/agents.png)
 
-Cellix is young. Everything here is built and tested, and it's in use on macOS, over SSH and under
-tmux, but it hasn't had many users yet. [docs/PROGRESS.md](docs/PROGRESS.md) says what has and hasn't
-been proven, and a bug report with a screenshot helps most.
+Cellix is young. Everything here is built and tested, and it's in daily use on macOS, over SSH and
+under tmux, but it hasn't had many users yet. Windows and the Codex and Gemini CLI plan hooks haven't
+been tried for real. [docs/PROGRESS.md](docs/PROGRESS.md) says what has and hasn't been proven, and
+[a bug report](https://github.com/quill-27f/cellix/issues) with a screenshot helps most.
 
 ## Keys
 
@@ -217,7 +221,7 @@ your LaTeX engine in the background, and kept, so typing never waits.
 `changes` package. Right-click one to accept or reject it, or settle them all from the commands.
 
 **Papers.** A `.tex` file shows its sections, numbers, citations, equations, theorems, figures and
-tables, across `\\input` files, and anything Cellix doesn't recognise stays visible as source. **Cite**
+tables, across `\input` files, and anything Cellix doesn't recognise stays visible as source. **Cite**
 lists the keys in your `.bib` files. **Build PDF**, or Ctrl+Alt+B, runs `tectonic`, `latexmk` or
 `pdflatex`, shows the PDF in the side pane, keeps what the build said in a Log tab, and goes to the
 line of any error. Clicking the PDF goes to that place in the source. Set `latex_engine` in the
@@ -239,7 +243,7 @@ agent answers with `cellix reply <id> "text"`, and the answer lands under your q
 
 The icons at the top right start a real agent, a terminal or a browser in the side pane, beside your file. Press Ctrl+` to
 move the keyboard between the two, and the × at the top right, or Ctrl+Shift+`, to hide the pane.
-Hiding stops nothing. What runs there outlives Cellix too: quitting offers Keep Running, a dropped SSH
+Hiding stops nothing. What runs there outlives Cellix too (not yet on Windows): quitting offers Keep Running, a dropped SSH
 connection keeps everything, and the next Cellix in that folder finds it with what it printed.
 
 A program in a shell there can draw pictures with the Kitty graphics protocol, and Open in Browser
@@ -256,8 +260,9 @@ opens the full Review, which reads what changed hunk by hunk.
 
 ## Over SSH
 
-Everything runs on the server, and your local terminal only draws the result. On the server, you
-need tmux, plus Claude Code if you want the agent features. Take the static binary from the
+Everything runs on the server, and your local terminal only draws the result. On the server, tmux
+is recommended, so a dropped connection doesn't close Cellix itself, plus Claude Code if you want the
+agent features. Take the static binary from the
 [releases page](https://github.com/quill-27f/cellix/releases), or use `cargo install`:
 
 ```sh
@@ -320,7 +325,7 @@ system's browser takes over.
 Cellix can run as a pane in Claude Code, so you start Claude and Cellix comes to you:
 
 ```sh
-cellix setup --install    # or Install under Settings, Integrations
+cellix setup claude    # or Install under Settings, Integrations
 ```
 
 That adds two lines to the `env` block of `~/.claude/settings.json`, which load the plugin
@@ -349,7 +354,8 @@ minimap, so the code keeps the room.
 - **Tests** an agent runs appear in review with their results.
 - **Staging**: Accept stages the hunk in git, and the Commit button commits what's staged.
 
-The pane needs a terminal with Kitty graphics, such as Ghostty, Kitty or WezTerm. Over SSH
+The pane needs a terminal with Kitty graphics, such as Ghostty, Kitty or WezTerm, so it isn't
+available on Windows yet. Over SSH
 each update travels as a PNG, so it costs more than the standalone app on a slow link.
 
 ## Beside an agent
@@ -412,11 +418,11 @@ time went. It's timings only, and it starts afresh each run.
 
 Build from a clone with `cargo install --path crates/cellix`. [AGENTS.md](AGENTS.md) says how the
 project is worked on, with `harness/x` running everything, and [docs/DESIGN.md](docs/DESIGN.md) says
-what it is and why. Bug reports with a screenshot help most.
+what it is and why. [Bug reports](https://github.com/quill-27f/cellix/issues) with a screenshot help most.
 
 A release is a version and its notes: `harness/x bump 0.4.0`, a `## [0.4.0]` section in
 [CHANGELOG.md](CHANGELOG.md), and a push to main. Once CI passes, the release workflow tags it,
-builds the four binaries, writes the release from the changelog, and updates the Homebrew tap and
+builds the binaries for macOS, Linux and Windows, writes the release from the changelog, and updates the Homebrew tap and
 crates.io.
 
 ## License

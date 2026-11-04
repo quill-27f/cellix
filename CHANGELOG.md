@@ -5,8 +5,8 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 ## [Unreleased]
 
 ### Added
-- Windows, as a preview. Cellix builds for x86_64-pc-windows-msvc and runs through ConPTY on the cell tier, with PowerShell in the side pane. Its tests pass on a Windows CI runner, but it has not yet been tried in Windows Terminal, and mouse clicks there are unconfirmed. Agents reach it as before, through `cellix`, which talks to it over a port on 127.0.0.1 behind a token only the user can read. Releases carry `cellix-x86_64-pc-windows-msvc.zip`, which `cargo binstall` takes too. Not on Windows yet: programs in the side pane that keep running after Cellix quits, stopping a running notebook cell, and Kitty graphics.
-- Comments on a plan carry into its next version as threads, with their replies. A thread whose words the new version dropped stays open with a "Removed in version N" pill, and clicking it shows what changed.
+- Windows, as a preview. Cellix builds for x86_64-pc-windows-msvc and runs through ConPTY on the cell tier, with PowerShell in the side pane. Its tests pass on a Windows CI runner, but it has not been run in Windows Terminal yet, and a mouse click sent on CI never arrived, so the mouse may not work. `cellix comments`, `open` and the other commands reach it over a port on 127.0.0.1, with a token kept in the user's own temp folder; the Claude Code mod and the Codex and Gemini CLI hooks haven't been tried there. Releases carry `cellix-x86_64-pc-windows-msvc.zip`, which `cargo binstall` takes too. Not on Windows yet: the pane inside Claude Code, Kitty graphics and pictures from programs in the side pane, programs there that keep running after Cellix quits, and stopping a running notebook cell.
+- A plan's comment threads keep their replies and resolved state in its next version. One whose words the new version dropped stays open with a "Removed in version N" pill, and clicking it shows what changed.
 - A paper split over `\input` and `\include` files counts its words as one, puts Track Changes' package in the root's preamble, and rebuilds when an agent edits any of its open files.
 
 ### Fixed

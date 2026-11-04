@@ -27,7 +27,7 @@ print(f"""
 ## Install
 
 ```sh
-brew install quill-27f/tap/cellix    # or brew upgrade cellix
+brew install quill-27f/tap/cellix    # brew upgrade cellix if you have it
 cargo install --locked --git https://github.com/quill-27f/cellix --tag v{version} cellix
 ```
 
@@ -39,10 +39,11 @@ for name, target, kind in targets:
     print(f"| {name} | [cellix-{target}.{kind}]({DOWNLOAD.format(version, target, kind)}) |")
 print(f"""
 ```sh
-curl -L {DOWNLOAD.format(version, "<target>", "tar.gz")} | tar xz -C ~/.local/bin cellix
+mkdir -p ~/.local/bin
+curl -fL {DOWNLOAD.format(version, "<target>", "tar.gz")} | tar xz -C ~/.local/bin ./cellix
 ```
 
 On Windows, put `cellix.exe` from the zip in a folder on your `PATH`.
 
-Then `cellix setup claude`, `codex` or `gemini` adds it to your agent. `checksums.txt` has the
+Then `cellix setup claude`, `codex` or `gemini` adds it to your agent (not yet tried on Windows). `checksums.txt` has the
 SHA-256 of each archive.""")

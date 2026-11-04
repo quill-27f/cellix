@@ -361,13 +361,6 @@ the file.
 - Review return path: comments are delivered as structured data over the socket and
   CLI, so any agent can consume them.
 
-On Windows the socket is a port on 127.0.0.1, because Rust's standard library has no Unix
-sockets there and a named pipe could only be tested on Windows. A file where the socket would
-be, in the user's own temp folder, names the port and a 128-bit token, and a connection that
-doesn't give the token first is dropped. It's plain std, so one test proves it on every
-platform; Unix keeps its socket. Windows has no session host yet, so programs in the side pane
-run on ConPTY under Cellix and end with it, and nothing is asked of the terminal, because a
-console hands input over as key events: Windows starts on the cell tier with Cellix's colours.
 - Claude Code: a plugin with a mod for status and commands. The mod is a bridge, not
   the editor: docked panes stop at 45% width and there is no terminal element. Installing
   it sets `CLAUDE_CODE_PLUGIN_DIRS` and `CLAUDE_CODE_AUTO_CONNECT_IDE` in the `env` block of
@@ -385,6 +378,15 @@ console hands input over as key events: Windows starts on the cell tier with Cel
   them side by side. The Agents icon opens the side pane. With nothing running, it lists what's running elsewhere,
   what can be started and the worktrees.
 - Rebuilding an agent's interface: the side pane shows the real program, so its features arrive with its updates.
+
+On Windows the socket is a port on 127.0.0.1, because Rust's standard library has no Unix
+sockets there and a named pipe could only be tested on Windows. A file where the socket would
+be, in the user's own temp folder, names the port and a 128-bit token, and a connection that
+doesn't give the token first is dropped. It's plain std, so one test proves it on every
+platform; Unix keeps its socket. Windows has no session host yet, so programs in the side pane
+run on ConPTY under Cellix and end with it. Cellix sends Windows no terminal queries: keys
+arrive as console events, and ConPTY passes on no graphics, so Windows starts on the cell tier
+with Cellix's own colours.
 
 ## Crates (proposed)
 
