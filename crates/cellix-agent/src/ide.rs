@@ -389,19 +389,31 @@ mod tests {
 
     #[test]
     fn the_next_cellix_takes_the_same_port_and_token() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("project");
-        let kept = dir.path().join("held/ide.json");
-        // The port a Cellix that has since quit was on.
-        let free = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let port = free.local_addr().unwrap().port();
-        drop(free);
-        fs::create_dir_all(kept.parent().unwrap()).unwrap();
-        let noted = json!({"port": port, "token": "kept-token"}).to_string();
-        fs::write(&kept, noted).unwrap();
-        let next = IdeServer::start_in(&root, dir.path(), Some(&kept)).unwrap();
-        assert_eq!(next.port, port);
-        assert_eq!(lock_of(dir.path(), port)["authToken"], "kept-token");
+        // Between freeing a port and taking it again, another test or program on a busy
+        // machine can take it, which is the case `a_port_someone_else_took_is_given_up` covers.
+        // Only that is tried again; anything else fails as before.
+        for _ in 0..5 {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join("project");
+            let kept = dir.path().join("held/ide.json");
+            // The port a Cellix that has since quit was on.
+            let free = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+            let port = free.local_addr().unwrap().port();
+            drop(free);
+            fs::create_dir_all(kept.parent().unwrap()).unwrap();
+            let noted = json!({"port": port, "token": "kept-token"}).to_string();
+            fs::write(&kept, noted).unwrap();
+            let next = IdeServer::start_in(&root, dir.path(), Some(&kept)).unwrap();
+            let taken =
+                next.port != port && TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_err();
+            if taken {
+                continue;
+            }
+            assert_eq!(next.port, port);
+            assert_eq!(lock_of(dir.path(), port)["authToken"], "kept-token");
+            return;
+        }
+        panic!("something else took the freed port five times running");
     }
 
     #[test]

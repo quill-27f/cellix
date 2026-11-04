@@ -2,8 +2,9 @@
 # Refuses a commit of anything `harness/x verify` didn't pass. It compares the staged tree with
 # the one verify stamped, so no reading of a command's output can get a failure past it.
 state=$(git rev-parse --git-common-dir)/cellix-guard
-stamp=$(cat "$state/verified" 2>/dev/null)
-if [ "$stamp" != "$(git write-tree)" ]; then
+tree=$(git write-tree)
+# One stamp per verified tree; the single `verified` file is what an older harness/x wrote.
+if [ ! -e "$state/verified.d/$tree" ] && [ "$(cat "$state/verified" 2>/dev/null)" != "$tree" ]; then
   echo "commit refused: this exact tree hasn't passed. Stage it, then run harness/x verify." >&2
   exit 1
 fi

@@ -45,10 +45,12 @@ case $task in
   verify)
     # Results come from the gate's own log, and its exit from PIPESTATUS, so nothing that
     # reads this output can turn a failure into a pass.
+    # Worktrees share the stamps but not the log, so a verify in one can't rewrite another's
+    # results. Each tree that passed keeps its own stamp, so one can't remove another's either.
     state=$(git rev-parse --git-common-dir)/cellix-guard
-    mkdir -p "$state"
-    log=$state/verify.log
-    rm -f "$state/verified"
+    mkdir -p "$state/verified.d"
+    find "$state/verified.d" -type f -mtime +7 -delete 2>/dev/null
+    log=$(git rev-parse --absolute-git-dir)/cellix-verify-run.log
     "$0" check 2>&1 | tee "$log"
     code=${PIPESTATUS[0]}
     [ "$code" = 0 ] || exit "$code"
@@ -68,7 +70,7 @@ case $task in
     # The commit hook compares against this, so only what was really verified can land.
     git config core.hooksPath harness/githooks
     if git diff --quiet; then
-      git write-tree > "$state/verified"
+      touch "$state/verified.d/$(git write-tree)"
     else
       echo "not stamped: stage your changes before verifying, so what's checked is what lands"
     fi

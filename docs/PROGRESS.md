@@ -1025,3 +1025,12 @@ Unverified here: the new TeX Live tests in `tests/tex.rs` (Biber, `\include` rer
 .bib, a latexmk warning count, a failed real export) run only in CI's `tex` job, so their
 features stay `"passes": false` until it passes. Next: map an export's errors back to Markdown
 lines.
+
+## 2026-11-04: Verify in parallel worktrees
+
+Every worktree wrote one shared `verify.log` and one `verified` stamp, so agents verifying at once
+overwrote each other's results ("did not pass" on tests that passed) and removed each other's
+stamp, and the commit hook refused verified work. Each worktree now keeps its own log in its git
+folder, and every tree that passes gets a stamp of its own under `cellix-guard/verified.d`, kept
+a week. The hook still accepts the old single stamp, which worktrees on an older harness write.
+Unverified beyond this commit's own gate: two worktrees verifying at the same moment.
