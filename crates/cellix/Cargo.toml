@@ -21,7 +21,6 @@ x86_64-unknown-linux-gnu = { pkg-url = "{ repo }/releases/download/v{ version }/
 aarch64-unknown-linux-gnu = { pkg-url = "{ repo }/releases/download/v{ version }/cellix-aarch64-unknown-linux-musl.tar.gz" }
 
 [dependencies]
-libc = "0.2.191"
 png = "0.18.1"
 cellix-agent = { path = "../cellix-agent", version = "0.3.1" }
 cellix-core = { path = "../cellix-core", version = "0.3.1" }
@@ -41,6 +40,9 @@ serde_json = { version = "1.0.154", features = ["preserve_order"] }
 rmpv = "1.3.1"
 alacritty_terminal = "0.26"
 portable-pty = "0.9"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.191"
 
 [dev-dependencies]
 cellix-doc = { path = "../cellix-doc", features = ["fixtures"] }

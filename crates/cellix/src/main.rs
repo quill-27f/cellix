@@ -177,6 +177,15 @@ fn checkpoint(label: &str) -> ExitCode {
 }
 
 fn main() -> ExitCode {
+    // Settings and the agents' folders are found under HOME, which Windows sets only inside
+    // Git Bash. Elsewhere it's the profile folder, which is where the agents keep theirs.
+    #[cfg(windows)]
+    if std::env::var_os("HOME").is_none()
+        && let Some(profile) = std::env::var_os("USERPROFILE")
+    {
+        // SAFETY: the first thing main does, before any other thread exists.
+        unsafe { std::env::set_var("HOME", profile) };
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let words: Vec<&str> = args.iter().map(String::as_str).collect();
     match words.as_slice() {

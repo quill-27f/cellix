@@ -130,6 +130,8 @@ enum Link {
     Own {
         master: Box<dyn MasterPty + Send>,
         killer: Box<dyn ChildKiller + Send + Sync>,
+        /// Read only where a PTY can say what's in front of it.
+        #[cfg_attr(not(unix), allow(dead_code))]
         pid: Option<u32>,
     },
     /// A host of its own owns the PTY, so the program can outlive Cellix.
@@ -446,10 +448,14 @@ impl Session {
             return false;
         }
         let at_prompt = match &self.link {
+            #[cfg(unix)]
             Link::Own { master, pid, .. } => {
                 let front = master.process_group_leader();
                 front.is_some() && front.map(|p| p as u32) == *pid
             }
+            // A console can't say what's in front of it, so closing a shell asks first.
+            #[cfg(not(unix))]
+            Link::Own { .. } => false,
             Link::Held(held) => held.at_prompt(),
         };
         !self.shell || !at_prompt

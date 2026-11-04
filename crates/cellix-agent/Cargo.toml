@@ -8,10 +8,16 @@ repository.workspace = true
 
 [dependencies]
 cellix-review = { version = "0.3.1", path = "../cellix-review" }
-libc = "0.2.191"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.191"
+
+# Tokens come from /dev/urandom on Unix.
+[target.'cfg(not(unix))'.dependencies]
+getrandom = "0.3"
 
 [lints]
 workspace = true

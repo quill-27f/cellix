@@ -5176,7 +5176,7 @@ impl App {
     /// anywhere else, with the file still in view.
     fn open_agent(&mut self, agent: &str) {
         let root = self.workspace.root().to_path_buf();
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string());
+        let shell = crate::agents::shell();
         let (name, env, launch) = if agent == crate::agents::SHELL.1 {
             (crate::agents::SHELL.0, Vec::new(), vec![shell])
         } else {
@@ -11618,6 +11618,7 @@ mod tests {
 
     /// A page and a stand-in for the browser that draws one, which says what it was asked
     /// to open and then shows a frame the way the real one does.
+    #[cfg(unix)]
     fn pane_browser_app() -> (TempDir, App) {
         let (dir, mut app, _log) = browser_app("<h1>hi</h1>\n", "page.html");
         let program = dir.path().join("terminal-browser");
@@ -11635,6 +11636,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn a_page_opens_in_the_side_pane_and_its_frames_show() {
         let (_dir, mut app) = pane_browser_app();
         app.run(Command::OpenInBrowser);
@@ -11660,6 +11662,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn a_comment_never_reaches_a_browser() {
         let (_dir, mut app) = pane_browser_app();
         app.run(Command::OpenInBrowser);
@@ -13105,6 +13108,7 @@ mod tests {
     }
 
     /// A stand-in for LaTeX that makes a real PDF, and proves it ran.
+    #[cfg(unix)]
     fn fake_latex(dir: &Path, reply: &str) -> Vec<String> {
         let script = dir.join("latex.sh");
         fs::write(&script, format!("#!/bin/sh\n{reply}\n")).unwrap();
@@ -13113,6 +13117,7 @@ mod tests {
         vec![script.display().to_string()]
     }
 
+    #[cfg(unix)]
     fn waits_for(app: &mut App, done: impl Fn(&App) -> bool) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while !done(app) {
@@ -13127,6 +13132,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn tikz_paper(reply: &str) -> (TempDir, App) {
         let dir = tempfile::tempdir().unwrap();
         let sample = dir.path().join("sample.pdf");
@@ -13143,6 +13149,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn a_commutative_diagram_is_built_in_the_background_and_shows() {
         let (dir, mut app) = tikz_paper("grep -q tikz-cd snippet.tex && cp SAMPLE snippet.pdf");
         assert!(painted_text(&app).contains("Drawing with LaTeX"));
@@ -13155,6 +13162,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn a_piece_latex_refuses_says_why() {
         let (_dir, mut app) = tikz_paper("echo '! Package tikz Error: no such library'; exit 1");
         waits_for(&mut app, |app| {
@@ -13163,6 +13171,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn a_paper_is_offered_drawings_of_its_own() {
         let (_dir, mut app) = tikz_paper("cp SAMPLE snippet.pdf");
         app.use_tool(Tool::Diagram, 40);
@@ -13173,6 +13182,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn a_tikz_block_in_markdown_is_built_too() {
         let dir = tempfile::tempdir().unwrap();
         let sample = dir.path().join("sample.pdf");
@@ -13216,6 +13226,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn a_failed_build_leaves_its_log_in_the_pane() {
         let dir = tempfile::tempdir().unwrap();
         let source = "\\documentclass{article}\n\\begin{document}\nx\n\\end{document}\n";
@@ -14019,6 +14030,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn an_algorithm_is_built_from_its_steps_with_its_caption_on_the_page() {
         let dir = tempfile::tempdir().unwrap();
         let sample = dir.path().join("sample.pdf");

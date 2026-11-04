@@ -1,4 +1,6 @@
-//! The real binary inside real multiplexers. Run with `harness/x mux`.
+//! The real binary inside real multiplexers. Run with `harness/x mux`. tmux and Zellij are
+//! Unix programs.
+#![cfg(unix)]
 
 use std::path::Path;
 use std::process::Command;

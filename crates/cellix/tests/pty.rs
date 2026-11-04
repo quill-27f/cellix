@@ -332,7 +332,9 @@ fn wait_blocks_until_closed() {
     assert!(text.ends_with("- Line 1: nice\n"), "{text}");
 }
 
+/// Windows has no hang-up signal.
 #[test]
+#[cfg(unix)]
 fn a_hang_up_leaves_nothing_behind() {
     let dir = project();
     let mut screen = Screen::start(dir.path(), &["hello.txt"]);
@@ -358,6 +360,7 @@ fn a_hang_up_leaves_nothing_behind() {
 /// Stops Cellix the way a closing terminal does: a stop, and the terminal gone straight
 /// after. Gives whether it exited, after a few tries, since the stop has to land while it
 /// waits for input. It used to read the closed terminal forever.
+#[cfg(unix)]
 fn stopped_and_closed(dir: &Path) -> bool {
     use std::ffi::CString;
     let binary = CString::new(env!("CARGO_BIN_EXE_cellix")).unwrap();
@@ -427,7 +430,9 @@ fn stopped_and_closed(dir: &Path) -> bool {
     false
 }
 
+/// Windows has no stop signal to send, nor forkpty to send it through.
 #[test]
+#[cfg(unix)]
 fn a_stop_as_the_terminal_closes_still_ends_cellix() {
     let dir = project();
     for attempt in 1..=3 {

@@ -823,6 +823,7 @@ name = "cellix-agent"
 version = "0.3.1"
 dependencies = [
  "cellix-review",
+ "getrandom 0.3.4",
  "libc",
  "serde",
  "serde_json",

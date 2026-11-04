@@ -26,6 +26,16 @@ const AGENTS: [(&str, &str); 3] = [
 /// What the panel calls a plain shell, and what stands for it in `Hit::Start`.
 pub const SHELL: (&str, &str) = ("Terminal", "shell");
 
+/// The program a Terminal tab runs: the user's shell, or on Windows PowerShell, which every
+/// Windows has. There `SHELL` is unset, or a Unix path Git Bash left behind.
+pub fn shell() -> String {
+    if cfg!(windows) {
+        "powershell.exe".to_string()
+    } else {
+        std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string())
+    }
+}
+
 /// What the panel calls a program.
 pub fn display_name(program: &str) -> &'static str {
     let named = AGENTS.iter().find(|(_, p)| *p == program);

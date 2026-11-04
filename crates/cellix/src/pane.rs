@@ -156,6 +156,7 @@ pub fn translate(input: Input) -> Vec<Event> {
 
 /// Cell size from the window Claude Code is drawn in. The child has no replies to read,
 /// because Claude Code owns the terminal's input, but the window size needs none.
+#[cfg(unix)]
 fn window_cell() -> Option<(usize, usize)> {
     let tty = fs::File::open("/dev/tty").ok()?;
     let mut size = libc::winsize {
@@ -247,9 +248,23 @@ fn png_line(rgb: &[u8], width: usize, height: usize) -> io::Result<String> {
     Ok(format!("png {text}"))
 }
 
+/// A console doesn't give its size in pixels, so the default cell is used.
+#[cfg(not(unix))]
+fn window_cell() -> Option<(usize, usize)> {
+    None
+}
+
+#[cfg(unix)]
 fn parent_gone() -> bool {
     // SAFETY: getppid has no preconditions and cannot fail.
     unsafe { libc::getppid() == 1 }
+}
+
+/// Windows doesn't hand an orphan to another parent, so there's nothing to see here: the pane
+/// ends when its output can't be written, or Claude Code ends it.
+#[cfg(not(unix))]
+fn parent_gone() -> bool {
+    false
 }
 
 /// Runs until Claude Code goes away.

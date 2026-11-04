@@ -1,4 +1,6 @@
-//! Sessions that outlive Cellix, through the real binary acting as their host.
+//! Sessions that outlive Cellix, through the real binary acting as their host. Unix only:
+//! Windows has no host yet.
+#![cfg(unix)]
 
 use std::io::Write;
 use std::path::Path;
