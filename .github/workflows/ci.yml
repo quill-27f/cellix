@@ -68,6 +68,7 @@ jobs:
       # Windows Terminal ships it, rather than the system's. portable-pty loads a conpty.dll
       # beside the test, which starts the OpenConsole.exe beside it.
       - name: PTY tests through Microsoft's own ConPTY (experiment)
+        if: ${{ !cancelled() }}
         continue-on-error: true
         shell: pwsh
         run: |

@@ -3106,5 +3106,19 @@
     "title": "Closing the terminal or window keeps unsent comments and removes the socket, on Windows through a console handler",
     "test": "closing_the_terminal_keeps_unsent_comments",
     "passes": true
+  },
+  {
+    "id": "windows-paste-keys",
+    "milestone": 10,
+    "title": "On Windows, keys that paste become one paste, so brackets don't close and lines don't indent",
+    "test": "keys_that_paste_on_windows_become_a_paste",
+    "passes": true
+  },
+  {
+    "id": "pty-paste-verbatim",
+    "milestone": 10,
+    "title": "A paste through a real terminal lands in the file exactly as pasted",
+    "test": "pty_bracketed_paste_inserts_verbatim",
+    "passes": true
   }
 ]

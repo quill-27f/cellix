@@ -263,6 +263,79 @@ fn translate(event: ct::Event, pixels: Option<(usize, usize)>) -> Option<Event> 
     })
 }
 
+/// The character a key types into text, if it's a key that types and isn't a shortcut.
+fn typed(event: &ct::Event) -> Option<char> {
+    let ct::Event::Key(key) = event else {
+        return None;
+    };
+    if key.kind == KeyEventKind::Release {
+        return None;
+    }
+    let plain = key.modifiers.difference(KeyModifiers::SHIFT).is_empty();
+    match key.code {
+        KeyCode::Char(c) if plain => Some(c),
+        KeyCode::Enter if key.modifiers.is_empty() => Some('\n'),
+        KeyCode::Tab if key.modifiers.is_empty() => Some('\t'),
+        _ => None,
+    }
+}
+
+/// Whether `events` starts with a bracketed paste's marker, `Esc [ 2 0 <last> ~`, sent as keys.
+fn marker(events: &[ct::Event], last: char) -> bool {
+    let is_esc = matches!(
+        events.first(),
+        Some(ct::Event::Key(k)) if k.code == KeyCode::Esc && k.kind != KeyEventKind::Release
+    );
+    is_esc
+        && events.len() >= 6
+        && events[1..6]
+            .iter()
+            .map(typed)
+            .eq(['[', '2', '0', last, '~'].map(Some))
+}
+
+/// Windows' console gives Cellix no pastes, only the keys that would type them, and typed,
+/// a paste's brackets close themselves and its lines indent. So in one batch of input, keys
+/// between a bracketed paste's markers become a paste, as do keys that type more after a line
+/// break or a tab, which no one types faster than Cellix reads. Anything else stays keys.
+fn pasted_keys(events: Vec<ct::Event>) -> Vec<ct::Event> {
+    // Releases say nothing here, and would split a run of keys.
+    let events: Vec<ct::Event> = events
+        .into_iter()
+        .filter(|e| !matches!(e, ct::Event::Key(k) if k.kind == KeyEventKind::Release))
+        .collect();
+    let text = |run: &[ct::Event]| run.iter().filter_map(typed).collect::<String>();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < events.len() {
+        if marker(&events[i..], '0') {
+            let start = i + 6;
+            let end = (start..events.len())
+                .find(|&j| marker(&events[j..], '1'))
+                .unwrap_or(events.len());
+            out.push(ct::Event::Paste(text(&events[start..end])));
+            i = (end + 6).min(events.len());
+            continue;
+        }
+        let run = events[i..]
+            .iter()
+            .take_while(|e| typed(e).is_some())
+            .count();
+        let typed_run = &events[i..i + run];
+        let breaks_then_types = typed_run
+            .iter()
+            .take(run.saturating_sub(1))
+            .any(|e| matches!(typed(e), Some('\n' | '\t')));
+        if run >= 3 && breaks_then_types {
+            out.push(ct::Event::Paste(text(typed_run)));
+        } else {
+            out.extend_from_slice(&events[i..i + run.max(1)]);
+        }
+        i += run.max(1);
+    }
+    out
+}
+
 /// Ghostty sends Ctrl+A for Cmd+Left, and keeps Cmd+A for itself, so there Ctrl+A means
 /// the start of the line. Select All stays in the palette.
 fn cmd_left(event: Event, ghostty: bool) -> Event {
@@ -528,6 +601,7 @@ pub fn run(options: Options) -> io::Result<()> {
             if ready {
                 let started = Instant::now();
                 // Drain everything queued, so a fast wheel doesn't redraw per event.
+                let mut batch = Vec::new();
                 loop {
                     let event = ct::read()?;
                     // Anything but the wheel or a passing pointer may change what's under a scroll.
@@ -557,14 +631,22 @@ pub fn run(options: Options) -> io::Result<()> {
                     if matches!(event, ct::Event::FocusGained | ct::Event::Key(_)) {
                         shape = None;
                     }
+                    // Keys that type are taken whole on Windows, where a paste comes as them.
+                    let typing = cfg!(windows) && typed(&event).is_some();
+                    batch.push(event);
+                    // A stream of input mustn't hold up the frames it's asking for.
+                    if (started.elapsed() >= INPUT_SLICE && !typing) || !ct::poll(Duration::ZERO)? {
+                        break;
+                    }
+                }
+                if cfg!(windows) {
+                    batch = pasted_keys(batch);
+                }
+                for event in batch {
                     match translate(event, mouse_cell(&display)).map(|e| cmd_left(e, ghostty)) {
                         // The size check above handles it, and compares against the old size.
                         Some(Event::Resize(..)) | None => {}
                         Some(event) => app.handle(event),
-                    }
-                    // A stream of input mustn't hold up the frames it's asking for.
-                    if started.elapsed() >= INPUT_SLICE || !ct::poll(Duration::ZERO)? {
-                        break;
                     }
                 }
                 phases.events += started.elapsed();
@@ -604,4 +686,80 @@ pub fn run(options: Options) -> io::Result<()> {
     #[cfg(windows)]
     FINISHED.store(true, Ordering::Relaxed);
     ended.and(finished)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyEvent as CtKey, KeyEventState};
+
+    fn key(code: KeyCode, kind: KeyEventKind) -> ct::Event {
+        ct::Event::Key(CtKey {
+            code,
+            modifiers: if matches!(code, KeyCode::Char('~' | '(' | 'A')) {
+                KeyModifiers::SHIFT
+            } else {
+                KeyModifiers::NONE
+            },
+            kind,
+            state: KeyEventState::NONE,
+        })
+    }
+
+    /// Text as a Windows console delivers it: each key pressed, then released.
+    fn keys(text: &str) -> Vec<ct::Event> {
+        text.chars()
+            .flat_map(|c| {
+                let code = match c {
+                    '\n' => KeyCode::Enter,
+                    '\t' => KeyCode::Tab,
+                    '\x1b' => KeyCode::Esc,
+                    c => KeyCode::Char(c),
+                };
+                [
+                    key(code, KeyEventKind::Press),
+                    key(code, KeyEventKind::Release),
+                ]
+            })
+            .collect()
+    }
+
+    fn pastes(events: &[ct::Event]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                ct::Event::Paste(text) => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn keys_that_paste_on_windows_become_a_paste() {
+        // Between a bracketed paste's markers, whatever the text.
+        let marked = pasted_keys(keys("\x1b[200~f(x)\x1b[201~"));
+        assert_eq!(marked, vec![ct::Event::Paste("f(x)".into())]);
+        let marked = pasted_keys(keys("\x1b[200~a(\n\tb\n\x1b[201~"));
+        assert_eq!(pastes(&marked), ["a(\n\tb\n"]);
+        // Without markers, lines typed faster than anyone types.
+        let unmarked = pasted_keys(keys("pasted(\n\ttext\nmore\n"));
+        assert_eq!(
+            unmarked,
+            vec![ct::Event::Paste("pasted(\n\ttext\nmore\n".into())]
+        );
+        // Typing stays typing: a word, a word and Enter, a shortcut, an Escape.
+        for typed in ["new ", "from a human\n", "n\n", "\x1b", "A"] {
+            let events = keys(typed);
+            let presses: Vec<_> = events
+                .iter()
+                .filter(|e| !matches!(e, ct::Event::Key(k) if k.kind == KeyEventKind::Release))
+                .cloned()
+                .collect();
+            assert_eq!(pasted_keys(events), presses, "{typed:?}");
+        }
+        let ctrl_s = ct::Event::Key(CtKey::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        let mut events = keys("a\nb");
+        events.insert(2, ctrl_s.clone());
+        assert!(pastes(&pasted_keys(events)).is_empty());
+    }
 }
