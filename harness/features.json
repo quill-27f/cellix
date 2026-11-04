@@ -3337,5 +3337,47 @@
     "title": "Opening what a maximized part hides restores first",
     "test": "opening_what_a_maximized_part_hides_restores_first",
     "passes": true
+  },
+  {
+    "id": "tab-drag-reorder",
+    "milestone": 10,
+    "title": "Dragging an editor tab reorders it, with a bar, a ghost and a status line",
+    "test": "dragging_an_editor_tab_reorders_with_a_bar_and_says_so",
+    "passes": true
+  },
+  {
+    "id": "tab-drag-cells",
+    "milestone": 10,
+    "title": "Dragging a tab works on the cell tier",
+    "test": "a_tab_drag_works_on_the_cell_tier",
+    "passes": true
+  },
+  {
+    "id": "tab-drag-split",
+    "milestone": 10,
+    "title": "A tab dropped beside a pane splits there and moves into it, or shows in another pane",
+    "test": "dropping_a_tab_beside_a_pane_splits_and_moves_it",
+    "passes": true
+  },
+  {
+    "id": "tab-drag-escape",
+    "milestone": 10,
+    "title": "Escape cancels a tab drag",
+    "test": "escape_cancels_a_tab_drag",
+    "passes": true
+  },
+  {
+    "id": "pane-drag-under",
+    "milestone": 10,
+    "title": "Dragging a side pane tab docks the pane under the file, and back on the right",
+    "test": "dragging_a_pane_tab_docks_the_pane_under_the_file_and_back",
+    "passes": true
+  },
+  {
+    "id": "pane-tab-reorder",
+    "milestone": 10,
+    "title": "The side pane's tabs reorder by dragging",
+    "test": "pane_tabs_reorder_by_dragging",
+    "passes": true
   }
 ]

@@ -889,6 +889,19 @@ fn key_bytes(key: KeyEvent, application: bool) -> Vec<u8> {
     text.into_bytes()
 }
 
+/// Where something at `index` ends up when one thing moves from `from` to `to`.
+pub fn moved(index: usize, from: usize, to: usize) -> usize {
+    if index == from {
+        to
+    } else if from < index && index <= to {
+        index - 1
+    } else if to <= index && index < from {
+        index + 1
+    } else {
+        index
+    }
+}
+
 /// What a click in the pane's title row lands on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TabHit {
@@ -962,7 +975,20 @@ pub struct Dock {
     /// with: it shows once a run.
     pub pan_hint: Option<std::time::Instant>,
     pub pan_hint_done: bool,
+    /// Dragged under the file, where it stands even with room beside it. Kept while running.
+    pub under: bool,
+    /// The order of the views' tabs, once one has been dragged.
+    pub view_order: Vec<Front>,
 }
+
+/// The views' tabs in the order they come in until one is dragged.
+const VIEW_ORDER: [Front; 5] = [
+    Front::Comments,
+    Front::Agents,
+    Front::Pdf,
+    Front::Log,
+    Front::Problems,
+];
 
 impl Dock {
     /// How wide the pane is in a window `room` columns wide past the sidebar.
@@ -1116,7 +1142,62 @@ impl Dock {
         if self.problems {
             views.push((Front::Problems, "Problems", PROBLEMS_WIDTH));
         }
+        // A sort that keeps ties in place, so views never dragged keep their own order.
+        let rank = |front: &Front| self.view_order.iter().position(|v| v == front);
+        views.sort_by_key(|view| rank(&view.0).unwrap_or(usize::MAX));
         views
+    }
+
+    /// Where a tab dragged along the row would go, among the views' tabs or the sessions':
+    /// the index it would take, and the column between tabs where it would stand.
+    pub fn slot(&self, area: Rect, x: u16, views: bool) -> (usize, u16) {
+        let spans: Vec<(u16, u16)> = if views {
+            let tabs = self.view_tabs(area);
+            tabs.iter().map(|t| (t.2.x, t.2.right())).collect()
+        } else {
+            self.tabs(area)
+        };
+        for (index, (start, end)) in spans.iter().enumerate() {
+            if x < (start + end) / 2 {
+                return (index, *start);
+            }
+        }
+        let end = spans.last().map_or(self.first_tab(area), |t| t.1);
+        (spans.len(), end)
+    }
+
+    /// Moves a view's tab to `to` among the views' tabs, counted before it moves.
+    pub fn move_view(&mut self, view: Front, to: usize) {
+        let mut order: Vec<Front> = self.views().iter().map(|v| v.0).collect();
+        let Some(from) = order.iter().position(|v| *v == view) else {
+            return;
+        };
+        order.remove(from);
+        let to = if to > from { to - 1 } else { to };
+        order.insert(to.min(order.len()), view);
+        let rest = VIEW_ORDER
+            .into_iter()
+            .filter(|v| !order.contains(v))
+            .collect::<Vec<_>>();
+        order.extend(rest);
+        self.view_order = order;
+    }
+
+    /// Moves a session's tab to `to` among the sessions' tabs, counted before it moves.
+    pub fn move_session(&mut self, from: usize, to: usize) {
+        if from >= self.sessions.len() {
+            return;
+        }
+        let to = if to > from { to - 1 } else { to }.min(self.sessions.len() - 1);
+        let session = self.sessions.remove(from);
+        self.sessions.insert(to, session);
+        self.active = self.active.map(|active| moved(active, from, to));
+    }
+
+    /// What a view's tab is called.
+    pub fn view_name(&self, view: Front) -> &'static str {
+        let views = self.views();
+        views.iter().find(|v| v.0 == view).map_or("", |v| v.1)
     }
 
     /// How wide a session's tab would like to be.

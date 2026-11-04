@@ -1088,3 +1088,29 @@ Unverified: in the tour's debug build, a double-click on the tab of a Markdown p
 picture didn't register, though it does in a test and on a code file. Multi-clicks are timed when
 each press is handled, so a slow frame between the two presses can split them; a release build
 wasn't tried. Next: dragging tabs.
+
+## 2026-11-04: Dragging tabs and the side pane
+
+A press on a tab becomes a drag after two columns or a row, so clicks and double-clicks are
+unchanged. A file's tab dropped on the tab bar moves there, with a 2 px accent bar where it would
+go; on the left or right half of a pane it opens a new pane on that side and moves there, the old
+pane showing its neighbour; in the middle third of another pane it shows there. Cellix has one tab
+bar for all panes, so "another pane's tab bar" became that middle drop. Panes only split side by
+side (`Command::SplitPane` appends one, and `pane_area` divides the width), so there's no bottom
+split; a split needs 20 columns a pane. The side pane's tabs move along their own row, views among
+views and sessions among sessions. Dragged over the bottom half of the file, a side pane tab docks
+the whole pane under it, reusing the narrow layout (`dock.under`), and on the right edge puts it
+back; kept while running. While dragging: a ghost chip at the pointer, an accent wash at about 14%
+with a 2 px border where it would land (a new `Paint::Wash`, since panels are opaque), and the
+status bar saying what dropping does. Esc cancels. On the cell tier the bar is `▏`, the wash tints
+cell backgrounds and the ghost is a label.
+
+The tour has `96-tab-drag-split`, `97-tab-drag-reorder`, `98-pane-drag-under` and
+`99-pane-under` (a new `press`/`hold` step in `term.py` holds a drag mid-way). A design review
+moved the insertion bar off the sidebar's edge, put the ghost below and right of the pointer so
+it hides nothing aimed at, and made the docking wash cover where the pane will really stand.
+Left as they are: the dragged tab isn't dimmed, the minimap shows through a split wash, and the
+Preview fits its page to the width when docked under, so a tall page scrolls there.
+
+Unverified: drags in a real terminal and inside Claude Code beyond the tour's headless terminal.
+In the tour's debug build the frame after a whole-layout change can take over a second.

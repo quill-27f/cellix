@@ -289,6 +289,49 @@ struct InView {
     settings: bool,
 }
 
+/// A tab being dragged.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Dragged {
+    Editor(usize),
+    View(Front),
+    Session(usize),
+}
+
+/// Where a dragged tab would land if it were let go now.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Landing {
+    /// Among the editor's tabs, before the one at this index.
+    Tabs(usize),
+    /// Beside a pane, on its right when true, as a new pane.
+    Split(usize, bool),
+    /// In another pane, in place of what it shows.
+    Show(usize),
+    /// Among the side pane's tabs.
+    PaneTabs(usize),
+    /// The side pane under the file, or back on the right.
+    Under,
+    Right,
+    Nowhere,
+}
+
+/// A press on a tab, and where the pointer has taken it. It's a drag once it moves far enough,
+/// so a click and a double-click stay what they were.
+#[derive(Clone, Copy, Debug)]
+struct TabDrag {
+    what: Dragged,
+    from: (u16, u16),
+    at: (u16, u16),
+    fine_x: f32,
+    moving: bool,
+}
+
+/// Columns a press on a tab moves before it's a drag.
+const DRAG_START: u16 = 2;
+/// The narrowest a pane may be split to.
+const LEAST_PANE: u16 = 20;
+/// The wash where something would land: the accent at about 14%.
+const DROP_WASH: u8 = 36;
+
 /// What the tooltip on the pane's maximize button says.
 const MAXIMIZE_TIP: &str = "Maximize or double-click the tab";
 const RESTORE_TIP: &str = "Restore or double-click the tab";
@@ -739,6 +782,8 @@ pub struct App {
     hover: Option<(u16, u16)>,
     /// The side pane or the editor taking the window.
     maximized: Option<Maximized>,
+    /// A tab pressed, and perhaps being dragged.
+    tab_drag: Option<TabDrag>,
     /// A press in the Preview, until it's let go.
     preview_press: Option<PreviewPress>,
     /// The last press in text, with where it was and how many it made in a row.
@@ -935,6 +980,7 @@ impl App {
             last_click: None,
             preview_press: None,
             maximized: None,
+            tab_drag: None,
             settings_page: None,
             terminal_look: (None, None),
             smooth_change: None,
@@ -2802,7 +2848,8 @@ impl App {
             return false;
         }
         let room = self.size.0.saturating_sub(self.main_left());
-        self.dock.too_narrow(room) && self.size.1 > STACK_HEIGHT
+        let chosen = self.dock.open && self.dock.under;
+        (chosen || self.dock.too_narrow(room)) && self.size.1 > STACK_HEIGHT
     }
 
     fn tabs_area(&self) -> Rect {
@@ -5542,6 +5589,11 @@ impl App {
                     return true;
                 }
                 match hit {
+                    Some(TabHit::Tab(index)) => self.press_tab(Dragged::Session(index), x, y),
+                    Some(TabHit::View(view)) => self.press_tab(Dragged::View(view), x, y),
+                    _ => {}
+                }
+                match hit {
                     Some(TabHit::Maximize) => self.toggle_maximized(Maximized::Pane),
                     Some(TabHit::Hide) => self.run(Command::CloseDock),
                     Some(TabHit::Tab(index)) => {
@@ -5769,6 +5821,9 @@ impl App {
     /// Lets go of a press in the Preview, putting the pages back where they were. Returns
     /// whether there was one.
     fn cancel_drag(&mut self) -> bool {
+        if self.tab_drag.take().is_some_and(|drag| drag.moving) {
+            return true;
+        }
         if self.drag != Drag::Preview {
             return false;
         }
@@ -7668,6 +7723,10 @@ impl App {
             }
             return;
         }
+        if self.tab_drag.is_some() && matches!(mouse.kind, MouseKind::Drag | MouseKind::Up) {
+            self.drag_tab(mouse);
+            return;
+        }
         if !matches!(self.overlay, Overlay::None) {
             self.overlay_mouse(mouse);
             return;
@@ -8777,10 +8836,13 @@ impl App {
             if x >= at && x < at + width {
                 self.set_active(i);
                 // A little wider than the glyph, so it isn't a pixel hunt.
+                let y = self.tabs_area().y;
                 if x + 3 >= at + width {
                     self.run(Command::CloseTab);
-                } else if self.count_click(x, self.tabs_area().y) == 2 {
+                } else if self.count_click(x, y) == 2 {
                     self.toggle_maximized(Maximized::Editor);
+                } else {
+                    self.press_tab(Dragged::Editor(i), x, y);
                 }
                 return;
             }
@@ -8852,6 +8914,7 @@ impl App {
         self.draw_dock(grid);
         if self.maximized == Some(Maximized::Pane) && self.dock.open {
             self.draw_status(grid);
+            self.draw_tab_drag(grid);
             self.draw_pane_actions(grid);
             self.draw_overlay(grid);
             self.draw_tooltip(grid);
@@ -8937,6 +9000,7 @@ impl App {
         self.draw_hover(grid);
         self.draw_offer(grid);
         self.draw_pane_actions(grid);
+        self.draw_tab_drag(grid);
         self.draw_overlay(grid);
         self.draw_tooltip(grid);
     }
@@ -9072,6 +9136,308 @@ impl App {
                 grid.text_run((after, text_top), end, tail, quiet, font);
             }
         }
+    }
+
+    fn press_tab(&mut self, what: Dragged, x: u16, y: u16) {
+        self.tab_drag = Some(TabDrag {
+            what,
+            from: (x, y),
+            at: (x, y),
+            fine_x: f32::from(x),
+            moving: false,
+        });
+    }
+
+    /// Follows a tab being dragged, and lands it when it's let go.
+    fn drag_tab(&mut self, mouse: MouseEvent) {
+        let Some(mut drag) = self.tab_drag.take() else {
+            return;
+        };
+        drag.at = (mouse.x, mouse.y);
+        drag.fine_x = mouse.fine_x;
+        drag.moving |= mouse.x.abs_diff(drag.from.0) >= DRAG_START || mouse.y != drag.from.1;
+        if mouse.kind == MouseKind::Drag {
+            self.tab_drag = Some(drag);
+        } else if drag.moving {
+            let landing = self.landing(&drag);
+            self.land(drag.what, landing);
+        }
+    }
+
+    /// Whether there's room for one more pane beside the others.
+    fn room_to_split(&self) -> bool {
+        let count = self.panes.len() as u16 + 1;
+        !self.compact() && self.main_area().w / count >= LEAST_PANE
+    }
+
+    /// The editor tab a drag at `x` would go before, as an index into all the tabs.
+    fn tab_slot(&self, x: u16) -> usize {
+        let tabs = self.visible_tabs();
+        let found = tabs.iter().find(|(_, at, width)| x < at + width / 2);
+        found.map_or(self.editors.len(), |(index, ..)| *index)
+    }
+
+    /// Where a dragged tab would land if it were let go now.
+    fn landing(&self, drag: &TabDrag) -> Landing {
+        let (x, y) = drag.at;
+        let main = self.main_area();
+        match drag.what {
+            Dragged::Editor(editor) => {
+                if y == self.tabs_area().y && x >= main.x && x < main.right() {
+                    return Landing::Tabs(self.tab_slot(x));
+                }
+                let Some(pane) = self.pane_at(x, y) else {
+                    return Landing::Nowhere;
+                };
+                let area = self.pane_area(pane);
+                let here = self.panes[pane] == editor;
+                let third = area.w / 3;
+                let middle = x >= area.x + third && x < area.right() - third;
+                if !here && (middle || !self.room_to_split()) {
+                    return Landing::Show(pane);
+                }
+                if !self.room_to_split() {
+                    return Landing::Nowhere;
+                }
+                Landing::Split(pane, x >= area.x + area.w / 2)
+            }
+            Dragged::View(_) | Dragged::Session(_) => {
+                let views = matches!(drag.what, Dragged::View(_));
+                if let Some(area) = self.dock_area().filter(|a| y == a.y && a.contains(x, y)) {
+                    return Landing::PaneTabs(self.dock.slot(area, x, views).0);
+                }
+                if self.maximized.is_some() {
+                    return Landing::Nowhere;
+                }
+                let room = self.size.0.saturating_sub(self.main_left());
+                let edge = (self.size.0 / 12).max(6);
+                if self.dock_under() {
+                    let fits = !self.dock.too_narrow(room);
+                    let on_edge = x + edge >= self.size.0 && y + 1 < self.size.1;
+                    return if fits && on_edge {
+                        Landing::Right
+                    } else {
+                        Landing::Nowhere
+                    };
+                }
+                if main.contains(x, y) && y >= main.y + main.h / 2 && self.size.1 > STACK_HEIGHT {
+                    return Landing::Under;
+                }
+                Landing::Nowhere
+            }
+        }
+    }
+
+    /// What letting go would do, for the status bar.
+    fn landing_said(&self, drag: &TabDrag) -> String {
+        let other = " · on the tab bar to move it there";
+        match self.landing(drag) {
+            Landing::Tabs(_) | Landing::PaneTabs(_) => "Drop to move the tab here".to_string(),
+            Landing::Split(_, true) => format!("Drop to split right{other}"),
+            Landing::Split(_, false) => format!("Drop to split left{other}"),
+            Landing::Show(_) => "Drop to show it in this pane".to_string(),
+            Landing::Under => {
+                "Drop to put the pane under the file · on the right edge to put it back".to_string()
+            }
+            Landing::Right => "Drop to put the pane back on the right".to_string(),
+            Landing::Nowhere if matches!(drag.what, Dragged::Editor(_)) => {
+                "Drop on the tab bar to move it, or on a pane to split it · Esc cancels".to_string()
+            }
+            Landing::Nowhere => {
+                "Drop under the file, or on the right edge, to move the pane · Esc cancels"
+                    .to_string()
+            }
+        }
+    }
+
+    /// Puts a dragged tab where it was let go.
+    fn land(&mut self, what: Dragged, landing: Landing) {
+        match (what, landing) {
+            (Dragged::Editor(editor), Landing::Tabs(to)) => self.move_editor(editor, to),
+            (Dragged::Editor(editor), Landing::Split(pane, right)) => {
+                let at = pane + usize::from(right);
+                self.move_out_of_panes(editor);
+                self.panes.insert(at, editor);
+                self.focus = at;
+            }
+            (Dragged::Editor(editor), Landing::Show(pane)) => {
+                self.move_out_of_panes(editor);
+                self.panes[pane] = editor;
+                self.focus = pane;
+            }
+            (Dragged::View(view), Landing::PaneTabs(to)) => self.dock.move_view(view, to),
+            (Dragged::Session(from), Landing::PaneTabs(to)) => self.dock.move_session(from, to),
+            (_, Landing::Under) => self.dock.under = true,
+            (_, Landing::Right) => self.dock.under = false,
+            _ => {}
+        }
+        self.fit_dock();
+    }
+
+    /// Moves an editor's tab to stand before the one at `to`, counted before it moves.
+    fn move_editor(&mut self, from: usize, to: usize) {
+        let to = if to > from { to - 1 } else { to };
+        let to = to.min(self.editors.len().saturating_sub(1));
+        if to == from || from >= self.editors.len() {
+            return;
+        }
+        let editor = self.editors.remove(from);
+        self.editors.insert(to, editor);
+        for pane in &mut self.panes {
+            *pane = crate::dock::moved(*pane, from, to);
+        }
+        self.threads_seen = None;
+    }
+
+    /// Panes showing an editor that's moving to another pane show its neighbour instead, so
+    /// the tab moves rather than copies. With one editor there's nothing else to show.
+    fn move_out_of_panes(&mut self, editor: usize) {
+        if self.editors.len() < 2 {
+            return;
+        }
+        let other = if editor > 0 { editor - 1 } else { editor + 1 };
+        for pane in &mut self.panes {
+            if *pane == editor {
+                *pane = other;
+            }
+        }
+    }
+
+    /// Where a dragged tab would land, and the tab under the pointer.
+    fn draw_tab_drag(&self, grid: &mut Grid) {
+        let Some(drag) = self.tab_drag.filter(|d| d.moving) else {
+            return;
+        };
+        let theme = &self.theme;
+        match self.landing(&drag) {
+            Landing::Tabs(slot) => {
+                let tabs = self.visible_tabs();
+                // In the gap before a tab, and never left of the bar.
+                let first = f32::from(self.tabs_area().x) + 0.2;
+                let x = match tabs.iter().find(|(index, ..)| *index == slot) {
+                    Some((_, at, _)) => (f32::from(*at) - 0.5).max(first),
+                    None => tabs
+                        .last()
+                        .map_or(f32::from(self.tabs_area().x), |(_, at, width)| {
+                            f32::from(at + width) + 0.5
+                        }),
+                };
+                self.insertion_bar(grid, x, self.tabs_area().y);
+            }
+            Landing::PaneTabs(_) => {
+                if let Some(area) = self.dock_area() {
+                    let views = matches!(drag.what, Dragged::View(_));
+                    let (_, x) = self.dock.slot(area, drag.at.0, views);
+                    self.insertion_bar(grid, f32::from(x), area.y);
+                }
+            }
+            Landing::Split(pane, right) => {
+                let area = self.pane_area(pane);
+                let half = area.w / 2;
+                let x = if right { area.x + half } else { area.x };
+                self.drop_zone(grid, Rect::new(x, area.y, area.w - half, area.h));
+            }
+            Landing::Show(pane) => self.drop_zone(grid, self.pane_area(pane)),
+            Landing::Under => {
+                // Where the pane will stand: under the file and across where it stands now.
+                let left = self.main_left();
+                let height = self.size.1.saturating_sub(1);
+                let rows = self.dock.height.unwrap_or(height * STACK_SHARE / 100);
+                let rows = rows.clamp(STACK_LEAST, height.saturating_sub(STACK_LEAST));
+                let zone = Rect::new(left, height - rows, self.size.0 - left, rows);
+                self.drop_zone(grid, zone);
+            }
+            Landing::Right => {
+                let left = self.main_left();
+                let room = self.size.0.saturating_sub(left);
+                let width = self.dock.width.unwrap_or(room * 46 / 100).clamp(1, room);
+                let zone = Rect::new(self.size.0 - width, 1, width, self.size.1.saturating_sub(2));
+                self.drop_zone(grid, zone);
+            }
+            Landing::Nowhere => {}
+        }
+        // The tab itself, under the pointer.
+        let (icon, name) = match drag.what {
+            Dragged::Editor(index) => (Icon::File, self.editors[index].title()),
+            Dragged::View(view) => {
+                let icon = match view {
+                    Front::Pdf => Icon::Picture,
+                    Front::Comments => Icon::Comment,
+                    Front::Agents => Icon::Agents,
+                    _ => Icon::Outline,
+                };
+                (icon, self.dock.view_name(view).to_string())
+            }
+            Dragged::Session(index) => {
+                let session = self.dock.sessions.get(index);
+                let icon = match session {
+                    Some(s) if s.browser => Icon::Globe,
+                    Some(s) if s.shell => Icon::Terminal,
+                    _ => Icon::Agents,
+                };
+                (icon, session.map(|s| s.name.clone()).unwrap_or_default())
+            }
+        };
+        let font = Font::default();
+        let wide = self.measure.width(&name, font) + 4.5;
+        // Below and right of the pointer, so what it's aiming at stays in sight.
+        let left = (drag.fine_x + 0.7).min(f32::from(self.size.0) - wide - 0.5);
+        let top = f32::from(drag.at.1) + 1.0;
+        let top = top.min(f32::from(self.size.1) - 2.4);
+        if self.measure.in_cells() {
+            let style = theme.tab_active;
+            let label = format!(" {name} ");
+            grid.put_str(left as u16, top.round() as u16, &label, style, self.size.0);
+            return;
+        }
+        let bounds = Bounds::cells(left, top, wide, 1.0);
+        grid.popup(bounds, 26, theme.tint, theme.popup_border);
+        let icon_bounds = Bounds::cells(left + 0.9, top + 0.18, 2.0, 0.64);
+        grid.paint.push(cellix_render::Paint::Icon {
+            bounds: icon_bounds,
+            icon,
+            color: theme.text.fg,
+        });
+        let colour = (theme.text.fg, false);
+        grid.text_run((left + 3.0, top), left + wide, &name, colour, font);
+    }
+
+    /// The thin accent bar between tabs where a dragged one would go.
+    fn insertion_bar(&self, grid: &mut Grid, x: f32, y: u16) {
+        let theme = &self.theme;
+        if self.measure.in_cells() {
+            let style = Style {
+                fg: theme.accent,
+                ..theme.tab
+            };
+            grid.put_str(x.round() as u16, y, "▏", style, self.size.0);
+            return;
+        }
+        let bounds = Bounds::cells(x - 0.06, f32::from(y) + 0.18, 0.12, 0.64);
+        grid.panel(bounds, 6, Some(theme.accent), None);
+    }
+
+    /// The accent wash, with a border, over where a dragged tab would land.
+    fn drop_zone(&self, grid: &mut Grid, zone: Rect) {
+        let theme = &self.theme;
+        if zone.w < 3 || zone.h < 2 {
+            return;
+        }
+        if self.measure.in_cells() {
+            grid.set_style(zone, |style| Style {
+                bg: theme.tint,
+                ..style
+            });
+            return;
+        }
+        // Clear of the edges, as the design's 12 px are.
+        let bounds = Bounds::cells(
+            f32::from(zone.x) + 0.7,
+            f32::from(zone.y) + 0.35,
+            f32::from(zone.w) - 1.4,
+            f32::from(zone.h) - 0.7,
+        );
+        grid.wash(bounds, 28, (theme.accent, DROP_WASH), Some(theme.accent));
     }
 
     /// Whether the pointer is on the side pane's maximize button.
@@ -10601,7 +10967,13 @@ impl App {
             }),
             None => None,
         };
-        let left = if !self.neovim_line.is_empty() {
+        let landing = self
+            .tab_drag
+            .filter(|d| d.moving)
+            .map(|d| self.landing_said(&d));
+        let left = if let Some(landing) = &landing {
+            landing.as_str()
+        } else if !self.neovim_line.is_empty() {
             typed.as_str()
         } else if !message.is_empty() {
             message.as_str()
@@ -15912,6 +16284,196 @@ mod tests {
         click(&mut app, preview.x + 2, area.y);
         assert_eq!(app.maximized, Some(Maximized::Pane));
         assert!(app.dock.showing(Front::Pdf));
+    }
+
+    /// Three files open in tabs, in a window with room to split.
+    fn three_tabs(pixels: bool) -> (TempDir, App) {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 44));
+        if pixels {
+            app.set_measure(Rc::new(cellix_render::FontMeasure::new(10, 20)));
+        }
+        for name in ["alpha.txt", "beta.txt", "gamma.txt"] {
+            fs::write(dir.path().join(name), format!("{name} words\n")).unwrap();
+            app.open(&dir.path().join(name)).unwrap();
+        }
+        (dir, app)
+    }
+
+    fn titles(app: &App) -> Vec<String> {
+        app.editors.iter().map(Editor::title).collect()
+    }
+
+    fn status_line(app: &App) -> String {
+        screen(app).row_text(app.size().1 - 1)
+    }
+
+    fn washes(app: &App) -> Vec<cellix_render::Bounds> {
+        let grid = screen(app);
+        let found = grid.paint.iter().filter_map(|p| match p {
+            Paint::Wash { bounds, .. } => Some(*bounds),
+            _ => None,
+        });
+        found.collect()
+    }
+
+    #[test]
+    fn dragging_an_editor_tab_reorders_with_a_bar_and_says_so() {
+        let (_dir, mut app) = three_tabs(true);
+        let y = app.tabs_area().y;
+        let tabs = app.visible_tabs();
+        let (gamma, alpha) = (tabs[2].1 + 2, tabs[0].1 + 1);
+        // A click stays a click.
+        click(&mut app, tabs[1].1 + 2, y);
+        assert_eq!(titles(&app), ["alpha.txt", "beta.txt", "gamma.txt"]);
+        assert_eq!(app.active(), 1);
+        app.handle(mouse(MouseKind::Left, gamma, y));
+        app.handle(mouse(MouseKind::Drag, alpha, y));
+        assert!(status_line(&app).contains("Drop to move the tab here"));
+        let grid = screen(&app);
+        let bar = grid.paint.iter().any(|p| {
+            matches!(p, Paint::Panel { bounds, fill: Some(fill), .. }
+                if *fill == app.theme.accent && bounds.w < bounds.h && bounds.y / 64 == i32::from(y))
+        });
+        assert!(bar, "an accent bar where it would go");
+        let ghost = grid.paint.iter().any(|p| {
+            matches!(p, Paint::Panel { fill: Some(fill), shadow: true, .. } if *fill == app.theme.tint)
+        });
+        assert!(ghost, "the tab follows the pointer");
+        app.handle(mouse(MouseKind::Up, alpha, y));
+        assert_eq!(titles(&app), ["gamma.txt", "alpha.txt", "beta.txt"]);
+        assert_eq!(app.editors[app.active()].title(), "gamma.txt");
+        assert!(!status_line(&app).contains("Drop"));
+    }
+
+    #[test]
+    fn a_tab_drag_works_on_the_cell_tier() {
+        let (_dir, mut app) = three_tabs(false);
+        let y = app.tabs_area().y;
+        let tabs = app.visible_tabs();
+        let (alpha, end) = (tabs[0].1 + 1, tabs[2].1 + tabs[2].2 - 3);
+        app.handle(mouse(MouseKind::Left, alpha, y));
+        app.handle(mouse(MouseKind::Drag, end, y));
+        let grid = screen(&app);
+        assert!(grid.row_text(y).contains('▏'), "{}", grid.row_text(y));
+        assert!(status_line(&app).contains("Drop to move the tab here"));
+        app.handle(mouse(MouseKind::Up, end, y));
+        assert_eq!(titles(&app), ["beta.txt", "gamma.txt", "alpha.txt"]);
+    }
+
+    #[test]
+    fn dropping_a_tab_beside_a_pane_splits_and_moves_it() {
+        let (_dir, mut app) = three_tabs(true);
+        let y = app.tabs_area().y;
+        let area = app.pane_area(0);
+        let (_, gamma, _) = app.visible_tabs()[2];
+        app.handle(mouse(MouseKind::Left, gamma + 2, y));
+        let right = (area.x + area.w * 3 / 4, area.y + 10);
+        app.handle(mouse(MouseKind::Drag, right.0, right.1));
+        let said = status_line(&app);
+        assert!(
+            said.contains("Drop to split right · on the tab bar to move it there"),
+            "{said}"
+        );
+        let wash = washes(&app);
+        assert_eq!(wash.len(), 1);
+        assert!(
+            wash[0].x / 64 >= i32::from(area.x + area.w / 2),
+            "on the right half"
+        );
+        app.handle(mouse(MouseKind::Up, right.0, right.1));
+        // gamma moves to a new pane on the right, and the first shows its neighbour.
+        assert_eq!(app.panes, [1, 2]);
+        assert_eq!(app.focus, 1);
+        // Dropped in the middle of another pane, a tab shows there instead. The press shows
+        // it in the focused pane first, as a click does, and the drop moves it on.
+        let (_, alpha, _) = app.visible_tabs()[0];
+        app.handle(mouse(MouseKind::Left, alpha + 2, y));
+        assert_eq!(app.panes, [1, 0]);
+        let middle = app.pane_area(0);
+        let (x, y2) = (middle.x + middle.w / 2, middle.y + 5);
+        app.handle(mouse(MouseKind::Drag, x, y2));
+        assert!(status_line(&app).contains("Drop to show it in this pane"));
+        app.handle(mouse(MouseKind::Up, x, y2));
+        assert_eq!((app.panes.clone(), app.focus), (vec![0, 1], 0));
+        // On the left half of a pane, it splits to the left.
+        let (_, beta, _) = app.visible_tabs()[1];
+        app.handle(mouse(MouseKind::Left, beta + 2, y));
+        let first = app.pane_area(0);
+        app.handle(mouse(MouseKind::Drag, first.x + 3, first.y + 5));
+        assert!(status_line(&app).contains("Drop to split left"));
+        app.handle(mouse(MouseKind::Up, first.x + 3, first.y + 5));
+        assert_eq!((app.panes.len(), app.panes[0], app.focus), (3, 1, 0));
+    }
+
+    #[test]
+    fn escape_cancels_a_tab_drag() {
+        let (_dir, mut app) = three_tabs(true);
+        let y = app.tabs_area().y;
+        let (_, gamma, _) = app.visible_tabs()[2];
+        let area = app.pane_area(0);
+        app.handle(mouse(MouseKind::Left, gamma + 2, y));
+        app.handle(mouse(MouseKind::Drag, area.x + area.w - 5, area.y + 5));
+        app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
+        assert!(washes(&app).is_empty());
+        assert!(!status_line(&app).contains("Drop"));
+        app.handle(mouse(MouseKind::Up, area.x + area.w - 5, area.y + 5));
+        assert_eq!(app.panes.len(), 1);
+        assert_eq!(titles(&app), ["alpha.txt", "beta.txt", "gamma.txt"]);
+    }
+
+    #[test]
+    fn dragging_a_pane_tab_docks_the_pane_under_the_file_and_back() {
+        let (_dir, mut app) = file_and_preview();
+        let area = app.dock_area().unwrap();
+        assert!(!app.dock_under());
+        let (_, _, tab) = app.dock.view_tabs_for_test(area)[0];
+        app.handle(mouse(MouseKind::Left, tab.x + 2, area.y));
+        let main = app.main_area();
+        let low = (main.x + main.w / 2, main.bottom() - 4);
+        app.handle(mouse(MouseKind::Drag, low.0, low.1));
+        let said = status_line(&app);
+        assert!(
+            said.contains("Drop to put the pane under the file"),
+            "{said}"
+        );
+        let wash = washes(&app);
+        assert_eq!(wash.len(), 1);
+        assert!(
+            wash[0].y / 64 >= i32::from(main.y + main.h / 2),
+            "over the bottom half"
+        );
+        app.handle(mouse(MouseKind::Up, low.0, low.1));
+        assert!(app.dock_under());
+        let under = app.dock_area().unwrap();
+        assert_eq!((under.x, under.right()), (app.main_left(), 150));
+        assert!(under.y > 10);
+        // It stays there, even with room beside the file, until it's dragged to the edge.
+        app.handle(Event::Resize(160, 44));
+        assert!(app.dock_under());
+        let (_, _, tab) = app.dock.view_tabs_for_test(under)[0];
+        app.handle(mouse(MouseKind::Left, tab.x + 2, under.y));
+        app.handle(mouse(MouseKind::Drag, 158, 12));
+        assert!(status_line(&app).contains("Drop to put the pane back on the right"));
+        app.handle(mouse(MouseKind::Up, 158, 12));
+        assert!(!app.dock_under());
+        assert_eq!(app.dock_area().unwrap().y, 0);
+    }
+
+    #[test]
+    fn pane_tabs_reorder_by_dragging() {
+        let (_dir, mut app) = file_and_preview();
+        app.dock.show_comments();
+        let area = app.dock_area().unwrap();
+        let tabs = app.dock.view_tabs_for_test(area);
+        assert_eq!((tabs[0].0, tabs[1].0), (Front::Comments, Front::Pdf));
+        let (from, to) = (tabs[1].2.x + 2, tabs[0].2.x + 1);
+        app.handle(mouse(MouseKind::Left, from, area.y));
+        app.handle(mouse(MouseKind::Drag, to, area.y));
+        assert!(status_line(&app).contains("Drop to move the tab here"));
+        app.handle(mouse(MouseKind::Up, to, area.y));
+        let tabs = app.dock.view_tabs_for_test(area);
+        assert_eq!((tabs[0].0, tabs[1].0), (Front::Pdf, Front::Comments));
     }
 
     #[test]

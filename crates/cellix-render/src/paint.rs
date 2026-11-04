@@ -106,6 +106,17 @@ pub enum Paint {
         /// The border in dashes.
         dashed: bool,
     },
+    /// A see-through wash with round corners over what's already drawn, text included, and
+    /// a border twice a panel's weight: where something dragged would land.
+    Wash {
+        bounds: Bounds,
+        /// As a percentage of a row's height.
+        radius: u8,
+        color: Rgb,
+        /// Out of 255.
+        alpha: u8,
+        border: Option<Rgb>,
+    },
     /// A line one device pixel thick, along the top or left of `bounds`.
     Hairline { bounds: Bounds, color: Rgb },
     Text {
@@ -159,6 +170,7 @@ impl Paint {
                 (bounds.x - shade, bounds.x + bounds.w + shade)
             }
             Self::Hairline { bounds, .. }
+            | Self::Wash { bounds, .. }
             | Self::Icon { bounds, .. }
             | Self::Strips { bounds, .. }
             | Self::Corners { bounds, .. } => (bounds.x, bounds.x + bounds.w.max(1)),
@@ -193,6 +205,7 @@ impl Paint {
         let mut paint = self.clone();
         match &mut paint {
             Self::Panel { bounds, .. }
+            | Self::Wash { bounds, .. }
             | Self::Hairline { bounds, .. }
             | Self::Icon { bounds, .. }
             | Self::Strips { bounds, .. }
@@ -218,6 +231,7 @@ impl Paint {
                 (bounds.y - reach, bounds.y + bounds.h + reach)
             }
             Self::Hairline { bounds, .. }
+            | Self::Wash { bounds, .. }
             | Self::Icon { bounds, .. }
             | Self::Strips { bounds, .. }
             | Self::Corners { bounds, .. } => (bounds.y, bounds.y + bounds.h.max(1)),

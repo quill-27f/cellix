@@ -265,7 +265,9 @@ to the focused pane, the status bar keeps only what fits, and review stacks chan
 The side pane or one editor can be maximized, from the pane's own tab row or a double-click on
 a tab, while running only. The icons at the top right never move for it. Whatever asks for a
 hidden part, such as one of those icons or opening a file, restores first, so nothing opens
-out of sight.
+out of sight. The side pane stands under the file when it's dragged there, as well as when the
+window is too narrow; that choice lasts while running. Panes split side by side only, so a tab
+dropped on a file splits left or right, and there is no split below.
 
 ### Markdown
 

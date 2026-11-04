@@ -10,6 +10,7 @@ The script is a list of steps:
     ["wait", seconds]            ["keys", "text, with \\e as ESC"]
     ["click", col, row]          ["right", col, row]       ["middle", col, row]
     ["double", col, row]         ["triple", col, row]      ["drag", col, row, col, row]
+    ["press", col, row]          ["hold", col, row]        A press, and a move with it still held.
     ["move", col, row]           ["wheel", col, row, notches]  (negative is up)
     ["paste", "text"]            ["resize", cols, rows]
     ["shot", "out.png"]          ["log", "label"]
@@ -269,6 +270,12 @@ def main():
             os.write(master, mouse(32, step[3], step[4]))
             pump(0.03)
             os.write(master, mouse(0, step[3], step[4], False))
+            pump(0.25)
+        elif kind == "press":
+            os.write(master, mouse(0, step[1], step[2]))
+            pump(0.1)
+        elif kind == "hold":
+            os.write(master, mouse(32, step[1], step[2]))
             pump(0.25)
         elif kind == "move":
             os.write(master, mouse(35, step[1], step[2]))

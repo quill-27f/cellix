@@ -370,6 +370,18 @@ with tempfile.TemporaryDirectory() as scratch:
                                     ["wait", 0.3], ["move", 22, 0]], RESULTS, LOSS, size="150x44")
     shoot("95-editor-maximized", [["wait", 4.0], ["double", 36, 0], ["wait", 0.6]], CODE_FILE, LOSS,
           size="150x44")
+    # A tab dragged: held over the right half of the file, and the pane dragged under it.
+    TAB = (36, 0)
+    shoot("96-tab-drag-split", [["wait", 1.0], ["press", *TAB], ["hold", 70, 12], ["hold", 112, 20]],
+          CODE_FILE, RESULTS, size="150x44")
+    shoot("97-tab-drag-reorder", [["wait", 1.0], ["press", 50, 0], ["hold", 40, 0], ["hold", 34, 0]],
+          CODE_FILE, RESULTS, size="150x44")
+    PREVIEW_TAB = (100, 0)
+    shoot("98-pane-drag-under", [["wait", 1.0], ["press", *PREVIEW_TAB], ["hold", 80, 20],
+                                 ["hold", 60, 34]], RESULTS, LOSS, size="150x44")
+    # A debug build takes a while over the frame that moves the whole layout.
+    shoot("99-pane-under", [["wait", 2.0], ["drag", *PREVIEW_TAB, 60, 34], ["wait", 5.0]],
+          RESULTS, LOSS, size="150x44")
     shoot("92-preview-panned", [*zoomed, ["drag", 125, 20, 105, 14], ["wait", 0.6]], RESULTS, LOSS,
           size="150x44")
 
