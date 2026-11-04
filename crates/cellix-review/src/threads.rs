@@ -50,6 +50,19 @@ pub struct Thread {
     /// so it stays in view as what was said about that version.
     #[serde(default)]
     pub earlier: Option<usize>,
+    /// With `earlier`: the later version has these words reworded, at `line`, rather than
+    /// dropped. The quote keeps the words as they were said about.
+    #[serde(default)]
+    pub reworded: bool,
+}
+
+/// Where a thread's quote is in a text.
+enum Place {
+    /// As written, or rewrapped, at a line, with which copy it is when it's on one line.
+    Same(usize, Option<(usize, usize)>),
+    /// With a word or two changed, at a line, and those words as they read now.
+    Reworded(usize, Option<String>),
+    Gone,
 }
 
 impl Thread {
@@ -71,8 +84,30 @@ impl Thread {
     /// more than once. A quote rewrapped across lines is still found, and so is one with a
     /// word or two changed. Text that's gone leaves it where it was. Says whether it was found.
     pub fn follow(&mut self, text: &str) -> bool {
+        match self.place(text) {
+            Place::Same(line, copy) => {
+                self.line = line;
+                if let Some(copy) = copy {
+                    self.copy = copy;
+                }
+                true
+            }
+            // Reworded: the quote takes the words it reads as now, so the card shows them.
+            Place::Reworded(line, now) => {
+                self.line = line;
+                if let Some(now) = now {
+                    self.quote = now;
+                }
+                self.copy = (0, 0);
+                true
+            }
+            Place::Gone => false,
+        }
+    }
+
+    fn place(&self, text: &str) -> Place {
         if self.quote.trim().is_empty() {
-            return true;
+            return Place::Same(self.line, None);
         }
         let distance = |line: &usize| line.abs_diff(self.line);
         let copies: Vec<usize> = text
@@ -86,55 +121,71 @@ impl Thread {
         let (copy, count) = self.copy;
         let same = (count == copies.len() && copy < count).then(|| copies[copy]);
         if let Some(line) = same.or_else(|| copies.iter().copied().min_by_key(distance)) {
-            self.line = line;
             let copy = copies.iter().position(|l| *l == line).unwrap_or(0);
-            self.copy = (copy, copies.len());
-            return true;
+            return Place::Same(line, Some((copy, copies.len())));
         }
         let found = rewrapped(text, &self.quote)
             .into_iter()
             .min_by_key(distance);
         if let Some(line) = found {
-            self.line = line;
-            return true;
+            return Place::Same(line, None);
         }
-        // Reworded: the quote takes the words it reads as now, so the card shows them.
-        if let Some(line) = reworded(text, &self.quote, self.line) {
-            self.line = line;
-            if let Some(now) = text
-                .lines()
-                .nth(line - 1)
-                .and_then(|l| span_of(l, &self.quote))
-            {
-                self.quote = now;
+        match reworded(text, &self.quote, self.line) {
+            Some(line) => {
+                let now = text
+                    .lines()
+                    .nth(line - 1)
+                    .and_then(|l| span_of(l, &self.quote));
+                Place::Reworded(line, now)
             }
-            self.copy = (0, 0);
-            return true;
+            None => Place::Gone,
         }
-        false
     }
 
-    /// Moves the thread onto a plan's next version. Words still there take it with them; words
-    /// that are gone leave it open on the version it was made on, `version` being the one just
-    /// replaced, and on a line the new text has.
+    /// Moves the thread onto a plan's next version, `version` being the one just replaced.
+    /// Words still there, or only rewrapped, take it with them. Words reworded or gone leave
+    /// it open on the version it was made on, quoting them as they were: a reworded quote
+    /// isn't taken as the same, since a word changed can turn what it says around.
     pub fn carry(&mut self, text: &str, version: usize) {
-        if self.follow(text) {
-            self.earlier = None;
-            return;
+        match self.place(text) {
+            Place::Same(line, copy) => {
+                self.line = line;
+                self.copy = copy.unwrap_or((0, 0));
+                self.earlier = None;
+                self.reworded = false;
+            }
+            Place::Reworded(line, _) => {
+                self.earlier.get_or_insert(version);
+                self.reworded = true;
+                self.line = line;
+                self.copy = (0, 0);
+            }
+            Place::Gone => {
+                self.earlier.get_or_insert(version);
+                self.reworded = false;
+                self.line = self.line.clamp(1, text.lines().count().max(1));
+                self.copy = (0, 0);
+            }
         }
-        self.earlier.get_or_insert(version);
-        self.line = self.line.clamp(1, text.lines().count().max(1));
-        self.copy = (0, 0);
     }
 
     /// The thread as a message for an agent, on one line, with how to answer.
     pub fn message(&self) -> String {
+        // Words a later version dropped have no line in it, so only the version is said.
+        let at = match self.earlier {
+            Some(_) if !self.reworded => String::new(),
+            _ => format!(" line {}", self.line),
+        };
         let earlier = self.earlier.map_or_else(String::new, |version| {
-            format!(" in version {version}, which this one no longer has")
+            let what = if self.reworded { "reworded" } else { "dropped" };
+            format!(
+                " (made on version {version}; version {} {what} these words)",
+                version + 1
+            )
         });
         let mut text = format!(
-            "Comment {} on {} line {}, about \"{}\"{earlier}: {}",
-            self.id, self.file, self.line, self.quote, self.text
+            "Comment {} on {}{at}, about \"{}\"{earlier}: {}",
+            self.id, self.file, self.quote, self.text
         );
         for reply in &self.replies {
             text.push_str(&format!(" {}: {}", reply.author, reply.text));
@@ -222,12 +273,46 @@ fn reworded(text: &str, quote: &str, near: usize) -> Option<usize> {
         let theirs: Vec<&str> = line.split_whitespace().collect();
         words.iter().filter(|w| theirs.contains(w)).count()
     };
+    // A "not" or a number in or out turns what's said around, so the line must say the same.
+    let turns = guards(quote);
+    let says_same = |line: &str| span_of(line, quote).is_some_and(|span| guards(&span) == turns);
     text.lines()
         .enumerate()
-        .map(|(index, line)| (score(line), index + 1))
-        .filter(|(shared, _)| shared * 3 >= words.len() * 2)
+        .map(|(index, line)| (score(line), index + 1, line))
+        .filter(|(shared, _, line)| shared * 3 >= words.len() * 2 && says_same(line))
+        .map(|(shared, index, _)| (shared, index))
         .max_by_key(|(shared, line)| (*shared, std::cmp::Reverse(line.abs_diff(near))))
         .map(|(_, line)| line)
+}
+
+/// Words that turn what a sentence says around: negations and numbers, sorted, so two
+/// stretches of text can be checked for saying the same.
+fn guards(text: &str) -> Vec<String> {
+    const NEGATIONS: [&str; 12] = [
+        "not", "no", "never", "none", "nor", "neither", "nothing", "nobody", "nowhere", "cannot",
+        "without", "instead",
+    ];
+    const NUMBERS: [&str; 22] = [
+        "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+        "eleven", "twelve", "twenty", "fifty", "hundred", "thousand", "million", "billion", "half",
+        "once", "twice",
+    ];
+    let mut found: Vec<String> = text
+        .split_whitespace()
+        .map(|word| {
+            word.replace('\u{2019}', "'")
+                .trim_matches(|c: char| !c.is_alphanumeric() && c != '\'')
+                .to_lowercase()
+        })
+        .filter(|word| {
+            word.chars().any(|c| c.is_ascii_digit())
+                || word.ends_with("n't")
+                || NEGATIONS.contains(&word.as_str())
+                || NUMBERS.contains(&word.as_str())
+        })
+        .collect();
+    found.sort();
+    found
 }
 
 /// The stretch of `line` from the first to the last of the quote's words it still has.
@@ -295,6 +380,7 @@ mod tests {
             suggested_by: String::new(),
             copy: (0, 0),
             earlier: None,
+            reworded: false,
         }
     }
 
@@ -318,10 +404,88 @@ mod tests {
         assert_eq!(gone.line, 3, "on a line the new version has");
         gone.carry("# Plan\n\nStill no cache.\n", 2);
         assert_eq!(gone.earlier, Some(1), "the version its words were in");
+        let message = gone.message();
         assert!(
-            gone.message()
-                .contains("in version 1, which this one no longer has")
+            message.contains("(made on version 1; version 2 dropped these words)"),
+            "{message}"
         );
+        assert!(
+            !message.contains("line 3"),
+            "no line of another version: {message}"
+        );
+    }
+
+    #[test]
+    fn a_comment_never_moves_onto_words_that_say_the_opposite() {
+        // Six of seven words match, but one "not" turns it around.
+        let mut on = Thread {
+            quote: "We will not drop the users table.".into(),
+            line: 3,
+            ..thread()
+        };
+        assert!(!on.follow("# Plan\n\nWe will drop the users table.\n"));
+        assert_eq!(on.quote, "We will not drop the users table.");
+        let mut on = Thread {
+            quote: "We will drop the users table.".into(),
+            line: 3,
+            ..thread()
+        };
+        assert!(!on.follow("# Plan\n\nWe won't drop the users table.\n"));
+        let mut on = Thread {
+            quote: "Retry 3 times before giving up.".into(),
+            line: 3,
+            ..thread()
+        };
+        assert!(!on.follow("# Plan\n\nRetry 5 times before giving up.\n"));
+        let mut on = Thread {
+            quote: "Run two workers per shard here.".into(),
+            line: 3,
+            ..thread()
+        };
+        assert!(!on.follow("# Plan\n\nRun four workers per shard here.\n"));
+        // The same "not" in a reworded line is still a reword.
+        let mut on = Thread {
+            quote: "We will not drop the users table.".into(),
+            line: 3,
+            ..thread()
+        };
+        assert!(on.follow("# Plan\n\nWe will not drop the old users table.\n"));
+    }
+
+    #[test]
+    fn a_plans_reworded_words_keep_their_quote_and_say_they_changed() {
+        let mut on = Thread {
+            quote: "Then the cache stays warm across runs.".into(),
+            line: 3,
+            ..thread()
+        };
+        on.carry(
+            "# Plan\n\nIntro.\n\nThen the cache stays hot across runs.\n",
+            1,
+        );
+        assert_eq!(
+            on.quote, "Then the cache stays warm across runs.",
+            "as it was said about"
+        );
+        assert_eq!((on.line, on.earlier, on.reworded), (5, Some(1), true));
+        let message = on.message();
+        assert!(message.contains("line 5"), "{message}");
+        assert!(
+            message.contains("(made on version 1; version 2 reworded these words)"),
+            "{message}"
+        );
+        // Rewrapped is the same words, so found.
+        on.carry("# Plan\n\nThen the cache stays\nwarm across runs.\n", 2);
+        assert_eq!((on.line, on.earlier, on.reworded), (3, None, false));
+        // Words that say the opposite are gone, not changed.
+        let mut on = Thread {
+            quote: "We will not drop the users table.".into(),
+            line: 3,
+            ..thread()
+        };
+        on.carry("# Plan\n\nWe will drop the users table.\n", 1);
+        assert_eq!((on.earlier, on.reworded), (Some(1), false));
+        assert_eq!(on.quote, "We will not drop the users table.");
     }
 
     #[test]

@@ -975,3 +975,25 @@ scroll event has no position, and a wheel without one always went to the file. I
 side pane when the pointer last moved over it.
 Unverified: not yet tried on their project; the hook test proves the checkpoint still lands from
 the process the hook leaves it to.
+
+## 2026-11-04: plan threads across versions, reviewed
+
+Fixes to carrying a plan's comments into its next version (458a767), after review:
+- A reworded quote no longer counts as the same words when a plan is sent again. Only exact or
+  rewrapped words carry a thread along. Reworded words keep the original quote and show a quiet
+  "Changed in version N" pill, which opens the comparison. A negation or a number in or out is
+  never a reword, anywhere a comment follows its text.
+- Approving a plan resolves its threads and keeps them with the approved copy in `.cellix/plans`.
+  The hook then puts that plan's versions away in `Approved N`, so the next plan starts at
+  version 1 with none of them.
+- Carrying saves the moves of resolved threads too. A dropped comment tells the agent its
+  version, not a line it isn't on ("made on version 1; version 2 dropped these words"). Its card
+  opens the comparison even when no plan is waiting.
+- Per the ui-expert: quotes on changed and removed cards stay readable, the strike sits
+  mid-letter, Changed has a neutral pill and Removed the warning one, and both end in "›". A
+  pill too wide for its header's row goes on a row of its own.
+
+Unverified: the pill on a row of its own only shows in the cell tier. In pixels the pane is
+never narrow enough beside the editor, and below about 90 columns it stacks under the editor
+at full width. The hook's `Approved N` move is tested through the real hook, but not with a
+live Claude Code session.

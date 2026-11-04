@@ -3302,6 +3302,7 @@ impl App {
                     suggested_by: String::new(),
                     copy: (0, 0),
                     earlier: None,
+                    reworded: false,
                 });
                 asked = draft.ask.then_some(id);
             }
@@ -5713,16 +5714,45 @@ impl App {
 
     /// Keeps an approved plan with the project: the agent's copy goes when the session does,
     /// and it's what the work gets checked against.
-    fn keep_plan(&self, path: &Path, decision: &Decision) {
+    fn keep_plan(&self, path: &Path, decision: &Decision) -> Option<PathBuf> {
         let text = match decision {
             Decision::Approve(Some(edited)) => edited.clone(),
             _ => std::fs::read_to_string(path).unwrap_or_default(),
         };
         let folder = self.workspace.root().join(".cellix/plans");
         let count = std::fs::read_dir(&folder).map_or(0, Iterator::count);
-        let name = format!("{:03}.md", count + 1);
-        let _ =
-            std::fs::create_dir_all(&folder).and_then(|()| std::fs::write(folder.join(name), text));
+        let kept = folder.join(format!("{:03}.md", count + 1));
+        std::fs::create_dir_all(&folder)
+            .and_then(|()| std::fs::write(&kept, text))
+            .ok()?;
+        Some(kept)
+    }
+
+    /// An approved plan's threads are settled: resolved, and kept with the plan as approved,
+    /// so the next plan an agent sends starts with none of them.
+    fn settle_plan_threads(&mut self, path: &Path, kept: Option<&Path>) {
+        let file = self.relative(path);
+        let kept = kept.map(|k| {
+            (
+                self.relative(k),
+                std::fs::read_to_string(k).unwrap_or_default(),
+            )
+        });
+        let mut settled = false;
+        for thread in self.threads.iter_mut().filter(|t| t.file == file) {
+            thread.resolved = true;
+            if let Some((name, text)) = &kept {
+                thread.file.clone_from(name);
+                if thread.earlier.is_none() {
+                    thread.follow(text);
+                }
+            }
+            settled = true;
+        }
+        if settled {
+            self.threads_seen = None;
+            self.save_threads();
+        }
     }
 
     /// Answers the waiting agent and closes the plan.
@@ -5732,7 +5762,8 @@ impl App {
             return;
         };
         if matches!(decision, Decision::Approve(_)) {
-            self.keep_plan(&plan.path, &decision);
+            let kept = self.keep_plan(&plan.path, &decision);
+            self.settle_plan_threads(&plan.path, kept.as_deref());
         }
         let _ = plan.reply.send(decision);
         self.agents.plan_answered();
@@ -6124,6 +6155,7 @@ impl App {
                 suggested_by: String::new(),
                 copy: (0, 0),
                 earlier: None,
+                reworded: false,
             });
             self.save_threads();
         }
@@ -6154,6 +6186,7 @@ impl App {
             suggested_by: String::new(),
             copy: (0, 0),
             earlier: None,
+            reworded: false,
         });
         self.save_threads();
         if page {
@@ -6229,16 +6262,20 @@ impl App {
             return;
         };
         let file = self.relative(path);
-        let mut open = false;
+        let (mut carried, mut open) = (false, false);
         for thread in self.threads.iter_mut().filter(|t| t.file == file) {
             thread.carry(&text, replaced);
+            carried = true;
             open |= !thread.resolved;
         }
-        if !open {
+        if !carried {
             return;
         }
         self.threads_seen = None;
         self.save_threads();
+        if !open {
+            return;
+        }
         self.dock.open = true;
         self.dock.show_comments();
         self.dock.focused = false;
@@ -6273,14 +6310,15 @@ impl App {
     fn thread_hit(&mut self, hit: ThreadHit) {
         match hit {
             ThreadHit::Open(id) => {
-                // Words the plan dropped are only in what changed, so that's where it goes.
+                // Words the plan changed or dropped are only in what changed, so that's where
+                // it goes, whether or not the plan still waits.
                 let earlier = self
                     .threads
                     .iter()
                     .find(|t| t.id == id)
-                    .and_then(|t| t.earlier);
-                if earlier.is_some() && self.plan.is_some() {
-                    self.compare_plan_with(earlier);
+                    .and_then(|t| Some((t.earlier?, self.workspace.root().join(&t.file))));
+                if let Some((version, path)) = earlier {
+                    self.compare_plan_with(Some(&path), Some(version));
                     self.dock.focused = false;
                     return;
                 }
@@ -6565,6 +6603,7 @@ impl App {
                     suggested_by: author.clone(),
                     copy: (0, 0),
                     earlier: None,
+                    reworded: false,
                 });
                 self.save_threads();
                 let _ = made.send(id);
@@ -9486,14 +9525,16 @@ impl App {
 
     /// Opens what changed since the plan's last version, as suggestions on a page of its own.
     fn compare_plan_versions(&mut self) {
-        self.compare_plan_with(None);
+        self.compare_plan_with(None, None);
     }
 
-    /// What changed since a given earlier version of the plan, or the last one.
-    fn compare_plan_with(&mut self, version: Option<usize>) {
-        let path = match &self.plan {
-            Some(plan) => plan.path.clone(),
-            None => match self
+    /// What changed since a given earlier version of a plan, or the last one. The plan is the
+    /// one given, else the one waiting, else the one in view.
+    fn compare_plan_with(&mut self, plan: Option<&Path>, version: Option<usize>) {
+        let path = match (plan, &self.plan) {
+            (Some(path), _) => path.to_path_buf(),
+            (None, Some(plan)) => plan.path.clone(),
+            (None, None) => match self
                 .editors
                 .get(self.active())
                 .and_then(|e| e.buffer.path())
@@ -12475,6 +12516,260 @@ mod tests {
         let compared = app.active_text().unwrap();
         assert!(compared.contains("{~~Cache~>"), "{compared}");
         assert!(app.plan.is_some(), "the plan still waits");
+    }
+
+    /// A plan the hook holds in `held`, with a comment typed on each of `comments`' lines,
+    /// sent back, and then `next` sent as its next version. Gives the plan's path.
+    fn plan_sent_again(
+        app: &mut App,
+        held: &Path,
+        (first, comments): (&str, &[(&str, &str)]),
+        next: &str,
+    ) -> PathBuf {
+        let path = cellix_agent::hook::keep_versions(held, first).unwrap();
+        let (reply, decision) = std::sync::mpsc::channel();
+        app.serve(Request::Plan {
+            path: path.clone(),
+            reply,
+        });
+        for (line, comment) in comments {
+            let (x, y) = find(&screen(app), line);
+            app.handle(mouse(MouseKind::Left, x + 1, y));
+            app.run(Command::AddComment);
+            typed(app, comment);
+            enter(app);
+        }
+        let (x, y) = find(&screen(app), SEND_BACK);
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        typed(app, "See comments");
+        enter(app);
+        assert!(matches!(decision.try_recv(), Ok(Decision::SendBack(_))));
+        cellix_agent::hook::keep_versions(held, next).unwrap();
+        let (reply, decision) = std::sync::mpsc::channel();
+        app.serve(Request::Plan {
+            path: path.clone(),
+            reply,
+        });
+        // Held open, as the agent would be.
+        std::mem::forget(decision);
+        path
+    }
+
+    #[test]
+    fn a_plan_comment_on_reworded_words_says_they_changed_and_never_takes_the_opposite() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        let held = tempfile::tempdir().unwrap();
+        let first = "# Plan\n\nWe will not drop the users table.\n\nThen the cache stays warm across runs.\n";
+        let next =
+            "# Plan\n\nWe will drop the users table.\n\nThen the cache stays hot across runs.\n";
+        let comments = [
+            ("We will not drop", "Good, keep it"),
+            ("stays warm", "How warm"),
+        ];
+        let path = plan_sent_again(&mut app, held.path(), (first, &comments), next);
+        let text = screen(&app).text();
+        assert!(
+            text.contains("We will drop the users table."),
+            "version 2: {text}"
+        );
+        // Six of seven words match, but the "not" is gone: the opposite, so not the same.
+        assert!(text.contains("Removed in version 2"), "{text}");
+        assert!(
+            text.contains("We will not drop the users table."),
+            "its words as said: {text}"
+        );
+        // A word changed: kept as said, and shown as changed.
+        assert!(text.contains("Changed in version 2"), "{text}");
+        assert!(
+            text.contains("Then the cache stays warm across runs."),
+            "{text}"
+        );
+        let file = app.relative(&path);
+        let thread = |text: &str| {
+            app.threads
+                .iter()
+                .find(|t| t.file == file && t.text == text)
+                .cloned()
+                .unwrap()
+        };
+        let opposite = thread("Good, keep it");
+        assert_eq!((opposite.earlier, opposite.reworded), (Some(1), false));
+        assert_eq!(opposite.quote, "We will not drop the users table.");
+        let changed = thread("How warm");
+        assert_eq!(
+            (changed.earlier, changed.reworded, changed.line),
+            (Some(1), true, 5)
+        );
+        assert!(changed.quote.contains("warm"), "the quote isn't replaced");
+        // Its card leads to what changed.
+        let (x, y) = find(&screen(&app), "How warm");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        let compared = app.active_text().unwrap();
+        assert!(compared.contains("{~~warm~>hot~~}"), "{compared}");
+    }
+
+    #[test]
+    fn a_plan_comments_pill_keeps_clear_of_its_header_at_any_width() {
+        for columns in [150, 100, 80, 70, 64] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut app = App::new(dir.path().to_path_buf(), (columns, 40));
+            let held = tempfile::tempdir().unwrap();
+            let first = "# Plan\n\nCache first.\n\nShip it.\n";
+            let comments = [("Cache first.", "Why first")];
+            plan_sent_again(
+                &mut app,
+                held.path(),
+                (first, &comments),
+                "# Plan\n\nShip it.\n",
+            );
+            for thread in &mut app.threads {
+                thread.kind = "Correctness".into();
+            }
+            let grid = screen(&app);
+            let text = grid.text();
+            let rows: Vec<&str> = text.lines().collect();
+            let pill = rows.iter().position(|r| r.contains("Removed in version 2"));
+            let header = rows.iter().position(|r| r.contains("You · Correctness"));
+            let (Some(pill), Some(header)) = (pill, header) else {
+                panic!("at {columns} columns, both whole: {text}");
+            };
+            if pill == header {
+                let row = rows[pill];
+                let label_end = row.find("You · Correctness").unwrap() + "You · Correctness".len();
+                let pill_start = row.find("Removed in version 2").unwrap();
+                assert!(pill_start > label_end + 1, "at {columns} columns: {row}");
+            } else {
+                assert_eq!(pill, header + 1, "under its header at {columns} columns");
+            }
+        }
+    }
+
+    #[test]
+    fn an_approved_plans_threads_stay_with_it_and_the_next_plan_starts_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        let held = tempfile::tempdir().unwrap();
+        let first = "# Plan\n\nCache first.\n\nShip it.\n";
+        let path = cellix_agent::hook::keep_versions(held.path(), first).unwrap();
+        let (reply, decision) = std::sync::mpsc::channel();
+        app.serve(Request::Plan {
+            path: path.clone(),
+            reply,
+        });
+        let (x, y) = find(&screen(&app), "Cache first.");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        app.run(Command::AddComment);
+        typed(&mut app, "Why first");
+        enter(&mut app);
+        let (x, y) = find(&screen(&app), APPROVE);
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        assert!(matches!(decision.try_recv(), Ok(Decision::Approve(_))));
+        // Settled: resolved, and kept with the approved plan in the project.
+        let settled = |threads: &[Thread]| {
+            threads
+                .iter()
+                .find(|t| t.text == "Why first")
+                .map(|t| (t.resolved, t.file.clone(), t.line))
+        };
+        let kept = Some((true, ".cellix/plans/001.md".to_string(), 3));
+        assert_eq!(settled(&app.threads), kept);
+        let saved = cellix_review::threads::load(dir.path()).unwrap();
+        assert_eq!(settled(&saved), kept, "and saved");
+        if app.dock.showing(Front::Comments) {
+            app.run(Command::ShowComments);
+        }
+        // The next plan in the session, unrelated. Even counted as version 2, as an older hook
+        // would, nothing of the last one comes onto it.
+        cellix_agent::hook::keep_versions(held.path(), "# Plan\n\nRename the parser.\n").unwrap();
+        let (reply, _decision) = std::sync::mpsc::channel();
+        app.serve(Request::Plan {
+            path: path.clone(),
+            reply,
+        });
+        let text = screen(&app).text();
+        assert!(text.contains("Rename the parser."), "{text}");
+        assert!(!text.contains("Removed in version"), "{text}");
+        assert!(!text.contains("Why first"), "{text}");
+        assert!(
+            !app.dock.showing(Front::Comments),
+            "the Comments pane stays shut"
+        );
+        // As the hook does now: the approved plan's versions are put away, so it's version 1.
+        cellix_agent::hook::put_versions_away(held.path()).unwrap();
+        cellix_agent::hook::keep_versions(held.path(), "# Plan\n\nA third.\n").unwrap();
+        let (reply, _decision) = std::sync::mpsc::channel();
+        app.serve(Request::Plan { path, reply });
+        let text = screen(&app).text();
+        assert!(
+            text.contains("waiting for you to review this plan"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_plans_resolved_moves_are_saved_and_a_dropped_comment_opens_the_comparison_later() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        let held = tempfile::tempdir().unwrap();
+        let first = "# Plan\n\nCache first.\n\nShip it.\n";
+        let comments = [
+            ("Cache first.", "Why first"),
+            ("Ship it.", "Ship when green"),
+        ];
+        let next = "# Plan\n\nWrite the tests.\n\nThen the parser.\n\nShip it.\n";
+        let path = plan_sent_again(&mut app, held.path(), (first, &comments), next);
+        let file = app.relative(&path);
+        let id = |app: &App, text: &str| app.threads.iter().find(|t| t.text == text).unwrap().id;
+        app.thread_hit(ThreadHit::Resolve(id(&app, "Ship when green")));
+        // Version 3 moves the resolved one again, and nothing on it is open.
+        app.thread_hit(ThreadHit::Resolve(id(&app, "Why first")));
+        let (x, y) = find(&screen(&app), SEND_BACK);
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        typed(&mut app, "Again");
+        enter(&mut app);
+        cellix_agent::hook::keep_versions(
+            held.path(),
+            "# Plan\n\nOne.\n\nTwo.\n\nThree.\n\nShip it.\n",
+        )
+        .unwrap();
+        let (reply, _decision) = std::sync::mpsc::channel();
+        app.serve(Request::Plan {
+            path: path.clone(),
+            reply,
+        });
+        let saved = cellix_review::threads::load(dir.path()).unwrap();
+        let shipped = saved.iter().find(|t| t.text == "Ship when green").unwrap();
+        assert_eq!(
+            (shipped.file.as_str(), shipped.line),
+            (file.as_str(), 9),
+            "its move is kept"
+        );
+        // A dropped comment, reopened: the agent hears the version, not a line it isn't on.
+        let gone = app
+            .threads
+            .iter_mut()
+            .find(|t| t.text == "Why first")
+            .unwrap();
+        gone.resolved = false;
+        let message = gone.message();
+        assert!(
+            message.contains("(made on version 1; version 2 dropped these words)"),
+            "{message}"
+        );
+        assert!(!message.contains(" line "), "{message}");
+        // With the plan no longer waiting, its card still opens what changed.
+        app.run(Command::CloseTab);
+        assert!(app.plan.is_none());
+        if !app.dock.showing(Front::Comments) {
+            app.run(Command::ShowComments);
+        }
+        let (x, y) = find(&screen(&app), "Why first");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        let compared = app.active_text().unwrap();
+        assert!(compared.contains("Cache first."), "{compared}");
+        let open = app.editors[app.active()].buffer.path().unwrap();
+        assert!(open.ends_with("Plan changes.md"), "{}", open.display());
     }
 
     #[test]

@@ -297,6 +297,10 @@ with tempfile.TemporaryDirectory() as scratch:
         {"id": 4, "file": "docs/PLAN.md", "line": 3, "quote": "Cache every read first.",
          "text": "Measure before caching.", "replies": [], "resolved": False, "told": 0,
          "asked": False, "kind": "", "suggested_by": "", "earlier": 1},
+        # And one on words it reworded: quoted as said, marked as changed.
+        {"id": 5, "file": "docs/PLAN.md", "line": 3, "quote": "Retry three times on a timeout.",
+         "text": "Why three?", "replies": [], "resolved": False, "told": 0, "asked": False,
+         "kind": "Reproducibility", "suggested_by": "", "earlier": 1, "reworded": True},
     ]
     os.makedirs(f"{ROOT}/.cellix", exist_ok=True)
     with open(f"{ROOT}/.cellix/threads.json", "w") as f:
@@ -307,6 +311,11 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("50-plan-versions", [["wait", 1.0], ["keys", "\\eOP"], ["wait", 0.6], ["keys", "show comments"],
                                ["wait", 1.0], ["keys", "\r"], ["wait", 1.5]],
           "docs/PLAN.md", size="150x44")
+    # Narrow beside the editor: a pill that can't share its header's row goes under it.
+    shoot("50-plan-versions-narrow", [["wait", 1.0], ["keys", "\\eOP"], ["wait", 0.6],
+                                      ["keys", "show comments"], ["wait", 1.0], ["keys", "\r"],
+                                      ["wait", 1.5]],
+          "docs/PLAN.md", size="96x44")
     shoot("51-agent-list", [*LIST_AGENTS, ["wait", 0.6]], NOTE_FILE, size="150x44")
     shell = [*LIST_AGENTS, ["wait", 0.6]]
     shoot("52-paper", [], PAPER_FILE, size="150x44", background="eff1f5")

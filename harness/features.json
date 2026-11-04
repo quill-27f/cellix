@@ -3092,5 +3092,54 @@
     "title": "Inside Claude Code, the wheel scrolls the Comments pane when the pointer is over it",
     "test": "inside_claude_code_the_wheel_scrolls_the_comments_under_the_pointer",
     "passes": true
+  },
+  {
+    "id": "plan-thread-opposite",
+    "milestone": 10,
+    "title": "A comment never moves onto words that say the opposite: a negation or number changed",
+    "test": "a_comment_never_moves_onto_words_that_say_the_opposite",
+    "passes": true
+  },
+  {
+    "id": "plan-thread-reworded",
+    "milestone": 10,
+    "title": "A plan's reworded words keep their quote and say they changed",
+    "test": "a_plans_reworded_words_keep_their_quote_and_say_they_changed",
+    "passes": true
+  },
+  {
+    "id": "plan-thread-changed-pill",
+    "milestone": 10,
+    "title": "A plan comment on reworded words shows Changed in version N and opens the comparison",
+    "test": "a_plan_comment_on_reworded_words_says_they_changed_and_never_takes_the_opposite",
+    "passes": true
+  },
+  {
+    "id": "plan-thread-pill-narrow",
+    "milestone": 10,
+    "title": "A plan comment's pill keeps clear of its header at any width",
+    "test": "a_plan_comments_pill_keeps_clear_of_its_header_at_any_width",
+    "passes": true
+  },
+  {
+    "id": "plan-approved-threads-settle",
+    "milestone": 10,
+    "title": "An approved plan's threads stay with it, and the next plan starts with none",
+    "test": "an_approved_plans_threads_stay_with_it_and_the_next_plan_starts_clean",
+    "passes": true
+  },
+  {
+    "id": "plan-approved-versions-away",
+    "milestone": 10,
+    "title": "A plan after an approved one starts at version one",
+    "test": "a_plan_after_an_approved_one_starts_at_version_one",
+    "passes": true
+  },
+  {
+    "id": "plan-thread-carry-saved",
+    "milestone": 10,
+    "title": "A plan's resolved threads' moves are saved, and a dropped comment opens the comparison with no plan waiting",
+    "test": "a_plans_resolved_moves_are_saved_and_a_dropped_comment_opens_the_comparison_later",
+    "passes": true
   }
 ]

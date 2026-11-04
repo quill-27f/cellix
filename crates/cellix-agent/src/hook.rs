@@ -200,7 +200,37 @@ fn review_plan(roots: &[PathBuf], input: &Value, plan: &str) -> Option<(String, 
     tell(roots, input, AgentState::NeedsYou, PLAN_WAITING);
     let reply = ask(roots, &format!("plan {}", path.display()))?;
     let (verdict, text) = reply.split_once(' ').unwrap_or((&reply, "null"));
+    // An approved plan is done with, so the next one the session sends starts at version one.
+    if verdict == "approve" {
+        let _ = put_versions_away(&folder);
+    }
     Some((verdict.to_string(), serde_json::from_str(text).ok()?))
+}
+
+/// Moves an approved plan and its earlier versions into `Approved 1`, `Approved 2` and on, so
+/// a plan sent after it isn't taken for its next version. Cellix keeps the approved one with
+/// the project, and its comments with it.
+pub fn put_versions_away(folder: &Path) -> std::io::Result<()> {
+    let plan = folder.join("Plan.md");
+    if !plan.exists() {
+        return Ok(());
+    }
+    let mut number = 1;
+    while folder.join(format!("Approved {number}")).exists() {
+        number += 1;
+    }
+    let away = folder.join(format!("Approved {number}"));
+    std::fs::create_dir_all(&away)?;
+    let mut version = 1;
+    loop {
+        let name = format!("Plan v{version}.md");
+        if !folder.join(&name).exists() {
+            break;
+        }
+        std::fs::rename(folder.join(&name), away.join(&name))?;
+        version += 1;
+    }
+    std::fs::rename(plan, away.join("Plan.md"))
 }
 
 /// Writes the plan as `Plan.md`, keeping the one it replaces as `Plan v1.md`, `Plan v2.md` and on,
@@ -522,6 +552,50 @@ mod tests {
         assert_eq!(answer["hookEventName"], "PermissionRequest");
         assert_eq!(answer["decision"]["behavior"], "deny");
         assert_eq!(answer["decision"]["message"], "Split step two");
+    }
+
+    #[test]
+    fn a_plan_after_an_approved_one_starts_at_version_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let server = start(&root, Arc::default()).unwrap();
+        // Sent back once, approved, then a new plan in the same session.
+        let answers = [
+            ("# One\n", Decision::SendBack("Fewer steps".into())),
+            ("# One, shorter\n", Decision::Approve(None)),
+            ("# Two\n", Decision::SendBack("Later".into())),
+        ];
+        let mut held = Vec::new();
+        for (plan, decision) in answers {
+            let hook = input(&root, json!({"tool_input": {"plan": plan}}));
+            let waiting = std::thread::spawn(move || handle("plan", &hook));
+            loop {
+                if let Request::Plan { path, reply } = server
+                    .requests
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap()
+                {
+                    let versions = (1..)
+                        .map(|v| path.with_file_name(format!("Plan v{v}.md")))
+                        .take_while(|p| p.exists())
+                        .count();
+                    held.push((path, versions));
+                    reply.send(decision).unwrap();
+                    break;
+                }
+            }
+            waiting.join().unwrap();
+        }
+        assert_eq!(held[1].1, 1, "sent back, so the second is version 2");
+        assert_eq!(held[2].1, 0, "after approval, a new plan is version 1");
+        let away = held[2].0.with_file_name("Approved 1");
+        let read = |name: &str| std::fs::read_to_string(away.join(name)).unwrap();
+        assert_eq!(
+            read("Plan.md"),
+            "# One, shorter\n",
+            "the approved plan is put away"
+        );
+        assert_eq!(read("Plan v1.md"), "# One\n");
     }
 
     /// Runs a hook on a thread, and answers the plan it holds with `decision`.
