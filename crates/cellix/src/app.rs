@@ -834,14 +834,7 @@ impl App {
             last_edit: (0, std::time::Instant::now()),
             built_folder: crate::snippets::default_folder(),
             snippets: None,
-            system_browser: vec![
-                if cfg!(target_os = "macos") {
-                    "open"
-                } else {
-                    "xdg-open"
-                }
-                .to_string(),
-            ],
+            system_browser: crate::agents::opener(),
             browser_result: None,
             browser_offer: false,
             browser_install: None,
@@ -1861,14 +1854,14 @@ impl App {
     }
 
     fn file_uri(path: &Path) -> String {
-        format!("file://{}", path.display())
+        cellix_agent::ide::file_url(path)
     }
 
     /// A path from Claude Code, which may be absolute, a file URI, or relative to the root.
     fn ide_path(&self, text: &str) -> PathBuf {
         self.workspace
             .root()
-            .join(text.strip_prefix("file://").unwrap_or(text))
+            .join(cellix_agent::ide::url_path(text))
     }
 
     fn line_column(editor: &Editor, at: usize) -> Value {
@@ -5125,7 +5118,8 @@ impl App {
             return false;
         };
         self.browser_result = None;
-        let name = target.rsplit('/').next().unwrap_or(&target).to_string();
+        let mut parts = target.rsplit(['/', std::path::MAIN_SEPARATOR]);
+        let name = parts.next().unwrap_or(&target).to_string();
         if !opened && self.offer_browser(browser_installed()) {
             return true;
         }
@@ -5202,7 +5196,7 @@ impl App {
     /// anywhere else, with the file still in view.
     fn open_agent(&mut self, agent: &str) {
         let root = self.workspace.root().to_path_buf();
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string());
+        let shell = crate::agents::shell();
         let (name, env, launch) = if agent == crate::agents::SHELL.1 {
             (crate::agents::SHELL.0, Vec::new(), vec![shell])
         } else {
@@ -9268,8 +9262,13 @@ impl App {
     /// beside it, so the document still works on another machine.
     fn image_reference(&self, path: &Path) -> io::Result<String> {
         let folder = self.document_folder();
+        // Written with `/` between folders, on Windows too, so the document reads anywhere.
+        let link = |path: &Path| {
+            path.to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR, "/")
+        };
         if let Ok(relative) = path.strip_prefix(&folder) {
-            return Ok(relative.to_string_lossy().into_owned());
+            return Ok(link(relative));
         }
         let name = path.file_name().ok_or(io::ErrorKind::InvalidInput)?;
         let target = folder.join(IMAGE_FOLDER).join(name);
@@ -9277,10 +9276,7 @@ impl App {
         if target != path {
             std::fs::copy(path, &target)?;
         }
-        Ok(Path::new(IMAGE_FOLDER)
-            .join(name)
-            .to_string_lossy()
-            .into_owned())
+        Ok(link(&Path::new(IMAGE_FOLDER).join(name)))
     }
 
     fn place_image(&mut self, path: &Path, replacing: bool) {
@@ -10547,7 +10543,9 @@ mod tests {
         let (_dir, mut app) = project();
         app.run(Command::QuickOpen);
         typed(&mut app, "lbr");
-        assert!(screen(&app).text().contains("src/lib.rs"));
+        // As the platform writes it: `src\lib.rs` on Windows, as VS Code shows it there.
+        let shown = Path::new("src").join("lib.rs").display().to_string();
+        assert!(screen(&app).text().contains(&shown));
         enter(&mut app);
         assert!(screen(&app).text().contains("pub fn x()"));
     }
@@ -11207,7 +11205,9 @@ mod tests {
         let (_dir, mut app) = project();
         app.run(Command::FindInProject);
         app.handle(Event::Key(KeyEvent::ctrl('p')));
-        assert!(screen(&app).text().contains("src/lib.rs"));
+        // As the platform writes it: `src\lib.rs` on Windows, as VS Code shows it there.
+        let shown = Path::new("src").join("lib.rs").display().to_string();
+        assert!(screen(&app).text().contains(&shown));
     }
 
     #[test]
@@ -11690,7 +11690,8 @@ mod tests {
         let (dir, _) = project();
         let log = dir.path().join("opened.txt");
         fs::create_dir(dir.path().join(".cellix")).unwrap();
-        let script = format!("printf '%s' \"$1\" > {}", log.display());
+        // Quoted, so a Windows path keeps its backslashes in the sh Git brings.
+        let script = format!("printf '%s' \"$1\" > '{}'", log.display());
         let settings = serde_json::json!({"browser": ["sh", "-c", script, "browser"]});
         fs::write(
             dir.path().join(".cellix/settings.json"),
@@ -11746,6 +11747,7 @@ mod tests {
 
     /// A page and a stand-in for the browser that draws one, which says what it was asked
     /// to open and then shows a frame the way the real one does.
+    #[cfg(unix)]
     fn pane_browser_app() -> (TempDir, App) {
         let (dir, mut app, _log) = browser_app("<h1>hi</h1>\n", "page.html");
         let program = dir.path().join("terminal-browser");
@@ -11763,6 +11765,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn a_page_opens_in_the_side_pane_and_its_frames_show() {
         let (_dir, mut app) = pane_browser_app();
         app.run(Command::OpenInBrowser);
@@ -11788,6 +11791,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn a_comment_never_reaches_a_browser() {
         let (_dir, mut app) = pane_browser_app();
         app.run(Command::OpenInBrowser);
@@ -11798,7 +11802,7 @@ mod tests {
     #[test]
     fn a_terminal_without_pictures_keeps_the_system_browser() {
         let (dir, mut app, log) = browser_app("<h1>hi</h1>\n", "page.html");
-        let script = format!("printf %s \"$1\" > {}", log.display());
+        let script = format!("printf %s \"$1\" > '{}'", log.display());
         app.settings.browser = Some(vec!["terminal-browser".to_string()]);
         app.system_browser = vec![
             "sh".to_string(),
@@ -11815,7 +11819,9 @@ mod tests {
         assert!(!app.dock.open);
     }
 
+    /// ConPTY keeps the graphics protocol from reaching Cellix, so Windows can't show these.
     #[test]
+    #[cfg(unix)]
     fn a_program_in_the_pane_is_told_graphics_work() {
         let dir = tempfile::tempdir().unwrap();
         let mut app = App::new(dir.path().to_path_buf(), (150, 40));
@@ -11832,7 +11838,7 @@ mod tests {
     #[test]
     fn a_failed_browser_falls_back_to_the_system_one() {
         let (dir, mut app, log) = browser_app("<h1>hi</h1>\n", "page.html");
-        let script = format!("printf %s \"$1\" > {}", log.display());
+        let script = format!("printf %s \"$1\" > '{}'", log.display());
         app.settings.browser = Some(vec!["false".to_string()]);
         app.system_browser = vec![
             "sh".to_string(),
@@ -13307,7 +13313,7 @@ mod tests {
         app.clipboard_image = vec![
             "sh".to_string(),
             "-c".to_string(),
-            format!("cp {} \"$1\"", source.display()),
+            format!("cp '{}' \"$1\"", source.display()),
             "clipboard".to_string(),
         ];
         app.paste_image();
@@ -13328,6 +13334,7 @@ mod tests {
     }
 
     /// A stand-in for LaTeX that makes a real PDF, and proves it ran.
+    #[cfg(unix)]
     fn fake_latex(dir: &Path, reply: &str) -> Vec<String> {
         let script = dir.join("latex.sh");
         fs::write(&script, format!("#!/bin/sh\n{reply}\n")).unwrap();
@@ -13336,6 +13343,7 @@ mod tests {
         vec![script.display().to_string()]
     }
 
+    #[cfg(unix)]
     fn waits_for(app: &mut App, done: impl Fn(&App) -> bool) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         while !done(app) {
@@ -13350,6 +13358,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn tikz_paper(reply: &str) -> (TempDir, App) {
         let dir = tempfile::tempdir().unwrap();
         let sample = dir.path().join("sample.pdf");
@@ -13366,6 +13375,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn a_commutative_diagram_is_built_in_the_background_and_shows() {
         let (dir, mut app) = tikz_paper("grep -q tikz-cd snippet.tex && cp SAMPLE snippet.pdf");
         assert!(painted_text(&app).contains("Drawing with LaTeX"));
@@ -13378,6 +13388,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn a_piece_latex_refuses_says_why() {
         let (_dir, mut app) = tikz_paper("echo '! Package tikz Error: no such library'; exit 1");
         waits_for(&mut app, |app| {
@@ -13386,6 +13397,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn a_paper_is_offered_drawings_of_its_own() {
         let (_dir, mut app) = tikz_paper("cp SAMPLE snippet.pdf");
         app.use_tool(Tool::Diagram, 40);
@@ -13396,6 +13408,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn a_tikz_block_in_markdown_is_built_too() {
         let dir = tempfile::tempdir().unwrap();
         let sample = dir.path().join("sample.pdf");
@@ -13439,6 +13452,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn a_failed_build_leaves_its_log_in_the_pane() {
         let dir = tempfile::tempdir().unwrap();
         let source = "\\documentclass{article}\n\\begin{document}\nx\n\\end{document}\n";
@@ -14242,6 +14256,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn an_algorithm_is_built_from_its_steps_with_its_caption_on_the_page() {
         let dir = tempfile::tempdir().unwrap();
         let sample = dir.path().join("sample.pdf");
@@ -15482,7 +15497,7 @@ mod tests {
         let sample = dir.path().join("sample.pdf");
         fs::write(&sample, cellix_doc::pdf::sample()).unwrap();
         let script = format!(
-            "if grep -q bad \"$1\"; then echo 'error: paper.tex:2: Undefined control sequence'; exit 1; fi; cp {} \"${{1%.tex}}.pdf\"",
+            "if grep -q bad \"$1\"; then echo 'error: paper.tex:2: Undefined control sequence'; exit 1; fi; cp '{}' \"${{1%.tex}}.pdf\"",
             sample.display()
         );
         app.settings.latex_engine = Some(vec![

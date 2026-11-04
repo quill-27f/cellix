@@ -6,8 +6,8 @@ use cellix::Options;
 
 fn workspace_root(dir: Option<&str>) -> std::io::Result<PathBuf> {
     match dir {
-        Some(dir) => PathBuf::from(dir).canonicalize(),
-        None => std::env::current_dir()?.canonicalize(),
+        Some(dir) => dunce::canonicalize(dir),
+        None => dunce::canonicalize(std::env::current_dir()?),
     }
 }
 
@@ -177,6 +177,15 @@ fn checkpoint(label: &str) -> ExitCode {
 }
 
 fn main() -> ExitCode {
+    // Settings and the agents' folders are found under HOME, which Windows sets only inside
+    // Git Bash. Elsewhere it's the profile folder, which is where the agents keep theirs.
+    #[cfg(windows)]
+    if std::env::var_os("HOME").is_none()
+        && let Some(profile) = std::env::var_os("USERPROFILE")
+    {
+        // SAFETY: the first thing main does, before any other thread exists.
+        unsafe { std::env::set_var("HOME", profile) };
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let words: Vec<&str> = args.iter().map(String::as_str).collect();
     match words.as_slice() {
@@ -197,7 +206,8 @@ fn main() -> ExitCode {
         ["hook", kind] => return hook("Claude Code", kind),
         ["hook", "--agent", agent, kind] => return hook(agent, kind),
         ["pane"] => {
-            return match std::env::current_dir().and_then(|d| cellix::pane::run(&d.canonicalize()?))
+            return match std::env::current_dir()
+                .and_then(|d| cellix::pane::run(&dunce::canonicalize(d)?))
             {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => {

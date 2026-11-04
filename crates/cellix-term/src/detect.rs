@@ -1,10 +1,12 @@
 use std::io::{self, Write};
 use std::process::Command;
+#[cfg(unix)]
 use std::time::{Duration, Instant};
 
 use crate::probe::{Env, Multiplexer};
 
 const QUERY_ID: u32 = 31;
+#[cfg(unix)]
 const REPLY_TIMEOUT: Duration = Duration::from_millis(250);
 /// Terminals known to speak Kitty graphics, for when tmux hides the terminal from us.
 const KITTY_TERMINALS: [&str; 3] = ["ghostty", "kitty", "wezterm"];
@@ -40,6 +42,7 @@ enum Asking {
 /// itself: tmux takes that kind of sequence as a window title and shows it in its status bar.
 /// tmux makes up a cell size when its own terminal gives none (16 by 32, over a console), and
 /// images sized for that are letterboxed, so with passthrough the cell size goes past it.
+#[cfg(any(unix, test))]
 fn questions(asking: Asking) -> String {
     let (cell, graphics) = match asking {
         Asking::Terminal => (
@@ -56,6 +59,30 @@ fn questions(asking: Asking) -> String {
 /// terminal answers, so a terminal without graphics doesn't cost the full timeout.
 /// Expects raw mode. Returns (kitty graphics, cell size).
 fn query_terminal(out: &mut impl Write, asking: Asking) -> io::Result<Reply> {
+    let reply = ask(out, asking)?;
+    Ok(Reply {
+        kitty: reply_has(&reply, format!("_Gi={QUERY_ID};OK").as_bytes()),
+        cell: parse_cell_size(&reply),
+        pixel_mouse: reply_has(&reply, b"?1016;1$y") || reply_has(&reply, b"?1016;2$y"),
+        light: parse_background_is_light(&reply),
+        background: parse_background(&reply).map(|(r, g, b)| {
+            let byte = |channel: f32| (channel * 255.0).round() as u8;
+            (byte(r), byte(g), byte(b))
+        }),
+    })
+}
+
+/// A Windows console hands its input over as key events, not bytes to poll, so nothing is
+/// asked there: Cellix starts on the cell tier with its own colours, and nothing the terminal
+/// would answer is left to arrive as keys.
+#[cfg(not(unix))]
+fn ask(_out: &mut impl Write, _asking: Asking) -> io::Result<Vec<u8>> {
+    Ok(Vec::new())
+}
+
+/// Writes the questions and reads the replies until device attributes, or the timeout.
+#[cfg(unix)]
+fn ask(out: &mut impl Write, asking: Asking) -> io::Result<Vec<u8>> {
     write!(out, "{}", questions(asking))?;
     out.flush()?;
     // tmux answers device attributes at once, but the terminal outside answers through it a
@@ -91,16 +118,7 @@ fn query_terminal(out: &mut impl Write, asking: Asking) -> io::Result<Reply> {
             break;
         }
     }
-    Ok(Reply {
-        kitty: reply_has(&reply, format!("_Gi={QUERY_ID};OK").as_bytes()),
-        cell: parse_cell_size(&reply),
-        pixel_mouse: reply_has(&reply, b"?1016;1$y") || reply_has(&reply, b"?1016;2$y"),
-        light: parse_background_is_light(&reply),
-        background: parse_background(&reply).map(|(r, g, b)| {
-            let byte = |channel: f32| (channel * 255.0).round() as u8;
-            (byte(r), byte(g), byte(b))
-        }),
-    })
+    Ok(reply)
 }
 
 fn parse_background_is_light(reply: &[u8]) -> Option<bool> {
@@ -136,6 +154,7 @@ fn reply_has(reply: &[u8], needle: &[u8]) -> bool {
 }
 
 /// A primary device attributes reply looks like `ESC [ ? ... c`.
+#[cfg(any(unix, test))]
 fn ends_device_attributes(reply: &[u8]) -> bool {
     let Some(start) = reply.windows(3).rposition(|w| w == b"\x1b[?") else {
         return false;

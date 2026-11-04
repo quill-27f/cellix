@@ -14,8 +14,11 @@ use cellix_term::{
 use crossterm::event::{
     self as ct, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture,
     EnableBracketedPaste, EnableFocusChange, EnableMouseCapture, KeyCode, KeyEventKind,
-    KeyModifiers, KeyboardEnhancementFlags, MouseButton, MouseEventKind,
-    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    KeyModifiers, MouseButton, MouseEventKind,
+};
+#[cfg(not(windows))]
+use crossterm::event::{
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::style::Print;
@@ -30,6 +33,7 @@ use crate::App;
 /// signals end the process on the spot and leave the workspace socket behind.
 static STOPPED: AtomicBool = AtomicBool::new(false);
 
+#[cfg(unix)]
 extern "C" fn stop(_: libc::c_int) {
     STOPPED.store(true, Ordering::Relaxed);
 }
@@ -40,6 +44,7 @@ extern "C" fn stop(_: libc::c_int) {
 /// terminal then closes, crossterm reads its end over and over and never returns, so the loop
 /// never sees the stop. A watch outside the loop ends Cellix after a moment in that case,
 /// clearing `left` (the socket and the like) as the loop would have.
+#[cfg(unix)]
 fn catch_stops(left: Vec<PathBuf>) {
     for signal in [libc::SIGHUP, libc::SIGTERM] {
         // SAFETY: the handler only stores to an atomic, which is safe in a signal handler.
@@ -64,6 +69,11 @@ fn catch_stops(left: Vec<PathBuf>) {
         std::process::exit(0);
     });
 }
+
+/// Windows has no hang-up to catch: closing the window ends Cellix where it stands. What it
+/// leaves is harmless, because the next Cellix here finds no one answering and replaces it.
+#[cfg(not(unix))]
+fn catch_stops(_left: Vec<PathBuf>) {}
 
 /// How often a scroll moves. Over a network each frame costs a round of placements.
 const SCROLL_FRAME: Duration = Duration::from_millis(8);
@@ -94,8 +104,13 @@ impl Session {
             EnableMouseCapture,
             EnableBracketedPaste,
             EnableFocusChange,
-            // Terminals without the Kitty keyboard protocol ignore this, and Ctrl+Shift+P
-            // and Cmd keys then can't be told apart: F1 and Alt+P still open commands.
+        )?;
+        // Terminals without the Kitty keyboard protocol ignore this, and Ctrl+Shift+P
+        // and Cmd keys then can't be told apart: F1 and Alt+P still open commands. On Windows
+        // keys arrive as console events, which have no such protocol, and crossterm refuses it.
+        #[cfg(not(windows))]
+        execute!(
+            io::stdout(),
             PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
         )?;
         // tmux ignores kitty's flags but passes modified keys on with its extended-keys, once
@@ -119,9 +134,10 @@ fn tmux_keys_readable() -> bool {
 
 impl Drop for Session {
     fn drop(&mut self) {
+        #[cfg(not(windows))]
+        let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
         let _ = execute!(
             io::stdout(),
-            PopKeyboardEnhancementFlags,
             Print("\x1b[?1016l"),
             Print(if std::env::var_os("TMUX").is_some() {
                 "\x1b[>4;0m"
@@ -328,11 +344,11 @@ pub fn run(options: Options) -> io::Result<()> {
         .iter()
         .find(|p| p.is_dir())
         .cloned()
-        .map_or_else(std::env::current_dir, Ok)?
-        .canonicalize()?;
+        .map_or_else(std::env::current_dir, Ok)?;
+    let root = dunce::canonicalize(root)?;
     let mut app = App::new(root, size()?);
     for path in paths.iter().filter(|p| p.is_file()) {
-        let path = path.canonicalize()?;
+        let path = dunce::canonicalize(path)?;
         app.open(&path)?;
         if options.wait {
             app.wait_file = Some(path);

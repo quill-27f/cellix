@@ -2,6 +2,16 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
+## [Unreleased]
+
+### Added
+- Windows, as a preview. Cellix builds for x86_64-pc-windows-msvc and runs through ConPTY on the cell tier, with PowerShell in the side pane. Its tests pass on a Windows CI runner, but it has not yet been tried in Windows Terminal, and mouse clicks there are unconfirmed. Agents reach it as before, through `cellix`, which talks to it over a port on 127.0.0.1 behind a token only the user can read. Releases carry `cellix-x86_64-pc-windows-msvc.zip`, which `cargo binstall` takes too. Not on Windows yet: programs in the side pane that keep running after Cellix quits, stopping a running notebook cell, and Kitty graphics.
+- Comments on a plan carry into its next version as threads, with their replies. A thread whose words the new version dropped stays open with a "Removed in version N" pill, and clicking it shows what changed.
+- A paper split over `\input` and `\include` files counts its words as one, puts Track Changes' package in the root's preamble, and rebuilds when an agent edits any of its open files.
+
+### Fixed
+- Export to PDF works with TeX Live's pdflatex and latexmk, not only tectonic: the export no longer builds from a hidden file TeX Live refuses to write beside, and it loads TikZ, tikz-cd and ulem only when the document uses them. Build PDF and Export are now tested against TeX Live on CI.
+
 ## [0.3.1] - 2026-11-04
 
 ### Added

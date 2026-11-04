@@ -360,6 +360,14 @@ the file.
 - `$VISUAL`: `cellix --wait <file>` covers Ctrl+G in Claude Code and equivalents elsewhere.
 - Review return path: comments are delivered as structured data over the socket and
   CLI, so any agent can consume them.
+
+On Windows the socket is a port on 127.0.0.1, because Rust's standard library has no Unix
+sockets there and a named pipe could only be tested on Windows. A file where the socket would
+be, in the user's own temp folder, names the port and a 128-bit token, and a connection that
+doesn't give the token first is dropped. It's plain std, so one test proves it on every
+platform; Unix keeps its socket. Windows has no session host yet, so programs in the side pane
+run on ConPTY under Cellix and end with it, and nothing is asked of the terminal, because a
+console hands input over as key events: Windows starts on the cell tier with Cellix's colours.
 - Claude Code: a plugin with a mod for status and commands. The mod is a bridge, not
   the editor: docked panes stop at 45% width and there is no terminal element. Installing
   it sets `CLAUDE_CODE_PLUGIN_DIRS` and `CLAUDE_CODE_AUTO_CONNECT_IDE` in the `env` block of

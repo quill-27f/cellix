@@ -8,10 +8,76 @@ use std::time::{Duration, Instant};
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
+type Input = Arc<Mutex<Box<dyn Write + Send>>>;
+/// The start of what Cellix wrote, to show when a test fails.
+type Raw = Arc<Mutex<Vec<u8>>>;
+
+/// How long a screen waits for text. Windows gets longer: a debug build there can take many
+/// seconds to start while it's scanned, with several starting at once.
+const WAIT: Duration = Duration::from_secs(if cfg!(windows) { 40 } else { 10 });
+
+/// Feeds what Cellix draws to `parser`, answering a cursor position query as a terminal would.
+/// Windows' ConPTY asks one before it passes anything on, and waits for the answer. An answer
+/// that comes too soon can be lost, so it's given again until something else arrives.
+fn pump(
+    mut reader: Box<dyn Read + Send>,
+    parser: Arc<Mutex<vt100::Parser>>,
+    input: Input,
+    raw: Raw,
+) {
+    let started = Instant::now();
+    let seen = Arc::new(Mutex::new(0usize));
+    std::thread::spawn(move || {
+        let mut buf = [0; 8192];
+        while let Ok(n) = reader.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            let asked = buf[..n].windows(4).any(|w| w == b"\x1b[6n");
+            {
+                let mut seen = seen.lock().unwrap();
+                let mut raw = raw.lock().unwrap();
+                if !asked && *seen == 0 {
+                    let note = format!("<output at {} ms>", started.elapsed().as_millis());
+                    raw.extend_from_slice(note.as_bytes());
+                }
+                *seen += usize::from(!asked);
+                let room = 2000usize.saturating_sub(raw.len()).min(n);
+                raw.extend_from_slice(&buf[..room]);
+            }
+            if asked {
+                let (row, column) = parser.lock().unwrap().screen().cursor_position();
+                let answer = format!("\x1b[{};{}R", row + 1, column + 1);
+                let (input, raw, seen) = (input.clone(), raw.clone(), seen.clone());
+                let before = *seen.lock().unwrap();
+                std::thread::spawn(move || {
+                    for attempt in 0..5 {
+                        if *seen.lock().unwrap() > before {
+                            return;
+                        }
+                        let mut input = input.lock().unwrap();
+                        let sent = input
+                            .write_all(answer.as_bytes())
+                            .and_then(|()| input.flush());
+                        let note = format!("<answer {attempt}: {}>", sent.is_ok());
+                        raw.lock().unwrap().extend_from_slice(note.as_bytes());
+                        drop(input);
+                        std::thread::sleep(Duration::from_secs(2));
+                    }
+                });
+            }
+            parser.lock().unwrap().process(&buf[..n]);
+        }
+    });
+}
+
 struct Screen {
     parser: Arc<Mutex<vt100::Parser>>,
-    input: Box<dyn Write + Send>,
+    input: Input,
+    raw: Raw,
     child: Box<dyn portable_pty::Child + Send + Sync>,
+    /// Kept for as long as the screen: on Windows, dropping the master closes the console.
+    _pty: portable_pty::PtyPair,
 }
 
 impl Screen {
@@ -28,44 +94,50 @@ impl Screen {
         command.cwd(dir);
         command.args(args);
         let child = pty.slave.spawn_command(command).unwrap();
-        let mut reader = pty.master.try_clone_reader().unwrap();
-        let input = pty.master.take_writer().unwrap();
+        let reader = pty.master.try_clone_reader().unwrap();
+        let input: Input = Arc::new(Mutex::new(pty.master.take_writer().unwrap()));
         let parser = Arc::new(Mutex::new(vt100::Parser::new(30, 100, 0)));
-        let sink = parser.clone();
-        std::thread::spawn(move || {
-            let mut buf = [0; 8192];
-            while let Ok(n) = reader.read(&mut buf) {
-                if n == 0 {
-                    break;
-                }
-                sink.lock().unwrap().process(&buf[..n]);
-            }
-        });
+        let raw = Raw::default();
+        pump(reader, parser.clone(), input.clone(), raw.clone());
         Self {
             parser,
             input,
+            raw,
             child,
+            _pty: pty,
         }
+    }
+
+    /// What Cellix wrote first, and whether it's still running, for a failure to show.
+    fn story(&mut self) -> String {
+        let raw = self.raw.lock().unwrap();
+        let status = self.child.try_wait();
+        format!(
+            "exited: {status:?}, wrote: {:?}",
+            String::from_utf8_lossy(&raw)
+        )
     }
 
     fn contents(&self) -> String {
         self.parser.lock().unwrap().screen().contents()
     }
 
-    fn wait_for(&self, text: &str) {
-        let deadline = Instant::now() + Duration::from_secs(10);
+    fn wait_for(&mut self, text: &str) {
+        let deadline = Instant::now() + WAIT;
         while Instant::now() < deadline {
             if self.contents().contains(text) {
                 return;
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        panic!("{text:?} never appeared:\n{}", self.contents());
+        let story = self.story();
+        panic!("{text:?} never appeared:\n{}\n{story}", self.contents());
     }
 
     fn send(&mut self, bytes: &[u8]) {
-        self.input.write_all(bytes).unwrap();
-        self.input.flush().unwrap();
+        let mut input = self.input.lock().unwrap();
+        input.write_all(bytes).unwrap();
+        input.flush().unwrap();
     }
 
     fn wait_exit(&mut self) {
@@ -103,7 +175,11 @@ fn pty_shows_file_contents() {
     screen.wait_exit();
 }
 
+/// Unix only for now: on the Windows runner, a click sent to ConPTY as an SGR mouse report
+/// never reached Cellix, though keys did. Whether clicks arrive in Windows Terminal itself is
+/// unverified; see docs/PROGRESS.md.
 #[test]
+#[cfg(unix)]
 fn pty_mouse_click_opens_file_and_typing_saves() {
     let dir = project();
     let mut screen = Screen::start(dir.path(), &[]);
@@ -139,7 +215,9 @@ fn pty_bracketed_paste_inserts_verbatim() {
     screen.wait_exit();
 }
 
+/// Windows has no Kitty keyboard protocol: keys arrive as console events.
 #[test]
+#[cfg(unix)]
 fn pty_ctrl_shift_p_and_cmd_p_work_as_in_vs_code() {
     let dir = project();
     let mut screen = Screen::start(dir.path(), &[]);
@@ -156,7 +234,9 @@ fn pty_ctrl_shift_p_and_cmd_p_work_as_in_vs_code() {
     screen.wait_exit();
 }
 
+/// Windows has no Cmd key, nor the Kitty keyboard protocol that carries it.
 #[test]
+#[cfg(unix)]
 fn pty_cmd_w_closes_the_tab_and_cmd_q_quits() {
     let dir = project();
     let mut screen = Screen::start(dir.path(), &["hello.txt"]);
@@ -187,7 +267,9 @@ fn pty_restores_the_terminal_on_exit() {
 }
 
 /// A fake terminal that says it speaks Kitty graphics, so the binary takes the pixel path
-/// with real fonts. Returns once it has sent a tile with this size marker.
+/// with real fonts. Returns once it has sent a tile with this size marker. Windows asks the
+/// terminal nothing, so it never takes this path.
+#[cfg(unix)]
 fn expect_tiles(pixels: (u16, u16), reply: &[u8], tile_marker: &[u8]) {
     let dir = project();
     let pty = native_pty_system()
@@ -241,6 +323,7 @@ fn expect_tiles(pixels: (u16, u16), reply: &[u8], tile_marker: &[u8]) {
 }
 
 #[test]
+#[cfg(unix)]
 fn pty_pixel_tier_sends_tiles_when_the_terminal_supports_graphics() {
     expect_tiles(
         (40 * 10, 12 * 20),
@@ -251,6 +334,7 @@ fn pty_pixel_tier_sends_tiles_when_the_terminal_supports_graphics() {
 
 /// Zellij can report no pixels in the window size but answers `CSI 16t`.
 #[test]
+#[cfg(unix)]
 fn pty_pixel_tier_uses_the_reported_cell_size_without_window_pixels() {
     expect_tiles(
         (0, 0),
@@ -273,22 +357,19 @@ fn pty_follows_a_resize() {
     let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_cellix"));
     command.cwd(dir.path());
     let mut child = pty.slave.spawn_command(command).unwrap();
-    let mut reader = pty.master.try_clone_reader().unwrap();
+    let reader = pty.master.try_clone_reader().unwrap();
+    let input: Input = Arc::new(Mutex::new(pty.master.take_writer().unwrap()));
     let parser = Arc::new(Mutex::new(vt100::Parser::new(10, 120, 0)));
-    let sink = parser.clone();
-    std::thread::spawn(move || {
-        let mut buf = [0; 8192];
-        while let Ok(n) = reader.read(&mut buf) {
-            if n == 0 {
-                break;
-            }
-            sink.lock().unwrap().process(&buf[..n]);
-        }
-    });
+    let raw = Raw::default();
+    pump(reader, parser.clone(), input, raw.clone());
     let wait = |text: &str| {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + WAIT;
         while !parser.lock().unwrap().screen().contents().contains(text) {
-            assert!(Instant::now() < deadline, "{text:?} never appeared");
+            let wrote = String::from_utf8_lossy(&raw.lock().unwrap()).into_owned();
+            assert!(
+                Instant::now() < deadline,
+                "{text:?} never appeared; wrote: {wrote:?}"
+            );
             std::thread::sleep(Duration::from_millis(20));
         }
     };
@@ -332,7 +413,9 @@ fn wait_blocks_until_closed() {
     assert!(text.ends_with("- Line 1: nice\n"), "{text}");
 }
 
+/// Windows has no hang-up signal.
 #[test]
+#[cfg(unix)]
 fn a_hang_up_leaves_nothing_behind() {
     let dir = project();
     let mut screen = Screen::start(dir.path(), &["hello.txt"]);
@@ -358,6 +441,7 @@ fn a_hang_up_leaves_nothing_behind() {
 /// Stops Cellix the way a closing terminal does: a stop, and the terminal gone straight
 /// after. Gives whether it exited, after a few tries, since the stop has to land while it
 /// waits for input. It used to read the closed terminal forever.
+#[cfg(unix)]
 fn stopped_and_closed(dir: &Path) -> bool {
     use std::ffi::CString;
     let binary = CString::new(env!("CARGO_BIN_EXE_cellix")).unwrap();
@@ -427,7 +511,9 @@ fn stopped_and_closed(dir: &Path) -> bool {
     false
 }
 
+/// Windows has no stop signal to send, nor forkpty to send it through.
 #[test]
+#[cfg(unix)]
 fn a_stop_as_the_terminal_closes_still_ends_cellix() {
     let dir = project();
     for attempt in 1..=3 {

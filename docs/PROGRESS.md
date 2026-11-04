@@ -901,3 +901,39 @@ Their features stay unmarked until the CI job passes.
 
 The tex job ran the four latexmk and pdflatex tests against TeX Live on CI and all passed, so
 those features are marked passing.
+
+## 2026-11-04: Windows
+
+Cellix builds for x86_64-pc-windows-msvc, with a CI job on
+windows-latest that runs clippy and every test, and a Windows zip in the release.
+- Agents reach it through `cellix` as before. Where there are no Unix sockets the workspace
+  socket is a port on 127.0.0.1, named with a 128-bit token in a file where the socket would be;
+  a connection without the token is dropped. Unix keeps its socket unchanged. The transport is
+  plain std, so `agents_reach_cellix_over_loopback_with_its_token` proves it here and on
+  Windows, with `a_loopback_note_nothing_answers_is_replaced` for a note left behind.
+- Gated with a fallback, never a panic: the session host (programs in the side pane run on
+  ConPTY under Cellix and end with it), hang-up and stop signals, interrupting a running
+  notebook cell, the pane's check for an orphaned parent, terminal queries (so no Kitty
+  graphics, cell size or background colour; Windows starts on the cell tier), and pictures from
+  programs in the side pane, which ConPTY doesn't pass on. A shell tab closes without asking,
+  since a console can't say what's in front of it.
+- Fixed for Windows: `\\?\` canonical paths (dunce), file URLs (`file:///C:/x`), the PATH and
+  `CLAUDE_CODE_PLUGIN_DIRS` separator, `.exe` and `.cmd` on the path, picture links written
+  with `/`, a venv's `Scripts/python.exe`, PowerShell for the Terminal tab, `rundll32` to open
+  pages, and HOME taken from USERPROFILE when unset.
+- crossterm refuses the Kitty keyboard flags on Windows, and that error ended Cellix before its
+  first frame. They're asked for only elsewhere now; Windows keys come as console events.
+- The PTY tests run the real binary through ConPTY on the runner: it starts, draws, follows a
+  resize, takes a bracketed paste, restores the terminal, holds `--wait`, and `cellix comments`
+  and `open` reach it over the loopback socket. They keep the PTY's master (dropping it closes
+  a pseudoconsole), answer ConPTY's cursor query until Cellix draws (a first answer can be
+  lost), and wait 40 seconds on Windows, not 10.
+- Unix only among the PTY tests: hang-up and stop signals, the pixel tier (Windows asks the
+  terminal nothing), Cmd and Ctrl+Shift keys sent in the Kitty keyboard protocol, and the mouse
+  click test. That click, an SGR report written to ConPTY, never reached Cellix on the runner
+  though keys did. Next: find out whether clicks arrive in a real Windows Terminal, and if not,
+  why crossterm doesn't see ConPTY's mouse events.
+
+Unverified: never run in a real Windows Terminal or WezTerm, only on the CI runner through
+ConPTY, so mouse input on Windows is the biggest unknown. The Claude Code mod, Codex and Gemini
+hooks, and `CLAUDE_CODE_PLUGIN_DIRS` taking `;` on Windows are untried there.

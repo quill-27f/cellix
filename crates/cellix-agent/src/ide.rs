@@ -6,8 +6,9 @@
 #![allow(clippy::result_large_err)]
 
 use std::fs;
-use std::io::{self, ErrorKind, Read};
+use std::io::{self, ErrorKind};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -19,6 +20,8 @@ use serde_json::{Value, json};
 use tungstenite::handshake::server::{ErrorResponse, Request, Response};
 use tungstenite::http::{HeaderValue, StatusCode};
 use tungstenite::{Message, WebSocket};
+
+use crate::new_token;
 
 const AUTH_HEADER: &str = "x-claude-code-ide-authorization";
 const SUBPROTOCOL: &str = "mcp";
@@ -80,10 +83,47 @@ fn config_dir() -> Option<PathBuf> {
     configured.or_else(|| Some(PathBuf::from(std::env::var_os("HOME")?).join(".claude")))
 }
 
-fn new_token() -> io::Result<String> {
-    let mut bytes = [0u8; 16];
-    fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
-    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
+/// A path as a file URL. A Windows path starts with its drive, `file:///C:/x`.
+pub fn file_url(path: &Path) -> String {
+    let text = path.display().to_string();
+    if cfg!(windows) {
+        format!("file:///{}", text.replace('\\', "/"))
+    } else {
+        format!("file://{text}")
+    }
+}
+
+/// The path a file URL names, or the text as it is if it isn't one.
+pub fn url_path(text: &str) -> &str {
+    let Some(path) = text.strip_prefix("file://") else {
+        return text;
+    };
+    // `file:///C:/x` is `C:/x`, which Windows takes.
+    let drive = path
+        .strip_prefix('/')
+        .filter(|rest| rest.get(1..2) == Some(":"));
+    match drive {
+        Some(rest) if cfg!(windows) => rest,
+        _ => path,
+    }
+}
+
+/// A folder only this user can enter. On Windows, the user's profile already is one.
+fn private_folder(folder: &Path) -> io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    builder.mode(0o700);
+    builder.create(folder)
+}
+
+/// Writes a file only this user can read.
+fn write_private(file: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    io::Write::write_all(&mut options.open(file)?, bytes)
 }
 
 impl IdeServer {
@@ -121,26 +161,13 @@ impl IdeServer {
         };
         if let Some(file) = kept {
             if let Some(parent) = file.parent() {
-                fs::DirBuilder::new()
-                    .recursive(true)
-                    .mode(0o700)
-                    .create(parent)?;
+                private_folder(parent)?;
             }
-            io::Write::write_all(
-                &mut fs::OpenOptions::new()
-                    .write(true)
-                    .create(true)
-                    .truncate(true)
-                    .mode(0o600)
-                    .open(file)?,
-                json!({"port": port, "token": token}).to_string().as_bytes(),
-            )?;
+            let noted = json!({"port": port, "token": token}).to_string();
+            write_private(file, noted.as_bytes())?;
         }
         let folder = config.join("ide");
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&folder)?;
+        private_folder(&folder)?;
         let lock = folder.join(format!("{port}.lock"));
         let contents = json!({
             "pid": std::process::id(),
@@ -149,15 +176,7 @@ impl IdeServer {
             "transport": "ws",
             "authToken": token,
         });
-        io::Write::write_all(
-            &mut fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .mode(0o600)
-                .open(&lock)?,
-            contents.to_string().as_bytes(),
-        )?;
+        write_private(&lock, contents.to_string().as_bytes())?;
         let (sender, calls) = channel();
         let clients = Clients::default();
         let shared = clients.clone();
@@ -296,7 +315,7 @@ fn workspace_folders(root: &Path) -> String {
     let name = root.file_name().unwrap_or_default().to_string_lossy();
     json!({
         "success": true,
-        "folders": [{"name": name, "uri": format!("file://{}", root.display()), "path": root}],
+        "folders": [{"name": name, "uri": file_url(root), "path": root}],
         "rootPath": root,
     })
     .to_string()
@@ -480,7 +499,10 @@ mod tests {
             json!({"name": "getWorkspaceFolders", "arguments": {}}),
         );
         let text = folders["result"]["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains(&*dir.path().to_string_lossy()), "{text}");
+        let reply: Value = serde_json::from_str(text).unwrap();
+        let folder = &reply["folders"][0];
+        assert_eq!(folder["path"], json!(dir.path()), "{text}");
+        assert_eq!(folder["uri"], file_url(dir.path()), "{text}");
         let unknown = call(&mut client, 4, "nonsense", json!({}));
         assert_eq!(unknown["error"]["code"], -32601);
     }
@@ -507,13 +529,29 @@ mod tests {
     }
 
     #[test]
+    fn file_urls_go_both_ways() {
+        let path = std::env::temp_dir().join("notes").join("a.md");
+        assert_eq!(Path::new(url_path(&file_url(&path))), path);
+        assert_eq!(url_path("docs/a.md"), "docs/a.md");
+        #[cfg(windows)]
+        assert_eq!(file_url(Path::new(r"C:\x\y.md")), "file:///C:/x/y.md");
+        #[cfg(unix)]
+        assert_eq!(file_url(Path::new("/x/y.md")), "file:///x/y.md");
+    }
+
+    #[test]
     fn the_lock_file_is_private_and_goes_away() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let server = IdeServer::start_in(dir.path(), dir.path(), None).unwrap();
         let path = dir.path().join("ide").join(format!("{}.lock", server.port));
-        let mode = fs::metadata(&path).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600);
+        // Windows has no modes: the lock is private because the user's profile is.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        assert!(path.exists());
         drop(server);
         assert!(!path.exists());
     }

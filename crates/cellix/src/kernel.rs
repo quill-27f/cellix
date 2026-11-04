@@ -105,12 +105,25 @@ pub fn python_for(folder: &Path, root: &Path) -> PathBuf {
     let local = places
         .flat_map(|place| [place.join(".venv"), place.join("venv")])
         .chain(var)
-        .map(|venv| venv.join("bin/python"))
+        .map(|venv| venv.join(VENV_PYTHON))
         .find(|python| python.is_file());
-    local.unwrap_or_else(|| PathBuf::from("python3"))
+    local.unwrap_or_else(|| PathBuf::from(PYTHON))
 }
 
+/// Where a virtual environment keeps its Python, and the one on the path. Windows puts it in
+/// `Scripts`, and its installer names it `python`.
+#[cfg(unix)]
+const VENV_PYTHON: &str = "bin/python";
+#[cfg(unix)]
+const PYTHON: &str = "python3";
+#[cfg(not(unix))]
+const VENV_PYTHON: &str = "Scripts/python.exe";
+#[cfg(not(unix))]
+const PYTHON: &str = "python";
+
 pub struct Kernel {
+    /// Only signalled on Unix, but held everywhere: it's this kernel's runner.
+    #[cfg_attr(not(unix), allow(dead_code))]
     child: Child,
     input: Option<ChildStdin>,
     pub events: Receiver<Event>,
@@ -166,12 +179,18 @@ impl Kernel {
     }
 
     /// Stops what's running, as Ctrl+C would.
+    #[cfg(unix)]
     pub fn interrupt(&self) {
         // SAFETY: signals the runner this kernel started, which turns it into an interrupt.
         unsafe {
             libc::kill(self.child.id() as i32, libc::SIGINT);
         }
     }
+
+    /// Windows has no SIGINT to send the runner, so a running cell can't be stopped short yet;
+    /// it finishes, or ends with the kernel.
+    #[cfg(not(unix))]
+    pub fn interrupt(&self) {}
 }
 
 impl Drop for Kernel {
@@ -207,7 +226,7 @@ mod tests {
     #[test]
     fn a_projects_own_python_comes_first() {
         let dir = tempfile::tempdir().unwrap();
-        let python = dir.path().join(".venv/bin/python");
+        let python = dir.path().join(".venv").join(VENV_PYTHON);
         std::fs::create_dir_all(python.parent().unwrap()).unwrap();
         std::fs::write(&python, "").unwrap();
         assert_eq!(python_for(dir.path(), dir.path()), python);

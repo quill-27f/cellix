@@ -48,7 +48,13 @@ curl -L https://github.com/quill-27f/cellix/releases/latest/download/cellix-$(un
   | tar xz -C ~/.local/bin cellix
 ```
 
-Every build for macOS and Linux is on the [releases page](https://github.com/quill-27f/cellix/releases),
+On Windows, `cargo install` as above (it needs the Visual Studio C++ build tools), or take
+`cellix-x86_64-pc-windows-msvc.zip` from the releases page and put `cellix.exe` in a folder on
+your `PATH`. Windows is a preview: its tests pass on a Windows CI runner, but it hasn't been tried
+in Windows Terminal yet, so tell us how it goes. It uses the cell tier there, and what runs in its
+side pane ends when Cellix does.
+
+Every build for macOS, Linux and Windows is on the [releases page](https://github.com/quill-27f/cellix/releases),
 with what changed in [CHANGELOG.md](CHANGELOG.md).
 
 ## Add it to your agent

@@ -12,6 +12,8 @@ use serde_json::{Map, Value, json};
 
 /// Loads a folder as a plugin in every session, which `--plugin-dir` does for one.
 const PLUGIN_DIRS: &str = "CLAUDE_CODE_PLUGIN_DIRS";
+/// What separates the folders in it, as in PATH: Windows paths have a `:` of their own.
+const LIST: &str = if cfg!(windows) { ";" } else { ":" };
 /// Connects to a running Cellix on its own, which `--ide` does for one session.
 const AUTO_CONNECT: &str = "CLAUDE_CODE_AUTO_CONNECT_IDE";
 /// Ghostty keeps Cmd+A (select the terminal's text) and Cmd+D (split) for itself, so an editor
@@ -57,7 +59,7 @@ pub(crate) fn write_settings(path: &Path, settings: &Map<String, Value>) -> io::
 
 fn folders(env: &Map<String, Value>) -> Vec<String> {
     let listed = env.get(PLUGIN_DIRS).and_then(Value::as_str).unwrap_or("");
-    let listed = listed.split(':').filter(|d| !d.is_empty());
+    let listed = listed.split(LIST).filter(|d| !d.is_empty());
     listed.map(str::to_string).collect()
 }
 
@@ -94,7 +96,7 @@ pub fn install_claude(var: impl Fn(&str) -> Option<String>) -> io::Result<()> {
     if !listed.contains(&ours) {
         listed.push(ours);
     }
-    env.insert(PLUGIN_DIRS.to_string(), json!(listed.join(":")));
+    env.insert(PLUGIN_DIRS.to_string(), json!(listed.join(LIST)));
     env.insert(AUTO_CONNECT.to_string(), json!("1"));
     write_settings(&file, &settings)
 }
@@ -113,7 +115,7 @@ pub fn remove_claude(var: impl Fn(&str) -> Option<String>) -> io::Result<()> {
     if left.is_empty() {
         env.remove(PLUGIN_DIRS);
     } else {
-        env.insert(PLUGIN_DIRS.to_string(), json!(left.join(":")));
+        env.insert(PLUGIN_DIRS.to_string(), json!(left.join(LIST)));
     }
     env.remove(AUTO_CONNECT);
     if env.is_empty() {
@@ -204,9 +206,18 @@ pub fn remove_gemini() -> io::Result<()> {
 /// Whether a program can be run by name.
 pub fn on_path(program: &str, var: impl Fn(&str) -> Option<String>) -> bool {
     let path = var("PATH").unwrap_or_default();
-    path.split(':')
-        .filter(|d| !d.is_empty())
-        .any(|d| Path::new(d).join(program).is_file())
+    // Windows runs `codex` as `codex.exe`, or `codex.cmd` where npm installed it.
+    let names: Vec<String> = if cfg!(windows) {
+        ["", ".exe", ".cmd", ".bat"]
+            .iter()
+            .map(|ending| format!("{program}{ending}"))
+            .collect()
+    } else {
+        vec![program.to_string()]
+    };
+    std::env::split_paths(&path)
+        .filter(|d| !d.as_os_str().is_empty())
+        .any(|d| names.iter().any(|name| d.join(name).is_file()))
 }
 
 /// Ghostty's config file: the one that exists, or the first place it looks.
@@ -331,7 +342,7 @@ mod tests {
         assert_eq!(after["env"]["FOO"], "1");
         assert_eq!(after["env"][AUTO_CONNECT], "1");
         let dirs = after["env"][PLUGIN_DIRS].as_str().unwrap();
-        assert!(dirs.starts_with("/other:"), "{dirs}");
+        assert!(dirs.starts_with(&format!("/other{LIST}")), "{dirs}");
         let plugin = crate::plugin::folder(&var).unwrap();
         assert!(plugin.join(".claude-plugin/plugin.json").exists());
 
@@ -434,7 +445,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("codex"), "").unwrap();
         let root = dir.path().display().to_string();
-        let var = move |_: &str| Some(format!("/nowhere:{root}"));
+        let path = std::env::join_paths(["/nowhere", &root]).unwrap();
+        let var = move |_: &str| Some(path.to_string_lossy().into_owned());
         assert!(on_path("codex", &var));
         assert!(!on_path("claude", &var));
     }
