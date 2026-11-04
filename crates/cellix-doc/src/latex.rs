@@ -1287,6 +1287,17 @@ const HEADER: &str = "\\documentclass[11pt]{article}\n\\usepackage{amsmath,amssy
 /// them, so a small TeX, with no TikZ or `ulem`, still builds a document that doesn't.
 fn header_for(body: &str) -> String {
     let mut header = String::from(HEADER);
+    // A code block shows commands without running them, so what it holds needs no package.
+    let mut run = String::new();
+    let mut rest = body;
+    while let Some(at) = rest.find("\\begin{verbatim}") {
+        run.push_str(&rest[..at]);
+        rest = rest[at..]
+            .find("\\end{verbatim}")
+            .map_or("", |end| &rest[at + end..]);
+    }
+    run.push_str(rest);
+    let body = run.as_str();
     let wanted = [
         ("\\toprule", "booktabs"),
         ("\\textcolor", "xcolor"),
@@ -1783,6 +1794,24 @@ mod tests {
         read_macro(r"\newcommand{\a}{\b}", &mut project);
         read_macro(r"\newcommand{\b}{\a}", &mut project);
         let _ = project.expand(r"\a");
+    }
+
+    #[test]
+    fn code_blocks_load_no_packages() {
+        let shown = "Shown, not drawn:\n\n```latex\n\\begin{tikzcd} A \\arrow[r] & B \\end{tikzcd}\n\\sout{x} \\toprule \\color{red}\n```\n\nAnd `\\tikz` inline.\n";
+        let tex = from_markdown(shown);
+        let (preamble, _) = tex.split_once("\\begin{document}").unwrap();
+        for package in ["tikz", "ulem", "booktabs", "xcolor"] {
+            assert!(!preamble.contains(package), "{package}: {preamble}");
+        }
+        assert!(
+            tex.contains("\\begin{tikzcd} A"),
+            "the code is still shown: {tex}"
+        );
+        let used = from_markdown("~~gone~~\n\n```tikzcd\nA \\arrow[r] & B\n```\n");
+        let (preamble, _) = used.split_once("\\begin{document}").unwrap();
+        assert!(preamble.contains("ulem"), "{preamble}");
+        assert!(preamble.contains("tikz-cd"), "{preamble}");
     }
 
     #[test]

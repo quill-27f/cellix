@@ -3066,6 +3066,13 @@
     "passes": true
   },
   {
+    "id": "export-packages-outside-code",
+    "milestone": 10,
+    "title": "An export loads packages for what it emits, not for code shown in code blocks",
+    "test": "code_blocks_load_no_packages",
+    "passes": true
+  },
+  {
     "id": "section-pictures-from-root",
     "milestone": 10,
     "title": "A section file's pictures resolve from the root's folder and \\graphicspath",
