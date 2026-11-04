@@ -3092,5 +3092,12 @@
     "title": "A closing Cellix removes only its own socket file, not one a later Cellix wrote",
     "test": "a_cellix_only_removes_its_own_socket_file",
     "passes": true
+  },
+  {
+    "id": "pane-path-separator",
+    "milestone": 10,
+    "title": "Agents in the side pane find cellix first on a PATH joined as the platform joins it",
+    "test": "claude_starts_with_cellix_on_its_path",
+    "passes": true
   }
 ]
