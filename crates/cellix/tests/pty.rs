@@ -9,15 +9,27 @@ use std::time::{Duration, Instant};
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
 type Input = Arc<Mutex<Box<dyn Write + Send>>>;
+/// The start of what Cellix wrote, to show when a test fails.
+type Raw = Arc<Mutex<Vec<u8>>>;
 
 /// Feeds what Cellix draws to `parser`, answering a cursor position query as a terminal would.
 /// Windows' ConPTY asks one before it passes anything on, and waits for the answer.
-fn pump(mut reader: Box<dyn Read + Send>, parser: Arc<Mutex<vt100::Parser>>, input: Input) {
+fn pump(
+    mut reader: Box<dyn Read + Send>,
+    parser: Arc<Mutex<vt100::Parser>>,
+    input: Input,
+    raw: Raw,
+) {
     std::thread::spawn(move || {
         let mut buf = [0; 8192];
         while let Ok(n) = reader.read(&mut buf) {
             if n == 0 {
                 break;
+            }
+            {
+                let mut raw = raw.lock().unwrap();
+                let room = 2000usize.saturating_sub(raw.len()).min(n);
+                raw.extend_from_slice(&buf[..room]);
             }
             if buf[..n].windows(4).any(|w| w == b"\x1b[6n") {
                 let (row, column) = parser.lock().unwrap().screen().cursor_position();
@@ -33,7 +45,10 @@ fn pump(mut reader: Box<dyn Read + Send>, parser: Arc<Mutex<vt100::Parser>>, inp
 struct Screen {
     parser: Arc<Mutex<vt100::Parser>>,
     input: Input,
+    raw: Raw,
     child: Box<dyn portable_pty::Child + Send + Sync>,
+    /// Kept for as long as the screen: on Windows, dropping it closes the console.
+    _master: Box<dyn portable_pty::MasterPty + Send>,
 }
 
 impl Screen {
@@ -53,19 +68,32 @@ impl Screen {
         let reader = pty.master.try_clone_reader().unwrap();
         let input: Input = Arc::new(Mutex::new(pty.master.take_writer().unwrap()));
         let parser = Arc::new(Mutex::new(vt100::Parser::new(30, 100, 0)));
-        pump(reader, parser.clone(), input.clone());
+        let raw = Raw::default();
+        pump(reader, parser.clone(), input.clone(), raw.clone());
         Self {
             parser,
             input,
+            raw,
             child,
+            _master: pty.master,
         }
+    }
+
+    /// What Cellix wrote first, and whether it's still running, for a failure to show.
+    fn story(&mut self) -> String {
+        let raw = self.raw.lock().unwrap();
+        let status = self.child.try_wait();
+        format!(
+            "exited: {status:?}, wrote: {:?}",
+            String::from_utf8_lossy(&raw)
+        )
     }
 
     fn contents(&self) -> String {
         self.parser.lock().unwrap().screen().contents()
     }
 
-    fn wait_for(&self, text: &str) {
+    fn wait_for(&mut self, text: &str) {
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
             if self.contents().contains(text) {
@@ -73,7 +101,8 @@ impl Screen {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        panic!("{text:?} never appeared:\n{}", self.contents());
+        let story = self.story();
+        panic!("{text:?} never appeared:\n{}\n{story}", self.contents());
     }
 
     fn send(&mut self, bytes: &[u8]) {
@@ -294,11 +323,16 @@ fn pty_follows_a_resize() {
     let reader = pty.master.try_clone_reader().unwrap();
     let input: Input = Arc::new(Mutex::new(pty.master.take_writer().unwrap()));
     let parser = Arc::new(Mutex::new(vt100::Parser::new(10, 120, 0)));
-    pump(reader, parser.clone(), input);
+    let raw = Raw::default();
+    pump(reader, parser.clone(), input, raw.clone());
     let wait = |text: &str| {
         let deadline = Instant::now() + Duration::from_secs(10);
         while !parser.lock().unwrap().screen().contents().contains(text) {
-            assert!(Instant::now() < deadline, "{text:?} never appeared");
+            let wrote = String::from_utf8_lossy(&raw.lock().unwrap()).into_owned();
+            assert!(
+                Instant::now() < deadline,
+                "{text:?} never appeared; wrote: {wrote:?}"
+            );
             std::thread::sleep(Duration::from_millis(20));
         }
     };
