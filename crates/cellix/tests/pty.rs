@@ -175,11 +175,11 @@ fn pty_shows_file_contents() {
     screen.wait_exit();
 }
 
-/// Unix only for now: on the Windows runner, a click sent to ConPTY as an SGR mouse report
-/// never reached Cellix, though keys did. Whether clicks arrive in Windows Terminal itself is
-/// unverified; see docs/PROGRESS.md.
+/// Ignored on Windows: on the runner, a click sent to the system's ConPTY as an SGR mouse
+/// report never reached Cellix, though keys did. CI tries it again through Microsoft's own
+/// ConPTY; see docs/PROGRESS.md.
 #[test]
-#[cfg(unix)]
+#[cfg_attr(windows, ignore = "the system ConPTY passes no clicks on")]
 fn pty_mouse_click_opens_file_and_typing_saves() {
     let dir = project();
     let mut screen = Screen::start(dir.path(), &[]);
@@ -207,12 +207,18 @@ fn pty_bracketed_paste_inserts_verbatim() {
     let dir = project();
     let mut screen = Screen::start(dir.path(), &["hello.txt"]);
     screen.wait_for("hello from a file");
-    screen.send(b"\x1b[200~pasted\ttext\x1b[201~");
-    screen.wait_for("pasted");
+    // Typed, the bracket would close itself and the new lines indent. Windows Terminal sends a
+    // pasted line break as a carriage return.
+    let newline = if cfg!(windows) { "\r" } else { "\n" };
+    let pasted = format!("pasted({newline}\ttext{newline}more{newline}");
+    screen.send(format!("\x1b[200~{pasted}\x1b[201~").as_bytes());
+    screen.wait_for("more");
+    screen.send(b"\x13"); // Ctrl+S
+    screen.wait_for("Saved hello.txt");
     screen.send(b"\x11");
-    screen.wait_for("Save changes to");
-    screen.send(b"n\r");
     screen.wait_exit();
+    let saved = std::fs::read_to_string(dir.path().join("hello.txt")).unwrap();
+    assert_eq!(saved, "pasted(\n\ttext\nmore\nhello from a file\n");
 }
 
 /// Windows has no Kitty keyboard protocol: keys arrive as console events.

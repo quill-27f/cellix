@@ -64,3 +64,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace --no-fail-fast
+      # An experiment: whether a click reaches Cellix through Microsoft's own ConPTY, as
+      # Windows Terminal ships it, rather than the system's. portable-pty loads a conpty.dll
+      # beside the test, which starts the OpenConsole.exe beside it.
+      - name: PTY tests through Microsoft's own ConPTY (experiment)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $package = "$env:RUNNER_TEMP\conpty"
+          Invoke-WebRequest https://www.nuget.org/api/v2/package/Microsoft.Windows.Console.ConPTY -OutFile "$package.zip"
+          Expand-Archive "$package.zip" $package
+          Get-ChildItem -Recurse $package -Include conpty.dll,OpenConsole.exe | ForEach-Object FullName
+          $dll = Get-ChildItem -Recurse $package -Filter conpty.dll | Where-Object FullName -Match 'x64' | Select-Object -First 1
+          $console = Get-ChildItem -Recurse $package -Filter OpenConsole.exe | Where-Object FullName -Match 'x64' | Select-Object -First 1
+          Copy-Item $dll.FullName, $console.FullName target\debug\deps\
+          cargo test -p cellix --test pty -- --include-ignored --test-threads=2
