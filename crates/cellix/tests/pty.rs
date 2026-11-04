@@ -12,32 +12,59 @@ type Input = Arc<Mutex<Box<dyn Write + Send>>>;
 /// The start of what Cellix wrote, to show when a test fails.
 type Raw = Arc<Mutex<Vec<u8>>>;
 
+/// How long a screen waits for text. Windows gets longer: a debug build there can take many
+/// seconds to start while it's scanned, with several starting at once.
+const WAIT: Duration = Duration::from_secs(if cfg!(windows) { 40 } else { 10 });
+
 /// Feeds what Cellix draws to `parser`, answering a cursor position query as a terminal would.
-/// Windows' ConPTY asks one before it passes anything on, and waits for the answer.
+/// Windows' ConPTY asks one before it passes anything on, and waits for the answer. An answer
+/// that comes too soon can be lost, so it's given again until something else arrives.
 fn pump(
     mut reader: Box<dyn Read + Send>,
     parser: Arc<Mutex<vt100::Parser>>,
     input: Input,
     raw: Raw,
 ) {
+    let started = Instant::now();
+    let seen = Arc::new(Mutex::new(0usize));
     std::thread::spawn(move || {
         let mut buf = [0; 8192];
         while let Ok(n) = reader.read(&mut buf) {
             if n == 0 {
                 break;
             }
+            let asked = buf[..n].windows(4).any(|w| w == b"\x1b[6n");
             {
+                let mut seen = seen.lock().unwrap();
                 let mut raw = raw.lock().unwrap();
+                if !asked && *seen == 0 {
+                    let note = format!("<output at {} ms>", started.elapsed().as_millis());
+                    raw.extend_from_slice(note.as_bytes());
+                }
+                *seen += usize::from(!asked);
                 let room = 2000usize.saturating_sub(raw.len()).min(n);
                 raw.extend_from_slice(&buf[..room]);
             }
-            if buf[..n].windows(4).any(|w| w == b"\x1b[6n") {
+            if asked {
                 let (row, column) = parser.lock().unwrap().screen().cursor_position();
-                let mut input = input.lock().unwrap();
-                let answered =
-                    write!(input, "\x1b[{};{}R", row + 1, column + 1).and_then(|()| input.flush());
-                let note = format!("<answered {}>", answered.is_ok());
-                raw.lock().unwrap().extend_from_slice(note.as_bytes());
+                let answer = format!("\x1b[{};{}R", row + 1, column + 1);
+                let (input, raw, seen) = (input.clone(), raw.clone(), seen.clone());
+                let before = *seen.lock().unwrap();
+                std::thread::spawn(move || {
+                    for attempt in 0..5 {
+                        if *seen.lock().unwrap() > before {
+                            return;
+                        }
+                        let mut input = input.lock().unwrap();
+                        let sent = input
+                            .write_all(answer.as_bytes())
+                            .and_then(|()| input.flush());
+                        let note = format!("<answer {attempt}: {}>", sent.is_ok());
+                        raw.lock().unwrap().extend_from_slice(note.as_bytes());
+                        drop(input);
+                        std::thread::sleep(Duration::from_secs(2));
+                    }
+                });
             }
             parser.lock().unwrap().process(&buf[..n]);
         }
@@ -96,7 +123,7 @@ impl Screen {
     }
 
     fn wait_for(&mut self, text: &str) {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + WAIT;
         while Instant::now() < deadline {
             if self.contents().contains(text) {
                 return;
@@ -332,7 +359,7 @@ fn pty_follows_a_resize() {
     let raw = Raw::default();
     pump(reader, parser.clone(), input, raw.clone());
     let wait = |text: &str| {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + WAIT;
         while !parser.lock().unwrap().screen().contents().contains(text) {
             let wrote = String::from_utf8_lossy(&raw.lock().unwrap()).into_owned();
             assert!(
