@@ -3239,5 +3239,19 @@
     "title": "A missing .bib is reported by real BibTeX (TeX Live, CI only)",
     "test": "pdflatex_says_when_bibtex_finds_no_bib",
     "passes": true
+  },
+  {
+    "id": "preview-name",
+    "milestone": 10,
+    "title": "The side pane's PDF and image view is called Preview, and says image for an image",
+    "test": "the_preview_is_called_preview_and_says_image_for_an_image",
+    "passes": true
+  },
+  {
+    "id": "preview-image-click",
+    "milestone": 10,
+    "title": "Clicking an image in the Preview doesn't ask for SyncTeX",
+    "test": "clicking_an_image_does_not_ask_for_synctex",
+    "passes": true
   }
 ]

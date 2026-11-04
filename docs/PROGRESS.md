@@ -1034,3 +1034,12 @@ stamp, and the commit hook refused verified work. Each worktree now keeps its ow
 folder, and every tree that passes gets a stamp of its own under `cellix-guard/verified.d`, kept
 a week. The hook still accepts the old single stamp, which worktrees on an older harness write.
 Unverified beyond this commit's own gate: two worktrees verifying at the same moment.
+
+## 2026-11-04: The Preview
+
+The side pane's tab for a PDF or an image was called "PDF" even for an image. It's Preview now,
+twelve columns like the other views' name, padding and ×. With an image, its texts say "image"
+("Reading the image…", "This image can't be shown.", "Image ready:" on the cell tier), its bar
+names the file instead of counting pages, and a click on it no longer says to build with
+SyncTeX. Build PDF, Export to PDF and Show in PDF keep their names: they are about PDFs. The
+tour has a new shot, `90-preview-image`. Next: panning a zoomed page.

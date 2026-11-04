@@ -1,5 +1,5 @@
-//! A PDF beside its source. Pages render on a thread, one at a time, so a long paper shows
-//! its first page at once and the interface never waits.
+//! The Preview: a PDF beside its source, or an image. Pages render on a thread, one at a
+//! time, so a long paper shows its first page at once and the interface never waits.
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
@@ -95,6 +95,16 @@ impl PdfView {
             generation: 0,
             seen: None,
         }
+    }
+
+    /// Whether this shows an image rather than a PDF.
+    pub fn is_image(&self) -> bool {
+        !self.path.extension().is_some_and(|e| e == "pdf")
+    }
+
+    /// What to call what's shown, in what the view says.
+    fn noun(&self) -> &'static str {
+        if self.is_image() { "image" } else { "PDF" }
     }
 
     /// Reads the file again and draws its pages `width` cells wide. Old pages stay until
@@ -295,24 +305,25 @@ impl PdfView {
         };
         let left = area.x + 2;
         if let Some(error) = &self.error {
-            grid.label(
-                left,
-                area.y + 1,
-                "This PDF can't be shown.",
-                theme.sidebar,
-                area.right(),
-            );
+            let said = format!("This {} can't be shown.", self.noun());
+            grid.label(left, area.y + 1, &said, theme.sidebar, area.right());
             grid.label(left, area.y + 2, error, quiet, area.right());
             return;
         }
         if cell_tier {
             let name = self.path.display().to_string();
-            grid.label(left, area.y + 1, "PDF ready:", theme.sidebar, area.right());
+            let said = if self.is_image() {
+                "Image ready:"
+            } else {
+                "PDF ready:"
+            };
+            grid.label(left, area.y + 1, said, theme.sidebar, area.right());
             grid.label(left, area.y + 2, &name, quiet, area.right());
             return;
         }
         if self.pages.is_empty() {
-            grid.label(left, area.y + 1, "Reading the PDF…", quiet, area.right());
+            let said = format!("Reading the {}…", self.noun());
+            grid.label(left, area.y + 1, &said, quiet, area.right());
             return;
         }
         let bar = Rect::new(area.x, area.y, area.w, 1);
@@ -322,8 +333,17 @@ impl PdfView {
             fg: theme.status.fg,
             ..theme.tab
         };
-        let count = format!("Page {} of {}", self.page_in_view(), self.pages.len());
-        grid.label(left, area.y, &count, quiet_bar, minus.saturating_sub(1));
+        // An image has no pages to count, so the bar names it instead.
+        let count = if self.is_image() {
+            let name = self.path.file_name().unwrap_or_default();
+            name.to_string_lossy().into_owned()
+        } else {
+            format!("Page {} of {}", self.page_in_view(), self.pages.len())
+        };
+        // Under the tab's own name, which starts half a cell in.
+        let under_tab = area.x as f32 + 1.5;
+        let end = minus.saturating_sub(1);
+        grid.label_at(under_tab, left, area.y, &count, quiet_bar, end, 100);
         grid.label(minus, area.y, "−", quiet_bar, minus + 1);
         let size = format!("{:.0}%", self.zoom * 100.0);
         grid.label(minus + 2, area.y, &size, quiet_bar, plus);

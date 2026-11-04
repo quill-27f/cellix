@@ -40,7 +40,7 @@ const COUNT_WIDTH: u16 = 2;
 /// The button that starts something, and the tab it becomes while that list shows.
 const NEW_WIDTH: u16 = 3;
 const AGENTS_WIDTH: u16 = 11;
-const PDF_WIDTH: u16 = 8;
+const PREVIEW_WIDTH: u16 = 12;
 const LOG_WIDTH: u16 = 8;
 const PROBLEMS_WIDTH: u16 = 13;
 /// Where a tab's name starts, as on the file's tabs.
@@ -925,7 +925,7 @@ pub struct Dock {
     pub width: Option<u16>,
     /// What stands in front of any session.
     pub front: Front,
-    /// The PDF being worked on.
+    /// The PDF or image in the Preview.
     pub pdf: Option<PdfView>,
     /// The place on a page last pointed at, for a comment on it.
     pub pdf_spot: Option<(usize, f32, f32)>,
@@ -1098,7 +1098,7 @@ impl Dock {
             views.push((Front::Agents, "Agents", AGENTS_WIDTH));
         }
         if self.pdf.is_some() {
-            views.push((Front::Pdf, "PDF", PDF_WIDTH));
+            views.push((Front::Pdf, "Preview", PREVIEW_WIDTH));
         }
         if !self.log.is_empty() {
             views.push((Front::Log, "Log", LOG_WIDTH));

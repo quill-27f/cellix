@@ -5547,8 +5547,12 @@ impl App {
             Some(PdfHit::Page(page, across, down)) => {
                 let view = self.dock.pdf.as_ref();
                 let place = view.and_then(|v| v.source_at(page, across, down));
+                let image = view.is_some_and(PdfView::is_image);
                 let Some((path, line)) = place else {
-                    self.say("Build with SyncTeX to jump from the PDF to the source");
+                    // An image has no source to go to, so a click on one says nothing.
+                    if !image {
+                        self.say("Build with SyncTeX to jump from the PDF to the source");
+                    }
                     return;
                 };
                 if self.open(&path).is_ok() {
@@ -15036,6 +15040,77 @@ mod tests {
         }
         assert!(screen(&app).text().contains("Pushed"));
         assert_eq!(cellix_review::ahead_behind(dir.path()), Some((0, 0)));
+    }
+
+    /// Waits for the Preview to finish reading, as a frame would.
+    fn preview_read(app: &mut App) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let view = app.dock.pdf.as_ref().unwrap();
+            if view.pages_ready() > 0 || view.error.is_some() {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the Preview never read it"
+            );
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn the_preview_is_called_preview_and_says_image_for_an_image() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("broken.png"), b"not a picture").unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 44));
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(10, 20)));
+        app.open(&dir.path().join("broken.png")).unwrap();
+        let area = app.dock_area().unwrap();
+        let tab = screen(&app).row_text(area.y);
+        assert!(tab.contains("Preview"), "{tab}");
+        assert!(!tab.contains("PDF"), "{tab}");
+        assert!(screen(&app).text().contains("Reading the image…"));
+        preview_read(&mut app);
+        let text = screen(&app).text();
+        assert!(text.contains("This image can't be shown."), "{text}");
+        assert!(!text.contains("PDF"), "{text}");
+        // The Preview tab is as wide as its name and its ×, as the others are.
+        let (front, _, rect) = app.dock.view_tabs_for_test(area)[0];
+        assert_eq!((front, rect.w), (Front::Pdf, 12));
+    }
+
+    #[test]
+    fn an_image_on_the_cell_tier_says_it_is_ready() {
+        let dir = tempfile::tempdir().unwrap();
+        let image = image::RgbaImage::from_pixel(40, 20, image::Rgba([1, 2, 3, 255]));
+        image.save(dir.path().join("loss.png")).unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 44));
+        app.open(&dir.path().join("loss.png")).unwrap();
+        let text = screen(&app).text();
+        assert!(text.contains("Image ready:"), "{text}");
+        assert!(text.contains("Preview"), "{text}");
+    }
+
+    #[test]
+    fn clicking_an_image_does_not_ask_for_synctex() {
+        let dir = tempfile::tempdir().unwrap();
+        let image = image::RgbaImage::from_pixel(80, 80, image::Rgba([1, 2, 3, 255]));
+        image.save(dir.path().join("loss.png")).unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 44));
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(10, 20)));
+        app.open(&dir.path().join("loss.png")).unwrap();
+        preview_read(&mut app);
+        let picture = pictures(&app)[0];
+        let (x, y) = (
+            ((picture.x + 64) / 64) as u16,
+            ((picture.y + 64) / 64) as u16,
+        );
+        app.handle(mouse(MouseKind::Left, x, y));
+        app.handle(mouse(MouseKind::Up, x, y));
+        assert!(!screen(&app).text().contains("SyncTeX"));
+        let bar = screen(&app).row_text(app.dock_screen().unwrap().y);
+        assert!(bar.contains("loss.png"), "the bar names the image: {bar}");
     }
 
     #[test]

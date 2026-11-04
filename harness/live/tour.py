@@ -168,6 +168,30 @@ def project(root):
         f.write("\nBound the queue.\n")
 
 
+def chart(path, width=1600, height=900):
+    """A wide plot as a PNG, for the Preview: two falling curves on a grid."""
+    import math, struct, zlib
+    rows = []
+    for y in range(height):
+        row = bytearray(b"\xf5\xf5\xf7" * width)
+        if y % 150 == 0:
+            row = bytearray(b"\xd4\xd4\xdc" * width)
+        rows.append(row)
+    for x in range(width):
+        for colour, lift in ((b"\x1e\x66\xf5", 0), (b"\xfe\x64\x0b", 40)):
+            y = int(80 + lift + (height - 260) * (1 - math.exp(-x / 300)))
+            for dy in range(-3, 4):
+                rows[min(height - 1, y + dy)][x * 3:x * 3 + 3] = colour
+    raw = b"".join(b"\x00" + bytes(row) for row in rows)
+    def chunk(tag, data):
+        body = tag + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header))
+        f.write(chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
+
+
 def shoot(name, steps, *args, size="120x40", background="1e1e2e"):
     """Runs one scene and writes `<name>.png`, with `steps` run first."""
     # TOUR_ONLY=50-review,02-code retakes just those, for a quick look after a change.
@@ -325,6 +349,14 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("55-paper-cite", [["click", 69, 1]], PAPER_FILE, size="150x44", background="eff1f5")
     shoot("55-paper-menu", [["right", 70, 14]], PAPER_FILE, size="150x44", background="eff1f5")
     shoot("56-narrow-note", [*LIST_AGENTS, ["wait", 0.6]], NOTE_FILE, size="100x34")
+
+    # The Preview: an image beside the page that shows it.
+    os.makedirs(f"{ROOT}/figures", exist_ok=True)
+    chart(f"{ROOT}/figures/loss.png")
+    RESULTS, LOSS = "docs/results.md", "figures/loss.png"
+    with open(f"{ROOT}/{RESULTS}", "w") as f:
+        f.write("# Training loss\n\nThe loss settles after 40k steps.\n\n![Loss by step](../figures/loss.png)\n")
+    shoot("90-preview-image", [["wait", 1.0]], RESULTS, LOSS, size="150x44")
 
     # The samples, which use everything a page can do.
     samples = os.path.join(ROOT, "samples")

@@ -9,6 +9,9 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 - A plan's comment threads keep their replies and resolved state in its next version. One whose words the new version dropped stays open with a "Removed in version N" pill, and clicking it shows what changed.
 - A paper split over `\input` and `\include` files counts its words as one, puts Track Changes' package in the root's preamble, and rebuilds when an agent edits any of its open files.
 
+### Changed
+- The side pane's tab for PDFs and images is called Preview. With an image it says "image" where it said "PDF", its bar names the file, and a click on it no longer asks for SyncTeX.
+
 ### Fixed
 - In a project with large untracked files, such as data, Claude Code's prompt hook could take longer than the 30 seconds Claude Code gives it ("UserPromptSubmit hook timed out"), and the comments it carries never reached the agent. Each prompt's checkpoint read every file again and copied untracked ones into `.git`. It now keeps its own index, so only changed files are read; untracked files over 10 MB stay out of checkpoints; and the hook waits at most 3 seconds, leaving a slow checkpoint to finish on its own.
 - Inside Claude Code, the wheel scrolls the Comments pane when the pointer is over it. It used to scroll the file whatever was under the pointer.

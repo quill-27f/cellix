@@ -223,7 +223,7 @@ your LaTeX engine in the background, and kept, so typing never waits.
 **Papers.** A `.tex` file shows its sections, numbers, citations, equations, theorems, figures and
 tables, across `\input` files, and anything Cellix doesn't recognise stays visible as source. **Cite**
 lists the keys in your `.bib` files. **Build PDF**, or Ctrl+Alt+B, runs `tectonic`, `latexmk` or
-`pdflatex`, shows the PDF in the side pane, keeps what the build said in a Log tab, and goes to the
+`pdflatex`, shows the PDF in the side pane's Preview, keeps what the build said in a Log tab, and goes to the
 line of any error. Clicking the PDF goes to that place in the source. Set `latex_engine` in the
 settings file to use your own command. Export to PDF does the same for Markdown, through LaTeX, with
 diagrams and footnotes.
@@ -237,7 +237,7 @@ kernel, with Jupyter's keys. It needs `jupyter_client` and `ipykernel` in the pr
 
 Whatever you can see, you can talk about, the same way in every file type. Select text and **Comment**
 and **Ask Agent** appear beside it. A picture, diagram or formula has a Comment button under the
-pointer, and a PDF or image in the side pane takes one too. Comments are threads in the side pane,
+pointer, and a PDF or image in the side pane's Preview takes one too. Comments are threads in the side pane,
 kept in `.cellix/threads.json`. Ask Agent sends yours to the agent with its file, line and quote, the
 agent answers with `cellix reply <id> "text"`, and the answer lands under your question.
 
