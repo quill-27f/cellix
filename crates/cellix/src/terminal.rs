@@ -14,8 +14,11 @@ use cellix_term::{
 use crossterm::event::{
     self as ct, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture,
     EnableBracketedPaste, EnableFocusChange, EnableMouseCapture, KeyCode, KeyEventKind,
-    KeyModifiers, KeyboardEnhancementFlags, MouseButton, MouseEventKind,
-    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    KeyModifiers, MouseButton, MouseEventKind,
+};
+#[cfg(not(windows))]
+use crossterm::event::{
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::style::Print;
@@ -101,8 +104,13 @@ impl Session {
             EnableMouseCapture,
             EnableBracketedPaste,
             EnableFocusChange,
-            // Terminals without the Kitty keyboard protocol ignore this, and Ctrl+Shift+P
-            // and Cmd keys then can't be told apart: F1 and Alt+P still open commands.
+        )?;
+        // Terminals without the Kitty keyboard protocol ignore this, and Ctrl+Shift+P
+        // and Cmd keys then can't be told apart: F1 and Alt+P still open commands. On Windows
+        // keys arrive as console events, which have no such protocol, and crossterm refuses it.
+        #[cfg(not(windows))]
+        execute!(
+            io::stdout(),
             PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
         )?;
         // tmux ignores kitty's flags but passes modified keys on with its extended-keys, once
@@ -126,9 +134,10 @@ fn tmux_keys_readable() -> bool {
 
 impl Drop for Session {
     fn drop(&mut self) {
+        #[cfg(not(windows))]
+        let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
         let _ = execute!(
             io::stdout(),
-            PopKeyboardEnhancementFlags,
             Print("\x1b[?1016l"),
             Print(if std::env::var_os("TMUX").is_some() {
                 "\x1b[>4;0m"

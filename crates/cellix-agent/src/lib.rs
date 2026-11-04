@@ -155,6 +155,8 @@ fn user() -> String {
 
 /// One socket per workspace, in a directory only this user can enter.
 pub fn socket_path(root: &Path) -> PathBuf {
+    // `\\?\C:\x` and `C:\x` are one folder, so they share a socket. Unix paths are as they are.
+    let root = dunce::simplified(root);
     let uid = user();
     env::temp_dir()
         .join(format!("cellix-{uid}"))

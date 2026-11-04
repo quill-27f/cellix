@@ -5092,7 +5092,8 @@ impl App {
             return false;
         };
         self.browser_result = None;
-        let name = target.rsplit('/').next().unwrap_or(&target).to_string();
+        let mut parts = target.rsplit(['/', std::path::MAIN_SEPARATOR]);
+        let name = parts.next().unwrap_or(&target).to_string();
         if !opened && self.offer_browser(browser_installed()) {
             return true;
         }
