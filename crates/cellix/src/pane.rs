@@ -87,6 +87,31 @@ fn key_of(name: &str) -> Option<Key> {
     })
 }
 
+/// What one `pane-send` carries: a batch the mod gathered, or one input.
+fn inputs(text: &str) -> Vec<Input> {
+    serde_json::from_str::<Vec<Input>>(text)
+        .or_else(|_| serde_json::from_str::<Input>(text).map(|one| vec![one]))
+        .unwrap_or_default()
+}
+
+/// Keeps only the last of a run of moves. Each move can change what's hovered and so cost a
+/// frame, and only where the pointer ended up matters; downs, ups and keys all stay, in order.
+fn latest_moves(inputs: Vec<Input>) -> Vec<Input> {
+    let moving = |input: &Input| match input {
+        Input::Pointer { kind, button, .. } if kind == "move" => Some(button.is_some()),
+        _ => None,
+    };
+    let mut kept: Vec<Input> = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        let held = moving(&input);
+        if held.is_some() && kept.last().map(moving) == Some(held) {
+            kept.pop();
+        }
+        kept.push(input);
+    }
+    kept
+}
+
 /// Turns input into the app's events. Takes no terminal, which keeps it testable.
 pub fn translate(input: Input) -> Vec<Event> {
     match input {
@@ -215,19 +240,14 @@ impl<R: Rasterizer> Frames<R> {
         (rgb, width, height)
     }
 
-    /// Describes a frame in one line for the mod, as a file where it's read on this machine.
+    /// Describes a frame in one line for the mod, as a file the terminal reads on this machine.
     /// Returns None if nothing changed: an idle pane must not keep reuploading an image.
-    fn line(&mut self, grid: &Grid, remote: bool) -> io::Result<Option<String>> {
-        let keys: Vec<u64> = (0..grid.height()).map(|y| row_key(grid, y)).collect();
-        if keys == self.shown {
+    fn line(&mut self, grid: &Grid) -> io::Result<Option<String>> {
+        if !changed(&mut self.shown, grid) {
             return Ok(None);
         }
-        self.shown = keys;
         let (rgb, width, height) = self.pixels(grid);
         self.count += 1;
-        if remote {
-            return png_line(&rgb, width, height).map(Some);
-        }
         let path = self.folder.join(format!("frame-{}.rgb", self.count % 2));
         fs::write(&path, &rgb)?;
         let line = format!("frame {} {width} {height} {}", path.display(), self.count);
@@ -235,17 +255,56 @@ impl<R: Rasterizer> Frames<R> {
     }
 }
 
-/// A frame by value. A file can't cross SSH, so remote sessions pay for a PNG.
-fn png_line(rgb: &[u8], width: usize, height: usize) -> io::Result<String> {
-    let mut bytes = Vec::new();
-    let mut encoder = png::Encoder::new(&mut bytes, width as u32, height as u32);
-    encoder.set_color(png::ColorType::Rgb);
-    encoder.set_compression(png::Compression::Fast);
-    let mut writer = encoder.write_header().map_err(io::Error::other)?;
-    writer.write_image_data(rgb).map_err(io::Error::other)?;
-    writer.finish().map_err(io::Error::other)?;
+/// What a cell shows in Claude Code's Raster, which takes one printable width-1 character
+/// from the Basic Multilingual Plane: an icon is its cell-tier drawing, as in a terminal, the
+/// right half of a wide character is a space, and a character it can't show stands as `?`.
+fn raster_char(symbol: &str) -> u32 {
+    use unicode_width::UnicodeWidthChar;
+    if let Some(piece) = cellix_render::Piece::decode(symbol) {
+        return raster_char(piece.fallback());
+    }
+    match symbol.chars().next() {
+        None => ' ' as u32,
+        // The narrow layout's sidebar button, wide in Unicode; the same bars fit one cell.
+        Some('☰') => '≡' as u32,
+        Some(c) if (c as u32) <= 0xFFFF && !c.is_control() && c.width() == Some(1) => c as u32,
+        Some(_) => '?' as u32,
+    }
+}
+
+/// A frame as cells, for Claude Code to draw as text: the cell tier, as Cellix draws in any
+/// terminal without pictures. Over SSH this is what keeps the pane quick, because only the
+/// cells that changed cross the connection, where a picture of the pane crossed it whole
+/// each time the pointer moved.
+fn cells_line(grid: &Grid) -> String {
+    let colour = |c: cellix_render::Rgb| u32::from_be_bytes([0, c.0, c.1, c.2]);
+    let mut bytes = Vec::with_capacity(grid.width() as usize * grid.height() as usize * 12);
+    for y in 0..grid.height() {
+        for (x, cell) in grid.row(y).iter().enumerate() {
+            // A Raster has no cursor of its own, so the cursor's cell is drawn inverted, as a
+            // terminal's block cursor is.
+            let (fg, bg) = if grid.cursor == Some((x as u16, y)) {
+                (cell.style.bg, cell.style.fg)
+            } else {
+                (cell.style.fg, cell.style.bg)
+            };
+            for word in [raster_char(&cell.symbol), colour(fg), colour(bg)] {
+                bytes.extend_from_slice(&word.to_le_bytes());
+            }
+        }
+    }
     let text = base64::engine::general_purpose::STANDARD.encode(&bytes);
-    Ok(format!("png {text}"))
+    format!("cells {} {} {text}", grid.width(), grid.height())
+}
+
+/// Whether a grid differs from the one last sent, remembering it if so.
+fn changed(shown: &mut Vec<u64>, grid: &Grid) -> bool {
+    let keys: Vec<u64> = (0..grid.height()).map(|y| row_key(grid, y)).collect();
+    if keys == *shown {
+        return false;
+    }
+    *shown = keys;
+    true
 }
 
 /// A console doesn't give its size in pixels, so the default cell is used.
@@ -272,24 +331,31 @@ pub fn run(root: &Path) -> io::Result<()> {
     let mut app = App::new(root.to_path_buf(), DEFAULT_SIZE);
     app.compact_width = PANE_COMPACT_WIDTH;
     app.in_pane = true;
-    let cell = window_cell().unwrap_or(DEFAULT_CELL);
-    app.set_measure(Rc::new(FontMeasure::new(cell.0, cell.1)));
+    // Over SSH a picture of the pane would cross the connection every time it changed, so
+    // the pane is drawn as cells there, as it is in a terminal without pictures.
+    let cells = std::env::var_os("SSH_CONNECTION").is_some()
+        || std::env::var("CELLIX_TIER").is_ok_and(|tier| tier == "cells");
+    let mut frames = None;
+    if !cells {
+        let cell = window_cell().unwrap_or(DEFAULT_CELL);
+        app.set_measure(Rc::new(FontMeasure::new(cell.0, cell.1)));
+        let rasterizer =
+            SoftwareRasterizer::new(cell.0, cell.1).ok_or_else(|| io::Error::other("no fonts"))?;
+        let folder = cellix_agent::socket_path(root).with_extension("pane");
+        fs::create_dir_all(&folder)?;
+        frames = Some(Frames {
+            rasterizer,
+            cell,
+            rows: HashMap::new(),
+            shown: Vec::new(),
+            folder,
+            count: 0,
+        });
+    }
+    let mut shown_cells = Vec::new();
     let server = cellix_agent::start(root, app.comments.clone())?;
     app.restore_unsent();
     app.ide = IdeServer::start(root).ok();
-    let folder = cellix_agent::socket_path(root).with_extension("pane");
-    fs::create_dir_all(&folder)?;
-    let rasterizer =
-        SoftwareRasterizer::new(cell.0, cell.1).ok_or_else(|| io::Error::other("no fonts"))?;
-    let mut frames = Frames {
-        rasterizer,
-        cell,
-        rows: HashMap::new(),
-        shown: Vec::new(),
-        folder,
-        count: 0,
-    };
-    let remote = std::env::var_os("SSH_CONNECTION").is_some();
     let mut out = BufWriter::new(io::stdout());
     if let Some(ide) = &app.ide {
         writeln!(out, "ide {}", ide.port)?;
@@ -301,7 +367,11 @@ pub fn run(root: &Path) -> io::Result<()> {
             let (columns, rows) = app.size();
             let mut grid = Grid::new(columns, rows, app.background());
             app.draw(&mut grid);
-            if let Some(line) = frames.line(&grid, remote)? {
+            let line = match &mut frames {
+                Some(frames) => frames.line(&grid)?,
+                None => changed(&mut shown_cells, &grid).then(|| cells_line(&grid)),
+            };
+            if let Some(line) = line {
                 writeln!(out, "{line}")?;
             }
             if let Some(prompt) = app.take_outgoing_prompt() {
@@ -318,19 +388,13 @@ pub fn run(root: &Path) -> io::Result<()> {
             redraw = false;
         }
         match server.requests.recv_timeout(WAIT) {
-            Ok(Request::Pane(text)) => {
-                if let Ok(input) = serde_json::from_str::<Input>(&text) {
-                    if let Input::Open { path } = &input {
-                        let _ = app.open(path);
-                    }
-                    for event in translate(input) {
-                        app.handle(event);
-                    }
-                    redraw = true;
-                }
-            }
-            Ok(request) => {
-                app.serve(request);
+            Ok(first) => {
+                // Everything that came in meanwhile is taken before the next frame, so a burst
+                // of input costs one frame, not one each.
+                let waiting: Vec<Request> = std::iter::once(first)
+                    .chain(server.requests.try_iter())
+                    .collect();
+                take_requests(&mut app, waiting);
                 redraw = true;
             }
             Err(_) => {
@@ -345,6 +409,33 @@ pub fn run(root: &Path) -> io::Result<()> {
         redraw |= app.poll();
     }
     app.finish()
+}
+
+/// Hands requests to the app in order, with the pointer's moves between other input cut to
+/// the last.
+fn take_requests(app: &mut App, requests: Vec<Request>) {
+    let mut input = Vec::new();
+    for request in requests {
+        match request {
+            Request::Pane(text) => input.extend(inputs(&text)),
+            other => {
+                take_input(app, std::mem::take(&mut input));
+                app.serve(other);
+            }
+        }
+    }
+    take_input(app, input);
+}
+
+fn take_input(app: &mut App, input: Vec<Input>) {
+    for one in latest_moves(input) {
+        if let Input::Open { path } = &one {
+            let _ = app.open(path);
+        }
+        for event in translate(one) {
+            app.handle(event);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -414,15 +505,123 @@ mod tests {
             count: 0,
         };
         let mut grid = Grid::new(4, 2, cellix_render::Style::default());
-        assert!(frames.line(&grid, false).unwrap().is_some());
-        assert!(frames.line(&grid, false).unwrap().is_none());
+        assert!(frames.line(&grid).unwrap().is_some());
+        assert!(frames.line(&grid).unwrap().is_none());
         grid.put_str(0, 1, "x", cellix_render::Style::default(), 4);
-        assert!(frames.line(&grid, false).unwrap().is_some());
+        assert!(frames.line(&grid).unwrap().is_some());
+    }
+
+    /// Over SSH a frame is the cell grid, as Claude Code's Raster reads it: a character, then
+    /// the foreground and background, each a little-endian u32.
+    #[test]
+    fn a_remote_frame_travels_as_cells() {
+        let mut grid = Grid::new(3, 1, cellix_render::Style::default());
+        let style = cellix_render::Style {
+            fg: cellix_render::Rgb(0x11, 0x22, 0x33),
+            bg: cellix_render::Rgb(0xaa, 0xbb, 0xcc),
+            ..cellix_render::Style::default()
+        };
+        grid.put_str(0, 0, "a界", style, 3);
+        let line = cells_line(&grid);
+        let [kind, columns, rows, data] = line.split(' ').collect::<Vec<_>>()[..] else {
+            panic!("{line}");
+        };
+        assert_eq!((kind, columns, rows), ("cells", "3", "1"));
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .unwrap();
+        let words: Vec<u32> = bytes
+            .chunks(4)
+            .map(|w| u32::from_le_bytes(w.try_into().unwrap()))
+            .collect();
+        assert_eq!(&words[..3], [u32::from('a'), 0x112233, 0xaabbcc]);
+        // A wide character can't stand in one cell of a Raster, and its right half is blank.
+        assert_eq!(words[3], u32::from('?'));
+        assert_eq!(words[6], u32::from(' '));
+    }
+
+    /// Icons live in the private plane, outside what a Raster takes, so they go as the cell
+    /// tier draws them; and the cursor, which a Raster has none of, is its cell inverted.
+    #[test]
+    fn icons_and_the_cursor_survive_as_cells() {
+        let mut grid = Grid::new(2, 1, cellix_render::Style::default());
+        let style = cellix_render::Style {
+            fg: cellix_render::Rgb(1, 1, 1),
+            bg: cellix_render::Rgb(2, 2, 2),
+            ..cellix_render::Style::default()
+        };
+        let piece = cellix_render::Piece {
+            icon: cellix_render::Icon::Files,
+            width: 1,
+            height: 1,
+            column: 0,
+            row: 0,
+        };
+        grid.put_str(0, 0, &piece.symbol().to_string(), style, 1);
+        grid.put_str(1, 0, "x", style, 2);
+        grid.cursor = Some((1, 0));
+        let line = cells_line(&grid);
+        let data = line.rsplit(' ').next().unwrap();
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .unwrap();
+        let word = |at: usize| u32::from_le_bytes(bytes[at * 4..at * 4 + 4].try_into().unwrap());
+        assert_eq!(word(0), u32::from('▤'));
+        assert_eq!(raster_char("☰"), u32::from('≡'), "the sidebar button");
+        assert_eq!((word(1), word(2)), (0x010101, 0x020202));
+        assert_eq!(word(3), u32::from('x'));
+        assert_eq!(
+            (word(4), word(5)),
+            (0x020202, 0x010101),
+            "the cursor's cell inverted"
+        );
     }
 
     #[test]
-    fn a_remote_frame_travels_as_a_png() {
-        let line = png_line(&[9; 12], 2, 2).unwrap();
-        assert!(line.starts_with("png iVBOR"), "{line}");
+    fn a_batch_of_input_crosses_in_one_send() {
+        let batch = r#"[{"type":"key","key":"a"},{"type":"pointer","kind":"down","x":1,"y":2}]"#;
+        assert_eq!(inputs(batch).len(), 2);
+        assert_eq!(inputs(r#"{"type":"key","key":"a"}"#).len(), 1);
+        assert!(inputs("not json").is_empty());
+    }
+
+    /// Every move used to cost a frame, and over SSH the moves queued up ahead of a click.
+    #[test]
+    fn a_run_of_moves_keeps_only_where_the_pointer_ended() {
+        let at = |kind: &str, x: u16, button: Option<&str>| Input::Pointer {
+            kind: kind.to_string(),
+            x,
+            y: 0,
+            fine: None,
+            button: button.map(str::to_string),
+        };
+        let kept = latest_moves(vec![
+            at("move", 1, None),
+            at("move", 2, None),
+            at("move", 3, None),
+            at("down", 3, Some("left")),
+            at("move", 4, Some("left")),
+            at("move", 5, Some("left")),
+            at("up", 5, Some("left")),
+            at("move", 6, None),
+        ]);
+        let shown: Vec<(String, u16)> = kept
+            .iter()
+            .map(|input| match input {
+                Input::Pointer { kind, x, .. } => (kind.clone(), *x),
+                _ => panic!("only pointers"),
+            })
+            .collect();
+        let expected = [
+            ("move", 3),
+            ("down", 3),
+            ("move", 5),
+            ("up", 5),
+            ("move", 6),
+        ];
+        assert_eq!(
+            shown,
+            expected.map(|(kind, x)| (kind.to_string(), x)).to_vec()
+        );
     }
 }

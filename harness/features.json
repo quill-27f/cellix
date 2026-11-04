@@ -563,8 +563,8 @@
     "id": "pane-remote",
     "milestone": 7,
     "passes": true,
-    "test": "a_remote_frame_travels_as_a_png",
-    "title": "Pane frames as PNGs over SSH"
+    "test": "a_remote_frame_travels_as_cells",
+    "title": "Over SSH a frame of the pane travels by value, as cells the mod draws"
   },
   {
     "id": "tall-heading-tile",
@@ -3511,6 +3511,13 @@
     "milestone": 10,
     "title": "An install that asks on the terminal takes its default and finishes, so Settings frees up",
     "test": "an_installer_that_asks_on_the_terminal_still_finishes",
+    "passes": true
+  },
+  {
+    "id": "pane-cells-over-ssh",
+    "milestone": 10,
+    "title": "Over SSH the pane inside Claude Code is drawn as cells, and input goes in batches with moves cut to the last",
+    "test": "over_ssh_the_pane_sends_cells_and_takes_input_in_batches",
     "passes": true
   }
 ]

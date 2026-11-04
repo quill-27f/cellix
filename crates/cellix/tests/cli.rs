@@ -102,3 +102,131 @@ fn the_prompt_hook_checkpoints_without_holding_the_prompt() {
     assert!(files.lines().any(|f| f == "notes.txt"), "{files}");
     assert!(!files.lines().any(|f| f == "dump.bin"), "{files}");
 }
+
+/// One frame of cells: its columns, rows and each cell's character.
+type CellFrame = (u16, u16, Vec<char>);
+
+/// Ends a process however the test ends.
+struct KillOnDrop(std::process::Child);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// One frame of cells as `cellix pane` writes it.
+fn decode_cells(line: &str) -> CellFrame {
+    use base64::Engine;
+    let mut parts = line.split(' ');
+    assert_eq!(parts.next(), Some("cells"));
+    let columns: u16 = parts.next().unwrap().parse().unwrap();
+    let rows: u16 = parts.next().unwrap().parse().unwrap();
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(parts.next().unwrap())
+        .unwrap();
+    assert_eq!(bytes.len(), columns as usize * rows as usize * 12);
+    let chars = bytes
+        .chunks(12)
+        .map(|cell| {
+            let code = u32::from_le_bytes(cell[..4].try_into().unwrap());
+            // What Claude Code's Raster takes, or it refuses the whole frame.
+            assert!(code <= 0xFFFF, "outside the BMP: {code:#x}");
+            let c = char::from_u32(code).unwrap();
+            assert!(!c.is_control(), "a control character: {code:#x}");
+            c
+        })
+        .collect();
+    (columns, rows, chars)
+}
+
+/// Over SSH the pane inside Claude Code sends its frames as cells, where it sent a picture
+/// of the whole pane each time the pointer moved, which blinked and held up clicks. This
+/// runs the real pane as the mod does: input goes in batches through `pane-send`.
+#[test]
+fn over_ssh_the_pane_sends_cells_and_takes_input_in_batches() {
+    use std::io::BufRead;
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("work");
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(root.join("plan.md"), "Cells cross the wire\n").unwrap();
+    let cellix = || {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cellix"));
+        command
+            .current_dir(&root)
+            .env("HOME", &home)
+            .env("XDG_CONFIG_HOME", home.join(".config"))
+            .env("XDG_CACHE_HOME", home.join(".cache"))
+            .env("SSH_CONNECTION", "10.0.0.1 50000 10.0.0.2 22");
+        command
+    };
+    let mut pane = KillOnDrop(
+        cellix()
+            .arg("pane")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let stdout = pane.0.stdout.take().unwrap();
+    let (sender, lines) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout).lines() {
+            let Ok(line) = line else { break };
+            if sender.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let next_frame = |what: &dyn Fn(&CellFrame) -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while Instant::now() < deadline {
+            let Ok(line) = lines.recv_timeout(Duration::from_millis(200)) else {
+                continue;
+            };
+            assert!(
+                !line.starts_with("frame ") && !line.starts_with("png "),
+                "a picture"
+            );
+            if line.starts_with("cells ") {
+                let frame = decode_cells(&line);
+                if what(&frame) {
+                    return Some(frame);
+                }
+            }
+        }
+        None
+    };
+    let first = next_frame(&|_| true).expect("a first frame of cells");
+    assert_eq!((first.0, first.1), (100, 40));
+    let batch = format!(
+        r#"[{{"type":"resize","columns":72,"rows":24}},{{"type":"pointer","kind":"move","x":3,"y":3}},{{"type":"pointer","kind":"move","x":4,"y":3}},{{"type":"open","path":{:?}}}]"#,
+        root.join("plan.md").to_str().unwrap()
+    );
+    // The socket may still be coming up, as the mod finds.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !cellix()
+        .args(["pane-send", &batch])
+        .status()
+        .unwrap()
+        .success()
+    {
+        assert!(Instant::now() < deadline, "pane-send never got through");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let shown = next_frame(&|(columns, rows, chars)| {
+        let text: String = chars.iter().collect();
+        (*columns, *rows) == (72, 24) && text.contains("Cells cross the wire")
+    });
+    assert!(
+        shown.is_some(),
+        "the batch was taken and the file shown, as cells"
+    );
+}

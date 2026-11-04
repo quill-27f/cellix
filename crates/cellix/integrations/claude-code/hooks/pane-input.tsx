@@ -4,7 +4,7 @@ type Input = Record<string, unknown>
 type State = { queue: Input[] }
 
 /** Catches the pane's keys and pointer. A post is replaced if another comes in the same
- * frame, so input queues here and goes in one post per tick. */
+ * frame, so input queues here and goes in one post per tick, a run of moves as its last. */
 const PaneInput: ClientModule<unknown, State> = (_props, surface) => {
   if (surface.state === undefined) {
     const state: State = { queue: [] }
@@ -14,6 +14,9 @@ const PaneInput: ClientModule<unknown, State> = (_props, surface) => {
     })
     surface.onPointer(e => {
       if (e.type === 'enter' || e.type === 'leave') return
+      // Only where the pointer ended up matters, so a move replaces the one before it.
+      const last = state.queue[state.queue.length - 1]
+      if (e.type === 'move' && last?.kind === 'move' && last.button === e.button) state.queue.pop()
       state.queue.push({
         type: 'pointer',
         kind: e.type,

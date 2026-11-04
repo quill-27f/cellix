@@ -10,26 +10,47 @@ const START_TRIES = 40
 const START_WAIT_MS = 100
 
 type Comment = { file: string; line: number; text: string }
+/** A frame as cells, which Cellix sends over SSH: drawn as text, so only what changed crosses. */
+type Cells = { columns: number; rows: number; cells: string }
 
 let source: ImageSource | undefined
+let cells: Cells | undefined
 /** Why Cellix stopped, when it stopped before it showed anything. */
 let stopped: string | undefined
 let running = false
 let sent = { columns: 0, rows: 0 }
-/** Input goes one at a time, so keys can't overtake each other. */
-let sending: Promise<unknown> = Promise.resolve()
+/** Input waiting to go. It goes in order, all that waits in one send, so a click never
+ * queues behind a send for each move before it. */
+let waiting: unknown[] = []
+let sending = false
 
 function send($: Engine, inputs: unknown[]) {
-  sending = sending.then(async () => {
-    for (const input of inputs) {
-      // Cellix may still be starting, as when the session opens with a command.
-      for (let tries = 0; tries < START_TRIES; tries++) {
-        const { exitCode } = await $.process.run(['cellix', 'pane-send', JSON.stringify(input)])
-        if (exitCode === 0) break
-        await $.clock.sleep(START_WAIT_MS)
+  waiting.push(...inputs)
+  if (sending) return
+  sending = true
+  void (async () => {
+    try {
+      while (waiting.length > 0) {
+        const batch = waiting
+        waiting = []
+        // Cellix may still be starting, as when the session opens with a command.
+        for (let tries = 0; tries < START_TRIES; tries++) {
+          const { exitCode } = await $.process.run(['cellix', 'pane-send', JSON.stringify(batch)])
+          if (exitCode === 0) break
+          await $.clock.sleep(START_WAIT_MS)
+        }
       }
+    } catch {
+      waiting = []
+    } finally {
+      sending = false
     }
-  }).catch(() => undefined)
+  })()
+}
+
+/** Whether Cellix has drawn anything yet. */
+function shown(): boolean {
+  return source !== undefined || cells !== undefined
 }
 
 /** Brings the pane up, tall enough to read when it sits above the prompt. */
@@ -52,11 +73,26 @@ async function showCount($: Engine) {
 async function show($: Engine, next: ImageSource) {
   const first = source === undefined
   source = next
+  cells = undefined
   if (first) {
     $.ui.invalidate('ui.render')
     return
   }
   await $.ui.blit({ requestId: PANE, key: 'view', source: next }).catch(() => undefined)
+}
+
+/** Repaints the cells in place, or draws the pane again when their size changed. */
+async function showCells($: Engine, next: Cells) {
+  const same = cells !== undefined && cells.columns === next.columns && cells.rows === next.rows
+  cells = next
+  source = undefined
+  if (same) {
+    const { deny } = await $.ui
+      .blit({ requestId: PANE, key: 'view', cells: next.cells, columns: next.columns, rows: next.rows })
+      .catch(() => ({ deny: 'failed' }))
+    if (deny === undefined) return
+  }
+  $.ui.invalidate('ui.render')
 }
 
 async function line($: Engine, text: string) {
@@ -70,8 +106,9 @@ async function line($: Engine, text: string) {
       height: Number(height),
       generation: Number(generation),
     })
-  } else if (kind === 'png') {
-    await show($, { png: rest[0] })
+  } else if (kind === 'cells') {
+    const [columns, rows, packed] = rest
+    await showCells($, { columns: Number(columns), rows: Number(rows), cells: packed })
   } else if (kind === 'prompt') {
     // Cellix asking the agent something, as Check my review does: a turn of its own.
     const prompt = JSON.parse(rest.join(' ')) as string
@@ -123,7 +160,7 @@ async function bridge($: Engine) {
     running = false
   }
   // Ended before it drew: the pane says why, where it would otherwise wait for good.
-  if (source === undefined) {
+  if (!shown()) {
     stopped = errors.includes('already running')
       ? 'Cellix is already open for this folder in another session. Close it there, then run /cellix again.'
       : `Cellix stopped: ${errors.trim() || 'it exited before it started'}. Run /cellix to try again.`
@@ -150,7 +187,7 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'cellix' }, async ($, e) => {
-    if (!running && source === undefined) void bridge($).catch(() => undefined)
+    if (!running && !shown()) void bridge($).catch(() => undefined)
     await openPane($)
     const typed = e.args.trim()
     if (typed !== '') {
@@ -194,17 +231,23 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Client, Image, Text } = $.ui.resolve(e)
+    const { Box, Client, Image, Raster, Text } = $.ui.resolve(e)
     const columns = Math.min(e.props.bodyColumns, MAX_IMAGE_CELLS)
     const rows = Math.min(e.props.scroll.bodyRows, MAX_IMAGE_CELLS)
     if (columns !== sent.columns || rows !== sent.rows) {
       sent = { columns, rows }
       send($, [{ type: 'resize', columns, rows }])
     }
-    if (source === undefined) return <Text dimColor>{stopped ?? 'Starting Cellix…'}</Text>
+    if (!shown()) return <Text dimColor>{stopped ?? 'Starting Cellix…'}</Text>
+    const view =
+      cells !== undefined ? (
+        <Raster key="view" columns={cells.columns} rows={cells.rows} cells={cells.cells} />
+      ) : (
+        <Image key="view" source={source!} columns={columns} rows={rows} alt="Cellix" />
+      )
     return (
       <Box position="relative" width={columns} height={rows}>
-        <Image key="view" source={source} columns={columns} rows={rows} alt="Cellix" />
+        {view}
         <Box position="absolute" top={0} left={0}>
           <Client key="input" module="./pane-input.tsx" width={columns} height={rows} />
         </Box>

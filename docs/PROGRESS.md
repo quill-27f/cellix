@@ -1202,3 +1202,33 @@ terminal-browser card and the language server card. The test runs an install fro
 real pseudo-terminal, re-running the test binary there; without the fix it waits out its 30 s.
 
 Unverified: a real terminal-browser install from Settings after the fix. Windows is unchanged.
+
+## 2026-11-04: The pane inside Claude Code over SSH
+
+Reported: with Claude Code over SSH, `/cellix` blinked on every mouse move, and clicks were slow
+or lost. Over SSH the pane sent a PNG of the whole pane on every change, and a pointer move
+changes what's hovered, so each move sent a picture across the connection and the swap showed
+as a blink. Input also queued: the mod ran one `cellix pane-send` per event, one after another,
+so a click waited behind every move before it, and Cellix drew a frame for each.
+
+Now, over SSH (or with `CELLIX_TIER=cells`), the pane is the cell tier: `cells` lines that the
+mod draws as Claude Code's `Raster`, so Claude Code writes only the changed cells to the
+terminal. Each cell is a width-1 BMP character: icons go as their cell-tier drawing, `☰` as
+`≡`, and other wide characters as `?`. A Raster has no cursor, so the cursor's cell is drawn
+inverted. The mod gathers input and sends one batch per `pane-send`, with what piled up during a
+send going in the next; the input module and Cellix both keep only the last of a run of moves,
+and Cellix takes everything waiting before it draws. The PNG path is gone.
+
+Tests: a CLI test runs the real `cellix pane` with `SSH_CONNECTION` set and drives it with a
+batch through `pane-send`; unit tests cover the cell encoding, icons and the cursor, batches and
+moves; the mod's tests cover drawing cells, repainting them in place and batching. `harness/x
+snapshot` takes `CELLIX_TIER=cells` and `CELLIX_PANE=1`, and `select:`/`ask:` views. A ui-expert
+review of the cell frames raised things the cell tier already had, left for a design pass: the
+top bar's glyphs (`◆ ◍ ◎` read badly, and `≡ ◆ ± ◎ ×` are ambiguous width, so CJK-wide terminals
+draw them two cells wide), bold that a Raster can't show (headings look like body text), a
+selection bar that reads like a line of the file, and a code block one cell short on the right.
+
+The ledger's `pane-remote` entry, which named `a_remote_frame_travels_as_a_png`, now
+names `a_remote_frame_travels_as_cells`: frames still travel by value over SSH, as cells now.
+
+Unverified: a real Claude Code session over SSH. Pictures and PDFs show as on the cell tier.

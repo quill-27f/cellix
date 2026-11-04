@@ -356,12 +356,17 @@ The plugin ships inside the binary and is written out when an agent starts.
 
 `cellix pane` runs the whole app with no terminal, started by the mod for the session's
 life. It writes each changed frame to a private file and prints one line, and the mod
-swaps the pane's image to it. Over SSH the terminal can't read that file, so a frame is a
-PNG on stdout. Input comes back through a surface module layered over the image, and each
-event is one `cellix pane-send` over the workspace socket. An idle pane sends nothing.
+swaps the pane's image to it. Over SSH the terminal can't read that file, and a picture of
+the pane sent each time it changed blinked and held up clicks, since a pointer move changes
+what's hovered. So over SSH (or with `CELLIX_TIER=cells`) the pane is the cell tier, sent as
+`cells` lines that the mod draws as a `Raster`: Claude Code writes only the changed cells to
+the terminal. Input comes back through a surface module layered over the picture. It is
+gathered per tick and sent as one batch per `cellix pane-send` over the workspace socket,
+whatever piled up while the last send ran going in the next. Cellix keeps only the last of a
+run of moves and takes everything waiting before it draws again. An idle pane sends nothing.
 
-A process per event costs a few milliseconds, which typing doesn't notice. If it shows,
-the next step is a long-lived input channel.
+A process per batch costs a few milliseconds. If it shows, the next step is a long-lived
+input channel.
 
 Cellix runs one local socket per workspace, and each integration is a thin adapter.
 Comments reach an agent through `cellix comments [--take]` as JSON. With `--wait` they are
