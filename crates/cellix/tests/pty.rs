@@ -34,8 +34,10 @@ fn pump(
             if buf[..n].windows(4).any(|w| w == b"\x1b[6n") {
                 let (row, column) = parser.lock().unwrap().screen().cursor_position();
                 let mut input = input.lock().unwrap();
-                let _ = write!(input, "\x1b[{};{}R", row + 1, column + 1);
-                let _ = input.flush();
+                let answered =
+                    write!(input, "\x1b[{};{}R", row + 1, column + 1).and_then(|()| input.flush());
+                let note = format!("<answered {}>", answered.is_ok());
+                raw.lock().unwrap().extend_from_slice(note.as_bytes());
             }
             parser.lock().unwrap().process(&buf[..n]);
         }
@@ -47,8 +49,8 @@ struct Screen {
     input: Input,
     raw: Raw,
     child: Box<dyn portable_pty::Child + Send + Sync>,
-    /// Kept for as long as the screen: on Windows, dropping it closes the console.
-    _master: Box<dyn portable_pty::MasterPty + Send>,
+    /// Kept for as long as the screen: on Windows, dropping the master closes the console.
+    _pty: portable_pty::PtyPair,
 }
 
 impl Screen {
@@ -75,7 +77,7 @@ impl Screen {
             input,
             raw,
             child,
-            _master: pty.master,
+            _pty: pty,
         }
     }
 
@@ -182,7 +184,9 @@ fn pty_bracketed_paste_inserts_verbatim() {
     screen.wait_exit();
 }
 
+/// Windows has no Kitty keyboard protocol: keys arrive as console events.
 #[test]
+#[cfg(unix)]
 fn pty_ctrl_shift_p_and_cmd_p_work_as_in_vs_code() {
     let dir = project();
     let mut screen = Screen::start(dir.path(), &[]);
@@ -199,7 +203,9 @@ fn pty_ctrl_shift_p_and_cmd_p_work_as_in_vs_code() {
     screen.wait_exit();
 }
 
+/// Windows has no Cmd key, nor the Kitty keyboard protocol that carries it.
 #[test]
+#[cfg(unix)]
 fn pty_cmd_w_closes_the_tab_and_cmd_q_quits() {
     let dir = project();
     let mut screen = Screen::start(dir.path(), &["hello.txt"]);
