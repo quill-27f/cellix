@@ -3106,5 +3106,26 @@
     "title": "Forward search tells files of one name apart by their whole path",
     "test": "chapters_with_one_name_find_their_own_pages",
     "passes": true
+  },
+  {
+    "id": "pdflatex-biber",
+    "milestone": 10,
+    "title": "The pdflatex fallback runs Biber for biblatex",
+    "test": "pdflatex_runs_biber_for_biblatex",
+    "passes": true
+  },
+  {
+    "id": "pdflatex-rerun-log",
+    "milestone": 10,
+    "title": "The pdflatex fallback runs again while its log asks",
+    "test": "pdflatex_reruns_while_its_log_asks",
+    "passes": true
+  },
+  {
+    "id": "bibtex-errors",
+    "milestone": 10,
+    "title": "A failing BibTeX says why after the build",
+    "test": "a_bibtex_that_fails_says_why",
+    "passes": true
   }
 ]

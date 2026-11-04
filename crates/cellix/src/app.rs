@@ -601,6 +601,8 @@ struct Build {
     worked: bool,
     said: String,
     took: std::time::Duration,
+    /// BibTeX or Biber failing, and why: the PDF is made all the same, without references.
+    bibliography: Option<(cellix_doc::latex::Bibliography, String)>,
 }
 
 /// All application state. It has no terminal: tests send events and read the grid.
@@ -9399,17 +9401,57 @@ impl App {
                     .output()
             };
             let mut output = run(&engine[0], &engine[1..]);
+            let mut bibliography = None;
+            let mut bib_said = String::new();
             // pdflatex makes one pass, where tectonic and latexmk go on until references settle.
             let worked = output.as_ref().is_ok_and(|o| o.status.success());
-            if worked && Path::new(&engine[0]).file_name() == Some(std::ffi::OsStr::new("pdflatex"))
-            {
-                let aux = std::fs::read_to_string(folder.join(&name).with_extension("aux"));
-                let (bibtex, passes) = cellix_doc::latex::more_passes(&aux.unwrap_or_default());
-                if bibtex {
+            let program = Path::new(&engine[0]);
+            if worked && program.file_name() == Some(std::ffi::OsStr::new("pdflatex")) {
+                let beside = |ext: &str| folder.join(&name).with_extension(ext);
+                let read = |ext: &str| std::fs::read_to_string(beside(ext)).unwrap_or_default();
+                let (tool, passes) =
+                    cellix_doc::latex::more_passes(&read("aux"), beside("bcf").is_file());
+                if let Some(tool) = tool {
+                    // TeX Live keeps its tools together, so a pdflatex named by path brings its
+                    // own BibTeX and Biber.
+                    let near = program
+                        .parent()
+                        .filter(|p| !p.as_os_str().is_empty())
+                        .map(|p| p.join(tool.program()))
+                        .filter(|p| p.is_file());
+                    let found = near.or_else(|| {
+                        let var = |name: &str| std::env::var(name).ok();
+                        crate::integrations::on_path(tool.program(), var)
+                            .then(|| PathBuf::from(tool.program()))
+                    });
                     let stem = name.with_extension("").display().to_string();
-                    let _ = run("bibtex", &[stem]);
+                    match found.map(|path| run(&path.display().to_string(), &[stem])) {
+                        Some(Ok(ran)) => {
+                            let text = format!(
+                                "{}{}",
+                                String::from_utf8_lossy(&ran.stdout),
+                                String::from_utf8_lossy(&ran.stderr)
+                            );
+                            bibliography = tool
+                                .failure(ran.status.code(), &text)
+                                .map(|why| (tool, why));
+                            bib_said = text;
+                        }
+                        Some(Err(e)) => bibliography = Some((tool, e.to_string())),
+                        None => {
+                            bibliography = Some((tool, format!("{} isn't installed", tool.name())));
+                        }
+                    }
                 }
                 for _ in 0..passes {
+                    output = run(&engine[0], &engine[1..]);
+                }
+                // Labels in `\include`d chapters' own .aux files, and anything else still
+                // moving, show only in the log.
+                for _ in 0..3 {
+                    if !cellix_doc::latex::asks_rerun(&read("log")) {
+                        break;
+                    }
                     output = run(&engine[0], &engine[1..]);
                 }
             }
@@ -9417,7 +9459,7 @@ impl App {
                 Ok(done) => (
                     done.status.success(),
                     format!(
-                        "{}{}",
+                        "{}{}{bib_said}",
                         String::from_utf8_lossy(&done.stdout),
                         String::from_utf8_lossy(&done.stderr)
                     ),
@@ -9429,6 +9471,7 @@ impl App {
                 worked,
                 said,
                 took: started.elapsed(),
+                bibliography,
             });
         });
         self.build = Some(result);
@@ -9671,10 +9714,13 @@ impl App {
         if build.worked && pdf.exists() {
             self.show_pdf(&pdf);
             let seconds = build.took.as_secs_f32();
-            self.say(match warned {
-                0 => format!("Built in {seconds:.1} s"),
-                1 => format!("Built in {seconds:.1} s, with a warning"),
-                many => format!("Built in {seconds:.1} s, with {many} warnings"),
+            self.say(match (&build.bibliography, warned) {
+                (Some((tool, why)), _) => {
+                    format!("Built in {seconds:.1} s, but {} failed: {why}", tool.name())
+                }
+                (None, 0) => format!("Built in {seconds:.1} s"),
+                (None, 1) => format!("Built in {seconds:.1} s, with a warning"),
+                (None, many) => format!("Built in {seconds:.1} s, with {many} warnings"),
             });
         } else if let Some(first) = problems.first() {
             self.dock.open = true;
@@ -15872,6 +15918,85 @@ mod tests {
         assert!(
             !dir.path().join("note.tex").exists(),
             "the middle step is gone"
+        );
+    }
+
+    /// A pdflatex in a folder of its own, with the tools TeX Live keeps beside it, each a shell
+    /// script. Every run of each is counted in a file named for it.
+    #[cfg(unix)]
+    fn fake_tex(dir: &Path, tools: &[(&str, &str)]) -> Vec<String> {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = dir.join("texbin");
+        fs::create_dir_all(&bin).unwrap();
+        for (name, body) in tools {
+            let script = bin.join(name);
+            let count = format!("echo \"$@\" >> {name}.runs");
+            fs::write(&script, format!("#!/bin/sh\n{count}\n{body}\n")).unwrap();
+            fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        vec![bin.join("pdflatex").display().to_string()]
+    }
+
+    #[cfg(unix)]
+    fn runs(dir: &Path, tool: &str) -> Vec<String> {
+        let text = fs::read_to_string(dir.join(format!("{tool}.runs"))).unwrap_or_default();
+        text.lines().map(str::to_string).collect()
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn pdflatex_reruns_while_its_log_asks() {
+        let (dir, mut app) =
+            paper_app("\\documentclass{article}\n\\begin{document}\nx\n\\end{document}\n");
+        // As `\include` leaves it: no labels in the root's .aux, and a log asking twice.
+        let pdflatex = "cp sample.pdf paper.pdf\n: > paper.aux\nif [ $(wc -l < pdflatex.runs) -lt 3 ]; then echo 'LaTeX Warning: Label(s) may have changed. Rerun to get cross-references right.' > paper.log; else echo 'Output written on paper.pdf' > paper.log; fi";
+        app.settings.latex_engine = Some(fake_tex(dir.path(), &[("pdflatex", pdflatex)]));
+        app.run(Command::BuildPdf);
+        built(&mut app);
+        assert_eq!(runs(dir.path(), "pdflatex").len(), 3);
+        let shown = screen(&app).text();
+        assert!(shown.contains("Built in"), "{shown}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn pdflatex_runs_biber_for_biblatex() {
+        let (dir, mut app) =
+            paper_app("\\documentclass{article}\n\\begin{document}\nx\n\\end{document}\n");
+        let pdflatex = "cp sample.pdf paper.pdf\nprintf '\\\\abx@aux@cite{0}{knuth84}\\n' > paper.aux\n: > paper.bcf\n: > paper.log";
+        let tools = [("pdflatex", pdflatex), ("biber", "echo 'INFO - Done'")];
+        app.settings.latex_engine = Some(fake_tex(dir.path(), &tools));
+        app.run(Command::BuildPdf);
+        built(&mut app);
+        assert_eq!(runs(dir.path(), "biber"), ["paper"]);
+        assert_eq!(runs(dir.path(), "pdflatex").len(), 3);
+        let shown = screen(&app).text();
+        assert!(shown.contains("Built in"), "{shown}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_bibtex_that_fails_says_why() {
+        let (dir, mut app) =
+            paper_app("\\documentclass{article}\n\\begin{document}\nx\n\\end{document}\n");
+        let pdflatex = "cp sample.pdf paper.pdf\nprintf '\\\\citation{k}\\n\\\\bibdata{refs}\\n' > paper.aux\n: > paper.log";
+        let bibtex = "echo 'This is BibTeX, Version 0.99d'\necho \"I couldn't open database file refs.bib\"\nexit 2";
+        let tools = [("pdflatex", pdflatex), ("bibtex", bibtex)];
+        app.settings.latex_engine = Some(fake_tex(dir.path(), &tools));
+        app.run(Command::BuildPdf);
+        built(&mut app);
+        assert_eq!(runs(dir.path(), "bibtex"), ["paper"]);
+        let shown = screen(&app).text();
+        assert!(
+            shown.contains("but BibTeX failed: I couldn't open database file refs.bib"),
+            "{shown}"
+        );
+        assert!(
+            app.dock
+                .log
+                .iter()
+                .any(|l| l.contains("couldn't open database")),
+            "its output is in the log"
         );
     }
 

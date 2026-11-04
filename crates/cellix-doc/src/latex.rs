@@ -913,17 +913,91 @@ pub const CITES: [&str; 10] = [
 ];
 pub const REFS: [&str; 6] = ["ref", "eqref", "cref", "Cref", "autoref", "pageref"];
 
-/// What a pdflatex pass left to do, from its `.aux` file: whether BibTeX has to run, and how many
-/// more passes it takes for citations and references to settle. Tectonic and latexmk do this
-/// themselves.
-pub fn more_passes(aux: &str) -> (bool, usize) {
-    let bibtex = aux.contains("\\bibdata");
-    let passes = if bibtex {
+/// What a pdflatex pass left to do, from its `.aux` file: BibTeX or Biber to run, if either,
+/// and how many more passes it takes for citations and references to settle. Tectonic and
+/// latexmk do this themselves. Biblatex with Biber writes no `\bibdata`, only its own
+/// `\abx@aux` lines and a `.bcf` file, which `bcf` says is there.
+pub fn more_passes(aux: &str, bcf: bool) -> (Option<Bibliography>, usize) {
+    let tool = if aux.contains("\\bibdata") {
+        Some(Bibliography::Bibtex)
+    } else if aux.contains("\\abx@aux") || bcf {
+        Some(Bibliography::Biber)
+    } else {
+        None
+    };
+    let passes = if tool.is_some() {
         2
     } else {
         usize::from(aux.contains("\\newlabel") || aux.contains("\\citation"))
     };
-    (bibtex, passes)
+    (tool, passes)
+}
+
+/// What reads a paper's `.bib` files between passes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Bibliography {
+    Bibtex,
+    Biber,
+}
+
+impl Bibliography {
+    pub fn program(self) -> &'static str {
+        match self {
+            Self::Bibtex => "bibtex",
+            Self::Biber => "biber",
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Bibtex => "BibTeX",
+            Self::Biber => "Biber",
+        }
+    }
+
+    /// Why a run failed, from its exit code and what it said, or None if it didn't. BibTeX
+    /// exits 1 for warnings, which LaTeX reports again, and 2 or more for errors, such as a
+    /// `.bib` file it can't find.
+    pub fn failure(self, code: Option<i32>, said: &str) -> Option<String> {
+        let failed = match self {
+            Self::Bibtex => code.is_none_or(|c| c >= 2),
+            Self::Biber => code != Some(0),
+        };
+        if !failed {
+            return None;
+        }
+        let chatter = [
+            "This is ",
+            "The top-level auxiliary file",
+            "The style file",
+            "Database file #",
+            "Warning--",
+            "INFO - ",
+            "WARN - ",
+        ];
+        let lines = || said.lines().map(str::trim).filter(|l| !l.is_empty());
+        let error = lines().find_map(|l| l.strip_prefix("ERROR - "));
+        let first = lines().find(|l| !chatter.iter().any(|c| l.starts_with(c)));
+        Some(
+            error
+                .or(first)
+                .unwrap_or("it ended without saying why")
+                .to_string(),
+        )
+    }
+}
+
+/// Whether a pass's log says references or citations may still be wrong. With `\include`,
+/// labels live in each chapter's own `.aux`, so only the log tells.
+pub fn asks_rerun(log: &str) -> bool {
+    let log = unwrapped(log);
+    [
+        "Rerun to get",
+        "Label(s) may have changed",
+        "Please rerun LaTeX",
+    ]
+    .iter()
+    .any(|asks| log.contains(asks))
 }
 
 /// Whether a key to a citation or a label is being typed: the text of a line up to the caret
@@ -1676,9 +1750,50 @@ mod tests {
 
     #[test]
     fn pdflatex_runs_again_until_references_settle() {
-        assert_eq!(more_passes("\\relax\n"), (false, 0));
-        assert_eq!(more_passes("\\newlabel{sec:a}{{1}{1}}\n"), (false, 1));
-        assert_eq!(more_passes("\\citation{k}\n\\bibdata{refs}\n"), (true, 2));
+        assert_eq!(more_passes("\\relax\n", false), (None, 0));
+        assert_eq!(more_passes("\\newlabel{sec:a}{{1}{1}}\n", false), (None, 1));
+        assert_eq!(
+            more_passes("\\citation{k}\n\\bibdata{refs}\n", false),
+            (Some(Bibliography::Bibtex), 2)
+        );
+    }
+
+    #[test]
+    fn biblatex_with_biber_runs_biber() {
+        let aux = "\\relax\n\\abx@aux@refcontext{nty/global//global/global}\n\\abx@aux@cite{0}{knuth84}\n";
+        assert_eq!(more_passes(aux, true), (Some(Bibliography::Biber), 2));
+        assert_eq!(more_passes("\\relax\n", true).0, Some(Bibliography::Biber));
+        // Biblatex on the BibTeX backend names its data as BibTeX wants.
+        let aux = "\\abx@aux@cite{0}{k}\n\\bibdata{main-blx,refs}\n";
+        assert_eq!(more_passes(aux, true).0, Some(Bibliography::Bibtex));
+    }
+
+    #[test]
+    fn a_log_asking_for_another_pass_gets_one() {
+        assert!(asks_rerun(
+            "(./ch1.aux)\n\nLaTeX Warning: Label(s) may have changed. Rerun to get cross-references right.\n"
+        ));
+        assert!(asks_rerun(
+            "Package biblatex Warning: Please rerun LaTeX.\n(biblatex)                Page breaks have changed.\n"
+        ));
+        assert!(!asks_rerun("Output written on main.pdf (1 page).\n"));
+    }
+
+    #[test]
+    fn a_bibliography_that_fails_says_why() {
+        let bibtex = "This is BibTeX, Version 0.99d (TeX Live 2023)\nThe top-level auxiliary file: main.aux\nThe style file: plain.bst\nI couldn't open database file refs.bib\n---line 3 of file main.aux\n :\\bibdata{refs\n :              }\nI'm skipping whatever remains of this command\n(There was 1 error message)\n";
+        assert_eq!(
+            Bibliography::Bibtex.failure(Some(2), bibtex).as_deref(),
+            Some("I couldn't open database file refs.bib")
+        );
+        let warned = "This is BibTeX\nWarning--I didn't find a database entry for \"x\"\n";
+        assert_eq!(Bibliography::Bibtex.failure(Some(1), warned), None);
+        let biber = "INFO - This is Biber 2.19\nINFO - Reading 'main.bcf'\nERROR - Cannot find 'refs.bib'!\nINFO - ERRORS: 1\n";
+        assert_eq!(
+            Bibliography::Biber.failure(Some(2), biber).as_deref(),
+            Some("Cannot find 'refs.bib'!")
+        );
+        assert_eq!(Bibliography::Biber.failure(Some(0), "INFO - Done\n"), None);
     }
 
     #[test]
