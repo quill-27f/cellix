@@ -1187,3 +1187,18 @@ In the tour's debug build the frame after a whole-layout change can take over a 
 The pane's maximize button looked missing in `91-preview-zoomed` and `92-preview-panned`. Those
 two shots were taken before Maximize was built and never retaken; retaken, the button is there.
 A test now holds it drawn while the Preview is zoomed, panned and hovered.
+
+## 2026-11-04: Installs no longer hang on a question
+
+Reported: after installing for Claude Code and then terminal-browser from Integrations, Settings
+said another install was still running long after it had finished, until Cellix was reopened.
+terminal-browser's installer ends with `terminal-browser setup`, which asks on `/dev/tty` whether
+to install its agent skill. Cellix runs installs from inside its own terminal, so the question
+went to Cellix's screen and waited for a `\n` that raw mode never sends (Enter arrives as `\r`).
+The tool was installed, but the shell never exited. Installs now run in a session of their own
+with no terminal (`setsid`), so a question like that takes its default answer and `sudo` fails
+rather than waiting for a password. This covers every install button: Integrations, the
+terminal-browser card and the language server card. The test runs an install from inside a
+real pseudo-terminal, re-running the test binary there; without the fix it waits out its 30 s.
+
+Unverified: a real terminal-browser install from Settings after the fix. Windows is unchanged.

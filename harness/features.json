@@ -3505,5 +3505,12 @@
     "title": "The pane's maximize button stays drawn while the Preview is zoomed and panned",
     "test": "the_maximize_button_stays_while_the_preview_is_zoomed_and_panned",
     "passes": true
+  },
+  {
+    "id": "install-without-terminal",
+    "milestone": 10,
+    "title": "An install that asks on the terminal takes its default and finishes, so Settings frees up",
+    "test": "an_installer_that_asks_on_the_terminal_still_finishes",
+    "passes": true
   }
 ]

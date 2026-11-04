@@ -525,10 +525,28 @@ fn install_server(index: usize) -> String {
 
 fn install_with(command: &str, tool: &str) -> String {
     // Not a login shell, whose profile would swap the PATH Cellix was started with.
-    let done = std::process::Command::new("sh")
+    let mut shell = std::process::Command::new("sh");
+    shell
         .args(["-c", command])
-        .stdin(std::process::Stdio::null())
-        .output();
+        .stdin(std::process::Stdio::null());
+    // In a session of its own, with no terminal. An installer that asks on /dev/tty, as
+    // terminal-browser's `setup` does, would otherwise ask on Cellix's own screen, where
+    // Enter arrives as \r and never answers it, and the install would never end. With no
+    // terminal it takes its default answer, and sudo fails instead of waiting for a password.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: setsid is async-signal-safe, and this runs in the child before it execs.
+        unsafe {
+            shell.pre_exec(|| {
+                if libc::setsid() < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    let done = shell.output();
     match done {
         Ok(done) if done.status.success() => format!("Installed {tool}"),
         Ok(done) => {
@@ -11324,6 +11342,74 @@ mod tests {
             fine_x: x as f32,
             mods: Mods::default(),
         })
+    }
+
+    /// An installer that asks on the terminal, as terminal-browser's does: with a terminal it
+    /// waits for an answer that never comes, without one it goes on.
+    const ASKS_ON_THE_TERMINAL: &str =
+        "if exec 3<>/dev/tty; then printf 'Install it? [Y/n] ' >&3; read answer <&3; fi; true";
+
+    /// Run inside a terminal by the test below; skipped on its own.
+    #[test]
+    #[ignore = "run by an_installer_that_asks_on_the_terminal_still_finishes"]
+    fn install_inside_a_terminal() {
+        println!("said: {}", install_with(ASKS_ON_THE_TERMINAL, "the tool"));
+    }
+
+    /// Cellix runs in a terminal, so its installs did too, and terminal-browser's setup asked
+    /// on Cellix's own screen and waited for good: Settings said another install was running
+    /// until Cellix was closed. This runs an install from inside a real terminal.
+    #[cfg(unix)]
+    #[test]
+    fn an_installer_that_asks_on_the_terminal_still_finishes() {
+        use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+        use std::io::Read;
+        let pty = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .unwrap();
+        let mut command = CommandBuilder::new(std::env::current_exe().unwrap());
+        command.args([
+            "--exact",
+            "app::tests::install_inside_a_terminal",
+            "--ignored",
+            "--nocapture",
+        ]);
+        let mut child = pty.slave.spawn_command(command).unwrap();
+        drop(pty.slave);
+        let mut reader = pty.master.try_clone_reader().unwrap();
+        let (sender, said) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut text = String::new();
+            let mut chunk = [0; 4096];
+            while let Ok(n) = reader.read(&mut chunk) {
+                if n == 0 {
+                    break;
+                }
+                text.push_str(&String::from_utf8_lossy(&chunk[..n]));
+                let _ = sender.send(text.clone());
+            }
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut text = String::new();
+        while !text.contains("said: ") && std::time::Instant::now() < deadline {
+            if let Ok(more) = said.recv_timeout(std::time::Duration::from_millis(100)) {
+                text = more;
+            }
+        }
+        let _ = child.kill();
+        assert!(
+            text.contains("said: Installed the tool"),
+            "the install waited on the terminal:\n{text}"
+        );
+        assert!(
+            !text.contains("Install it?"),
+            "it asked on the terminal:\n{text}"
+        );
     }
 
     fn typed(app: &mut App, text: &str) {
