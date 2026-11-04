@@ -362,6 +362,14 @@ with tempfile.TemporaryDirectory() as scratch:
     # A debug build reads the picture slowly, and each zoom reads it again.
     zoomed = [["wait", 2.0]] + [["click", *ZOOM_IN], ["wait", 1.0]] * 4 + [["wait", 1.0]]
     shoot("91-preview-zoomed", zoomed, RESULTS, LOSS, size="150x44")
+    # The pane's maximize button, at the end of its own tabs, and the window it takes.
+    MAXIMIZE = (114, 0)
+    shoot("93-pane-maximized", [["wait", 1.0], ["click", *MAXIMIZE], ["wait", 0.6], ["move", 80, 20]],
+          RESULTS, LOSS, size="150x44")
+    shoot("94-pane-restore-hover", [["wait", 1.0], ["click", *MAXIMIZE], ["wait", 0.6], ["move", 80, 20],
+                                    ["wait", 0.3], ["move", 22, 0]], RESULTS, LOSS, size="150x44")
+    shoot("95-editor-maximized", [["wait", 4.0], ["double", 36, 0], ["wait", 0.6]], CODE_FILE, LOSS,
+          size="150x44")
     shoot("92-preview-panned", [*zoomed, ["drag", 125, 20, 105, 14], ["wait", 0.6]], RESULTS, LOSS,
           size="150x44")
 

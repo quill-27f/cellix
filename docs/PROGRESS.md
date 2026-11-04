@@ -1067,3 +1067,24 @@ the bar's text, and thumbs touching the corners; all fixed. The thumbs keep the 
 Unverified: a real terminal's sideways wheel and Shift+wheel (crossterm's kinds are tested, a
 live trackpad isn't), and the pan inside a live Claude Code session. Pages don't show on the
 cell tier, so neither does panning. Next: maximizing the pane and an editor.
+
+## 2026-11-04: Maximize
+
+The side pane's tab row ends with a maximize-2 button after its +, which makes the pane fill
+everything right of the activity rail. Maximized, it shows minimize-2 on the selected chip, with
+the tooltip "Restore or double-click the tab", and the status bar says which file is hidden. A
+double-click on one of the pane's tabs does the same. A double-click on an editor's tab maximizes
+that editor, hiding the sidebar, the other split panes and the side pane, and again restores.
+The palette has Toggle Maximized Side Pane and Toggle Maximized Editor; no keys. Double-clicks
+use the existing time and place window. The icons at the top right stay put. What's shown is
+compared before and after every event and every agent call: a hidden part asked for (the pane
+behind an editor, the sidebar, a file behind the pane, Review, Settings, a split) restores first.
+Kept while running only. The tour has `93-pane-maximized`, `94-pane-restore-hover` and
+`95-editor-maximized`; a design review made the button's chip square and its icon the strip's
+size, gave it one step from the +, moved the tooltip clear of the bar's text, and named the
+hidden parts in the status bar for an editor too.
+
+Unverified: in the tour's debug build, a double-click on the tab of a Markdown page with a
+picture didn't register, though it does in a test and on a code file. Multi-clicks are timed when
+each press is handled, so a slow frame between the two presses can split them; a release build
+wasn't tried. Next: dragging tabs.

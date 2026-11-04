@@ -244,6 +244,8 @@ agent answers with `cellix reply <id> "text"`, and the answer lands under your q
 
 The icons at the top right start a real agent, a terminal or a browser in the side pane, beside your file. Press Ctrl+` to
 move the keyboard between the two, and the × at the top right, or Ctrl+Shift+`, to hide the pane.
+The button after the pane's own tabs, or a double-click on one of them, lets the pane take the
+window; a double-click on a file's tab does the same for the file. Do it again to restore.
 Hiding stops nothing. What runs there outlives Cellix too (not yet on Windows): quitting offers Keep Running, a dropped SSH
 connection keeps everything, and the next Cellix in that folder finds it with what it printed.
 

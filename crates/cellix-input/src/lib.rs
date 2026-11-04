@@ -165,6 +165,9 @@ pub enum Command {
     ComparePlanVersions,
     /// Scrolls the PDF to the line the caret is on.
     ShowInPdf,
+    /// The side pane, or the editor in front, takes the window, or gives it back.
+    MaximizePane,
+    MaximizeEditor,
     ToggleComment,
     MoveLineUp,
     MoveLineDown,

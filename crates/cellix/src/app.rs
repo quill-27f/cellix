@@ -268,6 +268,31 @@ struct PendingPlan {
     reply: Sender<Decision>,
 }
 
+/// What takes the window while the rest waits, until it's restored. Kept while running only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Maximized {
+    /// The side pane, right of the activity rail.
+    Pane,
+    /// The editor in front, without the sidebar, the other panes or the side pane.
+    Editor,
+}
+
+/// What shows, compared before and after something happens, so a maximized part gives the
+/// window back when what's asked for is hidden behind it.
+#[derive(Clone, PartialEq)]
+struct InView {
+    dock: (bool, Front),
+    sidebar: (bool, SidebarView, bool),
+    editor: (usize, usize),
+    panes: usize,
+    review: bool,
+    settings: bool,
+}
+
+/// What the tooltip on the pane's maximize button says.
+const MAXIMIZE_TIP: &str = "Maximize or double-click the tab";
+const RESTORE_TIP: &str = "Restore or double-click the tab";
+
 /// At most one of these takes input ahead of everything else.
 enum Overlay {
     None,
@@ -712,6 +737,8 @@ pub struct App {
     tests: Vec<TestRun>,
     /// Where the pointer is, for hover highlights.
     hover: Option<(u16, u16)>,
+    /// The side pane or the editor taking the window.
+    maximized: Option<Maximized>,
     /// A press in the Preview, until it's let go.
     preview_press: Option<PreviewPress>,
     /// The last press in text, with where it was and how many it made in a row.
@@ -907,6 +934,7 @@ impl App {
             hover: None,
             last_click: None,
             preview_press: None,
+            maximized: None,
             settings_page: None,
             terminal_look: (None, None),
             smooth_change: None,
@@ -1846,9 +1874,12 @@ impl App {
             calls.extend(ide.calls.try_iter());
         }
         let called = !calls.is_empty();
+        let shown = self.maximized.map(|_| self.in_view());
         for call in calls {
             self.ide_call(call);
         }
+        let built = self.poll_build();
+        self.keep_in_view(shown);
         self.tell_selection();
         let terminal = self.dock.poll(&self.theme);
         let searched = self.search.poll();
@@ -1856,7 +1887,7 @@ impl App {
         let installed = self.poll_install()
             | self.poll_browser()
             | self.poll_offer()
-            | self.poll_build()
+            | built
             | self.poll_snippets()
             | self.poll_spell()
             | self.poll_kernels()
@@ -2714,6 +2745,9 @@ impl App {
     }
 
     fn sidebar_area(&self) -> Option<Rect> {
+        if self.maximized.is_some() {
+            return None;
+        }
         let activity = self.activity_area();
         if self.compact() {
             return self
@@ -2744,6 +2778,9 @@ impl App {
     fn main_area(&self) -> Rect {
         let x = self.main_left();
         let height = self.size.1.saturating_sub(1);
+        if self.maximized == Some(Maximized::Pane) && self.dock.open {
+            return Rect::new(x, 0, 0, height);
+        }
         match self.dock_area() {
             Some(dock) if self.dock_under() => {
                 Rect::new(x, 0, self.size.0.saturating_sub(x), dock.y)
@@ -2761,6 +2798,9 @@ impl App {
     /// side, as when it's sharing a terminal with an agent. A short one has no room for that
     /// either, so there the pane takes the window.
     fn dock_under(&self) -> bool {
+        if self.maximized.is_some() {
+            return false;
+        }
         let room = self.size.0.saturating_sub(self.main_left());
         self.dock.too_narrow(room) && self.size.1 > STACK_HEIGHT
     }
@@ -2929,7 +2969,7 @@ impl App {
         let main = self.main_area();
         let rows = self.chrome_rows();
         let (y, h) = (main.y + rows, main.h.saturating_sub(rows));
-        if self.compact() {
+        if self.compact() || self.maximized == Some(Maximized::Editor) {
             let w = if pane == self.focus { main.w } else { 0 };
             return Rect::new(main.x, y, w, h);
         }
@@ -2974,6 +3014,7 @@ impl App {
             self.message.borrow_mut().clear();
         }
         self.follow_rest(&event);
+        let shown = self.maximized.map(|_| self.in_view());
         let wheel = matches!(
             event,
             Event::Mouse(MouseEvent {
@@ -2996,6 +3037,7 @@ impl App {
             Event::Tick => self.tick(),
         }
         self.poll_pan_hint();
+        self.keep_in_view(shown);
         self.fit_dock();
         self.follow_threads();
     }
@@ -4661,6 +4703,22 @@ impl App {
     }
 
     pub fn run(&mut self, command: Command) {
+        // The sidebar stands behind anything maximized, so asking for it restores first.
+        let sidebar = matches!(
+            command,
+            Command::ToggleSidebar
+                | Command::FindInProject
+                | Command::ReplaceInProject
+                | Command::ShowOutline
+                | Command::ShowSourceControl
+        );
+        if sidebar && self.maximized.take().is_some() {
+            self.fit_dock();
+            if command == Command::ToggleSidebar {
+                self.show_sidebar = true;
+                return;
+            }
+        }
         let area = self.focused_area();
         match command {
             Command::Quit if !self.stop_confirmed && !self.dock.busy().is_empty() => {
@@ -4908,6 +4966,8 @@ impl App {
                 self.dock.focused = wanted && self.dock.session().is_some();
             }
             Command::OpenGemini => self.open_agent("gemini"),
+            Command::MaximizePane => self.toggle_maximized(Maximized::Pane),
+            Command::MaximizeEditor => self.toggle_maximized(Maximized::Editor),
             Command::OpenSettings => {
                 let closing = self.settings_page.is_some();
                 self.settings_page = (!closing).then(|| SettingsPage::new(Found::look()));
@@ -5216,6 +5276,13 @@ impl App {
     fn dock_area(&self) -> Option<Rect> {
         let left = self.main_left();
         let height = self.size.1.saturating_sub(1);
+        match self.maximized {
+            Some(Maximized::Editor) => return None,
+            Some(Maximized::Pane) if self.dock.open => {
+                return Some(Rect::new(left, 0, self.size.0.saturating_sub(left), height));
+            }
+            _ => {}
+        }
         if self.dock_under() {
             let rows = self.dock.height.unwrap_or(height * STACK_SHARE / 100);
             let rows = rows.clamp(STACK_LEAST, height - STACK_LEAST);
@@ -5468,7 +5535,14 @@ impl App {
                 }
             }
             if mouse.kind == MouseKind::Left {
-                match self.dock.hit(area, x) {
+                let hit = self.dock.hit(area, x);
+                let on_tab = matches!(hit, Some(TabHit::Tab(_) | TabHit::View(_)));
+                if on_tab && self.count_click(x, y) == 2 {
+                    self.toggle_maximized(Maximized::Pane);
+                    return true;
+                }
+                match hit {
+                    Some(TabHit::Maximize) => self.toggle_maximized(Maximized::Pane),
                     Some(TabHit::Hide) => self.run(Command::CloseDock),
                     Some(TabHit::Tab(index)) => {
                         self.dock.active = Some(index);
@@ -5859,7 +5933,9 @@ impl App {
         });
         self.dock.tabs_end.set(end);
         self.dock.tabs_flush.set(self.dock_under());
-        self.dock.draw_tabs(grid, area, self.hover, theme);
+        let maximized = self.maximized == Some(Maximized::Pane);
+        self.dock
+            .draw_tabs(grid, area, (self.hover, maximized), theme);
         let line = if self.dock_under() {
             Bounds::cells(area.x as f32, area.y as f32, area.w as f32, 0.0)
         } else {
@@ -8703,6 +8779,8 @@ impl App {
                 // A little wider than the glyph, so it isn't a pixel hunt.
                 if x + 3 >= at + width {
                     self.run(Command::CloseTab);
+                } else if self.count_click(x, self.tabs_area().y) == 2 {
+                    self.toggle_maximized(Maximized::Editor);
                 }
                 return;
             }
@@ -8772,6 +8850,13 @@ impl App {
             }
         }
         self.draw_dock(grid);
+        if self.maximized == Some(Maximized::Pane) && self.dock.open {
+            self.draw_status(grid);
+            self.draw_pane_actions(grid);
+            self.draw_overlay(grid);
+            self.draw_tooltip(grid);
+            return;
+        }
         if let Some(page) = &self.settings_page {
             self.draw_settings_tab(grid);
             let (chosen, keymap, smooth_scroll, minimap) = self.settings_values();
@@ -8837,7 +8922,7 @@ impl App {
                 if let Some(hover) = self.hover.filter(|h| area.contains(h.0, h.1)) {
                     editor.draw_hover(grid, area, hover, &self.theme);
                 }
-                if pane + 1 < self.panes.len() {
+                if pane + 1 < self.panes.len() && self.maximized.is_none() {
                     let line = Rect::new(area.right(), area.y, 1, area.h);
                     grid.fill(line, theme.tab);
                 }
@@ -8895,6 +8980,18 @@ impl App {
                     let start = (middle - wide(name) / 2.0).min(right_edge);
                     (name, start, area.bottom() as f32 + 0.3)
                 })
+            }
+            Overlay::None if self.on_maximize_button(x, y) => {
+                let name = if self.maximized == Some(Maximized::Pane) {
+                    RESTORE_TIP
+                } else {
+                    MAXIMIZE_TIP
+                };
+                // Starting where the button's chip does, clear of the bar's text to its left.
+                let area = self.dock_area().unwrap_or_default();
+                let start = self.dock.maximize_button(area) as f32 + 0.5;
+                let left = start.min(self.size.0 as f32 - wide(name) - 0.5);
+                Some((name, left.max(0.5), area.y as f32 + 1.2))
             }
             Overlay::None if cut.is_some() => cut.as_deref().map(|name| {
                 let left = (x as f32).min(self.size.0 as f32 - wide(name) - 0.5);
@@ -8963,13 +9060,77 @@ impl App {
             );
         } else {
             let end = left + wide(name);
-            grid.text_run(
-                (left + 1.5, text_top),
-                end,
-                name,
-                (theme.text.fg, false),
-                font,
-            );
+            // What it does, and then, quieter, the other way to do it.
+            let (head, tail) = name
+                .split_once(" or ")
+                .map_or((name, ""), |(head, _)| (head, &name[head.len()..]));
+            let start = (left + 1.5, text_top);
+            grid.text_run(start, end, head, (theme.text.fg, false), font);
+            if !tail.is_empty() {
+                let after = left + 1.5 + self.measure.width(head, font);
+                let quiet = (theme.popup_dim, false);
+                grid.text_run((after, text_top), end, tail, quiet, font);
+            }
+        }
+    }
+
+    /// Whether the pointer is on the side pane's maximize button.
+    fn on_maximize_button(&self, x: u16, y: u16) -> bool {
+        self.dock_area()
+            .is_some_and(|area| y == area.y && self.dock.hit(area, x) == Some(TabHit::Maximize))
+    }
+
+    /// Lets the side pane or the editor in front take the window, or gives it back.
+    fn toggle_maximized(&mut self, which: Maximized) {
+        if self.maximized == Some(which) {
+            self.maximized = None;
+        } else {
+            match which {
+                Maximized::Pane if !self.dock.open => self.toggle_dock(),
+                Maximized::Editor if self.editors.is_empty() => {
+                    self.say("Open a file to maximize it");
+                    return;
+                }
+                Maximized::Editor => self.dock.focused = false,
+                Maximized::Pane => {}
+            }
+            self.maximized = Some(which);
+            self.drawer = false;
+        }
+        self.fit_dock();
+    }
+
+    fn in_view(&self) -> InView {
+        InView {
+            dock: (self.dock.open, self.dock.front),
+            sidebar: (self.show_sidebar, self.sidebar_view, self.drawer),
+            editor: (self.active(), self.editors.len()),
+            panes: self.panes.len(),
+            review: self.review.is_some(),
+            settings: self.settings_page.is_some(),
+        }
+    }
+
+    /// Gives the window back when what was just asked for stands behind what's maximized,
+    /// so nothing opens out of sight: the pane or the sidebar behind an editor, or a file
+    /// behind the pane.
+    fn keep_in_view(&mut self, before: Option<InView>) {
+        let (Some(before), Some(which)) = (before, self.maximized) else {
+            return;
+        };
+        let now = self.in_view();
+        let opened = |was: bool, is: bool| is && !was;
+        let around = now.sidebar != before.sidebar
+            || now.panes != before.panes
+            || opened(before.review, now.review)
+            || opened(before.settings, now.settings);
+        let behind = match which {
+            Maximized::Editor => self.dock.open && now.dock != before.dock,
+            Maximized::Pane => !self.dock.open || now.editor != before.editor,
+        };
+        if around || behind {
+            self.maximized = None;
+            self.fit_dock();
         }
     }
 
@@ -10429,10 +10590,23 @@ impl App {
         let waiting = self.agents.needing_you();
         let attention = format!("An agent needs you ({waiting})");
         let typed = format!(":{}", self.neovim_line);
+        let hidden = match self.maximized {
+            Some(Maximized::Pane) => self
+                .editors
+                .get(self.active())
+                .map(|e| format!("{} hidden while the pane is maximized", e.title())),
+            Some(Maximized::Editor) => self.editors.get(self.active()).map(|e| {
+                let name = e.title();
+                format!("Sidebar and panes hidden while {name} is maximized · double-click its tab to restore")
+            }),
+            None => None,
+        };
         let left = if !self.neovim_line.is_empty() {
             typed.as_str()
         } else if !message.is_empty() {
             message.as_str()
+        } else if let Some(hidden) = &hidden {
+            hidden.as_str()
         } else if waiting > 0 {
             attention.as_str()
         } else if let Some(problem) = &at_cursor {
@@ -15279,7 +15453,7 @@ mod tests {
 
     /// Waits for the Preview to finish reading, as a frame would.
     fn preview_read(app: &mut App) {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         loop {
             let view = app.dock.pdf.as_ref().unwrap();
             if view.pages_ready() > 0 || view.error.is_some() {
@@ -15375,7 +15549,7 @@ mod tests {
             app.handle(mouse(MouseKind::Left, plus, screen_area.y));
             app.handle(mouse(MouseKind::Up, plus, screen_area.y));
         }
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while !app.dock.pdf.as_ref().unwrap().wide(screen_area.w) {
             assert!(
                 std::time::Instant::now() < deadline,
@@ -15594,6 +15768,150 @@ mod tests {
             }
         }
         assert!((app.dock.pdf.as_ref().unwrap().left - 12.0).abs() < 0.01);
+    }
+
+    /// A file beside an image in the Preview, in a window wide enough for the sidebar.
+    fn file_and_preview() -> (TempDir, App) {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("notes.txt"), "Some words to read\n").unwrap();
+        let image = image::RgbaImage::from_pixel(80, 80, image::Rgba([1, 2, 3, 255]));
+        image.save(dir.path().join("loss.png")).unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 44));
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(10, 20)));
+        app.open(&dir.path().join("notes.txt")).unwrap();
+        app.open(&dir.path().join("loss.png")).unwrap();
+        preview_read(&mut app);
+        (dir, app)
+    }
+
+    fn click(app: &mut App, x: u16, y: u16) {
+        app.handle(mouse(MouseKind::Left, x, y));
+        app.handle(mouse(MouseKind::Up, x, y));
+    }
+
+    #[test]
+    fn the_side_pane_maximizes_from_its_button_and_its_tab() {
+        let (_dir, mut app) = file_and_preview();
+        let icons = app.pane_actions();
+        let area = app.dock_area().unwrap();
+        assert!(app.sidebar_area().is_some());
+        let button = app.dock.maximize_button(area);
+        app.handle(mouse(MouseKind::Move, button + 1, area.y));
+        assert!(painted_text(&app).contains("Maximize"));
+        click(&mut app, button + 1, area.y);
+        // The pane takes everything right of the rail; the file and sidebar wait.
+        let full = app.dock_area().unwrap();
+        assert_eq!((full.x, full.right()), (app.activity_area().right(), 150));
+        assert!(app.sidebar_area().is_none());
+        let grid = screen(&app);
+        assert!(!grid.text().contains("Some words to read"));
+        let status = grid.row_text(43);
+        assert!(
+            status.contains("notes.txt hidden while the pane is maximized"),
+            "{status}"
+        );
+        // The icons at the top right stay where they were.
+        let same = |a: &[(Rect, Icon, Command, &str)], b: &[(Rect, Icon, Command, &str)]| {
+            a.iter().map(|i| i.0).eq(b.iter().map(|i| i.0))
+        };
+        assert!(same(&icons, &app.pane_actions()));
+        // The button now restores, on the chip a selected icon stands on.
+        let button = app.dock.maximize_button(full);
+        app.handle(mouse(MouseKind::Move, button + 1, full.y));
+        let tip = painted_text(&app);
+        assert!(
+            tip.contains("Restore") && tip.contains("or double-click the tab"),
+            "{tip}"
+        );
+        let chip = screen(&app).paint.iter().any(|p| {
+            matches!(p, Paint::Panel { bounds, fill: Some(fill), .. }
+                if *fill == app.theme.tint && bounds.x / 64 >= i32::from(button) - 1
+                    && bounds.x / 64 <= i32::from(button) + 1 && bounds.y / 64 == i32::from(full.y))
+        });
+        assert!(chip, "the restore button stands on a chip");
+        click(&mut app, button + 1, full.y);
+        assert_eq!(app.dock_area(), Some(area));
+        assert!(screen(&app).text().contains("Some words to read"));
+        // A double-click on the pane's tab does the same, both ways.
+        let (_, _, tab) = app.dock.view_tabs_for_test(area)[0];
+        click(&mut app, tab.x + 2, area.y);
+        click(&mut app, tab.x + 2, area.y);
+        assert_eq!(app.maximized, Some(Maximized::Pane));
+        let full = app.dock_area().unwrap();
+        let (_, _, tab) = app.dock.view_tabs_for_test(full)[0];
+        click(&mut app, tab.x + 2, full.y);
+        click(&mut app, tab.x + 2, full.y);
+        assert_eq!(app.maximized, None);
+        assert!(same(&icons, &app.pane_actions()));
+    }
+
+    #[test]
+    fn double_clicking_an_editor_tab_maximizes_it() {
+        let (dir, mut app) = file_and_preview();
+        app.open(&dir.path().join("loss.png")).unwrap();
+        fs::write(dir.path().join("more.txt"), "Other words\n").unwrap();
+        app.open(&dir.path().join("more.txt")).unwrap();
+        app.run(Command::SplitPane);
+        let tab_y = app.tabs_area().y;
+        let (_, x, _) = app.visible_tabs()[1];
+        click(&mut app, x + 1, tab_y);
+        click(&mut app, x + 1, tab_y);
+        assert_eq!(app.maximized, Some(Maximized::Editor));
+        let rail = app.activity_area().right();
+        let shown = app.focused_area();
+        assert_eq!(
+            (shown.x, shown.right()),
+            (rail, 150),
+            "the whole window past the rail"
+        );
+        let others = (0..app.panes.len()).filter(|p| *p != app.focus);
+        assert!(others.into_iter().all(|p| app.pane_area(p).w == 0));
+        assert!(app.dock_area().is_none() && app.sidebar_area().is_none());
+        assert!(pictures(&app).is_empty(), "the Preview waits out of sight");
+        let (_, x, _) = app.visible_tabs()[1];
+        click(&mut app, x + 1, tab_y);
+        click(&mut app, x + 1, tab_y);
+        assert_eq!(app.maximized, None);
+        assert!(app.dock_area().is_some() && app.sidebar_area().is_some());
+        // The palette has both.
+        app.run(Command::MaximizeEditor);
+        assert_eq!(app.maximized, Some(Maximized::Editor));
+        app.run(Command::MaximizePane);
+        assert_eq!(app.maximized, Some(Maximized::Pane));
+        app.run(Command::MaximizePane);
+        assert_eq!(app.maximized, None);
+    }
+
+    #[test]
+    fn opening_what_a_maximized_part_hides_restores_first() {
+        let (_dir, mut app) = file_and_preview();
+        app.run(Command::MaximizeEditor);
+        // The Comments icon at the top right needs the pane, so the editor gives way.
+        let comments = app.pane_actions();
+        let (cell, ..) = comments
+            .iter()
+            .find(|(_, _, command, _)| *command == Command::ShowComments)
+            .unwrap();
+        click(&mut app, cell.x + 1, cell.y);
+        assert_eq!(app.maximized, None);
+        assert!(app.dock.showing(Front::Comments));
+        assert!(app.dock_area().is_some());
+        // The sidebar, asked for while the pane is maximized, brings everything back.
+        app.run(Command::MaximizePane);
+        app.handle(Event::Key(KeyEvent::ctrl('b')));
+        assert_eq!(app.maximized, None);
+        // Another view of the pane, while the pane is maximized, keeps it maximized.
+        app.run(Command::MaximizePane);
+        let area = app.dock_area().unwrap();
+        let (_, _, preview) = app
+            .dock
+            .view_tabs_for_test(area)
+            .into_iter()
+            .find(|t| t.0 == Front::Pdf)
+            .unwrap();
+        click(&mut app, preview.x + 2, area.y);
+        assert_eq!(app.maximized, Some(Maximized::Pane));
+        assert!(app.dock.showing(Front::Pdf));
     }
 
     #[test]

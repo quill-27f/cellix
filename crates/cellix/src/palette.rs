@@ -89,7 +89,7 @@ pub fn keys_of(command: Command) -> Option<&'static str> {
     })
 }
 
-pub const COMMANDS: [(&str, Command); 83] = [
+pub const COMMANDS: [(&str, Command); 85] = [
     ("Save", Command::Save),
     ("Undo", Command::Undo),
     ("Redo", Command::Redo),
@@ -112,6 +112,8 @@ pub const COMMANDS: [(&str, Command); 83] = [
     ("Export to PDF", Command::ExportPdf),
     ("Compare Plan Versions", Command::ComparePlanVersions),
     ("Show Line in PDF", Command::ShowInPdf),
+    ("Toggle Maximized Side Pane", Command::MaximizePane),
+    ("Toggle Maximized Editor", Command::MaximizeEditor),
     ("Find in File", Command::FindInFile),
     ("Go Back", Command::GoBack),
     ("Next Change", Command::NextChange),

@@ -39,6 +39,10 @@ const COMMENTS_WIDTH: u16 = 10;
 const COUNT_WIDTH: u16 = 2;
 /// The button that starts something, and the tab it becomes while that list shows.
 const NEW_WIDTH: u16 = 3;
+/// The button after it that maximizes the pane.
+const MAXIMIZE_WIDTH: u16 = 3;
+/// The column between it and the +, so the row keeps one step between its tabs and buttons.
+const MAXIMIZE_GAP: u16 = 1;
 const AGENTS_WIDTH: u16 = 11;
 const PREVIEW_WIDTH: u16 = 12;
 const LOG_WIDTH: u16 = 8;
@@ -891,6 +895,8 @@ pub enum TabHit {
     Tab(usize),
     Close(usize),
     New,
+    /// The button that maximizes the pane, and restores it.
+    Maximize,
     /// A view that comes and goes, and the × on its tab.
     View(Front),
     CloseView(Front),
@@ -1137,7 +1143,7 @@ impl Dock {
         let room = self
             .tabs_end
             .get()
-            .saturating_sub(self.tabs_start(area) + NEW_WIDTH);
+            .saturating_sub(self.tabs_start(area) + NEW_WIDTH + MAXIMIZE_GAP + MAXIMIZE_WIDTH);
         if self.tabs_end.get() == 0 || widths.iter().sum::<u16>() <= room {
             return widths;
         }
@@ -1190,6 +1196,11 @@ impl Dock {
             (front, name, tab)
         });
         tabs.collect()
+    }
+
+    /// Where the button that maximizes the pane starts.
+    pub fn maximize_button(&self, area: Rect) -> u16 {
+        self.tabs(area).last().map_or(self.first_tab(area), |t| t.1) + NEW_WIDTH + MAXIMIZE_GAP
     }
 
     #[cfg(test)]
@@ -1318,11 +1329,21 @@ impl Dock {
             }
         }
         let end = tabs.last().map_or(self.first_tab(area), |t| t.1);
-        (x >= end && x < end + NEW_WIDTH).then_some(TabHit::New)
+        if x >= end && x < end + NEW_WIDTH {
+            return Some(TabHit::New);
+        }
+        let maximize = end + NEW_WIDTH + MAXIMIZE_GAP;
+        (x >= maximize && x < maximize + MAXIMIZE_WIDTH).then_some(TabHit::Maximize)
     }
 
     /// The title row, in the frame's colour, with tabs like the editor's.
-    pub fn draw_tabs(&self, grid: &mut Grid, area: Rect, hover: Option<(u16, u16)>, theme: &Theme) {
+    pub fn draw_tabs(
+        &self,
+        grid: &mut Grid,
+        area: Rect,
+        (hover, maximized): (Option<(u16, u16)>, bool),
+        theme: &Theme,
+    ) {
         let count = self.comment_count.get();
         let row = Rect::new(area.x, area.y, area.w, 1);
         grid.fill(row, theme.tab);
@@ -1425,6 +1446,31 @@ impl Dock {
             ..theme.tab
         };
         grid.label(plus + 1, area.y, "+", style, area.right());
+        // Maximized, it stands on the chip a selected icon has, so it's plain how to get back.
+        let button = Rect::new(plus + NEW_WIDTH + MAXIMIZE_GAP, area.y, MAXIMIZE_WIDTH, 1);
+        let on_it = hover.is_some_and(|h| button.contains(h.0, h.1));
+        if maximized || on_it {
+            let fill = if maximized {
+                theme.tint
+            } else {
+                theme.row_hover
+            };
+            // Two cells around the icon: about square, as the rail's and the strip's chips are.
+            let chip = Bounds::cells(button.x as f32 + 0.5, area.y as f32 + 0.12, 2.0, 0.76);
+            grid.panel(chip, 22, Some(fill), None);
+        }
+        let icon = if maximized {
+            Icon::Minimize
+        } else {
+            Icon::Maximize
+        };
+        let fg = if maximized || on_it {
+            theme.text.fg
+        } else {
+            theme.gutter.fg
+        };
+        // The size of the icons at the top right, which it stands among.
+        crate::toolbar::draw_icon(grid, (icon, 0.62), button, fg, theme.tab);
         // Drawn last, over any tabs that reach this far, so it can always be found.
         let hide = Rect::new(
             area.right().saturating_sub(HIDE_WIDTH),

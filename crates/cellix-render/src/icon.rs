@@ -49,6 +49,9 @@ pub enum Icon {
     Replace = 39,
     ArrowUp = 40,
     ArrowDown = 41,
+    /// Lucide's maximize-2 and minimize-2: arrows out to two corners, and back in.
+    Maximize = 42,
+    Minimize = 43,
 }
 
 /// One cell of an icon that is `width` by `height` cells.
@@ -195,6 +198,8 @@ fn half_stroke(icon: Icon) -> f32 {
         | Icon::ArrowUp
         | Icon::ArrowDown
         | Icon::Replace
+        | Icon::Maximize
+        | Icon::Minimize
         | Icon::ReplaceAll => 0.9,
         Icon::Agents => 0.8,
         Icon::Check => 1.7,
@@ -531,6 +536,14 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
                 ],
             )),
         Icon::Check => path(p, &[(4.5, 12.5), (9.5, 17.5), (19.5, 6.5)]),
+        Icon::Maximize => path(p, &[(15.0, 3.0), (21.0, 3.0), (21.0, 9.0)])
+            .min(path(p, &[(9.0, 21.0), (3.0, 21.0), (3.0, 15.0)]))
+            .min(segment(p, (21.0, 3.0), (14.0, 10.0)))
+            .min(segment(p, (3.0, 21.0), (10.0, 14.0))),
+        Icon::Minimize => path(p, &[(4.0, 14.0), (10.0, 14.0), (10.0, 20.0)])
+            .min(path(p, &[(20.0, 10.0), (14.0, 10.0), (14.0, 4.0)]))
+            .min(segment(p, (14.0, 10.0), (21.0, 3.0)))
+            .min(segment(p, (3.0, 21.0), (10.0, 14.0))),
         Icon::Terminal => path(p, &[(3.5, 6.0), (10.0, 12.0), (3.5, 18.0)]).min(segment(
             p,
             (12.5, 18.0),
@@ -581,6 +594,8 @@ mod tests {
             Icon::Agents,
             Icon::Folder,
             Icon::File,
+            Icon::Maximize,
+            Icon::Minimize,
         ] {
             let dots = (0..50)
                 .flat_map(|y| (0..50).map(move |x| (x, y)))

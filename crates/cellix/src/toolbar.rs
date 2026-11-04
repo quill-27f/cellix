@@ -339,6 +339,8 @@ fn fallback(icon: Icon) -> &'static str {
         Icon::Replace => "⇄",
         Icon::ArrowUp => "↑",
         Icon::ArrowDown => "↓",
+        Icon::Maximize => "⤢",
+        Icon::Minimize => "⤡",
         Icon::Close => "×",
         Icon::ReplaceAll => "⇉",
         Icon::ChevronRight => "›",

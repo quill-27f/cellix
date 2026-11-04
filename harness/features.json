@@ -3316,5 +3316,26 @@
     "title": "The wheel tipped sideways reaches the app as itself",
     "test": "the_wheel_tipped_sideways_arrives_as_itself",
     "passes": true
+  },
+  {
+    "id": "maximize-pane",
+    "milestone": 10,
+    "title": "The side pane maximizes from its button and a double-click on its tab",
+    "test": "the_side_pane_maximizes_from_its_button_and_its_tab",
+    "passes": true
+  },
+  {
+    "id": "maximize-editor",
+    "milestone": 10,
+    "title": "A double-click on an editor tab maximizes it, and the palette has both",
+    "test": "double_clicking_an_editor_tab_maximizes_it",
+    "passes": true
+  },
+  {
+    "id": "maximize-restores",
+    "milestone": 10,
+    "title": "Opening what a maximized part hides restores first",
+    "test": "opening_what_a_maximized_part_hides_restores_first",
+    "passes": true
   }
 ]
