@@ -1,5 +1,12 @@
 name: release
 on:
+  # Releasing is bumping the version (harness/x bump) and pushing to main: once CI passes on a
+  # commit whose version has no release yet, this builds it, tags it and publishes it.
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+  # A tag pushed by hand releases too.
   push:
     tags: ["v*"]
   workflow_dispatch:
@@ -8,7 +15,43 @@ permissions:
   contents: write
 
 jobs:
+  plan:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      sha: ${{ steps.plan.outputs.sha }}
+      release: ${{ steps.plan.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::The tag $GITHUB_REF_NAME doesn't match the version in Cargo.toml, $version"
+            exit 1
+          fi
+          if gh release view "v$version" > /dev/null 2>&1; then
+            echo "v$version is already released."
+            release=false
+          else
+            python3 -I harness/notes.py "$version" > /dev/null
+            echo "v$version has no release yet, so this releases it."
+            release=true
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: plan
+    if: needs.plan.outputs.release == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -21,6 +64,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -47,23 +92,39 @@ jobs:
           path: cellix-${{ matrix.target }}.tar.gz
 
   publish:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/')
+    needs: [plan, build]
     runs-on: ubuntu-latest
+    # A tag pushed by hand and the CI run on the same commit can both get here.
+    concurrency: release-${{ needs.plan.outputs.version }}
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
       - uses: actions/download-artifact@v4
         with:
           path: archives
           merge-multiple: true
       - name: Make the release
+        id: release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if gh release view "v$VERSION" > /dev/null 2>&1; then
+            echo "v$VERSION was released while this ran."
+            echo "made=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           (cd archives && shasum -a 256 *.tar.gz > checksums.txt)
-          python3 -I harness/formula.py "${GITHUB_REF_NAME#v}" archives cellix.rb
-          gh release create "$GITHUB_REF_NAME" archives/* cellix.rb --generate-notes
+          python3 -I harness/formula.py "$VERSION" archives cellix.rb
+          python3 -I harness/notes.py "$VERSION" > notes.md
+          # Makes the tag too, on the commit CI passed.
+          gh release create "v$VERSION" archives/* cellix.rb --target "${{ needs.plan.outputs.sha }}" \
+            --title "Cellix $VERSION" --notes-file notes.md
+          echo "made=true" >> "$GITHUB_OUTPUT"
       - name: Update the Homebrew tap
+        if: steps.release.outputs.made == 'true'
         env:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
@@ -78,10 +139,12 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Formula/cellix.rb
-          git commit -m "cellix $GITHUB_REF_NAME"
+          git commit -m "cellix $VERSION"
           git push
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.release.outputs.made == 'true'
       - name: Publish to crates.io
+        if: steps.release.outputs.made == 'true'
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |

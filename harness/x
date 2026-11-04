@@ -12,6 +12,8 @@
 #   harness/x verify           check, then prove every passing feature has its test
 #   harness/x next             the next unfinished feature
 #   harness/x status           machine state, feature counts, recent guarded jobs
+#   harness/x bump <version>   set the version everywhere; pushed to main, it releases itself
+#   harness/x notes <version>  the release notes CHANGELOG.md gives for a version
 #   harness/x reserve-name     publish the crates.io placeholder (needs cargo login)
 set -u
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -78,6 +80,8 @@ case $task in
     echo "features: $(jq '[.[] | select(.passes)] | length' "$features") of $(jq length "$features") passing"
     log=$(git rev-parse --git-common-dir)/cellix-guard/guard.log
     [ -f "$log" ] && { echo "recent guarded jobs:"; tail -3 "$log"; } ;;
+  bump) python3 -I harness/bump.py "$@" ;;
+  notes) python3 -I harness/notes.py "$@" ;;
   reserve-name)
     cd harness/reserve-crate && exec ../guard.sh --label reserve -- cargo publish "$@" ;;
   *) sed -n '2,15p' "$0" | sed 's/^# *//'; exit 2 ;;

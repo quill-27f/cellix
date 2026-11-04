@@ -13,6 +13,8 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: The version has its changelog entry
+        run: python3 -I harness/notes.py "$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)" > /dev/null
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace 2>&1 | tee test.log

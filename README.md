@@ -22,14 +22,34 @@ by hunk, and a turn you don't like can be undone. It works the same over SSH.
 
 ![Claude Code rewriting a paragraph, with Cellix inside it showing the page and the change](docs/images/inside-claude.png)
 
+- **Review before it lands.** Plans wait for your Approve, edits stack hunk by hunk, each agent turn
+  is checkpointed, and one changed line can be put back without touching the rest.
+- **Talk about anything you can see.** A sentence, a formula, a diagram, a cell of a table or a spot
+  in a PDF: select it, comment, and the agent gets the file, the line and the quote.
+- **Documents are pages, not markup.** Markdown and LaTeX open typeset, with math, diagrams,
+  citations, Track Changes and offline spelling, while the file stays plain text for git.
+- **A second reader for your review.** Check my review has the agent weigh each of your comments and
+  suggest the ones you missed, without editing a word.
+- **Where your agent already is.** A pane inside Claude Code, plugins for Codex and Gemini CLI, and
+  the same thing over SSH and tmux. One static binary in Rust, drawing real pixels in Ghostty, Kitty
+  and WezTerm, and text cells everywhere else.
+
 ## Install
 
 ```sh
-brew install quill-27f/tap/cellix    # macOS and Linux
+brew install quill-27f/tap/cellix    # macOS and Linux; brew upgrade cellix gets each new release
 cargo install --locked --git https://github.com/quill-27f/cellix cellix   # anywhere Rust runs
 ```
 
-Static binaries for macOS and Linux are on the [releases page](https://github.com/quill-27f/cellix/releases).
+Or take the static binary, which needs nothing else on the machine. On Linux:
+
+```sh
+curl -L https://github.com/quill-27f/cellix/releases/latest/download/cellix-$(uname -m | sed s/arm64/aarch64/)-unknown-linux-musl.tar.gz \
+  | tar xz -C ~/.local/bin cellix
+```
+
+Every build for macOS and Linux is on the [releases page](https://github.com/quill-27f/cellix/releases),
+with what changed in [CHANGELOG.md](CHANGELOG.md).
 
 ## Add it to your agent
 
@@ -92,6 +112,7 @@ words and Comment as you go, then press **Check my review** in the Comments pane
 
 - **Plans** open as a page with Approve and Send back, and your edits and comments go with the answer.
 - **Diffs** stack hunk by hunk, against HEAD or any agent turn, with the tests the agent ran.
+  Right-click a changed line to comment on it or to undo just that line.
 - **Source Control** stages, commits, pushes and pulls, as in VS Code.
 - **Data and notebooks.** CSV as a table with Excel's keys, and notebooks on a real Jupyter kernel.
 
@@ -106,8 +127,9 @@ beside your file.
 
 ![Cellix on its own, with agents to start in the side pane](docs/images/agents.png)
 
-Cellix is young. Everything here is built and tested, but it hasn't had much real use yet, and not
-on a real SSH link. [docs/PROGRESS.md](docs/PROGRESS.md) says what has and hasn't been proven.
+Cellix is young. Everything here is built and tested, and it's in use on macOS, over SSH and under
+tmux, but it hasn't had many users yet. [docs/PROGRESS.md](docs/PROGRESS.md) says what has and hasn't
+been proven, and a bug report with a screenshot helps most.
 
 ## Keys
 
@@ -228,9 +250,8 @@ opens the full Review, which reads what changed hunk by hunk.
 
 ## Over SSH
 
-Everything runs on the server, and your local terminal only draws the result. This setup
-hasn't been tried on a real SSH link yet. On the server, you need tmux, plus Claude Code if you
-want the agent features. Take the static binary from the
+Everything runs on the server, and your local terminal only draws the result. On the server, you
+need tmux, plus Claude Code if you want the agent features. Take the static binary from the
 [releases page](https://github.com/quill-27f/cellix/releases), or use `cargo install`:
 
 ```sh
@@ -269,6 +290,10 @@ If pixels look wrong or scrolling is heavy, these commands help:
 tmux show -g allow-passthrough   # should say on
 CELLIX_TIER=cells cellix         # text cells only, for one run
 ```
+
+A thin line under every row means tmux doesn't know how many pixels a cell has, and assumes 16 by
+32. SSH tells it, but a serial or VM console that passes only rows and columns doesn't. Fix the
+console, or run Cellix outside tmux there.
 
 To turn off smooth scrolling on a slow link, add this to `~/.config/cellix/settings.json`:
 
@@ -341,8 +366,8 @@ show test runs in review, and hand the agent your comments.
 
 Plans are held for review too. Gemini CLI stops as it leaves plan mode, and still asks for its own
 approval afterwards. Codex has no plan tool, so its plan is held when its turn ends: sending it back
-starts another turn with your notes, and approving leaves implementing it for you to ask for. Neither
-has been tried on a live agent yet. `cellix plan <file>` always works. The pane itself needs what
+starts another turn with your notes, and approving with changes or notes hands them over in one more
+turn. Neither has been tried on a live agent yet. `cellix plan <file>` always works. The pane itself needs what
 only Claude Code offers.
 
 Codex asks you to trust a plugin's hooks before running them, so run `/hooks` in Codex once
@@ -382,6 +407,11 @@ time went. It's timings only, and it starts afresh each run.
 Build from a clone with `cargo install --path crates/cellix`. [AGENTS.md](AGENTS.md) says how the
 project is worked on, with `harness/x` running everything, and [docs/DESIGN.md](docs/DESIGN.md) says
 what it is and why. Bug reports with a screenshot help most.
+
+A release is a version and its notes: `harness/x bump 0.4.0`, a `## [0.4.0]` section in
+[CHANGELOG.md](CHANGELOG.md), and a push to main. Once CI passes, the release workflow tags it,
+builds the four binaries, writes the release from the changelog, and updates the Homebrew tap and
+crates.io.
 
 ## License
 

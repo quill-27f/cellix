@@ -10,6 +10,16 @@ readme = "../../README.md"
 keywords = ["ai", "ide", "editor", "terminal", "claude"]
 categories = ["command-line-utilities", "text-editors"]
 
+# `cargo binstall cellix` takes the release's binary instead of building it.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/cellix-{ target }.tar.gz"
+bin-dir = "cellix{ binary-ext }"
+pkg-fmt = "tgz"
+
+[package.metadata.binstall.overrides]
+x86_64-unknown-linux-gnu = { pkg-url = "{ repo }/releases/download/v{ version }/cellix-x86_64-unknown-linux-musl.tar.gz" }
+aarch64-unknown-linux-gnu = { pkg-url = "{ repo }/releases/download/v{ version }/cellix-aarch64-unknown-linux-musl.tar.gz" }
+
 [dependencies]
 libc = "0.2.191"
 png = "0.18.1"
