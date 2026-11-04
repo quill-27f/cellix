@@ -423,7 +423,8 @@ what it is and why. [Bug reports](https://github.com/quill-27f/cellix/issues) wi
 A release is a version and its notes: `harness/x bump 0.4.0`, a `## [0.4.0]` section in
 [CHANGELOG.md](CHANGELOG.md), and a push to main. Once CI passes, the release workflow tags it,
 builds the binaries for macOS, Linux and Windows, writes the release from the changelog, and updates the Homebrew tap and
-crates.io.
+crates.io. Only commits on main are released. If the tap or crates.io step fails, run the release
+workflow by hand on main with `finish` ticked, and it does what's missing.
 
 ## License
 

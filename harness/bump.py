@@ -12,15 +12,19 @@ if not re.fullmatch(r"\d+\.\d+\.\d+", new):
     sys.exit(f"not a version: {new}")
 
 
+# Every edit is worked out before any file is written, so a file that can't be changed leaves
+# the tree as it was rather than half bumped.
+edits = {}
+
+
 def edit(path, change):
     path = os.path.join(root, path)
     with open(path) as f:
         text = f.read()
     changed = change(text)
     if changed == text:
-        sys.exit(f"nothing to change in {path}")
-    with open(path, "w") as f:
-        f.write(changed)
+        sys.exit(f"nothing to change in {path}, so nothing was written")
+    edits[path] = changed
 
 
 with open(os.path.join(root, "Cargo.toml")) as f:
@@ -45,6 +49,9 @@ edit("Cargo.lock", lambda t: re.sub(
 for plugin in ["claude-code/.claude-plugin/plugin.json", "codex/plugin.json", "gemini/gemini-extension.json"]:
     edit(f"crates/cellix/integrations/{plugin}",
          lambda t: t.replace(f'"version": "{old}"', f'"version": "{new}"', 1))
+for path, text in edits.items():
+    with open(path, "w") as f:
+        f.write(text)
 
 changelog = os.path.join(root, "CHANGELOG.md")
 if not os.path.exists(changelog) or f"## [{new}]" not in open(changelog).read():

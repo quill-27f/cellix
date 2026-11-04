@@ -937,3 +937,20 @@ windows-latest that runs clippy and every test, and a Windows zip in the release
 Unverified: never run in a real Windows Terminal or WezTerm, only on the CI runner through
 ConPTY, so mouse input on Windows is the biggest unknown. The Claude Code mod, Codex and Gemini
 hooks, and `CLAUDE_CODE_PLUGIN_DIRS` taking `;` on Windows are untried there.
+
+## 2026-11-04: Review round after the Windows merge
+
+Four reviewers read everything since 0.3.1: a Windows systems developer, a Rust developer on the
+plan, LaTeX and release work, a paper author on pdflatex, and a technical writer. Fixed here:
+- The README's Linux install line failed with GNU tar ("cellix: Not found in archive"), proven in
+  a Debian container: the archives hold `./cellix`. It now extracts `./cellix`, makes
+  `~/.local/bin` and fails on a 404, in the README, the release notes and the six published
+  releases' notes.
+- The release workflow: a failed tap or crates.io step could never be redone, since a rerun saw
+  the release and skipped both. Each now does only what's missing, and a run by hand on main with
+  `finish` redoes them; automatic runs don't, so nothing reaches crates.io unasked. A run by hand
+  on a branch, or a tag on a commit not on main, only builds. A tag left on another commit stops
+  the release instead of publishing one commit's archives under another's tag.
+- `harness/x bump` works out every edit before writing, so it can't leave a half-bumped tree.
+Unverified: the workflow changes have not run yet; the next release, or a run with `finish`, is
+the test. Next: the LaTeX, plan-thread and Windows findings, each being fixed on its own branch.

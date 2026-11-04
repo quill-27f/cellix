@@ -9,7 +9,14 @@ on:
   # A tag pushed by hand releases too.
   push:
     tags: ["v*"]
+  # Run by hand, it builds every target. On main it also releases a version that has no release
+  # yet, and with `finish` it does the tap and crates.io steps a released version is missing.
   workflow_dispatch:
+    inputs:
+      finish:
+        description: Update the tap and crates.io for a version already released, if they lack it
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -24,30 +31,48 @@ jobs:
       version: ${{ steps.plan.outputs.version }}
       sha: ${{ steps.plan.outputs.sha }}
       release: ${{ steps.plan.outputs.release }}
+      finish: ${{ steps.plan.outputs.finish }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
       - id: plan
         env:
           GH_TOKEN: ${{ github.token }}
+          FINISH: ${{ inputs.finish }}
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          sha=$(git rev-parse HEAD)
           if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
             echo "::error::The tag $GITHUB_REF_NAME doesn't match the version in Cargo.toml, $version"
             exit 1
           fi
+          release=false
+          finish=false
           if gh release view "v$version" > /dev/null 2>&1; then
             echo "v$version is already released."
-            release=false
+            [ "$FINISH" = true ] && finish=true
+          elif ! git merge-base --is-ancestor "$sha" origin/main; then
+            # Only what CI passed on main is released; a branch run by hand just builds.
+            echo "$sha isn't on main, so this only builds."
           else
+            # A tag left from an earlier try must be on this commit, or the release would carry
+            # one commit's archives under another's tag.
+            tagged=$(git ls-remote origin "refs/tags/v$version^{}" | cut -f1)
+            [ -n "$tagged" ] || tagged=$(git ls-remote origin "refs/tags/v$version" | cut -f1)
+            if [ -n "$tagged" ] && [ "$tagged" != "$sha" ]; then
+              echo "::error::v$version is tagged on $tagged, not $sha. Delete the tag or bump the version."
+              exit 1
+            fi
             python3 -I harness/notes.py "$version" > /dev/null
             echo "v$version has no release yet, so this releases it."
             release=true
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "release=$release" >> "$GITHUB_OUTPUT"
+          echo "finish=$finish" >> "$GITHUB_OUTPUT"
 
   build:
     needs: plan
@@ -108,8 +133,11 @@ jobs:
 
   publish:
     needs: [plan, build]
-    # A run by hand with nothing to release stops at the builds.
-    if: needs.plan.outputs.release == 'true'
+    # A run by hand with nothing to release or finish stops at the builds.
+    if: >-
+      always() && needs.plan.result == 'success' && (
+        (needs.plan.outputs.release == 'true' && needs.build.result == 'success') ||
+        needs.plan.outputs.finish == 'true')
     runs-on: ubuntu-latest
     # A tag pushed by hand and the CI run on the same commit can both get here.
     concurrency: release-${{ needs.plan.outputs.version }}
@@ -118,13 +146,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.plan.outputs.sha }}
+          # Finishing publishes what was released, not what main has now.
+          ref: ${{ needs.plan.outputs.release == 'true' && needs.plan.outputs.sha || format('v{0}', needs.plan.outputs.version) }}
       - uses: actions/download-artifact@v4
+        if: needs.plan.outputs.release == 'true'
         with:
           path: archives
           merge-multiple: true
       - name: Make the release
         id: release
+        if: needs.plan.outputs.release == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -140,28 +171,35 @@ jobs:
           gh release create "v$VERSION" archives/* cellix.rb --target "${{ needs.plan.outputs.sha }}" \
             --title "Cellix $VERSION" --notes-file notes.md
           echo "made=true" >> "$GITHUB_OUTPUT"
+      # Each step below does only what's missing, so a run with `finish` can redo a failed one.
       - name: Update the Homebrew tap
-        if: steps.release.outputs.made == 'true'
+        if: steps.release.outputs.made == 'true' || needs.plan.outputs.finish == 'true'
         env:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           if [ -z "$TAP_TOKEN" ]; then
             echo "No HOMEBREW_TAP_TOKEN, so cellix.rb is left on the release to copy across."
             exit 0
           fi
+          [ -f cellix.rb ] || gh release download "v$VERSION" --pattern cellix.rb
           git clone "https://x-access-token:$TAP_TOKEN@github.com/quill-27f/homebrew-tap" tap
           mkdir -p tap/Formula
           cp cellix.rb tap/Formula/cellix.rb
           cd tap
+          git add Formula/cellix.rb
+          if git diff --cached --quiet; then
+            echo "The tap already has $VERSION."
+            exit 0
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/cellix.rb
           git commit -m "cellix $VERSION"
           git push
       - uses: dtolnay/rust-toolchain@stable
-        if: steps.release.outputs.made == 'true'
+        if: steps.release.outputs.made == 'true' || needs.plan.outputs.finish == 'true'
       - name: Publish to crates.io
-        if: steps.release.outputs.made == 'true'
+        if: steps.release.outputs.made == 'true' || needs.plan.outputs.finish == 'true'
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
@@ -169,4 +207,17 @@ jobs:
             echo "No CARGO_REGISTRY_TOKEN, so crates.io is left for 'cargo publish --workspace'."
             exit 0
           fi
-          cargo publish --workspace --locked
+          # Only the crates crates.io lacks at this version, so a publish cut short can resume.
+          missing=()
+          for manifest in crates/*/Cargo.toml; do
+            name=$(sed -n 's/^name = "\(.*\)"$/\1/p' "$manifest" | head -1)
+            code=$(curl -s -o /dev/null -w '%{http_code}' \
+              -A "cellix release (https://github.com/quill-27f/cellix)" \
+              "https://crates.io/api/v1/crates/$name/$VERSION")
+            [ "$code" = 200 ] && echo "$name $VERSION is on crates.io." || missing+=(-p "$name")
+          done
+          if [ ${#missing[@]} = 0 ]; then
+            echo "Every crate is on crates.io at $VERSION."
+            exit 0
+          fi
+          cargo publish --locked "${missing[@]}"
