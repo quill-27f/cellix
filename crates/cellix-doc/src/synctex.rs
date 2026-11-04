@@ -40,6 +40,25 @@ fn mark(record: &str) -> Option<Mark> {
     })
 }
 
+/// A path as one place on disk: canonical when it exists, and otherwise without the `.` and
+/// `..` steps an engine writes, as in `/w/./ch1/intro.tex`.
+fn same_place(path: &Path) -> PathBuf {
+    if let Ok(real) = std::fs::canonicalize(path) {
+        return real;
+    }
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 impl Map {
     /// Reads the map beside a PDF, if the engine wrote one.
     pub fn beside(pdf: &Path) -> Option<Self> {
@@ -98,11 +117,12 @@ impl Map {
 
     /// Where a source line landed, as a page and points from its top.
     pub fn to_pdf(&self, file: &Path, line: usize) -> Option<(usize, f32)> {
-        let name = file.file_name()?;
+        // By the whole path, since chapters often share a name: `ch1/intro.tex`, `ch2/intro.tex`.
+        let wanted = same_place(file);
         let tag = *self
             .files
             .iter()
-            .find(|(_, path)| path.file_name() == Some(name))?
+            .find(|(_, path)| same_place(path) == wanted)?
             .0;
         let mut best: Option<(usize, usize, f32)> = None;
         for (page, marks) in self.pages.iter().enumerate() {
@@ -159,5 +179,24 @@ h3,4:9000000,9000000:0,0,0
         assert_eq!(page, 1);
         assert!((y - 9000000.0 / SCALED_POINTS).abs() < 0.01);
         assert_eq!(map.to_pdf(Path::new("/w/main.tex"), 11).unwrap().0, 0);
+    }
+
+    #[test]
+    fn chapters_with_one_name_find_their_own_pages() {
+        let dir = tempfile::tempdir().unwrap();
+        for chapter in ["ch1", "ch2"] {
+            std::fs::create_dir(dir.path().join(chapter)).unwrap();
+            std::fs::write(dir.path().join(chapter).join("intro.tex"), "x\n").unwrap();
+        }
+        let w = dir.path().display();
+        // pdflatex writes the paths as it opened them, `./` and all.
+        let text = format!(
+            "SyncTeX Version:1\nInput:1:{w}/./ch1/intro.tex\nInput:2:{w}/./ch2/intro.tex\nContent:\n{{1\nh1,3:9000000,9000000:0,0,0\n}}1\n{{2\nh2,3:9000000,20000000:0,0,0\n}}2\n"
+        );
+        let map = Map::parse(&text, dir.path());
+        let page = |chapter: &str| map.to_pdf(&dir.path().join(chapter).join("intro.tex"), 3);
+        assert_eq!(page("ch1").unwrap().0, 0);
+        assert_eq!(page("ch2").unwrap().0, 1);
+        assert_eq!(map.to_pdf(&dir.path().join("intro.tex"), 3), None);
     }
 }

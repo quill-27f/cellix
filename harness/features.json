@@ -3064,5 +3064,12 @@
     "title": "Agents reach Cellix where there are no Unix sockets: a loopback port behind a token, as on Windows",
     "test": "agents_reach_cellix_over_loopback_with_its_token",
     "passes": true
+  },
+  {
+    "id": "synctex-full-paths",
+    "milestone": 10,
+    "title": "Forward search tells files of one name apart by their whole path",
+    "test": "chapters_with_one_name_find_their_own_pages",
+    "passes": true
   }
 ]
