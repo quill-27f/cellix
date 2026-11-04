@@ -373,15 +373,17 @@ fn plan_versions(path: &Path) -> Vec<PathBuf> {
     versions
 }
 
-/// Where an export builds and where its PDF ends up: built beside the document under a hidden
-/// name, so pictures resolve and nothing of the build is left in the project.
+/// Where an export builds and where its PDF ends up: built beside the document, so pictures
+/// resolve, under a name of its own whose build files all go afterwards. Not a hidden name: TeX
+/// Live refuses to write a file whose name starts with a dot (`openout_any = p`), so pdflatex
+/// and latexmk couldn't write the log, and the export failed everywhere but tectonic.
 fn export_names(path: &Path) -> (PathBuf, PathBuf) {
     let stem = path
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let hidden = path.with_file_name(format!(".{stem}.export.tex"));
-    (hidden, path.with_extension("pdf"))
+    let source = path.with_file_name(format!("{stem}.cellix-export.tex"));
+    (source, path.with_extension("pdf"))
 }
 
 /// What the periodic look at the disk found.
@@ -9636,7 +9638,18 @@ impl App {
                 if pdf.exists() {
                     let _ = std::fs::rename(&pdf, &target);
                 }
-                for leftover in ["log", "aux", "out", "synctex.gz", "fls", "fdb_latexmk"] {
+                let leftovers = [
+                    "log",
+                    "aux",
+                    "out",
+                    "synctex.gz",
+                    "fls",
+                    "fdb_latexmk",
+                    "bbl",
+                    "blg",
+                    "toc",
+                ];
+                for leftover in leftovers {
                     let _ = std::fs::remove_file(build.file.with_extension(leftover));
                 }
                 target
@@ -15162,9 +15175,13 @@ mod tests {
     }
 
     #[test]
-    fn an_export_builds_out_of_sight_and_lands_beside_the_document() {
+    fn an_export_builds_under_a_name_tex_can_write_and_lands_beside_the_document() {
         let (tex, pdf) = export_names(Path::new("/p/rfc.md"));
-        assert_eq!(tex, Path::new("/p/.rfc.export.tex"));
+        assert_eq!(tex, Path::new("/p/rfc.cellix-export.tex"));
+        assert!(
+            !tex.file_name().unwrap().to_string_lossy().starts_with('.'),
+            "pdflatex won't write a log for a dot file"
+        );
         assert_eq!(pdf, Path::new("/p/rfc.pdf"));
     }
 

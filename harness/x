@@ -9,6 +9,8 @@
 #                              render the real UI to a PNG, with no terminal or window
 #   harness/x tour [out]       every surface of the real binary as PNGs, with no window
 #   harness/x mux              real tmux and Zellij tests (slower, ignored by check)
+#   harness/x tex              papers built by latexmk and pdflatex, with tectonic hidden
+#                              (needs TeX Live; ignored by check, run in CI)
 #   harness/x verify           check, then prove every passing feature has its test
 #   harness/x next             the next unfinished feature
 #   harness/x status           machine state, feature counts, recent guarded jobs
@@ -39,6 +41,7 @@ case $task in
     guard build cargo build -q -p cellix || exit 1
     guard tour python3 -I harness/live/tour.py "$root/target/debug/cellix" "$out" ;;
   mux) guard mux cargo test -p cellix --test mux -- --ignored --test-threads=1 "$@" ;;
+  tex) guard tex cargo test -p cellix --test tex -- --ignored --test-threads=1 "$@" ;;
   verify)
     # Results come from the gate's own log, and its exit from PIPESTATUS, so nothing that
     # reads this output can turn a failure into a pass.
@@ -84,5 +87,5 @@ case $task in
   notes) python3 -I harness/notes.py "$@" ;;
   reserve-name)
     cd harness/reserve-crate && exec ../guard.sh --label reserve -- cargo publish "$@" ;;
-  *) sed -n '2,15p' "$0" | sed 's/^# *//'; exit 2 ;;
+  *) sed -n '2,17p' "$0" | sed 's/^# *//'; exit 2 ;;
 esac

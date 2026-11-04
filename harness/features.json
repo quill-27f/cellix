@@ -2397,7 +2397,7 @@
     "id": "export-hidden",
     "milestone": 10,
     "title": "Export builds out of sight",
-    "test": "an_export_builds_out_of_sight_and_lands_beside_the_document",
+    "test": "an_export_builds_under_a_name_tex_can_write_and_lands_beside_the_document",
     "passes": true
   },
   {
@@ -3022,5 +3022,40 @@
     "title": "A paper split over \\input files counts, tracks and rebuilds as one paper",
     "test": "a_paper_split_over_input_files_counts_tracks_and_rebuilds_as_one",
     "passes": true
+  },
+  {
+    "id": "export-packages-as-used",
+    "milestone": 10,
+    "title": "A Markdown export loads only the TeX packages it uses",
+    "test": "an_export_loads_only_the_packages_it_uses",
+    "passes": true
+  },
+  {
+    "id": "latexmk-paper",
+    "milestone": 10,
+    "title": "Build PDF with latexmk when tectonic is missing",
+    "test": "latexmk_builds_a_paper_without_tectonic",
+    "passes": false
+  },
+  {
+    "id": "pdflatex-paper",
+    "milestone": 10,
+    "title": "Build PDF with plain pdflatex and BibTeX passes",
+    "test": "pdflatex_builds_a_paper_with_bibtex_passes",
+    "passes": false
+  },
+  {
+    "id": "latexmk-export",
+    "milestone": 10,
+    "title": "Export Markdown to PDF with latexmk",
+    "test": "latexmk_exports_markdown_to_pdf",
+    "passes": false
+  },
+  {
+    "id": "pdflatex-export",
+    "milestone": 10,
+    "title": "Export Markdown to PDF with plain pdflatex",
+    "test": "pdflatex_exports_markdown_to_pdf",
+    "passes": false
   }
 ]

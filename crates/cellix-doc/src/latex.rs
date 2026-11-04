@@ -1245,7 +1245,35 @@ pub fn tabular_cell_offset(text: &str, row: usize, column: usize) -> usize {
     0
 }
 
-const HEADER: &str = "\\documentclass[11pt]{article}\n\\usepackage{amsmath,amssymb,graphicx,hyperref}\n\\usepackage[margin=1in]{geometry}\n\\usepackage{booktabs,xcolor,tikz,tikz-cd}\n\\usepackage[normalem]{ulem}\n\\begin{document}\n";
+const HEADER: &str = "\\documentclass[11pt]{article}\n\\usepackage{amsmath,amssymb,graphicx,hyperref}\n\\usepackage[margin=1in]{geometry}\n";
+
+/// The preamble an exported document needs. Packages past the core load only when the body uses
+/// them, so a small TeX, with no TikZ or `ulem`, still builds a document that doesn't.
+fn header_for(body: &str) -> String {
+    let mut header = String::from(HEADER);
+    let wanted = [
+        ("\\toprule", "booktabs"),
+        ("\\textcolor", "xcolor"),
+        ("\\color", "xcolor"),
+        ("\\tikz", "tikz"),
+        ("\\begin{tikzpicture}", "tikz"),
+        ("\\begin{tikzcd}", "tikz-cd"),
+    ];
+    let mut loaded: Vec<&str> = Vec::new();
+    for (used, package) in wanted {
+        if body.contains(used) && !loaded.contains(&package) {
+            loaded.push(package);
+        }
+    }
+    if !loaded.is_empty() {
+        header.push_str(&format!("\\usepackage{{{}}}\n", loaded.join(",")));
+    }
+    if body.contains("\\sout") {
+        header.push_str("\\usepackage[normalem]{ulem}\n");
+    }
+    header.push_str("\\begin{document}\n");
+    header
+}
 
 /// A tag from Markdown's marks, as LaTeX.
 fn tag_in_latex(tag: &str) -> Option<&'static str> {
@@ -1296,7 +1324,7 @@ pub fn from_markdown_with(
     // A footnote goes in where it's cited, so its text is found first.
     let notes = footnote_texts(markdown);
     let markdown = crate::html::marked(markdown);
-    let mut out = String::from(HEADER);
+    let mut out = String::new();
     if !front.is_empty() {
         let field = |value: &Option<String>| value.as_deref().map(escape).unwrap_or_default();
         out.push_str(&format!(
@@ -1446,7 +1474,7 @@ pub fn from_markdown_with(
         }
     }
     out.push_str("\n\\end{document}\n");
-    out
+    header_for(&out) + &out
 }
 
 #[cfg(test)]
@@ -1558,6 +1586,22 @@ mod tests {
             "{tex}"
         );
         assert!(!tex.contains("verbatim"), "{tex}");
+    }
+
+    #[test]
+    fn an_export_loads_only_the_packages_it_uses() {
+        let plain = from_markdown("# Notes\n\nSome $x^2$ and a [link](https://x.y).\n");
+        for package in ["tikz", "ulem", "booktabs", "xcolor"] {
+            assert!(!plain.contains(package), "{package}: {plain}");
+        }
+        let rich = from_markdown(
+            "~~gone~~ <mark>lit</mark>\n\n| A |\n|---|\n| b |\n\n```tikz\n\\draw (0,0) -- (1,1);\n```\n",
+        );
+        assert!(
+            rich.contains("\\usepackage{booktabs,xcolor,tikz}"),
+            "{rich}"
+        );
+        assert!(rich.contains("\\usepackage[normalem]{ulem}"), "{rich}");
     }
 
     #[test]

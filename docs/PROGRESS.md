@@ -880,3 +880,21 @@ file has no preamble), so the build failed on the marks; the package now goes in
 an agent rewriting such a file rebuilt the open PDF only when that file was in front; any open
 file of the same paper does now. Left as they are: spelling checks the file in front, which is
 what it shows, and files the paper takes in that aren't open aren't watched for an agent's edits.
+
+pdflatex without tectonic. `harness/x tex` runs four ignored tests of the real binary in a PTY,
+with tectonic hidden from its PATH (and latexmk too in the plain case): Build PDF on a paper over
+two files that cites a `.bib`, and Export to PDF on a Markdown note. They check the PDF, that
+BibTeX ran, that the log has no undefined citation or reference, no "Rerun" and no `??`, that
+SyncTeX was written, which engine ran, and that an export leaves nothing behind. CI runs them on
+Ubuntu with only `texlive-latex-recommended texlive-bibtex-extra latexmk`. Reading the code
+against what TeX Live does found two bugs, fixed:
+- Exports built from a hidden `.name.export.tex`. TeX Live won't write a file whose name starts
+  with a dot (kpathsea's `openout_any = p`, as its source reads; not seen here), so pdflatex
+  couldn't open its log and an export without tectonic would fail. The source is now `name.cellix-export.tex`, briefly visible while it builds;
+  everything it makes still goes afterwards, `.bbl`, `.blg` and `.toc` now included. The test
+  that held the hidden name now holds that the name doesn't start with a dot.
+- The export loaded TikZ, tikz-cd and ulem into every document, which a small TeX doesn't have.
+  Packages past amsmath, graphicx, hyperref and geometry now load only when the body uses them.
+Unverified: the tests have not run anywhere with pdflatex. This Mac has only tectonic, and the
+same tests passed against tectonic here as a probe of the driving, the waiting and the cleanup.
+Their features stay unmarked until the CI job passes.

@@ -26,6 +26,20 @@ jobs:
             grep -Eq "^test ([a-z_0-9]+::)*$t \.\.\. (ok|ignored)" test.log || { echo "did not pass: $t"; exit 1; }
           done
 
+  tex:
+    # Build PDF and Export to PDF where TeX Live is the only TeX: latexmk, then plain pdflatex
+    # with BibTeX passes. Tectonic isn't installed here, and the tests hide it besides.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install TeX Live, without tectonic
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends texlive-latex-recommended texlive-bibtex-extra latexmk
+      - run: cargo test -p cellix --test tex -- --ignored --test-threads=1
+
   macos:
     # macOS minutes cost ten times as much on a private repo, so main only.
     if: github.event_name == 'push'
