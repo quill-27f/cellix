@@ -163,7 +163,7 @@ fn review_plan(roots: &[PathBuf], input: &Value, plan: &str) -> Option<(String, 
 
 /// Writes the plan as `Plan.md`, keeping the one it replaces as `Plan v1.md`, `Plan v2.md` and on,
 /// so a reviewer can see what changed since they sent it back. Comments stay on `Plan.md`.
-fn keep_versions(folder: &Path, plan: &str) -> std::io::Result<PathBuf> {
+pub fn keep_versions(folder: &Path, plan: &str) -> std::io::Result<PathBuf> {
     let path = folder.join("Plan.md");
     if let Ok(old) = std::fs::read_to_string(&path)
         && old != plan

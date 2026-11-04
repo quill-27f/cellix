@@ -46,6 +46,10 @@ pub struct Thread {
     /// sentence written twice keeps its comment on the copy it was made on.
     #[serde(default)]
     pub copy: (usize, usize),
+    /// The version of a plan its words were last in, once a later version doesn't have them,
+    /// so it stays in view as what was said about that version.
+    #[serde(default)]
+    pub earlier: Option<usize>,
 }
 
 impl Thread {
@@ -65,10 +69,10 @@ impl Thread {
 
     /// Moves the thread to where its quoted text is now, the nearest place if it appears
     /// more than once. A quote rewrapped across lines is still found, and so is one with a
-    /// word or two changed. Text that's gone leaves it where it was.
-    pub fn follow(&mut self, text: &str) {
+    /// word or two changed. Text that's gone leaves it where it was. Says whether it was found.
+    pub fn follow(&mut self, text: &str) -> bool {
         if self.quote.trim().is_empty() {
-            return;
+            return true;
         }
         let distance = |line: &usize| line.abs_diff(self.line);
         let copies: Vec<usize> = text
@@ -85,14 +89,14 @@ impl Thread {
             self.line = line;
             let copy = copies.iter().position(|l| *l == line).unwrap_or(0);
             self.copy = (copy, copies.len());
-            return;
+            return true;
         }
         let found = rewrapped(text, &self.quote)
             .into_iter()
             .min_by_key(distance);
         if let Some(line) = found {
             self.line = line;
-            return;
+            return true;
         }
         // Reworded: the quote takes the words it reads as now, so the card shows them.
         if let Some(line) = reworded(text, &self.quote, self.line) {
@@ -105,13 +109,31 @@ impl Thread {
                 self.quote = now;
             }
             self.copy = (0, 0);
+            return true;
         }
+        false
+    }
+
+    /// Moves the thread onto a plan's next version. Words still there take it with them; words
+    /// that are gone leave it open on the version it was made on, `version` being the one just
+    /// replaced, and on a line the new text has.
+    pub fn carry(&mut self, text: &str, version: usize) {
+        if self.follow(text) {
+            self.earlier = None;
+            return;
+        }
+        self.earlier.get_or_insert(version);
+        self.line = self.line.clamp(1, text.lines().count().max(1));
+        self.copy = (0, 0);
     }
 
     /// The thread as a message for an agent, on one line, with how to answer.
     pub fn message(&self) -> String {
+        let earlier = self.earlier.map_or_else(String::new, |version| {
+            format!(" in version {version}, which this one no longer has")
+        });
         let mut text = format!(
-            "Comment {} on {} line {}, about \"{}\": {}",
+            "Comment {} on {} line {}, about \"{}\"{earlier}: {}",
             self.id, self.file, self.line, self.quote, self.text
         );
         for reply in &self.replies {
@@ -272,7 +294,34 @@ mod tests {
             kind: String::new(),
             suggested_by: String::new(),
             copy: (0, 0),
+            earlier: None,
         }
+    }
+
+    #[test]
+    fn a_thread_whose_words_left_the_plan_stays_on_the_version_it_was_made_on() {
+        let mut kept = Thread {
+            quote: "Keep the tests.".into(),
+            line: 5,
+            ..thread()
+        };
+        kept.carry("# Plan\n\nKeep the tests.\n", 1);
+        assert_eq!((kept.line, kept.earlier), (3, None));
+        let mut gone = Thread {
+            quote: "Cache first.".into(),
+            line: 9,
+            ..thread()
+        };
+        gone.carry("# Plan\n\nKeep the tests.\n", 1);
+        assert_eq!(gone.earlier, Some(1));
+        assert_eq!(gone.quote, "Cache first.", "its words still show");
+        assert_eq!(gone.line, 3, "on a line the new version has");
+        gone.carry("# Plan\n\nStill no cache.\n", 2);
+        assert_eq!(gone.earlier, Some(1), "the version its words were in");
+        assert!(
+            gone.message()
+                .contains("in version 1, which this one no longer has")
+        );
     }
 
     #[test]

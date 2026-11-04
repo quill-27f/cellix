@@ -83,12 +83,14 @@ enum Line {
     /// panel takes more than one row.
     Coverage(Vec<(&'static str, usize)>),
     /// At the top of a card: who wrote it, and its kind. True for an agent's suggestion.
-    Header(u32, String, bool),
+    /// And, for a plan's comment on words its next version dropped, the version that did.
+    Header(u32, String, bool, Option<usize>),
     /// Keep and Dismiss, under a suggestion.
     Choices(u32),
     /// Apply and Not this, under a rewrite still to be decided.
     Rewrite(u32),
-    Quote(u32, String),
+    /// True for words a plan's next version dropped: struck, and on a quiet bar.
+    Quote(u32, String, bool),
     Text(u32, String),
     /// Opens an answer: its verdict if it gives one, and who wrote it.
     Answer(u32, Option<String>, String),
@@ -214,7 +216,11 @@ fn lines(
         out.push(Line::Gap);
     }
     if let Some(new) = draft.filter(|d| d.thread.is_none()) {
-        out.push(Line::Quote(NEW_DRAFT, quote_of(&new.quote, new.line)));
+        out.push(Line::Quote(
+            NEW_DRAFT,
+            quote_of(&new.quote, new.line),
+            false,
+        ));
         draft_lines(new, width, measure, &mut out);
         out.push(Line::Buttons(NEW_DRAFT));
         out.push(Line::Gap);
@@ -234,8 +240,11 @@ fn lines(
         } else {
             YOU.to_string()
         };
-        out.push(Line::Header(id, format!("{by}{kind}"), suggested));
-        out.push(Line::Quote(id, quote_of(&thread.quote, thread.line)));
+        // Words a plan's next version dropped: still said, and marked as no longer there.
+        let removed = thread.earlier.map(|v| v + 1);
+        out.push(Line::Header(id, format!("{by}{kind}"), suggested, removed));
+        let quote = quote_of(&thread.quote, thread.line);
+        out.push(Line::Quote(id, quote, removed.is_some()));
         let text = wrap(&thread.text, width, measure);
         out.extend(text.into_iter().map(|row| Line::Text(id, row)));
         for reply in &thread.replies {
@@ -381,7 +390,7 @@ pub fn hit(
             let (cells, at) = check_button(area, measure);
             (x >= at && x < at + cells.chars().count() as u16).then_some(Hit::Check)
         }
-        Line::Quote(id, _)
+        Line::Quote(id, ..)
         | Line::Text(id, _)
         | Line::Answer(id, ..)
         | Line::Reply(id, _)
@@ -517,7 +526,7 @@ pub fn draw(
                 let hint = "Select text in a file, then press Alt+C.";
                 grid.label_at(side as f32, side, y + 1, hint, dim, right, SMALL);
             }
-            Line::Header(_, label, suggested) => {
+            Line::Header(_, label, suggested, removed) => {
                 let style = Style {
                     fg: if *suggested {
                         theme.accent
@@ -526,13 +535,40 @@ pub fn draw(
                     },
                     ..inner
                 };
-                grid.label_at(text_x as f32, text_x, y, label, style, right, SMALL);
+                let mut end = right;
+                if let Some(version) = removed {
+                    // A pill at the row's end, outlined in the warning colour like a kind
+                    // with no comments: what it's about has left the plan.
+                    let text = format!("Removed in version {version}");
+                    let width = pill_width(&text, measure);
+                    let x = (right as f32 - 1.0 - width).max(text_x as f32);
+                    let bounds = Bounds::cells(x, y as f32 + 0.16, width, 0.68);
+                    grid.panel(bounds, 34, None, Some(theme.attention));
+                    let tag = Style {
+                        fg: theme.attention,
+                        ..inner
+                    };
+                    let at = x + 0.45;
+                    grid.label_at(at, at.floor() as u16, y, &text, tag, right, SMALL);
+                    end = x.floor() as u16;
+                }
+                grid.label_at(text_x as f32, text_x, y, label, style, end, SMALL);
             }
-            Line::Quote(_, quote) => {
+            Line::Quote(_, quote, struck) => {
                 let bar = Bounds::cells(text_x as f32, y as f32 + 0.16, 0.22, 0.68);
-                grid.panel(bar, 10, Some(theme.accent), None);
                 let x = text_x as f32 + 0.8;
-                grid.label_at(x, text_x + 1, y, quote, inner_dim, right, SMALL);
+                if *struck {
+                    // Words that are gone: a quiet bar, dimmer words, and a line through them.
+                    let quiet = mix(theme.gutter.fg, inner.bg, 0.55);
+                    grid.panel(bar, 10, Some(quiet), None);
+                    let style = Style { fg: quiet, ..inner };
+                    grid.label_at(x, text_x + 1, y, quote, style, right, SMALL);
+                    let width = measure.width(quote, small()).min(right as f32 - x);
+                    grid.hairline(Bounds::cells(x, y as f32 + 0.56, width, 0.0), quiet);
+                } else {
+                    grid.panel(bar, 10, Some(theme.accent), None);
+                    grid.label_at(x, text_x + 1, y, quote, inner_dim, right, SMALL);
+                }
             }
             Line::Text(_, text) => {
                 grid.label(text_x, y, text, inner, right);

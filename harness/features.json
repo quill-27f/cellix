@@ -2994,5 +2994,19 @@
     "title": "A dashed border has gaps",
     "test": "a_dashed_border_has_gaps",
     "passes": true
+  },
+  {
+    "id": "plan-threads-carry",
+    "milestone": 10,
+    "title": "A plan's threads move onto its next version, and keep what it dropped",
+    "test": "a_plans_threads_move_onto_its_next_version_and_keep_what_it_dropped",
+    "passes": true
+  },
+  {
+    "id": "plan-thread-earlier",
+    "milestone": 10,
+    "title": "A thread whose words left the plan stays on the version it was made on",
+    "test": "a_thread_whose_words_left_the_plan_stays_on_the_version_it_was_made_on",
+    "passes": true
   }
 ]

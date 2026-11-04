@@ -861,3 +861,12 @@ The open items, closed for 0.3.1.
   failed their deadline on a loaded machine.
 
 Release 0.3.1.
+
+Plan comments carry into the plan's next version as threads. When an agent sends a plan again,
+each thread on it moves onto the new text, with its replies and whether it was resolved. One whose
+words the new version dropped stays open with its quote, struck through on a quiet bar, and a
+"Removed in version N" pill; clicking it opens what changed since the version it was made on, and
+an agent reading it hears which version it was about. The Comments pane opens when a plan arrives
+with comments on it, and a plan still open from before reloads. The tour has a `50-plan-versions`
+shot. Unverified: a real agent sending a third version, where a thread made on version 2 compares
+against `Plan v2.md`.

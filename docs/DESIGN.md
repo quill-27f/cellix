@@ -211,7 +211,9 @@ its source, so reaching it from either side opens it. PDFs draw with `hayro`, al
 Building a PDF uses a real engine, since only TeX typesets TeX, and Cellix offers to install one.
 
 A comment on a document is a thread kept in `.cellix/threads.json`. Comments on plans and `--wait`
-files stay as they were, because they're an answer the agent is waiting for.
+files also go back as the answer the agent is waiting for. A plan's threads move onto its next
+version: words still there take them along, and a thread on words that went stays open, marked
+with the version that removed them, and leads to what changed.
 
 ## Surfaces
 

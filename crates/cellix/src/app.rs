@@ -3292,6 +3292,7 @@ impl App {
                     kind: String::new(),
                     suggested_by: String::new(),
                     copy: (0, 0),
+                    earlier: None,
                 });
                 asked = draft.ask.then_some(id);
             }
@@ -6103,6 +6104,7 @@ impl App {
                 kind: String::new(),
                 suggested_by: String::new(),
                 copy: (0, 0),
+                earlier: None,
             });
             self.save_threads();
         }
@@ -6132,6 +6134,7 @@ impl App {
             kind: String::new(),
             suggested_by: String::new(),
             copy: (0, 0),
+            earlier: None,
         });
         self.save_threads();
         if page {
@@ -6160,13 +6163,36 @@ impl App {
         for thread in self
             .threads
             .iter_mut()
-            .filter(|t| t.file == file && !t.resolved)
+            .filter(|t| t.file == file && !t.resolved && t.earlier.is_none())
         {
             thread.follow(&text);
             quotes.push((thread.line, thread.quote.clone()));
         }
         editor.set_quotes(&quotes);
         self.threads_seen = Some((self.active(), revision));
+    }
+
+    /// A plan sent again keeps its comments as threads: each moves onto the new text, and one
+    /// whose words are gone stays open, marked with `replaced`, the version it was made on.
+    /// Replies and whether it was resolved come with it, and the Comments pane shows them.
+    fn carry_plan_threads(&mut self, path: &Path, replaced: usize) {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return;
+        };
+        let file = self.relative(path);
+        let mut open = false;
+        for thread in self.threads.iter_mut().filter(|t| t.file == file) {
+            thread.carry(&text, replaced);
+            open |= !thread.resolved;
+        }
+        if !open {
+            return;
+        }
+        self.threads_seen = None;
+        self.save_threads();
+        self.dock.open = true;
+        self.dock.show_comments();
+        self.dock.focused = false;
     }
 
     fn save_threads(&mut self) {
@@ -6198,6 +6224,17 @@ impl App {
     fn thread_hit(&mut self, hit: ThreadHit) {
         match hit {
             ThreadHit::Open(id) => {
+                // Words the plan dropped are only in what changed, so that's where it goes.
+                let earlier = self
+                    .threads
+                    .iter()
+                    .find(|t| t.id == id)
+                    .and_then(|t| t.earlier);
+                if earlier.is_some() && self.plan.is_some() {
+                    self.compare_plan_with(earlier);
+                    self.dock.focused = false;
+                    return;
+                }
                 let line = self.threads.iter().find(|t| t.id == id).map(|t| t.line);
                 let area = self.focused_area();
                 if let (Some(line), Some(editor)) = (line, self.editor_mut()) {
@@ -6478,6 +6515,7 @@ impl App {
                     kind,
                     suggested_by: author.clone(),
                     copy: (0, 0),
+                    earlier: None,
                 });
                 self.save_threads();
                 let _ = made.send(id);
@@ -6543,9 +6581,18 @@ impl App {
             }
             Request::Plan { path, reply } => {
                 self.review = None;
+                // A plan still open from before shows the version that came.
+                if let Some(editor) = self
+                    .editors
+                    .iter_mut()
+                    .find(|e| e.buffer.path() == Some(path.as_path()) && !e.buffer.is_dirty())
+                {
+                    let _ = editor.reload();
+                }
                 match self.open(&path) {
                     Ok(()) => {
                         let earlier = plan_versions(&path).len();
+                        self.carry_plan_threads(&path, earlier.max(1));
                         self.plan = Some(PendingPlan { path, reply });
                         self.attention = Some("plan");
                         if earlier == 0 {
@@ -9367,6 +9414,11 @@ impl App {
 
     /// Opens what changed since the plan's last version, as suggestions on a page of its own.
     fn compare_plan_versions(&mut self) {
+        self.compare_plan_with(None);
+    }
+
+    /// What changed since a given earlier version of the plan, or the last one.
+    fn compare_plan_with(&mut self, version: Option<usize>) {
         let path = match &self.plan {
             Some(plan) => plan.path.clone(),
             None => match self
@@ -9378,7 +9430,11 @@ impl App {
                 None => return,
             },
         };
-        let Some(earlier) = plan_versions(&path).pop() else {
+        let mut versions = plan_versions(&path);
+        if let Some(version) = version.filter(|v| (1..=versions.len()).contains(v)) {
+            versions.truncate(version);
+        }
+        let Some(earlier) = versions.pop() else {
             self.say("This plan has no earlier version");
             return;
         };
@@ -12229,6 +12285,101 @@ mod tests {
         assert_eq!(carried[0].text, "Too big");
         assert_eq!(carried[0].quote, "# Plan");
         assert!(!carried[0].waiting(), "the agent heard it with the plan");
+    }
+
+    #[test]
+    fn a_plans_threads_move_onto_its_next_version_and_keep_what_it_dropped() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        // Held where the hook holds it, outside the project, and versioned as the hook does.
+        let held = tempfile::tempdir().unwrap();
+        let first = "# Plan\n\nCache first.\n\nKeep the tests.\n\nShip it.\n";
+        let path = cellix_agent::hook::keep_versions(held.path(), first).unwrap();
+        let (reply, decision) = std::sync::mpsc::channel();
+        app.serve(Request::Plan {
+            path: path.clone(),
+            reply,
+        });
+        for (line, comment) in [
+            ("Cache first.", "Why first"),
+            ("Keep the tests.", "Which tests"),
+            ("Ship it.", "Ship when green"),
+        ] {
+            let (x, y) = find(&screen(&app), line);
+            app.handle(mouse(MouseKind::Left, x + 1, y));
+            app.run(Command::AddComment);
+            typed(&mut app, comment);
+            enter(&mut app);
+        }
+        let file = app.relative(&path);
+        let id_of = |app: &App, text: &str| {
+            app.threads
+                .iter()
+                .find(|t| t.file == file && t.text == text)
+                .map(|t| t.id)
+                .unwrap()
+        };
+        let (found, _) = std::sync::mpsc::channel();
+        app.serve(Request::Reply {
+            id: id_of(&app, "Which tests"),
+            author: "Claude Code".into(),
+            text: "The parser's unit tests.".into(),
+            found,
+        });
+        app.thread_hit(ThreadHit::Resolve(id_of(&app, "Ship when green")));
+        let (x, y) = find(&screen(&app), SEND_BACK);
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        typed(&mut app, "See comments");
+        enter(&mut app);
+        assert!(matches!(decision.try_recv(), Ok(Decision::SendBack(_))));
+
+        let second =
+            "# Plan\n\nWrite the tests first.\n\nThen the parser.\n\nKeep the tests.\n\nShip it.\n";
+        let again = cellix_agent::hook::keep_versions(held.path(), second).unwrap();
+        assert_eq!(again, path, "comments stay on Plan.md");
+        let (reply, _decision) = std::sync::mpsc::channel();
+        app.serve(Request::Plan {
+            path: path.clone(),
+            reply,
+        });
+        let text = screen(&app).text();
+        assert!(
+            text.contains("Then the parser."),
+            "version 2 is open: {text}"
+        );
+        assert!(text.contains("Removed in version 2"), "{text}");
+        assert!(
+            text.contains("Cache first."),
+            "the dropped words show: {text}"
+        );
+        assert!(text.contains("Why first"), "{text}");
+        assert!(text.contains("Which tests"), "{text}");
+        assert!(text.contains("The parser's unit tests."), "{text}");
+        assert!(!text.contains("Ship when green"), "resolved stays resolved");
+        let thread = |text: &str| {
+            app.threads
+                .iter()
+                .find(|t| t.file == file && t.text == text)
+                .unwrap()
+        };
+        let gone = thread("Why first");
+        assert_eq!(gone.earlier, Some(1));
+        assert_eq!(gone.quote, "Cache first.");
+        assert!(!gone.resolved);
+        let kept = thread("Which tests");
+        assert_eq!((kept.line, kept.earlier), (7, None), "it follows its words");
+        assert_eq!(kept.replies.len(), 1);
+        let shipped = thread("Ship when green");
+        assert!(shipped.resolved);
+        assert_eq!(shipped.line, 9);
+        let saved = cellix_review::threads::load(dir.path()).unwrap();
+        assert!(saved.iter().any(|t| t.earlier == Some(1)), "and it's kept");
+        // Its card leads to what changed, where the dropped words still stand.
+        let (x, y) = find(&screen(&app), "Why first");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        let compared = app.active_text().unwrap();
+        assert!(compared.contains("{~~Cache~>"), "{compared}");
+        assert!(app.plan.is_some(), "the plan still waits");
     }
 
     #[test]

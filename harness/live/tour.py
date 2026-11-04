@@ -290,6 +290,13 @@ with tempfile.TemporaryDirectory() as scratch:
          "text": "Say how large n gets in the experiments, or the cost claim can't be judged.",
          "replies": [], "resolved": False, "told": 0, "asked": False, "kind": "Evidence",
          "suggested_by": "Claude"},
+        # A plan sent again: one comment followed its words, one is on words it dropped.
+        {"id": 3, "file": "docs/PLAN.md", "line": 3, "quote": "Bound the queue.",
+         "text": "At what size?", "replies": [{"author": "Claude", "text": "A thousand items."}],
+         "resolved": False, "told": 1, "asked": False, "kind": "", "suggested_by": ""},
+        {"id": 4, "file": "docs/PLAN.md", "line": 3, "quote": "Cache every read first.",
+         "text": "Measure before caching.", "replies": [], "resolved": False, "told": 0,
+         "asked": False, "kind": "", "suggested_by": "", "earlier": 1},
     ]
     os.makedirs(f"{ROOT}/.cellix", exist_ok=True)
     with open(f"{ROOT}/.cellix/threads.json", "w") as f:
@@ -297,6 +304,9 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("50-review", [["wait", 1.5], ["keys", "\\eOP"], ["wait", 0.6], ["keys", "show comments"],
                         ["wait", 3.0], ["keys", "\r"], ["wait", 3.0]],
           NOTE_FILE, size="150x44")
+    shoot("50-plan-versions", [["wait", 1.0], ["keys", "\\eOP"], ["wait", 0.6], ["keys", "show comments"],
+                               ["wait", 1.0], ["keys", "\r"], ["wait", 1.5]],
+          "docs/PLAN.md", size="150x44")
     shoot("51-agent-list", [*LIST_AGENTS, ["wait", 0.6]], NOTE_FILE, size="150x44")
     shell = [*LIST_AGENTS, ["wait", 0.6]]
     shoot("52-paper", [], PAPER_FILE, size="150x44", background="eff1f5")
