@@ -49,6 +49,10 @@ portable-pty = "0.9"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.191"
 
+# A closing console's handler, so Cellix finishes as it does on Quit.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"] }
+
 [dev-dependencies]
 cellix-doc = { path = "../cellix-doc", features = ["fixtures"] }
 tempfile = "3"

@@ -1061,3 +1061,37 @@ so no tour was run.
 Harness: `harness/x verify` keeps its stamp and log in the shared git dir, so a verify started in
 another worktree clears the stamp and overwrites the log mid-run, failing verifies that passed.
 Next: give each worktree its own stamp and log.
+
+## 2026-11-04: Windows review fixes
+
+A review of the Windows port found these, all real, now fixed with tests that run on every
+platform unless said:
+- The loopback socket proves both ends. The note holds a client token, a server token and the
+  pid; a client gives its token and asks nothing until Cellix answers with its own, so whatever
+  takes the port after Cellix has gone can't feed an agent comments or approve a plan. A note
+  whose process ended, whose port refuses or times out, or that answers wrongly is removed.
+  Connecting and proving take 2 s at most and a reply 5 s, on Unix too; only `plan` waits.
+  A Cellix removes only its own socket file, and a failure to start the server is said.
+- The side pane's PATH is joined with `join_paths`, not `:`.
+- Closing the console runs a `SetConsoleCtrlHandler` that stops the loop and holds Windows off
+  for up to 4.5 s while unsent comments are kept and the socket and IDE lock go.
+  `closing_the_terminal_keeps_unsent_comments` passes on the Windows runner and here.
+- Paste: ConPTY strips the bracketed paste markers and hands Cellix keys, so a paste's Enter
+  took a word completion. `pty_bracketed_paste_inserts_verbatim` now compares the saved file
+  (it only waited for a word, so it passed anyway). Keys that type, read whole in one batch,
+  become a paste when they carry on after Enter or Tab, or sit between markers sent as keys.
+- Socket notes on Windows live in `%LOCALAPPDATA%\cellix\sockets`.
+- Codex and Gemini run hooks in PowerShell on Windows (read in their source), so `cellix setup`
+  writes the bare `cellix hook ...` there. Claude Code's hooks use Git Bash and are unchanged.
+- Notebooks prefer the `py` launcher on Windows, and shares get `file://server/share` URLs.
+
+The mouse: through Microsoft's own ConPTY (NuGet `Microsoft.Windows.Console.ConPTY`, the
+conpty.dll and OpenConsole.exe Windows Terminal ships) all the PTY tests pass on the runner, the
+click test included, where through the built-in console the click never arrives. So clicks
+should work in Windows Terminal, and not in the old console host. The windows job keeps that
+as a step, "PTY tests through Windows Terminal's ConPTY", pinned to 1.25.260930003 (a NuGet
+version can't change once published), and it fails the job like any other. By default the
+mouse test stays ignored on Windows.
+
+Unverified: nothing has run in a real Windows Terminal; the Codex and Gemini hooks and the
+Claude Code mod are untried on Windows. Next: try it in Windows Terminal itself.

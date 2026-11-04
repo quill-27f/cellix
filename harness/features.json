@@ -3274,5 +3274,89 @@
     "title": "Cite offers the keys in the .bib files a paper names with \\bibliography or \\addbibresource[options], read from its root folder, from any of its files",
     "test": "citations_come_from_the_bibliography_the_paper_names",
     "passes": true
+  },
+  {
+    "id": "loopback-mutual-auth",
+    "milestone": 10,
+    "title": "A loopback client tells nothing to whatever holds the port until it proves it is the Cellix that wrote the note",
+    "test": "loopback_clients_only_talk_to_the_cellix_that_wrote_the_note",
+    "passes": true
+  },
+  {
+    "id": "loopback-stale-note",
+    "milestone": 10,
+    "title": "A socket note whose Cellix has ended, or whose port refuses, is removed without waiting",
+    "test": "a_loopback_note_whose_process_ended_is_removed",
+    "passes": true
+  },
+  {
+    "id": "hook-timeouts",
+    "milestone": 10,
+    "title": "A Cellix that never answers holds a hook up for seconds at most; only a plan waits",
+    "test": "a_silent_cellix_holds_no_hook_up",
+    "passes": true
+  },
+  {
+    "id": "own-socket-file",
+    "milestone": 10,
+    "title": "A closing Cellix removes only its own socket file, not one a later Cellix wrote",
+    "test": "a_cellix_only_removes_its_own_socket_file",
+    "passes": true
+  },
+  {
+    "id": "pane-path-separator",
+    "milestone": 10,
+    "title": "Agents in the side pane find cellix first on a PATH joined as the platform joins it",
+    "test": "claude_starts_with_cellix_on_its_path",
+    "passes": true
+  },
+  {
+    "id": "close-keeps-comments",
+    "milestone": 10,
+    "title": "Closing the terminal or window keeps unsent comments and removes the socket, on Windows through a console handler",
+    "test": "closing_the_terminal_keeps_unsent_comments",
+    "passes": true
+  },
+  {
+    "id": "windows-paste-keys",
+    "milestone": 10,
+    "title": "On Windows, keys that paste become one paste, so brackets don't close and lines don't indent",
+    "test": "keys_that_paste_on_windows_become_a_paste",
+    "passes": true
+  },
+  {
+    "id": "pty-paste-verbatim",
+    "milestone": 10,
+    "title": "A paste through a real terminal lands in the file exactly as pasted",
+    "test": "pty_bracketed_paste_inserts_verbatim",
+    "passes": true
+  },
+  {
+    "id": "sockets-local-app-data",
+    "milestone": 10,
+    "title": "Windows keeps socket notes in the user's local app data, not wherever TEMP points",
+    "test": "windows_keeps_sockets_in_local_app_data",
+    "passes": true
+  },
+  {
+    "id": "powershell-hooks",
+    "milestone": 10,
+    "title": "Codex and Gemini hooks are written so PowerShell runs them on Windows",
+    "test": "codex_and_gemini_hooks_run_in_powershell_on_windows",
+    "passes": true
+  },
+  {
+    "id": "windows-py-launcher",
+    "milestone": 10,
+    "title": "Notebooks on Windows without a venv run the py launcher, not the Store's python stand-in",
+    "test": "windows_prefers_the_py_launcher",
+    "passes": true
+  },
+  {
+    "id": "windows-share-urls",
+    "milestone": 10,
+    "title": "Windows share paths become file://server/share URLs and read back",
+    "test": "windows_file_urls_name_drives_and_shares",
+    "passes": true
   }
 ]

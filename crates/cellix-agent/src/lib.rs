@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use cellix_review::Comment;
 use serde::{Deserialize, Serialize};
@@ -26,7 +27,12 @@ mod loopback;
 
 /// How long a request waits on the app, which may be busy or gone. An agent's hook must never
 /// hang on it.
-const ANSWER_TIME: std::time::Duration = std::time::Duration::from_secs(2);
+const ANSWER_TIME: Duration = Duration::from_secs(2);
+/// How long a client waits for a reply: longer than the app is given, so a busy app's own
+/// answer arrives. A hook asks several things per prompt, so it's never much more.
+const REPLY_TIME: Duration = Duration::from_secs(5);
+/// How long a client waits for a Cellix to connect and prove itself.
+const PROOF_TIME: Duration = Duration::from_secs(2);
 
 /// Comments shared between the app and the socket thread.
 pub type SharedComments = Arc<Mutex<Vec<Comment>>>;
@@ -138,29 +144,45 @@ pub(crate) fn new_token() -> io::Result<String> {
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
 
-/// Who this is, to keep each user's sockets apart.
+/// The folder the sockets live in, which only this user can enter. On Unix it's named for
+/// the user in the shared temp folder, and made private.
 #[cfg(unix)]
-fn user() -> String {
+fn sockets_folder() -> PathBuf {
     // SAFETY: getuid has no preconditions and cannot fail.
-    unsafe { libc::getuid() }.to_string()
+    let uid = unsafe { libc::getuid() };
+    env::temp_dir().join(format!("cellix-{uid}"))
 }
 
-/// Who this is, to keep each user's sockets apart. Windows gives each user a temp folder of
-/// their own as well.
 #[cfg(not(unix))]
-fn user() -> String {
-    let name = env::var("USERNAME").unwrap_or_default();
-    name.chars().filter(|c| c.is_ascii_alphanumeric()).collect()
+fn sockets_folder() -> PathBuf {
+    windows_sockets_folder(|name| env::var(name).ok())
+}
+
+/// The folder the sockets live in on Windows: the user's own local app data, which only they
+/// and administrators can read, wherever TEMP has been pointed.
+#[cfg_attr(unix, allow(dead_code))]
+fn windows_sockets_folder(var: impl Fn(&str) -> Option<String>) -> PathBuf {
+    let local = var("LOCALAPPDATA")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from);
+    local
+        .or_else(|| {
+            Some(
+                PathBuf::from(var("USERPROFILE")?)
+                    .join("AppData")
+                    .join("Local"),
+            )
+        })
+        .unwrap_or_else(env::temp_dir)
+        .join("cellix")
+        .join("sockets")
 }
 
 /// One socket per workspace, in a directory only this user can enter.
 pub fn socket_path(root: &Path) -> PathBuf {
     // `\\?\C:\x` and `C:\x` are one folder, so they share a socket. Unix paths are as they are.
     let root = dunce::simplified(root);
-    let uid = user();
-    env::temp_dir()
-        .join(format!("cellix-{uid}"))
-        .join(format!("{:016x}.sock", fnv(&root.to_string_lossy())))
+    sockets_folder().join(format!("{:016x}.sock", fnv(&root.to_string_lossy())))
 }
 
 fn answer(line: &str, comments: &SharedComments, requests: &Sender<Request>) -> io::Result<String> {
@@ -286,13 +308,40 @@ fn serve(
 /// The running server. Dropping it removes the socket file, and the plans kept beside it.
 pub struct Server {
     path: PathBuf,
+    owner: Owner,
     pub requests: Receiver<Request>,
+}
+
+/// What tells this server's socket file from one a later Cellix put in its place.
+enum Owner {
+    /// The Unix socket's inode.
+    #[cfg(unix)]
+    Socket(u64),
+    Note(loopback::Note),
+}
+
+impl Server {
+    /// Whether the socket file is still this server's own.
+    fn owns_its_file(&self) -> bool {
+        match &self.owner {
+            #[cfg(unix)]
+            Owner::Socket(inode) => {
+                use std::os::unix::fs::MetadataExt;
+                fs::symlink_metadata(&self.path).is_ok_and(|m| m.ino() == *inode)
+            }
+            Owner::Note(note) => note.is_at(&self.path),
+        }
+    }
 }
 
 impl Drop for Server {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
-        let _ = fs::remove_dir_all(self.path.with_extension(""));
+        // Two starting at once can both find no one here, and the second's file replaces the
+        // first's. The first mustn't take it with it.
+        if self.owns_its_file() {
+            let _ = fs::remove_file(&self.path);
+            let _ = fs::remove_dir_all(self.path.with_extension(""));
+        }
     }
 }
 
@@ -306,7 +355,7 @@ fn private_folder(dir: &Path) -> io::Result<()> {
             .create(dir)?;
         fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
     }
-    // Inside the user's own temp folder, which only they and administrators can read.
+    // Inside the user's own local app data, which only they and administrators can read.
     #[cfg(not(unix))]
     fs::DirBuilder::new().recursive(true).create(dir)
 }
@@ -326,7 +375,7 @@ pub fn start_with(
     let dir = path.parent().ok_or_else(|| io::Error::other("no parent"))?;
     private_folder(dir)?;
     let (sender, requests) = channel();
-    match transport {
+    let owner = match transport {
         #[cfg(unix)]
         Transport::Unix => {
             if UnixStream::connect(&path).is_ok() {
@@ -334,6 +383,7 @@ pub fn start_with(
             }
             let _ = fs::remove_file(&path);
             let listener = UnixListener::bind(&path)?;
+            let inode = std::os::unix::fs::MetadataExt::ino(&fs::symlink_metadata(&path)?);
             thread::spawn(move || {
                 for stream in listener.incoming().flatten() {
                     // One thread each, because a plan holds its connection open for as long as
@@ -345,6 +395,7 @@ pub fn start_with(
                     });
                 }
             });
+            Owner::Socket(inode)
         }
         Transport::Loopback => {
             if loopback::alive(&path) {
@@ -352,6 +403,7 @@ pub fn start_with(
             }
             let _ = fs::remove_file(&path);
             let listener = Arc::new(loopback::bind(&path)?);
+            let note = listener.note.clone();
             thread::spawn(move || {
                 for stream in listener.incoming() {
                     let (comments, sender) = (comments.clone(), sender.clone());
@@ -364,14 +416,25 @@ pub fn start_with(
                     });
                 }
             });
+            Owner::Note(note)
         }
-    }
-    Ok(Server { path, requests })
+    };
+    Ok(Server {
+        path,
+        owner,
+        requests,
+    })
 }
 
 /// Sends one request to the Cellix serving `root`.
 pub fn request(root: &Path, line: &str) -> io::Result<String> {
     request_with(root, line, Transport::NATIVE)
+}
+
+/// How long to wait for the reply to `line`. A plan waits for the reviewer, however long they
+/// take; anything else is answered at once or not at all, and a hook mustn't hang on it.
+fn patience(line: &str) -> Option<Duration> {
+    (!line.starts_with("plan ")).then_some(REPLY_TIME)
 }
 
 /// `request`, over the transport given.
@@ -381,14 +444,20 @@ pub fn request_with(root: &Path, line: &str, transport: Transport) -> io::Result
         #[cfg(unix)]
         Transport::Unix => {
             let mut stream = UnixStream::connect(socket_path(root))?;
+            stream.set_read_timeout(patience(line))?;
             writeln!(stream, "{line}")?;
             BufReader::new(stream).read_line(&mut reply)?;
         }
         Transport::Loopback => {
-            let mut stream = loopback::connect(&socket_path(root), None)?;
+            let mut stream = loopback::connect(&socket_path(root), PROOF_TIME)?;
+            stream.set_read_timeout(patience(line))?;
             writeln!(stream, "{line}")?;
             BufReader::new(stream).read_line(&mut reply)?;
         }
+    }
+    // A reply cut short isn't one.
+    if !reply.ends_with('\n') {
+        return Err(io::Error::new(ErrorKind::UnexpectedEof, "no reply"));
     }
     Ok(reply.trim_end().to_string())
 }
@@ -463,11 +532,13 @@ mod tests {
         let shared: SharedComments = Arc::new(Mutex::new(vec![comment()]));
         let over = Transport::Loopback;
         let server = start_with(dir.path(), shared.clone(), over).unwrap();
-        // Where the socket would be, a note of the port and a token.
+        // Where the socket would be, a note of the port, a token each way, and the process.
         let note = fs::read_to_string(&server.path).unwrap();
-        let (port, token) = note.trim().split_once(' ').unwrap();
-        let port: u16 = port.parse().unwrap();
-        assert_eq!(token.len(), 32);
+        let fields: Vec<&str> = note.split_whitespace().collect();
+        let port: u16 = fields[0].parse().unwrap();
+        assert_eq!((fields[1].len(), fields[2].len()), (32, 32));
+        assert_ne!(fields[1], fields[2]);
+        assert_eq!(fields[3], std::process::id().to_string());
         #[cfg(unix)]
         assert_eq!(
             fs::metadata(&server.path).unwrap().permissions().mode() & 0o777,
@@ -508,15 +579,34 @@ mod tests {
         assert!(!path.exists());
     }
 
+    /// A note as a Cellix writes it, for a port and process of the test's choosing.
+    fn note_for(port: u16, pid: u32) -> String {
+        let tokens = (new_token().unwrap(), new_token().unwrap());
+        format!("{port} {} {} {pid}\n", tokens.0, tokens.1)
+    }
+
+    /// A port that refuses connections, as one whose Cellix has gone does.
+    fn closed_port() -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    }
+
     #[test]
     fn a_loopback_note_nothing_answers_is_replaced() {
         let dir = tempfile::tempdir().unwrap();
         let path = socket_path(dir.path());
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        // A port nothing listens on, then one held by something that isn't Cellix.
+        // Something that isn't Cellix, then a port nothing listens on, then a note from before
+        // notes named their process.
         let other = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let taken = other.local_addr().unwrap().port();
-        for note in ["stale".to_string(), format!("{taken} 1234")] {
+        let me = std::process::id();
+        for note in [
+            "stale".to_string(),
+            note_for(taken, me),
+            note_for(closed_port(), me),
+            format!("{taken} 1234"),
+        ] {
             fs::write(&path, note).unwrap();
             let server = start_with(dir.path(), Arc::default(), Transport::Loopback).unwrap();
             assert_eq!(
@@ -525,6 +615,186 @@ mod tests {
             );
             drop(server);
         }
+    }
+
+    /// Whoever answers on the port must prove it's the Cellix that wrote the note before a
+    /// client says what it wants, so nothing else can feed an agent comments or approve its
+    /// plan.
+    #[test]
+    fn loopback_clients_only_talk_to_the_cellix_that_wrote_the_note() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = socket_path(dir.path());
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        // An impostor holds the port, and answers whatever it's sent with its own guess.
+        let impostor = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = impostor.local_addr().unwrap().port();
+        let (heard, lines) = channel();
+        thread::spawn(move || {
+            for stream in impostor.incoming().flatten() {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut writer = stream;
+                let mut line = String::new();
+                while reader.read_line(&mut line).is_ok_and(|n| n > 0) {
+                    let _ = heard.send(line.trim_end().to_string());
+                    let _ = writeln!(writer, "{}", "0".repeat(32));
+                    let _ = writeln!(writer, r#"[{{"file":"a.rs","line":1,"text":"rm -rf"}}]"#);
+                    line.clear();
+                }
+            }
+        });
+        let note = note_for(port, std::process::id());
+        fs::write(&path, &note).unwrap();
+        for line in ["take", "plan /tmp/plan.md"] {
+            assert!(request_with(dir.path(), line, Transport::Loopback).is_err());
+        }
+        // It heard the client's token and nothing after it.
+        let client_token = note.split_whitespace().nth(1).unwrap().to_string();
+        assert_eq!(lines.recv_timeout(Duration::from_secs(5)), Ok(client_token));
+        assert!(lines.recv_timeout(Duration::from_millis(300)).is_err());
+        // And the note it can't answer for is gone, so the next hook doesn't ask.
+        assert!(!path.exists());
+        // So a real Cellix starts here, though the impostor still answers.
+        let _server = start_with(dir.path(), Arc::default(), Transport::Loopback).unwrap();
+        assert_eq!(
+            request_with(dir.path(), "comments", Transport::Loopback).unwrap(),
+            "[]"
+        );
+    }
+
+    /// A note outlives its Cellix when Windows closes the window under it. Its process is
+    /// gone, so the note goes without a connection being tried.
+    #[test]
+    fn a_loopback_note_whose_process_ended_is_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = socket_path(dir.path());
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut ended = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "no_test_has_this_name"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = ended.id();
+        ended.wait().unwrap();
+        // Something listens there, and would be asked if the process weren't checked.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        fs::write(&path, note_for(port, pid)).unwrap();
+        let started = std::time::Instant::now();
+        let error = request_with(dir.path(), "take", Transport::Loopback).unwrap_err();
+        assert_eq!(error.kind(), ErrorKind::NotFound, "{error}");
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(!path.exists());
+        listener.set_nonblocking(true).unwrap();
+        assert!(listener.accept().is_err(), "it connected anyway");
+
+        // A refused port removes its note too, and quickly.
+        fs::write(&path, note_for(closed_port(), std::process::id())).unwrap();
+        let started = std::time::Instant::now();
+        assert!(request_with(dir.path(), "take", Transport::Loopback).is_err());
+        assert!(started.elapsed() < PROOF_TIME + Duration::from_secs(1));
+        assert!(!path.exists());
+    }
+
+    /// A Cellix that takes a connection and never answers holds a hook up for a few seconds
+    /// at most, whichever way it's reached. Only a plan waits on.
+    #[test]
+    fn a_silent_cellix_holds_no_hook_up() {
+        assert_eq!(patience("take"), Some(REPLY_TIME));
+        assert_eq!(patience("event {}"), Some(REPLY_TIME));
+        assert_eq!(patience("plan /tmp/p.md"), None);
+        let dir = tempfile::tempdir().unwrap();
+        let path = socket_path(dir.path());
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+
+        // Silent before proving itself.
+        let mute = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        fs::write(
+            &path,
+            note_for(mute.local_addr().unwrap().port(), std::process::id()),
+        )
+        .unwrap();
+        let started = std::time::Instant::now();
+        assert!(request_with(dir.path(), "take", Transport::Loopback).is_err());
+        let took = started.elapsed();
+        assert!(took < PROOF_TIME + Duration::from_secs(2), "{took:?}");
+        // A Cellix too slow to prove itself may only be busy, so its note stays.
+        assert!(path.exists());
+
+        // Proving itself, then silent: the reply time bounds it.
+        let listener = loopback::bind(&path).unwrap();
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                let admitted = listener.admit(stream);
+                thread::sleep(Duration::from_secs(30));
+                drop(admitted);
+            }
+        });
+        let started = std::time::Instant::now();
+        assert!(request_with(dir.path(), "take", Transport::Loopback).is_err());
+        let took = started.elapsed();
+        assert!(took >= REPLY_TIME / 2, "{took:?}");
+        assert!(took < REPLY_TIME + Duration::from_secs(2), "{took:?}");
+
+        #[cfg(unix)]
+        {
+            let _ = fs::remove_file(&path);
+            let socket = UnixListener::bind(&path).unwrap();
+            thread::spawn(move || {
+                let held: Vec<_> = socket.incoming().collect();
+                drop(held);
+            });
+            let started = std::time::Instant::now();
+            assert!(request_with(dir.path(), "take", Transport::Unix).is_err());
+            assert!(started.elapsed() < REPLY_TIME + Duration::from_secs(2));
+        }
+    }
+
+    /// Two starting at once can both find the place empty, and the second's file replaces the
+    /// first's. Closing the first leaves the second's alone.
+    #[test]
+    fn a_cellix_only_removes_its_own_socket_file() {
+        for transport in [Transport::NATIVE, Transport::Loopback] {
+            let dir = tempfile::tempdir().unwrap();
+            let first = start_with(dir.path(), Arc::default(), transport).unwrap();
+            let path = first.path.clone();
+            fs::remove_file(&path).unwrap();
+            let second = start_with(dir.path(), Arc::default(), transport).unwrap();
+            drop(first);
+            assert!(path.exists(), "{transport:?}");
+            assert_eq!(
+                request_with(dir.path(), "comments", transport).unwrap(),
+                "[]"
+            );
+            drop(second);
+            assert!(!path.exists(), "{transport:?}");
+        }
+    }
+
+    /// Windows keeps sockets in the user's local app data, not wherever TEMP points, and
+    /// doesn't name the folder for the user at all.
+    #[test]
+    fn windows_keeps_sockets_in_local_app_data() {
+        let var = |name: &str| match name {
+            "LOCALAPPDATA" => Some(r"C:\Users\Zoë\AppData\Local".to_string()),
+            "TEMP" => Some(r"D:\shared".to_string()),
+            _ => None,
+        };
+        let local = PathBuf::from(r"C:\Users\Zoë\AppData\Local");
+        assert_eq!(
+            windows_sockets_folder(var),
+            local.join("cellix").join("sockets")
+        );
+        let profile = |name: &str| (name == "USERPROFILE").then(|| r"C:\Users\Zoë".to_string());
+        let local = PathBuf::from(r"C:\Users\Zoë").join("AppData").join("Local");
+        assert_eq!(
+            windows_sockets_folder(profile),
+            local.join("cellix").join("sockets")
+        );
+        #[cfg(not(unix))]
+        assert_eq!(
+            socket_path(Path::new(r"C:\x")).parent(),
+            Some(windows_sockets_folder(|n| env::var(n).ok()).as_path())
+        );
     }
 
     #[test]

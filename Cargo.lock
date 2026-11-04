@@ -817,6 +817,7 @@ dependencies = [
  "tempfile",
  "unicode-width",
  "vt100",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -831,6 +832,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tungstenite",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

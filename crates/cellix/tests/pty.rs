@@ -77,7 +77,7 @@ struct Screen {
     raw: Raw,
     child: Box<dyn portable_pty::Child + Send + Sync>,
     /// Kept for as long as the screen: on Windows, dropping the master closes the console.
-    _pty: portable_pty::PtyPair,
+    pty: Option<portable_pty::PtyPair>,
 }
 
 impl Screen {
@@ -104,8 +104,21 @@ impl Screen {
             input,
             raw,
             child,
-            _pty: pty,
+            pty: Some(pty),
         }
+    }
+
+    /// Closes the terminal under Cellix, as closing its window does. On Windows that closes
+    /// the pseudoconsole. On Unix the reader and writer still hold the master open, so the
+    /// hang-up a closing terminal sends is sent here.
+    fn close(&mut self) {
+        #[cfg(unix)]
+        {
+            let pid = self.child.process_id().unwrap() as i32;
+            // SAFETY: kill only sends a signal to the child this test started.
+            assert_eq!(unsafe { libc::kill(pid, libc::SIGHUP) }, 0);
+        }
+        self.pty.take();
     }
 
     /// What Cellix wrote first, and whether it's still running, for a failure to show.
@@ -175,11 +188,14 @@ fn pty_shows_file_contents() {
     screen.wait_exit();
 }
 
-/// Unix only for now: on the Windows runner, a click sent to ConPTY as an SGR mouse report
-/// never reached Cellix, though keys did. Whether clicks arrive in Windows Terminal itself is
-/// unverified; see docs/PROGRESS.md.
+/// Ignored on Windows by default: the runner's built-in console passes no clicks on, though
+/// keys arrive. CI's "PTY tests through Windows Terminal's ConPTY" step runs it through the
+/// ConPTY Windows Terminal ships, where the click arrives.
 #[test]
-#[cfg(unix)]
+#[cfg_attr(
+    windows,
+    ignore = "the built-in console passes no clicks on; CI runs it through Windows Terminal's ConPTY"
+)]
 fn pty_mouse_click_opens_file_and_typing_saves() {
     let dir = project();
     let mut screen = Screen::start(dir.path(), &[]);
@@ -207,12 +223,18 @@ fn pty_bracketed_paste_inserts_verbatim() {
     let dir = project();
     let mut screen = Screen::start(dir.path(), &["hello.txt"]);
     screen.wait_for("hello from a file");
-    screen.send(b"\x1b[200~pasted\ttext\x1b[201~");
-    screen.wait_for("pasted");
+    // Typed, the bracket would close itself and the new lines indent. Windows Terminal sends a
+    // pasted line break as a carriage return.
+    let newline = if cfg!(windows) { "\r" } else { "\n" };
+    let pasted = format!("pasted({newline}\ttext{newline}more{newline}");
+    screen.send(format!("\x1b[200~{pasted}\x1b[201~").as_bytes());
+    screen.wait_for("more");
+    screen.send(b"\x13"); // Ctrl+S
+    screen.wait_for("Saved hello.txt");
     screen.send(b"\x11");
-    screen.wait_for("Save changes to");
-    screen.send(b"n\r");
     screen.wait_exit();
+    let saved = std::fs::read_to_string(dir.path().join("hello.txt")).unwrap();
+    assert_eq!(saved, "pasted(\n\ttext\nmore\nhello from a file\n");
 }
 
 /// Windows has no Kitty keyboard protocol: keys arrive as console events.
@@ -522,6 +544,43 @@ fn a_stop_as_the_terminal_closes_still_ends_cellix() {
             "attempt {attempt}: still running"
         );
     }
+}
+
+/// Closing the window is how a session often ends. Cellix finishes as it does on Quit: an
+/// unsent comment is kept for next time, and the socket goes. On Windows that's a console
+/// handler; elsewhere the hang-up.
+#[test]
+fn closing_the_terminal_keeps_unsent_comments() {
+    let dir = project();
+    let cellix = |args: &[&str]| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_cellix"))
+            .args(args)
+            .current_dir(dir.path())
+            .output()
+            .unwrap()
+    };
+    let mut screen = Screen::start(dir.path(), &["hello.txt"]);
+    screen.wait_for("hello from a file");
+    screen.send(b"\x1bc");
+    screen.wait_for("Enter sends");
+    screen.send(b"kept for later\r");
+    screen.wait_for("\u{25c6}");
+    assert!(cellix(&["comments"]).status.success());
+    screen.close();
+    screen.wait_exit();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while cellix(&["comments"]).status.success() {
+        assert!(Instant::now() < deadline, "the socket outlived Cellix");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    drop(screen);
+
+    let mut again = Screen::start(dir.path(), &["hello.txt"]);
+    again.wait_for("from last time");
+    let json = String::from_utf8(cellix(&["comments"]).stdout).unwrap();
+    assert!(json.contains("kept for later"), "{json}");
+    again.send(b"\x11");
+    again.wait_exit();
 }
 
 #[test]

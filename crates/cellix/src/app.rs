@@ -929,7 +929,7 @@ impl App {
         }
     }
 
-    fn say(&self, text: impl Into<String>) {
+    pub(crate) fn say(&self, text: impl Into<String>) {
         *self.message.borrow_mut() = text.into();
     }
 
@@ -5147,9 +5147,11 @@ impl App {
         )];
         let own_folder = std::env::current_exe()
             .ok()
-            .and_then(|exe| exe.parent().map(|folder| folder.display().to_string()));
-        if let (Some(folder), Ok(path)) = (own_folder, std::env::var("PATH")) {
-            env.push(format!("PATH={folder}:{path}"));
+            .and_then(|exe| exe.parent().map(Path::to_path_buf));
+        if let (Some(folder), Some(path)) = (own_folder, std::env::var_os("PATH"))
+            && let Some(path) = path_with(&folder, &path)
+        {
+            env.push(format!("PATH={path}"));
         }
         if agent != "claude" {
             return (env, launch);
@@ -10488,6 +10490,13 @@ impl App {
     pub fn background(&self) -> Style {
         self.theme.text
     }
+}
+
+/// `path` with `folder` in front, joined as this platform joins a PATH: with `;` on Windows,
+/// where a `:` would run into a drive letter.
+fn path_with(folder: &Path, path: &std::ffi::OsStr) -> Option<String> {
+    let folders = std::iter::once(folder.to_path_buf()).chain(std::env::split_paths(path));
+    std::env::join_paths(folders).ok()?.into_string().ok()
 }
 
 #[cfg(test)]
@@ -17449,7 +17458,15 @@ mod tests {
         let (_dir, app) = project();
         let (env, launch) = app.agent_launch("claude");
         assert_eq!(launch[0], "claude");
-        assert!(env.iter().any(|e| e.starts_with("PATH=")), "{env:?}");
+        // Cellix's folder first, then the path as it was, joined as this platform joins them:
+        // Windows separates with `;`, and a `:` there would break the first entry.
+        let path = env.iter().find_map(|e| e.strip_prefix("PATH=")).unwrap();
+        let folders: Vec<PathBuf> = std::env::split_paths(path).collect();
+        let own = std::env::current_exe().unwrap();
+        assert_eq!(Some(folders[0].as_path()), own.parent());
+        let before: Vec<PathBuf> =
+            std::env::split_paths(&std::env::var_os("PATH").unwrap()).collect();
+        assert_eq!(folders[1..], before[..]);
         let (env, _) = app.agent_launch("codex");
         assert!(env.iter().any(|e| e == "CELLIX_AGENT=Codex"), "{env:?}");
     }
