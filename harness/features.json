@@ -3519,5 +3519,12 @@
     "title": "Over SSH the pane inside Claude Code is drawn as cells, and input goes in batches with moves cut to the last",
     "test": "over_ssh_the_pane_sends_cells_and_takes_input_in_batches",
     "passes": true
+  },
+  {
+    "id": "ask-agent-in-claude-code",
+    "milestone": 10,
+    "title": "Inside Claude Code, Ask Agent puts the selection in Claude Code's prompt, unsent, and says to press Esc",
+    "test": "inside_claude_code_ask_agent_goes_to_its_prompt",
+    "passes": true
   }
 ]

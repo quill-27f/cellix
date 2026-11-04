@@ -381,6 +381,13 @@ pub fn run(root: &Path) -> io::Result<()> {
                     serde_json::to_string(&prompt).unwrap_or_default()
                 )?;
             }
+            if let Some(text) = app.take_outgoing_fill() {
+                writeln!(
+                    out,
+                    "fill {}",
+                    serde_json::to_string(&text).unwrap_or_default()
+                )?;
+            }
             if let Some(reason) = app.take_attention() {
                 writeln!(out, "attention {reason}")?;
             }

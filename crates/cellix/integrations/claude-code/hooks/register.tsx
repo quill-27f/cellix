@@ -109,6 +109,10 @@ async function line($: Engine, text: string) {
   } else if (kind === 'cells') {
     const [columns, rows, packed] = rest
     await showCells($, { columns: Number(columns), rows: Number(rows), cells: packed })
+  } else if (kind === 'fill') {
+    // Ask Agent: what the selection is about, in the prompt box for the person to finish.
+    const text = JSON.parse(rest.join(' ')) as string
+    await $.prompt.fill({ text, mode: 'insert' }).catch(() => undefined)
   } else if (kind === 'prompt') {
     // Cellix asking the agent something, as Check my review does: a turn of its own.
     const prompt = JSON.parse(rest.join(' ')) as string

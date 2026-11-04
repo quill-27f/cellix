@@ -99,6 +99,27 @@ test('over SSH the pane is drawn as cells, and the next frame repaints them in p
   expect(blits.length).toBe(1)
 })
 
+test("Ask Agent's words go in the prompt box, unsent", async ($, on) => {
+  const filled: string[] = []
+  const clock = mock.clock(on)
+  on('ui.open', async () => ({ value: { isPlaced: true as const } }))
+  on('process.run', async () => ({ value: { exitCode: 0, stdout: '[]', stderr: '' } }))
+  on('prompt.fill', async (_, e) => {
+    filled.push(e.text)
+    return { isFilled: true, text: e.text, cursor: e.text.length }
+  })
+  on('prompt.submit', async () => {
+    throw new Error('nothing is sent')
+  })
+  on('process.spawn', async function* () {
+    yield { stream: 'stdout' as const, text: `fill ${JSON.stringify('@plan.md line 3, "cache": ')}\n` }
+    return { value: { code: 0, signal: null } }
+  })
+  await $.command.run({ command: 'cellix', args: '' })
+  await clock.settle()
+  expect(filled).toEqual(['@plan.md line 3, "cache": '])
+})
+
 test('input that comes in while a send runs goes in the next send, all together', async ($, on) => {
   const sent: string[] = []
   const clock = mock.clock(on)

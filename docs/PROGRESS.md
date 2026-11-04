@@ -1232,3 +1232,17 @@ The ledger's `pane-remote` entry, which named `a_remote_frame_travels_as_a_png`,
 names `a_remote_frame_travels_as_cells`: frames still travel by value over SSH, as cells now.
 
 Unverified: a real Claude Code session over SSH. Pictures and PDFs show as on the cell tier.
+
+## 2026-11-04: Ask Agent inside Claude Code
+
+Reported: in the pane inside Claude Code, a selection's Ask Agent opened Cellix's comment bar,
+which is for an agent running in Cellix's own side pane; inside Claude Code the agent is the
+conversation beside it. Now Ask Agent there sends a `fill` line, and the mod puts
+`@<file> line <n>, "<selection>": ` into Claude Code's prompt box at the cursor, unsent, through
+`$.prompt.fill`. The `@` mention makes Claude read the file when the person sends it. The
+selection collapses so the bar goes, as a ui-expert review asked, and the status bar says
+`"cache" is in Claude Code's prompt. Press Esc to ask there.` A mod can't hand the keyboard to
+the prompt, so Esc, which already returns it, is the step named. Outside Claude Code, Ask Agent
+is unchanged.
+
+Unverified: in a real Claude Code session, that the fill lands while the pane holds the keys.

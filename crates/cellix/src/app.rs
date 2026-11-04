@@ -416,6 +416,31 @@ fn browser_installed() -> bool {
     cfg!(test) || crate::integrations::on_path(BROWSER_TOOL, var)
 }
 
+/// What Ask Agent puts in Claude Code's prompt: the file as a mention, so the agent reads
+/// it, the line and the words selected, then room for the question.
+fn ask_in_prompt(file: &str, line: usize, quote: &str) -> String {
+    const LONGEST: usize = 200;
+    let mut short: String = quote.chars().take(LONGEST).collect();
+    if quote.chars().count() > LONGEST {
+        short.push('…');
+    }
+    format!("@{file} line {line}, \"{short}\": ")
+}
+
+/// What Cellix says once Ask Agent has put the selection in Claude Code's prompt.
+fn asked_in_prompt(quote: &str, line: usize) -> String {
+    const LONGEST: usize = 24;
+    let what = if quote.is_empty() {
+        format!("Line {line}")
+    } else if quote.chars().count() > LONGEST {
+        let short: String = quote.chars().take(LONGEST).collect();
+        format!("\"{}…\"", short.trim_end())
+    } else {
+        format!("\"{quote}\"")
+    };
+    format!("{what} is in Claude Code's prompt. Press Esc to ask there.")
+}
+
 /// What an agent is asked when the reviewer presses Check my review.
 fn review_prompt(file: &str, mine: &[&Thread]) -> String {
     let mut text = format!("I'm reviewing {file} in Cellix. Read it, then help with my review.\n");
@@ -847,6 +872,8 @@ pub struct App {
     pending_review: Option<String>,
     /// A prompt for the agent this Cellix is a pane in, for the mod to submit.
     outgoing_prompt: Option<String>,
+    /// Words for the mod to put in Claude Code's prompt box, unsent, once.
+    outgoing_fill: Option<String>,
     /// The changed line a menu was opened on in Review, for its Comment choice: its file,
     /// number, text, and whether it was taken out.
     review_line: Option<(String, usize, String, bool)>,
@@ -928,6 +955,7 @@ impl App {
             pending_review: None,
             neovim_z: false,
             outgoing_prompt: None,
+            outgoing_fill: None,
             export_to: None,
             comment_quote: None,
             back: Vec::new(),
@@ -6884,6 +6912,11 @@ impl App {
         self.outgoing_prompt.take()
     }
 
+    /// What the mod puts in Claude Code's prompt box for the person to finish, once.
+    pub fn take_outgoing_fill(&mut self) -> Option<String> {
+        self.outgoing_fill.take()
+    }
+
     fn comment_lines(&self, file: &str) -> Vec<usize> {
         let waiting = self.comments.lock().map_or_else(
             |_| Vec::new(),
@@ -6922,6 +6955,18 @@ impl App {
                     .selected_text()
                     .unwrap_or_else(|| editor.line_text(line.saturating_sub(1)));
                 let quote = quote.lines().next().unwrap_or_default().trim().to_string();
+                // Inside Claude Code the agent is the conversation beside the pane, so the
+                // question is asked there: what it's about goes in the prompt box to finish.
+                if ask && self.in_pane {
+                    self.outgoing_fill = Some(ask_in_prompt(&file, line, &quote));
+                    // The bar goes, so the press shows it was taken; the words are in the prompt.
+                    if let Some(editor) = self.editor_mut() {
+                        let head = editor.selections.primary().head;
+                        editor.selections.set_single(Selection::cursor(head));
+                    }
+                    self.say(asked_in_prompt(&quote, line));
+                    return;
+                }
                 let code = !editor.rendered;
                 self.write_comment(Draft {
                     thread: None,
@@ -15515,6 +15560,33 @@ mod tests {
         };
         assert!(heard.contains("cache"), "what it's about: {heard}");
         assert!(heard.contains("cellix reply"), "how to answer: {heard}");
+    }
+
+    /// Inside Claude Code the agent is the conversation beside the pane, so Ask Agent asks it
+    /// there, where it opened a question box for an agent in Cellix's own pane.
+    #[test]
+    fn inside_claude_code_ask_agent_goes_to_its_prompt() {
+        let (_dir, mut app) = page_app("# Plan\n\nThe cache goes first.\n");
+        app.in_pane = true;
+        select_word(&mut app, "cache");
+        let (x, y) = find(&screen(&app), "Ask Agent");
+        app.handle(mouse(MouseKind::Left, x, y));
+        let fill = app
+            .take_outgoing_fill()
+            .expect("words for Claude Code's prompt");
+        assert!(fill.starts_with('@'), "a mention of the file: {fill}");
+        assert!(fill.contains("line 3, \"cache\""), "{fill}");
+        assert!(app.dock.draft.is_none(), "no question box in Cellix");
+        assert!(
+            status_line(&app).contains("\"cache\" is in Claude Code's prompt. Press Esc to ask"),
+            "{}",
+            status_line(&app)
+        );
+        assert!(
+            app.selection_bar().is_none(),
+            "the bar goes once it's pressed"
+        );
+        assert!(app.take_outgoing_fill().is_none(), "once");
     }
 
     #[test]
