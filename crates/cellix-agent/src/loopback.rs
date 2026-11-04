@@ -186,9 +186,11 @@ pub fn connect(path: &Path, wait: Duration) -> io::Result<TcpStream> {
         return Err(gone("its process has ended"));
     }
     let address = SocketAddr::from((Ipv4Addr::LOCALHOST, note.port));
-    let mut stream = match TcpStream::connect_timeout(&address, wait) {
-        Err(e) if e.kind() == ErrorKind::ConnectionRefused => return Err(gone("refused")),
-        connected => connected?,
+    // A listener on 127.0.0.1 is connected at once, by the system, however busy its program,
+    // so any failure to connect means no one listens there. Windows retries a refused one and
+    // reports it otherwise than Unix does.
+    let Ok(mut stream) = TcpStream::connect_timeout(&address, wait) else {
+        return Err(gone("no one listens on its port"));
     };
     stream.set_read_timeout(Some(wait))?;
     writeln!(stream, "{}", note.client)?;
