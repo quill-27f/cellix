@@ -2994,5 +2994,12 @@
     "title": "A dashed border has gaps",
     "test": "a_dashed_border_has_gaps",
     "passes": true
+  },
+  {
+    "id": "windows-transport",
+    "milestone": 10,
+    "title": "Agents reach Cellix where there are no Unix sockets: a loopback port behind a token, as on Windows",
+    "test": "agents_reach_cellix_over_loopback_with_its_token",
+    "passes": true
   }
 ]

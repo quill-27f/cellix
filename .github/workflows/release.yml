@@ -51,7 +51,8 @@ jobs:
 
   build:
     needs: plan
-    if: needs.plan.outputs.release == 'true'
+    # Run by hand, it builds even when there's nothing to release, to prove the builds work.
+    if: needs.plan.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
@@ -61,6 +62,7 @@ jobs:
           # Static, so it runs on any server, whatever its libc and with no Rust on it.
           - { target: x86_64-unknown-linux-musl, os: ubuntu-latest, runs: true }
           - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm, runs: true }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest, runs: true }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -75,24 +77,39 @@ jobs:
       - if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
       - run: cargo build --release --locked -p cellix --target ${{ matrix.target }}
+        env:
+          # The C runtime goes in the binary, so Windows needs no Visual C++ redistributable.
+          RUSTFLAGS: ${{ runner.os == 'Windows' && '-C target-feature=+crt-static' || '' }}
       - name: It runs
         if: matrix.runs
+        shell: bash
         run: target/${{ matrix.target }}/release/cellix --version
       - name: It links nothing
         if: runner.os == 'Linux'
         run: "! ldd target/${{ matrix.target }}/release/cellix 2>&1 | grep -q '=>'"
       - name: Pack it
+        if: runner.os != 'Windows'
         run: |
           mkdir pack
           cp target/${{ matrix.target }}/release/cellix README.md LICENSE-MIT LICENSE-APACHE pack/
           tar -czf cellix-${{ matrix.target }}.tar.gz -C pack .
+      - name: Pack it
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory pack | Out-Null
+          Copy-Item target/${{ matrix.target }}/release/cellix.exe, README.md, LICENSE-MIT, LICENSE-APACHE pack/
+          Compress-Archive -Path pack/* -DestinationPath cellix-${{ matrix.target }}.zip
       - uses: actions/upload-artifact@v4
         with:
           name: cellix-${{ matrix.target }}
-          path: cellix-${{ matrix.target }}.tar.gz
+          path: cellix-${{ matrix.target }}.*
+          if-no-files-found: error
 
   publish:
     needs: [plan, build]
+    # A run by hand with nothing to release stops at the builds.
+    if: needs.plan.outputs.release == 'true'
     runs-on: ubuntu-latest
     # A tag pushed by hand and the CI run on the same commit can both get here.
     concurrency: release-${{ needs.plan.outputs.version }}
@@ -116,7 +133,7 @@ jobs:
             echo "made=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          (cd archives && shasum -a 256 *.tar.gz > checksums.txt)
+          (cd archives && shasum -a 256 *.tar.gz *.zip > checksums.txt)
           python3 -I harness/formula.py "$VERSION" archives cellix.rb
           python3 -I harness/notes.py "$VERSION" > notes.md
           # Makes the tag too, on the commit CI passed.

@@ -36,6 +36,19 @@ pub fn shell() -> String {
     }
 }
 
+/// What opens a file or page in the system's own program for it. On Windows that isn't
+/// `cmd /c start`, because cmd would read a link's `&` as the start of another command.
+pub fn opener() -> Vec<String> {
+    let argv: &[&str] = if cfg!(target_os = "macos") {
+        &["open"]
+    } else if cfg!(windows) {
+        &["rundll32", "url.dll,FileProtocolHandler"]
+    } else {
+        &["xdg-open"]
+    };
+    argv.iter().map(|word| word.to_string()).collect()
+}
+
 /// What the panel calls a program.
 pub fn display_name(program: &str) -> &'static str {
     let named = AGENTS.iter().find(|(_, p)| *p == program);

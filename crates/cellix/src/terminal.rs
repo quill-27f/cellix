@@ -335,11 +335,11 @@ pub fn run(options: Options) -> io::Result<()> {
         .iter()
         .find(|p| p.is_dir())
         .cloned()
-        .map_or_else(std::env::current_dir, Ok)?
-        .canonicalize()?;
+        .map_or_else(std::env::current_dir, Ok)?;
+    let root = dunce::canonicalize(root)?;
     let mut app = App::new(root, size()?);
     for path in paths.iter().filter(|p| p.is_file()) {
-        let path = path.canonicalize()?;
+        let path = dunce::canonicalize(path)?;
         app.open(&path)?;
         if options.wait {
             app.wait_file = Some(path);

@@ -453,9 +453,10 @@ impl Session {
                 let front = master.process_group_leader();
                 front.is_some() && front.map(|p| p as u32) == *pid
             }
-            // A console can't say what's in front of it, so closing a shell asks first.
+            // A console can't say what's in front of it, so a shell closes as Windows Terminal
+            // closes one, without asking. An agent still asks.
             #[cfg(not(unix))]
-            Link::Own { .. } => false,
+            Link::Own { .. } => true,
             Link::Held(held) => held.at_prompt(),
         };
         !self.shell || !at_prompt
@@ -1453,9 +1454,12 @@ impl Dock {
 mod tests {
     use super::*;
     use cellix_input::Mods;
+    #[cfg(unix)]
     use cellix_render::UNIT;
 
-    /// Runs something that writes `stream`, and waits for `count` pictures to arrive.
+    /// Runs something that writes `stream`, and waits for `count` pictures to arrive. Unix
+    /// only: ConPTY keeps the graphics protocol from reaching Cellix.
+    #[cfg(unix)]
     fn pictures_from(stream: &[u8], count: usize) -> (tempfile::TempDir, Session) {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("stream");
@@ -1478,11 +1482,13 @@ mod tests {
     }
 
     /// A one pixel picture, as a program sends it.
+    #[cfg(unix)]
     fn pixel(control: &str) -> Vec<u8> {
         format!("\x1b_Ga=T,f=24,s=1,v=1,C=1,q=2,{control};AQID\x1b\\").into_bytes()
     }
 
     #[test]
+    #[cfg(unix)]
     fn a_picture_inside_a_synchronized_update_lands_where_the_update_moved_to() {
         let mut stream = b"\x1b[?2026h\x1b[3;5H".to_vec();
         stream.extend(pixel("i=1"));
@@ -1499,6 +1505,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn pictures_stand_in_their_cells_and_draw_in_their_layers() {
         let mut stream = b"\x1b[3;5H".to_vec();
         stream.extend(pixel("i=1,z=5,X=5,Y=10"));
@@ -1524,6 +1531,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn taking_one_placement_away_leaves_the_rest() {
         let mut stream = pixel("i=1,p=1");
         stream.extend(pixel("i=1,p=2"));

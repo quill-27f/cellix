@@ -20,6 +20,10 @@ pkg-fmt = "tgz"
 x86_64-unknown-linux-gnu = { pkg-url = "{ repo }/releases/download/v{ version }/cellix-x86_64-unknown-linux-musl.tar.gz" }
 aarch64-unknown-linux-gnu = { pkg-url = "{ repo }/releases/download/v{ version }/cellix-aarch64-unknown-linux-musl.tar.gz" }
 
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-url = "{ repo }/releases/download/v{ version }/cellix-{ target }.zip"
+pkg-fmt = "zip"
+
 [dependencies]
 png = "0.18.1"
 cellix-agent = { path = "../cellix-agent", version = "0.3.1" }
@@ -32,6 +36,7 @@ cellix-render = { path = "../cellix-render", version = "0.3.1" }
 cellix-review = { path = "../cellix-review", version = "0.3.1" }
 cellix-term = { path = "../cellix-term", version = "0.3.1" }
 base64 = "0.22"
+dunce = "1"
 flate2 = "1"
 crossterm = "0.29"
 unicode-width = "0.2"

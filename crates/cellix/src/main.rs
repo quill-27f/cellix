@@ -6,8 +6,8 @@ use cellix::Options;
 
 fn workspace_root(dir: Option<&str>) -> std::io::Result<PathBuf> {
     match dir {
-        Some(dir) => PathBuf::from(dir).canonicalize(),
-        None => std::env::current_dir()?.canonicalize(),
+        Some(dir) => dunce::canonicalize(dir),
+        None => dunce::canonicalize(std::env::current_dir()?),
     }
 }
 
@@ -206,7 +206,8 @@ fn main() -> ExitCode {
         ["hook", kind] => return hook("Claude Code", kind),
         ["hook", "--agent", agent, kind] => return hook(agent, kind),
         ["pane"] => {
-            return match std::env::current_dir().and_then(|d| cellix::pane::run(&d.canonicalize()?))
+            return match std::env::current_dir()
+                .and_then(|d| cellix::pane::run(&dunce::canonicalize(d)?))
             {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => {

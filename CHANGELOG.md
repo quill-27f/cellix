@@ -2,6 +2,11 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
+## [Unreleased]
+
+### Added
+- Windows. Cellix builds for x86_64-pc-windows-msvc and runs in Windows Terminal on the cell tier, with the side pane's shell on ConPTY (PowerShell). Agents reach it as before, through `cellix`, which talks to it over a port on 127.0.0.1 behind a token only the user can read. Releases carry `cellix-x86_64-pc-windows-msvc.zip`, which `cargo binstall` takes too. Not on Windows yet: programs in the side pane that keep running after Cellix quits, stopping a running notebook cell, and Kitty graphics.
+
 ## [0.3.1] - 2026-11-04
 
 ### Added

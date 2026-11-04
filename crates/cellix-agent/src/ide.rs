@@ -83,6 +83,31 @@ fn config_dir() -> Option<PathBuf> {
     configured.or_else(|| Some(PathBuf::from(std::env::var_os("HOME")?).join(".claude")))
 }
 
+/// A path as a file URL. A Windows path starts with its drive, `file:///C:/x`.
+pub fn file_url(path: &Path) -> String {
+    let text = path.display().to_string();
+    if cfg!(windows) {
+        format!("file:///{}", text.replace('\\', "/"))
+    } else {
+        format!("file://{text}")
+    }
+}
+
+/// The path a file URL names, or the text as it is if it isn't one.
+pub fn url_path(text: &str) -> &str {
+    let Some(path) = text.strip_prefix("file://") else {
+        return text;
+    };
+    // `file:///C:/x` is `C:/x`, which Windows takes.
+    let drive = path
+        .strip_prefix('/')
+        .filter(|rest| rest.get(1..2) == Some(":"));
+    match drive {
+        Some(rest) if cfg!(windows) => rest,
+        _ => path,
+    }
+}
+
 /// A folder only this user can enter. On Windows, the user's profile already is one.
 fn private_folder(folder: &Path) -> io::Result<()> {
     let mut builder = fs::DirBuilder::new();
@@ -290,7 +315,7 @@ fn workspace_folders(root: &Path) -> String {
     let name = root.file_name().unwrap_or_default().to_string_lossy();
     json!({
         "success": true,
-        "folders": [{"name": name, "uri": format!("file://{}", root.display()), "path": root}],
+        "folders": [{"name": name, "uri": file_url(root), "path": root}],
         "rootPath": root,
     })
     .to_string()
@@ -474,7 +499,10 @@ mod tests {
             json!({"name": "getWorkspaceFolders", "arguments": {}}),
         );
         let text = folders["result"]["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains(&*dir.path().to_string_lossy()), "{text}");
+        let reply: Value = serde_json::from_str(text).unwrap();
+        let folder = &reply["folders"][0];
+        assert_eq!(folder["path"], json!(dir.path()), "{text}");
+        assert_eq!(folder["uri"], file_url(dir.path()), "{text}");
         let unknown = call(&mut client, 4, "nonsense", json!({}));
         assert_eq!(unknown["error"]["code"], -32601);
     }
@@ -498,6 +526,17 @@ mod tests {
             .headers_mut()
             .insert("origin", "https://evil.example".parse().unwrap());
         assert!(tungstenite::connect(request).is_err());
+    }
+
+    #[test]
+    fn file_urls_go_both_ways() {
+        let path = std::env::temp_dir().join("notes").join("a.md");
+        assert_eq!(Path::new(url_path(&file_url(&path))), path);
+        assert_eq!(url_path("docs/a.md"), "docs/a.md");
+        #[cfg(windows)]
+        assert_eq!(file_url(Path::new(r"C:\x\y.md")), "file:///C:/x/y.md");
+        #[cfg(unix)]
+        assert_eq!(file_url(Path::new("/x/y.md")), "file:///x/y.md");
     }
 
     #[test]

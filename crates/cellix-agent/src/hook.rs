@@ -50,9 +50,7 @@ fn roots(input: &Value) -> Vec<PathBuf> {
 
 /// The folders a Cellix for `folder` might be serving: it, then its repository's root.
 pub fn workspaces(folder: &std::path::Path) -> Vec<PathBuf> {
-    let cwd = folder
-        .canonicalize()
-        .unwrap_or_else(|_| folder.to_path_buf());
+    let cwd = dunce::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
     let mut roots = vec![cwd.clone()];
     let top = Command::new("git")
         .arg("-C")
@@ -63,7 +61,14 @@ pub fn workspaces(folder: &std::path::Path) -> Vec<PathBuf> {
         && output.status.success()
     {
         let text = String::from_utf8_lossy(&output.stdout);
-        roots.push(PathBuf::from(text.trim()));
+        let top = PathBuf::from(text.trim());
+        // git on Windows writes `C:/x`, and the socket is found by the path as Cellix has it.
+        let top = if cfg!(windows) {
+            dunce::canonicalize(&top).unwrap_or(top)
+        } else {
+            top
+        };
+        roots.push(top);
     }
     roots
 }

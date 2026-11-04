@@ -8,9 +8,31 @@ use std::time::{Duration, Instant};
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
+type Input = Arc<Mutex<Box<dyn Write + Send>>>;
+
+/// Feeds what Cellix draws to `parser`, answering a cursor position query as a terminal would.
+/// Windows' ConPTY asks one before it passes anything on, and waits for the answer.
+fn pump(mut reader: Box<dyn Read + Send>, parser: Arc<Mutex<vt100::Parser>>, input: Input) {
+    std::thread::spawn(move || {
+        let mut buf = [0; 8192];
+        while let Ok(n) = reader.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            if buf[..n].windows(4).any(|w| w == b"\x1b[6n") {
+                let (row, column) = parser.lock().unwrap().screen().cursor_position();
+                let mut input = input.lock().unwrap();
+                let _ = write!(input, "\x1b[{};{}R", row + 1, column + 1);
+                let _ = input.flush();
+            }
+            parser.lock().unwrap().process(&buf[..n]);
+        }
+    });
+}
+
 struct Screen {
     parser: Arc<Mutex<vt100::Parser>>,
-    input: Box<dyn Write + Send>,
+    input: Input,
     child: Box<dyn portable_pty::Child + Send + Sync>,
 }
 
@@ -28,19 +50,10 @@ impl Screen {
         command.cwd(dir);
         command.args(args);
         let child = pty.slave.spawn_command(command).unwrap();
-        let mut reader = pty.master.try_clone_reader().unwrap();
-        let input = pty.master.take_writer().unwrap();
+        let reader = pty.master.try_clone_reader().unwrap();
+        let input: Input = Arc::new(Mutex::new(pty.master.take_writer().unwrap()));
         let parser = Arc::new(Mutex::new(vt100::Parser::new(30, 100, 0)));
-        let sink = parser.clone();
-        std::thread::spawn(move || {
-            let mut buf = [0; 8192];
-            while let Ok(n) = reader.read(&mut buf) {
-                if n == 0 {
-                    break;
-                }
-                sink.lock().unwrap().process(&buf[..n]);
-            }
-        });
+        pump(reader, parser.clone(), input.clone());
         Self {
             parser,
             input,
@@ -64,8 +77,9 @@ impl Screen {
     }
 
     fn send(&mut self, bytes: &[u8]) {
-        self.input.write_all(bytes).unwrap();
-        self.input.flush().unwrap();
+        let mut input = self.input.lock().unwrap();
+        input.write_all(bytes).unwrap();
+        input.flush().unwrap();
     }
 
     fn wait_exit(&mut self) {
@@ -187,7 +201,9 @@ fn pty_restores_the_terminal_on_exit() {
 }
 
 /// A fake terminal that says it speaks Kitty graphics, so the binary takes the pixel path
-/// with real fonts. Returns once it has sent a tile with this size marker.
+/// with real fonts. Returns once it has sent a tile with this size marker. Windows asks the
+/// terminal nothing, so it never takes this path.
+#[cfg(unix)]
 fn expect_tiles(pixels: (u16, u16), reply: &[u8], tile_marker: &[u8]) {
     let dir = project();
     let pty = native_pty_system()
@@ -241,6 +257,7 @@ fn expect_tiles(pixels: (u16, u16), reply: &[u8], tile_marker: &[u8]) {
 }
 
 #[test]
+#[cfg(unix)]
 fn pty_pixel_tier_sends_tiles_when_the_terminal_supports_graphics() {
     expect_tiles(
         (40 * 10, 12 * 20),
@@ -251,6 +268,7 @@ fn pty_pixel_tier_sends_tiles_when_the_terminal_supports_graphics() {
 
 /// Zellij can report no pixels in the window size but answers `CSI 16t`.
 #[test]
+#[cfg(unix)]
 fn pty_pixel_tier_uses_the_reported_cell_size_without_window_pixels() {
     expect_tiles(
         (0, 0),
@@ -273,18 +291,10 @@ fn pty_follows_a_resize() {
     let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_cellix"));
     command.cwd(dir.path());
     let mut child = pty.slave.spawn_command(command).unwrap();
-    let mut reader = pty.master.try_clone_reader().unwrap();
+    let reader = pty.master.try_clone_reader().unwrap();
+    let input: Input = Arc::new(Mutex::new(pty.master.take_writer().unwrap()));
     let parser = Arc::new(Mutex::new(vt100::Parser::new(10, 120, 0)));
-    let sink = parser.clone();
-    std::thread::spawn(move || {
-        let mut buf = [0; 8192];
-        while let Ok(n) = reader.read(&mut buf) {
-            if n == 0 {
-                break;
-            }
-            sink.lock().unwrap().process(&buf[..n]);
-        }
-    });
+    pump(reader, parser.clone(), input);
     let wait = |text: &str| {
         let deadline = Instant::now() + Duration::from_secs(10);
         while !parser.lock().unwrap().screen().contents().contains(text) {

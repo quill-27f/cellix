@@ -226,7 +226,7 @@ mod tests {
     #[test]
     fn a_projects_own_python_comes_first() {
         let dir = tempfile::tempdir().unwrap();
-        let python = dir.path().join(".venv/bin/python");
+        let python = dir.path().join(".venv").join(VENV_PYTHON);
         std::fs::create_dir_all(python.parent().unwrap()).unwrap();
         std::fs::write(&python, "").unwrap();
         assert_eq!(python_for(dir.path(), dir.path()), python);

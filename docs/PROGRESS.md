@@ -861,3 +861,28 @@ The open items, closed for 0.3.1.
   failed their deadline on a loaded machine.
 
 Release 0.3.1.
+
+## 2026-11-04: Windows
+
+Cellix builds for x86_64-pc-windows-msvc, on the `windows` branch, with a CI job on
+windows-latest that runs clippy and every test, and a Windows zip in the release.
+- Agents reach it through `cellix` as before. Where there are no Unix sockets the workspace
+  socket is a port on 127.0.0.1, named with a 128-bit token in a file where the socket would be;
+  a connection without the token is dropped. Unix keeps its socket unchanged. The transport is
+  plain std, so `agents_reach_cellix_over_loopback_with_its_token` proves it here and on
+  Windows, with `a_loopback_note_nothing_answers_is_replaced` for a note left behind.
+- Gated with a fallback, never a panic: the session host (programs in the side pane run on
+  ConPTY under Cellix and end with it), hang-up and stop signals, interrupting a running
+  notebook cell, the pane's check for an orphaned parent, terminal queries (so no Kitty
+  graphics, cell size or background colour; Windows starts on the cell tier), and pictures from
+  programs in the side pane, which ConPTY doesn't pass on. A shell tab closes without asking,
+  since a console can't say what's in front of it.
+- Fixed for Windows: `\\?\` canonical paths (dunce), file URLs (`file:///C:/x`), the PATH and
+  `CLAUDE_CODE_PLUGIN_DIRS` separator, `.exe` and `.cmd` on the path, picture links written
+  with `/`, a venv's `Scripts/python.exe`, PowerShell for the Terminal tab, `rundll32` to open
+  pages, and HOME taken from USERPROFILE when unset.
+- PTY tests answer ConPTY's cursor position query, which it waits on before passing anything.
+
+Unverified: never run in a real Windows Terminal or WezTerm, only on the CI runner through
+ConPTY. The Claude Code mod, Codex and Gemini hooks, and `CLAUDE_CODE_PLUGIN_DIRS` taking `;`
+on Windows are untried there.
