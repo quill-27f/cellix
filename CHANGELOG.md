@@ -4,6 +4,8 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-04
+
 ### Added
 - Tabs drag. A file's tab moves along the tab bar, splits a pane when dropped on its left or right half, and shows in another pane when dropped in its middle; the side pane's tabs move along its own row, and dragging one over the bottom half of the file docks the whole pane under it, until it's dragged to the right edge. A ghost of the tab follows the pointer, the place it would land is washed in the accent, the status bar says what dropping will do, and Esc cancels.
 - Maximize. The button after the side pane's tabs, or a double-click on one of its tabs, lets the pane fill everything right of the activity bar; a double-click on a file's tab does the same for that file, hiding the sidebar, the other panes and the side pane. Both are in the palette as Toggle Maximized Side Pane and Toggle Maximized Editor. Opening something that a maximized part hides restores first.
@@ -18,6 +20,10 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 ### Fixed
 - In a project with large untracked files, such as data, Claude Code's prompt hook could take longer than the 30 seconds Claude Code gives it ("UserPromptSubmit hook timed out"), and the comments it carries never reached the agent. Each prompt's checkpoint read every file again and copied untracked ones into `.git`. It now keeps its own index, so only changed files are read; untracked files over 10 MB stay out of checkpoints; and the hook waits at most 3 seconds, leaving a slow checkpoint to finish on its own.
 - Inside Claude Code, the wheel scrolls the Comments pane when the pointer is over it. It used to scroll the file whatever was under the pointer.
+- A comment on a plan no longer moves onto words that say the opposite in the next version: only the same words, rewrapped, count as found, and reworded ones keep their quote with a "Changed in version N" pill. An approved plan's threads are settled with it, and the next plan starts at version one instead of inheriting them.
+- A section of a split paper belongs to the document that really takes it in, found through `% !TeX root` in any case and up to three folders above, so Track Changes no longer writes into a file that only mentions the section's name. Building saves the paper's other open files first, and Cite reads the bibliographies the paper names, `\addbibresource[...]` included.
+- Warnings in a section file point at that file and count once, a failed export keeps the last good PDF, pictures in a section file are found from the paper's root and its `\graphicspath`, forward search tells apart chapters with the same file name, and the pdflatex fallback runs Biber for biblatex, reruns while the log asks, and says when BibTeX fails.
+- The Linux install line works with GNU tar, which most Linux machines have: it extracts `./cellix`, makes `~/.local/bin` if needed, and stops on a failed download.
 - Export to PDF works with TeX Live's pdflatex and latexmk, not only tectonic: the export no longer builds from a hidden file TeX Live refuses to write beside, and it loads TikZ, tikz-cd and ulem only when the document uses them. Build PDF and Export are now tested against TeX Live on CI.
 
 ## [0.3.1] - 2026-11-04
@@ -132,6 +138,7 @@ The first public release. Cellix is a terminal editor that lives inside your AI 
 - CSV and TSV as editable tables with Excel's keys, and Jupyter notebooks run on a real kernel.
 - Real pixels in terminals with Kitty graphics, such as Ghostty, Kitty and WezTerm, with fonts built in, and text cells anywhere else. It runs under tmux, Zellij and over SSH, with light and dark themes that can follow the terminal.
 
+[0.4.0]: https://github.com/quill-27f/cellix/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/quill-27f/cellix/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/quill-27f/cellix/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/quill-27f/cellix/compare/v0.2.1...v0.2.2
