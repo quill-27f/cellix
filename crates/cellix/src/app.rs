@@ -6109,11 +6109,19 @@ impl App {
         }
     }
 
+    /// A path inside the workspace as comments, threads and agents name it: with `/` on every
+    /// platform, which Windows reads too, so a thread saved on one machine matches on another.
     fn relative(&self, path: &Path) -> String {
-        path.strip_prefix(self.workspace.root())
+        let relative = path
+            .strip_prefix(self.workspace.root())
             .unwrap_or(path)
             .to_string_lossy()
-            .into_owned()
+            .into_owned();
+        if cfg!(windows) {
+            relative.replace('\\', "/")
+        } else {
+            relative
+        }
     }
 
     fn add_comment(&mut self, file: String, line: usize, text: String) {

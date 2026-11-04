@@ -1095,3 +1095,11 @@ mouse test stays ignored on Windows.
 
 Unverified: nothing has run in a real Windows Terminal; the Codex and Gemini hooks and the
 Claude Code mod are untried on Windows. Next: try it in Windows Terminal itself.
+
+## 2026-11-04: Paths in comments use / on Windows too
+
+After the merges, CI on Windows failed `an_approved_plans_threads_stay_with_it_and_the_next_plan_starts_clean`:
+an approved plan's thread was filed under `.cellix/plans\001.md`. Cellix named workspace files
+with the platform's separator, so on Windows a thread or comment said `docs\x.md` while git, the
+agents and saved threads say `docs/x.md`. Paths in comments and threads now use `/` everywhere,
+which Windows reads as well.
