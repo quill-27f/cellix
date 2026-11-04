@@ -881,8 +881,19 @@ windows-latest that runs clippy and every test, and a Windows zip in the release
   `CLAUDE_CODE_PLUGIN_DIRS` separator, `.exe` and `.cmd` on the path, picture links written
   with `/`, a venv's `Scripts/python.exe`, PowerShell for the Terminal tab, `rundll32` to open
   pages, and HOME taken from USERPROFILE when unset.
-- PTY tests answer ConPTY's cursor position query, which it waits on before passing anything.
+- crossterm refuses the Kitty keyboard flags on Windows, and that error ended Cellix before its
+  first frame. They're asked for only elsewhere now; Windows keys come as console events.
+- The PTY tests run the real binary through ConPTY on the runner: it starts, draws, follows a
+  resize, takes a bracketed paste, restores the terminal, holds `--wait`, and `cellix comments`
+  and `open` reach it over the loopback socket. They keep the PTY's master (dropping it closes
+  a pseudoconsole), answer ConPTY's cursor query until Cellix draws (a first answer can be
+  lost), and wait 40 seconds on Windows, not 10.
+- Unix only among the PTY tests: hang-up and stop signals, the pixel tier (Windows asks the
+  terminal nothing), Cmd and Ctrl+Shift keys sent in the Kitty keyboard protocol, and the mouse
+  click test. That click, an SGR report written to ConPTY, never reached Cellix on the runner
+  though keys did. Next: find out whether clicks arrive in a real Windows Terminal, and if not,
+  why crossterm doesn't see ConPTY's mouse events.
 
 Unverified: never run in a real Windows Terminal or WezTerm, only on the CI runner through
-ConPTY. The Claude Code mod, Codex and Gemini hooks, and `CLAUDE_CODE_PLUGIN_DIRS` taking `;`
-on Windows are untried there.
+ConPTY, so mouse input on Windows is the biggest unknown. The Claude Code mod, Codex and Gemini
+hooks, and `CLAUDE_CODE_PLUGIN_DIRS` taking `;` on Windows are untried there.
