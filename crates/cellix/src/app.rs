@@ -927,7 +927,7 @@ impl App {
         }
     }
 
-    fn say(&self, text: impl Into<String>) {
+    pub(crate) fn say(&self, text: impl Into<String>) {
         *self.message.borrow_mut() = text.into();
     }
 

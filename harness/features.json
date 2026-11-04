@@ -3064,5 +3064,33 @@
     "title": "Agents reach Cellix where there are no Unix sockets: a loopback port behind a token, as on Windows",
     "test": "agents_reach_cellix_over_loopback_with_its_token",
     "passes": true
+  },
+  {
+    "id": "loopback-mutual-auth",
+    "milestone": 10,
+    "title": "A loopback client tells nothing to whatever holds the port until it proves it is the Cellix that wrote the note",
+    "test": "loopback_clients_only_talk_to_the_cellix_that_wrote_the_note",
+    "passes": true
+  },
+  {
+    "id": "loopback-stale-note",
+    "milestone": 10,
+    "title": "A socket note whose Cellix has ended, or whose port refuses, is removed without waiting",
+    "test": "a_loopback_note_whose_process_ended_is_removed",
+    "passes": true
+  },
+  {
+    "id": "hook-timeouts",
+    "milestone": 10,
+    "title": "A Cellix that never answers holds a hook up for seconds at most; only a plan waits",
+    "test": "a_silent_cellix_holds_no_hook_up",
+    "passes": true
+  },
+  {
+    "id": "own-socket-file",
+    "milestone": 10,
+    "title": "A closing Cellix removes only its own socket file, not one a later Cellix wrote",
+    "test": "a_cellix_only_removes_its_own_socket_file",
+    "passes": true
   }
 ]

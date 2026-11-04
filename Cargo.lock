@@ -831,6 +831,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tungstenite",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

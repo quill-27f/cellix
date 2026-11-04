@@ -354,8 +354,19 @@ pub fn run(options: Options) -> io::Result<()> {
             app.wait_file = Some(path);
         }
     }
-    // Agents are optional: a second window on this workspace still edits normally.
-    let server = cellix_agent::start(app.workspace.root(), app.comments.clone()).ok();
+    // Agents are optional: a second window on this workspace still edits normally. Anything
+    // else that stops agents reaching this one is said, not swallowed.
+    let server = match cellix_agent::start(app.workspace.root(), app.comments.clone()) {
+        Ok(server) => Some(server),
+        Err(e) if e.kind() == io::ErrorKind::AddrInUse => {
+            app.say("Another Cellix has this folder open, so agents reach that one");
+            None
+        }
+        Err(e) => {
+            app.say(format!("Agents can't reach this Cellix: {e}"));
+            None
+        }
+    };
     if server.is_some() {
         app.restore_unsent();
     }
