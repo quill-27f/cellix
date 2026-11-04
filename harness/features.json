@@ -3073,6 +3073,13 @@
     "passes": true
   },
   {
+    "id": "export-failure-keeps-pdf-tex",
+    "milestone": 10,
+    "title": "A failed export with real pdflatex keeps the last good PDF (TeX Live, CI only)",
+    "test": "a_failed_pdflatex_export_keeps_the_last_good_pdf",
+    "passes": false
+  },
+  {
     "id": "export-packages-outside-code",
     "milestone": 10,
     "title": "An export loads packages for what it emits, not for code shown in code blocks",
@@ -3092,6 +3099,13 @@
     "title": "Each build warning counts once, from the last pass",
     "test": "each_warning_counts_once_from_the_last_pass",
     "passes": true
+  },
+  {
+    "id": "warnings-latexmk-tex",
+    "milestone": 10,
+    "title": "latexmk counts a warning in a section file once and keeps it off the root (TeX Live, CI only)",
+    "test": "latexmk_counts_a_warning_in_a_section_file_once",
+    "passes": false
   },
   {
     "id": "section-pictures-from-root",
@@ -3115,6 +3129,13 @@
     "passes": true
   },
   {
+    "id": "pdflatex-biber-tex",
+    "milestone": 10,
+    "title": "The pdflatex fallback runs real Biber (TeX Live, CI only)",
+    "test": "pdflatex_runs_biber_for_a_biblatex_paper",
+    "passes": false
+  },
+  {
     "id": "pdflatex-rerun-log",
     "milestone": 10,
     "title": "The pdflatex fallback runs again while its log asks",
@@ -3122,10 +3143,24 @@
     "passes": true
   },
   {
+    "id": "pdflatex-include-tex",
+    "milestone": 10,
+    "title": "Labels in \\include'd chapters settle under plain pdflatex (TeX Live, CI only)",
+    "test": "pdflatex_settles_labels_in_included_chapters",
+    "passes": false
+  },
+  {
     "id": "bibtex-errors",
     "milestone": 10,
     "title": "A failing BibTeX says why after the build",
     "test": "a_bibtex_that_fails_says_why",
     "passes": true
+  },
+  {
+    "id": "bibtex-errors-tex",
+    "milestone": 10,
+    "title": "A missing .bib is reported by real BibTeX (TeX Live, CI only)",
+    "test": "pdflatex_says_when_bibtex_finds_no_bib",
+    "passes": false
   }
 ]

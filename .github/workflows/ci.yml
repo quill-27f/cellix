@@ -29,7 +29,7 @@ jobs:
 
   tex:
     # Build PDF and Export to PDF where TeX Live is the only TeX: latexmk, then plain pdflatex
-    # with BibTeX passes. Tectonic isn't installed here, and the tests hide it besides.
+    # with BibTeX and Biber passes. Tectonic isn't installed here, and the tests hide it besides.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,7 +38,7 @@ jobs:
       - name: Install TeX Live, without tectonic
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends texlive-latex-recommended texlive-bibtex-extra latexmk
+          sudo apt-get install -y --no-install-recommends texlive-latex-recommended texlive-bibtex-extra biber latexmk
       - run: cargo test -p cellix --test tex -- --ignored --test-threads=1
 
   macos:

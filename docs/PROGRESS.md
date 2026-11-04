@@ -937,3 +937,31 @@ windows-latest that runs clippy and every test, and a Windows zip in the release
 Unverified: never run in a real Windows Terminal or WezTerm, only on the CI runner through
 ConPTY, so mouse input on Windows is the biggest unknown. The Claude Code mod, Codex and Gemini
 hooks, and `CLAUDE_CODE_PLUGIN_DIRS` taking `;` on Windows are untried there.
+
+## 2026-11-04: LaTeX build output, reviewed
+
+Fixes from a review of what Cellix does with a build's output.
+- A failed Markdown export no longer replaces the last good PDF: pdflatex and latexmk write
+  one despite errors, so it's renamed only when the build worked, and deleted otherwise. Its
+  errors point at the hidden `.cellix-export.tex`, already gone, so they're said ("The PDF
+  wasn't made: …") with nothing to jump to, and a jump to any missing file only says where.
+  They aren't mapped back to Markdown lines; there is no line map yet.
+- An export loads tikz-cd, ulem, booktabs or xcolor for what it emits, not for code shown in a
+  code block.
+- Undefined-reference warnings go to the file TeX was reading, from the log's `(./file` … `)`
+  stack, with lines TeX broke at 79 characters joined back first.
+- Warnings count once, from the last pass: the .log when there is one, plus tectonic's own
+  `warning:` lines; summaries ("There were undefined references") don't count again.
+- `\includegraphics` on the page of a section file looks in the root's folder, then each
+  `\graphicspath` folder, as LaTeX does.
+- Forward search matches the source by its whole canonical path, so `ch1/intro.tex` and
+  `ch2/intro.tex` no longer collide.
+- The pdflatex fallback runs Biber for biblatex (`\abx@aux` or a `.bcf`), runs again while the
+  log asks ("Rerun to get…", "Label(s) may have changed"), up to three more times, and says
+  when BibTeX or Biber fails, with its output in the Log tab. Both tools are looked for beside
+  a pdflatex named by path first.
+
+Unverified here: the new TeX Live tests in `tests/tex.rs` (Biber, `\include` reruns, a missing
+.bib, a latexmk warning count, a failed real export) run only in CI's `tex` job, so their
+features stay `"passes": false` until it passes. Next: map an export's errors back to Markdown
+lines.
