@@ -18,39 +18,28 @@ pub struct Problem {
 }
 
 /// The file a build starts from: the one a `% !TEX root` comment names, this one if it's a
-/// whole document, or a whole document nearby that takes this one in.
+/// whole document, or a whole document nearby that really takes this one in.
 pub fn root_of(path: &Path, text: &str) -> PathBuf {
     let folder = path.parent().unwrap_or(Path::new(""));
-    let named = text.lines().take(5).find_map(|line| {
-        let rest = line.trim().strip_prefix('%')?.trim();
-        let rest = rest.strip_prefix("!TEX")?.trim().strip_prefix("root")?;
+    // TeXShop writes `!TEX`, TeXstudio `!TeX`.
+    let named = text.lines().take(20).find_map(|line| {
+        let rest = line.trim().strip_prefix('%')?.trim_start();
+        let rest = rest
+            .get(4..)
+            .filter(|_| rest[..4].eq_ignore_ascii_case("!tex"))?;
+        let rest = rest.trim_start();
+        let rest = rest
+            .get(4..)
+            .filter(|_| rest[..4].eq_ignore_ascii_case("root"))?;
         Some(rest.trim_start_matches([' ', '=']).trim().to_string())
     });
-    if let Some(name) = named {
+    if let Some(name) = named.filter(|n| !n.is_empty()) {
         return folder.join(name);
     }
-    if text.contains("\\documentclass") {
+    if crate::paper::is_whole(text) {
         return path.to_path_buf();
     }
-    let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned());
-    let stem = stem.unwrap_or_default();
-    for place in [folder, folder.parent().unwrap_or(folder)] {
-        let Ok(entries) = std::fs::read_dir(place) else {
-            continue;
-        };
-        for candidate in entries.flatten().map(|e| e.path()) {
-            if candidate.extension().is_none_or(|e| e != "tex") || candidate == path {
-                continue;
-            }
-            let Ok(other) = std::fs::read_to_string(&candidate) else {
-                continue;
-            };
-            if other.contains("\\documentclass") && other.contains(&stem) {
-                return candidate;
-            }
-        }
-    }
-    path.to_path_buf()
+    crate::paper::root_including(path).unwrap_or_else(|| path.to_path_buf())
 }
 
 /// A command a paper defines.
@@ -410,7 +399,7 @@ impl Project {
         let mut project = Self::default();
         let mut counters = Counters::default();
         let folder = root.parent().unwrap_or(Path::new("")).to_path_buf();
-        project.walk(root, &folder, &mut counters, 0);
+        project.walk(root, &folder, &mut counters, &mut Vec::new());
         // The ones it names, wherever they are, then any beside it.
         let beside = std::fs::read_dir(&folder)
             .into_iter()
@@ -438,23 +427,40 @@ impl Project {
     pub fn from_text(text: &str) -> Self {
         let mut project = Self::default();
         let mut counters = Counters::default();
-        project.lines(text, Path::new(""), &mut counters, 0);
+        project.lines(text, Path::new(""), &mut counters, &mut Vec::new());
         project
     }
 
-    fn walk(&mut self, path: &Path, folder: &Path, counters: &mut Counters, depth: usize) {
+    /// Reads one file of the paper. `stack` holds the files being read in, so one that takes
+    /// itself in is read once.
+    fn walk(
+        &mut self,
+        path: &Path,
+        folder: &Path,
+        counters: &mut Counters,
+        stack: &mut Vec<PathBuf>,
+    ) {
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        if stack.contains(&canonical) || stack.len() > 16 {
+            return;
+        }
         let Ok(text) = std::fs::read_to_string(path) else {
             return;
         };
-        if depth > 16 {
-            return;
-        }
+        stack.push(canonical);
         self.starts.insert(path.to_path_buf(), counters.clone());
-        self.lines(&text, folder, counters, depth);
+        self.lines(&text, folder, counters, stack);
         self.after.insert(path.to_path_buf(), counters.clone());
+        stack.pop();
     }
 
-    fn lines(&mut self, text: &str, folder: &Path, counters: &mut Counters, depth: usize) {
+    fn lines(
+        &mut self,
+        text: &str,
+        folder: &Path,
+        counters: &mut Counters,
+        stack: &mut Vec<PathBuf>,
+    ) {
         self.setup.extend(setup_of(text));
         self.bibliographies.extend(bibliographies_of(text, folder));
         if let Some(style) = text.lines().find_map(|l| {
@@ -477,16 +483,10 @@ impl Project {
             let code = line.split('%').next().unwrap_or("");
             read_macro(code, self);
             let trimmed = code.trim_start();
-            for command in ["\\input", "\\include"] {
-                if let Some(name) =
-                    word_after(trimmed, command).filter(|_| trimmed.starts_with(command))
-                {
-                    let mut file = folder.join(name);
-                    if file.extension().is_none() {
-                        file.set_extension("tex");
-                    }
-                    self.walk(&file, folder, counters, depth + 1);
-                }
+            // Anywhere on the line, as LaTeX and the word count read them.
+            for (_, name, _) in crate::paper::inputs(crate::paper::uncommented(line)) {
+                let file = crate::paper::resolve(folder, name);
+                self.walk(&file, folder, counters, stack);
             }
             if trimmed.starts_with("\\appendix") {
                 counters.appendix = true;
@@ -1679,6 +1679,78 @@ mod tests {
         assert_eq!(root_of(chapter, "\\section{A}\n"), chapter);
         let text = "% !TEX root = ../main.tex\n\\section{A}\n";
         assert_eq!(root_of(chapter, text), Path::new("/w/ch/../main.tex"));
+    }
+
+    #[test]
+    fn a_root_is_a_document_that_really_takes_the_file_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let paper = dir.path().join("paper");
+        let chapter = paper.join("chapters/one");
+        std::fs::create_dir_all(&chapter).unwrap();
+        let intro = chapter.join("intro.tex");
+        std::fs::write(&intro, "\\section{Introduction}\n").unwrap();
+        // Whole documents that only mention it, and come first by name.
+        std::fs::write(
+            chapter.join("a-notes.tex"),
+            "\\documentclass{article}\n% \\input{intro}\nThe intro is long.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            paper.join("a-draft.tex"),
+            "\\documentclass{article}\nOn chapters/one/intro.\n",
+        )
+        .unwrap();
+        let main = paper.join("main.tex");
+        std::fs::write(
+            &main,
+            "\\documentclass{book}\n\\begin{document}\n\\include{chapters/one/intro}\n\\end{document}\n",
+        )
+        .unwrap();
+        assert_eq!(
+            root_of(&intro, "\\section{Introduction}\n"),
+            main,
+            "two folders up"
+        );
+        assert_eq!(
+            root_of(&intro, "% \\documentclass{article}\n\\section{A}\n"),
+            main,
+            "a commented-out class isn't a whole document"
+        );
+        let stray = chapter.join("stray.tex");
+        std::fs::write(&stray, "Text.\n").unwrap();
+        assert_eq!(root_of(&stray, "Text.\n"), stray, "nothing takes it in");
+        assert_eq!(
+            root_of(&stray, "% !TeX root = ../../main.tex\nText.\n"),
+            chapter.join("../../main.tex"),
+            "TeXstudio's spelling"
+        );
+    }
+
+    #[test]
+    fn an_input_anywhere_on_a_line_numbers_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("main.tex");
+        std::fs::write(
+            &root,
+            "\\documentclass{article}\n\\begin{document}\n\\section{One}\nSee: \\input two\n\\input{self}\n\\end{document}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("two.tex"),
+            "\\section{Two}\\label{sec:two}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("self.tex"),
+            "\\section{Again}\\label{sec:again}\n\\input{self}\n",
+        )
+        .unwrap();
+        let project = Project::read(&root);
+        assert_eq!(project.labels["sec:two"], "2");
+        assert_eq!(
+            project.labels["sec:again"], "3",
+            "a file that takes itself in, once"
+        );
     }
 
     #[test]

@@ -47,11 +47,12 @@ fn markdown(text: &str) -> Vec<Heading> {
     found
 }
 
+/// `reading` holds the `\\input` files being read in, so one that takes itself in is read once.
 fn latex(
     text: &str,
     folder: Option<&std::path::Path>,
     file: Option<&std::path::Path>,
-    depth: usize,
+    reading: &mut Vec<std::path::PathBuf>,
 ) -> Vec<Heading> {
     const LEVELS: [(&str, u8); 5] = [
         ("\\chapter", 1),
@@ -62,23 +63,24 @@ fn latex(
     ];
     let mut found = Vec::new();
     for (line, source) in text.lines().enumerate() {
-        let code = source.split('%').next().unwrap_or("").trim_start();
-        // An input file's headings stand where it's read in.
-        if let Some(folder) = folder.filter(|_| depth < 8) {
-            for command in ["\\input{", "\\include{"] {
-                let Some(name) = code.strip_prefix(command).and_then(|r| r.split('}').next())
-                else {
+        let code = cellix_doc::paper::uncommented(source);
+        // An input file's headings stand where it's read in, wherever on the line it is, as
+        // the paper's numbering and word count read it.
+        if let Some(folder) = folder.filter(|_| reading.len() < 16) {
+            for (_, name, _) in cellix_doc::paper::inputs(code) {
+                let path = cellix_doc::paper::resolve(folder, name);
+                let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+                if reading.contains(&canonical) {
                     continue;
-                };
-                let mut path = folder.join(name.trim());
-                if path.extension().is_none() {
-                    path.set_extension("tex");
                 }
                 if let Ok(inner) = std::fs::read_to_string(&path) {
-                    found.extend(latex(&inner, Some(folder), Some(&path), depth + 1));
+                    reading.push(canonical);
+                    found.extend(latex(&inner, Some(folder), Some(&path), reading));
+                    reading.pop();
                 }
             }
         }
+        let code = code.trim_start();
         for (command, level) in LEVELS {
             let Some(rest) = code.strip_prefix(command) else {
                 continue;
@@ -117,7 +119,7 @@ fn latex(
 pub fn of_in(text: &str, dialect: Dialect, folder: Option<&std::path::Path>) -> Vec<Heading> {
     match dialect {
         Dialect::Markdown => markdown(text),
-        Dialect::Latex => latex(text, folder, None, 0),
+        Dialect::Latex => latex(text, folder, None, &mut Vec::new()),
         Dialect::Data(_) => Vec::new(),
     }
 }
@@ -221,6 +223,21 @@ mod tests {
             found[1].file.as_deref(),
             Some(dir.path().join("method.tex").as_path())
         );
+    }
+
+    #[test]
+    fn an_outline_follows_inputs_as_the_paper_reads_them() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("method.tex"), "\\section{Method}\n").unwrap();
+        std::fs::write(
+            dir.path().join("loop.tex"),
+            "\\section{Loop}\n\\input{loop}\n",
+        )
+        .unwrap();
+        let text = "See: \\input method\n\\input{loop}\n% \\input{method}\n";
+        let found = of_in(text, Dialect::Latex, Some(dir.path()));
+        let titles: Vec<&str> = found.iter().map(|h| h.title.as_str()).collect();
+        assert_eq!(titles, ["Method", "Loop"], "mid-line, unbraced, and once");
     }
 
     #[test]

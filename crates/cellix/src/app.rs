@@ -10125,7 +10125,8 @@ impl App {
                 "UTF-8".to_string(),
                 // A writer counts words, and has no use for indent width.
                 if editor.rendered {
-                    let (all, selected, paper) = editor.word_count();
+                    let others: Vec<&Editor> = self.editors.iter().collect();
+                    let (all, selected, paper) = editor.word_count(&others);
                     // A paper over several files counts whole, and says so.
                     let whole = if paper { " in the paper" } else { "" };
                     let words = match selected {
@@ -15599,6 +15600,42 @@ mod tests {
         assert!(dir.path().join("paper.pdf").exists(), "built again");
         let text = screen(&app).text();
         assert!(text.contains("4 words in the paper"), "{text}");
+    }
+
+    #[test]
+    fn a_section_belongs_to_the_root_that_really_takes_it_in() {
+        let (dir, mut app) = paper_app(
+            "\\documentclass{article}\n\\begin{document}\nOne two.\n\\input sections/intro\n\\end{document}\n",
+        );
+        let root = dir.path().join("paper.tex");
+        // A whole document first by name, which mentions the section but doesn't take it in.
+        let notes = dir.path().join("a-notes.tex");
+        let notes_text =
+            "\\documentclass{article}\n\\begin{document}\nThe intro is long.\n\\end{document}\n";
+        fs::write(&notes, notes_text).unwrap();
+        fs::create_dir(dir.path().join("sections")).unwrap();
+        let intro = dir.path().join("sections/intro.tex");
+        fs::write(&intro, "Three four five.\n").unwrap();
+
+        // The section's unsaved words count from the root's tab.
+        app.open(&intro).unwrap();
+        typed(&mut app, "Zero ");
+        app.open(&root).unwrap();
+        let text = screen(&app).text();
+        assert!(text.contains("6 words in the paper"), "{text}");
+
+        app.open(&intro).unwrap();
+        app.run(Command::ToggleTracking);
+        assert_eq!(
+            fs::read_to_string(&notes).unwrap(),
+            notes_text,
+            "left alone"
+        );
+        let on_disk = fs::read_to_string(&root).unwrap();
+        assert!(
+            on_disk.contains("\\usepackage{changes}\n\\begin{document}"),
+            "{on_disk}"
+        );
     }
 
     #[test]

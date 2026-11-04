@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use crate::changes::{Syntax, settle_all};
+use crate::paper::{Files, expand, uncommented};
 
 /// Words in a Markdown document or a LaTeX paper, with pending suggestions taken as accepted.
 pub fn count(text: &str, latex: bool) -> usize {
@@ -17,91 +18,25 @@ pub fn count(text: &str, latex: bool) -> usize {
         .count()
 }
 
-/// Words in a whole paper: its root with each `\input` and `\include` read in where it stands,
-/// and `front`, the file being edited, read from `text` rather than the disk. Also gives how
-/// many files were counted. A root that never takes `front` in counts `front` alone.
-pub fn paper(root: &Path, front: &Path, text: &str) -> (usize, usize) {
-    let folder = root.parent().unwrap_or(Path::new(""));
-    let mut paper = Paper {
-        folder,
-        front,
-        text,
-        files: 0,
-        reached: false,
-    };
-    let whole = paper.expand(root, 0);
-    if !paper.reached {
+/// Words in a whole paper: its root with each `\input` and `\include` read in where it stands.
+/// `open` holds the files open in editors, with their unsaved text, `front`, the file being
+/// edited, among them; the rest are read from `files`. Also gives how many files were
+/// counted. A root that never takes `front` in counts `front` alone.
+pub fn paper(
+    root: &Path,
+    front: &Path,
+    open: &[(&Path, &str)],
+    files: &mut Files,
+) -> (usize, usize) {
+    let text = open
+        .iter()
+        .find(|(path, _)| *path == front)
+        .map_or("", |(_, text)| *text);
+    let whole = expand(root, open, files);
+    if !whole.files.contains(&files.canonical(front)) {
         return (count(text, true), 1);
     }
-    (count(&whole, true), paper.files)
-}
-
-struct Paper<'a> {
-    /// The root's folder, which LaTeX reads every `\input` from.
-    folder: &'a Path,
-    front: &'a Path,
-    text: &'a str,
-    files: usize,
-    reached: bool,
-}
-
-impl Paper<'_> {
-    fn expand(&mut self, path: &Path, depth: usize) -> String {
-        let own = if same_file(path, self.front) {
-            self.reached = true;
-            self.text.to_string()
-        } else {
-            match std::fs::read_to_string(path) {
-                Ok(text) => text,
-                Err(_) => return String::new(),
-            }
-        };
-        self.files += 1;
-        let mut out = String::with_capacity(own.len());
-        for line in own.lines() {
-            let mut rest = uncommented(line);
-            while let Some((at, name, end)) = next_input(rest).filter(|_| depth < 16) {
-                out.push_str(&rest[..at]);
-                out.push('\n');
-                let mut file = self.folder.join(name.trim());
-                if file.extension().is_none() {
-                    file.set_extension("tex");
-                }
-                out.push_str(&self.expand(&file, depth + 1));
-                out.push('\n');
-                rest = &rest[end..];
-            }
-            out.push_str(rest);
-            out.push('\n');
-        }
-        out
-    }
-}
-
-fn same_file(a: &Path, b: &Path) -> bool {
-    a == b || matches!((a.canonicalize(), b.canonicalize()), (Ok(a), Ok(b)) if a == b)
-}
-
-/// The next `\input{name}` or `\include{name}` in a line: where it starts, the name, and where
-/// it ends. `\includegraphics` and the like aren't one.
-fn next_input(line: &str) -> Option<(usize, &str, usize)> {
-    let mut from = 0;
-    while let Some(found) = line[from..].find("\\in") {
-        let at = from + found;
-        for command in ["\\input", "\\include"] {
-            let Some(after) = line[at..].strip_prefix(command) else {
-                continue;
-            };
-            let open = at + command.len() + (after.len() - after.trim_start().len());
-            if !line[open..].starts_with('{') {
-                continue;
-            }
-            let close = open + line[open..].find('}')?;
-            return Some((at, &line[open + 1..close], close + 1));
-        }
-        from = at + 3;
-    }
-    None
+    (count(&whole.text, true), whole.files.len())
 }
 
 /// Markdown without its front matter, code blocks, comments and link targets.
@@ -291,17 +226,6 @@ fn latex_prose(text: &str) -> String {
     out
 }
 
-/// A line up to its `%` comment, if it has one.
-fn uncommented(line: &str) -> &str {
-    let bytes = line.as_bytes();
-    for (at, b) in bytes.iter().enumerate() {
-        if *b == b'%' && (at == 0 || bytes[at - 1] != b'\\') {
-            return &line[..at];
-        }
-    }
-    line
-}
-
 /// Where `text` next starts, from `from` on.
 fn find(chars: &[char], from: usize, text: &str) -> Option<usize> {
     let wanted: Vec<char> = text.chars().collect();
@@ -369,20 +293,47 @@ mod tests {
         std::fs::write(dir.path().join("sections/deep.tex"), "eight.\n").unwrap();
         std::fs::write(dir.path().join("gone.tex"), "commented out\n").unwrap();
         let front = dir.path().join("sections/intro.tex");
+        let alone = |path: &Path, text: &str| {
+            let open = [(path, text)];
+            let mut files = Files::default();
+            paper(&root, path, &open, &mut files)
+        };
         assert_eq!(
-            paper(&root, &front, "Four five six seven.\n"),
+            alone(&front, "Four five six seven.\n"),
             (10, 5),
             "One two Four five six seven Then Seven eight three, with the edit unsaved"
         );
-        assert_eq!(
-            paper(&root, &root, &std::fs::read_to_string(&root).unwrap()).0,
-            9
-        );
+        assert_eq!(alone(&root, &std::fs::read_to_string(&root).unwrap()).0, 9);
         let stray = dir.path().join("stray.tex");
+        assert_eq!(alone(&stray, "Just these three.\n"), (3, 1), "not in it");
+    }
+
+    #[test]
+    fn a_paper_is_walked_as_latex_reads_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("main.tex");
+        std::fs::write(
+            &root,
+            "\\documentclass{article}\n\\begin{document}\nOne. \\input intro\nTwo \\input{ch.v2} three.\n\\input{loop}\n\\end{document}\n",
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("intro.tex"), "Four five.\n").unwrap();
+        std::fs::write(dir.path().join("ch.v2.tex"), "Six.\n").unwrap();
+        std::fs::write(dir.path().join("ch.v2"), "Not this one.\n").unwrap();
+        std::fs::write(dir.path().join("loop.tex"), "Seven \\input{loop} eight.\n").unwrap();
+        let text = std::fs::read_to_string(&root).unwrap();
+        let mut files = Files::default();
         assert_eq!(
-            paper(&root, &stray, "Just these three.\n"),
-            (3, 1),
-            "not in it"
+            paper(&root, &root, &[(&root, &text)], &mut files),
+            (8, 4),
+            "One Four five Two Six three Seven eight: a file that takes itself in counts once"
         );
+        // Another open file counts as its editor holds it, unsaved.
+        let intro = dir.path().join("intro.tex");
+        let open = [
+            (root.as_path(), text.as_str()),
+            (intro.as_path(), "Four.\n"),
+        ];
+        assert_eq!(paper(&root, &root, &open, &mut files).0, 7);
     }
 }

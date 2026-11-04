@@ -130,8 +130,11 @@ pub struct Editor {
     /// its first edit, and the buffer as Cellix last marked it. A later edit from the same
     /// turn is marked against that text again, so the edits pile up into one review.
     pub agent_review: Option<(String, String)>,
-    /// The word count, how many files it took in, and the revision it was counted at.
-    words: Cell<Option<(u64, usize, usize)>>,
+    /// The word count, how many files it took in, and what it was counted at: this file's
+    /// revision, and a stamp of the other open files' unsaved edits.
+    words: Cell<Option<Counted>>,
+    /// The paper's other files as last read.
+    paper_files: RefCell<cellix_doc::paper::Files>,
     /// The paper a LaTeX file belongs to, looked for again only once the file is saved.
     paper_root: RefCell<Option<PathBuf>>,
     /// The notebook this page was read from, which saving writes back into.
@@ -154,6 +157,10 @@ pub struct Editor {
     /// The revision last sent to a language server.
     pub synced: u64,
 }
+
+/// A word count, how many files it took in, and what it was counted at: the file's revision and a
+/// stamp of the other open files' unsaved edits.
+type Counted = ((u64, u64), usize, usize);
 
 fn display_width(c: char, column: usize) -> usize {
     if c == '\t' {
@@ -221,6 +228,7 @@ impl Editor {
             tracking: false,
             agent_review: None,
             words: Cell::new(None),
+            paper_files: RefCell::default(),
             paper_root: RefCell::new(None),
             notebook: None,
             issues: (0, Vec::new()),
@@ -543,11 +551,26 @@ impl Editor {
     }
 
     /// Words in the document, and in the selection when there is one. A paper split over
-    /// `\input` files counts whole, from its root, and the last says it did. Counted once a
-    /// revision.
-    pub fn word_count(&self) -> (usize, Option<usize>, bool) {
+    /// `\input` files counts whole, from its root, and the last says it did; any of its files
+    /// open in `others` counts as edited there, saved or not. Counted once a revision.
+    pub fn word_count(&self, others: &[&Editor]) -> (usize, Option<usize>, bool) {
         let latex = self.dialect() == Dialect::Latex;
-        let revision = self.buffer.revision();
+        // Other open papers with unsaved edits, which count as they stand.
+        let unsaved: Vec<&Editor> = others
+            .iter()
+            .copied()
+            .filter(|e| latex && e.buffer.is_dirty() && e.dialect() == Dialect::Latex)
+            .filter(|e| e.buffer.path().is_some() && !std::ptr::eq(*e, self))
+            .collect();
+        let stamp = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            for editor in &unsaved {
+                (editor.buffer.path(), editor.buffer.revision()).hash(&mut hasher);
+            }
+            hasher.finish()
+        };
+        let revision = (self.buffer.revision(), stamp);
         let (all, files) = match self.words.get() {
             Some((counted, words, files)) if counted == revision => (words, files),
             _ => {
@@ -555,7 +578,14 @@ impl Editor {
                 let (words, files) = match self.buffer.path().filter(|_| latex) {
                     Some(path) => {
                         let root = self.paper_root(path, &text);
-                        cellix_doc::words::paper(&root, path, &text)
+                        let texts: Vec<(&Path, String)> = unsaved
+                            .iter()
+                            .filter_map(|e| Some((e.buffer.path()?, e.buffer.text())))
+                            .collect();
+                        let mut open = vec![(path, text.as_str())];
+                        open.extend(texts.iter().map(|(p, t)| (*p, t.as_str())));
+                        let mut files = self.paper_files.borrow_mut();
+                        cellix_doc::words::paper(&root, path, &open, &mut files)
                     }
                     None => (cellix_doc::words::count(&text, latex), 1),
                 };
