@@ -336,6 +336,20 @@ fn common_trail<'a>(a: &'a str, b: &str) -> &'a str {
     &a[a.len() - n..]
 }
 
+/// A paper with the `changes` package its marks print with, just before its document begins.
+/// None when it has it already, or has no preamble to put it in.
+pub fn with_package(text: &str) -> Option<String> {
+    if text.contains("{changes}") {
+        return None;
+    }
+    let at = text.find("\\begin{document}")?;
+    Some(format!(
+        "{}\\usepackage{{changes}}\n{}",
+        &text[..at],
+        &text[at..]
+    ))
+}
+
 pub fn settle_all(text: &str, syntax: Syntax, accept: bool) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());

@@ -870,3 +870,13 @@ an agent reading it hears which version it was about. The Comments pane opens wh
 with comments on it, and a plan still open from before reloads. The tour has a `50-plan-versions`
 shot. Unverified: a real agent sending a third version, where a thread made on version 2 compares
 against `Plan v2.md`.
+
+A paper split over `\input` and `\include` counts as one. The word count reads the paper from its
+root with each file it takes in read in place, the file being edited as it stands unsaved, and the
+status says "words in the paper" when it took in more than one file; saving or an agent's edit
+counts every open file again. Looking for what else only saw the file in front found two more,
+both fixed: Track Changes in a file the paper takes in added `\usepackage{changes}` nowhere (that
+file has no preamble), so the build failed on the marks; the package now goes in the root's. And
+an agent rewriting such a file rebuilt the open PDF only when that file was in front; any open
+file of the same paper does now. Left as they are: spelling checks the file in front, which is
+what it shows, and files the paper takes in that aren't open aren't watched for an agent's edits.

@@ -3008,5 +3008,19 @@
     "title": "A thread whose words left the plan stays on the version it was made on",
     "test": "a_thread_whose_words_left_the_plan_stays_on_the_version_it_was_made_on",
     "passes": true
+  },
+  {
+    "id": "paper-words-whole",
+    "milestone": 10,
+    "title": "A paper's word count takes in every \\input and \\include file",
+    "test": "a_paper_counts_every_file_it_takes_in",
+    "passes": true
+  },
+  {
+    "id": "paper-split-as-one",
+    "milestone": 10,
+    "title": "A paper split over \\input files counts, tracks and rebuilds as one paper",
+    "test": "a_paper_split_over_input_files_counts_tracks_and_rebuilds_as_one",
+    "passes": true
   }
 ]

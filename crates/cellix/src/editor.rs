@@ -130,8 +130,10 @@ pub struct Editor {
     /// its first edit, and the buffer as Cellix last marked it. A later edit from the same
     /// turn is marked against that text again, so the edits pile up into one review.
     pub agent_review: Option<(String, String)>,
-    /// The word count and the revision it was counted at.
-    words: Cell<Option<(u64, usize)>>,
+    /// The word count, how many files it took in, and the revision it was counted at.
+    words: Cell<Option<(u64, usize, usize)>>,
+    /// The paper a LaTeX file belongs to, looked for again only once the file is saved.
+    paper_root: RefCell<Option<PathBuf>>,
     /// The notebook this page was read from, which saving writes back into.
     pub notebook: Option<Notebook>,
     /// Spelling and grammar, for the revision they were checked at.
@@ -219,6 +221,7 @@ impl Editor {
             tracking: false,
             agent_review: None,
             words: Cell::new(None),
+            paper_root: RefCell::new(None),
             notebook: None,
             issues: (0, Vec::new()),
             checked: 0,
@@ -539,23 +542,47 @@ impl Editor {
         project
     }
 
-    /// Words in the document, and in the selection when there is one. Counted once a revision.
-    pub fn word_count(&self) -> (usize, Option<usize>) {
+    /// Words in the document, and in the selection when there is one. A paper split over
+    /// `\input` files counts whole, from its root, and the last says it did. Counted once a
+    /// revision.
+    pub fn word_count(&self) -> (usize, Option<usize>, bool) {
         let latex = self.dialect() == Dialect::Latex;
         let revision = self.buffer.revision();
-        let all = match self.words.get() {
-            Some((counted, words)) if counted == revision => words,
+        let (all, files) = match self.words.get() {
+            Some((counted, words, files)) if counted == revision => (words, files),
             _ => {
-                let words = cellix_doc::words::count(&self.buffer.text(), latex);
-                self.words.set(Some((revision, words)));
-                words
+                let text = self.buffer.text();
+                let (words, files) = match self.buffer.path().filter(|_| latex) {
+                    Some(path) => {
+                        let root = self.paper_root(path, &text);
+                        cellix_doc::words::paper(&root, path, &text)
+                    }
+                    None => (cellix_doc::words::count(&text, latex), 1),
+                };
+                self.words.set(Some((revision, words, files)));
+                (words, files)
             }
         };
         let selected = self
             .selected_text()
             .filter(|t| !t.trim().is_empty())
             .map(|t| cellix_doc::words::count(&t, false));
-        (all, selected)
+        (all, selected, files > 1)
+    }
+
+    /// Counts again on the next look, as when another file of the paper was saved.
+    pub fn recount(&self) {
+        self.words.set(None);
+    }
+
+    /// The root of the paper this file is in. Finding it can read the folder, so it's found
+    /// again only while the file is as saved, not on every keystroke.
+    fn paper_root(&self, path: &Path, text: &str) -> PathBuf {
+        let mut known = self.paper_root.borrow_mut();
+        match known.as_ref() {
+            Some(root) if self.buffer.is_dirty() => root.clone(),
+            _ => known.insert(cellix_doc::latex::root_of(path, text)).clone(),
+        }
     }
 
     /// How this document writes a suggestion.

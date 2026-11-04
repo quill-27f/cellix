@@ -346,6 +346,16 @@ fn review_prompt(file: &str, mine: &[&Thread]) -> String {
     text
 }
 
+/// Whether two LaTeX files build as one paper, as their files on disk say.
+fn same_paper(a: &Path, b: &Path) -> bool {
+    let root = |path: &Path| {
+        let tex = path.extension().is_some_and(|e| e == "tex");
+        let text = std::fs::read_to_string(path).ok().filter(|_| tex)?;
+        Some(cellix_doc::latex::root_of(path, &text))
+    };
+    root(a).is_some_and(|r| Some(r) == root(b))
+}
+
 /// A plan's earlier versions, `Plan v1.md` and on beside `Plan.md`, oldest first.
 fn plan_versions(path: &Path) -> Vec<PathBuf> {
     let stem = path
@@ -3100,13 +3110,17 @@ impl App {
         // A file an agent wrote is a saved file: servers only run their full check on save.
         if !reloaded.is_empty() {
             self.poll();
+            for editor in &self.editors {
+                editor.recount();
+            }
         }
-        // And a paper an agent wrote rebuilds, so the PDF beside it stays true.
+        // And a paper an agent wrote rebuilds, so the PDF beside it stays true: the file in
+        // front, or another file of the same paper.
         let active = self
             .editors
             .get(self.active())
             .and_then(|e| e.buffer.path());
-        if active.is_some_and(|path| reloaded.iter().any(|p| p == path)) {
+        if active.is_some_and(|path| reloaded.iter().any(|p| p == path || same_paper(p, path))) {
             self.rebuild_on_save();
         }
         for path in reloaded {
@@ -4768,6 +4782,15 @@ impl App {
                         let _ = editor.buffer.save();
                     }
                     let path = editor.buffer.path().map(Path::to_path_buf);
+                    // A file the paper takes in has no preamble: the package goes in its root's.
+                    let text = editor.buffer.text();
+                    let latex = editor.dialect() == Dialect::Latex;
+                    if let Some(path) = path.as_ref().filter(|_| on && latex) {
+                        let root = cellix_doc::latex::root_of(path, &text);
+                        if root != *path {
+                            self.track_in_root(&root);
+                        }
+                    }
                     if let Some(file) = path.map(|p| self.relative(&p)) {
                         let mut tracked = self.tracked_files();
                         tracked.retain(|f| *f != file);
@@ -6172,6 +6195,36 @@ impl App {
         self.threads_seen = Some((self.active(), revision));
     }
 
+    /// Gives a paper's root the package its tracked changes print with, in its open tab if it
+    /// has one, saved if it was, or else in the file.
+    fn track_in_root(&mut self, root: &Path) {
+        let open = self
+            .editors
+            .iter_mut()
+            .find(|e| e.buffer.path() == Some(root));
+        if let Some(editor) = open {
+            let saved = !editor.buffer.is_dirty();
+            let text = editor.buffer.text();
+            if let Some(with) = cellix_doc::changes::with_package(&text) {
+                editor.set_all_text(&with);
+                if saved {
+                    let _ = editor.buffer.save();
+                }
+            }
+            return;
+        }
+        let Ok(text) = std::fs::read_to_string(root) else {
+            return;
+        };
+        if let Some(with) = cellix_doc::changes::with_package(&text)
+            && let Err(e) = std::fs::write(root, with)
+        {
+            self.say(format!(
+                "Could not add the changes package to the paper: {e}"
+            ));
+        }
+    }
+
     /// A plan sent again keeps its comments as threads: each moves onto the new text, and one
     /// whose words are gone stays open, marked with `replaced`, the version it was made on.
     /// Replies and whether it was resolved come with it, and the Comments pane shows them.
@@ -7194,6 +7247,10 @@ impl App {
             (Err(e), _) => format!("Could not save: {e}"),
         };
         self.say(note);
+        // A paper's count takes in its other files, so every open one counts again.
+        for editor in &self.editors {
+            editor.recount();
+        }
         // With its PDF open, saving a paper rebuilds it.
         self.rebuild_on_save();
         // Sent after any pending edit, so the server checks what was saved.
@@ -10059,10 +10116,12 @@ impl App {
                 "UTF-8".to_string(),
                 // A writer counts words, and has no use for indent width.
                 if editor.rendered {
-                    let (all, selected) = editor.word_count();
+                    let (all, selected, paper) = editor.word_count();
+                    // A paper over several files counts whole, and says so.
+                    let whole = if paper { " in the paper" } else { "" };
                     let words = match selected {
-                        Some(selected) => format!("{selected} of {all} words"),
-                        None => format!("{all} words"),
+                        Some(selected) => format!("{selected} of {all} words{whole}"),
+                        None => format!("{all} words{whole}"),
                     };
                     if editor.tracking {
                         format!("Tracking changes  {words}")
@@ -15457,6 +15516,57 @@ mod tests {
         app.handle(Event::Tick);
         built(&mut app);
         assert!(dir.path().join("paper.pdf").exists(), "built again");
+    }
+
+    #[test]
+    fn a_paper_split_over_input_files_counts_tracks_and_rebuilds_as_one() {
+        let (dir, mut app) = paper_app(
+            "\\documentclass{article}\n\\begin{document}\nOne two.\n\\input{sections/intro}\n\\end{document}\n",
+        );
+        let root = dir.path().join("paper.tex");
+        fs::create_dir(dir.path().join("sections")).unwrap();
+        let intro = dir.path().join("sections/intro.tex");
+        fs::write(&intro, "Three four five.\n").unwrap();
+        app.open(&intro).unwrap();
+        let text = screen(&app).text();
+        assert!(text.contains("5 words in the paper"), "{text}");
+        typed(&mut app, "Zero ");
+        let text = screen(&app).text();
+        assert!(
+            text.contains("6 words in the paper"),
+            "unsaved words count: {text}"
+        );
+        app.run(Command::Save);
+        app.open(&root).unwrap();
+        let text = screen(&app).text();
+        assert!(
+            text.contains("6 words in the paper"),
+            "from the root too: {text}"
+        );
+
+        // Tracking a file the paper takes in puts the package in the root's preamble.
+        app.open(&intro).unwrap();
+        app.run(Command::ToggleTracking);
+        let on_disk = fs::read_to_string(&root).unwrap();
+        assert!(
+            on_disk.contains("\\usepackage{changes}\n\\begin{document}"),
+            "{on_disk}"
+        );
+        assert!(!app.active_text().unwrap().contains("usepackage"));
+        app.run(Command::ToggleTracking);
+
+        // An agent rewriting that file rebuilds the paper's PDF with the root in front.
+        app.open(&root).unwrap();
+        app.run(Command::BuildPdf);
+        built(&mut app);
+        fs::remove_file(dir.path().join("paper.pdf")).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(&intro, "Three four.\n").unwrap();
+        app.handle(Event::Tick);
+        built(&mut app);
+        assert!(dir.path().join("paper.pdf").exists(), "built again");
+        let text = screen(&app).text();
+        assert!(text.contains("4 words in the paper"), "{text}");
     }
 
     #[test]
