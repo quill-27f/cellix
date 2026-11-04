@@ -898,3 +898,6 @@ against what TeX Live does found two bugs, fixed:
 Unverified: the tests have not run anywhere with pdflatex. This Mac has only tectonic, and the
 same tests passed against tectonic here as a probe of the driving, the waiting and the cleanup.
 Their features stay unmarked until the CI job passes.
+
+The tex job ran the four latexmk and pdflatex tests against TeX Live on CI and all passed, so
+those features are marked passing.

@@ -3035,27 +3035,27 @@
     "milestone": 10,
     "title": "Build PDF with latexmk when tectonic is missing",
     "test": "latexmk_builds_a_paper_without_tectonic",
-    "passes": false
+    "passes": true
   },
   {
     "id": "pdflatex-paper",
     "milestone": 10,
     "title": "Build PDF with plain pdflatex and BibTeX passes",
     "test": "pdflatex_builds_a_paper_with_bibtex_passes",
-    "passes": false
+    "passes": true
   },
   {
     "id": "latexmk-export",
     "milestone": 10,
     "title": "Export Markdown to PDF with latexmk",
     "test": "latexmk_exports_markdown_to_pdf",
-    "passes": false
+    "passes": true
   },
   {
     "id": "pdflatex-export",
     "milestone": 10,
     "title": "Export Markdown to PDF with plain pdflatex",
     "test": "pdflatex_exports_markdown_to_pdf",
-    "passes": false
+    "passes": true
   }
 ]
