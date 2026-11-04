@@ -9447,6 +9447,39 @@ impl App {
         self.start_build(root);
     }
 
+    /// Saves the paper's other open files with unsaved edits, so a build reads them as they
+    /// stand, as LaTeX Workshop does. One changed on disk meanwhile is left for its own tab.
+    fn save_paper(&mut self, root: &Path) {
+        let active = self.active();
+        let mut saved = Vec::new();
+        let mut failed = Vec::new();
+        for (index, editor) in self.editors.iter_mut().enumerate() {
+            let Some(path) = editor.buffer.path().map(Path::to_path_buf) else {
+                continue;
+            };
+            if index == active
+                || !editor.buffer.is_dirty()
+                || editor.conflict
+                || editor.dialect() != Dialect::Latex
+            {
+                continue;
+            }
+            let theirs = cellix_doc::latex::root_of(&path, &editor.buffer.text());
+            if !cellix_doc::paper::same_file(&theirs, root) {
+                continue;
+            }
+            match editor.save() {
+                Ok(()) => saved.push(editor.title()),
+                Err(e) => failed.push(format!("{}: {e}", editor.title())),
+            }
+        }
+        if !failed.is_empty() {
+            self.say(format!("Could not save {}", failed.join(", ")));
+        } else if !saved.is_empty() {
+            self.say(format!("Saved {}", saved.join(", ")));
+        }
+    }
+
     fn build_pdf(&mut self) {
         let Some(editor) = self.editors.get(self.active()) else {
             return;
@@ -9460,6 +9493,7 @@ impl App {
             return;
         }
         let root = cellix_doc::latex::root_of(&path, &editor.buffer.text());
+        self.save_paper(&root);
         self.save();
         // Saving already builds when the PDF is open.
         if self.build.is_none() {
@@ -15636,6 +15670,36 @@ mod tests {
             on_disk.contains("\\usepackage{changes}\n\\begin{document}"),
             "{on_disk}"
         );
+    }
+
+    #[test]
+    fn building_saves_the_papers_other_open_files() {
+        let (dir, mut app) = paper_app(
+            "\\documentclass{article}\n\\begin{document}\n\\input{intro}\n\\end{document}\n",
+        );
+        let root = dir.path().join("paper.tex");
+        let intro = dir.path().join("intro.tex");
+        fs::write(&intro, "Old.\n").unwrap();
+        let other = dir.path().join("other.tex");
+        fs::write(&other, "Elsewhere.\n").unwrap();
+        app.open(&other).unwrap();
+        typed(&mut app, "Unsaved ");
+        app.open(&intro).unwrap();
+        typed(&mut app, "New ");
+        app.open(&root).unwrap();
+        click_tool(&mut app, "Build PDF");
+        built(&mut app);
+        assert_eq!(
+            fs::read_to_string(&intro).unwrap(),
+            "New Old.\n",
+            "built as it stands"
+        );
+        assert_eq!(
+            fs::read_to_string(&other).unwrap(),
+            "Elsewhere.\n",
+            "not part of the paper"
+        );
+        assert!(dir.path().join("paper.pdf").exists());
     }
 
     #[test]

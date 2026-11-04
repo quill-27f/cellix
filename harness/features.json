@@ -3085,5 +3085,12 @@
     "title": "Tracking a paper adds the changes package unless a real, uncommented \\usepackage loads it, and puts it before the real \\begin{document}",
     "test": "the_changes_package_goes_in_unless_it_is_really_loaded",
     "passes": true
+  },
+  {
+    "id": "build-saves-paper",
+    "milestone": 10,
+    "title": "Build PDF first saves every open file of the same paper with unsaved edits, so the PDF is built from what is on screen",
+    "test": "building_saves_the_papers_other_open_files",
+    "passes": true
   }
 ]
