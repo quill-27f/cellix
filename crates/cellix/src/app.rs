@@ -5714,16 +5714,45 @@ impl App {
 
     /// Keeps an approved plan with the project: the agent's copy goes when the session does,
     /// and it's what the work gets checked against.
-    fn keep_plan(&self, path: &Path, decision: &Decision) {
+    fn keep_plan(&self, path: &Path, decision: &Decision) -> Option<PathBuf> {
         let text = match decision {
             Decision::Approve(Some(edited)) => edited.clone(),
             _ => std::fs::read_to_string(path).unwrap_or_default(),
         };
         let folder = self.workspace.root().join(".cellix/plans");
         let count = std::fs::read_dir(&folder).map_or(0, Iterator::count);
-        let name = format!("{:03}.md", count + 1);
-        let _ =
-            std::fs::create_dir_all(&folder).and_then(|()| std::fs::write(folder.join(name), text));
+        let kept = folder.join(format!("{:03}.md", count + 1));
+        std::fs::create_dir_all(&folder)
+            .and_then(|()| std::fs::write(&kept, text))
+            .ok()?;
+        Some(kept)
+    }
+
+    /// An approved plan's threads are settled: resolved, and kept with the plan as approved,
+    /// so the next plan an agent sends starts with none of them.
+    fn settle_plan_threads(&mut self, path: &Path, kept: Option<&Path>) {
+        let file = self.relative(path);
+        let kept = kept.map(|k| {
+            (
+                self.relative(k),
+                std::fs::read_to_string(k).unwrap_or_default(),
+            )
+        });
+        let mut settled = false;
+        for thread in self.threads.iter_mut().filter(|t| t.file == file) {
+            thread.resolved = true;
+            if let Some((name, text)) = &kept {
+                thread.file.clone_from(name);
+                if thread.earlier.is_none() {
+                    thread.follow(text);
+                }
+            }
+            settled = true;
+        }
+        if settled {
+            self.threads_seen = None;
+            self.save_threads();
+        }
     }
 
     /// Answers the waiting agent and closes the plan.
@@ -5733,7 +5762,8 @@ impl App {
             return;
         };
         if matches!(decision, Decision::Approve(_)) {
-            self.keep_plan(&plan.path, &decision);
+            let kept = self.keep_plan(&plan.path, &decision);
+            self.settle_plan_threads(&plan.path, kept.as_deref());
         }
         let _ = plan.reply.send(decision);
         self.agents.plan_answered();
@@ -12589,6 +12619,68 @@ mod tests {
                 assert_eq!(pill, header + 1, "under its header at {columns} columns");
             }
         }
+    }
+
+    #[test]
+    fn an_approved_plans_threads_stay_with_it_and_the_next_plan_starts_clean() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        let held = tempfile::tempdir().unwrap();
+        let first = "# Plan\n\nCache first.\n\nShip it.\n";
+        let path = cellix_agent::hook::keep_versions(held.path(), first).unwrap();
+        let (reply, decision) = std::sync::mpsc::channel();
+        app.serve(Request::Plan {
+            path: path.clone(),
+            reply,
+        });
+        let (x, y) = find(&screen(&app), "Cache first.");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        app.run(Command::AddComment);
+        typed(&mut app, "Why first");
+        enter(&mut app);
+        let (x, y) = find(&screen(&app), APPROVE);
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        assert!(matches!(decision.try_recv(), Ok(Decision::Approve(_))));
+        // Settled: resolved, and kept with the approved plan in the project.
+        let settled = |threads: &[Thread]| {
+            threads
+                .iter()
+                .find(|t| t.text == "Why first")
+                .map(|t| (t.resolved, t.file.clone(), t.line))
+        };
+        let kept = Some((true, ".cellix/plans/001.md".to_string(), 3));
+        assert_eq!(settled(&app.threads), kept);
+        let saved = cellix_review::threads::load(dir.path()).unwrap();
+        assert_eq!(settled(&saved), kept, "and saved");
+        if app.dock.showing(Front::Comments) {
+            app.run(Command::ShowComments);
+        }
+        // The next plan in the session, unrelated. Even counted as version 2, as an older hook
+        // would, nothing of the last one comes onto it.
+        cellix_agent::hook::keep_versions(held.path(), "# Plan\n\nRename the parser.\n").unwrap();
+        let (reply, _decision) = std::sync::mpsc::channel();
+        app.serve(Request::Plan {
+            path: path.clone(),
+            reply,
+        });
+        let text = screen(&app).text();
+        assert!(text.contains("Rename the parser."), "{text}");
+        assert!(!text.contains("Removed in version"), "{text}");
+        assert!(!text.contains("Why first"), "{text}");
+        assert!(
+            !app.dock.showing(Front::Comments),
+            "the Comments pane stays shut"
+        );
+        // As the hook does now: the approved plan's versions are put away, so it's version 1.
+        cellix_agent::hook::put_versions_away(held.path()).unwrap();
+        cellix_agent::hook::keep_versions(held.path(), "# Plan\n\nA third.\n").unwrap();
+        let (reply, _decision) = std::sync::mpsc::channel();
+        app.serve(Request::Plan { path, reply });
+        let text = screen(&app).text();
+        assert!(
+            text.contains("waiting for you to review this plan"),
+            "{text}"
+        );
     }
 
     #[test]

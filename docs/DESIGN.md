@@ -216,7 +216,9 @@ version: words still there, or only rewrapped, take them along. A thread on word
 open, marked with the version that removed them, and leads to what changed. Words reworded are
 not taken as the same, since one word can turn a sentence around: the thread keeps the words it
 was about, is marked as changed in that version, and leads to what changed too. A negation or a
-number in or out never counts as a reword.
+number in or out never counts as a reword. Approving a plan settles its threads: they're resolved
+and kept with the approved copy in `.cellix/plans`, and the hook puts that plan's versions away in
+`Approved N`, so the next plan the session sends starts at version 1 with no threads.
 
 ## Surfaces
 

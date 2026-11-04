@@ -3092,5 +3092,19 @@
     "title": "A plan comment's pill keeps clear of its header at any width",
     "test": "a_plan_comments_pill_keeps_clear_of_its_header_at_any_width",
     "passes": true
+  },
+  {
+    "id": "plan-approved-threads-settle",
+    "milestone": 10,
+    "title": "An approved plan's threads stay with it, and the next plan starts with none",
+    "test": "an_approved_plans_threads_stay_with_it_and_the_next_plan_starts_clean",
+    "passes": true
+  },
+  {
+    "id": "plan-approved-versions-away",
+    "milestone": 10,
+    "title": "A plan after an approved one starts at version one",
+    "test": "a_plan_after_an_approved_one_starts_at_version_one",
+    "passes": true
   }
 ]
