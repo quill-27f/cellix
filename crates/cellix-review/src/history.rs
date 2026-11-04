@@ -2,12 +2,20 @@
 //! a turn can be undone. They live in private refs and never touch the branch or the index.
 
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, SystemTime};
 
 use crate::git::{Change, git, parse_name_status};
 
 const PREFIX: &str = "refs/cellix/turns/";
+/// Untracked files bigger than this stay out of checkpoints. Hashing a project's data dumps on
+/// every prompt made the prompt hook outlast the time an agent gives it, and each checkpoint
+/// copied them into `.git`.
+pub const LARGEST_UNTRACKED: u64 = 10 * 1024 * 1024;
+/// A lock on the checkpoint index older than this was left by a git that was stopped.
+const STALE_LOCK: Duration = Duration::from_secs(10 * 60);
 
 /// One checkpoint: the state of the tree when a turn began.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -17,33 +25,82 @@ pub struct Turn {
     pub label: String,
 }
 
-/// Runs git with a private index, so a snapshot can't disturb what's staged.
-fn git_with_index(root: &Path, index: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git")
+/// Runs git with a private index, so a snapshot can't disturb what's staged, giving it `input`.
+fn git_with_index_fed(root: &Path, index: &Path, args: &[&str], input: &[u8]) -> Option<String> {
+    let mut child = Command::new("git")
         .arg("-C")
         .arg(root)
         .args(args)
         .env("GIT_INDEX_FILE", index)
-        .output()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
         .ok()?;
-    output
-        .status
-        .success()
+    let mut stdin = child.stdin.take()?;
+    let fed = stdin.write_all(input).is_ok();
+    drop(stdin);
+    let output = child.wait_with_output().ok()?;
+    (fed && output.status.success())
         .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// The tree object for the working directory as it stands, ignored files aside.
+fn git_with_index(root: &Path, index: &Path, args: &[&str]) -> Option<String> {
+    git_with_index_fed(root, index, args, &[])
+}
+
+/// The tree object for the working directory as it stands, ignored files and untracked files
+/// over `LARGEST_UNTRACKED` aside.
 fn snapshot_tree(root: &Path) -> Option<String> {
-    let dir = git(root, &["rev-parse", "--absolute-git-dir"])?;
-    let index = PathBuf::from(dir.trim()).join("cellix-index");
-    let _ = fs::remove_file(&index);
-    if git(root, &["rev-parse", "--verify", "-q", "HEAD"]).is_some() {
-        git_with_index(root, &index, &["read-tree", "HEAD"])?;
+    let dir = PathBuf::from(git(root, &["rev-parse", "--absolute-git-dir"])?.trim());
+    snapshot_with(root, &dir).or_else(|| {
+        // An index that can't be read, as when it was copied mid-write, is built again.
+        let _ = fs::remove_file(dir.join("cellix-index"));
+        snapshot_with(root, &dir)
+    })
+}
+
+fn snapshot_with(root: &Path, dir: &Path) -> Option<String> {
+    // Kept from one checkpoint to the next, so git knows each file's size and time and hashes
+    // only what changed. Rebuilt from scratch, every file was read again on every prompt.
+    let index = dir.join("cellix-index");
+    let lock = dir.join("cellix-index.lock");
+    if fs::metadata(&lock)
+        .and_then(|m| m.modified())
+        .is_ok_and(|at| SystemTime::now().duration_since(at).unwrap_or_default() > STALE_LOCK)
+    {
+        let _ = fs::remove_file(&lock);
     }
-    git_with_index(root, &index, &["add", "-A", "."])?;
-    let tree = git_with_index(root, &index, &["write-tree"]);
-    let _ = fs::remove_file(&index);
-    tree
+    if !index.exists() {
+        // The repository's own index already knows the tracked files, so the first checkpoint
+        // hashes only what has changed since they were staged.
+        let seeded = fs::copy(dir.join("index"), &index).is_ok();
+        if !seeded && git(root, &["rev-parse", "--verify", "-q", "HEAD"]).is_some() {
+            git_with_index(root, &index, &["read-tree", "HEAD"])?;
+        }
+    }
+    // What's already in it, tracked or added by an earlier checkpoint, as it stands now.
+    git_with_index(root, &index, &["add", "-u", "."])?;
+    let untracked = git_with_index_fed(
+        root,
+        &index,
+        &["ls-files", "-z", "-o", "--exclude-standard", "."],
+        &[],
+    )?;
+    let small: Vec<&str> = untracked
+        .split('\0')
+        .filter(|path| !path.is_empty())
+        .filter(|path| {
+            fs::symlink_metadata(root.join(path)).is_ok_and(|m| m.len() <= LARGEST_UNTRACKED)
+        })
+        .collect();
+    if !small.is_empty() {
+        let mut paths = small.join("\0").into_bytes();
+        paths.push(0);
+        let args = ["add", "--pathspec-from-file=-", "--pathspec-file-nul"];
+        git_with_index_fed(root, &index, &args, &paths)?;
+    }
+    git_with_index(root, &index, &["write-tree"])
 }
 
 /// Every checkpoint, oldest first.
@@ -168,6 +225,49 @@ mod tests {
         assert_eq!(
             git(dir.path(), &["diff", "--cached", "--name-only"]).unwrap(),
             ""
+        );
+    }
+
+    #[test]
+    fn a_large_untracked_file_stays_out_of_checkpoints() {
+        let dir = repo();
+        write(dir.path(), "notes.txt", "small\n");
+        let big = vec![b'x'; LARGEST_UNTRACKED as usize + 1];
+        fs::write(dir.path().join("dump.bin"), big).unwrap();
+        let turn = checkpoint(dir.path(), "prompt").unwrap();
+        let files = git(dir.path(), &["ls-tree", "-r", "--name-only", &turn.commit]).unwrap();
+        assert!(files.lines().any(|f| f == "notes.txt"), "{files}");
+        assert!(!files.lines().any(|f| f == "dump.bin"), "{files}");
+        // Nor does it show as a change the agent made.
+        write(dir.path(), "notes.txt", "edited\n");
+        let changes = changed_since(dir.path(), &turn.commit);
+        assert_eq!(changes.len(), 1, "{changes:?}");
+    }
+
+    #[test]
+    fn the_checkpoint_index_is_kept_and_follows_the_tree() {
+        let dir = repo();
+        write(dir.path(), "made.txt", "one\n");
+        let first = checkpoint(dir.path(), "one").unwrap();
+        let git_dir = git(dir.path(), &["rev-parse", "--absolute-git-dir"]).unwrap();
+        assert!(Path::new(git_dir.trim()).join("cellix-index").exists());
+        // A file an earlier checkpoint took in, then deleted, leaves the next one.
+        fs::remove_file(dir.path().join("made.txt")).unwrap();
+        write(dir.path(), "kept.txt", "changed again\n");
+        let second = checkpoint(dir.path(), "two").unwrap();
+        let files = git(
+            dir.path(),
+            &["ls-tree", "-r", "--name-only", &second.commit],
+        )
+        .unwrap();
+        assert!(!files.lines().any(|f| f == "made.txt"), "{files}");
+        assert_eq!(
+            text_at(dir.path(), &second.commit, Path::new("kept.txt")),
+            "changed again\n"
+        );
+        assert_eq!(
+            text_at(dir.path(), &first.commit, Path::new("made.txt")),
+            "one\n"
         );
     }
 

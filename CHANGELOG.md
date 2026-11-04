@@ -10,6 +10,8 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 - A paper split over `\input` and `\include` files counts its words as one, puts Track Changes' package in the root's preamble, and rebuilds when an agent edits any of its open files.
 
 ### Fixed
+- In a project with large untracked files, such as data, Claude Code's prompt hook could take longer than the 30 seconds Claude Code gives it ("UserPromptSubmit hook timed out"), and the comments it carries never reached the agent. Each prompt's checkpoint read every file again and copied untracked ones into `.git`. It now keeps its own index, so only changed files are read; untracked files over 10 MB stay out of checkpoints; and the hook waits at most 3 seconds, leaving a slow checkpoint to finish on its own.
+- Inside Claude Code, the wheel scrolls the Comments pane when the pointer is over it. It used to scroll the file whatever was under the pointer.
 - Export to PDF works with TeX Live's pdflatex and latexmk, not only tectonic: the export no longer builds from a hidden file TeX Live refuses to write beside, and it loads TikZ, tikz-cd and ulem only when the document uses them. Build PDF and Export are now tested against TeX Live on CI.
 
 ## [0.3.1] - 2026-11-04

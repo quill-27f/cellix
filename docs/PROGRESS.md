@@ -954,3 +954,24 @@ plan, LaTeX and release work, a paper author on pdflatex, and a technical writer
 - `harness/x bump` works out every edit before writing, so it can't leave a half-bumped tree.
 Unverified: the workflow changes have not run yet; the next release, or a run with `finish`, is
 the test. Next: the LaTeX, plan-thread and Windows findings, each being fixed on its own branch.
+
+## 2026-11-04: The prompt hook timed out, and the Comments pane didn't scroll inside Claude Code
+
+An early user on macOS saw "UserPromptSubmit hook [cellix hook prompt] timed out after 30s" on
+every prompt, in a project with data files. Claude Code drops what a timed-out hook prints, so the
+comments it takes never reached the agent, which is why they kept running /cellix review instead.
+The hook checkpoints the tree first, and the checkpoint deleted its private index and ran
+`read-tree HEAD` and `add -A` each time: every file was hashed again, and every untracked file
+written into `.git`. Timed here, 200 MB of untracked data took 10.5 s the first time and 1.2 s
+each time after; a few GB is past 30 s on every prompt. Now:
+- The checkpoint index is kept between checkpoints, first seeded from the repository's own index,
+  so git hashes only files whose size or time changed. One it can't read is rebuilt, and a lock on
+  it older than ten minutes is cleared.
+- Untracked files over 10 MB stay out of checkpoints, so they're neither hashed each prompt nor
+  copied into `.git`. Review won't show a change to such a file, and Undo Turn won't touch one.
+- The hook runs `cellix checkpoint` in a process of its own and waits for it at most 3 s.
+Their other report: the wheel didn't scroll the Comments pane inside Claude Code. Claude Code's
+scroll event has no position, and a wheel without one always went to the file. It now goes to the
+side pane when the pointer last moved over it.
+Unverified: not yet tried on their project; the hook test proves the checkpoint still lands from
+the process the hook leaves it to.

@@ -7295,6 +7295,23 @@ impl App {
     }
 
     fn mouse(&mut self, mouse: MouseEvent) {
+        // Inside Claude Code the wheel comes with no position. Over the side pane it scrolls
+        // the pane, which only the pointer's last move can tell; elsewhere it means the file.
+        let mouse = match self.hover {
+            Some((x, y))
+                if mouse.x == u16::MAX
+                    && matches!(mouse.kind, MouseKind::ScrollUp | MouseKind::ScrollDown)
+                    && self.dock_area().is_some_and(|area| area.contains(x, y)) =>
+            {
+                MouseEvent {
+                    x,
+                    y,
+                    fine_x: f32::from(x),
+                    ..mouse
+                }
+            }
+            _ => mouse,
+        };
         if mouse.kind == MouseKind::Move {
             self.hover = Some((mouse.x, mouse.y));
             let in_pane = self
@@ -12596,6 +12613,32 @@ mod tests {
         app.run(Command::SendToAgent);
         assert!(screen(&app).text().contains("next prompt"));
         assert_eq!(app.comments.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn inside_claude_code_the_wheel_scrolls_the_comments_under_the_pointer() {
+        let (dir, mut app) = project();
+        app.in_pane = true;
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        app.run(Command::ShowComments);
+        let area = app.dock_area().expect("the comments are open");
+        let (x, y) = (area.x + area.w / 2, area.y + area.h / 2);
+        // The mod's wheel has no position, as Claude Code's scroll event gives none.
+        let wheel = Event::Mouse(MouseEvent {
+            kind: MouseKind::ScrollDown,
+            x: u16::MAX,
+            y: u16::MAX,
+            fine_x: 0.0,
+            mods: Mods::default(),
+        });
+        app.handle(mouse(MouseKind::Move, x, y));
+        app.handle(wheel.clone());
+        app.handle(wheel.clone());
+        assert_eq!(app.dock.comments_top, 6);
+        // Back over the file, it scrolls the file again.
+        app.handle(mouse(MouseKind::Move, 2, 3));
+        app.handle(wheel);
+        assert_eq!(app.dock.comments_top, 6);
     }
 
     #[test]

@@ -2,7 +2,8 @@
 //! so with no Cellix running every kind quietly does nothing but keep its checkpoints.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use cellix_review::{Comment, Thread, checkpoint};
 use serde_json::{Value, json};
@@ -16,6 +17,10 @@ const LABEL_LENGTH: usize = 60;
 const AGENT_KEY: &str = "cellix_agent";
 /// What an agent reports while its plan is with the reviewer.
 pub const PLAN_WAITING: &str = "Plan waiting for review";
+/// How long the prompt hook waits for its checkpoint. An agent gives a hook a fixed time and
+/// drops what it says after that, comments included, and a first checkpoint of a large tree
+/// can take longer; past this it finishes on its own.
+const CHECKPOINT_WAIT: Duration = Duration::from_secs(3);
 
 /// Commands whose results belong beside the diff.
 const TEST_COMMANDS: [&str; 13] = [
@@ -120,7 +125,7 @@ fn label(prompt: &str) -> String {
 fn on_prompt(roots: &[PathBuf], input: &Value) -> Option<String> {
     if let Some(root) = roots.first() {
         let prompt = input["prompt"].as_str().unwrap_or("Prompt");
-        checkpoint(root, &label(prompt));
+        checkpoint_briefly(root, &label(prompt));
     }
     tell(roots, input, AgentState::Working, "Working");
     let comments: Vec<Comment> = ask(roots, "take")
@@ -145,6 +150,38 @@ fn on_prompt(roots: &[PathBuf], input: &Value) -> Option<String> {
         "additionalContext": context,
     }});
     Some(output.to_string())
+}
+
+/// Checkpoints in a process of its own, waiting at most `CHECKPOINT_WAIT` for it.
+fn checkpoint_briefly(root: &Path, label: &str) {
+    // Only the real binary has a `checkpoint` command; a test runs it here instead.
+    let exe = std::env::current_exe()
+        .ok()
+        .filter(|exe| exe.file_stem().is_some_and(|stem| stem == "cellix"));
+    let Some(exe) = exe else {
+        checkpoint(root, label);
+        return;
+    };
+    let mut command = Command::new(exe);
+    command
+        .args(["checkpoint", label])
+        .current_dir(root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // Its own group, so it isn't stopped with the hook that started it.
+    #[cfg(unix)]
+    std::os::unix::process::CommandExt::process_group(&mut command, 0);
+    let Ok(mut child) = command.spawn() else {
+        return;
+    };
+    let started = Instant::now();
+    while started.elapsed() < CHECKPOINT_WAIT {
+        if !matches!(child.try_wait(), Ok(None)) {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 /// Holds a plan until the reviewer decides, and gives back the verdict and any text with it.

@@ -3064,5 +3064,33 @@
     "title": "Agents reach Cellix where there are no Unix sockets: a loopback port behind a token, as on Windows",
     "test": "agents_reach_cellix_over_loopback_with_its_token",
     "passes": true
+  },
+  {
+    "id": "checkpoint-index-kept",
+    "milestone": 10,
+    "title": "Checkpoints keep their own index, so only changed files are hashed again",
+    "test": "the_checkpoint_index_is_kept_and_follows_the_tree",
+    "passes": true
+  },
+  {
+    "id": "checkpoint-large-untracked",
+    "milestone": 10,
+    "title": "Untracked files over 10 MB stay out of checkpoints and out of .git",
+    "test": "a_large_untracked_file_stays_out_of_checkpoints",
+    "passes": true
+  },
+  {
+    "id": "prompt-hook-quick",
+    "milestone": 10,
+    "title": "The prompt hook checkpoints in its own process and returns within seconds",
+    "test": "the_prompt_hook_checkpoints_without_holding_the_prompt",
+    "passes": true
+  },
+  {
+    "id": "pane-wheel-comments",
+    "milestone": 10,
+    "title": "Inside Claude Code, the wheel scrolls the Comments pane when the pointer is over it",
+    "test": "inside_claude_code_the_wheel_scrolls_the_comments_under_the_pointer",
+    "passes": true
   }
 ]
