@@ -1010,16 +1010,81 @@ pub fn problems(output: &str, folder: &Path) -> Vec<Problem> {
     found
 }
 
-/// Where a build's warnings point, as problems a reader can walk with F8: tectonic's own
-/// `warning: file:line: …`, and LaTeX's undefined references and citations, at their line in
-/// the file the build started from.
-pub fn warning_places(output: &str, folder: &Path, root: &Path) -> Vec<Problem> {
-    let mut found = Vec::new();
-    for line in output.lines() {
-        if let Some(rest) = line.trim().strip_prefix("warning: ") {
-            found.extend(problems(rest, folder));
+/// A TeX log with the lines TeX broke at 79 characters put back together.
+fn unwrapped(log: &str) -> String {
+    let mut out = String::new();
+    for line in log.lines() {
+        out.push_str(line);
+        if line.len() != 79 && line.chars().count() != 79 {
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// What a build's warnings come from: the log, which holds the last pass alone, or what the
+/// engine said when it left no log.
+fn last_pass(said: &str, log: &str) -> String {
+    unwrapped(if log.trim().is_empty() { said } else { log })
+}
+
+/// The file a log names after `(`, if it's one of the paper's. Tectonic leaves `.tex` off.
+fn opened(name: &str, folder: &Path) -> Option<PathBuf> {
+    if name.is_empty() {
+        return None;
+    }
+    let path: PathBuf = folder
+        .join(name)
+        .components()
+        .filter(|c| *c != std::path::Component::CurDir)
+        .collect();
+    if path.is_file() {
+        return Some(path);
+    }
+    let tex = PathBuf::from(format!("{}.tex", path.display()));
+    tex.is_file().then_some(tex)
+}
+
+/// Follows the files TeX opens, `(./sections/a.tex` … `)`, through one line of its log.
+fn follow(line: &str, folder: &Path, open: &mut Vec<Option<PathBuf>>) {
+    let mut rest = line;
+    while let Some(at) = rest.find(['(', ')']) {
+        if rest[at..].starts_with(')') {
+            open.pop();
+            rest = &rest[at + 1..];
             continue;
         }
+        let after = &rest[at + 1..];
+        let (name, next) = match after.strip_prefix('"') {
+            Some(quoted) => {
+                let end = quoted.find('"').unwrap_or(quoted.len());
+                (&quoted[..end], &quoted[(end + 1).min(quoted.len())..])
+            }
+            None => {
+                let end = after
+                    .find(|c: char| c.is_whitespace() || matches!(c, '(' | ')' | '[' | '{'))
+                    .unwrap_or(after.len());
+                (&after[..end], &after[end..])
+            }
+        };
+        open.push(opened(name, folder));
+        rest = next;
+    }
+}
+
+/// Where a build's warnings point, as problems a reader can walk with F8: tectonic's own
+/// `warning: file:line: …`, and LaTeX's undefined references and citations, at their line in
+/// the file TeX was reading then. Each place is given once, from the last pass.
+pub fn warning_places(said: &str, log: &str, folder: &Path, root: &Path) -> Vec<Problem> {
+    let mut found = Vec::new();
+    for line in said.lines() {
+        if let Some(rest) = line.trim().strip_prefix("warning: ") {
+            found.extend(problems(rest, folder));
+        }
+    }
+    let mut open: Vec<Option<PathBuf>> = Vec::new();
+    for line in last_pass(said, log).lines() {
+        let reading = open.iter().rev().find_map(Option::as_ref);
         if line.contains("undefined on input line")
             && let Some(at) = line.rfind("input line ")
         {
@@ -1034,32 +1099,48 @@ pub fn warning_places(output: &str, folder: &Path, root: &Path) -> Vec<Problem> 
                     .trim_start_matches("Package natbib Warning: ")
                     .to_string();
                 found.push(Problem {
-                    file: root.to_path_buf(),
+                    file: reading.map_or_else(|| root.to_path_buf(), Clone::clone),
                     line: number,
                     message,
                 });
             }
         }
+        follow(line, folder, &mut open);
     }
-    found.dedup();
+    let mut seen = Vec::new();
+    found.retain(|p| {
+        let new = !seen.contains(p);
+        if new {
+            seen.push(p.clone());
+        }
+        new
+    });
     found
 }
 
-/// What a build warned about, from its output and log: a build that "worked" can still have
-/// unresolved citations and references.
-pub fn warnings(output: &str) -> Vec<String> {
-    let marks = [
-        "warning:",
-        "Warning:",
-        "undefined on input",
+/// What a build warned about, each once: a build that "worked" can still have unresolved
+/// citations and references. Only the last pass counts, since latexmk reports every one.
+pub fn warnings(said: &str, log: &str) -> Vec<String> {
+    let marks = ["warning:", "Warning:", "undefined on input"];
+    // What only sums up the warnings already counted.
+    let summaries = [
         "There were undefined",
+        "There were multiply-defined",
+        "warnings were issued by the TeX engine",
     ];
-    let mut found: Vec<String> = output
+    let own = said
         .lines()
-        .filter(|line| marks.iter().any(|m| line.contains(m)))
-        .map(|line| line.trim().to_string())
-        .collect();
-    found.dedup();
+        .filter(|line| line.trim_start().starts_with("warning:"));
+    let text = last_pass(said, log);
+    let mut found: Vec<String> = Vec::new();
+    for line in text.lines().chain(own) {
+        let line = line.trim();
+        let warned =
+            marks.iter().any(|m| line.contains(m)) && !summaries.iter().any(|s| line.contains(s));
+        if warned && !found.iter().any(|f| f == line) {
+            found.push(line.to_string());
+        }
+    }
     found
 }
 
@@ -1580,7 +1661,7 @@ mod tests {
     fn warnings_point_at_their_lines() {
         let root = Path::new("/p/main.tex");
         let output = "warning: sections/results.tex:4: Overfull \\hbox (3pt too wide)\nLaTeX Warning: Reference `sec:x' on page 1 undefined on input line 12.\n";
-        let found = warning_places(output, Path::new("/p"), root);
+        let found = warning_places(output, "", Path::new("/p"), root);
         assert_eq!(found.len(), 2, "{found:?}");
         assert_eq!(found[0].file, Path::new("/p/sections/results.tex"));
         assert_eq!((found[1].file.as_path(), found[1].line), (root, 12));
@@ -1817,10 +1898,70 @@ mod tests {
     #[test]
     fn warnings_are_noticed() {
         assert_eq!(
-            warnings("note: ok\nwarning: main.tex:3: Citation `x' undefined\n").len(),
+            warnings(
+                "note: ok\nwarning: main.tex:3: Citation `x' undefined\n",
+                ""
+            )
+            .len(),
             1
         );
-        assert!(warnings("note: fine\n").is_empty());
+        assert!(warnings("note: fine\n", "").is_empty());
+    }
+
+    /// A pdflatex log over a root and a section file, with a citation key long enough that
+    /// TeX breaks its warning at 79 characters.
+    const SECTION_LOG: &str = "This is pdfTeX, Version 3.141592653\n(./main.tex\nLaTeX2e <2023-11-01>\n(/usr/share/texlive/texmf-dist/tex/latex/base/article.cls\nDocument Class: article 2023/05/17 v1.4n Standard LaTeX document class\n(/usr/share/texlive/texmf-dist/tex/latex/base/size10.clo))\n(./main.aux)\n\nLaTeX Warning: Reference `sec:intro' on page 1 undefined on input line 3.\n\n(./sections/results.tex\nOverfull \\hbox (3.0pt too wide) in paragraph at lines 1--2\n\nLaTeX Warning: Reference `sec:gone' on page 1 undefined on input line 2.\n\n\nLaTeX Warning: Citation `averyveryveryveryveryveryverylongcitationkeyhere' on p\nage 1 undefined on input line 5.\n\n) [1] (./main.aux)\n\nLaTeX Warning: There were undefined references.\n\n )\nOutput written on main.pdf (1 page, 1160 bytes).\n";
+
+    fn section_paper() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sections")).unwrap();
+        for file in ["main.tex", "main.aux", "sections/results.tex"] {
+            std::fs::write(dir.path().join(file), "x\n").unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn warnings_in_a_section_file_point_at_that_file() {
+        let dir = section_paper();
+        let root = dir.path().join("main.tex");
+        let section = dir.path().join("sections/results.tex");
+        let found = warning_places("", SECTION_LOG, dir.path(), &root);
+        let places: Vec<(&Path, usize)> =
+            found.iter().map(|p| (p.file.as_path(), p.line)).collect();
+        assert_eq!(
+            places,
+            [
+                (root.as_path(), 3),
+                (section.as_path(), 2),
+                (section.as_path(), 5)
+            ],
+            "{found:?}"
+        );
+        assert!(found[2].message.contains("page 1 undefined"), "{found:?}");
+        // Tectonic names an `\input` file without its extension.
+        let tectonic = "(main.tex (article.cls\n) (sections/results\n\nLaTeX Warning: Reference `x' on page 1 undefined on input line 4.\n\n) )\n";
+        let found = warning_places("", tectonic, dir.path(), &root);
+        assert_eq!(found[0].file, section, "{found:?}");
+    }
+
+    #[test]
+    fn each_warning_counts_once_from_the_last_pass() {
+        let dir = section_paper();
+        let root = dir.path().join("main.tex");
+        // latexmk shows every pass; the log holds the last. Here the first pass had more.
+        let first = "LaTeX Warning: Reference `sec:method' on page 1 undefined on input line 9.\n";
+        let said = format!(
+            "Latexmk: Run number 1 of rule 'pdflatex'\n{first}{SECTION_LOG}Latexmk: Run number 2 of rule 'pdflatex'\n{SECTION_LOG}"
+        );
+        let counted = warnings(&said, SECTION_LOG);
+        assert_eq!(counted.len(), 3, "{counted:#?}");
+        let placed = warning_places(&said, SECTION_LOG, dir.path(), &root);
+        assert_eq!(placed.len(), 3, "{placed:#?}");
+        // Tectonic says its own each pass, and the summary is not one more.
+        let said = "warning: main.tex:4: Overfull \\hbox (3pt too wide)\nwarning: main.tex:4: Overfull \\hbox (3pt too wide)\nwarning: warnings were issued by the TeX engine; use --print and/or --keep-logs for details.\n";
+        assert_eq!(warnings(said, SECTION_LOG).len(), 4);
+        assert_eq!(warnings(said, "").len(), 1);
     }
 
     #[test]

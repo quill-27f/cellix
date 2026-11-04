@@ -9614,8 +9614,7 @@ impl App {
         }
         let pdf = build.file.with_extension("pdf");
         let log = std::fs::read_to_string(build.file.with_extension("log")).unwrap_or_default();
-        let output = format!("{}\n{log}", build.said);
-        for place in cellix_doc::latex::warning_places(&output, &folder, &build.file) {
+        for place in cellix_doc::latex::warning_places(&build.said, &log, &folder, &build.file) {
             by_file.entry(place.file).or_default().push(Diagnostic {
                 line: place.line.saturating_sub(1),
                 column: 0,
@@ -9626,7 +9625,7 @@ impl App {
         self.diagnostics
             .retain(|p, _| p.extension().is_none_or(|e| e != "tex"));
         self.diagnostics.extend(by_file);
-        let warned = cellix_doc::latex::warnings(&format!("{}\n{log}", build.said)).len();
+        let warned = cellix_doc::latex::warnings(&build.said, &log).len();
         // An export was built under a hidden name: the PDF takes the document's, and the rest
         // of the build goes.
         let pdf = match self.export_to.take() {

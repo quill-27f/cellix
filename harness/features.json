@@ -3073,6 +3073,20 @@
     "passes": true
   },
   {
+    "id": "warnings-in-section-files",
+    "milestone": 10,
+    "title": "Build warnings point at the file TeX was reading, from the log's open files",
+    "test": "warnings_in_a_section_file_point_at_that_file",
+    "passes": true
+  },
+  {
+    "id": "warnings-counted-once",
+    "milestone": 10,
+    "title": "Each build warning counts once, from the last pass",
+    "test": "each_warning_counts_once_from_the_last_pass",
+    "passes": true
+  },
+  {
     "id": "section-pictures-from-root",
     "milestone": 10,
     "title": "A section file's pictures resolve from the root's folder and \\graphicspath",
