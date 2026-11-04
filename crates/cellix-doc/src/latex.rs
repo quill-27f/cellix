@@ -144,6 +144,35 @@ pub struct Project {
     pub cited: Vec<String>,
     /// The `.bib` files the paper names with `\\bibliography` or `\\addbibresource`.
     pub bibliographies: Vec<PathBuf>,
+    /// The folders `\graphicspath` names, as written.
+    pub graphicspath: Vec<String>,
+    /// Where `\includegraphics` looks, as LaTeX does: the root's folder, wherever the file
+    /// naming the picture is, then each `\graphicspath` folder. Empty for an unsaved file.
+    pub pictures: Vec<PathBuf>,
+}
+
+/// The folders of a `\graphicspath{{figures/}{img/}}` line.
+fn graphicspath_of(code: &str) -> Vec<String> {
+    let Some(at) = code.find("\\graphicspath") else {
+        return Vec::new();
+    };
+    let rest = code[at + "\\graphicspath".len()..].trim_start();
+    let Some((from, to)) = braced(rest, 0) else {
+        return Vec::new();
+    };
+    let mut inside = &rest[from..to];
+    let mut found = Vec::new();
+    while let Some(open) = inside.find('{') {
+        let Some((from, to)) = braced(inside, open) else {
+            break;
+        };
+        let name = inside[from..to].trim();
+        if !name.is_empty() {
+            found.push(name.to_string());
+        }
+        inside = &inside[to + 1..];
+    }
+    found
 }
 
 /// The argument of `\name{...}` on a line, as a byte range.
@@ -411,6 +440,9 @@ impl Project {
         let mut counters = Counters::default();
         let folder = root.parent().unwrap_or(Path::new("")).to_path_buf();
         project.walk(root, &folder, &mut counters, 0);
+        project.pictures = std::iter::once(folder.clone())
+            .chain(project.graphicspath.iter().map(|path| folder.join(path)))
+            .collect();
         // The ones it names, wherever they are, then any beside it.
         let beside = std::fs::read_dir(&folder)
             .into_iter()
@@ -457,6 +489,10 @@ impl Project {
     fn lines(&mut self, text: &str, folder: &Path, counters: &mut Counters, depth: usize) {
         self.setup.extend(setup_of(text));
         self.bibliographies.extend(bibliographies_of(text, folder));
+        for line in text.lines() {
+            let code = line.split('%').next().unwrap_or("");
+            self.graphicspath.extend(graphicspath_of(code));
+        }
         if let Some(style) = text.lines().find_map(|l| {
             let at = l.find("\\bibliographystyle{")?;
             let rest = &l[at + "\\bibliographystyle{".len()..];
@@ -877,17 +913,91 @@ pub const CITES: [&str; 10] = [
 ];
 pub const REFS: [&str; 6] = ["ref", "eqref", "cref", "Cref", "autoref", "pageref"];
 
-/// What a pdflatex pass left to do, from its `.aux` file: whether BibTeX has to run, and how many
-/// more passes it takes for citations and references to settle. Tectonic and latexmk do this
-/// themselves.
-pub fn more_passes(aux: &str) -> (bool, usize) {
-    let bibtex = aux.contains("\\bibdata");
-    let passes = if bibtex {
+/// What a pdflatex pass left to do, from its `.aux` file: BibTeX or Biber to run, if either,
+/// and how many more passes it takes for citations and references to settle. Tectonic and
+/// latexmk do this themselves. Biblatex with Biber writes no `\bibdata`, only its own
+/// `\abx@aux` lines and a `.bcf` file, which `bcf` says is there.
+pub fn more_passes(aux: &str, bcf: bool) -> (Option<Bibliography>, usize) {
+    let tool = if aux.contains("\\bibdata") {
+        Some(Bibliography::Bibtex)
+    } else if aux.contains("\\abx@aux") || bcf {
+        Some(Bibliography::Biber)
+    } else {
+        None
+    };
+    let passes = if tool.is_some() {
         2
     } else {
         usize::from(aux.contains("\\newlabel") || aux.contains("\\citation"))
     };
-    (bibtex, passes)
+    (tool, passes)
+}
+
+/// What reads a paper's `.bib` files between passes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Bibliography {
+    Bibtex,
+    Biber,
+}
+
+impl Bibliography {
+    pub fn program(self) -> &'static str {
+        match self {
+            Self::Bibtex => "bibtex",
+            Self::Biber => "biber",
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Bibtex => "BibTeX",
+            Self::Biber => "Biber",
+        }
+    }
+
+    /// Why a run failed, from its exit code and what it said, or None if it didn't. BibTeX
+    /// exits 1 for warnings, which LaTeX reports again, and 2 or more for errors, such as a
+    /// `.bib` file it can't find.
+    pub fn failure(self, code: Option<i32>, said: &str) -> Option<String> {
+        let failed = match self {
+            Self::Bibtex => code.is_none_or(|c| c >= 2),
+            Self::Biber => code != Some(0),
+        };
+        if !failed {
+            return None;
+        }
+        let chatter = [
+            "This is ",
+            "The top-level auxiliary file",
+            "The style file",
+            "Database file #",
+            "Warning--",
+            "INFO - ",
+            "WARN - ",
+        ];
+        let lines = || said.lines().map(str::trim).filter(|l| !l.is_empty());
+        let error = lines().find_map(|l| l.strip_prefix("ERROR - "));
+        let first = lines().find(|l| !chatter.iter().any(|c| l.starts_with(c)));
+        Some(
+            error
+                .or(first)
+                .unwrap_or("it ended without saying why")
+                .to_string(),
+        )
+    }
+}
+
+/// Whether a pass's log says references or citations may still be wrong. With `\include`,
+/// labels live in each chapter's own `.aux`, so only the log tells.
+pub fn asks_rerun(log: &str) -> bool {
+    let log = unwrapped(log);
+    [
+        "Rerun to get",
+        "Label(s) may have changed",
+        "Please rerun LaTeX",
+    ]
+    .iter()
+    .any(|asks| log.contains(asks))
 }
 
 /// Whether a key to a citation or a label is being typed: the text of a line up to the caret
@@ -974,16 +1084,81 @@ pub fn problems(output: &str, folder: &Path) -> Vec<Problem> {
     found
 }
 
-/// Where a build's warnings point, as problems a reader can walk with F8: tectonic's own
-/// `warning: file:line: …`, and LaTeX's undefined references and citations, at their line in
-/// the file the build started from.
-pub fn warning_places(output: &str, folder: &Path, root: &Path) -> Vec<Problem> {
-    let mut found = Vec::new();
-    for line in output.lines() {
-        if let Some(rest) = line.trim().strip_prefix("warning: ") {
-            found.extend(problems(rest, folder));
+/// A TeX log with the lines TeX broke at 79 characters put back together.
+fn unwrapped(log: &str) -> String {
+    let mut out = String::new();
+    for line in log.lines() {
+        out.push_str(line);
+        if line.len() != 79 && line.chars().count() != 79 {
+            out.push('\n');
+        }
+    }
+    out
+}
+
+/// What a build's warnings come from: the log, which holds the last pass alone, or what the
+/// engine said when it left no log.
+fn last_pass(said: &str, log: &str) -> String {
+    unwrapped(if log.trim().is_empty() { said } else { log })
+}
+
+/// The file a log names after `(`, if it's one of the paper's. Tectonic leaves `.tex` off.
+fn opened(name: &str, folder: &Path) -> Option<PathBuf> {
+    if name.is_empty() {
+        return None;
+    }
+    let path: PathBuf = folder
+        .join(name)
+        .components()
+        .filter(|c| *c != std::path::Component::CurDir)
+        .collect();
+    if path.is_file() {
+        return Some(path);
+    }
+    let tex = PathBuf::from(format!("{}.tex", path.display()));
+    tex.is_file().then_some(tex)
+}
+
+/// Follows the files TeX opens, `(./sections/a.tex` … `)`, through one line of its log.
+fn follow(line: &str, folder: &Path, open: &mut Vec<Option<PathBuf>>) {
+    let mut rest = line;
+    while let Some(at) = rest.find(['(', ')']) {
+        if rest[at..].starts_with(')') {
+            open.pop();
+            rest = &rest[at + 1..];
             continue;
         }
+        let after = &rest[at + 1..];
+        let (name, next) = match after.strip_prefix('"') {
+            Some(quoted) => {
+                let end = quoted.find('"').unwrap_or(quoted.len());
+                (&quoted[..end], &quoted[(end + 1).min(quoted.len())..])
+            }
+            None => {
+                let end = after
+                    .find(|c: char| c.is_whitespace() || matches!(c, '(' | ')' | '[' | '{'))
+                    .unwrap_or(after.len());
+                (&after[..end], &after[end..])
+            }
+        };
+        open.push(opened(name, folder));
+        rest = next;
+    }
+}
+
+/// Where a build's warnings point, as problems a reader can walk with F8: tectonic's own
+/// `warning: file:line: …`, and LaTeX's undefined references and citations, at their line in
+/// the file TeX was reading then. Each place is given once, from the last pass.
+pub fn warning_places(said: &str, log: &str, folder: &Path, root: &Path) -> Vec<Problem> {
+    let mut found = Vec::new();
+    for line in said.lines() {
+        if let Some(rest) = line.trim().strip_prefix("warning: ") {
+            found.extend(problems(rest, folder));
+        }
+    }
+    let mut open: Vec<Option<PathBuf>> = Vec::new();
+    for line in last_pass(said, log).lines() {
+        let reading = open.iter().rev().find_map(Option::as_ref);
         if line.contains("undefined on input line")
             && let Some(at) = line.rfind("input line ")
         {
@@ -998,32 +1173,48 @@ pub fn warning_places(output: &str, folder: &Path, root: &Path) -> Vec<Problem> 
                     .trim_start_matches("Package natbib Warning: ")
                     .to_string();
                 found.push(Problem {
-                    file: root.to_path_buf(),
+                    file: reading.map_or_else(|| root.to_path_buf(), Clone::clone),
                     line: number,
                     message,
                 });
             }
         }
+        follow(line, folder, &mut open);
     }
-    found.dedup();
+    let mut seen = Vec::new();
+    found.retain(|p| {
+        let new = !seen.contains(p);
+        if new {
+            seen.push(p.clone());
+        }
+        new
+    });
     found
 }
 
-/// What a build warned about, from its output and log: a build that "worked" can still have
-/// unresolved citations and references.
-pub fn warnings(output: &str) -> Vec<String> {
-    let marks = [
-        "warning:",
-        "Warning:",
-        "undefined on input",
+/// What a build warned about, each once: a build that "worked" can still have unresolved
+/// citations and references. Only the last pass counts, since latexmk reports every one.
+pub fn warnings(said: &str, log: &str) -> Vec<String> {
+    let marks = ["warning:", "Warning:", "undefined on input"];
+    // What only sums up the warnings already counted.
+    let summaries = [
         "There were undefined",
+        "There were multiply-defined",
+        "warnings were issued by the TeX engine",
     ];
-    let mut found: Vec<String> = output
+    let own = said
         .lines()
-        .filter(|line| marks.iter().any(|m| line.contains(m)))
-        .map(|line| line.trim().to_string())
-        .collect();
-    found.dedup();
+        .filter(|line| line.trim_start().starts_with("warning:"));
+    let text = last_pass(said, log);
+    let mut found: Vec<String> = Vec::new();
+    for line in text.lines().chain(own) {
+        let line = line.trim();
+        let warned =
+            marks.iter().any(|m| line.contains(m)) && !summaries.iter().any(|s| line.contains(s));
+        if warned && !found.iter().any(|f| f == line) {
+            found.push(line.to_string());
+        }
+    }
     found
 }
 
@@ -1251,6 +1442,17 @@ const HEADER: &str = "\\documentclass[11pt]{article}\n\\usepackage{amsmath,amssy
 /// them, so a small TeX, with no TikZ or `ulem`, still builds a document that doesn't.
 fn header_for(body: &str) -> String {
     let mut header = String::from(HEADER);
+    // A code block shows commands without running them, so what it holds needs no package.
+    let mut run = String::new();
+    let mut rest = body;
+    while let Some(at) = rest.find("\\begin{verbatim}") {
+        run.push_str(&rest[..at]);
+        rest = rest[at..]
+            .find("\\end{verbatim}")
+            .map_or("", |end| &rest[at + end..]);
+    }
+    run.push_str(rest);
+    let body = run.as_str();
     let wanted = [
         ("\\toprule", "booktabs"),
         ("\\textcolor", "xcolor"),
@@ -1533,7 +1735,7 @@ mod tests {
     fn warnings_point_at_their_lines() {
         let root = Path::new("/p/main.tex");
         let output = "warning: sections/results.tex:4: Overfull \\hbox (3pt too wide)\nLaTeX Warning: Reference `sec:x' on page 1 undefined on input line 12.\n";
-        let found = warning_places(output, Path::new("/p"), root);
+        let found = warning_places(output, "", Path::new("/p"), root);
         assert_eq!(found.len(), 2, "{found:?}");
         assert_eq!(found[0].file, Path::new("/p/sections/results.tex"));
         assert_eq!((found[1].file.as_path(), found[1].line), (root, 12));
@@ -1548,9 +1750,50 @@ mod tests {
 
     #[test]
     fn pdflatex_runs_again_until_references_settle() {
-        assert_eq!(more_passes("\\relax\n"), (false, 0));
-        assert_eq!(more_passes("\\newlabel{sec:a}{{1}{1}}\n"), (false, 1));
-        assert_eq!(more_passes("\\citation{k}\n\\bibdata{refs}\n"), (true, 2));
+        assert_eq!(more_passes("\\relax\n", false), (None, 0));
+        assert_eq!(more_passes("\\newlabel{sec:a}{{1}{1}}\n", false), (None, 1));
+        assert_eq!(
+            more_passes("\\citation{k}\n\\bibdata{refs}\n", false),
+            (Some(Bibliography::Bibtex), 2)
+        );
+    }
+
+    #[test]
+    fn biblatex_with_biber_runs_biber() {
+        let aux = "\\relax\n\\abx@aux@refcontext{nty/global//global/global}\n\\abx@aux@cite{0}{knuth84}\n";
+        assert_eq!(more_passes(aux, true), (Some(Bibliography::Biber), 2));
+        assert_eq!(more_passes("\\relax\n", true).0, Some(Bibliography::Biber));
+        // Biblatex on the BibTeX backend names its data as BibTeX wants.
+        let aux = "\\abx@aux@cite{0}{k}\n\\bibdata{main-blx,refs}\n";
+        assert_eq!(more_passes(aux, true).0, Some(Bibliography::Bibtex));
+    }
+
+    #[test]
+    fn a_log_asking_for_another_pass_gets_one() {
+        assert!(asks_rerun(
+            "(./ch1.aux)\n\nLaTeX Warning: Label(s) may have changed. Rerun to get cross-references right.\n"
+        ));
+        assert!(asks_rerun(
+            "Package biblatex Warning: Please rerun LaTeX.\n(biblatex)                Page breaks have changed.\n"
+        ));
+        assert!(!asks_rerun("Output written on main.pdf (1 page).\n"));
+    }
+
+    #[test]
+    fn a_bibliography_that_fails_says_why() {
+        let bibtex = "This is BibTeX, Version 0.99d (TeX Live 2023)\nThe top-level auxiliary file: main.aux\nThe style file: plain.bst\nI couldn't open database file refs.bib\n---line 3 of file main.aux\n :\\bibdata{refs\n :              }\nI'm skipping whatever remains of this command\n(There was 1 error message)\n";
+        assert_eq!(
+            Bibliography::Bibtex.failure(Some(2), bibtex).as_deref(),
+            Some("I couldn't open database file refs.bib")
+        );
+        let warned = "This is BibTeX\nWarning--I didn't find a database entry for \"x\"\n";
+        assert_eq!(Bibliography::Bibtex.failure(Some(1), warned), None);
+        let biber = "INFO - This is Biber 2.19\nINFO - Reading 'main.bcf'\nERROR - Cannot find 'refs.bib'!\nINFO - ERRORS: 1\n";
+        assert_eq!(
+            Bibliography::Biber.failure(Some(2), biber).as_deref(),
+            Some("Cannot find 'refs.bib'!")
+        );
+        assert_eq!(Bibliography::Biber.failure(Some(0), "INFO - Done\n"), None);
     }
 
     #[test]
@@ -1750,12 +1993,90 @@ mod tests {
     }
 
     #[test]
+    fn code_blocks_load_no_packages() {
+        let shown = "Shown, not drawn:\n\n```latex\n\\begin{tikzcd} A \\arrow[r] & B \\end{tikzcd}\n\\sout{x} \\toprule \\color{red}\n```\n\nAnd `\\tikz` inline.\n";
+        let tex = from_markdown(shown);
+        let (preamble, _) = tex.split_once("\\begin{document}").unwrap();
+        for package in ["tikz", "ulem", "booktabs", "xcolor"] {
+            assert!(!preamble.contains(package), "{package}: {preamble}");
+        }
+        assert!(
+            tex.contains("\\begin{tikzcd} A"),
+            "the code is still shown: {tex}"
+        );
+        let used = from_markdown("~~gone~~\n\n```tikzcd\nA \\arrow[r] & B\n```\n");
+        let (preamble, _) = used.split_once("\\begin{document}").unwrap();
+        assert!(preamble.contains("ulem"), "{preamble}");
+        assert!(preamble.contains("tikz-cd"), "{preamble}");
+    }
+
+    #[test]
     fn warnings_are_noticed() {
         assert_eq!(
-            warnings("note: ok\nwarning: main.tex:3: Citation `x' undefined\n").len(),
+            warnings(
+                "note: ok\nwarning: main.tex:3: Citation `x' undefined\n",
+                ""
+            )
+            .len(),
             1
         );
-        assert!(warnings("note: fine\n").is_empty());
+        assert!(warnings("note: fine\n", "").is_empty());
+    }
+
+    /// A pdflatex log over a root and a section file, with a citation key long enough that
+    /// TeX breaks its warning at 79 characters.
+    const SECTION_LOG: &str = "This is pdfTeX, Version 3.141592653\n(./main.tex\nLaTeX2e <2023-11-01>\n(/usr/share/texlive/texmf-dist/tex/latex/base/article.cls\nDocument Class: article 2023/05/17 v1.4n Standard LaTeX document class\n(/usr/share/texlive/texmf-dist/tex/latex/base/size10.clo))\n(./main.aux)\n\nLaTeX Warning: Reference `sec:intro' on page 1 undefined on input line 3.\n\n(./sections/results.tex\nOverfull \\hbox (3.0pt too wide) in paragraph at lines 1--2\n\nLaTeX Warning: Reference `sec:gone' on page 1 undefined on input line 2.\n\n\nLaTeX Warning: Citation `averyveryveryveryveryveryverylongcitationkeyhere' on p\nage 1 undefined on input line 5.\n\n) [1] (./main.aux)\n\nLaTeX Warning: There were undefined references.\n\n )\nOutput written on main.pdf (1 page, 1160 bytes).\n";
+
+    fn section_paper() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("sections")).unwrap();
+        for file in ["main.tex", "main.aux", "sections/results.tex"] {
+            std::fs::write(dir.path().join(file), "x\n").unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn warnings_in_a_section_file_point_at_that_file() {
+        let dir = section_paper();
+        let root = dir.path().join("main.tex");
+        let section = dir.path().join("sections/results.tex");
+        let found = warning_places("", SECTION_LOG, dir.path(), &root);
+        let places: Vec<(&Path, usize)> =
+            found.iter().map(|p| (p.file.as_path(), p.line)).collect();
+        assert_eq!(
+            places,
+            [
+                (root.as_path(), 3),
+                (section.as_path(), 2),
+                (section.as_path(), 5)
+            ],
+            "{found:?}"
+        );
+        assert!(found[2].message.contains("page 1 undefined"), "{found:?}");
+        // Tectonic names an `\input` file without its extension.
+        let tectonic = "(main.tex (article.cls\n) (sections/results\n\nLaTeX Warning: Reference `x' on page 1 undefined on input line 4.\n\n) )\n";
+        let found = warning_places("", tectonic, dir.path(), &root);
+        assert_eq!(found[0].file, section, "{found:?}");
+    }
+
+    #[test]
+    fn each_warning_counts_once_from_the_last_pass() {
+        let dir = section_paper();
+        let root = dir.path().join("main.tex");
+        // latexmk shows every pass; the log holds the last. Here the first pass had more.
+        let first = "LaTeX Warning: Reference `sec:method' on page 1 undefined on input line 9.\n";
+        let said = format!(
+            "Latexmk: Run number 1 of rule 'pdflatex'\n{first}{SECTION_LOG}Latexmk: Run number 2 of rule 'pdflatex'\n{SECTION_LOG}"
+        );
+        let counted = warnings(&said, SECTION_LOG);
+        assert_eq!(counted.len(), 3, "{counted:#?}");
+        let placed = warning_places(&said, SECTION_LOG, dir.path(), &root);
+        assert_eq!(placed.len(), 3, "{placed:#?}");
+        // Tectonic says its own each pass, and the summary is not one more.
+        let said = "warning: main.tex:4: Overfull \\hbox (3pt too wide)\nwarning: main.tex:4: Overfull \\hbox (3pt too wide)\nwarning: warnings were issued by the TeX engine; use --print and/or --keep-logs for details.\n";
+        assert_eq!(warnings(said, SECTION_LOG).len(), 4);
+        assert_eq!(warnings(said, "").len(), 1);
     }
 
     #[test]

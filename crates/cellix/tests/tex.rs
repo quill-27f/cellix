@@ -251,3 +251,145 @@ fn latexmk_exports_markdown_to_pdf() {
 fn pdflatex_exports_markdown_to_pdf() {
     exports_markdown(&["tectonic", "latexmk"]);
 }
+
+/// Writes a paper's files, opens `open` in the real binary with `hidden` off PATH, and runs a
+/// palette command, ready to wait on what the screen says.
+fn start_with(
+    hidden: &[&str],
+    files: &[(&str, &str)],
+    open: &str,
+    command: &str,
+) -> (tempfile::TempDir, PathBuf, Screen) {
+    let scratch = tempfile::tempdir().unwrap();
+    let bin = path_without(hidden, scratch.path());
+    let home = scratch.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let dir = scratch.path().join("paper");
+    for (name, text) in files {
+        let path = dir.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+    let mut screen = Screen::start(&dir, &bin, &home, open);
+    screen.wait_for(open, Duration::from_secs(15));
+    screen.command(command);
+    (scratch, dir, screen)
+}
+
+const REFS: &str = "@book{knuth84,\n  author = {Donald E. Knuth},\n  title = {The {\\TeX}book},\n  publisher = {Addison-Wesley},\n  year = {1984}\n}\n";
+
+#[test]
+#[ignore = "needs TeX Live and Biber: harness/x tex"]
+fn pdflatex_runs_biber_for_a_biblatex_paper() {
+    let main = "\\documentclass{article}\n\\usepackage[backend=biber]{biblatex}\n\\addbibresource{refs.bib}\n\\begin{document}\nAs \\cite{knuth84} shows.\n\\printbibliography\n\\end{document}\n";
+    let files = [("main.tex", main), ("refs.bib", REFS)];
+    let (_scratch, dir, screen) =
+        start_with(&["tectonic", "latexmk"], &files, "main.tex", "build pdf");
+    screen.wait_for("Built in", BUILD_TIME);
+    assert!(
+        !screen.contents().contains("failed"),
+        "{}",
+        screen.contents()
+    );
+    let bbl = std::fs::read_to_string(dir.join("main.bbl")).expect("Biber ran");
+    assert!(bbl.contains("knuth84"), "{bbl}");
+    let log = std::fs::read_to_string(dir.join("main.log")).unwrap();
+    for unresolved in [
+        "LaTeX Warning: Citation",
+        "There were undefined",
+        "Please rerun",
+        "Rerun to get",
+    ] {
+        assert!(!log.contains(unresolved), "{unresolved}:\n{log}");
+    }
+}
+
+#[test]
+#[ignore = "needs TeX Live: harness/x tex"]
+fn pdflatex_settles_labels_in_included_chapters() {
+    let main = "\\documentclass{article}\n\\begin{document}\n\\include{ch1}\n\\include{ch2}\n\\end{document}\n";
+    let files = [
+        ("main.tex", main),
+        (
+            "ch1.tex",
+            "\\section{One}\\label{sec:one}\nSee Section~\\ref{sec:two}.\n",
+        ),
+        (
+            "ch2.tex",
+            "\\section{Two}\\label{sec:two}\nSee Section~\\ref{sec:one}.\n",
+        ),
+    ];
+    let (_scratch, dir, screen) =
+        start_with(&["tectonic", "latexmk"], &files, "main.tex", "build pdf");
+    screen.wait_for("Built in", BUILD_TIME);
+    let log = std::fs::read_to_string(dir.join("main.log")).unwrap();
+    for unresolved in [
+        "LaTeX Warning: Reference",
+        "There were undefined",
+        "Rerun to get",
+    ] {
+        assert!(!log.contains(unresolved), "{unresolved}:\n{log}");
+    }
+    assert!(
+        screen.contents().contains("Built in") && !screen.contents().contains("warning"),
+        "{}",
+        screen.contents()
+    );
+}
+
+#[test]
+#[ignore = "needs TeX Live: harness/x tex"]
+fn pdflatex_says_when_bibtex_finds_no_bib() {
+    let main = "\\documentclass{article}\n\\begin{document}\nAs \\cite{knuth84} shows.\n\\bibliographystyle{plain}\n\\bibliography{missing}\n\\end{document}\n";
+    let (_scratch, _dir, screen) = start_with(
+        &["tectonic", "latexmk"],
+        &[("main.tex", main)],
+        "main.tex",
+        "build pdf",
+    );
+    screen.wait_for("BibTeX failed", BUILD_TIME);
+    assert!(
+        screen.contents().contains("missing.bib"),
+        "{}",
+        screen.contents()
+    );
+}
+
+/// One undefined reference in a section file is one warning, however many passes latexmk
+/// makes, and it belongs to that file, so F8 in the root finds nothing.
+#[test]
+#[ignore = "needs TeX Live: harness/x tex"]
+fn latexmk_counts_a_warning_in_a_section_file_once() {
+    let main = "\\documentclass{article}\n\\begin{document}\n\\section{Intro}\\label{sec:intro}\nText.\n\\input{sections/method}\n\\end{document}\n";
+    let method = "\\section{Method}\nIt builds on Section~\\ref{sec:intro}.\n\nAnd on Section~\\ref{sec:gone}.\n";
+    let files = [("main.tex", main), ("sections/method.tex", method)];
+    let (_scratch, _dir, mut screen) = start_with(&["tectonic"], &files, "main.tex", "build pdf");
+    screen.wait_for("Built in", BUILD_TIME);
+    screen.wait_for("with a warning", Duration::from_secs(5));
+    // F8, the next problem.
+    screen.send(b"\x1b[19~");
+    screen.wait_for("No problems in this file", Duration::from_secs(10));
+}
+
+#[test]
+#[ignore = "needs TeX Live: harness/x tex"]
+fn a_failed_pdflatex_export_keeps_the_last_good_pdf() {
+    let files = [
+        ("note.md", "# Note\n\nBroken: $\\nosuchmacro{x}$.\n"),
+        ("note.pdf", "the good one"),
+    ];
+    let (_scratch, dir, screen) =
+        start_with(&["tectonic", "latexmk"], &files, "note.md", "export to pdf");
+    screen.wait_for("The PDF wasn't made", BUILD_TIME);
+    assert_eq!(
+        std::fs::read_to_string(dir.join("note.pdf")).unwrap(),
+        "the good one"
+    );
+    let left: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| name != "note.md" && name != "note.pdf" && name != ".cellix")
+        .collect();
+    assert!(left.is_empty(), "the build left {left:?}");
+}
