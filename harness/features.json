@@ -3066,6 +3066,13 @@
     "passes": true
   },
   {
+    "id": "section-pictures-from-root",
+    "milestone": 10,
+    "title": "A section file's pictures resolve from the root's folder and \\graphicspath",
+    "test": "a_section_files_pictures_are_found_as_latex_finds_them",
+    "passes": true
+  },
+  {
     "id": "synctex-full-paths",
     "milestone": 10,
     "title": "Forward search tells files of one name apart by their whole path",

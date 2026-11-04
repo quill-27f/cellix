@@ -1427,17 +1427,28 @@ impl Context<'_> {
     fn image(&self, source: &str, fit: Fit) -> Option<usize> {
         let cell = self.cell()?;
         let folder = self.extras.folder?;
-        let named = folder.join(source);
-        let path = ["", "png", "jpg", "jpeg", "pdf", "webp", "svg"]
-            .iter()
-            .map(|extension| {
-                if extension.is_empty() {
-                    named.clone()
-                } else {
-                    named.with_extension(extension)
-                }
-            })
-            .find(|path| path.is_file())?;
+        // A paper's pictures are found from its root's folder, and its `\graphicspath`, as
+        // LaTeX finds them, even on the page of a file in a folder of its own.
+        let folders: Vec<PathBuf> = match self.extras.project.as_deref() {
+            Some(project) if !project.pictures.is_empty() => project.pictures.clone(),
+            Some(project) => std::iter::once(folder.to_path_buf())
+                .chain(project.graphicspath.iter().map(|path| folder.join(path)))
+                .collect(),
+            None => vec![folder.to_path_buf()],
+        };
+        let path = folders.iter().find_map(|folder| {
+            let named = folder.join(source);
+            ["", "png", "jpg", "jpeg", "pdf", "webp", "svg"]
+                .iter()
+                .map(|extension| {
+                    if extension.is_empty() {
+                        named.clone()
+                    } else {
+                        named.with_extension(extension)
+                    }
+                })
+                .find(|path| path.is_file())
+        })?;
         let make = || load_image(&path, cell, fit);
         let figure = match self.extras.library {
             Some(library) => library

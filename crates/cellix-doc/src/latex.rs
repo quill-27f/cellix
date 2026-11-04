@@ -144,6 +144,35 @@ pub struct Project {
     pub cited: Vec<String>,
     /// The `.bib` files the paper names with `\\bibliography` or `\\addbibresource`.
     pub bibliographies: Vec<PathBuf>,
+    /// The folders `\graphicspath` names, as written.
+    pub graphicspath: Vec<String>,
+    /// Where `\includegraphics` looks, as LaTeX does: the root's folder, wherever the file
+    /// naming the picture is, then each `\graphicspath` folder. Empty for an unsaved file.
+    pub pictures: Vec<PathBuf>,
+}
+
+/// The folders of a `\graphicspath{{figures/}{img/}}` line.
+fn graphicspath_of(code: &str) -> Vec<String> {
+    let Some(at) = code.find("\\graphicspath") else {
+        return Vec::new();
+    };
+    let rest = code[at + "\\graphicspath".len()..].trim_start();
+    let Some((from, to)) = braced(rest, 0) else {
+        return Vec::new();
+    };
+    let mut inside = &rest[from..to];
+    let mut found = Vec::new();
+    while let Some(open) = inside.find('{') {
+        let Some((from, to)) = braced(inside, open) else {
+            break;
+        };
+        let name = inside[from..to].trim();
+        if !name.is_empty() {
+            found.push(name.to_string());
+        }
+        inside = &inside[to + 1..];
+    }
+    found
 }
 
 /// The argument of `\name{...}` on a line, as a byte range.
@@ -411,6 +440,9 @@ impl Project {
         let mut counters = Counters::default();
         let folder = root.parent().unwrap_or(Path::new("")).to_path_buf();
         project.walk(root, &folder, &mut counters, 0);
+        project.pictures = std::iter::once(folder.clone())
+            .chain(project.graphicspath.iter().map(|path| folder.join(path)))
+            .collect();
         // The ones it names, wherever they are, then any beside it.
         let beside = std::fs::read_dir(&folder)
             .into_iter()
@@ -457,6 +489,10 @@ impl Project {
     fn lines(&mut self, text: &str, folder: &Path, counters: &mut Counters, depth: usize) {
         self.setup.extend(setup_of(text));
         self.bibliographies.extend(bibliographies_of(text, folder));
+        for line in text.lines() {
+            let code = line.split('%').next().unwrap_or("");
+            self.graphicspath.extend(graphicspath_of(code));
+        }
         if let Some(style) = text.lines().find_map(|l| {
             let at = l.find("\\bibliographystyle{")?;
             let rest = &l[at + "\\bibliographystyle{".len()..];

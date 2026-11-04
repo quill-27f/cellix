@@ -13294,6 +13294,32 @@ mod tests {
     }
 
     #[test]
+    fn a_section_files_pictures_are_found_as_latex_finds_them() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("sections")).unwrap();
+        fs::create_dir_all(dir.path().join("figures")).unwrap();
+        fs::write(
+            dir.path().join("main.tex"),
+            "\\documentclass{article}\n\\usepackage{graphicx}\n\\graphicspath{{figures/}}\n\\begin{document}\n\\input{sections/results}\n\\end{document}\n",
+        )
+        .unwrap();
+        let section = dir.path().join("sections/results.tex");
+        fs::write(
+            &section,
+            "Results.\n\n\\begin{figure}\n  \\includegraphics{shared.png}\n\\end{figure}\n\nMore.\n\n\\begin{figure}\n  \\includegraphics{plot}\n\\end{figure}\n",
+        )
+        .unwrap();
+        let image = image::RgbaImage::from_pixel(40, 20, image::Rgba([200, 30, 30, 255]));
+        // One beside the root, one in the folder `\graphicspath` names; none beside the section.
+        image.save(dir.path().join("shared.png")).unwrap();
+        image.save(dir.path().join("figures/plot.png")).unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(10, 20)));
+        app.open(&section).unwrap();
+        assert_eq!(pictures(&app).len(), 2, "{}", painted_text(&app));
+    }
+
+    #[test]
     fn a_dropped_picture_is_copied_in_beside_the_document() {
         let (dir, mut app) = picture_page("words\n");
         let outside = tempfile::tempdir().unwrap();
