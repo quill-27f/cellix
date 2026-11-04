@@ -3127,5 +3127,12 @@
     "title": "Windows keeps socket notes in the user's local app data, not wherever TEMP points",
     "test": "windows_keeps_sockets_in_local_app_data",
     "passes": true
+  },
+  {
+    "id": "powershell-hooks",
+    "milestone": 10,
+    "title": "Codex and Gemini hooks are written so PowerShell runs them on Windows",
+    "test": "codex_and_gemini_hooks_run_in_powershell_on_windows",
+    "passes": true
   }
 ]

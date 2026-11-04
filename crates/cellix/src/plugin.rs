@@ -69,16 +69,36 @@ fn data_dir(var: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
 }
 
 pub(crate) fn write_to(folder: &Path) -> io::Result<()> {
-    write_files(folder, &FILES)
+    // Claude Code runs hooks in Git Bash, on Windows too.
+    write_files_for(folder, &FILES, false)
 }
 
+/// Writes an agent's hooks as this platform runs them.
 fn write_files(folder: &Path, files: &[(&str, &str)]) -> io::Result<()> {
+    write_files_for(folder, files, cfg!(windows))
+}
+
+/// What keeps a hook quiet where it runs in a Unix shell, when Cellix isn't installed.
+const QUIET: &str = " 2>/dev/null || true";
+
+/// A hook file as `windows` runs it. Codex and Gemini run hooks in PowerShell there, where
+/// `/dev/null` doesn't exist and Windows PowerShell can't read `||`, so the hook would never
+/// run. `cellix hook` itself always succeeds quietly, so the bare command is what's left.
+fn for_platform<'a>(name: &str, text: &'a str, windows: bool) -> std::borrow::Cow<'a, str> {
+    if windows && name.ends_with("hooks/hooks.json") {
+        text.replace(QUIET, "").into()
+    } else {
+        text.into()
+    }
+}
+
+fn write_files_for(folder: &Path, files: &[(&str, &str)], windows: bool) -> io::Result<()> {
     for (name, text) in files {
         let path = folder.join(name);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(path, text)?;
+        fs::write(path, for_platform(name, text, windows).as_ref())?;
     }
     Ok(())
 }
@@ -123,6 +143,45 @@ mod tests {
         write_to(dir.path()).unwrap();
         for (name, _) in FILES {
             assert!(dir.path().join(name).exists(), "{name}");
+        }
+    }
+
+    /// Codex and Gemini run hooks in PowerShell on Windows, which can't run the Unix form.
+    #[test]
+    fn codex_and_gemini_hooks_run_in_powershell_on_windows() {
+        for files in [&CODEX_FILES[..], &GEMINI_FILES[..]] {
+            let dir = tempfile::tempdir().unwrap();
+            write_files_for(dir.path(), files, true).unwrap();
+            let (name, unix) = files
+                .iter()
+                .find(|(name, _)| name.ends_with("hooks/hooks.json"))
+                .unwrap();
+            let written = fs::read_to_string(dir.path().join(name)).unwrap();
+            let hooks: serde_json::Value = serde_json::from_str(&written).unwrap();
+            let mut commands = Vec::new();
+            for groups in hooks["hooks"].as_object().unwrap().values() {
+                for group in groups.as_array().unwrap() {
+                    for hook in group["hooks"].as_array().unwrap() {
+                        commands.push(hook["command"].as_str().unwrap().to_string());
+                    }
+                }
+            }
+            assert!(!commands.is_empty());
+            for command in &commands {
+                // Words PowerShell, cmd and bash all run the same way.
+                assert!(command.starts_with("cellix hook "), "{command}");
+                assert!(
+                    command
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || " -".contains(c)),
+                    "{command}"
+                );
+            }
+            // Elsewhere they keep quiet when Cellix isn't installed.
+            assert_eq!(commands.len(), unix.matches(QUIET).count());
+            let dir = tempfile::tempdir().unwrap();
+            write_files_for(dir.path(), files, false).unwrap();
+            assert_eq!(fs::read_to_string(dir.path().join(name)).unwrap(), *unix);
         }
     }
 
