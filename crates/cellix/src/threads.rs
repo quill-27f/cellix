@@ -83,14 +83,17 @@ enum Line {
     /// panel takes more than one row.
     Coverage(Vec<(&'static str, usize)>),
     /// At the top of a card: who wrote it, and its kind. True for an agent's suggestion.
-    /// And, for a plan's comment on words its next version dropped, the version that did.
-    Header(u32, String, bool, Option<usize>),
+    /// And, for a plan's comment on words its next version changed or dropped, a pill saying
+    /// so, when it fits beside them.
+    Header(u32, String, bool, Option<(String, Words)>),
+    /// That pill on a row of its own, under a header too wide to share with it.
+    Pill(u32, String, Words),
     /// Keep and Dismiss, under a suggestion.
     Choices(u32),
     /// Apply and Not this, under a rewrite still to be decided.
     Rewrite(u32),
-    /// True for words a plan's next version dropped: struck, and on a quiet bar.
-    Quote(u32, String, bool),
+    /// What a comment is about, and what became of those words in a plan's next version.
+    Quote(u32, String, Words),
     Text(u32, String),
     /// Opens an answer: its verdict if it gives one, and who wrote it.
     Answer(u32, Option<String>, String),
@@ -102,6 +105,44 @@ enum Line {
     Buttons(u32),
     Gap,
 }
+
+/// What became of a plan comment's words in a later version of the plan.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Words {
+    Here,
+    /// Reworded: on a quiet bar, as they were said about.
+    Changed,
+    /// Dropped: on a quiet bar and struck through.
+    Removed,
+}
+
+/// The pill on a plan comment whose words a later version changed or dropped, and how.
+fn words_of(thread: &Thread) -> (Words, Option<String>) {
+    match thread.earlier.map(|v| v + 1) {
+        Some(version) if thread.reworded => (
+            Words::Changed,
+            Some(format!("Changed in version {version} \u{203a}")),
+        ),
+        Some(version) => (
+            Words::Removed,
+            Some(format!("Removed in version {version} \u{203a}")),
+        ),
+        None => (Words::Here, None),
+    }
+}
+
+/// A pill's colour: the warning colour for words that are gone, a quiet one for words
+/// only reworded.
+fn pill_tone(words: Words, theme: &Theme) -> cellix_render::Rgb {
+    if words == Words::Changed {
+        theme.gutter.fg
+    } else {
+        theme.attention
+    }
+}
+
+/// Room between a header's words and a pill beside them, about 9 px.
+const PILL_AIR: f32 = 1.0;
 
 /// A comment or reply being written, in place, so what it's about stays in view.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -176,6 +217,23 @@ fn pill_width(text: &str, measure: &dyn Measure) -> f32 {
 
 const PILL_GAP: f32 = 0.35;
 
+/// A pill outlined in `tone`, its words in it, starting at `x`.
+fn draw_pill(
+    grid: &mut Grid,
+    x: f32,
+    y: u16,
+    text: &str,
+    (right, inner, tone): (u16, Style, cellix_render::Rgb),
+    measure: &dyn Measure,
+) {
+    let width = pill_width(text, measure);
+    let bounds = Bounds::cells(x, y as f32 + 0.16, width, 0.68);
+    grid.panel(bounds, 34, None, Some(tone));
+    let tag = Style { fg: tone, ..inner };
+    let at = x + 0.45;
+    grid.label_at(at, at.floor() as u16, y, text, tag, right, SMALL);
+}
+
 /// `a` over `b`, `amount` of the way.
 fn mix(a: cellix_render::Rgb, b: cellix_render::Rgb, amount: f32) -> cellix_render::Rgb {
     let channel = |a: u8, b: u8| (a as f32 * amount + b as f32 * (1.0 - amount)).round() as u8;
@@ -219,7 +277,7 @@ fn lines(
         out.push(Line::Quote(
             NEW_DRAFT,
             quote_of(&new.quote, new.line),
-            false,
+            Words::Here,
         ));
         draft_lines(new, width, measure, &mut out);
         out.push(Line::Buttons(NEW_DRAFT));
@@ -240,11 +298,23 @@ fn lines(
         } else {
             YOU.to_string()
         };
-        // Words a plan's next version dropped: still said, and marked as no longer there.
-        let removed = thread.earlier.map(|v| v + 1);
-        out.push(Line::Header(id, format!("{by}{kind}"), suggested, removed));
+        // Words a plan's next version changed or dropped: still said, and marked as such.
+        // The pill sits at the header's end when both fit, and under it when they don't.
+        let label = format!("{by}{kind}");
+        let (words, pill) = words_of(thread);
+        let fits = |pill: &String| {
+            measure.width(&label, small()) + PILL_AIR + pill_width(pill, measure) <= width
+        };
+        let (beside, under) = match pill {
+            Some(pill) if fits(&pill) => (Some((pill, words)), None),
+            under => (None, under),
+        };
+        out.push(Line::Header(id, label, suggested, beside));
+        if let Some(pill) = under {
+            out.push(Line::Pill(id, pill, words));
+        }
         let quote = quote_of(&thread.quote, thread.line);
-        out.push(Line::Quote(id, quote, removed.is_some()));
+        out.push(Line::Quote(id, quote, words));
         let text = wrap(&thread.text, width, measure);
         out.extend(text.into_iter().map(|row| Line::Text(id, row)));
         for reply in &thread.replies {
@@ -394,6 +464,7 @@ pub fn hit(
         | Line::Text(id, _)
         | Line::Answer(id, ..)
         | Line::Reply(id, _)
+        | Line::Pill(id, ..)
         | Line::Header(id, ..) => Some(Hit::Open(*id)),
         _ => None,
     }
@@ -526,7 +597,7 @@ pub fn draw(
                 let hint = "Select text in a file, then press Alt+C.";
                 grid.label_at(side as f32, side, y + 1, hint, dim, right, SMALL);
             }
-            Line::Header(_, label, suggested, removed) => {
+            Line::Header(_, label, suggested, pill) => {
                 let style = Style {
                     fg: if *suggested {
                         theme.accent
@@ -536,38 +607,37 @@ pub fn draw(
                     ..inner
                 };
                 let mut end = right;
-                if let Some(version) = removed {
-                    // A pill at the row's end, outlined in the warning colour like a kind
-                    // with no comments: what it's about has left the plan.
-                    let text = format!("Removed in version {version}");
-                    let width = pill_width(&text, measure);
-                    let x = (right as f32 - 1.0 - width).max(text_x as f32);
-                    let bounds = Bounds::cells(x, y as f32 + 0.16, width, 0.68);
-                    grid.panel(bounds, 34, None, Some(theme.attention));
-                    let tag = Style {
-                        fg: theme.attention,
-                        ..inner
-                    };
-                    let at = x + 0.45;
-                    grid.label_at(at, at.floor() as u16, y, &text, tag, right, SMALL);
+                if let Some((text, words)) = pill {
+                    // At the row's end: what it's about has changed or left the plan.
+                    let width = pill_width(text, measure);
+                    let x = right as f32 - 1.0 - width;
+                    let tone = pill_tone(*words, theme);
+                    draw_pill(grid, x, y, text, (right, inner, tone), measure);
                     end = x.floor() as u16;
                 }
                 grid.label_at(text_x as f32, text_x, y, label, style, end, SMALL);
             }
-            Line::Quote(_, quote, struck) => {
+            Line::Pill(_, text, words) => {
+                let tone = pill_tone(*words, theme);
+                draw_pill(grid, text_x as f32, y, text, (right, inner, tone), measure);
+            }
+            Line::Quote(_, quote, words) => {
                 let bar = Bounds::cells(text_x as f32, y as f32 + 0.16, 0.22, 0.68);
                 let x = text_x as f32 + 0.8;
-                if *struck {
-                    // Words that are gone: a quiet bar, dimmer words, and a line through them.
-                    let quiet = mix(theme.gutter.fg, inner.bg, 0.55);
-                    grid.panel(bar, 10, Some(quiet), None);
-                    let style = Style { fg: quiet, ..inner };
-                    grid.label_at(x, text_x + 1, y, quote, style, right, SMALL);
-                    let width = measure.width(quote, small()).min(right as f32 - x);
-                    grid.hairline(Bounds::cells(x, y as f32 + 0.56, width, 0.0), quiet);
-                } else {
+                if *words == Words::Here {
                     grid.panel(bar, 10, Some(theme.accent), None);
                     grid.label_at(x, text_x + 1, y, quote, inner_dim, right, SMALL);
+                } else {
+                    // Words no longer as said: a quiet bar, the words still readable, and a
+                    // line through them once they're gone. The pill says which.
+                    let quiet = mix(theme.gutter.fg, inner.bg, 0.55);
+                    grid.panel(bar, 10, Some(quiet), None);
+                    grid.label_at(x, text_x + 1, y, quote, inner_dim, right, SMALL);
+                    if *words == Words::Removed {
+                        let width = measure.width(quote, small()).min(right as f32 - x);
+                        let through = Bounds::cells(x, y as f32 + 0.5, width, 0.0);
+                        grid.hairline(through, theme.gutter.fg);
+                    }
                 }
             }
             Line::Text(_, text) => {

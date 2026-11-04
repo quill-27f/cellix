@@ -3302,6 +3302,7 @@ impl App {
                     suggested_by: String::new(),
                     copy: (0, 0),
                     earlier: None,
+                    reworded: false,
                 });
                 asked = draft.ask.then_some(id);
             }
@@ -6124,6 +6125,7 @@ impl App {
                 suggested_by: String::new(),
                 copy: (0, 0),
                 earlier: None,
+                reworded: false,
             });
             self.save_threads();
         }
@@ -6154,6 +6156,7 @@ impl App {
             suggested_by: String::new(),
             copy: (0, 0),
             earlier: None,
+            reworded: false,
         });
         self.save_threads();
         if page {
@@ -6565,6 +6568,7 @@ impl App {
                     suggested_by: author.clone(),
                     copy: (0, 0),
                     earlier: None,
+                    reworded: false,
                 });
                 self.save_threads();
                 let _ = made.send(id);
@@ -12458,6 +12462,133 @@ mod tests {
         let compared = app.active_text().unwrap();
         assert!(compared.contains("{~~Cache~>"), "{compared}");
         assert!(app.plan.is_some(), "the plan still waits");
+    }
+
+    /// A plan the hook holds in `held`, with a comment typed on each of `comments`' lines,
+    /// sent back, and then `next` sent as its next version. Gives the plan's path.
+    fn plan_sent_again(
+        app: &mut App,
+        held: &Path,
+        (first, comments): (&str, &[(&str, &str)]),
+        next: &str,
+    ) -> PathBuf {
+        let path = cellix_agent::hook::keep_versions(held, first).unwrap();
+        let (reply, decision) = std::sync::mpsc::channel();
+        app.serve(Request::Plan {
+            path: path.clone(),
+            reply,
+        });
+        for (line, comment) in comments {
+            let (x, y) = find(&screen(app), line);
+            app.handle(mouse(MouseKind::Left, x + 1, y));
+            app.run(Command::AddComment);
+            typed(app, comment);
+            enter(app);
+        }
+        let (x, y) = find(&screen(app), SEND_BACK);
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        typed(app, "See comments");
+        enter(app);
+        assert!(matches!(decision.try_recv(), Ok(Decision::SendBack(_))));
+        cellix_agent::hook::keep_versions(held, next).unwrap();
+        let (reply, decision) = std::sync::mpsc::channel();
+        app.serve(Request::Plan {
+            path: path.clone(),
+            reply,
+        });
+        // Held open, as the agent would be.
+        std::mem::forget(decision);
+        path
+    }
+
+    #[test]
+    fn a_plan_comment_on_reworded_words_says_they_changed_and_never_takes_the_opposite() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        let held = tempfile::tempdir().unwrap();
+        let first = "# Plan\n\nWe will not drop the users table.\n\nThen the cache stays warm across runs.\n";
+        let next =
+            "# Plan\n\nWe will drop the users table.\n\nThen the cache stays hot across runs.\n";
+        let comments = [
+            ("We will not drop", "Good, keep it"),
+            ("stays warm", "How warm"),
+        ];
+        let path = plan_sent_again(&mut app, held.path(), (first, &comments), next);
+        let text = screen(&app).text();
+        assert!(
+            text.contains("We will drop the users table."),
+            "version 2: {text}"
+        );
+        // Six of seven words match, but the "not" is gone: the opposite, so not the same.
+        assert!(text.contains("Removed in version 2"), "{text}");
+        assert!(
+            text.contains("We will not drop the users table."),
+            "its words as said: {text}"
+        );
+        // A word changed: kept as said, and shown as changed.
+        assert!(text.contains("Changed in version 2"), "{text}");
+        assert!(
+            text.contains("Then the cache stays warm across runs."),
+            "{text}"
+        );
+        let file = app.relative(&path);
+        let thread = |text: &str| {
+            app.threads
+                .iter()
+                .find(|t| t.file == file && t.text == text)
+                .cloned()
+                .unwrap()
+        };
+        let opposite = thread("Good, keep it");
+        assert_eq!((opposite.earlier, opposite.reworded), (Some(1), false));
+        assert_eq!(opposite.quote, "We will not drop the users table.");
+        let changed = thread("How warm");
+        assert_eq!(
+            (changed.earlier, changed.reworded, changed.line),
+            (Some(1), true, 5)
+        );
+        assert!(changed.quote.contains("warm"), "the quote isn't replaced");
+        // Its card leads to what changed.
+        let (x, y) = find(&screen(&app), "How warm");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        let compared = app.active_text().unwrap();
+        assert!(compared.contains("{~~warm~>hot~~}"), "{compared}");
+    }
+
+    #[test]
+    fn a_plan_comments_pill_keeps_clear_of_its_header_at_any_width() {
+        for columns in [150, 100, 80, 70, 64] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut app = App::new(dir.path().to_path_buf(), (columns, 40));
+            let held = tempfile::tempdir().unwrap();
+            let first = "# Plan\n\nCache first.\n\nShip it.\n";
+            let comments = [("Cache first.", "Why first")];
+            plan_sent_again(
+                &mut app,
+                held.path(),
+                (first, &comments),
+                "# Plan\n\nShip it.\n",
+            );
+            for thread in &mut app.threads {
+                thread.kind = "Correctness".into();
+            }
+            let grid = screen(&app);
+            let text = grid.text();
+            let rows: Vec<&str> = text.lines().collect();
+            let pill = rows.iter().position(|r| r.contains("Removed in version 2"));
+            let header = rows.iter().position(|r| r.contains("You · Correctness"));
+            let (Some(pill), Some(header)) = (pill, header) else {
+                panic!("at {columns} columns, both whole: {text}");
+            };
+            if pill == header {
+                let row = rows[pill];
+                let label_end = row.find("You · Correctness").unwrap() + "You · Correctness".len();
+                let pill_start = row.find("Removed in version 2").unwrap();
+                assert!(pill_start > label_end + 1, "at {columns} columns: {row}");
+            } else {
+                assert_eq!(pill, header + 1, "under its header at {columns} columns");
+            }
+        }
     }
 
     #[test]

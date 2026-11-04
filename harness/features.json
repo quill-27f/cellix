@@ -3064,5 +3064,33 @@
     "title": "Agents reach Cellix where there are no Unix sockets: a loopback port behind a token, as on Windows",
     "test": "agents_reach_cellix_over_loopback_with_its_token",
     "passes": true
+  },
+  {
+    "id": "plan-thread-opposite",
+    "milestone": 10,
+    "title": "A comment never moves onto words that say the opposite: a negation or number changed",
+    "test": "a_comment_never_moves_onto_words_that_say_the_opposite",
+    "passes": true
+  },
+  {
+    "id": "plan-thread-reworded",
+    "milestone": 10,
+    "title": "A plan's reworded words keep their quote and say they changed",
+    "test": "a_plans_reworded_words_keep_their_quote_and_say_they_changed",
+    "passes": true
+  },
+  {
+    "id": "plan-thread-changed-pill",
+    "milestone": 10,
+    "title": "A plan comment on reworded words shows Changed in version N and opens the comparison",
+    "test": "a_plan_comment_on_reworded_words_says_they_changed_and_never_takes_the_opposite",
+    "passes": true
+  },
+  {
+    "id": "plan-thread-pill-narrow",
+    "milestone": 10,
+    "title": "A plan comment's pill keeps clear of its header at any width",
+    "test": "a_plan_comments_pill_keeps_clear_of_its_header_at_any_width",
+    "passes": true
   }
 ]
