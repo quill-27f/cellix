@@ -165,7 +165,14 @@ impl Picker {
             .and_then(|home| path.strip_prefix(home).ok())
         {
             Some(rest) if rest.as_os_str().is_empty() => "~".to_string(),
-            Some(rest) => format!("~/{}", rest.display()),
+            // With `/` between folders, as it's typed after `~`, on Windows too.
+            Some(rest) => {
+                let parts: Vec<String> = rest
+                    .components()
+                    .map(|part| part.as_os_str().to_string_lossy().into_owned())
+                    .collect();
+                format!("~/{}", parts.join("/"))
+            }
             None => path.display().to_string(),
         }
     }

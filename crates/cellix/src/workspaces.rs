@@ -915,7 +915,13 @@ fn name_of(app: &App) -> String {
 fn tilde(path: &Path) -> String {
     let home = std::env::var_os("HOME").map(PathBuf::from);
     match home.and_then(|home| path.strip_prefix(home).ok().map(Path::to_path_buf)) {
-        Some(rest) => format!("~/{}", rest.display()),
+        Some(rest) => {
+            let parts: Vec<String> = rest
+                .components()
+                .map(|part| part.as_os_str().to_string_lossy().into_owned())
+                .collect();
+            format!("~/{}", parts.join("/"))
+        }
         None => path.display().to_string(),
     }
 }
