@@ -4,6 +4,8 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-05
+
 ### Added
 - Cellix keeps your work over SSH without tmux. Agents and shells in the side pane already outlived a dropped connection; now the next `cellix` in a folder also has your open tabs and unsaved edits as you left them, and a bar along the bottom holds every folder with work running on the machine, each tile saying whether its agent is working, needs you, or is done. Click a tile to switch, + to open another folder, Ctrl+Alt+PageUp and PageDown to move between them. `cellix` in your home folder lists what's running to choose from, and `cellix ls` prints it.
 - After the machine restarts, what was running comes back as it was left, with Resume for Claude Code and Codex, which picks up the agent's own conversation, and Start Again for terminals. Resume in the bar does every workspace at once.
@@ -172,6 +174,7 @@ The first public release. Cellix is a terminal editor that lives inside your AI 
 - CSV and TSV as editable tables with Excel's keys, and Jupyter notebooks run on a real kernel.
 - Real pixels in terminals with Kitty graphics, such as Ghostty, Kitty and WezTerm, with fonts built in, and text cells anywhere else. It runs under tmux, Zellij and over SSH, with light and dark themes that can follow the terminal.
 
+[0.5.0]: https://github.com/quill-27f/cellix/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/quill-27f/cellix/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/quill-27f/cellix/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/quill-27f/cellix/compare/v0.4.0...v0.4.1
