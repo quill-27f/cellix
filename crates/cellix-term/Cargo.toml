@@ -9,7 +9,7 @@ repository.workspace = true
 [dependencies]
 base64 = "0.22"
 flate2 = "1"
-cellix-render = { path = "../cellix-render", version = "0.4.1" }
+cellix-render = { path = "../cellix-render", version = "0.4.2" }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

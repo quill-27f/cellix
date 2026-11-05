@@ -4,6 +4,8 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-05
+
 ### Fixed
 - In a big folder, Quick Open and the "Open a File" button held everything until the whole tree had been walked. Quick Open now opens at once and fills in as files are found, saying how many so far; typing stays quick over hundreds of thousands of files, and closing it stops the walk.
 - In a repository with many untracked files, Cellix waited for `git status` before drawing anything, so the pane inside Claude Code sat on "Starting Cellix…". Git is now asked in the background.
@@ -156,6 +158,7 @@ The first public release. Cellix is a terminal editor that lives inside your AI 
 - CSV and TSV as editable tables with Excel's keys, and Jupyter notebooks run on a real kernel.
 - Real pixels in terminals with Kitty graphics, such as Ghostty, Kitty and WezTerm, with fonts built in, and text cells anywhere else. It runs under tmux, Zellij and over SSH, with light and dark themes that can follow the terminal.
 
+[0.4.2]: https://github.com/quill-27f/cellix/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/quill-27f/cellix/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/quill-27f/cellix/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/quill-27f/cellix/compare/v0.3.0...v0.3.1
