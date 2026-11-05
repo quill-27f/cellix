@@ -338,7 +338,11 @@ impl<R: Rasterizer> RowPictures<R> {
             self.held.clear();
             self.width = grid.width();
         }
-        let keys: Vec<u64> = (0..grid.height()).map(|y| row_key(grid, y)).collect();
+        // The cell size is in the name: a row drawn at another size is another picture.
+        let size = (self.cell.0 as u64) << 32 | self.cell.1 as u64;
+        let keys: Vec<u64> = (0..grid.height())
+            .map(|y| row_key(grid, y) ^ size.wrapping_mul(0x9E37_79B9_7F4A_7C15))
+            .collect();
         // A row keeps the name it had, sharp or soft, when it's still on screen somewhere.
         let held = |key: u64| {
             let sharp = row_name(key, true);
@@ -738,6 +742,15 @@ pub fn run(root: &Path) -> io::Result<()> {
                 }
                 let (cells, resized) = take_requests(&mut app, waiting);
                 sized |= resized;
+                // A new font size in the terminal resizes the pane too: rows are drawn at the
+                // cell size the terminal has now, or it would scale them and soften the text.
+                if let (true, Output::Rows(rows)) = (resized, &mut output)
+                    && let Some(cell) = window_cell().filter(|&cell| cell != rows.cell)
+                    && let Some(rasterizer) = SoftwareRasterizer::new(cell.0, cell.1)
+                {
+                    app.set_measure(Rc::new(FontMeasure::new(cell.0, cell.1)));
+                    *rows = RowPictures::new(rasterizer, cell);
+                }
                 if cells {
                     // Pictures can't be shown here after all.
                     app.set_measure(Rc::new(cellix_render::CellMeasure));
@@ -1071,6 +1084,24 @@ mod tests {
         );
         assert!(names.iter().all(|name| !name.ends_with('s')));
         assert!(rows.line(&page(4, 12, 100), at(800)).is_none());
+    }
+
+    /// A new font size in the terminal is a new cell size: the same rows get new names, so
+    /// the mod doesn't keep the pictures drawn at the old size.
+    #[test]
+    fn rows_at_another_cell_size_are_new_pictures() {
+        let now = std::time::Instant::now();
+        let (small, _) = sent(
+            &RowPictures::new(Blocks, (2, 2))
+                .line(&page(4, 3, 0), now)
+                .unwrap(),
+        );
+        let (large, _) = sent(
+            &RowPictures::new(Blocks, (3, 4))
+                .line(&page(4, 3, 0), now)
+                .unwrap(),
+        );
+        assert!(small.iter().all(|name| !large.contains(name)));
     }
 
     /// Claude Code changes the pane's height as its prompt grows. Rows that still hold the

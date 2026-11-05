@@ -3638,5 +3638,12 @@
     "title": "Rows go as palette PNGs where they fit in 256 colours, losslessly",
     "test": "rows_go_as_small_as_they_losslessly_can",
     "passes": true
+  },
+  {
+    "id": "pane-rows-cell-size",
+    "milestone": 10,
+    "title": "Rows are drawn at the terminal's cell size, read again when the pane resizes, and named with it",
+    "test": "rows_at_another_cell_size_are_new_pictures",
+    "passes": true
   }
 ]
