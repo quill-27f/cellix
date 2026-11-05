@@ -4,6 +4,8 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-05
+
 ### Changed
 - The workspace bar is always there, even with one folder open, and its button says what it does: **+ New Workspace**, with "Open another folder beside this one" on hover. The small + it replaces was easy to miss, and with one folder there was no bar to find it in.
 
@@ -177,6 +179,7 @@ The first public release. Cellix is a terminal editor that lives inside your AI 
 - CSV and TSV as editable tables with Excel's keys, and Jupyter notebooks run on a real kernel.
 - Real pixels in terminals with Kitty graphics, such as Ghostty, Kitty and WezTerm, with fonts built in, and text cells anywhere else. It runs under tmux, Zellij and over SSH, with light and dark themes that can follow the terminal.
 
+[0.5.1]: https://github.com/quill-27f/cellix/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/quill-27f/cellix/compare/v0.4.3...v0.5.0
 [0.4.3]: https://github.com/quill-27f/cellix/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/quill-27f/cellix/compare/v0.4.1...v0.4.2
