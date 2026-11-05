@@ -295,9 +295,9 @@ cellix
 ```
 
 Close the laptop or lose the connection, and the next `cellix` in that folder has everything as you
-left it. Each folder you work in is a workspace, and with more than one there's a bar along the
-bottom: a tile for each, saying whether its agent is working, needs you, or is done, a click to
-switch to it, and + to open another folder beside it (Ctrl+Alt+PageUp and PageDown move between
+left it. Each folder you work in is a workspace, shown in the bar along the bottom: a tile for each,
+saying whether its agent is working, needs you, or is done, a click to switch to it, and
+**+ New Workspace** to open another folder beside it (Ctrl+Alt+PageUp and PageDown move between
 them). A new `cellix` anywhere picks up every workspace left running on the machine, and `cellix`
 in your home folder lists them to choose from. `cellix ls` prints the same list. Two computers can
 show the same workspace at once; whichever typed into an agent last sets its size.

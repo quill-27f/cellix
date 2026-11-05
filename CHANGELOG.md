@@ -4,6 +4,9 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 
 ## [Unreleased]
 
+### Changed
+- The workspace bar is always there, even with one folder open, and its button says what it does: **+ New Workspace**, with "Open another folder beside this one" on hover. The small + it replaces was easy to miss, and with one folder there was no bar to find it in.
+
 ## [0.5.0] - 2026-11-05
 
 ### Added

@@ -555,6 +555,7 @@ pub fn run(options: Options) -> io::Result<()> {
         start_workspace(root, size, (&starting.0.borrow(), &starting.1), wait)
     });
     let mut spaces = Workspaces::new(size()?, crate::app::machine_name(), start);
+    spaces.bar = !wait;
     if away {
         spaces.open_running();
         spaces.choosing = !spaces.list.is_empty();

@@ -348,9 +348,10 @@ dropped connection or a restart loses no typing; edits made before the file chan
 back marked as a conflict. Answering Don't Save on Quit keeps the tabs but not the edits.
 
 One Cellix holds several folders, each a whole app with its own socket, IDE port and sessions.
-With two or more, a bar on the bottom row (the terminal's own colour, like the status bar, so the
-window padding shows no seam) has a tile per folder that says what its agent is doing, + to open a
-folder, Resume for everything that stopped, and the machine's name. Each folder's sessions folder
+A bar on the bottom row, shown even with one folder so opening another is always in reach, is
+the terminal's own colour like the status bar, so the window padding shows no seam. It has a tile
+per folder that says what its agent is doing, a labelled New Workspace button to open
+a folder, Resume for everything that stopped, and the machine's name. Each folder's sessions folder
 names its project, so a new Cellix opens every folder on the machine with something running or
 stopped that no other Cellix has open, and Cellix started at home with nothing named offers them
 first. Closing a tile asks as Quit does; Quit asks each folder in turn. The bar is drawn on the

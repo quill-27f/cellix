@@ -29,6 +29,11 @@ const MARK: f32 = 1.0;
 const CHIP_INSET: f32 = 0.06;
 /// As a percentage of a row, about 9 pixels.
 const CHIP_RADIUS: u8 = 26;
+/// The button that opens another folder beside this one, and what its tip says.
+const NEW_WORKSPACE: &str = "New Workspace";
+const NEW_WORKSPACE_TIP: &str = "Open another folder beside this one";
+/// The tip's size, relative to the interface font.
+const TIP_SIZE: u8 = 85;
 
 /// One folder's workspace: its app, and the socket agents reach it on.
 pub struct Workspace {
@@ -71,6 +76,9 @@ pub struct Workspaces {
     pub choosing: bool,
     /// Set when another workspace came to the front, so the whole screen is sent again.
     switched: bool,
+    /// Whether the bar shows at all: not when Cellix is only editing a file for another
+    /// program, as for a commit message.
+    pub bar: bool,
     machine: String,
     start: Starter,
 }
@@ -87,6 +95,7 @@ impl Workspaces {
             quit: false,
             choosing: false,
             switched: false,
+            bar: true,
             machine,
             start,
         }
@@ -96,9 +105,21 @@ impl Workspaces {
         self.size
     }
 
-    /// Whether the bar shows: with more than one workspace, and not over the first screen.
+    /// Whether the bar shows: always, so there's somewhere to open another folder, except over
+    /// the first screen.
     pub fn shows_bar(&self) -> bool {
-        self.list.len() > 1 && !self.choosing
+        self.bar && !self.list.is_empty() && !self.choosing
+    }
+
+    /// Where the New Workspace button goes, and where it ends.
+    fn new_button(&self) -> (f32, f32) {
+        let start = self.spans().1;
+        let width = self.room(PAD)
+            + self.room(MARK)
+            + self.room(GAP)
+            + self.text_width(NEW_WORKSPACE)
+            + self.room(PAD);
+        (start, start + width)
     }
 
     /// The size each app has: the window, less the bar's row when it shows.
@@ -125,11 +146,9 @@ impl Workspaces {
             return index;
         }
         let had_bar = self.shows_bar();
-        let mut size = self.app_size();
-        // The bar comes with the second workspace, and this one is made to its new size.
-        if self.list.len() == 1 && !self.choosing {
-            size.1 = self.size.1.saturating_sub(1);
-        }
+        // Made to the size it has once it's in the list, with the bar if the bar shows.
+        let bar = u16::from(self.bar && !self.choosing);
+        let size = (self.size.0, self.size.1.saturating_sub(bar));
         let workspace = (self.start)(root, size);
         self.list.push(workspace);
         if had_bar != self.shows_bar() {
@@ -413,7 +432,7 @@ impl Workspaces {
         } else {
             mouse.fine_x
         };
-        let (spans, plus) = self.spans();
+        let (spans, _) = self.spans();
         for (index, span) in spans.iter().enumerate() {
             if x >= span.start && x < span.end {
                 let on_close = x >= span.end - self.room(CLOSE);
@@ -425,7 +444,8 @@ impl Workspaces {
                 });
             }
         }
-        if x >= plus && x < plus + 2.0 {
+        let (start, end) = self.new_button();
+        if x >= start && x < end {
             return Some(BarHit::New);
         }
         let (start, label) = self.resume_button()?;
@@ -493,7 +513,7 @@ impl Workspaces {
         let y = self.size.1.saturating_sub(1);
         let base = theme.workspaces;
         grid.fill(Rect::new(0, y, self.size.0, 1), base);
-        let (spans, plus) = self.spans();
+        let (spans, _) = self.spans();
         let right = self.size.0.saturating_sub(1);
         for (index, (workspace, span)) in self.list.iter().zip(&spans).enumerate() {
             let active = index == self.active;
@@ -533,30 +553,7 @@ impl Workspaces {
                 grid.glyph(close, y, Icon::Close, quiet.fg, "×", quiet);
             }
         }
-        let on_plus = self.hover.is_some_and(|(x, hy)| {
-            self.on_bar(hy) && f32::from(x) + 0.5 >= plus && f32::from(x) + 0.5 < plus + 2.0
-        });
-        if on_plus {
-            let chip = Bounds::cells(plus, f32::from(y) + CHIP_INSET, 2.0, 1.0 - 2.0 * CHIP_INSET);
-            grid.panel(chip, CHIP_RADIUS, Some(theme.row_hover), None);
-        }
-        let plus_style = Style {
-            fg: if on_plus {
-                theme.text.fg
-            } else {
-                theme.gutter.fg
-            },
-            ..base
-        };
-        grid.label_at(
-            plus + 0.6,
-            (plus + 0.5) as u16,
-            y,
-            "+",
-            plus_style,
-            right,
-            120,
-        );
+        self.draw_new_button(grid, y, base);
         // The machine's name at the right, so it's plain which one this is.
         let machine_style = Style {
             fg: theme.gutter.fg,
@@ -611,6 +608,61 @@ impl Workspaces {
                 &text,
                 style,
                 right,
+            );
+        }
+    }
+
+    /// The button that opens another folder as a workspace: labelled, so it says what it
+    /// does, with a tip above it on hover.
+    fn draw_new_button(&self, grid: &mut Grid, y: u16, base: Style) {
+        let theme = self.theme();
+        let (start, end) = self.new_button();
+        let on_it = self.hover.is_some_and(|(x, hy)| {
+            let x = f32::from(x) + 0.5;
+            self.on_bar(hy) && x >= start && x < end
+        });
+        let chip = Bounds::cells(
+            start,
+            f32::from(y) + CHIP_INSET,
+            end - start,
+            1.0 - 2.0 * CHIP_INSET,
+        );
+        let fill = if on_it {
+            theme.popup_hover
+        } else {
+            theme.row_active
+        };
+        grid.panel(chip, CHIP_RADIUS, Some(fill), None);
+        let right = self.size.0.saturating_sub(1);
+        let mark = start + self.room(PAD);
+        let plus = Style {
+            fg: theme.accent,
+            ..base
+        };
+        grid.label_at(mark + 0.1, mark as u16, y, "+", plus, right, 120);
+        let text = Style {
+            fg: theme.text.fg,
+            ..base
+        };
+        let x = mark + self.room(MARK) + self.room(GAP);
+        label(grid, (x, y), NEW_WORKSPACE, text, right);
+        if on_it && !self.measure().in_cells() {
+            let font = Font {
+                size: TIP_SIZE,
+                ..Font::default()
+            };
+            let wide = self.measure().width(NEW_WORKSPACE_TIP, font) + 2.0;
+            let left = start.min(f32::from(self.size.0) - wide - 1.0).max(0.0);
+            let top = f32::from(y) - 1.25;
+            let bounds = Bounds::cells(left, top, wide, 1.0);
+            grid.popup(bounds, CHIP_RADIUS, theme.popup, theme.popup_border);
+            let colour = (theme.popup_dim, false);
+            grid.text_run(
+                (left + 1.0, top),
+                left + wide,
+                NEW_WORKSPACE_TIP,
+                colour,
+                font,
             );
         }
     }
@@ -963,17 +1015,18 @@ mod tests {
     }
 
     #[test]
-    fn the_bar_comes_with_a_second_workspace_and_a_click_switches() {
+    fn the_bar_shows_every_workspace_and_a_click_switches() {
         let (_dir, first, second) = projects();
         let mut spaces = spaces();
         spaces.open(first.clone());
-        assert!(!spaces.shows_bar());
-        assert_eq!(
-            spaces.app().size(),
-            (100, 30),
-            "one workspace has the whole window"
+        // Even with one, the bar is there, with a button that says what it does.
+        assert!(spaces.shows_bar());
+        assert_eq!(spaces.app().size(), (100, 29), "the bar takes a row");
+        let row = bar(&spaces);
+        assert!(
+            row.contains("api-server") && row.contains("+ New Workspace"),
+            "{row}"
         );
-        assert!(!screen(&spaces).text().contains("dev-box"));
 
         spaces.open(second.clone());
         assert!(spaces.shows_bar());
@@ -987,7 +1040,7 @@ mod tests {
         let row = bar(&spaces);
         assert!(row.contains("api-server") && row.contains("infra"), "{row}");
         assert!(row.contains("dev-box"), "the machine is named: {row}");
-        assert!(row.contains('+'), "{row}");
+        assert!(row.contains("+ New Workspace"), "{row}");
         // The status bar is still there, above it.
         assert!(screen(&spaces).row_text(28).contains("Ctrl+P"));
 
@@ -1058,12 +1111,8 @@ mod tests {
         assert_eq!(spaces.list.len(), 1);
         assert!(!spaces.quit, "Cellix goes on with the other");
         assert_eq!(spaces.app().workspace.root(), first);
-        assert!(!spaces.shows_bar());
-        assert_eq!(
-            spaces.app().size(),
-            (100, 30),
-            "and it has the whole window back"
-        );
+        assert!(!bar(&spaces).contains("infra"), "{}", bar(&spaces));
+        assert_eq!(spaces.app().size(), (100, 29));
         let _ = fs::remove_dir_all(crate::hold::folder_of(&second));
     }
 
@@ -1120,7 +1169,13 @@ mod tests {
         let (_dir, first, second) = projects();
         let mut spaces = spaces();
         spaces.open(first);
-        spaces.app_mut().run(Command::OpenWorkspace);
+        // The bar's button asks for the folder.
+        let grid = screen(&spaces);
+        click(
+            &mut spaces,
+            MouseKind::Left,
+            spot(&grid, 29, "New Workspace"),
+        );
         assert!(
             screen(&spaces)
                 .text()
@@ -1145,7 +1200,7 @@ mod tests {
         key(&mut spaces, Key::PageUp, both);
         assert_eq!(spaces.active, 1);
 
-        // A name that's no folder says so.
+        // A name that's no folder says so. The palette asks too.
         spaces.app_mut().run(Command::OpenWorkspace);
         type_text(&mut spaces, "nowhere");
         key(&mut spaces, Key::Enter, Mods::default());

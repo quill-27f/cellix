@@ -3719,8 +3719,8 @@
   {
     "id": "ws-bar",
     "milestone": 11,
-    "title": "A second workspace brings the bar along the bottom, and a click switches",
-    "test": "the_bar_comes_with_a_second_workspace_and_a_click_switches",
+    "title": "The bar along the bottom shows every workspace and a labelled New Workspace button, and a click switches",
+    "test": "the_bar_shows_every_workspace_and_a_click_switches",
     "passes": true
   },
   {

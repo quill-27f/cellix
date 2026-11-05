@@ -250,6 +250,7 @@ def workspaces(scratch):
         ["wait", 0.6],
     ]
     shoot("100-workspaces", told, CODE_FILE, size="150x44", **space)
+    shoot("105-new-workspace-hover", [*told, ["move", 56, 43], ["wait", 0.4]], CODE_FILE, size="150x44", **space)
     shoot("101-workspace-hover", [*told, ["move", 40, 43], ["wait", 0.4]], CODE_FILE, size="150x44", **space)
     # Its tile brings back what stopped, with what it last showed.
     shoot("102-stopped-card", [["wait", 1.0], ["keys", "\x1b[6;7~"], ["keys", "\x1b[6;7~"],
