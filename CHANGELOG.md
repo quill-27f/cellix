@@ -4,6 +4,9 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 
 ## [Unreleased]
 
+### Fixed
+- Ctrl+W and a middle click close the Settings tab, as they do any other. Ctrl+W used to close the file hidden behind Settings instead, and a middle click did nothing.
+
 ## [0.4.1] - 2026-11-05
 
 ### Changed

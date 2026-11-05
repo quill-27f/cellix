@@ -3526,5 +3526,12 @@
     "title": "Inside Claude Code, Ask Agent puts the selection in Claude Code's prompt, unsent, and says to press Esc",
     "test": "inside_claude_code_ask_agent_goes_to_its_prompt",
     "passes": true
+  },
+  {
+    "id": "settings-tab-closes",
+    "milestone": 10,
+    "title": "Ctrl+W and a middle click close the Settings tab, and leave the file behind it open",
+    "test": "the_settings_tab_closes_like_any_other",
+    "passes": true
   }
 ]

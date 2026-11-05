@@ -4837,6 +4837,8 @@ impl App {
                 self.confirm_leaving(Leaving::Quit);
             }
             Command::Quit => self.quit_now(),
+            // Settings shows as the only tab, so closing a tab closes it, not the file behind.
+            Command::CloseTab if self.settings_page.is_some() => self.settings_page = None,
             Command::CloseTab
                 if self
                     .editors
@@ -8646,10 +8648,16 @@ impl App {
             }
             return;
         }
+        let on_tabs = self.tabs_area().contains(mouse.x, mouse.y);
+        // A middle click closes the Settings tab, as it does any other.
+        if mouse.kind == MouseKind::Middle && on_tabs {
+            self.settings_page = None;
+            return;
+        }
         if mouse.kind != MouseKind::Left {
             return;
         }
-        if self.tabs_area().contains(mouse.x, mouse.y) {
+        if on_tabs {
             self.settings_page = None;
         } else if let Some(control) = page.control_at(area, mouse.x, mouse.y) {
             self.use_control(control);
@@ -19961,6 +19969,24 @@ while True:
         );
         key(&mut app, Key::Esc);
         assert!(!screen(&app).text().contains("Appearance"));
+    }
+
+    #[test]
+    fn the_settings_tab_closes_like_any_other() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        app.run(Command::OpenSettings);
+        app.handle(Event::Key(KeyEvent::ctrl('w')));
+        assert!(app.settings_page.is_none(), "Ctrl+W closes Settings");
+        assert_eq!(app.editors.len(), 1, "and leaves the file behind it open");
+        assert!(screen(&app).text().contains("alpha.txt"));
+
+        app.run(Command::OpenSettings);
+        let (x, y) = find(&screen(&app), "Settings");
+        assert_eq!(y, app.tabs_area().y, "the Settings tab");
+        app.handle(mouse(MouseKind::Middle, x + 1, y));
+        assert!(app.settings_page.is_none(), "a middle click closes it");
+        assert_eq!(app.editors.len(), 1);
     }
 
     #[test]
