@@ -145,6 +145,9 @@ fn setup_agent(agent: &str) -> ExitCode {
 /// `cellix hook <kind>` is what the Claude Code plugin calls. It always succeeds, because a
 /// failing hook would get in the agent's way.
 fn hook(agent: &str, kind: &str) -> ExitCode {
+    if agent == "Claude Code" && kind == "session-start" {
+        cellix::plugin::refresh();
+    }
     let mut input = String::new();
     let _ = std::io::stdin().read_to_string(&mut input);
     if let Some(output) = cellix_agent::hook::handle_for(agent, kind, &input) {

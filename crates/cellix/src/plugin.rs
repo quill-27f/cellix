@@ -98,7 +98,12 @@ fn write_files_for(folder: &Path, files: &[(&str, &str)], windows: bool) -> io::
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(path, for_platform(name, text, windows).as_ref())?;
+        let text = for_platform(name, text, windows);
+        // Left alone when it's the same, so whatever watches the folder sees no change.
+        if fs::read_to_string(&path).is_ok_and(|now| now == text.as_ref()) {
+            continue;
+        }
+        fs::write(path, text.as_ref())?;
     }
     Ok(())
 }
@@ -124,6 +129,17 @@ pub(crate) fn write_gemini(var: impl Fn(&str) -> Option<String>) -> io::Result<P
 /// Where the Claude Code plugin lives.
 pub(crate) fn folder(var: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
     Some(data_dir(var)?.join("cellix/claude-code"))
+}
+
+/// Brings a plugin written by an older Cellix up to this one's, as each Claude Code session
+/// starts: an upgrade replaces the binary, not the files it wrote. Nothing is written where
+/// the plugin never was.
+pub fn refresh() {
+    if let Some(folder) = folder(|name| std::env::var(name).ok())
+        && folder.join(".claude-plugin/plugin.json").exists()
+    {
+        let _ = write_to(&folder);
+    }
 }
 
 /// Writes the Claude Code plugin to the user's data folder, and returns where.
@@ -183,6 +199,20 @@ mod tests {
             write_files_for(dir.path(), files, false).unwrap();
             assert_eq!(fs::read_to_string(dir.path().join(name)).unwrap(), *unix);
         }
+    }
+
+    #[test]
+    fn an_older_plugin_is_brought_up_to_date_and_a_current_one_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        write_to(dir.path()).unwrap();
+        let module = dir.path().join("hooks/register.tsx");
+        fs::write(&module, "an older mod").unwrap();
+        let skill = dir.path().join("skills/cellix-review/SKILL.md");
+        let before = fs::metadata(&skill).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        write_to(dir.path()).unwrap();
+        assert_eq!(fs::read_to_string(&module).unwrap(), FILES[2].1);
+        assert_eq!(fs::metadata(&skill).unwrap().modified().unwrap(), before);
     }
 
     #[test]

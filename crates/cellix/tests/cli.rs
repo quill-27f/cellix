@@ -163,6 +163,8 @@ fn over_ssh_the_pane_sends_cells_and_takes_input_in_batches() {
             .env("HOME", &home)
             .env("XDG_CONFIG_HOME", home.join(".config"))
             .env("XDG_CACHE_HOME", home.join(".cache"))
+            .env("XDG_DATA_HOME", home.join(".local/share"))
+            .env("CELLIX_MOD", cellix::pane::PROTOCOL)
             .env("SSH_CONNECTION", "10.0.0.1 50000 10.0.0.2 22");
         command
     };
@@ -229,4 +231,29 @@ fn over_ssh_the_pane_sends_cells_and_takes_input_in_batches() {
         shown.is_some(),
         "the batch was taken and the file shown, as cells"
     );
+}
+
+/// An upgrade replaces the binary but used to leave the plugin it wrote, so the old mod waited
+/// on "Starting Cellix…" for lines it couldn't read. Now the pane writes the new plugin and
+/// says to restart Claude Code, which the old mod shows.
+#[test]
+fn a_mod_left_by_an_upgrade_is_replaced_and_told_to_restart() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    let done = Command::new(env!("CARGO_BIN_EXE_cellix"))
+        .arg("pane")
+        .current_dir(dir.path())
+        .env("HOME", dir.path())
+        .env("XDG_DATA_HOME", &data)
+        .env_remove("CELLIX_MOD")
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!done.status.success());
+    let said = String::from_utf8_lossy(&done.stderr);
+    assert!(said.contains("Restart Claude Code"), "{said}");
+    assert!(done.stdout.is_empty(), "no lines an old mod could misread");
+    let written =
+        std::fs::read_to_string(data.join("cellix/claude-code/hooks/register.tsx")).unwrap();
+    assert!(written.contains(&format!("const PROTOCOL = '{}'", cellix::pane::PROTOCOL)));
 }

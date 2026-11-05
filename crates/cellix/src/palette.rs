@@ -17,6 +17,8 @@ const PANEL_PADDING: f32 = 0.3;
 const HEADER_ROWS: u16 = 2;
 /// Where that line falls, as far below the field's text as the panel's edge is above it.
 const HEADER_LINE: f32 = 1.3;
+/// Air between what's typed and the status at the field's right end, in cells.
+const STATUS_GAP: f32 = 1.5;
 /// Space between the caret and the hint in an empty field.
 const HINT_GAP: f32 = 0.45;
 
@@ -184,7 +186,13 @@ pub struct Palette {
     hint: &'static str,
     items: Vec<Item>,
     matches: Vec<usize>,
+    /// Each match's score, beside it, while something is typed.
+    scores: Vec<i32>,
+    /// What the matches were found for: a longer query only needs to look among them.
+    matched: String,
     pub selected: usize,
+    /// What's still happening, as "8,310 files…", shown at the right of the field.
+    pub status: Option<String>,
 }
 
 /// Scores `text` against `query`, whose characters must appear in order. Runs of
@@ -192,22 +200,27 @@ pub struct Palette {
 pub fn fuzzy_score(query: &str, text: &str) -> Option<i32> {
     let name_start = text.rfind('/').map_or(0, |i| i + 1);
     let mut score = 0;
+    // Where the last match ended, to see a run.
     let mut last = None;
-    let lower = text.to_lowercase();
-    let mut from = 0;
-    for q in query.to_lowercase().chars() {
-        let found = lower[from..].find(q)? + from;
+    // Nothing is allocated: Quick Open scores every file in a big tree on each key.
+    let mut rest = text.char_indices();
+    for q in query.chars().flat_map(char::to_lowercase) {
+        let (found, c) = rest.by_ref().find(|(_, c)| same_letter(*c, q))?;
         score += 1;
-        if last.is_some_and(|l| l + 1 == found) {
+        if last == Some(found) {
             score += 4;
         }
         if found >= name_start {
             score += 2;
         }
-        last = Some(found);
-        from = found + q.len_utf8();
+        last = Some(found + c.len_utf8());
     }
     Some(score - text.len() as i32 / 16)
+}
+
+/// Whether `c` is `lower`, whatever its case.
+fn same_letter(c: char, lower: char) -> bool {
+    c == lower || (!c.is_ascii() || c.is_ascii_uppercase()) && c.to_lowercase().eq([lower])
 }
 
 impl Palette {
@@ -217,10 +230,47 @@ impl Palette {
             hint: "Type to search",
             items,
             matches: Vec::new(),
+            scores: Vec::new(),
+            matched: String::new(),
             selected: 0,
+            status: None,
         };
         palette.filter();
         palette
+    }
+
+    /// Adds items that arrived after the palette opened, as files do from a walk of a big
+    /// tree. What's typed applies to them too, and the picked row stays picked.
+    pub fn extend(&mut self, items: Vec<Item>) {
+        let picked = self.matches.get(self.selected).copied();
+        let from = self.items.len();
+        self.items.extend(items);
+        if self.query.is_empty() {
+            self.matches.extend(from..self.items.len());
+            return;
+        }
+        let mut scored: Vec<(i32, usize)> = self
+            .scores
+            .iter()
+            .copied()
+            .zip(self.matches.iter().copied())
+            .collect();
+        for i in from..self.items.len() {
+            if let Some(score) = fuzzy_score(&self.query, self.items[i].label()) {
+                scored.push((score, i));
+            }
+        }
+        scored.sort_by_key(|(score, i)| (-score, *i));
+        (self.scores, self.matches) = scored.into_iter().unzip();
+        if let Some(picked) = picked {
+            self.selected = self.matches.iter().position(|&i| i == picked).unwrap_or(0);
+        }
+    }
+
+    /// How many items it holds.
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.items.len()
     }
 
     /// A palette whose empty field asks for something other than a search.
@@ -235,18 +285,27 @@ impl Palette {
         // Nothing typed means no ranking: the list keeps the order it came in.
         if self.query.is_empty() {
             self.matches = (0..self.items.len()).collect();
+            self.scores.clear();
+            self.matched.clear();
             self.selected = 0;
             return;
         }
-        let mut scored: Vec<(i32, usize)> = self
-            .items
-            .iter()
-            .enumerate()
-            .filter(|(_, item)| **item != Item::Gap)
-            .filter_map(|(i, item)| Some((fuzzy_score(&self.query, item.label())?, i)))
+        // A letter added at the end can only narrow what matched, so only that is looked at
+        // again: in a tree of half a million files, each key stays quick.
+        let narrowing = !self.matched.is_empty() && self.query.starts_with(&self.matched);
+        let candidates: Vec<usize> = if narrowing {
+            std::mem::take(&mut self.matches)
+        } else {
+            (0..self.items.len()).collect()
+        };
+        let mut scored: Vec<(i32, usize)> = candidates
+            .into_iter()
+            .filter(|&i| self.items[i] != Item::Gap)
+            .filter_map(|i| Some((fuzzy_score(&self.query, self.items[i].label())?, i)))
             .collect();
         scored.sort_by_key(|(score, i)| (-score, *i));
-        self.matches = scored.into_iter().map(|(_, i)| i).collect();
+        (self.scores, self.matches) = scored.into_iter().unzip();
+        self.matched = self.query.clone();
         self.selected = 0;
     }
 
@@ -309,24 +368,34 @@ impl Palette {
         // Clear of the icon. The hint waits a little past the caret, so they don't touch.
         let x = area.x as f32 + TEXT_INSET + 2.3;
         let cell = area.x + 4;
-        if self.query.is_empty() {
-            grid.label_at(
-                x + HINT_GAP,
-                cell,
-                area.y,
-                self.hint,
-                dim,
-                area.right(),
-                100,
-            );
-        } else {
-            grid.label_at(x, cell, area.y, &self.query, base, area.right(), 100);
-        }
         let font = Font {
             size: INTERFACE_SIZE_PERCENT,
             ..Font::default()
         };
         let caret = x - 0.1 + measure.width(&self.query, font);
+        // The status keeps clear of what's typed, and gives way to it when both don't fit:
+        // the query is what the person is working on.
+        let status_right = area.right().saturating_sub(2);
+        let status = self.status.as_deref().map(|text| {
+            let width = measure.width(
+                text,
+                Font {
+                    size: 85,
+                    ..Font::default()
+                },
+            );
+            (text, status_right as f32 - width)
+        });
+        let status = status.filter(|(_, left)| caret + STATUS_GAP <= *left);
+        let end = status.map_or(area.right(), |(_, left)| (left - STATUS_GAP / 2.0) as u16);
+        if self.query.is_empty() {
+            grid.label_at(x + HINT_GAP, cell, area.y, self.hint, dim, end, 100);
+        } else {
+            grid.label_at(x, cell, area.y, &self.query, base, end, 100);
+        }
+        if let Some((text, _)) = status {
+            grid.label_right(status_right, area.y, text, dim, 85);
+        }
         grid.set_caret(caret, area.y, 0.56);
         let line_y = area.y as f32 + HEADER_LINE;
         let edge = Bounds::cells(area.x as f32, line_y, area.w as f32, 0.0);
@@ -453,6 +522,34 @@ pub fn popup(grid: &mut Grid, area: Rect, theme: &Theme) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The status at the field's right end gives way to a long query instead of covering it.
+    #[test]
+    fn a_long_query_keeps_clear_of_the_status() {
+        let field = |query: &str| {
+            let mut palette = Palette::new(Vec::new());
+            palette.query = query.to_string();
+            palette.status = Some("8,310 files…".to_string());
+            let mut grid = Grid::new(100, 20, Style::default());
+            palette.draw(
+                &mut grid,
+                None,
+                &cellix_render::CellMeasure,
+                &Theme::default(),
+            );
+            grid.row_text(Palette::area(grid.area()).y)
+        };
+        let short = field("needle");
+        assert!(
+            short.contains("needle") && short.contains("8,310 files…"),
+            "{short}"
+        );
+        // Fits the field, but reaches where the status sits.
+        let long = "src/a/long/path/that/someone/pasted/in/it/needle.rs";
+        let row = field(long);
+        assert!(row.contains(long), "the query stays whole: {row}");
+        assert!(!row.contains("files…"), "and the status gives way: {row}");
+    }
 
     #[test]
     fn subsequence_required() {

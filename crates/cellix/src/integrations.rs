@@ -16,6 +16,9 @@ const PLUGIN_DIRS: &str = "CLAUDE_CODE_PLUGIN_DIRS";
 const LIST: &str = if cfg!(windows) { ";" } else { ":" };
 /// Connects to a running Cellix on its own, which `--ide` does for one session.
 const AUTO_CONNECT: &str = "CLAUDE_CODE_AUTO_CONNECT_IDE";
+/// Where Cellix is, for the plugin to start it by when Claude Code's PATH doesn't have it, as
+/// when Claude Code is started from an IDE, a service or by its full path.
+const CELLIX_BIN: &str = "CELLIX_BIN";
 /// Ghostty keeps Cmd+A (select the terminal's text) and Cmd+D (split) for itself, so an editor
 /// inside never sees Select All or Select Next Match.
 const GHOSTTY_FREE: [&str; 2] = ["keybind = super+d=unbind", "keybind = super+a=unbind"];
@@ -98,7 +101,28 @@ pub fn install_claude(var: impl Fn(&str) -> Option<String>) -> io::Result<()> {
     }
     env.insert(PLUGIN_DIRS.to_string(), json!(listed.join(LIST)));
     env.insert(AUTO_CONNECT.to_string(), json!("1"));
+    if let Some(bin) = cellix_bin(&var) {
+        env.insert(CELLIX_BIN.to_string(), json!(bin.display().to_string()));
+    }
     write_settings(&file, &settings)
+}
+
+/// This Cellix, by the path the PATH finds it at when that's the same file, since that path
+/// stays put when Homebrew moves the real one on an upgrade.
+fn cellix_bin(var: &impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
+    let running = std::env::current_exe().ok()?;
+    let same = |path: &Path| fs::canonicalize(path).ok() == fs::canonicalize(&running).ok();
+    let name = if cfg!(windows) {
+        "cellix.exe"
+    } else {
+        "cellix"
+    };
+    let path = var("PATH").unwrap_or_default();
+    let found = std::env::split_paths(&path)
+        .filter(|d| !d.as_os_str().is_empty())
+        .map(|d| d.join(name))
+        .find(|candidate| candidate.is_file());
+    Some(found.filter(|f| same(f)).unwrap_or(running))
 }
 
 /// Takes back exactly what `install_claude` added, and leaves the plugin's files.
@@ -118,6 +142,7 @@ pub fn remove_claude(var: impl Fn(&str) -> Option<String>) -> io::Result<()> {
         env.insert(PLUGIN_DIRS.to_string(), json!(left.join(LIST)));
     }
     env.remove(AUTO_CONNECT);
+    env.remove(CELLIX_BIN);
     if env.is_empty() {
         settings.remove("env");
     }
@@ -341,6 +366,11 @@ mod tests {
         assert_eq!(after["model"], "opus");
         assert_eq!(after["env"]["FOO"], "1");
         assert_eq!(after["env"][AUTO_CONNECT], "1");
+        let bin = after["env"][CELLIX_BIN].as_str().unwrap();
+        assert!(
+            Path::new(bin).is_file(),
+            "where the plugin finds Cellix off the PATH: {bin}"
+        );
         let dirs = after["env"][PLUGIN_DIRS].as_str().unwrap();
         assert!(dirs.starts_with(&format!("/other{LIST}")), "{dirs}");
         let plugin = crate::plugin::folder(&var).unwrap();

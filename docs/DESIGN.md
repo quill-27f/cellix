@@ -350,17 +350,24 @@ against Claude Code 2.1.309:
 Plans answer on `PermissionRequest`, not `PreToolUse`: a real run showed `PreToolUse` leaves
 Claude Code's own dialog up, and the answer must carry `updatedInput` to count.
 
-The plugin ships inside the binary and is written out when an agent starts.
+The plugin ships inside the binary and is written out when an agent starts. An upgrade
+replaces the binary but not the files it wrote, so each Claude Code session's start hook
+rewrites any file of the installed plugin that differs from the binary's, and Claude Code
+picks the new mod up. The mod also tells `cellix pane` the protocol it speaks
+(`CELLIX_MOD`); a pane that gets another refuses with a message the old mod shows, rather
+than sending lines it would ignore.
 
 ### Inside Claude Code
 
 `cellix pane` runs the whole app with no terminal, started by the mod for the session's
 life. It writes each changed frame to a private file and prints one line, and the mod
-swaps the pane's image to it. Over SSH the terminal can't read that file, and a picture of
-the pane sent each time it changed blinked and held up clicks, since a pointer move changes
-what's hovered. So over SSH (or with `CELLIX_TIER=cells`) the pane is the cell tier, sent as
-`cells` lines that the mod draws as a `Raster`: Claude Code writes only the changed cells to
-the terminal. Input comes back through a surface module layered over the picture. It is
+swaps the pane's image to it. Claude Code shows a picture from a file only in kitty and
+Ghostty on the same machine: through tmux or Zellij it shows nothing, and over SSH the
+terminal can't read the file, while a picture sent by value each time the pane changed
+blinked and held up clicks, since a pointer move changes what's hovered. So everywhere but
+kitty or Ghostty, directly, the pane is the cell tier, sent as `cells` lines that the mod
+draws as a `Raster`: Claude Code writes only the changed cells to the terminal.
+`CELLIX_TIER=cells` or `pixels` overrides the choice. Input comes back through a surface module layered over the picture. It is
 gathered per tick and sent as one batch per `cellix pane-send` over the workspace socket,
 whatever piled up while the last send ran going in the next. Cellix keeps only the last of a
 run of moves and takes everything waiting before it draws again. An idle pane sends nothing.
@@ -381,7 +388,9 @@ the file.
   the editor: docked panes stop at 45% width and there is no terminal element. Installing
   it sets `CLAUDE_CODE_PLUGIN_DIRS` and `CLAUDE_CODE_AUTO_CONNECT_IDE` in the `env` block of
   the user's settings, because a mod loads through that variable or `--plugin-dir`. This
-  only happens when the user asks.
+  only happens when the user asks. It also sets `CELLIX_BIN`, where Cellix is, since Claude
+  Code started from an IDE, a service or by its full path may have a PATH without it; the
+  mod and hooks try `cellix` first and that second. A pane that can't be started says why.
 - Codex: a plugin in a local marketplace, installed with Codex's own commands. It runs
   hooks for status, turns, comments and test runs, once the user trusts them with `/hooks`.
   A plan is no tool call there, so its Stop hook holds a `<proposed_plan>` block. Sending it

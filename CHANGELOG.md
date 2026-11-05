@@ -5,6 +5,12 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 ## [Unreleased]
 
 ### Fixed
+- In a big folder, Quick Open and the "Open a File" button held everything until the whole tree had been walked. Quick Open now opens at once and fills in as files are found, saying how many so far; typing stays quick over hundreds of thousands of files, and closing it stops the walk.
+- In a repository with many untracked files, Cellix waited for `git status` before drawing anything, so the pane inside Claude Code sat on "Starting Cellix…". Git is now asked in the background.
+- After an upgrade, the Claude Code plugin written by the older Cellix stayed in place, and over SSH it waited on "Starting Cellix…" for lines it couldn't read. Each session's start now brings the plugin up to date, and a pane started by an older plugin says to restart Claude Code.
+- When Claude Code's PATH didn't include `cellix`, as when it's started from an IDE, a service or by its full path, the pane waited on "Starting Cellix…" for good and the hooks did nothing. Setup now records where Cellix is (`CELLIX_BIN`) for the plugin to use, and a pane that can't start says why.
+- Inside Claude Code in tmux, Zellij, iTerm2 or any terminal without Kitty pictures, the pane was blank. It's now drawn as text cells there, and as a picture only in kitty and Ghostty.
+- In a container or sandbox where Claude Code is process 1, the pane quit as soon as it started.
 - Ctrl+W and a middle click close the Settings tab, as they do any other. Ctrl+W used to close the file hidden behind Settings instead, and a middle click did nothing.
 
 ## [0.4.1] - 2026-11-05

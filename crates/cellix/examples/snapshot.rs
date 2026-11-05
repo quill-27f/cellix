@@ -86,6 +86,13 @@ fn main() {
         Some("review") => app.run(Command::OpenDiff),
         Some("welcome") => {}
         Some("palette") => app.run(Command::CommandPalette),
+        // Quick Open a moment after it opens, while a big tree is still being walked.
+        Some("quick-open") => {
+            app.finding_wait = std::time::Duration::ZERO;
+            app.run(Command::QuickOpen);
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            app.poll();
+        }
         Some("plan") => {
             let path = root.join("plan.md");
             let (reply, _decision) = std::sync::mpsc::channel();

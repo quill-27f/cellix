@@ -3533,5 +3533,54 @@
     "title": "Ctrl+W and a middle click close the Settings tab, and leave the file behind it open",
     "test": "the_settings_tab_closes_like_any_other",
     "passes": true
+  },
+  {
+    "id": "quick-open-streams",
+    "milestone": 10,
+    "title": "Quick Open opens at once in a big tree and fills in from a walk on another thread, which closing it stops",
+    "test": "quick_open_opens_at_once_and_fills_in_from_a_big_tree",
+    "passes": true
+  },
+  {
+    "id": "git-status-off-main-thread",
+    "milestone": 10,
+    "title": "git status is asked off the main thread, so a repository with many untracked files no longer holds the first frame",
+    "test": "git_status_is_asked_off_the_main_thread",
+    "passes": true
+  },
+  {
+    "id": "pane-tier-by-terminal",
+    "milestone": 10,
+    "title": "The pane is a picture only in kitty or Ghostty directly, and cells in tmux, Zellij, over SSH and elsewhere",
+    "test": "the_pane_is_a_picture_only_where_claude_code_can_show_one",
+    "passes": true
+  },
+  {
+    "id": "plugin-refresh",
+    "milestone": 10,
+    "title": "Each Claude Code session's start brings an installed plugin up to this Cellix, rewriting only what changed",
+    "test": "an_older_plugin_is_brought_up_to_date_and_a_current_one_left_alone",
+    "passes": true
+  },
+  {
+    "id": "pane-old-mod",
+    "milestone": 10,
+    "title": "A mod older than the pane gets the new plugin written and a message to restart, never lines it can't read",
+    "test": "a_mod_left_by_an_upgrade_is_replaced_and_told_to_restart",
+    "passes": true
+  },
+  {
+    "id": "pane-start-off-path",
+    "milestone": 10,
+    "title": "The mod starts Cellix from CELLIX_BIN when Claude Code's PATH lacks it, and says why when it can't start it at all",
+    "test": "the_mod_passes_its_own_tests_in_claude_code",
+    "passes": true
+  },
+  {
+    "id": "quick-open-status-clear",
+    "milestone": 10,
+    "title": "Quick Open's count at the field's right end gives way to a long query instead of covering it",
+    "test": "a_long_query_keeps_clear_of_the_status",
+    "passes": true
   }
 ]

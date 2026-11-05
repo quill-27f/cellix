@@ -3,6 +3,8 @@ use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 
 use cellix_core::{Buffer, Selection, Workspace};
@@ -502,10 +504,42 @@ fn export_names(path: &Path) -> (PathBuf, PathBuf) {
 }
 
 /// What the periodic look at the disk found.
+/// A count as people read it: 12,345.
+fn thousands(count: usize) -> String {
+    let digits = count.to_string();
+    let mut out = String::new();
+    for (i, digit) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
+}
+
+/// Each changed file by git's letter, and each folder holding one with a dot.
+fn status_of(root: &Path, changes: &[cellix_review::Change]) -> HashMap<PathBuf, char> {
+    let mut status = HashMap::new();
+    for change in changes {
+        let path = root.join(&change.path);
+        for parent in path
+            .ancestors()
+            .skip(1)
+            .take_while(|p| p.starts_with(root) && *p != root)
+        {
+            status.entry(parent.to_path_buf()).or_insert('•');
+        }
+        status.insert(path, change.status);
+    }
+    status
+}
+
 struct DiskLook {
     entries: Vec<cellix_core::Entry>,
     branch: Option<String>,
-    changes: Vec<cellix_review::Change>,
+    /// Each changed file and folder, by git's letter: worked out here, since a repository
+    /// can hold hundreds of thousands of untracked files.
+    status: HashMap<PathBuf, char>,
     /// Each open file as it was last committed.
     committed: Vec<(PathBuf, String)>,
 }
@@ -739,6 +773,21 @@ struct Build {
 }
 
 /// All application state. It has no terminal: tests send events and read the grid.
+/// A walk of the folder for Quick Open, running on its own thread.
+struct Finding {
+    found: std::sync::mpsc::Receiver<Vec<Item>>,
+    stop: Arc<AtomicBool>,
+    /// How many it found so far.
+    count: usize,
+}
+
+/// How often a walk hands over what it found, so the palette fills in while you look.
+const FINDING_BATCH: std::time::Duration = std::time::Duration::from_millis(50);
+/// How long Quick Open waits for its walk before it opens with what it has.
+const FINDING_WAIT: std::time::Duration = std::time::Duration::from_millis(100);
+/// Past this many files a walk stops: a home folder can hold millions.
+const MAX_FILES: usize = 500_000;
+
 pub struct App {
     pub workspace: Workspace,
     explorer: Explorer,
@@ -874,6 +923,11 @@ pub struct App {
     outgoing_prompt: Option<String>,
     /// Words for the mod to put in Claude Code's prompt box, unsent, once.
     outgoing_fill: Option<String>,
+    /// The walk under way while Quick Open is open.
+    finding: Option<Finding>,
+    /// How long Quick Open waits for the walk before it shows what it has, so a small folder
+    /// opens whole.
+    pub finding_wait: std::time::Duration,
     /// The changed line a menu was opened on in Review, for its Comment choice: its file,
     /// number, text, and whether it was taken out.
     review_line: Option<(String, usize, String, bool)>,
@@ -956,6 +1010,12 @@ impl App {
             neovim_z: false,
             outgoing_prompt: None,
             outgoing_fill: None,
+            finding: None,
+            finding_wait: if cfg!(test) {
+                std::time::Duration::from_secs(10)
+            } else {
+                FINDING_WAIT
+            },
             export_to: None,
             comment_quote: None,
             back: Vec::new(),
@@ -1986,7 +2046,8 @@ impl App {
             | self.poll_source()
             | self.poll_disk()
             | self.poll_pending_ask()
-            | self.poll_pan_hint();
+            | self.poll_pan_hint()
+            | self.poll_finding();
         let mut events = Vec::new();
         for client in self.servers.values() {
             events.extend(client.events.try_iter());
@@ -3329,7 +3390,7 @@ impl App {
             let _ = done.send(DiskLook {
                 entries: workspace.entries(),
                 branch: current_branch(root),
-                changes: changed_files(root),
+                status: status_of(root, &changed_files(root)),
                 committed: opened
                     .iter()
                     .map(|path| (path.clone(), head_text(root, &inside(path))))
@@ -3350,7 +3411,7 @@ impl App {
             return false;
         };
         self.disk_look = None;
-        let status = self.status_of(&look.changes);
+        let status = look.status;
         let tree = self.explorer.entries != look.entries;
         let marks = self.explorer.status != status;
         let branch = self.branch != look.branch;
@@ -3375,30 +3436,15 @@ impl App {
     }
 
     /// The marks for the explorer: each changed file's letter, and a dot on its folders.
-    fn status_of(&self, changes: &[cellix_review::Change]) -> HashMap<PathBuf, char> {
-        let root = self.workspace.root();
-        let mut status = HashMap::new();
-        for change in changes {
-            let path = root.join(&change.path);
-            for parent in path
-                .ancestors()
-                .skip(1)
-                .take_while(|p| p.starts_with(root) && *p != root)
-            {
-                status.entry(parent.to_path_buf()).or_insert('•');
-            }
-            status.insert(path, change.status);
-        }
-        status
-    }
-
+    /// Shows the tree as it is now, and asks git about it off the main thread: in a big
+    /// repository `git status` takes seconds, and the pane used to wait for it to start.
     fn refresh_tree(&mut self) {
         // A look already on its way saw the tree before whatever brought this on.
         self.disk_look = None;
         self.explorer.refresh(&self.workspace);
-        let root = self.workspace.root().to_path_buf();
-        self.branch = current_branch(&root);
-        self.explorer.status = self.status_of(&changed_files(&root));
+        // The branch is one quick question, and switching expects to see it at once.
+        self.branch = current_branch(self.workspace.root());
+        self.look_at_disk();
     }
 
     fn reveal(&mut self) {
@@ -5149,23 +5195,7 @@ impl App {
                 self.focus = self.panes.len() - 1;
             }
             Command::FocusNextPane => self.focus = (self.focus + 1) % self.panes.len(),
-            Command::QuickOpen => {
-                let root = self.workspace.root().to_path_buf();
-                let mut files: Vec<PathBuf> = self.workspace.files();
-                files.sort();
-                let items = files
-                    .into_iter()
-                    .map(|path| {
-                        let label = path
-                            .strip_prefix(&root)
-                            .unwrap_or(&path)
-                            .to_string_lossy()
-                            .into_owned();
-                        Item::File(path, label)
-                    })
-                    .collect();
-                self.overlay = Overlay::Palette(Palette::new(items));
-            }
+            Command::QuickOpen => self.quick_open(),
             Command::CommandPalette => {
                 let items = COMMANDS
                     .iter()
@@ -10127,6 +10157,97 @@ impl App {
         editor.map(Editor::dialect).unwrap_or_default()
     }
 
+    /// Opens Quick Open at once and fills it from a walk of the folder on another thread: a
+    /// big tree takes seconds, and everything used to wait for the whole walk.
+    fn quick_open(&mut self) {
+        let mut palette = Palette::new(Vec::new());
+        palette.status = Some("0 files…".to_string());
+        self.overlay = Overlay::Palette(palette);
+        if let Some(old) = self.finding.take() {
+            old.stop.store(true, Ordering::Relaxed);
+        }
+        let (send, found) = std::sync::mpsc::channel();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopping = stop.clone();
+        let root = self.workspace.root().to_path_buf();
+        std::thread::spawn(move || {
+            // Labels are made here, so the main thread only adds them to the list.
+            let item = |path: PathBuf| {
+                let label = path.strip_prefix(&root).unwrap_or(&path);
+                let label = label.to_string_lossy().into_owned();
+                Item::File(path, label)
+            };
+            let mut batch = Vec::new();
+            let mut sent = std::time::Instant::now();
+            let mut count = 0;
+            cellix_core::walk_files(&root, |path| {
+                batch.push(item(path));
+                count += 1;
+                if sent.elapsed() >= FINDING_BATCH {
+                    sent = std::time::Instant::now();
+                    if send.send(std::mem::take(&mut batch)).is_err() {
+                        return false;
+                    }
+                }
+                count < MAX_FILES && !stopping.load(Ordering::Relaxed)
+            });
+            let _ = send.send(batch);
+        });
+        self.finding = Some(Finding {
+            found,
+            stop,
+            count: 0,
+        });
+        let until = std::time::Instant::now() + self.finding_wait;
+        while self.finding.is_some() && std::time::Instant::now() < until {
+            self.poll_finding();
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+
+    /// Takes what the walk found since last time into Quick Open.
+    fn poll_finding(&mut self) -> bool {
+        let Some(finding) = &mut self.finding else {
+            return false;
+        };
+        // Closed: nobody is waiting on the rest.
+        let Overlay::Palette(palette) = &mut self.overlay else {
+            finding.stop.store(true, Ordering::Relaxed);
+            self.finding = None;
+            return false;
+        };
+        let mut items = Vec::new();
+        let mut ended = false;
+        loop {
+            match finding.found.try_recv() {
+                Ok(batch) => items.extend(batch),
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    ended = true;
+                    break;
+                }
+            }
+        }
+        if items.is_empty() && !ended {
+            return false;
+        }
+        finding.count += items.len();
+        let count = finding.count;
+        palette.extend(items);
+        // The count leads, so the words stay put as it climbs.
+        palette.status = if !ended {
+            Some(format!("{} files…", thousands(count)))
+        } else if count >= MAX_FILES {
+            Some(format!("Stopped at {} files", thousands(MAX_FILES)))
+        } else {
+            None
+        };
+        if ended {
+            self.finding = None;
+        }
+        true
+    }
+
     /// Lists the pictures in this project, to pick one.
     fn choose_image(&mut self, replacing: bool) {
         let items: Vec<Item> = self
@@ -11673,6 +11794,50 @@ mod tests {
         assert!(screen(&app).text().contains("pub fn x()"));
     }
 
+    /// A big tree used to hold Quick Open, and everything else, until the whole walk ended.
+    #[test]
+    fn quick_open_opens_at_once_and_fills_in_from_a_big_tree() {
+        let (dir, mut app) = project();
+        for folder in 0..40 {
+            let folder = dir.path().join(format!("deep/f{folder:02}"));
+            fs::create_dir_all(&folder).unwrap();
+            for file in 0..250 {
+                fs::write(folder.join(format!("n{file:03}.txt")), "").unwrap();
+            }
+        }
+        fs::write(dir.path().join("deep/f39/needle.rs"), "fn needle() {}\n").unwrap();
+        app.finding_wait = std::time::Duration::ZERO;
+        let started = std::time::Instant::now();
+        app.run(Command::QuickOpen);
+        assert!(started.elapsed() < std::time::Duration::from_millis(500));
+        assert!(
+            screen(&app).text().contains("0 files…"),
+            "it opens before the walk ends"
+        );
+        assert_eq!(thousands(500_000), "500,000");
+        assert_eq!(thousands(999), "999");
+        typed(&mut app, "needle");
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while app.finding.is_some() && std::time::Instant::now() < until {
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let text = screen(&app).text();
+        assert!(text.contains("needle.rs"), "found while typing");
+        assert!(!text.contains("files…"), "and it says when it's done");
+        let Overlay::Palette(palette) = &app.overlay else {
+            panic!("Quick Open closed");
+        };
+        assert_eq!(palette.len(), 10_004, "every file once");
+        enter(&mut app);
+        assert!(screen(&app).text().contains("fn needle()"));
+
+        app.run(Command::QuickOpen);
+        key(&mut app, Key::Esc);
+        app.poll();
+        assert!(app.finding.is_none(), "closing it stops the walk");
+    }
+
     #[test]
     fn command_palette_runs_commands_by_mouse() {
         let (_dir, mut app) = project();
@@ -11779,10 +11944,35 @@ mod tests {
 
     #[test]
     fn a_stale_look_cant_undo_what_just_happened() {
-        let (_dir, mut app) = project();
+        let (dir, mut app) = project();
         app.look_at_disk();
+        fs::write(dir.path().join("gamma.txt"), "new\n").unwrap();
         app.refresh_tree();
-        assert!(app.disk_look.is_none());
+        settle_disk(&mut app);
+        assert!(screen(&app).text().contains("gamma.txt"));
+    }
+
+    /// `git status` in a repository with a great many untracked files takes seconds, and
+    /// Cellix used to wait for it before its first frame: the pane said "Starting Cellix…".
+    #[test]
+    fn git_status_is_asked_off_the_main_thread() {
+        let (dir, _) = project();
+        git(dir.path(), &["init", "-q"]);
+        let app = App::new(dir.path().to_path_buf(), (120, 30));
+        assert!(
+            app.explorer.status.is_empty(),
+            "the first frame doesn't wait for git"
+        );
+        assert!(app.disk_look.is_some(), "git is being asked");
+        let mut app = app;
+        settle_disk(&mut app);
+        assert_eq!(
+            app.explorer
+                .status
+                .get(&app.workspace.root().join("alpha.txt")),
+            Some(&'?'),
+            "and its answer arrives"
+        );
     }
 
     fn git(dir: &Path, args: &[&str]) {
@@ -11805,8 +11995,19 @@ mod tests {
         git(dir.path(), &["add", "."]);
         git(dir.path(), &["commit", "-q", "-m", "base"]);
         fs::write(dir.path().join("alpha.txt"), "first line\nCHANGED\n").unwrap();
-        let app = App::new(dir.path().to_path_buf(), (120, 30));
+        let mut app = App::new(dir.path().to_path_buf(), (120, 30));
+        settle_disk(&mut app);
         (dir, app)
+    }
+
+    /// Waits for what git says about the tree, as a person does for a moment.
+    fn settle_disk(app: &mut App) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while app.disk_look.is_some() {
+            app.poll_disk();
+            assert!(std::time::Instant::now() < deadline, "git never answered");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
     }
 
     #[test]

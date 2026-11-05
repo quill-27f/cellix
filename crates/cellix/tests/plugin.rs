@@ -31,6 +31,8 @@ fn plugin_hooks_are_wired_and_never_fail_the_agent() {
                 let command = hook["command"].as_str().unwrap();
                 assert!(command.starts_with("cellix hook "), "{command}");
                 assert!(command.ends_with("|| true"), "{command}");
+                // Claude Code's PATH may lack Cellix; setup says where it is.
+                assert!(command.contains(" || \"$CELLIX_BIN\" hook "), "{command}");
             }
         }
     }

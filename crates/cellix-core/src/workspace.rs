@@ -109,15 +109,12 @@ impl Workspace {
 
     /// All files under the root, for quick open and project search.
     pub fn files(&self) -> Vec<PathBuf> {
-        WalkBuilder::new(&self.root)
-            .hidden(false)
-            .require_git(false)
-            .filter_entry(|e| e.file_name() != ".git")
-            .build()
-            .flatten()
-            .filter(|e| e.file_type().is_some_and(|t| t.is_file()))
-            .map(ignore::DirEntry::into_path)
-            .collect()
+        let mut files = Vec::new();
+        walk_files(&self.root, |path| {
+            files.push(path);
+            true
+        });
+        files
     }
 
     /// Every place `query` matches, in path order, one for each match on a line. Binary files
@@ -246,6 +243,24 @@ fn is_build_leftover(path: &Path) -> bool {
         name.strip_suffix(ending)
             .is_some_and(|stem| path.with_file_name(format!("{stem}.tex")).exists())
     })
+}
+
+/// Hands each file under `root` to `each` as the walk finds it, until `each` says stop. Hidden
+/// files count and what `.gitignore` names doesn't, as in VS Code's Quick Open. A big tree can
+/// take a long time, so whoever shows the files can start before the walk ends.
+pub fn walk_files(root: &Path, mut each: impl FnMut(PathBuf) -> bool) {
+    // Each folder in name order, so the list reads the same every time.
+    let walk = WalkBuilder::new(root)
+        .hidden(false)
+        .require_git(false)
+        .filter_entry(|e| e.file_name() != ".git")
+        .sort_by_file_name(|a, b| a.cmp(b))
+        .build();
+    for entry in walk.flatten() {
+        if entry.file_type().is_some_and(|t| t.is_file()) && !each(entry.into_path()) {
+            return;
+        }
+    }
 }
 
 #[cfg(test)]

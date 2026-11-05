@@ -26,6 +26,10 @@ const PANE_COMPACT_WIDTH: u16 = 110;
 const DEFAULT_SIZE: (u16, u16) = (100, 40);
 /// A cell on a Retina display, when the terminal won't say.
 const DEFAULT_CELL: (usize, usize) = (16, 36);
+/// What the mod and the pane say to each other. The mod sets `CELLIX_MOD` to the one it
+/// speaks, and this goes up when the lines change, so an old mod left behind by an upgrade
+/// says so instead of waiting for lines it can't read.
+pub const PROTOCOL: &str = "2";
 
 /// One thing the mod passes on.
 #[derive(Debug, Deserialize)]
@@ -313,28 +317,66 @@ fn window_cell() -> Option<(usize, usize)> {
     None
 }
 
+/// The process that started this one. When it goes, the pane passes to another, so a
+/// different answer means Claude Code is gone. It can't be compared with 1: in a container
+/// or a sandbox Claude Code may itself be process 1.
 #[cfg(unix)]
-fn parent_gone() -> bool {
+fn parent() -> u32 {
     // SAFETY: getppid has no preconditions and cannot fail.
-    unsafe { libc::getppid() == 1 }
+    unsafe { libc::getppid() as u32 }
 }
 
 /// Windows doesn't hand an orphan to another parent, so there's nothing to see here: the pane
 /// ends when its output can't be written, or Claude Code ends it.
 #[cfg(not(unix))]
-fn parent_gone() -> bool {
-    false
+fn parent() -> u32 {
+    0
+}
+
+/// Whether Claude Code can show the pane as a picture here. It shows a picture read from a
+/// file only in kitty and Ghostty on this machine, never through tmux or Zellij, and over SSH
+/// the file isn't where the terminal is. Everywhere else the pane goes as cells.
+pub fn pictures_show(var: impl Fn(&str) -> Option<String>) -> bool {
+    let set = |name: &str| var(name).is_some_and(|v| !v.is_empty());
+    match var("CELLIX_TIER").as_deref() {
+        Some("cells") => return false,
+        Some("pixels") => return true,
+        _ => {}
+    }
+    if set("SSH_CONNECTION") || set("SSH_TTY") || set("TMUX") || var("ZELLIJ").is_some() {
+        return false;
+    }
+    let program = var("TERM_PROGRAM").unwrap_or_default().to_lowercase();
+    let term = var("TERM").unwrap_or_default();
+    program == "ghostty"
+        || term == "xterm-ghostty"
+        || term == "xterm-kitty"
+        || set("KITTY_WINDOW_ID")
+}
+
+/// Why an old mod can't run this pane, once the new one is written where Claude Code loads it.
+fn mod_too_old() -> io::Error {
+    let written = crate::plugin::install().is_some();
+    let version = env!("CARGO_PKG_VERSION");
+    io::Error::other(if written {
+        format!("Cellix {version} updated its Claude Code plugin. Restart Claude Code to load it")
+    } else {
+        format!(
+            "Cellix {version} needs a newer Claude Code plugin: run `cellix setup claude`, then restart Claude Code"
+        )
+    })
 }
 
 /// Runs until Claude Code goes away.
 pub fn run(root: &Path) -> io::Result<()> {
+    if std::env::var("CELLIX_MOD").as_deref() != Ok(PROTOCOL) {
+        return Err(mod_too_old());
+    }
+    let started_by = parent();
     let mut app = App::new(root.to_path_buf(), DEFAULT_SIZE);
     app.compact_width = PANE_COMPACT_WIDTH;
     app.in_pane = true;
-    // Over SSH a picture of the pane would cross the connection every time it changed, so
-    // the pane is drawn as cells there, as it is in a terminal without pictures.
-    let cells = std::env::var_os("SSH_CONNECTION").is_some()
-        || std::env::var("CELLIX_TIER").is_ok_and(|tier| tier == "cells");
+    let cells = !pictures_show(|name| std::env::var(name).ok());
     let mut frames = None;
     if !cells {
         let cell = window_cell().unwrap_or(DEFAULT_CELL);
@@ -362,7 +404,7 @@ pub fn run(root: &Path) -> io::Result<()> {
     }
     let mut redraw = true;
     let mut waits = 0;
-    while !app.quit && !parent_gone() {
+    while !app.quit && parent() == started_by {
         if redraw {
             let (columns, rows) = app.size();
             let mut grid = Grid::new(columns, rows, app.background());
@@ -520,6 +562,46 @@ mod tests {
 
     /// Over SSH a frame is the cell grid, as Claude Code's Raster reads it: a character, then
     /// the foreground and background, each a little-endian u32.
+    /// Claude Code shows a picture from a file only in kitty and Ghostty on the same machine.
+    /// Elsewhere it showed nothing, as in tmux, so the pane goes as cells there.
+    #[test]
+    fn the_pane_is_a_picture_only_where_claude_code_can_show_one() {
+        let shows = |pairs: &[(&str, &str)]| {
+            let pairs: Vec<(String, String)> = pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect();
+            pictures_show(move |name| {
+                pairs
+                    .iter()
+                    .find(|(k, _)| k == name)
+                    .map(|(_, v)| v.clone())
+            })
+        };
+        assert!(shows(&[("TERM_PROGRAM", "ghostty")]));
+        assert!(shows(&[("TERM", "xterm-kitty")]));
+        assert!(!shows(&[
+            ("TERM_PROGRAM", "ghostty"),
+            ("TMUX", "/tmp/tmux-1/default,1,0")
+        ]));
+        assert!(!shows(&[
+            ("TERM_PROGRAM", "ghostty"),
+            ("SSH_CONNECTION", "1 2 3 4")
+        ]));
+        assert!(!shows(&[("TERM", "xterm-kitty"), ("ZELLIJ", "0")]));
+        assert!(!shows(&[("TERM_PROGRAM", "iTerm.app")]));
+        assert!(
+            !shows(&[("TERM", "xterm-256color")]),
+            "a plain Linux terminal, or SSM"
+        );
+        assert!(!shows(&[]));
+        assert!(!shows(&[
+            ("TERM_PROGRAM", "ghostty"),
+            ("CELLIX_TIER", "cells")
+        ]));
+        assert!(shows(&[("TERM", "screen"), ("CELLIX_TIER", "pixels")]));
+    }
+
     #[test]
     fn a_remote_frame_travels_as_cells() {
         let mut grid = Grid::new(3, 1, cellix_render::Style::default());

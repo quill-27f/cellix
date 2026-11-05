@@ -142,3 +142,51 @@ test('input that comes in while a send runs goes in the next send, all together'
   expect(sent.length).toBe(2)
   expect(JSON.parse(sent[1]).length).toBe(2)
 })
+
+test("when cellix can't be started, the pane says why instead of waiting", async ($, on) => {
+  on('ui.open', async () => ({ value: { isPlaced: true as const } }))
+  on('process.run', async () => ({ value: { exitCode: 1, stdout: '', stderr: '' } }))
+  on('env.get', async () => ({ value: undefined }))
+  // eslint-disable-next-line require-yield
+  on('process.spawn', async function* () {
+    return { deny: 'spawn cellix ENOENT' }
+  })
+  await $.command.run({ command: 'cellix', args: '' })
+  const pane = await $.ui.mount({
+    plugin: 'cellix',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'cellix',
+    props: { bodyColumns: 80, scroll: { bodyRows: 20 } } as never,
+  })
+  expect(await pane.find({ type: 'Text', text: /can't find cellix on the PATH.*cellix setup claude/ })).toBeDefined()
+  expect(await pane.find({ type: 'Text', text: /Starting Cellix/ })).toBeUndefined()
+})
+
+test('off Claude Code PATH, Cellix starts from where setup found it, and says which protocol it speaks', async ($, on) => {
+  const started: { argv: readonly string[]; env?: Record<string, string> }[] = []
+  const ran: string[] = []
+  const clock = mock.clock(on)
+  on('ui.open', async () => ({ value: { isPlaced: true as const } }))
+  on('session.cwd', async () => ({ value: '/work' }))
+  on('process.run', async (_, e) => {
+    if (e.argv[0] === 'cellix') return { deny: 'spawn cellix ENOENT' }
+    ran.push(e.argv.join(' '))
+    return { value: { exitCode: 0, stdout: '[]', stderr: '' } }
+  })
+  on('env.get', async (_, e) => ({ value: e.name === 'CELLIX_BIN' ? '/opt/cellix/bin/cellix' : undefined }))
+  on('process.spawn', async function* (_, e) {
+    started.push({ argv: e.argv, env: e.env })
+    if (e.argv[0] === 'cellix') return { deny: 'spawn cellix ENOENT' }
+    yield { stream: 'stdout' as const, text: cellsLine('x') }
+    return { value: { code: 0, signal: null } }
+  })
+  await $.command.run({ command: 'cellix', args: 'plan.md' })
+  await clock.settle()
+  // The open went before Cellix was found, so it tries again once it is.
+  await clock.advance(100)
+  await clock.settle()
+  expect(started.map(s => s.argv[0])).toEqual(['cellix', '/opt/cellix/bin/cellix'])
+  expect(started.every(s => s.env?.CELLIX_MOD === '2')).toBe(true)
+  expect(ran).toContain('/opt/cellix/bin/cellix pane-send [{"type":"open","path":"/work/plan.md"}]')
+})

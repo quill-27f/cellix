@@ -8,7 +8,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cellix hook session-start 2>/dev/null || true"
+            "command": "cellix hook session-start 2>/dev/null || \"$CELLIX_BIN\" hook session-start 2>/dev/null || true"
           }
         ]
       }
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cellix hook prompt 2>/dev/null || true"
+            "command": "cellix hook prompt 2>/dev/null || \"$CELLIX_BIN\" hook prompt 2>/dev/null || true"
           }
         ]
       }
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cellix hook plan 2>/dev/null || true",
+            "command": "cellix hook plan 2>/dev/null || \"$CELLIX_BIN\" hook plan 2>/dev/null || true",
             "timeout": 86400
           }
         ]
@@ -41,7 +41,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cellix hook tool-done 2>/dev/null || true"
+            "command": "cellix hook tool-done 2>/dev/null || \"$CELLIX_BIN\" hook tool-done 2>/dev/null || true"
           }
         ]
       }
@@ -52,7 +52,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cellix hook tool-failed 2>/dev/null || true"
+            "command": "cellix hook tool-failed 2>/dev/null || \"$CELLIX_BIN\" hook tool-failed 2>/dev/null || true"
           }
         ]
       }
@@ -62,7 +62,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cellix hook notify 2>/dev/null || true"
+            "command": "cellix hook notify 2>/dev/null || \"$CELLIX_BIN\" hook notify 2>/dev/null || true"
           }
         ]
       }
@@ -72,7 +72,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cellix hook stop 2>/dev/null || true"
+            "command": "cellix hook stop 2>/dev/null || \"$CELLIX_BIN\" hook stop 2>/dev/null || true"
           }
         ]
       }
@@ -82,7 +82,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cellix hook session-end 2>/dev/null || true"
+            "command": "cellix hook session-end 2>/dev/null || \"$CELLIX_BIN\" hook session-end 2>/dev/null || true"
           }
         ]
       }

@@ -1254,3 +1254,18 @@ CI failed 0.4.1 on Linux in `an_installer_that_asks_on_the_terminal_still_finish
 ## The Settings tab closes like any other (2026-11-05)
 
 From the user: Ctrl+W and a middle click closed every tab but Settings. Settings is a page drawn over the editors with a tab of its own, not a tab in the list, so Ctrl+W fell through to the file hidden behind it and closed that, and the page ignored every button but the left. Ctrl+W now closes Settings while it shows, and a middle click on its tab closes it. Test `the_settings_tab_closes_like_any_other`. Unverified in a real terminal. Not released; it goes out with the next version.
+
+## Quick Open in big trees, and the pane that stayed on "Starting Cellix…" (2026-11-05)
+
+From the user: Quick Open from the "Open a File" button took a long time in a big tree on a Mac, and on Amazon Linux `/cellix` stayed on "Starting Cellix…".
+
+Quick Open walked the whole folder on the main thread before it showed anything. It now opens at once and a walk on another thread hands it files every 50 ms, labelled there so the main thread only appends; a small folder still opens whole within 100 ms. Typing rescored every file with a lowercased copy of each name; scoring no longer allocates, and a query that only grew rescans just what matched. In a 300,000-file folder on this Mac the palette shows in 0.1 s and each key takes about 10 ms. The walk stops at 500,000 files and says so.
+
+Reproduced on Amazon Linux 2023 in Docker with Claude Code 2.1.318 and tmux, there were four ways to "Starting Cellix…" or a blank pane:
+- An upgrade left the plugin the old Cellix wrote. With a 0.4.0 plugin and the 0.4.1 binary over SSH, the mod ignored the new `cells` lines for good. This is likely what the user saw after upgrading. The session-start hook now rewrites changed plugin files, which Claude Code picked up in the same session, and the mod sends `CELLIX_MOD` so a pane can tell an older mod to restart Claude Code.
+- Claude Code started without `cellix` on its PATH: the spawn rejected, the rejection skipped the code that says why, and Claude Code still said "Cellix is open". Setup now writes `CELLIX_BIN`, the mod and hooks fall back to it, and a spawn that fails says how to fix it.
+- `git status --untracked-files=all` ran on the main thread before the first frame: 1.1 s for 300,000 untracked files, longer in bigger repositories. It now runs with the rest of the disk look in the background; the branch stays synchronous.
+- Outside Ghostty and kitty, as in tmux, the pane sent pictures Claude Code can't show and stayed blank. It now picks cells from the environment it inherits.
+Also, the pane took a parent of process 1 to mean Claude Code was gone, which is wrong in a container where Claude Code is process 1.
+
+Checked in the container with the new build: the upgrade case draws in the first session; off the PATH it starts from `CELLIX_BIN`; with neither it explains; tmux without SSH draws as cells. Unverified: the user's own Mac tree and Amazon Linux machine, and whether Claude Code reloads a rewritten mod everywhere as it did here. Next: release 0.4.2 with these and the Settings tab fix.

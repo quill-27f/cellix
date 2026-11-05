@@ -8,6 +8,8 @@ const INLINE_ROWS = 28
 const DOCK_COLUMNS = 400
 const START_TRIES = 40
 const START_WAIT_MS = 100
+/** What this mod and `cellix pane` say to each other; Cellix's `pane::PROTOCOL`. */
+const PROTOCOL = '2'
 
 type Comment = { file: string; line: number; text: string }
 /** A frame as cells, which Cellix sends over SSH: drawn as text, so only what changed crosses. */
@@ -23,6 +25,8 @@ let sent = { columns: 0, rows: 0 }
  * queues behind a send for each move before it. */
 let waiting: unknown[] = []
 let sending = false
+/** How Cellix is started: by name, or where setup found it, when Claude Code's PATH lacks it. */
+let program = 'cellix'
 
 function send($: Engine, inputs: unknown[]) {
   waiting.push(...inputs)
@@ -33,10 +37,11 @@ function send($: Engine, inputs: unknown[]) {
       while (waiting.length > 0) {
         const batch = waiting
         waiting = []
-        // Cellix may still be starting, as when the session opens with a command.
+        // Cellix may still be starting, as when the session opens with a command, and may
+        // yet be found somewhere other than the PATH.
         for (let tries = 0; tries < START_TRIES; tries++) {
-          const { exitCode } = await $.process.run(['cellix', 'pane-send', JSON.stringify(batch)])
-          if (exitCode === 0) break
+          const done = await $.process.run([program, 'pane-send', JSON.stringify(batch)]).catch(() => undefined)
+          if (done?.exitCode === 0) break
           await $.clock.sleep(START_WAIT_MS)
         }
       }
@@ -60,8 +65,8 @@ async function openPane($: Engine) {
 
 /** The review comments waiting in Cellix, or nothing if no Cellix serves this folder. */
 async function pending($: Engine): Promise<Comment[] | undefined> {
-  const { exitCode, stdout } = await $.process.run(['cellix', 'comments'])
-  return exitCode === 0 ? (JSON.parse(stdout) as Comment[]) : undefined
+  const done = await $.process.run([program, 'comments']).catch(() => undefined)
+  return done?.exitCode === 0 ? (JSON.parse(done.stdout) as Comment[]) : undefined
 }
 
 async function showCount($: Engine) {
@@ -143,6 +148,12 @@ async function resolve($: Engine, typed: string): Promise<string> {
   return typed.startsWith('/') ? typed : `${await $.session.cwd()}/${typed}`
 }
 
+/** The ways to start Cellix, in order: by name, then where setup found it. */
+async function programs($: Engine): Promise<string[]> {
+  const found = await $.env.get('CELLIX_BIN').catch(() => undefined)
+  return found && found !== 'cellix' ? ['cellix', found] : ['cellix']
+}
+
 /** Runs Cellix for the life of the session. Without it, Claude Code just carries on. */
 async function bridge($: Engine) {
   if (running) return
@@ -150,16 +161,35 @@ async function bridge($: Engine) {
   stopped = undefined
   let buffer = ''
   let errors = ''
+  /** Why Cellix couldn't be started at all, as when it isn't on Claude Code's PATH. */
+  let unstarted: string | undefined
   try {
-    for await (const piece of $.process.spawn({ argv: ['cellix', 'pane'] })) {
-      if (!('stream' in piece)) continue
-      if (piece.stream === 'stderr') errors += piece.text
-      if (piece.stream !== 'stdout') continue
-      buffer += piece.text
-      const lines = buffer.split('\n')
-      buffer = lines.pop() ?? ''
-      for (const text of lines) await line($, text)
+    for (const argv0 of await programs($)) {
+      let started = false
+      try {
+        const env = { CELLIX_MOD: PROTOCOL }
+        for await (const piece of $.process.spawn({ argv: [argv0, 'pane'], env })) {
+          if (!started) {
+            started = true
+            program = argv0
+            unstarted = undefined
+          }
+          if (!('stream' in piece)) continue
+          if (piece.stream === 'stderr') errors += piece.text
+          if (piece.stream !== 'stdout') continue
+          buffer += piece.text
+          const lines = buffer.split('\n')
+          buffer = lines.pop() ?? ''
+          for (const text of lines) await line($, text)
+        }
+        break
+      } catch (error) {
+        if (started) throw error
+        unstarted = error instanceof Error ? error.message : String(error)
+      }
     }
+  } catch (error) {
+    errors ||= error instanceof Error ? error.message : String(error)
   } finally {
     running = false
   }
@@ -167,7 +197,9 @@ async function bridge($: Engine) {
   if (!shown()) {
     stopped = errors.includes('already running')
       ? 'Cellix is already open for this folder in another session. Close it there, then run /cellix again.'
-      : `Cellix stopped: ${errors.trim() || 'it exited before it started'}. Run /cellix to try again.`
+      : unstarted !== undefined
+        ? `${/ENOENT|not found/i.test(unstarted) ? "Claude Code can't find cellix on the PATH it was started with" : `Claude Code couldn't start cellix: ${unstarted}`}. Run \`cellix setup claude\` in a shell where \`cellix\` works, then restart Claude Code.`
+        : `Cellix stopped: ${errors.trim() || 'it exited before it started'}. Run /cellix to try again.`
     $.ui.invalidate('ui.render')
   }
 }
