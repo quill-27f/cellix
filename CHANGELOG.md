@@ -4,6 +4,15 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-05
+
+### Changed
+- Inside Claude Code, Ask Agent puts the file, line and selected words into Claude Code's own prompt, not Cellix's comment bar, since the agent is already there. Press Esc to go back to the prompt and finish the question.
+
+### Fixed
+- Install buttons in Settings no longer hang when an installer asks a question on the terminal. terminal-browser's installer asked whether to add its agent skill and waited forever, so Settings said an install was still running after it had finished. Installs now run with no terminal and take the installer's default answer.
+- Over SSH, the pane inside Claude Code no longer blinks on every mouse move, and clicks land at once. It is now sent as text cells, so only what changed crosses the connection; input goes in batches, a run of mouse moves keeps only the last, and Cellix draws once per burst of input. Pictures and PDFs show in their text form over SSH.
+
 ## [0.4.0] - 2026-11-04
 
 ### Added
@@ -138,6 +147,7 @@ The first public release. Cellix is a terminal editor that lives inside your AI 
 - CSV and TSV as editable tables with Excel's keys, and Jupyter notebooks run on a real kernel.
 - Real pixels in terminals with Kitty graphics, such as Ghostty, Kitty and WezTerm, with fonts built in, and text cells anywhere else. It runs under tmux, Zellij and over SSH, with light and dark themes that can follow the terminal.
 
+[0.4.1]: https://github.com/quill-27f/cellix/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/quill-27f/cellix/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/quill-27f/cellix/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/quill-27f/cellix/compare/v0.2.2...v0.3.0
