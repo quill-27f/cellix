@@ -31,14 +31,18 @@ jobs:
     # Build PDF and Export to PDF where TeX Live is the only TeX: latexmk, then plain pdflatex
     # with BibTeX and Biber passes. Tectonic isn't installed here, and the tests hide it besides.
     runs-on: ubuntu-latest
+    # The job takes about three minutes. A package mirror that stalls once held a release for
+    # twenty, with GitHub's default of six hours still to go.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install TeX Live, without tectonic
+        timeout-minutes: 10
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends texlive-latex-recommended texlive-bibtex-extra biber latexmk
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends texlive-latex-recommended texlive-bibtex-extra biber latexmk
       - run: cargo test -p cellix --test tex -- --ignored --test-threads=1
 
   macos:
