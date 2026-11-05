@@ -4,6 +4,8 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-11-05
+
 ### Changed
 - Inside Claude Code over SSH and in tmux, the pane is drawn as on your own machine, in pictures, instead of text. It goes a row at a time, and only rows the terminal hasn't shown cross: a click or a letter costs a few kilobytes, a scroll the lines that came into view. `cellix setup claude` adds `allow-passthrough` and `focus-events` to your tmux config, which Claude Code needs to show pictures inside tmux; in a tmux already running without them, Cellix turns them on and asks you to restart Claude Code once. Where pictures can't show, the pane is text, and says why.
 
@@ -161,6 +163,7 @@ The first public release. Cellix is a terminal editor that lives inside your AI 
 - CSV and TSV as editable tables with Excel's keys, and Jupyter notebooks run on a real kernel.
 - Real pixels in terminals with Kitty graphics, such as Ghostty, Kitty and WezTerm, with fonts built in, and text cells anywhere else. It runs under tmux, Zellij and over SSH, with light and dark themes that can follow the terminal.
 
+[0.4.3]: https://github.com/quill-27f/cellix/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/quill-27f/cellix/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/quill-27f/cellix/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/quill-27f/cellix/compare/v0.3.1...v0.4.0

@@ -26,15 +26,15 @@ pkg-fmt = "zip"
 
 [dependencies]
 png = "0.18.1"
-cellix-agent = { path = "../cellix-agent", version = "0.4.2" }
-cellix-core = { path = "../cellix-core", version = "0.4.2" }
-cellix-doc = { path = "../cellix-doc", version = "0.4.2" }
+cellix-agent = { path = "../cellix-agent", version = "0.4.3" }
+cellix-core = { path = "../cellix-core", version = "0.4.3" }
+cellix-doc = { path = "../cellix-doc", version = "0.4.3" }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
-cellix-input = { path = "../cellix-input", version = "0.4.2" }
-cellix-lang = { path = "../cellix-lang", version = "0.4.2" }
-cellix-render = { path = "../cellix-render", version = "0.4.2" }
-cellix-review = { path = "../cellix-review", version = "0.4.2" }
-cellix-term = { path = "../cellix-term", version = "0.4.2" }
+cellix-input = { path = "../cellix-input", version = "0.4.3" }
+cellix-lang = { path = "../cellix-lang", version = "0.4.3" }
+cellix-render = { path = "../cellix-render", version = "0.4.3" }
+cellix-review = { path = "../cellix-review", version = "0.4.3" }
+cellix-term = { path = "../cellix-term", version = "0.4.3" }
 base64 = "0.22"
 dunce = "1"
 flate2 = "1"
