@@ -11390,9 +11390,10 @@ mod tests {
     }
 
     /// An installer that asks on the terminal, as terminal-browser's does: with a terminal it
-    /// waits for an answer that never comes, without one it goes on.
-    const ASKS_ON_THE_TERMINAL: &str =
-        "if exec 3<>/dev/tty; then printf 'Install it? [Y/n] ' >&3; read answer <&3; fi; true";
+    /// waits for an answer that never comes, without one it goes on. The terminal is tried on
+    /// `true`, not `exec`: dash, Linux's `sh`, ends the script when `exec` can't open it.
+    const ASKS_ON_THE_TERMINAL: &str = "if true 2>/dev/null <>/dev/tty; then \
+         printf 'Install it? [Y/n] ' >/dev/tty; read answer </dev/tty; fi; true";
 
     /// Run inside a terminal by the test below; skipped on its own.
     #[test]

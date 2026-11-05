@@ -1246,3 +1246,7 @@ the prompt, so Esc, which already returns it, is the step named. Outside Claude 
 is unchanged.
 
 Unverified: in a real Claude Code session, that the fill lands while the pane holds the keys.
+
+## The install test on Linux (2026-11-05)
+
+CI failed 0.4.1 on Linux in `an_installer_that_asks_on_the_terminal_still_finishes`. The test's fake installer opened the terminal with `exec 3<>/dev/tty`, and dash, Linux's `sh`, ends the whole script when `exec` can't open a file, so the install failed instead of going on. macOS's `sh` is bash, which carries on, so it passed here. The fix to installs was right; the test was wrong. It now tries the terminal on `true`, whose failed redirection is only false in both shells. Checked by hand under bash and dash: with a terminal it asks and waits, without one it finishes. Next: CI on Linux, then the 0.4.1 release.
