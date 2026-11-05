@@ -267,23 +267,13 @@ opens the full Review, which reads what changed hunk by hunk.
 
 ## Over SSH
 
-Everything runs on the server, and your local terminal only draws the result. On the server, tmux
-is recommended, so a dropped connection doesn't close Cellix itself, plus Claude Code if you want the
-agent features. Take the static binary from the
+Everything runs on the server, and your local terminal only draws the result. You don't need tmux:
+what runs in Cellix's side pane, agents and shells alike, keeps running when the connection drops,
+and Cellix keeps your open tabs and unsaved edits. Take the static binary from the
 [releases page](https://github.com/quill-27f/cellix/releases), or use `cargo install`:
 
 ```sh
-cargo install --locked --git https://github.com/quill-27f/cellix cellix
-
-# Pixels through tmux, no focus warning from Claude Code, click to switch panes
-cat >> ~/.tmux.conf <<'CONF'
-set -g allow-passthrough on
-set -g focus-events on
-set -g mouse on
-set -g extended-keys on   # so Ctrl+Shift+P, Ctrl+Shift+F and the like reach Cellix
-set -s extended-keys-format csi-u   # the form Cellix reads them in (tmux 3.5 and later)
-CONF
-tmux source-file ~/.tmux.conf 2>/dev/null   # only needed if tmux is already running
+cargo install --locked cellix
 
 # Language server for Rust projects, optional
 rustup component add rust-analyzer
@@ -293,9 +283,35 @@ Then, from your own machine:
 
 ```sh
 ssh you@your-server
-tmux new -A -s work   # starts the session, or rejoins it after a dropped connection
 cd your-project
 cellix
+```
+
+Close the laptop or lose the connection, and the next `cellix` in that folder has everything as you
+left it. Each folder you work in is a workspace, and with more than one there's a bar along the
+bottom: a tile for each, saying whether its agent is working, needs you, or is done, a click to
+switch to it, and + to open another folder beside it (Ctrl+Alt+PageUp and PageDown move between
+them). A new `cellix` anywhere picks up every workspace left running on the machine, and `cellix`
+in your home folder lists them to choose from. `cellix ls` prints the same list. Two computers can
+show the same workspace at once; whichever typed into an agent last sets its size.
+
+If the server restarts, what was running has stopped. Its tab comes back with what it last showed,
+and Resume picks up the agent's own conversation (Claude Code and Codex), or Start Again opens a
+new terminal in the same folder. Resume in the bar does it for every workspace at once. Some Linux
+servers end your programs when you log out; Cellix says so the first time something runs there and
+offers to turn on lingering (`loginctl enable-linger`), which keeps them.
+
+tmux still works, if you prefer it. These lines give Cellix pixels and every key inside it:
+
+```sh
+cat >> ~/.tmux.conf <<'CONF'
+set -g allow-passthrough on
+set -g focus-events on
+set -g mouse on
+set -g extended-keys on   # so Ctrl+Shift+P, Ctrl+Shift+F and the like reach Cellix
+set -s extended-keys-format csi-u   # the form Cellix reads them in (tmux 3.5 and later)
+CONF
+tmux source-file ~/.tmux.conf 2>/dev/null   # only needed if tmux is already running
 ```
 
 Click the Agents icon at the top right, or press Ctrl+Shift+P and choose `Open Claude Code`. The real program

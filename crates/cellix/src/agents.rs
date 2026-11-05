@@ -55,6 +55,24 @@ pub fn display_name(program: &str) -> &'static str {
     named.map_or(SHELL.0, |(name, _)| name)
 }
 
+/// The program of an agent the panel calls `name`.
+pub fn program_of(name: &str) -> Option<&'static str> {
+    AGENTS.iter().find(|(n, _)| *n == name).map(|(_, p)| *p)
+}
+
+/// What resumes an agent's own session, put after its program: the agents that can be told
+/// which session to pick up.
+pub fn resume_args(name: &str, session: &str) -> Option<Vec<String>> {
+    let words: &[&str] = match name {
+        "Claude Code" => &["--resume"],
+        "Codex" => &["resume"],
+        _ => return None,
+    };
+    let mut args: Vec<String> = words.iter().map(|w| w.to_string()).collect();
+    args.push(session.to_string());
+    Some(args)
+}
+
 /// What a click in the panel lands on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Hit {
@@ -88,6 +106,8 @@ pub struct Agents {
     seen: Arc<Mutex<Vec<String>>>,
     /// The agents installed here.
     installed: Vec<(&'static str, &'static str)>,
+    /// When an agent here last finished its turn, until one starts working again.
+    pub finished: Option<std::time::Instant>,
 }
 
 /// Names of the agents whose working folder is `root`, from `lsof -Fcn` output.
@@ -113,6 +133,13 @@ fn agents_in(output: &str, root: &Path) -> Vec<String> {
 
 impl Agents {
     pub fn update(&mut self, event: AgentEvent) {
+        match event.state {
+            AgentState::Working | AgentState::NeedsYou => self.finished = None,
+            AgentState::Idle if event.detail == "Finished" => {
+                self.finished = Some(std::time::Instant::now());
+            }
+            _ => {}
+        }
         self.running.retain(|a| a.session != event.session);
         if event.state != AgentState::Ended {
             self.running.push(event);

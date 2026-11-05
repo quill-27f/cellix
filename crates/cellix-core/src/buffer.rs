@@ -156,6 +156,29 @@ impl Buffer {
         Ok(())
     }
 
+    /// Puts back edits that weren't saved, as one change that can be undone, so the buffer
+    /// holds them and is unsaved again.
+    pub fn restore_unsaved(&mut self, selections: &mut Selections, text: &str) {
+        if self.rope == text {
+            return;
+        }
+        let before = selections.clone();
+        self.push_edits(
+            vec![Edit {
+                at: 0,
+                removed: self.rope.to_string(),
+                inserted: text.to_string(),
+            }],
+            before,
+        );
+        self.rope = Rope::from_str(text);
+        self.revision += 1;
+        selections.clamp(self.rope.len_chars());
+        if let Some(txn) = self.undo.last_mut() {
+            txn.after = selections.clone();
+        }
+    }
+
     fn push_edits(&mut self, edits: Vec<Edit>, before: Selections) {
         self.redo.clear();
         if self.saved_at.is_some_and(|at| at > self.undo.len()) {

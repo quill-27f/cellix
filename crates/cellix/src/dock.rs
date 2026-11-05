@@ -140,6 +140,9 @@ enum Link {
     },
     /// A host of its own owns the PTY, so the program can outlive Cellix.
     Held(Held),
+    /// Its host died without finishing, as when the machine restarted: only what it last
+    /// showed is left.
+    Gone,
 }
 
 /// A place in the visible text, as (column, row).
@@ -192,6 +195,8 @@ pub struct Session {
     scanner: Scanner,
     protocol: Protocol,
     pictures: Vec<Picture>,
+    /// What it was, when it stopped without finishing, so it can be resumed.
+    pub stopped: Option<crate::hold::Stopped>,
 }
 
 fn pty_size((columns, rows): (u16, u16), (width, height): CellPixels) -> PtySize {
@@ -309,7 +314,23 @@ impl Session {
             scanner: Scanner::default(),
             protocol: Protocol::default(),
             pictures: Vec::new(),
+            stopped: None,
         }
+    }
+
+    /// A program that stopped without finishing, showing what it last showed.
+    pub fn stopped(stopped: crate::hold::Stopped, size: (u16, u16), cell: CellPixels) -> Self {
+        // Nothing can arrive: both senders are gone.
+        let (_, output) = mpsc::channel();
+        let (_, finished) = mpsc::channel();
+        let name = stopped.job.name.clone();
+        let channels = (output, finished);
+        let writer = Box::new(io::sink());
+        let mut session = Self::around(&name, Link::Gone, writer, channels, (size, cell));
+        session.take_in(&stopped.output);
+        session.exited = true;
+        session.stopped = Some(stopped);
+        session
     }
 
     /// Whether it has started and gone quiet, so it's ready for what's typed at it.
@@ -462,6 +483,7 @@ impl Session {
             #[cfg(not(unix))]
             Link::Own { .. } => true,
             Link::Held(held) => held.at_prompt(),
+            Link::Gone => true,
         };
         !self.shell || !at_prompt
     }
@@ -526,6 +548,7 @@ impl Session {
                 let pixels = pty_size(size, cell);
                 held.resize(size, (pixels.pixel_width, pixels.pixel_height));
             }
+            Link::Gone => {}
         }
         self.term.resize(Size {
             columns: size.0 as usize,
@@ -784,6 +807,7 @@ impl Session {
                 let _ = killer.kill();
             }
             Link::Held(held) => held.kill(),
+            Link::Gone => {}
         }
     }
 }
@@ -1047,8 +1071,9 @@ impl Dock {
         for session in &mut self.sessions {
             changed |= session.poll(theme);
         }
-        // A shell that's finished has nothing left to show. An agent may have said why.
-        let done = |s: &Session| s.exited && (s.shell || s.browser);
+        // A shell that's finished has nothing left to show. An agent may have said why, and
+        // one that stopped with the machine waits to be resumed.
+        let done = |s: &Session| s.exited && s.stopped.is_none() && (s.shell || s.browser);
         while let Some(index) = self.sessions.iter().position(done) {
             self.close(index);
             changed = true;

@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 
-use super::Job;
+use super::{Job, Stopped};
 
 /// How much output is kept for the next Cellix to show.
 const KEPT: usize = 4 * 1024 * 1024;
@@ -73,7 +73,12 @@ pub fn start(program: &Path, folder: &Path, job: &Job) -> io::Result<Held> {
         .map_or(0, |d| d.subsec_nanos());
     let socket = folder.join(format!("{id}-{stamp}.sock"));
     let notes = socket.with_extension("json");
-    std::fs::write(&notes, serde_json::to_vec(job)?)?;
+    // The program learns where it's held, so an agent's hooks can leave word of how to
+    // resume it beside its socket.
+    let mut job = job.clone();
+    job.env
+        .push(format!("{}={}", super::HELD_VAR, socket.display()));
+    std::fs::write(&notes, serde_json::to_vec(&job)?)?;
     let mut command = Command::new(program);
     command
         .arg("session-host")
@@ -110,9 +115,10 @@ pub fn left_running(folder: &Path) -> Vec<(String, PathBuf)> {
             continue;
         }
         if UnixStream::connect(&path).is_err() {
-            // Its host is gone, and so is what it held.
+            // Its host is gone without finishing, as when the machine restarted, so what it
+            // held is put aside to be offered again. A job that can't be read is forgotten.
             let _ = std::fs::remove_file(&path);
-            let _ = std::fs::remove_file(path.with_extension("json"));
+            put_aside(&path);
             continue;
         }
         let notes = std::fs::read(path.with_extension("json"));
@@ -123,6 +129,74 @@ pub fn left_running(folder: &Path) -> Vec<(String, PathBuf)> {
     }
     found.sort();
     found
+}
+
+/// The files a host keeps beside its socket, by extension.
+const BESIDE: [&str; 3] = ["json", "log", "agent"];
+
+/// Moves what a host that died left behind into the stopped folder, if its job can be read.
+fn put_aside(socket: &Path) {
+    let notes = std::fs::read(socket.with_extension("json"));
+    let readable = notes.is_ok_and(|n| serde_json::from_slice::<Job>(&n).is_ok());
+    let Some(folder) = socket.parent() else {
+        return;
+    };
+    let aside = folder.join(super::STOPPED);
+    if readable && ensure_private(&aside).is_ok() {
+        for extension in BESIDE {
+            let from = socket.with_extension(extension);
+            if let Some(name) = from.file_name() {
+                let _ = std::fs::rename(&from, aside.join(name));
+            }
+        }
+    }
+    for extension in BESIDE {
+        let _ = std::fs::remove_file(socket.with_extension(extension));
+    }
+}
+
+/// What stopped without finishing, as when the machine restarted, oldest first. Each has the
+/// job it ran, what it last showed, and how to resume it if an agent left word.
+pub fn stopped(folder: &Path) -> Vec<Stopped> {
+    let aside = folder.join(super::STOPPED);
+    // Anything still in the folder whose host is gone is put aside first.
+    left_running(folder);
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(&aside).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|e| e != "json") {
+            continue;
+        }
+        let Some(job) = std::fs::read(&path)
+            .ok()
+            .and_then(|n| serde_json::from_slice::<Job>(&n).ok())
+        else {
+            let _ = std::fs::remove_file(&path);
+            continue;
+        };
+        let when = entry.metadata().and_then(|m| m.modified()).ok();
+        let log = path.with_extension("log");
+        let ended = std::fs::metadata(&log)
+            .and_then(|m| m.modified())
+            .ok()
+            .or(when);
+        let output = std::fs::read(&log).unwrap_or_default();
+        let agent = std::fs::read(path.with_extension("agent"))
+            .ok()
+            .and_then(|a| serde_json::from_slice(&a).ok());
+        found.push((
+            when,
+            Stopped {
+                job,
+                output,
+                agent,
+                ended,
+                notes: path,
+            },
+        ));
+    }
+    found.sort_by_key(|(when, _)| *when);
+    found.into_iter().map(|(_, stopped)| stopped).collect()
 }
 
 /// A connection to a host, from Cellix's side.
@@ -210,32 +284,126 @@ impl Held {
 #[derive(Default)]
 struct Shared {
     kept: VecDeque<u8>,
-    client: Option<UnixStream>,
-    /// Counts clients, so one leaving can't take the place of the next.
+    /// Every Cellix showing it, as on two machines at once, by the number of its visit.
+    clients: Vec<Client>,
+    /// Counts clients, so each can be told from the next.
     visit: u64,
     exited: bool,
     at_prompt: bool,
+    /// What it printed, on disk too, so it can be shown again after the machine restarts.
+    log: Option<Log>,
+    /// The size the program has, as `RESIZE` sends it.
+    size: Vec<u8>,
+}
+
+struct Client {
+    visit: u64,
+    stream: UnixStream,
+    /// The size this client wants, which it gets once it types.
+    size: Option<Vec<u8>>,
 }
 
 impl Shared {
+    /// Tells every client, forgetting any that have gone.
     fn tell(&mut self, kind: u8, payload: &[u8]) {
-        if let Some(client) = &mut self.client
-            && send_frame(client, kind, payload).is_err()
-        {
-            self.client = None;
-        }
+        self.clients
+            .retain_mut(|client| send_frame(&mut client.stream, kind, payload).is_ok());
     }
 
     fn output(&mut self, bytes: &[u8]) {
         self.kept.extend(bytes);
         let extra = self.kept.len().saturating_sub(KEPT);
         self.kept.drain(..extra);
+        if let Some(log) = &mut self.log {
+            log.add(bytes, &self.kept);
+        }
         self.tell(OUTPUT, bytes);
+    }
+
+    /// The size a client asks for. The first, or one that is typing, gets it at once; with
+    /// several watching, whoever types last decides, as in tmux.
+    fn wants_size(&mut self, visit: u64, size: Vec<u8>) -> Option<Vec<u8>> {
+        let alone = self.clients.len() <= 1;
+        if let Some(client) = self.clients.iter_mut().find(|c| c.visit == visit) {
+            client.size = Some(size.clone());
+        }
+        (alone || self.size.is_empty()).then(|| self.take_size(size))
+    }
+
+    /// Whether a client's own size should be taken because it's typing.
+    fn typing(&mut self, visit: u64) -> Option<Vec<u8>> {
+        let size = self
+            .clients
+            .iter()
+            .find(|c| c.visit == visit)
+            .and_then(|c| c.size.clone())?;
+        (size != self.size).then(|| self.take_size(size))
+    }
+
+    fn take_size(&mut self, size: Vec<u8>) -> Vec<u8> {
+        self.size = size.clone();
+        size
+    }
+}
+
+/// The output on disk, kept to about `KEPT` by starting again from what's in memory when it
+/// grows to twice that.
+struct Log {
+    file: std::fs::File,
+    path: PathBuf,
+    written: usize,
+}
+
+impl Log {
+    fn open(path: &Path) -> Option<Self> {
+        use std::os::unix::fs::OpenOptionsExt;
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+            .ok()?;
+        Some(Self {
+            file,
+            path: path.to_path_buf(),
+            written: 0,
+        })
+    }
+
+    fn add(&mut self, bytes: &[u8], kept: &VecDeque<u8>) {
+        if self.written + bytes.len() > 2 * KEPT {
+            if let Some(fresh) = Self::open(&self.path) {
+                *self = fresh;
+            }
+            let (front, back) = kept.as_slices();
+            let _ = self
+                .file
+                .write_all(front)
+                .and_then(|()| self.file.write_all(back));
+            self.written = kept.len();
+            return;
+        }
+        if self.file.write_all(bytes).is_ok() {
+            self.written += bytes.len();
+        }
+    }
+}
+
+fn resize(master: &Arc<Mutex<Box<dyn MasterPty + Send>>>, payload: &[u8]) {
+    if payload.len() != 8 {
+        return;
+    }
+    let number = |at: usize| u16::from_be_bytes([payload[at], payload[at + 1]]);
+    if let Ok(master) = master.lock() {
+        let size = pty_size((number(0), number(2)), (number(4), number(6)));
+        let _ = master.resize(size);
     }
 }
 
 fn serve_client(
     mut stream: UnixStream,
+    (shared, visit): (&Arc<Mutex<Shared>>, u64),
     writer: &Arc<Mutex<Box<dyn Write + Send>>>,
     master: &Arc<Mutex<Box<dyn MasterPty + Send>>>,
     pid: Option<u32>,
@@ -243,16 +411,22 @@ fn serve_client(
     while let Ok((kind, payload)) = read_frame(&mut stream) {
         match kind {
             INPUT => {
+                let size = shared.lock().ok().and_then(|mut s| s.typing(visit));
+                if let Some(size) = size {
+                    resize(master, &size);
+                }
                 if let Ok(mut writer) = writer.lock() {
                     let _ = writer.write_all(&payload);
                     let _ = writer.flush();
                 }
             }
             RESIZE if payload.len() == 8 => {
-                let number = |at: usize| u16::from_be_bytes([payload[at], payload[at + 1]]);
-                if let Ok(master) = master.lock() {
-                    let size = pty_size((number(0), number(2)), (number(4), number(6)));
-                    let _ = master.resize(size);
+                let size = shared
+                    .lock()
+                    .ok()
+                    .and_then(|mut s| s.wants_size(visit, payload));
+                if let Some(size) = size {
+                    resize(master, &size);
                 }
             }
             KILL => {
@@ -304,7 +478,10 @@ pub fn serve(socket: &Path) -> io::Result<()> {
     };
     std::fs::write(&notes, serde_json::to_vec(&quiet)?)?;
     let listener = UnixListener::bind(socket)?;
-    let shared = Arc::new(Mutex::new(Shared::default()));
+    let shared = Arc::new(Mutex::new(Shared {
+        log: Log::open(&socket.with_extension("log")),
+        ..Shared::default()
+    }));
 
     let from_program = shared.clone();
     std::thread::spawn(move || {
@@ -345,7 +522,7 @@ pub fn serve(socket: &Path) -> io::Result<()> {
             shared.exited = true;
             // Only someone who really heard it lets the host go. Otherwise it waits to say so.
             shared.tell(EXITED, &[]);
-            if shared.client.is_some() {
+            if !shared.clients.is_empty() {
                 finish(&place);
             }
         }
@@ -355,6 +532,7 @@ pub fn serve(socket: &Path) -> io::Result<()> {
         let Ok(mut outgoing) = stream.try_clone() else {
             continue;
         };
+        let mut visit = 0;
         if let Ok(mut shared) = shared.lock() {
             let (front, back) = shared.kept.as_slices();
             let sent = send_frame(&mut outgoing, OUTPUT, front)
@@ -363,21 +541,23 @@ pub fn serve(socket: &Path) -> io::Result<()> {
             if sent.is_err() {
                 continue;
             }
-            shared.client = Some(outgoing);
             shared.visit += 1;
+            visit = shared.visit;
+            shared.clients.push(Client {
+                visit,
+                stream: outgoing,
+                size: None,
+            });
             if shared.exited {
                 shared.tell(EXITED, &[]);
                 finish(socket);
             }
         }
-        let visit = shared.lock().map_or(0, |shared| shared.visit);
         let (writer, master, leaving) = (writer.clone(), master.clone(), shared.clone());
         std::thread::spawn(move || {
-            serve_client(stream, &writer, &master, pid);
-            if let Ok(mut shared) = leaving.lock()
-                && shared.visit == visit
-            {
-                shared.client = None;
+            serve_client(stream, (&leaving, visit), &writer, &master, pid);
+            if let Ok(mut shared) = leaving.lock() {
+                shared.clients.retain(|c| c.visit != visit);
             }
         });
     }
@@ -387,6 +567,8 @@ pub fn serve(socket: &Path) -> io::Result<()> {
 /// The program is over and someone knows: nothing is left to hold.
 fn finish(socket: &Path) -> ! {
     let _ = std::fs::remove_file(socket);
-    let _ = std::fs::remove_file(socket.with_extension("json"));
+    for extension in BESIDE {
+        let _ = std::fs::remove_file(socket.with_extension(extension));
+    }
     std::process::exit(0);
 }

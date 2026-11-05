@@ -245,6 +245,11 @@ pub enum Command {
     Commit,
     OpenClaude,
     OpenCodex,
+    /// Moves to the next workspace in the bar along the bottom.
+    NextWorkspace,
+    PreviousWorkspace,
+    /// Opens another folder beside this one, as a workspace of its own.
+    OpenWorkspace,
     OpenGemini,
     OpenSettings,
     SwitchBranch,

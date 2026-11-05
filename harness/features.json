@@ -3645,5 +3645,166 @@
     "title": "Rows are drawn at the terminal's cell size, read again when the pane resizes, and named with it",
     "test": "rows_at_another_cell_size_are_new_pictures",
     "passes": true
+  },
+  {
+    "id": "hold-log-and-stopped",
+    "milestone": 11,
+    "title": "A host that dies with the machine leaves its job, output and the agent's session id, put aside to be resumed",
+    "test": "a_host_that_dies_with_the_machine_leaves_what_resumes_it",
+    "passes": true
+  },
+  {
+    "id": "hold-agent-word",
+    "milestone": 11,
+    "title": "An agent's hooks leave its own session id beside the host that holds it",
+    "test": "a_held_agent_leaves_word_of_how_to_resume_it",
+    "passes": true
+  },
+  {
+    "id": "hold-finish-clean",
+    "milestone": 11,
+    "title": "A program that finishes leaves nothing to resume",
+    "test": "a_program_that_finishes_leaves_nothing_to_resume",
+    "passes": true
+  },
+  {
+    "id": "hold-shared",
+    "milestone": 11,
+    "title": "Two Cellix windows share a held program; whoever types last sets its size",
+    "test": "two_cellix_windows_share_a_program_and_whoever_types_sets_its_size",
+    "passes": true
+  },
+  {
+    "id": "resume-card",
+    "milestone": 11,
+    "title": "A stopped agent's tab comes back with what it showed and Resume, which picks up its own session",
+    "test": "an_agent_that_stopped_with_the_machine_is_offered_back_and_resumes",
+    "passes": true
+  },
+  {
+    "id": "resume-shell",
+    "milestone": 11,
+    "title": "A stopped terminal offers Start Again or Close, and stays until answered",
+    "test": "a_stopped_terminal_starts_again_or_closes",
+    "passes": true
+  },
+  {
+    "id": "hot-exit",
+    "milestone": 11,
+    "title": "Open tabs, cursors and unsaved edits come back in the next run",
+    "test": "tabs_and_unsaved_edits_come_back_in_the_next_run",
+    "passes": true
+  },
+  {
+    "id": "hot-exit-conflict",
+    "milestone": 11,
+    "title": "Edits kept from before a file changed on disk come back marked",
+    "test": "edits_kept_from_before_a_file_changed_say_so",
+    "passes": true
+  },
+  {
+    "id": "hot-exit-discard",
+    "milestone": 11,
+    "title": "Don't Save on Quit keeps the tabs but not the edits",
+    "test": "edits_not_saved_on_quit_dont_come_back",
+    "passes": true
+  },
+  {
+    "id": "hot-exit-pty",
+    "milestone": 11,
+    "title": "A dropped connection loses no unsaved edits, through the real binary",
+    "test": "a_dropped_connection_loses_no_unsaved_edits",
+    "passes": true
+  },
+  {
+    "id": "ws-bar",
+    "milestone": 11,
+    "title": "A second workspace brings the bar along the bottom, and a click switches",
+    "test": "the_bar_comes_with_a_second_workspace_and_a_click_switches",
+    "passes": true
+  },
+  {
+    "id": "ws-tile-state",
+    "milestone": 11,
+    "title": "A workspace's tile says whether its agent is working, needs you, or is done",
+    "test": "a_tile_says_what_its_agent_is_doing",
+    "passes": true
+  },
+  {
+    "id": "ws-close",
+    "milestone": 11,
+    "title": "Closing a tile asks as Quit does, and the other workspaces carry on",
+    "test": "closing_a_tile_asks_as_quitting_does_and_the_rest_carry_on",
+    "passes": true
+  },
+  {
+    "id": "ws-quit",
+    "milestone": 11,
+    "title": "Quit asks each workspace in turn, and Cancel stops it",
+    "test": "quitting_asks_each_workspace_in_turn_and_cancel_stops_it",
+    "passes": true
+  },
+  {
+    "id": "ws-open",
+    "milestone": 11,
+    "title": "A folder opens beside this one as a workspace; Ctrl+Alt+PageUp/PageDown move between them",
+    "test": "a_folder_opens_beside_this_one_and_keys_move_between_them",
+    "passes": true
+  },
+  {
+    "id": "ws-resume-all",
+    "milestone": 11,
+    "title": "Resume in the bar resumes what stopped in every workspace",
+    "test": "what_stopped_anywhere_resumes_from_the_bar",
+    "passes": true
+  },
+  {
+    "id": "ws-choose",
+    "milestone": 11,
+    "title": "Cellix started at home offers what's running on the machine first",
+    "test": "started_away_from_a_project_what_is_running_comes_first",
+    "passes": true
+  },
+  {
+    "id": "ws-pty",
+    "milestone": 11,
+    "title": "Work left running is a tile in the next Cellix's bar, and cellix ls lists it",
+    "test": "work_left_running_is_in_the_next_cellixs_bar",
+    "passes": true
+  },
+  {
+    "id": "linger-card",
+    "milestone": 11,
+    "title": "On a server that ends programs at logout, a card offers to turn lingering on",
+    "test": "a_server_that_ends_programs_at_logout_says_so_and_turns_lingering_on",
+    "passes": true
+  },
+  {
+    "id": "linger-none",
+    "milestone": 11,
+    "title": "Where logout ends nothing, there's no card",
+    "test": "where_logout_ends_nothing_there_is_no_card",
+    "passes": true
+  },
+  {
+    "id": "linger-conf",
+    "milestone": 11,
+    "title": "logind's KillUserProcesses is read with the last setting winning",
+    "test": "the_last_setting_of_kill_user_processes_wins",
+    "passes": true
+  },
+  {
+    "id": "theme-on-focus",
+    "milestone": 11,
+    "title": "Coming back into focus, Cellix asks the terminal its colour again and follows it to dark or light",
+    "test": "coming_back_to_a_terminal_that_turned_dark_turns_cellix_dark",
+    "passes": true
+  },
+  {
+    "id": "theme-past-tmux",
+    "milestone": 11,
+    "title": "Inside tmux the terminal is asked its colour past tmux first, so tmux's own answer is current",
+    "test": "inside_tmux_with_passthrough_the_terminal_itself_is_asked_its_colour",
+    "passes": true
   }
 ]

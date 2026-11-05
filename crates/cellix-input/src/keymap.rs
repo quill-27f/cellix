@@ -22,6 +22,9 @@ pub fn simple_keymap(event: KeyEvent) -> Option<Command> {
         Key::End if mods.ctrl => Move(Direction::Bottom, shift),
         Key::Home => Move(Direction::LineStart, shift),
         Key::End => Move(Direction::LineEnd, shift),
+        // Ctrl+PageUp and PageDown change tabs, so with Alt as well they change workspaces.
+        Key::PageUp if mods.ctrl && mods.alt => PreviousWorkspace,
+        Key::PageDown if mods.ctrl && mods.alt => NextWorkspace,
         Key::PageUp if mods.ctrl => PreviousTab,
         Key::PageDown if mods.ctrl => NextTab,
         Key::PageUp => Move(Direction::PageUp, shift),

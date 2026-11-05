@@ -41,6 +41,9 @@ pub struct Theme {
     pub moved: Rgb,
     pub activity: Style,
     pub status: Style,
+    /// The bar of workspaces under the status bar. It's the bottom row, so it's the
+    /// terminal's own colour like the status bar, and its tiles stand out as chips.
+    pub workspaces: Style,
     pub breadcrumb: Style,
     /// Background of the line holding the cursor.
     pub line: Rgb,
@@ -145,6 +148,7 @@ impl Theme {
             &mut self.tab,
             &mut self.activity,
             &mut self.status,
+            &mut self.workspaces,
             &mut self.text,
             &mut self.tab_active,
             &mut self.gutter,
@@ -218,6 +222,7 @@ impl Theme {
             moved: Rgb(226, 232, 250),
             activity: style(Rgb(94, 94, 108), frame),
             status: style(Rgb(94, 94, 108), frame),
+            workspaces: style(Rgb(94, 94, 108), frame),
             breadcrumb: style(Rgb(110, 110, 110), bg),
             line: Rgb(245, 245, 245),
             number_active: Rgb(40, 40, 45),
@@ -299,6 +304,7 @@ impl Default for Theme {
             moved: Rgb(38, 46, 70),
             activity: style(Rgb(127, 132, 156), frame),
             status: style(Rgb(154, 154, 178), frame),
+            workspaces: style(Rgb(166, 173, 200), frame),
             breadcrumb: style(Rgb(154, 154, 178), bg),
             line: Rgb(50, 50, 75),
             number_active: Rgb(198, 198, 198),

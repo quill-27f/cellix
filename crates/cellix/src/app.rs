@@ -122,6 +122,11 @@ const CONFIRM_WIDTH: u16 = 56;
 const CONFIRM_HEIGHT: u16 = 6;
 /// Columns around a dialog button's label.
 const CONFIRM_PADDING: usize = 4;
+/// Rows of the card on a session that stopped without finishing, besides its detail: an
+/// edge, the title, a gap, the buttons and an edge.
+const STOPPED_CARD_ROWS: u16 = 5;
+/// At most this many lines of detail.
+const STOPPED_DETAIL_LINES: usize = 3;
 const PLAN_BAR_WIDTH: u16 = 48;
 /// Corners as percentages of a row's height.
 const TAB_RADIUS: u8 = 22;
@@ -146,6 +151,15 @@ const OFFER_WIDTH: u16 = 46;
 const OFFER_HEIGHT: u16 = 4;
 const OFFER_BUTTON_ROW: u16 = 3;
 const OFFER_BUTTONS: [&str; 3] = ["Install", "Not now", "Never"];
+/// The card saying a server ends programs at logout: its buttons.
+const LINGER_BUTTONS: [&str; 3] = ["Turn On", "Copy Command", "Not Now"];
+const LINGER_WIDTH: u16 = 52;
+/// How far into its first row a card's panel starts, and how far short of the end of its
+/// last row it stops, so there's the same air over the title as under the buttons.
+const CARD_TOP: f32 = 0.4;
+const CARD_BOTTOM: f32 = 0.1;
+/// As a percentage of a row, about 9 pixels.
+const CARD_RADIUS: u8 = 26;
 /// Columns at the end of the pane's title that close it.
 const PANE_CLOSE_REACH: u16 = 3;
 /// A tooltip's height in rows, and the size of its text.
@@ -234,6 +248,8 @@ enum PromptAction {
     NewBranch,
     Image,
     Link,
+    /// A folder to open beside this one, as a workspace of its own.
+    OpenWorkspace,
 }
 
 struct Prompt {
@@ -911,6 +927,19 @@ pub struct App {
     clipboard_image: Vec<String>,
     /// The answer to quitting was to leave things running.
     keep_running: bool,
+    /// The answer to quitting was not to save, so unsaved edits aren't kept for next time.
+    discarded: bool,
+    /// Something for the workspaces around this one to do, taken by them.
+    pub workspace_request: Option<WorkspaceRequest>,
+    /// Whether this machine ends programs at logout, once something is running to lose.
+    linger: Linger,
+    /// What turns lingering on: loginctl, or a stand-in in tests.
+    linger_command: Vec<String>,
+    /// Stands in for asking the machine, in tests.
+    #[cfg(test)]
+    linger_answer: Option<bool>,
+    /// What was last written of the tabs and unsaved edits, so it's written when it changes.
+    kept_state: std::cell::Cell<u64>,
     /// Whether how the two sides work together has been said yet.
     pane_explained: bool,
     /// A comment waiting for an agent to be started.
@@ -954,6 +983,9 @@ pub struct App {
     sync_result: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     /// What runs sessions so they can outlive Cellix: Cellix itself, away from tests.
     host_program: Option<PathBuf>,
+    /// Stands in for an agent's program in tests, so none really starts.
+    #[cfg(test)]
+    agent_program: Option<String>,
     /// A kernel for each notebook that has run something, by its file.
     kernels: HashMap<PathBuf, Kernel>,
     /// Stands in for the kernel's runner in tests.
@@ -1029,10 +1061,19 @@ impl App {
             hover_at: None,
             sync_result: None,
             keep_running: false,
+            discarded: false,
+            workspace_request: None,
+            linger: Linger::Unasked,
+            linger_command: vec!["loginctl".to_string(), "enable-linger".to_string()],
+            #[cfg(test)]
+            linger_answer: None,
+            kept_state: std::cell::Cell::new(0),
             kernels: HashMap::new(),
             kernel_command: None,
             pane_explained: false,
             host_program: std::env::current_exe().ok().filter(|_| !cfg!(test)),
+            #[cfg(test)]
+            agent_program: None,
             spell: None,
             spell_on: cfg!(not(test)) && settings.spell_check != Some(false),
             last_edit: (0, std::time::Instant::now()),
@@ -2039,6 +2080,7 @@ impl App {
         let installed = self.poll_install()
             | self.poll_browser()
             | self.poll_offer()
+            | self.poll_linger()
             | built
             | self.poll_snippets()
             | self.poll_spell()
@@ -3247,6 +3289,7 @@ impl App {
     }
 
     fn tick(&mut self) {
+        self.keep_state();
         if let Some(view) = &mut self.dock.pdf {
             view.refresh();
         }
@@ -4139,7 +4182,10 @@ impl App {
                 self.save_dirty(leaving == Leaving::CloseTab);
                 self.leave(leaving);
             }
-            Choice::Discard(leaving) => self.leave(leaving),
+            Choice::Discard(leaving) => {
+                self.discarded |= leaving == Leaving::Quit;
+                self.leave(leaving);
+            }
             Choice::Delete(path) => {
                 if let Err(e) = self.workspace.delete(&path) {
                     self.say(format!("Could not delete it: {e}"));
@@ -4757,6 +4803,14 @@ impl App {
                 }
                 Ok(())
             }
+            PromptAction::OpenWorkspace => {
+                let folder = self.folder_named(name);
+                match folder {
+                    Some(folder) => self.workspace_request = Some(WorkspaceRequest::Open(folder)),
+                    None => self.say(format!("There's no folder at {name}")),
+                }
+                Ok(())
+            }
             PromptAction::GoToLine => {
                 self.mark_jump();
                 let area = self.focused_area();
@@ -5131,6 +5185,16 @@ impl App {
             Command::OpenInBrowser => self.open_in_browser(),
             Command::OpenClaude => self.open_agent("claude"),
             Command::OpenCodex => self.open_agent("codex"),
+            Command::OpenWorkspace => {
+                self.ask(
+                    "Folder to open beside this one",
+                    PromptAction::OpenWorkspace,
+                );
+            }
+            Command::NextWorkspace => self.workspace_request = Some(WorkspaceRequest::Next),
+            Command::PreviousWorkspace => {
+                self.workspace_request = Some(WorkspaceRequest::Previous);
+            }
             Command::FindInProject => self.show_search(Field::Query),
             Command::ReplaceInProject => self.show_search(Field::Replace),
             Command::MarkdownPreview => {
@@ -5368,6 +5432,10 @@ impl App {
     /// this Cellix and load the plugin, with `cellix` on the path for the plugin's hooks.
     fn agent_launch(&self, agent: &str) -> (Vec<String>, Vec<String>) {
         let mut launch = vec![agent.to_string()];
+        #[cfg(test)]
+        if let Some(program) = &self.agent_program {
+            launch[0] = program.clone();
+        }
         // Any agent can answer a comment with `cellix reply`, under its own name.
         let mut env = vec![format!(
             "CELLIX_AGENT={}",
@@ -5474,6 +5542,7 @@ impl App {
                     pixels: (size.0.saturating_mul(cell.0), size.1.saturating_mul(cell.1)),
                 };
                 let sessions = crate::hold::folder_of(self.workspace.root());
+                crate::hold::mark_project(self.workspace.root());
                 crate::hold::start(&program, &sessions, &job).ok()
             });
         let started = match held {
@@ -5483,6 +5552,7 @@ impl App {
         match started {
             Ok(session) => {
                 self.dock.sessions.push(session);
+                self.ask_about_logout();
                 self.dock.active = Some(self.dock.sessions.len() - 1);
                 self.dock.focused = true;
                 self.dock.front = Front::Session;
@@ -5528,7 +5598,23 @@ impl App {
                 names.push(name);
             }
         }
+        // What stopped without finishing comes back as it was left, to resume or close.
+        let stopped = crate::hold::stopped(&folder);
+        let first_stopped = self.dock.sessions.len();
+        for record in stopped {
+            let size = self.dock_screen().map_or((80, 24), |a| (a.w, a.h));
+            self.dock
+                .sessions
+                .push(Session::stopped(record, size, self.cell_size()));
+        }
+        if names.is_empty() && self.dock.sessions.len() > first_stopped {
+            self.dock.active = Some(first_stopped);
+            self.dock.open = true;
+            self.dock.front = Front::Session;
+            self.fit_dock();
+        }
         if !names.is_empty() {
+            self.ask_about_logout();
             self.dock.active = Some(self.dock.sessions.len() - 1);
             self.dock.open = true;
             self.dock.front = Front::Session;
@@ -5536,6 +5622,625 @@ impl App {
             let names = names.join(", ");
             self.say(format!("{names} kept running while you were away"));
         }
+    }
+
+    /// Finds out, once and off the main thread, whether logging out of this server would end
+    /// what's running, which matters over SSH on Linux.
+    fn ask_about_logout(&mut self) {
+        if !matches!(self.linger, Linger::Unasked) {
+            return;
+        }
+        #[cfg(test)]
+        if let Some(answer) = self.linger_answer {
+            self.linger = if answer {
+                Linger::Offered
+            } else {
+                Linger::Settled
+            };
+            return;
+        }
+        // Set to 1 or 0, it stands in for asking, to show or check the card anywhere.
+        if let Ok(forced) = std::env::var("CELLIX_LOGOUT_STOPS") {
+            self.linger = if forced == "1" {
+                Linger::Offered
+            } else {
+                Linger::Settled
+            };
+            return;
+        }
+        let remote = std::env::var_os("SSH_CONNECTION").is_some();
+        if !cfg!(target_os = "linux") || !remote {
+            self.linger = Linger::Settled;
+            return;
+        }
+        let user = user_name();
+        let (told, answer) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = told.send(crate::linger::logout_stops_programs(&user));
+        });
+        self.linger = Linger::Asking(answer);
+    }
+
+    /// Takes the answer about logging out. Returns whether the card came.
+    fn poll_linger(&mut self) -> bool {
+        let Linger::Asking(answer) = &self.linger else {
+            return false;
+        };
+        let Ok(stops) = answer.try_recv() else {
+            return false;
+        };
+        self.linger = if stops {
+            Linger::Offered
+        } else {
+            Linger::Settled
+        };
+        stops
+    }
+
+    fn offering_linger(&self) -> bool {
+        matches!(self.linger, Linger::Offered) && !self.overlay_is_open()
+    }
+
+    /// What the logout card says, besides its title and command.
+    fn linger_detail(&self) -> Vec<String> {
+        let text = "This server ends your programs when you log out, so agents and shells \
+                    would stop with the SSH connection. Turning on lingering keeps them running.";
+        let width = self.linger_frame().1;
+        self.wrap(text, f32::from(width.saturating_sub(4)))
+    }
+
+    /// The logout card's left edge and width: the window's corner, like the other offers,
+    /// but clear of the line between the file and the side pane.
+    fn linger_frame(&self) -> (u16, u16) {
+        let width = LINGER_WIDTH.min(self.size.0.saturating_sub(4));
+        let x = self.size.0.saturating_sub(width + 2);
+        match self.dock_area() {
+            Some(dock) if !self.dock_under() && x < dock.x + 2 && x + width > dock.x => {
+                if dock.w >= 40 {
+                    (dock.x + 2, dock.w.saturating_sub(4).min(width))
+                } else {
+                    (dock.x.saturating_sub(width + 2), width)
+                }
+            }
+            _ => (x, width),
+        }
+    }
+
+    /// The card's place, as tall as its words: an edge, the title, the detail, a gap, the
+    /// command, a gap, the buttons and an edge.
+    fn linger_area(&self) -> Rect {
+        let (x, width) = self.linger_frame();
+        let height = self.linger_detail().len() as u16 + 7;
+        Rect::new(x, self.size.1.saturating_sub(height + 2), width, height)
+    }
+
+    fn linger_buttons(&self) -> Vec<(String, u16)> {
+        let area = self.linger_area();
+        self.card_buttons(area.x + 2, &LINGER_BUTTONS)
+    }
+
+    fn linger_button_row(&self) -> u16 {
+        self.linger_area().bottom().saturating_sub(2)
+    }
+
+    /// A card's buttons as (cells, x), from `x` along, each padded alike, which only a
+    /// measured width gives proportional text.
+    fn card_buttons(&self, mut x: u16, labels: &[&str]) -> Vec<(String, u16)> {
+        let plain = self.measure.in_cells();
+        let font = Font {
+            size: 90,
+            ..Font::default()
+        };
+        labels
+            .iter()
+            .map(|label| {
+                let cells = if plain {
+                    format!("[{label}]")
+                } else {
+                    let width = self.measure.width(label, font).ceil() as usize + CONFIRM_PADDING;
+                    format!("{label:^width$}")
+                };
+                let at = x;
+                x += cells.chars().count() as u16 + 1;
+                (cells, at)
+            })
+            .collect()
+    }
+
+    /// A card's panel, raised and rounded. It starts and ends inside its first and last rows,
+    /// so the title and the buttons have the same air above and below them, and what's under
+    /// those rows is cleared so no text shows half covered.
+    fn draw_card(&self, grid: &mut Grid, area: Rect) {
+        let theme = &self.theme;
+        let plain = self.measure.in_cells();
+        let base = Style {
+            fg: theme.text.fg,
+            bg: theme.popup,
+            ..theme.bar
+        };
+        for y in area.y..area.bottom() {
+            let edge = y == area.y || y + 1 == area.bottom();
+            let fill = if edge && !plain { theme.text } else { base };
+            grid.fill(Rect::new(area.x, y, area.w, 1), fill);
+        }
+        let bounds = Bounds::cells(
+            f32::from(area.x),
+            f32::from(area.y) + CARD_TOP,
+            f32::from(area.w),
+            f32::from(area.h) - CARD_TOP - CARD_BOTTOM,
+        );
+        grid.popup(bounds, CARD_RADIUS, theme.popup, theme.popup_border);
+    }
+
+    /// A card's row of buttons, the first the one to press.
+    fn draw_card_buttons(
+        &self,
+        grid: &mut Grid,
+        y: u16,
+        placed: &[(String, u16)],
+        labels: &[&str],
+    ) {
+        let theme = &self.theme;
+        let base = Style {
+            fg: theme.text.fg,
+            bg: theme.popup,
+            ..theme.bar
+        };
+        for (i, (cells, x)) in placed.iter().enumerate() {
+            let first = i == 0;
+            let width = cells.chars().count() as u16;
+            let hovered = self
+                .hover
+                .is_some_and(|h| h.1 == y && h.0 >= *x && h.0 < x + width);
+            let fill = match (first, hovered) {
+                (true, _) => theme.button,
+                (false, true) => theme.popup_hover,
+                (false, false) => theme.quiet_button(theme.popup),
+            };
+            let style = Style {
+                fg: if first {
+                    theme.button_text
+                } else {
+                    theme.text.fg
+                },
+                bg: fill,
+                ..base
+            };
+            grid.large_button(*x, y, cells, labels[i], fill, style);
+        }
+    }
+
+    fn draw_linger(&self, grid: &mut Grid) {
+        if !self.offering_linger() {
+            return;
+        }
+        let theme = &self.theme;
+        let area = self.linger_area();
+        self.draw_card(grid, area);
+        let base = Style {
+            fg: theme.text.fg,
+            bg: theme.popup,
+            ..theme.bar
+        };
+        let strong = Style { bold: true, ..base };
+        let dim = Style {
+            fg: theme.popup_dim,
+            ..base
+        };
+        let right = area.right().saturating_sub(2);
+        let title = "Agents here stop when you disconnect";
+        grid.label(area.x + 2, area.y + 1, title, strong, right);
+        let detail = self.linger_detail();
+        for (i, line) in detail.iter().enumerate() {
+            grid.label(area.x + 2, area.y + 2 + i as u16, line, dim, right);
+        }
+        // The command in a well of its own, in the code font, as it would be typed.
+        let command = crate::linger::command(&user_name());
+        let row = area.y + 3 + detail.len() as u16;
+        let well = Style {
+            fg: theme.text.fg,
+            bg: theme.input,
+            ..base
+        };
+        if self.measure.in_cells() {
+            grid.fill(
+                Rect::new(area.x + 2, row, area.w.saturating_sub(4), 1),
+                well,
+            );
+            grid.label(area.x + 3, row, &command, well, right);
+        } else {
+            let bounds = Bounds::cells(
+                f32::from(area.x) + 2.0,
+                f32::from(row) - 0.1,
+                f32::from(area.w.saturating_sub(4)),
+                1.2,
+            );
+            grid.panel(bounds, 17, Some(theme.input), None);
+            let font = Font {
+                mono: true,
+                ..Font::default()
+            };
+            let text = (f32::from(area.x) + 2.7, f32::from(row));
+            grid.text_run(
+                text,
+                f32::from(right),
+                &command,
+                (theme.text.fg, false),
+                font,
+            );
+        }
+        let y = self.linger_button_row();
+        self.draw_card_buttons(grid, y, &self.linger_buttons(), &LINGER_BUTTONS);
+    }
+
+    /// A press on the logout card. Returns whether the card took it.
+    fn click_linger(&mut self, x: u16, y: u16) -> bool {
+        if !self.offering_linger() {
+            return false;
+        }
+        let area = self.linger_area();
+        if !area.contains(x, y) {
+            return false;
+        }
+        if y != self.linger_button_row() {
+            return true;
+        }
+        let hit = self
+            .linger_buttons()
+            .into_iter()
+            .position(|(cells, at)| x >= at && x < at + cells.chars().count() as u16);
+        let user = user_name();
+        match hit.map(|index| LINGER_BUTTONS[index]) {
+            Some("Turn On") => {
+                let mut program = self.linger_command.clone();
+                program.push(user.clone());
+                self.linger = Linger::Settled;
+                match crate::linger::turn_on(&program) {
+                    Ok(()) => self
+                        .say("Lingering is on: what runs here keeps running when you disconnect"),
+                    Err(why) => self.say(format!(
+                        "loginctl said: {why}. Someone with admin rights can run sudo {}",
+                        crate::linger::command(&user)
+                    )),
+                }
+            }
+            Some("Copy Command") => {
+                let command = crate::linger::command(&user);
+                self.clipboard = command.clone();
+                self.outgoing_clipboard = Some(command);
+                self.say("Copied. Run it in a terminal here, then disconnect as you like");
+            }
+            Some("Not Now") => self.linger = Linger::Settled,
+            _ => {}
+        }
+        true
+    }
+
+    /// The card over a session that stopped without finishing, when one is showing.
+    fn stopped_card(&self) -> Option<Rect> {
+        let session = self.dock.session().filter(|_| !self.dock.listing())?;
+        session.stopped.as_ref()?;
+        if self.dock.front != Front::Session {
+            return None;
+        }
+        let screen = self.dock_screen()?;
+        let width = screen.w.saturating_sub(3);
+        let (_, detail, _) = self.stopped_offer()?;
+        let lines = self.stopped_detail(&detail, width).len() as u16;
+        let height = (STOPPED_CARD_ROWS + lines).min(screen.h);
+        Some(Rect::new(
+            screen.x + 1,
+            screen.bottom().saturating_sub(height + 1),
+            width,
+            height,
+        ))
+    }
+
+    /// The card's detail, in the lines it takes in a card `width` wide.
+    fn stopped_detail(&self, detail: &str, width: u16) -> Vec<String> {
+        let room = f32::from(width.saturating_sub(4));
+        let mut lines = self.wrap(detail, room);
+        lines.truncate(STOPPED_DETAIL_LINES);
+        lines
+    }
+
+    /// The row of the card's buttons.
+    fn stopped_buttons_row(&self, card: Rect) -> u16 {
+        card.bottom().saturating_sub(2)
+    }
+
+    /// What the card says, and the buttons it has, for the session showing.
+    fn stopped_offer(&self) -> Option<(String, String, Vec<Offer>)> {
+        let stopped = self.dock.session()?.stopped.as_ref()?;
+        let title = if stopped.by_restart() {
+            format!("Stopped when {} restarted", machine_name())
+        } else {
+            "Stopped without finishing".to_string()
+        };
+        let name = &stopped.job.name;
+        let resumable = stopped
+            .agent
+            .as_ref()
+            .and_then(|a| crate::agents::resume_args(name, &a.session))
+            .is_some();
+        let (detail, buttons) = if resumable {
+            (
+                "The conversation is saved. Resume picks it up where it left off; nothing \
+                 runs until you say so."
+                    .to_string(),
+                vec![
+                    ("Resume", Revive::Resume),
+                    ("Start Fresh", Revive::Fresh),
+                    ("Close", Revive::Close),
+                ],
+            )
+        } else if crate::agents::program_of(name).is_some() {
+            (
+                format!(
+                    "Start {name} again in the same folder. Its conversation can't be resumed from here."
+                ),
+                vec![("Start Again", Revive::Fresh), ("Close", Revive::Close)],
+            )
+        } else {
+            (
+                "Start a new terminal in the same folder. What it was running has stopped."
+                    .to_string(),
+                vec![("Start Again", Revive::Fresh), ("Close", Revive::Close)],
+            )
+        };
+        Some((title, detail, buttons))
+    }
+
+    /// The card's buttons as (cells, x, choice), laid out from the left.
+    fn stopped_buttons(&self, card: Rect, buttons: &[Offer]) -> Vec<(String, u16, Revive)> {
+        let plain = self.measure.in_cells();
+        let font = Font {
+            size: 90,
+            ..Font::default()
+        };
+        let mut x = card.x + 2;
+        let mut placed = Vec::new();
+        for (label, choice) in buttons {
+            let cells = if plain {
+                format!("[{label}]")
+            } else {
+                let width = self.measure.width(label, font).ceil() as usize + CONFIRM_PADDING;
+                format!("{label:^width$}")
+            };
+            let width = cells.chars().count() as u16;
+            placed.push((cells, x, *choice));
+            x += width + 1;
+        }
+        placed
+    }
+
+    /// The choice under a click on the card, if any.
+    fn stopped_hit(&self, x: u16, y: u16) -> Option<Revive> {
+        let card = self.stopped_card()?;
+        let (_, _, buttons) = self.stopped_offer()?;
+        let row = self.stopped_buttons_row(card);
+        if y != row {
+            return None;
+        }
+        let placed = self.stopped_buttons(card, &buttons);
+        placed.into_iter().find_map(|(cells, at, choice)| {
+            let width = cells.chars().count() as u16;
+            (x >= at && x < at + width).then_some(choice)
+        })
+    }
+
+    fn draw_stopped(&self, grid: &mut Grid) {
+        let (Some(card), Some((title, detail, buttons))) =
+            (self.stopped_card(), self.stopped_offer())
+        else {
+            return;
+        };
+        let theme = &self.theme;
+        // What it last showed stays readable, but dimmed, so it doesn't look alive.
+        if let Some(screen) = self.dock_screen() {
+            grid.wash(
+                Bounds::inset(screen, 0.0, 0.0),
+                0,
+                (theme.text.bg, 150),
+                None,
+            );
+        }
+        self.draw_card(grid, card);
+        let base = Style {
+            fg: theme.text.fg,
+            bg: theme.popup,
+            ..theme.bar
+        };
+        let strong = Style {
+            bold: true,
+            fg: theme.heading,
+            ..base
+        };
+        let dim = Style {
+            fg: theme.popup_dim,
+            ..base
+        };
+        let right = card.right().saturating_sub(2);
+        grid.label(card.x + 2, card.y + 1, &title, strong, right);
+        for (i, line) in self.stopped_detail(&detail, card.w).iter().enumerate() {
+            grid.label(card.x + 2, card.y + 2 + i as u16, line, dim, right);
+        }
+        let y = self.stopped_buttons_row(card);
+        let placed: Vec<(String, u16)> = self
+            .stopped_buttons(card, &buttons)
+            .into_iter()
+            .map(|(cells, x, _)| (cells, x))
+            .collect();
+        let labels: Vec<&str> = buttons.iter().map(|(label, _)| *label).collect();
+        self.draw_card_buttons(grid, y, &placed, &labels);
+    }
+
+    /// Breaks text into lines that fit `width` cells, by words.
+    fn wrap(&self, text: &str, width: f32) -> Vec<String> {
+        let font = Font::default();
+        let mut lines = Vec::new();
+        let mut line = String::new();
+        for word in text.split_whitespace() {
+            let tried = if line.is_empty() {
+                word.to_string()
+            } else {
+                format!("{line} {word}")
+            };
+            if !line.is_empty() && self.measure.width(&tried, font) > width {
+                lines.push(std::mem::replace(&mut line, word.to_string()));
+            } else {
+                line = tried;
+            }
+        }
+        if !line.is_empty() {
+            lines.push(line);
+        }
+        lines
+    }
+
+    /// Acts on the card of the session showing: resumes it, starts it fresh, or closes it.
+    /// The record is forgotten either way, and what starts takes the stopped tab's place.
+    fn revive(&mut self, choice: Revive) {
+        let Some(index) = self.dock.active else {
+            return;
+        };
+        self.revive_at(index, choice);
+    }
+
+    fn revive_at(&mut self, index: usize, choice: Revive) {
+        let Some(stopped) = self
+            .dock
+            .sessions
+            .get(index)
+            .and_then(|s| s.stopped.clone())
+        else {
+            return;
+        };
+        stopped.forget();
+        self.dock.close(index);
+        if choice == Revive::Close {
+            return;
+        }
+        let job = &stopped.job;
+        let (name, env, mut launch) = match crate::agents::program_of(&job.name) {
+            Some(program) => {
+                let (env, launch) = self.agent_launch(program);
+                (crate::agents::display_name(program), env, launch)
+            }
+            None => (
+                crate::agents::SHELL.0,
+                Vec::new(),
+                vec![crate::agents::shell()],
+            ),
+        };
+        let resume = stopped
+            .agent
+            .as_ref()
+            .and_then(|a| crate::agents::resume_args(&job.name, &a.session))
+            .filter(|_| choice == Revive::Resume);
+        if let Some(args) = resume {
+            launch.splice(1..1, args);
+        }
+        let count = self.dock.sessions.len();
+        self.start_session(name, &launch, &env, &job.folder);
+        // In the stopped tab's place, rather than at the end.
+        if self.dock.sessions.len() > count {
+            let started = self.dock.sessions.remove(count);
+            let at = index.min(count);
+            self.dock.sessions.insert(at, started);
+            self.dock.active = Some(at);
+        }
+    }
+
+    /// Resumes everything here that stopped without finishing, or starts it again where it
+    /// can't be resumed. Returns how many.
+    pub fn revive_all(&mut self) -> usize {
+        let mut count = 0;
+        while let Some(index) = self.dock.sessions.iter().position(|s| s.stopped.is_some()) {
+            self.revive_at(index, Revive::Resume);
+            count += 1;
+        }
+        count
+    }
+
+    /// How many sessions here stopped without finishing.
+    pub fn stopped_count(&self) -> usize {
+        self.dock
+            .sessions
+            .iter()
+            .filter(|s| s.stopped.is_some())
+            .count()
+    }
+
+    /// What this workspace's tile in the bar says: whether an agent needs you, is working,
+    /// finished, or stopped with the machine.
+    pub fn tile_state(&self) -> TileState {
+        let stopped = self.stopped_count();
+        if self.agents.needing_you() > 0 {
+            return TileState::NeedsYou;
+        }
+        if stopped > 0 {
+            return TileState::Stopped(stopped);
+        }
+        let working = self
+            .agents
+            .running
+            .iter()
+            .any(|a| a.state == cellix_agent::AgentState::Working);
+        // A shell running a command is working too. An agent with no plugin can't say.
+        let shell_busy = self.dock.sessions.iter().any(|s| s.shell && s.busy());
+        if working || shell_busy {
+            return TileState::Working;
+        }
+        if let Some(at) = self.agents.finished {
+            return TileState::Done(at);
+        }
+        if self.dock.sessions.iter().any(|s| !s.exited && !s.browser) {
+            return TileState::Idle;
+        }
+        TileState::Nothing
+    }
+
+    /// Whether a question is waiting for an answer, as before quitting.
+    pub fn asking(&self) -> bool {
+        matches!(self.overlay, Overlay::Confirm(_))
+    }
+
+    pub fn theme(&self) -> &Theme {
+        &self.theme
+    }
+
+    pub fn measure(&self) -> Rc<dyn Measure> {
+        self.measure.clone()
+    }
+
+    /// How many columns the activity rail takes.
+    pub fn rail_width(&self) -> u16 {
+        self.activity_area().w
+    }
+
+    /// The folder a name typed for a new workspace means: from home with `~`, otherwise from
+    /// beside this project, where sibling projects are.
+    fn folder_named(&self, name: &str) -> Option<PathBuf> {
+        let name = name.trim();
+        if name.is_empty() {
+            return None;
+        }
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let path = if let Some(rest) = name.strip_prefix("~/") {
+            home?.join(rest)
+        } else if name == "~" {
+            home?
+        } else if Path::new(name).is_absolute() {
+            PathBuf::from(name)
+        } else {
+            let root = self.workspace.root();
+            let beside = root.parent().map(|p| p.join(name));
+            beside
+                .filter(|p| p.is_dir())
+                .unwrap_or_else(|| root.join(name))
+        };
+        dunce::canonicalize(path).ok().filter(|p| p.is_dir())
     }
 
     /// Pixels in a cell, for programs that draw pictures.
@@ -5758,6 +6463,12 @@ impl App {
                     None => {}
                 }
             }
+            return true;
+        }
+        if mouse.kind == MouseKind::Left
+            && let Some(choice) = self.stopped_hit(x, y)
+        {
+            self.revive(choice);
             return true;
         }
         match mouse.kind {
@@ -6102,7 +6813,9 @@ impl App {
         match self.dock.session().filter(|_| !self.dock.listing()) {
             Some(session) => {
                 session.draw(grid, screen, theme, self.dock.focused);
-                if session.exited {
+                if session.stopped.is_some() {
+                    self.draw_stopped(grid);
+                } else if session.exited {
                     session.draw_ended(grid, screen, theme);
                 }
             }
@@ -7166,6 +7879,7 @@ impl App {
     /// Writes comments into the `--wait` file. Called once, as the app exits.
     pub fn finish(&self) -> io::Result<()> {
         self.keep_unsent();
+        self.keep_state();
         let Some(path) = &self.wait_file else {
             return Ok(());
         };
@@ -7179,6 +7893,107 @@ impl App {
         }
         let text = std::fs::read_to_string(path)?;
         std::fs::write(path, append_comments(&text, &comments))
+    }
+
+    /// Where the open tabs and unsaved edits are kept between runs, beside the project's
+    /// sessions, so a dropped connection or a restart loses nothing.
+    fn state_file(&self) -> PathBuf {
+        crate::hold::folder_of(self.workspace.root()).join("state.json")
+    }
+
+    /// The open tabs and unsaved edits as they'd be kept.
+    fn state(&self) -> Kept {
+        let files = self
+            .editors
+            .iter()
+            .filter_map(|editor| {
+                let path = editor.buffer.path()?;
+                let unsaved =
+                    (editor.buffer.is_dirty() && !self.discarded).then(|| editor.buffer.text());
+                Some(KeptFile {
+                    path: self.relative(path),
+                    cursor: editor.selections.primary().head,
+                    top: editor.top,
+                    // What the file held when the edits began, to tell if it changed since.
+                    base: unsaved.as_ref().and_then(|_| disk_hash(path)),
+                    unsaved,
+                })
+            })
+            .collect();
+        Kept {
+            files,
+            active: (!self.editors.is_empty()).then(|| self.active()),
+        }
+    }
+
+    /// Writes the open tabs and unsaved edits when they've changed since last time.
+    pub fn keep_state(&self) {
+        let state = self.state();
+        let Ok(json) = serde_json::to_vec(&state) else {
+            return;
+        };
+        let hash = fnv_bytes(&json);
+        if self.kept_state.replace(hash) == hash {
+            return;
+        }
+        let file = self.state_file();
+        if let Some(folder) = file.parent() {
+            let _ = std::fs::create_dir_all(folder);
+        }
+        // Beside it and then renamed, so a crash mid-write leaves the last one whole.
+        let fresh = file.with_extension("json.new");
+        if private_write(&fresh, &json).is_ok() {
+            let _ = std::fs::rename(&fresh, &file);
+        }
+    }
+
+    /// Opens the tabs the last run here left, with their unsaved edits, and returns how many
+    /// came back with edits. A file whose edits began before it changed on disk is marked, as
+    /// any file that changed under unsaved edits is.
+    pub fn restore_state(&mut self) -> usize {
+        let Ok(text) = std::fs::read_to_string(self.state_file()) else {
+            return 0;
+        };
+        let Ok(state) = serde_json::from_str::<Kept>(&text) else {
+            return 0;
+        };
+        let root = self.workspace.root().to_path_buf();
+        let mut unsaved = 0;
+        let mut opened = Vec::new();
+        for file in &state.files {
+            let path = root.join(&file.path);
+            if !path.is_file() || self.open(&path).is_err() {
+                continue;
+            }
+            opened.push(self.active());
+            let Some(editor) = self.editor_mut() else {
+                continue;
+            };
+            if let Some(text) = &file.unsaved {
+                let changed = file.base.is_some() && disk_hash(&path) != file.base;
+                editor.buffer.restore_unsaved(&mut editor.selections, text);
+                editor.conflict |= changed;
+                unsaved += 1;
+            }
+            let length = editor.buffer.rope().len_chars();
+            editor.selections =
+                cellix_core::Selections::single(Selection::cursor(file.cursor.min(length)));
+            editor.top = file.top;
+        }
+        if let Some(index) = state.active.and_then(|a| opened.get(a)) {
+            self.set_active(*index);
+        }
+        // What came back is what's kept, so nothing is written until something changes.
+        if let Ok(json) = serde_json::to_vec(&self.state()) {
+            self.kept_state.set(fnv_bytes(&json));
+        }
+        if unsaved > 0 {
+            let files = if unsaved == 1 { "file" } else { "files" };
+            self.say(format!(
+                "Unsaved edits to {unsaved} {files} are back as you left them"
+            ));
+        }
+        unsaved
     }
 
     /// The documents with Track Changes on, kept beside the project's sessions so it stays as
@@ -7837,6 +8652,9 @@ impl App {
             return;
         }
         if mouse.kind == MouseKind::Left && self.click_companion(mouse.x, mouse.y) {
+            return;
+        }
+        if mouse.kind == MouseKind::Left && self.click_linger(mouse.x, mouse.y) {
             return;
         }
         if mouse.kind == MouseKind::Left && self.click_offer(mouse.x, mouse.y) {
@@ -9109,7 +9927,11 @@ impl App {
         self.draw_status(grid);
         self.draw_suggest(grid);
         self.draw_hover(grid);
-        self.draw_offer(grid);
+        if self.offering_linger() {
+            self.draw_linger(grid);
+        } else {
+            self.draw_offer(grid);
+        }
         self.draw_pane_actions(grid);
         self.draw_tab_drag(grid);
         self.draw_overlay(grid);
@@ -11484,6 +12306,121 @@ fn path_with(folder: &Path, path: &std::ffi::OsStr) -> Option<String> {
     std::env::join_paths(folders).ok()?.into_string().ok()
 }
 
+/// Whether logging out ends what's running here, as some Linux servers do.
+enum Linger {
+    Unasked,
+    Asking(std::sync::mpsc::Receiver<bool>),
+    /// It does, and lingering is off: the card says so.
+    Offered,
+    Settled,
+}
+
+/// Who's running Cellix, as the system knows them.
+fn user_name() -> String {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("LOGNAME"))
+        .unwrap_or_else(|_| "$USER".to_string())
+}
+
+/// What the workspaces around an app are asked to do.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WorkspaceRequest {
+    Open(PathBuf),
+    Next,
+    Previous,
+}
+
+/// What a workspace's tile in the bar says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TileState {
+    NeedsYou,
+    Working,
+    /// An agent finished its turn, at this time.
+    Done(std::time::Instant),
+    /// This many sessions stopped with the machine.
+    Stopped(usize),
+    /// Something's running, with nothing to say about it.
+    Idle,
+    Nothing,
+}
+
+/// The open tabs and unsaved edits of a project, kept between runs.
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+struct Kept {
+    files: Vec<KeptFile>,
+    /// Which of `files` was in front.
+    active: Option<usize>,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct KeptFile {
+    /// From the project's root.
+    path: String,
+    cursor: usize,
+    top: usize,
+    /// The text, when it had edits that weren't saved.
+    unsaved: Option<String>,
+    /// What the file on disk held when they were kept.
+    base: Option<u64>,
+}
+
+fn fnv_bytes(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf29ce484222325, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+    })
+}
+
+/// What a file on disk holds, as a hash.
+fn disk_hash(path: &Path) -> Option<u64> {
+    std::fs::read(path).ok().map(|bytes| fnv_bytes(&bytes))
+}
+
+/// Writes a file only its owner can read: unsaved edits are as private as the files.
+fn private_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(bytes)
+    }
+    #[cfg(not(unix))]
+    std::fs::write(path, bytes)
+}
+
+/// A button on the card of a session that stopped without finishing, and what it does.
+type Offer = (&'static str, Revive);
+
+/// What the card on a session that stopped without finishing offers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Revive {
+    Resume,
+    Fresh,
+    Close,
+}
+
+/// This machine's name as people know it, without its domain.
+pub(crate) fn machine_name() -> String {
+    #[cfg(unix)]
+    {
+        let mut buffer = [0u8; 256];
+        // SAFETY: the buffer is as long as it says, and the name is cut at its first zero.
+        let ok = unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) } == 0;
+        if ok {
+            let end = buffer.iter().position(|&b| b == 0).unwrap_or(buffer.len());
+            let name = String::from_utf8_lossy(&buffer[..end]);
+            if let Some(short) = name.split('.').next().filter(|n| !n.is_empty()) {
+                return short.to_string();
+            }
+        }
+    }
+    std::env::var("COMPUTERNAME").unwrap_or_else(|_| "this machine".to_string())
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -13328,6 +14265,247 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "no {want}: {text}");
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+    }
+
+    #[test]
+    fn tabs_and_unsaved_edits_come_back_in_the_next_run() {
+        let (dir, mut app) = project();
+        let root = dir.path().to_path_buf();
+        app.open(&root.join("alpha.txt")).unwrap();
+        app.open(&root.join("beta.rs")).unwrap();
+        typed(&mut app, "EDIT ");
+        app.open(&root.join("alpha.txt")).unwrap();
+        app.keep_state();
+        drop(app);
+
+        // As after a dropped connection: a new Cellix in the same folder.
+        let mut again = App::new(root.clone(), (100, 30));
+        assert_eq!(again.restore_state(), 1);
+        assert_eq!(again.editors.len(), 2);
+        let beta = again
+            .editors
+            .iter()
+            .find(|e| e.buffer.path() == Some(root.join("beta.rs").as_path()))
+            .unwrap();
+        assert!(beta.buffer.is_dirty(), "its edits are still unsaved");
+        assert!(
+            beta.buffer.text().starts_with("EDIT "),
+            "{}",
+            beta.buffer.text()
+        );
+        assert_eq!(beta.selections.primary().head, 5, "the cursor where it was");
+        assert!(!beta.conflict);
+        assert!(
+            !fs::read_to_string(root.join("beta.rs"))
+                .unwrap()
+                .contains("EDIT")
+        );
+        // The tab that was in front is in front again, and it says what came back.
+        assert_eq!(
+            again.editors[again.active()].buffer.path(),
+            Some(root.join("alpha.txt").as_path())
+        );
+        assert!(
+            screen(&again)
+                .text()
+                .contains("Unsaved edits to 1 file are back")
+        );
+        let _ = fs::remove_dir_all(crate::hold::folder_of(&root));
+    }
+
+    #[test]
+    fn edits_kept_from_before_a_file_changed_say_so() {
+        let (dir, mut app) = project();
+        let root = dir.path().to_path_buf();
+        app.open(&root.join("beta.rs")).unwrap();
+        typed(&mut app, "MINE ");
+        app.keep_state();
+        drop(app);
+        fs::write(root.join("beta.rs"), "changed by someone else\n").unwrap();
+        let mut again = App::new(root.clone(), (100, 30));
+        again.restore_state();
+        let editor = &again.editors[0];
+        assert!(editor.buffer.text().starts_with("MINE "));
+        assert!(
+            editor.conflict,
+            "saving would overwrite the other change, so it's marked"
+        );
+        let _ = fs::remove_dir_all(crate::hold::folder_of(&root));
+    }
+
+    #[test]
+    fn edits_not_saved_on_quit_dont_come_back() {
+        let (dir, mut app) = project();
+        let root = dir.path().to_path_buf();
+        app.open(&root.join("beta.rs")).unwrap();
+        typed(&mut app, "THROWAWAY ");
+        app.run(Command::Quit);
+        let (x, y) = find(&screen(&app), "Don't Save");
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert!(app.quit);
+        app.finish().unwrap();
+        drop(app);
+        let mut again = App::new(root.clone(), (100, 30));
+        assert_eq!(again.restore_state(), 0);
+        assert_eq!(again.editors.len(), 1, "the tab still comes back");
+        assert!(!again.editors[0].buffer.is_dirty());
+        let _ = fs::remove_dir_all(crate::hold::folder_of(&root));
+    }
+
+    #[test]
+    fn a_server_that_ends_programs_at_logout_says_so_and_turns_lingering_on() {
+        let (dir, mut app) = project();
+        app.linger_answer = Some(true);
+        // A stand-in for loginctl, which notes who it was asked about.
+        let noted = dir.path().join("lingering");
+        let fake = dir.path().join("fake-loginctl");
+        fs::write(
+            &fake,
+            format!("#!/bin/sh\necho \"$@\" > {}\n", noted.display()),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        app.linger_command = vec![fake.display().to_string(), "enable-linger".to_string()];
+        assert!(
+            !screen(&app).text().contains("stop when you disconnect"),
+            "nothing to lose yet"
+        );
+        session(&mut app, "echo ready; sleep 9");
+        let text = screen(&app).text();
+        assert!(
+            text.contains("Agents here stop when you disconnect"),
+            "{text}"
+        );
+        assert!(text.contains("loginctl enable-linger"), "{text}");
+
+        let (x, y) = find(&screen(&app), "Copy Command");
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert!(
+            app.outgoing_clipboard
+                .as_deref()
+                .is_some_and(|c| c.starts_with("loginctl enable-linger"))
+        );
+        let (x, y) = find(&screen(&app), "Turn On");
+        app.handle(mouse(MouseKind::Left, x, y));
+        let asked = fs::read_to_string(&noted).unwrap();
+        assert!(asked.starts_with("enable-linger "), "{asked}");
+        let text = screen(&app).text();
+        assert!(
+            !text.contains("stop when you disconnect"),
+            "the card goes: {text}"
+        );
+        assert!(text.contains("Lingering is on"), "{text}");
+    }
+
+    #[test]
+    fn where_logout_ends_nothing_there_is_no_card() {
+        let (_dir, mut app) = project();
+        app.linger_answer = Some(false);
+        session(&mut app, "echo ready; sleep 9");
+        assert!(!screen(&app).text().contains("stop when you disconnect"));
+    }
+
+    /// Leaves a stopped session's record where a host that died leaves one.
+    fn left_stopped(root: &Path, name: &str, output: &str, session: Option<&str>) -> PathBuf {
+        let aside = crate::hold::folder_of(root).join("stopped");
+        fs::create_dir_all(&aside).unwrap();
+        let job = crate::hold::Job {
+            name: name.to_string(),
+            argv: vec!["codex".to_string()],
+            env: Vec::new(),
+            folder: root.to_path_buf(),
+            size: (80, 24),
+            pixels: (0, 0),
+        };
+        let notes = aside.join(format!("1-{}.json", name.len()));
+        fs::write(&notes, serde_json::to_vec(&job).unwrap()).unwrap();
+        fs::write(notes.with_extension("log"), output).unwrap();
+        if let Some(id) = session {
+            let word = cellix_agent::hook::Resumable {
+                agent: name.to_string(),
+                session: id.to_string(),
+            };
+            fs::write(
+                notes.with_extension("agent"),
+                serde_json::to_vec(&word).unwrap(),
+            )
+            .unwrap();
+        }
+        notes
+    }
+
+    #[test]
+    fn an_agent_that_stopped_with_the_machine_is_offered_back_and_resumes() {
+        let (dir, mut app) = project();
+        let notes = left_stopped(
+            dir.path(),
+            "Codex",
+            "Added the refund route\r\n",
+            Some("abc-123"),
+        );
+        // A stand-in for the agent's program, which says how it was started.
+        let fake = dir.path().join("fake-agent");
+        fs::write(&fake, "#!/bin/sh\necho \"started with $*\"; sleep 9\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        app.agent_program = Some(fake.display().to_string());
+        app.rejoin_sessions();
+
+        // Its tab is back with what it last showed, and a card saying what can be done.
+        assert_eq!(app.stopped_count(), 1);
+        let text = screen(&app).text();
+        assert!(text.contains("Codex"), "{text}");
+        assert!(text.contains("Added the refund route"), "{text}");
+        assert!(text.contains("The conversation is saved"), "{text}");
+        for button in ["Resume", "Start Fresh", "Close"] {
+            assert!(text.contains(button), "no {button}: {text}");
+        }
+
+        // Resume starts the agent on its own session, in the stopped tab's place.
+        let (x, y) = find(&screen(&app), "[Resume]");
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert_eq!(app.stopped_count(), 0);
+        assert_eq!(app.dock.sessions.len(), 1);
+        shows(&mut app, "started with resume abc-123");
+        assert!(!notes.exists(), "the record goes once it's resumed");
+        let _ = fs::remove_dir_all(crate::hold::folder_of(dir.path()));
+    }
+
+    #[test]
+    fn a_stopped_terminal_starts_again_or_closes() {
+        let (dir, mut app) = project();
+        left_stopped(dir.path(), "Terminal", "$ cargo watch\r\n", None);
+        left_stopped(dir.path(), "Gemini CLI", "thinking\r\n", Some("g-1"));
+        app.rejoin_sessions();
+        app.poll();
+        assert_eq!(
+            app.stopped_count(),
+            2,
+            "a stopped terminal stays, unlike one that ended"
+        );
+        // A shell can't be resumed, so it's started again or closed.
+        let text = screen(&app).text();
+        assert!(text.contains("Start a new terminal"), "{text}");
+        assert!(
+            text.contains("Start Again") && !text.contains("Resume"),
+            "{text}"
+        );
+        // Nor can an agent Cellix doesn't know how to resume, even with its session.
+        app.dock.active = Some(1);
+        let text = screen(&app).text();
+        assert!(text.contains("resumed from here"), "{text}");
+        let (x, y) = find(&screen(&app), "[Close]");
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert_eq!(app.stopped_count(), 1);
+        assert!(crate::hold::stopped(&crate::hold::folder_of(dir.path())).len() == 1);
+        let _ = fs::remove_dir_all(crate::hold::folder_of(dir.path()));
     }
 
     #[test]
@@ -16759,7 +17937,7 @@ mod tests {
         if pixels {
             app.set_measure(Rc::new(cellix_render::FontMeasure::new(10, 20)));
         }
-        for name in ["alpha.txt", "beta.txt", "gamma.txt"] {
+        for name in ["alpha.txt", "beta.rs", "gamma.txt"] {
             fs::write(dir.path().join(name), format!("{name} words\n")).unwrap();
             app.open(&dir.path().join(name)).unwrap();
         }
@@ -16791,7 +17969,7 @@ mod tests {
         let (gamma, alpha) = (tabs[2].1 + 2, tabs[0].1 + 1);
         // A click stays a click.
         click(&mut app, tabs[1].1 + 2, y);
-        assert_eq!(titles(&app), ["alpha.txt", "beta.txt", "gamma.txt"]);
+        assert_eq!(titles(&app), ["alpha.txt", "beta.rs", "gamma.txt"]);
         assert_eq!(app.active(), 1);
         app.handle(mouse(MouseKind::Left, gamma, y));
         app.handle(mouse(MouseKind::Drag, alpha, y));
@@ -16807,7 +17985,7 @@ mod tests {
         });
         assert!(ghost, "the tab follows the pointer");
         app.handle(mouse(MouseKind::Up, alpha, y));
-        assert_eq!(titles(&app), ["gamma.txt", "alpha.txt", "beta.txt"]);
+        assert_eq!(titles(&app), ["gamma.txt", "alpha.txt", "beta.rs"]);
         assert_eq!(app.editors[app.active()].title(), "gamma.txt");
         assert!(!status_line(&app).contains("Drop"));
     }
@@ -16824,7 +18002,7 @@ mod tests {
         assert!(grid.row_text(y).contains('▏'), "{}", grid.row_text(y));
         assert!(status_line(&app).contains("Drop to move the tab here"));
         app.handle(mouse(MouseKind::Up, end, y));
-        assert_eq!(titles(&app), ["beta.txt", "gamma.txt", "alpha.txt"]);
+        assert_eq!(titles(&app), ["beta.rs", "gamma.txt", "alpha.txt"]);
     }
 
     #[test]
@@ -16885,7 +18063,7 @@ mod tests {
         assert!(!status_line(&app).contains("Drop"));
         app.handle(mouse(MouseKind::Up, area.x + area.w - 5, area.y + 5));
         assert_eq!(app.panes.len(), 1);
-        assert_eq!(titles(&app), ["alpha.txt", "beta.txt", "gamma.txt"]);
+        assert_eq!(titles(&app), ["alpha.txt", "beta.rs", "gamma.txt"]);
     }
 
     #[test]

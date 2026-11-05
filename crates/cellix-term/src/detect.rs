@@ -52,14 +52,71 @@ fn questions(asking: Asking) -> String {
         Asking::Tmux => (String::new(), String::new()),
         Asking::TmuxPassthrough => ("\x1bPtmux;\x1b\x1b[16t\x1b\\".to_string(), String::new()),
     };
-    format!("{cell}\x1b]11;?\x1b\\\x1b[?1016$p{graphics}\x1b[c")
+    format!(
+        "{}{cell}\x1b[?1016$p{graphics}\x1b[c",
+        background_question(asking)
+    )
+}
+
+/// The question about the background. Inside tmux with passthrough it goes to the terminal
+/// itself too: tmux keeps that answer rather than passing it on, but it's how tmux learns the
+/// terminal's colour has changed since the client attached, so tmux's own answer, asked
+/// afterwards, is current. It comes ahead of the cell size, which the terminal answers next and
+/// tmux does pass on, so that answer arriving means tmux has the new colour.
+#[cfg(any(unix, test))]
+fn background_question(asking: Asking) -> &'static str {
+    match asking {
+        Asking::TmuxPassthrough => "\x1bPtmux;\x1b\x1b]11;?\x07\x1b\\",
+        Asking::Terminal | Asking::Tmux => "\x1b]11;?\x1b\\",
+    }
+}
+
+/// tmux's own answer about the background, asked once the terminal has told it.
+#[cfg(any(unix, test))]
+const ASK_TMUX_BACKGROUND: &str = "\x1b]11;?\x1b\\\x1b[c";
+
+/// Asks the terminal for its background again, as when Cellix comes back into focus: it may
+/// have turned from light to dark since Cellix started. Must run in raw mode, between reads
+/// of input. Gives whether it's light, and its colour, when the terminal said.
+pub fn background(multiplexer: Multiplexer, passthrough: bool) -> Option<(bool, (u8, u8, u8))> {
+    let asking = match multiplexer {
+        Multiplexer::Tmux if passthrough => Asking::TmuxPassthrough,
+        Multiplexer::Tmux => Asking::Tmux,
+        Multiplexer::None | Multiplexer::Zellij => Asking::Terminal,
+    };
+    let mut out = io::stdout();
+    let reply = if asking == Asking::TmuxPassthrough {
+        let refresh = format!(
+            "{}\x1bPtmux;\x1b\x1b[16t\x1b\\\x1b[c",
+            background_question(asking)
+        );
+        ask_for(&mut out, &refresh, asking, |reply| {
+            parse_cell_size(reply).is_some()
+        })
+        .ok()?;
+        ask_for(&mut out, ASK_TMUX_BACKGROUND, Asking::Tmux, |_| true).ok()?
+    } else {
+        let question = format!("{}\x1b[c", background_question(asking));
+        ask_for(&mut out, &question, asking, |reply| {
+            parse_background(reply).is_some()
+        })
+        .ok()?
+    };
+    let light = parse_background_is_light(&reply)?;
+    let (r, g, b) = parse_background(&reply)?;
+    let byte = |channel: f32| (channel * 255.0).round() as u8;
+    Some((light, (byte(r), byte(g), byte(b))))
 }
 
 /// Asks for the cell size and for Kitty graphics, then device attributes, which every
 /// terminal answers, so a terminal without graphics doesn't cost the full timeout.
 /// Expects raw mode. Returns (kitty graphics, cell size).
 fn query_terminal(out: &mut impl Write, asking: Asking) -> io::Result<Reply> {
-    let reply = ask(out, asking)?;
+    let mut reply = ask(out, asking)?;
+    if asking == Asking::TmuxPassthrough {
+        // The terminal told tmux its colour; now tmux's answer is current.
+        reply.extend(ask_for(out, ASK_TMUX_BACKGROUND, Asking::Tmux, |_| true)?);
+    }
     Ok(Reply {
         kitty: reply_has(&reply, format!("_Gi={QUERY_ID};OK").as_bytes()),
         cell: parse_cell_size(&reply),
@@ -80,10 +137,35 @@ fn ask(_out: &mut impl Write, _asking: Asking) -> io::Result<Vec<u8>> {
     Ok(Vec::new())
 }
 
+#[cfg(not(unix))]
+fn ask_for(
+    _out: &mut impl Write,
+    _question: &str,
+    _asking: Asking,
+    _done: impl Fn(&[u8]) -> bool,
+) -> io::Result<Vec<u8>> {
+    Ok(Vec::new())
+}
+
 /// Writes the questions and reads the replies until device attributes, or the timeout.
 #[cfg(unix)]
 fn ask(out: &mut impl Write, asking: Asking) -> io::Result<Vec<u8>> {
-    write!(out, "{}", questions(asking))?;
+    let outside = asking == Asking::TmuxPassthrough;
+    ask_for(out, &questions(asking), asking, |reply| {
+        !outside || parse_cell_size(reply).is_some()
+    })
+}
+
+/// Writes `question`, which ends by asking for device attributes, and reads the replies
+/// until those come and `done` is satisfied, or the timeout.
+#[cfg(unix)]
+fn ask_for(
+    out: &mut impl Write,
+    question: &str,
+    asking: Asking,
+    done: impl Fn(&[u8]) -> bool,
+) -> io::Result<Vec<u8>> {
+    write!(out, "{question}")?;
     out.flush()?;
     // tmux answers device attributes at once, but the terminal outside answers through it a
     // round trip later, so that answer is waited for too, a little longer.
@@ -114,7 +196,7 @@ fn ask(out: &mut impl Write, asking: Asking) -> io::Result<Vec<u8>> {
             break;
         }
         reply.extend_from_slice(&buf[..n as usize]);
-        if ends_device_attributes(&reply) && (!outside || parse_cell_size(&reply).is_some()) {
+        if ends_device_attributes(&reply) && done(&reply) {
             break;
         }
     }
@@ -175,7 +257,8 @@ pub fn detect(var: impl Fn(&str) -> Option<String>) -> io::Result<Env> {
         let kitty_graphics = KITTY_TERMINALS.iter().any(|t| client.contains(t));
         let tmux_passthrough = tmux_output(&["show", "-Apv", "allow-passthrough"])
             .is_some_and(|v| v == "on" || v == "all");
-        // tmux answers the colour query itself, from what it knows of the terminal.
+        // tmux answers the colour query itself, from what it knows of the terminal, which with
+        // passthrough is brought up to date first.
         let asking = if tmux_passthrough {
             Asking::TmuxPassthrough
         } else {
@@ -209,6 +292,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn inside_tmux_with_passthrough_the_terminal_itself_is_asked_its_colour() {
+        // tmux's own answer is what it knew when the client attached, and goes stale.
+        let asked = questions(Asking::TmuxPassthrough);
+        assert!(asked.starts_with("\x1bPtmux;\x1b\x1b]11;?"), "{asked:?}");
+        assert!(
+            !asked.contains("\x1b]11;?\x1b\\\x1b["),
+            "tmux isn't asked as well: {asked:?}"
+        );
+        assert!(questions(Asking::Terminal).starts_with("\x1b]11;?"));
+        assert!(questions(Asking::Tmux).starts_with("\x1b]11;?"));
+    }
+
+    #[test]
     fn tmux_is_not_asked_about_graphics() {
         assert!(!questions(Asking::Tmux).contains("\x1b_G"));
         assert!(questions(Asking::Terminal).contains("\x1b_Gi=31"));
@@ -220,7 +316,7 @@ mod tests {
         // tmux would answer a plain question with a size it made up.
         assert!(!questions(Asking::Tmux).contains("[16t"));
         let past = questions(Asking::TmuxPassthrough);
-        assert!(past.starts_with("\x1bPtmux;\x1b\x1b[16t\x1b\\"), "{past:?}");
+        assert!(past.contains("\x1bPtmux;\x1b\x1b[16t\x1b\\"), "{past:?}");
         assert!(!past.contains("\x1b_G"));
         // As tmux hands the outer terminal's answer back.
         assert_eq!(parse_cell_size(b"\x1b[?62c\x1b[6;36;17t"), Some((17, 36)));

@@ -42,6 +42,8 @@ fn ask(request: &str, dir: Option<&str>) -> std::io::Result<String> {
 const USAGE: &str = "\
 Usage: cellix [--wait] [files]
 
+  cellix ls                 What's running in Cellix on this machine, by folder
+
   cellix threads            The comments on this project, as JSON
   cellix reply <id> <text>  Answers a comment, beside the document
   cellix reply <id> --suggest <text>
@@ -54,6 +56,45 @@ Usage: cellix [--wait] [files]
   cellix setup [claude|codex|gemini]  Connects an agent
   cellix setup --remove     Disconnects Claude Code
 ";
+
+/// `cellix ls`: each folder with something running in Cellix, or stopped with the machine
+/// and waiting to be resumed. Cellix started at home offers the same list.
+fn list() -> ExitCode {
+    let found = cellix::hold::projects_with_activity();
+    if found.is_empty() {
+        println!("Nothing is running in Cellix on this machine.");
+        return ExitCode::SUCCESS;
+    }
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let rows: Vec<(String, String, String)> = found
+        .iter()
+        .map(|(root, activity)| {
+            let name = root.file_name().map_or_else(
+                || root.display().to_string(),
+                |n| n.to_string_lossy().into(),
+            );
+            let mut what = activity.running.join(", ");
+            if !activity.stopped.is_empty() {
+                if !what.is_empty() {
+                    what.push_str("; ");
+                }
+                what.push_str(&format!("stopped: {}", activity.stopped.join(", ")));
+            }
+            let path = match home.as_deref().and_then(|h| root.strip_prefix(h).ok()) {
+                Some(rest) => format!("~/{}", rest.display()),
+                None => root.display().to_string(),
+            };
+            (name, what, path)
+        })
+        .collect();
+    let name_width = rows.iter().map(|r| r.0.chars().count()).max().unwrap_or(0);
+    let what_width = rows.iter().map(|r| r.1.chars().count()).max().unwrap_or(0);
+    for (name, what, path) in rows {
+        println!("{name:<name_width$}  {what:<what_width$}  {path}");
+    }
+    println!("\nRun cellix in one of these folders to pick it up, or cellix at home to choose.");
+    ExitCode::SUCCESS
+}
 
 /// `cellix plan <file>` holds a plan until the reviewer decides. It exits 0 on approval,
 /// printing the plan if it was edited, and 1 when it's sent back, with what to change.
@@ -214,6 +255,7 @@ fn main() -> ExitCode {
             };
         }
         ["checkpoint", label @ ..] => return checkpoint(&label.join(" ")),
+        ["ls"] => return list(),
         ["hook", kind] => return hook("Claude Code", kind),
         ["hook", "--agent", agent, kind] => return hook(agent, kind),
         ["pane"] => {

@@ -192,7 +192,7 @@ def chart(path, width=1600, height=900):
         f.write(chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
 
 
-def shoot(name, steps, *args, size="120x40", background="1e1e2e"):
+def shoot(name, steps, *args, size="120x40", background="1e1e2e", cwd=None, env=None):
     """Runs one scene and writes `<name>.png`, with `steps` run first."""
     # TOUR_ONLY=50-review,02-code retakes just those, for a quick look after a change.
     only = os.environ.get("TOUR_ONLY")
@@ -201,18 +201,68 @@ def shoot(name, steps, *args, size="120x40", background="1e1e2e"):
     script = [*steps, ["wait", 0.3], ["shot", f"{out}/{name}.png"]]
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump(script, f)
+    extra = env or {}
     env = {
         **os.environ,
         "HOME": HOME,
         "TERM_SIZE": size,
         "TERM_BG": background,
         "TERM_PADDING": "10x24",
+        **extra,
     }
     env.pop("CLAUDE_CONFIG_DIR", None)
     command = ["python3", "-I", f"{here}/term.py", f.name, binary, *args]
-    subprocess.run(command, cwd=ROOT, env=env, timeout=70, stdout=subprocess.DEVNULL)
+    subprocess.run(command, cwd=cwd or ROOT, env=env, timeout=70, stdout=subprocess.DEVNULL)
     os.unlink(f.name)
     print(name, flush=True)
+
+
+def workspaces(scratch):
+    """Work left running in other projects, as the bar along the bottom shows it, and what
+    stopped with the machine. Sessions need a host, whose socket needs a short path."""
+    cache = tempfile.mkdtemp(prefix="cx", dir="/tmp")
+    space = {"env": {"XDG_CACHE_HOME": cache, "SHELL": "/bin/sh"}}
+    others = {}
+    for name in ["api-server", "infra", "notes"]:
+        others[name] = f"{scratch}/{name}"
+        os.makedirs(others[name])
+        with open(f"{others[name]}/README.md", "w") as f:
+            f.write(f"# {name}\n")
+    terminal = [["keys", CTRL("j")], ["wait", 1.0]]
+    # Notes had a terminal when the machine went down.
+    shoot("w0-notes", [*terminal, ["keys", "echo building the index\r"], ["wait", 0.5]],
+          cwd=others["notes"], **space)
+    subprocess.run(["pkill", "-9", "-f", cache])
+    # api-server's terminal is busy; infra's is back at its prompt, its agent done.
+    shoot("w0-api-server", [*terminal, ["keys", "sleep 300\r"], ["wait", 0.5]],
+          cwd=others["api-server"], **space)
+    shoot("w0-infra", [*terminal, ["keys", "echo deployed\r"], ["wait", 0.5]],
+          cwd=others["infra"], **space)
+
+    def hook(kind, root, **fields):
+        stdin = json.dumps({"session_id": "s1", "cwd": root, **fields})
+        return ["run", f"'{binary}' hook {kind}", stdin]
+
+    told = [
+        ["wait", 1.0],
+        hook("notify", others["api-server"], message="Claude Code needs your permission"),
+        hook("stop", others["infra"]),
+        ["wait", 0.6],
+    ]
+    shoot("100-workspaces", told, CODE_FILE, size="150x44", **space)
+    shoot("101-workspace-hover", [*told, ["move", 40, 43], ["wait", 0.4]], CODE_FILE, size="150x44", **space)
+    # Its tile brings back what stopped, with what it last showed.
+    shoot("102-stopped-card", [["wait", 1.0], ["keys", "\x1b[6;7~"], ["keys", "\x1b[6;7~"],
+                                ["keys", "\x1b[6;7~"], ["wait", 1.0]], CODE_FILE, size="150x44", **space)
+    # Started at home, nothing is open yet: what's running comes first.
+    shoot("103-running-here", [["wait", 1.0]], cwd=HOME, size="150x44", **space)
+    lingering = {"env": {**space["env"], "CELLIX_LOGOUT_STOPS": "1"}}
+    shoot("104-logout-card", [*terminal, ["wait", 0.6]], CODE_FILE, size="150x44", **lingering)
+    if os.environ.get("TOUR_KEEP"):
+        print("kept", cache, flush=True)
+        return
+    subprocess.run(["pkill", "-9", "-f", cache])
+    shutil.rmtree(cache, ignore_errors=True)
 
 
 with tempfile.TemporaryDirectory() as scratch:
@@ -236,6 +286,7 @@ with tempfile.TemporaryDirectory() as scratch:
     GEAR = (RAIL_X, 37)
     settings = [["click", *GEAR]]
 
+    workspaces(scratch)
     shoot("01-welcome", [])
     shoot("02-code", [], CODE_FILE)
     shoot("03-page", [], PAGE_FILE)

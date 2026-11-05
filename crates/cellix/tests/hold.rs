@@ -123,3 +123,102 @@ fn a_dead_host_leaves_nothing_behind() {
     assert!(hold::left_running(&folder).is_empty());
     assert_eq!(std::fs::read_dir(&folder).unwrap().count(), 0);
 }
+
+#[test]
+fn a_host_that_dies_with_the_machine_leaves_what_resumes_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("held");
+    // The program learns where it's held, as an agent's hooks do, and leaves word there.
+    let script = r#"echo working on it; printf '{"agent":"Claude Code","session":"abc-123"}' > "${CELLIX_HELD%.sock}.agent"; echo noted; sleep 60"#;
+    let held = start(&folder, &job("Claude Code", script, dir.path()));
+    let (seen, _) = attach(&held);
+    read_until(&seen, "noted");
+    let socket = held.socket.clone();
+    drop(seen);
+    drop(held);
+
+    // The machine goes down: the host dies without finishing, and its program with it.
+    let killed = std::process::Command::new("pkill")
+        .args(["-KILL", "-f", &socket.display().to_string()])
+        .status()
+        .unwrap();
+    assert!(killed.success(), "the host should have been found");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while std::os::unix::net::UnixStream::connect(&socket).is_ok() {
+        assert!(Instant::now() < deadline, "the host should have died");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    assert!(hold::left_running(&folder).is_empty());
+    let stopped = hold::stopped(&folder);
+    assert_eq!(stopped.len(), 1, "{stopped:?}");
+    let stopped = &stopped[0];
+    assert_eq!(stopped.job.name, "Claude Code");
+    assert_eq!(stopped.job.folder, dir.path());
+    let output = String::from_utf8_lossy(&stopped.output);
+    assert!(output.contains("working on it"), "{output}");
+    let agent = stopped.agent.as_ref().expect("the agent's word");
+    assert_eq!(agent.session, "abc-123");
+    // Its environment stays off the disk, as for a running one.
+    assert!(stopped.job.env.is_empty(), "{:?}", stopped.job.env);
+
+    // Still there for the next Cellix, until it's resumed or closed.
+    assert_eq!(hold::stopped(&folder).len(), 1);
+    stopped.forget();
+    assert!(hold::stopped(&folder).is_empty());
+}
+
+#[test]
+fn a_program_that_finishes_leaves_nothing_to_resume() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("held");
+    let held = start(&folder, &job("Job", "echo finished; exit 0", dir.path()));
+    let (seen, over) = attach(&held);
+    read_until(&seen, "finished");
+    over.recv_timeout(Duration::from_secs(5)).unwrap();
+    drop(held);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while std::fs::read_dir(&folder)
+        .unwrap()
+        .flatten()
+        .any(|e| e.path().is_file())
+    {
+        assert!(Instant::now() < deadline, "the host should have cleared up");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(hold::stopped(&folder).is_empty());
+}
+
+#[test]
+fn two_cellix_windows_share_a_program_and_whoever_types_sets_its_size() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("held");
+    let script = r#"echo ready; while read line; do echo "got $line at $(stty size)"; done"#;
+    let held = start(&folder, &job("Shared", script, dir.path()));
+    let (first, _) = attach(&held);
+    read_until(&first, "ready");
+    held.resize((100, 30), (1000, 600));
+
+    // A second window, as on another machine: it sees what was shown, and what comes after.
+    let other = Held::connect(&held.socket).unwrap();
+    let (second, _) = attach(&other);
+    read_until(&second, "ready");
+    other.resize((80, 24), (800, 480));
+
+    // Typing in the first keeps its size; the second watching changes nothing.
+    held.keys().unwrap().write_all(b"one\n").unwrap();
+    read_until(&first, "got one at 30 100");
+    read_until(&second, "got one at 30 100");
+
+    // Typing in the second gives the program its size.
+    other.keys().unwrap().write_all(b"two\n").unwrap();
+    read_until(&second, "got two at 24 80");
+    read_until(&first, "got two at 24 80");
+
+    // One leaving leaves the other with it.
+    drop(second);
+    drop(other);
+    held.keys().unwrap().write_all(b"three\n").unwrap();
+    read_until(&first, "got three at 30 100");
+    held.kill();
+}

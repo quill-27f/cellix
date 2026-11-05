@@ -71,7 +71,12 @@ rendered nothing under Zellij, which is why the method is chosen per environment
 Cells are a full tier, not an error state: every feature must work there. This is
 what guarantees tmux and Zellij always work. Pixels are the upgrade.
 
-Detection sends `CSI 16t`, `a=q` and device attributes, and checks `$TMUX` and `$ZELLIJ`.
+Detection sends `CSI 16t`, `a=q` and device attributes, and checks `$TMUX` and `$ZELLIJ`. The background colour
+(`OSC 11`) decides light or dark, and is asked again each time the window regains focus, since a
+terminal follows the system's appearance. tmux answers that question from what it learned when
+the client attached and keeps the terminal's own answer to a passthrough question to itself, but
+the passthrough question is how it learns the new colour, so inside tmux Cellix asks past it
+first, waits for the cell size answered after it, then asks tmux.
 tmux swallows the replies, so under tmux Cellix asks tmux for the client terminal name and
 `allow-passthrough`. `CELLIX_TIER` can force a tier. `CSI 16t` is preferred for cell size
 because the window size call was not reliable under Zellij at startup. Window size is
@@ -322,9 +327,37 @@ doesn't need to compete with a full IDE here.
 ## Agent integration
 
 Each program in the side pane runs under a small host of its own: Cellix re-run as
-`cellix session-host`, which owns the PTY and a Unix socket and keeps recent output. So Cellix can
-quit, or an SSH connection drop, and the next Cellix in that folder finds it with what it printed.
-Quitting offers Keep Running. A dropped connection keeps everything, since nobody can be asked.
+`cellix session-host`, which owns the PTY and a Unix socket and keeps recent output, in memory
+and in a log beside the socket. So Cellix can quit, or an SSH connection drop, and the next Cellix
+in that folder finds it with what it printed. Quitting offers Keep Running. A dropped connection
+keeps everything, since nobody can be asked. A host serves every Cellix that connects, as two
+computers on one machine; all see its output, and the program takes the size of whichever typed
+into it last, as tmux does. The program is told its socket (`CELLIX_HELD`), and an agent's hooks
+leave its own session id beside it.
+
+A host that dies without finishing, as when the machine restarts, leaves its job, log and session
+id; the next Cellix puts them aside and shows the tab as it was, with Resume (Claude Code's
+`--resume`, Codex's `resume`), Start Fresh or Start Again, and Close. It says "restarted" only when
+the machine booted after the log was last written.
+
+### Workspaces, in place of tmux
+
+Cellix keeps the open tabs, cursors and unsaved edits of each folder in `state.json` beside its
+sessions, written on the tick when they change and on exit, and opens them again on start, so a
+dropped connection or a restart loses no typing; edits made before the file changed on disk come
+back marked as a conflict. Answering Don't Save on Quit keeps the tabs but not the edits.
+
+One Cellix holds several folders, each a whole app with its own socket, IDE port and sessions.
+With two or more, a bar on the bottom row (the terminal's own colour, like the status bar, so the
+window padding shows no seam) has a tile per folder that says what its agent is doing, + to open a
+folder, Resume for everything that stopped, and the machine's name. Each folder's sessions folder
+names its project, so a new Cellix opens every folder on the machine with something running or
+stopped that no other Cellix has open, and Cellix started at home with nothing named offers them
+first. Closing a tile asks as Quit does; Quit asks each folder in turn. The bar is drawn on the
+same grid as everything else, so it works on the cell tier too.
+
+On Linux over SSH, where logind ends a user's programs at logout and lingering is off, a card
+says so the first time a session starts and offers `loginctl enable-linger`.
 Claude Code is told the IDE port when it starts, so Cellix keeps its port and token per folder, and
 the next Cellix takes the same ones for an agent that outlived the last.
 

@@ -28,6 +28,7 @@ use crossterm::terminal::{
 };
 
 use crate::App;
+use crate::workspaces::{Workspace, Workspaces};
 
 /// Set when the terminal hangs up or Cellix is asked to stop. Left to their default, those
 /// signals end the process on the spot and leave the workspace socket behind.
@@ -45,7 +46,7 @@ extern "C" fn stop(_: libc::c_int) {
 /// never sees the stop. A watch outside the loop ends Cellix after a moment in that case,
 /// clearing `left` (the socket and the like) as the loop would have.
 #[cfg(unix)]
-fn catch_stops(left: Vec<PathBuf>) {
+fn catch_stops(left: Left) {
     for signal in [libc::SIGHUP, libc::SIGTERM] {
         // SAFETY: the handler only stores to an atomic, which is safe in a signal handler.
         unsafe {
@@ -62,7 +63,8 @@ fn catch_stops(left: Vec<PathBuf>) {
         let _ = disable_raw_mode();
         let _ = write!(io::stdout(), "\x1b[?1049l\x1b[?25h");
         let _ = io::stdout().flush();
-        for path in left {
+        let paths = left.lock().map(|l| l.clone()).unwrap_or_default();
+        for path in paths {
             let _ = std::fs::remove_file(&path);
             let _ = std::fs::remove_dir_all(&path);
         }
@@ -104,7 +106,7 @@ unsafe extern "system" fn console_closing(kind: u32) -> windows_sys::core::BOOL 
 /// Windows has no hang-up signal: a closing console calls a handler instead. The loop finishes
 /// as it would on Quit, so unsent comments are kept and the socket and lock files go.
 #[cfg(windows)]
-fn catch_stops(_left: Vec<PathBuf>) {
+fn catch_stops(_left: Left) {
     // SAFETY: the handler only touches atomics and sleeps, which any thread may do.
     unsafe {
         windows_sys::Win32::System::Console::SetConsoleCtrlHandler(Some(console_closing), 1);
@@ -112,7 +114,68 @@ fn catch_stops(_left: Vec<PathBuf>) {
 }
 
 #[cfg(not(any(unix, windows)))]
-fn catch_stops(_left: Vec<PathBuf>) {}
+fn catch_stops(_left: Left) {}
+
+/// What a stop must clear if the loop can't: each workspace's socket and the like.
+type Left = std::sync::Arc<std::sync::Mutex<Vec<PathBuf>>>;
+
+/// How each new workspace is made to look, as the terminal said, and kept up as it changes.
+struct Look {
+    measure: Rc<dyn Measure>,
+    wheel_lines: isize,
+    light: Option<bool>,
+    background: Option<(u8, u8, u8)>,
+}
+
+/// Makes a folder's workspace: its socket for agents and the IDE, what it left unsaved and
+/// running last time, and the terminal's look.
+fn start_workspace(
+    root: PathBuf,
+    size: (u16, u16),
+    (look, left): (&Look, &Left),
+    wait: bool,
+) -> Workspace {
+    let mut app = App::new(root, size);
+    // As an editor for another program, only the file it asked for opens.
+    if !wait {
+        app.restore_state();
+    }
+    // Agents are optional: a second window on this workspace still edits normally. Anything
+    // else that stops agents reaching this one is said, not swallowed.
+    let server = match cellix_agent::start(app.workspace.root(), app.comments.clone()) {
+        Ok(server) => Some(server),
+        Err(e) if e.kind() == io::ErrorKind::AddrInUse => {
+            app.say("Another Cellix has this folder open, so agents reach that one");
+            None
+        }
+        Err(e) => {
+            app.say(format!("Agents can't reach this Cellix: {e}"));
+            None
+        }
+    };
+    if server.is_some() {
+        app.restore_unsent();
+    }
+    app.ide = server.as_ref().and_then(|_| {
+        let root = app.workspace.root();
+        let kept = crate::hold::folder_of(root).join("ide.json");
+        cellix_agent::ide::IdeServer::start_kept(root, &kept).ok()
+    });
+    if let Ok(mut left) = left.lock() {
+        if server.is_some() {
+            let socket = cellix_agent::socket_path(app.workspace.root());
+            left.push(socket.with_extension(""));
+            left.push(socket);
+        }
+        left.extend(app.ide.as_ref().map(|ide| ide.lock().to_path_buf()));
+    }
+    app.set_measure(look.measure.clone());
+    app.wheel_lines = look.wheel_lines;
+    app.follow_terminal_theme(look.light);
+    app.rejoin_sessions();
+    app.match_terminal_background(look.background);
+    Workspace { app, server }
+}
 
 /// How often a scroll moves. Over a network each frame costs a round of placements.
 const SCROLL_FRAME: Duration = Duration::from_millis(8);
@@ -358,6 +421,9 @@ struct Display {
     pixel_mouse: bool,
     light: Option<bool>,
     background: Option<(u8, u8, u8)>,
+    /// Where the colour is asked again when Cellix comes back into focus.
+    multiplexer: cellix_term::Multiplexer,
+    passthrough: bool,
     smooth: Option<Smooth>,
     bleed: Bleed,
 }
@@ -387,6 +453,8 @@ impl Display {
             pixel_mouse: env.pixel_mouse,
             light: env.light,
             background: env.background,
+            multiplexer: env.multiplexer,
+            passthrough: env.tmux_passthrough,
             smooth: smooth.then(|| Smooth {
                 frame: if std::env::var_os("SSH_CONNECTION").is_some() {
                     REMOTE_SCROLL_FRAME
@@ -453,68 +521,59 @@ pub struct Options {
 /// Opens the requested files and runs until the user quits.
 pub fn run(options: Options) -> io::Result<()> {
     let paths = options.paths;
-    let root = paths
-        .iter()
-        .find(|p| p.is_dir())
-        .cloned()
-        .map_or_else(std::env::current_dir, Ok)?;
-    let root = dunce::canonicalize(root)?;
-    let mut app = App::new(root, size()?);
-    for path in paths.iter().filter(|p| p.is_file()) {
-        let path = dunce::canonicalize(path)?;
-        app.open(&path)?;
-        if options.wait {
-            app.wait_file = Some(path);
-        }
-    }
-    // Agents are optional: a second window on this workspace still edits normally. Anything
-    // else that stops agents reaching this one is said, not swallowed.
-    let server = match cellix_agent::start(app.workspace.root(), app.comments.clone()) {
-        Ok(server) => Some(server),
-        Err(e) if e.kind() == io::ErrorKind::AddrInUse => {
-            app.say("Another Cellix has this folder open, so agents reach that one");
-            None
-        }
-        Err(e) => {
-            app.say(format!("Agents can't reach this Cellix: {e}"));
-            None
-        }
-    };
-    if server.is_some() {
-        app.restore_unsent();
-    }
-    app.ide = server.as_ref().and_then(|_| {
-        let root = app.workspace.root();
-        let kept = crate::hold::folder_of(root).join("ide.json");
-        cellix_agent::ide::IdeServer::start_kept(root, &kept).ok()
-    });
-
-    let mut left = Vec::new();
-    if server.is_some() {
-        let socket = cellix_agent::socket_path(app.workspace.root());
-        left.push(socket.with_extension(""));
-        left.push(socket);
-    }
-    left.extend(app.ide.as_ref().map(|ide| ide.lock().to_path_buf()));
-    catch_stops(left);
+    let named = paths.iter().find(|p| p.is_dir()).cloned();
+    let root = dunce::canonicalize(named.clone().map_or_else(std::env::current_dir, Ok)?)?;
+    // Started at home with nothing named, there's no project here: what's running on the
+    // machine comes first, if anything is.
+    let home = std::env::var_os("HOME").and_then(|h| dunce::canonicalize(h).ok());
+    let away = named.is_none() && paths.is_empty() && home.as_deref() == Some(root.as_path());
+    let settings = crate::settings::Settings::load(&root);
+    let left: Left = Default::default();
+    catch_stops(left.clone());
     let _session = Session::start()?;
-    let smooth = app.settings.smooth_scroll != Some(false);
-    let mut display = Display::detect(app.settings.tier.as_deref(), smooth)?;
+    let smooth = settings.smooth_scroll != Some(false);
+    let mut display = Display::detect(settings.tier.as_deref(), smooth)?;
     let mut backend = display.backend();
     let mut out = io::stdout();
     let mut slow = crate::slow::Log::start();
     let mut phases = crate::slow::Phases::default();
     let mut last_present = Instant::now();
-    app.set_measure(display.measure());
-    // Only the direct tier moves by less than a line, so elsewhere a notch stays short.
-    app.wheel_lines = if display.placement == Some(Placement::Direct) {
-        3
-    } else {
-        1
-    };
-    app.follow_terminal_theme(display.light);
-    app.rejoin_sessions();
-    app.match_terminal_background(display.background);
+    let look = Rc::new(std::cell::RefCell::new(Look {
+        measure: display.measure(),
+        // Only the direct tier moves by less than a line, so elsewhere a notch stays short.
+        wheel_lines: if display.placement == Some(Placement::Direct) {
+            3
+        } else {
+            1
+        },
+        light: display.light,
+        background: display.background,
+    }));
+    let wait = options.wait;
+    let starting = (look.clone(), left.clone());
+    let start = Box::new(move |root: PathBuf, size: (u16, u16)| {
+        start_workspace(root, size, (&starting.0.borrow(), &starting.1), wait)
+    });
+    let mut spaces = Workspaces::new(size()?, crate::app::machine_name(), start);
+    if away {
+        spaces.open_running();
+        spaces.choosing = !spaces.list.is_empty();
+    }
+    if spaces.list.is_empty() {
+        spaces.open(root);
+        for path in paths.iter().filter(|p| p.is_file()) {
+            let path = dunce::canonicalize(path)?;
+            spaces.app_mut().open(&path)?;
+            if wait {
+                spaces.app_mut().wait_file = Some(path);
+            }
+        }
+        // What else is running on the machine is a click away, as in tmux, unless Cellix is
+        // only here to edit a file for another program.
+        if !wait {
+            spaces.open_running();
+        }
+    }
     // Whole cells can't place a caret in proportional text, so ask for pixels where that's
     // on offer. It's only used with a known cell size to divide by.
     let pixel_mouse = display.pixel_mouse && display.placement.is_some() && display.cell.is_some();
@@ -534,8 +593,8 @@ pub fn run(options: Options) -> io::Result<()> {
         loop {
             // Polled as well as signalled: a resize during slow startup is otherwise lost.
             let now = size()?;
-            if now != app.size() {
-                app.handle(Event::Resize(now.0, now.1));
+            if now != spaces.size() {
+                spaces.handle(Event::Resize(now.0, now.1));
                 let cell = window_cell();
                 if display.placement.is_some()
                     && !display.told_cell
@@ -544,24 +603,34 @@ pub fn run(options: Options) -> io::Result<()> {
                 {
                     display.cell = cell;
                     backend = display.backend();
-                    app.set_measure(display.measure());
+                    let measure = display.measure();
+                    look.borrow_mut().measure = measure.clone();
+                    for workspace in &mut spaces.list {
+                        workspace.app.set_measure(measure.clone());
+                    }
                 }
                 backend.invalidate();
                 redraw = true;
             }
-            if let Some(on) = app.take_smooth_change() {
+            if spaces.take_switched() {
+                // Another workspace is in front: none of what's on screen can be kept.
+                backend.invalidate();
+                shown = None;
+                redraw = true;
+            }
+            if let Some(on) = spaces.app_mut().take_smooth_change() {
                 display.set_smooth(on);
                 backend = display.backend();
                 redraw = true;
             }
             if redraw {
-                let (width, height) = app.size();
-                let mut grid = Grid::new(width, height, app.background());
+                let (width, height) = spaces.size();
+                let mut grid = Grid::new(width, height, spaces.app().background());
                 let started = Instant::now();
-                app.draw(&mut grid);
+                spaces.draw(&mut grid);
                 phases.draw = started.elapsed();
                 let started = Instant::now();
-                if let (Some((area, rows)), Some(from)) = (app.take_scroll(), &shown) {
+                if let (Some((area, rows)), Some(from)) = (spaces.app_mut().take_scroll(), &shown) {
                     backend.scroll(from, &grid, area, rows, &mut out)?;
                 }
                 // Under a scroll the page can wait, so the time goes on moving it.
@@ -573,12 +642,12 @@ pub fn run(options: Options) -> io::Result<()> {
                 slow.note(&phases);
                 phases = crate::slow::Phases::default();
                 shown = Some(grid);
-                if let Some(text) = app.outgoing_clipboard.take() {
+                if let Some(text) = spaces.app_mut().outgoing_clipboard.take() {
                     let encoded = base64::engine::general_purpose::STANDARD.encode(text);
                     write!(out, "\x1b]52;c;{encoded}\x07")?;
                 }
                 // The terminal's own idea of the pointer drifts, so it's told each time.
-                let pointer = app.pointer();
+                let pointer = spaces.app().pointer();
                 if shape != Some(pointer) {
                     write!(out, "\x1b]22;{pointer}\x1b\\")?;
                     shape = Some(pointer);
@@ -586,14 +655,13 @@ pub fn run(options: Options) -> io::Result<()> {
                 out.flush()?;
                 redraw = false;
             }
-            if app.quit || STOPPED.load(Ordering::Relaxed) {
+            if spaces.quit || STOPPED.load(Ordering::Relaxed) {
                 break;
             }
-            let wait = backend.gliding().unwrap_or(if app.has_session() {
-                SESSION_POLL
-            } else {
-                POLL
-            });
+            let has_session = spaces.list.iter().any(|w| w.app.has_session());
+            let wait = backend
+                .gliding()
+                .unwrap_or(if has_session { SESSION_POLL } else { POLL });
             // A signal interrupts the wait; the loop goes round and sees it.
             let ready = match ct::poll(wait) {
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
@@ -603,6 +671,7 @@ pub fn run(options: Options) -> io::Result<()> {
                 let started = Instant::now();
                 // Drain everything queued, so a fast wheel doesn't redraw per event.
                 let mut batch = Vec::new();
+                let mut came_back = false;
                 loop {
                     let event = ct::read()?;
                     // Anything but the wheel or a passing pointer may change what's under a scroll.
@@ -628,6 +697,7 @@ pub fn run(options: Options) -> io::Result<()> {
                     {
                         backend.invalidate();
                     }
+                    came_back |= matches!(event, ct::Event::FocusGained);
                     // Coming back, or typing, can leave the terminal showing a pointer of its own.
                     if matches!(event, ct::Event::FocusGained | ct::Event::Key(_)) {
                         shape = None;
@@ -647,31 +717,44 @@ pub fn run(options: Options) -> io::Result<()> {
                     match translate(event, mouse_cell(&display)).map(|e| cmd_left(e, ghostty)) {
                         // The size check above handles it, and compares against the old size.
                         Some(Event::Resize(..)) | None => {}
-                        Some(event) => app.handle(event),
+                        Some(event) => spaces.handle(event),
                     }
+                }
+                // The terminal may have turned dark or light while Cellix was away, as a Mac
+                // does at sunset, or a reattach finds it changed: its colour is asked again.
+                if came_back
+                    && let Some((light, background)) =
+                        cellix_term::background(display.multiplexer, display.passthrough)
+                    && (display.light != Some(light) || display.background != Some(background))
+                {
+                    display.light = Some(light);
+                    display.background = Some(background);
+                    let mut look = look.borrow_mut();
+                    look.light = Some(light);
+                    look.background = Some(background);
+                    for workspace in &mut spaces.list {
+                        workspace.app.follow_terminal_theme(Some(light));
+                        workspace.app.match_terminal_background(Some(background));
+                    }
+                    backend.invalidate();
+                    shown = None;
                 }
                 phases.events += started.elapsed();
                 redraw = true;
             } else if last_tick.elapsed() >= TICK {
                 let started = Instant::now();
                 last_tick = started;
-                app.handle(Event::Tick);
+                spaces.handle(Event::Tick);
                 phases.events += started.elapsed();
                 redraw = true;
             }
             let started = Instant::now();
-            redraw |= app.poll();
+            redraw |= spaces.poll();
             phases.poll += started.elapsed();
             if backend.gliding().is_some() {
                 backend.glide(Instant::now(), &mut out)?;
                 // Arrived, so the page underneath takes over.
                 redraw |= backend.gliding().is_none();
-            }
-            if let Some(server) = &server {
-                while let Ok(request) = server.requests.try_recv() {
-                    app.serve(request);
-                    redraw = true;
-                }
             }
         }
         Ok(())
@@ -680,10 +763,17 @@ pub fn run(options: Options) -> io::Result<()> {
     let _ = write!(out, "\x1b]22;default\x1b\\");
     let _ = out.flush();
     drop(_session);
-    let finished = app.finish();
-    // Before Windows ends the process, which it does as soon as a closing console is let go.
-    drop(app.ide.take());
-    drop(server);
+    // Each workspace keeps what it must: comments, tabs and unsaved edits.
+    let mut finished = Ok(());
+    for mut workspace in spaces.list.drain(..) {
+        let result = workspace.app.finish();
+        if finished.is_ok() {
+            finished = result;
+        }
+        // Before Windows ends the process, which it does as soon as a closing console is let go.
+        drop(workspace.app.ide.take());
+        drop(workspace.server);
+    }
     #[cfg(windows)]
     FINISHED.store(true, Ordering::Relaxed);
     ended.and(finished)

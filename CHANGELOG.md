@@ -4,6 +4,15 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 
 ## [Unreleased]
 
+### Added
+- Cellix keeps your work over SSH without tmux. Agents and shells in the side pane already outlived a dropped connection; now the next `cellix` in a folder also has your open tabs and unsaved edits as you left them, and a bar along the bottom holds every folder with work running on the machine, each tile saying whether its agent is working, needs you, or is done. Click a tile to switch, + to open another folder, Ctrl+Alt+PageUp and PageDown to move between them. `cellix` in your home folder lists what's running to choose from, and `cellix ls` prints it.
+- After the machine restarts, what was running comes back as it was left, with Resume for Claude Code and Codex, which picks up the agent's own conversation, and Start Again for terminals. Resume in the bar does every workspace at once.
+- Two computers can show the same agent at once. Whichever typed into it last sets its size, as in tmux.
+- On a Linux server that ends your programs when you log out, Cellix says so the first time something runs there and offers to turn on lingering, which keeps them.
+
+### Fixed
+- When the terminal turned dark (or light) while Cellix was running, as a Mac does at sunset, Cellix kept its old colours, and inside tmux even a new Cellix could start light: tmux answered from what it knew when you attached. Cellix now asks the terminal again whenever its window comes back into focus, and inside tmux lets the terminal tell tmux first.
+
 ## [0.4.3] - 2026-11-05
 
 ### Changed

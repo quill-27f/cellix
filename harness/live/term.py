@@ -18,7 +18,7 @@ The script is a list of steps:
 
 Settings come from the environment: TERM_SIZE=170x46, TERM_CELL=17x36, TERM_PADDING=10x8,
 TERM_BG=1e1e2e. Clipboard writes and timings are printed. Stop when the script ends."""
-import base64, fcntl, json, os, pty, re, select, signal, struct, sys, termios, time, zlib
+import subprocess, base64, fcntl, json, os, pty, re, select, signal, struct, sys, termios, time, zlib
 
 
 def pair(name, default):
@@ -302,6 +302,20 @@ def main():
             png(step[1], *screen.picture())
         elif kind == "log":
             print(step[1], flush=True)
+        elif kind == "bg":
+            # The terminal turns light or dark, as a Mac does at sunset, and the window comes
+            # back into focus.
+            global BACKGROUND
+            os.write(master, b"\x1b[O")
+            pump(0.3)
+            BACKGROUND = "/".join(CHANNEL(b) for b in bytes.fromhex(step[1]))
+            os.write(master, b"\x1b[I")
+            pump(0.5)
+        elif kind == "run":
+            # A command beside the program, as an agent's hook or a restart would come.
+            subprocess.run(step[1], shell=True, input=step[2] if len(step) > 2 else None,
+                           text=True, capture_output=True, timeout=20)
+            pump(0.4)
         elif kind == "timed":
             sent = time.time()
             frames = screen.frames
@@ -331,6 +345,16 @@ def main():
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
         pass
+    # The next scene may need what this one holds, such as a workspace's socket.
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        try:
+            done, _ = os.waitpid(pid, os.WNOHANG)
+        except ChildProcessError:
+            break
+        if done:
+            break
+        time.sleep(0.05)
 
 
 main()

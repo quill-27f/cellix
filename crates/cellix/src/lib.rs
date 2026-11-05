@@ -11,6 +11,7 @@ pub mod hold;
 pub mod integrations;
 mod kernel;
 mod kitty;
+mod linger;
 mod menu;
 mod neovim;
 mod outline;
@@ -33,6 +34,7 @@ mod theme;
 mod threads;
 mod toolbar;
 mod wheel;
+mod workspaces;
 
 pub use app::App;
 pub use terminal::{Options, run};

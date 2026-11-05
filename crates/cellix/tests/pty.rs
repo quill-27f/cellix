@@ -2,7 +2,7 @@
 //! the screen back through a terminal emulator.
 
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -11,6 +11,8 @@ use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 type Input = Arc<Mutex<Box<dyn Write + Send>>>;
 /// The start of what Cellix wrote, to show when a test fails.
 type Raw = Arc<Mutex<Vec<u8>>>;
+/// The background colour the "terminal" says it has when asked, as `rrrr/gggg/bbbb`.
+type Colour = Arc<Mutex<Option<String>>>;
 
 /// How long a screen waits for text. Windows gets longer: a debug build there can take many
 /// seconds to start while it's scanned, with several starting at once.
@@ -22,8 +24,8 @@ const WAIT: Duration = Duration::from_secs(if cfg!(windows) { 40 } else { 10 });
 fn pump(
     mut reader: Box<dyn Read + Send>,
     parser: Arc<Mutex<vt100::Parser>>,
-    input: Input,
-    raw: Raw,
+    (input, raw): (Input, Raw),
+    colour: Colour,
 ) {
     let started = Instant::now();
     let seen = Arc::new(Mutex::new(0usize));
@@ -66,6 +68,15 @@ fn pump(
                     }
                 });
             }
+            // Asked its colour, it answers as a terminal does, and then device attributes.
+            let said = colour.lock().unwrap().clone();
+            if let Some(said) = said.filter(|_| buf[..n].windows(5).any(|w| w == b"]11;?")) {
+                let answer = format!("\x1b]11;rgb:{said}\x1b\\\x1b[?62c");
+                let mut input = input.lock().unwrap();
+                let _ = input
+                    .write_all(answer.as_bytes())
+                    .and_then(|()| input.flush());
+            }
             parser.lock().unwrap().process(&buf[..n]);
         }
     });
@@ -82,6 +93,16 @@ struct Screen {
 
 impl Screen {
     fn start(dir: &Path, args: &[&str]) -> Self {
+        Self::start_with(dir, args, &[])
+    }
+
+    /// Starts Cellix with environment variables of its own, as `(name, value)`.
+    fn start_with(dir: &Path, args: &[&str], env: &[(&str, &Path)]) -> Self {
+        Self::start_answering(dir, args, env, Colour::default())
+    }
+
+    /// Starts Cellix in a terminal that answers what colour it is with `colour`.
+    fn start_answering(dir: &Path, args: &[&str], env: &[(&str, &Path)], colour: Colour) -> Self {
         let pty = native_pty_system()
             .openpty(PtySize {
                 rows: 30,
@@ -93,12 +114,15 @@ impl Screen {
         let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_cellix"));
         command.cwd(dir);
         command.args(args);
+        for (name, value) in env {
+            command.env(name, value);
+        }
         let child = pty.slave.spawn_command(command).unwrap();
         let reader = pty.master.try_clone_reader().unwrap();
         let input: Input = Arc::new(Mutex::new(pty.master.take_writer().unwrap()));
         let parser = Arc::new(Mutex::new(vt100::Parser::new(30, 100, 0)));
         let raw = Raw::default();
-        pump(reader, parser.clone(), input.clone(), raw.clone());
+        pump(reader, parser.clone(), (input.clone(), raw.clone()), colour);
         Self {
             parser,
             input,
@@ -383,7 +407,12 @@ fn pty_follows_a_resize() {
     let input: Input = Arc::new(Mutex::new(pty.master.take_writer().unwrap()));
     let parser = Arc::new(Mutex::new(vt100::Parser::new(10, 120, 0)));
     let raw = Raw::default();
-    pump(reader, parser.clone(), input, raw.clone());
+    pump(
+        reader,
+        parser.clone(),
+        (input, raw.clone()),
+        Colour::default(),
+    );
     let wait = |text: &str| {
         let deadline = Instant::now() + WAIT;
         while !parser.lock().unwrap().screen().contents().contains(text) {
@@ -581,6 +610,166 @@ fn closing_the_terminal_keeps_unsent_comments() {
     assert!(json.contains("kept for later"), "{json}");
     again.send(b"\x11");
     again.wait_exit();
+}
+
+/// A dropped SSH connection hangs up on Cellix. The next Cellix in the folder has the same
+/// tabs, with what was typed and never saved.
+#[test]
+#[cfg(unix)]
+fn a_dropped_connection_loses_no_unsaved_edits() {
+    let dir = project();
+    let cache = tempfile::tempdir().unwrap();
+    let env = [("XDG_CACHE_HOME", cache.path())];
+    let mut screen = Screen::start_with(dir.path(), &["hello.txt"], &env);
+    screen.wait_for("hello from a file");
+    screen.send(b"KEPT ");
+    screen.wait_for("KEPT hello");
+    screen.close();
+    screen.wait_exit();
+    drop(screen);
+    let on_disk = std::fs::read_to_string(dir.path().join("hello.txt")).unwrap();
+    assert_eq!(
+        on_disk, "hello from a file\n",
+        "nothing was saved to the file"
+    );
+
+    let mut again = Screen::start_with(dir.path(), &[], &env);
+    again.wait_for("KEPT hello from a file");
+    again.wait_for("are back as you left them");
+    again.send(b"\x13"); // Ctrl+S
+    let deadline = Instant::now() + WAIT;
+    while !std::fs::read_to_string(dir.path().join("hello.txt"))
+        .unwrap()
+        .starts_with("KEPT ")
+    {
+        assert!(
+            Instant::now() < deadline,
+            "the edits should save as any edits do"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    again.send(b"\x11");
+    again.wait_exit();
+}
+
+fn walk(dir: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(walk(&path));
+        } else {
+            found.push(path);
+        }
+    }
+    found
+}
+
+/// Work left running in one project is a tile in the next Cellix's bar, as a tmux window
+/// would be, and `cellix ls` lists it.
+#[test]
+#[cfg(unix)]
+fn work_left_running_is_in_the_next_cellixs_bar() {
+    let parent = tempfile::tempdir().unwrap();
+    let (alpha, beta) = (parent.path().join("alpha"), parent.path().join("beta"));
+    for root in [&alpha, &beta] {
+        std::fs::create_dir(root).unwrap();
+        std::fs::write(root.join("notes.txt"), "notes\n").unwrap();
+    }
+    // Short, since a socket's path has to fit in about a hundred bytes.
+    let cache = tempfile::tempdir_in("/tmp").unwrap();
+    let shell = Path::new("/bin/sh");
+    let env = [("XDG_CACHE_HOME", cache.path()), ("SHELL", shell)];
+    let cellix_ls = || {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_cellix"))
+            .arg("ls")
+            .env("XDG_CACHE_HOME", cache.path())
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+    assert!(cellix_ls().contains("Nothing is running"));
+
+    let mut screen = Screen::start_with(&alpha, &[], &env);
+    screen.wait_for("notes.txt");
+    screen.send(b"\x0a"); // Ctrl+J, a terminal in the side pane
+    screen.send(b"echo marker-$((40+2))\r");
+    screen.wait_for("marker-42");
+    screen.send(b"sleep 600\r");
+    std::thread::sleep(Duration::from_millis(700));
+    screen.close();
+    screen.wait_exit();
+    drop(screen);
+    let listed = cellix_ls();
+    let files = walk(cache.path());
+    assert!(
+        listed.contains("alpha") && listed.contains("Terminal"),
+        "{listed} {files:#?}"
+    );
+
+    let mut other = Screen::start_with(&beta, &[], &env);
+    other.wait_for("notes.txt");
+    let bar = |screen: &Screen| screen.contents().lines().last().unwrap_or("").to_string();
+    let deadline = Instant::now() + WAIT;
+    while !bar(&other).contains("alpha working") {
+        assert!(
+            Instant::now() < deadline,
+            "no tile for alpha: {:?}",
+            bar(&other)
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(bar(&other).contains("beta"), "{}", bar(&other));
+    let line = bar(&other);
+    let column = line[..line.find("alpha").unwrap()].chars().count() + 1;
+    other.send(format!("\x1b[<0;{column};30M\x1b[<0;{column};30m").as_bytes());
+    other.wait_for("marker-42");
+
+    // The shell is still the one left running: it never stopped.
+    let _ = std::process::Command::new("pkill")
+        .args(["-f", &cache.path().display().to_string()])
+        .status();
+    other.send(b"\x11");
+}
+
+/// The terminal turns dark while Cellix is away, as a Mac does at sunset, and Cellix follows
+/// when it comes back into focus.
+#[test]
+#[cfg(unix)]
+fn coming_back_to_a_terminal_that_turned_dark_turns_cellix_dark() {
+    let dir = project();
+    let colour = Colour::default();
+    *colour.lock().unwrap() = Some("ffff/ffff/ffff".to_string());
+    let mut screen = Screen::start_answering(dir.path(), &["hello.txt"], &[], colour.clone());
+    screen.wait_for("hello from a file");
+    let brightness = |screen: &Screen| {
+        let parser = screen.parser.lock().unwrap();
+        match parser.screen().cell(10, 60).map(|c| c.bgcolor()) {
+            Some(vt100::Color::Rgb(r, g, b)) => u32::from(r) + u32::from(g) + u32::from(b),
+            other => panic!("no colour: {other:?}"),
+        }
+    };
+    assert!(
+        brightness(&screen) > 600,
+        "light at first: {}",
+        brightness(&screen)
+    );
+
+    *colour.lock().unwrap() = Some("1e1e/1e1e/2e2e".to_string());
+    screen.send(b"\x1b[I"); // focus comes back
+    let deadline = Instant::now() + WAIT;
+    while brightness(&screen) > 300 {
+        assert!(
+            Instant::now() < deadline,
+            "still light: {}",
+            brightness(&screen)
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // Typing still works after the question.
+    screen.send(b"x");
+    screen.wait_for("xhello from a file");
+    screen.send(b"\x11");
 }
 
 #[test]

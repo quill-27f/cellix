@@ -15,6 +15,40 @@ const MAX_OUTPUT: usize = 20_000;
 const LABEL_LENGTH: usize = 60;
 /// Where `handle_for` leaves the agent's name in a hook's input.
 const AGENT_KEY: &str = "cellix_agent";
+/// Set by Cellix's session host to its socket, for a program it holds.
+pub const HELD_VAR: &str = "CELLIX_HELD";
+
+/// How to resume an agent held by Cellix, left by its hooks beside the host's socket so it
+/// outlives the host, as when the machine restarts.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Resumable {
+    /// The agent, as Cellix names it: "Claude Code", "Codex".
+    pub agent: String,
+    /// The agent's own session id.
+    pub session: String,
+}
+
+/// Leaves word beside `held`, the host's socket, of the agent session running there.
+/// Unchanged word isn't written again.
+pub fn remember(held: &Path, agent: &str, session: &str) {
+    if session.is_empty() || !held.extension().is_some_and(|e| e == "sock") {
+        return;
+    }
+    let word = Resumable {
+        agent: agent.to_string(),
+        session: session.to_string(),
+    };
+    let path = held.with_extension("agent");
+    let known = std::fs::read(&path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Resumable>(&bytes).ok());
+    if known.as_ref() == Some(&word) {
+        return;
+    }
+    if let Ok(json) = serde_json::to_vec(&word) {
+        let _ = std::fs::write(path, json);
+    }
+}
 /// What an agent reports while its plan is with the reviewer.
 pub const PLAN_WAITING: &str = "Plan waiting for review";
 /// How long the prompt hook waits for its checkpoint. An agent gives a hook a fixed time and
@@ -391,6 +425,15 @@ pub fn handle_for(agent: &str, kind: &str, stdin: &str) -> Option<String> {
     }
     input[AGENT_KEY] = json!(agent);
     let roots = roots(&input);
+    if matches!(kind, "session-start" | "prompt")
+        && let Some(held) = std::env::var_os(HELD_VAR)
+    {
+        remember(
+            Path::new(&held),
+            agent,
+            input["session_id"].as_str().unwrap_or(""),
+        );
+    }
     match kind {
         "session-start" => tell(&roots, &input, AgentState::Idle, "Ready"),
         "prompt" => return on_prompt(&roots, &input),
@@ -416,6 +459,30 @@ pub fn handle_for(agent: &str, kind: &str, stdin: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_held_agent_leaves_word_of_how_to_resume_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("1-2.sock");
+        super::remember(&socket, "Claude Code", "abc-123");
+        let word: super::Resumable =
+            serde_json::from_slice(&std::fs::read(dir.path().join("1-2.agent")).unwrap()).unwrap();
+        assert_eq!(word.agent, "Claude Code");
+        assert_eq!(word.session, "abc-123");
+        // A /clear starts a new session, which replaces it.
+        super::remember(&socket, "Claude Code", "def-456");
+        let text = std::fs::read_to_string(dir.path().join("1-2.agent")).unwrap();
+        assert!(text.contains("def-456"), "{text}");
+        // Nothing without an id, and nothing beside what isn't a host's socket.
+        super::remember(&socket, "Claude Code", "");
+        assert!(
+            std::fs::read_to_string(dir.path().join("1-2.agent"))
+                .unwrap()
+                .contains("def-456")
+        );
+        super::remember(&dir.path().join("notes.txt"), "Claude Code", "x");
+        assert!(!dir.path().join("notes.agent").exists());
+    }
+
     use super::*;
     use crate::{Decision, Request, SharedComments, start};
     use std::path::Path;
