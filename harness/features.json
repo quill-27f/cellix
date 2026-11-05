@@ -564,7 +564,7 @@
     "milestone": 7,
     "passes": true,
     "test": "a_remote_frame_travels_as_cells",
-    "title": "Over SSH a frame of the pane travels by value, as cells the mod draws"
+    "title": "Where pictures can't show, a frame of the pane travels by value, as cells the mod draws"
   },
   {
     "id": "tall-heading-tile",
@@ -3516,8 +3516,8 @@
   {
     "id": "pane-cells-over-ssh",
     "milestone": 10,
-    "title": "Over SSH the pane inside Claude Code is drawn as cells, and input goes in batches with moves cut to the last",
-    "test": "over_ssh_the_pane_sends_cells_and_takes_input_in_batches",
+    "title": "Where pictures can't show, the pane inside Claude Code is drawn as cells, and input goes in batches with moves cut to the last",
+    "test": "without_pictures_the_pane_sends_cells_and_takes_input_in_batches",
     "passes": true
   },
   {
@@ -3551,7 +3551,7 @@
   {
     "id": "pane-tier-by-terminal",
     "milestone": 10,
-    "title": "The pane is a picture only in kitty or Ghostty directly, and cells in tmux, Zellij, over SSH and elsewhere",
+    "title": "The pane is a picture file only in kitty or Ghostty on the same machine; elsewhere its pictures go by value",
     "test": "the_pane_is_a_picture_only_where_claude_code_can_show_one",
     "passes": true
   },
@@ -3581,6 +3581,62 @@
     "milestone": 10,
     "title": "Quick Open's count at the field's right end gives way to a long query instead of covering it",
     "test": "a_long_query_keeps_clear_of_the_status",
+    "passes": true
+  },
+  {
+    "id": "pane-rows-over-ssh",
+    "milestone": 10,
+    "title": "Over SSH the pane goes as a picture a row, by value, all at first and then only what changed",
+    "test": "over_ssh_the_pane_sends_a_picture_a_row_and_only_what_changed",
+    "passes": true
+  },
+  {
+    "id": "pane-rows-only-changed",
+    "milestone": 10,
+    "title": "Rows are named by what they show and only pictures the mod lacks cross; an idle pane sends nothing",
+    "test": "only_the_rows_that_changed_go_as_pictures",
+    "passes": true
+  },
+  {
+    "id": "pane-scroll-soft",
+    "milestone": 10,
+    "title": "Whole new pages in a burst go at half resolution, and sharp once the pane is still",
+    "test": "whole_new_pages_in_a_burst_go_soft_and_sharpen_when_still",
+    "passes": true
+  },
+  {
+    "id": "pane-tmux-passthrough",
+    "milestone": 10,
+    "title": "In tmux, Cellix turns on the options Claude Code needs for pictures on the running server, before the next Claude Code starts",
+    "test": "tmux_is_set_up_for_claude_codes_pictures",
+    "passes": true
+  },
+  {
+    "id": "setup-tmux-pictures",
+    "milestone": 10,
+    "title": "Installing for Claude Code adds what tmux needs for its pictures to the tmux config, once, and removing takes just that back",
+    "test": "tmux_gets_what_claude_code_needs_for_pictures",
+    "passes": true
+  },
+  {
+    "id": "pane-scroll-by-name",
+    "milestone": 10,
+    "title": "A scroll sends only the lines that came into view: moved rows keep their names and pictures",
+    "test": "a_scroll_sends_only_the_lines_that_came_into_view",
+    "passes": true
+  },
+  {
+    "id": "pane-height-keeps-rows",
+    "milestone": 10,
+    "title": "A new pane height sends only rows that changed",
+    "test": "a_new_height_sends_only_what_changed",
+    "passes": true
+  },
+  {
+    "id": "pane-rows-palette",
+    "milestone": 10,
+    "title": "Rows go as palette PNGs where they fit in 256 colours, losslessly",
+    "test": "rows_go_as_small_as_they_losslessly_can",
     "passes": true
   }
 ]

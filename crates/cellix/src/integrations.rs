@@ -19,6 +19,10 @@ const AUTO_CONNECT: &str = "CLAUDE_CODE_AUTO_CONNECT_IDE";
 /// Where Cellix is, for the plugin to start it by when Claude Code's PATH doesn't have it, as
 /// when Claude Code is started from an IDE, a service or by its full path.
 const CELLIX_BIN: &str = "CELLIX_BIN";
+/// What Claude Code asks of tmux before it shows pictures inside it, read as it starts. In the
+/// user's tmux config, so every tmux server has them.
+const TMUX_LINES: [&str; 2] = ["set -g allow-passthrough on", "set -g focus-events on"];
+const TMUX_NOTE: &str = "# Added by Cellix: Claude Code shows pictures inside tmux with these.";
 /// Ghostty keeps Cmd+A (select the terminal's text) and Cmd+D (split) for itself, so an editor
 /// inside never sees Select All or Select Next Match.
 const GHOSTTY_FREE: [&str; 2] = ["keybind = super+d=unbind", "keybind = super+a=unbind"];
@@ -104,7 +108,89 @@ pub fn install_claude(var: impl Fn(&str) -> Option<String>) -> io::Result<()> {
     if let Some(bin) = cellix_bin(&var) {
         env.insert(CELLIX_BIN.to_string(), json!(bin.display().to_string()));
     }
-    write_settings(&file, &settings)
+    write_settings(&file, &settings)?;
+    if on_path("tmux", &var) {
+        add_tmux_lines(&var)?;
+    }
+    Ok(())
+}
+
+/// The tmux config tmux reads: the one that exists, or the first place it looks.
+fn tmux_config(var: &impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
+    let home = PathBuf::from(var("HOME")?);
+    let classic = home.join(".tmux.conf");
+    let xdg = var("XDG_CONFIG_HOME")
+        .filter(|d| !d.is_empty())
+        .map_or_else(|| home.join(".config"), PathBuf::from)
+        .join("tmux/tmux.conf");
+    Some(if !classic.exists() && xdg.exists() {
+        xdg
+    } else {
+        classic
+    })
+}
+
+/// Adds what Claude Code needs to show pictures in tmux, keeping the rest of the config, and
+/// only the lines it lacks.
+fn add_tmux_lines(var: &impl Fn(&str) -> Option<String>) -> io::Result<()> {
+    let Some(path) = tmux_config(var) else {
+        return Ok(());
+    };
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e),
+    };
+    let has = |line: &str| text.lines().any(|l| l.trim() == line);
+    let missing: Vec<&str> = TMUX_LINES.into_iter().filter(|line| !has(line)).collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let mut added = text.clone();
+    if !added.is_empty() && !added.ends_with('\n') {
+        added.push('\n');
+    }
+    added.push_str(TMUX_NOTE);
+    added.push('\n');
+    for line in missing {
+        added.push_str(line);
+        added.push('\n');
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, added)
+}
+
+/// Takes back exactly the lines `add_tmux_lines` wrote, under its note.
+fn remove_tmux_lines(var: &impl Fn(&str) -> Option<String>) -> io::Result<()> {
+    let Some(path) = tmux_config(var) else {
+        return Ok(());
+    };
+    let Ok(text) = fs::read_to_string(&path) else {
+        return Ok(());
+    };
+    let mut kept = Vec::new();
+    let mut ours = false;
+    for line in text.lines() {
+        if line == TMUX_NOTE {
+            ours = true;
+            continue;
+        }
+        if ours && TMUX_LINES.contains(&line) {
+            continue;
+        }
+        ours = false;
+        kept.push(line);
+    }
+    if kept.len() == text.lines().count() {
+        return Ok(());
+    }
+    let mut left = kept.join("\n");
+    if !left.is_empty() {
+        left.push('\n');
+    }
+    fs::write(path, left)
 }
 
 /// This Cellix, by the path the PATH finds it at when that's the same file, since that path
@@ -146,7 +232,8 @@ pub fn remove_claude(var: impl Fn(&str) -> Option<String>) -> io::Result<()> {
     if env.is_empty() {
         settings.remove("env");
     }
-    write_settings(&file, &settings)
+    write_settings(&file, &settings)?;
+    remove_tmux_lines(&var)
 }
 
 /// Runs an agent's own command, so its config stays its business, and returns what went
@@ -402,6 +489,48 @@ mod tests {
             !crate::plugin::folder(&var).unwrap().exists(),
             "nothing half done"
         );
+    }
+
+    /// Claude Code shows pictures inside tmux only with these on as it starts, so they go in
+    /// the user's tmux config, under a note, keeping what was there; removing takes back
+    /// just those.
+    #[test]
+    fn tmux_gets_what_claude_code_needs_for_pictures() {
+        let (dir, home_var) = home();
+        let bin = dir.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        fs::write(bin.join("tmux"), "").unwrap();
+        let path = bin.display().to_string();
+        let var = |name: &str| {
+            if name == "PATH" {
+                Some(path.clone())
+            } else {
+                home_var(name)
+            }
+        };
+        let conf = dir.path().join(".tmux.conf");
+        fs::write(&conf, "set -g mouse on\nset -g focus-events on\n").unwrap();
+        install_claude(var).unwrap();
+        let text = fs::read_to_string(&conf).unwrap();
+        assert_eq!(
+            text,
+            format!(
+                "set -g mouse on\nset -g focus-events on\n{TMUX_NOTE}\nset -g allow-passthrough on\n"
+            ),
+            "only what was missing"
+        );
+        install_claude(var).unwrap();
+        assert_eq!(fs::read_to_string(&conf).unwrap(), text, "once");
+        remove_claude(var).unwrap();
+        assert_eq!(
+            fs::read_to_string(&conf).unwrap(),
+            "set -g mouse on\nset -g focus-events on\n",
+            "and the user's own lines stay"
+        );
+        // Without tmux, its config isn't touched.
+        let (dir, var) = home();
+        install_claude(var).unwrap();
+        assert!(!dir.path().join(".tmux.conf").exists());
     }
 
     #[test]

@@ -604,6 +604,21 @@ mod tests {
     use super::*;
     use cellix_render::Style;
 
+    /// A row under a tall shape, like a page's sheet, is the same row wherever it stands, so it
+    /// keeps its picture as the page scrolls. Near the shape's rounded ends it isn't.
+    #[test]
+    fn a_row_under_a_tall_shape_is_known_wherever_it_stands() {
+        let mut grid = Grid::new(10, 30, Style::default());
+        let sheet = cellix_render::Bounds::cells(1.0, 0.0, 8.0, 30.0);
+        grid.panel(sheet, 40, Some(cellix_render::Rgb(250, 250, 250)), None);
+        assert_eq!(row_key(&grid, 10), row_key(&grid, 15));
+        assert_ne!(
+            row_key(&grid, 0),
+            row_key(&grid, 15),
+            "the rounded top shows in row 0"
+        );
+    }
+
     /// Solid tiles, so these tests measure the protocol and not fonts.
     struct Flat;
 

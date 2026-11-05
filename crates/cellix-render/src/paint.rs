@@ -160,6 +160,23 @@ pub enum Paint {
     },
 }
 
+/// How far past a row a shape's edge can still change it: the largest corner, 255% of a row,
+/// and a shadow's reach, with room to spare.
+const ROW_REACH: i32 = 4 * UNIT;
+
+/// `bounds` cut to within reach of the row starting at `top`, which leaves what the row shows
+/// of a plain shape as it was.
+fn beyond_the_row(bounds: Bounds, top: i32) -> Bounds {
+    let (low, high) = (top - ROW_REACH, top + UNIT + ROW_REACH);
+    let y = bounds.y.clamp(low, high);
+    let bottom = (bounds.y + bounds.h).clamp(low, high);
+    Bounds {
+        y,
+        h: bottom - y,
+        ..bounds
+    }
+}
+
 impl Paint {
     /// Paint units of the columns this can touch, as (left, right). It may overstate them:
     /// that costs a tile, where understating would leave stale pixels.
@@ -204,12 +221,23 @@ impl Paint {
     pub fn on_row(&self, top: i32) -> Self {
         let mut paint = self.clone();
         match &mut paint {
-            Self::Panel { bounds, .. }
+            // A shape reaching well past the row on a side looks the same in it however far
+            // it goes, so that far is left out: a page's sheet runs the height of the view,
+            // and seen whole, every row under it looked new after each scroll.
+            Self::Panel {
+                bounds,
+                dashed: false,
+                ..
+            }
             | Self::Wash { bounds, .. }
             | Self::Hairline { bounds, .. }
+            | Self::Corners { bounds, .. } => {
+                *bounds = beyond_the_row(*bounds, top);
+                bounds.y -= top;
+            }
+            Self::Panel { bounds, .. }
             | Self::Icon { bounds, .. }
-            | Self::Strips { bounds, .. }
-            | Self::Corners { bounds, .. } => bounds.y -= top,
+            | Self::Strips { bounds, .. } => bounds.y -= top,
             Self::Image { bounds, clip, .. } => {
                 // A clip that doesn't reach into the row makes no difference to it.
                 let bottom = (clip.y + clip.h).min(top + UNIT);

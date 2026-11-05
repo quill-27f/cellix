@@ -141,11 +141,10 @@ fn decode_cells(line: &str) -> CellFrame {
     (columns, rows, chars)
 }
 
-/// Over SSH the pane inside Claude Code sends its frames as cells, where it sent a picture
-/// of the whole pane each time the pointer moved, which blinked and held up clicks. This
+/// Where pictures can't show, the pane inside Claude Code sends its frames as cells. This
 /// runs the real pane as the mod does: input goes in batches through `pane-send`.
 #[test]
-fn over_ssh_the_pane_sends_cells_and_takes_input_in_batches() {
+fn without_pictures_the_pane_sends_cells_and_takes_input_in_batches() {
     use std::io::BufRead;
     use std::process::Stdio;
     use std::time::{Duration, Instant};
@@ -165,6 +164,7 @@ fn over_ssh_the_pane_sends_cells_and_takes_input_in_batches() {
             .env("XDG_CACHE_HOME", home.join(".cache"))
             .env("XDG_DATA_HOME", home.join(".local/share"))
             .env("CELLIX_MOD", cellix::pane::PROTOCOL)
+            .env("CELLIX_TIER", "cells")
             .env("SSH_CONNECTION", "10.0.0.1 50000 10.0.0.2 22");
         command
     };
@@ -256,4 +256,137 @@ fn a_mod_left_by_an_upgrade_is_replaced_and_told_to_restart() {
     let written =
         std::fs::read_to_string(data.join("cellix/claude-code/hooks/register.tsx")).unwrap();
     assert!(written.contains(&format!("const PROTOCOL = '{}'", cellix::pane::PROTOCOL)));
+}
+
+/// A `rows` line: each row's name, and the names whose pictures it carries.
+fn named_rows(line: &str) -> (Vec<String>, Vec<String>) {
+    let mut parts = line.split(' ');
+    assert_eq!(parts.next(), Some("rows"));
+    parts.nth(1);
+    let names = parts
+        .next()
+        .unwrap()
+        .split(',')
+        .map(str::to_string)
+        .collect();
+    let pictures = parts
+        .map(|part| {
+            let (name, png) = part.split_once(':').unwrap();
+            assert!(png.starts_with("iVBORw0KGgo"), "a whole PNG");
+            name.to_string()
+        })
+        .collect();
+    (names, pictures)
+}
+
+/// Over SSH the pane goes as a picture a row, by value, which the terminal can show where it
+/// couldn't read this machine's files; and only the rows that changed cross, where the whole
+/// pane used to cross on each move and blink. Runs the real pane as the mod does.
+#[test]
+fn over_ssh_the_pane_sends_a_picture_a_row_and_only_what_changed() {
+    use std::io::BufRead;
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("work");
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(
+        root.join("plan.md"),
+        "Pictures cross the wire\n\nA second line\n",
+    )
+    .unwrap();
+    let cellix = || {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cellix"));
+        command
+            .current_dir(&root)
+            .env("HOME", &home)
+            .env("XDG_CONFIG_HOME", home.join(".config"))
+            .env("XDG_CACHE_HOME", home.join(".cache"))
+            .env("XDG_DATA_HOME", home.join(".local/share"))
+            .env("CELLIX_MOD", cellix::pane::PROTOCOL)
+            .env_remove("TMUX")
+            .env_remove("CELLIX_TIER")
+            .env("SSH_CONNECTION", "10.0.0.1 50000 10.0.0.2 22");
+        command
+    };
+    let mut pane = KillOnDrop(
+        cellix()
+            .arg("pane")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let stdout = pane.0.stdout.take().unwrap();
+    let (sender, lines) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stdout).lines() {
+            let Ok(line) = line else { break };
+            if sender.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let next_rows = |what: &dyn Fn(&str) -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while Instant::now() < deadline {
+            let Ok(line) = lines.recv_timeout(Duration::from_millis(200)) else {
+                continue;
+            };
+            assert!(
+                !line.starts_with("cells ") && !line.starts_with("frame "),
+                "{line:.40}"
+            );
+            if line.starts_with("rows ") && what(&line) {
+                return Some(line);
+            }
+        }
+        None
+    };
+    let send = |batch: &str| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !cellix()
+            .args(["pane-send", batch])
+            .status()
+            .unwrap()
+            .success()
+        {
+            assert!(Instant::now() < deadline, "pane-send never got through");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    };
+    // Nothing crosses until the mod says the pane's size.
+    let until = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < until {
+        if let Ok(line) = lines.recv_timeout(Duration::from_millis(100)) {
+            assert!(!line.starts_with("rows "), "a frame at a guessed size");
+        }
+    }
+    let open = format!(
+        r#"[{{"type":"resize","columns":72,"rows":24}},{{"type":"open","path":{:?}}}]"#,
+        root.join("plan.md").to_str().unwrap()
+    );
+    send(&open);
+    let first = next_rows(&|line| line.starts_with("rows 72 24 ")).expect("a first frame");
+    let (names, pictures) = named_rows(&first);
+    assert_eq!(names.len(), 24);
+    let distinct: std::collections::HashSet<&String> = names.iter().collect();
+    assert_eq!(
+        pictures.len(),
+        distinct.len(),
+        "a picture for each row it shows, once"
+    );
+    // Let it settle: the file opens, and anything sent soft is sharpened.
+    while lines.recv_timeout(Duration::from_millis(600)).is_ok() {}
+    send(r#"[{"type":"key","key":"x"}]"#);
+    let typed = next_rows(&|_| true).expect("the typed letter");
+    let (_, changed) = named_rows(&typed);
+    assert!(
+        !changed.is_empty() && changed.len() <= 4,
+        "a letter costs a row or so, not the pane: {changed:?}"
+    );
 }

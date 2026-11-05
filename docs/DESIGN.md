@@ -362,12 +362,24 @@ than sending lines it would ignore.
 `cellix pane` runs the whole app with no terminal, started by the mod for the session's
 life. It writes each changed frame to a private file and prints one line, and the mod
 swaps the pane's image to it. Claude Code shows a picture from a file only in kitty and
-Ghostty on the same machine: through tmux or Zellij it shows nothing, and over SSH the
-terminal can't read the file, while a picture sent by value each time the pane changed
-blinked and held up clicks, since a pointer move changes what's hovered. So everywhere but
-kitty or Ghostty, directly, the pane is the cell tier, sent as `cells` lines that the mod
-draws as a `Raster`: Claude Code writes only the changed cells to the terminal.
-`CELLIX_TIER=cells` or `pixels` overrides the choice. Input comes back through a surface module layered over the picture. It is
+Ghostty on the same machine. Everywhere else, over SSH and through tmux, the pane goes by
+value as a picture a row (`rows` lines). Each row is named by what it shows, a hash of its
+cells and paint with tall shapes cut to the row's reach, and a PNG crosses only for a name the
+mod doesn't hold; the mod draws a column of `Image`s keyed by name. Claude Code uploads a
+picture to the terminal once per key and moves it with its row, so a click or a letter costs a
+row or two and a scroll the lines that came into view (measured over SSH and tmux: a click
+21 KB, a letter 28 KB, a scroll notch about 60 KB, where one picture of the pane each change
+cost about 300 KB and blinked). Rows are palette PNGs where they fit in 256 colours, about a
+third the size, and pages that are all new in quick succession go at half resolution, sharp
+once the pane is still. Nothing is sent until the mod says the pane's size.
+
+Claude Code decides whether it can show pictures inside tmux as it starts, from tmux's global
+`allow-passthrough` and `focus-events`; a pane's own option, or one set later, isn't seen.
+`cellix setup claude` adds both to the tmux config, and the session-start hook and the pane
+set them on a running tmux server, so the next Claude Code started there shows pictures. The
+mod checks once, by swapping a drawn row for itself, and where Claude Code draws the alt
+instead, asks for the cell tier: `cells` lines drawn as a `Raster`. `CELLIX_TIER=cells` or
+`pixels` overrides the choice, and `CELLIX_PANE_LOG=<file>` records what came in and went out. Input comes back through a surface module layered over the picture. It is
 gathered per tick and sent as one batch per `cellix pane-send` over the workspace socket,
 whatever piled up while the last send ran going in the next. Cellix keeps only the last of a
 run of moves and takes everything waiting before it draws again. An idle pane sends nothing.

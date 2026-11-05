@@ -4,6 +4,9 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 
 ## [Unreleased]
 
+### Changed
+- Inside Claude Code over SSH and in tmux, the pane is drawn as on your own machine, in pictures, instead of text. It goes a row at a time, and only rows the terminal hasn't shown cross: a click or a letter costs a few kilobytes, a scroll the lines that came into view. `cellix setup claude` adds `allow-passthrough` and `focus-events` to your tmux config, which Claude Code needs to show pictures inside tmux; in a tmux already running without them, Cellix turns them on and asks you to restart Claude Code once. Where pictures can't show, the pane is text, and says why.
+
 ## [0.4.2] - 2026-11-05
 
 ### Fixed

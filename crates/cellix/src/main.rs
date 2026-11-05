@@ -94,6 +94,11 @@ fn setup(install: bool) -> ExitCode {
         return match cellix::integrations::install_claude(|name| std::env::var(name).ok()) {
             Ok(()) => {
                 println!("Installed. Claude Code now opens Cellix with no flags.");
+                if cellix::integrations::on_path("tmux", |name| std::env::var(name).ok()) {
+                    println!(
+                        "tmux's config now has allow-passthrough and focus-events on, which Claude Code needs to show pictures inside tmux."
+                    );
+                }
                 ExitCode::SUCCESS
             }
             Err(e) => {
@@ -147,6 +152,9 @@ fn setup_agent(agent: &str) -> ExitCode {
 fn hook(agent: &str, kind: &str) -> ExitCode {
     if agent == "Claude Code" && kind == "session-start" {
         cellix::plugin::refresh();
+        // Too late for this session, which has read tmux's options already, but every
+        // Claude Code started after in this tmux shows Cellix's pictures.
+        let _ = cellix::pane::prepare_tmux(|name| std::env::var(name).ok());
     }
     let mut input = String::new();
     let _ = std::io::stdin().read_to_string(&mut input);

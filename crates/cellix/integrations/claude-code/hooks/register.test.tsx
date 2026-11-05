@@ -190,3 +190,103 @@ test('off Claude Code PATH, Cellix starts from where setup found it, and says wh
   expect(started.every(s => s.env?.CELLIX_MOD === '2')).toBe(true)
   expect(ran).toContain('/opt/cellix/bin/cellix pane-send [{"type":"open","path":"/work/plan.md"}]')
 })
+
+/** One-pixel PNGs, base64, standing for rows. */
+const RED = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGM4wcAAAAJcAMlDyBJGAAAAAElFTkSuQmCC'
+const GREEN = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgOMEAAAGUAMlBGJ3rAAAAAElFTkSuQmCC'
+const BLUE = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYDgBAADMAMkncsFaAAAAAElFTkSuQmCC'
+
+/** A frame as Cellix sends it over SSH and in tmux: each row's name, and the pictures given. */
+function rowsLine(columns: number, height: number, names: string[], pictures: Record<string, string>): string {
+  const parts = Object.entries(pictures).map(([name, png]) => ` ${name}:${png}`)
+  return `rows ${columns} ${height} ${names.join(',')}${parts.join('')}\n`
+}
+
+/** The pictures the pane draws, top to bottom, by their source. */
+async function drawn(pane: { findAll: (query: { type: string }) => Promise<{ props: unknown }[]> }) {
+  const images = await pane.findAll({ type: 'Image' })
+  return images.map(image => (image.props as { source: { png: string } }).source.png)
+}
+
+test('over SSH the pane is a picture a row, kept by name as rows move, so only new rows cross', async ($, on) => {
+  const blits: string[] = []
+  const clock = mock.clock(on)
+  on('ui.open', async () => ({ value: { isPlaced: true as const } }))
+  on('process.run', async () => ({ value: { exitCode: 0, stdout: '[]', stderr: '' } }))
+  on('ui.blit', async (_, e) => {
+    blits.push(e.key)
+    return { value: {} }
+  })
+  on('process.spawn', async function* () {
+    yield { stream: 'stdout' as const, text: rowsLine(4, 3, ['a', 'b', 'c'], { a: RED, b: GREEN, c: BLUE }) }
+    await clock.sleep(1000)
+    // Scrolled by one: b and c move up by name, and only the new row comes with a picture.
+    yield { stream: 'stdout' as const, text: rowsLine(4, 3, ['b', 'c', 'd'], { d: RED }) }
+    await clock.sleep(5000)
+    return { value: { code: 0, signal: null } }
+  })
+  await $.command.run({ command: 'cellix', args: '' })
+  await clock.advance(1)
+  const pane = await $.ui.mount({
+    plugin: 'cellix',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'cellix',
+    props: { bodyColumns: 80, scroll: { bodyRows: 20 } } as never,
+  })
+  expect(await drawn(pane)).toEqual([RED, GREEN, BLUE])
+  await clock.advance(1100)
+  expect(await drawn(pane)).toEqual([GREEN, BLUE, RED])
+  const images = await pane.findAll({ type: 'Image' })
+  expect(images.map(image => image.key)).toEqual(['b.0', 'c.0', 'd.0'])
+  expect(blits).toEqual(['a.0'])
+})
+
+test("where the terminal can't show pictures, Cellix is asked for cells and told why", async ($, on) => {
+  const sent: string[] = []
+  const clock = mock.clock(on)
+  on('ui.open', async () => ({ value: { isPlaced: true as const } }))
+  on('process.run', async (_, e) => {
+    sent.push(e.argv.join(' '))
+    return { value: { exitCode: 0, stdout: '[]', stderr: '' } }
+  })
+  on('ui.blit', async () => ({
+    value: { deny: 'the Image draws its alt here: tmux does not know which terminal is outside it' },
+  }))
+  on('process.spawn', async function* () {
+    yield { stream: 'stdout' as const, text: rowsLine(4, 2, ['a', 'a'], { a: GREEN }) }
+    await clock.sleep(5000)
+    return { value: { code: 0, signal: null } }
+  })
+  await $.command.run({ command: 'cellix', args: '' })
+  await clock.advance(400)
+  await clock.settle()
+  expect(sent).toContain(
+    'cellix pane-send [{"type":"tier","tier":"cells","why":"tmux does not know which terminal is outside it"}]',
+  )
+})
+
+test("a new height keeps the rows Cellix didn't send again", async ($, on) => {
+  const clock = mock.clock(on)
+  on('ui.open', async () => ({ value: { isPlaced: true as const } }))
+  on('process.run', async () => ({ value: { exitCode: 0, stdout: '[]', stderr: '' } }))
+  on('ui.blit', async () => ({ value: {} }))
+  on('process.spawn', async function* () {
+    yield { stream: 'stdout' as const, text: rowsLine(4, 3, ['a', 'b', 'c'], { a: RED, b: GREEN, c: BLUE }) }
+    await clock.sleep(1000)
+    // The prompt grew: one row fewer, and the last one now holds the status bar.
+    yield { stream: 'stdout' as const, text: rowsLine(4, 2, ['a', 'd'], { d: BLUE }) }
+    await clock.sleep(5000)
+    return { value: { code: 0, signal: null } }
+  })
+  await $.command.run({ command: 'cellix', args: '' })
+  await clock.advance(1100)
+  const pane = await $.ui.mount({
+    plugin: 'cellix',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'cellix',
+    props: { bodyColumns: 80, scroll: { bodyRows: 20 } } as never,
+  })
+  expect(await drawn(pane)).toEqual([RED, BLUE])
+})

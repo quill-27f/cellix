@@ -62,6 +62,12 @@ pub enum Input {
         path: PathBuf,
     },
     Quiet,
+    /// The mod found it can't show pictures here, so the pane goes as cells.
+    Tier {
+        tier: String,
+        /// Claude Code's reason, to say why.
+        why: Option<String>,
+    },
 }
 
 fn key_of(name: &str) -> Option<Key> {
@@ -179,7 +185,7 @@ pub fn translate(input: Input) -> Vec<Event> {
             (0..by.unsigned_abs()).map(wheel).collect()
         }
         Input::Resize { columns, rows } => vec![Event::Resize(columns.max(20), rows.max(5))],
-        Input::Open { .. } | Input::Quiet => Vec::new(),
+        Input::Open { .. } | Input::Quiet | Input::Tier { .. } => Vec::new(),
     }
 }
 
@@ -259,6 +265,255 @@ impl<R: Rasterizer> Frames<R> {
     }
 }
 
+/// Changed rows of more than this many make a frame a big one, as scrolling makes.
+const BURST_ROWS: usize = 8;
+/// Big frames closer together than this are a burst: their rows go at half resolution, about
+/// a quarter of the bytes, so a scroll keeps up over a slow link.
+const BURST_GAP: std::time::Duration = std::time::Duration::from_millis(250);
+/// How long the pane stays still before rows sent at half resolution are sent sharp.
+const SHARPEN_AFTER: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// The pane as one picture per row, sent by value, for a terminal that can't read this
+/// machine's files: over SSH, or through tmux. Each row is named by what it shows, and its
+/// picture crosses only when the mod doesn't hold that name yet. Claude Code uploads a picture
+/// to the terminal once per name and moves it with the row, so a scroll costs the lines that
+/// came into view, and a hover or a click a row or two; measured in real Claude Code, a row
+/// moved by name uploads nothing.
+struct RowPictures<R> {
+    rasterizer: R,
+    cell: (usize, usize),
+    /// The name of what each row on screen shows, as last sent.
+    shown: Vec<String>,
+    /// The names whose pictures the mod holds: those on screen.
+    held: std::collections::HashSet<String>,
+    width: u16,
+    last_big: Option<std::time::Instant>,
+    last_change: std::time::Instant,
+}
+
+/// A row's name: what it holds, and whether its picture is the soft one.
+fn row_name(key: u64, sharp: bool) -> String {
+    if sharp {
+        format!("{key:x}")
+    } else {
+        format!("{key:x}s")
+    }
+}
+
+impl<R: Rasterizer> RowPictures<R> {
+    fn new(rasterizer: R, cell: (usize, usize)) -> Self {
+        Self {
+            rasterizer,
+            cell,
+            shown: Vec::new(),
+            held: std::collections::HashSet::new(),
+            width: 0,
+            last_big: None,
+            last_change: std::time::Instant::now(),
+        }
+    }
+
+    fn soft_on_screen(&self) -> bool {
+        self.shown.iter().any(|name| name.ends_with('s'))
+    }
+
+    /// One row as a PNG, base64, at full or half resolution.
+    fn picture(&mut self, grid: &Grid, y: u16, sharp: bool) -> String {
+        let rgb = self.rasterizer.row(grid, y).rgb;
+        let (mut width, mut height) = (grid.width() as usize * self.cell.0, self.cell.1);
+        let rgb = if sharp {
+            rgb
+        } else {
+            let half = halve(&rgb, width, height);
+            (width, height) = (width / 2, height / 2);
+            half
+        };
+        base64::engine::general_purpose::STANDARD.encode(encode_png(&rgb, width, height))
+    }
+
+    /// The names of every row and the pictures the mod lacks, in one line; None when nothing
+    /// changed and nothing waits to be sharpened.
+    fn line(&mut self, grid: &Grid, now: std::time::Instant) -> Option<String> {
+        if grid.width() != self.width {
+            self.held.clear();
+            self.width = grid.width();
+        }
+        let keys: Vec<u64> = (0..grid.height()).map(|y| row_key(grid, y)).collect();
+        // A row keeps the name it had, sharp or soft, when it's still on screen somewhere.
+        let held = |key: u64| {
+            let sharp = row_name(key, true);
+            if self.held.contains(&sharp) {
+                return Some(sharp);
+            }
+            let soft = row_name(key, false);
+            self.held.contains(&soft).then_some(soft)
+        };
+        let new = keys.iter().filter(|&&key| held(key).is_none()).count();
+        let mut sharp = true;
+        if new > BURST_ROWS {
+            sharp = self.last_big.is_none_or(|at| now - at > BURST_GAP);
+            self.last_big = Some(now);
+        }
+        let still = new == 0 && now - self.last_change >= SHARPEN_AFTER;
+        let names: Vec<String> = keys
+            .iter()
+            .map(|&key| match held(key) {
+                // Still for long enough: what went soft in a burst goes sharp now.
+                Some(name) if still && name.ends_with('s') => row_name(key, true),
+                Some(name) => name,
+                None => row_name(key, sharp),
+            })
+            .collect();
+        if names == self.shown {
+            return None;
+        }
+        if new > 0 {
+            self.last_change = now;
+        }
+        let mut line = format!(
+            "rows {} {} {}",
+            grid.width(),
+            grid.height(),
+            names.join(",")
+        );
+        let mut sent = std::collections::HashSet::new();
+        for (y, name) in names.iter().enumerate() {
+            if self.held.contains(name) || !sent.insert(name.clone()) {
+                continue;
+            }
+            let picture = self.picture(grid, y as u16, !name.ends_with('s'));
+            line.push_str(&format!(" {name}:{picture}"));
+        }
+        // The mod keeps only what's on screen.
+        self.held = names.iter().cloned().collect();
+        self.shown = names;
+        Some(line)
+    }
+}
+
+/// Half the width and height, each pixel the top left of its four: averaging makes colours
+/// the row didn't have, and a row past 256 of them loses its small palette PNG.
+fn halve(rgb: &[u8], width: usize, height: usize) -> Vec<u8> {
+    let (w, h) = (width / 2, height / 2);
+    let mut out = Vec::with_capacity(w * h * 3);
+    for y in 0..h {
+        for x in 0..w {
+            let at = (y * 2 * width + x * 2) * 3;
+            out.extend_from_slice(&rgb[at..at + 3]);
+        }
+    }
+    out
+}
+
+fn encode_png(rgb: &[u8], width: usize, height: usize) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let mut encoder = png::Encoder::new(&mut bytes, width as u32, height as u32);
+    encoder.set_compression(png::Compression::Balanced);
+    // Filters cost more than they save on flat colour and text.
+    encoder.set_filter(png::Filter::NoFilter);
+    let palette = palette_of(rgb);
+    let data = match &palette {
+        Some((colours, indices)) => {
+            encoder.set_color(png::ColorType::Indexed);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder.set_palette(colours.clone());
+            indices.as_slice()
+        }
+        None => {
+            encoder.set_color(png::ColorType::Rgb);
+            rgb
+        }
+    };
+    if let Ok(mut writer) = encoder.write_header() {
+        let _ = writer.write_image_data(data);
+    }
+    bytes
+}
+
+/// The colours of a picture and each pixel's index into them, if there are 256 or fewer.
+fn palette_of(rgb: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+    let mut index: HashMap<[u8; 3], u8> = HashMap::new();
+    let mut colours = Vec::new();
+    let mut indices = Vec::with_capacity(rgb.len() / 3);
+    for &key in rgb.as_chunks::<3>().0 {
+        let at = match index.get(&key) {
+            Some(&at) => at,
+            None => {
+                if index.len() == 256 {
+                    return None;
+                }
+                let at = index.len() as u8;
+                index.insert(key, at);
+                colours.extend_from_slice(&key);
+                at
+            }
+        };
+        indices.push(at);
+    }
+    Some((colours, indices))
+}
+
+/// The tmux options Claude Code needs to show pictures inside tmux, as it says itself. It
+/// reads them when it starts, so they must be on before then, server wide: a pane's own
+/// option, or one set while it runs, isn't seen.
+const TMUX_OPTIONS: [&str; 2] = ["allow-passthrough", "focus-events"];
+const RESTART_FOR_PICTURES: &str = "tmux is ready for pictures: restart Claude Code to see them";
+
+/// Gets the tmux this runs in ready for Claude Code's pictures. Sets the options on the
+/// running server, never in the user's config, so every Claude Code started after shows
+/// pictures. Returns what was found.
+pub fn prepare_tmux(var: impl Fn(&str) -> Option<String>) -> Tmux {
+    let (Some(socket), Some(pane)) = (var("TMUX").filter(|v| !v.is_empty()), var("TMUX_PANE"))
+    else {
+        return Tmux::Absent;
+    };
+    let tmux = |args: &[&str]| {
+        let done = std::process::Command::new("tmux")
+            .env("TMUX", &socket)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .ok()?;
+        done.status
+            .success()
+            .then(|| String::from_utf8_lossy(&done.stdout).trim().to_string())
+    };
+    // Pictures stand on placeholder characters, which tmux mangles unless it speaks UTF-8.
+    let utf8 = tmux(&["display-message", "-p", "-t", &pane, "#{client_utf8}"]);
+    if utf8.as_deref() == Some("0") {
+        return Tmux::NoPictures(
+            "tmux isn't using UTF-8, so the pane shows text. Set LANG to a UTF-8 locale and attach again for pictures".into(),
+        );
+    }
+    let on = |option: &str| {
+        let value = tmux(&["show-options", "-g", "-v", option]);
+        matches!(value.as_deref(), Some("on" | "all"))
+    };
+    if TMUX_OPTIONS.iter().all(|option| on(option)) {
+        return Tmux::Ready;
+    }
+    let set = TMUX_OPTIONS
+        .iter()
+        .all(|option| tmux(&["set-option", "-g", option, "on"]).is_some());
+    if set {
+        Tmux::JustSet
+    } else {
+        Tmux::NoPictures(
+            "tmux won't pass pictures through, so the pane shows text. tmux 3.3 or later shows them".into(),
+        )
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Tmux {
+    Absent,
+    /// Set before this Claude Code started, so its pictures show.
+    Ready,
+    /// Set just now: Claude Code started without them, so pictures show from its next start.
+    JustSet,
+    NoPictures(String),
+}
+
 /// What a cell shows in Claude Code's Raster, which takes one printable width-1 character
 /// from the Basic Multilingual Plane: an icon is its cell-tier drawing, as in a terminal, the
 /// right half of a wide character is a space, and a character it can't show stands as `?`.
@@ -333,9 +588,9 @@ fn parent() -> u32 {
     0
 }
 
-/// Whether Claude Code can show the pane as a picture here. It shows a picture read from a
-/// file only in kitty and Ghostty on this machine, never through tmux or Zellij, and over SSH
-/// the file isn't where the terminal is. Everywhere else the pane goes as cells.
+/// Whether Claude Code can show the pane from a picture file here. It reads one only in kitty
+/// and Ghostty on this machine, never through tmux or Zellij, and over SSH the file isn't
+/// where the terminal is. Everywhere else the pictures go by value, a row each.
 pub fn pictures_show(var: impl Fn(&str) -> Option<String>) -> bool {
     let set = |name: &str| var(name).is_some_and(|v| !v.is_empty());
     match var("CELLIX_TIER").as_deref() {
@@ -376,25 +631,51 @@ pub fn run(root: &Path) -> io::Result<()> {
     let mut app = App::new(root.to_path_buf(), DEFAULT_SIZE);
     app.compact_width = PANE_COMPACT_WIDTH;
     app.in_pane = true;
-    let cells = !pictures_show(|name| std::env::var(name).ok());
-    let mut frames = None;
-    if !cells {
-        let cell = window_cell().unwrap_or(DEFAULT_CELL);
-        app.set_measure(Rc::new(FontMeasure::new(cell.0, cell.1)));
-        let rasterizer =
-            SoftwareRasterizer::new(cell.0, cell.1).ok_or_else(|| io::Error::other("no fonts"))?;
-        let folder = cellix_agent::socket_path(root).with_extension("pane");
-        fs::create_dir_all(&folder)?;
-        frames = Some(Frames {
-            rasterizer,
-            cell,
-            rows: HashMap::new(),
-            shown: Vec::new(),
-            folder,
-            count: 0,
-        });
-    }
+    let var = |name: &str| std::env::var(name).ok();
+    let mut output = match (var("CELLIX_TIER").as_deref(), prepare_tmux(var)) {
+        (Some("cells"), _) => Output::Cells,
+        (_, Tmux::NoPictures(why)) => {
+            app.say(why);
+            Output::Cells
+        }
+        (_, Tmux::JustSet) => {
+            app.say(RESTART_FOR_PICTURES);
+            Output::Cells
+        }
+        (_, Tmux::Absent | Tmux::Ready) => {
+            let cell = window_cell().unwrap_or(DEFAULT_CELL);
+            app.set_measure(Rc::new(FontMeasure::new(cell.0, cell.1)));
+            let rasterizer = SoftwareRasterizer::new(cell.0, cell.1)
+                .ok_or_else(|| io::Error::other("no fonts"))?;
+            if pictures_show(var) {
+                let folder = cellix_agent::socket_path(root).with_extension("pane");
+                fs::create_dir_all(&folder)?;
+                Output::File(Frames {
+                    rasterizer,
+                    cell,
+                    rows: HashMap::new(),
+                    shown: Vec::new(),
+                    folder,
+                    count: 0,
+                })
+            } else {
+                Output::Rows(RowPictures::new(rasterizer, cell))
+            }
+        }
+    };
     let mut shown_cells = Vec::new();
+    // `CELLIX_PANE_LOG=<file>` notes what came in and what went out, to see why a setup
+    // sends more than it should.
+    let mut log = std::env::var_os("CELLIX_PANE_LOG").and_then(|path| {
+        fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .ok()
+    });
+    // Pictures cross the connection, so none go until the mod says how big the pane is:
+    // a frame at the default size would cross only to be sent again.
+    let mut sized = !matches!(output, Output::Rows(_));
     let server = cellix_agent::start(root, app.comments.clone())?;
     app.restore_unsent();
     app.ide = IdeServer::start(root).ok();
@@ -409,11 +690,16 @@ pub fn run(root: &Path) -> io::Result<()> {
             let (columns, rows) = app.size();
             let mut grid = Grid::new(columns, rows, app.background());
             app.draw(&mut grid);
-            let line = match &mut frames {
-                Some(frames) => frames.line(&grid)?,
-                None => changed(&mut shown_cells, &grid).then(|| cells_line(&grid)),
+            let line = match &mut output {
+                Output::File(frames) => frames.line(&grid)?,
+                Output::Rows(_) if !sized => None,
+                Output::Rows(rows) => rows.line(&grid, std::time::Instant::now()),
+                Output::Cells => changed(&mut shown_cells, &grid).then(|| cells_line(&grid)),
             };
             if let Some(line) = line {
+                if let Some(log) = &mut log {
+                    let _ = writeln!(log, "out {}", summary(&line));
+                }
                 writeln!(out, "{line}")?;
             }
             if let Some(prompt) = app.take_outgoing_prompt() {
@@ -443,7 +729,21 @@ pub fn run(root: &Path) -> io::Result<()> {
                 let waiting: Vec<Request> = std::iter::once(first)
                     .chain(server.requests.try_iter())
                     .collect();
-                take_requests(&mut app, waiting);
+                if let Some(log) = &mut log {
+                    for request in &waiting {
+                        if let Request::Pane(text) = request {
+                            let _ = writeln!(log, "in {text:.300}");
+                        }
+                    }
+                }
+                let (cells, resized) = take_requests(&mut app, waiting);
+                sized |= resized;
+                if cells {
+                    // Pictures can't be shown here after all.
+                    app.set_measure(Rc::new(cellix_render::CellMeasure));
+                    output = Output::Cells;
+                    shown_cells.clear();
+                }
                 redraw = true;
             }
             Err(_) => {
@@ -456,28 +756,52 @@ pub fn run(root: &Path) -> io::Result<()> {
             }
         }
         redraw |= app.poll();
+        // Rows sent soft while scrolling are sent sharp once the pane is still.
+        redraw |= matches!(&output, Output::Rows(rows) if rows.soft_on_screen());
     }
     app.finish()
 }
 
 /// Hands requests to the app in order, with the pointer's moves between other input cut to
-/// the last.
-fn take_requests(app: &mut App, requests: Vec<Request>) {
+/// the last. Returns whether the mod asked for cells, and whether it said the pane's size.
+fn take_requests(app: &mut App, requests: Vec<Request>) -> (bool, bool) {
     let mut input = Vec::new();
+    let (mut cells, mut resized) = (false, false);
     for request in requests {
         match request {
             Request::Pane(text) => input.extend(inputs(&text)),
             other => {
-                take_input(app, std::mem::take(&mut input));
+                let (c, r) = take_input(app, std::mem::take(&mut input));
+                (cells, resized) = (cells | c, resized | r);
                 app.serve(other);
             }
         }
     }
-    take_input(app, input);
+    let (c, r) = take_input(app, input);
+    (cells | c, resized | r)
 }
 
-fn take_input(app: &mut App, input: Vec<Input>) {
+fn take_input(app: &mut App, input: Vec<Input>) -> (bool, bool) {
+    let (mut cells, mut resized) = (false, false);
     for one in latest_moves(input) {
+        resized |= matches!(one, Input::Resize { .. });
+        if let Input::Tier { tier, why } = &one
+            && tier == "cells"
+        {
+            cells = true;
+            let why = why.as_deref().unwrap_or("this terminal doesn't show them");
+            // Set up after this Claude Code started, as its session-start hook does: it
+            // shows pictures from its next start.
+            let tmux_ready = matches!(
+                prepare_tmux(|name| std::env::var(name).ok()),
+                Tmux::Ready | Tmux::JustSet
+            );
+            app.say(if tmux_ready && why.contains("tmux") {
+                RESTART_FOR_PICTURES.to_string()
+            } else {
+                format!("Pictures can't show here ({why}), so the pane shows text")
+            });
+        }
         if let Input::Open { path } = &one {
             let _ = app.open(path);
         }
@@ -485,6 +809,36 @@ fn take_input(app: &mut App, input: Vec<Input>) {
             app.handle(event);
         }
     }
+    (cells, resized)
+}
+
+/// A line for the log: its kind and size, and for rows, which ones.
+fn summary(line: &str) -> String {
+    let mut parts = line.split(' ');
+    let head: Vec<&str> = parts.by_ref().take(3).collect();
+    if head.first() == Some(&"rows") {
+        let rows: Vec<&str> = parts
+            .filter_map(|p| p.split_once(':').map(|(y, _)| y))
+            .collect();
+        format!(
+            "{} [{}] {} bytes",
+            head.join(" "),
+            rows.join(","),
+            line.len()
+        )
+    } else {
+        format!("{} {} bytes", head.join(" "), line.len())
+    }
+}
+
+/// How frames leave the pane.
+enum Output {
+    /// A file the terminal reads, on this machine.
+    File(Frames<SoftwareRasterizer>),
+    /// Pictures by value, a row each.
+    Rows(RowPictures<SoftwareRasterizer>),
+    /// Text, where pictures can't show.
+    Cells,
 }
 
 #[cfg(test)]
@@ -560,8 +914,6 @@ mod tests {
         assert!(frames.line(&grid).unwrap().is_some());
     }
 
-    /// Over SSH a frame is the cell grid, as Claude Code's Raster reads it: a character, then
-    /// the foreground and background, each a little-endian u32.
     /// Claude Code shows a picture from a file only in kitty and Ghostty on the same machine.
     /// Elsewhere it showed nothing, as in tmux, so the pane goes as cells there.
     #[test]
@@ -602,6 +954,219 @@ mod tests {
         assert!(shows(&[("TERM", "screen"), ("CELLIX_TIER", "pixels")]));
     }
 
+    /// A fake that draws each cell as a 2 by 2 block, so a row can be halved.
+    struct Blocks;
+
+    impl Rasterizer for Blocks {
+        fn row(&mut self, grid: &Grid, y: u16) -> cellix_render::Image {
+            let width = grid.width() as usize * 2;
+            let shade = grid.row_text(y).bytes().fold(0u8, |a, b| a.wrapping_add(b));
+            cellix_render::Image {
+                width,
+                height: 2,
+                rgb: vec![shade; width * 2 * 3],
+            }
+        }
+    }
+
+    /// A line's row names, and the pictures it carries with their sizes.
+    fn sent(line: &str) -> (Vec<String>, Vec<(String, u32, u32)>) {
+        let mut parts = line.split(' ');
+        assert_eq!(parts.next(), Some("rows"));
+        parts.nth(1);
+        let names = parts
+            .next()
+            .unwrap()
+            .split(',')
+            .map(str::to_string)
+            .collect();
+        let pictures = parts
+            .map(|part| {
+                let (name, text) = part.split_once(':').unwrap();
+                let png = base64::engine::general_purpose::STANDARD
+                    .decode(text)
+                    .unwrap();
+                let size = |at: usize| u32::from_be_bytes(png[at..at + 4].try_into().unwrap());
+                (name.to_string(), size(16), size(20))
+            })
+            .collect();
+        (names, pictures)
+    }
+
+    /// A grid whose rows read `first`, `first + 1`, and on: a page of a scrolled file.
+    fn page(width: u16, height: u16, first: usize) -> Grid {
+        let style = cellix_render::Style::default();
+        let mut grid = Grid::new(width, height, style);
+        for y in 0..height {
+            grid.put_str(0, y, &format!("{}", first + y as usize), style, width);
+        }
+        grid
+    }
+
+    /// Over SSH and in tmux the pane goes as a picture a row, named by what it shows, and
+    /// only pictures the mod lacks cross: a click costs a row, where the whole pane used to.
+    #[test]
+    fn only_the_rows_that_changed_go_as_pictures() {
+        let mut rows = RowPictures::new(Blocks, (2, 2));
+        let now = std::time::Instant::now();
+        let mut grid = page(4, 3, 0);
+        let (names, pictures) = sent(&rows.line(&grid, now).unwrap());
+        assert_eq!(names.len(), 3);
+        assert_eq!(
+            pictures.iter().map(|p| (p.1, p.2)).collect::<Vec<_>>(),
+            [(8, 2); 3]
+        );
+        assert!(
+            rows.line(&grid, now).is_none(),
+            "an idle pane sends nothing"
+        );
+        grid.put_str(1, 1, "x", cellix_render::Style::default(), 4);
+        let (later, pictures) = sent(&rows.line(&grid, now).unwrap());
+        assert_eq!(pictures.len(), 1, "one row changed");
+        assert_eq!(
+            (&later[0], &later[2]),
+            (&names[0], &names[2]),
+            "the rest keep their names"
+        );
+    }
+
+    /// Scrolling moves rows. A moved row keeps its name, so only the lines that came into
+    /// view cross: Claude Code moves an uploaded picture with its name.
+    #[test]
+    fn a_scroll_sends_only_the_lines_that_came_into_view() {
+        let mut rows = RowPictures::new(Blocks, (2, 2));
+        let now = std::time::Instant::now();
+        let (first, _) = sent(&rows.line(&page(4, 12, 0), now).unwrap());
+        let (names, pictures) = sent(&rows.line(&page(4, 12, 3), now).unwrap());
+        assert_eq!(names[..9], first[3..], "moved up, by name");
+        assert_eq!(pictures.len(), 3, "three new lines");
+        assert!(pictures.iter().all(|p| (p.1, p.2) == (8, 2)), "and sharp");
+    }
+
+    /// Pages that are all new, one after another, go at half resolution, about a quarter of
+    /// the bytes, and sharp once the pane is still.
+    #[test]
+    fn whole_new_pages_in_a_burst_go_soft_and_sharpen_when_still() {
+        let mut rows = RowPictures::new(Blocks, (2, 2));
+        let start = std::time::Instant::now();
+        let at = |ms: u64| start + std::time::Duration::from_millis(ms);
+        let (_, first) = sent(&rows.line(&page(4, 12, 0), at(0)).unwrap());
+        assert!(first.iter().all(|p| p.1 == 8));
+        let (names, soft) = sent(&rows.line(&page(4, 12, 100), at(50)).unwrap());
+        assert_eq!(soft.len(), 12);
+        assert!(
+            soft.iter().all(|p| (p.1, p.2) == (4, 1)),
+            "half size in a burst: {soft:?}"
+        );
+        assert!(names.iter().all(|name| name.ends_with('s')));
+        assert!(
+            rows.line(&page(4, 12, 100), at(100)).is_none(),
+            "not yet still"
+        );
+        let (names, sharp) = sent(&rows.line(&page(4, 12, 100), at(400)).unwrap());
+        assert_eq!(sharp.len(), 12);
+        assert!(
+            sharp.iter().all(|p| (p.1, p.2) == (8, 2)),
+            "sharp once still"
+        );
+        assert!(names.iter().all(|name| !name.ends_with('s')));
+        assert!(rows.line(&page(4, 12, 100), at(800)).is_none());
+    }
+
+    /// Claude Code changes the pane's height as its prompt grows. Rows that still hold the
+    /// same aren't sent again.
+    #[test]
+    fn a_new_height_sends_only_what_changed() {
+        let mut rows = RowPictures::new(Blocks, (2, 2));
+        let now = std::time::Instant::now();
+        rows.line(&page(4, 6, 0), now).unwrap();
+        let mut shorter = page(4, 4, 0);
+        shorter.put_str(0, 3, "status", cellix_render::Style::default(), 4);
+        let line = rows.line(&shorter, now).unwrap();
+        assert!(line.starts_with("rows 4 4 "), "{line:.20}");
+        assert_eq!(sent(&line).1.len(), 1, "only the status row is new");
+        assert_eq!(
+            sent(&rows.line(&page(5, 4, 0), now).unwrap()).1.len(),
+            4,
+            "a new width sends all"
+        );
+    }
+
+    /// A row goes as a palette PNG when it fits in 256 colours, losslessly, and as RGB when
+    /// it doesn't; either decodes to the same pixels.
+    #[test]
+    fn rows_go_as_small_as_they_losslessly_can() {
+        let decode = |bytes: &[u8]| {
+            let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes.to_vec()));
+            decoder.set_transformations(png::Transformations::EXPAND);
+            let mut reader = decoder.read_info().unwrap();
+            let mut out = vec![0; reader.output_buffer_size().unwrap()];
+            let info = reader.next_frame(&mut out).unwrap();
+            (info.color_type, out[..info.buffer_size()].to_vec())
+        };
+        let (width, height) = (64, 4);
+        let few: Vec<u8> = (0..width * height)
+            .flat_map(|i| [(i % 7) as u8 * 30, 40, 50])
+            .collect();
+        let png = encode_png(&few, width, height);
+        assert_eq!(png[25], 3, "indexed");
+        assert_eq!(decode(&png).1, few);
+        // 512 colours.
+        let many: Vec<u8> = (0..width * 2 * height)
+            .flat_map(|i| [i as u8, (i / 256) as u8, 7])
+            .collect();
+        let png = encode_png(&many, width * 2, height);
+        assert_eq!(png[25], 2, "RGB");
+        assert_eq!(decode(&png), (png::ColorType::Rgb, many));
+    }
+
+    /// In tmux, Cellix turns on what Claude Code needs for pictures, server wide, since
+    /// Claude Code reads it as it starts. Runs against a real tmux server where installed.
+    #[test]
+    fn tmux_is_set_up_for_claude_codes_pictures() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("tmux");
+        let tmux = |args: &[&str]| {
+            std::process::Command::new("tmux")
+                .arg("-S")
+                .arg(&socket)
+                .args(["-f", "/dev/null"])
+                .args(args)
+                .output()
+        };
+        let Ok(started) = tmux(&["new-session", "-d", "-s", "t", "sleep 30"]) else {
+            eprintln!("skipped: tmux isn't installed");
+            return;
+        };
+        assert!(started.status.success());
+        let pane = tmux(&["display-message", "-p", "-t", "t", "#{pane_id}"]).unwrap();
+        let pane = String::from_utf8(pane.stdout).unwrap().trim().to_string();
+        let value = format!("{},1,0", socket.display());
+        let var = |name: &str| match name {
+            "TMUX" => Some(value.clone()),
+            "TMUX_PANE" => Some(pane.clone()),
+            _ => None,
+        };
+        assert_eq!(prepare_tmux(var), Tmux::JustSet);
+        for option in TMUX_OPTIONS {
+            let value = tmux(&["show-options", "-g", "-v", option]).unwrap();
+            assert_eq!(
+                String::from_utf8_lossy(&value.stdout).trim(),
+                "on",
+                "{option}"
+            );
+        }
+        assert_eq!(
+            prepare_tmux(var),
+            Tmux::Ready,
+            "the next Claude Code finds it ready"
+        );
+        let _ = tmux(&["kill-server"]);
+        assert_eq!(prepare_tmux(|_| None), Tmux::Absent);
+    }
+
+    /// Over SSH a frame is the cell grid, as Claude Code's Raster reads it: a character, then
+    /// the foreground and background, each a little-endian u32.
     #[test]
     fn a_remote_frame_travels_as_cells() {
         let mut grid = Grid::new(3, 1, cellix_render::Style::default());

@@ -6,17 +6,26 @@ const MAX_IMAGE_CELLS = 255
 const INLINE_ROWS = 28
 /** More than Claude Code allows, so the dock opens as wide as it can: 45% of the window. */
 const DOCK_COLUMNS = 400
+/** How long after the pane is first drawn to check that its pictures show. */
+const CHECK_MS = 300
 const START_TRIES = 40
 const START_WAIT_MS = 100
 /** What this mod and `cellix pane` say to each other; Cellix's `pane::PROTOCOL`. */
 const PROTOCOL = '2'
 
 type Comment = { file: string; line: number; text: string }
-/** A frame as cells, which Cellix sends over SSH: drawn as text, so only what changed crosses. */
+/** A frame as cells, for where pictures can't show: drawn as text. */
 type Cells = { columns: number; rows: number; cells: string }
+/** A frame as a picture a row, which Cellix sends over SSH and in tmux. Each row is named by
+ * what it shows, and a picture (PNG, base64) comes only with a name not held yet. Drawn under
+ * those names, a row that moves keeps its picture: Claude Code uploads each name once. */
+type Rows = { columns: number; rows: number; names: string[]; pictures: Map<string, string> }
 
 let source: ImageSource | undefined
 let cells: Cells | undefined
+let rows: Rows | undefined
+/** Whether a drawn row has shown that pictures show here. */
+let checked = false
 /** Why Cellix stopped, when it stopped before it showed anything. */
 let stopped: string | undefined
 let running = false
@@ -55,7 +64,7 @@ function send($: Engine, inputs: unknown[]) {
 
 /** Whether Cellix has drawn anything yet. */
 function shown(): boolean {
-  return source !== undefined || cells !== undefined
+  return source !== undefined || cells !== undefined || rows !== undefined
 }
 
 /** Brings the pane up, tall enough to read when it sits above the prompt. */
@@ -79,6 +88,7 @@ async function show($: Engine, next: ImageSource) {
   const first = source === undefined
   source = next
   cells = undefined
+  rows = undefined
   if (first) {
     $.ui.invalidate('ui.render')
     return
@@ -91,6 +101,7 @@ async function showCells($: Engine, next: Cells) {
   const same = cells !== undefined && cells.columns === next.columns && cells.rows === next.rows
   cells = next
   source = undefined
+  rows = undefined
   if (same) {
     const { deny } = await $.ui
       .blit({ requestId: PANE, key: 'view', cells: next.cells, columns: next.columns, rows: next.rows })
@@ -98,6 +109,46 @@ async function showCells($: Engine, next: Cells) {
     if (deny === undefined) return
   }
   $.ui.invalidate('ui.render')
+}
+
+/** Takes a frame of named rows: new pictures join those held, and what left the screen goes,
+ * as Cellix expects. The pane is drawn again, and Claude Code sends the terminal only the
+ * pictures it hasn't shown. */
+function showRows($: Engine, columns: number, height: number, list: string, parts: string[]) {
+  const names = list.split(',')
+  const pictures = rows !== undefined && rows.columns === columns ? rows.pictures : new Map<string, string>()
+  for (const part of parts) {
+    const at = part.indexOf(':')
+    pictures.set(part.slice(0, at), part.slice(at + 1))
+  }
+  const onScreen = new Set(names)
+  for (const name of [...pictures.keys()]) if (!onScreen.has(name)) pictures.delete(name)
+  rows = { columns, rows: height, names, pictures }
+  source = undefined
+  cells = undefined
+  $.ui.invalidate('ui.render')
+  if (!checked) {
+    checked = true
+    $.clock.after(CHECK_MS, () => void check($))
+  }
+}
+
+/** Swaps a drawn row for itself, which sends the terminal nothing, to learn whether pictures
+ * show here. Where they can't, Cellix is asked for cells and told why. */
+async function check($: Engine) {
+  const frame = rows
+  const name = frame?.names[0]
+  const png = name === undefined ? undefined : frame?.pictures.get(name)
+  if (png === undefined) return
+  const { deny } = await $.ui
+    .blit({ requestId: PANE, key: `${name}.0`, source: { png } })
+    .catch(() => ({ deny: undefined }))
+  if (deny?.includes('draws its alt')) {
+    send($, [{ type: 'tier', tier: 'cells', why: deny.replace(/^.*draws its alt here: /, '') }])
+  } else if (deny !== undefined) {
+    // Not drawn yet, as when the pane isn't open: the next frame asks again.
+    checked = false
+  }
 }
 
 async function line($: Engine, text: string) {
@@ -111,6 +162,9 @@ async function line($: Engine, text: string) {
       height: Number(height),
       generation: Number(generation),
     })
+  } else if (kind === 'rows') {
+    const [columns, height, list, ...parts] = rest
+    showRows($, Number(columns), Number(height), list, parts)
   } else if (kind === 'cells') {
     const [columns, rows, packed] = rest
     await showCells($, { columns: Number(columns), rows: Number(rows), cells: packed })
@@ -268,24 +322,41 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Client, Image, Raster, Text } = $.ui.resolve(e)
-    const columns = Math.min(e.props.bodyColumns, MAX_IMAGE_CELLS)
-    const rows = Math.min(e.props.scroll.bodyRows, MAX_IMAGE_CELLS)
-    if (columns !== sent.columns || rows !== sent.rows) {
-      sent = { columns, rows }
-      send($, [{ type: 'resize', columns, rows }])
+    const width = Math.min(e.props.bodyColumns, MAX_IMAGE_CELLS)
+    const height = Math.min(e.props.scroll.bodyRows, MAX_IMAGE_CELLS)
+    if (width !== sent.columns || height !== sent.rows) {
+      sent = { columns: width, rows: height }
+      send($, [{ type: 'resize', columns: width, rows: height }])
     }
     if (!shown()) return <Text dimColor>{stopped ?? 'Starting Cellix…'}</Text>
+    const frame = rows
+    // A name on screen twice, as blank lines are, is drawn under one key each.
+    const seen = new Map<string, number>()
     const view =
-      cells !== undefined ? (
+      frame !== undefined ? (
+        <Box flexDirection="column">
+          {frame.names.map(name => {
+            const nth = seen.get(name) ?? 0
+            seen.set(name, nth + 1)
+            const png = frame.pictures.get(name)
+            const key = `${name}.${nth}`
+            return png === undefined ? (
+              <Box key={key} width={frame.columns} height={1} />
+            ) : (
+              <Image key={key} source={{ png }} columns={frame.columns} rows={1} alt=" " />
+            )
+          })}
+        </Box>
+      ) : cells !== undefined ? (
         <Raster key="view" columns={cells.columns} rows={cells.rows} cells={cells.cells} />
       ) : (
-        <Image key="view" source={source!} columns={columns} rows={rows} alt="Cellix" />
+        <Image key="view" source={source!} columns={width} rows={height} alt="Cellix" />
       )
     return (
-      <Box position="relative" width={columns} height={rows}>
+      <Box position="relative" width={width} height={height}>
         {view}
         <Box position="absolute" top={0} left={0}>
-          <Client key="input" module="./pane-input.tsx" width={columns} height={rows} />
+          <Client key="input" module="./pane-input.tsx" width={width} height={height} />
         </Box>
       </Box>
     )

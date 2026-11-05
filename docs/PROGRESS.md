@@ -1269,3 +1269,15 @@ Reproduced on Amazon Linux 2023 in Docker with Claude Code 2.1.318 and tmux, the
 Also, the pane took a parent of process 1 to mean Claude Code was gone, which is wrong in a container where Claude Code is process 1.
 
 Checked in the container with the new build: the upgrade case draws in the first session; off the PATH it starts from `CELLIX_BIN`; with neither it explains; tmux without SSH draws as cells. Unverified: the user's own Mac tree and Amazon Linux machine, and whether Claude Code reloads a rewritten mod everywhere as it did here. Next: release 0.4.2 with these and the Settings tab fix.
+
+## Pictures for the pane over SSH and in tmux (2026-11-05)
+
+The user wanted the pane inside Claude Code over SSH to look as it does locally, not fall back to text, and for Cellix to set up what it needs, as Claude Code does.
+
+Measured first with a throwaway probe plugin in real Claude Code 2.1.318 over real SSH into the Amazon Linux container, with a pty "terminal" on the Mac answering like Ghostty and recording every graphics command:
+- Pictures by value (`png`) cross SSH; a source equal to the last drawn sends nothing; Images drawn under keys that move keep their uploads (a shift by one row uploaded one picture and deleted one).
+- Inside tmux Claude Code needs tmux's global `allow-passthrough` and `focus-events` on when it starts. A pane option, a SessionStart hook or setting them while it runs all came too late; set before it starts, with no reattach, works. tmux also needs a UTF-8 client, or it mangles the placeholder characters.
+
+Built: `rows` lines, a PNG per row named by a hash of the row, sent only when the mod lacks the name; the mod draws Images keyed by name and checks once with a self-blit whether pictures show, falling back to cells on "draws its alt". Palette PNGs (rows were 18 KB as fast RGB, 5 KB as palettes), half resolution by nearest pixel for bursts of whole new pages, nothing until the size is known, and the row key now cuts tall shapes to the row's reach, so rows under a page's sheet keep their names when scrolled (8 of 43 kept before, 33 after). `cellix setup claude` writes the tmux lines; the hook and the pane set them on a running server; a session started before says to restart. `CELLIX_PANE_LOG` logs what crossed.
+
+Measured end to end over SSH and tmux: open 537 KB, click 21 KB, a letter 28 KB, hover nothing, five scroll notches 280 KB plus tmux's placeholder text, first picture 65-75 ms after a click or wheel on a local link. tmux's own grid drawn from the recorded pictures shows the pane exactly, rows in order. Unverified: a real Ghostty window, a slow real link, and the user's own server; the row pictures assume the cell size the pane's tty reports.
