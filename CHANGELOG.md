@@ -4,6 +4,9 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 
 ## [Unreleased]
 
+### Added
+- New Workspace finds the folder for you. It opens with suggestions, other projects running on the machine, folders beside this one and folders in your home, and typing narrows them. Type a path (`~/src/`, `../`, `/srv/`) to list the folders inside it, Tab to go into the picked one, and Enter to open it.
+
 ## [0.5.1] - 2026-11-05
 
 ### Changed

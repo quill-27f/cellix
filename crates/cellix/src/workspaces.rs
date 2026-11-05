@@ -646,7 +646,8 @@ impl Workspaces {
         };
         let x = mark + self.room(MARK) + self.room(GAP);
         label(grid, (x, y), NEW_WORKSPACE, text, right);
-        if on_it && !self.measure().in_cells() {
+        // The tip stays out of the way of what the button opened.
+        if on_it && !self.measure().in_cells() && !self.app().overlay_is_open() {
             let font = Font {
                 size: TIP_SIZE,
                 ..Font::default()
@@ -1169,6 +1170,8 @@ mod tests {
         let (_dir, first, second) = projects();
         let mut spaces = spaces();
         spaces.open(first);
+        // A home of its own, so what the finder suggests is only what's here.
+        spaces.app_mut().home = Some(_dir.path().to_path_buf());
         // The bar's button asks for the folder.
         let grid = screen(&spaces);
         click(
@@ -1176,10 +1179,11 @@ mod tests {
             MouseKind::Left,
             spot(&grid, 29, "New Workspace"),
         );
+        let text = screen(&spaces).text();
+        assert!(text.contains("Folder to open, or a path"), "{text}");
         assert!(
-            screen(&spaces)
-                .text()
-                .contains("Folder to open beside this one")
+            text.contains("infra") && text.contains("beside this one"),
+            "{text}"
         );
         type_text(&mut spaces, "infra");
         key(&mut spaces, Key::Enter, Mods::default());
@@ -1201,6 +1205,7 @@ mod tests {
         assert_eq!(spaces.active, 1);
 
         // A name that's no folder says so. The palette asks too.
+        spaces.app_mut().home = Some(_dir.path().to_path_buf());
         spaces.app_mut().run(Command::OpenWorkspace);
         type_text(&mut spaces, "nowhere");
         key(&mut spaces, Key::Enter, Mods::default());
@@ -1210,6 +1215,33 @@ mod tests {
                 .text()
                 .contains("There's no folder at nowhere")
         );
+    }
+
+    #[test]
+    fn the_folder_finder_walks_down_a_path_with_tab() {
+        let (dir, first, _second) = projects();
+        fs::create_dir_all(dir.path().join("work/deep/inside")).unwrap();
+        let mut spaces = spaces();
+        spaces.open(first);
+        spaces.app_mut().home = Some(dir.path().to_path_buf());
+        spaces.app_mut().run(Command::OpenWorkspace);
+        // A path lists the folders in it as it's typed.
+        type_text(&mut spaces, "~/wo");
+        let text = screen(&spaces).text();
+        assert!(text.contains("~/work"), "{text}");
+        // Tab goes into the picked one, and lists what's inside.
+        key(&mut spaces, Key::Tab, Mods::default());
+        let text = screen(&spaces).text();
+        assert!(text.contains("~/work/deep"), "{text}");
+        assert!(text.contains("this folder"), "{text}");
+        key(&mut spaces, Key::Down, Mods::default());
+        key(&mut spaces, Key::Tab, Mods::default());
+        assert!(screen(&spaces).text().contains("~/work/deep/inside"));
+        // Enter on the folder itself opens it.
+        key(&mut spaces, Key::Enter, Mods::default());
+        assert_eq!(spaces.list.len(), 2);
+        let opened = dunce::canonicalize(dir.path().join("work/deep")).unwrap();
+        assert_eq!(spaces.app().workspace.root(), opened);
     }
 
     /// Unix only: sessions outlive Cellix only there.

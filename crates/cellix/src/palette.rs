@@ -35,12 +35,14 @@ pub enum Item {
     Citation(String, String),
     /// A picture, how it's shown, and whether it takes the place of the one at the caret.
     Image(PathBuf, String, bool),
+    /// A folder to open as a workspace, as it's written, and a word about it.
+    Folder(PathBuf, String, &'static str),
 }
 
 impl Item {
     fn label(&self) -> &str {
         match self {
-            Self::File(_, label) | Self::Image(_, label, _) => label,
+            Self::File(_, label) | Self::Image(_, label, _) | Self::Folder(_, label, _) => label,
             Self::Command(label, _) => label,
             Self::Branch(name, _) | Self::Citation(name, _) => name,
             Self::NewBranch => "New branch…",
@@ -54,6 +56,7 @@ impl Item {
             Self::File(..) | Self::Image(..) | Self::NewBranch | Self::Gap => None,
             Self::Command(_, command) => keys_of(*command),
             Self::Branch(_, when) | Self::Citation(_, when) => Some(when),
+            Self::Folder(_, _, note) => (!note.is_empty()).then_some(note),
         }
     }
 }
@@ -196,6 +199,8 @@ pub struct Palette {
     pub selected: usize,
     /// What's still happening, as "8,310 files…", shown at the right of the field.
     pub status: Option<String>,
+    /// Set when the palette finds a folder, which lists again as a path is typed.
+    pub folders: Option<crate::folders::Picker>,
 }
 
 /// Scores `text` against `query`, whose characters must appear in order. Runs of
@@ -237,6 +242,7 @@ impl Palette {
             matched: String::new(),
             selected: 0,
             status: None,
+            folders: None,
         };
         palette.filter();
         palette
@@ -282,6 +288,20 @@ impl Palette {
             hint,
             ..Self::new(items)
         }
+    }
+
+    /// Lists folders again for what's typed, when it's a path into another folder, and
+    /// filters by it either way.
+    pub fn refresh(&mut self) {
+        let fresh = self
+            .folders
+            .as_mut()
+            .and_then(|picker| picker.items_for(&self.query));
+        if let Some(items) = fresh {
+            self.items = items;
+            self.matched.clear();
+        }
+        self.filter();
     }
 
     pub fn filter(&mut self) {
@@ -424,7 +444,12 @@ impl Palette {
             let text = self.items[*index].label();
             let end = area.right().saturating_sub(16);
             let inset = area.x as f32 + TEXT_INSET;
-            grid.label_at(inset, area.x + 2, y, text, base, end, 100);
+            // A long path keeps its end, which names the folder, and loses its middle.
+            let shown = match &self.items[*index] {
+                Item::Folder(..) => middle_out(text, f32::from(end) - inset, measure),
+                _ => text.to_string(),
+            };
+            grid.label_at(inset, area.x + 2, y, &shown, base, end, 100);
             if let Some(keys) = self.items[*index].keys() {
                 // The picked row's wash is lighter, so its keys need to be too.
                 let fg = if row == self.selected {
@@ -437,6 +462,33 @@ impl Palette {
             }
         }
     }
+}
+
+/// `text` with characters taken from its middle until it fits `room` cells.
+fn middle_out(text: &str, room: f32, measure: &dyn Measure) -> String {
+    let font = Font {
+        size: INTERFACE_SIZE_PERCENT,
+        ..Font::default()
+    };
+    if measure.width(text, font) <= room {
+        return text.to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut keep = chars.len();
+    while keep > 2 {
+        keep -= 1;
+        let head = keep / 3;
+        let tail = keep - head;
+        let tried: String = chars[..head]
+            .iter()
+            .chain(std::iter::once(&'…'))
+            .chain(&chars[chars.len() - tail..])
+            .collect();
+        if measure.width(&tried, font) <= room {
+            return tried;
+        }
+    }
+    "…".to_string()
 }
 
 /// What a text box shows.

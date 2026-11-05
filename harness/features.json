@@ -3806,5 +3806,19 @@
     "title": "Inside tmux the terminal is asked its colour past tmux first, so tmux's own answer is current",
     "test": "inside_tmux_with_passthrough_the_terminal_itself_is_asked_its_colour",
     "passes": true
+  },
+  {
+    "id": "folder-finder",
+    "milestone": 11,
+    "title": "New Workspace finds a folder: suggestions first, and the folders inside a typed path as it's typed",
+    "test": "suggestions_then_folders_inside_what_is_typed",
+    "passes": true
+  },
+  {
+    "id": "folder-finder-tab",
+    "milestone": 11,
+    "title": "Tab goes into the picked folder, and Enter opens it as a workspace",
+    "test": "the_folder_finder_walks_down_a_path_with_tab",
+    "passes": true
   }
 ]

@@ -6,6 +6,7 @@ mod dock;
 mod editor;
 mod explorer;
 mod find;
+mod folders;
 mod guide;
 pub mod hold;
 pub mod integrations;

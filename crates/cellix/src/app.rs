@@ -248,8 +248,6 @@ enum PromptAction {
     NewBranch,
     Image,
     Link,
-    /// A folder to open beside this one, as a workspace of its own.
-    OpenWorkspace,
 }
 
 struct Prompt {
@@ -931,6 +929,8 @@ pub struct App {
     discarded: bool,
     /// Something for the workspaces around this one to do, taken by them.
     pub workspace_request: Option<WorkspaceRequest>,
+    /// The home folder, where the folder finder looks and `~` leads. Tests set their own.
+    pub home: Option<PathBuf>,
     /// Whether this machine ends programs at logout, once something is running to lose.
     linger: Linger,
     /// What turns lingering on: loginctl, or a stand-in in tests.
@@ -1063,6 +1063,7 @@ impl App {
             keep_running: false,
             discarded: false,
             workspace_request: None,
+            home: std::env::var_os("HOME").map(PathBuf::from),
             linger: Linger::Unasked,
             linger_command: vec!["loginctl".to_string(), "enable-linger".to_string()],
             #[cfg(test)]
@@ -4328,7 +4329,28 @@ impl App {
         match overlay {
             Overlay::Palette(mut palette) => match key.key {
                 Key::Esc => {}
+                // A folder typed out in full opens even with nothing listed for it.
+                Key::Enter if palette.folders.is_some() && palette.current().is_none() => {
+                    let typed = palette.query.trim().to_string();
+                    let folder = palette.folders.as_ref().and_then(|p| p.resolve(&typed));
+                    match folder {
+                        Some(folder) => {
+                            self.workspace_request = Some(WorkspaceRequest::Open(folder));
+                        }
+                        None => self.say(format!("There's no folder at {typed}")),
+                    }
+                }
                 Key::Enter => self.pick(palette.current().cloned()),
+                // Tab goes into the picked folder, to pick one inside it.
+                Key::Tab if palette.folders.is_some() => {
+                    if let Some(Item::Folder(_, label, note)) = palette.current().cloned()
+                        && note != crate::folders::THIS_FOLDER
+                    {
+                        palette.query = format!("{label}/");
+                        palette.refresh();
+                    }
+                    self.overlay = Overlay::Palette(palette);
+                }
                 Key::Up => {
                     palette.move_by(-1);
                     self.overlay = Overlay::Palette(palette);
@@ -4339,12 +4361,12 @@ impl App {
                 }
                 Key::Backspace => {
                     palette.query.pop();
-                    palette.filter();
+                    palette.refresh();
                     self.overlay = Overlay::Palette(palette);
                 }
                 Key::Char(c) if !key.mods.ctrl && !key.mods.alt => {
                     palette.query.push(c);
-                    palette.filter();
+                    palette.refresh();
                     self.overlay = Overlay::Palette(palette);
                 }
                 _ => self.overlay = Overlay::Palette(palette),
@@ -4739,6 +4761,11 @@ impl App {
                     editor.insert_text(&format!("\\cite{{{key}}}"));
                 }
             }
+            Some(Item::Folder(path, _, _)) => {
+                // As the workspace will know itself, so it isn't opened twice.
+                let path = dunce::canonicalize(&path).unwrap_or(path);
+                self.workspace_request = Some(WorkspaceRequest::Open(path));
+            }
             Some(Item::Gap) | None => {}
         }
     }
@@ -4800,14 +4827,6 @@ impl App {
                 if let Some(editor) = self.editor_mut() {
                     editor.prepare_edit(area);
                     editor.insert_image(name);
-                }
-                Ok(())
-            }
-            PromptAction::OpenWorkspace => {
-                let folder = self.folder_named(name);
-                match folder {
-                    Some(folder) => self.workspace_request = Some(WorkspaceRequest::Open(folder)),
-                    None => self.say(format!("There's no folder at {name}")),
                 }
                 Ok(())
             }
@@ -5185,12 +5204,7 @@ impl App {
             Command::OpenInBrowser => self.open_in_browser(),
             Command::OpenClaude => self.open_agent("claude"),
             Command::OpenCodex => self.open_agent("codex"),
-            Command::OpenWorkspace => {
-                self.ask(
-                    "Folder to open beside this one",
-                    PromptAction::OpenWorkspace,
-                );
-            }
+            Command::OpenWorkspace => self.find_folder(),
             Command::NextWorkspace => self.workspace_request = Some(WorkspaceRequest::Next),
             Command::PreviousWorkspace => {
                 self.workspace_request = Some(WorkspaceRequest::Previous);
@@ -6219,28 +6233,32 @@ impl App {
         self.activity_area().w
     }
 
-    /// The folder a name typed for a new workspace means: from home with `~`, otherwise from
-    /// beside this project, where sibling projects are.
-    fn folder_named(&self, name: &str) -> Option<PathBuf> {
-        let name = name.trim();
-        if name.is_empty() {
-            return None;
-        }
-        let home = std::env::var_os("HOME").map(PathBuf::from);
-        let path = if let Some(rest) = name.strip_prefix("~/") {
-            home?.join(rest)
-        } else if name == "~" {
-            home?
-        } else if Path::new(name).is_absolute() {
-            PathBuf::from(name)
+    /// Opens the folder finder: suggestions first, and the folders inside a path as it's
+    /// typed, with Tab to go into one and Enter to open it as a workspace.
+    fn find_folder(&mut self) {
+        let root = self.workspace.root().to_path_buf();
+        // Tests leave out what's really running on the machine they run on.
+        let running = if cfg!(test) {
+            Vec::new()
         } else {
-            let root = self.workspace.root();
-            let beside = root.parent().map(|p| p.join(name));
-            beside
-                .filter(|p| p.is_dir())
-                .unwrap_or_else(|| root.join(name))
+            crate::hold::projects_with_activity()
+                .into_iter()
+                .filter(|(path, _)| *path != root)
+                .map(|(path, activity)| {
+                    let note = if activity.running.is_empty() {
+                        crate::folders::STOPPED
+                    } else {
+                        crate::folders::RUNNING
+                    };
+                    (path, note)
+                })
+                .collect()
         };
-        dunce::canonicalize(path).ok().filter(|p| p.is_dir())
+        let mut picker = crate::folders::Picker::new(root, self.home.clone(), running);
+        let items = picker.items_for("").unwrap_or_default();
+        let mut palette = Palette::asking(items, "Folder to open, or a path · Tab goes into it");
+        palette.folders = Some(picker);
+        self.overlay = Overlay::Palette(palette);
     }
 
     /// Pixels in a cell, for programs that draw pictures.
