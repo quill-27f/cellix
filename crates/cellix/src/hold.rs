@@ -18,6 +18,7 @@ pub use host::{Held, Keys, left_running, serve, start, stopped};
 /// What a held program is told about where it's held: the host's socket.
 pub const HELD_VAR: &str = cellix_agent::hook::HELD_VAR;
 /// The folder, among a project's sessions, for those that stopped without finishing.
+#[cfg(unix)]
 const STOPPED: &str = "stopped";
 
 /// A session whose host died without finishing, as when the machine restarted.

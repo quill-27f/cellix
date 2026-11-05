@@ -2,7 +2,7 @@
 //! the screen back through a terminal emulator.
 
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -652,7 +652,8 @@ fn a_dropped_connection_loses_no_unsaved_edits() {
     again.wait_exit();
 }
 
-fn walk(dir: &Path) -> Vec<PathBuf> {
+#[cfg(unix)]
+fn walk(dir: &Path) -> Vec<std::path::PathBuf> {
     let mut found = Vec::new();
     for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         let path = entry.path();

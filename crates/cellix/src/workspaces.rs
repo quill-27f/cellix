@@ -1157,7 +1157,9 @@ mod tests {
         );
     }
 
+    /// Unix only: sessions outlive Cellix only there.
     #[test]
+    #[cfg(unix)]
     fn what_stopped_anywhere_resumes_from_the_bar() {
         let (_dir, first, second) = projects();
         let aside = crate::hold::folder_of(&second).join("stopped");

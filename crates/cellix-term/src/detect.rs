@@ -63,7 +63,6 @@ fn questions(asking: Asking) -> String {
 /// terminal's colour has changed since the client attached, so tmux's own answer, asked
 /// afterwards, is current. It comes ahead of the cell size, which the terminal answers next and
 /// tmux does pass on, so that answer arriving means tmux has the new colour.
-#[cfg(any(unix, test))]
 fn background_question(asking: Asking) -> &'static str {
     match asking {
         Asking::TmuxPassthrough => "\x1bPtmux;\x1b\x1b]11;?\x07\x1b\\",
@@ -72,7 +71,6 @@ fn background_question(asking: Asking) -> &'static str {
 }
 
 /// tmux's own answer about the background, asked once the terminal has told it.
-#[cfg(any(unix, test))]
 const ASK_TMUX_BACKGROUND: &str = "\x1b]11;?\x1b\\\x1b[c";
 
 /// Asks the terminal for its background again, as when Cellix comes back into focus: it may

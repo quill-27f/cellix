@@ -14352,7 +14352,9 @@ mod tests {
         let _ = fs::remove_dir_all(crate::hold::folder_of(&root));
     }
 
+    /// Unix only: the stand-in for loginctl is a shell script.
     #[test]
+    #[cfg(unix)]
     fn a_server_that_ends_programs_at_logout_says_so_and_turns_lingering_on() {
         let (dir, mut app) = project();
         app.linger_answer = Some(true);
@@ -14410,6 +14412,7 @@ mod tests {
     }
 
     /// Leaves a stopped session's record where a host that died leaves one.
+    #[cfg(unix)]
     fn left_stopped(root: &Path, name: &str, output: &str, session: Option<&str>) -> PathBuf {
         let aside = crate::hold::folder_of(root).join("stopped");
         fs::create_dir_all(&aside).unwrap();
@@ -14438,7 +14441,9 @@ mod tests {
         notes
     }
 
+    /// Unix only: sessions outlive Cellix only on Unix, and the stand-in agent is a shell script.
     #[test]
+    #[cfg(unix)]
     fn an_agent_that_stopped_with_the_machine_is_offered_back_and_resumes() {
         let (dir, mut app) = project();
         let notes = left_stopped(
@@ -14478,7 +14483,9 @@ mod tests {
         let _ = fs::remove_dir_all(crate::hold::folder_of(dir.path()));
     }
 
+    /// Unix only: sessions outlive Cellix only on Unix.
     #[test]
+    #[cfg(unix)]
     fn a_stopped_terminal_starts_again_or_closes() {
         let (dir, mut app) = project();
         left_stopped(dir.path(), "Terminal", "$ cargo watch\r\n", None);

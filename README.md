@@ -4,9 +4,11 @@
 [![release](https://img.shields.io/github/v/release/quill-27f/cellix)](https://github.com/quill-27f/cellix/releases)
 [![license](https://img.shields.io/badge/license-MIT%20or%20Apache--2.0-blue)](#license)
 
-**The AI companion IDE that lives inside your agent.** A Claude Code mod, a Codex plugin and a
-Gemini CLI extension that give your agent a real editor for Markdown, LaTeX, plans and diffs, right
-there in the terminal.
+**A terminal app where your coding agents work.** Claude Code, Codex and Gemini CLI run beside your
+files in one window, in any terminal, on your machine or over SSH. They keep running when you close
+the laptop or the connection drops, and what they write is read, corrected and answered right there.
+Inside Claude Code, Codex or Gemini CLI, Cellix is also a mod, plugin or extension that gives the
+agent a real editor for Markdown, LaTeX, plans and diffs.
 
 Agents now write code, documents and papers faster than anyone can read them, so review is the
 bottleneck, and that's where careless work slips through. Slop isn't what agents write; it's what
@@ -18,10 +20,15 @@ back to the agent. No switching to a GUI IDE to check what happened in the termi
 Your agent writes the code and the documents. Cellix is where you read what it did, correct it and
 answer back. Select any sentence, formula or figure and leave a comment, and the agent gets it with
 the file, the line and the quote. Plans wait for your approval, edits arrive as diffs you accept hunk
-by hunk, and a turn you don't like can be undone. It works the same over SSH.
+by hunk, and a turn you don't like can be undone. It works the same over SSH, and you don't need
+tmux to keep it running there.
 
 ![Claude Code rewriting a paragraph, with Cellix inside it showing the page and the change](docs/images/inside-claude.png)
 
+- **Agents that keep working.** Each project is a workspace with its own agents and terminals. Close
+  the laptop or lose the connection and they carry on; the next `cellix` has them back, with your
+  tabs and unsaved edits, and a bar along the bottom says which agent is working, done or waiting
+  for you. After a reboot, Resume picks up each agent's own conversation.
 - **Review before it lands.** Plans wait for your Approve, edits stack hunk by hunk, each agent turn
   is checkpointed, and one changed line can be put back without touching the rest.
 - **Talk about anything you can see.** A sentence, a formula, a diagram, a cell of a table or a spot
@@ -30,15 +37,15 @@ by hunk, and a turn you don't like can be undone. It works the same over SSH.
   citations, Track Changes and offline spelling, while the file stays plain text for git.
 - **A second reader for your review.** Check my review has the agent weigh each of your comments and
   suggest the ones you missed, without editing a word.
-- **Where your agent already is.** A pane inside Claude Code, plugins for Codex and Gemini CLI, and
-  the same thing over SSH and tmux. One static binary in Rust, drawing real pixels in Ghostty, Kitty
+- **Or inside your agent.** A pane inside Claude Code, plugins for Codex and Gemini CLI, and
+  the same thing over SSH and in tmux. One static binary in Rust, drawing real pixels in Ghostty, Kitty
   and WezTerm, and text cells everywhere else.
 
 ## Install
 
 ```sh
 brew install quill-27f/tap/cellix    # macOS and Linux; brew upgrade cellix gets each new release
-cargo install --locked --git https://github.com/quill-27f/cellix cellix   # anywhere Rust runs
+cargo install --locked cellix   # anywhere Rust runs
 ```
 
 Or take the static binary, which needs nothing else on the machine. On Linux:
