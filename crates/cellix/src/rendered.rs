@@ -1764,6 +1764,8 @@ pub fn layout_with(
     }
     let mut i = 0;
     let mut callout = None;
+    let plain: Vec<&str> = lines.iter().map(|(_, line)| *line).collect();
+    let numbers = list_numbers(&plain);
     // The notebook cell the next fence belongs to.
     let mut cell = None;
     // Front matter shows as dimmed text, with its delimiters hidden.
@@ -2090,7 +2092,9 @@ pub fn layout_with(
                         glyphs.extend(decoration(&format!("{pad}{bullet} "), Tone::Text));
                         PLAIN
                     }
-                    Marker::Ordered(number) => {
+                    Marker::Ordered(written) => {
+                        // Counted as Markdown counts it, whatever the file says.
+                        let number = numbers[i].map_or(*written, |(_, n)| n);
                         glyphs.extend(decoration(&format!("{pad}{number}. "), Tone::Dim));
                         PLAIN
                     }
@@ -2378,6 +2382,103 @@ pub fn cell_range(rows: &[Row], start: usize) -> (usize, usize) {
     let held = here.glyphs.iter().filter_map(|g| g.at);
     let last = held.filter(|at| (start..end).contains(at)).max();
     (start, last.map_or(start, |at| at + 1))
+}
+
+/// The numbers a numbered list shows, as Markdown counts them: on from the first item's,
+/// whatever the others say. For each line that's an item, the line its list starts on and
+/// its number. A line set in no further than an item ends its list, unless it's the next
+/// item; blank lines and what's set in further, as an item's own text and lists, don't.
+pub fn list_numbers(lines: &[&str]) -> Vec<Option<(usize, u64)>> {
+    // The lists open here, outermost first: each one's indent, first line and next number.
+    let mut open: Vec<(usize, usize, u64)> = Vec::new();
+    let mut numbers = vec![None; lines.len()];
+    let mut fence: Option<&str> = None;
+    for (index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim_start();
+        if let Some(mark) = fence {
+            if trimmed.starts_with(mark) {
+                fence = None;
+            }
+            continue;
+        }
+        if trimmed.is_empty() {
+            continue;
+        }
+        let indent = line.len() - trimmed.len();
+        if let Some(found) = prefix(line)
+            && let Marker::Ordered(number) = found.marker
+        {
+            while open.last().is_some_and(|(at, ..)| *at > indent) {
+                open.pop();
+            }
+            match open.last_mut() {
+                Some((at, first, next)) if *at == indent => {
+                    numbers[index] = Some((*first, *next));
+                    *next += 1;
+                }
+                _ => {
+                    open.push((indent, index, number + 1));
+                    numbers[index] = Some((index, number));
+                }
+            }
+            continue;
+        }
+        while open.last().is_some_and(|(at, ..)| *at >= indent) {
+            open.pop();
+        }
+        for mark in ["```", "~~~"] {
+            if trimmed.starts_with(mark) {
+                fence = Some(mark);
+            }
+        }
+    }
+    numbers
+}
+
+/// What to change so the numbered lists with an item near `line` count on from their
+/// first item: each as (line, chars its number takes, the number it should be). A list
+/// whose items all say the same number is left as it is, since that's written on purpose
+/// and shows counted anyway.
+pub fn renumbering(lines: &[&str], line: usize) -> Vec<(usize, usize, u64)> {
+    let numbers = list_numbers(lines);
+    let near = line.saturating_sub(2)..=line + 2;
+    let mut lists: Vec<usize> = numbers
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| near.contains(index))
+        .filter_map(|(_, number)| number.map(|(first, _)| first))
+        .collect();
+    lists.sort_unstable();
+    lists.dedup();
+    let mut changes = Vec::new();
+    for list in lists {
+        let items: Vec<(usize, u64)> = numbers
+            .iter()
+            .enumerate()
+            .filter_map(|(index, n)| {
+                n.filter(|(first, _)| *first == list)
+                    .map(|(_, n)| (index, n))
+            })
+            .collect();
+        let written = |index: usize| {
+            let trimmed = lines[index].trim_start();
+            let digits = trimmed.chars().take_while(char::is_ascii_digit).count();
+            (digits, trimmed[..digits].parse::<u64>().unwrap_or(0))
+        };
+        let same = items
+            .iter()
+            .all(|(index, _)| written(*index).1 == written(list).1);
+        if same && items.len() > 1 {
+            continue;
+        }
+        for (index, shown) in items {
+            let (digits, number) = written(index);
+            if number != shown {
+                changes.push((index, digits, shown));
+            }
+        }
+    }
+    changes
 }
 
 /// What Enter should do on a line, and Backspace at its start.
@@ -2839,11 +2940,59 @@ body",
     #[test]
     fn enter_carries_lists_on_and_empty_items_end_them() {
         assert!(matches!(enter_intent("- a"), Intent::Continue(s) if s == "- "));
+        assert!(matches!(enter_intent("1. a"), Intent::Continue(s) if s == "2. "));
         assert!(matches!(enter_intent("  2. a"), Intent::Continue(s) if s == "  3. "));
         assert!(matches!(enter_intent("- [x] a"), Intent::Continue(s) if s == "- [ ] "));
         assert!(matches!(enter_intent("> a"), Intent::Continue(s) if s == "> "));
         assert!(matches!(enter_intent("- "), Intent::EndList(2)));
         assert!(matches!(enter_intent("# a"), Intent::Plain));
         assert!(matches!(enter_intent("plain"), Intent::Plain));
+    }
+
+    #[test]
+    fn a_numbered_list_counts_on_from_its_first_item() {
+        let lines = [
+            "1. one",
+            "3. three",
+            "   text of three",
+            "   - inside",
+            "",
+            "4. four",
+            "Then a paragraph.",
+            "7. new list",
+            "```",
+            "1. in code",
+            "```",
+        ];
+        let shown: Vec<Option<u64>> = list_numbers(&lines)
+            .iter()
+            .map(|n| n.map(|(_, n)| n))
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                Some(1),
+                Some(2),
+                None,
+                None,
+                None,
+                Some(3),
+                None,
+                Some(7),
+                None,
+                None,
+                None
+            ]
+        );
+        // Taking item 2 out leaves the next to count down to it; a list of all ones is left.
+        assert_eq!(
+            renumbering(&["1. a", "3. c", "4. d"], 1),
+            [(1, 1, 2), (2, 1, 3)]
+        );
+        assert!(renumbering(&["1. a", "1. b", "1. c"], 1).is_empty());
+        assert!(renumbering(&["1. a", "2. b", "", "x", "", "9. far", "1. away"], 0).is_empty());
+        // Nested lists count on their own.
+        let nested = ["1. a", "   1. x", "   3. y", "2. b"];
+        assert_eq!(renumbering(&nested, 2), [(2, 1, 2)]);
     }
 }

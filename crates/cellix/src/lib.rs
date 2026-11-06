@@ -5,6 +5,7 @@ mod app;
 mod dock;
 mod editor;
 mod explorer;
+mod field;
 mod find;
 mod folders;
 mod guide;

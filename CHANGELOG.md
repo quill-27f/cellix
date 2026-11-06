@@ -6,8 +6,18 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 
 ## [0.5.4] - 2026-11-06
 
+### Added
+- Resume All on the card of a session that stopped, when more than one did, so they all come back with one press rather than tab by tab.
+- The Comments pane can show resolved comments, marked as resolved, and Reopen brings one back.
+
 ### Changed
 - The close button at the top right is drawn as the icons beside it are, grey with the same hover chip, instead of a red circle. A thin line still sets it apart from the side pane's own ×.
+- A numbered list on a page shows its numbers as Markdown counts them, and taking an item out or putting one in renumbers the rest in the file, undone in one step with the edit.
+
+### Fixed
+- Typing a comment works as in any text box: a space moves the caret, the arrows and Option+arrows move it, and Option+Backspace, Ctrl+W and Cmd+Backspace delete a word or the line.
+- A resolved comment kept its words highlighted on the page until the file was next edited.
+- Ask Agent inside Claude Code put only the first line of the selection in the prompt, cut at 200 letters. It now puts all of it. A comment sent to an agent also says all of what was selected.
 
 ## [0.5.3] - 2026-11-05
 

@@ -17,6 +17,8 @@ const INSET: f32 = 0.6;
 const BUTTONS: [&str; 3] = ["Reply", "Ask agent", "Resolve"];
 const CHOICES: [&str; 2] = ["Keep", "Dismiss"];
 const REWRITE: [&str; 2] = ["Apply", "Not this"];
+const REOPEN: [&str; 1] = ["Reopen"];
+const HIDE_RESOLVED: &str = "Hide resolved";
 const CHECK: &str = "Check my review";
 /// Columns the agent's icon takes on Check my review.
 const CHECK_ICON: u16 = 2;
@@ -50,6 +52,10 @@ pub enum Hit {
     /// Puts an agent's rewrite in the document as a suggestion, or turns it down.
     Apply(u32),
     Decline(u32),
+    /// Opens a resolved comment again.
+    Reopen(u32),
+    /// Shows the resolved comments too, or hides them again.
+    ToggleResolved,
 }
 
 /// An agent's verdict on a comment, from how its reply starts: `Agree (Evidence): …` or
@@ -75,7 +81,8 @@ pub fn verdict(text: &str) -> Option<(&'static str, &str, &str)> {
 
 /// One row of the panel.
 enum Line {
-    Empty,
+    /// Nothing open; true when there are resolved comments to show.
+    Empty(bool),
     /// The button that asks the agent to check the review, after how many comments are the
     /// reviewer's and how many the agent's.
     Check(usize, usize),
@@ -100,9 +107,14 @@ enum Line {
     /// A row of an answer, set in from the comment it answers.
     Reply(u32, String),
     Status(String),
-    Input(String),
+    /// A row of what's being written, and where the caret is on it, in bytes, when it is.
+    Input(String, Option<usize>),
     Hint,
     Buttons(u32),
+    /// Reopen, under a resolved comment.
+    Reopen(u32),
+    /// The button that shows the resolved comments, how many there are, and whether they show.
+    Resolved(usize, bool),
     Gap,
 }
 
@@ -152,7 +164,11 @@ pub struct Draft {
     pub file: String,
     pub line: usize,
     pub quote: String,
+    /// All that was selected, when it ran past the quote's one line.
+    pub selection: String,
     pub text: String,
+    /// Where the caret is in `text`, in bytes.
+    pub caret: usize,
     /// Goes straight to the agent when it's done.
     pub ask: bool,
     /// It's about code, so it also goes with the review.
@@ -240,24 +256,57 @@ fn mix(a: cellix_render::Rgb, b: cellix_render::Rgb, amount: f32) -> cellix_rend
     cellix_render::Rgb(channel(a.0, b.0), channel(a.1, b.1), channel(a.2, b.2))
 }
 
+/// Breaks what's being written into rows at spaces, as `wrap` does, as byte ranges of it.
+/// Spaces stay where they were typed, at the end of a row, so a space moves the caret.
+pub fn wrap_spans(text: &str, width: f32, measure: &dyn Measure) -> Vec<(usize, usize)> {
+    let font = Font::default();
+    let mut rows = Vec::new();
+    let mut start = 0;
+    for paragraph in text.split('\n') {
+        let mut row = start;
+        let mut word = start;
+        for piece in paragraph.split(' ') {
+            let end = word + piece.len();
+            let before = &text[row..word];
+            if !before.trim().is_empty() && measure.width(&text[row..end], font) > width {
+                rows.push((row, word));
+                row = word;
+            }
+            word = end + 1;
+        }
+        let end = start + paragraph.len();
+        rows.push((row, end));
+        start = end + 1;
+    }
+    rows
+}
+
 fn draft_lines(draft: &Draft, width: f32, measure: &dyn Measure, out: &mut Vec<Line>) {
-    let text = wrap(&format!("{} ", draft.text), width, measure);
-    out.extend(text.into_iter().map(Line::Input));
+    let spans = wrap_spans(&draft.text, width, measure);
+    let caret = draft.caret.min(draft.text.len());
+    // At a row's end and the next one's start, it's at the start of the next.
+    let on = spans
+        .iter()
+        .rposition(|(start, end)| *start <= caret && caret <= *end);
+    for (index, (start, end)) in spans.into_iter().enumerate() {
+        let at = (on == Some(index)).then(|| caret - start);
+        out.push(Line::Input(draft.text[start..end].to_string(), at));
+    }
     out.push(Line::Hint);
 }
 
-fn lines(
-    threads: &[&Thread],
-    draft: Option<&Draft>,
-    agent: &str,
-    width: f32,
-    measure: &dyn Measure,
-) -> Vec<Line> {
+/// What the panel shows: the comments, the one being written, the agent's name, and how
+/// many comments are resolved and whether they're among those shown.
+pub type Shown<'a> = (&'a [&'a Thread], Option<&'a Draft>, &'a str, (usize, bool));
+
+fn lines((threads, draft, agent, resolved): Shown, width: f32, measure: &dyn Measure) -> Vec<Line> {
     let mut out = vec![Line::Gap];
-    if !threads.is_empty() {
-        let mine = threads.iter().filter(|t| t.suggested_by.is_empty()).count();
-        out.push(Line::Check(mine, threads.len() - mine));
-        let count = |kind: &str| threads.iter().filter(|t| t.kind == kind).count();
+    // The counts are of what's still open, whether or not the resolved ones show.
+    let open: Vec<&Thread> = threads.iter().copied().filter(|t| !t.resolved).collect();
+    if !open.is_empty() {
+        let mine = open.iter().filter(|t| t.suggested_by.is_empty()).count();
+        out.push(Line::Check(mine, open.len() - mine));
+        let count = |kind: &str| open.iter().filter(|t| t.kind == kind).count();
         // As many pills to a row as fit.
         let mut row = Vec::new();
         let mut used = 0.0;
@@ -282,8 +331,8 @@ fn lines(
         draft_lines(new, width, measure, &mut out);
         out.push(Line::Buttons(NEW_DRAFT));
         out.push(Line::Gap);
-    } else if threads.is_empty() {
-        out.push(Line::Empty);
+    } else if open.is_empty() {
+        out.push(Line::Empty(resolved.0 > 0));
     }
     for thread in threads {
         let id = thread.id;
@@ -300,7 +349,8 @@ fn lines(
         };
         // Words a plan's next version changed or dropped: still said, and marked as such.
         // The pill sits at the header's end when both fit, and under it when they don't.
-        let label = format!("{by}{kind}");
+        let done = if thread.resolved { " · Resolved" } else { "" };
+        let label = format!("{by}{kind}{done}");
         let (words, pill) = words_of(thread);
         let fits = |pill: &String| {
             measure.width(&label, small()) + PILL_AIR + pill_width(pill, measure) <= width
@@ -335,7 +385,7 @@ fn lines(
             out.extend(text.into_iter().map(|row| Line::Reply(id, row)));
         }
         // A suggestion is the agent's own, so there's nothing to wait for.
-        let waiting = !suggested && thread.waiting_answer();
+        let waiting = !suggested && !thread.resolved && thread.waiting_answer();
         if waiting && thread.told == Some(thread.replies.len()) && !agent.is_empty() {
             out.push(Line::Status(format!("Waiting for {agent}…")));
         } else if waiting && thread.asked {
@@ -347,21 +397,45 @@ fn lines(
             draft_lines(reply, width, measure, &mut out);
         }
         // The last word a rewrite: it's for the reviewer to apply or not.
-        if thread
-            .replies
-            .last()
-            .is_some_and(|r| rewrite(&r.text).is_some())
+        if !thread.resolved
+            && thread
+                .replies
+                .last()
+                .is_some_and(|r| rewrite(&r.text).is_some())
         {
             out.push(Line::Rewrite(id));
         }
-        out.push(if suggested {
+        out.push(if thread.resolved {
+            Line::Reopen(id)
+        } else if suggested {
             Line::Choices(id)
         } else {
             Line::Buttons(id)
         });
         out.push(Line::Gap);
     }
+    if resolved.0 > 0 {
+        out.push(Line::Resolved(resolved.0, resolved.1));
+        out.push(Line::Gap);
+    }
     out
+}
+
+/// What the button for resolved comments says.
+fn resolved_label(count: usize, shown: bool) -> String {
+    if shown {
+        HIDE_RESOLVED.to_string()
+    } else {
+        format!("Show {count} resolved")
+    }
+}
+
+/// That button's cells and start column.
+fn resolved_button(area: Rect, count: usize, shown: bool, measure: &dyn Measure) -> (String, u16) {
+    (
+        button_cells(&resolved_label(count, shown), measure),
+        area.x + SIDE + 1,
+    )
 }
 
 /// Each button as (label, padded cells, start column).
@@ -419,13 +493,13 @@ fn row_of(
 
 pub fn hit(
     area: Rect,
-    (threads, draft, agent): (&[&Thread], Option<&Draft>, &str),
+    shown: Shown,
     top: usize,
     (x, y): (u16, u16),
     measure: &dyn Measure,
 ) -> Option<Hit> {
     let width = area.w.saturating_sub(SIDE * 2 + 2) as f32;
-    let all = lines(threads, draft, agent, width, measure);
+    let all = lines(shown, width, measure);
     let row = top + y.checked_sub(area.y)? as usize;
     match all.get(row)? {
         Line::Buttons(id) => {
@@ -460,6 +534,14 @@ pub fn hit(
             let (cells, at) = check_button(area, measure);
             (x >= at && x < at + cells.chars().count() as u16).then_some(Hit::Check)
         }
+        Line::Reopen(id) => {
+            let (_, cells, at) = row_of(area, &REOPEN, measure).pop()?;
+            (x >= at && x < at + cells.chars().count() as u16).then_some(Hit::Reopen(*id))
+        }
+        Line::Resolved(count, shown) => {
+            let (cells, at) = resolved_button(area, *count, *shown, measure);
+            (x >= at && x < at + cells.chars().count() as u16).then_some(Hit::ToggleResolved)
+        }
         Line::Quote(id, ..)
         | Line::Text(id, _)
         | Line::Answer(id, ..)
@@ -473,14 +555,15 @@ pub fn hit(
 pub fn draw(
     grid: &mut Grid,
     area: Rect,
-    (threads, draft, agent): (&[&Thread], Option<&Draft>, &str),
+    shown: Shown,
     top: usize,
     hover: Option<(u16, u16)>,
     (measure, theme): (&dyn Measure, &Theme),
 ) {
     grid.fill(area, theme.sidebar);
     let width = area.w.saturating_sub(SIDE * 2 + 2) as f32;
-    let all = lines(threads, draft, agent, width, measure);
+    let threads = shown.0;
+    let all = lines(shown, width, measure);
     let (side, right) = (area.x + SIDE, area.right().saturating_sub(SIDE));
     let dim = Style {
         fg: theme.gutter.fg,
@@ -507,7 +590,7 @@ pub fn draw(
         match line {
             Line::Header(..) => start = Some(index),
             Line::Quote(..) if start.is_none() => start = Some(index),
-            Line::Buttons(_) | Line::Choices(_) => {
+            Line::Buttons(_) | Line::Choices(_) | Line::Reopen(_) => {
                 if let Some(first) = start.take() {
                     let (y, height) = (row_y(first), (index - first + 1) as f32);
                     let bounds = Bounds::cells(
@@ -579,12 +662,11 @@ pub fn draw(
             Line::Status(text) => {
                 grid.label_at(text_x as f32, text_x, y, text, inner_dim, right, SMALL);
             }
-            Line::Input(text) => {
+            Line::Input(text, caret) => {
                 grid.label(text_x, y, text, inner, right);
-                let last = matches!(all.get(index + 1), Some(Line::Hint));
-                if last {
+                if let Some(at) = caret {
                     let font = Font::default();
-                    let x = text_x as f32 + measure.width(text.trim_end(), font);
+                    let x = text_x as f32 + measure.width(&text[..*at], font);
                     grid.set_caret(x, y, 0.62);
                 }
             }
@@ -592,8 +674,13 @@ pub fn draw(
                 let hint = "Enter sends. Shift+Enter starts a new line. Esc cancels.";
                 grid.label_at(text_x as f32, text_x, y, hint, inner_dim, right, SMALL);
             }
-            Line::Empty => {
-                grid.label(side, y, "No comments yet.", dim, right);
+            Line::Empty(resolved) => {
+                let none = if *resolved {
+                    "No open comments."
+                } else {
+                    "No comments yet."
+                };
+                grid.label(side, y, none, dim, right);
                 let hint = "Select text in a file, then press Alt+C.";
                 grid.label_at(side as f32, side, y + 1, hint, dim, right, SMALL);
             }
@@ -814,6 +901,44 @@ pub fn draw(
                     };
                     grid.button(x, y, &cells, label, fill, style);
                 }
+            }
+            Line::Reopen(_) => {
+                for (label, cells, x) in row_of(area, &REOPEN, measure) {
+                    let width = cells.chars().count() as u16;
+                    let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
+                    let fill = if on_it {
+                        theme.popup_hover
+                    } else {
+                        theme.quiet_button(theme.text.bg)
+                    };
+                    let style = Style {
+                        bg: fill,
+                        fg: inner.fg,
+                        ..inner
+                    };
+                    grid.button(x, y, &cells, label, fill, style);
+                }
+            }
+            Line::Resolved(count, shown) => {
+                // Quiet, as Dismiss is: words only, filled while pointed at. Nothing is painted
+                // under the pane, so the button's corners need a ground, as Check my review's do.
+                let (cells, x) = resolved_button(area, *count, *shown, measure);
+                let width = cells.chars().count() as u16;
+                let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
+                let ground = Bounds::cells(x as f32, y as f32, width as f32, 1.0);
+                grid.panel(ground, 0, Some(body.bg), None);
+                let fill = if on_it { theme.popup_hover } else { body.bg };
+                let style = Style {
+                    bg: fill,
+                    fg: if on_it {
+                        theme.text.fg
+                    } else {
+                        theme.gutter.fg
+                    },
+                    ..body
+                };
+                let label = resolved_label(*count, *shown);
+                grid.button(x, y, &cells, &label, fill, style);
             }
             Line::Gap => {}
         }

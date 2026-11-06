@@ -366,6 +366,11 @@ with tempfile.TemporaryDirectory() as scratch:
     comment += [["keys", "add comment"], ["keys", "\r"], ["wait", 0.6]]
     comment += [["keys", "Is this true for multi-head attention?\r"], ["wait", 1.0]]
     shoot("50-comments", comment, NOTE_FILE, size="150x44", background="eff1f5")
+    # Being typed: the caret stands after the space just typed.
+    typing = [["wait", 3.0], ["click", 90, 5], ["wait", 1.5], ["keys", "\\eOP"], ["wait", 1.5],
+              ["keys", "add comment"], ["wait", 1.0], ["keys", "\r"], ["wait", 1.5],
+              ["keys", "Is this true for "], ["wait", 1.5]]
+    shoot("50-comment-typing", typing, NOTE_FILE, size="150x44", background="eff1f5")
     # A review the agent has checked: a verdict on the reviewer's comment and a suggestion.
     review = [
         {"id": 1, "file": NOTE_FILE, "line": 3, "quote": "the weights sum to one",
@@ -387,6 +392,10 @@ with tempfile.TemporaryDirectory() as scratch:
         {"id": 5, "file": "docs/PLAN.md", "line": 3, "quote": "Retry three times on a timeout.",
          "text": "Why three?", "replies": [], "resolved": False, "told": 0, "asked": False,
          "kind": "Reproducibility", "suggested_by": "", "earlier": 1, "reworded": True},
+        # Settled, so it's under "Show 1 resolved" rather than on the page.
+        {"id": 6, "file": NOTE_FILE, "line": 1, "quote": "Attention",
+         "text": "Cite the original paper.", "replies": [], "resolved": True, "told": 0,
+         "asked": False, "kind": "", "suggested_by": ""},
     ]
     os.makedirs(f"{ROOT}/.cellix", exist_ok=True)
     with open(f"{ROOT}/.cellix/threads.json", "w") as f:

@@ -54,6 +54,10 @@ pub struct Thread {
     /// dropped. The quote keeps the words as they were said about.
     #[serde(default)]
     pub reworded: bool,
+    /// All that was selected, when it ran past the quote's one line, so an agent asked about
+    /// it hears the whole of it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub selection: String,
 }
 
 /// Where a thread's quote is in a text.
@@ -183,9 +187,14 @@ impl Thread {
                 version + 1
             )
         });
+        let about = if self.selection.is_empty() {
+            &self.quote
+        } else {
+            &self.selection
+        };
         let mut text = format!(
-            "Comment {} on {}{at}, about \"{}\"{earlier}: {}",
-            self.id, self.file, self.quote, self.text
+            "Comment {} on {}{at}, about \"{about}\"{earlier}: {}",
+            self.id, self.file, self.text
         );
         for reply in &self.replies {
             text.push_str(&format!(" {}: {}", reply.author, reply.text));
@@ -381,6 +390,7 @@ mod tests {
             copy: (0, 0),
             earlier: None,
             reworded: false,
+            selection: String::new(),
         }
     }
 

@@ -382,6 +382,36 @@ impl Buffer {
         (start, end)
     }
 
+    /// Changes a char range as part of the last edit, so one undo takes back both: for what
+    /// an edit sets off, as a numbered list counting again once an item goes. Selections
+    /// after the range move with it. Refused, returning false, when the last edit isn't the
+    /// newest state, as after an undo, or when it was saved.
+    pub fn amend(
+        &mut self,
+        selections: &mut Selections,
+        (start, end): (usize, usize),
+        text: &str,
+    ) -> bool {
+        let saved = self.saved_at == Some(self.undo.len());
+        if !self.redo.is_empty() || self.undo.is_empty() || saved {
+            return false;
+        }
+        let removed = self.rope.slice(start..end).to_string();
+        self.rope.remove(start..end);
+        self.rope.insert(start, text);
+        self.revision += 1;
+        selections.shift((start, end), text.chars().count());
+        let last = self.undo.last_mut().expect("checked above");
+        last.edits.push(Edit {
+            at: start,
+            removed,
+            inserted: text.to_string(),
+        });
+        last.after = selections.clone();
+        last.typing = false;
+        true
+    }
+
     pub fn undo(&mut self, selections: &mut Selections) -> bool {
         let Some(txn) = self.undo.pop() else {
             return false;
@@ -489,5 +519,30 @@ mod tests {
         assert_eq!(b.text(), "hllo");
         b.undo(&mut s);
         assert_eq!(b.text(), "héllo");
+    }
+
+    #[test]
+    fn an_amended_edit_undoes_as_one() {
+        let mut buffer = Buffer::from_text("1. a\n2. b\n3. c\n");
+        let mut selections = Selections::single(Selection {
+            anchor: 5,
+            head: 10,
+            goal: None,
+        });
+        buffer.replace(&mut selections, "");
+        assert_eq!(buffer.text(), "1. a\n3. c\n");
+        assert!(buffer.amend(&mut selections, (5, 6), "2"));
+        assert_eq!(buffer.text(), "1. a\n2. c\n");
+        assert_eq!(
+            selections.primary().head,
+            5,
+            "the caret stays at the line's start"
+        );
+        buffer.undo(&mut selections);
+        assert_eq!(buffer.text(), "1. a\n2. b\n3. c\n");
+        // After an undo the last edit isn't the newest, so nothing is added to it.
+        assert!(!buffer.amend(&mut selections, (0, 1), "9"));
+        buffer.redo(&mut selections);
+        assert_eq!(buffer.text(), "1. a\n2. c\n");
     }
 }

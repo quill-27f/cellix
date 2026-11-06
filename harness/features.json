@@ -3862,5 +3862,47 @@
     "title": "A pane too narrow for its maximize button goes without it, rather than putting it under the icons",
     "test": "every_tab_in_a_narrow_pane_keeps_its_close_button_clear_of_the_icons",
     "passes": true
+  },
+  {
+    "id": "comment-typing",
+    "milestone": 11,
+    "title": "A comment is typed as any text is: the caret moves with spaces, arrows and Option+arrows, and Option+Backspace, Ctrl+W and Cmd+Backspace delete",
+    "test": "a_comment_is_typed_as_any_text_is",
+    "passes": true
+  },
+  {
+    "id": "comment-resolved-shown",
+    "milestone": 11,
+    "title": "A resolved comment stops marking its words at once, and the Comments pane can show resolved comments and reopen them",
+    "test": "a_resolved_comment_stops_marking_its_words_and_can_be_shown_again",
+    "passes": true
+  },
+  {
+    "id": "resume-all-card",
+    "milestone": 11,
+    "title": "With several sessions stopped, the stopped card resumes them all with one press",
+    "test": "every_session_that_stopped_comes_back_with_one_press",
+    "passes": true
+  },
+  {
+    "id": "list-renumber",
+    "milestone": 11,
+    "title": "Taking an item out of a numbered list on a page, or putting one in, counts the rest again in the file, undone as one",
+    "test": "taking_an_item_out_of_a_numbered_list_counts_the_rest_again",
+    "passes": true
+  },
+  {
+    "id": "list-shows-counted",
+    "milestone": 11,
+    "title": "A numbered list on a page shows its numbers counted as Markdown counts them",
+    "test": "a_list_of_ones_shows_counted",
+    "passes": true
+  },
+  {
+    "id": "ask-whole-selection",
+    "milestone": 11,
+    "title": "Ask Agent and comments give the agent all of what was selected, not its first line cut at 200 letters",
+    "test": "ask_agent_sends_all_of_a_long_selection",
+    "passes": true
   }
 ]

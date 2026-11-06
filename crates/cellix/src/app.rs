@@ -438,13 +438,19 @@ fn browser_installed() -> bool {
 
 /// What Ask Agent puts in Claude Code's prompt: the file as a mention, so the agent reads
 /// it, the line and the words selected, then room for the question.
-fn ask_in_prompt(file: &str, line: usize, quote: &str) -> String {
-    const LONGEST: usize = 200;
-    let mut short: String = quote.chars().take(LONGEST).collect();
-    if quote.chars().count() > LONGEST {
-        short.push('…');
+/// What Ask Agent puts in Claude Code's prompt: the file, and all of what was selected, a
+/// passage set out as a quote under the lines it's on.
+fn ask_in_prompt(file: &str, line: usize, selected: &str) -> String {
+    let selected = selected.trim();
+    if !selected.contains('\n') {
+        return format!("@{file} line {line}, \"{selected}\": ");
     }
-    format!("@{file} line {line}, \"{short}\": ")
+    let last = line + selected.lines().count() - 1;
+    let quoted: Vec<String> = selected
+        .lines()
+        .map(|row| format!("> {row}").trim_end().to_string())
+        .collect();
+    format!("@{file} lines {line}-{last}:\n{}\n\n", quoted.join("\n"))
 }
 
 /// What Cellix says once Ask Agent has put the selection in Claude Code's prompt.
@@ -885,6 +891,8 @@ pub struct App {
     threads: Vec<Thread>,
     /// The editor and revision comments were last placed for.
     threads_seen: Option<(usize, u64)>,
+    /// The Comments pane lists resolved comments too, under the open ones' cards.
+    show_resolved: bool,
     /// The file couldn't be read, so saving would lose what's in it.
     threads_broken: bool,
     tests: Vec<TestRun>,
@@ -1129,6 +1137,7 @@ impl App {
             remove_after_build: Vec::new(),
             threads,
             threads_seen: None,
+            show_resolved: false,
             threads_broken,
             tests: Vec::new(),
             hover: None,
@@ -3293,6 +3302,14 @@ impl App {
         if !passive && !wheel {
             self.scrolled = None;
         }
+        // What the person does to a page, as against what a file changing on disk does.
+        let edited = (!passive && !matches!(event, Event::Tick | Event::Resize(..)))
+            .then(|| {
+                self.editors
+                    .get(self.active())
+                    .map(|e| (self.active(), e.buffer.revision()))
+            })
+            .flatten();
         match event {
             Event::Key(key) => self.key(key),
             Event::Mouse(mouse) => self.mouse(mouse),
@@ -3303,12 +3320,19 @@ impl App {
         self.poll_pan_hint();
         self.keep_in_view(shown);
         self.fit_dock();
+        if let Some((index, revision)) = edited
+            && index == self.active()
+            && let Some(editor) = self.editors.get_mut(index)
+            && editor.buffer.revision() != revision
+        {
+            editor.renumber_lists();
+        }
         self.follow_threads();
     }
 
     fn paste(&mut self, text: &str) {
         if let Some(draft) = &mut self.dock.draft {
-            draft.text.push_str(text);
+            crate::field::insert(&mut draft.text, &mut draft.caret, text);
             return;
         }
         if self.source.focused {
@@ -3572,16 +3596,17 @@ impl App {
         };
         match key.key {
             Key::Esc => self.dock.draft = None,
-            Key::Enter if key.mods.shift || key.mods.alt => draft.text.push('\n'),
+            Key::Enter if key.mods.shift || key.mods.alt => {
+                crate::field::insert(&mut draft.text, &mut draft.caret, "\n");
+            }
             Key::Enter => {
                 let draft = self.dock.draft.take().expect("checked above");
                 self.finish_draft(draft);
             }
-            Key::Backspace => {
-                draft.text.pop();
+            // Everything else is typing, as in any text box: words, moves and deletes.
+            _ => {
+                crate::field::key(&mut draft.text, &mut draft.caret, key);
             }
-            Key::Char(c) if !key.mods.ctrl => draft.text.push(c),
-            _ => {}
         }
         true
     }
@@ -3607,11 +3632,17 @@ impl App {
                     && !draft.ask
                     && let Ok(mut comments) = self.comments.lock()
                 {
+                    // The agent acts on what it's told, so it's told all that was selected.
+                    let about = if draft.selection.is_empty() {
+                        draft.quote.clone()
+                    } else {
+                        draft.selection.clone()
+                    };
                     comments.push(Comment {
                         file: draft.file.clone(),
                         line: draft.line,
                         text: text.clone(),
-                        quote: draft.quote.clone(),
+                        quote: about,
                         ..Comment::default()
                     });
                 }
@@ -3630,6 +3661,7 @@ impl App {
                     copy: (0, 0),
                     earlier: None,
                     reworded: false,
+                    selection: draft.selection,
                 });
                 asked = draft.ask.then_some(id);
             }
@@ -3793,7 +3825,9 @@ impl App {
             file,
             line,
             quote,
+            selection: String::new(),
             text: String::new(),
+            caret: 0,
             ask: false,
             code: false,
         });
@@ -3876,7 +3910,9 @@ impl App {
             file,
             line: line + 1,
             quote,
+            selection: String::new(),
             text: String::new(),
+            caret: 0,
             ask: false,
             code: false,
         });
@@ -5859,7 +5895,7 @@ impl App {
         grid: &mut Grid,
         y: u16,
         placed: &[(String, u16)],
-        labels: &[&str],
+        (labels, filled): (&[&str], bool),
     ) {
         let theme = &self.theme;
         let base = Style {
@@ -5868,7 +5904,8 @@ impl App {
             ..theme.bar
         };
         for (i, (cells, x)) in placed.iter().enumerate() {
-            let first = i == 0;
+            // The first is the answer, filled, unless this row only carries on another.
+            let first = i == 0 && filled;
             let width = cells.chars().count() as u16;
             let hovered = self
                 .hover
@@ -5951,7 +5988,7 @@ impl App {
             );
         }
         let y = self.linger_button_row();
-        self.draw_card_buttons(grid, y, &self.linger_buttons(), &LINGER_BUTTONS);
+        self.draw_card_buttons(grid, y, &self.linger_buttons(), (&LINGER_BUTTONS, true));
     }
 
     /// A press on the logout card. Returns whether the card took it.
@@ -6006,9 +6043,12 @@ impl App {
         }
         let screen = self.dock_screen()?;
         let width = screen.w.saturating_sub(3);
-        let (_, detail, _) = self.stopped_offer()?;
+        let (_, detail, buttons) = self.stopped_offer()?;
         let lines = self.stopped_detail(&detail, width).len() as u16;
-        let height = (STOPPED_CARD_ROWS + lines).min(screen.h);
+        // Buttons that don't fit beside each other take another row.
+        let wide = Rect::new(screen.x + 1, 0, width, 0);
+        let rows = self.stopped_button_rows(wide, &buttons);
+        let height = (STOPPED_CARD_ROWS + lines + rows - 1).min(screen.h);
         Some(Rect::new(
             screen.x + 1,
             screen.bottom().saturating_sub(height + 1),
@@ -6025,9 +6065,13 @@ impl App {
         lines
     }
 
-    /// The row of the card's buttons.
-    fn stopped_buttons_row(&self, card: Rect) -> u16 {
-        card.bottom().saturating_sub(2)
+    /// How many rows the card's buttons take in a card as wide as `card`.
+    fn stopped_button_rows(&self, card: Rect, buttons: &[Offer]) -> u16 {
+        self.flow_buttons(card, buttons)
+            .iter()
+            .map(|(_, _, row, _)| row + 1)
+            .max()
+            .unwrap_or(1)
     }
 
     /// What the card says, and the buttons it has, for the session showing.
@@ -6069,17 +6113,41 @@ impl App {
                 vec![("Start Again", Revive::Fresh), ("Close", Revive::Close)],
             )
         };
+        let mut buttons = buttons;
+        // With others stopped too, they can all come back at once: resumed where they can
+        // be, and otherwise started again.
+        if self.stopped_count() > 1 {
+            let any_resumes = self
+                .dock
+                .sessions
+                .iter()
+                .filter_map(|s| s.stopped.as_ref())
+                .any(|s| {
+                    s.agent
+                        .as_ref()
+                        .and_then(|a| crate::agents::resume_args(&s.job.name, &a.session))
+                        .is_some()
+                });
+            let label = if any_resumes {
+                "Resume All"
+            } else {
+                "Start All Again"
+            };
+            buttons.push((label, Revive::All));
+        }
         Some((title, detail, buttons))
     }
 
-    /// The card's buttons as (cells, x, choice), laid out from the left.
-    fn stopped_buttons(&self, card: Rect, buttons: &[Offer]) -> Vec<(String, u16, Revive)> {
+    /// The card's buttons as (cells, x, row counting from the first, choice), laid out from
+    /// the left, onto another row where the card is too narrow for them all.
+    fn flow_buttons(&self, card: Rect, buttons: &[Offer]) -> Vec<(String, u16, u16, Revive)> {
         let plain = self.measure.in_cells();
         let font = Font {
             size: 90,
             ..Font::default()
         };
-        let mut x = card.x + 2;
+        let start = card.x + 2;
+        let (mut x, mut row) = (start, 0);
         let mut placed = Vec::new();
         for (label, choice) in buttons {
             let cells = if plain {
@@ -6089,24 +6157,33 @@ impl App {
                 format!("{label:^width$}")
             };
             let width = cells.chars().count() as u16;
-            placed.push((cells, x, *choice));
+            if x > start && x + width > card.right().saturating_sub(1) {
+                (x, row) = (start, row + 1);
+            }
+            placed.push((cells, x, row, *choice));
             x += width + 1;
         }
         placed
+    }
+
+    /// The card's buttons as (cells, x, y, choice).
+    fn stopped_buttons(&self, card: Rect, buttons: &[Offer]) -> Vec<(String, u16, u16, Revive)> {
+        let rows = self.stopped_button_rows(card, buttons);
+        let first = card.bottom().saturating_sub(1 + rows);
+        self.flow_buttons(card, buttons)
+            .into_iter()
+            .map(|(cells, x, row, choice)| (cells, x, first + row, choice))
+            .collect()
     }
 
     /// The choice under a click on the card, if any.
     fn stopped_hit(&self, x: u16, y: u16) -> Option<Revive> {
         let card = self.stopped_card()?;
         let (_, _, buttons) = self.stopped_offer()?;
-        let row = self.stopped_buttons_row(card);
-        if y != row {
-            return None;
-        }
         let placed = self.stopped_buttons(card, &buttons);
-        placed.into_iter().find_map(|(cells, at, choice)| {
+        placed.into_iter().find_map(|(cells, at, row, choice)| {
             let width = cells.chars().count() as u16;
-            (x >= at && x < at + width).then_some(choice)
+            (y == row && x >= at && x < at + width).then_some(choice)
         })
     }
 
@@ -6146,14 +6223,18 @@ impl App {
         for (i, line) in self.stopped_detail(&detail, card.w).iter().enumerate() {
             grid.label(card.x + 2, card.y + 2 + i as u16, line, dim, right);
         }
-        let y = self.stopped_buttons_row(card);
-        let placed: Vec<(String, u16)> = self
-            .stopped_buttons(card, &buttons)
-            .into_iter()
-            .map(|(cells, x, _)| (cells, x))
-            .collect();
-        let labels: Vec<&str> = buttons.iter().map(|(label, _)| *label).collect();
-        self.draw_card_buttons(grid, y, &placed, &labels);
+        let placed = self.stopped_buttons(card, &buttons);
+        let mut rows: Vec<u16> = placed.iter().map(|(_, _, y, _)| *y).collect();
+        rows.dedup();
+        for (index, y) in rows.into_iter().enumerate() {
+            let (spots, labels): (Vec<(String, u16)>, Vec<&str>) = placed
+                .iter()
+                .zip(&buttons)
+                .filter(|((_, _, row, _), _)| *row == y)
+                .map(|((cells, x, _, _), (label, _))| ((cells.clone(), *x), *label))
+                .unzip();
+            self.draw_card_buttons(grid, y, &spots, (&labels, index == 0));
+        }
     }
 
     /// Breaks text into lines that fit `width` cells, by words.
@@ -6182,6 +6263,12 @@ impl App {
     /// Acts on the card of the session showing: resumes it, starts it fresh, or closes it.
     /// The record is forgotten either way, and what starts takes the stopped tab's place.
     fn revive(&mut self, choice: Revive) {
+        if choice == Revive::All {
+            let count = self.revive_all();
+            let what = if count == 1 { "session" } else { "sessions" };
+            self.say(format!("Resumed {count} {what}"));
+            return;
+        }
         let Some(index) = self.dock.active else {
             return;
         };
@@ -6514,9 +6601,10 @@ impl App {
             let screen = self.dock_panel().unwrap_or(area);
             match mouse.kind {
                 MouseKind::Left => {
-                    let threads = self.open_threads();
+                    let (threads, resolved) = self.shown_threads();
                     let agent = self.dock.agent_name();
-                    let threads = (threads.as_slice(), self.dock.draft.as_ref(), agent.as_str());
+                    let draft = self.dock.draft.as_ref();
+                    let threads = (threads.as_slice(), draft, agent.as_str(), resolved);
                     let spot = (x, y);
                     let hit = threads::hit(
                         screen,
@@ -6890,7 +6978,9 @@ impl App {
             let look = (&*self.measure, theme);
             let top = self.dock.comments_top;
             let agent = self.dock.agent_name();
-            let shown = (threads.as_slice(), self.dock.draft.as_ref(), agent.as_str());
+            let (listed, resolved) = self.shown_threads();
+            let draft = self.dock.draft.as_ref();
+            let shown = (listed.as_slice(), draft, agent.as_str(), resolved);
             let panel = self.dock_panel().unwrap_or(screen);
             threads::draw(grid, panel, shown, top, self.hover, look);
             return;
@@ -7401,6 +7491,7 @@ impl App {
                 copy: (0, 0),
                 earlier: None,
                 reworded: false,
+                selection: String::new(),
             });
             self.save_threads();
         }
@@ -7432,6 +7523,7 @@ impl App {
             copy: (0, 0),
             earlier: None,
             reworded: false,
+            selection: String::new(),
         });
         self.save_threads();
         if page {
@@ -7445,6 +7537,25 @@ impl App {
 
     /// Keeps comments on their text as the document changes.
     fn follow_threads(&mut self) {
+        // A comment resolved, reopened or added changes the highlights on every page showing
+        // its file, not only the one in front.
+        if self.threads_seen.is_none() {
+            for (index, editor) in self.editors.iter().enumerate() {
+                if index == self.active() {
+                    continue;
+                }
+                let Some(file) = editor.buffer.path().map(|p| self.relative(p)) else {
+                    continue;
+                };
+                let quotes: Vec<(usize, String)> = self
+                    .threads
+                    .iter()
+                    .filter(|t| t.file == file && !t.resolved && t.earlier.is_none())
+                    .map(|t| (t.line, t.quote.clone()))
+                    .collect();
+                editor.set_quotes(&quotes);
+            }
+        }
         let Some(editor) = self.editors.get(self.active()) else {
             return;
         };
@@ -7527,6 +7638,8 @@ impl App {
     }
 
     fn save_threads(&mut self) {
+        // Whatever changed, the highlights on the page are drawn again from what's open.
+        self.threads_seen = None;
         if self.threads_broken {
             self.say("The comments file can't be read, so new comments aren't being saved");
             return;
@@ -7534,6 +7647,33 @@ impl App {
         if let Err(e) = cellix_review::threads::save(self.workspace.root(), &self.threads) {
             self.say(format!("Could not save comments: {e}"));
         }
+    }
+
+    /// What the Comments pane lists for the file in view, top to bottom: the open comments,
+    /// and the resolved ones too when they're asked for. Also how many are resolved, and
+    /// whether they're listed.
+    fn shown_threads(&self) -> (Vec<&Thread>, (usize, bool)) {
+        let file = self
+            .editors
+            .get(self.active())
+            .and_then(|e| e.buffer.path())
+            .map(|p| self.relative(p));
+        let here = |t: &&Thread| file.as_ref().is_none_or(|f| *f == t.file);
+        let resolved = self
+            .threads
+            .iter()
+            .filter(|t| t.resolved)
+            .filter(here)
+            .count();
+        let shown = self.show_resolved && resolved > 0;
+        let mut threads: Vec<&Thread> = self
+            .threads
+            .iter()
+            .filter(|t| shown || !t.resolved)
+            .filter(here)
+            .collect();
+        threads.sort_by_key(|t| t.line);
+        (threads, (resolved, shown))
     }
 
     /// The open comments on the file in view, top to bottom.
@@ -7580,7 +7720,9 @@ impl App {
                     file: String::new(),
                     line: 0,
                     quote: String::new(),
+                    selection: String::new(),
                     text: String::new(),
+                    caret: 0,
                     ask: false,
                     code: false,
                 });
@@ -7647,9 +7789,23 @@ impl App {
             ThreadHit::Resolve(id) => {
                 if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
                     thread.resolved = true;
+                    // A comment on code waits to go with the review; resolved, it doesn't.
+                    if let Ok(mut comments) = self.comments.lock() {
+                        let about = |q: &String| *q == thread.quote || *q == thread.selection;
+                        comments.retain(|c| {
+                            !(c.file == thread.file && c.text == thread.text && about(&c.quote))
+                        });
+                    }
                 }
                 self.save_threads();
             }
+            ThreadHit::Reopen(id) => {
+                if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
+                    thread.resolved = false;
+                }
+                self.save_threads();
+            }
+            ThreadHit::ToggleResolved => self.show_resolved = !self.show_resolved,
         }
     }
 
@@ -7781,14 +7937,31 @@ impl App {
             let open = self.editors.get(self.active());
             if let Some(editor) = open.filter(|_| !answering) {
                 // Written beside the file, so the text it's about stays in view.
-                let quote = editor
-                    .selected_text()
-                    .unwrap_or_else(|| editor.line_text(line.saturating_sub(1)));
-                let quote = quote.lines().next().unwrap_or_default().trim().to_string();
+                let selected = editor.selected_text().filter(|t| !t.trim().is_empty());
+                // A selection over several lines is about the line it starts on.
+                let line = match &selected {
+                    Some(_) => {
+                        let rope = editor.buffer.rope();
+                        rope.char_to_line(editor.selections.primary().start()) + 1
+                    }
+                    None => line,
+                };
+                let whole = selected
+                    .unwrap_or_else(|| editor.line_text(line.saturating_sub(1)))
+                    .trim()
+                    .to_string();
+                // The quote is one line, which the page marks and follows; the agent hears
+                // all of what was selected.
+                let quote = whole.lines().next().unwrap_or_default().trim().to_string();
+                let selection = if whole.contains('\n') {
+                    whole.clone()
+                } else {
+                    String::new()
+                };
                 // Inside Claude Code the agent is the conversation beside the pane, so the
                 // question is asked there: what it's about goes in the prompt box to finish.
                 if ask && self.in_pane {
-                    self.outgoing_fill = Some(ask_in_prompt(&file, line, &quote));
+                    self.outgoing_fill = Some(ask_in_prompt(&file, line, &whole));
                     // The bar goes, so the press shows it was taken; the words are in the prompt.
                     if let Some(editor) = self.editor_mut() {
                         let head = editor.selections.primary().head;
@@ -7803,7 +7976,9 @@ impl App {
                     file,
                     line,
                     quote,
+                    selection,
                     text: String::new(),
+                    caret: 0,
                     ask,
                     code,
                 });
@@ -7866,6 +8041,7 @@ impl App {
                     copy: (0, 0),
                     earlier: None,
                     reworded: false,
+                    selection: String::new(),
                 });
                 self.save_threads();
                 let _ = made.send(id);
@@ -9998,14 +10174,9 @@ impl App {
                         .and_then(|p| self.diagnostics.get(p))
                         .map_or_else(Vec::new, |d| d.iter().map(|d| d.line + 1).collect()),
                 };
-                editor.draw(
-                    grid,
-                    area,
-                    theme,
-                    pane == self.focus,
-                    &self.registry,
-                    &marks,
-                );
+                // While a comment is being written the keys go to it, and so does the caret.
+                let focused = pane == self.focus && self.dock.draft.is_none();
+                editor.draw(grid, area, theme, focused, &self.registry, &marks);
                 if let Some(hover) = self.hover.filter(|h| area.contains(h.0, h.1)) {
                     editor.draw_hover(grid, area, hover, &self.theme);
                 }
@@ -12503,6 +12674,8 @@ enum Revive {
     Resume,
     Fresh,
     Close,
+    /// Every session here that stopped, resumed at once rather than tab by tab.
+    All,
 }
 
 /// This machine's name as people know it, without its domain.
@@ -14622,6 +14795,54 @@ mod tests {
         let _ = fs::remove_dir_all(crate::hold::folder_of(dir.path()));
     }
 
+    /// Unix only: sessions outlive Cellix only on Unix, and the stand-in agent is a shell script.
+    #[test]
+    #[cfg(unix)]
+    fn every_session_that_stopped_comes_back_with_one_press() {
+        let (dir, mut app) = project();
+        left_stopped(dir.path(), "Codex", "first\r\n", Some("one-1"));
+        left_stopped(dir.path(), "Claude Code", "second\r\n", Some("two-2"));
+        let fake = dir.path().join("fake-agent");
+        fs::write(&fake, "#!/bin/sh\necho \"started with $*\"; sleep 9\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        app.agent_program = Some(fake.display().to_string());
+        app.rejoin_sessions();
+        assert_eq!(app.stopped_count(), 2);
+
+        // The card on either offers them all back at once, rather than tab by tab.
+        let (x, y) = find(&screen(&app), "[Resume All]");
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert_eq!(app.stopped_count(), 0);
+        assert_eq!(app.dock.sessions.len(), 2);
+        let started: Vec<String> = (0..2)
+            .map(|index| {
+                app.dock.active = Some(index);
+                let deadline = std::time::Instant::now() + BACKGROUND;
+                loop {
+                    app.poll();
+                    let text = screen(&app).text();
+                    if text.contains("started with") {
+                        return text;
+                    }
+                    assert!(std::time::Instant::now() < deadline, "{text}");
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+            })
+            .collect();
+        assert!(
+            started.iter().any(|t| t.contains("resume one-1")),
+            "{started:?}"
+        );
+        assert!(
+            started.iter().any(|t| t.contains("--resume two-2")),
+            "{started:?}"
+        );
+        let _ = fs::remove_dir_all(crate::hold::folder_of(dir.path()));
+    }
+
     /// Unix only: sessions outlive Cellix only on Unix.
     #[test]
     #[cfg(unix)]
@@ -14636,9 +14857,10 @@ mod tests {
             2,
             "a stopped terminal stays, unlike one that ended"
         );
-        // A shell can't be resumed, so it's started again or closed.
+        // A shell can't be resumed, so it's started again or closed, the two together too.
         let text = screen(&app).text();
         assert!(text.contains("Start a new terminal"), "{text}");
+        assert!(text.contains("Start All Again"), "{text}");
         assert!(
             text.contains("Start Again") && !text.contains("Resume"),
             "{text}"
@@ -16028,6 +16250,112 @@ mod tests {
     }
 
     #[test]
+    fn taking_an_item_out_of_a_numbered_list_counts_the_rest_again() {
+        let (_dir, mut app) = page_app("1. one\n2. two\n3. three\n");
+        let on_two = "1. one\n2. t".chars().count();
+        let editor = app.editor_mut().unwrap();
+        editor.selections.set_single(Selection::cursor(on_two));
+        app.handle(Event::Key(KeyEvent {
+            key: Key::Char('K'),
+            mods: Mods {
+                ctrl: true,
+                shift: true,
+                ..Mods::default()
+            },
+        }));
+        assert_eq!(app.active_text().unwrap(), "1. one\n2. three\n");
+        assert!(screen(&app).text().contains("2. three"));
+        // One undo puts the item back with its number, and the next one's too.
+        app.handle(Event::Key(KeyEvent::ctrl('z')));
+        assert_eq!(app.active_text().unwrap(), "1. one\n2. two\n3. three\n");
+
+        // An item put in the middle pushes the rest on.
+        let end_of_one = "1. one".chars().count();
+        let editor = app.editor_mut().unwrap();
+        editor.selections.set_single(Selection::cursor(end_of_one));
+        enter(&mut app);
+        typed(&mut app, "half");
+        assert_eq!(
+            app.active_text().unwrap(),
+            "1. one\n2. half\n3. two\n4. three\n"
+        );
+    }
+
+    #[test]
+    fn a_list_of_ones_shows_counted() {
+        let (_dir, app) = page_app("1. one\n1. two\n1. three\n");
+        assert!(
+            screen(&app).text().contains("3. three"),
+            "{}",
+            screen(&app).text()
+        );
+        assert_eq!(app.active_text().unwrap(), "1. one\n1. two\n1. three\n");
+    }
+
+    #[test]
+    fn a_resolved_comment_stops_marking_its_words_and_can_be_shown_again() {
+        let (_dir, mut app) = page_app("the cache goes first\nand the queue after\n");
+        for (word, note) in [("cache", "Why first?"), ("queue", "And this?")] {
+            select_word(&mut app, word);
+            app.run(Command::AddComment);
+            typed(&mut app, note);
+            enter(&mut app);
+        }
+        let marked = |app: &App| app.editors[app.active()].quoted.borrow().len();
+        assert_eq!(marked(&app), 2);
+        let first = app.threads[0].id;
+        app.thread_hit(ThreadHit::Resolve(first));
+        app.handle(Event::Tick);
+        assert_eq!(marked(&app), 1, "the resolved one's words aren't marked");
+        let text = screen(&app).text();
+        assert!(!text.contains("Why first?"), "{text}");
+        assert!(text.contains("Show 1 resolved"), "{text}");
+
+        // Shown again on asking, marked as resolved, and it can be opened again.
+        let (x, y) = find(&screen(&app), "Show 1 resolved");
+        app.handle(mouse(MouseKind::Left, x, y));
+        let text = screen(&app).text();
+        assert!(
+            text.contains("Why first?") && text.contains("Resolved"),
+            "{text}"
+        );
+        assert!(text.contains("Hide resolved"), "{text}");
+        let (x, y) = find(&screen(&app), "Reopen");
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert!(!app.threads[0].resolved);
+        assert_eq!(marked(&app), 2, "marked again once it's open");
+    }
+
+    #[test]
+    fn a_comment_is_typed_as_any_text_is() {
+        let (_dir, mut app) = page_app("the cache goes first\n");
+        app.run(Command::AddComment);
+        let caret = |app: &App| screen(app).caret.expect("a caret in the comment").x;
+        typed(&mut app, "fix the cache");
+        let before = caret(&app);
+        typed(&mut app, " ");
+        assert!(caret(&app) > before, "a space moves the caret");
+        let alt = |key| {
+            Event::Key(KeyEvent {
+                key,
+                mods: Mods {
+                    alt: true,
+                    ..Mods::default()
+                },
+            })
+        };
+        // Option+Backspace takes the word before, and Option+Left goes back a word.
+        app.handle(alt(Key::Backspace));
+        assert_eq!(app.dock.draft.as_ref().unwrap().text, "fix the ");
+        app.handle(alt(Key::Left));
+        typed(&mut app, "all of ");
+        app.handle(Event::Key(KeyEvent::plain(Key::End)));
+        typed(&mut app, "store");
+        enter(&mut app);
+        assert_eq!(app.threads[0].text, "fix all of the store");
+    }
+
+    #[test]
     fn tab_walks_a_templates_slots_and_a_selection_fills_the_first() {
         let (_dir, mut app) = page_app("x\n");
         app.run(Command::Move(cellix_input::Direction::LineEnd, false));
@@ -17123,6 +17451,46 @@ mod tests {
             "the bar goes once it's pressed"
         );
         assert!(app.take_outgoing_fill().is_none(), "once");
+    }
+
+    /// What was selected goes to the agent whole, however long, where it once stopped at the
+    /// first line and 200 letters.
+    #[test]
+    fn ask_agent_sends_all_of_a_long_selection() {
+        let long = "word ".repeat(80);
+        let page = format!("# Plan\n\n{long}end of one\n\nSecond paragraph here.\n");
+        let (_dir, mut app) = page_app(&page);
+        app.in_pane = true;
+        let start = "# Plan\n\n".chars().count();
+        let end = page.find("here.").unwrap() + "here.".len();
+        let editor = app.editor_mut().unwrap();
+        editor.selections.set_single(Selection {
+            anchor: start,
+            head: end,
+            goal: None,
+        });
+        app.prompt_comment_at_cursor(true);
+        let fill = app.take_outgoing_fill().expect("words for the prompt");
+        assert!(fill.starts_with("@note.md lines 3-5:"), "{fill}");
+        assert!(fill.contains("end of one"), "{fill}");
+        assert!(fill.contains("> Second paragraph here."), "{fill}");
+        assert!(!fill.contains('…'), "{fill}");
+
+        // A comment for an agent in Cellix's own pane says all of it too.
+        app.in_pane = false;
+        let editor = app.editor_mut().unwrap();
+        editor.selections.set_single(Selection {
+            anchor: start,
+            head: end,
+            goal: None,
+        });
+        app.run(Command::AddComment);
+        typed(&mut app, "Too long");
+        enter(&mut app);
+        let message = app.threads[0].message();
+        assert!(message.contains("end of one"), "{message}");
+        assert!(message.contains("Second paragraph here."), "{message}");
+        assert_eq!(app.threads[0].line, 3);
     }
 
     #[test]
@@ -18593,7 +18961,10 @@ mod tests {
         let (x, y) = find(&screen(&app), "Resolve");
         app.handle(mouse(MouseKind::Left, x, y));
         assert!(app.threads[0].resolved);
-        assert!(screen(&app).text().contains("No comments yet"));
+        // Resolved comments are kept, and can be shown again.
+        let text = screen(&app).text();
+        assert!(text.contains("No open comments"), "{text}");
+        assert!(text.contains("Show 1 resolved"), "{text}");
     }
 
     #[test]
@@ -21010,7 +21381,6 @@ while True:
     #[test]
     fn lsp_completion_replaces_the_word() {
         let (_dir, mut app) = with_server();
-        typed(&mut app, "");
         app.run(Command::Complete);
         wait(&mut app, |a| screen(a).text().contains("completed_name"));
         enter(&mut app);

@@ -107,6 +107,25 @@ impl Selections {
         self.normalize();
     }
 
+    /// Moves each selection for `start..end` having become `inserted` chars long: places
+    /// after it shift by the difference, and places inside it stay inside.
+    pub(crate) fn shift(&mut self, (start, end): (usize, usize), inserted: usize) {
+        let place = |at: usize| {
+            if at >= end {
+                at + inserted - (end - start)
+            } else if at > start {
+                start + (at - start).min(inserted)
+            } else {
+                at
+            }
+        };
+        for s in &mut self.items {
+            s.anchor = place(s.anchor);
+            s.head = place(s.head);
+        }
+        self.normalize();
+    }
+
     pub fn clamp(&mut self, len: usize) {
         for s in &mut self.items {
             s.anchor = s.anchor.min(len);

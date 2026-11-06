@@ -142,8 +142,11 @@ unchanged. On a page, arrows and Home and End move by what's shown.
 Whatever can be seen can be talked about. A selection, in code or on a page, gets Comment and Ask
 Agent beside it, and a picture, diagram or formula gets a Comment button under the pointer. Comments
 are written in the side pane, with what they're about in view. Ask Agent sends the comment to the
-agent as soon as it's written, with its file, line and quote, and how to answer with `cellix reply`,
-so the answer lands under it. A picture's comment names its file, so the agent can open it. All of
+agent as soon as it's written, with its file, line and all of what was selected, and how to answer
+with `cellix reply`, so the answer lands under it. Inside Claude Code it puts the file and the whole
+selection in Claude Code's prompt instead, a passage set out as a quote. A comment is typed as any
+text box is, with a caret that moves by letter and word and the Mac's word deletes. Resolving one
+stops marking its words at once; the pane can show resolved comments again, to reopen them. A picture's comment names its file, so the agent can open it. All of
 this works the same in code, Markdown, LaTeX, data and notebooks. A PDF or image in the side pane
 takes a comment too, from a button or a right click, and a paper's PDF lands it on the source line
 behind that place, so it stays put through every rebuild.
@@ -337,8 +340,8 @@ leave its own session id beside it.
 
 A host that dies without finishing, as when the machine restarts, leaves its job, log and session
 id; the next Cellix puts them aside and shows the tab as it was, with Resume (Claude Code's
-`--resume`, Codex's `resume`), Start Fresh or Start Again, and Close. It says "restarted" only when
-the machine booted after the log was last written.
+`--resume`, Codex's `resume`), Start Fresh or Start Again, and Close, and with others stopped too,
+Resume All. It says "restarted" only when the machine booted after the log was last written.
 
 ### Workspaces, in place of tmux
 

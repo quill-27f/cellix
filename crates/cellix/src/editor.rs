@@ -973,6 +973,33 @@ impl Editor {
         }
     }
 
+    /// Keeps a page's numbered lists counting on once an edit takes an item out or puts one
+    /// in, as part of that edit, so one undo takes back both. Only on a Markdown page, where
+    /// the numbers are hidden and can't be fixed by hand, and not while changes are tracked.
+    pub fn renumber_lists(&mut self) {
+        if !self.rendered || self.tracking || self.dialect() != Dialect::Markdown {
+            return;
+        }
+        let line = {
+            let rope = self.buffer.rope();
+            rope.char_to_line(self.selections.primary().head)
+        };
+        let text = self.buffer.text();
+        let lines: Vec<&str> = text.split('\n').collect();
+        // From the bottom up, so what's above keeps its place.
+        for (index, digits, number) in rendered::renumbering(&lines, line).into_iter().rev() {
+            let indent = lines[index].chars().count() - lines[index].trim_start().chars().count();
+            let start = self.buffer.rope().line_to_char(index) + indent;
+            let range = (start, start + digits);
+            if !self
+                .buffer
+                .amend(&mut self.selections, range, &number.to_string())
+            {
+                return;
+            }
+        }
+    }
+
     /// Backspace at the start of an item or heading removes its marker in one step.
     fn backspace_on_page(&mut self) {
         let (line, start) = self.line_of_head();
