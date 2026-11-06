@@ -445,7 +445,10 @@ the file.
   trust question isn't covered by `--consent`, and the user's click is the answer to it.
   `BeforeTool` on `exit_plan_mode` holds the plan, and Gemini still asks for its own approval.
 - The icons at the top right, as in a desktop app, reach the comments, a terminal, Review, the
-  browser and the agents. The pane stands under the file when the window is too narrow to have
+  browser and the agents. Past them, in the corner, a red close button quits Cellix as Ctrl+Q
+  does; it's a window's red circle so it can't be taken for the pane's own grey ×. The
+  explorer lists gitignored files, as VS Code does, since agents work in them, but dims them,
+  and what's dimmed is exactly what Quick Open and search leave out. The pane stands under the file when the window is too narrow to have
   them side by side. The Agents icon opens the side pane. With nothing running, it lists what's running elsewhere,
   what can be started and the worktrees.
 - Rebuilding an agent's interface: the side pane shows the real program, so its features arrive with its updates.

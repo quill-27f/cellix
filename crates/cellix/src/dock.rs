@@ -43,6 +43,8 @@ const NEW_WIDTH: u16 = 3;
 const MAXIMIZE_WIDTH: u16 = 3;
 /// The column between it and the +, so the row keeps one step between its tabs and buttons.
 const MAXIMIZE_GAP: u16 = 1;
+/// Columns it keeps clear of the icons at the top right, so it isn't read as one of them.
+const MAXIMIZE_CLEAR: u16 = 2;
 const AGENTS_WIDTH: u16 = 11;
 const PREVIEW_WIDTH: u16 = 12;
 const LOG_WIDTH: u16 = 8;
@@ -53,6 +55,9 @@ const TAB_TEXT: f32 = 1.5;
 const SMALLEST_TAB: u16 = 6;
 /// The button that closes the pane.
 const HIDE_WIDTH: u16 = 3;
+/// Its hover chip, the size and roundness of the one the icons at the top right have.
+const HIDE_PILL: (f32, f32) = (1.95, 0.89);
+const HIDE_RADIUS: u8 = 30;
 /// What the pane's browser tab is called.
 pub const BROWSER: &str = "Browser";
 /// Pictures kept per session, oldest going first.
@@ -1439,7 +1444,15 @@ impl Dock {
             return Some(TabHit::New);
         }
         let maximize = end + NEW_WIDTH + MAXIMIZE_GAP;
-        (x >= maximize && x < maximize + MAXIMIZE_WIDTH).then_some(TabHit::Maximize)
+        let on_it = x >= maximize && x < maximize + MAXIMIZE_WIDTH;
+        (on_it && self.maximize_fits(end)).then_some(TabHit::Maximize)
+    }
+
+    /// Whether the maximize button fits before the icons at the top right, after a + that
+    /// ends at `plus`. In a narrow pane it goes: a double click on a tab does the same.
+    fn maximize_fits(&self, plus: u16) -> bool {
+        let end = self.tabs_end.get();
+        end == 0 || plus + NEW_WIDTH + MAXIMIZE_GAP + MAXIMIZE_WIDTH + MAXIMIZE_CLEAR <= end
     }
 
     /// The title row, in the frame's colour, with tabs like the editor's.
@@ -1554,29 +1567,31 @@ impl Dock {
         grid.label(plus + 1, area.y, "+", style, area.right());
         // Maximized, it stands on the chip a selected icon has, so it's plain how to get back.
         let button = Rect::new(plus + NEW_WIDTH + MAXIMIZE_GAP, area.y, MAXIMIZE_WIDTH, 1);
-        let on_it = hover.is_some_and(|h| button.contains(h.0, h.1));
-        if maximized || on_it {
-            let fill = if maximized {
-                theme.tint
+        if maximized || self.maximize_fits(plus) {
+            let on_it = hover.is_some_and(|h| button.contains(h.0, h.1));
+            if maximized || on_it {
+                let fill = if maximized {
+                    theme.tint
+                } else {
+                    theme.row_hover
+                };
+                // Two cells around the icon: about square, as the rail's and the strip's chips are.
+                let chip = Bounds::cells(button.x as f32 + 0.5, area.y as f32 + 0.12, 2.0, 0.76);
+                grid.panel(chip, 22, Some(fill), None);
+            }
+            let icon = if maximized {
+                Icon::Minimize
             } else {
-                theme.row_hover
+                Icon::Maximize
             };
-            // Two cells around the icon: about square, as the rail's and the strip's chips are.
-            let chip = Bounds::cells(button.x as f32 + 0.5, area.y as f32 + 0.12, 2.0, 0.76);
-            grid.panel(chip, 22, Some(fill), None);
+            let fg = if maximized || on_it {
+                theme.text.fg
+            } else {
+                theme.gutter.fg
+            };
+            // The size of the icons at the top right, which it stands among.
+            crate::toolbar::draw_icon(grid, (icon, 0.62), button, fg, theme.tab);
         }
-        let icon = if maximized {
-            Icon::Minimize
-        } else {
-            Icon::Maximize
-        };
-        let fg = if maximized || on_it {
-            theme.text.fg
-        } else {
-            theme.gutter.fg
-        };
-        // The size of the icons at the top right, which it stands among.
-        crate::toolbar::draw_icon(grid, (icon, 0.62), button, fg, theme.tab);
         // Drawn last, over any tabs that reach this far, so it can always be found.
         let hide = Rect::new(
             area.right().saturating_sub(HIDE_WIDTH),
@@ -1586,23 +1601,31 @@ impl Dock {
         );
         grid.fill(hide, theme.tab);
         let on_it = hover.is_some_and(|h| hide.contains(h.0, h.1));
+        let middle = hide.x as f32 + hide.w as f32 / 2.0;
         if on_it {
-            grid.panel(
-                Bounds::inset(hide, 0.1, 0.1),
-                16,
-                Some(theme.row_hover),
-                None,
-            );
+            // The chip the icons beside it have on hover.
+            let (wide, high) = HIDE_PILL;
+            let top = area.y as f32 + (1.0 - high) / 2.0;
+            let chip = Bounds::cells(middle - wide / 2.0, top, wide, high);
+            grid.panel(chip, HIDE_RADIUS, Some(theme.row_hover), None);
         }
+        let fg = if on_it {
+            theme.text.fg
+        } else {
+            theme.gutter.fg
+        };
+        // The same × as a tab's, so closing looks one way across the row.
         let style = Style {
-            fg: if on_it {
-                theme.text.fg
-            } else {
-                theme.gutter.fg
-            },
+            fg,
+            painted: true,
             ..theme.tab
         };
-        grid.label(hide.x + 1, area.y, "×", style, hide.right());
+        grid.put_str(hide.x + 1, area.y, "×", style, hide.right());
+        grid.paint.push(cellix_render::Paint::Icon {
+            bounds: Bounds::cells(middle - 1.0, area.y as f32 + 0.14, 2.0, 0.72),
+            icon: Icon::Close,
+            color: fg,
+        });
     }
 }
 

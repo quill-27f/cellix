@@ -191,6 +191,15 @@ impl Workspaces {
     }
 
     pub fn handle(&mut self, event: Event) {
+        // The last row is drawn down into the window's bottom padding, and a click there
+        // counts rows past the grid. It's on that row all the same.
+        let event = match event {
+            Event::Mouse(mut mouse) => {
+                mouse.y = mouse.y.min(self.size.1.saturating_sub(1));
+                Event::Mouse(mouse)
+            }
+            event => event,
+        };
         match event {
             Event::Resize(width, height) => {
                 self.size = (width, height);
@@ -1057,6 +1066,15 @@ mod tests {
         assert_eq!(spaces.active, 1);
         assert!(spaces.take_switched(), "the whole screen is sent again");
         assert_eq!(spaces.app().workspace.root(), second);
+
+        // Ghostty draws the last row down into its bottom padding, so the lower half of a
+        // tile is past the grid's last row. A click there still lands on the tile.
+        let (x, _) = spot(&grid, 29, "api-server");
+        click(&mut spaces, MouseKind::Left, (x, 30));
+        assert_eq!(spaces.active, 0, "a click under the last row is on the bar");
+        let (x, _) = spot(&grid, 29, "infra");
+        click(&mut spaces, MouseKind::Left, (x, 31));
+        assert_eq!(spaces.active, 1);
     }
 
     #[test]

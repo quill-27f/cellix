@@ -166,6 +166,10 @@ def project(root):
         f.write("\n/// Returned when the queue is full.\npub struct Full;\n")
     with open(f"{root}/docs/PLAN.md", "a") as f:
         f.write("\nBound the queue.\n")
+    # What a build leaves, which .gitignore names: dimmed in the tree.
+    os.makedirs(f"{root}/target/debug")
+    with open(f"{root}/target/debug/queue", "w") as f:
+        f.write("built\n")
 
 
 def chart(path, width=1600, height=900):
@@ -307,7 +311,10 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("11-replace", replacing, CODE_FILE)
     shoot("12-search-switches", [["click", RAIL_X, SEARCH], ["keys", "item"], ["keys", "\x1bw"], ["wait", 0.6]], CODE_FILE)
     shoot("13-review", [["keys", "\u0007"], ["wait", 1.2]], CODE_FILE)
-    shoot("13-strip-hover", [["wait", 0.8], ["move", 99, 0], ["wait", 0.4]], CODE_FILE)
+    shoot("13-strip-hover", [["wait", 0.8], ["move", 95, 0], ["wait", 0.4]], CODE_FILE)
+    shoot("13-agents-click", [["wait", 1.5], ["click", 111, 0], ["wait", 1.5]], CODE_FILE)
+    shoot("13-quit-hover", [["wait", 0.8], ["move", 119, 0], ["wait", 0.4]], CODE_FILE)
+    shoot("13-quit-beside-pane", [["wait", 1.5], ["click", 111, 0], ["wait", 2.5], ["move", 116, 0], ["wait", 0.4]], CODE_FILE)
     git_tab = [["click", RAIL_X, REVIEW], ["wait", 0.8]]
     shoot("13-source-hover", [*git_tab, ["move", 14, 11], ["wait", 0.3]], CODE_FILE)
     shoot("13-source-staged", [*git_tab, ["click", 28, 11], ["wait", 0.8], ["move", 14, 11]], CODE_FILE)

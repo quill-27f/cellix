@@ -3820,5 +3820,47 @@
     "title": "Tab goes into the picked folder, and Enter opens it as a workspace",
     "test": "the_folder_finder_walks_down_a_path_with_tab",
     "passes": true
+  },
+  {
+    "id": "bar-click-below-grid",
+    "milestone": 11,
+    "title": "A click on the lower half of a workspace tile, drawn into Ghostty's bottom padding, still lands on it",
+    "test": "the_bar_shows_every_workspace_and_a_click_switches",
+    "passes": true
+  },
+  {
+    "id": "folder-double-click",
+    "milestone": 11,
+    "title": "A double click on a folder in the tree opens it, rather than opening and closing it",
+    "test": "click_on_folder_expands_it",
+    "passes": true
+  },
+  {
+    "id": "ignored-dimmed",
+    "milestone": 11,
+    "title": "Gitignored files and folders are dimmed in the tree and left out of Quick Open and search",
+    "test": "ignored_files_show_in_the_tree_marked_and_stay_out_of_search",
+    "passes": true
+  },
+  {
+    "id": "ignored-dimmed-drawn",
+    "milestone": 11,
+    "title": "The tree draws ignored entries dimmed, and Ctrl+P doesn't list what's inside them",
+    "test": "ignored_files_are_dimmed_in_the_tree_and_left_out_of_quick_open",
+    "passes": true
+  },
+  {
+    "id": "app-close-button",
+    "milestone": 11,
+    "title": "A red close button at the top right quits Cellix as Ctrl+Q does, asking first about unsaved files",
+    "test": "the_button_at_the_top_right_quits_as_ctrl_q_does",
+    "passes": true
+  },
+  {
+    "id": "pane-maximize-fits",
+    "milestone": 11,
+    "title": "A pane too narrow for its maximize button goes without it, rather than putting it under the icons",
+    "test": "every_tab_in_a_narrow_pane_keeps_its_close_button_clear_of_the_icons",
+    "passes": true
   }
 ]

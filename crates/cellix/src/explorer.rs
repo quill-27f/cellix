@@ -126,6 +126,11 @@ impl Explorer {
                     fg: theme.error,
                     ..theme.sidebar
                 },
+                // Ignored, it's half there, as in VS Code: still listed, but quiet.
+                None if entry.ignored => Style {
+                    fg: theme.ignored,
+                    ..theme.sidebar
+                },
                 None => theme.sidebar,
             };
             let x = area.x + entry.depth as u16 * 2 + 2;
@@ -140,12 +145,18 @@ impl Explorer {
             } else {
                 file_color(&entry.name)
             };
+            // The name's colour, so the icon fades as much as the name does.
+            let color = if entry.ignored { theme.ignored } else { color };
             if let Some(chevron) = chevron {
                 grid.glyph(
                     x as f32 - 1.3,
                     y,
                     chevron,
-                    theme.sidebar.fg,
+                    if entry.ignored {
+                        theme.ignored
+                    } else {
+                        theme.sidebar.fg
+                    },
                     " ",
                     theme.sidebar,
                 );

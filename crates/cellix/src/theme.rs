@@ -71,6 +71,11 @@ pub struct Theme {
     pub popup_dim: Rgb,
     /// What can't be done right now.
     pub disabled: Rgb,
+    /// A gitignored file's name and icon in the tree: there, but quiet.
+    pub ignored: Rgb,
+    /// The button that quits Cellix, and the × on it.
+    pub quit: Rgb,
+    pub quit_mark: Rgb,
     pub popup_border: Rgb,
     /// The highlighted row of a list in a floating panel.
     pub pick: Rgb,
@@ -241,6 +246,9 @@ impl Theme {
             popup: Rgb(255, 255, 255),
             popup_dim: Rgb(94, 94, 108),
             disabled: Rgb(150, 150, 160),
+            ignored: Rgb(124, 127, 147),
+            quit: Rgb(210, 15, 57),
+            quit_mark: Rgb(255, 255, 255),
             popup_border: Rgb(214, 214, 214),
             pick: Rgb(214, 226, 252),
             button: Rgb(47, 91, 196),
@@ -323,6 +331,9 @@ impl Default for Theme {
             popup: Rgb(55, 55, 90),
             popup_dim: Rgb(168, 168, 190),
             disabled: Rgb(122, 122, 150),
+            ignored: Rgb(122, 122, 150),
+            quit: Rgb(243, 139, 168),
+            quit_mark: Rgb(17, 17, 27),
             popup_border: Rgb(78, 78, 112),
             pick: Rgb(72, 80, 128),
             button: Rgb(143, 180, 255),

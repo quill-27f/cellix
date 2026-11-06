@@ -14,6 +14,9 @@ pub struct Entry {
     pub depth: usize,
     pub is_dir: bool,
     pub expanded: bool,
+    /// Named by `.gitignore`, or inside a folder that is: shown dimmed, and left out of
+    /// Quick Open and search.
+    pub ignored: bool,
 }
 
 /// One line containing a project search hit. Lines count from zero.
@@ -63,15 +66,27 @@ impl Workspace {
     }
 
     /// Visible rows: directories first, then files. Hidden and ignored files show, as in
-    /// VS Code, because agents often work in them. Only `.git` stays out, and what LaTeX leaves
-    /// beside a paper.
+    /// VS Code, because agents often work in them, with ignored ones marked so they can be
+    /// dimmed. Only `.git` stays out, and what LaTeX leaves beside a paper.
     pub fn entries(&self) -> Vec<Entry> {
         let mut out = Vec::new();
-        self.collect(&self.root, 0, &mut out);
+        self.collect(&self.root, 0, false, &mut out);
         out
     }
 
-    fn collect(&self, dir: &Path, depth: usize, out: &mut Vec<Entry>) {
+    fn collect(&self, dir: &Path, depth: usize, ignored: bool, out: &mut Vec<Entry>) {
+        // What a search would walk into here. Inside an ignored folder, nothing is.
+        let kept: BTreeSet<PathBuf> = if ignored {
+            BTreeSet::new()
+        } else {
+            files_walk(dir)
+                .max_depth(Some(1))
+                .build()
+                .flatten()
+                .filter(|e| e.depth() == 1)
+                .map(ignore::DirEntry::into_path)
+                .collect()
+        };
         let mut children: Vec<(PathBuf, bool)> = WalkBuilder::new(dir)
             .max_depth(Some(1))
             .standard_filters(false)
@@ -91,6 +106,7 @@ impl Workspace {
         });
         for (path, is_dir) in children {
             let expanded = is_dir && self.expanded.contains(&path);
+            let ignored = !kept.contains(&path);
             out.push(Entry {
                 name: path
                     .file_name()
@@ -100,9 +116,10 @@ impl Workspace {
                 depth,
                 is_dir,
                 expanded,
+                ignored,
             });
             if expanded {
-                self.collect(&path, depth + 1, out);
+                self.collect(&path, depth + 1, ignored, out);
             }
         }
     }
@@ -250,12 +267,7 @@ fn is_build_leftover(path: &Path) -> bool {
 /// take a long time, so whoever shows the files can start before the walk ends.
 pub fn walk_files(root: &Path, mut each: impl FnMut(PathBuf) -> bool) {
     // Each folder in name order, so the list reads the same every time.
-    let walk = WalkBuilder::new(root)
-        .hidden(false)
-        .require_git(false)
-        .filter_entry(|e| e.file_name() != ".git")
-        .sort_by_file_name(|a, b| a.cmp(b))
-        .build();
+    let walk = files_walk(root).sort_by_file_name(|a, b| a.cmp(b)).build();
     for entry in walk.flatten() {
         if entry.file_type().is_some_and(|t| t.is_file()) && !each(entry.into_path()) {
             return;
@@ -263,9 +275,73 @@ pub fn walk_files(root: &Path, mut each: impl FnMut(PathBuf) -> bool) {
     }
 }
 
+/// A walk that keeps what Quick Open and search look in: hidden files, but not `.git` or
+/// what `.gitignore` names, in a git repository or not.
+fn files_walk(root: &Path) -> WalkBuilder {
+    let mut walk = WalkBuilder::new(root);
+    walk.hidden(false)
+        .require_git(false)
+        .filter_entry(|e| e.file_name() != ".git");
+    walk
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ignored_files_show_in_the_tree_marked_and_stay_out_of_search() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        fs::write(root.join(".gitignore"), "target/\n*.log\n").unwrap();
+        fs::create_dir_all(root.join("target/debug")).unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("target/debug/out.rs"), "needle\n").unwrap();
+        fs::write(root.join("src/main.rs"), "needle\n").unwrap();
+        fs::write(root.join("build.log"), "needle\n").unwrap();
+        fs::write(root.join(".env"), "needle\n").unwrap();
+        let mut workspace = Workspace::new(root.to_path_buf());
+        workspace.expand(&root.join("target"));
+        workspace.expand(&root.join("target/debug"));
+        let marks: Vec<(String, bool)> = workspace
+            .entries()
+            .into_iter()
+            .map(|e| (e.name, e.ignored))
+            .collect();
+        let marked = |name: &str| marks.iter().find(|(n, _)| n == name).map(|(_, i)| *i);
+        // Still listed, as in VS Code, but marked, and everything inside an ignored folder too.
+        assert_eq!(marked("target"), Some(true), "{marks:?}");
+        assert_eq!(marked("debug"), Some(true), "{marks:?}");
+        assert_eq!(marked("out.rs"), Some(true), "{marks:?}");
+        assert_eq!(marked("build.log"), Some(true), "{marks:?}");
+        assert_eq!(marked("src"), Some(false), "{marks:?}");
+        assert_eq!(
+            marked(".env"),
+            Some(false),
+            "hidden isn't ignored: {marks:?}"
+        );
+        assert_eq!(marked(".gitignore"), Some(false), "{marks:?}");
+
+        // What's dimmed is what search leaves out.
+        let mut files: Vec<String> = workspace
+            .files()
+            .iter()
+            .map(|p| {
+                p.strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+        files.sort();
+        assert_eq!(files, [".env", ".gitignore", "src/main.rs"]);
+        let found: Vec<PathBuf> = workspace
+            .search("needle", Options::default())
+            .into_iter()
+            .map(|m| m.path)
+            .collect();
+        assert_eq!(found, [root.join(".env"), root.join("src/main.rs")]);
+    }
 
     #[test]
     fn a_papers_build_files_stay_out_of_the_tree() {

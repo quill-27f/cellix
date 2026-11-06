@@ -16,7 +16,7 @@ use cellix_lang::Registry;
 use cellix_lang::complete::{self, Candidate, Source};
 use cellix_lang::lsp::{Client, Diagnostic, LspEvent, TextEdit};
 use cellix_render::{
-    ALL_CORNERS, Bounds, CellMeasure, Font, Grid, Icon, Measure, Rect, Rgb, Style, TOP_LEFT,
+    ALL_CORNERS, Bounds, CellMeasure, Font, Grid, Icon, Measure, Paint, Rect, Rgb, Style, TOP_LEFT,
     TOP_RIGHT,
 };
 use cellix_review::{
@@ -107,6 +107,13 @@ const RAIL_PILL: (f32, f32) = (2.15, 1.0);
 const ACTION_PILL: (f32, f32) = (1.95, 0.89);
 /// Where the pane's own close button stands, which they keep clear of.
 const PANE_CLOSE: u16 = 3;
+/// Columns for the button at the very top right that quits Cellix, as a window's close
+/// button does: red, so it doesn't read as the pane's own ×.
+const APP_CLOSE: u16 = 2;
+const APP_CLOSE_TIP: &str = "Quit Cellix (Ctrl+Q)";
+/// The close circle's height in rows, and its colours, as a desktop window's.
+const APP_CLOSE_DOT: f32 = 0.5;
+const APP_CLOSE_MARK: f32 = 0.3;
 /// Columns kept for tabs beside them, in the pane and over the file. A window with less goes
 /// without them, sooner than move them somewhere else.
 const PANE_TABS_ROOM: u16 = 14;
@@ -894,6 +901,9 @@ pub struct App {
     preview_press: Option<PreviewPress>,
     /// The last press in text, with where it was and how many it made in a row.
     last_click: Option<(std::time::Instant, u16, u16, u8)>,
+    /// The folder a click last opened or closed in the explorer, and when, so the second
+    /// press of a double click doesn't close it again.
+    last_toggle: Option<(std::time::Instant, PathBuf)>,
     /// The Settings page, when it stands in place of the file.
     settings_page: Option<SettingsPage>,
     /// What the terminal said of itself, kept for when the theme changes.
@@ -1126,6 +1136,7 @@ impl App {
             tests: Vec::new(),
             hover: None,
             last_click: None,
+            last_toggle: None,
             preview_press: None,
             maximized: None,
             tab_drag: None,
@@ -3015,7 +3026,8 @@ impl App {
     /// The icons at the top right, each with where it stands.
     fn pane_actions(&self) -> Vec<(Rect, Icon, Command, &'static str)> {
         // The same place whatever's open, so a second click finds the same icon.
-        let wide = ACTION_WIDTH * PANE_ACTIONS.len() as u16 + PANE_CLOSE + ACTION_MARGIN;
+        let wide =
+            ACTION_WIDTH * PANE_ACTIONS.len() as u16 + PANE_CLOSE + ACTION_MARGIN + APP_CLOSE;
         let pane = self.dock_area().filter(|_| !self.dock_under());
         let least = pane.map_or(self.main_area().x + FILE_TABS_ROOM, |pane| {
             pane.x + PANE_TABS_ROOM
@@ -3030,7 +3042,26 @@ impl App {
             .collect()
     }
 
+    /// The button that quits Cellix, at the very top right, when the icons beside it fit.
+    fn app_close(&self) -> Option<Rect> {
+        let x = self.size.0.checked_sub(APP_CLOSE)?;
+        (!self.pane_actions().is_empty()).then(|| Rect::new(x, 0, APP_CLOSE, 1))
+    }
+
+    /// The pane's tab row, short of the quit button when it reaches the top right corner.
+    fn title_of(&self, area: Rect) -> Rect {
+        let corner = area.y == 0 && area.right() >= self.size.0 && self.app_close().is_some();
+        if corner {
+            Rect::new(area.x, area.y, area.w.saturating_sub(APP_CLOSE), area.h)
+        } else {
+            area
+        }
+    }
+
     fn action_at(&self, x: u16, y: u16) -> Option<Command> {
+        if self.app_close().is_some_and(|cell| cell.contains(x, y)) {
+            return Some(Command::Quit);
+        }
         let actions = self.pane_actions();
         let found = actions.into_iter().find(|(cell, ..)| cell.contains(x, y));
         found.map(|(_, _, command, _)| command)
@@ -3067,7 +3098,49 @@ impl App {
         }
     }
 
+    fn draw_app_close(&self, grid: &mut Grid) {
+        let Some(cell) = self.app_close() else {
+            return;
+        };
+        let theme = &self.theme;
+        grid.fill(cell, theme.tab);
+        let hovered = self.hover.is_some_and(|h| cell.contains(h.0, h.1));
+        let middle = cell.x as f32 + cell.w as f32 / 2.0;
+        if hovered {
+            // The chip every icon at the top right has on hover.
+            let (wide, high) = ACTION_PILL;
+            let chip = Bounds::cells(middle - wide / 2.0, (1.0 - high) / 2.0, wide, high);
+            grid.panel(chip, PILL_RADIUS, Some(theme.row_hover), None);
+        }
+        // Set apart from the pane's own buttons, as a group of its own.
+        let line = Bounds::cells(cell.x as f32, 0.22, 0.0, 0.56);
+        grid.hairline(line, theme.border);
+        // A circle: twice as many columns as rows, since a cell is about twice as tall.
+        let top = (1.0 - APP_CLOSE_DOT) / 2.0;
+        let dot = Bounds::cells(
+            middle - APP_CLOSE_DOT,
+            top,
+            APP_CLOSE_DOT * 2.0,
+            APP_CLOSE_DOT,
+        );
+        grid.panel(dot, (APP_CLOSE_DOT * 50.0) as u8, Some(theme.quit), None);
+        // The cell tier has only the ×, in red.
+        let style = Style {
+            fg: theme.quit,
+            painted: true,
+            ..theme.tab
+        };
+        grid.put_str(cell.x, 0, "×", style, cell.right());
+        let side = APP_CLOSE_MARK;
+        grid.paint.push(Paint::Icon {
+            bounds: Bounds::cells(middle - side, (1.0 - side) / 2.0, side * 2.0, side),
+            icon: Icon::Close,
+            color: theme.quit_mark,
+        });
+    }
+
     fn draw_pane_actions(&self, grid: &mut Grid) {
+        self.draw_app_close(grid);
         let theme = &self.theme;
         for (cell, icon, command, _) in self.pane_actions() {
             let hovered = self.hover.is_some_and(|h| cell.contains(h.0, h.1));
@@ -6303,7 +6376,7 @@ impl App {
             return false;
         };
         if self.dock_under() {
-            let empty_title = y == area.y && self.dock.hit(area, x).is_none();
+            let empty_title = y == area.y && self.dock.hit(self.title_of(area), x).is_none();
             let on_strip = self.action_at(x, y).is_some();
             return !on_strip && x >= area.x && (y + 1 == area.y || empty_title);
         }
@@ -6374,7 +6447,7 @@ impl App {
         }
         if y == area.y {
             if mouse.kind == MouseKind::Middle {
-                match self.dock.hit(area, x) {
+                match self.dock.hit(self.title_of(area), x) {
                     Some(TabHit::Tab(index) | TabHit::Close(index)) => {
                         self.close_session_tab(index);
                     }
@@ -6385,7 +6458,7 @@ impl App {
                 }
             }
             if mouse.kind == MouseKind::Left {
-                let hit = self.dock.hit(area, x);
+                let hit = self.dock.hit(self.title_of(area), x);
                 let on_tab = matches!(hit, Some(TabHit::Tab(_) | TabHit::View(_)));
                 if on_tab && self.count_click(x, y) == 2 {
                     self.toggle_maximized(Maximized::Pane);
@@ -6799,7 +6872,7 @@ impl App {
         self.dock.tabs_flush.set(self.dock_under());
         let maximized = self.maximized == Some(Maximized::Pane);
         self.dock
-            .draw_tabs(grid, area, (self.hover, maximized), theme);
+            .draw_tabs(grid, self.title_of(area), (self.hover, maximized), theme);
         let line = if self.dock_under() {
             Bounds::cells(area.x as f32, area.y as f32, area.w as f32, 0.0)
         } else {
@@ -9716,6 +9789,16 @@ impl App {
         self.explorer.selected = Some(index);
         let entry = self.explorer.entries[index].clone();
         if entry.is_dir {
+            // A double click opens a folder, as one click does, rather than opening and
+            // closing it: VS Code lets the second press go.
+            let again = self
+                .last_toggle
+                .as_ref()
+                .is_some_and(|(at, path)| *path == entry.path && at.elapsed() < MULTI_CLICK);
+            if again {
+                return;
+            }
+            self.last_toggle = Some((std::time::Instant::now(), entry.path.clone()));
             self.workspace.toggle(&entry.path);
             self.explorer.refresh(&self.workspace);
         } else if let Err(e) = self.open(&entry.path) {
@@ -10012,6 +10095,11 @@ impl App {
                 let left = (x as f32).min(self.size.0 as f32 - wide(name) - 0.5);
                 (name, left, self.dock_area().map_or(0, |a| a.y) as f32 + 1.2)
             }),
+            Overlay::None if self.app_close().is_some_and(|cell| cell.contains(x, y)) => Some((
+                APP_CLOSE_TIP,
+                self.size.0 as f32 - wide(APP_CLOSE_TIP) - 0.5,
+                1.2,
+            )),
             Overlay::None if self.action_at(x, y).is_some() => {
                 let actions = self.pane_actions();
                 let found = actions.iter().find(|(cell, ..)| cell.contains(x, y));
@@ -10022,7 +10110,7 @@ impl App {
                 })
             }
             Overlay::None
-                if self.dock_area().is_some_and(|a| {
+                if self.dock_area().map(|a| self.title_of(a)).is_some_and(|a| {
                     y == a.y && x + PANE_CLOSE_REACH >= a.right() && x < a.right()
                 }) =>
             {
@@ -10393,8 +10481,9 @@ impl App {
 
     /// Whether the pointer is on the side pane's maximize button.
     fn on_maximize_button(&self, x: u16, y: u16) -> bool {
-        self.dock_area()
-            .is_some_and(|area| y == area.y && self.dock.hit(area, x) == Some(TabHit::Maximize))
+        self.dock_area().is_some_and(|area| {
+            y == area.y && self.dock.hit(self.title_of(area), x) == Some(TabHit::Maximize)
+        })
     }
 
     /// Lets the side pane or the editor in front take the window, or gives it back.
@@ -12584,8 +12673,43 @@ mod tests {
         let (x, y) = find(&screen(&app), "src");
         app.handle(mouse(MouseKind::Left, x, y));
         assert!(screen(&app).text().contains("lib.rs"));
+        // A second press soon after is a double click, which leaves it open.
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert!(
+            screen(&app).text().contains("lib.rs"),
+            "a double click doesn't close what the first press opened"
+        );
+        std::thread::sleep(MULTI_CLICK);
         app.handle(mouse(MouseKind::Left, x, y));
         assert!(!screen(&app).text().contains("lib.rs"));
+        // Another folder right after is a click of its own.
+        fs::create_dir(app.workspace.root().join("docs")).unwrap();
+        fs::write(app.workspace.root().join("docs/guide.md"), "# Guide\n").unwrap();
+        app.explorer.refresh(&app.workspace);
+        let (x, y) = find(&screen(&app), "docs");
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert!(screen(&app).text().contains("guide.md"));
+    }
+
+    #[test]
+    fn ignored_files_are_dimmed_in_the_tree_and_left_out_of_quick_open() {
+        let (dir, mut app) = project();
+        fs::write(dir.path().join(".gitignore"), "build/\n").unwrap();
+        fs::create_dir(dir.path().join("build")).unwrap();
+        fs::write(dir.path().join("build/out.txt"), "made\n").unwrap();
+        app.explorer.refresh(&app.workspace);
+        let grid = screen(&app);
+        let (x, y) = find(&grid, "build");
+        assert_eq!(grid.cell(x, y).style.fg, app.theme.ignored, "dimmed");
+        let (x, y) = find(&grid, "src");
+        assert_ne!(grid.cell(x, y).style.fg, app.theme.ignored, "src isn't");
+
+        // Ctrl+P lists what isn't ignored, and nothing from inside what is.
+        app.run(Command::QuickOpen);
+        typed(&mut app, "t");
+        let shown = screen(&app).text();
+        assert!(shown.contains("alpha.txt"), "{shown}");
+        assert!(!shown.contains("out.txt"), "{shown}");
     }
 
     #[test]
@@ -14736,7 +14860,9 @@ mod tests {
         let area = app.dock_area().unwrap();
         assert!(app.dock.focused);
         assert!(screen(&app).text().lines().next().unwrap().contains('×'));
-        app.handle(mouse(MouseKind::Left, area.right() - 2, area.y));
+        // Its own ×, beside the one at the corner that quits.
+        let title = app.title_of(area);
+        app.handle(mouse(MouseKind::Left, title.right() - 2, area.y));
         assert!(!app.dock.open && !app.dock.focused);
         assert_eq!(app.dock.sessions.len(), 1, "closing the pane stops nothing");
         assert!(app.dock_area().is_none());
@@ -18540,7 +18666,7 @@ mod tests {
     fn the_icons_at_the_top_right_are_there_with_the_pane_shut() {
         let (_dir, mut app) = project();
         assert!(!app.dock.open);
-        let right = app.size.0 - PANE_CLOSE - ACTION_MARGIN;
+        let right = app.size.0 - APP_CLOSE - PANE_CLOSE - ACTION_MARGIN;
         assert_eq!(app.pane_actions().last().unwrap().0.right(), right);
         assert!(
             app.tabs_area().right() <= app.pane_actions()[0].0.x,
@@ -18625,21 +18751,23 @@ mod tests {
         let (_dir, mut app) = reviewed();
         app.run(Command::OpenDiff);
         let _ = screen(&app);
-        let strip = ACTION_WIDTH * PANE_ACTIONS.len() as u16 + PANE_CLOSE + ACTION_MARGIN;
+        let strip =
+            ACTION_WIDTH * PANE_ACTIONS.len() as u16 + PANE_CLOSE + ACTION_MARGIN + APP_CLOSE;
         assert_eq!(app.actions_over_main(), strip);
     }
 
     #[test]
     fn tabs_in_the_pane_share_the_row_with_the_icons() {
+        // Four agents' tabs at their smallest, beside the icons and the quit button.
         let (dir, _) = project();
-        let mut app = App::new(dir.path().to_path_buf(), (170, 40));
+        let mut app = App::new(dir.path().to_path_buf(), (180, 40));
         let root = app.workspace.root().to_path_buf();
         let cat = ["cat".to_string()];
         for name in ["Claude Code", "Codex", "Gemini CLI", "Another Agent"] {
             app.start_session(name, &cat, &[], &root);
         }
         let _ = screen(&app);
-        let area = app.dock_area().unwrap();
+        let area = app.title_of(app.dock_area().unwrap());
         let first = app.pane_actions()[0].0.x;
         assert!(first > area.x, "the icons are in the pane's row");
         assert!(
@@ -18655,12 +18783,31 @@ mod tests {
         app.run(Command::ShowComments);
         app.run(Command::ListAgents);
         let _ = screen(&app);
-        let area = app.dock_area().unwrap();
+        let area = app.title_of(app.dock_area().unwrap());
         let first = app.pane_actions()[0].0.x;
         let tabs = app.dock.view_tabs_for_test(area);
         assert!(
             tabs.iter().all(|(_, _, tab)| tab.right() <= first),
             "{tabs:?}"
+        );
+        // With no room before the icons, the pane goes without its maximize button rather
+        // than put it under them. A double click on a tab still maximizes.
+        let maximize =
+            (area.x..area.right()).find(|x| app.dock.hit(area, *x) == Some(TabHit::Maximize));
+        assert!(
+            maximize.is_none_or(|x| x + 2 < first),
+            "{maximize:?} {first}"
+        );
+        let wide = 220;
+        app.handle(Event::Resize(wide, 30));
+        let _ = screen(&app);
+        let area = app.title_of(app.dock_area().unwrap());
+        let first = app.pane_actions()[0].0.x;
+        let maximize =
+            (area.x..area.right()).find(|x| app.dock.hit(area, *x) == Some(TabHit::Maximize));
+        assert!(
+            maximize.is_some_and(|x| x < first),
+            "with room it's there: {maximize:?}"
         );
     }
 
@@ -18767,10 +18914,50 @@ mod tests {
         let area = app.dock_area().unwrap();
         assert_eq!(
             app.pane_actions().last().unwrap().0.right(),
-            area.right() - PANE_CLOSE - ACTION_MARGIN
+            area.right() - APP_CLOSE - PANE_CLOSE - ACTION_MARGIN
         );
-        app.handle(mouse(MouseKind::Left, area.right() - 2, area.y));
+        // The pane's × stands just left of the one that quits.
+        let text = screen(&app).row_text(area.y);
+        let hide = text.chars().count() as u16 - APP_CLOSE - 2;
+        assert_eq!(text.chars().nth(hide as usize), Some('×'), "{text}");
+        app.handle(mouse(MouseKind::Move, hide, area.y));
+        assert!(app.dock.open, "a hover leaves it open");
+        assert!(screen(&app).text().contains("Close pane"), "and names it");
+        app.handle(mouse(MouseKind::Left, hide, area.y));
         assert!(!app.dock.open, "the close button still closes");
+        assert!(!app.quit, "and only the pane");
+    }
+
+    #[test]
+    fn the_button_at_the_top_right_quits_as_ctrl_q_does() {
+        let (_dir, mut app) = project();
+        let grid = screen(&app);
+        let corner = app.size.0 - 2;
+        assert_eq!(grid.cell(corner, 0).symbol, "×");
+        assert_eq!(
+            grid.cell(corner, 0).style.fg,
+            app.theme.quit,
+            "red, as a window's"
+        );
+        // Its name on hover says what it does and its key.
+        app.handle(mouse(MouseKind::Move, corner, 0));
+        assert!(screen(&app).text().contains(APP_CLOSE_TIP));
+
+        // An unsaved file is asked about first, as Ctrl+Q asks.
+        let (x, y) = find(&grid, "alpha.txt");
+        app.handle(mouse(MouseKind::Left, x, y));
+        typed(&mut app, "x");
+        app.handle(mouse(MouseKind::Left, corner, 0));
+        assert!(!app.quit, "asks first");
+        assert!(
+            screen(&app).text().contains("Don't Save"),
+            "{}",
+            screen(&app).text()
+        );
+
+        let (_dir, mut app) = project();
+        app.handle(mouse(MouseKind::Left, app.size.0 - 1, 0));
+        assert!(app.quit, "nothing to ask, so it quits");
     }
 
     #[test]
@@ -20544,7 +20731,13 @@ mod tests {
         app.open(&dir.path().join("alpha.txt")).unwrap();
         typed(&mut app, "x");
         let (x, y) = find(&screen(&app), "●");
-        assert!(!screen(&app).row_text(y).contains('×'));
+        // The tab's row, short of the button at the corner that quits.
+        let tabs: String = screen(&app)
+            .row_text(y)
+            .chars()
+            .take(app.tabs_area().right() as usize)
+            .collect();
+        assert!(!tabs.contains('×'), "{tabs}");
         app.handle(mouse(MouseKind::Left, x, y));
         assert!(screen(&app).text().contains("Save changes to"));
     }
