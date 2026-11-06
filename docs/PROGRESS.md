@@ -1315,3 +1315,5 @@ Tests changed with the layout: the strip tests count the new two columns; `tabs_
 The ui-expert review of the tour pictures led to: one `ignored` colour per theme for both name and icon (the light theme's was 2.8:1 and its icon hardly differed from a plain file's); the quit circle in Catppuccin red with a larger near-black × (white on the light theme's red), the strip's hover chip instead of a darker red, and a hairline setting it apart; the pane's × drawn as the tab's × with the strip's hover chip; maximize kept only with two clear columns before the icons. Its note that the pane's tooltip reads as a sentence, unlike the others, was left: it says what keeps running on purpose.
 
 Unverified: the bar fix in a real Ghostty window; whether a doubled press, not only a double click, caused the folder flicker. Next: the user tries 0.5.3.
+
+The release gate failed twice on `the_vim_keymap_runs_neovim_when_it_is_installed` while containers on the machine used about eight cores: Neovim missed its 2 s first reply three times running, though the test passes alone in a second. Tests now wait 10 s for a Neovim reply; Cellix itself still gives up after 2 s.

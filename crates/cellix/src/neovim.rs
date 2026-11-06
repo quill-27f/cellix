@@ -10,8 +10,13 @@ use cellix_input::{Key, KeyEvent};
 use rmpv::Value;
 
 /// A request that takes longer means Neovim is stuck, and a stuck editor must not freeze
-/// the window.
-const TIMEOUT: Duration = Duration::from_secs(2);
+/// the window. Tests run hundreds at once on a shared machine, where a well Neovim can take
+/// longer than that to start; what they check is what's chosen, not how fast.
+const TIMEOUT: Duration = if cfg!(test) {
+    Duration::from_secs(10)
+} else {
+    Duration::from_secs(2)
+};
 const REQUEST: i64 = 0;
 const RESPONSE: i64 = 1;
 

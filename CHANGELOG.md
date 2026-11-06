@@ -4,6 +4,16 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-11-05
+
+### Added
+- A red close button in the top right corner quits Cellix, as Ctrl+Q does, asking first about unsaved files and what's running. It's a window's red circle, so it isn't mistaken for the side pane's own ×.
+- Gitignored files and folders are dimmed in the explorer, as in VS Code. They're still listed, since agents often work in them, and what's dimmed is exactly what Quick Open and project search leave out.
+
+### Fixed
+- In Ghostty, only the top half of a workspace tile in the bottom bar took a click. Ghostty draws the last row down into its bottom padding, and a click there counted as below the screen; it now lands on the bar.
+- A double click on a folder in the explorer opened and then closed it again. The second press of a double click now leaves it open, as in VS Code.
+
 ## [0.5.2] - 2026-11-05
 
 ### Added
@@ -184,6 +194,7 @@ The first public release. Cellix is a terminal editor that lives inside your AI 
 - CSV and TSV as editable tables with Excel's keys, and Jupyter notebooks run on a real kernel.
 - Real pixels in terminals with Kitty graphics, such as Ghostty, Kitty and WezTerm, with fonts built in, and text cells anywhere else. It runs under tmux, Zellij and over SSH, with light and dark themes that can follow the terminal.
 
+[0.5.3]: https://github.com/quill-27f/cellix/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/quill-27f/cellix/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/quill-27f/cellix/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/quill-27f/cellix/compare/v0.4.3...v0.5.0
