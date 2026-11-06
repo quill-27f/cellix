@@ -743,11 +743,22 @@ fn coming_back_to_a_terminal_that_turned_dark_turns_cellix_dark() {
     *colour.lock().unwrap() = Some("ffff/ffff/ffff".to_string());
     let mut screen = Screen::start_answering(dir.path(), &["hello.txt"], &[], colour.clone());
     screen.wait_for("hello from a file");
+    // The text can show before the rest of the frame has arrived, so it waits for the cell's
+    // colour rather than taking it as it first is.
     let brightness = |screen: &Screen| {
-        let parser = screen.parser.lock().unwrap();
-        match parser.screen().cell(10, 60).map(|c| c.bgcolor()) {
-            Some(vt100::Color::Rgb(r, g, b)) => u32::from(r) + u32::from(g) + u32::from(b),
-            other => panic!("no colour: {other:?}"),
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let cell = {
+                let parser = screen.parser.lock().unwrap();
+                parser.screen().cell(10, 60).map(|c| c.bgcolor())
+            };
+            match cell {
+                Some(vt100::Color::Rgb(r, g, b)) => {
+                    return u32::from(r) + u32::from(g) + u32::from(b);
+                }
+                other => assert!(Instant::now() < deadline, "no colour: {other:?}"),
+            }
+            std::thread::sleep(Duration::from_millis(50));
         }
     };
     assert!(

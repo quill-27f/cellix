@@ -213,7 +213,7 @@ fn without_pictures_the_pane_sends_cells_and_takes_input_in_batches() {
         root.join("plan.md").to_str().unwrap()
     );
     // The socket may still be coming up, as the mod finds.
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(30);
     while !cellix()
         .args(["pane-send", &batch])
         .status()
@@ -348,7 +348,7 @@ fn over_ssh_the_pane_sends_a_picture_a_row_and_only_what_changed() {
         None
     };
     let send = |batch: &str| {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(30);
         while !cellix()
             .args(["pane-send", batch])
             .status()

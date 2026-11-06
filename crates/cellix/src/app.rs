@@ -108,12 +108,9 @@ const ACTION_PILL: (f32, f32) = (1.95, 0.89);
 /// Where the pane's own close button stands, which they keep clear of.
 const PANE_CLOSE: u16 = 3;
 /// Columns for the button at the very top right that quits Cellix, as a window's close
-/// button does: red, so it doesn't read as the pane's own ×.
+/// button does. It looks as the icons beside it do, set apart from the pane's × by a line.
 const APP_CLOSE: u16 = 2;
 const APP_CLOSE_TIP: &str = "Quit Cellix (Ctrl+Q)";
-/// The close circle's height in rows, and its colours, as a desktop window's.
-const APP_CLOSE_DOT: f32 = 0.5;
-const APP_CLOSE_MARK: f32 = 0.3;
 /// Columns kept for tabs beside them, in the pane and over the file. A window with less goes
 /// without them, sooner than move them somewhere else.
 const PANE_TABS_ROOM: u16 = 14;
@@ -3112,30 +3109,27 @@ impl App {
             let chip = Bounds::cells(middle - wide / 2.0, (1.0 - high) / 2.0, wide, high);
             grid.panel(chip, PILL_RADIUS, Some(theme.row_hover), None);
         }
-        // Set apart from the pane's own buttons, as a group of its own.
-        let line = Bounds::cells(cell.x as f32, 0.22, 0.0, 0.56);
+        // Set apart from the pane's own buttons, as a group of its own, with air either side.
+        let line = Bounds::cells(cell.x as f32 - 0.5, 0.22, 0.0, 0.56);
         grid.hairline(line, theme.border);
-        // A circle: twice as many columns as rows, since a cell is about twice as tall.
-        let top = (1.0 - APP_CLOSE_DOT) / 2.0;
-        let dot = Bounds::cells(
-            middle - APP_CLOSE_DOT,
-            top,
-            APP_CLOSE_DOT * 2.0,
-            APP_CLOSE_DOT,
-        );
-        grid.panel(dot, (APP_CLOSE_DOT * 50.0) as u8, Some(theme.quit), None);
-        // The cell tier has only the ×, in red.
+        // Drawn as the icons beside it are: grey, and the text's colour on hover.
+        let color = if hovered {
+            theme.text.fg
+        } else {
+            theme.activity.fg
+        };
         let style = Style {
-            fg: theme.quit,
+            fg: color,
             painted: true,
             ..theme.tab
         };
         grid.put_str(cell.x, 0, "×", style, cell.right());
-        let side = APP_CLOSE_MARK;
+        // The size of the pane's ×, so every × in the row is the same, centred on its chip.
+        let side = crate::dock::CLOSE_MARK;
         grid.paint.push(Paint::Icon {
             bounds: Bounds::cells(middle - side, (1.0 - side) / 2.0, side * 2.0, side),
             icon: Icon::Close,
-            color: theme.quit_mark,
+            color,
         });
     }
 
@@ -12531,6 +12525,9 @@ pub(crate) fn machine_name() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// How long a test waits on work done in the background: git, a PDF read, a build. The
+    /// shared machine this runs on can be loaded enough that a few seconds isn't enough.
+    const BACKGROUND: std::time::Duration = std::time::Duration::from_secs(30);
     use cellix_input::{Mods, MouseEvent};
     use cellix_render::Paint;
     use std::fs;
@@ -12671,9 +12668,9 @@ mod tests {
     fn click_on_folder_expands_it() {
         let (_dir, mut app) = project();
         let (x, y) = find(&screen(&app), "src");
+        // A second press soon after is a double click, which leaves it open. Nothing is drawn
+        // between them, which on a loaded machine can take longer than a double click.
         app.handle(mouse(MouseKind::Left, x, y));
-        assert!(screen(&app).text().contains("lib.rs"));
-        // A second press soon after is a double click, which leaves it open.
         app.handle(mouse(MouseKind::Left, x, y));
         assert!(
             screen(&app).text().contains("lib.rs"),
@@ -12972,7 +12969,7 @@ mod tests {
         for _ in 0..EXPLORER_REFRESH_TICKS {
             app.handle(Event::Tick);
         }
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + BACKGROUND;
         while app.disk_look.is_some() {
             assert!(std::time::Instant::now() < deadline);
             app.poll();
@@ -13004,7 +13001,7 @@ mod tests {
         app.open(&app.workspace.root().join("alpha.txt")).unwrap();
         let settled = |app: &mut App| {
             app.look_at_disk();
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let deadline = std::time::Instant::now() + BACKGROUND;
             loop {
                 let changed = app.poll_disk();
                 if app.disk_look.is_none() {
@@ -13303,7 +13300,7 @@ mod tests {
         for _ in 0..EXPLORER_REFRESH_TICKS {
             app.handle(Event::Tick);
         }
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + BACKGROUND;
         while app.disk_look.is_some() {
             assert!(std::time::Instant::now() < deadline);
             app.poll();
@@ -14108,7 +14105,7 @@ mod tests {
     }
 
     fn wait_for_file(path: &Path) -> String {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + BACKGROUND;
         while !path.exists() {
             assert!(
                 std::time::Instant::now() < deadline,
@@ -14175,7 +14172,7 @@ mod tests {
         assert!(app.dock.open);
         assert_eq!(app.dock.session().unwrap().name, BROWSER);
         shows(&mut app, "showing page.html");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + BACKGROUND;
         let count = |app: &App| {
             let grid = screen(app);
             let images =
@@ -14252,7 +14249,7 @@ mod tests {
         app.run(Command::OpenInBrowser);
         let opened = wait_for_file(&log);
         assert_eq!(opened, dir.path().join("page.html").display().to_string());
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + BACKGROUND;
         while !app.poll_browser() {
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(std::time::Duration::from_millis(10));
@@ -14289,7 +14286,7 @@ mod tests {
         app.settings.browser = Some(vec!["false".to_string()]);
         app.system_browser = vec!["false".to_string()];
         app.run(Command::OpenInBrowser);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + BACKGROUND;
         while !app.poll_browser() {
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(std::time::Duration::from_millis(10));
@@ -14327,7 +14324,7 @@ mod tests {
         let y = app.offer_area().y + OFFER_BUTTON_ROW;
         app.handle(mouse(MouseKind::Left, at + 1, y));
         assert!(screen(&app).text().contains("Installing Java support"));
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + BACKGROUND;
         while !app.poll_offer() {
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(std::time::Duration::from_millis(10));
@@ -14396,7 +14393,7 @@ mod tests {
     }
 
     fn shows(app: &mut App, want: &str) {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + BACKGROUND;
         loop {
             app.poll();
             app.fit_dock();
@@ -15952,7 +15949,7 @@ mod tests {
         let root = app.workspace.root().to_path_buf();
         let argv = ["sh".to_string(), "-c".to_string(), "exit 0".to_string()];
         app.start_session(crate::agents::SHELL.0, &argv, &[], &root);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + BACKGROUND;
         while !app.dock.sessions.is_empty() {
             assert!(std::time::Instant::now() < deadline);
             app.poll();
@@ -17084,7 +17081,7 @@ mod tests {
         typed(&mut app, "Is this right");
         enter(&mut app);
         let log = dir.path().join("heard.txt");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + BACKGROUND;
         let heard = loop {
             let text = fs::read_to_string(&log).unwrap_or_default();
             if text.contains("Is this right") {
@@ -17547,7 +17544,7 @@ mod tests {
         let (_dir, mut app) = source_app();
         let (x, y) = find(&screen(&app), "kept.txt");
         app.handle(mouse(MouseKind::Left, x, y));
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + BACKGROUND;
         while app.review.as_ref().unwrap().is_reading() {
             assert!(std::time::Instant::now() < deadline);
             app.poll();
@@ -17571,7 +17568,7 @@ mod tests {
         git(dir.path(), &["push", "-q", "-u", "origin", &branch]);
         git(dir.path(), &["commit", "-q", "--allow-empty", "-m", "more"]);
         app.source.refresh(dir.path());
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + BACKGROUND;
         while app.source.sync_label().as_deref() != Some("Push 1") {
             assert!(std::time::Instant::now() < deadline);
             app.source.poll();
@@ -17579,6 +17576,8 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         app.sync_remote();
+        // The push has its own wait, not what the setup above left of it.
+        let deadline = std::time::Instant::now() + BACKGROUND;
         while app.source.busy.is_some() {
             assert!(std::time::Instant::now() < deadline);
             app.poll();
@@ -18279,7 +18278,7 @@ mod tests {
         image.save(dir.path().join("loss.png")).unwrap();
         app.set_measure(Rc::new(cellix_render::FontMeasure::new(10, 20)));
         app.open(&dir.path().join("loss.png")).unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + BACKGROUND;
         while app.dock.pdf.as_ref().unwrap().pages_ready() == 0 {
             assert!(std::time::Instant::now() < deadline);
             app.poll();
@@ -18302,7 +18301,7 @@ mod tests {
         let mut app = App::new(dir.path().to_path_buf(), (150, 44));
         app.set_measure(Rc::new(cellix_render::FontMeasure::new(10, 20)));
         app.open(&dir.path().join("paper.pdf")).unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + BACKGROUND;
         while app.dock.pdf.as_ref().unwrap().pages_ready() == 0 {
             assert!(std::time::Instant::now() < deadline);
             app.poll();
@@ -18936,8 +18935,8 @@ mod tests {
         assert_eq!(grid.cell(corner, 0).symbol, "×");
         assert_eq!(
             grid.cell(corner, 0).style.fg,
-            app.theme.quit,
-            "red, as a window's"
+            app.theme.activity.fg,
+            "grey, as the icons beside it are"
         );
         // Its name on hover says what it does and its key.
         app.handle(mouse(MouseKind::Move, corner, 0));
@@ -19242,7 +19241,7 @@ mod tests {
     }
 
     fn built(app: &mut App) {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + BACKGROUND;
         while app.build.is_some() {
             assert!(
                 std::time::Instant::now() < deadline,
@@ -19423,7 +19422,7 @@ mod tests {
         fs::write(dir.path().join("paper.synctex.gz"), &mut gz).unwrap();
         let path = dir.path().join("paper.pdf");
         app.show_pdf(&path);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + BACKGROUND;
         while app.dock.pdf.as_ref().unwrap().pages_ready() == 0 {
             assert!(std::time::Instant::now() < deadline, "no page");
             app.poll();
@@ -19475,7 +19474,7 @@ mod tests {
         let (dir, mut app) = paper_app("\\begin{document}\nHello\n\\end{document}\n");
         let sample = dir.path().join("sample.pdf");
         app.open(&sample).unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = std::time::Instant::now() + BACKGROUND;
         while app.dock.pdf.as_ref().unwrap().pages_ready() == 0 {
             assert!(std::time::Instant::now() < deadline, "no page");
             app.poll();

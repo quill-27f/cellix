@@ -3852,7 +3852,7 @@
   {
     "id": "app-close-button",
     "milestone": 11,
-    "title": "A red close button at the top right quits Cellix as Ctrl+Q does, asking first about unsaved files",
+    "title": "A close button at the top right, drawn as the icons beside it are, quits Cellix as Ctrl+Q does, asking first about unsaved files",
     "test": "the_button_at_the_top_right_quits_as_ctrl_q_does",
     "passes": true
   },

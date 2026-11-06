@@ -58,6 +58,8 @@ const HIDE_WIDTH: u16 = 3;
 /// Its hover chip, the size and roundness of the one the icons at the top right have.
 const HIDE_PILL: (f32, f32) = (1.95, 0.89);
 const HIDE_RADIUS: u8 = 30;
+/// The height in rows of every × in the title row: a tab's, the pane's, and the quit button's.
+pub const CLOSE_MARK: f32 = 0.72;
 /// What the pane's browser tab is called.
 pub const BROWSER: &str = "Browser";
 /// Pictures kept per session, oldest going first.
@@ -1601,7 +1603,9 @@ impl Dock {
         );
         grid.fill(hide, theme.tab);
         let on_it = hover.is_some_and(|h| hide.contains(h.0, h.1));
-        let middle = hide.x as f32 + hide.w as f32 / 2.0;
+        // Half a column left of the button's middle, so a line can stand clear between its
+        // chip and the quit button's beside it.
+        let middle = hide.x as f32 + 1.0;
         if on_it {
             // The chip the icons beside it have on hover.
             let (wide, high) = HIDE_PILL;
@@ -1622,7 +1626,13 @@ impl Dock {
         };
         grid.put_str(hide.x + 1, area.y, "×", style, hide.right());
         grid.paint.push(cellix_render::Paint::Icon {
-            bounds: Bounds::cells(middle - 1.0, area.y as f32 + 0.14, 2.0, 0.72),
+            // Square in pixels, as a cell is about twice as tall as it's wide, and centred.
+            bounds: Bounds::cells(
+                middle - CLOSE_MARK,
+                area.y as f32 + (1.0 - CLOSE_MARK) / 2.0,
+                CLOSE_MARK * 2.0,
+                CLOSE_MARK,
+            ),
             icon: Icon::Close,
             color: fg,
         });
