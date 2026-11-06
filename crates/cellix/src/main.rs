@@ -57,8 +57,9 @@ Usage: cellix [--wait] [files]
   cellix setup --remove     Disconnects Claude Code
 ";
 
-/// `cellix ls`: each folder with something running in Cellix, or stopped with the machine
-/// and waiting to be resumed. Cellix started at home offers the same list.
+/// `cellix ls`: each folder with something running in Cellix, stopped with the machine and
+/// waiting to be resumed, or open when Cellix last quit. Cellix started at home offers the
+/// same list.
 fn list() -> ExitCode {
     let found = cellix::hold::projects_with_activity();
     if found.is_empty() {
@@ -74,6 +75,9 @@ fn list() -> ExitCode {
                 |n| n.to_string_lossy().into(),
             );
             let mut what = activity.running.join(", ");
+            if activity.running.is_empty() && activity.stopped.is_empty() {
+                what.push_str("open, nothing running");
+            }
             if !activity.stopped.is_empty() {
                 if !what.is_empty() {
                     what.push_str("; ");

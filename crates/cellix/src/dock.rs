@@ -204,6 +204,9 @@ pub struct Session {
     pictures: Vec<Picture>,
     /// What it was, when it stopped without finishing, so it can be resumed.
     pub stopped: Option<crate::hold::Stopped>,
+    /// What the program put on the clipboard, as Claude Code does when text is selected in
+    /// it, for Cellix to pass on to the terminal's clipboard.
+    pub copied: Option<String>,
 }
 
 fn pty_size((columns, rows): (u16, u16), (width, height): CellPixels) -> PtySize {
@@ -322,6 +325,7 @@ impl Session {
             protocol: Protocol::default(),
             pictures: Vec::new(),
             stopped: None,
+            copied: None,
         }
     }
 
@@ -512,6 +516,12 @@ impl Session {
         for event in events.unwrap_or_default() {
             match event {
                 TermEvent::PtyWrite(text) => self.write(text.as_bytes()),
+                // A program that takes the mouse selects and copies for itself, through the
+                // terminal's clipboard, which here is Cellix.
+                TermEvent::ClipboardStore(_, text) => {
+                    self.copied = Some(text);
+                    changed = true;
+                }
                 TermEvent::ColorRequest(index, format) => {
                     let color = asked_colour(index, theme);
                     let reply = format(TermRgb {
@@ -1068,6 +1078,11 @@ impl Dock {
     }
 
     /// The names of what would stop if the pane closed.
+    /// What a program here last put on the clipboard, once.
+    pub fn take_copied(&mut self) -> Option<String> {
+        self.sessions.iter_mut().find_map(|s| s.copied.take())
+    }
+
     pub fn busy(&self) -> Vec<String> {
         let busy = self.sessions.iter().filter(|s| s.busy());
         busy.map(|s| s.name.clone()).collect()

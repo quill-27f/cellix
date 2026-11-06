@@ -3904,5 +3904,19 @@
     "title": "Ask Agent and comments give the agent all of what was selected, not its first line cut at 200 letters",
     "test": "ask_agent_sends_all_of_a_long_selection",
     "passes": true
+  },
+  {
+    "id": "workspaces-remembered",
+    "milestone": 11,
+    "title": "Every workspace open when Cellix quits comes back next time and is in cellix ls, even with nothing running; closing its tile forgets it",
+    "test": "every_open_workspace_comes_back_next_time",
+    "passes": true
+  },
+  {
+    "id": "pane-copy",
+    "milestone": 11,
+    "title": "What a program in the side pane copies, as Claude Code does on a selection, reaches the clipboard",
+    "test": "what_a_program_in_the_pane_copies_reaches_the_clipboard",
+    "passes": true
   }
 ]

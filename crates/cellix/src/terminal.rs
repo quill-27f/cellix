@@ -767,6 +767,10 @@ pub fn run(options: Options) -> io::Result<()> {
     // Each workspace keeps what it must: comments, tabs and unsaved edits.
     let mut finished = Ok(());
     for mut workspace in spaces.list.drain(..) {
+        // Hung up rather than quit: every workspace still here opens again next time.
+        if spaces.bar {
+            crate::hold::remember_open(workspace.app.workspace.root());
+        }
         let result = workspace.app.finish();
         if finished.is_ok() {
             finished = result;

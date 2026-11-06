@@ -116,17 +116,33 @@ pub fn mark_project(project: &Path) {
 
 /// The file in a sessions folder that names its project.
 const PROJECT: &str = "project";
+/// Beside it while the project was a workspace when Cellix last quit, so it opens again with
+/// nothing running in it, as an editor brings back the windows it had.
+const OPEN: &str = "open";
 
-/// What's running for a project, or stopped without finishing and waiting to be resumed.
+/// Notes that a project was an open workspace when Cellix quit, so the next one opens it.
+pub fn remember_open(project: &Path) {
+    mark_project(project);
+    let _ = std::fs::write(folder_of(project).join(OPEN), "");
+}
+
+/// Forgets that, once its workspace is closed on purpose.
+pub fn forget_open(project: &Path) {
+    let _ = std::fs::remove_file(folder_of(project).join(OPEN));
+}
+
+/// What's running for a project, or stopped without finishing and waiting to be resumed, and
+/// whether it was open when Cellix last quit.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Activity {
     pub running: Vec<String>,
     pub stopped: Vec<String>,
+    pub open: bool,
 }
 
 impl Activity {
     pub fn is_empty(&self) -> bool {
-        self.running.is_empty() && self.stopped.is_empty()
+        self.running.is_empty() && self.stopped.is_empty() && !self.open
     }
 }
 
@@ -138,11 +154,16 @@ pub fn activity(project: &Path) -> Activity {
         .into_iter()
         .map(|(name, _)| name)
         .collect();
-    Activity { running, stopped }
+    let open = folder.join(OPEN).exists();
+    Activity {
+        running,
+        stopped,
+        open,
+    }
 }
 
-/// The projects on this machine with something running, or stopped and waiting to be
-/// resumed, by their folders, sorted.
+/// The projects on this machine with something running, stopped and waiting to be resumed,
+/// or left open when Cellix last quit, by their folders, sorted.
 pub fn projects_with_activity() -> Vec<(PathBuf, Activity)> {
     let mut found = Vec::new();
     for entry in std::fs::read_dir(sessions_base())

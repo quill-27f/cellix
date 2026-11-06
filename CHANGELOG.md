@@ -4,6 +4,12 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-11-06
+
+### Fixed
+- Copying from an agent in the side pane did nothing. Claude Code takes the mouse and copies its own selection through the terminal's clipboard, which the pane dropped; it now reaches the real clipboard, and Ctrl+V in Cellix.
+- A workspace with nothing running in it, only its files, didn't come back when Cellix was opened again, and `cellix ls` didn't list it. Every workspace open when Cellix quits now comes back, listed by `cellix ls` as "open, nothing running", until its tile is closed.
+
 ## [0.5.4] - 2026-11-06
 
 ### Added
@@ -209,6 +215,7 @@ The first public release. Cellix is a terminal editor that lives inside your AI 
 - CSV and TSV as editable tables with Excel's keys, and Jupyter notebooks run on a real kernel.
 - Real pixels in terminals with Kitty graphics, such as Ghostty, Kitty and WezTerm, with fonts built in, and text cells anywhere else. It runs under tmux, Zellij and over SSH, with light and dark themes that can follow the terminal.
 
+[0.5.5]: https://github.com/quill-27f/cellix/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/quill-27f/cellix/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/quill-27f/cellix/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/quill-27f/cellix/compare/v0.5.1...v0.5.2

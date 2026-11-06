@@ -357,7 +357,9 @@ per folder that says what its agent is doing, a labelled New Workspace button to
 a folder, Resume for everything that stopped, and the machine's name. Each folder's sessions folder
 names its project, so a new Cellix opens every folder on the machine with something running or
 stopped that no other Cellix has open, and Cellix started at home with nothing named offers them
-first. Closing a tile asks as Quit does; Quit asks each folder in turn. The bar is drawn on the
+first. Every folder open when Cellix quits or hangs up is marked `open` there too, so it comes
+back with nothing running in it, as an editor brings back its windows; closing its tile lets it
+go. Closing a tile asks as Quit does; Quit asks each folder in turn. The bar is drawn on the
 same grid as everything else, so it works on the cell tier too.
 
 On Linux over SSH, where logind ends a user's programs at logout and lingering is off, a card

@@ -8,6 +8,7 @@ use crate::palette::Item;
 /// What the row of a folder says about it.
 pub const RUNNING: &str = "running";
 pub const STOPPED: &str = "stopped";
+pub const OPEN_LAST: &str = "open last time";
 const BESIDE: &str = "beside this one";
 const IN_HOME: &str = "in home";
 /// The folder a typed path names, offered first.

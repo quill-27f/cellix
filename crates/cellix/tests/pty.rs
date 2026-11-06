@@ -117,6 +117,16 @@ impl Screen {
         for (name, value) in env {
             command.env(name, value);
         }
+        // Never the real cache: what one Cellix leaves there, such as the workspaces it had
+        // open, would reach every other test's Cellix and the person's own. One cache per
+        // project, so a Cellix started again in it finds what the last one left. Short, since a
+        // socket's path has to fit in about a hundred bytes.
+        if !env.iter().any(|(name, _)| *name == "XDG_CACHE_HOME") {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            dir.hash(&mut hasher);
+            command.env("XDG_CACHE_HOME", format!("/tmp/cxt-{:x}", hasher.finish()));
+        }
         let child = pty.slave.spawn_command(command).unwrap();
         let reader = pty.master.try_clone_reader().unwrap();
         let input: Input = Arc::new(Mutex::new(pty.master.take_writer().unwrap()));
@@ -664,6 +674,127 @@ fn walk(dir: &Path) -> Vec<std::path::PathBuf> {
         }
     }
     found
+}
+
+/// Every workspace open when Cellix quits opens again next time, and `cellix ls` lists it,
+/// even with nothing running in it: only those with something running used to come back.
+/// Closing one from its tile lets it go.
+#[test]
+#[cfg(unix)]
+fn every_open_workspace_comes_back_next_time() {
+    let parent = tempfile::tempdir_in("/tmp").unwrap();
+    let roots: Vec<_> = ["alpha", "beta", "gamma"]
+        .iter()
+        .map(|n| parent.path().join(n))
+        .collect();
+    for root in &roots {
+        std::fs::create_dir(root).unwrap();
+        std::fs::write(root.join("notes.txt"), "notes\n").unwrap();
+    }
+    // Short, since a socket's path has to fit in about a hundred bytes.
+    let cache = tempfile::tempdir_in("/tmp").unwrap();
+    let shell = Path::new("/bin/sh");
+    let env = [("XDG_CACHE_HOME", cache.path()), ("SHELL", shell)];
+    let cellix_ls = || {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_cellix"))
+            .arg("ls")
+            .env("XDG_CACHE_HOME", cache.path())
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+    let bar = |screen: &Screen| screen.contents().lines().last().unwrap_or("").to_string();
+    // Alpha has a terminal; beta and gamma, opened beside it, only their files.
+    let mut screen = Screen::start_with(&roots[0], &[], &env);
+    screen.wait_for("notes.txt");
+    screen.send(b"\x0a"); // Ctrl+J, a terminal in the side pane
+    screen.send(b"echo in-alpha-$((40+2))\r");
+    screen.wait_for("in-alpha-42");
+    for (index, name) in ["beta", "gamma"].iter().enumerate() {
+        let line = bar(&screen);
+        let column = line[..line.find("New Workspace").expect("the bar")]
+            .chars()
+            .count()
+            + 2;
+        let row = screen.contents().lines().count();
+        screen.send(format!("\x1b[<0;{column};{row}M\x1b[<0;{column};{row}m").as_bytes());
+        screen.wait_for("Folder to open");
+        screen.send(roots[index + 1].display().to_string().as_bytes());
+        std::thread::sleep(Duration::from_millis(500));
+        screen.send(b"\r");
+        let deadline = Instant::now() + WAIT;
+        while !bar(&screen).contains(name) {
+            assert!(
+                Instant::now() < deadline,
+                "no tile for {name}: {}",
+                bar(&screen)
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    screen.send(b"\x11"); // Ctrl+Q, with nothing busy to ask about
+    screen.wait_exit();
+    drop(screen);
+    let listed = cellix_ls();
+    for name in ["alpha", "beta", "gamma"] {
+        assert!(listed.contains(name), "{name} missing: {listed}");
+    }
+    assert!(listed.contains("open, nothing running"), "{listed}");
+
+    // The next Cellix has all three, and closing one from its tile lets it go.
+    let mut again = Screen::start_with(&roots[0], &[], &env);
+    let deadline = Instant::now() + WAIT;
+    while !(bar(&again).contains("beta") && bar(&again).contains("gamma")) {
+        assert!(Instant::now() < deadline, "not all back: {}", bar(&again));
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // Its close button shows once it's the workspace in front. The tiles settle as what each
+    // is doing comes in, so the click is placed from the bar as it is, and made again until
+    // it lands.
+    let row = again.contents().lines().count();
+    let deadline = Instant::now() + WAIT;
+    let mut last_click = Instant::now() - Duration::from_secs(1);
+    let column = loop {
+        let line = bar(&again);
+        let at = line.find("gamma").unwrap();
+        if let Some(close) = line[at..].find('×') {
+            break line[..at + close].chars().count() + 1;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no close on gamma: {line}\n{}",
+            again.contents()
+        );
+        if last_click.elapsed() >= Duration::from_secs(1) {
+            if again.contents().contains("Folder to open") {
+                again.send(b"\x1b");
+                std::thread::sleep(Duration::from_millis(300));
+            }
+            let line = bar(&again);
+            let on = line[..line.find("gamma").unwrap()].chars().count() + 2;
+            again.send(format!("\x1b[<0;{on};{row}M\x1b[<0;{on};{row}m").as_bytes());
+            last_click = Instant::now();
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    again.send(format!("\x1b[<0;{column};{row}M\x1b[<0;{column};{row}m").as_bytes());
+    let deadline = Instant::now() + WAIT;
+    while bar(&again).contains("gamma") {
+        assert!(
+            Instant::now() < deadline,
+            "gamma still open: {}",
+            bar(&again)
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    again.send(b"\x11");
+    again.wait_exit();
+    let _ = std::process::Command::new("pkill")
+        .args(["-f", &cache.path().display().to_string()])
+        .status();
+    let listed = cellix_ls();
+    assert!(!listed.contains("gamma"), "{listed}");
+    assert!(listed.contains("beta"), "{listed}");
 }
 
 /// Work left running in one project is a tile in the next Cellix's bar, as a tmux window

@@ -2093,6 +2093,9 @@ impl App {
         self.keep_in_view(shown);
         self.tell_selection();
         let terminal = self.dock.poll(&self.theme);
+        if let Some(text) = self.dock.take_copied() {
+            self.copy_text(text, "Copied");
+        }
         let searched = self.search.poll();
         let reviewed = self.review.as_mut().is_some_and(Review::poll);
         let installed = self.poll_install()
@@ -6399,10 +6402,12 @@ impl App {
                 .into_iter()
                 .filter(|(path, _)| *path != root)
                 .map(|(path, activity)| {
-                    let note = if activity.running.is_empty() {
+                    let note = if !activity.running.is_empty() {
+                        crate::folders::RUNNING
+                    } else if !activity.stopped.is_empty() {
                         crate::folders::STOPPED
                     } else {
-                        crate::folders::RUNNING
+                        crate::folders::OPEN_LAST
                     };
                     (path, note)
                 })
@@ -13251,7 +13256,7 @@ mod tests {
 
     /// Waits for what git says about the tree, as a person does for a moment.
     fn settle_disk(app: &mut App) {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + BACKGROUND;
         while app.disk_look.is_some() {
             app.poll_disk();
             assert!(std::time::Instant::now() < deadline, "git never answered");
@@ -14558,6 +14563,29 @@ mod tests {
     }
 
     /// Starts a stand-in for an agent, and waits until it has drawn `ready`.
+    /// Claude Code takes the mouse, so it selects and copies for itself, through the
+    /// terminal's clipboard: what it copies reaches the real one.
+    #[test]
+    fn what_a_program_in_the_pane_copies_reaches_the_clipboard() {
+        let (_dir, mut app) = project();
+        session(
+            &mut app,
+            "echo ready; printf '\\033]52;c;%s\\007' \"$(printf 'from the agent' | base64)\"; echo sent; sleep 9",
+        );
+        shows(&mut app, "sent");
+        let deadline = std::time::Instant::now() + BACKGROUND;
+        while app.outgoing_clipboard.is_none() {
+            assert!(std::time::Instant::now() < deadline, "nothing copied");
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(app.outgoing_clipboard.as_deref(), Some("from the agent"));
+        assert_eq!(
+            app.clipboard, "from the agent",
+            "Ctrl+V in Cellix has it too"
+        );
+    }
+
     fn session(app: &mut App, script: &str) {
         let argv = ["sh".to_string(), "-c".to_string(), script.to_string()];
         let root = app.workspace.root().to_path_buf();
@@ -16629,7 +16657,7 @@ mod tests {
 
     #[cfg(unix)]
     fn waits_for(app: &mut App, done: impl Fn(&App) -> bool) {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + BACKGROUND;
         while !done(app) {
             assert!(
                 std::time::Instant::now() < deadline,
@@ -16749,7 +16777,7 @@ mod tests {
         app.settings.latex_engine = Some(vec![script.display().to_string()]);
         app.open(&dir.path().join("paper.tex")).unwrap();
         app.run(Command::BuildPdf);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + BACKGROUND;
         while app.dock.log.is_empty() {
             assert!(std::time::Instant::now() < deadline);
             app.poll();
@@ -17157,7 +17185,7 @@ mod tests {
     }
 
     fn cell_ran(app: &mut App, wanted: &str) {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + BACKGROUND;
         while !screen(app).text().contains(wanted) {
             assert!(
                 std::time::Instant::now() < deadline,
@@ -18979,7 +19007,7 @@ mod tests {
         let root = app.workspace.root().to_path_buf();
         app.start_session("Stand-in", &argv, &[], &root);
         let log = dir.path().join("heard.txt");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        let deadline = std::time::Instant::now() + BACKGROUND;
         while !fs::read_to_string(&log)
             .unwrap_or_default()
             .contains("Note for later")
@@ -21350,7 +21378,7 @@ while True:
     }
 
     fn wait(app: &mut App, done: impl Fn(&App) -> bool) {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + BACKGROUND;
         while !done(app) {
             assert!(
                 std::time::Instant::now() < deadline,

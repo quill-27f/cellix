@@ -286,6 +286,14 @@ impl Workspaces {
             let _ = gone.app.finish();
             drop(gone);
             let closed = self.closing.as_deref() == Some(root.as_path());
+            // A workspace closed from its tile is let go; one that goes as Cellix quits opens
+            // again next time, whether or not anything is left running in it.
+            if closed {
+                crate::hold::forget_open(&root);
+            } else if self.bar && !cfg!(test) {
+                // Tests run on whatever machine they're on, whose own list this is.
+                crate::hold::remember_open(&root);
+            }
             if closed {
                 self.closing = None;
             } else if self.quitting.is_none() {
