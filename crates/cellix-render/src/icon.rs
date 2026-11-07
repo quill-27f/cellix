@@ -60,6 +60,12 @@ pub enum Icon {
     SymbolType = 46,
     SymbolField = 47,
     SymbolValue = 48,
+    /// What waits for the person.
+    Bell = 49,
+    /// The inbox's marks for what's waiting: asking, done, failed.
+    Question = 50,
+    CircleCheck = 51,
+    CircleX = 52,
 }
 
 /// One cell of an icon that is `width` by `height` cells.
@@ -617,6 +623,45 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
             .min(segment(p, (12.0, 6.5), (12.0, 12.5)))
             .min(segment(p, (9.0, 9.5), (15.0, 9.5)))
             .min(segment(p, (9.0, 16.5), (15.0, 16.5))),
+        // Lucide's bell: a dome on a flared rim, and the clapper under it.
+        Icon::Bell => {
+            let dome = if p.1 <= 9.0 {
+                ring(p, (12.0, 9.0), 6.0)
+            } else {
+                f32::MAX
+            };
+            dome.min(path(
+                p,
+                &[(6.0, 9.0), (6.0, 12.5), (5.2, 15.4), (3.2, 17.5)],
+            ))
+            .min(path(
+                p,
+                &[(18.0, 9.0), (18.0, 12.5), (18.8, 15.4), (20.8, 17.5)],
+            ))
+            .min(segment(p, (3.2, 17.5), (20.8, 17.5)))
+            .min(path(p, &[(10.2, 20.8), (12.0, 21.8), (13.8, 20.8)]))
+        }
+        Icon::Question => ring(p, (12.0, 12.0), 9.5)
+            .min(path(
+                p,
+                &[
+                    (9.3, 9.2),
+                    (10.1, 7.6),
+                    (12.0, 7.0),
+                    (14.0, 7.7),
+                    (14.8, 9.4),
+                    (14.0, 11.0),
+                    (12.0, 12.2),
+                    (12.0, 13.6),
+                ],
+            ))
+            .min(circle(p, (12.0, 17.0)) - 0.4),
+        Icon::CircleCheck => {
+            ring(p, (12.0, 12.0), 9.5).min(path(p, &[(8.0, 12.3), (10.8, 15.0), (16.0, 9.5)]))
+        }
+        Icon::CircleX => ring(p, (12.0, 12.0), 9.5)
+            .min(segment(p, (8.8, 8.8), (15.2, 15.2)))
+            .min(segment(p, (15.2, 8.8), (8.8, 15.2))),
         Icon::Globe => {
             let (x, y) = ((p.0 - 12.0) / 4.5, (p.1 - 12.0) / 9.5);
             let meridian = ((x * x + y * y).sqrt() - 1.0).abs() * 4.5;
@@ -665,6 +710,10 @@ mod tests {
             Icon::SymbolType,
             Icon::SymbolField,
             Icon::SymbolValue,
+            Icon::Bell,
+            Icon::Question,
+            Icon::CircleCheck,
+            Icon::CircleX,
         ] {
             let dots = (0..50)
                 .flat_map(|y| (0..50).map(move |x| (x, y)))

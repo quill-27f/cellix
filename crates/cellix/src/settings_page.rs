@@ -79,6 +79,7 @@ pub enum Control {
     WordWrap,
     StickyScroll,
     InlayHints,
+    Notify,
     Keymap(&'static str),
     FormatOnSave,
     AutoSave(&'static str),
@@ -108,6 +109,7 @@ pub struct Values<'a> {
     pub inlay_hints: bool,
     pub format_on_save: bool,
     pub auto_save: &'a str,
+    pub notify: bool,
 }
 
 /// How code is laid out and coloured, each a switch in Appearance.
@@ -455,6 +457,8 @@ impl SettingsPage {
                     let y = below + 6 + 3 * i as u16;
                     spots.push((Rect::new(page.x, y, page.w, 2), *control));
                 }
+                let notify = below + 6 + 3 * VIEW_SWITCHES.len() as u16;
+                spots.push((Rect::new(page.x, notify, page.w, 2), Control::Notify));
             }
             Section::Editor => {
                 let format = Rect::new(page.x, page.y + FORMAT_ROW, page.w, 2);
@@ -579,6 +583,12 @@ impl SettingsPage {
                 for (i, (_, text, on)) in view_switches(values).into_iter().enumerate() {
                     draw_toggle(grid, page, below + 6 + 3 * i as u16, text, on, theme);
                 }
+                let notify = (
+                    "Notifications",
+                    "When something needs you and Cellix isn't the window in front, the terminal says so.",
+                );
+                let y = below + 6 + 3 * VIEW_SWITCHES.len() as u16;
+                draw_toggle(grid, page, y, notify, values.notify, theme);
             }
             Section::Editor => self.draw_editor(grid, page, &spots, values, hover, theme),
             Section::Integrations => self.draw_integrations(grid, page, (hover, measure), theme),

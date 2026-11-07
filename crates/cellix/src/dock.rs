@@ -36,6 +36,8 @@ const TAB_PADDING: u16 = 2;
 const CLOSE_WIDTH: u16 = 2;
 /// The Comments tab at the far end, and what a count adds to it.
 const COMMENTS_WIDTH: u16 = 10;
+/// The Inbox tab, which counts what's waiting the same way.
+const INBOX_WIDTH: u16 = 7;
 const COUNT_WIDTH: u16 = 2;
 /// The button that starts something, and the tab it becomes while that list shows.
 const NEW_WIDTH: u16 = 3;
@@ -1081,6 +1083,12 @@ pub fn moved(index: usize, from: usize, to: usize) -> usize {
     }
 }
 
+/// A tab's width with a count after its name, when there's something to count.
+fn counted_width(base: u16, count: usize) -> u16 {
+    let digits = if count > 9 { COUNT_WIDTH } else { 1 };
+    base + CLOSE_WIDTH + 1 + if count > 0 { digits + 1 } else { 0 }
+}
+
 /// What a click in the pane's title row lands on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TabHit {
@@ -1109,6 +1117,8 @@ pub enum Front {
     Problems,
     /// What can be started, and what's running elsewhere.
     Agents,
+    /// What waits for the person, in every workspace.
+    Inbox,
 }
 
 /// The side pane: its tabs, and whether it's open and has the keyboard.
@@ -1144,6 +1154,10 @@ pub struct Dock {
     pub agents_tab: bool,
     /// Whether the comments have a tab.
     pub comments_tab: bool,
+    /// Whether the inbox has a tab, how far it has scrolled, and how much is in it.
+    pub inbox_tab: bool,
+    pub inbox_top: usize,
+    pub inbox_count: Cell<usize>,
     /// The column tabs stop at, for what stands past them.
     pub tabs_end: Cell<u16>,
     /// Whether the tabs start flush, under the file's, with no line beside them.
@@ -1164,7 +1178,8 @@ pub struct Dock {
 }
 
 /// The views' tabs in the order they come in until one is dragged.
-const VIEW_ORDER: [Front; 5] = [
+const VIEW_ORDER: [Front; 6] = [
+    Front::Inbox,
     Front::Comments,
     Front::Agents,
     Front::Pdf,
@@ -1270,6 +1285,7 @@ impl Dock {
     /// Goes to what's left in the pane, which closes when that's nothing.
     fn next_tab(&mut self) {
         let standing = [
+            (self.inbox_tab, Front::Inbox),
             (self.comments_tab, Front::Comments),
             (self.agents_tab, Front::Agents),
             (self.pdf.is_some(), Front::Pdf),
@@ -1288,9 +1304,20 @@ impl Dock {
     }
 
     fn comments_width(&self) -> u16 {
-        let count = self.comment_count.get();
-        let digits = if count > 9 { COUNT_WIDTH } else { 1 };
-        COMMENTS_WIDTH + CLOSE_WIDTH + 1 + if count > 0 { digits + 1 } else { 0 }
+        counted_width(COMMENTS_WIDTH, self.comment_count.get())
+    }
+
+    fn inbox_width(&self) -> u16 {
+        counted_width(INBOX_WIDTH, self.inbox_count.get())
+    }
+
+    /// Brings the inbox forward, in a tab of its own.
+    pub fn show_inbox(&mut self) {
+        self.inbox_tab = true;
+        self.inbox_top = 0;
+        self.open = true;
+        self.front = Front::Inbox;
+        self.focused = false;
     }
 
     /// Whether the list of what can be started is showing. With nothing running, it's what
@@ -1315,6 +1342,10 @@ impl Dock {
     /// The views with a tab just now, in order, each with its name and width.
     fn views(&self) -> Vec<(Front, &'static str, u16)> {
         let mut views = Vec::new();
+        // The inbox has no icon among the panel's, so it keeps its tab even docked.
+        if self.inbox_tab || self.front == Front::Inbox {
+            views.push((Front::Inbox, "Inbox", self.inbox_width()));
+        }
         let tabbed = !self.docked;
         if tabbed && (self.comments_tab || self.front == Front::Comments) {
             views.push((Front::Comments, "Comments", self.comments_width()));
@@ -1505,6 +1536,7 @@ impl Dock {
             Front::Problems => self.problems = false,
             Front::Agents => self.agents_tab = false,
             Front::Comments => self.comments_tab = false,
+            Front::Inbox => self.inbox_tab = false,
             Front::Session => {}
         }
         if showing {
@@ -1639,8 +1671,13 @@ impl Dock {
                 ..theme.tab
             };
             let close = tab.right().saturating_sub(CLOSE_WIDTH + 1);
-            let text = if view == Front::Comments && count > 0 {
-                format!("{name} {count}")
+            let counted = match view {
+                Front::Comments => count,
+                Front::Inbox => self.inbox_count.get(),
+                _ => 0,
+            };
+            let text = if counted > 0 {
+                format!("{name} {counted}")
             } else {
                 name.to_string()
             };

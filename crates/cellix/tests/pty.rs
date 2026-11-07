@@ -26,6 +26,7 @@ fn pump(
     parser: Arc<Mutex<vt100::Parser>>,
     (input, raw): (Input, Raw),
     colour: Colour,
+    all: Raw,
 ) {
     let started = Instant::now();
     let seen = Arc::new(Mutex::new(0usize));
@@ -77,6 +78,7 @@ fn pump(
                     .write_all(answer.as_bytes())
                     .and_then(|()| input.flush());
             }
+            all.lock().unwrap().extend_from_slice(&buf[..n]);
             parser.lock().unwrap().process(&buf[..n]);
         }
     });
@@ -86,6 +88,8 @@ struct Screen {
     parser: Arc<Mutex<vt100::Parser>>,
     input: Input,
     raw: Raw,
+    /// Everything Cellix wrote, for what never shows on screen, such as a notification.
+    all: Raw,
     child: Box<dyn portable_pty::Child + Send + Sync>,
     /// Kept for as long as the screen: on Windows, dropping the master closes the console.
     pty: Option<portable_pty::PtyPair>,
@@ -115,7 +119,12 @@ impl Screen {
         command.cwd(dir);
         command.args(args);
         for (name, value) in env {
-            command.env(name, value);
+            // An empty value takes the variable away, as tmux's must be for a test inside it.
+            if value.as_os_str().is_empty() {
+                command.env_remove(name);
+            } else {
+                command.env(name, value);
+            }
         }
         // Never the real cache: what one Cellix leaves there, such as the workspaces it had
         // open, would reach every other test's Cellix and the person's own. One cache per
@@ -132,11 +141,19 @@ impl Screen {
         let input: Input = Arc::new(Mutex::new(pty.master.take_writer().unwrap()));
         let parser = Arc::new(Mutex::new(vt100::Parser::new(30, 100, 0)));
         let raw = Raw::default();
-        pump(reader, parser.clone(), (input.clone(), raw.clone()), colour);
+        let all = Raw::default();
+        pump(
+            reader,
+            parser.clone(),
+            (input.clone(), raw.clone()),
+            colour,
+            all.clone(),
+        );
         Self {
             parser,
             input,
             raw,
+            all,
             child,
             pty: Some(pty),
         }
@@ -422,6 +439,7 @@ fn pty_follows_a_resize() {
         parser.clone(),
         (input, raw.clone()),
         Colour::default(),
+        Raw::default(),
     );
     let wait = |text: &str| {
         let deadline = Instant::now() + WAIT;
@@ -940,6 +958,87 @@ fn cli_reads_comments_over_socket() {
     assert_eq!(cli(&["comments"]).trim(), "[]");
     cli(&["open", "other.txt"]);
     screen.wait_for("other contents");
+    screen.send(b"\x11");
+    screen.wait_exit();
+}
+
+/// Everything Cellix has written, as text.
+fn written(screen: &Screen) -> String {
+    String::from_utf8_lossy(&screen.all.lock().unwrap()).into_owned()
+}
+
+/// Has the Cellix in `dir` hear from an agent through its hook, as Claude Code's would.
+fn hook(dir: &Path, cache: &Path, kind: &str, input: &str) {
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_cellix"))
+        .args(["hook", kind])
+        .current_dir(dir)
+        .env("XDG_CACHE_HOME", cache)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+#[cfg(unix)]
+fn an_agent_asking_while_cellix_is_behind_becomes_a_terminal_notification() {
+    let dir = project();
+    let cache = tempfile::Builder::new()
+        .prefix("cxn")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let mut screen = Screen::start_with(
+        dir.path(),
+        &["hello.txt"],
+        &[
+            ("XDG_CACHE_HOME", cache.path()),
+            ("TERM_PROGRAM", Path::new("ghostty")),
+            ("TMUX", Path::new("")),
+        ],
+    );
+    screen.wait_for("hello from a file");
+    let asking = format!(
+        r#"{{"message":"Claude needs your permission to use Bash","cwd":{:?},"session_id":"s1"}}"#,
+        root.to_str().unwrap()
+    );
+    let expected = "\x1b]777;notify;Cellix";
+    // In front, the person sees it in Cellix, and the terminal isn't asked to say it.
+    hook(dir.path(), cache.path(), "notify", &asking);
+    screen.wait_for("needs you");
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(!written(&screen).contains(expected), "told while in front");
+
+    // Behind another window, it's the terminal's own notification, through OSC 777 for
+    // Ghostty, saying where and what.
+    screen.send(b"\x1b[O");
+    let finished = format!(
+        r#"{{"cwd":{:?},"session_id":"s1"}}"#,
+        root.to_str().unwrap()
+    );
+    hook(dir.path(), cache.path(), "stop", &finished);
+    let name = root.file_name().unwrap().to_string_lossy().into_owned();
+    let wanted = format!("\x1b]777;notify;Cellix · {name};Claude Code finished its turn\x1b\\");
+    let deadline = Instant::now() + WAIT;
+    while !written(&screen).contains(&wanted) {
+        assert!(
+            Instant::now() < deadline,
+            "no notification: {:?}",
+            written(&screen).rsplit('\n').next()
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(
+        written(&screen).matches(expected).count(),
+        1,
+        "one per event"
+    );
     screen.send(b"\x11");
     screen.wait_exit();
 }

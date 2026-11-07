@@ -118,6 +118,23 @@ pub struct Agents {
     pub docked: bool,
 }
 
+/// Whether a process is still there.
+#[cfg(unix)]
+fn alive(pid: u32) -> bool {
+    let Ok(pid) = libc::pid_t::try_from(pid) else {
+        return false;
+    };
+    // SAFETY: signal 0 sends nothing; it only asks whether the process exists. A process
+    // that exists but isn't ours answers EPERM, which still means it's there.
+    let sent = unsafe { libc::kill(pid, 0) };
+    sent == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(not(unix))]
+fn alive(_pid: u32) -> bool {
+    true
+}
+
 /// Names of the agents whose working folder is `root`, from `lsof -Fcn` output.
 fn agents_in(output: &str, root: &Path) -> Vec<String> {
     let mut found = Vec::new();
@@ -148,7 +165,12 @@ impl Agents {
             }
             _ => {}
         }
-        self.running.retain(|a| a.session != event.session);
+        // One process at a time is one session: news under a new id, as after /clear,
+        // replaces what the old one said.
+        let same = |a: &AgentEvent| {
+            a.session == event.session || (event.pid.is_some() && a.pid == event.pid)
+        };
+        self.running.retain(|a| !same(a));
         if event.state != AgentState::Ended {
             self.running.push(event);
         }
@@ -174,6 +196,16 @@ impl Agents {
     pub fn outside(&self) -> Option<String> {
         let reporting = self.running.first().map(|a| a.agent.clone());
         reporting.or_else(|| self.silent().into_iter().next())
+    }
+
+    /// Lets go of agents whose process has gone without saying so, as when one is killed,
+    /// and gives their sessions. Without a process to look at, an agent stays.
+    pub fn prune(&mut self) -> Vec<String> {
+        let (gone, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.running)
+            .into_iter()
+            .partition(|a| a.pid.is_some_and(|pid| !alive(pid)));
+        self.running = kept;
+        gone.into_iter().map(|a| a.session).collect()
     }
 
     pub fn needing_you(&self) -> usize {

@@ -15,6 +15,7 @@ RAIL_X = 1
 # One row each since the rail's redesign, Files on the first.
 SEARCH, OUTLINE, REVIEW = 2, 3, 5  # a row and a half apart, at their middles
 LIST_AGENTS = [["keys", "\x1b[112;6u"], ["wait", 0.3], ["keys", "List Agents"], ["wait", 0.3], ["keys", "\r"]]
+SHOW_INBOX = [["wait", 1.0], ["keys", "\x1b[112;6u"], ["wait", 1.0], ["keys", "Show Inbox"], ["wait", 1.0], ["keys", "\r"]]
 
 CODE = """//! A bounded queue.
 use std::collections::VecDeque;
@@ -306,6 +307,12 @@ def workspaces(scratch):
     shoot("107-folder-path", [*told, ["click", 56, 43], ["keys", "../in"], ["wait", 0.6]], CODE_FILE,
           size="150x44", **space)
     shoot("101-workspace-hover", [*told, ["move", 40, 43], ["wait", 0.4]], CODE_FILE, size="150x44", **space)
+    # What waits everywhere, in the side pane: an agent asking, a finished turn, a failed run.
+    failed = hook("tool-failed", others["api-server"], tool_input={"command": "cargo test orders"},
+                  tool_response={"stdout": "test refunds::rejects_twice ... FAILED\ntest result: FAILED. 13 passed; 1 failed"})
+    inbox = [*told, failed, ["wait", 0.6], *SHOW_INBOX, ["wait", 0.8]]
+    shoot("140-inbox", inbox, CODE_FILE, size="150x44", **space)
+    shoot("141-inbox-hover", [*inbox, ["move", 120, 7], ["wait", 0.4]], CODE_FILE, size="150x44", **space)
     # Its tile brings back what stopped, with what it last showed.
     shoot("102-stopped-card", [["wait", 1.0], ["keys", "\x1b[6;7~"], ["keys", "\x1b[6;7~"],
                                 ["keys", "\x1b[6;7~"], ["wait", 1.0]], CODE_FILE, size="150x44", **space)
@@ -464,7 +471,7 @@ with tempfile.TemporaryDirectory() as scratch:
     # Where the terminal's output and the Problems tab are, at 150x44 and 170x44.
     OUTPUT_FROM, OUTPUT_TO, OUTPUT_ASK = (97, 7), (125, 10), (111, 6)
     PROBLEM_COUNT, PROBLEM_ROW = (9, 42), (150, 2)
-    GEAR = (RAIL_X, 37)
+    GEAR = (RAIL_X, 36)
     settings = [["click", *GEAR]]
 
     workspaces(scratch)
@@ -615,6 +622,7 @@ with tempfile.TemporaryDirectory() as scratch:
                                       ["wait", 1.5]],
           "docs/PLAN.md", size="96x44")
     shoot("51-agent-list", [*LIST_AGENTS, ["wait", 0.6]], NOTE_FILE, size="150x44")
+    shoot("51-inbox-empty", [*SHOW_INBOX, ["wait", 0.6]], NOTE_FILE, size="150x44")
     shell = [*LIST_AGENTS, ["wait", 0.6]]
     shoot("52-paper", [], PAPER_FILE, size="150x44", background="eff1f5")
     shoot("53-paper-dark", [], PAPER_FILE, size="150x44")

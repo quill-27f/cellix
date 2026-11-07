@@ -228,6 +228,8 @@ pub enum Command {
     NewTerminal,
     /// Brings the comments up in the pane, or puts them away.
     ShowComments,
+    /// Brings up what waits for the person in every workspace, or puts it away.
+    ShowInbox,
     /// Brings the pane's browser up, or starts one, or puts it away.
     ShowBrowser,
     /// Brings the list of agents up in the pane, or puts it away.

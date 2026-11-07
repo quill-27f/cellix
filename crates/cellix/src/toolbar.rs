@@ -348,6 +348,10 @@ fn fallback(icon: Icon) -> &'static str {
         Icon::Globe => "◍",
         Icon::Agents => "◎",
         Icon::Panel => "▭",
+        Icon::Bell => "◬",
+        Icon::Question => "?",
+        Icon::CircleCheck => "✓",
+        Icon::CircleX => "✗",
         _ => "?",
     }
 }

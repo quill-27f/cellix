@@ -15,6 +15,7 @@ mod folders;
 mod graph;
 mod guide;
 pub mod hold;
+mod inbox;
 pub mod integrations;
 mod kernel;
 mod keys;

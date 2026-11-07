@@ -4156,5 +4156,26 @@
     "title": "The Explorer's Timeline lists the commits that changed the file in view, each opening its diff there; Show File History lists them all",
     "test": "the_timeline_lists_the_open_files_commits_and_opens_one",
     "passes": true
+  },
+  {
+    "id": "attention-notifications",
+    "milestone": 11,
+    "title": "While Cellix is behind another window, an agent asking, a plan waiting, a finished turn, an answered comment or a failed test run becomes the terminal's own notification (OSC 777, 9 or 99, through tmux), one per event at most every 10 s, with a switch in Settings",
+    "test": "an_agent_asking_while_cellix_is_behind_becomes_a_terminal_notification",
+    "passes": true
+  },
+  {
+    "id": "attention-inbox",
+    "milestone": 11,
+    "title": "The side pane's Inbox lists what waits in every workspace, newest first; a click goes to the workspace and opens it, the x lets it go, and empty it says what would fill it",
+    "test": "the_inbox_lists_what_waits_everywhere_and_a_click_goes_there",
+    "passes": true
+  },
+  {
+    "id": "needs-you-honest",
+    "milestone": 11,
+    "title": "\"Needs you\" means an agent asks something: Claude Code's idle reminder and sign-in notices don't count, a tool running clears an answered request, and an agent whose process has gone, or whose process started a new session, stops counting",
+    "test": "only_a_request_counts_as_needing_you",
+    "passes": true
   }
 ]

@@ -53,6 +53,10 @@ pub struct AgentEvent {
     pub state: AgentState,
     pub detail: String,
     pub folder: String,
+    /// The agent's process, so news from one that has since gone can be let go. Hooks from
+    /// before it was sent, and Windows, leave it out.
+    #[serde(default)]
+    pub pid: Option<u32>,
 }
 
 /// A test command an agent ran.

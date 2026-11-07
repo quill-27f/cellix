@@ -11,6 +11,7 @@ use cellix_input::{Command, Event, Key, KeyEvent, MouseEvent, MouseKind};
 use cellix_render::{Bounds, Font, Grid, Icon, Measure, Rect, Rgb, Style};
 
 use crate::app::{App, TileState, WorkspaceRequest};
+use crate::inbox::Notifier;
 use crate::theme::Theme;
 
 /// The bar's size, relative to the interface font, as the status bar's.
@@ -81,6 +82,11 @@ pub struct Workspaces {
     pub bar: bool,
     machine: String,
     start: Starter,
+    /// Whether the terminal says Cellix is the window in front. Without word from it, it is.
+    focused: bool,
+    notifier: Notifier,
+    /// Notifications for the terminal to show, as title and body, waiting to be written.
+    pub notifications: Vec<(String, String)>,
 }
 
 impl Workspaces {
@@ -98,6 +104,18 @@ impl Workspaces {
             bar: true,
             machine,
             start,
+            focused: true,
+            notifier: Notifier::default(),
+            notifications: Vec::new(),
+        }
+    }
+
+    /// The terminal said Cellix came to the front, or went behind another window.
+    pub fn set_focused(&mut self, focused: bool) {
+        self.focused = focused;
+        // Back in front, what wasn't told yet can be seen.
+        if focused {
+            self.notifier.clear();
         }
     }
 
@@ -237,10 +255,54 @@ impl Workspaces {
                 }
             }
         }
+        changed |= self.notify();
         let count = self.list.len();
         let active = self.active;
         self.settle();
         changed || count != self.list.len() || active != self.active
+    }
+
+    /// Gives the workspace in front what waits in all of them, for its inbox.
+    fn share_inbox(&mut self) {
+        let active = self.active;
+        let mut rows = Vec::new();
+        for (index, workspace) in self.list.iter().enumerate() {
+            let root = workspace.app.workspace.root().to_path_buf();
+            let place = name_of(&workspace.app);
+            for item in &workspace.app.inbox.items {
+                rows.push(crate::inbox::Listed {
+                    root: root.clone(),
+                    place: place.clone(),
+                    here: index == active,
+                    item: item.clone(),
+                });
+            }
+        }
+        let rows = crate::inbox::sorted(rows);
+        for (index, workspace) in self.list.iter_mut().enumerate() {
+            workspace.app.inbox_shared = (index == active).then(|| rows.clone());
+        }
+    }
+
+    /// Passes what's new in any workspace to the notifier while Cellix is behind another
+    /// window, and takes a notification from it when one is due.
+    fn notify(&mut self) -> bool {
+        let on = |app: &App| app.settings.notify != Some(false);
+        let front_on = self.list.get(self.active).is_none_or(|w| on(&w.app));
+        for workspace in &mut self.list {
+            let fresh = workspace.app.inbox.take_fresh();
+            if self.focused || !front_on || !on(&workspace.app) {
+                continue;
+            }
+            let name = name_of(&workspace.app);
+            for item in fresh {
+                self.notifier.push(&name, &item.title);
+            }
+        }
+        let due = self.notifier.due(Instant::now());
+        let any = due.is_some();
+        self.notifications.extend(due);
+        any
     }
 
     /// Acts on what the apps asked for, and lets go of those that quit.
@@ -261,8 +323,25 @@ impl Workspaces {
                 let count = self.list.len();
                 self.switch((self.active + count - 1) % count);
             }
+            Some(WorkspaceRequest::Attend(root, key)) => {
+                if let Some(index) = self.find(&root) {
+                    self.switch(index);
+                    self.list[index].app.attend(&key);
+                }
+            }
+            Some(WorkspaceRequest::Dismiss(root, key)) => {
+                if let Some(index) = self.find(&root) {
+                    self.list[index].app.inbox.drop_key(&key);
+                }
+            }
+            Some(WorkspaceRequest::ClearFinished) => {
+                for workspace in &mut self.list {
+                    workspace.app.inbox.drop_kind(crate::inbox::Kind::Finished);
+                }
+            }
             None => {}
         }
+        self.share_inbox();
         // A quit chain stops if the one asked said Cancel.
         let asked = self.quitting.as_deref();
         let cancelled = asked.and_then(|root| self.find(root)).is_some_and(|index| {
@@ -1035,6 +1114,7 @@ mod tests {
             state,
             detail: detail.to_string(),
             folder: String::new(),
+            pid: None,
         })
     }
 
@@ -1112,6 +1192,169 @@ mod tests {
             .app
             .serve(event(AgentState::Working, "Working"));
         assert!(bar(&spaces).contains("infra working"), "{}", bar(&spaces));
+    }
+
+    #[test]
+    fn what_needs_you_anywhere_reaches_the_terminal_only_while_cellix_is_behind() {
+        let (_dir, first, second) = projects();
+        let mut spaces = spaces();
+        spaces.open(first);
+        spaces.open(second);
+        // In front, the person sees it: the inbox has it, the terminal isn't told.
+        spaces.list[1]
+            .app
+            .serve(event(AgentState::NeedsYou, "Allow sqlx migrate run?"));
+        spaces.poll();
+        assert!(spaces.notifications.is_empty());
+        assert!(spaces.list[1].app.inbox.has("ask:s1"));
+
+        // Behind another window, news from a workspace in the back is told, once.
+        spaces.set_focused(false);
+        spaces.list[1]
+            .app
+            .serve(event(AgentState::Working, "Working"));
+        assert!(!spaces.list[1].app.inbox.has("ask:s1"), "answered");
+        spaces.list[1]
+            .app
+            .serve(event(AgentState::NeedsYou, "Allow cargo publish?"));
+        spaces.poll();
+        assert_eq!(
+            std::mem::take(&mut spaces.notifications),
+            vec![(
+                "Cellix · infra".to_string(),
+                "Allow cargo publish?".to_string()
+            )]
+        );
+        spaces.poll();
+        assert!(spaces.notifications.is_empty(), "one per event");
+
+        // More within the gap waits, and goes as one when it's over.
+        spaces.list[1]
+            .app
+            .serve(event(AgentState::Idle, "Finished"));
+        spaces.list[0]
+            .app
+            .serve(Request::Test(cellix_agent::TestRun {
+                command: "cargo test".to_string(),
+                passed: false,
+                output: "test refunds ... FAILED".to_string(),
+            }));
+        spaces.poll();
+        assert!(spaces.notifications.is_empty(), "rate-limited");
+        let inbox = &spaces.list[1].app.inbox.items;
+        assert_eq!(inbox.len(), 1, "finished replaces asking: {inbox:?}");
+        assert_eq!(inbox[0].title, "Claude Code finished its turn");
+        assert_eq!(spaces.list[0].app.inbox.items[0].title, "cargo test failed");
+
+        // Coming back, what wasn't told yet isn't told at all.
+        spaces.set_focused(true);
+        spaces.set_focused(false);
+        spaces.list[1]
+            .app
+            .serve(event(AgentState::Working, "Working"));
+        spaces.poll();
+        assert!(spaces.notifications.is_empty());
+
+        // Turned off in Settings, nothing goes.
+        spaces.list[0].app.settings.notify = Some(false);
+        spaces.list[1]
+            .app
+            .serve(event(AgentState::NeedsYou, "Allow rm -rf target?"));
+        spaces.notifier = Notifier::default();
+        spaces.poll();
+        assert!(spaces.notifications.is_empty());
+        assert!(
+            spaces.list[1].app.inbox.has("ask:s1"),
+            "the inbox still has it"
+        );
+    }
+
+    /// The row on screen holding `text`, and the column it starts at.
+    fn find_text(grid: &Grid, text: &str) -> (u16, u16) {
+        (0..grid.height())
+            .find_map(|y| {
+                let row = grid.row_text(y);
+                let at = row.find(text)?;
+                Some((row[..at].chars().count() as u16, y))
+            })
+            .unwrap_or_else(|| panic!("no {text} in\n{}", grid.text()))
+    }
+
+    #[test]
+    fn the_inbox_lists_what_waits_everywhere_and_a_click_goes_there() {
+        let (_dir, first, second) = projects();
+        let mut spaces = spaces();
+        spaces.open(first);
+        spaces.open(second);
+        spaces.handle(Event::Resize(140, 36));
+        // The bell at the right end of the status bar opens it. Empty, it says what would
+        // fill it, and what to do meanwhile.
+        let status = spaces.size().1 - 2;
+        assert!(screen(&spaces).row_text(status).trim_end().ends_with('◬'));
+        let bell = (spaces.size().0 - 3, status);
+        click(&mut spaces, MouseKind::Left, bell);
+        spaces.poll();
+        let text = screen(&spaces).text();
+        assert!(text.contains("Nothing is waiting for you"), "{text}");
+        assert!(text.contains("A plan is ready for you to review"), "{text}");
+        assert!(text.contains("Notification Settings"), "{text}");
+
+        // An agent asks in the workspace behind, then tests fail in this one.
+        spaces.list[1]
+            .app
+            .serve(event(AgentState::NeedsYou, "Allow sqlx migrate run?"));
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        spaces.list[0]
+            .app
+            .serve(Request::Test(cellix_agent::TestRun {
+                command: "cargo test".to_string(),
+                passed: false,
+                output: "test refunds ... FAILED".to_string(),
+            }));
+        spaces.poll();
+        let grid = screen(&spaces);
+        let text = grid.text();
+        assert!(text.contains("Inbox 2"), "the tab counts them: {text}");
+        let bell = grid.row_text(status);
+        assert!(bell.trim_end().ends_with("◬ 2"), "and the bell: {bell}");
+        assert!(text.contains("2 waiting in 2 workspaces"), "{text}");
+        let (_, failed) = find_text(&grid, "cargo test failed");
+        let (x, asking) = find_text(&grid, "Allow sqlx migrate run?");
+        assert!(failed < asking, "newest first");
+        assert!(
+            grid.row_text(asking + 1).contains("infra"),
+            "where it waits"
+        );
+
+        // Under the pointer, a row says what a click does.
+        spaces.handle(Event::Mouse(MouseEvent {
+            kind: MouseKind::Move,
+            x,
+            y: asking,
+            fine_x: f32::from(x),
+            mods: cellix_input::Mods::default(),
+        }));
+        assert!(screen(&spaces).row_text(asking).contains("Show Prompt"));
+
+        // A click goes to its workspace, and with no session in the pane, to the agents list.
+        click(&mut spaces, MouseKind::Left, (x, asking));
+        assert_eq!(spaces.active, 1);
+        assert!(spaces.app().showing_agents_for_test());
+        assert!(
+            spaces.list[1].app.inbox.has("ask:s1"),
+            "it waits until answered"
+        );
+
+        // From there, the × on the other workspace's row lets it go.
+        spaces.app_mut().run(Command::ShowInbox);
+        spaces.poll();
+        let grid = screen(&spaces);
+        let (_, failed) = find_text(&grid, "cargo test failed");
+        click(&mut spaces, MouseKind::Move, (grid.width() - 4, failed));
+        click(&mut spaces, MouseKind::Left, (grid.width() - 4, failed));
+        assert!(spaces.list[0].app.inbox.items.is_empty());
+        assert!(!screen(&spaces).text().contains("cargo test failed"));
+        assert!(screen(&spaces).text().contains("Inbox 1"));
     }
 
     #[test]

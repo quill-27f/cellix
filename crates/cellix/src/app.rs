@@ -41,6 +41,7 @@ use crate::dock::{BROWSER, CellPixels, Dock, Front, Session, TabHit};
 use crate::editor::{Editor, Marks};
 use crate::explorer::Explorer;
 use crate::find::Find;
+use crate::inbox::{Hit as InboxHit, Inbox, Kind as Waits, Listed, Target as WaitTarget, Waiting};
 use crate::kernel::{self, Event as KernelEvent, Kernel};
 use crate::menu::{Action as MenuAction, Item as MenuItem, Menu, Outcome as MenuOutcome};
 use crate::neovim::{self, Neovim};
@@ -955,6 +956,12 @@ pub struct App {
     /// The file couldn't be read, so saving would lose what's in it.
     threads_broken: bool,
     tests: Vec<TestRun>,
+    /// What waits for the person here: permission asked, a plan, a finished turn, an answer,
+    /// a failed test run.
+    pub inbox: Inbox,
+    /// What waits in every workspace, as the workspaces around this one share it. Without
+    /// them, the inbox lists only what's here.
+    pub inbox_shared: Option<Vec<Listed>>,
     /// Where the pointer is, for hover highlights.
     hover: Option<(u16, u16)>,
     /// The side pane or the editor taking the window.
@@ -1217,6 +1224,8 @@ impl App {
             show_resolved: false,
             threads_broken,
             tests: Vec::new(),
+            inbox: Inbox::default(),
+            inbox_shared: None,
             hover: None,
             last_click: None,
             last_toggle: None,
@@ -2155,6 +2164,7 @@ impl App {
     }
 
     pub fn poll(&mut self) -> bool {
+        self.tidy_inbox();
         if self.sidebar_view == SidebarView::Outline {
             self.refresh_outline();
         }
@@ -3656,6 +3666,10 @@ impl App {
     }
 
     fn tick(&mut self) {
+        // An agent killed without a word is no longer asking anything.
+        for session in self.agents.prune() {
+            self.inbox.drop_key(&format!("ask:{session}"));
+        }
         self.keep_state();
         if let Some(view) = &mut self.dock.pdf {
             view.refresh();
@@ -6196,6 +6210,10 @@ impl App {
             Command::ToggleTerminal => self.toggle_terminal(),
             Command::NewTerminal => self.open_agent(crate::agents::SHELL.1),
             Command::ShowBrowser => self.show_browser(),
+            Command::ShowInbox if self.dock.showing(Front::Inbox) => {
+                self.dock.close_view(Front::Inbox);
+            }
+            Command::ShowInbox => self.dock.show_inbox(),
             Command::ShowComments if self.dock.showing(Front::Comments) => {
                 self.dock.close_view(Front::Comments);
             }
@@ -7546,6 +7564,18 @@ impl App {
             }
             return true;
         }
+        if self.dock.front == Front::Inbox {
+            match mouse.kind {
+                MouseKind::ScrollUp => self.dock.inbox_top = self.dock.inbox_top.saturating_sub(1),
+                MouseKind::ScrollDown => {
+                    let last = self.inbox_listed().len().saturating_sub(1);
+                    self.dock.inbox_top = (self.dock.inbox_top + 1).min(last);
+                }
+                MouseKind::Left => self.inbox_click(x, y),
+                _ => {}
+            }
+            return true;
+        }
         if self.dock.front == Front::Problems {
             match mouse.kind {
                 MouseKind::ScrollUp => {
@@ -7940,6 +7970,7 @@ impl App {
             x - ACTION_MARGIN
         });
         self.dock.tabs_end.set(end);
+        self.dock.inbox_count.set(self.inbox_listed().len());
         self.dock.tabs_flush.set(self.dock_under());
         let maximized = self.maximized == Some(Maximized::Pane);
         self.dock
@@ -7961,6 +7992,17 @@ impl App {
         }
         if self.dock.front == Front::Problems {
             self.draw_problems(grid, screen);
+            return;
+        }
+        if self.dock.front == Front::Inbox {
+            let rows = self.inbox_listed();
+            let panel = self.dock_panel().unwrap_or(screen);
+            let shown = (
+                rows.as_slice(),
+                self.dock.inbox_top,
+                std::time::Instant::now(),
+            );
+            crate::inbox::draw(grid, panel, shown, self.hover, (&*self.measure, theme));
             return;
         }
         if self.dock.front == Front::Comments {
@@ -9090,6 +9132,9 @@ impl App {
                         author: author.clone(),
                         text,
                     });
+                    let quote = thread.quote.clone();
+                    let file = thread.file.clone();
+                    self.note_reply(id, &author, &quote, &file);
                     self.save_threads();
                     self.say(format!("{author} answered a comment"));
                 }
@@ -9113,8 +9158,21 @@ impl App {
             }
             // Only the pane loop reads these, and it handles them before they get here.
             Request::Pane(_) => {}
-            Request::Agent(event) => self.agents.update(event),
+            Request::Agent(event) => {
+                // A new session in the same process ends the old one, and what it asked.
+                let replaced = self.agents.running.iter().filter(|a| {
+                    a.session != event.session && event.pid.is_some() && a.pid == event.pid
+                });
+                let replaced: Vec<String> =
+                    replaced.map(|a| format!("ask:{}", a.session)).collect();
+                for key in replaced {
+                    self.inbox.drop_key(&key);
+                }
+                self.note_agent(&event);
+                self.agents.update(event);
+            }
             Request::Test(run) => {
+                self.note_test(&run);
                 let text = format!(
                     "{} {}",
                     run.command,
@@ -9140,6 +9198,7 @@ impl App {
                     Ok(()) => {
                         let earlier = plan_versions(&path).len();
                         self.carry_plan_threads(&path, earlier.max(1));
+                        self.note_plan(&path);
                         self.plan = Some(PendingPlan { path, reply });
                         self.attention = Some("plan");
                         if earlier == 0 {
@@ -9155,6 +9214,242 @@ impl App {
                     Err(e) => self.say(format!("Could not open the plan: {e}")),
                 }
             }
+        }
+    }
+
+    /// What an agent's news means for what waits here: asking puts it in, and anything else
+    /// it says means it's no longer asking.
+    fn note_agent(&mut self, event: &cellix_agent::AgentEvent) {
+        use cellix_agent::AgentState;
+        let asking = format!("ask:{}", event.session);
+        let done = format!("done:{}", event.session);
+        let item = |kind, key: String, title: String, detail: String| Waiting {
+            kind,
+            key,
+            title,
+            detail,
+            since: std::time::Instant::now(),
+            target: WaitTarget::Session(event.agent.clone()),
+        };
+        match event.state {
+            // A plan comes in its own right, with the plan itself.
+            AgentState::NeedsYou if event.detail == cellix_agent::hook::PLAN_WAITING => {}
+            AgentState::NeedsYou => {
+                self.inbox.drop_key(&done);
+                let generic = event.detail.is_empty() || event.detail == "Needs your attention";
+                let title = if generic {
+                    format!("{} needs you", event.agent)
+                } else {
+                    event.detail.clone()
+                };
+                let detail = event.agent.clone();
+                self.inbox
+                    .note(item(Waits::Permission, asking, title, detail));
+            }
+            AgentState::Idle if event.detail == "Finished" => {
+                self.inbox.drop_key(&asking);
+                let title = format!("{} finished its turn", event.agent);
+                self.inbox
+                    .note(item(Waits::Finished, done, title, String::new()));
+            }
+            AgentState::Working => {
+                self.inbox.drop_key(&asking);
+                self.inbox.drop_key(&done);
+            }
+            AgentState::Idle | AgentState::Ended => self.inbox.drop_key(&asking),
+        }
+    }
+
+    fn note_plan(&mut self, path: &Path) {
+        let author = self.agents.plan_author().unwrap_or("An agent").to_string();
+        let name = path
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().to_string());
+        self.inbox.note(Waiting {
+            kind: Waits::Plan,
+            key: "plan".to_string(),
+            title: "Plan ready to review".to_string(),
+            detail: format!("{author} · {name}"),
+            since: std::time::Instant::now(),
+            target: WaitTarget::Plan,
+        });
+    }
+
+    fn note_reply(&mut self, id: u32, author: &str, quote: &str, file: &str) {
+        let quote: String = quote
+            .lines()
+            .next()
+            .unwrap_or("")
+            .chars()
+            .take(40)
+            .collect();
+        let place = Path::new(file)
+            .file_name()
+            .map_or_else(|| file.to_string(), |n| n.to_string_lossy().to_string());
+        self.inbox.note(Waiting {
+            kind: Waits::Reply,
+            key: format!("reply:{id}"),
+            title: format!("{author} answered your comment"),
+            detail: format!("on \u{201c}{quote}\u{201d} · {place}"),
+            since: std::time::Instant::now(),
+            target: WaitTarget::Thread(id),
+        });
+    }
+
+    /// A failed run waits until one passes.
+    fn note_test(&mut self, run: &TestRun) {
+        if run.passed {
+            self.inbox.drop_kind(Waits::TestFailed);
+            return;
+        }
+        let (title, detail) = test_summary(run);
+        self.inbox.note(Waiting {
+            kind: Waits::TestFailed,
+            key: "tests".to_string(),
+            title,
+            detail,
+            since: std::time::Instant::now(),
+            target: WaitTarget::Tests,
+        });
+    }
+
+    /// Whether the side pane shows the list of agents, for tests outside this module.
+    #[cfg(test)]
+    pub fn showing_agents_for_test(&self) -> bool {
+        self.dock.showing(Front::Agents)
+    }
+
+    /// The inbox's rows, newest first: every workspace's when they're shared, else this one's.
+    pub fn inbox_listed(&self) -> Vec<Listed> {
+        if let Some(shared) = &self.inbox_shared {
+            return shared.clone();
+        }
+        let root = self.workspace.root().to_path_buf();
+        let place = root.file_name().map_or_else(
+            || root.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        let rows = self.inbox.items.iter().map(|item| Listed {
+            root: root.clone(),
+            place: place.clone(),
+            here: true,
+            item: item.clone(),
+        });
+        crate::inbox::sorted(rows.collect())
+    }
+
+    fn inbox_click(&mut self, x: u16, y: u16) {
+        let Some(panel) = self.dock_panel() else {
+            return;
+        };
+        let rows = self.inbox_listed();
+        let top = self.dock.inbox_top;
+        let Some(hit) = crate::inbox::hit(panel, &rows, top, (x, y), &*self.measure) else {
+            return;
+        };
+        let shared = self.inbox_shared.is_some();
+        match hit {
+            InboxHit::Open(index) | InboxHit::Dismiss(index) => {
+                let row = &rows[index];
+                let key = row.item.key.clone();
+                let dismiss = matches!(hit, InboxHit::Dismiss(_));
+                match (row.here, dismiss) {
+                    (true, false) => self.attend(&key),
+                    (true, true) => self.inbox.drop_key(&key),
+                    (false, false) => {
+                        self.workspace_request =
+                            Some(WorkspaceRequest::Attend(row.root.clone(), key));
+                    }
+                    (false, true) => {
+                        self.workspace_request =
+                            Some(WorkspaceRequest::Dismiss(row.root.clone(), key));
+                    }
+                }
+            }
+            InboxHit::ClearFinished if shared => {
+                self.workspace_request = Some(WorkspaceRequest::ClearFinished);
+            }
+            InboxHit::ClearFinished => self.inbox.drop_kind(Waits::Finished),
+            InboxHit::Settings => self.run(Command::OpenSettings),
+            InboxHit::StartAgent => {
+                self.refresh_agents();
+                self.dock.show_list();
+            }
+        }
+    }
+
+    /// Opens what waits under `key`: the agent's session, the plan, the comment, the tests.
+    /// What only wanted to be seen leaves the inbox as it's opened.
+    pub fn attend(&mut self, key: &str) {
+        let Some(item) = self.inbox.items.iter().find(|w| w.key == key).cloned() else {
+            return;
+        };
+        match &item.target {
+            WaitTarget::Session(agent) => {
+                let live = |s: &Session| s.agent() && !s.exited;
+                let named = self
+                    .dock
+                    .sessions
+                    .iter()
+                    .position(|s| live(s) && s.name == *agent);
+                match named.or_else(|| self.dock.sessions.iter().position(live)) {
+                    Some(index) => {
+                        self.dock.active = Some(index);
+                        self.dock.open = true;
+                        self.dock.front = Front::Session;
+                        self.dock.focused = true;
+                    }
+                    // Running outside the pane: the list says where.
+                    None => {
+                        self.dock.open = true;
+                        self.refresh_agents();
+                        self.dock.show_list();
+                    }
+                }
+            }
+            WaitTarget::Plan => {
+                if let Some(path) = self.plan.as_ref().map(|p| p.path.clone()) {
+                    let _ = self.open(&path);
+                }
+            }
+            WaitTarget::Thread(id) => {
+                if let Some(thread) = self.threads.iter().find(|t| t.id == *id) {
+                    let (file, line) = (self.workspace.root().join(&thread.file), thread.line);
+                    if self.open(&file).is_ok() {
+                        let area = self.focused_area();
+                        if let Some(editor) = self.editor_mut() {
+                            editor.go_to_line(line, area);
+                        }
+                    }
+                }
+                self.dock.open = true;
+                self.dock.show_comments();
+                self.dock.focused = false;
+            }
+            WaitTarget::Tests => self.run(Command::OpenDiff),
+        }
+        if matches!(item.kind, Waits::Finished | Waits::Reply) {
+            self.inbox.drop_key(key);
+        }
+    }
+
+    /// Takes out what was dealt with some other way: a plan answered or closed, a comment
+    /// resolved.
+    fn tidy_inbox(&mut self) {
+        if self.plan.is_none() {
+            self.inbox.drop_kind(Waits::Plan);
+        }
+        let threads = &self.threads;
+        let settled = |id: u32| !threads.iter().any(|t| t.id == id && !t.resolved);
+        let gone: Vec<String> = self
+            .inbox
+            .items
+            .iter()
+            .filter(|w| matches!(w.target, WaitTarget::Thread(id) if settled(id)))
+            .map(|w| w.key.clone())
+            .collect();
+        for key in gone {
+            self.inbox.drop_key(&key);
         }
     }
 
@@ -10010,6 +10305,12 @@ impl App {
                 .is_some_and(|(at, end)| x >= at && x < end);
             if mouse.kind == MouseKind::Left && on_problems {
                 self.toggle_problems();
+            }
+            let on_bell = self
+                .status_bell()
+                .is_some_and(|(at, end)| x >= at && x < end);
+            if mouse.kind == MouseKind::Left && on_bell {
+                self.run(Command::ShowInbox);
             }
             return;
         }
@@ -10908,6 +11209,11 @@ impl App {
                 }
                 note = store("inlay_hints", on.into());
             }
+            Control::Notify => {
+                let on = self.settings.notify == Some(false);
+                self.settings.notify = Some(on);
+                note = store("notify", on.into());
+            }
             Control::Minimap => {
                 let on = self.settings.minimap == Some(false);
                 self.settings.minimap = Some(on);
@@ -11374,6 +11680,7 @@ impl App {
                 inlay_hints,
                 format_on_save: self.settings.format_on_save == Some(true),
                 auto_save,
+                notify: self.settings.notify != Some(false),
             };
             let area = self.sheet_area();
             page.draw(grid, area, &values, (self.hover, &*self.measure), theme);
@@ -11817,6 +12124,7 @@ impl App {
                     Front::Pdf => Icon::Picture,
                     Front::Comments => Icon::Comment,
                     Front::Agents => Icon::Agents,
+                    Front::Inbox => Icon::Bell,
                     _ => Icon::Outline,
                 };
                 (icon, self.dock.view_name(view).to_string())
@@ -13729,7 +14037,9 @@ impl App {
         let problems: usize = self.all_problems().values().map(Vec::len).sum();
         let problems = (problems > 0 && !self.compact()).then(|| format!("⊗ {problems}  "));
         let flagged = problems.as_ref().map_or(0, |p| p.chars().count() as u16);
-        let used = left.chars().count().min(kept) as u16 + start + flagged + 3;
+        let bell = self.status_bell();
+        let end = bell.map_or(width, |(at, _)| at.saturating_sub(1));
+        let used = left.chars().count().min(kept) as u16 + start + flagged + 3 + (width - end);
         let room = width.saturating_sub(used) as usize;
         let mut shown = right.clone();
         while shown.len() > 1 && shown.join("   ").chars().count() > room {
@@ -13738,7 +14048,7 @@ impl App {
         // Dropped from the far end, and read from the other, with the cursor last.
         shown.reverse();
         let right = shown.join("   ");
-        let right_x = width.saturating_sub(right.chars().count() as u16 + 1);
+        let right_x = end.saturating_sub(right.chars().count() as u16 + 1);
         if let (Some((at, end)), Some(branch)) = (self.status_branch(), &self.branch) {
             let hovered = self
                 .hover
@@ -13783,7 +14093,71 @@ impl App {
             bar
         };
         grid.label_at(x as f32, x, y, left, bar, right_x.saturating_sub(1), 90);
-        grid.label_right(width.saturating_sub(1), y, &right, bar, 90);
+        grid.label_right(end.saturating_sub(1), y, &right, bar, 90);
+        if let Some(spot) = bell {
+            self.draw_status_bell(grid, spot, y);
+        }
+    }
+
+    /// The bell at the right end of the status bar, as VS Code has it, with how much waits in
+    /// every workspace. It lights while something waits and the inbox isn't showing.
+    fn draw_status_bell(&self, grid: &mut Grid, (at, end): (u16, u16), y: u16) {
+        let theme = &self.theme;
+        let bar = theme.status;
+        let count = self.inbox_listed().len();
+        let showing = self.dock.showing(Front::Inbox);
+        let hovered = self
+            .hover
+            .is_some_and(|h| h.1 == y && h.0 >= at && h.0 < end);
+        if hovered || showing {
+            let fill = if showing { theme.tint } else { theme.row_hover };
+            // Round the bell and its count, with air on every side of them.
+            let digits = if count > 0 {
+                count.to_string().len() as f32 + 0.8
+            } else {
+                0.0
+            };
+            let chip = Bounds::cells(at as f32 - 0.6, y as f32 + 0.05, 2.0 + digits + 0.6, 0.9);
+            grid.panel(chip, 16, Some(fill), None);
+        }
+        let lit = count > 0 && !showing;
+        let color = if lit {
+            theme.attention
+        } else if hovered || showing {
+            theme.text.fg
+        } else {
+            bar.fg
+        };
+        let style = Style { fg: color, ..bar };
+        grid.glyph(at as f32, y, Icon::Bell, color, "◬", bar);
+        if count > 0 {
+            grid.label_at(
+                at as f32 + 1.8,
+                at + 2,
+                y,
+                &count.to_string(),
+                style,
+                end,
+                90,
+            );
+        }
+    }
+
+    /// Where the bell sits in the status bar, as (start, end) columns: at the far right, wide
+    /// enough for its count.
+    fn status_bell(&self) -> Option<(u16, u16)> {
+        if self.in_pane {
+            return None;
+        }
+        let count = self.inbox_listed().len();
+        let digits = if count > 0 {
+            count.to_string().len() as u16 + 1
+        } else {
+            0
+        };
+        let width = 2 + digits;
+        let end = self.size.0.saturating_sub(1);
+        Some((end.saturating_sub(width), end))
     }
 
     /// Where the count of problems sits in the status bar, as (start, end) columns.
@@ -13850,6 +14224,9 @@ impl App {
                 .is_some_and(|(at, end)| x >= at && x < end)
                 || self
                     .status_problems()
+                    .is_some_and(|(at, end)| x >= at && x < end)
+                || self
+                    .status_bell()
                     .is_some_and(|(at, end)| x >= at && x < end));
         let dock = self.dock_area().filter(|a| a.contains(x, y));
         let dock_title = dock.is_some_and(|a| y == a.y);
@@ -13922,12 +14299,49 @@ fn user_name() -> String {
         .unwrap_or_else(|_| "$USER".to_string())
 }
 
+/// What a failed run says in the inbox: how many of how many failed, where the runner says
+/// so, and the command with the first test that failed.
+fn test_summary(run: &TestRun) -> (String, String) {
+    let failing: Vec<&str> = run
+        .output
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("test ")?.strip_suffix(" ... FAILED"))
+        .collect();
+    // cargo's "N passed; M failed", added up over every test binary it ran.
+    let count = |word: &str| -> Option<usize> {
+        let results = run.output.lines().filter(|l| l.contains("test result:"));
+        let numbers = results.flat_map(|line| line.split(';')).filter_map(|part| {
+            let before = part.trim().strip_suffix(word)?;
+            before.trim().rsplit(' ').next()?.parse::<usize>().ok()
+        });
+        numbers.reduce(|a, b| a + b)
+    };
+    let title = match (count("failed"), count("passed")) {
+        (Some(failed), Some(passed)) if failed > 0 => {
+            format!("{failed} of {} tests failed", failed + passed)
+        }
+        _ => format!("{} failed", run.command),
+    };
+    let detail = match failing.as_slice() {
+        [] => run.command.clone(),
+        [one] => format!("{} · {one}", run.command),
+        [first, rest @ ..] => format!("{} · {first} and {} more", run.command, rest.len()),
+    };
+    (title, detail)
+}
+
 /// What the workspaces around an app are asked to do.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WorkspaceRequest {
     Open(PathBuf),
     Next,
     Previous,
+    /// Go to the workspace at this folder and open what waits there under this key.
+    Attend(PathBuf, String),
+    /// Let go of what waits there under this key.
+    Dismiss(PathBuf, String),
+    /// Let go of every finished turn, everywhere.
+    ClearFinished,
 }
 
 /// What a workspace's tile in the bar says.
@@ -16422,6 +16836,7 @@ mod tests {
             state,
             detail: detail.into(),
             folder: "/w".into(),
+            pid: None,
         }
     }
 
@@ -17488,6 +17903,114 @@ mod tests {
         let (sender, answer) = std::sync::mpsc::channel();
         app.serve(Request::Threads(sender));
         assert!(answer.recv().unwrap().contains("Why first"));
+    }
+
+    #[test]
+    fn a_failed_run_says_how_many_failed_and_which() {
+        let run = TestRun {
+            command: "cargo test orders".into(),
+            passed: false,
+            output: "test refunds::rejects_twice ... FAILED\ntest orders::totals ... FAILED\n\
+                     test result: FAILED. 12 passed; 2 failed; 0 ignored\n\
+                     test result: ok. 3 passed; 0 failed; 0 ignored"
+                .into(),
+        };
+        assert_eq!(
+            test_summary(&run),
+            (
+                "2 of 17 tests failed".to_string(),
+                "cargo test orders · refunds::rejects_twice and 1 more".to_string()
+            )
+        );
+    }
+
+    /// Unix only: whether a process is still there is asked of the system.
+    #[test]
+    #[cfg(unix)]
+    fn an_agent_whose_process_is_gone_stops_needing_you() {
+        use cellix_agent::AgentState::{NeedsYou, Working};
+        let (_dir, mut app) = project();
+        // One agent was killed without a word; its process is gone.
+        let mut gone = std::process::Command::new("true").spawn().unwrap();
+        gone.wait().unwrap();
+        let mut killed = agent(NeedsYou, "Allow Bash?");
+        killed.pid = Some(gone.id());
+        app.serve(Request::Agent(killed));
+        // Another still runs, and asks.
+        let mut living = agent(NeedsYou, "Allow Edit?");
+        living.session = "s2".into();
+        living.pid = Some(std::process::id());
+        app.serve(Request::Agent(living.clone()));
+        assert_eq!(app.agents.needing_you(), 2);
+        app.handle(Event::Tick);
+        assert_eq!(app.agents.needing_you(), 1, "the killed one lets go");
+        assert!(!app.inbox.has("ask:s1") && app.inbox.has("ask:s2"));
+        // The living one starts a new session, as /clear does: the old one is over.
+        let mut fresh = agent(Working, "Working");
+        fresh.session = "s3".into();
+        fresh.pid = living.pid;
+        app.serve(Request::Agent(fresh));
+        assert_eq!(app.agents.needing_you(), 0);
+        assert!(!app.inbox.has("ask:s2"));
+        assert_eq!(app.tile_state(), TileState::Working);
+    }
+
+    #[test]
+    fn what_waits_here_comes_and_goes_with_what_happens() {
+        use crate::inbox::Kind;
+        let (dir, mut app) = page_app("The cache goes first.\n");
+        let kinds = |app: &App| app.inbox.items.iter().map(|w| w.kind).collect::<Vec<_>>();
+        // A plan waits until it's answered.
+        let decision = pending_plan(&dir, &mut app);
+        let plan = app.inbox.items.last().unwrap();
+        assert_eq!(plan.title, "Plan ready to review");
+        assert!(plan.detail.ends_with("plan.md"), "{}", plan.detail);
+        app.run(Command::ApprovePlan);
+        assert!(decision.try_recv().is_ok());
+        app.poll();
+        assert!(kinds(&app).is_empty(), "{:?}", kinds(&app));
+
+        // An answer to a comment waits until the comment is resolved.
+        app.open(&dir.path().join("note.md")).unwrap();
+        comment_on(&mut app, "Why first");
+        let id = app.threads.iter().find(|t| !t.resolved).unwrap().id;
+        let (found, _known) = std::sync::mpsc::channel();
+        app.serve(Request::Reply {
+            id,
+            author: "Claude Code".into(),
+            text: "It saves a read.".into(),
+            found,
+        });
+        let reply = app.inbox.items.last().unwrap();
+        assert_eq!(reply.title, "Claude Code answered your comment");
+        assert!(reply.detail.contains("note.md"), "{}", reply.detail);
+        app.thread_hit(ThreadHit::Resolve(id));
+        app.poll();
+        assert!(kinds(&app).is_empty(), "{:?}", kinds(&app));
+
+        // A failed run waits until one passes.
+        let run = |passed| {
+            Request::Test(TestRun {
+                command: "cargo test".into(),
+                passed,
+                output: "test refunds ... FAILED".into(),
+            })
+        };
+        app.serve(run(false));
+        assert_eq!(kinds(&app), vec![Kind::TestFailed]);
+        assert_eq!(app.inbox.items[0].title, "cargo test failed");
+        assert_eq!(app.inbox.items[0].detail, "cargo test · refunds");
+        app.serve(run(true));
+        assert!(kinds(&app).is_empty());
+
+        // Asking, then finishing, then working again.
+        use cellix_agent::AgentState::{Idle, NeedsYou, Working};
+        app.serve(Request::Agent(agent(NeedsYou, "Needs your attention")));
+        assert_eq!(app.inbox.items[0].title, "Claude Code needs you");
+        app.serve(Request::Agent(agent(Idle, "Finished")));
+        assert_eq!(kinds(&app), vec![Kind::Finished]);
+        app.serve(Request::Agent(agent(Working, "Working")));
+        assert!(kinds(&app).is_empty());
     }
 
     #[test]

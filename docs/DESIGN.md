@@ -415,6 +415,18 @@ back with nothing running in it, as an editor brings back its windows; closing i
 go. Closing a tile asks as Quit does; Quit asks each folder in turn. The bar is drawn on the
 same grid as everything else, so it works on the cell tier too.
 
+What waits for the person, in any workspace, is kept as it happens: an agent asking leave to
+run something, a plan to review, a finished turn, an agent's answer to a comment, a failed test
+run. Each workspace keeps its own list and drops what's dealt with (answered, approved, resolved,
+a passing run, or opened when it only wanted seeing). The Inbox in the side pane, behind a bell at
+the right end of the status bar as in VS Code, lists them all newest first, and a click goes to the workspace and opens the
+thing. While the terminal says Cellix isn't in front (focus events), new ones become the
+terminal's own notification, so they reach the person over SSH with nothing installed: OSC 777
+where the terminal is known to read it (Ghostty, WezTerm, foot), OSC 99 for Kitty, OSC 9
+elsewhere, wrapped for tmux's passthrough inside tmux. One goes at most every 10 seconds, a
+burst becoming one, and Settings turns them off. A terminal that sends no focus events never
+gets one; nor does tmux without `focus-events` and `allow-passthrough`.
+
 On Linux over SSH, where logind ends a user's programs at logout and lingering is off, a card
 says so the first time a session starts and offers `loginctl enable-linger`.
 Claude Code is told the IDE port when it starts, so Cellix keeps its port and token per folder, and
@@ -432,7 +444,9 @@ programs, and real use showed that isn't side by side. It connects to the real t
 against Claude Code 2.1.309:
 
 - **Hooks** reach the workspace socket through `cellix hook <kind>`. They checkpoint turns,
-  report status and test runs, and hold plans. Every hook exits cleanly, so a missing
+  report status and test runs, and hold plans. Only a permission or elicitation notification
+  counts as the agent needing the person, any tool finishing says it's working again, and
+  each event carries the agent's process, so one that is killed stops counting. Every hook exits cleanly, so a missing
   Cellix never gets in the agent's way.
 - **The IDE server** is MCP over a local WebSocket, announced by a lock file in
   `~/.claude/ide`. Only a client with the token gets in, and any request with an Origin is

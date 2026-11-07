@@ -587,6 +587,10 @@ pub fn run(options: Options) -> io::Result<()> {
     let mut last_tick = std::time::Instant::now();
     let mut shown: Option<Grid> = None;
     let ghostty = std::env::var("TERM").is_ok_and(|t| t.contains("ghostty"));
+    // What the terminal is decides which notification sequence it reads.
+    let notice =
+        cellix_term::Notice::for_terminal(&cellix_term::terminal_names(|n| std::env::var(n).ok()));
+    let inside_tmux = display.multiplexer == cellix_term::Multiplexer::Tmux;
     // The loop's errors still come back, but only after what Quit does: a console closing
     // under Cellix can fail its last frame.
     #[allow(clippy::redundant_closure_call)]
@@ -701,6 +705,11 @@ pub fn run(options: Options) -> io::Result<()> {
                     }
                     came_back |= matches!(event, ct::Event::FocusGained);
                     left |= matches!(event, ct::Event::FocusLost);
+                    match event {
+                        ct::Event::FocusGained => spaces.set_focused(true),
+                        ct::Event::FocusLost => spaces.set_focused(false),
+                        _ => {}
+                    }
                     // Coming back, or typing, can leave the terminal showing a pointer of its own.
                     if matches!(event, ct::Event::FocusGained | ct::Event::Key(_)) {
                         shape = None;
@@ -760,6 +769,13 @@ pub fn run(options: Options) -> io::Result<()> {
             let started = Instant::now();
             redraw |= spaces.poll();
             phases.poll += started.elapsed();
+            if !spaces.notifications.is_empty() {
+                for (title, body) in spaces.notifications.drain(..) {
+                    let bytes = cellix_term::notification(notice, &title, &body, inside_tmux);
+                    write!(out, "{bytes}")?;
+                }
+                out.flush()?;
+            }
             if backend.gliding().is_some() {
                 backend.glide(Instant::now(), &mut out)?;
                 // Arrived, so the page underneath takes over.

@@ -32,6 +32,8 @@ pub struct Settings {
     pub inlay_hints: Option<bool>,
     /// `false` turns off spelling and grammar on pages.
     pub spell_check: Option<bool>,
+    /// `false` keeps Cellix from telling the terminal when something needs the person.
+    pub notify: Option<bool>,
     /// What opens web pages, before the system's own browser. `terminal-browser` works here.
     pub browser: Option<Vec<String>>,
     /// Language name to server command, overriding the built-in table.
@@ -75,6 +77,7 @@ impl Settings {
         self.sticky_scroll_lines = other
             .sticky_scroll_lines
             .or(self.sticky_scroll_lines.take());
+        self.notify = other.notify.or(self.notify.take());
         self.language_servers.extend(other.language_servers);
         self.formatters.extend(other.formatters);
         self.keybindings.extend(other.keybindings);

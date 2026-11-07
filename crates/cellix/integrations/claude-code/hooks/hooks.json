@@ -37,7 +37,6 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
@@ -48,7 +47,6 @@
     ],
     "PostToolUseFailure": [
       {
-        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",

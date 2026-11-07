@@ -34,8 +34,8 @@ const BUTTON_PADDING: usize = 1;
 /// Columns either side of a button's text, in pixels, about 24 px.
 const BUTTON_ROOM: f32 = 1.4;
 /// The size buttons set their text at, as `Grid::button` does.
-const BUTTON_TEXT: u8 = 90;
-const SMALL: u8 = 85;
+pub(crate) const BUTTON_TEXT: u8 = 90;
+pub(crate) const SMALL: u8 = 85;
 
 /// What a click in the panel lands on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -470,7 +470,7 @@ fn check_button(area: Rect, measure: &dyn Measure) -> (String, u16) {
 
 /// The cells a button takes: its letters and a space either side where every letter is a
 /// cell, and in pixels its set width with the same room either side, whatever its letters.
-fn button_cells(label: &str, measure: &dyn Measure) -> String {
+pub(crate) fn button_cells(label: &str, measure: &dyn Measure) -> String {
     let padding = " ".repeat(BUTTON_PADDING);
     if measure.in_cells() {
         return format!("{padding}{label}{padding}");

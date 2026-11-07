@@ -129,9 +129,78 @@ fn tell(roots: &[PathBuf], input: &Value, state: AgentState, detail: &str) {
             .first()
             .map(|r| r.display().to_string())
             .unwrap_or_default(),
+        pid: agent_pid(),
     };
     if let Ok(json) = serde_json::to_string(&event) {
         ask(roots, &format!("event {json}"));
+    }
+}
+
+/// The agent this hook runs for. An agent runs a hook's command through a shell, which waits
+/// while `cellix` runs, so the agent is the shell's parent; run directly, it's this one's.
+#[cfg(unix)]
+fn agent_pid() -> Option<u32> {
+    let parent = std::os::unix::process::parent_id();
+    let (above, name) = process_of(parent)?;
+    let shell = ["sh", "bash", "zsh", "dash", "fish", "ksh"];
+    let name = name
+        .rsplit('/')
+        .next()
+        .unwrap_or(&name)
+        .trim_start_matches('-');
+    Some(if shell.contains(&name) { above } else { parent })
+}
+
+#[cfg(not(unix))]
+fn agent_pid() -> Option<u32> {
+    None
+}
+
+/// A process's parent and its command's name: from `/proc` where there is one, else `ps`.
+#[cfg(unix)]
+fn process_of(pid: u32) -> Option<(u32, String)> {
+    if let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        // `pid (name) state ppid ...`, and the name can hold spaces and brackets.
+        let (head, rest) = stat.rsplit_once(')')?;
+        let name = head.split_once('(')?.1.to_string();
+        let ppid = rest.split_whitespace().nth(1)?.parse().ok()?;
+        return Some((ppid, name));
+    }
+    let output = Command::new("ps")
+        .args(["-o", "ppid=,comm=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let (ppid, name) = text.trim().split_once(char::is_whitespace)?;
+    Some((ppid.trim().parse().ok()?, name.trim().to_string()))
+}
+
+/// Whether a notification asks the person for something. Claude Code also sends one when it
+/// has sat idle after a turn ("waiting for your input") and on signing in, and those ask for
+/// nothing: the agent is done. Its `notification_type` says which, as Gemini's does; without
+/// it, from older versions, the words do.
+fn asks(input: &Value) -> bool {
+    match input["notification_type"].as_str() {
+        Some(kind) => {
+            let kind = kind.to_lowercase();
+            kind.contains("permission") || kind.contains("elicitation")
+        }
+        None => {
+            let message = input["message"].as_str().unwrap_or("").to_lowercase();
+            !message.contains("waiting for your input")
+        }
+    }
+}
+
+/// What a request says: its own words, or for Codex, which asks through a permission hook
+/// with none, the command it wants to run.
+fn request_words(input: &Value, agent: &str) -> String {
+    if let Some(message) = input["message"].as_str().filter(|m| !m.is_empty()) {
+        return message.to_string();
+    }
+    match input["tool_input"]["command"].as_str() {
+        Some(command) => format!("{agent} asks to run {command}"),
+        None => "Needs your attention".to_string(),
     }
 }
 
@@ -375,6 +444,8 @@ fn reads_as_failed(output: &str) -> bool {
 }
 
 fn on_tool(roots: &[PathBuf], input: &Value, passed: bool) {
+    // A tool ran, so whatever the agent asked leave for has been answered.
+    tell(roots, input, AgentState::Working, "Working");
     let command = input["tool_input"]["command"].as_str().unwrap_or("");
     if !is_test_command(command) {
         return;
@@ -439,10 +510,12 @@ pub fn handle_for(agent: &str, kind: &str, stdin: &str) -> Option<String> {
         "prompt" => return on_prompt(&roots, &input),
         "plan" if agent == "Gemini" => return on_gemini_plan(&roots, &input),
         "plan" => return on_plan(&roots, &input),
-        "notify" => {
-            let detail = input["message"].as_str().unwrap_or("Needs your attention");
-            tell(&roots, &input, AgentState::NeedsYou, detail);
+        "notify" if asks(&input) => {
+            let detail = request_words(&input, agent);
+            tell(&roots, &input, AgentState::NeedsYou, &detail);
         }
+        // An idle reminder or a sign-in: nothing to answer, so the state stays as it was.
+        "notify" => {}
         "tool-done" => on_tool(&roots, &input, true),
         "tool-failed" => on_tool(&roots, &input, false),
         "stop" => {
@@ -484,7 +557,7 @@ mod tests {
     }
 
     use super::*;
-    use crate::{Decision, Request, SharedComments, start};
+    use crate::{Decision, Request, Server, SharedComments, start};
     use std::path::Path;
 
     #[test]
@@ -853,17 +926,9 @@ mod tests {
                    "tool_response": {"returnDisplay": "boom", "error": "exit 1"}}),
         );
         handle_for("Gemini", "tool-done", &run);
-        match server
-            .requests
-            .recv_timeout(Duration::from_secs(5))
-            .unwrap()
-        {
-            Request::Test(run) => {
-                assert!(!run.passed);
-                assert_eq!(run.output, "boom");
-            }
-            other => panic!("{other:?}"),
-        }
+        let run = next_test(&server);
+        assert!(!run.passed);
+        assert_eq!(run.output, "boom");
     }
 
     #[test]
@@ -878,16 +943,110 @@ mod tests {
             json!({"tool_input": {"command": "cargo test"}, "tool_response": {"stdout": "ok"}}),
         );
         handle("tool-failed", &run);
-        match server
-            .requests
-            .recv_timeout(Duration::from_secs(5))
-            .unwrap()
-        {
-            Request::Test(run) => {
-                assert_eq!(run.command, "cargo test");
-                assert!(!run.passed);
+        // The first test run to arrive is the second command's: `ls` only says it's working.
+        let run = next_test(&server);
+        assert_eq!(run.command, "cargo test");
+        assert!(!run.passed);
+    }
+
+    /// The next test run reported, past news of the agent working, which every tool sends.
+    fn next_test(server: &Server) -> TestRun {
+        loop {
+            match server
+                .requests
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+            {
+                Request::Test(run) => return run,
+                Request::Agent(event) => assert_eq!(event.state, AgentState::Working),
+                other => panic!("{other:?}"),
             }
-            other => panic!("{other:?}"),
         }
+    }
+
+    /// The next news of an agent, or None if nothing comes for a while.
+    fn next_event(server: &Server, wait: Duration) -> Option<AgentEvent> {
+        match server.requests.recv_timeout(wait) {
+            Ok(Request::Agent(event)) => Some(event),
+            Ok(other) => panic!("{other:?}"),
+            Err(_) => None,
+        }
+    }
+
+    #[test]
+    fn only_a_request_counts_as_needing_you() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let server = start(&root, Arc::default()).unwrap();
+        // Claude Code's reminder after an idle turn, with and without its type, and a sign-in:
+        // none asks for anything, so none is told.
+        let idle = "Claude is waiting for your input";
+        handle(
+            "notify",
+            &input(
+                &root,
+                json!({"notification_type": "idle_prompt", "message": idle}),
+            ),
+        );
+        handle("notify", &input(&root, json!({"message": idle})));
+        handle(
+            "notify",
+            &input(
+                &root,
+                json!({"notification_type": "auth_success", "message": "Signed in"}),
+            ),
+        );
+        // A permission prompt is, and comes first.
+        let asking = "Claude needs your permission to use Bash";
+        handle(
+            "notify",
+            &input(
+                &root,
+                json!({"notification_type": "permission_prompt", "message": asking}),
+            ),
+        );
+        let event = next_event(&server, Duration::from_secs(5)).unwrap();
+        assert_eq!(
+            (event.state, event.detail.as_str()),
+            (AgentState::NeedsYou, asking)
+        );
+        // Codex asks through its permission hook, with the command and no words of its own.
+        let codex = input(
+            &root,
+            json!({"tool_name": "Bash", "tool_input": {"command": "cargo publish"}}),
+        );
+        handle_for("Codex", "notify", &codex);
+        let event = next_event(&server, Duration::from_secs(5)).unwrap();
+        assert_eq!(event.state, AgentState::NeedsYou);
+        assert_eq!(event.detail, "Codex asks to run cargo publish");
+        // Gemini says what kind of notification it sends.
+        let gemini = input(
+            &root,
+            json!({"notification_type": "ToolPermission", "message": "Allow rm?"}),
+        );
+        handle_for("Gemini", "notify", &gemini);
+        assert_eq!(
+            next_event(&server, Duration::from_secs(5)).unwrap().state,
+            AgentState::NeedsYou
+        );
+        assert_eq!(next_event(&server, Duration::from_millis(300)), None);
+    }
+
+    #[test]
+    fn a_tool_that_ran_means_the_request_was_answered() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let server = start(&root, Arc::default()).unwrap();
+        let asking = json!({"notification_type": "permission_prompt", "message": "Claude needs your permission to use Edit"});
+        handle("notify", &input(&root, asking));
+        let event = next_event(&server, Duration::from_secs(5)).unwrap();
+        assert_eq!(event.state, AgentState::NeedsYou);
+        // On Unix, it says which process it is, so one that's gone can be let go.
+        assert_eq!(event.pid.is_some(), cfg!(unix));
+        // Approved in the agent, the tool runs, and its hook says the agent is working.
+        let edited = json!({"tool_name": "Edit", "tool_input": {"file_path": "notes.txt"}});
+        handle("tool-done", &input(&root, edited));
+        let event = next_event(&server, Duration::from_secs(5)).unwrap();
+        assert_eq!(event.state, AgentState::Working);
     }
 }
