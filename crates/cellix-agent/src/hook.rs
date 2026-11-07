@@ -26,17 +26,21 @@ pub struct Resumable {
     pub agent: String,
     /// The agent's own session id.
     pub session: String,
+    /// Where the agent keeps the session's transcript, when its hook says.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub transcript: String,
 }
 
 /// Leaves word beside `held`, the host's socket, of the agent session running there.
 /// Unchanged word isn't written again.
-pub fn remember(held: &Path, agent: &str, session: &str) {
+pub fn remember(held: &Path, agent: &str, session: &str, transcript: &str) {
     if session.is_empty() || !held.extension().is_some_and(|e| e == "sock") {
         return;
     }
     let word = Resumable {
         agent: agent.to_string(),
         session: session.to_string(),
+        transcript: transcript.to_string(),
     };
     let path = held.with_extension("agent");
     let known = std::fs::read(&path)
@@ -130,6 +134,7 @@ fn tell(roots: &[PathBuf], input: &Value, state: AgentState, detail: &str) {
             .map(|r| r.display().to_string())
             .unwrap_or_default(),
         pid: agent_pid(),
+        transcript: input["transcript_path"].as_str().unwrap_or("").to_string(),
     };
     if let Ok(json) = serde_json::to_string(&event) {
         ask(roots, &format!("event {json}"));
@@ -503,6 +508,7 @@ pub fn handle_for(agent: &str, kind: &str, stdin: &str) -> Option<String> {
             Path::new(&held),
             agent,
             input["session_id"].as_str().unwrap_or(""),
+            input["transcript_path"].as_str().unwrap_or(""),
         );
     }
     match kind {
@@ -536,23 +542,24 @@ mod tests {
     fn a_held_agent_leaves_word_of_how_to_resume_it() {
         let dir = tempfile::tempdir().unwrap();
         let socket = dir.path().join("1-2.sock");
-        super::remember(&socket, "Claude Code", "abc-123");
+        super::remember(&socket, "Claude Code", "abc-123", "/t/abc-123.jsonl");
         let word: super::Resumable =
             serde_json::from_slice(&std::fs::read(dir.path().join("1-2.agent")).unwrap()).unwrap();
         assert_eq!(word.agent, "Claude Code");
         assert_eq!(word.session, "abc-123");
+        assert_eq!(word.transcript, "/t/abc-123.jsonl");
         // A /clear starts a new session, which replaces it.
-        super::remember(&socket, "Claude Code", "def-456");
+        super::remember(&socket, "Claude Code", "def-456", "");
         let text = std::fs::read_to_string(dir.path().join("1-2.agent")).unwrap();
         assert!(text.contains("def-456"), "{text}");
         // Nothing without an id, and nothing beside what isn't a host's socket.
-        super::remember(&socket, "Claude Code", "");
+        super::remember(&socket, "Claude Code", "", "");
         assert!(
             std::fs::read_to_string(dir.path().join("1-2.agent"))
                 .unwrap()
                 .contains("def-456")
         );
-        super::remember(&dir.path().join("notes.txt"), "Claude Code", "x");
+        super::remember(&dir.path().join("notes.txt"), "Claude Code", "x", "");
         assert!(!dir.path().join("notes.agent").exists());
     }
 

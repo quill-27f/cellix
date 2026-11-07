@@ -396,6 +396,29 @@ id; the next Cellix puts them aside and shows the tab as it was, with Resume (Cl
 `--resume`, Codex's `resume`), Start Fresh or Start Again, and Close, and with others stopped too,
 Resume All. It says "restarted" only when the machine booted after the log was last written.
 
+### How the agent got there
+
+Reviewing a result isn't only its diff: the steps, commands and reasoning that led to it can be
+wrong too. An agent's hooks leave its transcript's path beside its socket with its session id, and
+send it with every report, so Cellix knows each tab's transcript: Claude Code's
+`~/.claude/projects/<project>/<session>.jsonl`, or Codex's rollout log, found by the session id when
+a hook didn't say. Right-click an agent's tab, or run Open Agent Transcript, and it opens as a page
+beside the code, made by Cellix into `.cellix/transcripts` (ignored by git) and read only: each turn
+under a heading with how its context grew, the prompt in a callout, the replies as written, and
+each tool call on one line with its input and a word on the result. A command's output, and any
+that failed, follows in a code block, cut to its last 12 lines; a file read whole isn't repeated.
+What the transcript holds is data: tool output stays in code blocks, and nothing in it is run. A
+selection on it gets Comment and Ask Agent as on any page, and the comment carries the step it's
+on (`turn 1, step 3 (Bash cargo test orders)`), which is what the agent is told rather than a line
+of Cellix's copy. The page is rewritten while it's open, as the transcript grows.
+
+The same lines say how many tokens each reply took in, so each agent's tab shows how full its
+context is, as a percent after its name: grey, orange from 80%, red from 95%, with the numbers and
+the session's totals on hover, and the workspace's tile shows its fullest agent's. Context is the
+last reply's input with cache; the window is what Codex logs, and for Claude 200k, or 1M for a
+`[1m]` model or once more than 200k is used. Transcripts are followed a few times a second, away
+from the screen, reading only what was added.
+
 ### Workspaces, in place of tmux
 
 Cellix keeps the open tabs, cursors and unsaved edits of each folder in `state.json` beside its

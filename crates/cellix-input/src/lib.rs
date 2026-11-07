@@ -266,6 +266,8 @@ pub enum Command {
     /// Opens another folder beside this one, as a workspace of its own.
     OpenWorkspace,
     OpenGemini,
+    /// Opens the transcript of the agent in the side pane as a page.
+    OpenTranscript,
     OpenSettings,
     SwitchBranch,
     /// Folders and files opened lately, to open again.

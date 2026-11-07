@@ -33,6 +33,9 @@ pub struct Buffer {
     saved_at: Option<usize>,
     disk_mtime: Option<SystemTime>,
     revision: u64,
+    /// Shown, never changed: edits do nothing, as on a copy of an agent's transcript. It can
+    /// still be read again from disk.
+    pub read_only: bool,
 }
 
 impl Buffer {
@@ -200,6 +203,9 @@ impl Buffer {
         range: impl Fn(&Selection, &Rope) -> (usize, usize),
         text: impl Fn(usize) -> String,
     ) {
+        if self.read_only {
+            return;
+        }
         self.revision += 1;
         let before = selections.clone();
         let mut edits = Vec::new();
@@ -314,6 +320,9 @@ impl Buffer {
         end: usize,
         text: &str,
     ) {
+        if self.read_only {
+            return;
+        }
         let owned = text.to_string();
         let one = Selections::single(Selection {
             anchor: start,
@@ -423,7 +432,7 @@ impl Buffer {
         text: &str,
     ) -> bool {
         let saved = self.saved_at == Some(self.undo.len());
-        if !self.redo.is_empty() || self.undo.is_empty() || saved {
+        if self.read_only || !self.redo.is_empty() || self.undo.is_empty() || saved {
             return false;
         }
         let removed = self.rope.slice(start..end).to_string();
@@ -479,6 +488,19 @@ mod tests {
 
     fn at(s: &Selections) -> usize {
         s.primary().head
+    }
+
+    #[test]
+    fn a_read_only_buffer_takes_no_edits() {
+        let mut b = Buffer::from_text("kept");
+        b.read_only = true;
+        let mut s = Selections::single(Selection::cursor(4));
+        b.type_text(&mut s, "!");
+        b.delete_backward(&mut s);
+        b.replace_range(&mut s, 0, 4, "gone");
+        assert_eq!(b.text(), "kept");
+        assert!(!b.is_dirty());
+        assert!(!b.undo(&mut s));
     }
 
     #[test]

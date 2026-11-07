@@ -57,6 +57,9 @@ pub struct AgentEvent {
     /// before it was sent, and Windows, leave it out.
     #[serde(default)]
     pub pid: Option<u32>,
+    /// Where the agent keeps this session's transcript, when its hook says.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub transcript: String,
 }
 
 /// A test command an agent ran.

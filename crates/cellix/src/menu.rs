@@ -59,6 +59,10 @@ pub enum Action {
     Submenu,
     /// Brings a file's tab to the front, from the list of those out of view.
     ShowTab(usize),
+    /// Opens the transcript of the agent in a tab of the side pane, by its place there.
+    Transcript(usize),
+    /// Closes a tab of the side pane.
+    CloseSession(usize),
 }
 
 /// What a click or a key on a menu came to.

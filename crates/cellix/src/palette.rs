@@ -202,7 +202,7 @@ pub fn keys_of(command: Command) -> Option<&'static str> {
     })
 }
 
-pub const COMMANDS: [(&str, Command); 118] = [
+pub const COMMANDS: [(&str, Command); 119] = [
     ("Save", Command::Save),
     ("Undo", Command::Undo),
     ("Redo", Command::Redo),
@@ -296,6 +296,7 @@ pub const COMMANDS: [(&str, Command); 118] = [
     ("Open Settings", Command::OpenSettings),
     ("Switch Branch", Command::SwitchBranch),
     ("Open Gemini CLI", Command::OpenGemini),
+    ("Open Agent Transcript", Command::OpenTranscript),
     ("Go to Definition", Command::GoToDefinition),
     ("Go to Symbol in Editor", Command::GoToSymbol),
     ("Go to Symbol in Workspace", Command::GoToWorkspaceSymbol),

@@ -1076,6 +1076,14 @@ pub struct App {
     sync_result: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     /// What runs sessions so they can outlive Cellix: Cellix itself, away from tests.
     host_program: Option<PathBuf>,
+    /// What each agent's transcript has said of its tokens, by the transcript's path. They're
+    /// read away from the screen.
+    meters: Arc<std::sync::Mutex<HashMap<PathBuf, crate::transcript::Meter>>>,
+    /// Set while transcripts are being read, so one read runs at a time.
+    metering: Arc<AtomicBool>,
+    /// Each transcript page made, by its file: the transcript it shows, and how long that was
+    /// when the page was last written.
+    transcript_pages: crate::transcript::Sources,
     /// Stands in for an agent's program in tests, so none really starts.
     #[cfg(test)]
     agent_program: Option<String>,
@@ -1172,6 +1180,9 @@ impl App {
             kernel_command: None,
             pane_explained: false,
             host_program: std::env::current_exe().ok().filter(|_| !cfg!(test)),
+            meters: Arc::default(),
+            metering: Arc::default(),
+            transcript_pages: HashMap::new(),
             #[cfg(test)]
             agent_program: None,
             spell: None,
@@ -1351,6 +1362,12 @@ impl App {
         editor.sticky_lines = self.sticky_lines();
         editor.built = Some(self.built_folder.clone());
         editor.notebook = book;
+        // A transcript's page is Cellix's copy of what the agent did: it's read and commented
+        // on, never edited.
+        if crate::transcript::is_page(self.workspace.root(), path) {
+            editor.buffer.read_only = true;
+            editor.label = Some(crate::transcript::page_title(path));
+        }
         // Track Changes stays as it was left for this document.
         let relative = self.relative(path);
         editor.tracking = editor.rendered && self.tracked_files().contains(&relative);
@@ -3783,6 +3800,7 @@ impl App {
         self.ticks += 1;
         if self.ticks.is_multiple_of(EXPLORER_REFRESH_TICKS) {
             self.look_at_disk();
+            self.follow_transcripts();
             if let Some(review) = self.review.as_mut().filter(|r| !r.is_reading()) {
                 review.refresh_later();
             }
@@ -3935,6 +3953,7 @@ impl App {
                         ..Comment::default()
                     });
                 }
+                let step = self.transcript_step(&draft.file, draft.line);
                 self.threads.push(Thread {
                     id,
                     file: draft.file,
@@ -3952,6 +3971,7 @@ impl App {
                     reworded: false,
                     selection: draft.selection,
                     about: draft.about,
+                    step,
                 });
                 asked = draft.ask.then_some(id);
             }
@@ -6265,6 +6285,7 @@ impl App {
                 self.dock.focused = wanted && self.dock.session().is_some();
             }
             Command::OpenGemini => self.open_agent("gemini"),
+            Command::OpenTranscript => self.open_transcript(None),
             Command::MaximizePane => self.toggle_maximized(Maximized::Pane),
             Command::MaximizeEditor => self.toggle_maximized(Maximized::Editor),
             Command::OpenSettings => {
@@ -6669,6 +6690,197 @@ impl App {
             }
             Err(e) => self.say(format!("Could not start {name}: {e}")),
         }
+    }
+
+    /// What an agent in the side pane has said of itself: its name, its own session's id, and
+    /// where its transcript is when its hooks said. A held agent's hooks leave this beside its
+    /// host's socket. One Cellix runs itself is known by its hooks' reports, when no other tab
+    /// of that agent could have sent them.
+    fn agent_word(&self, index: usize) -> Option<(String, String, String)> {
+        let session = self.dock.sessions.get(index)?;
+        if session.shell || session.browser {
+            return None;
+        }
+        let stopped = session.stopped.as_ref().and_then(|s| s.agent.clone());
+        let held = || {
+            let bytes = std::fs::read(session.socket()?.with_extension("agent")).ok()?;
+            serde_json::from_slice::<cellix_agent::hook::Resumable>(&bytes).ok()
+        };
+        if let Some(word) = stopped.or_else(held) {
+            return Some((word.agent, word.session, word.transcript));
+        }
+        let alike = self.dock.sessions.iter().filter(|s| s.name == session.name);
+        if session.exited || alike.filter(|s| !s.exited).count() != 1 {
+            return None;
+        }
+        let event = self
+            .agents
+            .running
+            .iter()
+            .rev()
+            .find(|e| e.agent == session.name && !e.session.is_empty())?;
+        Some((
+            event.agent.clone(),
+            event.session.clone(),
+            event.transcript.clone(),
+        ))
+    }
+
+    /// Where an agent's transcript is: where its hooks said, or where that agent keeps them.
+    /// Found once for each of its sessions.
+    fn resolve_transcript(&mut self, index: usize) -> Option<PathBuf> {
+        let (agent, id, said) = self.agent_word(index)?;
+        if let Some((known, path)) = &self.dock.sessions[index].transcript
+            && *known == id
+        {
+            return Some(path.clone());
+        }
+        let said = PathBuf::from(said);
+        let path = if said.is_file() {
+            said
+        } else {
+            crate::transcript::find(&agent, &id)?
+        };
+        self.dock.sessions[index].transcript = Some((id, path.clone()));
+        Some(path)
+    }
+
+    /// Keeps each agent's tab saying how full its context is, and each transcript page up to
+    /// date with its transcript. Both are read away from the screen, a little at a time.
+    fn follow_transcripts(&mut self) {
+        let mut paths = Vec::new();
+        for index in 0..self.dock.sessions.len() {
+            if let Some(path) = self.resolve_transcript(index) {
+                paths.push(path);
+            }
+        }
+        // What the last read found. Mid-read, the tabs keep what they had.
+        if let Ok(meters) = self.meters.try_lock() {
+            for session in &mut self.dock.sessions {
+                let meter = session.transcript.as_ref().and_then(|(_, p)| meters.get(p));
+                session.usage = meter
+                    .map(|m| m.usage.clone())
+                    .filter(|usage| usage.percent().is_some());
+            }
+        }
+        // Open pages whose transcripts grew are written again, and read again from disk.
+        let root = self.workspace.root().to_path_buf();
+        let mut stale = Vec::new();
+        for (page, (source, length)) in &self.transcript_pages {
+            let open = self.editors.iter().any(|e| e.buffer.path() == Some(page));
+            let now = std::fs::metadata(source).map_or(*length, |m| m.len());
+            if open && now != *length {
+                stale.push((page.clone(), source.clone(), now));
+            }
+        }
+        if (paths.is_empty() && stale.is_empty()) || self.metering.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        for (page, _, now) in &stale {
+            if let Some(entry) = self.transcript_pages.get_mut(page) {
+                entry.1 = *now;
+            }
+        }
+        let (meters, busy) = (self.meters.clone(), self.metering.clone());
+        std::thread::spawn(move || {
+            if let Ok(mut meters) = meters.lock() {
+                meters.retain(|path, _| paths.contains(path));
+                for path in paths {
+                    let meter = meters.entry(path.clone());
+                    meter
+                        .or_insert_with(|| crate::transcript::Meter::new(path))
+                        .refresh();
+                }
+            }
+            for (page, source, _) in stale {
+                let name = page.file_stem().and_then(|n| n.to_str()).unwrap_or("");
+                if let Ok(transcript) = crate::transcript::read(&source) {
+                    let _ = crate::transcript::write_page(&root, name, &transcript);
+                }
+            }
+            busy.store(false, Ordering::SeqCst);
+        });
+    }
+
+    /// Opens an agent's transcript as a page beside the code: the agent in tab `index` of the
+    /// side pane, or else the one in front there, or else the first.
+    fn open_transcript(&mut self, index: Option<usize>) {
+        let count = self.dock.sessions.len();
+        let index = index
+            .or_else(|| self.dock.active.filter(|&i| self.agent_word(i).is_some()))
+            .or_else(|| (0..count).find(|&i| self.agent_word(i).is_some()));
+        let Some(index) = index else {
+            let running = self.dock.sessions.iter().any(Session::agent);
+            self.say(if running {
+                "The agent hasn't reported its session yet. Send it a prompt, then try again"
+            } else {
+                "Start an agent in the side pane first, then open its transcript"
+            });
+            return;
+        };
+        let name = self.dock.sessions[index].name.clone();
+        let Some(source) = self.resolve_transcript(index) else {
+            self.say(format!(
+                "Can't find {name}'s transcript yet. Send it a prompt, then try again"
+            ));
+            return;
+        };
+        let id = self.dock.sessions[index]
+            .transcript
+            .as_ref()
+            .map(|(id, _)| id.clone())
+            .unwrap_or_default();
+        let transcript = match crate::transcript::read(&source) {
+            Ok(transcript) => transcript,
+            Err(e) => {
+                self.say(format!("Could not read {name}'s transcript: {e}"));
+                return;
+            }
+        };
+        let root = self.workspace.root().to_path_buf();
+        let named = crate::transcript::page_name(&name, &id);
+        let page = match crate::transcript::write_page(&root, &named, &transcript) {
+            Ok(page) => page,
+            Err(e) => {
+                self.say(format!("Could not write the transcript's page: {e}"));
+                return;
+            }
+        };
+        let length = std::fs::metadata(&source).map_or(0, |m| m.len());
+        self.transcript_pages.insert(page.clone(), (source, length));
+        if let Err(e) = self.open(&page) {
+            self.say(format!("Could not open the transcript: {e}"));
+            return;
+        }
+        self.dock.focused = false;
+        self.say("Select any step to comment on it, or ask the agent why it did it");
+    }
+
+    /// On a transcript's page, the step a line is in, as a comment names it to the agent.
+    fn transcript_step(&self, file: &str, line: usize) -> String {
+        let root = self.workspace.root();
+        let page = root.join(file);
+        if !crate::transcript::is_page(root, &page) {
+            return String::new();
+        }
+        let anchors = crate::transcript::anchors_of(&page);
+        crate::transcript::step_at(&anchors, line)
+            .unwrap_or_default()
+            .to_string()
+    }
+
+    /// Starts a stand-in for an agent in the side pane, for tests elsewhere in the crate.
+    #[cfg(test)]
+    pub(crate) fn start_stand_in(&mut self, name: &str, script: &str) {
+        let argv = ["sh".to_string(), "-c".to_string(), script.to_string()];
+        let root = self.workspace.root().to_path_buf();
+        self.start_session(name, &argv, &[], &root);
+    }
+
+    /// How full the fullest agent's context is here, for the workspace's tile.
+    pub fn context_percent(&self) -> Option<u8> {
+        let sessions = self.dock.sessions.iter().filter(|s| !s.exited);
+        sessions.filter_map(|s| s.usage.as_ref()?.percent()).max()
     }
 
     /// Where a panel goes in the pane: from its edge, so its text lines up with the tabs.
@@ -7518,6 +7730,19 @@ impl App {
             return false;
         }
         if y == area.y {
+            if mouse.kind == MouseKind::Right
+                && let Some(TabHit::Tab(index) | TabHit::Close(index)) =
+                    self.dock.hit(self.title_of(area), x)
+            {
+                let agent = self.agent_word(index).is_some();
+                let items = vec![
+                    MenuItem::new("Open Transcript", MenuAction::Transcript(index)).when(agent),
+                    MenuItem::new("Close", MenuAction::CloseSession(index)),
+                ];
+                // Under the row of tabs, clear of the one it's about.
+                self.show_menu((x, y + 2), items);
+                return true;
+            }
             if mouse.kind == MouseKind::Middle {
                 match self.dock.hit(self.title_of(area), x) {
                     Some(TabHit::Tab(index) | TabHit::Close(index)) => {
@@ -7973,8 +8198,13 @@ impl App {
         self.dock.inbox_count.set(self.inbox_listed().len());
         self.dock.tabs_flush.set(self.dock_under());
         let maximized = self.maximized == Some(Maximized::Pane);
-        self.dock
-            .draw_tabs(grid, self.title_of(area), (self.hover, maximized), theme);
+        self.dock.draw_tabs(
+            grid,
+            self.title_of(area),
+            (self.hover, maximized),
+            theme,
+            &*self.measure,
+        );
         let line = if self.dock_under() {
             Bounds::cells(area.x as f32, area.y as f32, area.w as f32, 0.0)
         } else {
@@ -8535,6 +8765,7 @@ impl App {
                 reworded: false,
                 selection: String::new(),
                 about: None,
+                step: String::new(),
             });
             self.save_threads();
         }
@@ -8551,6 +8782,7 @@ impl App {
         // Every comment shows beside its file. A document's is a conversation there, and
         // code's also goes with the review, so an agent is told of it by that road.
         let page = editor.rendered;
+        let step = self.transcript_step(&file, line);
         self.threads.push(Thread {
             id: cellix_review::threads::next_id(&self.threads),
             file: file.clone(),
@@ -8568,6 +8800,7 @@ impl App {
             reworded: false,
             selection: String::new(),
             about: None,
+            step,
         });
         self.save_threads();
         if page {
@@ -9105,6 +9338,7 @@ impl App {
                     reworded: false,
                     selection: String::new(),
                     about: None,
+                    step: String::new(),
                 });
                 self.save_threads();
                 let _ = made.send(id);
@@ -11078,6 +11312,8 @@ impl App {
                 self.run(Command::CloseTab);
             }
             MenuAction::CloseOtherTabs(index) => self.close_tabs_except(Some(index)),
+            MenuAction::Transcript(index) => self.open_transcript(Some(index)),
+            MenuAction::CloseSession(index) => self.close_session_tab(index),
             MenuAction::CloseAllTabs => self.close_tabs_except(None),
         }
     }
@@ -11771,7 +12007,11 @@ impl App {
         };
         let wide = |name: &str| self.measure.width(name, font) + 3.0;
         let cut = self.dock_area().filter(|a| y == a.y);
-        let cut = cut.and_then(|area| self.dock.cut_name(self.title_of(area), x));
+        let cut = cut.and_then(|area| {
+            let area = self.title_of(area);
+            let context = self.dock.context_tip(area, x);
+            context.or_else(|| self.dock.cut_name(area, x))
+        });
         // Where each one goes: its name, left edge and top, in cells and rows.
         let spot = match &self.overlay {
             Overlay::Find(_) => {
@@ -11812,7 +12052,9 @@ impl App {
                 Some((name, left.max(0.5), area.y as f32 + 1.2))
             }
             Overlay::None if cut.is_some() => cut.as_deref().map(|name| {
-                let left = (x as f32).min(self.size.0 as f32 - wide(name) - 0.5);
+                let left = (x as f32)
+                    .min(self.size.0 as f32 - wide(name) - 0.5)
+                    .max(0.5);
                 (name, left, self.dock_area().map_or(0, |a| a.y) as f32 + 1.2)
             }),
             Overlay::None if self.app_close().is_some_and(|cell| cell.contains(x, y)) => Some((
@@ -12783,7 +13025,7 @@ impl App {
         let page = self
             .editors
             .get(self.active())
-            .is_some_and(|e| e.rendered && e.dialect().is_writing());
+            .is_some_and(|e| e.rendered && e.dialect().is_writing() && !e.buffer.read_only);
         let room = main.w >= toolbar::MIN_WIDTH;
         (page && room && self.chrome_rows() == 2 && !self.plan_in_view())
             .then(|| Rect::new(main.x, 1, main.w, 1))
@@ -16511,6 +16753,7 @@ mod tests {
             let word = cellix_agent::hook::Resumable {
                 agent: name.to_string(),
                 session: id.to_string(),
+                transcript: String::new(),
             };
             fs::write(
                 notes.with_extension("agent"),
@@ -16837,6 +17080,7 @@ mod tests {
             detail: detail.into(),
             folder: "/w".into(),
             pid: None,
+            transcript: String::new(),
         }
     }
 
@@ -24847,5 +25091,145 @@ while True:
         let (x, y) = find(&screen(&app), "One line.");
         app.handle(mouse(MouseKind::ScrollDown, x + 2, y));
         assert_eq!(find(&screen(&app), "One line.").1, y);
+    }
+
+    /// An agent in the side pane, a stand-in that writes what it's sent to `heard.txt`, whose
+    /// hooks have said which session it is and where its transcript is: a fixture of a short
+    /// Claude Code session.
+    fn agent_with_transcript() -> (TempDir, App) {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("alpha.txt"), "first line\n").unwrap();
+        let log = dir.path().join("session.jsonl");
+        fs::write(&log, crate::transcript::tests::CLAUDE).unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        let argv = [
+            "sh".to_string(),
+            "-c".to_string(),
+            "printf ready; cat > heard.txt".to_string(),
+        ];
+        let root = dir.path().to_path_buf();
+        app.start_session("Claude Code", &argv, &[], &root);
+        shows(&mut app, "ready");
+        let mut event = agent(cellix_agent::AgentState::Idle, "Finished");
+        event.session = "abc-123".into();
+        event.transcript = log.display().to_string();
+        app.serve(Request::Agent(event));
+        (dir, app)
+    }
+
+    /// Ticks until the screen shows `want`: transcripts are read away from the screen.
+    fn ticks_until(app: &mut App, want: &str) {
+        let deadline = std::time::Instant::now() + BACKGROUND;
+        loop {
+            app.handle(Event::Tick);
+            app.poll();
+            let text = screen(app).text();
+            if text.contains(want) {
+                return;
+            }
+            assert!(std::time::Instant::now() < deadline, "no {want}: {text}");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn an_agents_tab_shows_its_context_and_opens_its_transcript_as_a_page() {
+        let (dir, mut app) = agent_with_transcript();
+        // 88k of a 200k window, from the last reply's tokens.
+        ticks_until(&mut app, "Claude Code 44%");
+        assert_eq!(app.context_percent(), Some(44));
+        let (x, y) = find(&screen(&app), "Claude Code 44%");
+        app.handle(mouse(MouseKind::Move, x + 1, y));
+        let tip = screen(&app).text();
+        assert!(tip.contains("Context 88k of 200k (44%)"), "{tip}");
+        app.handle(mouse(MouseKind::Right, x + 1, y));
+        let (x, y) = find(&screen(&app), "Open Transcript");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        let page = screen(&app).text();
+        assert!(page.contains("Transcript · Claude Code"), "its tab: {page}");
+        assert!(page.contains("Add a refund route"), "its title: {page}");
+        assert!(page.contains("Turn 1"), "{page}");
+        assert!(
+            page.contains("Add a refund route, and a test."),
+            "the prompt: {page}"
+        );
+        assert!(
+            !page.contains("Not typed by anyone"),
+            "no reminders: {page}"
+        );
+        assert!(page.contains("cargo test orders"), "the command: {page}");
+        assert!(
+            page.contains("refund_full ... FAILED"),
+            "what it printed: {page}"
+        );
+        assert!(page.contains("src/routes.rs"), "the file it read: {page}");
+        assert!(
+            page.contains("Also reject unpaid orders."),
+            "the next turn: {page}"
+        );
+        // It's a copy of what happened, so typing changes nothing.
+        let file = dir.path().join(crate::transcript::PAGES);
+        let written = fs::read_dir(&file)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .find(|p| p.extension().is_some_and(|e| e == "md"))
+            .expect("the page's file");
+        let before = fs::read_to_string(&written).unwrap();
+        typed(&mut app, "EDIT");
+        app.run(Command::Save);
+        assert_eq!(fs::read_to_string(&written).unwrap(), before);
+        assert!(!screen(&app).text().contains("EDIT"));
+        // And it's kept out of the project's changes.
+        assert_eq!(fs::read_to_string(file.join(".gitignore")).unwrap(), "*\n");
+    }
+
+    #[test]
+    fn asking_the_agent_about_a_step_of_its_transcript_names_the_step() {
+        let (dir, mut app) = agent_with_transcript();
+        ticks_until(&mut app, "44%");
+        app.run(Command::CommandPalette);
+        typed(&mut app, "Agent Transcript");
+        enter(&mut app);
+        // The word is only on the step that ran the tests.
+        select_word(&mut app, "cargo");
+        let (x, y) = find(&screen(&app), "Ask Agent");
+        app.handle(mouse(MouseKind::Left, x, y));
+        typed(&mut app, "Why did this fail");
+        enter(&mut app);
+        let log = dir.path().join("heard.txt");
+        let deadline = std::time::Instant::now() + BACKGROUND;
+        let heard = loop {
+            let text = fs::read_to_string(&log).unwrap_or_default();
+            if text.contains("Why did this fail") {
+                break text;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the agent heard nothing"
+            );
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        assert!(
+            heard.contains(
+                "your transcript of this session, at turn 1, step 3 (Bash cargo test orders)"
+            ),
+            "the step: {heard}"
+        );
+        assert!(heard.contains("cellix reply"), "how to answer: {heard}");
+        let thread = app.threads.last().expect("the comment");
+        assert_eq!(thread.step, "turn 1, step 3 (Bash cargo test orders)");
+    }
+
+    #[test]
+    fn with_no_agent_the_transcript_says_what_to_do_first() {
+        let (_dir, mut app) = project();
+        app.run(Command::OpenTranscript);
+        assert!(
+            status_line(&app).contains("Start an agent in the side pane first"),
+            "{}",
+            status_line(&app)
+        );
     }
 }

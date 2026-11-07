@@ -53,6 +53,12 @@ const LOG_WIDTH: u16 = 8;
 const PROBLEMS_WIDTH: u16 = 13;
 /// Where a tab's name starts, as on the file's tabs.
 const TAB_TEXT: f32 = 1.5;
+/// The column between an agent's name and how full its context is.
+const CONTEXT_GAP: u16 = 1;
+/// Room between the name and the context, in cells: about 16 px.
+const CONTEXT_AIR: f32 = 0.9;
+/// The size the context is set at, smaller than the name it follows.
+const CONTEXT_SIZE: u8 = 85;
 /// How narrow a session's tab can get, sharing the row with others.
 const SMALLEST_TAB: u16 = 6;
 /// The button that closes the pane.
@@ -219,6 +225,10 @@ pub struct Session {
     typing: Option<(usize, u16)>,
     /// Everything it printed, kept for a task, whose errors are read from it once it ends.
     pub printed: Option<Vec<u8>>,
+    /// The agent's session id and where its transcript is, once known.
+    pub transcript: Option<(String, std::path::PathBuf)>,
+    /// What the transcript says of its tokens, which the tab shows.
+    pub usage: Option<crate::transcript::Usage>,
 }
 
 fn pty_size((columns, rows): (u16, u16), (width, height): CellPixels) -> PtySize {
@@ -341,6 +351,8 @@ impl Session {
             commands: Vec::new(),
             typing: None,
             printed: None,
+            transcript: None,
+            usage: None,
         }
     }
 
@@ -372,6 +384,20 @@ impl Session {
     /// Whether comments can go here.
     pub fn agent(&self) -> bool {
         !self.exited && !self.shell && !self.browser
+    }
+
+    /// The socket of the host it runs under, beside which its agent's hooks leave word.
+    pub fn socket(&self) -> Option<&Path> {
+        match &self.link {
+            Link::Held(held) => Some(held.socket.as_path()),
+            _ => None,
+        }
+    }
+
+    /// How full its agent's context is, as the tab says it: `62%`.
+    pub fn context(&self) -> Option<String> {
+        let percent = self.usage.as_ref()?.percent()?;
+        Some(format!("{percent}%"))
     }
 
     /// Takes in what the program wrote, with its pictures lifted out in order, so a reply
@@ -1422,7 +1448,10 @@ impl Dock {
 
     /// How wide a session's tab would like to be.
     fn session_width(session: &Session) -> u16 {
-        session.name.chars().count() as u16 + TAB_PADDING * 2 + CLOSE_WIDTH
+        let context = session
+            .context()
+            .map_or(0, |c| c.chars().count() as u16 + CONTEXT_GAP);
+        session.name.chars().count() as u16 + TAB_PADDING * 2 + CLOSE_WIDTH + context
     }
 
     pub fn tabs_start(&self, area: Rect) -> u16 {
@@ -1465,6 +1494,18 @@ impl Dock {
             }
         }
         widths
+    }
+
+    /// What an agent's tab says of its context, for a tooltip, with the pointer at `x`.
+    pub fn context_tip(&self, area: Rect, x: u16) -> Option<String> {
+        let (index, _) = self
+            .tabs(area)
+            .into_iter()
+            .enumerate()
+            .find(|(_, (start, end))| x >= *start && x < *end)?;
+        let usage = self.sessions.get(index)?.usage.as_ref()?;
+        usage.percent()?;
+        Some(usage.describe())
     }
 
     /// The full name of a tab too narrow to show it, for a tooltip.
@@ -1653,6 +1694,7 @@ impl Dock {
         area: Rect,
         (hover, maximized): (Option<(u16, u16)>, bool),
         theme: &Theme,
+        measure: &dyn cellix_render::Measure,
     ) {
         let count = self.comment_count.get();
         let row = Rect::new(area.x, area.y, area.w, 1);
@@ -1724,13 +1766,35 @@ impl Dock {
             };
             let close = end.saturating_sub(CLOSE_WIDTH + 1);
             let at = start as f32 + TAB_TEXT;
+            // How full its context is, before the ×, when the tab has its whole width.
+            let whole = end - start >= Self::session_width(session);
+            let context = session.context().filter(|_| whole);
+            let name_end = match &context {
+                Some(text) => {
+                    // Right after the name, as the workspace's tile has it, not at the ×.
+                    let font = cellix_render::Font::default();
+                    let after = at + measure.width(&session.name, font) + CONTEXT_AIR;
+                    let x = after.ceil().min(close.saturating_sub(1) as f32) as u16;
+                    let percent = session.usage.as_ref().and_then(|u| u.percent());
+                    let fg = match percent {
+                        Some(p) if p >= crate::transcript::FULL => theme.error,
+                        Some(p) if p >= crate::transcript::WARN => theme.attention,
+                        _ => theme.gutter.fg,
+                    };
+                    let quiet = Style { fg, ..shown };
+                    let px = after.min(x as f32);
+                    grid.label_at(px, x, area.y, text, quiet, close, CONTEXT_SIZE);
+                    x
+                }
+                None => close,
+            };
             grid.label_at(
                 at,
                 start + TAB_PADDING,
                 area.y,
                 &session.name,
                 shown,
-                close,
+                name_end,
                 100,
             );
             if hovered || active {

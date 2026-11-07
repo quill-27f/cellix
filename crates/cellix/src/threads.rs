@@ -352,6 +352,12 @@ fn lines((threads, draft, agent, resolved): Shown, width: f32, measure: &dyn Mea
         } else {
             format!(" · {}", thread.kind)
         };
+        // On a transcript, which step it's about, as the agent is told.
+        let kind = if thread.step.is_empty() {
+            kind
+        } else {
+            format!(" · {}{kind}", thread.step)
+        };
         let by = if suggested {
             format!("Suggested by {}", thread.suggested_by)
         } else {

@@ -4177,5 +4177,26 @@
     "title": "\"Needs you\" means an agent asks something: Claude Code's idle reminder and sign-in notices don't count, a tool running clears an answered request, and an agent whose process has gone, or whose process started a new session, stops counting",
     "test": "only_a_request_counts_as_needing_you",
     "passes": true
+  },
+  {
+    "id": "transcript-page",
+    "milestone": 11,
+    "title": "An agent's transcript opens from its tab's right-click or the palette as a read-only page of its turns, prompts, replies and tool steps, with long output cut",
+    "test": "an_agents_tab_shows_its_context_and_opens_its_transcript_as_a_page",
+    "passes": true
+  },
+  {
+    "id": "transcript-comments",
+    "milestone": 11,
+    "title": "Comment and Ask Agent on a transcript step tell the agent which turn and step it's about",
+    "test": "asking_the_agent_about_a_step_of_its_transcript_names_the_step",
+    "passes": true
+  },
+  {
+    "id": "context-tile",
+    "milestone": 11,
+    "title": "A workspace's tile shows how full its fullest agent's context is, from the transcript's token counts",
+    "test": "a_tile_says_how_full_its_agents_context_is",
+    "passes": true
   }
 ]

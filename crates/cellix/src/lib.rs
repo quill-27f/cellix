@@ -46,6 +46,7 @@ mod theme;
 mod threads;
 mod timeline;
 mod toolbar;
+mod transcript;
 mod wheel;
 mod workspaces;
 

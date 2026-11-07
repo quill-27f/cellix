@@ -62,6 +62,10 @@ pub struct Thread {
     /// problem found in the code.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub about: Option<About>,
+    /// On an agent's transcript, the step it's about, as `turn 2, step 3 (Bash cargo test)`,
+    /// which is how the agent is told where it is.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub step: String,
 }
 
 /// What a thread is about besides a file's words.
@@ -217,6 +221,12 @@ impl Thread {
         };
         let id = self.id;
         let mut text = match &self.about {
+            // The page is Cellix's copy of the agent's own transcript, so the step says more
+            // to the agent than a line of that copy would.
+            None if !self.step.is_empty() => format!(
+                "Comment {id} on your transcript of this session, at {}, about \"{about}\": {}",
+                self.step, self.text
+            ),
             None => format!(
                 "Comment {id} on {}{at}, about \"{about}\"{earlier}: {}",
                 self.file, self.text
@@ -441,6 +451,7 @@ mod tests {
             reworded: false,
             selection: String::new(),
             about: None,
+            step: String::new(),
         }
     }
 

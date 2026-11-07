@@ -477,7 +477,7 @@ impl Workspaces {
         let mut x = 1.0;
         let mut spans = Vec::new();
         for (index, workspace) in self.list.iter().enumerate() {
-            let (_, word, _) = self.word(workspace.app.tile_state());
+            let (_, word, _) = self.word(&workspace.app);
             let mut width = self.room(PAD)
                 + self.room(MARK)
                 + self.room(GAP)
@@ -575,8 +575,27 @@ impl Workspaces {
         }
     }
 
+    /// The mark, word and their colour for a tile: what its agents are doing, and how full
+    /// the fullest one's context is.
+    fn word(&self, app: &App) -> (Mark, String, Rgb) {
+        let (mark, mut word, mut color) = self.state_word(app.tile_state());
+        if let Some(percent) = app.context_percent() {
+            if !word.is_empty() {
+                word.push_str(" · ");
+            }
+            word.push_str(&format!("{percent}%"));
+            let theme = self.theme();
+            if percent >= crate::transcript::FULL {
+                color = theme.error;
+            } else if percent >= crate::transcript::WARN {
+                color = theme.attention;
+            }
+        }
+        (mark, word, color)
+    }
+
     /// The mark, word and their colour for a tile's state.
-    fn word(&self, state: TileState) -> (Mark, String, Rgb) {
+    fn state_word(&self, state: TileState) -> (Mark, String, Rgb) {
         let theme = self.theme();
         let dim = theme.gutter.fg;
         match state {
@@ -625,7 +644,7 @@ impl Workspaces {
             } else if hovered {
                 grid.panel(chip, CHIP_RADIUS, Some(theme.row_hover), None);
             }
-            let (mark, word, color) = self.word(workspace.app.tile_state());
+            let (mark, word, color) = self.word(&workspace.app);
             let mut x = span.start + self.room(PAD);
             draw_mark(grid, (x, y), mark, theme, base);
             x += self.room(MARK) + self.room(GAP);
@@ -890,7 +909,7 @@ impl Workspaces {
             } else if hovered {
                 grid.panel(chip, CHIP_RADIUS, Some(theme.row_hover), None);
             }
-            let (mark, word, color) = self.word(workspace.app.tile_state());
+            let (mark, word, color) = self.word(&workspace.app);
             draw_mark(grid, (f32::from(left), y), mark, theme, base);
             let strong = Style { bold: true, ..base };
             label(
@@ -1115,7 +1134,30 @@ mod tests {
             detail: detail.to_string(),
             folder: String::new(),
             pid: None,
+            transcript: String::new(),
         })
+    }
+
+    #[test]
+    fn a_tile_says_how_full_its_agents_context_is() {
+        let (dir, first, _) = projects();
+        let log = dir.path().join("session.jsonl");
+        fs::write(&log, crate::transcript::tests::CLAUDE).unwrap();
+        let mut spaces = spaces();
+        spaces.open(first);
+        spaces.app_mut().start_stand_in("Claude Code", "sleep 30");
+        let Request::Agent(mut said) = event(AgentState::Working, "Working") else {
+            unreachable!()
+        };
+        said.session = "abc-123".into();
+        said.transcript = log.display().to_string();
+        spaces.app_mut().serve(Request::Agent(said));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !bar(&spaces).contains("working · 44%") {
+            assert!(std::time::Instant::now() < deadline, "{}", bar(&spaces));
+            spaces.handle(Event::Tick);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 
     #[test]

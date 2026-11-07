@@ -450,6 +450,100 @@ def git_scenes(scratch):
     shoot("89-git-stashes", [*source, ["wheel", 14, 20, 3], ["wait", 0.4]], "src/queue.rs", size="120x40", cwd=root)
 
 
+def transcript_lines(root, scale=1.0):
+    """A short Claude Code session in the shape its transcript has: two turns, with reads,
+    an edit, a failing test run and replies, and what each reply took in."""
+    lines = [{"type": "custom-title", "customTitle": "Add a refund route"}]
+    used = [0]
+
+    def user(text):
+        lines.append({"type": "user", "cwd": root, "message": {"role": "user", "content": text}})
+
+    def reply(blocks, context):
+        context = int(context * scale)
+        used[0] += 1
+        lines.append({"type": "assistant", "cwd": root, "message": {
+            "id": f"m{used[0]}", "model": "claude-opus-5-5", "role": "assistant", "content": blocks,
+            "usage": {"input_tokens": 2, "cache_creation_input_tokens": 2000,
+                      "cache_read_input_tokens": context - 2002, "output_tokens": 120}}})
+
+    def tool(id, name, args, context):
+        reply([{"type": "tool_use", "id": id, "name": name, "input": args}], context)
+
+    def result(id, text, error=False):
+        lines.append({"type": "user", "cwd": root, "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": id, "content": text, "is_error": error}]}})
+
+    user("Add a POST /orders/:id/refund route. Only full refunds for now, and a test.")
+    reply([{"type": "text", "text": "I'll look at how orders are routed first, then add the route beside create."}], 41000)
+    tool("t1", "Read", {"file_path": f"{root}/src/queue.rs"}, 52000)
+    result("t1", CODE)
+    tool("t2", "Grep", {"pattern": "fn create", "path": f"{root}/src"}, 58000)
+    result("t2", "src/orders.rs:12: pub fn create(")
+    tool("t3", "Edit", {"file_path": f"{root}/src/orders.rs", "old_string": "a\nb",
+                        "new_string": "a\nb\nc\nd\ne"}, 71000)
+    result("t3", "The file was updated.")
+    tool("t4", "Bash", {"command": "cargo test orders"}, 80000)
+    result("t4", "running 15 tests\n" + "".join(f"test orders::case_{n} ... ok\n" for n in range(14))
+           + "test orders::refund_full ... FAILED\n\nthread 'refund_full' panicked: left: Paid, right: Refunded\n"
+           "test result: FAILED. 14 passed; 1 failed", True)
+    reply([{"type": "text", "text": "The refund never changes the order's state. I'll set it in the handler and run the tests again."}], 88000)
+    tool("t5", "Bash", {"command": "cargo test orders"}, 96000)
+    result("t5", "running 15 tests\ntest result: ok. 15 passed")
+    reply([{"type": "text", "text": "Added `POST /orders/:id/refund` and `refund_full`. It sets the order to **Refunded**, and all 15 order tests pass."}], 98000)
+    user("Also reject a refund on an order that was never paid.")
+    tool("t6", "Edit", {"file_path": f"{root}/src/orders.rs", "old_string": "x", "new_string": "x\ny\nz"}, 112000)
+    result("t6", "The file was updated.")
+    reply([{"type": "text", "text": "A refund on an unpaid order now answers 409 Conflict, with a test."}], 124000)
+    return "".join(json.dumps(line) + "\n" for line in lines)
+
+
+def transcripts(scratch):
+    """An agent in the side pane whose hooks have said where its transcript is: its tab
+    with how full its context is, and the transcript as a page. The agent is a stand-in that
+    reports through Cellix's real hook, as Claude Code's plugin does, and then waits."""
+    tools = f"{scratch}/bin"
+    os.makedirs(tools)
+    log = f"{scratch}/transcript.jsonl"
+    with open(log, "w") as f:
+        f.write(transcript_lines(ROOT))
+    # The same session nearer the end of its window: 172k of 200k.
+    full = f"{scratch}/transcript-full.jsonl"
+    with open(full, "w") as f:
+        f.write(transcript_lines(ROOT, 172 / 124))
+    said = json.dumps({"session_id": "abc-123", "cwd": ROOT, "transcript_path": "LOG"})
+    said = said.replace('"LOG"', '"$LOG"')
+    with open(f"{tools}/claude", "w") as f:
+        f.write(f"#!/bin/sh\nprintf 'Claude Code (stand-in)\\n'\nLOG=${{TRANSCRIPT:-{log}}}\n"
+                f"printf '%s' \"{said.replace(chr(34), chr(92) + chr(34))}\" | '{binary}' hook session-start\n"
+                f"exec sleep 300\n")
+    os.chmod(f"{tools}/claude", 0o755)
+    # The meter reads the transcript every couple of seconds, away from the screen.
+    start = [["keys", "\\eOP"], ["wait", 0.3], ["keys", "Open Claude Code"], ["wait", 0.3],
+             ["keys", "\r"], ["wait", 6.0]]
+    opened = [*start, ["keys", "\\eOP"], ["wait", 1.5], ["keys", "Agent Transcript"],
+              ["wait", 0.6], ["keys", "\r"], ["wait", 3.0]]
+    scenes = [
+        ("64-transcript-tab", start, [CODE_FILE], {}),
+        ("64-transcript-tab-hover", [*start, ["move", 104, 0], ["wait", 0.6]], [CODE_FILE], {}),
+        ("64-transcript-tab-menu", [*start, ["right", 104, 0], ["wait", 0.4]], [CODE_FILE], {}),
+        ("64-transcript-tab-full", start, [CODE_FILE], {"TRANSCRIPT": full}),
+        ("64-transcript-tab-light", start, [CODE_FILE], {"background": "eff1f5"}),
+        ("65-transcript-page", opened, [], {}),
+        ("66-transcript-light", opened, [], {"background": "eff1f5"}),
+        ("67-transcript-scrolled", [*opened, ["wheel", 50, 20, 6], ["wait", 0.6]], [], {}),
+    ]
+    # Each scene has sessions of its own, so none finds the last one's, running or stopped.
+    for name, steps, files, extra in scenes:
+        cache = tempfile.mkdtemp(prefix="cx", dir="/tmp")
+        env = {"XDG_CACHE_HOME": cache, "PATH": f"{tools}:{os.environ['PATH']}"}
+        if "TRANSCRIPT" in extra:
+            env["TRANSCRIPT"] = extra.pop("TRANSCRIPT")
+        shoot(name, steps, *files, size="150x44", env=env, **extra)
+        subprocess.run(["pkill", "-9", "-f", cache])
+        shutil.rmtree(cache, ignore_errors=True)
+        shutil.rmtree(f"{ROOT}/.cellix/transcripts", ignore_errors=True)
+
 with tempfile.TemporaryDirectory() as scratch:
     ROOT = f"{scratch}/queue"
     HOME = f"{scratch}/home"
@@ -476,6 +570,7 @@ with tempfile.TemporaryDirectory() as scratch:
 
     workspaces(scratch)
     code_intelligence(scratch)
+    transcripts(scratch)
     shoot("01-welcome", [])
     shoot("02-code", [], CODE_FILE)
     shoot("03-page", [], PAGE_FILE)

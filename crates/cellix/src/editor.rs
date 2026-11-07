@@ -128,6 +128,9 @@ pub struct Editor {
     spans_bytes: Cell<usize>,
     /// Show Markdown as an editable page rather than its source, as Xcode does.
     pub rendered: bool,
+    /// What its tab says, when not its file's name: a transcript's page is named for its
+    /// agent.
+    pub label: Option<String>,
     /// The file changed on disk under unsaved edits, so saving would erase that change.
     pub conflict: bool,
     /// Whether the minimap may show, given the room.
@@ -275,6 +278,7 @@ impl Editor {
             asked: Cell::new(u64::MAX),
             spans_bytes: Cell::new(0),
             rendered: is_page,
+            label: None,
             conflict: false,
             minimap_on: true,
             hints: Vec::new(),
@@ -314,6 +318,9 @@ impl Editor {
     }
 
     pub fn title(&self) -> String {
+        if let Some(label) = &self.label {
+            return label.clone();
+        }
         self.buffer
             .path()
             .and_then(Path::file_name)
