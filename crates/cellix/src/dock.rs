@@ -1703,10 +1703,9 @@ impl Dock {
             let on = self.front == view || (view == Front::Agents && self.listing());
             let hovered = hover.is_some_and(|h| tab.contains(h.0, h.1));
             if on {
-                grid.fill(tab, theme.sidebar);
+                grid.panel(tab_chip(tab), TAB_CHIP_RADIUS, Some(theme.row_active), None);
             } else if hovered {
-                let bounds = Bounds::inset(tab, 0.1, 0.1);
-                grid.panel(bounds, 16, Some(theme.row_hover), None);
+                grid.panel(tab_chip(tab), TAB_CHIP_RADIUS, Some(theme.row_hover), None);
             }
             let quiet = Style {
                 fg: if on { theme.text.fg } else { theme.gutter.fg },
@@ -1739,7 +1738,10 @@ impl Dock {
             let tab = Rect::new(start, area.y, end - start, 1);
             let hovered = hover.is_some_and(|h| tab.contains(h.0, h.1));
             let style = if active {
-                theme.text
+                Style {
+                    fg: theme.text.fg,
+                    ..theme.tab
+                }
             } else {
                 Style {
                     fg: theme.gutter.fg,
@@ -1747,14 +1749,9 @@ impl Dock {
                 }
             };
             if active {
-                grid.fill(tab, theme.text);
+                grid.panel(tab_chip(tab), TAB_CHIP_RADIUS, Some(theme.row_active), None);
             } else if hovered {
-                grid.panel(
-                    Bounds::inset(tab, 0.1, 0.1),
-                    16,
-                    Some(theme.row_hover),
-                    None,
-                );
+                grid.panel(tab_chip(tab), TAB_CHIP_RADIUS, Some(theme.row_hover), None);
             }
             let shown = if session.exited {
                 Style {
@@ -1876,26 +1873,23 @@ impl Dock {
         } else {
             theme.gutter.fg
         };
-        // The same × as a tab's, so closing looks one way across the row.
-        let style = Style {
-            fg,
-            painted: true,
-            ..theme.tab
-        };
-        grid.put_str(hide.x + 1, area.y, "×", style, hide.right());
-        grid.paint.push(cellix_render::Paint::Icon {
-            // Square in pixels, as a cell is about twice as tall as it's wide, and centred.
-            bounds: Bounds::cells(
-                middle - CLOSE_MARK,
-                area.y as f32 + (1.0 - CLOSE_MARK) / 2.0,
-                CLOSE_MARK * 2.0,
-                CLOSE_MARK,
-            ),
-            icon: Icon::Close,
-            color: fg,
-        });
+        // A window with its right part filled, not an ×: the pane hides, and the only × in
+        // the corner quits. The size of the icons beside it.
+        let cell = Rect::new(hide.x, area.y, 2, 1);
+        debug_assert_eq!(cell.x as f32 + cell.w as f32 / 2.0, middle);
+        crate::toolbar::draw_icon(grid, (Icon::HidePane, 0.62), cell, fg, theme.tab);
     }
 }
+
+/// A pane tab's chip: one chip height inside its row, a little in from its sides, as every
+/// tab and button is.
+fn tab_chip(tab: Rect) -> Bounds {
+    let height = 0.8;
+    let top = f32::from(tab.y) + (1.0 - height) / 2.0;
+    Bounds::cells(f32::from(tab.x) + 0.3, top, f32::from(tab.w) - 0.6, height)
+}
+
+const TAB_CHIP_RADIUS: u8 = 22;
 
 #[cfg(test)]
 mod tests {

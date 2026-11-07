@@ -44,6 +44,7 @@ fn click(app: &mut App, (x, y): (u16, u16)) {
             x,
             y,
             fine_x: x as f32 + 0.5,
+            fine_y: y as f32 + 0.5,
             mods: Mods::default(),
         }));
     }

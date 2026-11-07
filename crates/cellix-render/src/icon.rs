@@ -68,6 +68,9 @@ pub enum Icon {
     Question = 50,
     CircleCheck = 51,
     CircleX = 52,
+    /// A window with its right part filled, as VS Code's title bar has: the side pane
+    /// shown, and the button that hides it. Not an ×, so the only × in the corner quits.
+    HidePane = 54,
 }
 
 /// One cell of an icon that is `width` by `height` cells.
@@ -185,6 +188,17 @@ fn rounded(p: Point, min: Point, max: Point, radius: f32) -> f32 {
     (outside + qx.max(qy).min(0.0) - radius).abs()
 }
 
+/// Distance to a box with round corners, filled: nothing inside it.
+fn solid(p: Point, min: Point, max: Point, radius: f32) -> f32 {
+    let (cx, cy) = ((min.0 + max.0) / 2.0, (min.1 + max.1) / 2.0);
+    let (qx, qy) = (
+        (p.0 - cx).abs() - (max.0 - min.0) / 2.0 + radius,
+        (p.1 - cy).abs() - (max.1 - min.1) / 2.0 + radius,
+    );
+    let outside = (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt();
+    (outside + qx.max(qy).min(0.0) - radius).max(0.0)
+}
+
 /// A box at the bottom left, an arrow turning up from it, and the corners of the box it
 /// becomes at the top right.
 fn replace(p: Point) -> f32 {
@@ -225,6 +239,7 @@ fn half_stroke(icon: Icon) -> f32 {
         | Icon::SymbolType
         | Icon::SymbolField
         | Icon::SymbolValue
+        | Icon::HidePane
         | Icon::ReplaceAll => 0.9,
         Icon::Agents => 0.8,
         Icon::Check => 1.7,
@@ -574,6 +589,10 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
                 ],
             )),
         Icon::Check => path(p, &[(4.5, 12.5), (9.5, 17.5), (19.5, 6.5)]),
+        // Lucide's panel-right, its right part filled.
+        Icon::HidePane => rounded(p, (3.0, 3.0), (21.0, 21.0), 2.0)
+            .min(segment(p, (15.0, 3.0), (15.0, 21.0)))
+            .min(solid(p, (15.0, 3.0), (21.0, 21.0), 2.0)),
         Icon::Maximize => path(p, &[(15.0, 3.0), (21.0, 3.0), (21.0, 9.0)])
             .min(path(p, &[(9.0, 21.0), (3.0, 21.0), (3.0, 15.0)]))
             .min(segment(p, (21.0, 3.0), (14.0, 10.0)))
@@ -741,6 +760,7 @@ mod tests {
             Icon::Question,
             Icon::CircleCheck,
             Icon::CircleX,
+            Icon::HidePane,
         ] {
             let dots = (0..50)
                 .flat_map(|y| (0..50).map(move |x| (x, y)))

@@ -2180,9 +2180,10 @@ impl Editor {
             .unwrap_or_else(|| self.shown_rows().len())
     }
 
-    /// The furthest down the view goes: the end of the file at the bottom of the pane. A page
-    /// goes on past its end, as VS Code's editor does, until its last row is a third of the
-    /// way down, so its last block can always be brought clear of the status bar.
+    /// The furthest down the view goes. A page goes on past its end, as VS Code's editor
+    /// does, until its last row is a third of the way down, so its last block can always be
+    /// brought clear of the status bar; code goes a row past its end, so its last line never
+    /// sits on the status bar.
     fn last_top(&self) -> usize {
         let rows = self.view_rows.get().max(1) as usize;
         let length = self.scroll_length();
@@ -2190,7 +2191,7 @@ impl Editor {
         let past = if self.rendered && length > rows {
             rows - rows / 3
         } else {
-            0
+            usize::from(!self.rendered)
         };
         (length + past).saturating_sub(rows)
     }

@@ -539,6 +539,7 @@ mod tests {
             x: x + 1,
             y,
             fine_x: x as f32 + 1.0,
+            fine_y: y as f32 + 0.5,
             mods: Mods::default(),
         }));
     }

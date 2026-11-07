@@ -981,6 +981,39 @@ pub fn raised(grid: &mut Grid, area: Rect, theme: &Theme) {
     grid.popup(bounds, 28, theme.popup, theme.popup_border);
 }
 
+/// The size of a sidebar's title, a little under the text's.
+const TITLE_SIZE: u8 = 85;
+
+/// The font of a sidebar's title, for measuring what follows it.
+pub fn title_font() -> Font {
+    Font {
+        bold: true,
+        size: TITLE_SIZE,
+        ..Font::default()
+    }
+}
+
+/// A sidebar's title on the row `row`: its name in capitals, small, quiet and two columns
+/// in, the same in every sidebar. Returns the cell after it.
+pub fn sidebar_title(grid: &mut Grid, row: Rect, title: &str, theme: &Theme) -> u16 {
+    let style = Style {
+        fg: theme.tab.fg,
+        bold: true,
+        ..theme.sidebar
+    };
+    let x = row.x + 2;
+    let shown = title.to_uppercase();
+    grid.label_at(
+        f32::from(x),
+        x,
+        row.y,
+        &shown,
+        style,
+        row.right(),
+        TITLE_SIZE,
+    )
+}
+
 /// A floating panel. Its corner cells keep what's behind them, so rounded corners show the
 /// page rather than a square of panel colour.
 pub fn popup(grid: &mut Grid, area: Rect, theme: &Theme) {

@@ -249,19 +249,7 @@ impl Search {
         theme: &Theme,
     ) {
         grid.fill(area, theme.sidebar);
-        let title = Style {
-            fg: theme.gutter.fg,
-            ..theme.sidebar
-        };
-        grid.label_at(
-            area.x as f32 + 2.0,
-            area.x + 2,
-            area.y,
-            "SEARCH",
-            title,
-            area.right(),
-            80,
-        );
+        crate::palette::sidebar_title(grid, area, "Search", theme);
         self.draw_box(grid, area, area.y + 1, Field::Query, measure, theme);
         draw_switches(
             grid,

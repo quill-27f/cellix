@@ -191,11 +191,18 @@ impl Theme {
         u16::from(r) + u16::from(g) + u16::from(b) > 3 * 128
     }
 
-    /// Moves every surface by the same amount, so the frame sits exactly on the terminal's
-    /// background and the panels keep their distance from it. Text colours stay, since
-    /// they're chosen for contrast and a nearby background doesn't change that.
+    /// Moves every surface by the same amount, so the panels keep their distance from the
+    /// terminal's background. Dark, the frame sits exactly on it, so the window's padding
+    /// can't show as a seam. Light, the editor does, as Latte's base is a light terminal's
+    /// background, so on one the sidebars and frame are Latte's mantle and crust exactly.
+    /// Text colours stay, since they're chosen for contrast and a nearby background doesn't
+    /// change that.
     pub fn on_background(mut self, background: Rgb) -> Self {
-        let base = self.activity.bg;
+        let base = if self.is_light() {
+            self.text.bg
+        } else {
+            self.activity.bg
+        };
         let by = (
             i16::from(background.0) - i16::from(base.0),
             i16::from(background.1) - i16::from(base.1),
@@ -248,65 +255,83 @@ impl Theme {
         }
     }
 
+    /// Catppuccin Latte: the editor on base, the sidebars on mantle, the frame on crust, and
+    /// menus white, with Latte's own colours for code.
     fn light() -> Self {
-        let text = Rgb(38, 38, 46);
-        let bg = Rgb(255, 255, 255);
-        let frame = Rgb(238, 238, 236);
-        let panel = Rgb(246, 246, 244);
+        let text = Rgb(0x4C, 0x4F, 0x69);
+        let subtext = Rgb(0x6C, 0x6F, 0x85);
+        let base = Rgb(0xEF, 0xF1, 0xF5);
+        let mantle = Rgb(0xE6, 0xE9, 0xEF);
+        let crust = Rgb(0xDC, 0xE0, 0xE8);
+        let surface0 = Rgb(0xCC, 0xD0, 0xDA);
+        let surface1 = Rgb(0xBC, 0xC0, 0xCC);
+        let overlay0 = Rgb(0x9C, 0xA0, 0xB0);
+        let overlay2 = Rgb(0x7C, 0x7F, 0x93);
+        let blue = Rgb(0x1E, 0x66, 0xF5);
+        let mauve = Rgb(0x88, 0x39, 0xEF);
+        let green = Rgb(0x40, 0xA0, 0x2B);
+        let yellow = Rgb(0xDF, 0x8E, 0x1D);
+        // Latte's yellow is 2.5:1 on mantle, too faint for words; this is it darkened to 4:1.
+        let amber = Rgb(0xA8, 0x6A, 0x0B);
+        let peach = Rgb(0xFE, 0x64, 0x0B);
+        let red = Rgb(0xD2, 0x0F, 0x39);
+        let lavender = Rgb(0x72, 0x87, 0xFD);
+        let white = Rgb(0xFF, 0xFF, 0xFF);
         Self {
-            text: style(text, bg),
-            sidebar: style(Rgb(58, 58, 70), panel),
-            bar: style(Rgb(59, 59, 62), panel),
-            tab: style(Rgb(94, 94, 108), panel),
-            tab_active: style(Rgb(51, 51, 51), bg),
-            gutter: style(Rgb(102, 102, 110), bg),
-            selection: Rgb(173, 214, 255),
-            found: Rgb(255, 236, 170),
-            row_hover: Rgb(236, 236, 234),
-            page_hover: Rgb(243, 243, 245),
-            popup_hover: Rgb(238, 240, 246),
-            row_active: Rgb(226, 226, 224),
-            accent: Rgb(47, 91, 196),
-            tint: Rgb(226, 233, 248),
-            accept_tint: Rgb(218, 240, 226),
-            attention: Rgb(170, 90, 0),
-            keyword: Rgb(0, 0, 255),
-            string: Rgb(163, 21, 21),
-            comment: Rgb(0, 128, 0),
-            function: Rgb(121, 94, 38),
-            kind: Rgb(38, 127, 153),
-            number: Rgb(9, 134, 88),
-            added: Rgb(214, 245, 220),
-            removed: Rgb(255, 224, 224),
-            added_word: Rgb(165, 230, 180),
-            removed_word: Rgb(250, 185, 185),
-            moved: Rgb(226, 232, 250),
-            activity: style(Rgb(94, 94, 108), frame),
-            status: style(Rgb(94, 94, 108), frame),
-            workspaces: style(Rgb(94, 94, 108), frame),
-            breadcrumb: style(Rgb(110, 110, 110), bg),
-            line: Rgb(245, 245, 245),
-            number_active: Rgb(40, 40, 45),
-            guide: Rgb(211, 211, 211),
-            scrollbar: Rgb(200, 200, 200),
-            error: Rgb(225, 40, 40),
-            heading: Rgb(29, 29, 31),
-            git_modified: Rgb(137, 93, 0),
-            git_added: Rgb(40, 130, 60),
-            input: Rgb(255, 255, 255),
-            find_match: Rgb(168, 216, 170),
-            code_bg: Rgb(243, 243, 243),
-            minimap_view: Rgb(222, 226, 238),
-            border: Rgb(229, 229, 229),
-            focus: Rgb(0, 144, 241),
-            popup: Rgb(255, 255, 255),
-            popup_dim: Rgb(94, 94, 108),
-            disabled: Rgb(150, 150, 160),
-            ignored: Rgb(124, 127, 147),
-            popup_border: Rgb(214, 214, 214),
-            pick: Rgb(214, 226, 252),
-            button: Rgb(47, 91, 196),
-            button_text: Rgb(255, 255, 255),
+            text: style(text, base),
+            sidebar: style(text, mantle),
+            bar: style(text, mantle),
+            tab: style(subtext, mantle),
+            tab_active: style(text, base),
+            // Latte's subtext, not overlay1, so line numbers and descriptions read at 4.5:1.
+            gutter: style(subtext, base),
+            selection: surface0,
+            found: mix(base, yellow, 0.3),
+            row_hover: crust,
+            page_hover: mantle,
+            popup_hover: mantle,
+            row_active: surface0,
+            accent: blue,
+            tint: mix(base, blue, 0.13),
+            accept_tint: mix(base, green, 0.15),
+            attention: peach,
+            keyword: mauve,
+            string: green,
+            comment: overlay2,
+            function: blue,
+            kind: amber,
+            number: peach,
+            added: mix(base, green, 0.15),
+            removed: mix(base, red, 0.15),
+            added_word: mix(base, green, 0.3),
+            removed_word: mix(base, red, 0.3),
+            moved: mix(base, lavender, 0.15),
+            activity: style(subtext, crust),
+            status: style(subtext, crust),
+            workspaces: style(subtext, crust),
+            breadcrumb: style(subtext, base),
+            line: mantle,
+            number_active: text,
+            guide: surface0,
+            scrollbar: surface1,
+            error: red,
+            heading: text,
+            git_modified: amber,
+            git_added: green,
+            input: base,
+            find_match: mix(base, yellow, 0.45),
+            code_bg: mantle,
+            minimap_view: crust,
+            border: crust,
+            focus: blue,
+            popup: white,
+            popup_dim: subtext,
+            disabled: overlay0,
+            ignored: overlay2,
+            popup_border: surface0,
+            pick: mix(white, blue, 0.16),
+            button: blue,
+            button_text: white,
         }
     }
 
@@ -394,9 +419,34 @@ impl Default for Theme {
     }
 }
 
+/// `by` of the way from `from` to `to`: a wash of one colour over another.
+fn mix(from: Rgb, to: Rgb, by: f32) -> Rgb {
+    let channel = |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * by).round() as u8;
+    Rgb(
+        channel(from.0, to.0),
+        channel(from.1, to.1),
+        channel(from.2, to.2),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Light is Catppuccin Latte: base, mantle and crust for the editor, the sidebars and the
+    /// frame, menus white, and Latte's colours for code.
+    #[test]
+    fn the_light_theme_is_catppuccin_latte() {
+        let latte = Theme::named(Some("light"));
+        assert_eq!(latte.text.bg, Rgb(0xEF, 0xF1, 0xF5), "base");
+        assert_eq!(latte.sidebar.bg, Rgb(0xE6, 0xE9, 0xEF), "mantle");
+        assert_eq!(latte.activity.bg, Rgb(0xDC, 0xE0, 0xE8), "crust");
+        assert_eq!(latte.popup, Rgb(0xFF, 0xFF, 0xFF), "menus");
+        assert_eq!(latte.comment, Rgb(0x7C, 0x7F, 0x93));
+        assert_eq!(latte.keyword, Rgb(0x88, 0x39, 0xEF));
+        assert_eq!(latte.string, Rgb(0x40, 0xA0, 0x2B));
+        assert_eq!(latte.selection, Rgb(0xCC, 0xD0, 0xDA));
+    }
 
     #[test]
     fn the_frame_is_the_terminal_background() {

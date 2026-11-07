@@ -164,6 +164,7 @@ pub fn translate(input: Input) -> Vec<Event> {
                 x,
                 y,
                 fine_x,
+                fine_y: f32::from(y) + 0.5,
                 mods,
             })]
         }
@@ -179,6 +180,7 @@ pub fn translate(input: Input) -> Vec<Event> {
                     x: u16::MAX,
                     y: u16::MAX,
                     fine_x: 0.0,
+                    fine_y: 0.0,
                     mods: Mods::default(),
                 })
             };

@@ -65,6 +65,8 @@ enum Stacked<'a> {
     Header(usize),
     Line(&'a Side, RowKind),
     Note(&'a str),
+    /// After a file's last change, what's next: the next file, or that it's all been seen.
+    End,
 }
 
 /// A row of the column beside the diff.
@@ -123,6 +125,8 @@ pub struct Review {
     pub beside_panel: bool,
     /// Columns the title row leaves free at its end, for what stands there.
     pub title_room: Cell<u16>,
+    /// The list's width: the sidebar's, so every sidebar is the same.
+    pub list_width: Cell<u16>,
     /// A file to show once the changes have been read.
     wanted: Option<PathBuf>,
     root: PathBuf,
@@ -321,6 +325,7 @@ impl Review {
             hover: Cell::new(None),
             beside_panel: false,
             title_room: Cell::new(0),
+            list_width: Cell::new(LIST_WIDTH),
             wanted: None,
             fixed: None,
         };
@@ -383,6 +388,7 @@ impl Review {
             tokens: (Vec::new(), Vec::new()),
             beside_panel: false,
             title_room: Cell::new(0),
+            list_width: Cell::new(LIST_WIDTH),
             wanted: None,
             fixed: None,
         };
@@ -776,7 +782,19 @@ impl Review {
                 }
             }
         }
+        if !rows.is_empty() {
+            rows.push(Stacked::Gap);
+            rows.push(Stacked::End);
+        }
         rows
+    }
+
+    /// What the row after a file's last change says.
+    fn end_words(&self) -> String {
+        match self.changes.get(self.selected + 1) {
+            Some(next) => format!("End of this file. Next: {}", next.path.display()),
+            None => "That's every change. Commit when it's ready.".to_string(),
+        }
     }
 
     /// What code surrounds a hunk: the nearest line above that sits further out.
@@ -807,7 +825,7 @@ impl Review {
         if area.w < MIN_SIDE_BY_SIDE || self.beside_panel {
             return (None, area);
         }
-        let list = Rect::new(area.x, area.y, LIST_WIDTH.min(area.w), area.h);
+        let list = Rect::new(area.x, area.y, self.list_width.get().min(area.w), area.h);
         let x = list.right() + 1;
         (
             Some(list),
@@ -885,6 +903,7 @@ impl Review {
                     Hit::Text(file, side.number)
                 })
             }
+            Stacked::End => (self.selected + 1 < self.changes.len()).then_some(Hit::NextFile),
             Stacked::Gap | Stacked::Note(_) => None,
         }
     }
@@ -999,8 +1018,9 @@ impl Review {
             grid.label_right(card.right().saturating_sub(1), y, word, done, 90);
             return;
         }
-        let green = Style {
-            fg: theme.git_added,
+        // Accept is what a hunk is there for: the primary, filled with the accent.
+        let primary = Style {
+            fg: theme.button_text,
             ..theme.text
         };
         let quiet = Style {
@@ -1008,16 +1028,16 @@ impl Review {
             ..theme.text
         };
         let accept_fill = if self.on_button(accept, y, ACCEPT) {
-            theme.quiet_button(theme.accept_tint)
+            theme.quiet_button(theme.button)
         } else {
-            theme.accept_tint
+            theme.button
         };
         let reject_fill = if self.on_button(reject, y, REJECT) {
             theme.quiet_button(theme.line)
         } else {
             theme.line
         };
-        grid.button(accept, y, ACCEPT, "Accept", accept_fill, green);
+        grid.button(accept, y, ACCEPT, "Accept", accept_fill, primary);
         grid.button(reject, y, REJECT, "Reject", reject_fill, quiet);
     }
 
@@ -1056,6 +1076,23 @@ impl Review {
             let row = Rect::new(body.x, y, body.w, 1);
             match entry {
                 Stacked::Gap => continue,
+                Stacked::End => {
+                    let quiet = Style {
+                        fg: theme.gutter.fg,
+                        ..theme.sidebar
+                    };
+                    // Level with the hunks' titles, and in the accent where a click goes on.
+                    let style = if self.selected + 1 < self.changes.len() {
+                        Style {
+                            fg: theme.accent,
+                            ..theme.sidebar
+                        }
+                    } else {
+                        quiet
+                    };
+                    grid.label(body.x + 2, y, &self.end_words(), style, body.right());
+                    continue;
+                }
                 Stacked::Header(hunk) => self.draw_hunk_header(grid, body, y, *hunk, theme),
                 Stacked::Note(text) => self.draw_note(grid, body, y, text, theme),
                 Stacked::Line(side, kind) => {
@@ -1175,8 +1212,9 @@ impl Review {
                     fg: theme.gutter.fg,
                     ..theme.sidebar
                 };
-                let x = list.x as f32 + 1.0;
-                grid.label_at(x, list.x + 1, y, text, dim, list.right(), 80);
+                // Where every sidebar's title starts, two columns in.
+                let x = list.x as f32 + 2.0;
+                grid.label_at(x, list.x + 2, y, text, dim, list.right(), 80);
             }
             ListRow::Base(base) => {
                 let style = pick(self.base == *base);
@@ -1219,7 +1257,7 @@ impl Review {
                 let change = &self.changes[*index];
                 let name = change.path.display().to_string();
                 let right = list.right().saturating_sub(1);
-                let mut end = right;
+                let mut end = right.saturating_sub(2);
                 if let Some((added, removed)) = self.stats.get(&change.path) {
                     let green = Style {
                         fg: theme.git_added,
@@ -1229,14 +1267,29 @@ impl Review {
                         fg: theme.error,
                         ..style
                     };
-                    let removed = format!("-{removed}");
-                    let added = format!("+{added}");
-                    grid.label_right(end, y, &removed, red, 85);
-                    end = end.saturating_sub(removed.len() as u16 + 1);
-                    grid.label_right(end, y, &added, green, 85);
-                    end = end.saturating_sub(added.len() as u16 + 1);
+                    // A count of nothing is only noise.
+                    let counts = [(*removed, '-', red), (*added, '+', green)];
+                    for (count, sign, colour) in counts.into_iter().filter(|c| c.0 > 0) {
+                        let shown = format!("{sign}{count}");
+                        grid.label_right(end, y, &shown, colour, 85);
+                        end = end.saturating_sub(shown.len() as u16 + 1);
+                    }
                 }
-                grid.label(list.x + 1, y, &name, style, end);
+                grid.label(list.x + 2, y, &name, style, end);
+                // The letter Source Control shows for it, in the same colours.
+                let letter = match change.status {
+                    '?' => 'U',
+                    other => other,
+                };
+                let mark = Style {
+                    fg: match letter {
+                        'A' | 'U' => theme.git_added,
+                        'D' => theme.deleted(),
+                        _ => theme.git_modified,
+                    },
+                    ..style
+                };
+                grid.label_right(right, y, letter.encode_utf8(&mut [0; 4]), mark, 100);
             }
         }
     }

@@ -1885,7 +1885,7 @@
   {
     "id": "strip-close",
     "milestone": 9,
-    "title": "The icons leave the pane's close button clear",
+    "title": "The pane hides with an icon of its own beside quit, so the only × in the corner quits",
     "test": "the_icons_stand_clear_of_the_panes_close_button",
     "passes": true
   },
@@ -2599,8 +2599,8 @@
   {
     "id": "menu-hairlines",
     "milestone": 10,
-    "title": "With paint, a menu's groups part on a hairline, not a blank row",
-    "test": "with_paint_groups_part_on_a_hairline_not_a_row",
+    "title": "A painted menu is whole rows, with half a row for each rule and its hover band clear of it, rather than a blank row",
+    "test": "with_paint_a_menu_is_whole_rows_and_a_rule_has_half_a_row",
     "passes": true
   },
   {
@@ -4239,6 +4239,69 @@
     "milestone": 11,
     "title": "The Task page links to the agent's transcript and shows how full its context grew over each turn, from the transcript",
     "test": "a_turn_says_how_full_the_agents_context_grew",
+    "passes": true
+  },
+  {
+    "id": "button-hit-area",
+    "milestone": 12,
+    "title": "Every dialog and card button takes a click anywhere it's painted, edges included",
+    "test": "every_dialog_button_takes_a_click_anywhere_it_is_painted",
+    "passes": true
+  },
+  {
+    "id": "button-hit-cells",
+    "milestone": 12,
+    "title": "Where the terminal reports cells, a dialog button is its row",
+    "test": "in_cells_a_dialog_button_is_its_row",
+    "passes": true
+  },
+  {
+    "id": "menu-cells-on-row",
+    "milestone": 12,
+    "title": "A painted menu's items are clicked where their cells are",
+    "test": "a_painted_rows_cells_are_on_it",
+    "passes": true
+  },
+  {
+    "id": "tooltip-one-row",
+    "milestone": 12,
+    "title": "Every tooltip is one row, on a row of its own",
+    "test": "a_tooltip_is_one_whole_row",
+    "passes": true
+  },
+  {
+    "id": "review-letters-end",
+    "milestone": 12,
+    "title": "Review letters its files as Source Control does, matches the sidebar's width, and ends each file with what's next",
+    "test": "review_letters_its_files_and_says_whats_next_after_each",
+    "passes": true
+  },
+  {
+    "id": "kind-pills-quiet",
+    "milestone": 12,
+    "title": "A comment kind with none is quiet and one with some is filled",
+    "test": "a_comment_kind_with_none_is_quiet_and_one_with_some_is_filled",
+    "passes": true
+  },
+  {
+    "id": "pane-tab-chip",
+    "milestone": 12,
+    "title": "The pane's tab is a chip inside its row",
+    "test": "the_panes_tab_is_a_chip_inside_its_row",
+    "passes": true
+  },
+  {
+    "id": "code-scroll-air",
+    "milestone": 12,
+    "title": "Code scrolls a row past its end, clear of the status bar",
+    "test": "code_scrolls_a_row_past_its_end",
+    "passes": true
+  },
+  {
+    "id": "light-latte",
+    "milestone": 12,
+    "title": "The light theme is Catppuccin Latte",
+    "test": "the_light_theme_is_catppuccin_latte",
     "passes": true
   }
 ]

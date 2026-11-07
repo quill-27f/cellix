@@ -55,22 +55,17 @@ impl Explorer {
         theme: &Theme,
     ) {
         grid.fill(area, theme.sidebar);
-        let heading = Style {
-            bold: true,
-            ..theme.sidebar
-        };
-        let end = grid.label(area.x + 2, area.y, root_name, heading, area.right());
+        // The folder's name, as every sidebar's title is.
+        let end = crate::palette::sidebar_title(grid, area, root_name, theme);
         if let Some(branch) = branch {
             // Proportional text is narrower than its cells, so measure it.
-            let bold = Font {
-                bold: true,
-                ..Font::default()
-            };
+            let title = crate::palette::title_font();
             let small = Font {
                 size: BRANCH_SIZE,
                 ..Font::default()
             };
-            let x = area.x as f32 + 2.0 + measure.width(root_name, bold) + 1.0;
+            let name = root_name.to_uppercase();
+            let x = area.x as f32 + 2.0 + measure.width(&name, title) + 1.0;
             let chevron = 0.9;
             let wide = measure.width(branch, small) + 1.0 + chevron;
             let hovered = hover.is_some_and(|h| h.1 == area.y && area.contains(h.0, h.1));

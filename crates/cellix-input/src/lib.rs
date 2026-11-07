@@ -84,7 +84,17 @@ pub struct MouseEvent {
     /// `x` with the fraction of a cell, where the terminal reports pixels. Proportional
     /// text needs this: a cell can hold two thin letters.
     pub fine_x: f32,
+    /// `y` with the fraction of a row, the same way. Without pixels it's the row's middle,
+    /// so something painted a little past its row is only hit there on its own row.
+    pub fine_y: f32,
     pub mods: Mods,
+}
+
+impl MouseEvent {
+    /// Where the pointer is, in columns and rows with their fractions.
+    pub fn at(&self) -> (f32, f32) {
+        (self.fine_x, self.fine_y)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

@@ -7,8 +7,11 @@ use crate::measure::Font;
 use crate::paint::{Bounds, Paint, UNIT, units};
 
 /// Heights of a button, in rows.
-const BUTTON_HEIGHT: f32 = 0.9;
-const LARGE_BUTTON_HEIGHT: f32 = 1.22;
+/// Every button is one chip centred inside its row, so none stands past it and what's
+/// painted is what takes a click: about 30 px of a 37 px row, the air the design's 24 of 32
+/// gives its smaller text.
+const BUTTON_HEIGHT: f32 = 0.8;
+const LARGE_BUTTON_HEIGHT: f32 = BUTTON_HEIGHT;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Rgb(pub u8, pub u8, pub u8);
@@ -324,6 +327,7 @@ impl Grid {
         style: Style,
     ) {
         let width = cells.chars().count() as u16;
+        let (left, top, right, bottom) = button_span((height, drop), (x, y), width);
         self.put_str(
             x,
             y,
@@ -334,8 +338,7 @@ impl Grid {
             },
             self.width,
         );
-        let top = y as f32 + drop + (1.0 - height) / 2.0;
-        let bounds = Bounds::cells(x as f32, top, width as f32, height);
+        let bounds = Bounds::cells(left, top, right - left, bottom - top);
         self.panel(bounds, 22, Some(fill), None);
         let middle = x as f32 + width as f32 / 2.0;
         self.centred_text(middle, y as f32 + drop, label, style.fg, 90);
@@ -617,6 +620,21 @@ impl Grid {
             .collect::<Vec<_>>()
             .join("\n")
     }
+}
+
+/// Where a button is painted, as (left, top, right, bottom) in columns and rows.
+fn button_span((height, drop): (f32, f32), (x, y): (u16, u16), width: u16) -> (f32, f32, f32, f32) {
+    let top = y as f32 + drop + (1.0 - height) / 2.0;
+    (x as f32, top, (x + width) as f32, top + height)
+}
+
+/// Whether a click at `at` (columns and rows, with their fractions) lands on the large
+/// button `Grid::large_button` paints at `(x, y)`, `width` cells wide. It takes the whole
+/// of what's painted, which stands a little past its row above and below. A terminal
+/// without pixel reports gives the middle of a cell, so there it's the button's row.
+pub fn on_large_button((x, y): (u16, u16), width: u16, at: (f32, f32)) -> bool {
+    let (left, top, right, bottom) = button_span((LARGE_BUTTON_HEIGHT, 0.0), (x, y), width);
+    at.0 >= left && at.0 < right && at.1 >= top && at.1 < bottom
 }
 
 #[cfg(test)]

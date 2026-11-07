@@ -547,7 +547,7 @@ impl ContextPanel {
             }
             match line {
                 Line::Title => {
-                    grid.label(left, y, "AGENT CONTEXT", quiet, area.right());
+                    crate::palette::sidebar_title(grid, whole, "Agent Context", theme);
                 }
                 Line::Agent => self.draw_agent(grid, (left, right, y), theme),
                 Line::Meter => {

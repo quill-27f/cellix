@@ -4,9 +4,9 @@ use std::path::PathBuf;
 
 use cellix_doc::table::Edit as TableEdit;
 use cellix_input::{Command, Key};
-use cellix_render::{Bounds, Font, Grid, Measure, Rect, Style};
+use cellix_render::{Bounds, Font, Grid, Measure, Paint, Rect, Style, units};
 
-use crate::palette::{keys_of, raised};
+use crate::palette::{keys_of, popup, raised};
 use crate::theme::Theme;
 use crate::toolbar::Tool;
 
@@ -16,6 +16,14 @@ const INSET: f32 = 1.0;
 const GAP: f32 = 3.0;
 const KEYS_SIZE: u8 = 85;
 const MIN_WIDTH: u16 = 16;
+/// Air above the first row and below the last, in rows: 8 px of a 32 px row. Painted
+/// menus only; the cell tier has no fractions of a row.
+const PADDING: f32 = 0.25;
+/// What a rule between groups takes, in rows, so a hover band never meets it.
+const RULE_ROOM: f32 = 0.5;
+/// The hover band inside its row: 26 px of 32 tall, 6 px in from each side.
+const BAND_HEIGHT: f32 = 26.0 / 32.0;
+const BAND_INSET: f32 = 0.375;
 
 /// What a row of a menu does.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -142,6 +150,11 @@ pub struct Menu {
     items: Vec<Item>,
     /// Whether each rule has a blank row of its own, which needs the room.
     spaced: bool,
+    /// Painted: rows sit between the terminal's, padded and parted by half rows, and the
+    /// menu is whole rows around them.
+    fine: bool,
+    /// Rows from the menu's top to its first item's.
+    pad: f32,
     /// The row the keyboard is on.
     pub selected: Option<usize>,
     /// Each row's submenu, placed beside it, and the one open.
@@ -156,8 +169,19 @@ impl Menu {
         let room = screen.h.saturating_sub(2);
         let rules = items.iter().filter(|i| i.rule).count() as u16;
         // The cell tier has no hairline, so a blank row parts its groups instead.
-        let spaced = measure.in_cells() && items.len() as u16 + rules <= room;
-        let height = (items.len() as u16 + if spaced { rules } else { 0 }).min(room);
+        let fine = !measure.in_cells();
+        let spaced = !fine && items.len() as u16 + rules <= room;
+        // Painted, the rows and rules sit inside whole rows of their own, so the menu starts
+        // and ends on a row line.
+        let rows = items.len() as f32 + f32::from(rules) * RULE_ROOM;
+        let height = if fine {
+            ((rows + PADDING * 2.0).ceil() as u16).min(room)
+        } else {
+            (items.len() as u16 + if spaced { rules } else { 0 }).min(room)
+        };
+        // 8 px above the first row whatever the count; rounding to whole rows only adds air
+        // at the bottom.
+        let pad = if fine { PADDING } else { 0.0 };
         let x = x.min(screen.right().saturating_sub(width));
         let bottom = screen.bottom().saturating_sub(1);
         // A menu that won't fit below the pointer opens upward from it.
@@ -172,6 +196,8 @@ impl Menu {
             area: Rect::new(x, y, width, height),
             items,
             spaced,
+            fine,
+            pad,
             selected: None,
             subs: Vec::new(),
             open: None,
@@ -197,8 +223,10 @@ impl Menu {
         } else {
             screen.right().saturating_sub(width)
         };
-        // Its first row level with the row that opened it, as the pointer leaves that row.
-        Some(Menu::new((x, self.row_of(row)), items, measure, screen))
+        // Its first row level with the row that opened it, as the pointer leaves that row:
+        // its top as far above that as its own first row is below its top.
+        let top = (self.top_of(row) - self.pad).floor() as u16;
+        Some(Menu::new((x, top), items, measure, screen))
     }
 
     /// The submenu showing, if any.
@@ -235,8 +263,8 @@ impl Menu {
     }
 
     /// The pointer moved: over a row with a submenu it opens, over another row it closes.
-    pub fn hover(&mut self, x: u16, y: u16) {
-        if let Some(child) = self.child_mut().filter(|c| c.contains(x, y)) {
+    pub fn hover(&mut self, x: u16, y: f32) {
+        if let Some(child) = self.child_mut().filter(|c| c.contains(x, y as u16)) {
             child.hover(x, y);
             return;
         }
@@ -258,8 +286,8 @@ impl Menu {
         }
     }
 
-    /// A click at a point.
-    pub fn click(&mut self, x: u16, y: u16) -> Outcome {
+    /// A click at a point, `y` with its fraction of a row.
+    pub fn click(&mut self, x: u16, y: f32) -> Outcome {
         if let Some(child) = self.child_mut() {
             match child.click(x, y) {
                 Outcome::Outside => {}
@@ -336,18 +364,31 @@ impl Menu {
         ((widest + INSET * 2.0).ceil() as u16 + 1).max(MIN_WIDTH)
     }
 
-    /// The screen row of an item, counting the blank rows of the rules above it.
-    fn row_of(&self, index: usize) -> u16 {
+    /// Where an item's row starts, in rows, counting the room of the rules above it.
+    fn top_of(&self, index: usize) -> f32 {
         let rules = self.items[..=index].iter().filter(|i| i.rule).count();
-        let blank = if self.spaced { rules } else { 0 };
-        self.area.y + (index + blank) as u16
+        if self.fine {
+            f32::from(self.area.y) + self.pad + index as f32 + rules as f32 * RULE_ROOM
+        } else {
+            let blank = if self.spaced { rules } else { 0 };
+            f32::from(self.area.y) + (index + blank) as f32
+        }
     }
 
-    pub fn row_at(&self, x: u16, y: u16) -> Option<usize> {
-        if !self.area.contains(x, y) {
+    /// The item under the pointer, `y` with its fraction of a row.
+    pub fn row_at(&self, x: u16, y: f32) -> Option<usize> {
+        let area = self.area;
+        let inside = x >= area.x
+            && x < area.right()
+            && y >= f32::from(area.y)
+            && y < f32::from(area.bottom());
+        if !inside {
             return None;
         }
-        (0..self.items.len()).find(|i| self.row_of(*i) == y)
+        (0..self.items.len()).find(|i| {
+            let top = self.top_of(*i);
+            y >= top && y < top + 1.0
+        })
     }
 
     #[cfg(test)]
@@ -381,9 +422,15 @@ impl Menu {
         }
     }
 
-    pub fn draw(&self, grid: &mut Grid, hover: Option<(u16, u16)>, theme: &Theme) {
+    /// `hover` is where the pointer is, its row with the fraction.
+    pub fn draw(&self, grid: &mut Grid, hover: Option<(u16, f32)>, theme: &Theme) {
         let area = self.area;
-        raised(grid, area, theme);
+        if self.fine {
+            // On its rows, covering each it touches whole: nothing reaches past its edges.
+            popup(grid, area, theme);
+        } else {
+            raised(grid, area, theme);
+        }
         let base = Style {
             fg: theme.text.fg,
             bg: theme.popup,
@@ -398,20 +445,25 @@ impl Menu {
             ..base
         };
         for (row, item) in self.items.iter().enumerate() {
-            let y = self.row_of(row);
-            if y >= area.bottom() {
+            let top = self.top_of(row);
+            if top + 1.0 > f32::from(area.bottom()) + 0.01 {
                 break;
             }
-            let line = Rect::new(area.x, y, area.w, 1);
             if item.rule {
                 let across = area.w as f32 - INSET * 2.0;
-                let above = if self.spaced { 0.5 } else { 0.0 };
-                let at = y as f32 - above;
-                let rule = Bounds::cells(area.x as f32 + INSET, at, across, 0.0);
+                // In the middle of its own room, painted or a blank row in cells.
+                let above = if self.fine {
+                    RULE_ROOM / 2.0
+                } else if self.spaced {
+                    0.5
+                } else {
+                    0.0
+                };
+                let rule = Bounds::cells(area.x as f32 + INSET, top - above, across, 0.0);
                 grid.hairline(rule, theme.popup_border);
             }
             let usable = item.action.is_some();
-            let hovered = hover.is_some_and(|h| line.contains(h.0, h.1));
+            let hovered = hover.is_some_and(|(x, y)| self.row_at(x, y) == Some(row));
             // The row whose submenu is open stays lit while the pointer is in the submenu.
             let opened = self.open == Some(row);
             if usable && (self.selected == Some(row) || hovered || opened) {
@@ -420,20 +472,38 @@ impl Menu {
                 } else {
                     theme.popup_hover
                 };
-                grid.panel(Bounds::inset(line, 0.35, 0.055), 18, Some(fill), None);
+                let band = Bounds::cells(
+                    area.x as f32 + BAND_INSET,
+                    top + (1.0 - BAND_HEIGHT) / 2.0,
+                    area.w as f32 - BAND_INSET * 2.0,
+                    BAND_HEIGHT,
+                );
+                grid.panel(band, 18, Some(fill), None);
             }
             let style = if usable { base } else { greyed };
             let x = area.x as f32 + INSET;
-            grid.label_at(x, area.x + 1, y, &item.label, style, area.right(), 100);
+            words(
+                grid,
+                (x, top),
+                &item.label,
+                style,
+                (area.right(), 100, false),
+            );
             if let Some(keys) = item.keys {
                 let right = area.right().saturating_sub(1);
                 let shown = if usable { keys_style } else { greyed };
-                grid.label_right(right, y, keys, shown, KEYS_SIZE);
+                words(
+                    grid,
+                    (right as f32, top),
+                    keys,
+                    shown,
+                    (right, KEYS_SIZE, true),
+                );
             }
             if !item.sub.is_empty() {
                 let right = area.right().saturating_sub(1);
                 let shown = if usable { keys_style } else { greyed };
-                grid.label_right(right, y, "›", shown, 100);
+                words(grid, (right as f32, top), "›", shown, (right, 100, true));
             }
         }
         if let Some(child) = self.child() {
@@ -442,10 +512,63 @@ impl Menu {
     }
 }
 
+/// Words on a row that may sit between the terminal's: painted where they belong, and in
+/// cells on the nearest row. `right` is where they stop, or end when `align_right`.
+fn words(
+    grid: &mut Grid,
+    (x, top): (f32, f32),
+    text: &str,
+    style: Style,
+    (right, size, align_right): (u16, u8, bool),
+) {
+    // The row holding most of it; a row starting halfway takes the upper one, whose middle
+    // is still on it, so a click on the cells lands on the row they show.
+    let row = (top + 0.499).floor() as u16;
+    let cells = text.chars().count() as u16;
+    let column = if align_right {
+        right.saturating_sub(cells)
+    } else {
+        x as u16
+    };
+    let shown = Style {
+        painted: true,
+        ..style
+    };
+    grid.put_str(column, row, text, shown, right);
+    if row >= grid.area().bottom() {
+        return;
+    }
+    let width = grid.area().w;
+    grid.paint.push(Paint::Text {
+        x: units(x),
+        y: units(top),
+        max_width: units(if align_right {
+            x
+        } else {
+            f32::from(right.min(width)) - x
+        }),
+        text: text.to_string(),
+        color: style.fg,
+        font: Font {
+            bold: style.bold,
+            size,
+            ..Font::default()
+        },
+        align_right,
+        centred: false,
+        underline: false,
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use cellix_render::CellMeasure;
+
+    /// The middle of a row, where a terminal without pixels puts the pointer.
+    fn on(row: u16) -> f32 {
+        f32::from(row) + 0.5
+    }
 
     const SCREEN: Rect = Rect {
         x: 0,
@@ -491,14 +614,85 @@ mod tests {
         let short = Rect::new(0, 0, 80, 5);
         let menu = Menu::new((1, 1), items(), &CellMeasure, short);
         assert_eq!(menu.area.h, 3);
-        assert_eq!(menu.row_at(2, menu.area.y + 2), Some(2));
+        assert_eq!(menu.row_at(2, on(menu.area.y + 2)), Some(2));
     }
 
+    /// Painted, a menu is whole rows: 8 px of air above and at least that below, half a row
+    /// for each rule, rounded up, so its edges sit on row lines.
     #[test]
-    fn with_paint_groups_part_on_a_hairline_not_a_row() {
+    fn with_paint_a_menu_is_whole_rows_and_a_rule_has_half_a_row() {
         let measure = cellix_render::FontMeasure::new(17, 37);
         let menu = Menu::new((1, 1), items(), &measure, SCREEN);
-        assert_eq!(menu.area.h, items().len() as u16, "no blank rows");
+        // Three rows, half a row for the rule and a quarter above and below.
+        assert_eq!(menu.area.h, 4);
+        assert_eq!(menu.top_of(0), 1.25);
+        assert_eq!(menu.top_of(1), 2.25);
+        assert_eq!(menu.top_of(2), 3.75, "past half a row for the rule");
+        // Each row is hit across all of it, by the fraction of a row the pointer's on.
+        assert_eq!(menu.row_at(2, 1.3), Some(0));
+        assert_eq!(menu.row_at(2, 3.2), Some(1));
+        assert_eq!(menu.row_at(2, 3.5), None, "the rule's own room");
+        assert_eq!(menu.row_at(2, 3.8), Some(2));
+        assert_eq!(menu.row_at(2, 1.1), None, "the padding");
+        // Its frame is its rows: nothing painted reaches past them.
+        let mut grid = Grid::new(SCREEN.w, SCREEN.h, Style::default());
+        menu.draw(&mut grid, Some((2, 3.8)), &Theme::default());
+        let (top, bottom) = (
+            i32::from(menu.area.y) * 64,
+            i32::from(menu.area.bottom()) * 64,
+        );
+        for paint in &grid.paint {
+            if let Paint::Panel { bounds, .. } = paint {
+                assert!(
+                    bounds.y >= top && bounds.y + bounds.h <= bottom,
+                    "{bounds:?}"
+                );
+            }
+        }
+        // The hover band stands clear of the rule above it.
+        let band = grid.paint.iter().find_map(|p| match p {
+            Paint::Panel {
+                bounds,
+                shadow: false,
+                ..
+            } => Some(*bounds),
+            _ => None,
+        });
+        let band = band.expect("Paste is lit");
+        let rule = grid.paint.iter().find_map(|p| match p {
+            Paint::Hairline { bounds, .. } => Some(bounds.y),
+            _ => None,
+        });
+        assert!(band.y > rule.expect("a rule"), "{band:?}");
+    }
+
+    /// Whatever the padding, the cells an item is shown in are on it: a click in their
+    /// middle chooses that item.
+    #[test]
+    fn a_painted_rows_cells_are_on_it() {
+        let measure = cellix_render::FontMeasure::new(17, 37);
+        for count in 1..6 {
+            let list: Vec<Item> = (0..count)
+                .map(|i| {
+                    let item = Item::run("Cut", Command::Cut);
+                    if i == 2 { item.after_rule() } else { item }
+                })
+                .collect();
+            let menu = Menu::new((1, 1), list, &measure, SCREEN);
+            let mut grid = Grid::new(SCREEN.w, SCREEN.h, Style::default());
+            menu.draw(&mut grid, None, &Theme::default());
+            let rows: Vec<u16> = (0..SCREEN.h)
+                .filter(|y| grid.row_text(*y).contains("Cut"))
+                .collect();
+            assert_eq!(rows.len(), count, "{rows:?}");
+            for (index, row) in rows.into_iter().enumerate() {
+                assert_eq!(
+                    menu.row_at(2, on(row)),
+                    Some(index),
+                    "{count} items, row {row}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -506,9 +700,13 @@ mod tests {
         let menu = Menu::new((1, 1), items(), &CellMeasure, SCREEN);
         assert_eq!(menu.action(1), None);
         assert_eq!(menu.action(0), Some(&Action::Run(Command::Cut)));
-        assert_eq!(menu.row_at(2, 2), Some(1));
-        assert_eq!(menu.row_at(2, 3), None, "the rule has this row to itself");
-        assert_eq!(menu.row_at(2, 4), Some(2));
-        assert_eq!(menu.row_at(2, 9), None);
+        assert_eq!(menu.row_at(2, on(2)), Some(1));
+        assert_eq!(
+            menu.row_at(2, on(3)),
+            None,
+            "the rule has this row to itself"
+        );
+        assert_eq!(menu.row_at(2, on(4)), Some(2));
+        assert_eq!(menu.row_at(2, on(9)), None);
     }
 }

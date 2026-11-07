@@ -254,6 +254,11 @@ def shoot(name, steps, *args, size="120x40", background="1e1e2e", cwd=None, env=
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump(script, f)
     extra = env or {}
+    # Each scene gets a cache of its own, so tabs, carets and staged files one scene leaves
+    # aren't restored into the next. Sessions need a host, whose socket needs a short path.
+    own_cache = None if "XDG_CACHE_HOME" in extra else tempfile.mkdtemp(prefix="cx", dir="/tmp")
+    if own_cache:
+        extra = {**extra, "XDG_CACHE_HOME": own_cache}
     env = {
         **os.environ,
         "HOME": HOME,
@@ -266,6 +271,9 @@ def shoot(name, steps, *args, size="120x40", background="1e1e2e", cwd=None, env=
     command = ["python3", "-I", f"{here}/term.py", f.name, binary, *args]
     subprocess.run(command, cwd=cwd or ROOT, env=env, timeout=timeout, stdout=subprocess.DEVNULL)
     os.unlink(f.name)
+    if own_cache:
+        subprocess.run(["pkill", "-9", "-f", own_cache])
+        shutil.rmtree(own_cache, ignore_errors=True)
     print(name, flush=True)
 
 
@@ -633,10 +641,10 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("04-menu-page", [["right", 60, 12]], PAGE_FILE)
     shoot("05-menu-code", [["right", 60, 12]], CODE_FILE)
     shoot("06-menu-explorer", [["right", 12, 2]])
-    shoot("07-menu-tab", [["right", 36, 0]], CODE_FILE)
+    shoot("07-menu-tab", [["wait", 1.0], ["right", 36, 0], ["wait", 0.3]], CODE_FILE)
     shoot("08-open-file", [["keys", CTRL("p")]], CODE_FILE)
     shoot("09-commands", [["keys", "\\eOP"], ["keys", "op"]], CODE_FILE)
-    shoot("10-branches", [["click", 3, 39]], CODE_FILE)
+    shoot("10-branches", [["wait", 1.5], ["click", 3, 38], ["wait", 0.5]], CODE_FILE)
     shoot("11-find", [["keys", CTRL("f")], ["keys", "item"]], CODE_FILE)
     shoot("12-search", [["click", RAIL_X, SEARCH]], CODE_FILE)
     replacing = [["keys", CTRL("r")], ["keys", "item"], ["keys", "\t"], ["keys", "entry"]]
@@ -649,8 +657,8 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("13-quit-beside-pane", [["wait", 6], ["click", 111, 0], ["wait", 3.5], ["move", 116, 0], ["wait", 1.2]], CODE_FILE)
     git_tab = [["click", RAIL_X, REVIEW], ["wait", 0.8]]
     shoot("13-source-hover", [*git_tab, ["move", 14, 11], ["wait", 0.3]], CODE_FILE)
-    shoot("13-source-staged", [*git_tab, ["click", 28, 11], ["wait", 0.8], ["move", 14, 11]], CODE_FILE)
     shoot("13-source-diff", [*git_tab, ["click", 14, 11], ["wait", 1.2]], CODE_FILE)
+    shoot("13-source-staged", [*git_tab, ["click", 28, 11], ["wait", 0.8], ["move", 14, 11]], CODE_FILE)
     shoot("13-stacked-pane", [*LIST_AGENTS, ["wait", 0.6]], CODE_FILE, size="72x44")
     shoot("13-source-control", [["click", RAIL_X, REVIEW], ["wait", 0.8]], CODE_FILE)
     shoot("13-source-message", [["click", RAIL_X, REVIEW], ["wait", 0.8], ["click", 14, 3],
@@ -700,10 +708,10 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("27-hover-rail", [["move", RAIL_X, REVIEW]], CODE_FILE)
     shoot("28-hover-tree", [["move", 12, 3]], CODE_FILE)
     shoot("29-hover-tab", [["move", 38, 0]], CODE_FILE)
-    shoot("30-hover-menu", [["right", 60, 12], ["move", 64, 19]], CODE_FILE)
+    shoot("30-hover-menu", [["right", 60, 12], ["move", 64, 13]], CODE_FILE)
     shoot("31-hover-palette", [["keys", CTRL("p")], ["move", 60, 7]], CODE_FILE)
     shoot("32-hover-toolbar", [["move", 100, 1]], PAGE_FILE)
-    shoot("33-hover-branch", [["move", 3, 39]], CODE_FILE)
+    shoot("33-hover-branch", [["move", 3, 38]], CODE_FILE)
     shoot("34-hover-header", [["move", 18, 0]], CODE_FILE)
     shoot("35-hover-review", [["keys", "\u0007"], ["wait", 0.6], ["move", 12, 2]], CODE_FILE)
     shoot("36-hover-accept", [["keys", "\u0007"], ["wait", 0.6], ["move", 114, 1]], CODE_FILE)
@@ -712,7 +720,7 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("39-hover-agents", [*LIST_AGENTS, ["wait", 0.5], ["move", 90, 12]], CODE_FILE)
     shoot("41-hover-tab-close", [["move", 42, 0]], CODE_FILE)
     shoot("42-hover-install", [*settings, ["click", 45, 4], ["move", 113, 16]], CODE_FILE)
-    shoot("43-light-hover-menu", [["right", 60, 12], ["move", 64, 19]], CODE_FILE, background="eff1f5")
+    shoot("43-light-hover-menu", [["right", 60, 12], ["move", 64, 13]], CODE_FILE, background="eff1f5")
     shoot("40-hover-find", [["keys", CTRL("f")], ["keys", "item"], ["move", 112, 3]], CODE_FILE)
 
     FORMULA, TABLE = (77, 1), (80, 1)

@@ -281,11 +281,22 @@ its background with OSC 11 and takes the matching theme, staying dark if nothing
 
 ## Look
 
-The interface follows VS Code's layout and its Dark+ and Light+ colours, because that is
-what the target users already read fluently: activity bar, explorer, tabs, breadcrumbs,
-blue status bar, current-line highlight, indent guides. It's all drawn to the grid, so it
-holds on the cell tier. Activity icons span several cells: shapes on the pixel tier and
-block art on cells, because a font glyph is too small beside a real IDE.
+The interface follows VS Code's layout, because that is what the target users already read
+fluently: activity bar, explorer, tabs, breadcrumbs, current-line highlight, indent guides. The
+dark theme has deep blue-grey tones of its own; the light one is Catppuccin Latte, with the editor on
+base, the sidebars on mantle, the frame on crust, menus white and Latte's own colours for code.
+It's all drawn to the grid, so it holds on the cell tier. Activity icons span several cells:
+shapes on the pixel tier and block art on cells, because a font glyph is too small beside a
+real IDE.
+
+One set of parts, everywhere. A button is one chip, four fifths of its row and inside it: the
+primary one filled with the accent, the rest a quiet fill, and each takes a click anywhere it's
+painted, from one rectangle the painter and the hit test share. Every sidebar is one width,
+Review's list too, with the same title row: its name in small quiet capitals, two columns in.
+A tab, in the editor or the pane, is a chip inside its row. Overlays sit on row lines: a menu
+is whole rows, padded 8 px above and below, with half a row for each rule and its hover band
+clear of them, and it drops from the bottom edge of what opened it; a tooltip is one row, on
+the row under its icon. Nothing covers part of a row.
 
 Git has two places. Source Control in the sidebar decides what goes in: a message, staged and
 unstaged files, Commit, and Push or Pull, as in VS Code. Review reads what changed, hunk by hunk,
@@ -590,7 +601,8 @@ the file.
 - The icons at the top right, as in a desktop app, reach the comments, a terminal, Review, the
   browser and the agents. Past them, in the corner, a close button quits Cellix as Ctrl+Q
   does. It's drawn as the icons are, grey with the same hover chip, and a thin line sets it
-  apart from the pane's own ×. The
+  apart from the pane's own control, which hides the pane and is drawn as a window with its
+  right part filled, so the only × in the corner quits. The
   explorer lists gitignored files, as VS Code does, since agents work in them, but dims them,
   and what's dimmed is exactly what Quick Open and search leave out. The pane stands under the file when the window is too narrow to have
   them side by side. The Agents icon opens the side pane. With nothing running, it lists what's running elsewhere,

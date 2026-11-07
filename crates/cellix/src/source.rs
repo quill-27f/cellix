@@ -460,7 +460,7 @@ impl Source {
             let hovered = hover.is_some_and(|h| whole.contains(h.0, h.1));
             match line {
                 Line::Title => {
-                    grid.label(left, y, "SOURCE CONTROL", quiet, right);
+                    crate::palette::sidebar_title(grid, whole, "Source Control", theme);
                     let more = right.saturating_sub(MORE_FROM_RIGHT);
                     if let Some(branch) = branch {
                         grid.label_right(more.saturating_sub(1), y, branch, quiet, 90);
@@ -476,13 +476,13 @@ impl Source {
                 Line::Underway => self.draw_underway(grid, area, y, hover, (measure, theme)),
                 Line::StashHeading(count) => {
                     fold_mark(grid, (left, y), self.stashes_folded, quiet);
-                    grid.label(left, y, "STASHES", quiet, right);
+                    grid.label_at(f32::from(left), left, y, "STASHES", quiet, right, 80);
                     let number = count.to_string();
-                    grid.label_right(right.saturating_sub(SIDE), y, &number, quiet, 100);
+                    grid.label_right(right.saturating_sub(SIDE), y, &number, quiet, 85);
                 }
                 Line::GraphHeading => {
                     fold_mark(grid, (left, y), self.graph_folded, quiet);
-                    grid.label(left, y, "GRAPH", quiet, right);
+                    grid.label_at(f32::from(left), left, y, "GRAPH", quiet, right, 80);
                 }
                 Line::Commit(index) => {
                     let open = self.graph.is_open(*index);
@@ -547,7 +547,9 @@ impl Source {
                 }
                 Line::Message(0) => self.draw_message(grid, area, y, measure, theme),
                 Line::Message(_) | Line::Gap => {}
-                Line::Buttons => self.draw_buttons(grid, area, y, hover, theme),
+                Line::Buttons => {
+                    self.draw_buttons(grid, (area, y), hover, measure.in_cells(), theme);
+                }
                 Line::Clean => {
                     grid.label(left, y, "No changes", quiet, right);
                 }
@@ -557,9 +559,10 @@ impl Source {
                         Group::Staged => "STAGED CHANGES",
                         Group::Changes => "CHANGES",
                     };
-                    grid.label(left, y, name, quiet, right);
+                    // A section's name small and quiet, as Review's and the agents' are.
+                    grid.label_at(f32::from(left), left, y, name, quiet, right, 80);
                     let number = count.to_string();
-                    grid.label_right(right.saturating_sub(SIDE), y, &number, quiet, 100);
+                    grid.label_right(right.saturating_sub(SIDE), y, &number, quiet, 85);
                     if hovered && *group != Group::Merge {
                         let mark = if *group == Group::Staged { "−" } else { "+" };
                         let x = right.saturating_sub(STAGE_FROM_RIGHT);
@@ -638,14 +641,17 @@ impl Source {
         }
     }
 
+    /// Commit and Push or Pull. Painted, each is a chip inside its row on the sidebar's
+    /// ground; in cells, the fill is all that shows a button.
     fn draw_buttons(
         &self,
         grid: &mut Grid,
-        area: Rect,
-        y: u16,
+        (area, y): (Rect, u16),
         hover: Option<(u16, u16)>,
+        in_cells: bool,
         theme: &Theme,
     ) {
+        let ground = |fill| if in_cells { fill } else { theme.sidebar.bg };
         let (commit, sync) = self.buttons(area, y);
         let ready = !self.entries.is_empty();
         let fill = if ready {
@@ -659,7 +665,7 @@ impl Source {
             } else {
                 theme.gutter.fg
             },
-            bg: fill,
+            bg: ground(fill),
             ..theme.sidebar
         };
         let name = self.commit_label();
@@ -673,7 +679,7 @@ impl Source {
                 theme.quiet_button(theme.sidebar.bg)
             };
             let label = Style {
-                bg: fill,
+                bg: ground(fill),
                 ..theme.sidebar
             };
             let cells = format!("{name:^0$}", button.w as usize);

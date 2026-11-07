@@ -141,7 +141,8 @@ impl Timeline {
         grid.label(area.x, area.y, mark, quiet, left);
         let heading = format!("TIMELINE · {name}");
         let heading = crate::source::clip(&heading, (right - left) as f32, measure);
-        grid.label(left, area.y, &heading, quiet, right);
+        // A section's name small and quiet, as Source Control's are.
+        grid.label_at(f32::from(left), left, area.y, &heading, quiet, right, 80);
         if self.folded {
             return;
         }

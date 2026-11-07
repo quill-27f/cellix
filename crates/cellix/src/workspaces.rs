@@ -769,7 +769,8 @@ impl Workspaces {
             };
             let wide = self.measure().width(NEW_WORKSPACE_TIP, font) + 2.0;
             let left = start.min(f32::from(self.size.0) - wide - 1.0).max(0.0);
-            let top = f32::from(y) - 1.25;
+            // The whole row above the bar: a tip covers rows whole, never part of one.
+            let top = f32::from(y) - 1.0;
             let bounds = Bounds::cells(left, top, wide, 1.0);
             grid.popup(bounds, CHIP_RADIUS, theme.popup, theme.popup_border);
             let colour = (theme.popup_dim, false);
@@ -1109,6 +1110,7 @@ mod tests {
             x,
             y,
             fine_x: f32::from(x),
+            fine_y: f32::from(y) + 0.5,
             mods: Mods::default(),
         }));
     }
@@ -1374,6 +1376,7 @@ mod tests {
             x,
             y: asking,
             fine_x: f32::from(x),
+            fine_y: f32::from(asking) + 0.5,
             mods: cellix_input::Mods::default(),
         }));
         assert!(screen(&spaces).row_text(asking).contains("Show Prompt"));

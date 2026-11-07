@@ -20,7 +20,7 @@ use cellix_lang::complete::{self, Candidate, Source};
 use cellix_lang::lsp::{Client, Diagnostic, LspEvent, Signature, Symbol, TextEdit};
 use cellix_render::{
     ALL_CORNERS, Bounds, CellMeasure, Font, Grid, Icon, Measure, Paint, Rect, Rgb, Style, TOP_LEFT,
-    TOP_RIGHT,
+    TOP_RIGHT, on_large_button,
 };
 use cellix_review::{
     About, Comment, Reply, Thread, YOU, append_comments, blame_line, branches, changed_files,
@@ -183,7 +183,8 @@ const CARD_RADIUS: u8 = 26;
 /// Columns at the end of the pane's title that close it.
 const PANE_CLOSE_REACH: u16 = 3;
 /// A tooltip's height in rows, and the size of its text.
-const TOOLTIP_HEIGHT: f32 = 1.22;
+/// A tooltip is one row, on a row of its own, so it never covers part of one.
+const TOOLTIP_HEIGHT: f32 = 1.0;
 const TOOLTIP_SIZE: u8 = 92;
 /// What each button is called, in order, since they're only icons and marks.
 const FIND_NAMES: [&str; 6] = [
@@ -983,6 +984,8 @@ pub struct App {
     pub inbox_shared: Option<Vec<Listed>>,
     /// Where the pointer is, for hover highlights.
     hover: Option<(u16, u16)>,
+    /// The same, with the fractions of a cell, for what's painted past its cells.
+    pointer: (f32, f32),
     /// The side pane or the editor taking the window.
     maximized: Option<Maximized>,
     /// A tab pressed, and perhaps being dragged.
@@ -1261,6 +1264,7 @@ impl App {
             inbox: Inbox::default(),
             inbox_shared: None,
             hover: None,
+            pointer: (0.0, 0.0),
             last_click: None,
             last_toggle: None,
             preview_press: None,
@@ -3242,10 +3246,13 @@ impl App {
         // Review uses the explorer's width: side-by-side code needs it more. Source Control
         // stays, since it's what the diff was opened from.
         let beside = self.review.is_none() || self.sidebar_view == SidebarView::Source;
-        (self.show_sidebar && beside).then(|| {
-            let width = (self.size.0 / 4).clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_WIDTH);
-            Rect::new(activity.right(), 0, width, activity.h)
-        })
+        (self.show_sidebar && beside)
+            .then(|| Rect::new(activity.right(), 0, self.sidebar_width(), activity.h))
+    }
+
+    /// Every sidebar's width, Review's list's too: a quarter of the window, within bounds.
+    fn sidebar_width(&self) -> u16 {
+        (self.size.0 / 4).clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_WIDTH)
     }
 
     /// Where the main area starts.
@@ -5217,9 +5224,7 @@ impl App {
         for (i, (cells, x)) in self.confirm_buttons(confirm).iter().enumerate() {
             let on = i == confirm.selected;
             let width = cells.chars().count() as u16;
-            let hovered = self
-                .hover
-                .is_some_and(|h| h.1 == y && h.0 >= *x && h.0 < x + width);
+            let hovered = self.over_button((*x, y), width);
             let fill = match (on, hovered) {
                 (true, _) => theme.button,
                 (false, true) => theme.popup_hover,
@@ -7201,9 +7206,7 @@ impl App {
             // The first is the answer, filled, unless this row only carries on another.
             let first = i == 0 && filled;
             let width = cells.chars().count() as u16;
-            let hovered = self
-                .hover
-                .is_some_and(|h| h.1 == y && h.0 >= *x && h.0 < x + width);
+            let hovered = self.over_button((*x, y), width);
             let fill = match (first, hovered) {
                 (true, _) => theme.button,
                 (false, true) => theme.popup_hover,
@@ -7286,21 +7289,18 @@ impl App {
     }
 
     /// A press on the logout card. Returns whether the card took it.
-    fn click_linger(&mut self, x: u16, y: u16) -> bool {
+    fn click_linger(&mut self, mouse: MouseEvent) -> bool {
         if !self.offering_linger() {
             return false;
         }
         let area = self.linger_area();
-        if !area.contains(x, y) {
+        if !area.contains(mouse.x, mouse.y) {
             return false;
         }
-        if y != self.linger_button_row() {
-            return true;
-        }
-        let hit = self
-            .linger_buttons()
-            .into_iter()
-            .position(|(cells, at)| x >= at && x < at + cells.chars().count() as u16);
+        let row = self.linger_button_row();
+        let hit = self.linger_buttons().into_iter().position(|(cells, x)| {
+            on_large_button((x, row), cells.chars().count() as u16, mouse.at())
+        });
         let user = user_name();
         match hit.map(|index| LINGER_BUTTONS[index]) {
             Some("Turn On") => {
@@ -7471,14 +7471,20 @@ impl App {
     }
 
     /// The choice under a click on the card, if any.
-    fn stopped_hit(&self, x: u16, y: u16) -> Option<Revive> {
+    fn stopped_hit(&self, at: (f32, f32)) -> Option<Revive> {
         let card = self.stopped_card()?;
         let (_, _, buttons) = self.stopped_offer()?;
         let placed = self.stopped_buttons(card, &buttons);
-        placed.into_iter().find_map(|(cells, at, row, choice)| {
+        placed.into_iter().find_map(|(cells, x, row, choice)| {
             let width = cells.chars().count() as u16;
-            (y == row && x >= at && x < at + width).then_some(choice)
+            on_large_button((x, row), width, at).then_some(choice)
         })
+    }
+
+    /// Whether the pointer is over a large button painted at `(x, y)`, `width` cells wide:
+    /// anywhere it's painted, as a click there would take it.
+    fn over_button(&self, (x, y): (u16, u16), width: u16) -> bool {
+        self.hover.is_some() && on_large_button((x, y), width, self.pointer)
     }
 
     fn draw_stopped(&self, grid: &mut Grid) {
@@ -7965,7 +7971,7 @@ impl App {
             return true;
         }
         if mouse.kind == MouseKind::Left
-            && let Some(choice) = self.stopped_hit(x, y)
+            && let Some(choice) = self.stopped_hit(mouse.at())
         {
             self.revive(choice);
             return true;
@@ -8497,6 +8503,7 @@ impl App {
     fn new_review(&self, root: PathBuf) -> Review {
         let mut review = Review::new(root, self.registry.clone());
         review.tests.clone_from(&self.tests);
+        review.list_width.set(self.sidebar_width() - 1);
         review
     }
 
@@ -10537,6 +10544,7 @@ impl App {
                     x,
                     y,
                     fine_x: f32::from(x),
+                    fine_y: f32::from(y) + 0.5,
                     ..mouse
                 }
             }
@@ -10544,8 +10552,9 @@ impl App {
         };
         if mouse.kind == MouseKind::Move {
             self.hover = Some((mouse.x, mouse.y));
+            self.pointer = mouse.at();
             if let Overlay::Menu(menu) = &mut self.overlay {
-                menu.hover(mouse.x, mouse.y);
+                menu.hover(mouse.x, mouse.fine_y);
             }
             let in_pane = self
                 .dock_screen()
@@ -10569,7 +10578,7 @@ impl App {
         if mouse.kind == MouseKind::Left && self.click_companion(mouse.x, mouse.y) {
             return;
         }
-        if mouse.kind == MouseKind::Left && self.click_linger(mouse.x, mouse.y) {
+        if mouse.kind == MouseKind::Left && self.click_linger(mouse) {
             return;
         }
         if mouse.kind == MouseKind::Left && self.click_offer(mouse.x, mouse.y) {
@@ -10922,7 +10931,7 @@ impl App {
             }
             Overlay::Menu(mut menu) => {
                 // A greyed row stays open, so a slip doesn't dismiss the menu.
-                match menu.click(mouse.x, mouse.y) {
+                match menu.click(mouse.x, mouse.fine_y) {
                     MenuOutcome::Chose(action) => self.menu_action(action),
                     MenuOutcome::Stay => self.overlay = Overlay::Menu(menu),
                     MenuOutcome::Outside => {}
@@ -10945,7 +10954,7 @@ impl App {
                 let width = |cells: &String| cells.chars().count() as u16;
                 let on = spots
                     .iter()
-                    .position(|(c, x)| mouse.y == y && mouse.x >= *x && mouse.x < x + width(c));
+                    .position(|(c, x)| on_large_button((*x, y), width(c), mouse.at()));
                 match on {
                     Some(index) => self.choose(confirm.buttons[index].1.clone()),
                     None => self.overlay = Overlay::Confirm(confirm),
@@ -10992,11 +11001,12 @@ impl App {
             .visible_tabs()
             .into_iter()
             .find(|(_, at, width)| x >= *at && x < at + width);
-        let Some((index, ..)) = tab else {
+        let Some((index, left, _)) = tab else {
             return;
         };
-        // Below the breadcrumbs, so its edge runs through neither them nor the title.
-        let y = y + 3;
+        // Dropped from the tab's bottom edge, left-aligned to it. Its edges are row lines,
+        // so the breadcrumbs it covers are covered whole.
+        let (x, y) = (left, y + 1);
         let path = self.editors[index].buffer.path().map(Path::to_path_buf);
         let others = self.editors.len() > 1;
         let on_file = |action: fn(PathBuf) -> MenuAction| {
@@ -12038,6 +12048,8 @@ impl App {
         if let Some(review) = &self.review {
             let comments = self.comments.lock().map(|c| c.clone()).unwrap_or_default();
             review.title_room.set(self.actions_over_main());
+            // The list and the column after it make one sidebar's width.
+            review.list_width.set(self.sidebar_width() - 1);
             review.draw(grid, self.main_area(), self.hover, theme, &comments);
             self.draw_status(grid);
             self.draw_pane_actions(grid);
@@ -12193,7 +12205,7 @@ impl App {
                     y == a.y && x + PANE_CLOSE_REACH >= a.right() && x < a.right()
                 }) =>
             {
-                let name = "Close pane. What runs here keeps running.";
+                let name = "Hide pane. What runs here keeps running.";
                 Some((name, self.size.0 as f32 - wide(name) - 0.5, 1.2))
             }
             Overlay::None if rail.w > 0 && rail.contains(x, y) => {
@@ -12223,6 +12235,8 @@ impl App {
         let Some((name, left, top)) = spot else {
             return;
         };
+        // On the row nearest where it was asked for: the one under its icon.
+        let top = top.round();
         let theme = &self.theme;
         let bounds = Bounds::cells(left, top, wide(name), TOOLTIP_HEIGHT);
         grid.popup(bounds, 24, theme.popup, theme.popup_border);
@@ -12632,7 +12646,10 @@ impl App {
         }
         match &self.overlay {
             Overlay::Palette(palette) => palette.draw(grid, self.hover, &*self.measure, theme),
-            Overlay::Menu(menu) => menu.draw(grid, self.hover, theme),
+            Overlay::Menu(menu) => {
+                let hover = self.hover.map(|(x, _)| (x, self.pointer.1));
+                menu.draw(grid, hover, theme);
+            }
             Overlay::Prompt(prompt) => self.draw_prompt(grid, prompt),
             Overlay::Find(find) => self.draw_find(grid, find),
             Overlay::Confirm(confirm) => self.draw_confirm(grid, confirm),
@@ -14831,6 +14848,7 @@ mod tests {
             x,
             y,
             fine_x: x as f32,
+            fine_y: y as f32 + 0.5,
             mods: Mods::default(),
         })
     }
@@ -15550,6 +15568,7 @@ mod tests {
             x: find(&screen(&app), "step one").0,
             y: find(&screen(&app), "step one").1,
             fine_x: find(&screen(&app), "step one").0 as f32,
+            fine_y: find(&screen(&app), "step one").1 as f32 + 0.5,
             mods: Mods::default(),
         }));
         let (x, y) = find(&screen(&app), "Add Comment");
@@ -16402,6 +16421,7 @@ mod tests {
             x: x + 1,
             y,
             fine_x: (x + 1) as f32,
+            fine_y: y as f32 + 0.5,
             mods: Mods {
                 ctrl: true,
                 ..Mods::default()
@@ -16839,6 +16859,187 @@ mod tests {
             "the card goes: {text}"
         );
         assert!(text.contains("Lingering is on"), "{text}");
+    }
+
+    /// What's painted for the button labelled `label`, as (left, top, right, bottom) in
+    /// columns and rows: the smallest rounded panel under its words. Taken from the paint,
+    /// not the layout, so a hit test can't agree with the painter by sharing its mistake.
+    fn painted_button(app: &App, label: &str) -> (f32, f32, f32, f32) {
+        let grid = screen(app);
+        let unit = cellix_render::UNIT as f32;
+        let (x, y) = grid
+            .paint
+            .iter()
+            .find_map(|p| match p {
+                Paint::Text { x, y, text, .. } if text == label => Some((*x, *y)),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no {label} painted"));
+        let (x, y) = (x as f32 / unit, y as f32 / unit + 0.5);
+        let area = |b: &(f32, f32, f32, f32)| (b.2 - b.0) * (b.3 - b.1);
+        grid.paint
+            .iter()
+            .filter_map(|p| match p {
+                Paint::Panel {
+                    bounds,
+                    fill: Some(_),
+                    radius: 22,
+                    ..
+                } => Some((
+                    bounds.x as f32 / unit,
+                    bounds.y as f32 / unit,
+                    (bounds.x + bounds.w) as f32 / unit,
+                    (bounds.y + bounds.h) as f32 / unit,
+                )),
+                _ => None,
+            })
+            .filter(|b| b.0 <= x && x <= b.2 && b.1 <= y && y <= b.3)
+            .min_by(|a, b| area(a).total_cmp(&area(b)))
+            .unwrap_or_else(|| panic!("no button under {label}"))
+    }
+
+    /// A sliver inside each painted edge: top, bottom, left and right.
+    fn button_edges((left, top, right, bottom): (f32, f32, f32, f32)) -> [(f32, f32); 4] {
+        let (middle_x, middle_y) = ((left + right) / 2.0, (top + bottom) / 2.0);
+        let sliver = 0.03;
+        [
+            (middle_x, top + sliver),
+            (middle_x, bottom - sliver),
+            (left + sliver, middle_y),
+            (right - sliver, middle_y),
+        ]
+    }
+
+    /// A press and release where a terminal reporting pixels would put them.
+    fn click_fine(app: &mut App, (x, y): (f32, f32)) {
+        for kind in [MouseKind::Left, MouseKind::Up] {
+            app.handle(Event::Mouse(MouseEvent {
+                kind,
+                x: x as u16,
+                y: y as u16,
+                fine_x: x,
+                fine_y: y,
+                mods: Mods::default(),
+            }));
+        }
+    }
+
+    /// The user found Cancel in "Stop what's running?" missed clicks near its edges: a
+    /// large button stood a little past its row, and only its row took a click. Every
+    /// dialog and card button now takes one anywhere it's painted, and is one chip inside
+    /// its row.
+    /// Unix only: the stopped card needs sessions that outlive Cellix.
+    #[test]
+    #[cfg(unix)]
+    fn every_dialog_button_takes_a_click_anywhere_it_is_painted() {
+        let (dir, mut app) = project();
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        session(&mut app, "echo ready; sleep 30");
+        // A chip inside its row: from its top edge to its bottom, one row.
+        let in_its_row = |(_, top, _, bottom): (f32, f32, f32, f32)| {
+            top >= top.floor() && bottom <= top.floor() + 1.0
+        };
+
+        // "Stop what's running?": each button at each edge.
+        for label in ["Cancel", "Keep Running", "Stop and Quit"] {
+            for edge in 0..4 {
+                if app.dock.busy().is_empty() {
+                    session(&mut app, "echo ready; sleep 30");
+                }
+                app.quit = false;
+                app.keep_running = false;
+                app.stop_confirmed = false;
+                app.run(Command::Quit);
+                let Overlay::Confirm(confirm) = &app.overlay else {
+                    panic!("no dialog for {label}");
+                };
+                // Keep Running is there only for what can outlive Cellix.
+                if !confirm.buttons.iter().any(|(name, _)| *name == label) {
+                    assert_eq!(label, "Keep Running");
+                    app.overlay = Overlay::None;
+                    continue;
+                }
+                let painted = painted_button(&app, label);
+                let at = button_edges(painted)[edge];
+                assert!(in_its_row(painted), "{painted:?}");
+                click_fine(&mut app, at);
+                assert!(
+                    matches!(app.overlay, Overlay::None),
+                    "{label} missed at {at:?}, painted {painted:?}"
+                );
+                assert_eq!(app.quit, label != "Cancel", "{label} at {at:?}");
+            }
+        }
+        // Just past the painted edge it's still a miss, and the dialog stays.
+        app.quit = false;
+        app.keep_running = false;
+        app.stop_confirmed = false;
+        if app.dock.busy().is_empty() {
+            session(&mut app, "echo ready; sleep 30");
+        }
+        app.run(Command::Quit);
+        let (left, top, right, _) = painted_button(&app, "Cancel");
+        click_fine(&mut app, ((left + right) / 2.0, top - 0.05));
+        assert!(matches!(app.overlay, Overlay::Confirm(_)), "a miss above");
+        app.overlay = Overlay::None;
+
+        // The logout card.
+        app.linger_command = vec!["true".to_string()];
+        for label in ["Turn On", "Copy Command", "Not Now"] {
+            for edge in 0..4 {
+                app.linger = Linger::Offered;
+                app.outgoing_clipboard = None;
+                let painted = painted_button(&app, label);
+                let at = button_edges(painted)[edge];
+                assert!(in_its_row(painted), "{painted:?}");
+                click_fine(&mut app, at);
+                let took = match label {
+                    "Copy Command" => app.outgoing_clipboard.is_some(),
+                    _ => matches!(app.linger, Linger::Settled),
+                };
+                assert!(took, "{label} missed at {at:?}, painted {painted:?}");
+            }
+        }
+        app.linger = Linger::Settled;
+
+        // The card over an agent that stopped with the machine.
+        for edge in 0..4 {
+            left_stopped(
+                dir.path(),
+                "Codex",
+                "Added the refund route\r\n",
+                Some("abc-123"),
+            );
+            app.rejoin_sessions();
+            assert_eq!(app.stopped_count(), 1);
+            let painted = painted_button(&app, "Close");
+            let at = button_edges(painted)[edge];
+            assert!(in_its_row(painted), "{painted:?}");
+            click_fine(&mut app, at);
+            assert_eq!(
+                app.stopped_count(),
+                0,
+                "Close missed at {at:?}, painted {painted:?}"
+            );
+        }
+        let _ = fs::remove_dir_all(crate::hold::folder_of(dir.path()));
+    }
+
+    /// Where the terminal reports cells, a button is its row: the row above it misses.
+    #[test]
+    fn in_cells_a_dialog_button_is_its_row() {
+        let (_dir, mut app) = project();
+        session(&mut app, "echo ready; sleep 30");
+        app.run(Command::Quit);
+        let (x, y) = find(&screen(&app), "[Cancel]");
+        app.handle(mouse(MouseKind::Left, x + 1, y - 1));
+        assert!(
+            matches!(app.overlay, Overlay::Confirm(_)),
+            "the row above misses"
+        );
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        assert!(matches!(app.overlay, Overlay::None), "its row takes it");
+        assert!(!app.quit);
     }
 
     #[test]
@@ -17867,6 +18068,7 @@ mod tests {
             x: u16::MAX,
             y: u16::MAX,
             fine_x: 0.0,
+            fine_y: 0.0,
             mods: Mods::default(),
         });
         app.handle(mouse(MouseKind::Move, x, y));
@@ -20772,6 +20974,7 @@ mod tests {
                 x,
                 y,
                 fine_x: f32::from(x),
+                fine_y: f32::from(y) + 0.5,
                 mods: Mods {
                     shift: true,
                     ..Mods::default()
@@ -21886,13 +22089,21 @@ mod tests {
             app.pane_actions().last().unwrap().0.right(),
             area.right() - APP_CLOSE - PANE_CLOSE - ACTION_MARGIN
         );
-        // The pane's × stands just left of the one that quits.
+        // The pane's hide icon stands just left of the button that quits, and isn't an ×:
+        // the only × in the corner quits.
         let text = screen(&app).row_text(area.y);
         let hide = text.chars().count() as u16 - APP_CLOSE - 2;
-        assert_eq!(text.chars().nth(hide as usize), Some('×'), "{text}");
+        assert_eq!(text.chars().nth(hide as usize), Some('◨'), "{text}");
+        let corner: String = text.chars().skip(hide as usize).collect();
+        assert_eq!(corner.matches('×').count(), 1, "only quit: {corner}");
+        let icons = screen(&app).paint.iter().any(|p| {
+            matches!(p, Paint::Icon { icon: Icon::HidePane, bounds, .. }
+                if bounds.x / 64 >= i32::from(hide) - 1 && bounds.y / 64 == i32::from(area.y))
+        });
+        assert!(icons, "the pixel tier draws it as the hide-pane icon");
         app.handle(mouse(MouseKind::Move, hide, area.y));
         assert!(app.dock.open, "a hover leaves it open");
-        assert!(screen(&app).text().contains("Close pane"), "and names it");
+        assert!(screen(&app).text().contains("Hide pane"), "and names it");
         app.handle(mouse(MouseKind::Left, hide, area.y));
         assert!(!app.dock.open, "the close button still closes");
         assert!(!app.quit, "and only the pane");
@@ -24806,6 +25017,170 @@ while True:
         );
     }
 
+    /// The panel under some painted words, and how it's filled and outlined.
+    fn panel_under(app: &App, words: &str) -> (Option<Rgb>, Option<Rgb>) {
+        let grid = screen(app);
+        let (x, y) = grid
+            .paint
+            .iter()
+            .find_map(|p| match p {
+                Paint::Text { x, y, text, .. } if text == words => Some((*x, *y + 32)),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no {words} painted"));
+        grid.paint
+            .iter()
+            .rev()
+            .find_map(|p| match p {
+                Paint::Panel {
+                    bounds,
+                    fill,
+                    border,
+                    ..
+                } if bounds.x <= x
+                    && x <= bounds.x + bounds.w
+                    && bounds.y <= y
+                    && y <= bounds.y + bounds.h =>
+                {
+                    Some((*fill, *border))
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("nothing under {words}"))
+    }
+
+    /// Review lists each file with the letter Source Control gives it, is as wide as every
+    /// other sidebar, and ends each file with a row saying what's next, which goes there.
+    #[test]
+    fn review_letters_its_files_and_says_whats_next_after_each() {
+        let (dir, mut app) = reviewed();
+        fs::write(dir.path().join("beta.rs"), "fn main() { go() }\n").unwrap();
+        settle_disk(&mut app);
+        let sidebar = app.sidebar_area().expect("the explorer").w;
+        app.run(Command::OpenDiff);
+        let grid = screen(&app);
+        let list_end = usize::from(app.activity_area().right() + sidebar);
+        for name in ["alpha.txt", "beta.rs"] {
+            let y = (1..grid.area().h)
+                .find(|r| grid.row_text(*r).contains(name))
+                .unwrap_or_else(|| panic!("{name} listed"));
+            let row: String = grid.row_text(y).chars().take(list_end).collect();
+            assert!(row.trim_end().ends_with('M'), "{row}");
+        }
+        let review = app.review.as_ref().expect("a review");
+        assert_eq!(
+            review.list_width.get() + 1,
+            sidebar,
+            "as wide as the sidebar, its gap too"
+        );
+        let text = grid.text();
+        let (x, y) = find(&grid, "End of this file. Next:");
+        assert!(text.contains("Next: beta.rs"), "{text}");
+        let before = app.review.as_ref().unwrap().selected;
+        app.handle(mouse(MouseKind::Left, x + 2, y));
+        assert_eq!(
+            app.review.as_ref().unwrap().selected,
+            before + 1,
+            "it goes there"
+        );
+        assert!(
+            screen(&app).text().contains("That's every change"),
+            "{}",
+            screen(&app).text()
+        );
+    }
+
+    /// A kind with no comments is only outlined and quiet; one with comments is filled.
+    #[test]
+    fn a_comment_kind_with_none_is_quiet_and_one_with_some_is_filled() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        let held = tempfile::tempdir().unwrap();
+        let first = "# Plan\n\nCache first.\n\nShip it.\n";
+        let comments = [("Cache first.", "Why first")];
+        plan_sent_again(
+            &mut app,
+            held.path(),
+            (first, &comments),
+            "# Plan\n\nShip it.\n",
+        );
+        for thread in &mut app.threads {
+            thread.kind = "Correctness".into();
+        }
+        let (fill, border) = panel_under(&app, "Clarity 0");
+        assert_eq!(
+            (fill, border),
+            (None, Some(app.theme.popup_border)),
+            "quiet"
+        );
+        let (fill, _) = panel_under(&app, "Correctness 1");
+        assert!(fill.is_some(), "filled");
+    }
+
+    /// The pane's tab is a chip inside its row, as every tab and button is.
+    #[test]
+    fn the_panes_tab_is_a_chip_inside_its_row() {
+        let (_dir, mut app) = project();
+        app.run(Command::ListAgents);
+        let (fill, _) = panel_under(&app, "Agents");
+        assert_eq!(fill, Some(app.theme.row_active));
+        let area = app.dock_area().unwrap();
+        let top = i32::from(area.y) * 64;
+        let chip = screen(&app).paint.iter().any(|p| {
+            matches!(p, Paint::Panel { bounds, fill: Some(f), .. }
+                if *f == app.theme.row_active && bounds.y > top && bounds.y + bounds.h < top + 64)
+        });
+        assert!(chip, "inside its row");
+    }
+
+    /// Scrolled to the end, code keeps a row of air over the status bar.
+    #[test]
+    fn code_scrolls_a_row_past_its_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let text: String = (1..=100).map(|n| format!("line {n}\n")).collect();
+        fs::write(dir.path().join("long.txt"), &text).unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (100, 30));
+        app.open(&dir.path().join("long.txt")).unwrap();
+        let _ = screen(&app);
+        app.editor_mut().unwrap().scroll_by(1000);
+        let grid = screen(&app);
+        let (_, last) = find(&grid, "line 100");
+        let below = grid.row_text(last + 1);
+        assert!(
+            below.trim().is_empty() || !below.contains("line"),
+            "{below}"
+        );
+        assert!(
+            !grid.row_text(last + 1).contains("Ln "),
+            "a row before the status bar"
+        );
+    }
+
+    /// Every tooltip is one row, on a row of its own.
+    #[test]
+    fn a_tooltip_is_one_whole_row() {
+        let (_dir, mut app) = project();
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        let rail = app.activity_area();
+        app.handle(mouse(MouseKind::Move, rail.x + 1, rail.y + 1));
+        let tips: Vec<_> = screen(&app)
+            .paint
+            .iter()
+            .filter_map(|p| match p {
+                Paint::Panel {
+                    bounds,
+                    shadow: true,
+                    ..
+                } => Some(*bounds),
+                _ => None,
+            })
+            .collect();
+        assert!(!tips.is_empty(), "a tip shows");
+        for tip in tips {
+            assert_eq!((tip.y % 64, tip.h), (0, 64), "{tip:?}");
+        }
+    }
+
     #[test]
     fn a_tab_has_its_own_menu() {
         let (dir, mut app) = project();
@@ -24817,9 +25192,12 @@ while True:
             .find(|r| screen(&app).row_text(*r).contains("beta.rs"))
             .unwrap();
         assert!(row <= y);
-        app.handle(mouse(MouseKind::Right, app.visible_tabs()[0].1 + 2, 0));
+        let tab = app.visible_tabs()[0].1;
+        app.handle(mouse(MouseKind::Right, tab + 2, 0));
         assert!(screen(&app).text().contains("Close Others"));
         let (x2, y2) = find(&screen(&app), "Close Others");
+        // Dropped from the tab's bottom edge, left-aligned to it: Close, then this.
+        assert_eq!((x2, y2), (tab + 1, 2), "{}", screen(&app).text());
         app.handle(mouse(MouseKind::Left, x2 + 1, y2));
         assert_eq!(app.editors.len(), 1);
         assert!(app.editors[0].title().contains("alpha"), "{x}");

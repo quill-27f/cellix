@@ -157,11 +157,7 @@ impl Outline {
         theme: &Theme,
     ) {
         grid.fill(area, theme.sidebar);
-        let bold = Style {
-            bold: true,
-            ..theme.sidebar
-        };
-        grid.label(area.x + LEFT, area.y, "Outline", bold, area.right());
+        crate::palette::sidebar_title(grid, area, "Outline", theme);
         let quiet = Style {
             fg: theme.gutter.fg,
             ..theme.sidebar

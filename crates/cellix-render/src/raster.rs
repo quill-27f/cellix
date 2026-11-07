@@ -513,18 +513,20 @@ impl Target<'_> {
             let run = if along_top { x - s.x } else { y - s.y };
             (run / dash).floor() as i64 % 2 == 0
         };
-        let reach = if shadow { row * 0.6 } else { 1.0 };
+        // A shadow falls down and to the sides, never up onto what opened the panel.
+        let reach = if shadow { row * 0.35 } else { 1.0 };
         let (x0, x1) = (
             (s.x - reach).floor() as i32,
             (s.x + s.w + reach).ceil() as i32,
         );
-        let y0 = ((s.y - reach).floor() as i32).max(self.top);
+        let above = if shadow { 1.0 } else { reach };
+        let y0 = ((s.y - above).floor() as i32).max(self.top);
         let y1 = ((s.y + s.h + reach).ceil() as i32).min(self.top + self.height as i32);
         let stroke = (row / 30.0).max(1.0);
         for y in y0..y1 {
             for x in x0..x1 {
                 let d = rounded_distance(&s, x as f32 + 0.5, y as f32 + 0.5);
-                if shadow && d > 0.0 {
+                if shadow && d > 0.0 && y as f32 + 0.5 > s.y + s.radius {
                     let fade = (1.0 - d / reach).clamp(0.0, 1.0);
                     // A shadow heavy enough for dark surfaces is a grey halo on light ones.
                     let light = fill.is_some_and(|f| f.0 > 180);

@@ -932,6 +932,8 @@ impl SettingsPage {
             theme,
         );
         let blocks = self.blocks();
+        // One primary button to a page: the first that wants it; the rest are quiet.
+        let mut primary_left = true;
         for (index, block) in blocks.iter().enumerate() {
             let color = match block.tone {
                 Tone::Good => theme.git_added,
@@ -950,6 +952,7 @@ impl SettingsPage {
                 let spots = self.controls_at(page);
                 let spot = spots.iter().find(|(_, c)| *c == control);
                 if let Some((rect, _)) = spot {
+                    let primary = primary && std::mem::take(&mut primary_left);
                     draw_button(grid, *rect, label, primary, hover, theme);
                 }
             }

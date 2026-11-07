@@ -306,18 +306,20 @@ fn translate(event: ct::Event, pixels: Option<(usize, usize)>) -> Option<Event> 
                 MouseEventKind::ScrollLeft => MouseKind::ScrollLeft,
                 MouseEventKind::ScrollRight => MouseKind::ScrollRight,
             };
-            let (x, y, fine_x) = match pixels {
+            let (x, y, fine_x, fine_y) = match pixels {
                 Some((cw, ch)) => {
                     let fine = m.column as f32 / cw.max(1) as f32;
-                    (fine as u16, m.row / ch.max(1) as u16, fine)
+                    let fine_y = m.row as f32 / ch.max(1) as f32;
+                    (fine as u16, m.row / ch.max(1) as u16, fine, fine_y)
                 }
-                None => (m.column, m.row, m.column as f32),
+                None => (m.column, m.row, m.column as f32, m.row as f32 + 0.5),
             };
             Event::Mouse(MouseEvent {
                 kind,
                 x,
                 y,
                 fine_x,
+                fine_y,
                 mods: mods(m.modifiers),
             })
         }

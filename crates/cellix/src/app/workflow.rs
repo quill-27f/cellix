@@ -661,6 +661,7 @@ mod tests {
             x: x + 1,
             y: row + 1,
             fine_x: f32::from(x + 1),
+            fine_y: f32::from(row + 1) + 0.5,
             mods: Default::default(),
         };
         app.handle(Event::Mouse(click));
@@ -674,6 +675,7 @@ mod tests {
                 x,
                 y,
                 fine_x: f32::from(x),
+                fine_y: f32::from(y) + 0.5,
                 mods: Default::default(),
             }));
         }

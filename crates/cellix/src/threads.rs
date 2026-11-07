@@ -834,8 +834,8 @@ pub fn draw(
                 grid.label_at(text_x as f32, text_x, y, &note, dim, end, SMALL);
             }
             Line::Coverage(kinds) => {
-                // A pill for each kind; one with no comments is only outlined, in the warning
-                // colour, as the gap to look at.
+                // A pill for each kind: filled where there are comments of it, and only
+                // outlined and quiet where there are none, so the filled ones read first.
                 let mut x = text_x as f32;
                 for (kind, count) in kinds {
                     let text = format!("{kind} {count}");
@@ -843,13 +843,13 @@ pub fn draw(
                     let bounds = Bounds::cells(x, y as f32 + 0.16, width, 0.68);
                     let missing = *count == 0;
                     if missing {
-                        grid.panel(bounds, 34, None, Some(theme.attention));
+                        grid.panel(bounds, 34, None, Some(theme.popup_border));
                     } else {
                         grid.panel(bounds, 34, Some(theme.quiet_button(body.bg)), None);
                     }
                     let style = Style {
                         fg: if missing {
-                            theme.attention
+                            theme.gutter.fg
                         } else {
                             theme.text.fg
                         },
