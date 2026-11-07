@@ -2,8 +2,8 @@
 //! working on it, where the agent's answer lands under the question.
 
 use cellix_render::{Bounds, Font, Grid, Icon, Measure, Rect, Style};
-use cellix_review::Thread;
 use cellix_review::threads::YOU;
+use cellix_review::{About, Thread};
 
 use crate::theme::Theme;
 
@@ -173,6 +173,8 @@ pub struct Draft {
     pub ask: bool,
     /// It's about code, so it also goes with the review.
     pub code: bool,
+    /// Terminal output or a problem it's about, for the thread it becomes.
+    pub about: Option<About>,
 }
 
 const NEW_DRAFT: u32 = 0;
@@ -203,6 +205,14 @@ pub fn wrap(text: &str, width: f32, measure: &dyn Measure) -> Vec<String> {
 
 /// What a comment is about, with a stand-in for a blank line. Math reads without its
 /// dollar signs, as it does on the page.
+/// What a card says it's about: a problem as the checker said it, else the words quoted.
+fn shown_quote(quote: &str, line: usize, about: Option<&About>) -> String {
+    match about {
+        Some(About::Problem { message }) => message.clone(),
+        _ => quote_of(quote, line),
+    }
+}
+
 fn quote_of(quote: &str, line: usize) -> String {
     if quote.is_empty() {
         format!("Line {line}")
@@ -325,7 +335,7 @@ fn lines((threads, draft, agent, resolved): Shown, width: f32, measure: &dyn Mea
     if let Some(new) = draft.filter(|d| d.thread.is_none()) {
         out.push(Line::Quote(
             NEW_DRAFT,
-            quote_of(&new.quote, new.line),
+            shown_quote(&new.quote, new.line, new.about.as_ref()),
             Words::Here,
         ));
         draft_lines(new, width, measure, &mut out);
@@ -363,7 +373,7 @@ fn lines((threads, draft, agent, resolved): Shown, width: f32, measure: &dyn Mea
         if let Some(pill) = under {
             out.push(Line::Pill(id, pill, words));
         }
-        let quote = quote_of(&thread.quote, thread.line);
+        let quote = shown_quote(&thread.quote, thread.line, thread.about.as_ref());
         out.push(Line::Quote(id, quote, words));
         let text = wrap(&thread.text, width, measure);
         out.extend(text.into_iter().map(|row| Line::Text(id, row)));

@@ -58,6 +58,29 @@ pub struct Thread {
     /// it hears the whole of it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub selection: String,
+    /// What it's about when that isn't only words in a file: output in a terminal, or a
+    /// problem found in the code.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub about: Option<About>,
+}
+
+/// What a thread is about besides a file's words.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "is", rename_all = "lowercase")]
+pub enum About {
+    /// Output in a terminal tab, which the quote and selection hold: the tab's name, the
+    /// command that printed it when the shell said, and every `file:line` it names. Such a
+    /// thread has no file of its own.
+    Output {
+        tab: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        command: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        places: Vec<String>,
+    },
+    /// A problem a checker found on the thread's line, as it said it. The quote is that
+    /// line, and the selection the code around it.
+    Problem { message: String },
 }
 
 /// Where a thread's quote is in a text.
@@ -192,14 +215,40 @@ impl Thread {
         } else {
             &self.selection
         };
-        let mut text = format!(
-            "Comment {} on {}{at}, about \"{about}\"{earlier}: {}",
-            self.id, self.file, self.text
-        );
+        let id = self.id;
+        let mut text = match &self.about {
+            None => format!(
+                "Comment {id} on {}{at}, about \"{about}\"{earlier}: {}",
+                self.file, self.text
+            ),
+            Some(About::Output {
+                tab,
+                command,
+                places,
+            }) => {
+                let command = if command.is_empty() {
+                    String::new()
+                } else {
+                    format!(" from `{command}`")
+                };
+                let places = if places.is_empty() {
+                    String::new()
+                } else {
+                    format!(", which names {}", places.join(", "))
+                };
+                format!(
+                    "Comment {id} on output in {tab}{command}{places}, about \"{about}\": {}",
+                    self.text
+                )
+            }
+            Some(About::Problem { message }) => format!(
+                "Comment {id} on the problem \"{message}\" at {}{at}, in the code \"{about}\": {}",
+                self.file, self.text
+            ),
+        };
         for reply in &self.replies {
             text.push_str(&format!(" {}: {}", reply.author, reply.text));
         }
-        let id = self.id;
         text.push_str(&format!(
             " Answer in the document by running: cellix reply {id} \"your answer\""
         ));
@@ -391,6 +440,7 @@ mod tests {
             earlier: None,
             reworded: false,
             selection: String::new(),
+            about: None,
         }
     }
 
@@ -552,6 +602,46 @@ mod tests {
         assert!(message.contains("the cache"));
         assert!(message.contains("Claude Code: It saves a read."));
         assert!(message.contains("cellix reply 3"));
+    }
+
+    #[test]
+    fn a_thread_on_output_names_its_command_and_places() {
+        let output = Thread {
+            file: String::new(),
+            line: 0,
+            quote: "thread 'full' panicked at src/queue.rs:16:9:".into(),
+            selection: "thread 'full' panicked at src/queue.rs:16:9:\nassertion failed".into(),
+            text: "Why?".into(),
+            replies: Vec::new(),
+            about: Some(About::Output {
+                tab: "Terminal".into(),
+                command: "cargo test".into(),
+                places: vec!["src/queue.rs:16".into()],
+            }),
+            ..thread()
+        };
+        let message = output.message();
+        assert!(!message.contains('\n'), "{message}");
+        assert!(message.starts_with("Comment 3 on output in Terminal from `cargo test`, which names src/queue.rs:16, about \"thread 'full' panicked"), "{message}");
+        assert!(message.contains("assertion failed\": Why?"), "{message}");
+        assert!(message.contains("cellix reply 3"), "{message}");
+        let problem = Thread {
+            quote: "self.items.push_back(itme);".into(),
+            about: Some(About::Problem {
+                message: "cannot find value `itme`".into(),
+            }),
+            replies: Vec::new(),
+            ..thread()
+        };
+        let message = problem.message();
+        assert!(
+            message.contains("the problem \"cannot find value `itme`\" at docs/plan.md line 12"),
+            "{message}"
+        );
+        let saved = serde_json::to_string(&output).unwrap();
+        assert_eq!(serde_json::from_str::<Thread>(&saved).unwrap(), output);
+        let plain = serde_json::to_string(&thread()).unwrap();
+        assert!(!plain.contains("about"), "{plain}");
     }
 
     #[test]

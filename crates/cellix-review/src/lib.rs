@@ -16,7 +16,7 @@ pub use git::{
     worktrees,
 };
 pub use history::{Turn, changed_since, checkpoint, restore, text_at, turns};
-pub use threads::{Reply, Thread, YOU};
+pub use threads::{About, Reply, Thread, YOU};
 
 use serde::{Deserialize, Serialize};
 

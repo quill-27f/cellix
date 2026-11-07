@@ -207,6 +207,11 @@ pub struct Session {
     /// What the program put on the clipboard, as Claude Code does when text is selected in
     /// it, for Cellix to pass on to the terminal's clipboard.
     pub copied: Option<String>,
+    /// Where each command entered at a shell's prompt starts, as (line counting from the top
+    /// of the scrollback, column), so output can be traced to the command that printed it.
+    commands: Vec<(usize, u16)>,
+    /// Where the command being typed at the prompt starts, from its first key.
+    typing: Option<(usize, u16)>,
 }
 
 fn pty_size((columns, rows): (u16, u16), (width, height): CellPixels) -> PtySize {
@@ -326,6 +331,8 @@ impl Session {
             pictures: Vec::new(),
             stopped: None,
             copied: None,
+            commands: Vec::new(),
+            typing: None,
         }
     }
 
@@ -393,6 +400,11 @@ impl Session {
         if contains(text, b"\x1b[2J") || contains(text, b"\x1b[3J") || contains(text, b"\x1bc") {
             let alternate = self.term.mode().contains(TermMode::ALT_SCREEN);
             self.pictures.retain(|p| p.alternate != alternate);
+        }
+        // The scrollback goes, and with it the lines the commands were on.
+        if contains(text, b"\x1b[3J") || contains(text, b"\x1bc") {
+            self.commands.clear();
+            self.typing = None;
         }
     }
 
@@ -483,7 +495,12 @@ impl Session {
         if self.exited || self.browser {
             return false;
         }
-        let at_prompt = match &self.link {
+        !self.shell || !self.waits_at_prompt()
+    }
+
+    /// Whether the program in front is the shell itself, waiting for a command.
+    fn waits_at_prompt(&self) -> bool {
+        match &self.link {
             #[cfg(unix)]
             Link::Own { master, pid, .. } => {
                 let front = master.process_group_leader();
@@ -495,8 +512,35 @@ impl Session {
             Link::Own { .. } => true,
             Link::Held(held) => held.at_prompt(),
             Link::Gone => true,
-        };
-        !self.shell || !at_prompt
+        }
+    }
+
+    /// Whether what's typed now goes to a shell's prompt, as a command.
+    fn typing_a_command(&self) -> bool {
+        let alternate = self.term.mode().contains(TermMode::ALT_SCREEN);
+        self.shell && !self.exited && !alternate && self.waits_at_prompt()
+    }
+
+    /// Where the cursor is, counting lines from the top of the scrollback.
+    fn cursor_place(&self) -> (usize, u16) {
+        let grid = self.term.grid();
+        let point = grid.cursor.point;
+        let line = grid.history_size() as i32 + point.line.0;
+        (line.max(0) as usize, point.column.0 as u16)
+    }
+
+    /// Notes where a command starts, from the first key typed at the prompt.
+    fn note_typing(&mut self) {
+        if self.typing.is_none() && self.typing_a_command() {
+            self.typing = Some(self.cursor_place());
+        }
+    }
+
+    /// The command typed at the prompt was entered.
+    fn note_entered(&mut self) {
+        if let Some(start) = self.typing.take() {
+            self.commands.push(start);
+        }
     }
 
     pub fn write(&mut self, bytes: &[u8]) {
@@ -578,10 +622,17 @@ impl Session {
         let bytes = key_bytes(key, application);
         self.term.scroll_display(Scroll::Bottom);
         self.selection = None;
+        match key.key {
+            Key::Enter => self.note_entered(),
+            // The line is thrown away, and the next prompt starts a new one.
+            Key::Char('c' | 'C') if key.mods.ctrl => self.typing = None,
+            _ => self.note_typing(),
+        }
         self.write(&bytes);
     }
 
     pub fn paste(&mut self, text: &str) {
+        self.note_typing();
         self.term.scroll_display(Scroll::Bottom);
         if self.term.mode().contains(TermMode::BRACKETED_PASTE) {
             self.write(b"\x1b[200~");
@@ -595,6 +646,7 @@ impl Session {
     /// Sends a whole message, as if typed and entered.
     pub fn send_line(&mut self, text: &str) {
         self.paste(text);
+        self.note_entered();
         self.write(b"\r");
     }
 
@@ -692,26 +744,73 @@ impl Session {
         Some(lines.join("\n"))
     }
 
+    /// What's selected and where it is, as the first and last places in reading order,
+    /// while something is.
+    pub fn selection(&self) -> Option<(String, Spot, Spot)> {
+        let (from, to) = self.ordered()?;
+        let text = self.selected_text().filter(|t| !t.trim().is_empty())?;
+        Some((text, from, to))
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.selection = None;
+    }
+
+    /// The command entered at the shell's prompt that printed the visible row `row`, when
+    /// the shell was at its prompt as it was typed.
+    pub fn command_before(&self, row: u16) -> Option<String> {
+        let grid = self.term.grid();
+        let top = grid.history_size() as i32 - grid.display_offset() as i32;
+        let line = (top + row as i32).max(0) as usize;
+        let &(start, column) = self.commands.iter().rev().find(|(at, _)| *at <= line)?;
+        let command = self.logical_line(start, column);
+        let command = command.trim();
+        (!command.is_empty()).then(|| command.to_string())
+    }
+
+    /// The text from a place to the end of its line, following it across rows it wrapped to.
+    fn logical_line(&self, start: usize, column: u16) -> String {
+        let grid = self.term.grid();
+        let history = grid.history_size() as i32;
+        let columns = self.term.columns();
+        let last = self.term.screen_lines() as i32 - 1;
+        let mut text = String::new();
+        let mut line = start as i32 - history;
+        let mut from = column as usize;
+        while line <= last && line >= -history {
+            let row = &grid[Line(line)];
+            for x in from.min(columns)..columns {
+                let cell = &row[Column(x)];
+                if !cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                    text.push(cell.c);
+                }
+            }
+            let wrapped = row[Column(columns - 1)].flags.contains(Flags::WRAPLINE);
+            if !wrapped {
+                break;
+            }
+            line += 1;
+            from = 0;
+        }
+        text.trim_end().to_string()
+    }
+
     /// The `file:line` or file under a column of a visible row, as tracebacks and compilers
     /// print them.
     pub fn path_at(&self, (x, y): Spot) -> Option<(String, Option<usize>)> {
         let rows = self.rows();
         let chars: Vec<char> = rows.get(y as usize)?.chars().collect();
         let x = x as usize;
-        let edge = |c: &char| c.is_whitespace() || "\"'`()[]<>,".contains(*c);
-        if chars.get(x).is_none_or(edge) {
+        if chars.get(x).is_none_or(path_edge) {
             return None;
         }
-        let start = chars[..x].iter().rposition(edge).map_or(0, |i| i + 1);
+        let start = chars[..x].iter().rposition(path_edge).map_or(0, |i| i + 1);
         let end = chars[x..]
             .iter()
-            .position(edge)
+            .position(path_edge)
             .map_or(chars.len(), |i| x + i);
         let word: String = chars[start..end].iter().collect();
-        let word = word.trim_end_matches(':');
-        let mut parts = word.split(':');
-        let file = parts.next()?.to_string();
-        Some((file, parts.next().and_then(|n| n.parse().ok())))
+        place_of(&word)
     }
 
     /// The screen as text, one string a row.
@@ -850,6 +949,32 @@ fn asked_colour(index: usize, theme: &Theme) -> Rgb {
         _ if index == NamedColor::Cursor as usize => theme.text.fg,
         _ => indexed(index.min(255) as u8, palette_of(theme)),
     }
+}
+
+/// What ends a path in a line of output.
+fn path_edge(c: &char) -> bool {
+    c.is_whitespace() || "\"'`()[]<>,".contains(*c)
+}
+
+/// A word as a file and the line it names, as in `src/main.rs:12:5`.
+fn place_of(word: &str) -> Option<(String, Option<usize>)> {
+    let word = word.trim_end_matches(':');
+    let mut parts = word.split(':');
+    let file = parts.next().filter(|f| !f.is_empty())?.to_string();
+    Some((file, parts.next().and_then(|n| n.parse().ok())))
+}
+
+/// Every `file:line` a piece of output names, in order, as tracebacks and compilers print
+/// them.
+pub fn places_in(text: &str) -> Vec<(String, usize)> {
+    let mut places = Vec::new();
+    for word in text.split(|c: char| path_edge(&c)) {
+        // A sentence may end on one: `failed at src/main.rs:12.`
+        if let Some((file, Some(line))) = place_of(word.trim_end_matches('.')) {
+            places.push((file, line));
+        }
+    }
+    places
 }
 
 fn contains(text: &[u8], wanted: &[u8]) -> bool {

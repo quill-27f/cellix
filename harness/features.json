@@ -3918,5 +3918,26 @@
     "title": "What a program in the side pane copies, as Claude Code does on a selection, reaches the clipboard",
     "test": "what_a_program_in_the_pane_copies_reaches_the_clipboard",
     "passes": true
+  },
+  {
+    "id": "terminal-output-ask",
+    "milestone": 11,
+    "title": "A selection in a terminal tab gets Comment and Ask Agent; the agent hears the output, the command that printed it and the project files it names",
+    "test": "ask_agent_on_terminal_output_sends_it_with_its_command_and_places",
+    "passes": true
+  },
+  {
+    "id": "terminal-output-ask-in-claude-code",
+    "milestone": 11,
+    "title": "Inside Claude Code, Ask Agent on terminal output puts all of it in Claude Code's prompt",
+    "test": "inside_claude_code_terminal_output_goes_to_its_prompt_whole",
+    "passes": true
+  },
+  {
+    "id": "problem-ask",
+    "milestone": 11,
+    "title": "A row in the Problems tab has Ask Agent, which sends the problem, its file and line, and the code around it, to the pane's agent or Claude Code's prompt",
+    "test": "ask_agent_on_a_problem_sends_the_problem_and_the_code_around_it",
+    "passes": true
   }
 ]

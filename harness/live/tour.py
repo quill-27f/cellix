@@ -196,7 +196,7 @@ def chart(path, width=1600, height=900):
         f.write(chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
 
 
-def shoot(name, steps, *args, size="120x40", background="1e1e2e", cwd=None, env=None):
+def shoot(name, steps, *args, size="120x40", background="1e1e2e", cwd=None, env=None, timeout=70):
     """Runs one scene and writes `<name>.png`, with `steps` run first."""
     # TOUR_ONLY=50-review,02-code retakes just those, for a quick look after a change.
     only = os.environ.get("TOUR_ONLY")
@@ -216,7 +216,7 @@ def shoot(name, steps, *args, size="120x40", background="1e1e2e", cwd=None, env=
     }
     env.pop("CLAUDE_CONFIG_DIR", None)
     command = ["python3", "-I", f"{here}/term.py", f.name, binary, *args]
-    subprocess.run(command, cwd=cwd or ROOT, env=env, timeout=70, stdout=subprocess.DEVNULL)
+    subprocess.run(command, cwd=cwd or ROOT, env=env, timeout=timeout, stdout=subprocess.DEVNULL)
     os.unlink(f.name)
     print(name, flush=True)
 
@@ -291,6 +291,9 @@ with tempfile.TemporaryDirectory() as scratch:
     if os.path.isdir(real):
         os.makedirs(f"{HOME}/Library/Caches", exist_ok=True)
         os.symlink(real, f"{HOME}/Library/Caches/Tectonic")
+    # Where the terminal's output and the Problems tab are, at 150x44 and 170x44.
+    OUTPUT_FROM, OUTPUT_TO, OUTPUT_ASK = (97, 7), (125, 10), (111, 6)
+    PROBLEM_COUNT, PROBLEM_ROW = (9, 42), (150, 2)
     GEAR = (RAIL_X, 37)
     settings = [["click", *GEAR]]
 
@@ -495,3 +498,27 @@ with tempfile.TemporaryDirectory() as scratch:
     ):
         steps = [["wait", 1.0], ["wheel", 90, 20, notches], ["wait", 1.0]]
         shoot(f"{78 + number}-paper-{name}", steps, PAPER, **light)
+
+    # Last, so the broken paper they leave open is in no other scene.
+    # A failing run in a terminal, its output selected: the buttons that comment on it or ask
+    # the agent about it, as by a selection in a file.
+    # Each scene has a cache of its own, or the second rejoins the first one's shell.
+    in_shell = lambda cache: {"XDG_CACHE_HOME": cache, "SHELL": "/bin/sh", "PS1": "$ ", "ENV": ""}
+    caches = [tempfile.mkdtemp(prefix="cx", dir="/tmp") for _ in range(2)]
+    failing = ("printf 'test refuses_once_full ... FAILED\\n\\nthread panicked at src/queue.rs:16:9:\\n"
+               "assertion failed: queue.push(4).is_err()\\n  left: Ok(())\\n right: Err(Full)\\n'\r")
+    selected = [["keys", CTRL("j")], ["wait", 1.5], ["keys", failing], ["wait", 1.0],
+                ["drag", *OUTPUT_FROM, *OUTPUT_TO], ["wait", 0.5]]
+    shoot("108-terminal-ask", selected, CODE_FILE, size="150x44", env=in_shell(caches[0]))
+    shoot("108-terminal-ask-hover", [*selected, ["move", *OUTPUT_ASK], ["wait", 0.4]], CODE_FILE,
+          size="150x44", env=in_shell(caches[1]))
+    for cache in caches:
+        subprocess.run(["pkill", "-9", "-f", cache])
+        shutil.rmtree(cache, ignore_errors=True)
+    # A paper that doesn't build: its problem in the list, the pointer on it.
+    with open(f"{ROOT}/docs/broken.tex", "w") as f:
+        f.write("\\documentclass{article}\n\\begin{document}\nHello \\wrongmacro{} world.\n\\end{document}\n")
+    # A loaded machine can take over a minute to build, so this one gets longer.
+    problems = [["wait", 2.0], ["click", 164, 1], ["wait", 100], ["click", *PROBLEM_COUNT], ["wait", 0.6],
+                ["move", *PROBLEM_ROW], ["wait", 0.4]]
+    shoot("109-problem-ask", problems, "docs/broken.tex", size="170x44", timeout=130)

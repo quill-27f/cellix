@@ -151,6 +151,14 @@ this works the same in code, Markdown, LaTeX, data and notebooks. A PDF or image
 takes a comment too, from a button or a right click, and a paper's PDF lands it on the source line
 behind that place, so it stays put through every rebuild.
 
+Output is seen too, so a failing run needs no copy and paste. A selection in a terminal tab gets the
+same two buttons, and the agent hears all of the output, the command that printed it and every
+`file:line` in it that is a file of the project. Cellix knows the command from where the first key
+was typed while the shell was at its prompt, read off the screen when it's asked. A comment on output
+has no file, so it shows in the Comments tab whatever file is in view, and opening it goes to the
+first place it names. A row of the Problems tab gets Ask Agent under the pointer, which sends what the
+checker said, the file and line, and three lines of code either side.
+
 ## The pointer
 
 Cellix tells the terminal which pointer to show with OSC 22: a hand on what can be pressed, a bar on

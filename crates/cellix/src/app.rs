@@ -20,7 +20,7 @@ use cellix_render::{
     TOP_RIGHT,
 };
 use cellix_review::{
-    Comment, Reply, Thread, YOU, append_comments, blame_line, branches, changed_files,
+    About, Comment, Reply, Thread, YOU, append_comments, blame_line, branches, changed_files,
     create_branch, current_branch, head_text, restore, switch_branch, turns, worktrees,
 };
 
@@ -436,8 +436,6 @@ fn browser_installed() -> bool {
     cfg!(test) || crate::integrations::on_path(BROWSER_TOOL, var)
 }
 
-/// What Ask Agent puts in Claude Code's prompt: the file as a mention, so the agent reads
-/// it, the line and the words selected, then room for the question.
 /// What Ask Agent puts in Claude Code's prompt: the file, and all of what was selected, a
 /// passage set out as a quote under the lines it's on.
 fn ask_in_prompt(file: &str, line: usize, selected: &str) -> String {
@@ -446,12 +444,59 @@ fn ask_in_prompt(file: &str, line: usize, selected: &str) -> String {
         return format!("@{file} line {line}, \"{selected}\": ");
     }
     let last = line + selected.lines().count() - 1;
-    let quoted: Vec<String> = selected
+    format!(
+        "@{file} lines {line}-{last}:\n{}\n\n",
+        quote_block(selected)
+    )
+}
+
+/// Text set out as a Markdown quote, every line of it.
+fn quote_block(text: &str) -> String {
+    let quoted: Vec<String> = text
         .lines()
         .map(|row| format!("> {row}").trim_end().to_string())
         .collect();
-    format!("@{file} lines {line}-{last}:\n{}\n\n", quoted.join("\n"))
+    quoted.join("\n")
 }
+
+/// What Ask Agent puts in Claude Code's prompt for output in a terminal: where it came from,
+/// the files it names as mentions, so the agent reads them, and all of it as a quote.
+fn output_in_prompt(tab: &str, command: &str, places: &[(String, usize)], output: &str) -> String {
+    let from = if command.is_empty() {
+        format!("Output in {tab}")
+    } else {
+        format!("Output of `{command}` in {tab}")
+    };
+    let names: Vec<String> = places
+        .iter()
+        .map(|(file, line)| format!("@{file} line {line}"))
+        .collect();
+    let names = if names.is_empty() {
+        String::new()
+    } else {
+        format!(", which names {}", names.join(", "))
+    };
+    format!("{from}{names}:\n{}\n\n", quote_block(output.trim()))
+}
+
+/// What Ask Agent puts in Claude Code's prompt for a problem: the file as a mention, the
+/// problem as the checker said it, and the code around it as a quote under its lines.
+fn problem_in_prompt(file: &str, line: usize, message: &str, code: (usize, &str)) -> String {
+    let (first, code) = code;
+    let last = first + code.lines().count().max(1) - 1;
+    format!(
+        "@{file} line {line} has the problem \"{message}\". Lines {first}-{last}:\n{}\n\n",
+        quote_block(code)
+    )
+}
+
+/// Whether a thread is about output in a terminal rather than a file.
+fn on_output(thread: &Thread) -> bool {
+    matches!(thread.about, Some(About::Output { .. }))
+}
+
+/// Lines of code either side of a problem that go with it to the agent.
+const PROBLEM_AROUND: usize = 3;
 
 /// What Cellix says once Ask Agent has put the selection in Claude Code's prompt.
 fn asked_in_prompt(quote: &str, line: usize) -> String {
@@ -3665,6 +3710,7 @@ impl App {
                     earlier: None,
                     reworded: false,
                     selection: draft.selection,
+                    about: draft.about,
                 });
                 asked = draft.ask.then_some(id);
             }
@@ -3714,6 +3760,165 @@ impl App {
         ))
     }
 
+    /// The same buttons by what's selected in a terminal tab: above its first row, or under
+    /// its last when that's the top.
+    fn output_bar(&self) -> Option<(Rect, Rect)> {
+        let idle = matches!(self.overlay, Overlay::None) && self.drag != Drag::Session;
+        // A terminal keeps its selection after a click elsewhere, as terminals do, but the
+        // buttons go with the focus, so they don't stand over the pane while the file is worked on.
+        let front = self.dock.open && self.dock.focused && self.dock.front == Front::Session;
+        if !idle || !front || self.dock.draft.is_some() {
+            return None;
+        }
+        let screen = self.dock_screen()?;
+        let (_, from, to) = self.dock.session()?.selection()?;
+        let y = match from.1 {
+            0 => (screen.y + to.1 + 1).min(screen.bottom().saturating_sub(1)),
+            row => screen.y + row - 1,
+        };
+        let width = COMMENT_WIDTH + ASK_WIDTH;
+        let x = (screen.x + from.0)
+            .min(screen.right().saturating_sub(width + 1))
+            .max(screen.x);
+        Some((
+            Rect::new(x, y, COMMENT_WIDTH, 1),
+            Rect::new(x + COMMENT_WIDTH, y, ASK_WIDTH, 1),
+        ))
+    }
+
+    /// Every `file:line` in some output that's a file in this project, as the project names
+    /// it, each once.
+    fn places_named(&self, output: &str) -> Vec<(String, usize)> {
+        let root = self.workspace.root();
+        let mut places: Vec<(String, usize)> = Vec::new();
+        for (file, line) in crate::dock::places_in(output) {
+            let path = Path::new(&file);
+            let path = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                root.join(path)
+            };
+            if !path.starts_with(root) || !path.is_file() {
+                continue;
+            }
+            let place = (self.relative(&path), line);
+            if !places.contains(&place) {
+                places.push(place);
+            }
+        }
+        places
+    }
+
+    /// Starts a comment on what's selected in the terminal tab in front or, with `ask`, a
+    /// question for the agent, which hears the output, the command that printed it when the
+    /// shell said, and the places in the project it names.
+    fn comment_on_output(&mut self, ask: bool) {
+        let Some(session) = self.dock.session_mut() else {
+            return;
+        };
+        let Some((text, from, _)) = session.selection() else {
+            return;
+        };
+        let command = session.command_before(from.1).unwrap_or_default();
+        let tab = session.name.clone();
+        // The buttons go, so the press shows it was taken.
+        session.clear_selection();
+        let whole = text.trim().to_string();
+        let places = self.places_named(&whole);
+        let quote = whole.lines().next().unwrap_or_default().trim().to_string();
+        if ask && self.in_pane {
+            self.outgoing_fill = Some(output_in_prompt(&tab, &command, &places, &whole));
+            self.say(asked_in_prompt(&quote, 0));
+            return;
+        }
+        let selection = if whole.contains('\n') {
+            whole.clone()
+        } else {
+            String::new()
+        };
+        let places = places
+            .iter()
+            .map(|(file, line)| format!("{file}:{line}"))
+            .collect();
+        self.write_comment(Draft {
+            thread: None,
+            file: String::new(),
+            line: 0,
+            quote,
+            selection,
+            text: String::new(),
+            caret: 0,
+            ask,
+            code: false,
+            about: Some(About::Output {
+                tab,
+                command,
+                places,
+            }),
+        });
+    }
+
+    /// The Ask Agent button on the row of the Problems tab at `y`, when it's a problem, and
+    /// that problem.
+    fn problem_ask_at(&self, y: u16) -> Option<(Rect, PathBuf, Diagnostic)> {
+        if self.dock.front != Front::Problems || !matches!(self.overlay, Overlay::None) {
+            return None;
+        }
+        let screen = self.dock_screen()?;
+        let row = y.checked_sub(screen.y).filter(|_| y < screen.bottom())?;
+        let picked = self
+            .problem_rows()
+            .into_iter()
+            .nth(self.dock.problems_top + row as usize)?;
+        let ProblemRow::Item(file, problem) = picked else {
+            return None;
+        };
+        // As far from the row's end as the dot is from its start.
+        let left = screen.right().saturating_sub(ASK_WIDTH + 2);
+        Some((Rect::new(left, y, ASK_WIDTH, 1), file, problem))
+    }
+
+    /// Asks the agent about a problem: what the checker said, where, and the code around it.
+    fn ask_about_problem(&mut self, path: &Path, problem: &Diagnostic) {
+        let line = problem.line + 1;
+        let file = self.relative(path);
+        let open = self.editors.iter().find(|e| e.buffer.path() == Some(path));
+        let text = open
+            .map(|e| e.buffer.text())
+            .or_else(|| std::fs::read_to_string(path).ok())
+            .unwrap_or_default();
+        let lines: Vec<&str> = text.lines().collect();
+        let first = line.saturating_sub(PROBLEM_AROUND).max(1);
+        let last = (line + PROBLEM_AROUND).min(lines.len()).max(first);
+        let code = lines
+            .get(first - 1..last)
+            .map(|l| l.join("\n"))
+            .unwrap_or_default();
+        let quote = lines
+            .get(line - 1)
+            .map(|l| l.trim().to_string())
+            .unwrap_or_default();
+        let message = problem.message.trim().to_string();
+        if self.in_pane {
+            self.outgoing_fill = Some(problem_in_prompt(&file, line, &message, (first, &code)));
+            let said = message.lines().next().unwrap_or_default();
+            self.say(asked_in_prompt(said, line));
+            return;
+        }
+        self.write_comment(Draft {
+            thread: None,
+            file,
+            line,
+            quote,
+            selection: code,
+            text: String::new(),
+            caret: 0,
+            ask: true,
+            code: true,
+            about: Some(About::Problem { message }),
+        });
+    }
+
     /// The button on the picture under the pointer, and the line that picture is on.
     fn picture_comment(&self) -> Option<(Rect, usize)> {
         let (x, y) = self.hover?;
@@ -3738,16 +3943,41 @@ impl App {
     }
 
     fn draw_chip(&self, grid: &mut Grid, chip: Rect, name: &str) {
-        /// Its gap from the words it stands over, and from the button beside it, in cells.
+        /// Its gap from the words it stands over, in cells.
         const LIFT: f32 = 0.2;
+        self.draw_chip_lifted(grid, chip, name, (LIFT, 0.96));
+    }
+
+    /// A button as the ones by a selection, `lift` cells above its row and `height` of a
+    /// row tall, centred on it.
+    fn draw_chip_lifted(
+        &self,
+        grid: &mut Grid,
+        chip: Rect,
+        name: &str,
+        (lift, height): (f32, f32),
+    ) {
+        /// Its gap from the button beside it, in cells.
         const SIDE: f32 = 0.24;
         let theme = &self.theme;
         let on_it = self.hover.is_some_and(|h| chip.contains(h.0, h.1));
+        // Painted, the cells under the label keep the ground they had, so a chip shorter
+        // than its row doesn't show a strip of its colour above or below it.
+        let inside = chip.x + 1 < grid.width() && chip.y < grid.height();
+        let ground = if inside {
+            grid.cell(chip.x + 1, chip.y).style.bg
+        } else {
+            theme.popup
+        };
         let style = Style {
             fg: theme.text.fg,
             bold: false,
             painted: !self.measure.in_cells(),
-            bg: theme.popup,
+            bg: if self.measure.in_cells() {
+                theme.popup
+            } else {
+                ground
+            },
             ..theme.bar
         };
         if self.measure.in_cells() {
@@ -3760,15 +3990,15 @@ impl App {
             };
             let bounds = Bounds::cells(
                 chip.x as f32 + SIDE,
-                chip.y as f32 + 0.02 - LIFT,
+                chip.y as f32 + (1.0 - height) / 2.0 - lift,
                 chip.w as f32 - SIDE * 2.0,
-                0.96,
+                height,
             );
             grid.popup(bounds, 20, fill, theme.popup_border);
             let font = Font::default();
             let width = self.measure.width(name, font);
             let x = chip.x as f32 + (chip.w as f32 - width) / 2.0;
-            let top = chip.y as f32 - LIFT;
+            let top = chip.y as f32 - lift;
             grid.text_run(
                 (x, top),
                 chip.right() as f32,
@@ -3833,6 +4063,7 @@ impl App {
             caret: 0,
             ask: false,
             code: false,
+            about: None,
         });
     }
 
@@ -3843,6 +4074,10 @@ impl App {
         }
         if let Some((chip, _)) = self.run_button() {
             self.draw_chip(grid, chip, "Run");
+        }
+        if let Some((comment, ask)) = self.output_bar() {
+            self.draw_chip(grid, comment, "Comment");
+            self.draw_chip(grid, ask, "Ask Agent");
         }
         if let Some((comment, ask)) = self.selection_bar() {
             self.draw_chip(grid, comment, "Comment");
@@ -3865,6 +4100,12 @@ impl App {
                 editor.go_to_line(line + 1, area);
             }
             self.run_cell();
+            return true;
+        }
+        if let Some((comment, ask)) = self.output_bar()
+            && (comment.contains(x, y) || ask.contains(x, y))
+        {
+            self.comment_on_output(ask.contains(x, y));
             return true;
         }
         if let Some((comment, ask)) = self.selection_bar() {
@@ -3918,6 +4159,7 @@ impl App {
             caret: 0,
             ask: false,
             code: false,
+            about: None,
         });
     }
 
@@ -6584,7 +6826,12 @@ impl App {
                     self.dock.problems_top = self.dock.problems_top.saturating_sub(3);
                 }
                 MouseKind::ScrollDown => self.dock.problems_top += 3,
-                MouseKind::Left => self.click_problem(y),
+                MouseKind::Left => match self.problem_ask_at(y) {
+                    Some((chip, file, problem)) if chip.contains(x, y) => {
+                        self.ask_about_problem(&file, &problem);
+                    }
+                    _ => self.click_problem(y),
+                },
                 _ => {}
             }
             return true;
@@ -6894,10 +7141,14 @@ impl App {
     fn open_session_path(&mut self, x: u16, y: u16) {
         let spot = self.session_spot(x, y);
         let found = self.dock.session().and_then(|s| s.path_at(spot));
-        let Some((file, line)) = found else {
-            return;
-        };
-        let path = self.workspace.root().join(&file);
+        if let Some((file, line)) = found {
+            self.go_to_place(&file, line);
+        }
+    }
+
+    /// Opens a file of the project at a line, as output names it.
+    fn go_to_place(&mut self, file: &str, line: Option<usize>) {
+        let path = self.workspace.root().join(file);
         if !path.is_file() {
             self.say(format!("No file called {file} here"));
             return;
@@ -7497,6 +7748,7 @@ impl App {
                 earlier: None,
                 reworded: false,
                 selection: String::new(),
+                about: None,
             });
             self.save_threads();
         }
@@ -7529,6 +7781,7 @@ impl App {
             earlier: None,
             reworded: false,
             selection: String::new(),
+            about: None,
         });
         self.save_threads();
         if page {
@@ -7663,7 +7916,8 @@ impl App {
             .get(self.active())
             .and_then(|e| e.buffer.path())
             .map(|p| self.relative(p));
-        let here = |t: &&Thread| file.as_ref().is_none_or(|f| *f == t.file);
+        // Output has no file, so a comment on it shows whatever file is in view.
+        let here = |t: &&Thread| on_output(t) || file.as_ref().is_none_or(|f| *f == t.file);
         let resolved = self
             .threads
             .iter()
@@ -7691,7 +7945,7 @@ impl App {
         let mut threads: Vec<&Thread> = self
             .threads
             .iter()
-            .filter(|t| !t.resolved && file.as_ref().is_none_or(|f| *f == t.file))
+            .filter(|t| !t.resolved && (on_output(t) || file.as_ref().is_none_or(|f| *f == t.file)))
             .collect();
         threads.sort_by_key(|t| t.line);
         threads
@@ -7700,6 +7954,21 @@ impl App {
     fn thread_hit(&mut self, hit: ThreadHit) {
         match hit {
             ThreadHit::Open(id) => {
+                // Output goes to the first place it names, as Ctrl+click on it does.
+                let output =
+                    self.threads
+                        .iter()
+                        .find(|t| t.id == id)
+                        .and_then(|t| match &t.about {
+                            Some(About::Output { places, .. }) => Some(places.first().cloned()),
+                            _ => None,
+                        });
+                if let Some(place) = output {
+                    if let Some((file, line)) = place.as_deref().and_then(|p| p.rsplit_once(':')) {
+                        self.go_to_place(file, line.parse().ok());
+                    }
+                    return;
+                }
                 // Words the plan changed or dropped are only in what changed, so that's where
                 // it goes, whether or not the plan still waits.
                 let earlier = self
@@ -7730,6 +7999,7 @@ impl App {
                     caret: 0,
                     ask: false,
                     code: false,
+                    about: None,
                 });
             }
             ThreadHit::Ask(id) => {
@@ -7986,6 +8256,7 @@ impl App {
                     caret: 0,
                     ask,
                     code,
+                    about: None,
                 });
                 return;
             }
@@ -8047,6 +8318,7 @@ impl App {
                     earlier: None,
                     reworded: false,
                     selection: String::new(),
+                    about: None,
                 });
                 self.save_threads();
                 let _ = made.send(id);
@@ -11948,9 +12220,18 @@ impl App {
             return;
         }
         let shown = rows.iter().skip(self.dock.problems_top);
+        let ask = self
+            .hover
+            .filter(|h| screen.contains(h.0, h.1))
+            .and_then(|h| self.problem_ask_at(h.1))
+            .map(|(chip, ..)| chip);
         for (index, row) in shown.take(screen.h as usize).enumerate() {
             let y = screen.y + index as u16;
             let line = Rect::new(screen.x, y, screen.w, 1);
+            // The message stops short of the button on its row.
+            let end = ask
+                .filter(|chip| chip.y == y)
+                .map_or(screen.right(), |chip| chip.x.saturating_sub(1));
             if self.hover.is_some_and(|h| line.contains(h.0, h.1)) {
                 grid.panel(
                     Bounds::inset(line, 0.4, 0.06),
@@ -11979,10 +12260,14 @@ impl App {
                     };
                     grid.label(screen.x + 2, y, "●", mark, screen.x + 4);
                     let at = format!("{}  ", problem.line + 1);
-                    let text = grid.label(screen.x + 4, y, &at, quiet, screen.right());
-                    grid.label(text, y, &problem.message, theme.sidebar, screen.right());
+                    let text = grid.label(screen.x + 4, y, &at, quiet, end);
+                    grid.label(text, y, &problem.message, theme.sidebar, end);
                 }
             }
+        }
+        if let Some(chip) = ask {
+            // Inside the row's highlight, with room above and below.
+            self.draw_chip_lifted(grid, chip, "Ask Agent", (0.0, 0.78));
         }
     }
 
@@ -17519,6 +17804,200 @@ mod tests {
         assert!(message.contains("end of one"), "{message}");
         assert!(message.contains("Second paragraph here."), "{message}");
         assert_eq!(app.threads[0].line, 3);
+    }
+
+    /// A shell in the side pane, at a prompt the tests can find.
+    fn shell(app: &mut App) {
+        let argv = ["sh".to_string()];
+        let env = ["PS1=cx$ ".to_string(), "ENV=".to_string()];
+        let root = app.workspace.root().to_path_buf();
+        app.start_session(crate::agents::SHELL.0, &argv, &env, &root);
+        shows(app, "cx$");
+    }
+
+    /// Types a command at the shell in front, as a person does, and waits for what it prints.
+    fn run_in_shell(app: &mut App, command: &str, prints: &str) {
+        typed(app, command);
+        enter(app);
+        shows(app, prints);
+    }
+
+    /// Drags across the side pane's output, from where `first` starts to the end of the row
+    /// `rows` below it.
+    fn select_output(app: &mut App, first: &str, rows: u16) {
+        let grid = screen(app);
+        let (x, y) = find(&grid, first);
+        let end = y + rows;
+        let right = grid.row_text(end).trim_end().chars().count() as u16 - 1;
+        app.handle(mouse(MouseKind::Left, x, y));
+        app.handle(mouse(MouseKind::Drag, right, end));
+        app.handle(mouse(MouseKind::Up, right, end));
+    }
+
+    /// What the stand-in agent wrote down, once it has `want`.
+    fn heard(app: &mut App, log: &Path, want: &str) -> String {
+        let deadline = std::time::Instant::now() + BACKGROUND;
+        loop {
+            let text = fs::read_to_string(log).unwrap_or_default();
+            if text.contains(want) {
+                return text;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the agent heard nothing"
+            );
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    /// The commonest loop in agent work, a failing run, goes to the agent without copy and
+    /// paste: select the output in the terminal tab and press Ask Agent, as on a file.
+    #[test]
+    fn ask_agent_on_terminal_output_sends_it_with_its_command_and_places() {
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (160, 40));
+        session(&mut app, "printf ready; cat > heard.txt");
+        shell(&mut app);
+        let failing = r"printf '\102OOM failed\nat beta.rs:1 and gone.rs:3\n'";
+        run_in_shell(&mut app, failing, "BOOM failed");
+        run_in_shell(&mut app, r"printf '\123ECOND\n'", "SECOND");
+        select_output(&mut app, "BOOM failed", 1);
+        let (_, first) = find(&screen(&app), "BOOM failed");
+        let (comment, ask) = app.output_bar().expect("buttons by the selected output");
+        assert_eq!(ask.y, first - 1, "above the first selected row");
+        let row = screen(&app).row_text(ask.y);
+        assert!(
+            row.contains("Comment") && row.contains("Ask Agent"),
+            "{row}"
+        );
+        assert_eq!(comment.right(), ask.x);
+        app.dock.focused = false;
+        assert!(
+            app.output_bar().is_none(),
+            "the buttons go with the pane's focus"
+        );
+        app.dock.focused = true;
+
+        app.handle(mouse(MouseKind::Left, ask.x + 1, ask.y));
+        assert!(app.output_bar().is_none(), "the buttons go once pressed");
+        typed(&mut app, "Why");
+        enter(&mut app);
+        let heard = heard(&mut app, &dir.path().join("heard.txt"), "Why");
+        assert!(
+            heard.contains("BOOM failed at beta.rs:1 and gone.rs:3"),
+            "all of the output: {heard}"
+        );
+        assert!(
+            heard.contains(&format!("in Terminal from `{failing}`")),
+            "the command that printed it, not the one after: {heard}"
+        );
+        assert!(
+            heard.contains("which names beta.rs:1, about"),
+            "the places it names that are in the project: {heard}"
+        );
+        assert!(heard.contains("cellix reply"), "how to answer: {heard}");
+        let thread = &app.threads[0];
+        assert_eq!(thread.text, "Why");
+        assert!(matches!(&thread.about, Some(About::Output { tab, .. }) if tab == "Terminal"));
+    }
+
+    /// Inside Claude Code the question is asked in its prompt, with all of the output.
+    #[test]
+    fn inside_claude_code_terminal_output_goes_to_its_prompt_whole() {
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (160, 40));
+        app.in_pane = true;
+        shell(&mut app);
+        let failing = r"printf '\102OOM failed\nat src/lib.rs:1:5\n'";
+        run_in_shell(&mut app, failing, "BOOM failed");
+        select_output(&mut app, "BOOM failed", 1);
+        let (_, ask) = app.output_bar().expect("buttons by the selected output");
+        app.handle(mouse(MouseKind::Left, ask.x + 1, ask.y));
+        let fill = app
+            .take_outgoing_fill()
+            .expect("words for Claude Code's prompt");
+        let from = format!("Output of `{failing}` in Terminal, which names @src/lib.rs line 1:\n");
+        assert!(fill.starts_with(&from), "{fill}");
+        assert!(
+            fill.contains("> BOOM failed\n> at src/lib.rs:1:5\n"),
+            "{fill}"
+        );
+        assert!(app.dock.draft.is_none(), "no question box in Cellix");
+        assert!(app.output_bar().is_none(), "the buttons go once pressed");
+        assert!(
+            status_line(&app).contains("\"BOOM failed\" is in Claude Code's prompt"),
+            "{}",
+            status_line(&app)
+        );
+    }
+
+    /// A problem in the list goes to the agent with what the checker said, where, and the
+    /// code around it.
+    #[test]
+    fn ask_agent_on_a_problem_sends_the_problem_and_the_code_around_it() {
+        let (dir, mut app) = project();
+        let file = dir.path().join("src/lib.rs");
+        let code = "fn a() {}\nfn b() {}\nfn c() {}\nlet x = itme;\nfn d() {}\nfn e() {}\nfn f() {}\nfn g() {}\n";
+        fs::write(&file, code).unwrap();
+        session(&mut app, "printf ready; cat > heard.txt");
+        let problem = Diagnostic {
+            line: 3,
+            column: 8,
+            message: "cannot find value `itme` in this scope".to_string(),
+            severity: 1,
+        };
+        app.diagnostics.insert(file.clone(), vec![problem]);
+        app.toggle_problems();
+        let (x, y) = find(&screen(&app), "cannot find");
+        assert!(app.problem_ask_at(y).is_some());
+        assert!(
+            !screen(&app).row_text(y).contains("Ask Agent"),
+            "only on the row pointed at"
+        );
+        app.handle(mouse(MouseKind::Move, x, y));
+        let row = screen(&app).row_text(y);
+        assert!(row.contains("Ask Agent"), "{row}");
+        let (chip, ..) = app.problem_ask_at(y).unwrap();
+
+        // Inside Claude Code it goes to its prompt.
+        app.in_pane = true;
+        app.handle(mouse(MouseKind::Left, chip.x + 1, y));
+        let fill = app
+            .take_outgoing_fill()
+            .expect("words for Claude Code's prompt");
+        let quoted = "> fn a() {}\n> fn b() {}\n> fn c() {}\n> let x = itme;\n> fn d() {}\n> fn e() {}\n> fn f() {}\n\n";
+        let want = format!(
+            "@src/lib.rs line 4 has the problem \"cannot find value `itme` in this scope\". Lines 1-7:\n{quoted}"
+        );
+        assert_eq!(fill, want);
+        assert!(
+            !app.editors
+                .iter()
+                .any(|e| e.buffer.path() == Some(file.as_path())),
+            "the button asks; it doesn't open the file"
+        );
+
+        app.in_pane = false;
+        app.handle(mouse(MouseKind::Left, chip.x + 1, y));
+        typed(&mut app, "Fix it");
+        enter(&mut app);
+        let heard = heard(&mut app, &dir.path().join("heard.txt"), "Fix it");
+        assert!(
+            heard.contains(
+                "the problem \"cannot find value `itme` in this scope\" at src/lib.rs line 4"
+            ),
+            "{heard}"
+        );
+        assert!(
+            heard.contains(
+                "fn a() {} fn b() {} fn c() {} let x = itme; fn d() {} fn e() {} fn f() {}\""
+            ),
+            "the code around it: {heard}"
+        );
+        assert!(!heard.contains("fn g()"), "{heard}");
+        assert_eq!(app.threads[0].line, 4);
+        assert_eq!(app.threads[0].quote, "let x = itme;");
     }
 
     #[test]
