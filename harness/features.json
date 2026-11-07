@@ -4100,5 +4100,61 @@
     "title": "Settings' Keyboard section lists every command with its keys, searchable by name or keys; a click records new keys, saved in settings, with keys two commands share flagged",
     "test": "a_command_gets_new_keys_on_the_shortcuts_page_and_they_work",
     "passes": true
+  },
+  {
+    "id": "git-conflict-cards",
+    "milestone": 11,
+    "title": "A file with merge conflicts shows each as a card, current green and incoming blue, its first line holding Compare, Both, Current and Incoming; Source Control lists the file under Merge Changes, offers Mark Resolved once no markers are left, and commits the merge",
+    "test": "a_conflict_is_a_card_whose_choices_settle_it_and_the_merge_commits",
+    "passes": true
+  },
+  {
+    "id": "git-conflict-commands",
+    "milestone": 11,
+    "title": "Next and Previous Conflict step through a file's conflicts, and Accept Current, Incoming or Both settle the one at the caret, from the palette",
+    "test": "conflicts_can_be_stepped_through_and_settled_from_the_palette",
+    "passes": true
+  },
+  {
+    "id": "git-abort-merge",
+    "milestone": 11,
+    "title": "Source Control says when a merge, rebase, cherry-pick or revert is under way, and Abort abandons it after asking",
+    "test": "a_merge_can_be_abandoned_from_the_panel",
+    "passes": true
+  },
+  {
+    "id": "git-stash",
+    "milestone": 11,
+    "title": "Stash from Source Control's menu or the palette, with a message; stashes are listed under the changes, each showing what it holds and offering Apply, Pop and Drop",
+    "test": "changes_are_stashed_from_the_panel_menu_and_popped_from_their_row",
+    "passes": true
+  },
+  {
+    "id": "git-stash-drop",
+    "milestone": 11,
+    "title": "Dropping a stash, from its row or the palette's Drop Stash, asks first",
+    "test": "a_stash_is_dropped_only_once_confirmed",
+    "passes": true
+  },
+  {
+    "id": "git-compare-with",
+    "milestone": 11,
+    "title": "Compare With compares the file in view, unsaved edits and all, with a branch, a recent commit or the clipboard in the diff view",
+    "test": "the_file_compares_with_a_branch_and_with_the_clipboard",
+    "passes": true
+  },
+  {
+    "id": "git-graph",
+    "milestone": 11,
+    "title": "Source Control ends with a graph of the repository's commits in lanes, merges as hollow dots; a commit opens to its files, each showing its diff against the commit before; Show Git History goes there",
+    "test": "the_graph_lists_commits_in_lanes_and_a_commit_opens_to_its_diffs",
+    "passes": true
+  },
+  {
+    "id": "git-file-history",
+    "milestone": 11,
+    "title": "The Explorer's Timeline lists the commits that changed the file in view, each opening its diff there; Show File History lists them all",
+    "test": "the_timeline_lists_the_open_files_commits_and_opens_one",
+    "passes": true
   }
 ]

@@ -55,9 +55,12 @@ use crate::settings::{SERVERS, Settings, default_server};
 use crate::settings_page::{Control, Found, SettingsPage, Values};
 use crate::snippets::Snippet;
 use crate::source::{Hit as SourceHit, Source as SourceControl};
+
+mod gitops;
 use crate::theme::Theme;
 use crate::threads::{self, Draft, Hit as ThreadHit};
 use crate::toolbar::{self, Bar, Tool};
+use gitops::GitChoice;
 
 const ACTIVITY_WIDTH: u16 = 4;
 /// The buttons that stand by a selection, and the one on a picture.
@@ -260,6 +263,8 @@ enum PromptAction {
     NewBranch,
     Image,
     Link,
+    /// Puts changes aside, with the message typed.
+    Stash(cellix_review::Keep),
 }
 
 struct Prompt {
@@ -410,6 +415,7 @@ enum Choice {
     ExportPdf(bool),
     CloseSession(usize),
     Undo(String),
+    Git(GitChoice),
 }
 
 /// The engines behind a keymap. `vim` runs the real Neovim when it's installed, since the
@@ -972,6 +978,8 @@ pub struct App {
     sidebar_view: SidebarView,
     outline: Outline,
     source: SourceControl,
+    /// The file in view's commits, under the Explorer.
+    timeline: crate::timeline::Timeline,
     /// Ticks since Source Control last read the repository.
     source_age: u32,
     /// The periodic look at the tree and git, on its way.
@@ -1221,6 +1229,7 @@ impl App {
             sidebar_view: SidebarView::Explorer,
             outline: Outline::default(),
             source: SourceControl::default(),
+            timeline: crate::timeline::Timeline::default(),
             source_age: 0,
             disk_look: None,
             search,
@@ -2009,6 +2018,10 @@ impl App {
             Some(SourceHit::Unstage(path)) => cellix_review::unstage(&root, &[path]),
             Some(SourceHit::StageAll) => cellix_review::stage(&root, &self.source.unstaged()),
             Some(SourceHit::UnstageAll) => cellix_review::unstage(&root, &self.source.staged()),
+            Some(hit) => {
+                self.click_source_git(hit, (x, y));
+                return;
+            }
         };
         if let Err(why) = result {
             self.say(format!("Git refused: {why}"));
@@ -2038,6 +2051,9 @@ impl App {
 
     /// Commits with the panel's message, staging everything first if nothing's staged.
     fn commit_message(&mut self) {
+        if self.finish_underway() {
+            return;
+        }
         let message = self.source.message.trim().to_string();
         if self.source.entries.is_empty() {
             self.say("Nothing to commit");
@@ -2192,6 +2208,7 @@ impl App {
             | self.poll_spell()
             | self.poll_kernels()
             | self.poll_source()
+            | self.poll_timeline()
             | self.poll_disk()
             | self.poll_pending_ask()
             | self.poll_pan_hint()
@@ -4947,6 +4964,7 @@ impl App {
                 self.run(Command::Quit);
             }
             Choice::ExportPdf(accepted) => self.export_pdf_with(accepted),
+            Choice::Git(choice) => self.choose_git(choice),
             Choice::DiscardFile(path, untracked) => {
                 let root = self.workspace.root().to_path_buf();
                 if let Err(why) = cellix_review::discard(&root, &path, untracked) {
@@ -5546,6 +5564,7 @@ impl App {
                     self.say(format!("Could not open: {e}"));
                 }
             }
+            Some(Item::Git(_, _, pick)) => self.pick_git(pick),
             Some(Item::Gap | Item::Header(_)) | None => {}
         }
     }
@@ -5917,6 +5936,10 @@ impl App {
                 self.reject_proposal();
                 Ok(())
             }
+            PromptAction::Stash(keep) => {
+                self.finish_stash(*keep, name);
+                Ok(())
+            }
             _ if name.is_empty() => Ok(()),
             PromptAction::NewBranch => {
                 let result = create_branch(self.workspace.root(), name);
@@ -5963,6 +5986,9 @@ impl App {
                 self.show_sidebar = true;
                 return;
             }
+        }
+        if self.run_git(command) {
+            return;
         }
         let area = self.focused_area();
         match command {
@@ -10081,6 +10107,7 @@ impl App {
                 }
                 self.open_editor_menu(x, y);
             }
+            MouseKind::Left if in_sidebar && self.click_timeline(x, y) => {}
             MouseKind::Left if in_sidebar && self.on_explorer_header(y) => {
                 self.run(Command::SwitchBranch);
             }
@@ -10111,6 +10138,9 @@ impl App {
                 self.search.focus = None;
                 self.focus = pane;
                 let area = self.focused_area();
+                if self.click_conflict(area, x, y) {
+                    return;
+                }
                 let target = self
                     .editors
                     .get(self.active())
@@ -11294,8 +11324,12 @@ impl App {
                 SidebarView::Explorer => {
                     let header = (name.as_str(), self.branch.as_deref());
                     let measure = &*self.measure;
+                    let (tree, below) = self.timeline.split(area);
                     self.explorer
-                        .draw(grid, area, header, measure, self.hover, theme);
+                        .draw(grid, tree, header, measure, self.hover, theme);
+                    if let Some(below) = below {
+                        self.draw_timeline(grid, below);
+                    }
                 }
                 SidebarView::Search => {
                     self.search
@@ -11389,6 +11423,7 @@ impl App {
                 // While a comment is being written the keys go to it, and so does the caret.
                 let focused = pane == self.focus && self.dock.draft.is_none();
                 editor.draw(grid, area, theme, focused, &self.registry, &marks);
+                crate::conflicts::draw(grid, editor, area, self.hover, theme);
                 if let Some(hover) = self.hover.filter(|h| area.contains(h.0, h.1)) {
                     editor.draw_hover(grid, area, hover, &self.theme);
                 }

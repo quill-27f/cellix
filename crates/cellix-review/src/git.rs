@@ -79,16 +79,27 @@ impl Entry {
         self.index == '?'
     }
 
+    /// Both sides changed it and git couldn't merge them: `UU`, `AA`, `DD` and the rest.
+    pub fn is_conflicted(&self) -> bool {
+        matches!(
+            (self.index, self.worktree),
+            ('U', _) | (_, 'U') | ('A', 'A') | ('D', 'D')
+        )
+    }
+
     pub fn is_staged(&self) -> bool {
-        !matches!(self.index, ' ' | '?')
+        !self.is_conflicted() && !matches!(self.index, ' ' | '?')
     }
 
     pub fn is_unstaged(&self) -> bool {
-        self.is_untracked() || self.worktree != ' '
+        !self.is_conflicted() && (self.is_untracked() || self.worktree != ' ')
     }
 
     /// The letter it shows in one list or the other, as VS Code writes them.
     pub fn letter(&self, staged: bool) -> char {
+        if self.is_conflicted() {
+            return 'C';
+        }
         match (self.is_untracked(), staged) {
             (true, _) => 'U',
             (false, true) => self.index,

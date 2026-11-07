@@ -1,8 +1,11 @@
 //! Reviewing agent work: what changed, how it lines up, and what the reviewer said.
 
+pub mod conflict;
 mod diff;
 mod git;
 mod history;
+mod log;
+mod stash;
 pub mod threads;
 
 pub use diff::{
@@ -16,6 +19,10 @@ pub use git::{
     worktrees,
 };
 pub use history::{Turn, changed_since, checkpoint, restore, text_at, turns};
+pub use log::{Commit, GraphRow, age, commit_files, commit_sides, file_history, graph, log};
+pub use stash::{
+    Keep, Stash, apply_stash, drop_stash, pop_stash, stash, stash_files, stash_sides, stashes,
+};
 pub use threads::{About, Reply, Thread, YOU};
 
 use serde::{Deserialize, Serialize};

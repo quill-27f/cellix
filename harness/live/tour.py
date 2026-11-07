@@ -387,6 +387,62 @@ pub struct Full;
     shoot("125-inlay-hints-light", [["wait", 1.5]], "src/run.rs", cwd=root, background="eff1f5")
 
 
+def git_scenes(scratch):
+    """Git past staging: a merge stopped on a conflict, stashes, the graph, a file's timeline
+    and Compare With, in a project of its own with some history."""
+    root = f"{scratch}/history"
+    os.makedirs(f"{root}/src")
+    def write(name, text):
+        with open(f"{root}/{name}", "w") as f:
+            f.write(text)
+    def commit(message):
+        git(root, "add", "-A")
+        git(root, "commit", "-qm", message)
+    write("src/queue.rs", CODE)
+    write("README.md", "# Queue\n")
+    git(root, "init", "-q", "-b", "main")
+    commit("Start the queue")
+    git(root, "checkout", "-q", "-b", "agent/queue-bound")
+    write("src/queue.rs", CODE.replace("Result<(), Full>", "Result<(), T>").replace("Err(Full)", "Err(item)"))
+    commit("Return the item when the queue is full")
+    git(root, "checkout", "-q", "main")
+    write("README.md", "# Queue\n\nA bounded queue.\n")
+    commit("Say what it is")
+    git(root, "checkout", "-q", "-b", "docs")
+    write("PLAN.md", "# Plan\n\nBound the queue.\n")
+    commit("Write the plan")
+    git(root, "checkout", "-q", "main")
+    git(root, "merge", "-q", "--no-edit", "docs")
+    write("src/queue.rs", CODE.replace("self.items.len() == self.limit", "self.items.len() >= self.limit"))
+    commit("Bound the queue")
+    # Two stashes, one put aside with a message.
+    write("README.md", "# Queue\n\nA bounded queue, for now.\n")
+    git(root, "stash", "push", "-q", "-m", "Tidy the README")
+    write("PLAN.md", "# Plan\n\nRing buffer?\n")
+    git(root, "stash", "push", "-q")
+    graph = [["wait", 1.0], ["keys", "\x1b[112;6u"], ["wait", 0.8], ["keys", "Show Git History"], ["wait", 0.8],
+             ["keys", "\r"], ["wait", 3.0]]
+    shoot("81-git-graph", graph, "README.md", size="120x40", cwd=root)
+    # The newest commit's row, opened to its files.
+    # The newest commit's row, opened to its files: the graph's heading is the panel's top row.
+    shoot("82-git-commit-open", [*graph, ["wait", 3.0], ["click", 14, 2], ["wait", 2.0]], "README.md", size="120x40", cwd=root)
+    shoot("83-git-timeline", [["wait", 1.5]], "src/queue.rs", size="120x40", cwd=root)
+    compare = [["wait", 1.0], ["keys", "\x1b[112;6u"], ["wait", 0.8], ["keys", "Compare With"], ["wait", 0.8],
+               ["keys", "\r"], ["wait", 1.0]]
+    shoot("84-git-compare", compare, "src/queue.rs", size="120x40", cwd=root)
+    shoot("85-git-compared", [*compare, ["keys", "agent"], ["wait", 0.8], ["keys", "\r"], ["wait", 1.5]],
+          "src/queue.rs", size="120x40", cwd=root)
+    # Then a merge that stops on a conflict.
+    subprocess.run(["git", "-c", "user.name=tour", "-c", "user.email=tour@example.com", "merge", "-q",
+                    "agent/queue-bound"], cwd=root, capture_output=True)
+    source = [["wait", 1.0], ["click", RAIL_X, REVIEW], ["wait", 3.0]]
+    shoot("86-git-merge-panel", source, "src/queue.rs", size="120x40", cwd=root)
+    shoot("87-git-conflict", [["wait", 0.8]], "src/queue.rs", size="120x40", cwd=root)
+    shoot("88-git-conflict-hover", [["wait", 1.0], ["move", 100, 16], ["wait", 0.6]],
+          "src/queue.rs", size="120x40", cwd=root)
+    shoot("89-git-stashes", [*source, ["wheel", 14, 20, 3], ["wait", 0.4]], "src/queue.rs", size="120x40", cwd=root)
+
+
 with tempfile.TemporaryDirectory() as scratch:
     ROOT = f"{scratch}/queue"
     HOME = f"{scratch}/home"
@@ -700,3 +756,4 @@ with tempfile.TemporaryDirectory() as scratch:
     problems = [["wait", 2.0], ["click", 164, 1], ["wait", 100], ["click", *PROBLEM_COUNT], ["wait", 0.6],
                 ["move", *PROBLEM_ROW], ["wait", 0.4]]
     shoot("109-problem-ask", problems, "docs/broken.tex", size="170x44", timeout=130)
+    git_scenes(scratch)

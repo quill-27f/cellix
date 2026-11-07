@@ -1224,6 +1224,27 @@ impl Editor {
         self.top = middle.min(self.last_top());
     }
 
+    /// Where code goes in a pane, and how wide its line numbers are, for what is drawn over
+    /// the code, as merge conflicts are.
+    pub fn code_layout(&self, area: Rect) -> (Rect, u16) {
+        let text = self.text_area(area);
+        (text, self.gutter_width(text.w))
+    }
+
+    /// The screen rows a line's rows stand on in the code view, for what's drawn over them:
+    /// none where it's folded away, scrolled off, or under a pinned header.
+    pub fn line_rows_on_screen(&self, area: Rect, line: usize) -> Vec<u16> {
+        let text = self.text_area(area);
+        let rows = self.code_rows(text.w);
+        let pinned = self.sticky(&rows, text).len();
+        rows.rows_of(line)
+            .filter_map(|row| {
+                let offset = row.checked_sub(self.top)?;
+                (offset >= pinned && offset < text.h as usize).then(|| text.y + offset as u16)
+            })
+            .collect()
+    }
+
     /// Narrow panes keep only the digits they need: every column counts there.
     fn gutter_width(&self, pane_width: u16) -> u16 {
         let digits = self.buffer.rope().len_lines().to_string().len();

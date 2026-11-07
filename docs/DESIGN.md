@@ -258,6 +258,22 @@ nothing changes there. Ghostty's config is never touched.
 A tile is keyed by what its row shows, and paint can stand in several rows, so a row with
 paint on it keys by its own number too.
 
+### Git beyond staging
+
+Every row of the code view is a line of the file, so nothing is drawn between lines. A merge
+conflict is a card made of its own marker lines: `<<<<<<<` is the header, naming the current
+side and holding Compare, Both, Current and Incoming; `=======` names the incoming side;
+`>>>>>>>` is the foot. Current is tinted green, incoming blue, both mixed from the theme.
+
+The commit graph sits at the end of Source Control, as in VS Code. Its lanes are straight
+lines with square joins, box-drawing characters on cells and hairlines on pixels, and a merge
+is a hollow dot. A commit opens to its files under it; a file opens the diff view against the
+commit's first parent. The open file's commits are the Explorer's Timeline.
+
+Commits, stashes and Compare With use the diff view read-only: no Accept or Reject, a list of
+what's in them, and a title naming both sides. A stash is named by its commit, never its
+place in the list, since every worktree shares one list and agents push and pop it.
+
 ## Theme
 
 `theme` is `auto`, `dark` or `light`. `auto` is the default: Cellix asks the terminal for

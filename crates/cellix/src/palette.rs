@@ -46,6 +46,20 @@ pub enum Item {
     Header(String),
     /// A folder or file from Open Recent, as `~` writes it, and whether it's a folder.
     Recent(PathBuf, String, bool),
+    /// A choice in one of git's lists: what it says, what stands at its right, and what it does.
+    Git(String, String, GitPick),
+}
+
+/// What picking a row of one of git's lists does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GitPick {
+    /// Compare the file in view with a branch or commit, and what to call it.
+    CompareRef(String, String),
+    CompareClipboard,
+    /// Apply, pop or drop a stash, by its commit.
+    Stash(crate::source::StashAction, String),
+    /// A commit that changed a file, and the file as it was called there.
+    FileCommit(Box<cellix_review::Commit>, PathBuf),
 }
 
 /// A row of Go to Symbol.
@@ -126,7 +140,7 @@ impl Item {
             Self::Command(label, _) => label,
             Self::Task(task) => &task.label,
             Self::Header(name) => name,
-            Self::Branch(name, _) | Self::Citation(name, _) => name,
+            Self::Branch(name, _) | Self::Citation(name, _) | Self::Git(name, _, _) => name,
             Self::Symbol(symbol) => &symbol.name,
             Self::NewBranch => "New branch…",
             Self::Gap => "",
@@ -140,7 +154,7 @@ impl Item {
                 None
             }
             Self::Command(_, command) => keys_of(*command),
-            Self::Branch(_, when) | Self::Citation(_, when) => Some(when),
+            Self::Branch(_, when) | Self::Citation(_, when) | Self::Git(_, when, _) => Some(when),
             Self::Folder(_, _, note) => (!note.is_empty()).then_some(note),
             Self::Symbol(symbol) => (!symbol.place.is_empty()).then_some(&symbol.place),
             Self::Task(task) => task.default_build.then_some("default build · Ctrl+Shift+B"),
@@ -188,7 +202,7 @@ pub fn keys_of(command: Command) -> Option<&'static str> {
     })
 }
 
-pub const COMMANDS: [(&str, Command); 100] = [
+pub const COMMANDS: [(&str, Command); 117] = [
     ("Save", Command::Save),
     ("Undo", Command::Undo),
     ("Redo", Command::Redo),
@@ -288,6 +302,24 @@ pub const COMMANDS: [(&str, Command); 100] = [
     ("Format Document", Command::FormatDocument),
     ("Complete", Command::Complete),
     ("Rename Symbol", Command::RenameSymbol),
+    // Git
+    ("Stash Changes", Command::Stash),
+    ("Stash Including Untracked", Command::StashUntracked),
+    ("Stash Staged Changes", Command::StashStaged),
+    ("Pop Latest Stash", Command::PopStash),
+    ("Apply Stash…", Command::ApplyStash),
+    ("Pop Stash…", Command::PickStashToPop),
+    ("Drop Stash…", Command::DropStash),
+    ("Compare With…", Command::CompareWith),
+    ("Show Git History", Command::ShowHistory),
+    ("Show File History", Command::FileHistory),
+    ("Accept Current Change", Command::AcceptCurrent),
+    ("Accept Incoming Change", Command::AcceptIncoming),
+    ("Accept Both Changes", Command::AcceptBoth),
+    ("Compare Current and Incoming", Command::CompareConflict),
+    ("Next Conflict", Command::NextConflict),
+    ("Previous Conflict", Command::PreviousConflict),
+    ("Abort Merge", Command::AbortMerge),
     ("Quit", Command::Quit),
 ];
 

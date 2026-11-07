@@ -289,6 +289,32 @@ pub enum Command {
     SelectLines(usize),
     /// Pastes after the cursor, or below it for a copied line.
     PasteLine,
+    /// Git: puts the changes aside, with untracked files too, or only what's staged.
+    Stash,
+    StashUntracked,
+    StashStaged,
+    /// Brings the newest stash back and drops it.
+    PopStash,
+    /// Picks a stash to apply, pop or drop.
+    ApplyStash,
+    PickStashToPop,
+    DropStash,
+    /// Compares the file in view with a branch, a commit or the clipboard.
+    CompareWith,
+    /// The repository's commits, drawn as a graph.
+    ShowHistory,
+    /// The commits that changed the file in view.
+    FileHistory,
+    /// Settles the conflict at the caret, keeping one side or both.
+    AcceptCurrent,
+    AcceptIncoming,
+    AcceptBoth,
+    /// The conflict at the caret, its two sides in the diff.
+    CompareConflict,
+    NextConflict,
+    PreviousConflict,
+    /// Gives up the merge, rebase, cherry-pick or revert under way.
+    AbortMerge,
     Cancel,
     Quit,
 }

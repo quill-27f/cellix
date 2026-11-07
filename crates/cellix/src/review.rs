@@ -77,6 +77,42 @@ enum ListRow {
     File(usize),
 }
 
+/// Something fixed to read, rather than the working tree against HEAD or a turn: nothing in
+/// it can be accepted or rejected.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Fixed {
+    /// A commit against its first parent.
+    Commit(cellix_review::Commit),
+    /// A stash against the commit it was made on: its commit and its title.
+    Stash(String, String),
+    /// One file against a branch, a commit or the clipboard: what the title row says, the
+    /// old text, and the file as the editor has it.
+    File {
+        title: String,
+        old: String,
+        new: String,
+    },
+}
+
+impl Fixed {
+    /// What the title row says beside the file.
+    fn describe(&self) -> String {
+        match self {
+            Fixed::Commit(commit) => format!("{} {}", commit.short(), commit.summary),
+            Fixed::Stash(_, title) => format!("stash: {title}"),
+            Fixed::File { title, .. } => title.clone(),
+        }
+    }
+
+    fn heading(&self) -> &'static str {
+        match self {
+            Fixed::Commit(_) => "IN THIS COMMIT",
+            Fixed::Stash(..) => "IN THIS STASH",
+            Fixed::File { .. } => "COMPARED",
+        }
+    }
+}
+
 /// Colour spans for one line: start, end and token, in chars.
 type LineTokens = Vec<(usize, usize, Token)>;
 
@@ -113,6 +149,8 @@ pub struct Review {
     reading: Option<Receiver<Reading>>,
     /// Where the pointer is, set each time the view is drawn.
     hover: Cell<Option<(u16, u16)>>,
+    /// A commit, stash or comparison to read, in place of the working tree.
+    pub fixed: Option<Fixed>,
 }
 
 /// What git says about the tree, gathered off the main thread: several git commands take
@@ -267,8 +305,35 @@ impl Review {
             beside_panel: false,
             title_room: Cell::new(0),
             wanted: None,
+            fixed: None,
         };
         review.refresh();
+        review
+    }
+
+    /// A commit, a stash, or one file against something else, to read. `path` is the file to
+    /// show first.
+    pub fn fixed(root: PathBuf, registry: Rc<Registry>, fixed: Fixed, path: Option<&Path>) -> Self {
+        let changes = match &fixed {
+            Fixed::Commit(commit) => cellix_review::commit_files(&root, commit),
+            Fixed::Stash(hash, _) => cellix_review::stash_files(&root, hash),
+            Fixed::File { .. } => path
+                .map(|p| Change {
+                    path: p.to_path_buf(),
+                    status: 'M',
+                })
+                .into_iter()
+                .collect(),
+        };
+        let mut review =
+            Self::proposing(root, registry, PathBuf::new(), String::new(), String::new());
+        review.proposal = None;
+        review.changes = changes;
+        review.fixed = Some(fixed);
+        review.selected = path
+            .and_then(|p| review.changes.iter().position(|c| c.path == p))
+            .unwrap_or(0);
+        review.load();
         review
     }
 
@@ -301,6 +366,7 @@ impl Review {
             beside_panel: false,
             title_room: Cell::new(0),
             wanted: None,
+            fixed: None,
         };
         review.reload_proposal();
         review.proposal = Some(vec![false; review.diff.hunks.len()]);
@@ -383,7 +449,7 @@ impl Review {
     /// Rereads git and the selected file now, for when what follows depends on it. Keeps
     /// the selection where it can.
     pub fn refresh(&mut self) {
-        if self.is_proposal() {
+        if self.is_proposal() || self.fixed.is_some() {
             return;
         }
         self.reading = None;
@@ -393,7 +459,7 @@ impl Review {
 
     /// Rereads in the background. `poll` picks up the result.
     pub fn refresh_later(&mut self) {
-        if self.is_proposal() {
+        if self.is_proposal() || self.fixed.is_some() {
             return;
         }
         let (root, base) = (self.root.clone(), self.base);
@@ -483,11 +549,19 @@ impl Review {
             self.tokens = (Vec::new(), Vec::new());
             return;
         };
-        let old = match self.base_commit() {
-            Some(commit) => text_at(&self.root, &commit, &path),
-            None => head_text(&self.root, &path),
+        let (old, new) = match &self.fixed {
+            Some(Fixed::Commit(commit)) => cellix_review::commit_sides(&self.root, commit, &path),
+            Some(Fixed::Stash(hash, _)) => cellix_review::stash_sides(&self.root, hash, &path),
+            Some(Fixed::File { old, new, .. }) => (old.clone(), new.clone()),
+            None => {
+                let old = match self.base_commit() {
+                    Some(commit) => text_at(&self.root, &commit, &path),
+                    None => head_text(&self.root, &path),
+                };
+                let new = std::fs::read_to_string(self.root.join(&path)).unwrap_or_default();
+                (old, new)
+            }
         };
-        let new = std::fs::read_to_string(self.root.join(&path)).unwrap_or_default();
         self.show_file(&path, old, new);
     }
 
@@ -540,6 +614,9 @@ impl Review {
 
     /// Whether a hunk's new text has already reached the index.
     pub fn is_accepted(&self, hunk: usize) -> bool {
+        if self.fixed.is_some() {
+            return false;
+        }
         if let Some(kept) = &self.proposal {
             return kept.get(hunk).copied().unwrap_or(false);
         }
@@ -573,6 +650,11 @@ impl Review {
         let mut rows = Vec::new();
         if self.is_proposal() {
             rows.push(ListRow::Heading("PROPOSED CHANGE"));
+            rows.extend((0..self.changes.len()).map(ListRow::File));
+            return rows;
+        }
+        if let Some(fixed) = &self.fixed {
+            rows.push(ListRow::Heading(fixed.heading()));
             rows.extend((0..self.changes.len()).map(ListRow::File));
             return rows;
         }
@@ -743,6 +825,7 @@ impl Review {
         }
         let row = (y - body.y - 1) as usize;
         match self.stacked(comments).get(self.top + row)? {
+            Stacked::Header(_) if self.fixed.is_some() => None,
             Stacked::Header(hunk) => {
                 let (accept, reject) = Self::button_spots(body);
                 if x >= accept && x < accept + ACCEPT.len() as u16 {
@@ -821,17 +904,26 @@ impl Review {
         }
         if narrow {
             let title = format!("◂ {}/{}  {file}", self.selected + 1, self.changes.len());
-            grid.label(
+            let end = grid.label(
                 body.x + 1,
                 y,
                 &title,
                 strong,
                 body.right().saturating_sub(2),
             );
+            // Beside Source Control there's no list, so the title says what this is.
+            if let Some(fixed) = &self.fixed {
+                let room = body.right().saturating_sub(3);
+                grid.label(end + 2, y, &fixed.describe(), dim, room);
+            }
             grid.put_str(body.right().saturating_sub(2), y, "▸", dim, body.right());
             return;
         }
         let end = grid.label(body.x + 1, y, &file, strong, body.right());
+        if let Some(fixed) = &self.fixed {
+            grid.label(end + 2, y, &fixed.describe(), dim, body.right());
+            return;
+        }
         let since = match self.base.and_then(|b| self.turns.get(b)) {
             Some(turn) => format!("since \u{201c}{}\u{201d}", turn.label),
             None => "since the last commit".to_string(),
@@ -853,6 +945,9 @@ impl Review {
             dim,
             reject.saturating_sub(1),
         );
+        if self.fixed.is_some() {
+            return;
+        }
         if self.is_accepted(hunk) {
             let done = Style {
                 fg: theme.git_added,
