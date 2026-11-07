@@ -2364,7 +2364,21 @@ impl App {
             }
             let from = top.saturating_sub(rows);
             let to = (bottom + rows).min(lines);
-            client.inlay_hints(&path, (from, to), revision);
+            // The range ends inside the document: at the start of line `to`, or at the end of
+            // the last line when `to` reaches it.
+            let last = lines.saturating_sub(1);
+            let end = if to < last {
+                (to, 0)
+            } else {
+                let text = editor.buffer.rope().line(last);
+                let width = text
+                    .chars()
+                    .filter(|c| *c != '\n' && *c != '\r')
+                    .map(char::len_utf16)
+                    .sum();
+                (last, width)
+            };
+            client.inlay_hints(&path, from, end, revision);
             editor.hints_asked = Some((revision, from, to));
         }
     }
@@ -24073,6 +24087,51 @@ mod tests {
             screen(&app).text().contains("line 29"),
             "{}",
             screen(&app).text()
+        );
+    }
+
+    #[test]
+    fn a_page_scrolled_past_its_end_keeps_its_scrollbar_over_the_file() {
+        // With the pane under the file, the thumb of a page scrolled past its end stopped
+        // short of its track's end and ran on over the pane.
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (60, 40));
+        let note: String = (0..60).map(|i| format!("Paragraph {i}.\n\n")).collect();
+        fs::write(dir.path().join("note.md"), note).unwrap();
+        app.open(&dir.path().join("note.md")).unwrap();
+        app.run(Command::ListAgents);
+        let pane = app.dock_area().unwrap();
+        assert!(app.dock_under(), "the pane stands under the file");
+        let area = app.main_area();
+        for _ in 0..300 {
+            app.handle(mouse(MouseKind::ScrollDown, area.x + 10, area.y + 3));
+        }
+        let grid = screen(&app);
+        let unit = cellix_render::UNIT as f32;
+        let colour = app.theme().scrollbar;
+        // The thumb is painted, so it's the paint that must stay over the file.
+        let thumbs: Vec<(f32, f32)> = grid
+            .paint
+            .iter()
+            .filter_map(|p| match p {
+                Paint::Panel {
+                    bounds,
+                    fill: Some(fill),
+                    radius: 20,
+                    ..
+                } if *fill == colour => {
+                    Some((bounds.y as f32 / unit, (bounds.y + bounds.h) as f32 / unit))
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(!thumbs.is_empty(), "the page has a thumb");
+        let over_file =
+            |(top, bottom): &(f32, f32)| *top >= area.y as f32 && *bottom <= pane.y as f32;
+        assert!(
+            thumbs.iter().all(over_file),
+            "{thumbs:?} past row {}",
+            pane.y
         );
     }
 

@@ -1533,3 +1533,30 @@ Landed last in the 0.6.0 relay, on #10's branch. The docked layout's submenus no
 Tests changed with the design: `with_paint_groups_part_on_a_hairline_not_a_row` asserted a painted menu was exactly its items tall; it's now `with_paint_a_menu_is_whole_rows_and_a_rule_has_half_a_row`. The menu tests that clicked a row by its integer y now give the middle of the row. The tour's tab menu scene waits for the app before right-clicking.
 
 Not done: terminal content half a row under its header (cells can't move by half a row; the pixel tier would have to draw the terminal as paint), and half a row of air before the status bar became a whole row, for code only, since the docked-layout session changes rendered pages' scroll end. Unverified: all of it in a real terminal; the tour and the ui-expert have seen it.
+
+## 0.6.0: what the combined tour found (2026-11-07)
+
+The eleven sessions' branches went onto main in order. The tour of the combined code, reviewed by the ui-expert, found four things that blocked the release. Three are fixed:
+
+- **A raw rust-analyzer error in the status bar on opening a file:** "Invalid offset LineCol { line: 26, col: 0 }". Inlay hints were asked for up to line `len_lines()`, which is past the end of a file with no final newline. The range now ends at the end of the last line. A refusal of a request made in the background (hints, folds, signatures) no longer reaches the status bar. Test: `only_what_the_person_asked_for_reports_a_refusal`.
+- **A page scrolled past its end drew its scrollbar thumb past its track,** over a pane standing under the file. The thumb now stops at the bottom of its track. Test: `a_page_scrolled_past_its_end_keeps_its_scrollbar_over_the_file`.
+- **Tour scenes that showed the wrong screen:**
+  - 51-agent-list sent its keys before the page was up.
+  - 57-dock-menu-format pointed below Format, since menus now stand on whole rows.
+  - 138-welcome-recent had an empty recent list, since each scene has its own cache; it's now written for the scene.
+  - 09, 135, 51-inbox-empty and 108 were timing flakes under load; they are right when retaken.
+
+Not fixed: side-pane tabs run under the icons at the top right when a narrow pane has a named tab in front and another beside it (131-task-failed, 132). The layout is 0.5.5's, so this isn't new in 0.6.0, but task and Inbox tabs make it more frequent. Shortening the tab in front was tried and taken out: at 120 columns the title row has about 16 columns, so the front tab became a stub, and two tests that say the tab in front keeps its name rightly failed. The fix is the reviewer's: tabs that don't fit fold into a "N more" chip with a menu, as the docked editor tabs do. It's the first thing after 0.6.0.
+
+The whole tour also no longer fits in the guard's 30 minutes. It was run in two parts with `TOUR_ONLY`.
+
+Left from the review for after 0.6.0 (polish, not broken):
+- The top-right icons need a reserved width and one background. The Task page header shows dark boxes there, and a narrow pane's tab in front gets only a few columns.
+- Section headings come in three styles: Agent Context, Source Control and Timeline, and the Task page.
+- Some actions are plain text, not buttons: Clear Finished, Show Source, Compare, Install. The Merging label and Abort touch.
+- Menus have uneven space below their last item. Palettes and the signature pop-up cut through text rows.
+- In the light theme, the window padding is paler than the activity bar.
+- The bottom dock uses the right-sidebar hide icon.
+- 89-git-stashes is scrolled with no commit box.
+- The "You" boxes on the Task page wrap early.
+- Wording: "1 lines", and "That's every change. Commit when it's ready." on a comparison.

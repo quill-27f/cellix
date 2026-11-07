@@ -4238,7 +4238,9 @@ impl Editor {
             return;
         }
         let height = (rows * rows / lines).max(1);
-        let top = self.top * rows / lines;
+        // A page scrolls past its end, so the thumb stops at the bottom of its track rather
+        // than run on over whatever stands under the file.
+        let top = (self.top * rows / lines).min(rows.saturating_sub(height));
         // A slim rounded thumb on the pixel tiers, and a block of colour on cells.
         let cells = Rect::new(track.x, track.y + top as u16, 1, height as u16);
         let thumb = cellix_render::Style {

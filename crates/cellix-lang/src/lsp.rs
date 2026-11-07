@@ -583,7 +583,15 @@ fn read_loop(
         let kind = pending.lock().ok().and_then(|mut p| p.remove(&id));
         let result = &message["result"];
         if let Some(error) = message["error"]["message"].as_str() {
-            let _ = events.send(LspEvent::Failed(error.to_string()));
+            // Folds, hints and signatures are asked for in the background, not by the person, so
+            // a refusal is no news to them; the next edit or scroll asks again.
+            let background = matches!(
+                kind,
+                Some(Pending::Folds(_) | Pending::InlayHints(..) | Pending::Signature)
+            );
+            if !background {
+                let _ = events.send(LspEvent::Failed(error.to_string()));
+            }
             continue;
         }
         let event = match kind {
@@ -835,11 +843,13 @@ impl Client {
 
     /// Asks for the hints in lines `from..to`, tagged so an answer to an older question can
     /// be told apart.
-    pub fn inlay_hints(&mut self, path: &Path, (from, to): (usize, usize), tag: u64) {
+    /// Hints from the start of line `from` to `end`, a line and a UTF-16 column that must be in
+    /// the document: servers such as rust-analyzer refuse a range past its last line.
+    pub fn inlay_hints(&mut self, path: &Path, from: usize, end: (usize, usize), tag: u64) {
         let params = json!({
             "textDocument": {"uri": uri(path)},
             "range": {"start": {"line": from, "character": 0},
-                      "end": {"line": to, "character": 0}},
+                      "end": {"line": end.0, "character": end.1}},
         });
         let kind = Pending::InlayHints(path.to_path_buf(), tag);
         self.request("textDocument/inlayHint", params, kind);
@@ -933,6 +943,38 @@ mod tests {
         assert_eq!(language_id("C#"), "csharp");
         assert_eq!(language_id("Shell"), "shellscript");
         assert_eq!(language_id("Rust"), "rust");
+    }
+
+    #[test]
+    fn only_what_the_person_asked_for_reports_a_refusal() {
+        // rust-analyzer refuses a hint range past the file's end with "Invalid offset LineCol";
+        // that was asked in the background, so it must not reach the status bar. A refused
+        // definition was asked for, so it still does.
+        let (writer, _child) = writer_over_cat();
+        let writer = Mutex::new(writer);
+        let pending = Mutex::new(HashMap::from([
+            (1, Pending::InlayHints(PathBuf::from("a.rs"), 3)),
+            (2, Pending::Folds(PathBuf::from("a.rs"))),
+            (3, Pending::Signature),
+            (4, Pending::Definition),
+        ]));
+        let mut raw = String::new();
+        for id in 1..=4 {
+            let body = json!({"jsonrpc": "2.0", "id": id,
+                "error": {"code": -32603, "message": format!("refused {id}")}})
+            .to_string();
+            raw.push_str(&format!("Content-Length: {}\r\n\r\n{body}", body.len()));
+        }
+        let (sender, events) = channel();
+        read_loop(raw.as_bytes(), &writer, &pending, &sender);
+        let said: Vec<String> = events
+            .try_iter()
+            .map(|event| match event {
+                LspEvent::Failed(message) => message,
+                _ => String::new(),
+            })
+            .collect();
+        assert_eq!(said, ["refused 4"]);
     }
 
     #[test]

@@ -694,10 +694,15 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("137-settings-keys-record", [*to_section(4), ["keys", "rerun"], ["wait", 0.4],
                                        *[["keys", "\t"]] * 8, ["keys", "\r"], ["keys", "\x1b\x12"],
                                        ["wait", 0.4]], CODE_FILE)
-    # By now the tasks folder and its file are recent, beside Start.
+    # The tasks folder and its file recent, beside Start. Each scene has a cache of its own,
+    # so the list the scenes above left isn't there: this one is written for it.
     fresh = f"{scratch}/fresh"
     os.makedirs(fresh)
-    shoot("138-welcome-recent", [], size="150x44", cwd=fresh)
+    recent_cache = tempfile.mkdtemp(prefix="cx", dir="/tmp")
+    os.makedirs(f"{recent_cache}/cellix")
+    with open(f"{recent_cache}/cellix/recent.json", "w") as f:
+        json.dump({"folders": [tasks, ROOT], "files": [f"{tasks}/src/main.c", f"{ROOT}/{CODE_FILE}"]}, f)
+    shoot("138-welcome-recent", [], size="150x44", cwd=fresh, env={"XDG_CACHE_HOME": recent_cache})
     shoot("20-prompt", [["right", 12, 2], ["click", 14, 2]])
     shoot("21-selection", [["double", 49, 13], ["keys", CTRL("d")]], CODE_FILE)
     shoot("22-narrow", [], CODE_FILE, size="64x30")
@@ -780,7 +785,11 @@ with tempfile.TemporaryDirectory() as scratch:
                                       ["keys", "show comments"], ["wait", 1.0], ["keys", "\r"],
                                       ["wait", 1.5]],
           "docs/PLAN.md", size="96x44")
-    shoot("51-agent-list", [*LIST_AGENTS, ["wait", 0.6]], NOTE_FILE, size="150x44")
+    # The page takes a moment to typeset at this size, and keys sent before it's up are lost,
+    # so this goes as slowly as the inbox scene beside it.
+    list_slowly = [["wait", 1.0], ["keys", "\x1b[112;6u"], ["wait", 1.0], ["keys", "List Agents"], ["wait", 1.0],
+                   ["keys", "\r"]]
+    shoot("51-agent-list", [*list_slowly, ["wait", 1.0]], NOTE_FILE, size="150x44")
     shoot("51-inbox-empty", [*SHOW_INBOX, ["wait", 0.6]], NOTE_FILE, size="150x44")
     shell = [*LIST_AGENTS, ["wait", 0.6]]
     shoot("52-paper", [], PAPER_FILE, size="150x44", background="eff1f5")
@@ -796,7 +805,8 @@ with tempfile.TemporaryDirectory() as scratch:
                                ["keys", "\r"], ["wait", 1.0]], NOTE_FILE, size="64x40")
     shoot("57-dock-agents", [*LIST_AGENTS, ["wait", 0.6]], NOTE_FILE, size="64x40")
     shoot("57-dock-menu", [["wait", 1.5], ["right", 20, 12], ["wait", 0.4]], NOTE_FILE, size="64x40")
-    shoot("57-dock-menu-format", [["wait", 1.5], ["right", 20, 12], ["wait", 0.4], ["move", 24, 16],
+    # Format is the fourth item down, past the rule under Paste: menus stand on whole rows.
+    shoot("57-dock-menu-format", [["wait", 1.5], ["right", 20, 12], ["wait", 0.4], ["move", 24, 17],
                                   ["wait", 0.4]], NOTE_FILE, size="64x40")
     # With the pane open the note is taller than its view, so it has an end to scroll past.
     shoot("57-dock-end", [*LIST_AGENTS, ["wait", 0.6], ["wheel", 30, 10, 40], ["wait", 1.0]], NOTE_FILE,

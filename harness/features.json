@@ -4303,5 +4303,19 @@
     "title": "The light theme is Catppuccin Latte",
     "test": "the_light_theme_is_catppuccin_latte",
     "passes": true
+  },
+  {
+    "id": "lsp-background-quiet",
+    "milestone": 12,
+    "title": "A server refusing a background request (hints, folds, signatures) says nothing in the status bar",
+    "test": "only_what_the_person_asked_for_reports_a_refusal",
+    "passes": true
+  },
+  {
+    "id": "scrollbar-in-its-track",
+    "milestone": 12,
+    "title": "A page scrolled past its end keeps its scrollbar thumb inside its track, clear of a pane under the file",
+    "test": "a_page_scrolled_past_its_end_keeps_its_scrollbar_over_the_file",
+    "passes": true
   }
 ]
