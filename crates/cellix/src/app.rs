@@ -16878,6 +16878,8 @@ mod tests {
     /// What's painted for the button labelled `label`, as (left, top, right, bottom) in
     /// columns and rows: the smallest rounded panel under its words. Taken from the paint,
     /// not the layout, so a hit test can't agree with the painter by sharing its mistake.
+    // Only the Unix tests click dialogs this way.
+    #[cfg_attr(not(unix), allow(dead_code))]
     fn painted_button(app: &App, label: &str) -> (f32, f32, f32, f32) {
         let grid = screen(app);
         let unit = cellix_render::UNIT as f32;
@@ -16913,6 +16915,8 @@ mod tests {
     }
 
     /// A sliver inside each painted edge: top, bottom, left and right.
+    // Only the Unix tests click dialogs this way.
+    #[cfg_attr(not(unix), allow(dead_code))]
     fn button_edges((left, top, right, bottom): (f32, f32, f32, f32)) -> [(f32, f32); 4] {
         let (middle_x, middle_y) = ((left + right) / 2.0, (top + bottom) / 2.0);
         let sliver = 0.03;
@@ -16925,6 +16929,8 @@ mod tests {
     }
 
     /// A press and release where a terminal reporting pixels would put them.
+    // Only the Unix tests click dialogs this way.
+    #[cfg_attr(not(unix), allow(dead_code))]
     fn click_fine(app: &mut App, (x, y): (f32, f32)) {
         for kind in [MouseKind::Left, MouseKind::Up] {
             app.handle(Event::Mouse(MouseEvent {

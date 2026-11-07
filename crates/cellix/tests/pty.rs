@@ -89,6 +89,7 @@ struct Screen {
     input: Input,
     raw: Raw,
     /// Everything Cellix wrote, for what never shows on screen, such as a notification.
+    #[cfg_attr(not(unix), allow(dead_code))]
     all: Raw,
     child: Box<dyn portable_pty::Child + Send + Sync>,
     /// Kept for as long as the screen: on Windows, dropping the master closes the console.
@@ -963,11 +964,13 @@ fn cli_reads_comments_over_socket() {
 }
 
 /// Everything Cellix has written, as text.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn written(screen: &Screen) -> String {
     String::from_utf8_lossy(&screen.all.lock().unwrap()).into_owned()
 }
 
 /// Has the Cellix in `dir` hear from an agent through its hook, as Claude Code's would.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn hook(dir: &Path, cache: &Path, kind: &str, input: &str) {
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_cellix"))
         .args(["hook", kind])
