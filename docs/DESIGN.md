@@ -1,12 +1,27 @@
 # Cellix design
 
-Date: 2026-11-01. Status: implemented through milestone 4 plus Vim mode. Progress is in
-`docs/PROGRESS.md` and `harness/features.json`.
+Date: 2026-11-01, goal revised 2026-11-07. Progress is in `docs/PROGRESS.md` and
+`harness/features.json`.
 
 ## Goal
 
-Keep people in the terminal they already use, locally or over SSH, and give them
-a good-looking, mouse-first editor for reviewing and correcting agent work.
+The editor you keep open all day in the terminal you already use, locally or over SSH: VS
+Code's layout and keys, what a developer does every day without extensions, and what VS Code
+can't do from a terminal. That last part is the reason to choose it:
+
+- Agents built in: the real agent in the side pane, comments it answers, plans and turns to
+  review, and sessions that outlive a quit or a dropped connection.
+- Documents as pages: Markdown and LaTeX edited as typeset pages, with PDFs beside them.
+- Native over SSH: Cellix runs where the code is, with nothing installed on the far side
+  and no multiplexer, as light on the machine as a terminal program should be.
+
+It began as a companion for reviewing and correcting agent work. Used standalone, with
+workspaces in place of tmux, it became the place the work happens, so parity with VS Code's
+everyday features is now part of the goal: the floor, not the point. VS Code's extensions are
+not part of it. Most serve a way of working from before agents; languages come from the
+registry and language servers, and the rest of the effort goes into the loop of working with
+agents: directing them, watching them, reviewing what they did, checking it works, and keeping
+what was decided.
 
 ## Decisions
 
@@ -17,7 +32,7 @@ a good-looking, mouse-first editor for reviewing and correcting agent work.
 | Agents | The real program on a PTY in a side pane, plus `$VISUAL` and thin plugins. Its interface is never rebuilt |
 | Editing | Cellix's simple mode by default, optional Vim and Neovim modes |
 | Multiplexers | tmux and Zellij are required targets |
-| Scope | Reviewing and correcting agent work, with everyday editing and LSP. No debugger |
+| Scope | An everyday editor at VS Code's built-in level, agent-native, with document pages. No extensions; no debugger for now |
 | Licence | MIT OR Apache-2.0 |
 
 ## Rendering
@@ -367,17 +382,27 @@ Order: Simple, then Vim, then Neovim.
 
 ## Scope: VS Code's built-in features
 
-Requested baseline: the default VS Code experience without extensions.
+The baseline is VS Code without extensions, for what a developer does every day.
 
-| v1 | After v1 |
+Already at that level: explorer with create, rename, delete and drag; tabs, splits, command
+palette and quick open; project search and replace with expressions; multiple cursors and
+tree-sitter highlighting; LSP definition, references, rename, completion, diagnostics, quick
+fix and formatting; Source Control with staging and commit, blame, and side-by-side diffs;
+the integrated terminal; notebooks; the minimap; settings and themes; Vim and Neovim modes.
+
+The gaps found in daily use as a standalone editor (2026-11-07), all closed in 0.6.0:
+
+| Area | What was missing |
 |---|---|
-| File explorer with create, rename, delete, drag | Integrated terminal |
-| Tabs, splits, command palette, quick open | Notebooks |
-| Project search and replace | Remote multi-root workspaces |
-| Multi-cursor, tree-sitter highlighting | |
-| Git status, side-by-side diff, blame | |
-| LSP: go to definition, diagnostics, completion, rename | |
-| Markdown preview, settings, themes | |
+| Code intelligence | Go to Symbol in the file and in the workspace, signature help, inlay hints |
+| Editor view | Code folding, sticky scroll, a word-wrap toggle, bracket pair colours |
+| Git | Merge conflict resolution, file history and a commit list with a light graph, stash, compare with any commit |
+| Workflow | Run tasks (scripts, cargo, make, tasks.json) with their errors in Problems, format on save, auto save, `.editorconfig`, a keyboard shortcuts page, Open Recent |
+
+Out of scope, said plainly: VS Code's extensions and marketplace, and settings sync (the
+settings file lives in dotfiles). What sets Cellix apart is kept measured, so features can't
+wear it away quietly: start-up time and memory against VS Code, and running over SSH with
+nothing to install.
 
 ### Languages
 
@@ -386,10 +411,11 @@ languages to a tree-sitter grammar, with a TextMate grammar as fallback, and to 
 language server. Adding one needs no code change. Over SSH, servers run on the
 remote host and must be installed there.
 
-### No debugger
+### No debugger, for now
 
-Dropped. Agents debug through tests, logs and print statements, and a companion to agents
-doesn't need to compete with a full IDE here.
+Agents debug through tests, logs and print statements, so it was dropped for the companion.
+Standalone use will ask for it again; if it comes, it comes through the Debug Adapter
+Protocol for two or three languages, after the gaps above.
 
 ## Agent integration
 

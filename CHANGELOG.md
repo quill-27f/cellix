@@ -4,6 +4,38 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-07
+
+Cellix's goal now reaches past reviewing agents' work: it is the editor you keep open all day in the
+terminal, with VS Code's everyday features built in, no extensions, and the work with agents at its
+centre.
+
+### Added
+- Ask Agent on terminal output: select output in a side-pane terminal and the agent gets all of it, the command that printed it and every file of the project it names. Inside Claude Code it goes into Claude's prompt.
+- Ask Agent on a Problems row, with what the checker said and the lines around it.
+- An Inbox for what needs you, behind a bell in the status bar: an agent asking, a plan to review, a finished turn, a reply to a comment, a failed test run, across every workspace. While Cellix is behind another window, each one is also a terminal notification (`notify: false` turns that off).
+- An agent's transcript as a page you can read and comment on, from Open Transcript on its tab. The tab also shows how full its context is, orange from 80% and red from 95%.
+- An Agent Context panel on the rail: how the agent's context fills up, its instruction files in load order with their imports, its skills, subagents, hooks and MCP servers, the files it read, and checks for instructions that contradict each other, broken imports and cut-off memory. For Claude Code, Codex and Gemini CLI.
+- Show Agent Task: one piece of agent work as a timeline of plan versions and turns, each with its prompt, changes, tests and comments, with Review Turn, Undo Turn, and Approve, Send Back and Compare for a waiting plan.
+- Code folding (Ctrl+Shift+[ and ], Fold All, Unfold All), sticky scroll, word wrap (Alt+Z) and bracket pair colours.
+- Go to Symbol in the file (Ctrl+Shift+O) and in the project (Ctrl+T), signature help and inlay hints.
+- Run Task for package.json scripts, Cargo, make, just, go, pytest and `.vscode/tasks.json`, with the errors it prints in Problems. Ctrl+Shift+B runs the build task.
+- Format on save, auto save after a delay or on leaving a file, and `.editorconfig`.
+- A Keyboard page in Settings to see and change every command's keys.
+- Open Recent, in the palette and on the welcome page.
+- Merge conflicts settled in the file, with Current, Incoming, Both and Compare, then Mark Resolved and the merge committed or the rebase continued.
+- Stash, Apply, Pop and Drop in Source Control; a commit graph at its end; the open file's commits in the Explorer's Timeline; Compare With the clipboard, a branch or a commit.
+
+### Changed
+- Docked beside Claude Code's chat, under 80 columns, the pane has its own layout: the panel icons lead its header, tabs that don't fit fold into "N more" chips, and the page menu folds into Format and Insert.
+- The pane's close button is now a hide-pane icon, so the only × in the top right corner quits.
+- The light theme is Catppuccin Latte.
+- Menus and tooltips sit on whole rows, every sidebar has the same title row, buttons are one chip inside their row, and a pane's tabs are chips.
+- "Needs you" means an agent is really waiting: Claude Code's idle reminder no longer counts, answering a prompt clears it, and an agent that was killed stops counting.
+
+### Fixed
+- Cancel in "Stop what's running?" missed clicks near its edges. Every button now takes a click anywhere it's painted.
+
 ## [0.5.5] - 2026-11-06
 
 ### Fixed

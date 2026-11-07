@@ -130,7 +130,14 @@ words and Comment as you go, then press **Check my review** in the Comments pane
 - **Plans** open as a page with Approve and Send back, and your edits and comments go with the answer.
 - **Diffs** stack hunk by hunk, against HEAD or any agent turn, with the tests the agent ran.
   Right-click a changed line to comment on it or to undo just that line.
-- **Source Control** stages, commits, pushes and pulls, as in VS Code.
+- **Tasks.** Show Agent Task lays out one piece of agent work as a timeline: its plan versions and
+  its turns, each with its prompt, what it changed, its tests and your comments. Review Turn reads
+  one turn's changes, Undo Turn takes them back, and a waiting plan has Approve, Send Back and Compare.
+- **Transcripts.** Open Transcript on an agent's tab shows its Claude Code or Codex transcript as a
+  page: each turn, its prompt, the steps it took and the output that failed. Comment on a step and
+  the agent hears which one.
+- **Source Control** stages, commits, pushes and pulls, settles merge conflicts and shows history,
+  as in VS Code.
 - **Data and notebooks.** CSV as a table with Excel's keys, and notebooks on a real Jupyter kernel.
 
 ![Source Control, with a diff beside it](docs/images/source-control.png)
@@ -163,6 +170,10 @@ been tried for real. [docs/PROGRESS.md](docs/PROGRESS.md) says what has and hasn
 | Ctrl+Shift+F | Search the project |
 | Ctrl+\\ | Split pane |
 | F12, F2, Ctrl+Space | Definition, rename, completion |
+| Ctrl+Shift+O, Ctrl+T | Go to a symbol in the file, in the project |
+| Ctrl+Shift+[ and ] | Fold and unfold |
+| Alt+Z | Word wrap on or off |
+| Ctrl+Shift+B | Run the build task |
 | Ctrl+S, Ctrl+Q | Save, quit |
 
 Ctrl+W closes a tab and Ctrl+Q quits. Ghostty keeps Cmd+W and Cmd+Q for itself, so they
@@ -179,6 +190,12 @@ Alt+Shift+Down duplicates one, and Ctrl+L goes to a line.
 
 The margin marks lines changed since the last commit, and the minimap fits the whole file,
 so you can see how long it is. Click or drag it to move.
+
+Code folds by the language server's regions, or by indent: hover the gutter for the chevrons, and
+Fold All and Unfold All are in the palette. As you scroll, the headers of the scopes you're in stay
+pinned at the top. Brackets are coloured by depth, and the pair at the caret is marked. A language
+server adds signature help as you type a call's arguments, and inlay hints with the types it
+inferred; `inlay_hints: false` turns those off.
 
 Mac text shortcuts work: Option+Backspace deletes a word, Option+Left and Right move by
 word, and Cmd+Backspace deletes to the start of the line. tmux doesn't pass Cmd through, so
@@ -254,7 +271,8 @@ kept in `.cellix/threads.json`. Ask Agent sends yours to the agent with its file
 agent answers with `cellix reply <id> "text"`, and the answer lands under your question.
 
 The icons at the top right start a real agent, a terminal or a browser in the side pane, beside your file. Press Ctrl+` to
-move the keyboard between the two, and the × at the top right, or Ctrl+Shift+`, to hide the pane.
+move the keyboard between the two, and the hide-pane icon at the top right, or Ctrl+Shift+`, to hide
+the pane. The only × there quits Cellix.
 The button after the pane's own tabs, or a double-click on one of them, lets the pane take the
 window; a double-click on a file's tab does the same for the file. Do it again to restore.
 Hiding stops nothing. What runs there outlives Cellix too (not yet on Windows): quitting offers Keep Running, a dropped SSH
@@ -262,6 +280,23 @@ connection keeps everything, and the next Cellix in that folder finds it with wh
 
 A program in a shell there can draw pictures with the Kitty graphics protocol, and Open in Browser
 runs a real browser there with `terminal-browser` if it's installed.
+
+Select output in a terminal tab of the side pane, or hover a row in Problems, and Ask Agent sends it
+to the agent: all of the output, the command that printed it and the project's files it names, or
+the problem with the lines around it. Inside Claude Code it goes into Claude's prompt.
+
+When an agent needs you, Cellix says so once and drops it when you've answered: an agent asking, a
+plan to review, a finished turn, a reply to your comment, or a failed test run. The bell at the right
+of the status bar opens the Inbox with every workspace's, newest first. While Cellix is behind another
+window, the terminal shows each as a notification, through tmux too; `notify: false` turns that
+off. An agent's tab shows how full its context is, orange from 80%
+and red from 95%.
+
+The Agent Context icon on the left shows what the agent works from: how its context fills up, its
+instruction files in the order it loads them with their imports, its skills, subagents, hooks and MCP
+servers, and the files it read. Checks point out instructions that contradict each other, imports that
+don't resolve, memory past the 200 lines that load, and hooks whose script is missing. Every row opens
+its file to edit. It reads Claude Code, Codex and Gemini CLI.
 
 Getting Started, in the command palette or on the empty window, is a short guide.
 
@@ -271,6 +306,13 @@ The Git icon on the left lists staged and unstaged files with a box for the mess
 over a file offers stage, unstage and discard. Enter commits what's staged, or everything if nothing
 is. The button beside Commit pushes, pulls or publishes, and clicking a file shows its diff. Ctrl+G
 opens the full Review, which reads what changed hunk by hunk.
+
+A merge or rebase that stops on conflicts lists the files under Merge Changes. Each conflict shows in
+the file as a card with Current, Incoming, Both and Compare; Mark Resolved stages a file once no
+markers are left, and the panel commits the merge, continues the rebase or aborts it. Source
+Control's menu stashes, and its stashes are listed with Apply, Pop and Drop. The panel ends with the
+commit graph, a commit opening to its files, and the Explorer's Timeline lists the open file's
+commits. Compare With puts the file beside the clipboard, a branch or any recent commit.
 
 ## Over SSH
 
@@ -376,7 +418,8 @@ Then `/cellix` opens the pane, and `/cellix <file>` opens a file in it. It also 
 by itself when Claude proposes an edit or a plan. Comments go to Claude with your next
 prompt, or straight away with `/cellix-send` or the pane's Send to Agent. Click the pane to type there, and press
 Esc to go back to Claude. Under 110 columns the pane drops the sidebar, and under 90 the
-minimap, so the code keeps the room.
+minimap, so the code keeps the room. Under 80, beside the chat, the panel icons lead the pane's
+header, tabs that don't fit fold into "N more" chips, and the page menu folds into Format and Insert.
 
 - **Proposed edits** open in the diff view. Accept or reject them by hunk or whole, in
   Cellix or in Claude's own prompt.
@@ -436,9 +479,11 @@ saved to `~/.config/cellix/settings.json`. You can also edit that file, or
 ```
 
 `keymap` is `simple`, `vim` or `neovim`, which runs your own `nvim` and config behind the
-editor. `theme` is `auto`, `dark` or `light`, and `auto` also matches your terminal's
-background. `tier` is `direct`, `placeholder` or `cells`. `smooth_scroll: false` makes the
-wheel jump by lines, for a slow link, and `minimap: false` hides the minimap.
+editor. `theme` is `auto`, `dark` or `light` (Catppuccin Latte), and `auto` also matches your
+terminal's background. `tier` is `direct`, `placeholder` or `cells`. `smooth_scroll: false` makes the
+wheel jump by lines, for a slow link, and `minimap: false` hides the minimap. `word_wrap`,
+`sticky_scroll` (with `sticky_scroll_lines`, 5 unless set), `bracket_pairs` and `inlay_hints` turn
+those on or off for code.
 `language_servers` maps a language to a command, `formatters` maps one to a formatter that
 reads stdin and writes stdout, and `browser` replaces the command that opens web pages.
 
