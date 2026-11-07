@@ -447,6 +447,35 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("17-settings-integrations", [*settings, ["click", 45, 5]], CODE_FILE)
     shoot("18-settings-keyboard", [*settings, ["click", 45, 6]], CODE_FILE)
     shoot("19-dialog", [["keys", "x"], ["keys", CTRL("q")]], CODE_FILE)
+    # Workflow: tasks, Open Recent, and Settings' Editor and Keyboard sections, reached through
+    # the palette so they don't hang on where the gear is.
+    palette = lambda words: [["keys", "\\eOP"], ["wait", 0.4], ["keys", words], ["wait", 0.4],
+                             ["keys", "\r"], ["wait", 0.8]]
+    shoot("130-run-task", palette("run task"), CODE_FILE)
+    tasks = f"{scratch}/tasks"
+    os.makedirs(f"{tasks}/src")
+    with open(f"{tasks}/src/main.c", "w") as f:
+        f.write("int main(void) {\n    return count;\n}\n")
+    with open(f"{tasks}/Makefile", "w") as f:
+        f.write("build:\n\t@echo 'src/main.c:2:12: error: use of undeclared identifier count'"
+                "; echo 'src/main.c:1:5: warning: unused parameter'; exit 2\n")
+    shoot("131-task-failed", [*palette("run task"), ["wait", 1.0], ["keys", "\r"], ["wait", 4.0]], "src/main.c",
+          cwd=tasks)
+    shoot("132-task-problems", [*palette("run task"), ["keys", "\r"], ["wait", 2.5],
+                                ["click", 3, 38], ["wait", 0.6]], "src/main.c", cwd=tasks)
+    shoot("133-open-recent", palette("open recent"), CODE_FILE)
+    to_section = lambda tabs: [*palette("open settings"), *[["keys", "\t"]] * tabs, ["keys", "\r"],
+                               ["wait", 0.5]]
+    shoot("134-settings-editor", to_section(2), CODE_FILE)
+    shoot("135-settings-keyboard", to_section(4), CODE_FILE)
+    shoot("136-settings-keys-search", [*to_section(4), ["keys", "task"], ["wait", 0.4]], CODE_FILE)
+    shoot("137-settings-keys-record", [*to_section(4), ["keys", "rerun"], ["wait", 0.4],
+                                       *[["keys", "\t"]] * 8, ["keys", "\r"], ["keys", "\x1b\x12"],
+                                       ["wait", 0.4]], CODE_FILE)
+    # By now the tasks folder and its file are recent, beside Start.
+    fresh = f"{scratch}/fresh"
+    os.makedirs(fresh)
+    shoot("138-welcome-recent", [], size="150x44", cwd=fresh)
     shoot("20-prompt", [["right", 12, 2], ["click", 14, 2]])
     shoot("21-selection", [["double", 49, 13], ["keys", CTRL("d")]], CODE_FILE)
     shoot("22-narrow", [], CODE_FILE, size="64x30")

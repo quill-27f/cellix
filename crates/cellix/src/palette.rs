@@ -40,6 +40,12 @@ pub enum Item {
     Folder(PathBuf, String, &'static str),
     /// A symbol to go to, in this file or elsewhere in the workspace.
     Symbol(Box<SymbolRow>),
+    /// A task to run, from Run Task.
+    Task(crate::tasks::Task),
+    /// A group's name, over its rows, as RECENTLY RUN or CARGO.
+    Header(String),
+    /// A folder or file from Open Recent, as `~` writes it, and whether it's a folder.
+    Recent(PathBuf, String, bool),
 }
 
 /// A row of Go to Symbol.
@@ -106,10 +112,20 @@ pub fn kind_icon(kind: u64, theme: &Theme) -> (Icon, &'static str, Rgb) {
 }
 
 impl Item {
+    /// A row that only divides the others, which the keyboard and filtering step over.
+    pub fn divider(&self) -> bool {
+        matches!(self, Self::Gap | Self::Header(_))
+    }
+
     fn label(&self) -> &str {
         match self {
-            Self::File(_, label) | Self::Image(_, label, _) | Self::Folder(_, label, _) => label,
+            Self::File(_, label)
+            | Self::Image(_, label, _)
+            | Self::Folder(_, label, _)
+            | Self::Recent(_, label, _) => label,
             Self::Command(label, _) => label,
+            Self::Task(task) => &task.label,
+            Self::Header(name) => name,
             Self::Branch(name, _) | Self::Citation(name, _) => name,
             Self::Symbol(symbol) => &symbol.name,
             Self::NewBranch => "New branch…",
@@ -120,11 +136,15 @@ impl Item {
     /// What sits at the right of the row.
     fn keys(&self) -> Option<&str> {
         match self {
-            Self::File(..) | Self::Image(..) | Self::NewBranch | Self::Gap => None,
+            Self::File(..) | Self::Image(..) | Self::NewBranch | Self::Gap | Self::Recent(..) => {
+                None
+            }
             Self::Command(_, command) => keys_of(*command),
             Self::Branch(_, when) | Self::Citation(_, when) => Some(when),
             Self::Folder(_, _, note) => (!note.is_empty()).then_some(note),
             Self::Symbol(symbol) => (!symbol.place.is_empty()).then_some(&symbol.place),
+            Self::Task(task) => task.default_build.then_some("default build · Ctrl+Shift+B"),
+            Self::Header(_) => None,
         }
     }
 }
@@ -157,6 +177,7 @@ pub fn keys_of(command: Command) -> Option<&'static str> {
         Command::GoToDefinition => "F12",
         Command::GoToSymbol => "Ctrl+Shift+O",
         Command::GoToWorkspaceSymbol => "Ctrl+T",
+        Command::RunBuildTask => "Ctrl+Shift+B",
         Command::GoToReferences => "Shift+F12",
         Command::FormatDocument => "Alt+Shift+F",
         Command::RenameSymbol => "F2",
@@ -167,7 +188,7 @@ pub fn keys_of(command: Command) -> Option<&'static str> {
     })
 }
 
-pub const COMMANDS: [(&str, Command); 96] = [
+pub const COMMANDS: [(&str, Command); 100] = [
     ("Save", Command::Save),
     ("Undo", Command::Undo),
     ("Redo", Command::Redo),
@@ -251,6 +272,10 @@ pub const COMMANDS: [(&str, Command); 96] = [
     ("Open Claude Code", Command::OpenClaude),
     ("Open Codex", Command::OpenCodex),
     ("Open Folder as a Workspace", Command::OpenWorkspace),
+    ("Open Recent…", Command::OpenRecent),
+    ("Run Task…", Command::RunTask),
+    ("Run Build Task", Command::RunBuildTask),
+    ("Rerun Last Task", Command::RerunLastTask),
     ("Next Workspace", Command::NextWorkspace),
     ("Previous Workspace", Command::PreviousWorkspace),
     ("Open Settings", Command::OpenSettings),
@@ -538,6 +563,14 @@ impl Palette {
             self.matched.clear();
             self.selected = 0;
             self.group();
+            // A heading or a gap is never what's picked.
+            if self.current().is_some_and(Item::divider) {
+                self.selected = self
+                    .matches
+                    .iter()
+                    .position(|&i| !self.items[i].divider())
+                    .unwrap_or(0);
+            }
             return;
         }
         // A letter added at the end can only narrow what matched, so only that is looked at
@@ -550,7 +583,7 @@ impl Palette {
         };
         let mut scored: Vec<(i32, usize)> = candidates
             .into_iter()
-            .filter(|&i| self.items[i] != Item::Gap)
+            .filter(|&i| !self.items[i].divider())
             .filter_map(|i| Some((fuzzy_score(&typed, self.items[i].label())?, i)))
             .collect();
         scored.sort_by_key(|(score, i)| (-score, *i));
@@ -563,8 +596,12 @@ impl Palette {
     pub fn move_by(&mut self, delta: isize) {
         let last = self.matches.len().saturating_sub(1) as isize;
         self.selected = (self.selected as isize + delta).clamp(0, last) as usize;
-        if self.current() == Some(&Item::Gap) {
+        if self.current().is_some_and(Item::divider) {
             self.selected = (self.selected as isize + delta).clamp(0, last) as usize;
+        }
+        // Two dividers together, or one at the end: back the other way.
+        if self.current().is_some_and(Item::divider) {
+            self.selected = (self.selected as isize - delta).clamp(0, last) as usize;
         }
     }
 
@@ -660,6 +697,24 @@ impl Palette {
                 grid.hairline(rule, theme.popup_border);
                 continue;
             }
+            if let Item::Header(name) = &self.items[*index] {
+                let small = Style {
+                    fg: theme.popup_dim,
+                    bold: true,
+                    ..base
+                };
+                let inset = area.x as f32 + TEXT_INSET;
+                grid.label_at(inset, area.x + 2, y, name, small, area.right(), 80);
+                let font = Font {
+                    size: 80,
+                    ..Font::default()
+                };
+                let from = inset + measure.width(name, font) + 1.0;
+                let across = (area.x as f32 + area.w as f32 - TEXT_INSET - from).max(0.0);
+                let rule = Bounds::cells(from, y as f32 + 0.5, across, 0.0);
+                grid.hairline(rule, theme.popup_border);
+                continue;
+            }
             let hovered = hover.is_some_and(|h| line.contains(h.0, h.1));
             if row == self.selected || hovered {
                 let fill = if row == self.selected {
@@ -680,12 +735,39 @@ impl Palette {
             let text = self.items[*index].label();
             let end = area.right().saturating_sub(16);
             let inset = area.x as f32 + TEXT_INSET;
+            // A file or folder from Open Recent: its name, then where it is.
+            let away = match &self.items[*index] {
+                Item::Recent(_, label, _) => label.rsplit_once('/'),
+                _ => None,
+            };
             // A long path keeps its end, which names the folder, and loses its middle.
             let shown = match &self.items[*index] {
                 Item::Folder(..) => middle_out(text, f32::from(end) - inset, measure),
-                _ => text.to_string(),
+                _ => away.map_or(text, |(_, name)| name).to_string(),
             };
             grid.label_at(inset, area.x + 2, y, &shown, base, end, 100);
+            if let Some((folder, _)) = away {
+                let quiet = Style {
+                    fg: theme.popup_dim,
+                    ..base
+                };
+                // A cell after the name as it's drawn, and on to the row's end: no keys here.
+                let from = inset + measure.width(&shown, Font::default()) + 1.0;
+                let right = area.right().saturating_sub(2);
+                let folder = middle_out(folder, f32::from(right) - from, measure);
+                grid.label_at(from, from as u16, y, &folder, quiet, right, 100);
+            }
+            // A task shows what it runs, quietly, when its name doesn't already say.
+            if let Item::Task(task) = &self.items[*index]
+                && task.command != task.label
+            {
+                let quiet = Style {
+                    fg: theme.popup_dim,
+                    ..base
+                };
+                let from = inset + measure.width(&shown, Font::default()) + 1.0;
+                grid.label_at(from, from as u16, y, &task.command, quiet, end, 100);
+            }
             if let Some(keys) = self.items[*index].keys() {
                 // The picked row's wash is lighter, so its keys need to be too.
                 let fg = if row == self.selected {
@@ -775,7 +857,7 @@ impl Palette {
 }
 
 /// `text` with characters taken from its middle until it fits `room` cells.
-fn middle_out(text: &str, room: f32, measure: &dyn Measure) -> String {
+pub fn middle_out(text: &str, room: f32, measure: &dyn Measure) -> String {
     let font = Font {
         size: INTERFACE_SIZE_PERCENT,
         ..Font::default()

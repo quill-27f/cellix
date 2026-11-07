@@ -3,6 +3,7 @@ use std::sync::mpsc::Receiver;
 use cellix_render::{Bounds, Font, Grid, Measure, Rect, Rgb, Style};
 
 use crate::integrations;
+use crate::keys::{self, Shortcut};
 use crate::settings::{SERVERS, Server};
 use crate::theme::Theme;
 
@@ -21,24 +22,24 @@ const THEMES: [(&str, &str, &str); 3] = [
     ("light", "Light", "Always light"),
 ];
 const KEYMAPS: [(&str, &str); 3] = [("simple", "Standard"), ("vim", "Vim"), ("neovim", "Neovim")];
-/// Real keys, so this list stays a promise. Cmd stands in for Ctrl where the terminal
-/// passes it on.
-const SHORTCUTS: [(&str, &str); 14] = [
-    ("Ctrl+P", "Open a file"),
-    ("Ctrl+Shift+P", "Commands"),
-    ("Ctrl+G", "Review changes"),
-    ("Ctrl+Shift+F", "Search the project"),
-    ("Ctrl+F", "Find in file"),
-    ("Ctrl+D", "Select the next match"),
-    ("Ctrl+/", "Toggle comment"),
-    ("Ctrl+S", "Save"),
-    ("Ctrl+W", "Close tab"),
-    ("Ctrl+B", "Toggle sidebar"),
-    ("Ctrl+\\", "Split pane"),
-    ("Ctrl+Space", "Complete"),
-    ("F12", "Go to definition"),
-    ("F2", "Rename symbol"),
+/// When files save themselves, as `auto_save` names it and as the page shows it.
+const AUTO_SAVES: [(&str, &str); 3] = [
+    ("off", "Off"),
+    ("after_delay", "After a pause"),
+    ("on_focus_change", "On leaving"),
 ];
+/// Where the Editor section's rows start, from the top of the page.
+const FORMAT_ROW: u16 = 3;
+const AUTO_SAVE_ROW: u16 = 6;
+/// The Keyboard section: the search field, the table's heading, and its first row.
+const KEYS_SEARCH_ROW: u16 = 6;
+const KEYS_HEAD_ROW: u16 = 8;
+const KEYS_FIRST_ROW: u16 = 9;
+/// The Source column's width, and the reset button's at the end of a row.
+const SOURCE_WIDTH: u16 = 9;
+const RESET_WIDTH: u16 = 3;
+/// Wide enough for "After a pause" with a cell either side.
+const AUTO_SAVE_WIDTH: u16 = 14;
 /// The list of sections, when there's room to keep it beside the page.
 const NAV_WIDTH: u16 = 20;
 /// Narrower than this, the sections run across the top instead.
@@ -54,7 +55,7 @@ const TITLE_SIZE: u8 = 170;
 const NOTE_SIZE: u8 = 90;
 const RADIUS: u8 = 30;
 /// Where the servers' rows start, from the top of the page.
-const SERVERS_ROW: u16 = 7;
+const SERVERS_ROW: u16 = 10;
 const INSTALL_WIDTH: u16 = 9;
 /// Columns from an integration's name to its state.
 const STATUS_GAP: f32 = 1.1;
@@ -79,6 +80,12 @@ pub enum Control {
     StickyScroll,
     InlayHints,
     Keymap(&'static str),
+    FormatOnSave,
+    AutoSave(&'static str),
+    /// A command's keys, by its place in `shortcuts`: a click records new ones.
+    Shortcut(usize),
+    /// Gives a command its own keys back.
+    ResetShortcut(usize),
     ClaudeCode,
     Codex,
     Gemini,
@@ -99,6 +106,8 @@ pub struct Values<'a> {
     pub minimap: bool,
     pub view: EditorView,
     pub inlay_hints: bool,
+    pub format_on_save: bool,
+    pub auto_save: &'a str,
 }
 
 /// How code is laid out and coloured, each a switch in Appearance.
@@ -222,6 +231,14 @@ pub struct SettingsPage {
     pub top: usize,
     /// An install under way, which says how it went.
     pub installing: Option<Receiver<String>>,
+    /// Every command and its keys, as the Keyboard section lists them.
+    pub shortcuts: Vec<Shortcut>,
+    /// What's typed in the Keyboard section's search.
+    pub keys_query: String,
+    /// The first command in view there.
+    pub keys_top: usize,
+    /// A command whose new keys are being pressed, and those pressed so far.
+    pub recording: Option<(usize, Option<String>)>,
 }
 
 impl SettingsPage {
@@ -233,10 +250,52 @@ impl SettingsPage {
             note: String::new(),
             top: 0,
             installing: None,
+            shortcuts: Vec::new(),
+            keys_query: String::new(),
+            keys_top: 0,
+            recording: None,
         }
     }
 
+    /// The commands that fit the search, by their place in `shortcuts`.
+    pub fn shown_shortcuts(&self) -> Vec<usize> {
+        let query = &self.keys_query;
+        let fits = |(_, s): &(usize, &Shortcut)| keys::matches(s, query);
+        self.shortcuts
+            .iter()
+            .enumerate()
+            .filter(fits)
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// The shortcut rows in view: each one's row, and its place in `shortcuts`.
+    fn shortcut_rows(&self, page: Rect) -> Vec<(u16, usize)> {
+        let room = page.h.saturating_sub(KEYS_FIRST_ROW) as usize;
+        let shown = self
+            .shown_shortcuts()
+            .into_iter()
+            .skip(self.keys_top)
+            .take(room);
+        shown
+            .enumerate()
+            .map(|(row, index)| (page.y + KEYS_FIRST_ROW + row as u16, index))
+            .collect()
+    }
+
+    /// The table's columns: where the keys start, and where the source does.
+    fn key_columns(page: Rect) -> (u16, u16) {
+        let source = page.right().saturating_sub(SOURCE_WIDTH + RESET_WIDTH);
+        let keys = page.x + (page.w * 2 / 5).clamp(16, 34);
+        (keys, source)
+    }
+
     pub fn scroll_by(&mut self, delta: isize) {
+        if self.section == Section::Keyboard {
+            let last = self.shown_shortcuts().len().saturating_sub(1) as isize;
+            self.keys_top = (self.keys_top as isize + delta).clamp(0, last) as usize;
+            return;
+        }
         let last = SERVERS.len().saturating_sub(1) as isize;
         self.top = (self.top as isize + delta).clamp(0, last) as usize;
     }
@@ -398,11 +457,13 @@ impl SettingsPage {
                 }
             }
             Section::Editor => {
-                let start = page.right().saturating_sub(SEGMENT_WIDTH * 3);
-                for (i, (name, _)) in KEYMAPS.iter().enumerate() {
-                    let x = start + i as u16 * SEGMENT_WIDTH;
-                    let rect = Rect::new(x, page.y + 3, SEGMENT_WIDTH, 1);
-                    spots.push((rect, Control::Keymap(name)));
+                let format = Rect::new(page.x, page.y + FORMAT_ROW, page.w, 2);
+                spots.push((format, Control::FormatOnSave));
+                let start = page.right().saturating_sub(AUTO_SAVE_WIDTH * 3);
+                for (i, (name, _)) in AUTO_SAVES.iter().enumerate() {
+                    let x = start + i as u16 * AUTO_SAVE_WIDTH;
+                    let rect = Rect::new(x, page.y + AUTO_SAVE_ROW, AUTO_SAVE_WIDTH, 1);
+                    spots.push((rect, Control::AutoSave(name)));
                 }
                 for (row, index) in self.server_rows(page).into_iter().enumerate() {
                     if !self.found.servers.get(index).copied().unwrap_or(false) {
@@ -422,7 +483,24 @@ impl SettingsPage {
                     }
                 }
             }
-            Section::Keyboard => {}
+            Section::Keyboard => {
+                let start = page.right().saturating_sub(SEGMENT_WIDTH * 3);
+                for (i, (name, _)) in KEYMAPS.iter().enumerate() {
+                    let x = start + i as u16 * SEGMENT_WIDTH;
+                    let rect = Rect::new(x, page.y + 3, SEGMENT_WIDTH, 1);
+                    spots.push((rect, Control::Keymap(name)));
+                }
+                let (keys_x, source_x) = Self::key_columns(page);
+                for (y, index) in self.shortcut_rows(page) {
+                    let width = source_x.saturating_sub(keys_x + 1);
+                    spots.push((Rect::new(keys_x, y, width, 1), Control::Shortcut(index)));
+                    if self.shortcuts[index].user {
+                        let x = page.right().saturating_sub(RESET_WIDTH);
+                        let rect = Rect::new(x, y, RESET_WIDTH, 1);
+                        spots.push((rect, Control::ResetShortcut(index)));
+                    }
+                }
+            }
         }
         spots
     }
@@ -504,9 +582,15 @@ impl SettingsPage {
             }
             Section::Editor => self.draw_editor(grid, page, &spots, values, hover, theme),
             Section::Integrations => self.draw_integrations(grid, page, (hover, measure), theme),
-            Section::Keyboard => draw_keyboard(grid, page, theme),
+            Section::Keyboard => {
+                let state = (&spots[..], values, hover, measure);
+                self.draw_keyboard(grid, page, state, theme);
+            }
         }
-        if let Some((rect, _)) = self.focus.and_then(|f| spots.get(f)) {
+        // A row taking new keys has its own outline: a second ring would only blur it.
+        let ringed = self.focus.and_then(|f| spots.get(f));
+        let ringed = ringed.filter(|_| self.recording.is_none());
+        if let Some((rect, _)) = ringed {
             let ring = Bounds::inset(*rect, -0.15, -0.1);
             grid.panel(ring, RADIUS, None, Some(theme.focus));
         }
@@ -538,6 +622,173 @@ impl SettingsPage {
         grid.label_at(x, rect.x + 1, rect.y, name, style, rect.right(), 100);
     }
 
+    /// Every command and its keys, searchable, with a click to set new ones.
+    #[allow(clippy::type_complexity)]
+    fn draw_keyboard(
+        &self,
+        grid: &mut Grid,
+        page: Rect,
+        (spots, values, hover, measure): (
+            &[(Rect, Control)],
+            &Values,
+            Option<(u16, u16)>,
+            &dyn Measure,
+        ),
+        theme: &Theme,
+    ) {
+        heading(
+            grid,
+            page,
+            "Keyboard",
+            "Click a command's keys to change them. Cmd works as Ctrl where the terminal passes it.",
+            theme,
+        );
+        let room = page.right().saturating_sub(SEGMENT_WIDTH * 3 + 1);
+        let keymap = ("Keymap", "Standard works as in VS Code.");
+        draw_text(grid, page, (page.y + 3, room), keymap, theme);
+        for (rect, control) in spots {
+            if let Control::Keymap(name) = control {
+                let label = KEYMAPS.iter().find(|k| k.0 == *name).map_or("", |k| k.1);
+                draw_segment(grid, *rect, label, values.keymap == *name, theme);
+            }
+        }
+        let quiet = Style {
+            fg: theme.gutter.fg,
+            ..theme.text
+        };
+        // The search field, a row of its own.
+        let y = page.y + KEYS_SEARCH_ROW;
+        let field = Bounds::cells(page.x as f32, y as f32 + 0.06, page.w as f32, 0.88);
+        grid.panel(field, 18, Some(theme.input), Some(theme.popup_border));
+        let shown = self.shown_shortcuts().len();
+        let count = match shown {
+            1 => "1 command".to_string(),
+            n => format!("{n} commands"),
+        };
+        grid.label_right(page.right().saturating_sub(1), y, &count, quiet, NOTE_SIZE);
+        let end = page.right().saturating_sub(count.len() as u16 + 3);
+        if self.keys_query.is_empty() {
+            grid.label(
+                page.x + 1,
+                y,
+                "Search commands or keys, as Ctrl+R",
+                quiet,
+                end,
+            );
+        } else {
+            grid.label(page.x + 1, y, &self.keys_query, theme.text, end);
+            // Where the text really ends, which proportional letters make short of its cells.
+            let caret = f32::from(page.x + 1) + measure.width(&self.keys_query, Font::default());
+            grid.set_caret(caret, y, 0.56);
+        }
+        let (keys_x, source_x) = Self::key_columns(page);
+        let head = Style {
+            bold: true,
+            ..quiet
+        };
+        let y = page.y + KEYS_HEAD_ROW;
+        grid.label_at(page.x as f32, page.x, y, "COMMAND", head, keys_x, 80);
+        grid.label_at(keys_x as f32, keys_x, y, "KEYS", head, source_x, 80);
+        grid.label_at(
+            source_x as f32,
+            source_x,
+            y,
+            "SOURCE",
+            head,
+            page.right(),
+            80,
+        );
+        let under = Bounds::cells(page.x as f32, y as f32 + 1.0, page.w as f32, 0.0);
+        grid.hairline(under, theme.border);
+        let shared = keys::sharing(&self.shortcuts);
+        for (y, index) in self.shortcut_rows(page) {
+            let shortcut = &self.shortcuts[index];
+            let row = Rect::new(page.x, y, page.w, 1);
+            if hover.is_some_and(|h| row.contains(h.0, h.1)) {
+                let wash = Bounds::cells(
+                    page.x as f32 - 0.6,
+                    y as f32 + 0.055,
+                    page.w as f32 + 1.2,
+                    0.89,
+                );
+                grid.panel(wash, 18, Some(theme.page_hover), None);
+            }
+            grid.label(
+                page.x,
+                y,
+                shortcut.name,
+                theme.text,
+                keys_x.saturating_sub(1),
+            );
+            let keys_end = source_x.saturating_sub(1);
+            match &self.recording {
+                Some((recording, pressed)) if *recording == index => {
+                    // One outline, inside the row, the keys on their column with air before.
+                    let box_ = Bounds::cells(
+                        keys_x as f32 - 1.0,
+                        y as f32 + 0.1,
+                        (keys_end - keys_x) as f32 + 1.0,
+                        0.8,
+                    );
+                    grid.panel(box_, 18, Some(theme.input), Some(theme.focus));
+                    match pressed {
+                        Some(keys) => grid.label(keys_x, y, keys, theme.text, keys_end),
+                        None => grid.label(keys_x, y, "Press the keys", quiet, keys_end),
+                    };
+                    let hint = if pressed.is_some() {
+                        "Enter saves · Esc cancels"
+                    } else {
+                        "Esc cancels"
+                    };
+                    grid.label_right(keys_end.saturating_sub(1), y, hint, quiet, NOTE_SIZE);
+                }
+                _ => {
+                    let mut x = keys_x;
+                    if shortcut.keys.is_empty() {
+                        grid.label(x, y, "—", quiet, keys_end);
+                    }
+                    for key in &shortcut.keys {
+                        let width = measure.width(key, Font::default());
+                        let cap = Bounds::cells(x as f32 - 0.3, y as f32 + 0.12, width + 0.6, 0.76);
+                        grid.panel(cap, 24, Some(theme.tab.bg), Some(theme.popup_border));
+                        x = grid.label(x, y, key, theme.text, keys_end) + 2;
+                        if x >= keys_end {
+                            break;
+                        }
+                    }
+                    let clash = shortcut.keys.iter().filter_map(|k| shared.get(k)).max();
+                    if let Some(&many) = clash.filter(|n| **n > 1) {
+                        let warn = Style {
+                            fg: theme.attention,
+                            ..theme.text
+                        };
+                        grid.label(x, y, &format!("⚠ {many} commands"), warn, keys_end);
+                    }
+                }
+            }
+            let (source, tone) = if shortcut.user {
+                ("User", theme.accent)
+            } else {
+                ("Default", theme.gutter.fg)
+            };
+            let style = Style {
+                fg: tone,
+                ..theme.text
+            };
+            grid.label(source_x, y, source, style, page.right());
+            if shortcut.user {
+                let x = page.right().saturating_sub(RESET_WIDTH);
+                let reset = Rect::new(x, y, RESET_WIDTH, 1);
+                let on = hover.is_some_and(|h| reset.contains(h.0, h.1));
+                let style = Style {
+                    fg: if on { theme.text.fg } else { theme.gutter.fg },
+                    ..theme.text
+                };
+                grid.label(x + 1, y, "↺", style, page.right());
+            }
+        }
+    }
+
     fn draw_editor(
         &self,
         grid: &mut Grid,
@@ -547,21 +798,35 @@ impl SettingsPage {
         hover: Option<(u16, u16)>,
         theme: &Theme,
     ) {
-        heading(grid, page, "Editor", "How keys and languages work.", theme);
-        let room = page.right().saturating_sub(SEGMENT_WIDTH * 3 + 1);
-        let keymap = ("Keymap", "Standard works as in VS Code.");
-        draw_text(grid, page, (page.y + 3, room), keymap, theme);
+        heading(
+            grid,
+            page,
+            "Editor",
+            "How files save, and the languages.",
+            theme,
+        );
+        let format = (
+            "Format on save",
+            "Formats code with its language server or formatter as it's saved.",
+        );
+        draw_toggle(
+            grid,
+            page,
+            page.y + FORMAT_ROW,
+            format,
+            values.format_on_save,
+            theme,
+        );
+        let y = page.y + AUTO_SAVE_ROW;
+        let above = Bounds::cells(page.x as f32, y as f32 - 0.5, page.w as f32, 0.0);
+        grid.hairline(above, theme.border);
+        let room = page.right().saturating_sub(AUTO_SAVE_WIDTH * 3 + 1);
+        let auto = ("Auto save", "Saves on its own.");
+        draw_text(grid, page, (y, room), auto, theme);
         for (rect, control) in spots {
-            if let Control::Keymap(name) = control {
-                let label = KEYMAPS.iter().find(|k| k.0 == *name).map_or("", |k| k.1);
-                let on = values.keymap == *name;
-                let fill = if on { theme.button } else { theme.tab.bg };
-                let style = Style {
-                    fg: if on { theme.button_text } else { theme.text.fg },
-                    ..theme.text
-                };
-                let cells = format!("{label:^width$}", width = rect.w as usize);
-                grid.large_button(rect.x, rect.y, &cells, label, fill, style);
+            if let Control::AutoSave(name) = control {
+                let label = AUTO_SAVES.iter().find(|a| a.0 == *name).map_or("", |a| a.1);
+                draw_segment(grid, *rect, label, values.auto_save == *name, theme);
             }
         }
         let line_y = page.y + SERVERS_ROW - 1;
@@ -748,6 +1013,17 @@ fn draw_text(
     grid.label(page.x, y + 1, detail, quiet, room);
 }
 
+/// One choice of a row of them, filled when it's the one chosen.
+fn draw_segment(grid: &mut Grid, rect: Rect, label: &str, on: bool, theme: &Theme) {
+    let fill = if on { theme.button } else { theme.tab.bg };
+    let style = Style {
+        fg: if on { theme.button_text } else { theme.text.fg },
+        ..theme.text
+    };
+    let cells = format!("{label:^width$}", width = rect.w as usize);
+    grid.large_button(rect.x, rect.y, &cells, label, fill, style);
+}
+
 fn draw_toggle(grid: &mut Grid, page: Rect, y: u16, text: (&str, &str), on: bool, theme: &Theme) {
     let above = Bounds::cells(page.x as f32, y as f32 - 0.5, page.w as f32, 0.0);
     grid.hairline(above, theme.border);
@@ -918,35 +1194,6 @@ fn draw_button(
     grid.large_button_between(rect.x, rect.y, &cells, label, fill, style);
 }
 
-fn draw_keyboard(grid: &mut Grid, page: Rect, theme: &Theme) {
-    heading(
-        grid,
-        page,
-        "Keyboard",
-        "Cmd works in place of Ctrl wherever your terminal passes it on.",
-        theme,
-    );
-    let quiet = Style {
-        fg: theme.gutter.fg,
-        ..theme.text
-    };
-    let column = (page.w / 2).max(30);
-    for (i, (keys, what)) in SHORTCUTS.iter().enumerate() {
-        let half = SHORTCUTS.len() / 2;
-        let (x, row) = if i < half {
-            (page.x, i)
-        } else {
-            (page.x + column, i - half)
-        };
-        let y = page.y + 3 + row as u16;
-        if y >= page.bottom() {
-            continue;
-        }
-        grid.label(x, y, keys, theme.text, x + 14);
-        grid.label(x + 14, y, what, quiet, (x + column).min(page.right()));
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1026,24 +1273,13 @@ mod tests {
     }
 
     #[test]
-    fn the_shortcuts_listed_are_real() {
-        use cellix_input::{Key, KeyEvent, Mods, simple_keymap};
-        for (keys, _) in SHORTCUTS {
-            let shift = keys.contains("Shift");
-            let event = match keys.rsplit('+').next().unwrap() {
-                "Space" => KeyEvent::ctrl(' '),
-                "F12" => KeyEvent::plain(Key::F(12)),
-                "F2" => KeyEvent::plain(Key::F(2)),
-                letter => KeyEvent {
-                    key: Key::Char(letter.chars().next().unwrap().to_ascii_lowercase()),
-                    mods: Mods {
-                        ctrl: true,
-                        shift,
-                        ..Mods::default()
-                    },
-                },
-            };
-            assert!(simple_keymap(event).is_some(), "{keys}");
+    fn every_listed_key_does_what_its_row_says() {
+        let bindings = keys::Bindings::default();
+        for shortcut in keys::shortcuts(&Default::default()) {
+            for key in &shortcut.keys {
+                let event = keys::parse(key).unwrap();
+                assert_eq!(bindings.command(event), Some(shortcut.command), "{key}");
+            }
         }
     }
 }

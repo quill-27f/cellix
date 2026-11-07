@@ -177,6 +177,9 @@ struct Picture {
     alternate: bool,
 }
 
+/// How much of what a task printed is kept.
+const PRINTED_MOST: usize = 8 << 20;
+
 /// A program running on a PTY, and the screen it has drawn.
 pub struct Session {
     pub name: String,
@@ -212,6 +215,8 @@ pub struct Session {
     commands: Vec<(usize, u16)>,
     /// Where the command being typed at the prompt starts, from its first key.
     typing: Option<(usize, u16)>,
+    /// Everything it printed, kept for a task, whose errors are read from it once it ends.
+    pub printed: Option<Vec<u8>>,
 }
 
 fn pty_size((columns, rows): (u16, u16), (width, height): CellPixels) -> PtySize {
@@ -333,6 +338,7 @@ impl Session {
             copied: None,
             commands: Vec::new(),
             typing: None,
+            printed: None,
         }
     }
 
@@ -553,6 +559,13 @@ impl Session {
         let mut changed = false;
         while let Ok(bytes) = self.output.try_recv() {
             self.take_in(&bytes);
+            if let Some(kept) = &mut self.printed {
+                kept.extend_from_slice(&bytes);
+                // A task that prints without end keeps its last few megabytes.
+                if kept.len() > PRINTED_MOST {
+                    kept.drain(..kept.len() - PRINTED_MOST / 2);
+                }
+            }
             self.wrote = Some(std::time::Instant::now());
             changed = true;
         }

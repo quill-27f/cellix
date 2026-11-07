@@ -19,6 +19,7 @@ use cellix_review::LineChange;
 use unicode_width::UnicodeWidthChar;
 
 use crate::brackets::{self, Bracket};
+use crate::editorconfig::{Indentation, Rules};
 use crate::fold;
 use crate::panels::Symbol;
 use crate::rendered::{
@@ -28,7 +29,6 @@ use crate::rows::{CodeRow, Rows};
 use crate::snippets::Snippet;
 use crate::theme::Theme;
 
-const TAB_WIDTH: usize = 4;
 /// The most header lines sticky scroll keeps at the top, as VS Code's default.
 pub const STICKY_LINES: usize = 5;
 const GUTTER_MIN_DIGITS: usize = 4;
@@ -36,7 +36,6 @@ const NARROW_PANE: u16 = 60;
 /// Left margin of a rendered page, which also carries comment marks.
 /// Heading levels the toolbar steps through before going back to plain text.
 const MAX_HEADING_CYCLE: usize = 3;
-const INDENT: &str = "    ";
 const MINIMAP_WIDTH: u16 = 13;
 /// Lines of code a minimap fits in one row of the grid.
 const MINIMAP_LINES_PER_ROW: usize = 6;
@@ -199,6 +198,10 @@ pub struct Editor {
     fold_ranges: RefCell<Option<Regions>>,
     /// How many header lines of the scopes scrolled into may stay at the top: 0 for none.
     pub sticky_lines: usize,
+    /// What a level of indentation is here, from `.editorconfig` or the default.
+    pub indentation: Indentation,
+    /// What saving does to the lines, from `.editorconfig`.
+    pub rules: Rules,
 }
 
 /// Folded header lines with their text, and the revision and line count they're right for.
@@ -213,9 +216,9 @@ struct Folded {
 /// stamp of the other open files' unsaved edits.
 type Counted = ((u64, u64), usize, usize);
 
-fn display_width(c: char, column: usize) -> usize {
+fn display_width(c: char, column: usize, tab: usize) -> usize {
     if c == '\t' {
-        TAB_WIDTH - column % TAB_WIDTH
+        tab - column % tab
     } else {
         c.width().unwrap_or(0)
     }
@@ -255,6 +258,8 @@ impl Editor {
         };
         let is_page =
             buffer.path().is_some_and(|p| Dialect::of(p).is_some()) && !definitions(&buffer.text());
+        let rules = buffer.path().map(Rules::for_file).unwrap_or_default();
+        let indentation = rules.indentation(Indentation::default());
         Self {
             buffer,
             selections: Selections::default(),
@@ -303,6 +308,8 @@ impl Editor {
             server_folds: None,
             fold_ranges: RefCell::new(None),
             sticky_lines: STICKY_LINES,
+            indentation,
+            rules,
         }
     }
 
@@ -1333,7 +1340,7 @@ impl Editor {
         let start = rope.line_to_char(line);
         let mut column = 0;
         for c in rope.slice(start..at).chars() {
-            column += display_width(c, column);
+            column += display_width(c, column, self.indentation.size);
         }
         column + self.hints_width(start, at)
     }
@@ -1674,7 +1681,7 @@ impl Editor {
             let mut text = String::new();
             let mut column = 0;
             for c in self.line_text(*line).chars() {
-                let width = display_width(c, column);
+                let width = display_width(c, column, self.indentation.size);
                 if column + width > self.left() {
                     if c == '\t' {
                         text.extend(std::iter::repeat_n(' ', width));
@@ -1764,7 +1771,12 @@ impl Editor {
             return rows.clone();
         }
         let hidden = self.hidden();
-        let rows = Rc::new(Rows::lay_out(self.buffer.rope(), &hidden, wrap, TAB_WIDTH));
+        let rows = Rc::new(Rows::lay_out(
+            self.buffer.rope(),
+            &hidden,
+            wrap,
+            self.indentation.size,
+        ));
         *self.rows.borrow_mut() = Some((key, rows.clone()));
         rows
     }
@@ -1813,7 +1825,7 @@ impl Editor {
         let ranges = match &self.server_folds {
             _ if self.rendered || rope.len_bytes() > brackets::MAX_BYTES => Vec::new(),
             Some((_, server)) if !server.is_empty() => fold::from_server(rope, server),
-            _ => fold::by_indent(rope, TAB_WIDTH),
+            _ => fold::by_indent(rope, self.indentation.size),
         };
         let ranges = Rc::new(ranges);
         *self.fold_ranges.borrow_mut() = Some((key, ranges.clone()));
@@ -2041,7 +2053,7 @@ impl Editor {
                 return at;
             }
             hinted += hint;
-            let width = display_width(*c, column);
+            let width = display_width(*c, column, self.indentation.size);
             if column + hinted + width > target {
                 return start + from + i;
             }
@@ -2331,7 +2343,10 @@ impl Editor {
                     self.selections.add(Selection::cursor(at));
                 }
             }
-            Command::Indent => self.buffer.type_text(&mut self.selections, "    "),
+            Command::Indent => {
+                let unit = self.indentation.unit();
+                self.buffer.type_text(&mut self.selections, &unit);
+            }
             Command::Outdent => self.outdent(),
             Command::DeleteWordLeft => self.delete_to(Motion::WordLeft),
             Command::DeleteWordRight => self.delete_to(Motion::WordRight),
@@ -2482,12 +2497,13 @@ impl Editor {
         let head = self.selections.primary().head;
         let rope = self.buffer.rope();
         let start = rope.line_to_char(rope.char_to_line(head));
-        let spaces = rope
-            .line(rope.char_to_line(head))
-            .chars()
-            .take(TAB_WIDTH)
-            .take_while(|c| *c == ' ')
-            .count();
+        let line = rope.line(rope.char_to_line(head));
+        let spaces = if line.chars().next() == Some('\t') {
+            1
+        } else {
+            let size = self.indentation.size;
+            line.chars().take(size).take_while(|c| *c == ' ').count()
+        };
         if spaces > 0 {
             self.buffer
                 .replace_range(&mut self.selections, start, start + spaces, "");
@@ -2516,7 +2532,12 @@ impl Editor {
             (before, after),
             (Some('{'), Some('}')) | (Some('('), Some(')')) | (Some('['), Some(']'))
         );
-        let inner = format!("{indent}{}", if opens { INDENT } else { "" });
+        let unit = if opens {
+            self.indentation.unit()
+        } else {
+            String::new()
+        };
+        let inner = format!("{indent}{unit}");
         let text = if closes {
             format!("\n{inner}\n{indent}")
         } else {
@@ -3098,8 +3119,19 @@ impl Editor {
         }
     }
 
-    /// Writes this file, through its notebook if it has one.
+    /// Writes this file, through its notebook if it has one. The project's `.editorconfig`
+    /// tidies the lines first, as an edit that can be undone.
     pub fn save(&mut self) -> io::Result<()> {
+        if self.notebook.is_none() {
+            let edits = self.rules.edits(&self.buffer.text());
+            self.buffer.edit_ranges(&mut self.selections, &edits);
+        }
+        self.save_as_is()
+    }
+
+    /// Writes this file as it stands, as saving in a pause while typing does: tidying then
+    /// would take away the space just typed.
+    pub fn save_as_is(&mut self) -> io::Result<()> {
         match &self.notebook {
             Some(notebook) => {
                 let written = notebook.write(&self.buffer.text());
@@ -4024,7 +4056,7 @@ impl Editor {
                 let Some(c) = chars[..end].get(i) else {
                     break;
                 };
-                let width = display_width(*c, column);
+                let width = display_width(*c, column, self.indentation.size);
                 if column + hinted + width > left {
                     if *c == '\t' {
                         text.extend(std::iter::repeat_n(' ', width));
@@ -4053,7 +4085,7 @@ impl Editor {
             } else {
                 laid.indent as usize
             };
-            for at in (0..indent).step_by(TAB_WIDTH) {
+            for at in (0..indent).step_by(self.indentation.size) {
                 let x = area.x + gutter + at as u16;
                 if x < area.right() {
                     grid.put_str(x, y, "│", guide, area.right());

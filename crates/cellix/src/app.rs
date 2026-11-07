@@ -1,3 +1,6 @@
+mod tasks;
+mod workflow;
+
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::io;
@@ -48,7 +51,7 @@ use crate::pdfview::{Hit as PdfHit, PdfView};
 use crate::rendered::{self, Dialect, Target};
 use crate::review::{Hit, Review};
 use crate::search::{self, Field, Search};
-use crate::settings::{SERVERS, Settings, default_server, formatter};
+use crate::settings::{SERVERS, Settings, default_server};
 use crate::settings_page::{Control, Found, SettingsPage, Values};
 use crate::snippets::Snippet;
 use crate::source::{Hit as SourceHit, Source as SourceControl};
@@ -68,7 +71,7 @@ const ASK_WIDTH: u16 = 11;
 /// The list an empty window shows, its width, the rows above it, and the height it needs.
 const WELCOME_WIDTH: u16 = 44;
 const WELCOME_LEAD_ROWS: u16 = 4;
-const WELCOME_MIN_HEIGHT: u16 = 16;
+const WELCOME_MIN_HEIGHT: u16 = 20;
 /// Activity bar buttons, with what each one runs.
 const ACTIVITY: [(Icon, Command); 5] = [
     (Icon::Files, Command::ToggleSidebar),
@@ -197,8 +200,6 @@ const MORE_PADDING: u16 = 1;
 const DOCK_WIDTH: u16 = 80;
 /// Columns the status bar gives a branch's name, so a long one can't crowd the message.
 const STATUS_BRANCH_WIDTH: u16 = 28;
-/// Spaces per indent, which is what the status bar shows and formatters are told.
-const TAB_SIZE: usize = 4;
 const WHEEL_LINES: isize = 3;
 /// Wheel events closer together than this are a trackpad's stream.
 /// How close together presses must be to count as one double or triple click.
@@ -1081,6 +1082,8 @@ pub struct App {
     browser_offer: bool,
     /// terminal-browser's installer, running, and what it said.
     browser_install: Option<std::sync::mpsc::Receiver<String>>,
+    /// Saving on its own, and saving after formatting.
+    workflow: workflow::State,
     /// Set when the user asks to leave.
     pub quit: bool,
 }
@@ -1222,11 +1225,13 @@ impl App {
             disk_look: None,
             search,
             drawer: false,
+            workflow: workflow::State::default(),
             quit: false,
         };
         app.dock.docked = app.docked();
         app.agents.docked = app.docked();
         app.refresh_tree();
+        app.start_workflow();
         app
     }
 
@@ -1334,6 +1339,7 @@ impl App {
         self.load_committed(&mut editor);
         self.editors.push(editor);
         self.set_active(self.editors.len() - 1);
+        self.workflow.recent.opened_file(path);
         self.attach_server(path);
         Ok(())
     }
@@ -2627,8 +2633,10 @@ impl App {
                 if let Some(editor) = self.editor_mut() {
                     editor.reveal(area);
                 }
+                self.formatted(&path);
             }
             LspEvent::Failed(message) => {
+                self.format_failed();
                 self.pending_rename = None;
                 self.say(message);
             }
@@ -2741,17 +2749,19 @@ impl App {
             return;
         };
         let text = editor.buffer.text();
+        let tab_size = editor.indentation.size;
         let language = Registry::language_name(&path).unwrap_or("Plain Text");
         if let Some(client) = self.servers.get_mut(language) {
-            client.format(&path, TAB_SIZE);
+            client.format(&path, tab_size);
             return;
         }
-        let Some(tool) = formatter(language) else {
+        let Some(tool) = self.settings.formatter(language) else {
             self.say(format!("No formatter for {language}"));
             return;
         };
+        let tool: Vec<&str> = tool.iter().map(String::as_str).collect();
         let name = path.display().to_string();
-        match format_with(tool, &name, &text) {
+        match format_with(&tool, &name, &text) {
             Ok(formatted) if formatted == text => self.say("Already formatted"),
             Ok(formatted) => {
                 let area = self.focused_area();
@@ -3545,6 +3555,7 @@ impl App {
             self.scrolled = None;
         }
         // What the person does to a page, as against what a file changing on disk does.
+        let had_keys = self.keyboard_editor();
         let edited = (!passive && !matches!(event, Event::Tick | Event::Resize(..)))
             .then(|| {
                 self.editors
@@ -3574,6 +3585,7 @@ impl App {
             editor.renumber_lists();
         }
         self.follow_threads();
+        self.after_event(had_keys);
     }
 
     fn paste(&mut self, text: &str) {
@@ -4404,7 +4416,7 @@ impl App {
         }
         if self.dock.focused && matches!(self.overlay, Overlay::None) {
             // The session gets everything but what moves away from it.
-            let command = simple_keymap(key);
+            let command = self.workflow.keys.command(key);
             let leaves = matches!(
                 command,
                 Some(
@@ -4424,8 +4436,14 @@ impl App {
                 return;
             }
         }
+        if self.recording_keys(key) {
+            return;
+        }
         // These two work from anywhere, even with a palette or prompt open.
-        let leaving = matches!(simple_keymap(key), Some(Command::Quit | Command::CloseTab));
+        let leaving = matches!(
+            self.workflow.keys.command(key),
+            Some(Command::Quit | Command::CloseTab)
+        );
         if !matches!(self.overlay, Overlay::None) && !leaving {
             self.overlay_key(key);
             return;
@@ -4461,7 +4479,7 @@ impl App {
                 VimAction::Passthrough => {}
             }
         }
-        if let Some(command) = simple_keymap(key) {
+        if let Some(command) = self.workflow.keys.command(key) {
             let open = self.suggest.is_some();
             self.run(command);
             match command {
@@ -5518,7 +5536,17 @@ impl App {
                 self.workspace_request = Some(WorkspaceRequest::Open(path));
             }
             Some(Item::Symbol(symbol)) => self.go_to_symbol_place(&symbol),
-            Some(Item::Gap) | None => {}
+            Some(Item::Task(task)) => self.run_task(task),
+            Some(Item::Recent(path, _, true)) => {
+                let path = dunce::canonicalize(&path).unwrap_or(path);
+                self.workspace_request = Some(WorkspaceRequest::Open(path));
+            }
+            Some(Item::Recent(path, _, false)) => {
+                if let Err(e) = self.open(&path) {
+                    self.say(format!("Could not open: {e}"));
+                }
+            }
+            Some(Item::Gap | Item::Header(_)) | None => {}
         }
     }
 
@@ -6198,12 +6226,17 @@ impl App {
             Command::OpenSettings => {
                 let closing = self.settings_page.is_some();
                 self.settings_page = (!closing).then(|| SettingsPage::new(Found::look()));
+                self.refresh_shortcuts();
                 if !closing {
                     self.review = None;
                     self.drawer = false;
                 }
             }
             Command::SwitchBranch => self.switch_branch_list(),
+            Command::OpenRecent => self.open_recent(),
+            Command::RunTask => self.pick_task(),
+            Command::RunBuildTask => self.run_build_task(),
+            Command::RerunLastTask => self.rerun_last_task(),
             Command::ReviewPreviousTurn => {
                 if self.review.is_none() {
                     self.review = Some(self.new_review(self.workspace.root().to_path_buf()));
@@ -9742,6 +9775,9 @@ impl App {
             self.confirm_conflict();
             return;
         }
+        if self.format_before_saving() {
+            return;
+        }
         self.write_file();
     }
 
@@ -10493,7 +10529,7 @@ impl App {
                 run("Rename Symbol", Command::RenameSymbol).when(server),
                 run("Quick Fix…", Command::QuickFix).when(server),
                 run("Format Document", Command::FormatDocument)
-                    .when(server || language.is_some_and(|l| formatter(l).is_some())),
+                    .when(server || language.is_some_and(|l| self.settings.formatter(l).is_some())),
             ]);
             if matches!(language, Some("Markdown" | "LaTeX")) {
                 items.push(run("Show Page", Command::MarkdownPreview));
@@ -10751,6 +10787,9 @@ impl App {
 
     fn settings_key(&mut self, key: KeyEvent) -> bool {
         let area = self.sheet_area();
+        if self.search_shortcuts(key) {
+            return true;
+        }
         let Some(page) = &mut self.settings_page else {
             return false;
         };
@@ -10872,6 +10911,26 @@ impl App {
                     editor.left = 0;
                 }
                 note = store("word_wrap", on.into());
+            }
+            Control::Shortcut(index) => {
+                if let Some(page) = &mut self.settings_page {
+                    page.recording = Some((index, None));
+                }
+            }
+            Control::ResetShortcut(index) => {
+                let name = self.settings_page.as_ref().map(|p| p.shortcuts[index].name);
+                if let Some(name) = name {
+                    note = self.set_keys(name, None);
+                }
+            }
+            Control::FormatOnSave => {
+                let on = self.settings.format_on_save != Some(true);
+                self.settings.format_on_save = Some(on);
+                note = store("format_on_save", on.into());
+            }
+            Control::AutoSave(name) => {
+                self.settings.auto_save = Some(name.to_string());
+                note = store("auto_save", name.into());
             }
             Control::Keymap(name) => {
                 (self.vim, self.neovim) = keymap_engines(Some(name));
@@ -11266,6 +11325,12 @@ impl App {
         if let Some(page) = &self.settings_page {
             self.draw_settings_tab(grid);
             let (chosen, keymap, smooth_scroll, minimap, inlay_hints) = self.settings_values();
+            let auto_save = self.settings.auto_save.as_deref().unwrap_or("off");
+            let auto_save = match workflow::AutoSave::from_setting(Some(auto_save)) {
+                workflow::AutoSave::Off => "off",
+                workflow::AutoSave::AfterDelay => "after_delay",
+                workflow::AutoSave::OnFocusChange => "on_focus_change",
+            };
             let values = Values {
                 theme: &chosen,
                 keymap: &keymap,
@@ -11273,6 +11338,8 @@ impl App {
                 minimap,
                 view: self.editor_view(),
                 inlay_hints,
+                format_on_save: self.settings.format_on_save == Some(true),
+                auto_save,
             };
             let area = self.sheet_area();
             page.draw(grid, area, &values, (self.hover, &*self.measure), theme);
@@ -13091,11 +13158,12 @@ impl App {
 
     /// Every problem known, file by file, as rows of the Problems tab.
     fn problem_rows(&self) -> Vec<ProblemRow> {
-        let mut files: Vec<&PathBuf> = self.diagnostics.keys().collect();
+        let all = self.all_problems();
+        let mut files: Vec<&PathBuf> = all.keys().collect();
         files.sort();
         let mut rows = Vec::new();
         for file in files {
-            let mut found = self.diagnostics[file].clone();
+            let mut found = all[file].clone();
             if found.is_empty() {
                 continue;
             }
@@ -13367,10 +13435,12 @@ impl App {
         if main.h < WELCOME_MIN_HEIGHT {
             return Vec::new();
         }
-        let top = main.y + main.h / 4 + WELCOME_LEAD_ROWS;
+        // Under the START heading.
+        let top = main.y + main.h / 4 + WELCOME_LEAD_ROWS + 1;
         let has_agent = self.dock.sessions.iter().any(Session::agent);
         let mut rows = vec![
             ("Open a File", Some("Ctrl+P"), Command::QuickOpen),
+            ("Open Folder…", None, Command::OpenWorkspace),
             ("New Document", None, Command::NewDocument),
         ];
         if !has_agent {
@@ -13378,6 +13448,7 @@ impl App {
         }
         rows.push(("Open a Terminal", Some("Ctrl+J"), Command::ToggleTerminal));
         rows.extend([
+            ("Run Task…", None, Command::RunTask),
             ("Review Changes", Some("Ctrl+G"), Command::OpenDiff),
             (
                 "Search the Project",
@@ -13401,8 +13472,10 @@ impl App {
     fn welcome_box(&self) -> Rect {
         let main = self.main_area();
         let width = WELCOME_WIDTH.min(main.w.saturating_sub(4));
+        // Recent stands to its right when there's room, and the two are centred together.
+        let beside = self.welcome_recent_width(main.w);
         Rect::new(
-            main.x + main.w.saturating_sub(width) / 2,
+            main.x + main.w.saturating_sub(width + beside) / 2,
             main.y,
             width,
             main.h,
@@ -13411,7 +13484,13 @@ impl App {
 
     /// Runs the action of an empty window under a click.
     fn click_welcome(&mut self, x: u16, y: u16) -> bool {
-        if !self.editors.is_empty() || !self.welcome_box().contains(x, y) {
+        if !self.editors.is_empty() {
+            return false;
+        }
+        if self.click_welcome_recent(x, y) {
+            return true;
+        }
+        if !self.welcome_box().contains(x, y) {
             return false;
         }
         let rows = self.welcome_rows();
@@ -13449,6 +13528,14 @@ impl App {
             main.right(),
             95,
         );
+        let heading = Style {
+            fg: theme.gutter.fg,
+            bold: true,
+            ..theme.text
+        };
+        let first = self.welcome_rows().first().map_or(y + 5, |row| row.0);
+        grid.label_at(x as f32, x, first - 1, "START", heading, area.right(), 80);
+        self.draw_welcome_recent(grid, area, first);
         for (line, name, keys, _) in self.welcome_rows() {
             let row = Rect::new(area.x, line, area.w, 1);
             if self.hover.is_some_and(|h| row.contains(h.0, h.1)) {
@@ -13591,7 +13678,7 @@ impl App {
                 } else if editor.tracking {
                     "Tracking changes".to_string()
                 } else {
-                    "Spaces: 4".to_string()
+                    editor.indentation.label()
                 },
             ];
         }
@@ -13604,7 +13691,7 @@ impl App {
         // A message outranks the details, and a hint gives way to them.
         let kept = if message.is_empty() { 24 } else { 64 };
         let start = self.status_branch().map_or(1, |(_, end)| end + 1);
-        let problems: usize = self.diagnostics.values().map(Vec::len).sum();
+        let problems: usize = self.all_problems().values().map(Vec::len).sum();
         let problems = (problems > 0 && !self.compact()).then(|| format!("⊗ {problems}  "));
         let flagged = problems.as_ref().map_or(0, |p| p.chars().count() as u16);
         let used = left.chars().count().min(kept) as u16 + start + flagged + 3;
@@ -17383,6 +17470,36 @@ mod tests {
         app.overlay = Overlay::None;
         app.choose(Choice::Overwrite);
         assert!(fs::read_to_string(&path).unwrap().starts_with("mine"));
+    }
+
+    #[test]
+    fn editorconfig_sets_indentation_and_tidies_lines_on_save() {
+        let (dir, mut app) = project();
+        fs::write(
+            dir.path().join(".editorconfig"),
+            "root = true\n\n[*]\ntrim_trailing_whitespace = true\ninsert_final_newline = true\n\n\
+             [Makefile]\nindent_style = tab\ntab_width = 8\n\n[*.rs]\nindent_size = 2\n",
+        )
+        .unwrap();
+        let make = dir.path().join("Makefile");
+        fs::write(&make, "all:  \n").unwrap();
+        app.open(&make).unwrap();
+        assert!(screen(&app).text().contains("Tab Size: 8"));
+        key(&mut app, Key::End);
+        key(&mut app, Key::Enter);
+        key(&mut app, Key::Tab);
+        typed(&mut app, "cc main.c   ");
+        app.handle(Event::Key(KeyEvent::ctrl('s')));
+        assert_eq!(fs::read_to_string(&make).unwrap(), "all:\n\tcc main.c\n");
+        // The tidying is an edit like any other, so it can be taken back.
+        app.handle(Event::Key(KeyEvent::ctrl('z')));
+        assert_eq!(app.active_text().unwrap(), "all:  \n\tcc main.c   \n");
+
+        let rust = dir.path().join("beta.rs");
+        app.open(&rust).unwrap();
+        assert!(screen(&app).text().contains("Spaces: 2"));
+        key(&mut app, Key::Tab);
+        assert_eq!(app.active_text().unwrap(), "  fn main() {}\n");
     }
 
     #[test]
@@ -23810,7 +23927,7 @@ while True:
         let (_dir, mut app) = project();
         app.run(Command::OpenSettings);
         let area = app.sheet_area();
-        app.settings_page.as_mut().unwrap().section = crate::settings_page::Section::Editor;
+        app.settings_page.as_mut().unwrap().section = crate::settings_page::Section::Keyboard;
         let page = app.settings_page.as_ref().unwrap();
         let (rect, _) = page
             .controls(area)

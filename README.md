@@ -439,8 +439,26 @@ saved to `~/.config/cellix/settings.json`. You can also edit that file, or
 editor. `theme` is `auto`, `dark` or `light`, and `auto` also matches your terminal's
 background. `tier` is `direct`, `placeholder` or `cells`. `smooth_scroll: false` makes the
 wheel jump by lines, for a slow link, and `minimap: false` hides the minimap.
-`language_servers` maps a language to a command, and
-`browser` replaces the command that opens web pages.
+`language_servers` maps a language to a command, `formatters` maps one to a formatter that
+reads stdin and writes stdout, and `browser` replaces the command that opens web pages.
+
+`format_on_save: true` formats code as it's saved. `auto_save` is `off`, `after_delay` (after
+`auto_save_delay` milliseconds, 1000 unless set) or `on_focus_change`, which saves a file as you
+leave it and when the terminal loses focus. A project's `.editorconfig` sets indentation and, on
+save, trailing whitespace, the final newline and line endings.
+
+Settings › Keyboard lists every command with its keys: search by name or by keys, and click a
+command's keys to set new ones. They're saved as `keybindings`, by the command's name in the
+palette, and win over the defaults; an empty list takes a command's keys away:
+
+```json
+{ "keybindings": { "Rerun Last Task": ["Ctrl+Alt+R"], "Toggle Sidebar": [] } }
+```
+
+Run Task (in the palette) finds the tasks in package.json, Cargo.toml, a Makefile, a justfile,
+go.mod, pytest's config and `.vscode/tasks.json`, and runs one in a tab of the side pane. Errors
+it prints go to Problems with their file and line. Ctrl+Shift+B runs the default build task, and
+Rerun Last Task runs the last one again.
 
 Ghostty keeps Cmd+D to open a split, so Cellix never sees it and Ctrl+D is the way to select
 the next match. `Free Cmd+D` under Integrations adds `keybind = super+d=unbind` to Ghostty's

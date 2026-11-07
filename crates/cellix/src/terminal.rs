@@ -673,6 +673,7 @@ pub fn run(options: Options) -> io::Result<()> {
                 // Drain everything queued, so a fast wheel doesn't redraw per event.
                 let mut batch = Vec::new();
                 let mut came_back = false;
+                let mut left = false;
                 loop {
                     let event = ct::read()?;
                     // Anything but the wheel or a passing pointer may change what's under a scroll.
@@ -699,6 +700,7 @@ pub fn run(options: Options) -> io::Result<()> {
                         backend.invalidate();
                     }
                     came_back |= matches!(event, ct::Event::FocusGained);
+                    left |= matches!(event, ct::Event::FocusLost);
                     // Coming back, or typing, can leave the terminal showing a pointer of its own.
                     if matches!(event, ct::Event::FocusGained | ct::Event::Key(_)) {
                         shape = None;
@@ -719,6 +721,12 @@ pub fn run(options: Options) -> io::Result<()> {
                         // The size check above handles it, and compares against the old size.
                         Some(Event::Resize(..)) | None => {}
                         Some(event) => spaces.handle(event),
+                    }
+                }
+                // Saving on focus change saves as the window is left, as VS Code does.
+                if left {
+                    for workspace in &mut spaces.list {
+                        workspace.app.window_left();
                     }
                 }
                 // The terminal may have turned dark or light while Cellix was away, as a Mac

@@ -36,10 +36,23 @@ pub struct Settings {
     pub browser: Option<Vec<String>>,
     /// Language name to server command, overriding the built-in table.
     pub language_servers: HashMap<String, Vec<String>>,
+    /// Language name to a formatter that reads the file on stdin and writes it to stdout,
+    /// overriding the built-in one.
+    pub formatters: HashMap<String, Vec<String>>,
+    /// Keys set in place of a command's own, by the command's name in the palette. An empty
+    /// list takes its keys away.
+    pub keybindings: HashMap<String, Vec<String>>,
     /// Languages whose support the user said not to offer again.
     pub declined_languages: Vec<String>,
     /// What builds a paper, taking the file last. Without it, the first engine found.
     pub latex_engine: Option<Vec<String>>,
+    /// Formats a file as it's saved, with its language server or formatter.
+    pub format_on_save: Option<bool>,
+    /// `off` (the default), `after_delay`, or `on_focus_change`, which saves a file as its
+    /// editor loses the keys and as the terminal loses focus.
+    pub auto_save: Option<String>,
+    /// How long after the last change `after_delay` saves, in milliseconds.
+    pub auto_save_delay: Option<u64>,
 }
 
 fn read(path: &Path) -> Option<Settings> {
@@ -63,8 +76,13 @@ impl Settings {
             .sticky_scroll_lines
             .or(self.sticky_scroll_lines.take());
         self.language_servers.extend(other.language_servers);
+        self.formatters.extend(other.formatters);
+        self.keybindings.extend(other.keybindings);
         self.declined_languages.extend(other.declined_languages);
         self.latex_engine = other.latex_engine.or(self.latex_engine.take());
+        self.format_on_save = other.format_on_save.or(self.format_on_save.take());
+        self.auto_save = other.auto_save.or(self.auto_save.take());
+        self.auto_save_delay = other.auto_save_delay.or(self.auto_save_delay.take());
     }
 
     /// The words the user has said are right.
@@ -236,6 +254,16 @@ pub const SERVERS: [Server; 27] = [
 pub fn default_server(language: &str) -> Option<Vec<String>> {
     let found = SERVERS.iter().find(|s| s.languages.contains(&language))?;
     Some(found.command.iter().map(|s| s.to_string()).collect())
+}
+
+impl Settings {
+    /// The formatter for a language: the one settings name, or the built-in one.
+    pub fn formatter(&self, language: &str) -> Option<Vec<String>> {
+        if let Some(own) = self.formatters.get(language) {
+            return Some(own.clone());
+        }
+        formatter(language).map(|tool| tool.iter().map(|s| s.to_string()).collect())
+    }
 }
 
 /// A formatter that reads a file on stdin and writes it to stdout, for when no language

@@ -7,7 +7,7 @@ mod vim;
 pub use keymap::simple_keymap;
 pub use vim::{Vim, VimAction, VimMode};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Key {
     Char(char),
     Enter,
@@ -27,14 +27,14 @@ pub enum Key {
     F(u8),
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Mods {
     pub ctrl: bool,
     pub alt: bool,
     pub shift: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct KeyEvent {
     pub key: Key,
     pub mods: Mods,
@@ -98,7 +98,7 @@ pub enum Event {
 }
 
 /// Markdown formatting, as the page's toolbar offers it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Format {
     Bold,
     Italic,
@@ -122,7 +122,7 @@ pub enum Format {
 
 /// Anything the user can ask for. Each entry is also a command-palette item unless it
 /// needs arguments.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Command {
     Move(Direction, bool),
     Newline,
@@ -266,6 +266,13 @@ pub enum Command {
     OpenGemini,
     OpenSettings,
     SwitchBranch,
+    /// Folders and files opened lately, to open again.
+    OpenRecent,
+    /// The project's tasks, to run one in the side pane: VS Code's Run Task.
+    RunTask,
+    /// The default build task: Ctrl+Shift+B.
+    RunBuildTask,
+    RerunLastTask,
     GoToDefinition,
     /// The language server's fixes and refactors at the caret: Ctrl+. in VS Code.
     QuickFix,
@@ -287,7 +294,7 @@ pub enum Command {
 }
 
 /// A cursor movement, independent of the rope model.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Direction {
     Left,
     Right,

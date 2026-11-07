@@ -33,6 +33,8 @@ pub fn simple_keymap(event: KeyEvent) -> Option<Command> {
         Key::Char('~') if mods.ctrl => CloseDock,
         Key::Char('`') if mods.ctrl => FocusAgent,
         Key::Char('b' | 'B') if mods.ctrl && mods.alt => BuildPdf,
+        // Telling this from Ctrl+B needs the Kitty keyboard protocol.
+        Key::Char('b' | 'B') if mods.ctrl && mods.shift => RunBuildTask,
         Key::Char('j' | 'J') if mods.ctrl && mods.alt => ShowInPdf,
         Key::Char('j') if mods.ctrl => ToggleTerminal,
         Key::Enter if mods.ctrl && shift => InsertLineAbove,

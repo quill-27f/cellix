@@ -4037,5 +4037,68 @@
     "title": "Inlay hints from the server show dim on a chip inside the line, never in the file; the caret and clicks step over them, and a setting turns them off",
     "test": "inlay_hints_show_in_the_line_without_changing_the_text",
     "passes": true
+  },
+  {
+    "id": "editorconfig",
+    "milestone": 12,
+    "title": "The project's .editorconfig sets indentation (tabs or spaces, size) and, on save, trims trailing whitespace, ends the file with a newline and sets line endings, as one undoable edit",
+    "test": "editorconfig_sets_indentation_and_tidies_lines_on_save",
+    "passes": true
+  },
+  {
+    "id": "format-on-save",
+    "milestone": 12,
+    "title": "Format on save, a setting, formats code with its language server or formatter before it is written",
+    "test": "format_on_save_runs_the_formatter_before_writing",
+    "passes": true
+  },
+  {
+    "id": "auto-save-delay",
+    "milestone": 12,
+    "title": "Auto save after a pause in typing, a setting with its delay",
+    "test": "auto_save_after_a_pause_saves_without_a_keypress",
+    "passes": true
+  },
+  {
+    "id": "auto-save-focus",
+    "milestone": 12,
+    "title": "Auto save on focus change saves a file as its editor loses the keys and when the terminal loses focus",
+    "test": "auto_save_on_focus_change_saves_the_file_that_lost_the_keys",
+    "passes": true
+  },
+  {
+    "id": "open-recent",
+    "milestone": 12,
+    "title": "Open Recent lists recently opened folders, then files, and opens the pick",
+    "test": "open_recent_lists_folders_then_files_and_opens_the_pick",
+    "passes": true
+  },
+  {
+    "id": "welcome-recent",
+    "milestone": 12,
+    "title": "The welcome page lists recent folders and files beside Start, and a click opens one",
+    "test": "the_welcome_page_lists_recent_folders_and_files_beside_start",
+    "passes": true
+  },
+  {
+    "id": "run-task",
+    "milestone": 12,
+    "title": "Run Task finds package.json, Cargo, Makefile, justfile, Go, pytest and tasks.json tasks, runs the pick in a pane tab named for it, and its compiler and test errors join Problems; Ctrl+Shift+B and Rerun Last Task",
+    "test": "a_task_runs_in_its_own_tab_and_its_errors_join_problems",
+    "passes": true
+  },
+  {
+    "id": "task-problems-parsed",
+    "milestone": 12,
+    "title": "Errors from rustc and Cargo, tsc, ESLint, gcc and clang, Go and pytest are read into file, line and message",
+    "test": "tsc_eslint_gcc_go_and_pytest",
+    "passes": true
+  },
+  {
+    "id": "keyboard-shortcuts",
+    "milestone": 12,
+    "title": "Settings' Keyboard section lists every command with its keys, searchable by name or keys; a click records new keys, saved in settings, with keys two commands share flagged",
+    "test": "a_command_gets_new_keys_on_the_shortcuts_page_and_they_work",
+    "passes": true
   }
 ]

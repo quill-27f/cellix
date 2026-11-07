@@ -126,6 +126,20 @@ impl Selections {
         self.normalize();
     }
 
+    /// Moves each selection for `inserted` chars put in at `at`, leaving those at `at`
+    /// before it, as text added after the caret does.
+    pub(crate) fn insert_after(&mut self, at: usize, inserted: usize) {
+        for s in &mut self.items {
+            if s.anchor > at {
+                s.anchor += inserted;
+            }
+            if s.head > at {
+                s.head += inserted;
+            }
+        }
+        self.normalize();
+    }
+
     pub fn clamp(&mut self, len: usize) {
         for s in &mut self.items {
             s.anchor = s.anchor.min(len);

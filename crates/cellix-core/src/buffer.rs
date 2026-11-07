@@ -332,6 +332,36 @@ impl Buffer {
         self.undo.last_mut().expect("just pushed").after = selections.clone();
     }
 
+    /// Makes several changes as one undo step, as saving does to tidy a file. `edits` are
+    /// (start, end, text) in chars of the text as it is, in order and apart. Selections move
+    /// with the text around them.
+    pub fn edit_ranges(&mut self, selections: &mut Selections, edits: &[(usize, usize, String)]) {
+        if edits.is_empty() {
+            return;
+        }
+        self.revision += 1;
+        let before = selections.clone();
+        let mut done = Vec::new();
+        // From the end, so each range still means what it did.
+        for (start, end, text) in edits.iter().rev() {
+            let removed = self.rope.slice(*start..*end).to_string();
+            self.rope.remove(*start..*end);
+            self.rope.insert(*start, text);
+            if start == end {
+                selections.insert_after(*start, text.chars().count());
+            } else {
+                selections.shift((*start, *end), text.chars().count());
+            }
+            done.push(Edit {
+                at: *start,
+                removed,
+                inserted: text.clone(),
+            });
+        }
+        self.push_edits(done, before);
+        self.undo.last_mut().expect("just pushed").after = selections.clone();
+    }
+
     /// The char index of a line and column, clamped to the text.
     pub fn position(&self, line: usize, column: usize) -> usize {
         let line = line.min(self.rope.len_lines().saturating_sub(1));
