@@ -295,6 +295,25 @@ out of sight. The side pane stands under the file when it's dragged there, as we
 window is too narrow; that choice lasts while running. Panes split side by side only, so a tab
 dropped on a file splits left or right, and there is no split below.
 
+### Code
+
+Code is laid out as rows rather than lines (`rows.rs`): a line each, unless word wrap breaks a
+long line at the pane's width or a fold hides some. Scrolling, clicks, the caret and Up and Down
+all go by row, so a wrapped line reads as several and a fold as one. Wrapped rows after a line's
+first have no number and keep its indent; wrapping is off by default, Alt+Z changes one file, and
+Settings changes the default.
+
+Folds come from the language server's `foldingRange` when it has one, and otherwise from the
+indent, as VS Code's own fallback does; a line of closing brackets folds in with its block and
+shows after the fold's ⋯ chip, so a folded function reads `fn a() { ⋯ }`. The gutter keeps two
+cells for chevrons, shown while the pointer is over it, and a folded line always shows its ›. A
+fold follows its header line through edits, found again by its text, and opens when a caret lands
+inside, whether from a search, a jump or a click. The headers of the scopes scrolled into stay
+pinned over the top rows, at most five, with a soft shadow under them on pixels and a line on
+cells. Brackets take one of three colours by depth, gold, orchid and sky as in VS Code, toned for
+each theme, with a stray in the error colour and the caret's pair tinted. Pages are none of this:
+they lay themselves out.
+
 ### Markdown
 
 Markdown follows Xcode 27's rendered editor, as read from its `RenderedEditor` framework:

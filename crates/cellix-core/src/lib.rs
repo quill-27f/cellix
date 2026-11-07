@@ -6,5 +6,6 @@ mod selection;
 mod workspace;
 
 pub use buffer::Buffer;
+pub use ropey::Rope;
 pub use selection::{Motion, Selection, Selections};
 pub use workspace::{Entry, Match, Workspace, walk_files};

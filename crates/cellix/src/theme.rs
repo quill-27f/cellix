@@ -127,6 +127,50 @@ impl Theme {
         }
     }
 
+    /// Bracket pairs by depth: gold, orchid and sky, as VS Code's, toned to sit with the
+    /// syntax colours. The light ones pass 4.5:1 on white.
+    pub fn brackets(&self) -> [Rgb; 3] {
+        if self.is_light() {
+            [
+                Rgb(0x9a, 0x67, 0x00),
+                Rgb(0xa2, 0x34, 0x9f),
+                Rgb(0x1f, 0x63, 0xc7),
+            ]
+        } else {
+            [
+                Rgb(0xe6, 0xc0, 0x7b),
+                Rgb(0xd2, 0x9f, 0xe3),
+                Rgb(0x6c, 0xb6, 0xff),
+            ]
+        }
+    }
+
+    /// What the caret's matching brackets stand on, part way from the text to a selection.
+    pub fn bracket_match(&self) -> Rgb {
+        let mix = |a: u8, b: u8| ((u16::from(a) * 3 + u16::from(b) * 2) / 5) as u8;
+        let (s, bg) = (self.selection, self.text.bg);
+        Rgb(mix(s.0, bg.0), mix(s.1, bg.1), mix(s.2, bg.2))
+    }
+
+    /// A folded region's chip: lighter than both the text and the caret's line, so it shows
+    /// on either.
+    pub fn fold_chip(&self) -> Rgb {
+        if self.is_light() {
+            Rgb(0xdc, 0xe0, 0xe8)
+        } else {
+            Rgb(0x42, 0x42, 0x66)
+        }
+    }
+
+    /// The ring around the caret's matching brackets, on the pixel tiers.
+    pub fn bracket_ring(&self) -> Rgb {
+        if self.is_light() {
+            Rgb(0x9d, 0xb3, 0xe6)
+        } else {
+            Rgb(0x6b, 0x74, 0xa8)
+        }
+    }
+
     pub fn is_light(&self) -> bool {
         let Rgb(r, g, b) = self.text.bg;
         u16::from(r) + u16::from(g) + u16::from(b) > 3 * 128

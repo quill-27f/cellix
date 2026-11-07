@@ -19,6 +19,14 @@ pub struct Settings {
     pub smooth_scroll: Option<bool>,
     /// `false` hides the minimap, however wide the window.
     pub minimap: Option<bool>,
+    /// `true` wraps long lines of code at the pane's width. Alt+Z changes one file.
+    pub word_wrap: Option<bool>,
+    /// `false` lets the headers of the scopes scrolled into go by with the rest.
+    pub sticky_scroll: Option<bool>,
+    /// How many of those headers may stay at the top: 5 unless set, 0 for none.
+    pub sticky_scroll_lines: Option<usize>,
+    /// `false` leaves code's brackets in the text colour.
+    pub bracket_pairs: Option<bool>,
     /// `false` turns off spelling and grammar on pages.
     pub spell_check: Option<bool>,
     /// What opens web pages, before the system's own browser. `terminal-browser` works here.
@@ -44,6 +52,12 @@ impl Settings {
         self.tier = other.tier.or(self.tier.take());
         self.browser = other.browser.or(self.browser.take());
         self.spell_check = other.spell_check.or(self.spell_check.take());
+        self.bracket_pairs = other.bracket_pairs.or(self.bracket_pairs.take());
+        self.word_wrap = other.word_wrap.or(self.word_wrap.take());
+        self.sticky_scroll = other.sticky_scroll.or(self.sticky_scroll.take());
+        self.sticky_scroll_lines = other
+            .sticky_scroll_lines
+            .or(self.sticky_scroll_lines.take());
         self.language_servers.extend(other.language_servers);
         self.declined_languages.extend(other.declined_languages);
         self.latex_engine = other.latex_engine.or(self.latex_engine.take());

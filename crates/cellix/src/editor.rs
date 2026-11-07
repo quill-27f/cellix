@@ -11,21 +11,26 @@ use cellix_doc::notebook::{Marker, Notebook, marker};
 use cellix_doc::prose::{Issue, Source};
 use cellix_doc::table::Edit as TableEdit;
 use cellix_input::{Command, Direction, Format};
-use cellix_lang::{Registry, Span, Worker};
+use cellix_lang::{Registry, Span, Token, Worker};
 use cellix_render::{
     Bounds, Font, Grid, INTERFACE_SIZE, Icon, Measure, Paint, Rect, Rgb, Strip, units,
 };
 use cellix_review::LineChange;
 use unicode_width::UnicodeWidthChar;
 
+use crate::brackets::{self, Bracket};
+use crate::fold;
 use crate::panels::Symbol;
 use crate::rendered::{
     self, Callout, Dialect, Extras, Figure, Glyph, Intent, Library, Row, Target, Tone,
 };
+use crate::rows::{CodeRow, Rows};
 use crate::snippets::Snippet;
 use crate::theme::Theme;
 
 const TAB_WIDTH: usize = 4;
+/// The most header lines sticky scroll keeps at the top, as VS Code's default.
+pub const STICKY_LINES: usize = 5;
 const GUTTER_MIN_DIGITS: usize = 4;
 const NARROW_PANE: u16 = 60;
 /// Left margin of a rendered page, which also carries comment marks.
@@ -87,6 +92,15 @@ fn dimmed(color: Rgb, bg: Rgb) -> Rgb {
     let mix = |a: u8, b: u8| ((a as u16 * 3 + b as u16 * 2) / 5) as u8;
     Rgb(mix(color.0, bg.0), mix(color.1, bg.1), mix(color.2, bg.2))
 }
+
+/// Bracket pairs, with the revision they were found at and whether strings were known.
+type Pairs = ((u64, bool), Rc<Vec<Bracket>>);
+
+/// Where code folds, with the revision and the server's answer it was worked out for.
+type Regions = ((u64, usize), Rc<Vec<fold::Range>>);
+
+/// What a code view's rows were laid out for: the revision, the wrap width, and the folds.
+type RowsKey = (u64, Option<usize>, u64);
 
 /// Bars per row, with the revision, height and width they fit.
 type MinimapRows = ((u64, u16, u16), Vec<Vec<Strip>>);
@@ -159,6 +173,32 @@ pub struct Editor {
     registry: Rc<Registry>,
     /// The revision last sent to a language server.
     pub synced: u64,
+    /// Whether code's brackets are coloured by depth, with the caret's pair marked.
+    pub bracket_pairs: bool,
+    /// Bracket pairs, for the revision they were found at and whether strings were known.
+    brackets: RefCell<Option<Pairs>>,
+    /// Whether long lines of code wrap at the pane's width: Alt+Z.
+    pub wrap: bool,
+    /// The code's rows, for what they were laid out for.
+    rows: RefCell<Option<(RowsKey, Rc<Rows>)>>,
+    /// Folded regions by their header line and its text, so a fold follows its line through
+    /// edits, with the revision and line count they were last followed at.
+    folded: RefCell<Folded>,
+    /// Where the language server says the code folds, as (first line, last line), with how
+    /// many answers it has given, so each new one is noticed.
+    server_folds: Option<(usize, Vec<(usize, usize)>)>,
+    /// Where the code can fold, for the revision and server answer it was worked out for.
+    fold_ranges: RefCell<Option<Regions>>,
+    /// How many header lines of the scopes scrolled into may stay at the top: 0 for none.
+    pub sticky_lines: usize,
+}
+
+/// Folded header lines with their text, and the revision and line count they're right for.
+#[derive(Default)]
+struct Folded {
+    revision: u64,
+    lines: usize,
+    headers: Vec<(usize, String)>,
 }
 
 /// A word count, how many files it took in, and what it was counted at: the file's revision and a
@@ -244,6 +284,14 @@ impl Editor {
             measure,
             registry,
             synced: 0,
+            bracket_pairs: true,
+            brackets: RefCell::new(None),
+            wrap: false,
+            rows: RefCell::new(None),
+            folded: RefCell::default(),
+            server_folds: None,
+            fold_ranges: RefCell::new(None),
+            sticky_lines: STICKY_LINES,
         }
     }
 
@@ -472,7 +520,12 @@ impl Editor {
         // of the map rather than sliding off it.
         let range = total.saturating_sub(text.h as usize).max(1) as f32;
         let travel = (filled - span).max(0.0);
-        let top = track.y as f32 + (self.top as f32 / range).min(1.0) * travel;
+        let first = if self.rendered {
+            self.top
+        } else {
+            self.code_rows(text.w).get(self.top).map_or(0, |r| r.line)
+        };
+        let top = track.y as f32 + (first as f32 / range).min(1.0) * travel;
         let margin = 0.6;
         let width = track.w as f32 - margin * 1.5;
         let view = Bounds::cells(track.x as f32 + margin - 0.3, top, width + 0.6, span);
@@ -820,6 +873,9 @@ impl Editor {
         if self.rendered && !self.measure.in_cells() {
             self.draw_image_handle(grid, area, hover, theme);
         }
+        if !self.rendered {
+            self.draw_fold_chevrons(grid, area, hover, theme);
+        }
     }
 
     /// The image whose right edge is under the pointer, ready to be dragged.
@@ -1133,6 +1189,16 @@ impl Editor {
             self.buffer.rope().len_lines()
         };
         let row = y.saturating_sub(area.y) as usize;
+        if !self.rendered {
+            // The map and the bar are drawn by line; the view scrolls by row.
+            let filled = self.map_filled(area, lines);
+            let line = (row * lines / filled).min(lines.saturating_sub(1));
+            let rows = self.code_rows(self.text_area(area).w);
+            let middle = rows.row_of(line, 0).saturating_sub(area.h as usize / 2);
+            self.view_rows.set(area.h);
+            self.top = middle.min(self.last_top());
+            return;
+        }
         let filled = self.map_filled(area, lines);
         // The point clicked comes to the middle of the view.
         let middle = (row * lines / filled).saturating_sub(area.h as usize / 2);
@@ -1148,7 +1214,19 @@ impl Editor {
         } else {
             GUTTER_MIN_DIGITS
         };
-        (digits.max(minimum) + 2) as u16
+        // A pad, the number, the cells for a fold's chevron, and a space before the text.
+        (digits.max(minimum) + 2) as u16 + Self::chevron_cells(pane_width)
+    }
+
+    /// Two cells for fold chevrons, except in a narrow pane, where every column counts and
+    /// folds are left to the keys and the palette.
+    fn chevron_cells(pane_width: u16) -> u16 {
+        if pane_width < NARROW_PANE { 0 } else { 2 }
+    }
+
+    /// How wide the line number is drawn, right-aligned, its pad included.
+    fn number_width(&self, pane_width: u16) -> usize {
+        (self.gutter_width(pane_width) - 1 - Self::chevron_cells(pane_width)) as usize
     }
 
     pub fn line_text(&self, line: usize) -> String {
@@ -1197,19 +1275,721 @@ impl Editor {
                 .or_else(|| rows[row..].iter().find(|r| r.stop));
             return stop.map_or(self.buffer.rope().len_chars(), |r| r.position_at(column));
         }
+        let rows = self.code_rows(area.w);
+        let index = (self.top + (y.saturating_sub(area.y)) as usize).min(rows.len() - 1);
+        let row = rows.get(index).expect("a row in range");
+        let target = self.left() + x.saturating_sub(area.x + self.gutter_width(area.w)) as usize;
+        self.row_char_at(row, target)
+    }
+
+    /// A folded region's ⋯ after its header's text, then the bracket it took in.
+    fn draw_fold_chip(
+        &self,
+        grid: &mut Grid,
+        (x, y): (u16, u16),
+        right: u16,
+        line: usize,
+        (text_style, theme): (cellix_render::Style, &Theme),
+    ) {
+        if x + 3 > right {
+            return;
+        }
+        let chip = cellix_render::Style {
+            fg: theme.text.fg,
+            bg: theme.fold_chip(),
+            painted: !self.measure.in_cells(),
+            ..text_style
+        };
+        grid.put_str(x, y, " ⋯ ", chip, right);
+        if !self.measure.in_cells() {
+            // One rounded shape, clear of the braces either side, lighter than both the
+            // line and the caret's line.
+            let pill = Bounds::cells(x as f32 + 0.2, y as f32 + 0.14, 2.6, 0.72);
+            grid.panel(pill, 22, Some(theme.fold_chip()), None);
+            grid.centred_text(x as f32 + 1.5, y as f32, "⋯", theme.text.fg, 100);
+            // Under paint the cells stay the line's colour, so only the pill shows.
+            grid.set_style(Rect::new(x, y, 3, 1), |style| cellix_render::Style {
+                bg: text_style.bg,
+                ..style
+            });
+        }
         let rope = self.buffer.rope();
-        let line = (self.top + (y.saturating_sub(area.y)) as usize).min(rope.len_lines() - 1);
-        let target = self.left + x.saturating_sub(area.x + self.gutter_width(area.w)) as usize;
-        let start = rope.line_to_char(line);
-        let mut column = 0;
-        for (i, c) in self.line_text(line).chars().enumerate() {
-            let width = display_width(c, column);
+        let range = self.hidden().into_iter().find(|r| r.start == line);
+        let Some(range) = range else {
+            return;
+        };
+        let Some(closer) = fold::closer(rope, range) else {
+            return;
+        };
+        grid.put_str(x + 3, y, &closer, text_style, right);
+        // Its brackets keep their pair's colour, as they would unfolded.
+        if self.bracket_pairs {
+            let found = self.pairs_found();
+            let start = rope.line_to_char(range.end);
+            let indent = self
+                .line_text(range.end)
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .count();
+            let colours = theme.brackets();
+            for bracket in brackets::between(
+                &found,
+                start + indent,
+                start + indent + closer.chars().count(),
+            ) {
+                let fg = match bracket.partner {
+                    Some(_) => colours[bracket.depth % colours.len()],
+                    None => theme.error,
+                };
+                let at = x + 3 + (bracket.at - start - indent) as u16;
+                if at < right {
+                    grid.set_style(Rect::new(at, y, 1, 1), |style| cellix_render::Style {
+                        fg,
+                        ..style
+                    });
+                }
+            }
+        }
+    }
+
+    /// Where a click in the gutter or on a fold's chip opens or closes a fold. True when it
+    /// did.
+    pub fn click_fold(&mut self, area: Rect, x: f32, y: u16) -> bool {
+        let Some(line) = self.fold_spot(area, x, y) else {
+            return false;
+        };
+        let text = self.text_area(area);
+        let pinned = self.sticky(&self.code_rows(text.w), text);
+        let outside = pinned.iter().position(|l| *l == line);
+        self.toggle_fold(line);
+        if let Some(outside) = outside {
+            // A pinned header folds where it stands, so the view goes back up to it.
+            let row = self.code_rows(text.w).row_of(line, 0);
+            self.view_rows.set(text.h);
+            self.top = row.saturating_sub(outside).min(self.last_top());
+        }
+        true
+    }
+
+    /// The header line of the fold a click at this place would open or close: a chevron in
+    /// the gutter, or a folded region's chip.
+    pub fn fold_spot(&self, area: Rect, x: f32, y: u16) -> Option<usize> {
+        if self.rendered {
+            return None;
+        }
+        let text = self.text_area(area);
+        let gutter = self.gutter_width(text.w);
+        let rows = self.code_rows(text.w);
+        let offset = y.checked_sub(text.y)? as usize;
+        let cell = x as u16;
+        let cells = Self::chevron_cells(text.w);
+        let first = text.x + gutter - 1 - cells;
+        let chevrons = first..first + cells;
+        // Over a pinned header only its chevron folds; the rest of it jumps there.
+        if let Some(line) = self.sticky(&rows, text).get(offset) {
+            return chevrons.contains(&cell).then_some(*line);
+        }
+        let row = rows.get(self.top + offset)?;
+        let folded = self.fold_at(row.line)?;
+        if chevrons.contains(&cell) && row.first() {
+            return Some(row.line);
+        }
+        let last = rows.rows_of(row.line).last().and_then(|r| rows.get(r));
+        if !folded || last != Some(row) {
+            return None;
+        }
+        let start = self.buffer.rope().line_to_char(row.line);
+        let line_end = start + self.line_text(row.line).chars().count();
+        let column = self.row_column(row, line_end).checked_sub(self.left())?;
+        let chip = text.x as usize + gutter as usize + column;
+        (chip..chip + 3)
+            .contains(&(cell as usize))
+            .then_some(row.line)
+    }
+
+    /// Chevrons beside every region that can fold, while the pointer is over the gutter.
+    fn draw_fold_chevrons(&self, grid: &mut Grid, area: Rect, hover: (u16, u16), theme: &Theme) {
+        let text = self.text_area(area);
+        let gutter = self.gutter_width(text.w);
+        if hover.0 >= text.x + gutter || hover.0 < text.x {
+            return;
+        }
+        if Self::chevron_cells(text.w) == 0 {
+            return;
+        }
+        let rows = self.code_rows(text.w);
+        let current = self
+            .buffer
+            .rope()
+            .char_to_line(self.selections.primary().head);
+        let pinned = self.sticky(&rows, text);
+        for offset in 0..text.h {
+            // Pinned headers fold too, as VS Code's do.
+            let line = match pinned.get(offset as usize) {
+                Some(line) => *line,
+                None => match rows.get(self.top + offset as usize) {
+                    Some(row) if row.first() => row.line,
+                    Some(_) => continue,
+                    None => break,
+                },
+            };
+            let Some(folded) = self.fold_at(line) else {
+                continue;
+            };
+            let y = text.y + offset;
+            let bg = if line == current && (offset as usize) >= pinned.len() {
+                theme.line
+            } else {
+                theme.text.bg
+            };
+            let style = cellix_render::Style { bg, ..theme.gutter };
+            let icon = if folded {
+                Icon::ChevronRight
+            } else {
+                Icon::ChevronDown
+            };
+            self.draw_chevron(grid, (text.x + gutter, y), icon, (style, theme));
+        }
+    }
+
+    /// A fold's chevron, in its own lane between the line number and the code, drawn in the
+    /// text's colour so it doesn't read as part of the number.
+    fn draw_chevron(
+        &self,
+        grid: &mut Grid,
+        (code, y): (u16, u16),
+        icon: Icon,
+        (style, theme): (cellix_render::Style, &Theme),
+    ) {
+        let fallback = if icon == Icon::ChevronRight {
+            "›"
+        } else {
+            "⌄"
+        };
+        let style = cellix_render::Style {
+            fg: theme.text.fg,
+            ..style
+        };
+        let x = (code - 3) as f32 + if self.measure.in_cells() { 0.0 } else { 0.3 };
+        grid.glyph(x, y, icon, theme.text.fg, fallback, style);
+    }
+
+    /// The header lines of the scopes the view has scrolled into, outermost first, that stay
+    /// pinned over the top rows. The line they're worked out for is the first one under them.
+    fn sticky(&self, rows: &Rows, area: Rect) -> Vec<usize> {
+        let most = self.sticky_lines.min(area.h as usize / 3);
+        if most == 0 || self.top == 0 || self.rendered {
+            return Vec::new();
+        }
+        // A scope's closing bracket isn't inside it here: with only the `}` left in view,
+        // pinning its header above it would say nothing, and VS Code doesn't.
+        let mut ranges: Vec<fold::Range> = self
+            .fold_ranges()
+            .iter()
+            .map(|&r| match fold::closer(self.buffer.rope(), r) {
+                Some(_) => fold::Range {
+                    end: r.end - 1,
+                    ..r
+                },
+                None => r,
+            })
+            .collect();
+        ranges.sort_by_key(|r| (r.start, std::cmp::Reverse(r.end)));
+        // Outermost first, each pinned at the next slot while its header has scrolled up past
+        // that slot and its body still shows below it.
+        let mut found: Vec<fold::Range> = Vec::new();
+        for range in ranges {
+            if found.len() == most {
+                break;
+            }
+            if found.last().is_some_and(|outer| range.end > outer.end) {
+                continue;
+            }
+            let slot = self.top + found.len();
+            if rows.row_of(range.start, 0) < slot && rows.row_of(range.end, usize::MAX) > slot {
+                found.push(range);
+            }
+        }
+        found.into_iter().map(|r| r.start).collect()
+    }
+
+    /// The line a pinned header at row `y` jumps to, when one is there.
+    pub fn sticky_at(&self, area: Rect, y: u16) -> Option<usize> {
+        if self.rendered {
+            return None;
+        }
+        let text = self.text_area(area);
+        let rows = self.code_rows(text.w);
+        let pinned = self.sticky(&rows, text);
+        pinned.get(y.checked_sub(text.y)? as usize).copied()
+    }
+
+    /// Brings a pinned header's line up under the headers outside it, with the caret at its
+    /// first word, so its scope shows from the start.
+    pub fn jump_to_sticky(&mut self, area: Rect, line: usize) {
+        let text = self.text_area(area);
+        let rows = self.code_rows(text.w);
+        let outside = self
+            .sticky(&rows, text)
+            .iter()
+            .position(|l| *l == line)
+            .unwrap_or(0);
+        let indent = self
+            .line_text(line)
+            .chars()
+            .take_while(|c| c.is_whitespace())
+            .count();
+        let at = self.buffer.rope().line_to_char(line) + indent;
+        self.selections.set_single(Selection::cursor(at));
+        self.top = rows.row_of(line, 0).saturating_sub(outside);
+        self.view_rows.set(text.h);
+        self.top = self.top.min(self.last_top());
+        self.reveal(area);
+    }
+
+    /// The pinned headers over the top rows: each line's number and text in its colours, and
+    /// a soft shadow under them on pixels, a line under them on cells.
+    fn draw_sticky(
+        &self,
+        grid: &mut Grid,
+        area: Rect,
+        (gutter, rows): (u16, &Rows),
+        theme: &Theme,
+    ) {
+        let pinned = self.sticky(rows, area);
+        if pinned.is_empty() {
+            return;
+        }
+        let rope = self.buffer.rope();
+        let found = self.bracket_pairs.then(|| self.pairs_found());
+        let spans = self.spans.borrow();
+        let spans = spans
+            .as_ref()
+            .filter(|(r, _)| *r == self.buffer.revision())
+            .map(|(_, s)| s.as_slice());
+        for (n, line) in pinned.iter().enumerate() {
+            let y = area.y + n as u16;
+            grid.fill(Rect::new(area.x, y, area.w, 1), theme.text);
+            let number = format!("{:>w$}", line + 1, w = self.number_width(area.w));
+            grid.put_str(area.x, y, &number, theme.gutter, area.x + gutter);
+            let row = CodeRow {
+                line: *line,
+                start: 0,
+                end: usize::MAX,
+                indent: 0,
+            };
+            let start = rope.line_to_char(*line);
+            let mut text = String::new();
+            let mut column = 0;
+            for c in self.line_text(*line).chars() {
+                let width = display_width(c, column);
+                if column + width > self.left() {
+                    if c == '\t' {
+                        text.extend(std::iter::repeat_n(' ', width));
+                    } else {
+                        text.push(c);
+                    }
+                }
+                column += width;
+            }
+            grid.put_str(area.x + gutter, y, &text, theme.text, area.right());
+            let colour = |grid: &mut Grid, from: usize, to: usize, fg: Rgb| {
+                let x_from = self.row_column(row, from).saturating_sub(self.left());
+                let x_to = self.row_column(row, to).saturating_sub(self.left());
+                let x = (area.x + gutter).saturating_add(x_from as u16);
+                let w = (x_to.saturating_sub(x_from) as u16).min(area.right().saturating_sub(x));
+                grid.set_style(Rect::new(x, y, w, 1), |style| cellix_render::Style {
+                    fg,
+                    ..style
+                });
+            };
+            let end = start + self.line_text(*line).chars().count();
+            if let Some(spans) = spans {
+                let (from, to) = (rope.char_to_byte(start), rope.char_to_byte(end));
+                let first = spans.partition_point(|s| s.end <= from);
+                for span in spans[first..].iter().take_while(|s| s.start < to) {
+                    let a = rope.byte_to_char(span.start.max(from));
+                    let b = rope.byte_to_char(span.end.min(to));
+                    colour(grid, a, b, theme.token(span.token));
+                }
+            }
+            if let Some(found) = &found {
+                let colours = theme.brackets();
+                for bracket in brackets::between(found, start, end) {
+                    let fg = if bracket.partner.is_some() {
+                        colours[bracket.depth % colours.len()]
+                    } else {
+                        theme.error
+                    };
+                    colour(grid, bracket.at, bracket.at + 1, fg);
+                }
+            }
+        }
+        let last = area.y + pinned.len() as u16 - 1;
+        if grid.cursor.is_some_and(|(_, y)| y <= last) {
+            grid.cursor = None;
+        }
+        if self.measure.in_cells() {
+            grid.set_style(Rect::new(area.x, last, area.w, 1), |style| {
+                cellix_render::Style {
+                    underline: true,
+                    ..style
+                }
+            });
+        } else {
+            // A shadow fading down from under the last pinned line.
+            // About 4 px, so it ends above the next row's glyphs. Light themes take less, so
+            // it stays a shadow and not the heaviest line there.
+            let below = (last + 1) as f32;
+            let alphas = if theme.is_light() {
+                [34, 18, 8]
+            } else {
+                [70, 40, 18]
+            };
+            for (n, alpha) in alphas.into_iter().enumerate() {
+                let band =
+                    Bounds::cells(area.x as f32, below + n as f32 * 0.04, area.w as f32, 0.04);
+                grid.wash(band, 0, (Rgb(0, 0, 0), alpha), None);
+            }
+        }
+    }
+
+    /// How far the code is scrolled sideways: never while it wraps.
+    fn left(&self) -> usize {
+        if self.wrap { 0 } else { self.left }
+    }
+
+    /// The rows the code shows in a text area `width` wide: a line each, unless lines wrap
+    /// or fold.
+    fn code_rows(&self, width: u16) -> Rc<Rows> {
+        let room = width.saturating_sub(self.gutter_width(width)) as usize;
+        // One column stays free for the caret after a full row.
+        let wrap = (self.wrap && width > 0).then(|| room.saturating_sub(1).max(8));
+        let key = (self.buffer.revision(), wrap, self.folds_stamp());
+        if let Some((cached, rows)) = self.rows.borrow().as_ref()
+            && *cached == key
+        {
+            return rows.clone();
+        }
+        let hidden = self.hidden();
+        let rows = Rc::new(Rows::lay_out(self.buffer.rope(), &hidden, wrap, TAB_WIDTH));
+        *self.rows.borrow_mut() = Some((key, rows.clone()));
+        rows
+    }
+
+    /// The rows as last drawn, for what has no area to hand.
+    fn shown_rows(&self) -> Rc<Rows> {
+        self.code_rows(self.view_width.get())
+    }
+
+    /// Lines folded away, as regions in order.
+    fn hidden(&self) -> Vec<fold::Range> {
+        self.follow_folds();
+        let folded = self.folded.borrow();
+        if folded.headers.is_empty() {
+            return Vec::new();
+        }
+        let ranges = self.fold_ranges();
+        let mut hidden: Vec<fold::Range> = folded
+            .headers
+            .iter()
+            .filter_map(|(line, _)| {
+                ranges
+                    .iter()
+                    .filter(|r| r.start == *line)
+                    .max_by_key(|r| r.end)
+                    .copied()
+            })
+            .collect();
+        hidden.sort();
+        hidden
+    }
+
+    /// Where the code can fold: the server's regions once it has said, else the indent's.
+    pub fn fold_ranges(&self) -> Rc<Vec<fold::Range>> {
+        let answers = self
+            .server_folds
+            .as_ref()
+            .map_or(0, |(answers, _)| *answers);
+        let key = (self.buffer.revision(), answers);
+        if let Some((cached, ranges)) = self.fold_ranges.borrow().as_ref()
+            && *cached == key
+        {
+            return ranges.clone();
+        }
+        let rope = self.buffer.rope();
+        let ranges = match &self.server_folds {
+            _ if self.rendered || rope.len_bytes() > brackets::MAX_BYTES => Vec::new(),
+            Some((_, server)) if !server.is_empty() => fold::from_server(rope, server),
+            _ => fold::by_indent(rope, TAB_WIDTH),
+        };
+        let ranges = Rc::new(ranges);
+        *self.fold_ranges.borrow_mut() = Some((key, ranges.clone()));
+        ranges
+    }
+
+    /// Takes the language server's regions, in place of the indent's.
+    pub fn set_server_folds(&mut self, ranges: Vec<(usize, usize)>) {
+        let answers = self
+            .server_folds
+            .as_ref()
+            .map_or(0, |(answers, _)| *answers);
+        self.server_folds = Some((answers + 1, ranges));
+    }
+
+    /// Keeps each fold on its header line after an edit: where the line moved to, found by
+    /// its text near where it was, or gone with it.
+    fn follow_folds(&self) {
+        let rope = self.buffer.rope();
+        let revision = self.buffer.revision();
+        let mut folded = self.folded.borrow_mut();
+        if folded.revision == revision {
+            return;
+        }
+        let lines = rope.len_lines();
+        let moved = lines as isize - folded.lines as isize;
+        let reach = moved.unsigned_abs() + 2;
+        let text_of = |line: usize| (line < lines).then(|| self.line_text(line));
+        let headers = std::mem::take(&mut folded.headers)
+            .into_iter()
+            .filter_map(|(line, text)| {
+                // Where it was, where the change in length puts it, then nearer first.
+                let shifted = line.saturating_add_signed(moved);
+                let around = (1..=reach)
+                    .flat_map(|d| [shifted.checked_sub(d), Some(shifted + d)])
+                    .flatten();
+                let found = [line, shifted]
+                    .into_iter()
+                    .chain(around)
+                    .find(|l| text_of(*l).as_deref() == Some(text.as_str()));
+                found.map(|l| (l, text))
+            })
+            .collect();
+        *folded = Folded {
+            revision,
+            lines,
+            headers,
+        };
+    }
+
+    /// Whether a line heads a region that can fold, and whether it's folded.
+    fn fold_at(&self, line: usize) -> Option<bool> {
+        let ranges = self.fold_ranges();
+        ranges.iter().any(|r| r.start == line).then(|| {
+            self.follow_folds();
+            self.folded.borrow().headers.iter().any(|(l, _)| *l == line)
+        })
+    }
+
+    /// Folds the region headed by `line`, or opens it.
+    pub fn toggle_fold(&mut self, line: usize) {
+        match self.fold_at(line) {
+            Some(true) => self.unfold_lines(|start, _| start == line),
+            Some(false) => self.fold_lines(&[line]),
+            None => {}
+        }
+    }
+
+    fn fold_lines(&mut self, lines: &[usize]) {
+        self.follow_folds();
+        {
+            let mut folded = self.folded.borrow_mut();
+            for line in lines {
+                if !folded.headers.iter().any(|(l, _)| l == line) {
+                    folded.headers.push((*line, self.line_text(*line)));
+                }
+            }
+        }
+        // A caret inside goes to the end of the line the fold stands on.
+        let rope = self.buffer.rope();
+        let hidden = self.hidden();
+        let moved: Vec<Selection> = self
+            .selections
+            .iter()
+            .map(|s| {
+                let line = rope.char_to_line(s.head);
+                match hidden.iter().find(|r| r.start < line && line <= r.end) {
+                    Some(r) => Selection::cursor(
+                        rope.line_to_char(r.start) + self.line_text(r.start).chars().count(),
+                    ),
+                    None => *s,
+                }
+            })
+            .collect();
+        self.selections.replace_all(moved);
+    }
+
+    /// Opens every fold whose region, as (header, last line), passes `which`.
+    fn unfold_lines(&mut self, which: impl Fn(usize, usize) -> bool) {
+        let hidden = self.hidden();
+        let open: Vec<usize> = hidden
+            .iter()
+            .filter(|r| which(r.start, r.end))
+            .map(|r| r.start)
+            .collect();
+        self.folded
+            .borrow_mut()
+            .headers
+            .retain(|(line, _)| !open.contains(line));
+    }
+
+    /// Opens any fold a caret has landed inside, as after a search or a jump.
+    fn open_folds_at_carets(&mut self) {
+        if self.folded.borrow().headers.is_empty() {
+            return;
+        }
+        let rope = self.buffer.rope();
+        let lines: Vec<usize> = self
+            .selections
+            .iter()
+            .flat_map(|s| [s.head, s.anchor])
+            .map(|at| rope.char_to_line(at.min(rope.len_chars())))
+            .collect();
+        loop {
+            let before = self.folded.borrow().headers.len();
+            self.unfold_lines(|start, end| lines.iter().any(|l| start < *l && *l <= end));
+            if self.folded.borrow().headers.len() == before {
+                break;
+            }
+        }
+    }
+
+    /// The fold commands: the region at the caret, or all of them.
+    fn run_fold(&mut self, command: Command) {
+        let rope = self.buffer.rope();
+        let line = rope.char_to_line(self.selections.primary().head);
+        let ranges = self.fold_ranges();
+        match command {
+            Command::Fold => {
+                self.follow_folds();
+                let folded: Vec<usize> = self
+                    .folded
+                    .borrow()
+                    .headers
+                    .iter()
+                    .map(|(l, _)| *l)
+                    .collect();
+                // The region this line heads, or else the innermost one around it.
+                let open = |r: &&fold::Range| !folded.contains(&r.start);
+                let heads = ranges.iter().filter(|r| r.start == line).find(open);
+                let around = ranges
+                    .iter()
+                    .filter(|r| r.start < line && line <= r.end)
+                    .filter(open)
+                    .max_by_key(|r| r.start);
+                if let Some(range) = heads.or(around) {
+                    self.fold_lines(&[range.start]);
+                }
+            }
+            Command::Unfold => {
+                let heads = self.hidden().iter().any(|r| r.start == line);
+                if heads {
+                    self.unfold_lines(|start, _| start == line);
+                } else {
+                    self.unfold_lines(|start, end| start < line && line <= end);
+                }
+            }
+            Command::FoldAll => {
+                let all: Vec<usize> = ranges.iter().map(|r| r.start).collect();
+                self.fold_lines(&all);
+            }
+            Command::UnfoldAll => self.folded.borrow_mut().headers.clear(),
+            _ => {}
+        }
+    }
+
+    /// A stamp of the folds and where the code can fold, so rows are laid out again when
+    /// either changes.
+    fn folds_stamp(&self) -> u64 {
+        self.follow_folds();
+        let folded = self.folded.borrow();
+        if folded.headers.is_empty() {
+            return 0;
+        }
+        let answers = self
+            .server_folds
+            .as_ref()
+            .map_or(0, |(answers, _)| *answers as u64);
+        folded.headers.iter().fold(answers, |key, (line, _)| {
+            key.wrapping_mul(31).wrapping_add(*line as u64 + 1)
+        })
+    }
+
+    /// The column a row shows the char at `at` in, counting a wrapped row's indent.
+    fn row_column(&self, row: CodeRow, at: usize) -> usize {
+        let start = self.buffer.rope().line_to_char(row.line);
+        let base = if row.first() {
+            0
+        } else {
+            self.column_of(start + row.start)
+        };
+        row.indent as usize + self.column_of(at).saturating_sub(base)
+    }
+
+    /// The char a row shows at column `target`, or its last place when the row is shorter.
+    fn row_char_at(&self, row: CodeRow, target: usize) -> usize {
+        let start = self.buffer.rope().line_to_char(row.line);
+        let text: Vec<char> = self.line_text(row.line).chars().collect();
+        let end = row.end.min(text.len());
+        let from = row.start.min(end);
+        let mut column = if row.first() {
+            0
+        } else {
+            self.column_of(start + from)
+        };
+        let target = target
+            .saturating_sub(row.indent as usize)
+            .saturating_add(column);
+        for (i, c) in text[from..end].iter().enumerate() {
+            let width = display_width(*c, column);
             if column + width > target {
-                return start + i;
+                return start + from + i;
             }
             column += width;
         }
-        start + self.line_text(line).chars().count()
+        // A wrapped row ends before the char the next row starts with.
+        if row.end != usize::MAX && end > from {
+            start + end - 1
+        } else {
+            start + end
+        }
+    }
+
+    /// The row the char at `at` is drawn on, and its column there.
+    fn place_of(&self, rows: &Rows, at: usize) -> (usize, usize) {
+        let rope = self.buffer.rope();
+        let line = rope.char_to_line(at);
+        let index = rows.row_of(line, at - rope.line_to_char(line));
+        match rows.get(index) {
+            Some(row) if row.line == line => (index, self.row_column(row, at)),
+            _ => (index, 0),
+        }
+    }
+
+    /// The pieces of chars `from..to`, all on one line, as they're drawn: a row in view and
+    /// the columns there, from the text's left edge.
+    fn pieces(&self, area: Rect, rows: &Rows, from: usize, to: usize) -> Vec<(u16, usize, usize)> {
+        let rope = self.buffer.rope();
+        let line = rope.char_to_line(from);
+        let start = rope.line_to_char(line);
+        let len = self.line_text(line).chars().count();
+        let left = self.left();
+        let mut out = Vec::new();
+        for index in rows.rows_of(line) {
+            if index < self.top || index >= self.top + area.h as usize {
+                continue;
+            }
+            let row = rows.get(index).expect("a row of the line");
+            let (a, b) = (start + row.start, start + row.end.min(len));
+            let (f, t) = (from.max(a), to.min(b));
+            if f > t {
+                continue;
+            }
+            let x_from = self.row_column(row, f).saturating_sub(left);
+            let x_to = self.row_column(row, t).saturating_sub(left);
+            out.push((area.y + (index - self.top) as u16, x_from, x_to));
+        }
+        out
     }
 
     pub fn top(&self) -> usize {
@@ -1221,7 +2001,7 @@ impl Editor {
         // A cached page is close enough to bound the scroll; draw corrects any slack.
         let rows = self.page.borrow().as_ref().map(|page| page.rows.len());
         rows.filter(|_| self.rendered)
-            .unwrap_or_else(|| self.buffer.rope().len_lines())
+            .unwrap_or_else(|| self.shown_rows().len())
     }
 
     /// The furthest down the view goes: the end of the file at the bottom of the pane. A page
@@ -1248,7 +2028,18 @@ impl Editor {
     /// column, where the sheet's rounded corners are.
     pub fn scroll_region(&self, area: Rect) -> Rect {
         let text = self.text_area(area);
-        Rect::new(text.x + 1, text.y, text.w.saturating_sub(1), text.h)
+        // Pinned headers stay where they are while the rows under them move.
+        let pinned = if self.rendered {
+            0
+        } else {
+            self.sticky(&self.code_rows(text.w), text).len() as u16
+        };
+        Rect::new(
+            text.x + 1,
+            text.y + pinned,
+            text.w.saturating_sub(1),
+            text.h - pinned,
+        )
     }
 
     /// Scrolls just enough to show the primary cursor.
@@ -1265,13 +2056,19 @@ impl Editor {
             self.left = 0;
             return;
         }
+        self.open_folds_at_carets();
         let head = self.selections.primary().head;
-        let line = self.buffer.rope().char_to_line(head);
+        let laid = self.code_rows(area.w);
+        let (line, _) = self.place_of(&laid, head);
         let rows = area.h.max(1) as usize;
         if line < self.top {
             self.top = line;
         } else if line >= self.top + rows {
             self.top = line + 1 - rows;
+        }
+        if self.wrap {
+            self.left = 0;
+            return;
         }
         let column = self.column_of(head);
         let cols = area.w.saturating_sub(self.gutter_width(area.w)).max(1) as usize;
@@ -1283,6 +2080,9 @@ impl Editor {
     }
 
     pub fn run(&mut self, command: Command, area: Rect) {
+        if self.run_view(command, area) {
+            return;
+        }
         let page = area.h.max(2) as usize - 1;
         if self.rendered {
             let text_area = self.text_area(area);
@@ -1327,6 +2127,12 @@ impl Editor {
                 self.reveal(area);
                 return;
             }
+        }
+        if let Command::Move(direction, extend) = command
+            && self.move_by_rows(self.text_area(area), direction, extend)
+        {
+            self.reveal(area);
+            return;
         }
         match command {
             Command::Move(direction, extend) => {
@@ -1425,6 +2231,101 @@ impl Editor {
             _ => return,
         }
         self.reveal(area);
+    }
+
+    /// Commands about how code is laid out: wrapping and folding. Pages lay themselves out,
+    /// so there they do nothing. True when the command was one of these.
+    fn run_view(&mut self, command: Command, area: Rect) -> bool {
+        if !matches!(
+            command,
+            Command::ToggleWordWrap
+                | Command::Fold
+                | Command::Unfold
+                | Command::FoldAll
+                | Command::UnfoldAll
+        ) {
+            return false;
+        }
+        if self.rendered {
+            return true;
+        }
+        let text = self.text_area(area);
+        // The line at the top stays there.
+        let line = self.code_rows(text.w).get(self.top).map_or(0, |r| r.line);
+        if command == Command::ToggleWordWrap {
+            self.wrap = !self.wrap;
+            self.left = 0;
+        } else {
+            self.run_fold(command);
+        }
+        self.top = self.code_rows(text.w).row_of(line, 0);
+        self.reveal(area);
+        true
+    }
+
+    /// Moves up and down by the rows on screen, over folds and through wrapped lines, and
+    /// Home and End to a wrapped row's ends before the line's. False when each line is a
+    /// row, where moving by line is the same thing.
+    fn move_by_rows(&mut self, area: Rect, direction: Direction, extend: bool) -> bool {
+        let rows = self.code_rows(area.w);
+        if matches!(*rows, Rows::Lines(_)) {
+            return false;
+        }
+        let page = area.h.max(2) as isize - 1;
+        let by = match direction {
+            Direction::Up => -1,
+            Direction::Down => 1,
+            Direction::PageUp => -page,
+            Direction::PageDown => page,
+            Direction::LineStart | Direction::LineEnd if self.wrap => 0,
+            _ => return false,
+        };
+        let rope = self.buffer.rope();
+        let last = rows.len() - 1;
+        let mut moved = Vec::new();
+        for s in self.selections.iter() {
+            let (index, column) = self.place_of(&rows, s.head);
+            let row = rows.get(index).expect("a row");
+            let line_start = rope.line_to_char(row.line);
+            let (head, goal) = if by == 0 {
+                let start = line_start + row.start;
+                let end = self.row_char_at(row, usize::MAX);
+                let head = match direction {
+                    Direction::LineStart if !row.first() && s.head > start => start,
+                    Direction::LineEnd if row.end != usize::MAX && s.head < end => end,
+                    _ => {
+                        let mut one = Selections::single(*s);
+                        let motion = if direction == Direction::LineStart {
+                            Motion::LineStart
+                        } else {
+                            Motion::LineEnd
+                        };
+                        one.apply_motion(rope, motion, extend);
+                        one.primary().head
+                    }
+                };
+                (head, None)
+            } else {
+                let goal = s.goal.unwrap_or(column);
+                let target = index as isize + by;
+                let head = if target < 0 {
+                    0
+                } else if target as usize > last {
+                    rope.len_chars()
+                } else {
+                    let row = rows.get(target as usize).expect("a row");
+                    self.row_char_at(row, goal)
+                };
+                (head, Some(goal))
+            };
+            moved.push(Selection {
+                anchor: if extend { s.anchor } else { head },
+                head,
+                goal,
+            });
+        }
+        self.selections.replace_all(moved);
+        true
     }
 
     /// Edits start from a visible place. Moves start wherever the caret is.
@@ -1735,8 +2636,8 @@ impl Editor {
             let (row, x) = rendered::locate(&rows, head);
             (row, (area.x + Self::page_margin(area)) as f32 + x)
         } else {
-            let row = self.buffer.rope().char_to_line(head);
-            let column = self.column_of(head).checked_sub(self.left)?;
+            let (row, column) = self.place_of(&self.code_rows(area.w), head);
+            let column = column.checked_sub(self.left())?;
             let gutter = self.gutter_width(area.w);
             (row, (area.x + gutter) as f32 + column as f32)
         };
@@ -2896,21 +3797,22 @@ impl Editor {
             }
             return;
         }
-        let lines = self.buffer.rope().len_lines();
+        let rows = self.code_rows(area.w);
         let track = Rect::new(area.right(), area.y, 1, area.h);
         if !self.shows_minimap(full) {
-            self.draw_scrollbar(grid, track, lines, theme);
+            self.draw_scrollbar(grid, track, rows.len(), theme);
         }
         grid.fill(area, theme.text);
         let gutter = self.gutter_width(area.w);
         let rope = self.buffer.rope();
         let current = rope.char_to_line(self.selections.primary().head);
-        for row in 0..area.h {
-            let line = self.top + row as usize;
-            if line >= rope.len_lines() {
+        let left = self.left();
+        for offset in 0..area.h {
+            let Some(laid) = rows.get(self.top + offset as usize) else {
                 break;
-            }
-            let y = area.y + row;
+            };
+            let line = laid.line;
+            let y = area.y + offset;
             let active = focused && line == current;
             let bg = if active { theme.line } else { theme.text.bg };
             let text_style = cellix_render::Style { bg, ..theme.text };
@@ -2927,9 +3829,15 @@ impl Editor {
                 bg,
                 ..theme.gutter
             };
-            let number = format!("{:>w$} ", line + 1, w = gutter as usize - 1);
-            grid.put_str(area.x, y, &number, gutter_style, area.x + gutter);
-            if marks.comments.contains(&(line + 1)) {
+            if laid.first() {
+                let number = format!("{:>w$}", line + 1, w = self.number_width(area.w));
+                grid.put_str(area.x, y, &number, gutter_style, area.x + gutter);
+                if Self::chevron_cells(area.w) > 0 && self.fold_at(line) == Some(true) {
+                    let icon = Icon::ChevronRight;
+                    self.draw_chevron(grid, (area.x + gutter, y), icon, (gutter_style, theme));
+                }
+            }
+            if laid.first() && marks.comments.contains(&(line + 1)) {
                 let mark = cellix_render::Style {
                     fg: theme.accent,
                     bg,
@@ -2938,26 +3846,44 @@ impl Editor {
                 grid.put_str(area.x, y, "◆", mark, area.x + gutter);
             }
 
-            let mut column = 0;
+            let chars: Vec<char> = self.line_text(line).chars().collect();
+            let end = laid.end.min(chars.len());
+            let from = laid.start.min(end);
+            let mut column = if laid.first() {
+                0
+            } else {
+                self.column_of(rope.line_to_char(line) + from)
+            };
             let mut text = String::new();
-            for c in self.line_text(line).chars() {
-                let width = display_width(c, column);
-                if column + width > self.left {
-                    if c == '\t' {
+            for c in &chars[from..end] {
+                let width = display_width(*c, column);
+                if column + width > left {
+                    if *c == '\t' {
                         text.extend(std::iter::repeat_n(' ', width));
                     } else {
-                        text.push(c);
+                        text.push(*c);
                     }
                 }
                 column += width;
             }
-            grid.put_str(area.x + gutter, y, &text, text_style, area.right());
+            let x = area.x + gutter + laid.indent;
+            let after = grid.put_str(x, y, &text, text_style, area.right());
+            let last_row = rows
+                .get(self.top + offset as usize + 1)
+                .is_none_or(|r| r.line != line);
+            if last_row && self.fold_at(line) == Some(true) {
+                self.draw_fold_chip(grid, (after, y), area.right(), line, (text_style, theme));
+            }
             let guide = cellix_render::Style {
                 fg: theme.guide,
                 bg,
                 ..theme.text
             };
-            let indent = text.chars().take_while(|c| *c == ' ').count();
+            let indent = if laid.first() {
+                text.chars().take_while(|c| *c == ' ').count()
+            } else {
+                laid.indent as usize
+            };
             for at in (0..indent).step_by(TAB_WIDTH) {
                 let x = area.x + gutter + at as u16;
                 if x < area.right() {
@@ -2966,13 +3892,19 @@ impl Editor {
             }
         }
         self.draw_highlights(grid, area, gutter, theme, registry);
+        if self.bracket_pairs {
+            self.draw_brackets(grid, area, gutter, theme, focused);
+        }
         if self.shows_minimap(full) {
             self.draw_minimap(grid, full, theme);
         }
         for (line, change) in &self.line_changes().1 {
-            if *line >= self.top && *line < self.top + area.h as usize {
-                let y = area.y + (*line - self.top) as u16;
-                self.draw_change(grid, area.x as f32 + gutter as f32 - 0.7, y, *change, theme);
+            for index in rows.rows_of(*line) {
+                if index >= self.top && index < self.top + area.h as usize {
+                    let y = area.y + (index - self.top) as u16;
+                    let x = area.x as f32 + gutter as f32 - 0.7;
+                    self.draw_change(grid, x, y, *change, theme);
+                }
             }
         }
         for (start, end) in self.found.iter().copied() {
@@ -2981,23 +3913,23 @@ impl Editor {
                 head: end,
                 goal: None,
             };
-            self.draw_range(grid, area, gutter, &s, theme.found);
+            self.draw_range(grid, area, (gutter, &rows), &s, theme.found);
         }
         for s in self.selections.iter().filter(|s| !s.is_empty()) {
-            self.draw_range(grid, area, gutter, s, theme.selection);
+            self.draw_range(grid, area, (gutter, &rows), s, theme.selection);
         }
         if focused {
             let head = self.selections.primary().head;
-            let line = rope.char_to_line(head);
-            let column = self.column_of(head);
-            if line >= self.top && column >= self.left {
-                let x = area.x as usize + gutter as usize + column - self.left;
-                let y = area.y as usize + line - self.top;
+            let (row, column) = self.place_of(&rows, head);
+            if row >= self.top && column >= left {
+                let x = area.x as usize + gutter as usize + column - left;
+                let y = area.y as usize + row - self.top;
                 if x < area.right() as usize && y < area.bottom() as usize {
                     grid.cursor = Some((x as u16, y as u16));
                 }
             }
         }
+        self.draw_sticky(grid, area, (gutter, &rows), theme);
     }
 
     fn draw_scrollbar(&self, grid: &mut Grid, track: Rect, lines: usize, theme: &Theme) {
@@ -3461,8 +4393,11 @@ impl Editor {
                 .collect();
             &shifted
         };
-        let last_line = (self.top + area.h as usize).min(rope.len_lines());
-        let from = rope.line_to_byte(self.top);
+        let rows = self.code_rows(area.w);
+        let Some((first_line, last_line)) = self.lines_in_view(&rows, area) else {
+            return;
+        };
+        let from = rope.line_to_byte(first_line);
         let to = rope.line_to_byte(last_line);
         let first = spans.partition_point(|s| s.end <= from);
         for span in spans[first..].iter().take_while(|s| s.start < to) {
@@ -3472,23 +4407,13 @@ impl Editor {
                 let line = rope.char_to_line(at);
                 let line_end =
                     end.min(rope.line_to_char(line) + self.line_text(line).chars().count());
-                if line >= self.top && line < last_line && at < line_end {
-                    let (a, b) = (self.column_of(at), self.column_of(line_end));
-                    let x_from = a.max(self.left) - self.left;
-                    let x_to = b.max(self.left) - self.left;
-                    let rect = Rect::new(
-                        (area.x + gutter).saturating_add(x_from as u16),
-                        area.y + (line - self.top) as u16,
-                        (x_to - x_from) as u16,
-                        1,
-                    );
-                    let clipped = Rect::new(
-                        rect.x,
-                        rect.y,
-                        rect.w.min(area.right().saturating_sub(rect.x)),
-                        1,
-                    );
-                    grid.set_style(clipped, |style| cellix_render::Style { fg, ..style });
+                if line >= first_line && line < last_line && at < line_end {
+                    for (y, x_from, x_to) in self.pieces(area, &rows, at, line_end) {
+                        let x = (area.x + gutter).saturating_add(x_from as u16);
+                        let w = (x_to - x_from.min(x_to)) as u16;
+                        let clipped = Rect::new(x, y, w.min(area.right().saturating_sub(x)), 1);
+                        grid.set_style(clipped, |style| cellix_render::Style { fg, ..style });
+                    }
                 }
                 let next = rope.len_lines().min(line + 1);
                 if next == line + 1 && next < rope.len_lines() {
@@ -3500,27 +4425,150 @@ impl Editor {
         }
     }
 
-    fn draw_range(&self, grid: &mut Grid, area: Rect, gutter: u16, s: &Selection, bg: Rgb) {
+    /// The bracket pairs in the file, found again only after an edit or once its strings
+    /// and comments are known.
+    fn pairs_found(&self) -> Rc<Vec<Bracket>> {
+        let revision = self.buffer.revision();
+        let spans = self.spans.borrow();
+        let known = spans.as_ref().is_some_and(|(r, _)| *r == revision);
+        let key = (revision, known);
+        if let Some((cached, found)) = self.brackets.borrow().as_ref()
+            && *cached == key
+        {
+            return found.clone();
+        }
+        let rope = self.buffer.rope();
+        let found = if rope.len_bytes() > brackets::MAX_BYTES {
+            Vec::new()
+        } else {
+            let skip: Vec<(usize, usize)> = spans
+                .as_ref()
+                .filter(|_| known)
+                .map(|(_, spans)| {
+                    spans
+                        .iter()
+                        .filter(|s| matches!(s.token, Token::String | Token::Comment))
+                        .map(|s| (rope.byte_to_char(s.start), rope.byte_to_char(s.end)))
+                        .collect()
+                })
+                .unwrap_or_default();
+            brackets::find(rope, &skip)
+        };
+        let found = Rc::new(found);
+        *self.brackets.borrow_mut() = Some((key, found.clone()));
+        found
+    }
+
+    /// Where a char is drawn in the text, as a cell, if it's in view.
+    fn screen_of(&self, area: Rect, (gutter, rows): (u16, &Rows), at: usize) -> Option<(u16, u16)> {
+        let line = self.buffer.rope().char_to_line(at);
+        if !rows.shows(line) {
+            return None;
+        }
+        let (row, column) = self.place_of(rows, at);
+        let row = row.checked_sub(self.top)?;
+        let column = column.checked_sub(self.left())?;
+        let x = (area.x + gutter) as usize + column;
+        let y = area.y as usize + row;
+        (x < area.right() as usize && y < area.bottom() as usize).then_some((x as u16, y as u16))
+    }
+
+    /// Brackets coloured by how deep they are, and the pair the caret touches marked: a tint
+    /// on every tier and a ring where there are pixels.
+    fn draw_brackets(
+        &self,
+        grid: &mut Grid,
+        area: Rect,
+        gutter: u16,
+        theme: &Theme,
+        focused: bool,
+    ) {
+        let found = self.pairs_found();
+        let rope = self.buffer.rope();
+        let rows = self.code_rows(area.w);
+        let Some((first, last)) = self.lines_in_view(&rows, area) else {
+            return;
+        };
+        let from = rope.line_to_char(first);
+        let to = rope.line_to_char(last.min(rope.len_lines()));
+        let colours = theme.brackets();
+        for bracket in brackets::between(&found, from, to) {
+            let Some((x, y)) = self.screen_of(area, (gutter, &rows), bracket.at) else {
+                continue;
+            };
+            let fg = if bracket.partner.is_some() {
+                colours[bracket.depth % colours.len()]
+            } else {
+                theme.error
+            };
+            grid.set_style(Rect::new(x, y, 1, 1), |style| cellix_render::Style {
+                fg,
+                ..style
+            });
+        }
+        if !focused {
+            return;
+        }
+        let Some((open, close)) = brackets::pair_at(&found, self.selections.primary().head) else {
+            return;
+        };
+        for at in [open, close] {
+            let Some((x, y)) = self.screen_of(area, (gutter, &rows), at) else {
+                continue;
+            };
+            if self.measure.in_cells() {
+                let bg = theme.bracket_match();
+                grid.set_style(Rect::new(x, y, 1, 1), |style| cellix_render::Style {
+                    bg,
+                    ..style
+                });
+            } else {
+                // One rounded shape, clear of the row's edges: a see-through tint, so the
+                // bracket shows through it, and a ring.
+                let shape = cellix_render::Bounds::cells(x as f32, y as f32 + 0.11, 1.0, 0.78);
+                let tint = (theme.selection, 110);
+                grid.wash(shape, 10, tint, Some(theme.bracket_ring()));
+            }
+        }
+    }
+
+    fn draw_range(
+        &self,
+        grid: &mut Grid,
+        area: Rect,
+        (gutter, rows): (u16, &Rows),
+        s: &Selection,
+        bg: Rgb,
+    ) {
         let rope = self.buffer.rope();
         let (first, last) = (rope.char_to_line(s.start()), rope.char_to_line(s.end()));
-        for line in first.max(self.top)..=last {
-            if line >= self.top + area.h as usize {
-                break;
-            }
+        let Some((top_line, end_line)) = self.lines_in_view(rows, area) else {
+            return;
+        };
+        for line in first.max(top_line)..=last.min(end_line.saturating_sub(1)) {
             let start = rope.line_to_char(line);
-            let from = self.column_of(s.start().max(start));
             let line_end = start + self.line_text(line).chars().count();
-            let to = self.column_of(s.end().min(line_end));
-            let x_from = (area.x + gutter) as usize + from.saturating_sub(self.left);
-            let x_to = (area.x + gutter) as usize + to.saturating_sub(self.left);
-            let y = area.y + (line - self.top) as u16;
-            let rect = Rect::new(
-                x_from as u16,
-                y,
-                (x_to - x_from.min(x_to)).max(usize::from(line < last)) as u16,
-                1,
-            );
-            grid.set_style(rect, |style| cellix_render::Style { bg, ..style });
+            let pieces = self.pieces(area, rows, s.start().max(start), s.end().min(line_end));
+            let count = pieces.len();
+            for (n, (y, from, to)) in pieces.into_iter().enumerate() {
+                // The line's end is selected too, shown as one more cell after its last row.
+                let newline = line < last && n + 1 == count;
+                let width = (to - from.min(to)).max(usize::from(newline));
+                let x = (area.x + gutter) as usize + from;
+                let w = width.min((area.right() as usize).saturating_sub(x));
+                grid.set_style(Rect::new(x as u16, y, w as u16, 1), |style| {
+                    cellix_render::Style { bg, ..style }
+                });
+            }
         }
+    }
+
+    /// The first line in view, and the line after the last.
+    fn lines_in_view(&self, rows: &Rows, area: Rect) -> Option<(usize, usize)> {
+        let first = rows.get(self.top)?.line;
+        let last = (self.top + area.h as usize)
+            .min(rows.len())
+            .checked_sub(1)?;
+        Some((first, rows.get(last)?.line + 1))
     }
 }

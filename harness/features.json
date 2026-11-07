@@ -3981,5 +3981,33 @@
     "title": "A long page scrolls past its end, so its last block clears the status bar",
     "test": "a_page_scrolls_past_its_end_so_the_last_block_clears_the_bar",
     "passes": true
+  },
+  {
+    "id": "bracket-pairs",
+    "milestone": 12,
+    "title": "Brackets in code are coloured by depth from three colours that suit both themes, strays in the error colour, and the pair the caret touches is tinted, with a ring on pixels; a switch in Settings",
+    "test": "brackets_take_a_colour_by_depth_and_the_carets_pair_is_marked",
+    "passes": true
+  },
+  {
+    "id": "word-wrap",
+    "milestone": 12,
+    "title": "Alt+Z, the palette or a Settings switch wraps long lines of code at the pane's width, later rows unnumbered at the line's indent, and the caret moves by row; pages are left alone",
+    "test": "alt_z_wraps_long_lines_and_the_caret_moves_by_row",
+    "passes": true
+  },
+  {
+    "id": "code-folding",
+    "milestone": 12,
+    "title": "Code folds by the language server's regions or the indent: chevrons on hovering the gutter, a click or Ctrl+Shift+[ and ] fold and unfold, Fold All and Unfold All, a folded region is one row with a ⋯ chip, and a caret landing inside opens it",
+    "test": "ctrl_shift_brackets_fold_and_unfold_and_a_jump_inside_opens_the_fold",
+    "passes": true
+  },
+  {
+    "id": "sticky-scroll",
+    "milestone": 12,
+    "title": "The header lines of the scopes scrolled into stay pinned at the top of code, at most five, with a shadow under them; a click jumps there; a switch in Settings",
+    "test": "sticky_scroll_pins_the_scopes_headers_and_a_click_jumps_there",
+    "passes": true
   }
 ]

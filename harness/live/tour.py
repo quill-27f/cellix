@@ -39,6 +39,53 @@ impl<T> Queue<T> {
     }
 }
 """
+SCHEDULER = """//! Runs jobs in order, each when its time comes.
+use std::collections::BinaryHeap;
+use std::time::{Duration, Instant};
+
+/// Holds jobs until they're due; a job that fails is tried again after a pause that doubles each time, up to a limit, and is then reported with the error it last gave.
+pub struct Scheduler {
+    queue: BinaryHeap<Job>,
+    retries: u32,
+}
+
+impl Scheduler {
+    pub fn new(retries: u32) -> Self {
+        Self { queue: BinaryHeap::new(), retries }
+    }
+
+    pub fn run_due(&mut self, now: Instant) -> Vec<Result<(), String>> {
+        let mut done = Vec::new();
+        while let Some(job) = self.queue.peek() {
+            if job.due > now {
+                break;
+            }
+            let mut job = self.queue.pop().expect("peeked");
+            match (job.work)() {
+                Ok(()) => done.push(Ok(())),
+                Err(error) if job.tries < self.retries => {
+                    job.tries += 1;
+                    job.due = now + Duration::from_millis(100 * 2u64.pow(job.tries));
+                    self.queue.push(job);
+                }
+                Err(error) => done.push(Err(format!("{} failed after {} tries: {error}", job.name, job.tries))),
+            }
+        }
+        done
+    }
+
+    pub fn len(&self) -> usize {
+        self.queue.len()
+    }
+}
+
+struct Job {
+    name: String,
+    due: Instant,
+    tries: u32,
+    work: Box<dyn FnMut() -> Result<(), String>>,
+}
+"""
 PAGE = """# AdPilot
 
 An AI agent that runs Google and Meta ads for small businesses. The plan is in `docs/PLAN.md`, and progress is tracked in `docs/STATUS.md`.
@@ -510,6 +557,29 @@ with tempfile.TemporaryDirectory() as scratch:
         steps = [["wait", 1.0], ["wheel", 90, 20, notches], ["wait", 1.0]]
         shoot(f"{78 + number}-paper-{name}", steps, PAPER, **light)
 
+    # The code view: fold chevrons and chips, sticky scroll, word wrap, bracket pairs. The
+    # file opens with the gutter's chevrons in columns 37 and 38, its line n on row n + 1.
+    VIEW_FILE = "src/scheduler.rs"
+    with open(f"{ROOT}/{VIEW_FILE}", "w") as f:
+        f.write(SCHEDULER)
+    FOLD_KEYS = "\x1b[91;6u"
+    at_line = lambda n: n + 1
+    shoot("110-view-fold-hover", [["move", 37, at_line(16)], ["wait", 0.4]], VIEW_FILE)
+    # run_due folded first, then new above it, which leaves run_due's row where it was.
+    folding = [["click", 60, at_line(16)], ["keys", FOLD_KEYS], ["click", 60, at_line(12)],
+               ["keys", FOLD_KEYS], ["wait", 0.3]]
+    shoot("111-view-folded", folding, VIEW_FILE)
+    shoot("111-view-folded-hover", [*folding, ["move", 37, at_line(11)], ["wait", 0.4]], VIEW_FILE)
+    short = {"size": "120x24"}
+    shoot("112-view-sticky", [["wheel", 70, 12, 16], ["wait", 0.8]], VIEW_FILE, **short)
+    # Each scene opens the file where the last one left it, so these go to the top first.
+    home = ["keys", "\x1b[1;5H"]
+    shoot("113-view-wrap", [home, ["click", 60, at_line(5)], ["keys", "\x1bz"], ["wait", 0.4]], VIEW_FILE)
+    shoot("114-view-brackets", [home, ["click", 59, at_line(16)], ["wait", 0.3]], VIEW_FILE)
+    shoot("115-view-light", [["wheel", 70, 12, 16], ["wait", 0.8], ["move", 37, 14], ["wait", 0.4]],
+          VIEW_FILE, background="eff1f5", **short)
+    # The cell tier isn't shot here: term.py keeps only Kitty graphics, so it would draw
+    # nothing. The view tests in app/view_tests.rs check the cells.
     # Last, so the broken paper they leave open is in no other scene.
     # A failing run in a terminal, its output selected: the buttons that comment on it or ask
     # the agent about it, as by a selection in a file.

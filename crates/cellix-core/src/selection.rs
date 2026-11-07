@@ -101,7 +101,7 @@ impl Selections {
         self.normalize();
     }
 
-    pub(crate) fn replace_all(&mut self, items: Vec<Selection>) {
+    pub fn replace_all(&mut self, items: Vec<Selection>) {
         self.items = items;
         self.primary = self.items.len() - 1;
         self.normalize();

@@ -2,11 +2,13 @@
 
 mod agents;
 mod app;
+mod brackets;
 mod dock;
 mod editor;
 mod explorer;
 mod field;
 mod find;
+mod fold;
 mod folders;
 mod guide;
 pub mod hold;
@@ -24,6 +26,7 @@ mod pdfview;
 pub mod plugin;
 mod rendered;
 mod review;
+mod rows;
 mod search;
 mod settings;
 mod settings_page;

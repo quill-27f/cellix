@@ -47,6 +47,8 @@ pub enum LspEvent {
     Actions(Vec<Fix>),
     /// A file's symbols, in order, as (name, depth, line).
     Symbols(PathBuf, Vec<(String, usize, usize)>),
+    /// Where a file's code folds, as (first line, last line).
+    Folds(PathBuf, Vec<(usize, usize)>),
     /// The server refused a request, in its own words.
     Failed(String),
 }
@@ -61,6 +63,7 @@ enum Pending {
     Formatting(PathBuf),
     Hover,
     Symbols(PathBuf),
+    Folds(PathBuf),
     Actions,
 }
 
@@ -210,6 +213,21 @@ fn parse_symbols(result: &Value) -> Vec<(String, usize, usize)> {
     }
     out.sort_by_key(|(_, _, line)| *line);
     out
+}
+
+/// Folding ranges as (first line, last line), leaving out any that fold nothing.
+fn parse_folds(result: &Value) -> Vec<(usize, usize)> {
+    let line = |item: &Value, key: &str| item[key].as_u64().map(|l| l as usize);
+    let mut found: Vec<(usize, usize)> = result
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| Some((line(item, "startLine")?, line(item, "endLine")?)))
+        .filter(|(start, end)| end > start)
+        .collect();
+    found.sort_unstable();
+    found.dedup();
+    found
 }
 
 /// A hover's contents as plain lines: Markdown's code fences go, and the code stays.
@@ -406,6 +424,7 @@ fn read_loop(
             Some(Pending::Hover) => parse_hover(result),
             Some(Pending::Actions) => Some(LspEvent::Actions(parse_actions(result))),
             Some(Pending::Symbols(path)) => Some(LspEvent::Symbols(path, parse_symbols(result))),
+            Some(Pending::Folds(path)) => Some(LspEvent::Folds(path, parse_folds(result))),
             Some(Pending::Completion) => Some(parse_completion(result)),
             Some(Pending::Rename) => Some(parse_rename(result)),
             Some(Pending::References) => Some(parse_references(result)),
@@ -477,6 +496,7 @@ impl Client {
                         "definition": {},
                         "hover": {"contentFormat": ["plaintext", "markdown"]},
                         "documentSymbol": {"hierarchicalDocumentSymbolSupport": true},
+                        "foldingRange": {"lineFoldingOnly": true},
                         "codeAction": {"codeActionLiteralSupport": {"codeActionKind": {"valueSet": [
                             "", "quickfix", "refactor", "refactor.extract", "refactor.inline",
                             "refactor.rewrite", "source", "source.organizeImports"
@@ -594,6 +614,16 @@ impl Client {
             "textDocument/documentSymbol",
             params,
             Pending::Symbols(path.to_path_buf()),
+        );
+    }
+
+    /// Asks where a file's code folds.
+    pub fn folding_ranges(&mut self, path: &Path) {
+        let params = json!({"textDocument": {"uri": uri(path)}});
+        self.request(
+            "textDocument/foldingRange",
+            params,
+            Pending::Folds(path.to_path_buf()),
         );
     }
 
@@ -770,5 +800,17 @@ mod tests {
         let documents =
             json!({"documentChanges": [{"textDocument": {"uri": "file:///a.rs"}, "edits": edit}]});
         assert_eq!(parse_rename(&changes), parse_rename(&documents));
+    }
+
+    #[test]
+    fn folding_ranges_keep_only_those_that_fold_something() {
+        let result = json!([
+            {"startLine": 4, "endLine": 9, "kind": "region"},
+            {"startLine": 0, "endLine": 2},
+            {"startLine": 3, "endLine": 3},
+            {"startLine": 4, "endLine": 9}
+        ]);
+        assert_eq!(parse_folds(&result), vec![(0, 2), (4, 9)]);
+        assert!(parse_folds(&json!(null)).is_empty());
     }
 }

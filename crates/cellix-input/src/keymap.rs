@@ -54,6 +54,10 @@ pub fn simple_keymap(event: KeyEvent) -> Option<Command> {
         Key::Char('b') if mods.alt => Move(Direction::WordLeft, shift),
         Key::Char('f') if mods.alt => Move(Direction::WordRight, shift),
         Key::Char('z' | 'Z') if mods.ctrl && mods.shift => Redo,
+        Key::Char('z' | 'Z') if mods.alt && !mods.ctrl => ToggleWordWrap,
+        // Ctrl+Shift+[ and ], which arrive as the shifted characters too.
+        Key::Char('[' | '{') if mods.ctrl && mods.shift => Fold,
+        Key::Char(']' | '}') if mods.ctrl && mods.shift => Unfold,
         // Terminals without the Kitty protocol send Ctrl+/ as Ctrl+_ or Ctrl+7.
         // Ctrl+- and Ctrl+Shift+-, as in VS Code, where the terminal tells them apart.
         Key::Char('-') if mods.ctrl && !shift => GoBack,
@@ -135,6 +139,12 @@ mod tests {
         assert_eq!(ctrl(']'), Some(Command::Indent));
         assert_eq!(ctrl_shift('K'), Some(Command::DeleteLine));
         assert_eq!(ctrl_shift('L'), Some(Command::SelectAllMatches));
+        assert_eq!(ctrl_shift('['), Some(Command::Fold));
+        assert_eq!(ctrl_shift('}'), Some(Command::Unfold));
+        assert_eq!(
+            key(Key::Char('z'), false, false, true),
+            Some(Command::ToggleWordWrap)
+        );
         assert_eq!(
             key(Key::Enter, true, false, false),
             Some(Command::InsertLineBelow)

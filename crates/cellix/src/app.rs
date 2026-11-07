@@ -1309,6 +1309,9 @@ impl App {
         };
         let mut editor = Editor::new(buffer, self.measure.clone(), self.registry.clone());
         editor.minimap_on = self.settings.minimap != Some(false);
+        editor.bracket_pairs = self.settings.bracket_pairs != Some(false);
+        editor.wrap = self.settings.word_wrap == Some(true) && !editor.rendered;
+        editor.sticky_lines = self.sticky_lines();
         editor.built = Some(self.built_folder.clone());
         editor.notebook = book;
         // Track Changes stays as it was left for this document.
@@ -1355,6 +1358,9 @@ impl App {
         };
         client.open(path, language, &editor.buffer.text());
         editor.synced = editor.buffer.revision();
+        if !editor.rendered {
+            client.folding_ranges(path);
+        }
     }
 
     /// Remembers that a language could have a server, so opening it can offer one. Markdown
@@ -2127,6 +2133,10 @@ impl App {
                 Registry::language_name(path).and_then(|language| self.servers.get_mut(language))
             {
                 client.change(path, &editor.buffer.text());
+                // Where it folds moves with the text, so it's asked again after each change.
+                if !editor.rendered {
+                    client.folding_ranges(path);
+                }
             }
             editor.synced = editor.buffer.revision();
         }
@@ -2510,6 +2520,13 @@ impl App {
                 // Asked for from the keyboard, so Enter takes the first, as in VS Code.
                 if let Overlay::Menu(menu) = &mut self.overlay {
                     menu.selected = Some(0);
+                }
+            }
+            LspEvent::Folds(path, ranges) => {
+                for editor in &mut self.editors {
+                    if editor.buffer.path() == Some(path.as_path()) {
+                        editor.set_server_folds(ranges.clone());
+                    }
                 }
             }
             LspEvent::Symbols(path, found) => {
@@ -9537,6 +9554,13 @@ impl App {
                     if editor.click_checkbox(area, fine_x, y) {
                         return;
                     }
+                    if clicks == 1 && editor.click_fold(area, fine_x, y) {
+                        return;
+                    }
+                    if let Some(line) = editor.sticky_at(area, y) {
+                        editor.jump_to_sticky(area, line);
+                        return;
+                    }
                     if let Some(line) = editor.image_edge(area, x as f32, y) {
                         self.drag = Drag::Image(line);
                         return;
@@ -10138,6 +10162,27 @@ impl App {
         }
     }
 
+    /// The Appearance switches for how code is laid out and coloured.
+    fn editor_view(&self) -> crate::settings_page::EditorView {
+        crate::settings_page::EditorView {
+            bracket_pairs: self.settings.bracket_pairs != Some(false),
+            word_wrap: self.settings.word_wrap == Some(true),
+            sticky_scroll: self.settings.sticky_scroll != Some(false),
+        }
+    }
+
+    /// How many scope headers stay at the top of code: none with Sticky Scroll off.
+    fn sticky_lines(&self) -> usize {
+        if self.settings.sticky_scroll == Some(false) {
+            0
+        } else {
+            self.settings
+                .sticky_scroll_lines
+                .unwrap_or(crate::editor::STICKY_LINES)
+                .min(crate::editor::STICKY_LINES * 2)
+        }
+    }
+
     fn settings_values(&self) -> (String, String, bool, bool) {
         let chosen = |value: &Option<String>, fallback: &str| {
             value.clone().unwrap_or_else(|| fallback.to_string())
@@ -10239,6 +10284,32 @@ impl App {
                     editor.minimap_on = on;
                 }
                 note = store("minimap", on.into());
+            }
+            Control::BracketPairs => {
+                let on = self.settings.bracket_pairs == Some(false);
+                self.settings.bracket_pairs = Some(on);
+                for editor in &mut self.editors {
+                    editor.bracket_pairs = on;
+                }
+                note = store("bracket_pairs", on.into());
+            }
+            Control::StickyScroll => {
+                let on = self.settings.sticky_scroll == Some(false);
+                self.settings.sticky_scroll = Some(on);
+                let lines = self.sticky_lines();
+                for editor in &mut self.editors {
+                    editor.sticky_lines = lines;
+                }
+                note = store("sticky_scroll", on.into());
+            }
+            Control::WordWrap => {
+                let on = self.settings.word_wrap != Some(true);
+                self.settings.word_wrap = Some(on);
+                for editor in self.editors.iter_mut().filter(|e| !e.rendered) {
+                    editor.wrap = on;
+                    editor.left = 0;
+                }
+                note = store("word_wrap", on.into());
             }
             Control::Keymap(name) => {
                 (self.vim, self.neovim) = keymap_engines(Some(name));
@@ -10638,6 +10709,7 @@ impl App {
                 keymap: &keymap,
                 smooth_scroll,
                 minimap,
+                view: self.editor_view(),
             };
             let area = self.sheet_area();
             page.draw(grid, area, &values, (self.hover, &*self.measure), theme);
@@ -13074,6 +13146,13 @@ impl App {
                 .run_button()
                 .is_some_and(|(chip, _)| chip.contains(x, y))
             || self.view_comment().is_some_and(|chip| chip.contains(x, y))
+            || self.pane_at(x, y).is_some_and(|pane| {
+                let editor = self.panes.get(pane).and_then(|i| self.editors.get(*i));
+                let area = self.pane_area(pane);
+                editor.is_some_and(|e| {
+                    e.fold_spot(area, x as f32, y).is_some() || e.sticky_at(area, y).is_some()
+                })
+            })
             || self
                 .page_switch()
                 .is_some_and(|(chip, _)| chip.contains(x, y));
@@ -13256,6 +13335,9 @@ pub(crate) fn machine_name() -> String {
     }
     std::env::var("COMPUTERNAME").unwrap_or_else(|_| "this machine".to_string())
 }
+#[cfg(test)]
+mod view_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -22171,7 +22253,8 @@ while True:
         wait(&mut app, |a| screen(a).text().contains("fake problem here"));
         let grid = screen(&app);
         let (x, y) = find(&grid, "fn main");
-        assert_eq!(grid.cell(x - 2, y).style.fg, Theme::default().error);
+        // The number's last digit, before the fold chevrons' two cells and a space.
+        assert_eq!(grid.cell(x - 4, y).style.fg, Theme::default().error);
     }
 
     #[test]

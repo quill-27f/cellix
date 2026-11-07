@@ -168,6 +168,13 @@ pub enum Command {
     /// The side pane, or the editor in front, takes the window, or gives it back.
     MaximizePane,
     MaximizeEditor,
+    /// Wraps long lines of code at the pane's width, or stops: Alt+Z.
+    ToggleWordWrap,
+    /// Folds the region the caret is in, or opens the fold: Ctrl+Shift+[ and ].
+    Fold,
+    Unfold,
+    FoldAll,
+    UnfoldAll,
     ToggleComment,
     MoveLineUp,
     MoveLineDown,

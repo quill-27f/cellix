@@ -74,6 +74,9 @@ pub enum Control {
     Theme(&'static str),
     SmoothScroll,
     Minimap,
+    BracketPairs,
+    WordWrap,
+    StickyScroll,
     Keymap(&'static str),
     ClaudeCode,
     Codex,
@@ -93,7 +96,53 @@ pub struct Values<'a> {
     pub keymap: &'a str,
     pub smooth_scroll: bool,
     pub minimap: bool,
+    pub view: EditorView,
 }
+
+/// How code is laid out and coloured, each a switch in Appearance.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct EditorView {
+    pub bracket_pairs: bool,
+    pub word_wrap: bool,
+    pub sticky_scroll: bool,
+}
+
+/// The switches under the theme cards, in order, with their words.
+fn view_switches(values: &Values) -> [(Control, (&'static str, &'static str), bool); 3] {
+    [
+        (
+            Control::WordWrap,
+            (
+                "Word wrap",
+                "Long lines of code wrap at the pane's width. Alt+Z changes one file.",
+            ),
+            values.view.word_wrap,
+        ),
+        (
+            Control::StickyScroll,
+            (
+                "Sticky scroll",
+                "The lines that open the scopes you've scrolled into stay at the top.",
+            ),
+            values.view.sticky_scroll,
+        ),
+        (
+            Control::BracketPairs,
+            (
+                "Bracket pair colours",
+                "Brackets in code coloured by depth, with the caret's pair marked.",
+            ),
+            values.view.bracket_pairs,
+        ),
+    ]
+}
+
+/// How many switches `view_switches` holds.
+const VIEW_SWITCHES: [Control; 3] = [
+    Control::WordWrap,
+    Control::StickyScroll,
+    Control::BracketPairs,
+];
 
 /// What was found on this machine. Looking touches the disk, so it happens on opening and
 /// after a change rather than every frame.
@@ -332,6 +381,10 @@ impl SettingsPage {
                 let below = page.y + 3 + CARD_HEIGHT + 2;
                 spots.push((Rect::new(page.x, below, page.w, 2), Control::SmoothScroll));
                 spots.push((Rect::new(page.x, below + 3, page.w, 2), Control::Minimap));
+                for (i, control) in VIEW_SWITCHES.iter().enumerate() {
+                    let y = below + 6 + 3 * i as u16;
+                    spots.push((Rect::new(page.x, y, page.w, 2), *control));
+                }
             }
             Section::Editor => {
                 let start = page.right().saturating_sub(SEGMENT_WIDTH * 3);
@@ -434,6 +487,9 @@ impl SettingsPage {
                 draw_toggle(grid, page, below, smooth, values.smooth_scroll, theme);
                 let minimap = ("Minimap", "The file at a glance, when the window has room.");
                 draw_toggle(grid, page, below + 3, minimap, values.minimap, theme);
+                for (i, (_, text, on)) in view_switches(values).into_iter().enumerate() {
+                    draw_toggle(grid, page, below + 6 + 3 * i as u16, text, on, theme);
+                }
             }
             Section::Editor => self.draw_editor(grid, page, &spots, values, hover, theme),
             Section::Integrations => self.draw_integrations(grid, page, (hover, measure), theme),

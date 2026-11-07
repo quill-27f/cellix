@@ -82,6 +82,9 @@ pub fn keys_of(command: Command) -> Option<&'static str> {
         Command::OpenDiff => "Ctrl+G",
         Command::ToggleSidebar => "Ctrl+B",
         Command::ToggleComment => "Ctrl+/",
+        Command::ToggleWordWrap => "Alt+Z",
+        Command::Fold => "Ctrl+Shift+[",
+        Command::Unfold => "Ctrl+Shift+]",
         Command::GoToLine => "Ctrl+L",
         Command::GoToDefinition => "F12",
         Command::GoToReferences => "Shift+F12",
@@ -94,7 +97,7 @@ pub fn keys_of(command: Command) -> Option<&'static str> {
     })
 }
 
-pub const COMMANDS: [(&str, Command); 89] = [
+pub const COMMANDS: [(&str, Command); 94] = [
     ("Save", Command::Save),
     ("Undo", Command::Undo),
     ("Redo", Command::Redo),
@@ -128,6 +131,11 @@ pub const COMMANDS: [(&str, Command); 89] = [
     ("Go Forward", Command::GoForward),
     ("Replace in File", Command::ReplaceInFile),
     ("Toggle Comment", Command::ToggleComment),
+    ("View: Toggle Word Wrap", Command::ToggleWordWrap),
+    ("Fold", Command::Fold),
+    ("Unfold", Command::Unfold),
+    ("Fold All", Command::FoldAll),
+    ("Unfold All", Command::UnfoldAll),
     ("Duplicate Line", Command::DuplicateLine),
     ("Move Line Up", Command::MoveLineUp),
     ("Go to Line", Command::GoToLine),
