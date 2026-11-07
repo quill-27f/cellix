@@ -297,6 +297,11 @@ pub fn index_text(root: &Path, path: &Path) -> String {
 /// Lines added and removed in each file since a commit, or HEAD for None.
 pub fn numstat(root: &Path, base: Option<&str>) -> HashMap<PathBuf, (usize, usize)> {
     let text = git(root, &["diff", "--numstat", base.unwrap_or("HEAD")]).unwrap_or_default();
+    parse_numstat(&text)
+}
+
+/// `git diff --numstat` output, by file.
+pub(crate) fn parse_numstat(text: &str) -> HashMap<PathBuf, (usize, usize)> {
     let mut stats = HashMap::new();
     for line in text.lines() {
         let mut parts = line.splitn(3, '\t');

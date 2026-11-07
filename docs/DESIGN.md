@@ -442,6 +442,31 @@ no description, a hook that runs a missing script, and instructions kept in a fi
 agent doesn't read. Whether two instructions disagree in meaning is for the agent to judge,
 not for Cellix to guess.
 
+### Tasks: the unit of agent work
+
+Cellix shows agent work by task, not by file. A task is one agent session's turns, by the
+agent's session id, so Resume keeps it, split where the session sends a new plan after one
+was approved: the prompt that led to the new plan begins the next task. The reviewer can name a
+task and start a new one at any turn; tasks are never merged. Decided with the user on
+2026-11-07, over "a plan through its approval" (which leaves out agents used without plan mode)
+and "a branch or worktree" (one endless task in a single checkout).
+
+The agent's hooks append what happened to `.cellix/tasks.jsonl` in the project: each prompt
+with when, which agent and session, the checkpoint taken as it began and the newest comment
+then; each plan version and its answer; each test run. The reviewer's splits and names go in
+the same log. Tasks are worked out from the log whenever it's read, so no two writers need to
+agree on them, and a log line that can't be read is skipped. A turn runs from its checkpoint to
+the next one taken in the project, or to the tree now, and the comments made while it was the
+latest are its comments. Nothing is logged outside a repository or a folder Cellix serves.
+
+The Task page (Show Agent Task) stands where the file would, like Review: the task's name with
+a list of the others, then the timeline of plan versions and turns beside the chosen step. A
+turn shows its prompt, what it changed, its tests and its comments, with Review Turn (Review
+limited to that turn, read-only, since the tree has moved on) and Undo Turn (back to its
+checkpoint, itself undoable). A waiting plan has Approve, Send Back and Compare. Open Transcript
+opens the session's transcript as the transcript page does, and each turn shows how full the
+agent's context grew over it, from that transcript.
+
 ### Workspaces, in place of tmux
 
 Cellix keeps the open tabs, cursors and unsaved edits of each folder in `state.json` beside its

@@ -6,6 +6,7 @@ mod git;
 mod history;
 mod log;
 mod stash;
+pub mod tasks;
 pub mod threads;
 
 pub use diff::{
@@ -18,7 +19,9 @@ pub use git::{
     pull, push, stage, stage_patch, staged_count, status_entries, switch_branch, unstage,
     worktrees,
 };
-pub use history::{Turn, changed_since, checkpoint, restore, text_at, turns};
+pub use history::{
+    Turn, changed_between, changed_since, checkpoint, numstat_between, restore, text_at, turns,
+};
 pub use log::{Commit, GraphRow, age, commit_files, commit_sides, file_history, graph, log};
 pub use stash::{
     Keep, Stash, apply_stash, drop_stash, pop_stash, stash, stash_files, stash_sides, stashes,

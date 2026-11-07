@@ -37,6 +37,10 @@ use cellix_doc::table::{Align, Edit as TableEdit};
 use serde_json::{Value, json};
 
 use crate::agents::{Agents, Hit as AgentHit};
+mod agent_task;
+pub use agent_task::Act as TaskAct;
+
+use crate::agent_task::TaskPage;
 use crate::context::{ContextPanel, Hit as ContextHit};
 use crate::dock::{BROWSER, CellPixels, Dock, Front, Session, TabHit};
 use crate::editor::{Editor, Marks};
@@ -267,6 +271,7 @@ enum PromptAction {
     Commit,
     GoToLine,
     SendBackPlan,
+    RenameTask,
     /// Turn down a hunk in Review, with the reason going to the agent.
     RejectHunk(usize),
     /// Turn down the change Claude Code proposed, with the reason going to it.
@@ -902,6 +907,9 @@ pub struct App {
     pub outgoing_clipboard: Option<String>,
     ticks: u32,
     review: Option<Review>,
+    /// The Task page, kept while something else is in front so it comes back where it was.
+    task_page: Option<TaskPage>,
+    task_shown: bool,
     /// Shared with the socket thread, so agents can read comments at any time.
     pub comments: SharedComments,
     /// With `--wait`: comments on this file are appended to it on exit, so an agent that
@@ -1152,6 +1160,8 @@ impl App {
             outgoing_clipboard: None,
             ticks: 0,
             review: None,
+            task_page: None,
+            task_shown: false,
             clipboard_image: clipboard_image_command(),
             pending_ask: None,
             pending_review: None,
@@ -1320,6 +1330,8 @@ impl App {
 
     fn set_active(&mut self, index: usize) {
         self.panes[self.focus] = index;
+        // A file brought to the front stands where the Task page was.
+        self.task_shown = false;
     }
 
     fn editor_mut(&mut self) -> Option<&mut Editor> {
@@ -2283,7 +2295,7 @@ impl App {
             self.copy_text(text, "Copied");
         }
         let searched = self.search.poll();
-        let reviewed = self.review.as_mut().is_some_and(Review::poll);
+        let reviewed = self.review.as_mut().is_some_and(Review::poll) | self.poll_task_page();
         let installed = self.poll_install()
             | self.poll_browser()
             | self.poll_offer()
@@ -3864,6 +3876,7 @@ impl App {
             if let Some(review) = self.review.as_mut().filter(|r| !r.is_reading()) {
                 review.refresh_later();
             }
+            self.refresh_task_page();
         }
     }
 
@@ -4565,6 +4578,9 @@ impl App {
         if self.settings_page.is_some() && self.settings_key(key) {
             return;
         }
+        if self.task_key(key) {
+            return;
+        }
         if self.search.focus.is_some() && self.sidebar_area().is_some() && self.search_key(key) {
             return;
         }
@@ -5096,6 +5112,7 @@ impl App {
                 if let Some(review) = &mut self.review {
                     review.refresh();
                 }
+                self.refresh_task_page();
             }
         }
     }
@@ -5984,6 +6001,10 @@ impl App {
                 }
                 Ok(())
             }
+            PromptAction::RenameTask => {
+                self.rename_task(name);
+                Ok(())
+            }
             PromptAction::SendBackPlan => {
                 if let Some(path) = self.plan.as_ref().map(|p| p.path.clone()) {
                     let feedback = self.plan_feedback(&path, name);
@@ -6372,6 +6393,7 @@ impl App {
                 }
             }
             Command::UndoTurn => self.prompt_undo_turn(),
+            Command::ShowAgentTask => self.show_task_page(),
             Command::Commit => self.ask("Commit message", PromptAction::Commit),
             Command::OpenInBrowser => self.open_in_browser(),
             Command::OpenClaude => self.open_agent("claude"),
@@ -6474,6 +6496,7 @@ impl App {
                 self.paste(&text);
             }
             Command::Cancel if self.review.is_some() => self.review = None,
+            Command::Cancel if self.task_shown() => self.task_shown = false,
             Command::Cancel => {
                 if let Some(editor) = self.editor_mut() {
                     let head = editor.selections.primary().head;
@@ -6895,6 +6918,11 @@ impl App {
             .as_ref()
             .map(|(id, _)| id.clone())
             .unwrap_or_default();
+        self.open_transcript_file(&name, &id, source);
+    }
+
+    /// Opens a transcript, written as a page and followed as it grows.
+    fn open_transcript_file(&mut self, name: &str, id: &str, source: PathBuf) {
         let transcript = match crate::transcript::read(&source) {
             Ok(transcript) => transcript,
             Err(e) => {
@@ -6903,7 +6931,7 @@ impl App {
             }
         };
         let root = self.workspace.root().to_path_buf();
-        let named = crate::transcript::page_name(&name, &id);
+        let named = crate::transcript::page_name(name, id);
         let page = match crate::transcript::write_page(&root, &named, &transcript) {
             Ok(page) => page,
             Err(e) => {
@@ -10297,6 +10325,8 @@ impl App {
             return;
         };
         let removed = matches!(undo, cellix_review::LineUndo::Removed { .. });
+        // A past turn's lines are only to read; the tree has moved on since.
+        let live = review.until.is_none();
         let what = match undo {
             cellix_review::LineUndo::Added(_) => "Remove This Added Line",
             cellix_review::LineUndo::Removed { .. } => "Put This Line Back",
@@ -10306,7 +10336,7 @@ impl App {
                 format!("Comment on Line {line}"),
                 MenuAction::Run(Command::AddComment),
             ),
-            MenuItem::new(what, MenuAction::RejectLine(undo)),
+            MenuItem::new(what, MenuAction::RejectLine(undo)).when(live),
         ];
         self.review_line = Some((file, line, quote, removed));
         self.show_menu((x, y.saturating_add(1)), items);
@@ -10616,6 +10646,9 @@ impl App {
         let in_sidebar = self.sidebar_area().is_some_and(|a| a.contains(x, y));
         if self.settings_page.is_some() && !in_sidebar {
             self.settings_mouse(mouse);
+            return;
+        }
+        if !in_sidebar && self.task_mouse(mouse) {
             return;
         }
         if self.review.is_some() && !in_sidebar && self.main_area().contains(x, y) {
@@ -11291,6 +11324,7 @@ impl App {
                 self.say(format!("Applied: {title}"));
             }
             MenuAction::RejectLine(undo) => self.reject_line(undo),
+            MenuAction::Task(act) => self.run_task_act(act),
             MenuAction::Learn(word) => {
                 if let Some(spell) = &self.spell {
                     spell.learn(&word);
@@ -12005,6 +12039,13 @@ impl App {
             let comments = self.comments.lock().map(|c| c.clone()).unwrap_or_default();
             review.title_room.set(self.actions_over_main());
             review.draw(grid, self.main_area(), self.hover, theme, &comments);
+            self.draw_status(grid);
+            self.draw_pane_actions(grid);
+            self.draw_overlay(grid);
+            self.draw_tooltip(grid);
+            return;
+        }
+        if self.draw_task_page(grid, theme) {
             self.draw_status(grid);
             self.draw_pane_actions(grid);
             self.draw_overlay(grid);

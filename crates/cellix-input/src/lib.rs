@@ -260,6 +260,8 @@ pub enum Command {
     RejectAllChanges,
     ReviewPreviousTurn,
     UndoTurn,
+    /// The Task page: the agent work here as a timeline.
+    ShowAgentTask,
     Commit,
     OpenClaude,
     OpenCodex,

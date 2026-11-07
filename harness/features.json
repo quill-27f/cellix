@@ -4205,5 +4205,40 @@
     "title": "Agent Context in the sidebar: an agent's instructions in load order with imports, its skills, subagents, commands, hooks and MCP servers, what its last session read and how full its context got, and checks, each opening its file",
     "test": "agent_context_shows_what_the_agent_works_from_and_opens_it",
     "passes": true
+  },
+  {
+    "id": "task-log",
+    "milestone": 11,
+    "title": "Agents' hooks log each prompt with its session, agent, time and checkpoint, each plan version and answer, and each test run, and tasks are worked out from that log: a session split at a plan after an approved one",
+    "test": "an_agents_work_is_logged_for_the_task_view",
+    "passes": true
+  },
+  {
+    "id": "task-page",
+    "milestone": 11,
+    "title": "Show Agent Task: one page per task with its plan versions, turns, changes, tests and comments as a timeline",
+    "test": "the_task_page_shows_a_plan_its_versions_turns_and_tests",
+    "passes": true
+  },
+  {
+    "id": "task-turn-actions",
+    "milestone": 11,
+    "title": "From the Task page a turn is reviewed on its own, read-only, and undone back to its checkpoint",
+    "test": "a_turn_is_reviewed_alone_and_undone_from_the_task_page",
+    "passes": true
+  },
+  {
+    "id": "task-split-rename",
+    "milestone": 11,
+    "title": "A task can be split at a turn and renamed, and both are kept",
+    "test": "a_task_can_be_split_at_a_turn_and_renamed",
+    "passes": true
+  },
+  {
+    "id": "task-context",
+    "milestone": 11,
+    "title": "The Task page links to the agent's transcript and shows how full its context grew over each turn, from the transcript",
+    "test": "a_turn_says_how_full_the_agents_context_grew",
+    "passes": true
   }
 ]

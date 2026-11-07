@@ -202,7 +202,7 @@ pub fn keys_of(command: Command) -> Option<&'static str> {
     })
 }
 
-pub const COMMANDS: [(&str, Command); 120] = [
+pub const COMMANDS: [(&str, Command); 121] = [
     ("Save", Command::Save),
     ("Undo", Command::Undo),
     ("Redo", Command::Redo),
@@ -284,6 +284,7 @@ pub const COMMANDS: [(&str, Command); 120] = [
     ("Reject All Changes", Command::RejectAllChanges),
     ("Review Previous Agent Turn", Command::ReviewPreviousTurn),
     ("Undo Agent Turn", Command::UndoTurn),
+    ("Show Agent Task", Command::ShowAgentTask),
     ("Commit Staged Changes", Command::Commit),
     ("Open Claude Code", Command::OpenClaude),
     ("Open Codex", Command::OpenCodex),

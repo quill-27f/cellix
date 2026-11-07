@@ -1,5 +1,6 @@
 //! The Cellix application: state, views and the terminal loop.
 
+mod agent_task;
 mod agents;
 mod app;
 mod brackets;

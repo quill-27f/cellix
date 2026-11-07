@@ -217,9 +217,16 @@ fn checkpoint(label: &str) -> ExitCode {
     } else {
         label
     };
+    // The prompt hook passes the prompt, to log with the checkpoint for the task view.
+    let prompt: Option<cellix_review::tasks::Event> =
+        std::env::var(cellix_review::tasks::EVENT_VAR)
+            .ok()
+            .and_then(|json| serde_json::from_str(&json).ok());
+    let log = std::env::var_os(cellix_review::tasks::ROOT_VAR).map(std::path::PathBuf::from);
+    let prompt = log.as_deref().zip(prompt);
     let saved = workspace_root(None)
         .ok()
-        .and_then(|root| cellix_review::checkpoint(&root, label));
+        .and_then(|root| cellix_review::tasks::checkpoint_prompt(&root, label, prompt));
     match saved {
         Some(turn) => {
             println!("{}", turn.number);

@@ -10,9 +10,9 @@ use cellix_render::{
     BOTTOM_LEFT, BOTTOM_RIGHT, Bounds, Grid, Rect, Rgb, Style, TOP_LEFT, TOP_RIGHT,
 };
 use cellix_review::{
-    Change, Comment, FileDiff, Row, RowKind, Side, Turn, changed_files, changed_since, commit,
-    head_text, hunk_patch, index_text, numstat, rank_changes, stage_patch, staged_count, text_at,
-    turns,
+    Change, Comment, FileDiff, Row, RowKind, Side, Turn, changed_between, changed_files,
+    changed_since, commit, head_text, hunk_patch, index_text, numstat, numstat_between,
+    rank_changes, stage_patch, staged_count, text_at, turns,
 };
 
 use crate::theme::Theme;
@@ -136,6 +136,9 @@ pub struct Review {
     pub turns: Vec<Turn>,
     /// The index into `turns` being compared against, or None for HEAD.
     pub base: Option<usize>,
+    /// The checkpoint a past turn ended at, to show only what that turn changed. Nothing in
+    /// it can be accepted or rejected: the tree has moved on since.
+    pub until: Option<String>,
     staged: usize,
     /// Test commands agents have run, newest last.
     pub tests: Vec<TestRun>,
@@ -166,16 +169,26 @@ struct Reading {
 }
 
 impl Reading {
-    fn take(root: &Path, base: Option<usize>, selected: Option<PathBuf>) -> Self {
+    fn take(
+        root: &Path,
+        base: Option<usize>,
+        until: Option<&str>,
+        selected: Option<PathBuf>,
+    ) -> Self {
         let turns = turns(root);
         let base = base.filter(|b| *b < turns.len());
         let commit = base.map(|b| turns[b].commit.clone());
-        let mut changes = match &commit {
-            Some(commit) => changed_since(root, commit),
-            None => changed_files(root),
+        let until = until.filter(|_| commit.is_some());
+        let mut changes = match (&commit, until) {
+            (Some(commit), Some(until)) => changed_between(root, commit, until),
+            (Some(commit), None) => changed_since(root, commit),
+            (None, _) => changed_files(root),
         };
         rank_changes(&mut changes);
-        let stats = numstat(root, commit.as_deref());
+        let stats = match (&commit, until) {
+            (Some(commit), Some(until)) => numstat_between(root, commit, until),
+            _ => numstat(root, commit.as_deref()),
+        };
         let staged = staged_count(root);
         let path = selected
             .filter(|p| changes.iter().any(|c| c.path == *p))
@@ -185,7 +198,10 @@ impl Reading {
                 Some(commit) => text_at(root, commit, &path),
                 None => head_text(root, &path),
             };
-            let new = std::fs::read_to_string(root.join(&path)).unwrap_or_default();
+            let new = match until {
+                Some(until) => text_at(root, until, &path),
+                None => std::fs::read_to_string(root.join(&path)).unwrap_or_default(),
+            };
             (path, old, new)
         });
         Self {
@@ -295,6 +311,7 @@ impl Review {
             top: 0,
             turns: Vec::new(),
             base: None,
+            until: None,
             staged: 0,
             tests: Vec::new(),
             proposal: None,
@@ -356,6 +373,7 @@ impl Review {
             top: 0,
             turns: Vec::new(),
             base: None,
+            until: None,
             staged: 0,
             tests: Vec::new(),
             proposal: Some(Vec::new()),
@@ -454,7 +472,13 @@ impl Review {
         }
         self.reading = None;
         let current = self.current_path().map(Path::to_path_buf);
-        self.apply(Reading::take(&self.root, self.base, current));
+        let until = self.until.clone();
+        self.apply(Reading::take(
+            &self.root,
+            self.base,
+            until.as_deref(),
+            current,
+        ));
     }
 
     /// Rereads in the background. `poll` picks up the result.
@@ -462,12 +486,12 @@ impl Review {
         if self.is_proposal() || self.fixed.is_some() {
             return;
         }
-        let (root, base) = (self.root.clone(), self.base);
+        let (root, base, until) = (self.root.clone(), self.base, self.until.clone());
         let current = self.current_path().map(Path::to_path_buf);
         let (sender, receiver) = mpsc::channel();
         self.reading = Some(receiver);
         std::thread::spawn(move || {
-            let _ = sender.send(Reading::take(&root, base, current));
+            let _ = sender.send(Reading::take(&root, base, until.as_deref(), current));
         });
     }
 
@@ -518,8 +542,22 @@ impl Review {
     /// Compares against a turn, or HEAD for None.
     pub fn set_base(&mut self, base: Option<usize>) {
         self.base = base;
+        self.until = None;
         self.top = 0;
         self.refresh_later();
+    }
+
+    /// Shows what one turn changed: from the checkpoint at `commit` to the one at `until`, or
+    /// up to the tree now for the latest turn. Says whether that checkpoint is known.
+    pub fn show_turn(&mut self, commit: &str, until: Option<String>) -> bool {
+        let Some(base) = self.turns.iter().position(|t| t.commit == commit) else {
+            return false;
+        };
+        self.base = Some(base);
+        self.until = until;
+        self.top = 0;
+        self.refresh();
+        true
     }
 
     /// Steps the base one turn back, from HEAD to the newest turn and on.
@@ -825,7 +863,7 @@ impl Review {
         }
         let row = (y - body.y - 1) as usize;
         match self.stacked(comments).get(self.top + row)? {
-            Stacked::Header(_) if self.fixed.is_some() => None,
+            Stacked::Header(_) if self.fixed.is_some() || self.until.is_some() => None,
             Stacked::Header(hunk) => {
                 let (accept, reject) = Self::button_spots(body);
                 if x >= accept && x < accept + ACCEPT.len() as u16 {
@@ -925,6 +963,9 @@ impl Review {
             return;
         }
         let since = match self.base.and_then(|b| self.turns.get(b)) {
+            Some(turn) if self.until.is_some() => {
+                format!("in the turn \u{201c}{}\u{201d}", turn.label)
+            }
             Some(turn) => format!("since \u{201c}{}\u{201d}", turn.label),
             None => "since the last commit".to_string(),
         };
@@ -945,7 +986,8 @@ impl Review {
             dim,
             reject.saturating_sub(1),
         );
-        if self.fixed.is_some() {
+        // A fixed change, or a past turn's, is only to read.
+        if self.fixed.is_some() || self.until.is_some() {
             return;
         }
         if self.is_accepted(hunk) {

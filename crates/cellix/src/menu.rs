@@ -53,6 +53,8 @@ pub enum Action {
     /// Undoes one line of a change in Review.
     RejectLine(cellix_review::LineUndo),
     AddCodeCell,
+    /// Something on the Task page.
+    Task(crate::app::TaskAct),
     /// Runs a program in the side pane, to set something up.
     InPane(String, Vec<String>),
     /// Opens the rows under this one, beside it.

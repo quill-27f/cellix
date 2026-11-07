@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use cellix_review::{Comment, Thread, checkpoint};
+use cellix_review::tasks::{self, Event};
+use cellix_review::{Comment, Thread, threads};
 use serde_json::{Value, json};
 
 use crate::{AgentEvent, AgentState, TestRun, request, socket_path};
@@ -120,13 +121,41 @@ fn ask(roots: &[PathBuf], line: &str) -> Option<String> {
     roots.iter().find_map(|root| request(root, line).ok())
 }
 
+/// The agent's own id for the session a hook is about.
+fn session_of(input: &Value) -> String {
+    input["session_id"].as_str().unwrap_or("").to_string()
+}
+
+/// The agent a hook came from, as Cellix names it.
+fn agent_of(input: &Value) -> String {
+    input[AGENT_KEY]
+        .as_str()
+        .unwrap_or("Claude Code")
+        .to_string()
+}
+
+/// Where the project's task log is: with the Cellix serving it, or else at the top of its
+/// repository. Outside both, as in a home folder, nothing is logged.
+fn task_root(roots: &[PathBuf]) -> Option<PathBuf> {
+    roots
+        .iter()
+        .find(|r| socket_path(r).exists())
+        .or_else(|| roots.get(1))
+        .or_else(|| roots.first().filter(|r| r.join(".git").exists()))
+        .cloned()
+}
+
+/// Adds to the task log of the project the hook is about. Never in the agent's way.
+fn log(roots: &[PathBuf], event: &Event) {
+    if let Some(root) = task_root(roots) {
+        let _ = tasks::record(&root, event);
+    }
+}
+
 fn tell(roots: &[PathBuf], input: &Value, state: AgentState, detail: &str) {
     let event = AgentEvent {
-        session: input["session_id"].as_str().unwrap_or("").to_string(),
-        agent: input[AGENT_KEY]
-            .as_str()
-            .unwrap_or("Claude Code")
-            .to_string(),
+        session: session_of(input),
+        agent: agent_of(input),
         state,
         detail: detail.to_string(),
         folder: roots
@@ -233,7 +262,22 @@ fn label(prompt: &str) -> String {
 fn on_prompt(roots: &[PathBuf], input: &Value) -> Option<String> {
     if let Some(root) = roots.first() {
         let prompt = input["prompt"].as_str().unwrap_or("Prompt");
-        checkpoint_briefly(root, &label(prompt));
+        // The newest thread now, so the task view can tell which were made during this turn.
+        let event = task_root(roots).map(|log| {
+            let threads = threads::load(&log)
+                .map(|t| threads::next_id(&t) - 1)
+                .unwrap_or(0);
+            let event = Event::Prompt {
+                at: tasks::now(),
+                session: session_of(input),
+                agent: agent_of(input),
+                text: tasks::clip_prompt(prompt),
+                commit: None,
+                threads,
+            };
+            (log, event)
+        });
+        checkpoint_briefly(root, &label(prompt), event);
     }
     tell(roots, input, AgentState::Working, "Working");
     let comments: Vec<Comment> = ask(roots, "take")
@@ -260,19 +304,27 @@ fn on_prompt(roots: &[PathBuf], input: &Value) -> Option<String> {
     Some(output.to_string())
 }
 
-/// Checkpoints in a process of its own, waiting at most `CHECKPOINT_WAIT` for it.
-fn checkpoint_briefly(root: &Path, label: &str) {
+/// Checkpoints in a process of its own, waiting at most `CHECKPOINT_WAIT` for it. That process
+/// also logs the prompt for the task view, with the checkpoint it took.
+fn checkpoint_briefly(root: &Path, label: &str, prompt: Option<(PathBuf, Event)>) {
     // Only the real binary has a `checkpoint` command; a test runs it here instead.
     let exe = std::env::current_exe()
         .ok()
         .filter(|exe| exe.file_stem().is_some_and(|stem| stem == "cellix"));
     let Some(exe) = exe else {
-        checkpoint(root, label);
+        let prompt = prompt.as_ref().map(|(log, e)| (log.as_path(), e.clone()));
+        tasks::checkpoint_prompt(root, label, prompt);
         return;
     };
     let mut command = Command::new(exe);
+    command.args(["checkpoint", label]);
+    if let Some((log, event)) = &prompt {
+        command.env(tasks::ROOT_VAR, log).env(
+            tasks::EVENT_VAR,
+            serde_json::to_string(event).unwrap_or_default(),
+        );
+    }
     command
-        .args(["checkpoint", label])
         .current_dir(root)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -306,22 +358,51 @@ fn review_plan(roots: &[PathBuf], input: &Value, plan: &str) -> Option<(String, 
     std::fs::create_dir_all(&folder).ok()?;
     let path = keep_versions(&folder, plan).ok()?;
     tell(roots, input, AgentState::NeedsYou, PLAN_WAITING);
-    let reply = ask(roots, &format!("plan {}", path.display()))?;
+    let file = path.display().to_string();
+    log(
+        roots,
+        &Event::Plan {
+            at: tasks::now(),
+            session: session_of(input),
+            agent: agent_of(input),
+            file: file.clone(),
+        },
+    );
+    let reply = ask(roots, &format!("plan {file}"))?;
     let (verdict, text) = reply.split_once(' ').unwrap_or((&reply, "null"));
+    let text: Option<String> = serde_json::from_str(text).ok()?;
     // An approved plan is done with, so the next one the session sends starts at version one.
-    if verdict == "approve" {
-        let _ = put_versions_away(&folder);
+    let kept = if verdict == "approve" {
+        put_versions_away(&folder).ok().flatten()
+    } else {
+        None
+    };
+    if matches!(verdict, "approve" | "send-back") {
+        log(
+            roots,
+            &Event::Answer {
+                at: tasks::now(),
+                file,
+                approved: verdict == "approve",
+                note: if verdict == "approve" {
+                    String::new()
+                } else {
+                    text.clone().unwrap_or_default()
+                },
+                kept: kept.map(|k| k.display().to_string()),
+            },
+        );
     }
-    Some((verdict.to_string(), serde_json::from_str(text).ok()?))
+    Some((verdict.to_string(), text))
 }
 
 /// Moves an approved plan and its earlier versions into `Approved 1`, `Approved 2` and on, so
 /// a plan sent after it isn't taken for its next version. Cellix keeps the approved one with
-/// the project, and its comments with it.
-pub fn put_versions_away(folder: &Path) -> std::io::Result<()> {
+/// the project, and its comments with it. Gives the folder they went to.
+pub fn put_versions_away(folder: &Path) -> std::io::Result<Option<PathBuf>> {
     let plan = folder.join("Plan.md");
     if !plan.exists() {
-        return Ok(());
+        return Ok(None);
     }
     let mut number = 1;
     while folder.join(format!("Approved {number}")).exists() {
@@ -338,7 +419,8 @@ pub fn put_versions_away(folder: &Path) -> std::io::Result<()> {
         std::fs::rename(folder.join(&name), away.join(&name))?;
         version += 1;
     }
-    std::fs::rename(plan, away.join("Plan.md"))
+    std::fs::rename(plan, away.join("Plan.md"))?;
+    Ok(Some(away))
 }
 
 /// Writes the plan as `Plan.md`, keeping the one it replaces as `Plan v1.md`, `Plan v2.md` and on,
@@ -476,6 +558,16 @@ fn on_tool(roots: &[PathBuf], input: &Value, passed: bool) {
         .rev()
         .nth(MAX_OUTPUT)
         .map_or(0, |(at, _)| at);
+    log(
+        roots,
+        &Event::Test {
+            at: tasks::now(),
+            session: session_of(input),
+            command: command.to_string(),
+            passed,
+            output: tasks::clip_output(text),
+        },
+    );
     let run = TestRun {
         command: command.to_string(),
         passed,
@@ -1055,5 +1147,81 @@ mod tests {
         handle("tool-done", &input(&root, edited));
         let event = next_event(&server, Duration::from_secs(5)).unwrap();
         assert_eq!(event.state, AgentState::Working);
+    }
+
+    #[test]
+    fn an_agents_work_is_logged_for_the_task_view() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let git = |args: &[&str]| {
+            let status = Command::new("git").arg("-C").arg(&root).args(args).status();
+            assert!(status.unwrap().success());
+        };
+        git(&["init", "-q"]);
+        std::fs::write(root.join("a.rs"), "fn a() {}\n").unwrap();
+        git(&["add", "."]);
+        git(&[
+            "-c",
+            "user.name=T",
+            "-c",
+            "user.email=t@example.com",
+            "commit",
+            "-qm",
+            "a",
+        ]);
+        let server = start(&root, Arc::default()).unwrap();
+        handle(
+            "prompt",
+            &input(&root, json!({"prompt": "Add a refund route"})),
+        );
+        // Plans sent back once and then approved, as the reviewer answers them.
+        for decision in [
+            Decision::SendBack("Only paid orders".into()),
+            Decision::Approve(None),
+        ] {
+            let hook = input(&root, json!({"tool_input": {"plan": "# Refunds\n"}}));
+            let waiting = std::thread::spawn(move || handle("plan", &hook));
+            loop {
+                let request = server
+                    .requests
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap();
+                if let Request::Plan { reply, .. } = request {
+                    reply.send(decision).unwrap();
+                    break;
+                }
+            }
+            waiting.join().unwrap();
+        }
+        let run = input(
+            &root,
+            json!({"tool_input": {"command": "cargo test"}, "tool_response": {"stdout": "FAILED"}}),
+        );
+        handle("tool-failed", &run);
+
+        let events = tasks::load(&root);
+        let found = tasks::tasks(&events, |_| None);
+        assert_eq!(found.len(), 1, "{events:?}");
+        let task = &found[0];
+        assert_eq!(
+            (task.name.as_str(), task.agent.as_str()),
+            ("Add a refund route", "Claude Code")
+        );
+        let turn = task.turns().next().unwrap();
+        assert!(
+            turn.commit.is_some(),
+            "the prompt is logged with its checkpoint"
+        );
+        assert_eq!(turn.tests.len(), 1);
+        assert!(!turn.tests[0].passed);
+        let outcomes: Vec<&tasks::Outcome> = task.plans().map(|p| &p.outcome).collect();
+        assert_eq!(
+            outcomes[0],
+            &tasks::Outcome::SentBack("Only paid orders".into())
+        );
+        assert!(matches!(outcomes[1], tasks::Outcome::Approved(Some(_))));
+        // The log stays out of the project's changes.
+        let ignore = std::fs::read_to_string(root.join(".cellix/.gitignore")).unwrap();
+        assert!(ignore.contains("tasks.jsonl"));
     }
 }

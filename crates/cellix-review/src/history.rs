@@ -1,13 +1,14 @@
 //! Checkpoints of the working tree, so review can ask what changed in an agent's turn and
 //! a turn can be undone. They live in private refs and never touch the branch or the index.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime};
 
-use crate::git::{Change, git, parse_name_status};
+use crate::git::{Change, git, parse_name_status, parse_numstat};
 
 const PREFIX: &str = "refs/cellix/turns/";
 /// Untracked files bigger than this stay out of checkpoints. Hashing a project's data dumps on
@@ -159,6 +160,18 @@ pub fn changed_since(root: &Path, commit: &str) -> Vec<Change> {
     };
     let args = ["diff-tree", "-r", "--name-status", "-z", commit, &tree];
     git(root, &args).map_or_else(Vec::new, |output| parse_name_status(&output))
+}
+
+/// Files that differ between two checkpoints, as one turn changed them.
+pub fn changed_between(root: &Path, from: &str, to: &str) -> Vec<Change> {
+    let args = ["diff-tree", "-r", "--name-status", "-z", from, to];
+    git(root, &args).map_or_else(Vec::new, |output| parse_name_status(&output))
+}
+
+/// Lines added and removed by file between two checkpoints.
+pub fn numstat_between(root: &Path, from: &str, to: &str) -> HashMap<PathBuf, (usize, usize)> {
+    let text = git(root, &["diff", "--numstat", from, to]).unwrap_or_default();
+    parse_numstat(&text)
 }
 
 /// A file as it was at a commit, or empty if it didn't exist.

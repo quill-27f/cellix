@@ -287,10 +287,7 @@ pub fn save(root: &Path, threads: &[Thread]) -> io::Result<()> {
         // A conversation isn't a change to the project, so it stays out of review.
         let ignore = folder.join(".gitignore");
         if !ignore.exists() {
-            fs::write(
-                ignore,
-                "threads.json\nthreads.json.tmp\nplans/\n.gitignore\n",
-            )?;
+            fs::write(ignore, crate::tasks::IGNORED)?;
         }
     }
     let scratch = path.with_extension("json.tmp");

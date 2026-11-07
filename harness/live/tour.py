@@ -543,6 +543,61 @@ def transcripts(scratch):
         subprocess.run(["pkill", "-9", "-f", cache])
         shutil.rmtree(cache, ignore_errors=True)
         shutil.rmtree(f"{ROOT}/.cellix/transcripts", ignore_errors=True)
+def task_scenes(scratch):
+    """The Task page on work an agent did: a plan sent back and approved, a turn with failing
+    then passing tests, and a later turn, logged as the hooks log them."""
+    import time
+    root = f"{scratch}/refunds"
+    os.makedirs(root)
+    project(root)
+    start = int(time.time() * 1000) - 40 * 60_000
+    log = f"{root}/.cellix/tasks.jsonl"
+
+    def record(**event):
+        os.makedirs(os.path.dirname(log), exist_ok=True)
+        with open(log, "a") as f:
+            f.write(json.dumps(event) + "\n")
+
+    def prompt(at, text):
+        event = {"kind": "prompt", "at": at, "session": "s1", "agent": "Claude Code",
+                 "text": text, "threads": 0}
+        env = {**os.environ, "CELLIX_TASK_EVENT": json.dumps(event), "CELLIX_TASK_ROOT": root}
+        subprocess.run([binary, "checkpoint", text[:60]], cwd=root, env=env, capture_output=True)
+
+    plans = f"{scratch}/held/s1"
+    os.makedirs(plans)
+    with open(f"{plans}/Plan v1.md", "w") as f:
+        f.write("# Bound the queue\n\n1. Refuse a push past the limit.\n2. Drop the oldest item when full.\n")
+    with open(f"{plans}/Plan.md", "w") as f:
+        f.write("# Bound the queue\n\n1. Refuse a push past the limit with `Full`.\n"
+                "2. Keep what is queued; the caller decides what to drop.\n3. Test both.\n")
+    plan = f"{plans}/Plan.md"
+    prompt(start, "Bound the queue so a fast producer can't outrun its consumer.")
+    record(kind="plan", at=start + 60_000, session="s1", agent="Claude Code", file=plan)
+    record(kind="answer", at=start + 3 * 60_000, file=plan, approved=False,
+           note="Don't drop anything. Refuse the push and let the caller decide.")
+    record(kind="plan", at=start + 5 * 60_000, session="s1", agent="Claude Code", file=plan)
+    record(kind="answer", at=start + 6 * 60_000, file=plan, approved=True, kept=plans)
+    with open(f"{root}/src/queue.rs", "a") as f:
+        f.write("\nimpl<T> Queue<T> {\n    pub fn len(&self) -> usize {\n        self.items.len()\n    }\n}\n")
+    record(kind="test", at=start + 9 * 60_000, session="s1", command="cargo test", passed=False,
+           output="test queue::refuses_past_limit ... FAILED\n")
+    record(kind="test", at=start + 11 * 60_000, session="s1", command="cargo test", passed=True,
+           output="test result: ok. 4 passed\n")
+    prompt(start + 20 * 60_000, "Add a test that a full queue still pops in order.")
+    with open(f"{root}/src/lib.rs", "w") as f:
+        f.write("mod queue;\n")
+    show = [["wait", 1.0], ["keys", "\\eOP"], ["wait", 0.6], ["keys", "show agent task"],
+            ["wait", 0.4], ["keys", "\r"], ["wait", 1.5]]
+    up = ["keys", "\x1b[A"]
+    cache = {"env": {"XDG_CACHE_HOME": tempfile.mkdtemp(prefix="cxt", dir="/tmp")}}
+    shoot("150-task-page", show, cwd=root, size="150x44", **cache)
+    shoot("151-task-plan", [*show, up, up, ["wait", 0.4]], cwd=root, size="150x44", **cache)
+    shoot("152-task-turn", [*show, up, up, up, ["wait", 0.6]], cwd=root, size="150x44", **cache)
+    shoot("153-task-review-turn", [*show, up, up, up, ["keys", "\r"], ["wait", 1.5]], cwd=root,
+          size="150x44", **cache)
+    shoot("154-task-narrow", show, cwd=root, size="72x44", **cache)
+
 
 with tempfile.TemporaryDirectory() as scratch:
     ROOT = f"{scratch}/queue"
@@ -571,6 +626,7 @@ with tempfile.TemporaryDirectory() as scratch:
     workspaces(scratch)
     code_intelligence(scratch)
     transcripts(scratch)
+    task_scenes(scratch)
     shoot("01-welcome", [])
     shoot("02-code", [], CODE_FILE)
     shoot("03-page", [], PAGE_FILE)
