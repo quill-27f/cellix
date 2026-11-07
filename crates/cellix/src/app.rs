@@ -14,7 +14,7 @@ use cellix_input::{
 };
 use cellix_lang::Registry;
 use cellix_lang::complete::{self, Candidate, Source};
-use cellix_lang::lsp::{Client, Diagnostic, LspEvent, TextEdit};
+use cellix_lang::lsp::{Client, Diagnostic, LspEvent, Signature, Symbol, TextEdit};
 use cellix_render::{
     ALL_CORNERS, Bounds, CellMeasure, Font, Grid, Icon, Measure, Paint, Rect, Rgb, Style, TOP_LEFT,
     TOP_RIGHT,
@@ -42,7 +42,7 @@ use crate::kernel::{self, Event as KernelEvent, Kernel};
 use crate::menu::{Action as MenuAction, Item as MenuItem, Menu, Outcome as MenuOutcome};
 use crate::neovim::{self, Neovim};
 use crate::outline::Outline;
-use crate::palette::{COMMANDS, Input, Item, Palette, input, popup, raised};
+use crate::palette::{COMMANDS, Input, Item, Palette, SymbolRow, input, popup, raised};
 use crate::panels::{MathPanel, SYMBOLS, TablePicker};
 use crate::pdfview::{Hit as PdfHit, PdfView};
 use crate::rendered::{self, Dialect, Target};
@@ -1029,14 +1029,24 @@ pub struct App {
     review_line: Option<(String, usize, String, bool)>,
     /// The fixes the language server last offered, for the menu that shows them.
     code_actions: Vec<cellix_lang::lsp::Fix>,
-    /// Code's symbols from its language server, for the Outline, and the file and revision
-    /// last asked about, so it's asked once a change.
-    symbols: HashMap<PathBuf, Vec<crate::outline::Heading>>,
+    /// Code's symbols from its language server, for the Outline and Go to Symbol, and the file
+    /// and revision last asked about, so it's asked once a change.
+    symbols: HashMap<PathBuf, Vec<Symbol>>,
     symbols_asked: Option<(PathBuf, u64)>,
+    /// Where Go to Symbol started, as an editor, its selections and its view, put back if
+    /// nothing is picked.
+    symbol_origin: Option<(usize, cellix_core::Selections, (usize, usize))>,
+    /// What the workspace's servers found for what's typed after `#`, gathered as each
+    /// answers.
+    workspace_found: (String, Vec<Item>),
     /// Where the pointer rests, since when, and whether the server has been asked about it.
     rest: Option<((u16, u16), std::time::Instant, bool)>,
     /// What the server said about the symbol there, and the cell it's about.
     hover_info: Option<(String, (u16, u16))>,
+    /// The call being typed, as the server describes it, over the place it opened.
+    signature: Option<Signature>,
+    /// Where signature help opened, while it's wanted: the file and the place after the `(`.
+    signature_at: Option<(PathBuf, usize)>,
     /// The cell a hover was asked for, so its answer lands there.
     hover_at: Option<(u16, u16)>,
     /// Places left by jumps, for Go Back, and the ones Go Back left, for Go Forward.
@@ -1125,6 +1135,10 @@ impl App {
             symbols_asked: None,
             rest: None,
             hover_info: None,
+            symbol_origin: None,
+            signature: None,
+            signature_at: None,
+            workspace_found: (String::new(), Vec::new()),
             hover_at: None,
             sync_result: None,
             keep_running: false,
@@ -2140,6 +2154,7 @@ impl App {
             }
             editor.synced = editor.buffer.revision();
         }
+        self.ask_inlay_hints();
         let mut highlighted = false;
         for editor in &self.editors {
             highlighted |= editor.collect_highlights();
@@ -2190,6 +2205,43 @@ impl App {
             self.lsp_event(event);
         }
         changed
+    }
+
+    /// Asks each server for the hints in the code in view, and a screen either side so a
+    /// little scrolling needs no new answer, once a change.
+    fn ask_inlay_hints(&mut self) {
+        let on = self.settings.inlay_hints != Some(false);
+        for pane in 0..self.panes.len() {
+            let index = self.panes[pane];
+            let rows = self.pane_area(pane).h as usize;
+            let Some(editor) = self.editors.get_mut(index) else {
+                continue;
+            };
+            editor.carry_hints();
+            let Some(path) = editor.buffer.path().map(Path::to_path_buf) else {
+                continue;
+            };
+            let language = Registry::language_name(&path);
+            let Some(client) = language.and_then(|l| self.servers.get_mut(l)) else {
+                continue;
+            };
+            if !on || editor.rendered {
+                continue;
+            }
+            let revision = editor.buffer.revision();
+            let (top, bottom) = editor.shown_lines(rows);
+            let lines = editor.buffer.rope().len_lines();
+            let covered = editor.hints_asked.is_some_and(|(asked, from, to)| {
+                asked == revision && from <= top && bottom.min(lines) <= to
+            });
+            if covered {
+                continue;
+            }
+            let from = top.saturating_sub(rows);
+            let to = (bottom + rows).min(lines);
+            client.inlay_hints(&path, (from, to), revision);
+            editor.hints_asked = Some((revision, from, to));
+        }
     }
 
     fn file_uri(path: &Path) -> String {
@@ -2529,18 +2581,30 @@ impl App {
                     }
                 }
             }
+            LspEvent::WorkspaceSymbols(query, found) => self.found_in_workspace(&query, found),
+            LspEvent::Signature(found) => match found {
+                Some(found) if self.signature_at.is_some() => self.signature = Some(found),
+                _ => self.close_signature(),
+            },
+            LspEvent::InlayHints(path, revision, found) => {
+                let on = self.settings.inlay_hints != Some(false);
+                let editor = self
+                    .editors
+                    .iter_mut()
+                    .find(|e| e.buffer.path() == Some(path.as_path()));
+                // An answer about an older text waits for the one asked about since.
+                if let Some(editor) = editor.filter(|e| on && e.buffer.revision() == revision) {
+                    let found = found
+                        .into_iter()
+                        .map(|h| (h.line, h.column, h.label))
+                        .collect();
+                    editor.set_hints(found);
+                }
+            }
             LspEvent::Symbols(path, found) => {
-                let headings = found
-                    .into_iter()
-                    .map(|(title, depth, line)| crate::outline::Heading {
-                        level: (depth + 1).min(6) as u8,
-                        title,
-                        line,
-                        file: None,
-                    })
-                    .collect();
-                self.symbols.insert(path, headings);
+                self.symbols.insert(path.clone(), found);
                 self.refresh_outline();
+                self.fill_symbol_palette(&path);
             }
             LspEvent::Hover(text) => {
                 if let Some(at) = self.hover_at.take() {
@@ -4405,6 +4469,7 @@ impl App {
                 Command::DeleteBackward if open => self.refresh_suggestions(),
                 _ => self.close_suggestions(),
             }
+            self.follow_signature(None, Some(command));
         } else if let Key::Char(c) = key.key
             && !key.mods.ctrl
             && !key.mods.alt
@@ -4420,6 +4485,222 @@ impl App {
             } else {
                 self.close_suggestions();
             }
+            self.follow_signature(Some(c), None);
+        }
+    }
+
+    /// Signature help follows typing, as in VS Code: `(` and `,` ask the server about the
+    /// call, `)` and Esc put it away, and anything else while it shows asks again, so the
+    /// parameter being typed stays right and it goes once the caret leaves the call.
+    fn follow_signature(&mut self, typed: Option<char>, command: Option<Command>) {
+        let showing = self.signature_at.is_some();
+        match (typed, command) {
+            (Some(')'), _) | (_, Some(Command::Cancel)) => self.close_signature(),
+            (Some('(' | ','), _) => self.ask_signature(),
+            _ if showing => self.ask_signature(),
+            _ => {}
+        }
+    }
+
+    fn ask_signature(&mut self) {
+        self.poll();
+        let Some((language, path, line, column)) = self.lsp_target() else {
+            self.close_signature();
+            return;
+        };
+        let Some(client) = self.servers.get_mut(language) else {
+            return;
+        };
+        client.signature_help(&path, line, column);
+        let head = self
+            .editors
+            .get(self.active())
+            .map_or(0, |e| e.selections.primary().head);
+        match &self.signature_at {
+            Some((at, _)) if *at == path => {}
+            _ => self.signature_at = Some((path, head)),
+        }
+    }
+
+    fn close_signature(&mut self) {
+        self.signature = None;
+        self.signature_at = None;
+    }
+
+    /// The call being typed, over the line, as VS Code shows it: the signature with the
+    /// parameter being typed picked out, a rule, what that parameter is, and then what the
+    /// function does, quieter.
+    fn draw_signature(&self, grid: &mut Grid) {
+        // As wide as VS Code's, about 900 pixels; longer docs wrap.
+        const WIDTH: usize = 52;
+        const ABOUT: usize = 3;
+        let (Some(signature), Some((path, anchor))) = (&self.signature, &self.signature_at) else {
+            return;
+        };
+        let Some(editor) = self.editors.get(self.active()) else {
+            return;
+        };
+        if editor.buffer.path() != Some(path.as_path()) {
+            return;
+        }
+        let area = self.focused_area();
+        let anchor = (*anchor).min(editor.buffer.rope().len_chars());
+        let (Some((x, _)), Some((_, y))) = (editor.cell_of(area, anchor), editor.caret_cell(area))
+        else {
+            return;
+        };
+        let theme = &self.theme;
+        let (width, height) = self.size;
+        let room = (width as usize).saturating_sub(4).min(WIDTH);
+        let overloads = (signature.count > 1)
+            .then(|| format!("{} of {}", signature.index + 1, signature.count));
+        let label_room = room.saturating_sub(overloads.as_ref().map_or(0, |o| o.len() + 2));
+        let label: String = signature.label.chars().take(label_room).collect();
+        // What the parameter is: its name, then the server's words about it.
+        let mut about: Vec<(String, bool)> = Vec::new();
+        let mut parameter = String::new();
+        if let Some((start, end)) = signature.active
+            && !signature.parameter_doc.is_empty()
+        {
+            let name: String = signature
+                .label
+                .chars()
+                .skip(start)
+                .take(end - start)
+                .collect();
+            parameter = name.split(':').next().unwrap_or("").trim().to_string();
+            let text = format!("{parameter} — {}", signature.parameter_doc);
+            let lines = crate::threads::wrap(&text, room as f32, &*self.measure);
+            about.extend(lines.into_iter().map(|line| (line, true)));
+        }
+        let mut quiet = if signature.documentation.is_empty() {
+            Vec::new()
+        } else {
+            crate::threads::wrap(&signature.documentation, room as f32, &*self.measure)
+        };
+        quiet.truncate(ABOUT);
+        about.extend(quiet.into_iter().map(|line| (line, false)));
+        // Measured, since on the pixel tiers text is narrower than its cells.
+        let measure = &*self.measure;
+        let mono = Font {
+            mono: true,
+            ..Font::default()
+        };
+        let small = Font {
+            size: 85,
+            ..Font::default()
+        };
+        let tag = overloads
+            .as_ref()
+            .map_or(0.0, |o| measure.width(o, small) + 2.0);
+        let widest = about
+            .iter()
+            .map(|(line, _)| measure.width(line, Font::default()))
+            .fold(measure.width(&label, mono) + tag, f32::max);
+        let wide = (widest.ceil() as u16 + 2).min(room as u16 + 2);
+        let high = 1 + about.len() as u16;
+        let left = (x.max(1.0) as u16 - 1).min(width.saturating_sub(wide + 1));
+        // Over the line being typed, so it never hides it, or under it near the top.
+        let top = if y >= high + 2 {
+            y - high - 1
+        } else if y + 2 + high < height {
+            y + 2
+        } else {
+            return;
+        };
+        let panel = Rect::new(left, top, wide, high);
+        crate::palette::raised(grid, panel, theme);
+        let base = Style {
+            fg: theme.text.fg,
+            bg: theme.popup,
+            ..theme.bar
+        };
+        // The signature is code, so it's in the code's font.
+        let chars: Vec<char> = label.chars().collect();
+        let (start, end) = signature.active.unwrap_or((0, 0));
+        let runs = [
+            (0, start.min(chars.len()), false),
+            (start.min(chars.len()), end.min(chars.len()), true),
+            (end.min(chars.len()), chars.len(), false),
+        ];
+        let right = panel.right().saturating_sub(1);
+        for (from, to, active) in runs {
+            if from >= to {
+                continue;
+            }
+            let text: String = chars[from..to].iter().collect();
+            let before: String = chars[..from].iter().collect();
+            let x = panel.x + 1 + from as u16;
+            let style = Style {
+                fg: if active { theme.accent } else { theme.text.fg },
+                bold: active,
+                underline: active,
+                painted: true,
+                ..base
+            };
+            grid.put_str(x, top, &text, style, right);
+            let font = cellix_render::Font {
+                mono: true,
+                bold: active,
+                ..cellix_render::Font::default()
+            };
+            grid.text_run(
+                (
+                    panel.x as f32 + 1.0 + measure.width(&before, mono),
+                    top as f32,
+                ),
+                right as f32,
+                &text,
+                (style.fg, active),
+                font,
+            );
+        }
+        if let Some(overloads) = overloads {
+            let quiet = Style {
+                fg: theme.popup_dim,
+                ..base
+            };
+            grid.label_right(right, top, &overloads, quiet, 85);
+        }
+        if !about.is_empty() {
+            let rule = Bounds::cells(
+                panel.x as f32 + 1.0,
+                top as f32 + 1.0,
+                wide as f32 - 2.0,
+                0.0,
+            );
+            grid.hairline(rule, theme.popup_border);
+        }
+        for (n, (line, strong)) in about.iter().enumerate() {
+            let style = Style {
+                fg: if *strong {
+                    theme.text.fg
+                } else {
+                    theme.popup_dim
+                },
+                ..base
+            };
+            let y = top + 1 + n as u16;
+            // The parameter's name stands out from what's said about it.
+            let rest = (n == 0 && *strong && !parameter.is_empty())
+                .then(|| line.strip_prefix(parameter.as_str()))
+                .flatten();
+            let Some(rest) = rest else {
+                grid.label(panel.x + 1, y, line, style, right);
+                continue;
+            };
+            let bold = Style {
+                bold: true,
+                ..style
+            };
+            grid.label(panel.x + 1, y, &parameter, bold, right);
+            let font = Font {
+                bold: true,
+                ..Font::default()
+            };
+            let after = panel.x as f32 + 1.0 + measure.width(&parameter, font);
+            let cell = panel.x + 1 + parameter.chars().count() as u16;
+            grid.label_at(after, cell, y, rest, style, right, 100);
         }
     }
 
@@ -4810,7 +5091,7 @@ impl App {
         let overlay = std::mem::replace(&mut self.overlay, Overlay::None);
         match overlay {
             Overlay::Palette(mut palette) => match key.key {
-                Key::Esc => {}
+                Key::Esc => self.restore_symbol_origin(),
                 // A folder typed out in full opens even with nothing listed for it.
                 Key::Enter if palette.folders.is_some() && palette.current().is_none() => {
                     let typed = palette.query.trim().to_string();
@@ -4836,20 +5117,20 @@ impl App {
                 Key::Up => {
                     palette.move_by(-1);
                     self.overlay = Overlay::Palette(palette);
+                    self.preview_symbol();
                 }
                 Key::Down => {
                     palette.move_by(1);
                     self.overlay = Overlay::Palette(palette);
+                    self.preview_symbol();
                 }
                 Key::Backspace => {
                     palette.query.pop();
-                    palette.refresh();
-                    self.overlay = Overlay::Palette(palette);
+                    self.palette_typed(palette);
                 }
                 Key::Char(c) if !key.mods.ctrl && !key.mods.alt => {
                     palette.query.push(c);
-                    palette.refresh();
-                    self.overlay = Overlay::Palette(palette);
+                    self.palette_typed(palette);
                 }
                 _ => self.overlay = Overlay::Palette(palette),
             },
@@ -5236,7 +5517,261 @@ impl App {
                 let path = dunce::canonicalize(&path).unwrap_or(path);
                 self.workspace_request = Some(WorkspaceRequest::Open(path));
             }
+            Some(Item::Symbol(symbol)) => self.go_to_symbol_place(&symbol),
             Some(Item::Gap) | None => {}
+        }
+    }
+
+    /// Follows what's typed in a palette. In Quick Open an `@` at the start lists the file's
+    /// symbols, and taking it away lists files again.
+    fn palette_typed(&mut self, mut palette: Palette) {
+        match palette.prefix {
+            Some(prefix) if !palette.query.starts_with(prefix) => {
+                self.restore_symbol_origin();
+                let query = palette.query.clone();
+                self.quick_open();
+                if let Overlay::Palette(files) = &mut self.overlay {
+                    files.query = query;
+                    files.refresh();
+                }
+            }
+            Some('#') => {
+                palette.refresh();
+                let typed = palette.typed().to_string();
+                self.overlay = Overlay::Palette(palette);
+                self.ask_workspace(&typed);
+            }
+            Some(_) => {
+                palette.refresh();
+                self.overlay = Overlay::Palette(palette);
+                self.preview_symbol();
+            }
+            None if palette.quick && palette.query.starts_with('@') => {
+                let typed = palette.query['@'.len_utf8()..].to_string();
+                self.go_to_symbol(&typed);
+            }
+            None if palette.quick && palette.query.starts_with('#') => {
+                let typed = palette.query['#'.len_utf8()..].to_string();
+                self.workspace_symbol(&typed);
+            }
+            None => {
+                palette.refresh();
+                self.overlay = Overlay::Palette(palette);
+            }
+        }
+    }
+
+    /// Go to Symbol in the file: Quick Open with `@` typed, listing the file's symbols by
+    /// kind, the file moving to each as it's picked out.
+    fn go_to_symbol(&mut self, typed: &str) {
+        self.poll();
+        let index = self.active();
+        let Some(editor) = self.editors.get(index) else {
+            self.say("Open a file to go to its symbols");
+            return;
+        };
+        self.symbol_origin = Some((index, editor.selections.clone(), editor.view()));
+        let path = editor.buffer.path().map(Path::to_path_buf);
+        let revision = editor.buffer.revision();
+        let mut palette = Palette::symbols(Vec::new(), '@', typed, "Go to a symbol in this file");
+        let language = path.as_deref().and_then(Registry::language_name);
+        match (&path, language) {
+            (Some(path), Some(language)) if self.servers.contains_key(language) => {
+                let asked = self.symbols_asked.as_ref() == Some(&(path.clone(), revision));
+                if !asked && let Some(client) = self.servers.get_mut(language) {
+                    client.symbols(path);
+                    self.symbols_asked = Some((path.clone(), revision));
+                }
+                palette.status = Some("Finding symbols…".to_string());
+            }
+            (_, Some(language)) => {
+                palette.status = Some(format!("No language server for {language}"));
+            }
+            _ => palette.status = Some("No language server for this file".to_string()),
+        }
+        self.overlay = Overlay::Palette(palette);
+        if let Some(path) = path {
+            self.fill_symbol_palette(&path);
+        }
+    }
+
+    /// Go to Symbol in the workspace: Quick Open with `#` typed, asking every running server
+    /// for symbols that match as each letter goes in.
+    fn workspace_symbol(&mut self, typed: &str) {
+        self.restore_symbol_origin();
+        let mut palette = Palette::symbols(
+            Vec::new(),
+            '#',
+            typed,
+            "Type to search the workspace's symbols",
+        );
+        if self.servers.is_empty() {
+            palette.status = Some("No language server running".to_string());
+        }
+        self.overlay = Overlay::Palette(palette);
+        self.ask_workspace(typed);
+    }
+
+    fn ask_workspace(&mut self, typed: &str) {
+        self.poll();
+        if self.servers.is_empty() {
+            return;
+        }
+        for client in self.servers.values_mut() {
+            client.workspace_symbols(typed);
+        }
+        self.workspace_found = (typed.to_string(), Vec::new());
+        if let Overlay::Palette(palette) = &mut self.overlay {
+            palette.status = Some("Searching…".to_string());
+        }
+    }
+
+    /// Adds what one server found to Go to Symbol in the workspace, if it's still for what's
+    /// typed there.
+    fn found_in_workspace(&mut self, query: &str, found: Vec<Symbol>) {
+        let Overlay::Palette(palette) = &mut self.overlay else {
+            return;
+        };
+        if palette.prefix != Some('#')
+            || palette.typed() != query
+            || self.workspace_found.0 != query
+        {
+            return;
+        }
+        let root = self.workspace.root();
+        for symbol in found {
+            let Some(path) = symbol.path else {
+                continue;
+            };
+            let shown = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .display()
+                .to_string();
+            let row = SymbolRow {
+                name: symbol.name,
+                kind: symbol.kind,
+                detail: symbol.container,
+                place: format!("{shown}  {}", symbol.line + 1),
+                path,
+                line: symbol.line,
+                column: symbol.column,
+            };
+            let item = Item::Symbol(Box::new(row));
+            if !self.workspace_found.1.contains(&item) {
+                self.workspace_found.1.push(item);
+            }
+        }
+        let count = self.workspace_found.1.len();
+        palette.status = Some(match count {
+            0 => "No symbols found".to_string(),
+            1 => "1 symbol".to_string(),
+            n => format!("{n} symbols"),
+        });
+        palette.set_items(self.workspace_found.1.clone());
+    }
+
+    /// Lists a file's symbols in Go to Symbol, if it's open for that file.
+    fn fill_symbol_palette(&mut self, path: &Path) {
+        let active = self
+            .editors
+            .get(self.active())
+            .and_then(|e| e.buffer.path());
+        if active != Some(path) {
+            return;
+        }
+        let Some(found) = self.symbols.get(path) else {
+            return;
+        };
+        let Overlay::Palette(palette) = &mut self.overlay else {
+            return;
+        };
+        if palette.prefix != Some('@') {
+            return;
+        }
+        let items: Vec<Item> = found
+            .iter()
+            .map(|symbol| {
+                Item::Symbol(Box::new(SymbolRow {
+                    name: symbol.name.clone(),
+                    kind: symbol.kind,
+                    detail: symbol.container.clone(),
+                    place: String::new(),
+                    path: path.to_path_buf(),
+                    line: symbol.line,
+                    column: symbol.column,
+                }))
+            })
+            .collect();
+        palette.status = Some(match items.len() {
+            0 => "No symbols".to_string(),
+            1 => "1 symbol".to_string(),
+            n => format!("{n} symbols"),
+        });
+        palette.set_items(items);
+        self.preview_symbol();
+    }
+
+    /// Moves the file to the symbol picked out in Go to Symbol, its name selected, as VS Code
+    /// does while you choose.
+    fn preview_symbol(&mut self) {
+        let Overlay::Palette(palette) = &self.overlay else {
+            return;
+        };
+        let Some(Item::Symbol(symbol)) = palette.current().filter(|_| palette.prefix == Some('@'))
+        else {
+            return;
+        };
+        let (line, column) = (symbol.line, symbol.column);
+        let area = self.focused_area();
+        let screen = Rect::new(0, 0, self.size.0, self.size.1);
+        if let Some(editor) = self.editor_mut() {
+            let at = editor.buffer.position(line, column);
+            let (start, end) = editor.buffer.word_at(at);
+            let selection = if start <= at && at < end {
+                Selection {
+                    anchor: start,
+                    head: end,
+                    goal: None,
+                }
+            } else {
+                Selection::cursor(at)
+            };
+            editor.selections.set_single(selection);
+            editor.reveal_centred(area);
+            // Clear of the palette, which covers the top of the file.
+            let covered = Palette::area(screen).bottom();
+            if let Some((_, y)) = editor.caret_cell(area)
+                && y <= covered
+            {
+                editor.top = editor.top.saturating_sub((covered + 1 - y) as usize);
+            }
+        }
+    }
+
+    /// Puts the file back as it was when Go to Symbol opened.
+    fn restore_symbol_origin(&mut self) {
+        if let Some((index, selections, view)) = self.symbol_origin.take()
+            && let Some(editor) = self.editors.get_mut(index)
+        {
+            editor.selections = selections;
+            editor.set_view(view);
+        }
+    }
+
+    /// Opens a symbol's file at the symbol. Going back returns to where Go to Symbol started.
+    fn go_to_symbol_place(&mut self, symbol: &SymbolRow) {
+        self.restore_symbol_origin();
+        self.mark_jump();
+        if let Err(e) = self.open(&symbol.path) {
+            self.say(format!("Could not open: {e}"));
+            return;
+        }
+        let area = self.focused_area();
+        if let Some(editor) = self.editor_mut() {
+            let at = editor.buffer.position(symbol.line, symbol.column);
+            editor.selections.set_single(Selection::cursor(at));
+            editor.reveal_centred(area);
         }
     }
 
@@ -5752,6 +6287,8 @@ impl App {
             }
             Command::FocusNextPane => self.focus = (self.focus + 1) % self.panes.len(),
             Command::QuickOpen => self.quick_open(),
+            Command::GoToSymbol => self.go_to_symbol(""),
+            Command::GoToWorkspaceSymbol => self.workspace_symbol(""),
             Command::CommandPalette => {
                 let items = COMMANDS
                     .iter()
@@ -7587,7 +8124,18 @@ impl App {
                 client.symbols(&path);
                 self.symbols_asked = Some((path.clone(), revision));
             }
-            self.outline.headings = self.symbols.get(&path).cloned().unwrap_or_default();
+            self.outline.headings = self
+                .symbols
+                .get(&path)
+                .into_iter()
+                .flatten()
+                .map(|symbol| crate::outline::Heading {
+                    level: (symbol.depth + 1).min(6) as u8,
+                    title: symbol.name.clone(),
+                    line: symbol.line,
+                    file: None,
+                })
+                .collect();
             return;
         }
         let folder = editor.buffer.path().and_then(Path::parent);
@@ -8834,7 +9382,10 @@ impl App {
                     }
                 }
             }
-            Event::Mouse(_) => self.hover_info = None,
+            Event::Mouse(_) => {
+                self.hover_info = None;
+                self.close_signature();
+            }
             Event::Tick => {
                 let Some((cell, since, false)) = self.rest else {
                     return;
@@ -9660,6 +10211,8 @@ impl App {
                 if let Some(row) = palette.row_at(screen, mouse.y) {
                     palette.selected = row;
                     self.pick(palette.current().cloned());
+                } else {
+                    self.restore_symbol_origin();
                 }
             }
             Overlay::Menu(mut menu) => {
@@ -10183,7 +10736,7 @@ impl App {
         }
     }
 
-    fn settings_values(&self) -> (String, String, bool, bool) {
+    fn settings_values(&self) -> (String, String, bool, bool, bool) {
         let chosen = |value: &Option<String>, fallback: &str| {
             value.clone().unwrap_or_else(|| fallback.to_string())
         };
@@ -10192,6 +10745,7 @@ impl App {
             chosen(&self.settings.keymap, "simple"),
             self.settings.smooth_scroll != Some(false),
             self.settings.minimap != Some(false),
+            self.settings.inlay_hints != Some(false),
         )
     }
 
@@ -10276,6 +10830,14 @@ impl App {
                 self.settings.smooth_scroll = Some(on);
                 self.smooth_change = Some(on);
                 note = store("smooth_scroll", on.into());
+            }
+            Control::InlayHints => {
+                let on = self.settings.inlay_hints == Some(false);
+                self.settings.inlay_hints = Some(on);
+                for editor in &mut self.editors {
+                    editor.clear_hints();
+                }
+                note = store("inlay_hints", on.into());
             }
             Control::Minimap => {
                 let on = self.settings.minimap == Some(false);
@@ -10703,13 +11265,14 @@ impl App {
         }
         if let Some(page) = &self.settings_page {
             self.draw_settings_tab(grid);
-            let (chosen, keymap, smooth_scroll, minimap) = self.settings_values();
+            let (chosen, keymap, smooth_scroll, minimap, inlay_hints) = self.settings_values();
             let values = Values {
                 theme: &chosen,
                 keymap: &keymap,
                 smooth_scroll,
                 minimap,
                 view: self.editor_view(),
+                inlay_hints,
             };
             let area = self.sheet_area();
             page.draw(grid, area, &values, (self.hover, &*self.measure), theme);
@@ -10775,6 +11338,7 @@ impl App {
         self.draw_status(grid);
         self.draw_suggest(grid);
         self.draw_hover(grid);
+        self.draw_signature(grid);
         if self.offering_linger() {
             self.draw_linger(grid);
         } else {
@@ -11871,7 +12435,9 @@ impl App {
     /// Opens Quick Open at once and fills it from a walk of the folder on another thread: a
     /// big tree takes seconds, and everything used to wait for the whole walk.
     fn quick_open(&mut self) {
-        let mut palette = Palette::new(Vec::new());
+        let hint = "Search files, @ for symbols, # for all symbols";
+        let mut palette = Palette::asking(Vec::new(), hint);
+        palette.quick = true;
         palette.status = Some("0 files…".to_string());
         self.overlay = Overlay::Palette(palette);
         if let Some(old) = self.finding.take() {
@@ -21624,6 +22190,18 @@ mod tests {
         assert_eq!(app.active_text().unwrap(), "fn main() {} // fixed\n");
     }
 
+    fn symbol(name: &str, kind: u64, depth: usize, line: usize) -> Symbol {
+        Symbol {
+            name: name.to_string(),
+            kind,
+            depth,
+            line,
+            column: 0,
+            container: String::new(),
+            path: None,
+        }
+    }
+
     #[test]
     fn code_lists_its_symbols_in_the_outline() {
         let (dir, mut app) = project();
@@ -21636,7 +22214,7 @@ mod tests {
             .to_path_buf();
         app.lsp_event(LspEvent::Symbols(
             path,
-            vec![("main".into(), 0, 0), ("helper".into(), 1, 0)],
+            vec![symbol("main", 12, 0, 0), symbol("helper", 12, 1, 0)],
         ));
         app.run(Command::ShowOutline);
         let text = screen(&app).text();
@@ -22175,10 +22753,26 @@ mod tests {
         assert_ne!(light.background(), Theme::default().text);
     }
 
-    /// Scripted language server: answers the handshake, reports one diagnostic and
-    /// jumps every definition to line 2.
+    /// Scripted language server: answers the handshake, reports one diagnostic, jumps every
+    /// definition to line 2, and finds `struct`, `fn` and `name:` lines as symbols.
     const FAKE_SERVER: &str = r#"
-import json, sys
+import json, re, sys
+texts = {}
+def symbols(uri, text):
+    out, parent = [], ""
+    for n, line in enumerate(text.split("\n")):
+        for kind, pattern in ((23, r"struct (\w+)"), (12, r"fn (\w+)"), (8, r"^\s+(\w+):")):
+            hit = re.search(pattern, line)
+            if hit:
+                if kind != 8:
+                    parent = hit.group(1) if kind == 23 else ""
+                out.append({"name": hit.group(1), "kind": kind,
+                    "containerName": parent if kind == 8 else "",
+                    "location": {"uri": uri, "range": {
+                        "start": {"line": n, "character": hit.start(1)},
+                        "end": {"line": n, "character": hit.end(1)}}}})
+                break
+    return out
 def read():
     n = 0
     while True:
@@ -22199,6 +22793,7 @@ while True:
         send({"jsonrpc": "2.0", "id": i, "result": {"capabilities": {}}})
     elif method == "textDocument/didOpen":
         uri = m["params"]["textDocument"]["uri"]
+        texts[uri] = m["params"]["textDocument"]["text"]
         send({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": {"uri": uri,
             "diagnostics": [{"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 1}},
             "message": "fake problem here", "severity": 1}]}})
@@ -22208,6 +22803,49 @@ while True:
             "range": {"start": {"line": 1, "character": 3}, "end": {"line": 1, "character": 4}}}})
     elif method == "textDocument/completion":
         send({"jsonrpc": "2.0", "id": i, "result": [{"label": "completed_name"}]})
+    elif method == "textDocument/didChange":
+        texts[m["params"]["textDocument"]["uri"]] = m["params"]["contentChanges"][-1]["text"]
+    elif method == "workspace/symbol":
+        q = m["params"]["query"].lower()
+        found = [s for u, t in texts.items() for s in symbols(u, t) if q in s["name"].lower()]
+        send({"jsonrpc": "2.0", "id": i, "result": found})
+    elif method == "textDocument/signatureHelp":
+        p = m["params"]["position"]
+        line = texts.get(m["params"]["textDocument"]["uri"], "").split("\n")[p["line"]][:p["character"]]
+        depth, at = 0, -1
+        for n in range(len(line) - 1, -1, -1):
+            if line[n] == ")": depth += 1
+            elif line[n] == "(":
+                if depth == 0:
+                    at = n
+                    break
+                depth -= 1
+        if at < 0:
+            send({"jsonrpc": "2.0", "id": i, "result": None})
+        else:
+            name = re.search(r"(\w+)$", line[:at]).group(1)
+            send({"jsonrpc": "2.0", "id": i, "result": {"signatures": [{
+                "label": "fn %s(index: usize, value: T)" % name,
+                "documentation": "Inserts an element.",
+                "parameters": [{"label": "index: usize", "documentation": "Where it goes."},
+                               {"label": "value: T", "documentation": "The element."}]}],
+                "activeSignature": 0, "activeParameter": line[at:].count(",")}})
+    elif method == "textDocument/inlayHint":
+        uri = m["params"]["textDocument"]["uri"]
+        hints = []
+        for n, line in enumerate(texts.get(uri, "").split("\n")):
+            hit = re.search(r"let (\w+) =", line)
+            if hit:
+                hints.append({"position": {"line": n, "character": hit.end(1)}, "label": ": i32", "kind": 1})
+            call = re.search(r"add\((\w+), (\w+)\)", line)
+            if call:
+                for name, g in (("a", 1), ("b", 2)):
+                    hints.append({"position": {"line": n, "character": call.start(g)},
+                        "label": name + ":", "kind": 2, "paddingRight": True})
+        send({"jsonrpc": "2.0", "id": i, "result": hints})
+    elif method == "textDocument/documentSymbol":
+        uri = m["params"]["textDocument"]["uri"]
+        send({"jsonrpc": "2.0", "id": i, "result": symbols(uri, texts.get(uri, ""))})
     elif method == "textDocument/rename":
         uri = m["params"]["textDocument"]["uri"]
         send({"jsonrpc": "2.0", "id": i, "result": {"changes": {uri: [{"newText": m["params"]["newName"],
@@ -22286,6 +22924,288 @@ while True:
         wait(&mut app, |a| {
             a.active_text().unwrap().starts_with("fn start()")
         });
+    }
+
+    /// A file with a struct, its fields and functions, the last far down.
+    fn with_symbols() -> (TempDir, App) {
+        let (dir, mut app) = with_server();
+        let gap = "\n".repeat(60);
+        let text = format!(
+            "struct Queue {{\n    items: Vec<u8>,\n    limit: usize,\n}}\n\nfn push() {{}}\n\nfn pop() {{}}\n{gap}fn far_away() {{}}\n"
+        );
+        fs::write(dir.path().join("queue.rs"), text).unwrap();
+        app.open(&dir.path().join("queue.rs")).unwrap();
+        (dir, app)
+    }
+
+    fn line_of_caret(app: &App) -> usize {
+        let editor = &app.editors[app.active()];
+        editor
+            .buffer
+            .rope()
+            .char_to_line(editor.selections.primary().head)
+    }
+
+    #[test]
+    fn go_to_symbol_lists_the_files_symbols_by_kind_and_moves_to_each() {
+        let (_dir, mut app) = with_symbols();
+        let shift_ctrl_o = KeyEvent {
+            key: Key::Char('O'),
+            mods: cellix_input::Mods {
+                ctrl: true,
+                shift: true,
+                alt: false,
+            },
+        };
+        app.handle(Event::Key(shift_ctrl_o));
+        wait(&mut app, |a| screen(a).text().contains("functions (3)"));
+        let grid = screen(&app);
+        // Grouped by kind, each group labelled with its size where it starts, as in VS Code.
+        let (_, structs) = find(&grid, "structs (1)");
+        let (_, fields) = find(&grid, "fields (2)");
+        let (_, functions) = find(&grid, "functions (3)");
+        assert!(structs < fields && fields < functions, "{}", grid.text());
+        assert!(grid.row_text(structs).contains("Queue"));
+        let row = grid.row_text(fields);
+        assert!(
+            row.contains("items") && row.contains("Queue"),
+            "the field says what it's in: {row}"
+        );
+        assert!(grid.row_text(functions).contains("push"));
+        assert!(
+            grid.row_text(functions).contains('ƒ'),
+            "kind icons on the cell tier"
+        );
+        assert!(grid.text().contains("@"), "the field shows the @");
+        // Typing narrows the list, and the file moves to the symbol picked out.
+        typed(&mut app, "far");
+        assert_eq!(line_of_caret(&app), 68);
+        let editor = &app.editors[app.active()];
+        assert!(editor.top() > 0, "scrolled to it");
+        assert_eq!(editor.selected_text().as_deref(), Some("far_away"));
+        // Esc puts the file back as it was.
+        key(&mut app, Key::Esc);
+        assert_eq!(line_of_caret(&app), 0);
+        assert_eq!(app.editors[app.active()].top(), 0);
+        // Enter goes there, and going back returns to where it started.
+        app.run(Command::GoToSymbol);
+        wait(&mut app, |a| screen(a).text().contains("functions (3)"));
+        key(&mut app, Key::Down);
+        key(&mut app, Key::Down);
+        assert_eq!(line_of_caret(&app), 2, "previewing limit");
+        typed(&mut app, "far");
+        enter(&mut app);
+        assert!(matches!(app.overlay, Overlay::None));
+        assert_eq!(line_of_caret(&app), 68);
+        assert!(app.editors[app.active()].selected_text().is_none());
+        app.run(Command::GoBack);
+        assert_eq!(line_of_caret(&app), 0);
+    }
+
+    #[test]
+    fn an_at_sign_in_quick_open_lists_symbols_and_deleting_it_lists_files() {
+        let (_dir, mut app) = with_symbols();
+        app.run(Command::QuickOpen);
+        assert!(
+            screen(&app)
+                .text()
+                .contains("@ for symbols, # for all symbols")
+        );
+        typed(&mut app, "@");
+        wait(&mut app, |a| screen(a).text().contains("structs (1)"));
+        typed(&mut app, "pu");
+        let text = screen(&app).text();
+        assert!(text.contains("functions (1)"), "{text}");
+        assert!(!text.contains("structs (1)"), "{text}");
+        key(&mut app, Key::Backspace);
+        key(&mut app, Key::Backspace);
+        key(&mut app, Key::Backspace);
+        let text = screen(&app).text();
+        assert!(text.contains("Search files,"), "{text}");
+        assert!(!text.contains("functions ("), "{text}");
+    }
+
+    #[test]
+    fn go_to_symbol_in_the_workspace_asks_the_servers_and_opens_the_file() {
+        let (dir, mut app) = with_symbols();
+        // Another file, open too, so the server knows it.
+        fs::write(
+            dir.path().join("jobs.rs"),
+            "fn pop_job() {}\nfn push_job() {}\n",
+        )
+        .unwrap();
+        app.open(&dir.path().join("jobs.rs")).unwrap();
+        app.handle(Event::Key(KeyEvent::ctrl('t')));
+        typed(&mut app, "push");
+        wait(&mut app, |a| screen(a).text().contains("2 symbols"));
+        let grid = screen(&app);
+        let (_, here) = find(&grid, "queue.rs  6");
+        assert!(grid.row_text(here).contains("push"), "{}", grid.text());
+        let (_, there) = find(&grid, "jobs.rs  2");
+        assert!(grid.row_text(there).contains("push_job"), "{}", grid.text());
+        // Picking one opens its file there.
+        for _ in 0..4 {
+            let on_push = matches!(
+                &app.overlay,
+                Overlay::Palette(p) if matches!(p.current(), Some(Item::Symbol(s)) if s.name == "push")
+            );
+            if on_push {
+                break;
+            }
+            key(&mut app, Key::Down);
+        }
+        enter(&mut app);
+        let editor = &app.editors[app.active()];
+        assert!(editor.buffer.path().unwrap().ends_with("queue.rs"));
+        assert_eq!(line_of_caret(&app), 5);
+        // # in Quick Open is the same list.
+        app.run(Command::QuickOpen);
+        typed(&mut app, "#pop");
+        wait(&mut app, |a| screen(a).text().contains("2 symbols"));
+        let text = screen(&app).text();
+        assert!(
+            text.contains("pop_job") && text.contains("jobs.rs  1"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn signature_help_shows_the_call_and_follows_the_parameter() {
+        let (_dir, mut app) = with_server();
+        typed(&mut app, "insert(");
+        wait(&mut app, |a| {
+            screen(a)
+                .text()
+                .contains("fn insert(index: usize, value: T)")
+        });
+        let grid = screen(&app);
+        let text = grid.text();
+        assert!(text.contains("index — Where it goes."), "{text}");
+        let (x, y) = find(&grid, "index — Where");
+        assert!(grid.cell(x, y).style.bold, "the parameter's name in bold");
+        assert!(!grid.cell(x + 8, y).style.bold, "what's said about it not");
+        assert!(text.contains("Inserts an element."), "{text}");
+        let (x, y) = find(&grid, "index: usize");
+        let cell = grid.cell(x, y);
+        assert!(
+            cell.style.underline && cell.style.fg == app.theme.accent,
+            "the parameter being typed"
+        );
+        let (x, y) = find(&grid, "value: T");
+        assert!(!grid.cell(x, y).style.underline);
+        // Above the first line there's no room, so it sits under the line being typed.
+        let (_, typing) = find(&grid, "insert(");
+        assert!(y > typing, "{text}");
+        typed(&mut app, "0,");
+        wait(&mut app, |a| {
+            screen(a).text().contains("value — The element.")
+        });
+        let grid = screen(&app);
+        let (x, y) = find(&grid, "value: T");
+        assert!(grid.cell(x, y).style.underline, "{}", grid.text());
+        // `)` puts it away, and Esc does too.
+        typed(&mut app, "item)");
+        assert!(!screen(&app).text().contains("fn insert("));
+        typed(&mut app, ";");
+        enter(&mut app);
+        typed(&mut app, "other(");
+        wait(&mut app, |a| {
+            screen(a)
+                .text()
+                .contains("fn other(index: usize, value: T)")
+        });
+        // Esc closes what's on top, as in VS Code: the server's late word list, then this.
+        key(&mut app, Key::Esc);
+        if app.suggest.is_none() {
+            assert!(!screen(&app).text().contains("fn other(index"));
+        }
+        key(&mut app, Key::Esc);
+        assert!(!screen(&app).text().contains("fn other(index"));
+        // An answer that comes after Esc doesn't bring it back.
+        app.lsp_event(LspEvent::Signature(Some(Signature {
+            label: "fn late()".into(),
+            active: None,
+            parameter_doc: String::new(),
+            documentation: String::new(),
+            index: 0,
+            count: 1,
+        })));
+        assert!(!screen(&app).text().contains("fn late()"));
+    }
+
+    #[test]
+    fn inlay_hints_show_in_the_line_without_changing_the_text() {
+        let (dir, mut app) = with_server();
+        let text = "fn main() {\n    let total = add(1, 2);\n}\n";
+        fs::write(dir.path().join("sum.rs"), text).unwrap();
+        app.open(&dir.path().join("sum.rs")).unwrap();
+        wait(&mut app, |a| {
+            screen(a)
+                .text()
+                .contains("let total: i32 = add(a: 1, b: 2);")
+        });
+        assert_eq!(
+            app.active_text().unwrap(),
+            text,
+            "the file never holds them"
+        );
+        let grid = screen(&app);
+        let (x, y) = find(&grid, ": i32");
+        let (fg, chip) = app.theme.hint(grid.cell(x - 1, y).style.bg);
+        assert_eq!(
+            (grid.cell(x, y).style.fg, grid.cell(x, y).style.bg),
+            (fg, chip)
+        );
+        assert_eq!(grid.cell(x + 1, y).style.bg, chip, "the chip");
+        let (a, _) = find(&grid, "a: 1");
+        assert_eq!(
+            grid.cell(a + 2, y).style.bg,
+            app.theme.text.bg,
+            "padding stays off the chip"
+        );
+        // The caret steps past a hint: after `total` it's before the hint, then after it.
+        app.run(Command::Move(cellix_input::Direction::Down, false));
+        for _ in 0..13 {
+            app.run(Command::Move(cellix_input::Direction::Right, false));
+        }
+        assert!(screen(&app).text().contains("Ln 2, Col 14"));
+        assert_eq!(screen(&app).cursor.map(|c| c.0), Some(x));
+        app.run(Command::Move(cellix_input::Direction::Right, false));
+        assert_eq!(screen(&app).cursor.map(|c| c.0), Some(x + 5 + 1));
+        // A click on the hint lands beside it.
+        app.handle(mouse(MouseKind::Left, x + 2, y));
+        assert!(
+            screen(&app).text().contains("Ln 2, Col 14"),
+            "{}",
+            screen(&app).text()
+        );
+        // Typing before a hint carries it along until the server answers again.
+        app.run(Command::Move(cellix_input::Direction::Left, false));
+        typed(&mut app, "s");
+        app.poll();
+        let shown = screen(&app).text();
+        assert!(
+            shown.contains("let totasl: i32 = add(a: 1, b: 2);"),
+            "{shown}"
+        );
+        // The setting turns them off.
+        app.run(Command::OpenSettings);
+        let area = app.sheet_area();
+        let page = app.settings_page.as_ref().unwrap();
+        let at = page
+            .controls(area)
+            .iter()
+            .position(|(_, c)| *c == Control::InlayHints)
+            .unwrap();
+        for _ in 0..=at {
+            key(&mut app, Key::Tab);
+        }
+        key(&mut app, Key::Enter);
+        assert_eq!(app.settings.inlay_hints, Some(false));
+        key(&mut app, Key::Esc);
+        app.poll();
+        let shown = screen(&app).text();
+        assert!(shown.contains("let totasl = add(1, 2);"), "{shown}");
     }
 
     /// Needs rust-analyzer. Run with `harness/x test real_rust_analyzer -- --ignored`.

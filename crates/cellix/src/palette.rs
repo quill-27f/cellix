@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use cellix_input::{Command, Format};
@@ -37,6 +38,71 @@ pub enum Item {
     Image(PathBuf, String, bool),
     /// A folder to open as a workspace, as it's written, and a word about it.
     Folder(PathBuf, String, &'static str),
+    /// A symbol to go to, in this file or elsewhere in the workspace.
+    Symbol(Box<SymbolRow>),
+}
+
+/// A row of Go to Symbol.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SymbolRow {
+    pub name: String,
+    /// The protocol's SymbolKind, which picks its icon and its group.
+    pub kind: u64,
+    /// Dim, after the name: what it sits in.
+    pub detail: String,
+    /// At the right, for a symbol in another file: where it is.
+    pub place: String,
+    pub path: PathBuf,
+    pub line: usize,
+    pub column: usize,
+}
+
+/// Where a kind of symbol is listed in Go to Symbol, and what its group is called, as VS
+/// Code names them.
+pub fn kind_group(kind: u64) -> (u8, &'static str) {
+    match kind {
+        2..=4 => (0, "modules"),
+        5 => (1, "classes"),
+        23 => (2, "structs"),
+        10 => (3, "enumerations"),
+        11 => (4, "interfaces"),
+        19 => (5, "objects"),
+        26 => (6, "type parameters"),
+        8 => (7, "fields"),
+        7 => (8, "properties"),
+        22 => (9, "enum members"),
+        14 => (10, "constants"),
+        13 => (11, "variables"),
+        9 => (12, "constructors"),
+        6 => (13, "methods"),
+        12 => (14, "functions"),
+        _ => (15, "symbols"),
+    }
+}
+
+/// A kind's icon, what the cell tier shows instead, and its colour: VS Code's purple for
+/// what runs, orange for types, blue for fields and teal for the rest.
+pub fn kind_icon(kind: u64, theme: &Theme) -> (Icon, &'static str, Rgb) {
+    let light = theme.is_light();
+    let pick = |dark: Rgb, lightened: Rgb| if light { lightened } else { dark };
+    match kind {
+        6 | 9 | 12 | 24 | 25 => (
+            Icon::SymbolFunction,
+            "ƒ",
+            pick(Rgb(0xcb, 0xa6, 0xf7), Rgb(0x88, 0x39, 0xef)),
+        ),
+        5 | 10 | 11 | 19 | 23 | 26 => (
+            Icon::SymbolType,
+            "◆",
+            pick(Rgb(0xfa, 0xb3, 0x87), Rgb(0xd2, 0x4f, 0x0b)),
+        ),
+        7 | 8 | 20 => (Icon::SymbolField, "▪", theme.accent),
+        _ => (
+            Icon::SymbolValue,
+            "≡",
+            pick(Rgb(0x94, 0xe2, 0xd5), Rgb(0x17, 0x92, 0x99)),
+        ),
+    }
 }
 
 impl Item {
@@ -45,6 +111,7 @@ impl Item {
             Self::File(_, label) | Self::Image(_, label, _) | Self::Folder(_, label, _) => label,
             Self::Command(label, _) => label,
             Self::Branch(name, _) | Self::Citation(name, _) => name,
+            Self::Symbol(symbol) => &symbol.name,
             Self::NewBranch => "New branch…",
             Self::Gap => "",
         }
@@ -57,6 +124,7 @@ impl Item {
             Self::Command(_, command) => keys_of(*command),
             Self::Branch(_, when) | Self::Citation(_, when) => Some(when),
             Self::Folder(_, _, note) => (!note.is_empty()).then_some(note),
+            Self::Symbol(symbol) => (!symbol.place.is_empty()).then_some(&symbol.place),
         }
     }
 }
@@ -87,6 +155,8 @@ pub fn keys_of(command: Command) -> Option<&'static str> {
         Command::Unfold => "Ctrl+Shift+]",
         Command::GoToLine => "Ctrl+L",
         Command::GoToDefinition => "F12",
+        Command::GoToSymbol => "Ctrl+Shift+O",
+        Command::GoToWorkspaceSymbol => "Ctrl+T",
         Command::GoToReferences => "Shift+F12",
         Command::FormatDocument => "Alt+Shift+F",
         Command::RenameSymbol => "F2",
@@ -97,7 +167,7 @@ pub fn keys_of(command: Command) -> Option<&'static str> {
     })
 }
 
-pub const COMMANDS: [(&str, Command); 94] = [
+pub const COMMANDS: [(&str, Command); 96] = [
     ("Save", Command::Save),
     ("Undo", Command::Undo),
     ("Redo", Command::Redo),
@@ -187,6 +257,8 @@ pub const COMMANDS: [(&str, Command); 94] = [
     ("Switch Branch", Command::SwitchBranch),
     ("Open Gemini CLI", Command::OpenGemini),
     ("Go to Definition", Command::GoToDefinition),
+    ("Go to Symbol in Editor", Command::GoToSymbol),
+    ("Go to Symbol in Workspace", Command::GoToWorkspaceSymbol),
     ("Go to References", Command::GoToReferences),
     ("Format Document", Command::FormatDocument),
     ("Complete", Command::Complete),
@@ -210,6 +282,27 @@ pub struct Palette {
     pub status: Option<String>,
     /// Set when the palette finds a folder, which lists again as a path is typed.
     pub folders: Option<crate::folders::Picker>,
+    /// What starts the query and isn't part of the search: Quick Open's `@` for this file's
+    /// symbols and `#` for the workspace's.
+    pub prefix: Option<char>,
+    /// Whether rows are kept together by kind, each group labelled with its size.
+    grouped: bool,
+    /// Quick Open, where `@` or `#` at the start turns to symbols and taking it away turns
+    /// back.
+    pub quick: bool,
+}
+
+/// Where the letters of `query` fall in `text`, as `fuzzy_score` finds them.
+pub fn matched_chars(query: &str, text: &str) -> Vec<usize> {
+    let mut found = Vec::new();
+    let mut rest = text.chars().enumerate();
+    for q in query.chars().flat_map(char::to_lowercase) {
+        match rest.by_ref().find(|(_, c)| same_letter(*c, q)) {
+            Some((at, _)) => found.push(at),
+            None => return Vec::new(),
+        }
+    }
+    found
 }
 
 /// Scores `text` against `query`, whose characters must appear in order. Runs of
@@ -252,9 +345,131 @@ impl Palette {
             selected: 0,
             status: None,
             folders: None,
+            prefix: None,
+            grouped: false,
+            quick: false,
         };
         palette.filter();
         palette
+    }
+
+    /// Go to Symbol: the query starts with `prefix`, and the file's own symbols are grouped
+    /// by kind.
+    pub fn symbols(items: Vec<Item>, prefix: char, typed: &str, hint: &'static str) -> Self {
+        let mut palette = Self::asking(Vec::new(), hint);
+        palette.prefix = Some(prefix);
+        palette.grouped = prefix == '@';
+        palette.quick = true;
+        palette.query = format!("{prefix}{typed}");
+        palette.set_items(items);
+        palette
+    }
+
+    /// Puts new items in place of the old, keeping what's typed and, where it's still there,
+    /// the picked row.
+    pub fn set_items(&mut self, items: Vec<Item>) {
+        let picked = self.current().cloned();
+        self.items = items;
+        self.matched.clear();
+        self.filter();
+        if let Some(picked) = picked {
+            let index = self.items.iter().position(|item| *item == picked);
+            if let Some(row) = index.and_then(|i| self.matches.iter().position(|&m| m == i)) {
+                self.selected = row;
+            }
+        }
+    }
+
+    /// What's typed, without the prefix that chose what's listed.
+    pub fn typed(&self) -> &str {
+        match self.prefix {
+            Some(prefix) => self.query.strip_prefix(prefix).unwrap_or(&self.query),
+            None => &self.query,
+        }
+    }
+
+    /// Keeps each kind together, with the best matches first in each, and a gap between
+    /// kinds. With nothing typed the kinds come in VS Code's order; with something typed, the
+    /// kind with the best match comes first, so the best match is the one picked.
+    fn group(&mut self) {
+        if !self.grouped {
+            return;
+        }
+        let gap = match self.items.iter().position(|item| *item == Item::Gap) {
+            Some(gap) => gap,
+            None => {
+                self.items.push(Item::Gap);
+                self.items.len() - 1
+            }
+        };
+        let rank = |i: usize| match &self.items[i] {
+            Item::Symbol(symbol) => kind_group(symbol.kind).0,
+            _ => u8::MAX,
+        };
+        let mut rows: Vec<(usize, i32)> = self
+            .matches
+            .iter()
+            .copied()
+            .zip(self.scores.iter().copied().chain(std::iter::repeat(0)))
+            .filter(|(i, _)| self.items[*i] != Item::Gap)
+            .collect();
+        let mut best: HashMap<u8, i32> = HashMap::new();
+        for (i, score) in &rows {
+            let top = best.entry(rank(*i)).or_insert(*score);
+            *top = (*top).max(*score);
+        }
+        rows.sort_by_key(|(i, _)| (-best[&rank(*i)], rank(*i)));
+        let keep_scores = !self.scores.is_empty();
+        let (mut matches, mut scores) = (Vec::new(), Vec::new());
+        for (n, (i, score)) in rows.iter().enumerate() {
+            if n > 0 && rank(rows[n - 1].0) != rank(*i) {
+                matches.push(gap);
+                scores.push(0);
+            }
+            matches.push(*i);
+            scores.push(*score);
+        }
+        (self.matches, self.scores) = (matches, scores);
+        if !keep_scores {
+            self.scores.clear();
+        }
+        // How many there are, and how many of them match what's typed.
+        let total = self
+            .items
+            .iter()
+            .filter(|i| matches!(i, Item::Symbol(_)))
+            .count();
+        let shown = self
+            .matches
+            .iter()
+            .filter(|&&i| self.items[i] != Item::Gap)
+            .count();
+        if total > 0 {
+            self.status = Some(match (shown, total) {
+                (1, 1) => "1 symbol".to_string(),
+                (shown, total) if shown == total => format!("{total} symbols"),
+                (shown, total) => format!("{shown} of {total}"),
+            });
+        }
+    }
+
+    /// The group label at the right of row `row`, on the first row of each group.
+    fn group_label(&self, row: usize) -> Option<String> {
+        if !self.grouped {
+            return None;
+        }
+        let kind = |row: usize| match &self.items[*self.matches.get(row)?] {
+            Item::Symbol(symbol) => Some(kind_group(symbol.kind)),
+            _ => None,
+        };
+        let (rank, name) = kind(row)?;
+        if row > 0 && kind(row - 1).map(|k| k.0) == Some(rank) {
+            return None;
+        }
+        let size = (row..self.matches.len())
+            .take_while(|&r| kind(r).map(|k| k.0) == Some(rank))
+            .count();
+        Some(format!("{name} ({size})"))
     }
 
     /// Adds items that arrived after the palette opened, as files do from a walk of a big
@@ -263,7 +478,8 @@ impl Palette {
         let picked = self.matches.get(self.selected).copied();
         let from = self.items.len();
         self.items.extend(items);
-        if self.query.is_empty() {
+        let typed = self.typed().to_string();
+        if typed.is_empty() {
             self.matches.extend(from..self.items.len());
             return;
         }
@@ -274,7 +490,7 @@ impl Palette {
             .zip(self.matches.iter().copied())
             .collect();
         for i in from..self.items.len() {
-            if let Some(score) = fuzzy_score(&self.query, self.items[i].label()) {
+            if let Some(score) = fuzzy_score(&typed, self.items[i].label()) {
                 scored.push((score, i));
             }
         }
@@ -314,17 +530,19 @@ impl Palette {
     }
 
     pub fn filter(&mut self) {
+        let typed = self.typed().to_string();
         // Nothing typed means no ranking: the list keeps the order it came in.
-        if self.query.is_empty() {
+        if typed.is_empty() {
             self.matches = (0..self.items.len()).collect();
             self.scores.clear();
             self.matched.clear();
             self.selected = 0;
+            self.group();
             return;
         }
         // A letter added at the end can only narrow what matched, so only that is looked at
         // again: in a tree of half a million files, each key stays quick.
-        let narrowing = !self.matched.is_empty() && self.query.starts_with(&self.matched);
+        let narrowing = !self.matched.is_empty() && typed.starts_with(&self.matched);
         let candidates: Vec<usize> = if narrowing {
             std::mem::take(&mut self.matches)
         } else {
@@ -333,12 +551,13 @@ impl Palette {
         let mut scored: Vec<(i32, usize)> = candidates
             .into_iter()
             .filter(|&i| self.items[i] != Item::Gap)
-            .filter_map(|i| Some((fuzzy_score(&self.query, self.items[i].label())?, i)))
+            .filter_map(|i| Some((fuzzy_score(&typed, self.items[i].label())?, i)))
             .collect();
         scored.sort_by_key(|(score, i)| (-score, *i));
         (self.scores, self.matches) = scored.into_iter().unzip();
-        self.matched = self.query.clone();
+        self.matched = typed;
         self.selected = 0;
+        self.group();
     }
 
     pub fn move_by(&mut self, delta: isize) {
@@ -450,6 +669,14 @@ impl Palette {
                 };
                 grid.panel(Bounds::inset(line, 0.5, 0.055), 18, Some(fill), None);
             }
+            if let Item::Symbol(symbol) = &self.items[*index] {
+                let group = self.group_label(row);
+                let right = group.as_deref().or(Some(symbol.place.as_str()));
+                let right = right.filter(|r| !r.is_empty());
+                let picked = row == self.selected;
+                self.draw_symbol(grid, (area, y), symbol, right, picked, measure, theme);
+                continue;
+            }
             let text = self.items[*index].label();
             let end = area.right().saturating_sub(16);
             let inset = area.x as f32 + TEXT_INSET;
@@ -469,6 +696,80 @@ impl Palette {
                 let quiet = Style { fg, ..base };
                 grid.label_right(area.right().saturating_sub(2), y, keys, quiet, 85);
             }
+        }
+    }
+}
+
+impl Palette {
+    /// A symbol's row: its kind's icon, its name with the typed letters picked out, what it
+    /// sits in, and its group or place at the right.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_symbol(
+        &self,
+        grid: &mut Grid,
+        (area, y): (Rect, u16),
+        symbol: &SymbolRow,
+        right: Option<&str>,
+        picked: bool,
+        measure: &dyn Measure,
+        theme: &Theme,
+    ) {
+        let base = Style {
+            fg: theme.text.fg,
+            bg: theme.popup,
+            ..theme.bar
+        };
+        // The picked row's wash is lighter, so what's quiet on it needs to be lighter too.
+        let quiet = Style {
+            fg: if picked {
+                theme.text.fg
+            } else {
+                theme.popup_dim
+            },
+            ..base
+        };
+        let (icon, fallback, colour) = kind_icon(symbol.kind, theme);
+        let inset = area.x as f32 + TEXT_INSET;
+        let icon_style = Style { fg: colour, ..base };
+        grid.glyph(inset, y, icon, colour, fallback, icon_style);
+        let right_width = right.map_or(0, |r| r.chars().count() as u16 + 3);
+        let end = area.right().saturating_sub(right_width.max(2));
+        // Clear of the icon, as the field's text is of its search icon.
+        let x = inset + 2.3;
+        let cell = area.x + 4;
+        let font = Font {
+            size: INTERFACE_SIZE_PERCENT,
+            ..Font::default()
+        };
+        let hits = matched_chars(self.typed(), &symbol.name);
+        let chars: Vec<char> = symbol.name.chars().collect();
+        let (mut at_px, mut at_cell, mut i) = (x, cell, 0);
+        while i < chars.len() {
+            let hit = hits.contains(&i);
+            let run_end = (i..chars.len())
+                .find(|j| hits.contains(j) != hit)
+                .unwrap_or(chars.len());
+            let run: String = chars[i..run_end].iter().collect();
+            let style = if hit {
+                Style {
+                    fg: theme.accent,
+                    bold: true,
+                    ..base
+                }
+            } else {
+                base
+            };
+            grid.label_at(at_px, at_cell, y, &run, style, end, INTERFACE_SIZE_PERCENT);
+            at_px += measure.width(&run, Font { bold: hit, ..font });
+            at_cell += (run_end - i) as u16;
+            i = run_end;
+        }
+        if !symbol.detail.is_empty() {
+            let gap = 1.0;
+            grid.label_at(at_px + gap, at_cell + 1, y, &symbol.detail, quiet, end, 85);
+        }
+        if let Some(right) = right {
+            grid.label_right(area.right().saturating_sub(2), y, right, quiet, 85);
         }
     }
 }
@@ -619,6 +920,38 @@ mod tests {
     fn subsequence_required() {
         assert!(fuzzy_score("xyz", "abc").is_none());
         assert!(fuzzy_score("abc", "a-b-c").is_some());
+    }
+
+    #[test]
+    fn typed_symbols_put_the_best_match_first_and_count_what_matches() {
+        let symbol = |name: &str, kind: u64| {
+            Item::Symbol(Box::new(SymbolRow {
+                name: name.to_string(),
+                kind,
+                detail: String::new(),
+                place: String::new(),
+                path: PathBuf::from("queue.rs"),
+                line: 0,
+                column: 0,
+            }))
+        };
+        let items = vec![
+            symbol("Queue", 23),
+            symbol("impl Queue", 19),
+            symbol("push", 6),
+        ];
+        let mut palette = Palette::symbols(items, '@', "", "Go to symbol");
+        // Kinds in VS Code's order, a gap between each.
+        assert_eq!(palette.current().map(Item::label), Some("Queue"));
+        assert_eq!(palette.matches.len(), 5);
+        assert_eq!(palette.status.as_deref(), Some("3 symbols"));
+        palette.move_by(1);
+        assert_eq!(palette.current().map(Item::label), Some("impl Queue"));
+        // "push" matches "pu" better than "impl Queue" does, so its kind comes first.
+        palette.query = "@pu".to_string();
+        palette.filter();
+        assert_eq!(palette.current().map(Item::label), Some("push"));
+        assert_eq!(palette.status.as_deref(), Some("2 of 3"));
     }
 
     #[test]

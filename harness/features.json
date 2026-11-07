@@ -4009,5 +4009,33 @@
     "title": "The header lines of the scopes scrolled into stay pinned at the top of code, at most five, with a shadow under them; a click jumps there; a switch in Settings",
     "test": "sticky_scroll_pins_the_scopes_headers_and_a_click_jumps_there",
     "passes": true
+  },
+  {
+    "id": "go-to-symbol",
+    "milestone": 12,
+    "title": "Go to Symbol in the file (Ctrl+Shift+O, @ in Quick Open) lists the server's symbols grouped by kind, filters as typed, and moves the file to each; Esc puts it back",
+    "test": "go_to_symbol_lists_the_files_symbols_by_kind_and_moves_to_each",
+    "passes": true
+  },
+  {
+    "id": "workspace-symbol",
+    "milestone": 12,
+    "title": "Go to Symbol in the workspace (Ctrl+T, # in Quick Open) asks every running server and opens the file at the symbol",
+    "test": "go_to_symbol_in_the_workspace_asks_the_servers_and_opens_the_file",
+    "passes": true
+  },
+  {
+    "id": "signature-help",
+    "milestone": 12,
+    "title": "Signature help opens over the call on ( and , with the parameter being typed picked out and its doc, and goes on ) or Esc",
+    "test": "signature_help_shows_the_call_and_follows_the_parameter",
+    "passes": true
+  },
+  {
+    "id": "inlay-hints",
+    "milestone": 12,
+    "title": "Inlay hints from the server show dim on a chip inside the line, never in the file; the caret and clicks step over them, and a setting turns them off",
+    "test": "inlay_hints_show_in_the_line_without_changing_the_text",
+    "passes": true
   }
 ]

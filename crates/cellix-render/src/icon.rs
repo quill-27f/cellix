@@ -54,6 +54,12 @@ pub enum Icon {
     Minimize = 43,
     /// Lucide's panel-bottom: a window with a panel along its foot.
     Panel = 44,
+    /// A symbol's kind, as Go to Symbol lists them: a cube for a function or method, braces
+    /// for a type, a bar for a field, and two lines for a constant, variable or module.
+    SymbolFunction = 45,
+    SymbolType = 46,
+    SymbolField = 47,
+    SymbolValue = 48,
 }
 
 /// One cell of an icon that is `width` by `height` cells.
@@ -202,6 +208,10 @@ fn half_stroke(icon: Icon) -> f32 {
         | Icon::Replace
         | Icon::Maximize
         | Icon::Minimize
+        | Icon::SymbolFunction
+        | Icon::SymbolType
+        | Icon::SymbolField
+        | Icon::SymbolValue
         | Icon::ReplaceAll => 0.9,
         Icon::Agents => 0.8,
         Icon::Check => 1.7,
@@ -546,6 +556,55 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
             .min(path(p, &[(20.0, 10.0), (14.0, 10.0), (14.0, 4.0)]))
             .min(segment(p, (14.0, 10.0), (21.0, 3.0)))
             .min(segment(p, (3.0, 21.0), (10.0, 14.0))),
+        // Lucide's box.
+        Icon::SymbolFunction => path(
+            p,
+            &[
+                (12.0, 2.5),
+                (20.5, 7.2),
+                (20.5, 16.8),
+                (12.0, 21.5),
+                (3.5, 16.8),
+                (3.5, 7.2),
+                (12.0, 2.5),
+            ],
+        )
+        .min(path(p, &[(3.8, 7.3), (12.0, 12.0), (20.2, 7.3)]))
+        .min(segment(p, (12.0, 12.0), (12.0, 21.5))),
+        Icon::SymbolType => path(
+            p,
+            &[
+                (8.5, 3.0),
+                (7.0, 3.0),
+                (5.5, 4.5),
+                (5.5, 10.0),
+                (3.5, 12.0),
+                (5.5, 14.0),
+                (5.5, 19.5),
+                (7.0, 21.0),
+                (8.5, 21.0),
+            ],
+        )
+        .min(path(
+            p,
+            &[
+                (15.5, 3.0),
+                (17.0, 3.0),
+                (18.5, 4.5),
+                (18.5, 10.0),
+                (20.5, 12.0),
+                (18.5, 14.0),
+                (18.5, 19.5),
+                (17.0, 21.0),
+                (15.5, 21.0),
+            ],
+        )),
+        Icon::SymbolField => {
+            rounded(p, (3.0, 7.5), (21.0, 16.5), 2.5).min(segment(p, (7.0, 12.0), (12.0, 12.0)))
+        }
+        Icon::SymbolValue => {
+            segment(p, (4.5, 9.0), (19.5, 9.0)).min(segment(p, (4.5, 15.0), (19.5, 15.0)))
+        }
         Icon::Terminal => path(p, &[(3.5, 6.0), (10.0, 12.0), (3.5, 18.0)]).min(segment(
             p,
             (12.5, 18.0),
@@ -602,6 +661,10 @@ mod tests {
             Icon::Maximize,
             Icon::Minimize,
             Icon::Panel,
+            Icon::SymbolFunction,
+            Icon::SymbolType,
+            Icon::SymbolField,
+            Icon::SymbolValue,
         ] {
             let dots = (0..50)
                 .flat_map(|y| (0..50).map(move |x| (x, y)))

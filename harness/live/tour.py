@@ -320,6 +320,73 @@ def workspaces(scratch):
     shutil.rmtree(cache, ignore_errors=True)
 
 
+RUN = """use crate::queue::{Full, Queue};
+
+/// Loads the jobs and queues as many as fit.
+pub fn run(path: &Path) -> usize {
+    let mut queue = Queue::new(8);
+    let jobs = load_jobs(path);
+    let mut sent = 0;
+    for job in jobs {
+        if let Err(full) = queue.push(job) {
+            log(Level::Warn, "queue is full");
+            break;
+        }
+        sent += 1;
+    }
+    sent
+}
+"""
+
+
+def code_intelligence(scratch):
+    """Go to Symbol, signature help and inlay hints, from a scripted server that answers at
+    once, in a project of their own so other scenes keep no server."""
+    root = f"{scratch}/lang"
+    os.makedirs(f"{root}/src")
+    os.makedirs(f"{root}/.cellix")
+    more = CODE.replace("    }\n}\n", """    }
+
+    pub fn pop(&mut self) -> Option<T> {
+        self.items.pop_front()
+    }
+
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    pub fn is_full(&self) -> bool {
+        self.items.len() == self.limit
+    }
+}
+
+/// Returned when the queue is full.
+pub struct Full;
+""")
+    files = {"src/queue.rs": more, "src/run.rs": RUN, "Cargo.toml": '[package]\nname = "queue"\n',
+             "src/jobs.rs": "pub fn push_job() {}\npub fn pushes_until_full() {}\npub const PUSH_LIMIT: usize = 8;\n"}
+    for name, text in files.items():
+        with open(f"{root}/{name}", "w") as f:
+            f.write(text)
+    server = {"language_servers": {"Rust": ["python3", "-I", f"{here}/fake_lsp.py"]}}
+    with open(f"{root}/.cellix/settings.json", "w") as f:
+        json.dump(server, f)
+    git(root, "init", "-q", "-b", "main")
+    git(root, "add", "-A")
+    git(root, "commit", "-qm", "First")
+    symbols = [["wait", 1.0], ["keys", "\x1b[111;6u"], ["wait", 1.0]]
+    down = [["keys", "\x1b[B"]] * 5
+    shoot("120-go-to-symbol", [*symbols, *down, ["wait", 0.5]], "src/queue.rs", cwd=root)
+    shoot("121-go-to-symbol-typed", [*symbols, ["keys", "pu"], ["wait", 0.5]], "src/queue.rs", cwd=root)
+    shoot("122-workspace-symbols", [["wait", 1.0], ["keys", CTRL("t")], ["keys", "push"], ["wait", 1.0]],
+          "src/queue.rs", cwd=root)
+    typing = [["wait", 1.0], ["keys", CTRL("l")], ["keys", "19\r"], ["keys", "\x1b[F"],
+              ["keys", "\r"], ["keys", "self.items.insert(0, "], ["wait", 1.0]]
+    shoot("123-signature-help", typing, "src/queue.rs", cwd=root)
+    shoot("124-inlay-hints", [["wait", 1.5]], "src/run.rs", cwd=root)
+    shoot("125-inlay-hints-light", [["wait", 1.5]], "src/run.rs", cwd=root, background="eff1f5")
+
+
 with tempfile.TemporaryDirectory() as scratch:
     ROOT = f"{scratch}/queue"
     HOME = f"{scratch}/home"
@@ -345,6 +412,7 @@ with tempfile.TemporaryDirectory() as scratch:
     settings = [["click", *GEAR]]
 
     workspaces(scratch)
+    code_intelligence(scratch)
     shoot("01-welcome", [])
     shoot("02-code", [], CODE_FILE)
     shoot("03-page", [], PAGE_FILE)

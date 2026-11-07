@@ -31,6 +31,50 @@ pub struct TextEdit {
     pub text: String,
 }
 
+/// A symbol a server knows, in one file or anywhere in the workspace.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Symbol {
+    pub name: String,
+    /// The protocol's SymbolKind: 5 a class, 6 a method, 12 a function, 23 a struct.
+    pub kind: u64,
+    /// How deeply it's nested, 0 at the top of the file.
+    pub depth: usize,
+    /// 0-based, as the protocol counts.
+    pub line: usize,
+    pub column: usize,
+    /// What it sits in, as the server names it: a parent symbol or `impl Queue<T>`.
+    pub container: String,
+    /// The file, for a workspace symbol.
+    pub path: Option<PathBuf>,
+}
+
+/// The call being typed, as the server describes it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Signature {
+    pub label: String,
+    /// The parameter being typed, as a range of chars in `label`.
+    pub active: Option<(usize, usize)>,
+    /// What the server says about that parameter.
+    pub parameter_doc: String,
+    /// What it says about the whole signature.
+    pub documentation: String,
+    /// Which of the overloads this is, and how many there are.
+    pub index: usize,
+    pub count: usize,
+}
+
+/// A note the server would show inside a line, such as a variable's type.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InlayHint {
+    /// 0-based, as the protocol counts. The hint is drawn before the char at `column`.
+    pub line: usize,
+    pub column: usize,
+    /// With the space the server asks for on either side.
+    pub label: String,
+    /// 1 a type, 2 a parameter's name.
+    pub kind: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LspEvent {
     Diagnostics(PathBuf, Vec<Diagnostic>),
@@ -45,10 +89,16 @@ pub enum LspEvent {
     Hover(String),
     /// The server's fixes and refactors for a place, each a title and its edits.
     Actions(Vec<Fix>),
-    /// A file's symbols, in order, as (name, depth, line).
-    Symbols(PathBuf, Vec<(String, usize, usize)>),
+    /// A file's symbols, in order.
+    Symbols(PathBuf, Vec<Symbol>),
     /// Where a file's code folds, as (first line, last line).
     Folds(PathBuf, Vec<(usize, usize)>),
+    /// Symbols across the workspace matching what was asked for, which comes back with them.
+    WorkspaceSymbols(String, Vec<Symbol>),
+    /// The call at the caret, or None when there's no call there.
+    Signature(Option<Signature>),
+    /// The hints for part of a file, with the tag they were asked for under.
+    InlayHints(PathBuf, u64, Vec<InlayHint>),
     /// The server refused a request, in its own words.
     Failed(String),
 }
@@ -64,6 +114,9 @@ enum Pending {
     Hover,
     Symbols(PathBuf),
     Folds(PathBuf),
+    WorkspaceSymbols(String),
+    Signature,
+    InlayHints(PathBuf, u64),
     Actions,
 }
 
@@ -190,28 +243,28 @@ fn parse_location(result: &Value) -> Option<LspEvent> {
 
 /// A file's symbols, nested ones under their parent, whichever shape the server sends: the
 /// tree of `DocumentSymbol`s or the flat `SymbolInformation` list.
-fn parse_symbols(result: &Value) -> Vec<(String, usize, usize)> {
-    fn walk(items: &[Value], depth: usize, out: &mut Vec<(String, usize, usize)>) {
+fn parse_symbols(result: &Value) -> Vec<Symbol> {
+    fn walk(items: &[Value], depth: usize, parent: &str, out: &mut Vec<Symbol>) {
         for item in items {
-            let Some(name) = item.get("name").and_then(Value::as_str) else {
+            let Some(mut symbol) = symbol_of(item) else {
                 continue;
             };
-            let range = item
-                .get("selectionRange")
-                .or_else(|| item.get("range"))
-                .or_else(|| item.get("location").and_then(|l| l.get("range")));
-            let line = range.and_then(|r| r["start"]["line"].as_u64()).unwrap_or(0) as usize;
-            out.push((name.to_string(), depth, line));
+            symbol.depth = depth;
+            if symbol.container.is_empty() {
+                symbol.container = parent.to_string();
+            }
+            let name = symbol.name.clone();
+            out.push(symbol);
             if let Some(children) = item.get("children").and_then(Value::as_array) {
-                walk(children, depth + 1, out);
+                walk(children, depth + 1, &name, out);
             }
         }
     }
     let mut out = Vec::new();
     if let Some(items) = result.as_array() {
-        walk(items, 0, &mut out);
+        walk(items, 0, "", &mut out);
     }
-    out.sort_by_key(|(_, _, line)| *line);
+    out.sort_by_key(|s| (s.line, s.column));
     out
 }
 
@@ -228,6 +281,131 @@ fn parse_folds(result: &Value) -> Vec<(usize, usize)> {
     found.sort_unstable();
     found.dedup();
     found
+}
+
+/// One `DocumentSymbol`, `SymbolInformation` or `WorkspaceSymbol`, without its children.
+fn symbol_of(item: &Value) -> Option<Symbol> {
+    let name = item.get("name").and_then(Value::as_str)?;
+    let location = item.get("location");
+    let range = item
+        .get("selectionRange")
+        .or_else(|| item.get("range"))
+        .or_else(|| location.and_then(|l| l.get("range")));
+    let (line, column) = range.map_or((0, 0), |r| position(&r["start"]));
+    let path = location.and_then(|l| l["uri"].as_str()).and_then(path_of);
+    Some(Symbol {
+        name: name.to_string(),
+        kind: item["kind"].as_u64().unwrap_or(0),
+        depth: 0,
+        line,
+        column,
+        container: item["containerName"].as_str().unwrap_or("").to_string(),
+        path,
+    })
+}
+
+/// Workspace symbols that say which file they're in.
+fn parse_workspace_symbols(result: &Value) -> Vec<Symbol> {
+    result
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(symbol_of)
+        .filter(|s| s.path.is_some())
+        .collect()
+}
+
+/// Documentation as plain text, from a string or a `MarkupContent`.
+fn plain(value: &Value) -> String {
+    let text = match value {
+        Value::String(text) => text.as_str(),
+        Value::Object(map) => map.get("value").and_then(Value::as_str).unwrap_or(""),
+        _ => "",
+    };
+    text.lines()
+        .filter(|line| !line.trim_start().starts_with("```"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
+}
+
+/// The signature the server picked, with the parameter being typed found in its label.
+fn parse_signature(result: &Value) -> Option<Signature> {
+    let signatures = result.get("signatures")?.as_array()?;
+    let count = signatures.len();
+    let index =
+        (result["activeSignature"].as_u64().unwrap_or(0) as usize).min(count.checked_sub(1)?);
+    let signature = &signatures[index];
+    let label = signature["label"].as_str()?.to_string();
+    let parameters = signature["parameters"].as_array();
+    let current = signature["activeParameter"]
+        .as_u64()
+        .or_else(|| result["activeParameter"].as_u64())
+        .unwrap_or(0) as usize;
+    let parameter = parameters.and_then(|p| p.get(current));
+    let active = parameter.and_then(|p| match &p["label"] {
+        Value::String(name) => {
+            // A name can appear twice, as in `f(a, ab)`, so it's looked for after the `(`.
+            let open = label.find('(').map_or(0, |at| at + 1);
+            let at = label[open..]
+                .match_indices(name.as_str())
+                .map(|(at, _)| at + open)
+                .find(|&at| {
+                    let after = label[at + name.len()..].chars().next();
+                    !after.is_some_and(|c| c.is_alphanumeric() || c == '_')
+                })?;
+            let start = label[..at].chars().count();
+            Some((start, start + name.chars().count()))
+        }
+        Value::Array(range) => {
+            let start = range.first()?.as_u64()? as usize;
+            let end = range.get(1)?.as_u64()? as usize;
+            Some((start, end))
+        }
+        _ => None,
+    });
+    let parameter_doc = parameter.map_or_else(String::new, |p| plain(&p["documentation"]));
+    Some(Signature {
+        label,
+        active,
+        parameter_doc,
+        documentation: plain(&signature["documentation"]),
+        index,
+        count,
+    })
+}
+
+fn parse_inlay_hints(result: &Value) -> Vec<InlayHint> {
+    result
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|hint| {
+            let (line, column) = position(&hint["position"]);
+            let text = match &hint["label"] {
+                Value::String(text) => text.clone(),
+                Value::Array(parts) => parts
+                    .iter()
+                    .filter_map(|part| part["value"].as_str())
+                    .collect(),
+                _ => String::new(),
+            };
+            let pad = |key: &str| if hint[key] == true { " " } else { "" };
+            InlayHint {
+                line,
+                column,
+                label: format!(
+                    "{}{}{}",
+                    pad("paddingLeft"),
+                    text.trim(),
+                    pad("paddingRight")
+                ),
+                kind: hint["kind"].as_u64().unwrap_or(0),
+            }
+        })
+        .filter(|hint| !hint.label.trim().is_empty())
+        .collect()
 }
 
 /// A hover's contents as plain lines: Markdown's code fences go, and the code stays.
@@ -425,6 +603,14 @@ fn read_loop(
             Some(Pending::Actions) => Some(LspEvent::Actions(parse_actions(result))),
             Some(Pending::Symbols(path)) => Some(LspEvent::Symbols(path, parse_symbols(result))),
             Some(Pending::Folds(path)) => Some(LspEvent::Folds(path, parse_folds(result))),
+            Some(Pending::WorkspaceSymbols(query)) => Some(LspEvent::WorkspaceSymbols(
+                query,
+                parse_workspace_symbols(result),
+            )),
+            Some(Pending::Signature) => Some(LspEvent::Signature(parse_signature(result))),
+            Some(Pending::InlayHints(path, tag)) => {
+                Some(LspEvent::InlayHints(path, tag, parse_inlay_hints(result)))
+            }
             Some(Pending::Completion) => Some(parse_completion(result)),
             Some(Pending::Rename) => Some(parse_rename(result)),
             Some(Pending::References) => Some(parse_references(result)),
@@ -491,6 +677,7 @@ impl Client {
                 "capabilities": {
                     "general": {"positionEncodings": ["utf-32", "utf-16"]},
                     "experimental": {"serverStatusNotification": true},
+                    "workspace": {"symbol": {}, "inlayHint": {"refreshSupport": false}},
                     "textDocument": {
                         "publishDiagnostics": {},
                         "definition": {},
@@ -505,6 +692,12 @@ impl Client {
                         "rename": {},
                         "references": {},
                         "formatting": {},
+                        "signatureHelp": {"signatureInformation": {
+                            "documentationFormat": ["plaintext", "markdown"],
+                            "parameterInformation": {"labelOffsetSupport": true},
+                            "activeParameterSupport": true,
+                        }},
+                        "inlayHint": {},
                     },
                 },
             },
@@ -627,6 +820,31 @@ impl Client {
         );
     }
 
+    /// Asks every symbol in the workspace whose name matches `query`, for Go to Symbol.
+    pub fn workspace_symbols(&mut self, query: &str) {
+        let params = json!({"query": query});
+        let kind = Pending::WorkspaceSymbols(query.to_string());
+        self.request("workspace/symbol", params, kind);
+    }
+
+    /// Asks about the call at a place, as a `(` or `,` is typed.
+    pub fn signature_help(&mut self, path: &Path, line: usize, column: usize) {
+        let params = Self::at(path, line, column);
+        self.request("textDocument/signatureHelp", params, Pending::Signature);
+    }
+
+    /// Asks for the hints in lines `from..to`, tagged so an answer to an older question can
+    /// be told apart.
+    pub fn inlay_hints(&mut self, path: &Path, (from, to): (usize, usize), tag: u64) {
+        let params = json!({
+            "textDocument": {"uri": uri(path)},
+            "range": {"start": {"line": from, "character": 0},
+                      "end": {"line": to, "character": 0}},
+        });
+        let kind = Pending::InlayHints(path.to_path_buf(), tag);
+        self.request("textDocument/inlayHint", params, kind);
+    }
+
     pub fn hover(&mut self, path: &Path, line: usize, column: usize) {
         let params = Self::at(path, line, column);
         self.request("textDocument/hover", params, Pending::Hover);
@@ -732,16 +950,86 @@ mod tests {
             "selectionRange": {"start": {"line": 5}},
             "children": [{"name": "push", "kind": 6, "range": {"start": {"line": 9}}}]},
             {"name": "main", "kind": 12, "range": {"start": {"line": 1}}}]);
+        let found = parse_symbols(&tree);
+        let brief: Vec<(&str, usize, usize, u64, &str)> = found
+            .iter()
+            .map(|s| {
+                (
+                    s.name.as_str(),
+                    s.depth,
+                    s.line,
+                    s.kind,
+                    s.container.as_str(),
+                )
+            })
+            .collect();
         assert_eq!(
-            parse_symbols(&tree),
+            brief,
             vec![
-                ("main".into(), 0, 1),
-                ("Queue".into(), 0, 5),
-                ("push".into(), 1, 9)
+                ("main", 0, 1, 12, ""),
+                ("Queue", 0, 5, 23, ""),
+                ("push", 1, 9, 6, "Queue")
             ]
         );
-        let flat = json!([{"name": "f", "kind": 12, "location": {"uri": "file:///a", "range": {"start": {"line": 3}}}}]);
-        assert_eq!(parse_symbols(&flat), vec![("f".into(), 0, 3)]);
+        let flat = json!([{"name": "f", "kind": 12, "containerName": "m",
+            "location": {"uri": "file:///a", "range": {"start": {"line": 3, "character": 4}}}}]);
+        let f = &parse_symbols(&flat)[0];
+        assert_eq!((f.line, f.column, f.container.as_str()), (3, 4, "m"));
+        assert_eq!(f.path, Some(PathBuf::from("/a")));
+    }
+
+    #[test]
+    fn workspace_symbols_need_a_file() {
+        let result = json!([
+            {"name": "push", "kind": 6, "containerName": "Queue",
+             "location": {"uri": "file:///q.rs", "range": {"start": {"line": 14, "character": 11}}}},
+            {"name": "lost", "kind": 12, "location": {"range": {"start": {"line": 1}}}},
+        ]);
+        let found = parse_workspace_symbols(&result);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].path, Some(PathBuf::from("/q.rs")));
+        assert_eq!((found[0].line, found[0].column), (14, 11));
+    }
+
+    #[test]
+    fn the_parameter_being_typed_is_found_in_the_label() {
+        let named = json!({"signatures": [{"label": "fn insert(&mut self, index: usize, value: T)",
+            "parameters": [{"label": "&mut self"}, {"label": "index: usize"},
+                {"label": "value: T", "documentation": "The element."}],
+            "documentation": {"kind": "markdown", "value": "Inserts it."}}],
+            "activeSignature": 0, "activeParameter": 2});
+        let signature = parse_signature(&named).unwrap();
+        let (start, end) = signature.active.unwrap();
+        let chars: Vec<char> = signature.label.chars().collect();
+        assert_eq!(chars[start..end].iter().collect::<String>(), "value: T");
+        assert_eq!(signature.parameter_doc, "The element.");
+        assert_eq!(signature.documentation, "Inserts it.");
+        assert_eq!((signature.index, signature.count), (0, 1));
+        // Offsets, and a name that's also the start of another.
+        let offsets = json!({"signatures": [{"label": "f(a, ab)",
+            "parameters": [{"label": [2, 3]}, {"label": "ab"}], "activeParameter": 1}]});
+        assert_eq!(parse_signature(&offsets).unwrap().active, Some((5, 7)));
+        let first = json!({"signatures": [{"label": "f(ab, a)",
+            "parameters": [{"label": "ab"}, {"label": "a"}]}], "activeParameter": 1});
+        assert_eq!(parse_signature(&first).unwrap().active, Some((6, 7)));
+        assert_eq!(parse_signature(&json!({"signatures": []})), None);
+        assert_eq!(parse_signature(&Value::Null), None);
+    }
+
+    #[test]
+    fn inlay_hints_keep_their_padding() {
+        let result = json!([
+            {"position": {"line": 2, "character": 13}, "label": ": Queue<Job>", "kind": 1},
+            {"position": {"line": 2, "character": 30}, "label": [{"value": "limit"}, {"value": ":"}],
+             "kind": 2, "paddingRight": true},
+            {"position": {"line": 3, "character": 0}, "label": ""},
+        ]);
+        let hints = parse_inlay_hints(&result);
+        assert_eq!(hints.len(), 2);
+        assert_eq!(hints[0].label, ": Queue<Job>");
+        assert_eq!((hints[1].line, hints[1].column), (2, 30));
+        assert_eq!(hints[1].label, "limit: ");
+        assert_eq!(hints[1].kind, 2);
     }
 
     #[test]

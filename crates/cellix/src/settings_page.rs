@@ -77,6 +77,7 @@ pub enum Control {
     BracketPairs,
     WordWrap,
     StickyScroll,
+    InlayHints,
     Keymap(&'static str),
     ClaudeCode,
     Codex,
@@ -97,6 +98,7 @@ pub struct Values<'a> {
     pub smooth_scroll: bool,
     pub minimap: bool,
     pub view: EditorView,
+    pub inlay_hints: bool,
 }
 
 /// How code is laid out and coloured, each a switch in Appearance.
@@ -108,7 +110,7 @@ pub struct EditorView {
 }
 
 /// The switches under the theme cards, in order, with their words.
-fn view_switches(values: &Values) -> [(Control, (&'static str, &'static str), bool); 3] {
+fn view_switches(values: &Values) -> [(Control, (&'static str, &'static str), bool); 4] {
     [
         (
             Control::WordWrap,
@@ -134,14 +136,23 @@ fn view_switches(values: &Values) -> [(Control, (&'static str, &'static str), bo
             ),
             values.view.bracket_pairs,
         ),
+        (
+            Control::InlayHints,
+            (
+                "Inlay hints",
+                "Types and parameter names inside the lines, from the language server.",
+            ),
+            values.inlay_hints,
+        ),
     ]
 }
 
 /// How many switches `view_switches` holds.
-const VIEW_SWITCHES: [Control; 3] = [
+const VIEW_SWITCHES: [Control; 4] = [
     Control::WordWrap,
     Control::StickyScroll,
     Control::BracketPairs,
+    Control::InlayHints,
 ];
 
 /// What was found on this machine. Looking touches the disk, so it happens on opening and

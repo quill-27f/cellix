@@ -78,6 +78,7 @@ pub fn simple_keymap(event: KeyEvent) -> Option<Command> {
         // As in VS Code. Telling these from Ctrl+P needs the Kitty keyboard protocol.
         Key::Char('p' | 'P') if mods.ctrl && mods.shift => CommandPalette,
         Key::Char('f' | 'F') if mods.ctrl && mods.shift => FindInProject,
+        Key::Char('o' | 'O') if mods.ctrl && mods.shift => GoToSymbol,
         Key::Char('k' | 'K') if mods.ctrl && mods.shift => DeleteLine,
         Key::Char('l' | 'L') if mods.ctrl && mods.shift => SelectAllMatches,
         Key::Char(c) if mods.ctrl => match c.to_ascii_lowercase() {
@@ -98,6 +99,7 @@ pub fn simple_keymap(event: KeyEvent) -> Option<Command> {
             'd' => SelectNextMatch,
             'w' => CloseTab,
             'p' => QuickOpen,
+            't' => GoToWorkspaceSymbol,
             'f' => FindInFile,
             // Ctrl+H is Backspace in too many terminals.
             'r' => ReplaceInFile,
@@ -145,6 +147,9 @@ mod tests {
             key(Key::Char('z'), false, false, true),
             Some(Command::ToggleWordWrap)
         );
+        assert_eq!(ctrl_shift('O'), Some(Command::GoToSymbol));
+        assert_eq!(ctrl('t'), Some(Command::GoToWorkspaceSymbol));
+        assert_eq!(ctrl('o'), Some(Command::FocusNextPane));
         assert_eq!(
             key(Key::Enter, true, false, false),
             Some(Command::InsertLineBelow)

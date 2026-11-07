@@ -133,6 +133,14 @@ pub struct Editor {
     pub conflict: bool,
     /// Whether the minimap may show, given the room.
     pub minimap_on: bool,
+    /// The language server's inlay hints, as places in the text in order and what each
+    /// says. They're drawn before the char at their place and are never part of the text.
+    hints: Vec<(usize, String)>,
+    /// The text's length and revision the hints were last moved to, so an edit carries them
+    /// along until the server's new ones come.
+    hints_for: (usize, u64),
+    /// The revision and lines last asked about, so each is asked once.
+    pub hints_asked: Option<(u64, usize, usize)>,
     /// The laid-out page, for one revision and width.
     page: RefCell<Option<PageCache>>,
     /// Formulas and images already drawn, so typing doesn't redo them.
@@ -264,6 +272,9 @@ impl Editor {
             rendered: is_page,
             conflict: false,
             minimap_on: true,
+            hints: Vec::new(),
+            hints_for: (0, 0),
+            hints_asked: None,
             page: RefCell::new(None),
             library: RefCell::default(),
             dark: Cell::new(false),
@@ -1234,7 +1245,88 @@ impl Editor {
         text.trim_end_matches(['\n', '\r']).to_string()
     }
 
-    /// Display column of a char position.
+    /// Takes the server's hints, as (line, column, label), for this revision.
+    pub fn set_hints(&mut self, found: Vec<(usize, usize, String)>) {
+        let rope = self.buffer.rope();
+        let mut hints: Vec<(usize, String)> = found
+            .into_iter()
+            .filter(|(line, _, _)| *line < rope.len_lines())
+            .map(|(line, column, label)| (self.buffer.position(line, column), label))
+            .collect();
+        hints.sort_by_key(|(at, _)| *at);
+        self.hints = hints;
+        self.hints_for = (rope.len_chars(), self.buffer.revision());
+    }
+
+    pub fn clear_hints(&mut self) {
+        self.hints.clear();
+        self.hints_asked = None;
+    }
+
+    /// Moves the hints with an edit made since they came: those after it by what it added
+    /// or took away, and those in text it took away go.
+    pub fn carry_hints(&mut self) {
+        let (length, revision) = self.hints_for;
+        if revision == self.buffer.revision() {
+            return;
+        }
+        let now = self.buffer.rope().len_chars();
+        let moved = now as isize - length as isize;
+        let head = self.selections.primary().head as isize;
+        let pivot = head - moved;
+        self.hints
+            .retain(|(at, _)| moved >= 0 || (*at as isize) < head || (*at as isize) >= pivot);
+        for (at, _) in &mut self.hints {
+            if *at as isize >= pivot {
+                *at = (*at as isize + moved).clamp(0, now as isize) as usize;
+            }
+        }
+        self.hints_for = (now, self.buffer.revision());
+    }
+
+    /// The hints at places `from..to`.
+    fn hints_in(&self, from: usize, to: usize) -> &[(usize, String)] {
+        let start = self.hints.partition_point(|(at, _)| *at < from);
+        let end = self.hints.partition_point(|(at, _)| *at < to);
+        &self.hints[start..end.max(start)]
+    }
+
+    fn hints_width(&self, from: usize, to: usize) -> usize {
+        self.hints_in(from, to)
+            .iter()
+            .map(|(_, label)| self.hint_cells(label).2)
+            .sum()
+    }
+
+    /// How a hint sits in the line: where its chip starts, how wide the chip is, and the
+    /// cells it takes in all. On cells a letter or a space of padding is a cell. With pixels
+    /// the chip is as wide as its smaller text needs, so the letters keep their own spacing,
+    /// and padding is a sliver beside it rather than a whole cell.
+    fn hint_cells(&self, label: &str) -> (f32, f32, usize) {
+        const PADDING: f32 = 0.3;
+        let lead = label.chars().take_while(|c| *c == ' ').count();
+        let body = label.trim();
+        let trail = label.chars().count() - lead - body.chars().count();
+        if self.measure.in_cells() || body.is_empty() {
+            let letters = body.chars().count();
+            return (lead as f32, letters as f32, lead + letters + trail);
+        }
+        let before = PADDING * lead.min(1) as f32;
+        let after = PADDING * trail.min(1) as f32;
+        let chip = self.measure.width(body, Self::HINT_FONT) + 0.8;
+        let total = (before + chip + after).ceil();
+        // What rounding up leaves goes to the chip, so the code after it stays close.
+        (before, total - before - after, total as usize)
+    }
+
+    const HINT_FONT: cellix_render::Font = cellix_render::Font {
+        mono: true,
+        bold: false,
+        italic: false,
+        size: 85,
+    };
+
+    /// Display column of a char position, counting the hints before it on its line.
     fn column_of(&self, at: usize) -> usize {
         let rope = self.buffer.rope();
         let line = rope.char_to_line(at);
@@ -1243,7 +1335,7 @@ impl Editor {
         for c in rope.slice(start..at).chars() {
             column += display_width(c, column);
         }
-        column
+        column + self.hints_width(start, at)
     }
 
     /// Char position at a screen cell inside `area`, clamped to the text.
@@ -1940,9 +2032,17 @@ impl Editor {
         let target = target
             .saturating_sub(row.indent as usize)
             .saturating_add(column);
+        let mut hinted = 0;
         for (i, c) in text[from..end].iter().enumerate() {
+            // A click on a hint lands beside it, where its place is.
+            let at = start + from + i;
+            let hint = self.hints_width(at, at + 1);
+            if column + hinted + hint > target {
+                return at;
+            }
+            hinted += hint;
             let width = display_width(*c, column);
-            if column + width > target {
+            if column + hinted + width > target {
                 return start + from + i;
             }
             column += width;
@@ -1992,8 +2092,44 @@ impl Editor {
         out
     }
 
+    /// The first line shown and the line after the last, with `rows` rows of code in view.
+    pub fn shown_lines(&self, rows: usize) -> (usize, usize) {
+        let laid = self.shown_rows();
+        let line = |row: usize| laid.get(row).map(|r| r.line);
+        let first = line(self.top).unwrap_or(0);
+        let after = line(self.top + rows).unwrap_or_else(|| self.buffer.rope().len_lines());
+        (first, after)
+    }
+
     pub fn top(&self) -> usize {
         self.top
+    }
+
+    /// Where the view is scrolled to, to put it back later.
+    pub fn view(&self) -> (usize, usize) {
+        (self.top, self.left)
+    }
+
+    pub fn set_view(&mut self, (top, left): (usize, usize)) {
+        self.top = top;
+        self.left = left;
+    }
+
+    /// Shows the primary cursor, in the middle of the pane if it was out of view, as Go to
+    /// Symbol does in VS Code.
+    pub fn reveal_centred(&mut self, area: Rect) {
+        if !self.rendered {
+            // `top` counts rows as shown, which folds and wrapping make other than lines.
+            self.open_folds_at_carets();
+            let text = self.text_area(area);
+            let rows = text.h.max(1) as usize;
+            let head = self.selections.primary().head;
+            let (row, _) = self.place_of(&self.code_rows(text.w), head);
+            if row < self.top || row >= self.top + rows {
+                self.top = row.saturating_sub(rows / 2).min(self.last_top());
+            }
+        }
+        self.reveal(area);
     }
 
     /// The lines or page rows there are to scroll through.
@@ -3807,6 +3943,7 @@ impl Editor {
         let rope = self.buffer.rope();
         let current = rope.char_to_line(self.selections.primary().head);
         let left = self.left();
+        let mut hint_rows = Vec::new();
         for offset in 0..area.h {
             let Some(laid) = rows.get(self.top + offset as usize) else {
                 break;
@@ -3855,9 +3992,40 @@ impl Editor {
                 self.column_of(rope.line_to_char(line) + from)
             };
             let mut text = String::new();
-            for c in &chars[from..end] {
+            // Hints go in the row as it's shown, by where they start on screen and how wide.
+            // One where a wrapped row ends shows at the start of the next.
+            let origin = column;
+            let mut hinted = 0;
+            let start = rope.line_to_char(line);
+            let mut shown_hints = Vec::new();
+            let screen = |at: usize| laid.indent as isize + (at - origin) as isize - left as isize;
+            for i in from..=end {
+                if i < end || end == chars.len() {
+                    for (_, label) in self.hints_in(start + i, start + i + 1) {
+                        let at = column + hinted;
+                        let cells = self.hint_cells(label).2;
+                        // Its letters on cells; with pixels the chip is drawn over blank cells.
+                        let shown = label.chars().chain(std::iter::repeat(' '));
+                        let blank = std::iter::repeat_n(' ', cells);
+                        let letters: Vec<char> = if self.measure.in_cells() {
+                            shown.take(cells).collect()
+                        } else {
+                            blank.collect()
+                        };
+                        for (n, c) in letters.into_iter().enumerate() {
+                            if at + n >= left {
+                                text.push(c);
+                            }
+                        }
+                        shown_hints.push((screen(at), label.as_str()));
+                        hinted += cells;
+                    }
+                }
+                let Some(c) = chars[..end].get(i) else {
+                    break;
+                };
                 let width = display_width(*c, column);
-                if column + width > left {
+                if column + hinted + width > left {
                     if *c == '\t' {
                         text.extend(std::iter::repeat_n(' ', width));
                     } else {
@@ -3868,6 +4036,7 @@ impl Editor {
             }
             let x = area.x + gutter + laid.indent;
             let after = grid.put_str(x, y, &text, text_style, area.right());
+            hint_rows.push((y, bg, shown_hints));
             let last_row = rows
                 .get(self.top + offset as usize + 1)
                 .is_none_or(|r| r.line != line);
@@ -3895,6 +4064,7 @@ impl Editor {
         if self.bracket_pairs {
             self.draw_brackets(grid, area, gutter, theme, focused);
         }
+        self.draw_hints(grid, area, gutter, &hint_rows, theme);
         if self.shows_minimap(full) {
             self.draw_minimap(grid, full, theme);
         }
@@ -3930,6 +4100,74 @@ impl Editor {
             }
         }
         self.draw_sticky(grid, area, (gutter, &rows), theme);
+    }
+
+    /// Each hint quiet on a chip of its own, as VS Code draws them: on the cell tier the
+    /// cells take the chip's colour, and on the pixel tiers a rounded chip sits under smaller
+    /// text. The space a hint asks for on either side stays outside the chip.
+    #[allow(clippy::type_complexity)]
+    fn draw_hints(
+        &self,
+        grid: &mut Grid,
+        area: Rect,
+        gutter: u16,
+        rows: &[(u16, Rgb, Vec<(isize, &str)>)],
+        theme: &Theme,
+    ) {
+        // Each hint is placed in cells from where the row's text starts, before any it's
+        // scrolled past.
+        let cells = self.measure.in_cells();
+        let left = area.x + gutter;
+        for (y, bg, hints) in rows {
+            let (fg, chip) = theme.hint(*bg);
+            for (at, label) in hints {
+                let (lead, wide, total) = self.hint_cells(label);
+                let body = label.trim();
+                if body.is_empty() {
+                    continue;
+                }
+                if cells {
+                    let Ok(from) = u16::try_from(at + lead as isize) else {
+                        continue;
+                    };
+                    let x = left + from;
+                    if x >= area.right() {
+                        continue;
+                    }
+                    let width = (wide as u16).min(area.right() - x);
+                    grid.set_style(Rect::new(x, *y, width, 1), |style| cellix_render::Style {
+                        fg,
+                        bg: chip,
+                        ..style
+                    });
+                    continue;
+                }
+                // With pixels its cells are blank and the chip is painted over them.
+                let Ok(from) = u16::try_from(*at) else {
+                    continue;
+                };
+                let x = left + from;
+                if x >= area.right() {
+                    continue;
+                }
+                let width = (total as u16).min(area.right() - x);
+                grid.set_style(Rect::new(x, *y, width, 1), |style| cellix_render::Style {
+                    fg,
+                    bg: *bg,
+                    painted: true,
+                    ..style
+                });
+                let start = x as f32 + lead;
+                let bounds = cellix_render::Bounds::cells(start, *y as f32 + 0.14, wide, 0.72);
+                grid.panel(bounds, 8, Some(chip), None);
+                // The text in the middle of its chip, smaller than the code.
+                let font = Self::HINT_FONT;
+                let room = self.measure.width(body, font);
+                let at = start + (wide - room).max(0.0) / 2.0;
+                let right = area.right() as f32;
+                grid.text_run((at, *y as f32), right, body, (fg, false), font);
+            }
+        }
     }
 
     fn draw_scrollbar(&self, grid: &mut Grid, track: Rect, lines: usize, theme: &Theme) {

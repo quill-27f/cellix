@@ -27,6 +27,9 @@ pub struct Settings {
     pub sticky_scroll_lines: Option<usize>,
     /// `false` leaves code's brackets in the text colour.
     pub bracket_pairs: Option<bool>,
+    /// `false` leaves out the types and parameter names the language server would show
+    /// inside the lines.
+    pub inlay_hints: Option<bool>,
     /// `false` turns off spelling and grammar on pages.
     pub spell_check: Option<bool>,
     /// What opens web pages, before the system's own browser. `terminal-browser` works here.
@@ -48,6 +51,7 @@ impl Settings {
         self.theme = other.theme.or(self.theme.take());
         self.smooth_scroll = other.smooth_scroll.or(self.smooth_scroll.take());
         self.minimap = other.minimap.or(self.minimap.take());
+        self.inlay_hints = other.inlay_hints.or(self.inlay_hints.take());
         self.keymap = other.keymap.or(self.keymap.take());
         self.tier = other.tier.or(self.tier.take());
         self.browser = other.browser.or(self.browser.take());

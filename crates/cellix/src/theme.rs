@@ -171,6 +171,21 @@ impl Theme {
         }
     }
 
+    /// An inlay hint's text and chip on a line of colour `under`: the chip a little toward the
+    /// text, so it shows on the current line's highlight and in light themes too.
+    pub fn hint(&self, under: Rgb) -> (Rgb, Rgb) {
+        let toward = |from: u8, to: u8| {
+            let (from, to) = (f32::from(from), f32::from(to));
+            (from + (to - from) * 0.08).round() as u8
+        };
+        let Rgb(r, g, b) = under;
+        let Rgb(tr, tg, tb) = self.text.fg;
+        (
+            self.popup_dim,
+            Rgb(toward(r, tr), toward(g, tg), toward(b, tb)),
+        )
+    }
+
     pub fn is_light(&self) -> bool {
         let Rgb(r, g, b) = self.text.bg;
         u16::from(r) + u16::from(g) + u16::from(b) > 3 * 128

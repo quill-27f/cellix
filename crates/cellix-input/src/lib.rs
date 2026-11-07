@@ -147,6 +147,10 @@ pub enum Command {
     FocusNextPane,
     ToggleSidebar,
     QuickOpen,
+    /// Quick Open with `@` typed: the file's symbols, grouped by kind.
+    GoToSymbol,
+    /// Quick Open with `#` typed: symbols across the workspace, from every running server.
+    GoToWorkspaceSymbol,
     CommandPalette,
     FindInProject,
     OpenDiff,
