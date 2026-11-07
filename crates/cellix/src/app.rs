@@ -19982,6 +19982,7 @@ mod tests {
     }
 
     /// A shell in the side pane, at a prompt the tests can find.
+    #[cfg_attr(not(unix), allow(dead_code))]
     fn shell(app: &mut App) {
         let argv = ["sh".to_string()];
         let env = ["PS1=cx$ ".to_string(), "ENV=".to_string()];
@@ -19991,6 +19992,7 @@ mod tests {
     }
 
     /// Types a command at the shell in front, as a person does, and waits for what it prints.
+    #[cfg_attr(not(unix), allow(dead_code))]
     fn run_in_shell(app: &mut App, command: &str, prints: &str) {
         typed(app, command);
         enter(app);
@@ -19999,6 +20001,7 @@ mod tests {
 
     /// Drags across the side pane's output, from where `first` starts to the end of the row
     /// `rows` below it.
+    #[cfg_attr(not(unix), allow(dead_code))]
     fn select_output(app: &mut App, first: &str, rows: u16) {
         let grid = screen(app);
         let (x, y) = find(&grid, first);
