@@ -19110,7 +19110,6 @@ mod tests {
         vec![script.display().to_string()]
     }
 
-    #[cfg(unix)]
     fn waits_for(app: &mut App, done: impl Fn(&App) -> bool) {
         let deadline = std::time::Instant::now() + BACKGROUND;
         while !done(app) {

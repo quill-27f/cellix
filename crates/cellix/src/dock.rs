@@ -389,7 +389,11 @@ impl Session {
     /// The socket of the host it runs under, beside which its agent's hooks leave word.
     pub fn socket(&self) -> Option<&Path> {
         match &self.link {
+            #[cfg(unix)]
             Link::Held(held) => Some(held.socket.as_path()),
+            // Nothing is held off Unix: there `Held` has no values.
+            #[cfg(not(unix))]
+            Link::Held(held) => match *held {},
             _ => None,
         }
     }
