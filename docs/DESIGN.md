@@ -418,6 +418,29 @@ the session's totals on hover, and the workspace's tile shows its fullest agent'
 last reply's input with cache; the window is what Codex logs, and for Claude 200k, or 1M for a
 `[1m]` model or once more than 200k is used. Transcripts are followed a few times a second, away
 from the screen, reading only what was added.
+### Agent context
+
+Much of an agent's quality is won in what it reads and is told, so Agent Context, a view
+on the rail, shows what an agent works from in this project, the way VS Code's views list
+things: its instruction files in the order it reads them, with what each imports beneath it
+and the ones it loads only on reaching a folder; its skills, subagents, commands, hooks and
+MCP servers with their scope; and, for Claude Code, what its last session read and how full
+its context got, with roughly what filled it. Every row opens its file, at its line, as a
+page to edit, and Cellix writes only what the user types.
+
+What Claude Code's transcript says it loaded wins over what the files suggest: it records
+the instruction files in order, the skills, subagents and MCP instructions it was told of,
+and the system prompt and tools. Without a session, each agent's own rules are applied to
+the files (Claude Code's `CLAUDE.md` levels, rules and auto memory; Codex's `AGENTS.md` from
+the repository's top down, to 32 KiB; Gemini CLI's `GEMINI.md`, or the names its settings
+give). The picker moves between Claude Code, Codex and Gemini CLI. All of it is read as data.
+
+Checks are gentle and never block: the same command told to run in one file and never to
+run in another, an import that doesn't resolve, a file cut where the agent stops reading
+(auto memory after 200 lines), a large file loaded every session, a skill or subagent with
+no description, a hook that runs a missing script, and instructions kept in a file this
+agent doesn't read. Whether two instructions disagree in meaning is for the agent to judge,
+not for Cellix to guess.
 
 ### Workspaces, in place of tmux
 

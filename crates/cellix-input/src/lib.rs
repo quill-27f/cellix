@@ -222,6 +222,9 @@ pub enum Command {
     ShowOutline,
     /// Shows what's changed, to stage and commit, in the sidebar.
     ShowSourceControl,
+    /// Shows what an agent works from in the sidebar: its instructions, skills, hooks and
+    /// what its session read.
+    ShowAgentContext,
     /// Brings a terminal up in the pane, starting one if there is none, or puts it away.
     ToggleTerminal,
     /// Starts another terminal in the pane.

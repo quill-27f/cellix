@@ -202,7 +202,7 @@ pub fn keys_of(command: Command) -> Option<&'static str> {
     })
 }
 
-pub const COMMANDS: [(&str, Command); 119] = [
+pub const COMMANDS: [(&str, Command); 120] = [
     ("Save", Command::Save),
     ("Undo", Command::Undo),
     ("Redo", Command::Redo),
@@ -262,6 +262,7 @@ pub const COMMANDS: [(&str, Command); 119] = [
     ("Toggle Side Pane", Command::TogglePanel),
     ("Show Outline", Command::ShowOutline),
     ("Show Source Control", Command::ShowSourceControl),
+    ("Show Agent Context", Command::ShowAgentContext),
     ("Toggle Terminal", Command::ToggleTerminal),
     ("New Terminal", Command::NewTerminal),
     ("Show Comments", Command::ShowComments),

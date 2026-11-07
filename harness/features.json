@@ -4198,5 +4198,12 @@
     "title": "A workspace's tile shows how full its fullest agent's context is, from the transcript's token counts",
     "test": "a_tile_says_how_full_its_agents_context_is",
     "passes": true
+  },
+  {
+    "id": "agent-context",
+    "milestone": 11,
+    "title": "Agent Context in the sidebar: an agent's instructions in load order with imports, its skills, subagents, commands, hooks and MCP servers, what its last session read and how full its context got, and checks, each opening its file",
+    "test": "agent_context_shows_what_the_agent_works_from_and_opens_it",
+    "passes": true
   }
 ]

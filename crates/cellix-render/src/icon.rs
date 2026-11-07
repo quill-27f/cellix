@@ -21,9 +21,11 @@ pub enum Icon {
     Check = 12,
     Agents = 13,
     Outline = 14,
+    /// Sheets stacked: what an agent's context is built from.
+    Layers = 15,
     // The document toolbar's, which only ever appear as paint.
     ListBullet = 30,
-    ListNumber = 15,
+    ListNumber = 53,
     ListTask = 16,
     Quote = 17,
     Code = 18,
@@ -100,6 +102,7 @@ impl Piece {
             2 => Icon::Git,
             13 => Icon::Agents,
             14 => Icon::Outline,
+            15 => Icon::Layers,
             _ => Icon::Settings,
         };
         Some(Self {
@@ -113,17 +116,19 @@ impl Piece {
 
     /// What the cell tier shows, since terminals can't draw the private plane.
     pub fn fallback(self) -> &'static str {
-        const ART: [[[&str; 3]; 2]; 6] = [
+        const ART: [[[&str; 3]; 2]; 7] = [
             [["▛", "▀", "▜"], ["▙", "▄", "▟"]],
             [["▞", "▀", "▚"], ["▚", "▄", "▟"]],
             [["●", "─", "●"], ["●", "─", "╯"]],
             [["▚", "▀", "▞"], ["▞", "▄", "▚"]],
             [["▗", "▄", "▖"], ["▐", "█", "▌"]],
             [["▪", "─", "─"], [" ", "▪", "─"]],
+            [["▗", "▀", "▖"], ["▝", "▀", "▘"]],
         ];
         let art = match self.icon {
             Icon::Agents => 4,
             Icon::Outline => 5,
+            Icon::Layers => 6,
             other => (other as usize).min(3),
         };
         if self.width == 1 || self.height == 1 {
@@ -136,6 +141,7 @@ impl Piece {
                 Icon::Git => "⎇",
                 Icon::Agents => "◉",
                 Icon::Outline => "≡",
+                Icon::Layers => "≋",
                 _ => "⚙",
             };
         }
@@ -203,6 +209,7 @@ fn half_stroke(icon: Icon) -> f32 {
         | Icon::Git
         | Icon::Settings
         | Icon::Outline
+        | Icon::Layers
         | Icon::File
         | Icon::Folder
         | Icon::FolderOpen
@@ -369,6 +376,19 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
                 (20.0, 10.0),
             ],
         ),
+        // Three sheets stacked, the top one whole.
+        Icon::Layers => path(
+            p,
+            &[
+                (12.0, 2.5),
+                (21.5, 7.5),
+                (12.0, 12.5),
+                (2.5, 7.5),
+                (12.0, 2.5),
+            ],
+        )
+        .min(path(p, &[(2.5, 12.5), (12.0, 17.5), (21.5, 12.5)]))
+        .min(path(p, &[(2.5, 17.0), (12.0, 22.0), (21.5, 17.0)])),
         // A tree of headings.
         Icon::Outline => segment(p, (21.0, 6.0), (8.0, 6.0))
             .min(segment(p, (21.0, 12.0), (13.0, 12.0)))
@@ -679,7 +699,13 @@ mod tests {
 
     #[test]
     fn pieces_survive_the_grid() {
-        for icon in [Icon::Files, Icon::Search, Icon::Git, Icon::Settings] {
+        for icon in [
+            Icon::Files,
+            Icon::Search,
+            Icon::Git,
+            Icon::Settings,
+            Icon::Layers,
+        ] {
             let piece = Piece {
                 icon,
                 width: 3,
@@ -701,6 +727,7 @@ mod tests {
             Icon::Git,
             Icon::Settings,
             Icon::Agents,
+            Icon::Layers,
             Icon::Folder,
             Icon::File,
             Icon::Maximize,

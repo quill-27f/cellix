@@ -860,3 +860,52 @@ with tempfile.TemporaryDirectory() as scratch:
                 ["move", *PROBLEM_ROW], ["wait", 0.4]]
     shoot("109-problem-ask", problems, "docs/broken.tex", size="170x44", timeout=130)
     git_scenes(scratch)
+    # Agent Context: a project with instructions that disagree and an import, a user's own
+    # instructions and skill, and a session's transcript, all in the throwaway home.
+    CONTEXT = 6  # the fifth rail icon's middle
+    ctx = os.path.realpath(f"{scratch}/service")
+    os.makedirs(f"{ctx}/src")
+    claude_home = f"{HOME}/.claude"
+    ctx_files = {
+        f"{ctx}/CLAUDE.md": "@AGENTS.md\n@docs/STYLE.md\n",
+        f"{ctx}/AGENTS.md": "# Working here\n\n## Rules\n\n**Never run `cargo build`, `test` directly.** Use `harness/x`.\n",
+        f"{ctx}/src/routes.rs": "pub fn routes() {}\n",
+        f"{ctx}/.claude/agents/reviewer.md": "---\nname: reviewer\ndescription: Reviews a diff before it lands\n---\n",
+        f"{ctx}/.claude/settings.json": '{"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "bash harness/guard.sh"}]}]}}',
+        f"{claude_home}/CLAUDE.md": "# How I like to work\n\n- Run tests with `cargo test` before saying it's done.\n",
+        f"{claude_home}/skills/browser/SKILL.md": "---\nname: terminal-browser\ndescription: A real browser in the terminal\n---\n",
+    }
+    for path, text in ctx_files.items():
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write(text)
+    git(ctx, "init", "-q", "-b", "main")
+    sessions = f"{claude_home}/projects/" + "".join(c if c.isalnum() else "-" for c in ctx)
+    os.makedirs(sessions, exist_ok=True)
+    transcript = [
+        {"type": "attachment", "attachment": {"type": "instructions", "files": [
+            {"path": f"{claude_home}/CLAUDE.md", "type": "User", "content": ctx_files[f"{claude_home}/CLAUDE.md"]},
+            {"path": f"{ctx}/CLAUDE.md", "type": "Project", "content": ctx_files[f"{ctx}/CLAUDE.md"]},
+            {"path": f"{ctx}/AGENTS.md", "type": "Project", "content": ctx_files[f"{ctx}/AGENTS.md"]}]}},
+        {"type": "attachment", "attachment": {"type": "skill_listing",
+            "content": "- terminal-browser: A real browser in the terminal\n- cellix:cellix-review: Read the user's comments"}},
+        {"type": "api-request-shape", "shape": {"system": [{"type": "text", "text": "You are Claude Code. " * 1800}],
+            "tools": [{"name": "Read", "description": "Reads a file. " * 3800}]}},
+        {"type": "user", "message": {"content": "Add a refund route"}},
+        {"type": "assistant", "message": {"model": "claude-opus-5-5", "content": [
+            {"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": f"{ctx}/src/routes.rs"}},
+            {"type": "tool_use", "id": "t2", "name": "Read", "input": {"file_path": f"{ctx}/AGENTS.md"}}],
+            "usage": {"input_tokens": 12, "cache_read_input_tokens": 118000}}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "x" * 56000},
+            {"type": "tool_result", "tool_use_id": "t2", "content": "y" * 4000}]}},
+    ]
+    with open(f"{sessions}/s1.jsonl", "w") as f:
+        f.write("".join(json.dumps(line) + "\n" for line in transcript))
+    show_context = [["click", RAIL_X, CONTEXT], ["wait", 1.2]]
+    shoot("81-context", show_context, cwd=ctx, size="150x44")
+    shoot("81-context-hover", [*show_context, ["move", 14, 9], ["wait", 0.3]], cwd=ctx, size="150x44")
+    # Checks wrap to however many rows their words take, so fold them to find AGENTS.md's row.
+    fold_checks = [["click", 14, 6], ["wait", 0.3]]
+    shoot("81-context-open", [*show_context, *fold_checks, ["click", 14, 11], ["wait", 1.0]], cwd=ctx, size="150x44")
+    shoot("81-context-codex", [*show_context, ["click", 14, 1], ["wait", 1.2]], cwd=ctx, size="150x44")

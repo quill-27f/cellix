@@ -37,6 +37,7 @@ use cellix_doc::table::{Align, Edit as TableEdit};
 use serde_json::{Value, json};
 
 use crate::agents::{Agents, Hit as AgentHit};
+use crate::context::{ContextPanel, Hit as ContextHit};
 use crate::dock::{BROWSER, CellPixels, Dock, Front, Session, TabHit};
 use crate::editor::{Editor, Marks};
 use crate::explorer::Explorer;
@@ -61,6 +62,7 @@ mod gitops;
 use crate::theme::Theme;
 use crate::threads::{self, Draft, Hit as ThreadHit};
 use crate::toolbar::{self, Bar, Tool};
+use cellix_agent::context::Agent as ContextAgent;
 use gitops::GitChoice;
 
 const ACTIVITY_WIDTH: u16 = 4;
@@ -77,11 +79,12 @@ const WELCOME_WIDTH: u16 = 44;
 const WELCOME_LEAD_ROWS: u16 = 4;
 const WELCOME_MIN_HEIGHT: u16 = 20;
 /// Activity bar buttons, with what each one runs.
-const ACTIVITY: [(Icon, Command); 5] = [
+const ACTIVITY: [(Icon, Command); 6] = [
     (Icon::Files, Command::ToggleSidebar),
     (Icon::Search, Command::FindInProject),
     (Icon::Outline, Command::ShowOutline),
     (Icon::Git, Command::ShowSourceControl),
+    (Icon::Layers, Command::ShowAgentContext),
     (Icon::Settings, Command::OpenSettings),
 ];
 /// Cells each activity icon spans.
@@ -187,7 +190,14 @@ const FIND_NAMES: [&str; 6] = [
     "Replace (Enter)",
     "Replace All (Alt+Enter)",
 ];
-const RAIL_NAMES: [&str; 5] = ["Files", "Search", "Outline", "Source Control", "Settings"];
+const RAIL_NAMES: [&str; 6] = [
+    "Files",
+    "Search",
+    "Outline",
+    "Source Control",
+    "Agent Context",
+    "Settings",
+];
 /// Below this width, opening the side pane puts the sidebar away.
 const CROWDED_WIDTH: u16 = 120;
 const SIDEBAR_WIDTH: u16 = 28;
@@ -280,6 +290,7 @@ enum SidebarView {
     Search,
     Outline,
     Source,
+    Context,
 }
 
 /// Suggestions showing at the caret while typing.
@@ -987,6 +998,8 @@ pub struct App {
     source: SourceControl,
     /// The file in view's commits, under the Explorer.
     timeline: crate::timeline::Timeline,
+    /// What an agent works from, for the Agent Context view.
+    context: ContextPanel,
     /// Ticks since Source Control last read the repository.
     source_age: u32,
     /// The periodic look at the tree and git, on its way.
@@ -1250,6 +1263,7 @@ impl App {
             outline: Outline::default(),
             source: SourceControl::default(),
             timeline: crate::timeline::Timeline::default(),
+            context: ContextPanel::default(),
             source_age: 0,
             disk_look: None,
             search,
@@ -1269,6 +1283,7 @@ impl App {
         for editor in &mut self.editors {
             editor.set_measure(measure.clone());
         }
+        self.context.set_measure(measure.clone());
         self.measure = measure;
     }
 
@@ -2002,6 +2017,49 @@ impl App {
         changed
     }
 
+    /// Shows Agent Context, for the agent running beside the file if there is one.
+    fn show_agent_context(&mut self) {
+        self.search.focus = None;
+        self.review = None;
+        self.sidebar_view = SidebarView::Context;
+        self.show_sidebar = true;
+        self.drawer = self.compact();
+        let mut running = self.dock.sessions.iter().filter(|s| s.agent());
+        let found = running.find_map(|s| Some((ContextAgent::named(&s.name)?, s)));
+        let agent = found.map_or(self.context.agent, |(agent, _)| agent);
+        // The running Claude Code tab's own transcript, as the transcript page finds it.
+        self.context.session_file = found
+            .filter(|(agent, _)| *agent == ContextAgent::Claude)
+            .and_then(|(_, s)| s.transcript.as_ref().map(|(_, path)| path.clone()));
+        self.context.show(agent, self.workspace.root());
+    }
+
+    fn click_context(&mut self, x: u16, y: u16) {
+        let Some(area) = self.sidebar_area() else {
+            return;
+        };
+        let Some(hit) = self.context.hit(area, x, y) else {
+            return;
+        };
+        let root = self.workspace.root().to_path_buf();
+        match self.context.click(hit, &root) {
+            Some(ContextHit::Open(path, line)) => {
+                self.mark_jump();
+                if let Err(e) = self.open(&path) {
+                    self.say(format!("Could not open: {e}"));
+                    return;
+                }
+                self.drawer = false;
+                let text = self.focused_area();
+                if let (Some(line), Some(editor)) = (line, self.editor_mut()) {
+                    editor.go_to_line(line, text);
+                }
+            }
+            Some(ContextHit::Say(words)) => self.say(words),
+            _ => {}
+        }
+    }
+
     fn click_source(&mut self, x: u16, y: u16) {
         let Some(area) = self.sidebar_area() else {
             return;
@@ -2236,6 +2294,7 @@ impl App {
             | self.poll_kernels()
             | self.poll_source()
             | self.poll_timeline()
+            | self.context.poll()
             | self.poll_disk()
             | self.poll_pending_ask()
             | self.poll_pan_hint()
@@ -3349,6 +3408,7 @@ impl App {
             Command::ToggleSidebar => shown && self.sidebar_view == SidebarView::Explorer,
             Command::FindInProject => shown && self.sidebar_view == SidebarView::Search,
             Command::ShowOutline => shown && self.sidebar_view == SidebarView::Outline,
+            Command::ShowAgentContext => shown && self.sidebar_view == SidebarView::Context,
             Command::ShowSourceControl => {
                 self.review.is_some() || (shown && self.sidebar_view == SidebarView::Source)
             }
@@ -6013,6 +6073,7 @@ impl App {
                 | Command::ReplaceInProject
                 | Command::ShowOutline
                 | Command::ShowSourceControl
+                | Command::ShowAgentContext
         );
         if sidebar && self.maximized.take().is_some() {
             self.fit_dock();
@@ -6364,6 +6425,10 @@ impl App {
                 self.source_age = 0;
                 self.source.refresh(self.workspace.root());
             }
+            Command::ShowAgentContext if self.rail_on(Command::ShowAgentContext) => {
+                self.hide_sidebar();
+            }
+            Command::ShowAgentContext => self.show_agent_context(),
             Command::ShowOutline if self.rail_on(Command::ShowOutline) => {
                 self.hide_sidebar();
             }
@@ -10592,6 +10657,8 @@ impl App {
                     self.outline.scroll_by(delta);
                 } else if in_sidebar && self.sidebar_view == SidebarView::Source {
                     self.source.scroll_by(delta);
+                } else if in_sidebar && self.sidebar_view == SidebarView::Context {
+                    self.context.scroll_by(delta);
                 } else if in_sidebar {
                     self.explorer.scroll_by(delta);
                 } else if self.pane_at(x, y).is_some() {
@@ -10616,6 +10683,10 @@ impl App {
                 self.click_source(x, y);
             }
             MouseKind::Right if in_sidebar && self.sidebar_view == SidebarView::Source => {}
+            MouseKind::Left if in_sidebar && self.sidebar_view == SidebarView::Context => {
+                self.click_context(x, y);
+            }
+            MouseKind::Right if in_sidebar && self.sidebar_view == SidebarView::Context => {}
             MouseKind::Left if in_sidebar && self.sidebar_view == SidebarView::Outline => {
                 self.click_outline(y);
             }
@@ -11880,6 +11951,10 @@ impl App {
                 SidebarView::Outline => {
                     let here = (self.outline_here(), !self.editors.is_empty());
                     self.outline.draw(grid, area, here, self.hover, theme);
+                }
+                SidebarView::Context => {
+                    let root = self.workspace.root();
+                    self.context.draw(grid, area, root, self.hover, theme);
                 }
                 SidebarView::Source => {
                     let branch = self.branch.as_deref();
@@ -20169,6 +20244,120 @@ mod tests {
             .output()
             .unwrap();
         String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    /// A home and a project in a temporary folder, as Claude Code leaves them after a session:
+    /// user and project instructions that disagree, an import, a skill, and a transcript that
+    /// read a file. Nothing here is the real `~/.claude`.
+    fn context_app() -> (TempDir, App, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(dir.path()).unwrap();
+        let home = root.join("home");
+        let project = root.join("app");
+        let claude = home.join(".claude");
+        let put = |path: PathBuf, text: &str| {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, text).unwrap();
+        };
+        put(
+            claude.join("CLAUDE.md"),
+            "# Mine\n\n- Run `cargo test` before saying it's done.\n",
+        );
+        put(
+            claude.join("skills/browser/SKILL.md"),
+            "---\nname: terminal-browser\ndescription: A real browser in the terminal\n---\n",
+        );
+        put(project.join("CLAUDE.md"), "@AGENTS.md\n");
+        put(
+            project.join("AGENTS.md"),
+            "# Working here\n\n**Never run `cargo build`, `test` directly.**\n",
+        );
+        put(project.join("src/app.rs"), "fn main() {}\n");
+        let transcript = cellix_agent::context::transcript_path(&claude, &project, "s1");
+        let read = serde_json::json!({"type": "assistant", "message": {"model": "claude-opus-5-5",
+            "content": [{"type": "tool_use", "id": "t1", "name": "Read",
+                "input": {"file_path": project.join("src/app.rs")}}],
+            "usage": {"input_tokens": 10, "cache_read_input_tokens": 118_000}}});
+        let result = serde_json::json!({"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "x".repeat(400)}]}});
+        put(transcript, &format!("{read}\n{result}\n"));
+        let homes = cellix_agent::context::Homes {
+            claude: Some(claude),
+            claude_json: Some(home.join(".claude.json")),
+            codex: Some(home.join(".codex")),
+            gemini: Some(home.join(".gemini")),
+            managed: None,
+        };
+        let mut app = App::new(project.clone(), (150, 40));
+        app.context = ContextPanel::new(homes);
+        (dir, app, project)
+    }
+
+    #[test]
+    fn agent_context_shows_what_the_agent_works_from_and_opens_it() {
+        let (_dir, mut app, project) = context_app();
+        let rail = app.activity_area();
+        app.handle(mouse(MouseKind::Left, rail.x, app.rail_row(4, rail)));
+        assert!(app.rail_on(Command::ShowAgentContext));
+        waits_for(&mut app, |app| app.context.loaded);
+        let text = screen(&app).text();
+        for words in [
+            "AGENT CONTEXT",
+            "Claude Code",
+            "118k of 200k · 59%",
+            "CHECKS",
+            "“cargo test”",
+            "INSTRUCTIONS",
+            "AGENTS.md",
+            "terminal-browser",
+            "READ LAST SESSION",
+            "app.rs",
+        ] {
+            assert!(text.contains(words), "{words:?} missing:\n{text}");
+        }
+
+        // An instruction file opens as a page to edit: its row, not the check that names it.
+        let grid = screen(&app);
+        let row = (0..grid.height())
+            .find(|y| {
+                grid.row_text(*y).contains("AGENTS.md") && grid.row_text(*y).contains("lines")
+            })
+            .expect("AGENTS.md's row");
+        click(&mut app, 12, row);
+        assert!(app.active_text().unwrap().contains("Never run"));
+        // Its row stays marked as the one open.
+        let selected = app.context.selected.clone().expect("a marked row");
+        assert!(selected.ends_with("AGENTS.md"), "{selected:?}");
+        // Sections with nothing in them sit folded, under the open ones.
+        let text = screen(&app).text();
+        assert!(text.contains("COMMANDS") && !text.contains("No commands of your own"));
+
+        // A check opens where it is: the user's own file, at the line that disagrees.
+        let (x, y) = find(&screen(&app), "“cargo test”");
+        click(&mut app, x, y);
+        assert!(app.active_text().unwrap().starts_with("# Mine"));
+        assert_eq!(app.cursor_line().map(|(_, line)| line), Some(3));
+
+        // A file the session read opens too.
+        let (x, y) = find(&screen(&app), "app.rs");
+        click(&mut app, x, y);
+        assert_eq!(app.active_text().unwrap(), "fn main() {}\n");
+
+        // The picker moves on to Codex, which reads AGENTS.md and has no transcript here.
+        let (x, y) = find(&screen(&app), "Claude Code");
+        click(&mut app, x, y);
+        waits_for(&mut app, |app| app.context.loaded);
+        let text = screen(&app).text();
+        assert!(
+            text.contains("Codex") && text.contains("AGENTS.md"),
+            "{text}"
+        );
+        assert!(!text.contains("READ LAST SESSION"), "{text}");
+        assert!(project.join("AGENTS.md").exists());
+
+        // Its rail icon puts it away again.
+        app.handle(mouse(MouseKind::Left, rail.x, app.rail_row(4, rail)));
+        assert!(!app.rail_on(Command::ShowAgentContext));
     }
 
     #[test]

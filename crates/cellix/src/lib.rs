@@ -4,6 +4,7 @@ mod agents;
 mod app;
 mod brackets;
 mod conflicts;
+mod context;
 mod dock;
 mod editor;
 mod editorconfig;
