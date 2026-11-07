@@ -50,10 +50,12 @@ fn fixture() -> Fixture {
     );
     write(
         &home.join(".claude.json"),
-        &format!(
-            "{{\"mcpServers\": {{\"postwren\": {{\"command\": \"postwren\", \"args\": [\"mcp\"]}}}},\n \"projects\": {{\"{}\": {{\"mcpServers\": {{\"local-db\": {{\"url\": \"http://localhost:9\"}}}}}}}}}}",
-            project.display()
-        ),
+        // Built as JSON, so a Windows path's backslashes are escaped.
+        &serde_json::json!({
+            "mcpServers": {"postwren": {"command": "postwren", "args": ["mcp"]}},
+            "projects": {project.to_string_lossy(): {"mcpServers": {"local-db": {"url": "http://localhost:9"}}}},
+        })
+        .to_string(),
     );
     let memory = claude_project_dir(&claude, &project).join("memory/MEMORY.md");
     let long: String = (1..=212).map(|i| format!("- note {i}\n")).collect();
@@ -130,6 +132,8 @@ fn names(context: &Context, project: &Path, home: &Path) -> Vec<String> {
                     i.path.strip_prefix(home).unwrap_or(&i.path).display()
                 )
             });
+            // Compared with `/` on every system.
+            let path = path.replace('\\', "/");
             let mut name = format!("{}{path}", "  ".repeat(i.depth));
             if !i.exists() {
                 name.push_str(" (missing)");
@@ -149,7 +153,8 @@ fn claude_code_instructions_come_in_its_load_order_with_imports() {
     let got = names(&context, &f.project, &f.home);
     let memory =
         claude_project_dir(f.homes.claude.as_ref().unwrap(), &f.project).join("memory/MEMORY.md");
-    let memory = format!("~/{}", memory.strip_prefix(&f.home).unwrap().display());
+    let memory =
+        format!("~/{}", memory.strip_prefix(&f.home).unwrap().display()).replace('\\', "/");
     assert_eq!(
         got,
         [
@@ -289,7 +294,7 @@ fn checks_find_what_the_files_alone_can_tell() {
         (missing.path.clone(), missing.line),
         (f.project.join("CLAUDE.md"), Some(2))
     );
-    assert!(missing.message.contains("docs/STYLE.md"));
+    assert!(missing.message.replace('\\', "/").contains("docs/STYLE.md"));
     let cut = found.iter().find(|c| c.kind == CheckKind::CutOff).unwrap();
     assert!(
         cut.message.contains("212 lines") && cut.message.contains("first 200"),

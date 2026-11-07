@@ -773,7 +773,8 @@ impl Palette {
             let inset = area.x as f32 + TEXT_INSET;
             // A file or folder from Open Recent: its name, then where it is.
             let away = match &self.items[*index] {
-                Item::Recent(_, label, _) => label.rsplit_once('/'),
+                // Either separator: a Windows path outside home keeps its own.
+                Item::Recent(_, label, _) => label.rsplit_once(['/', '\\']),
                 _ => None,
             };
             // A long path keeps its end, which names the folder, and loses its middle.

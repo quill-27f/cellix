@@ -20028,6 +20028,8 @@ mod tests {
 
     /// The commonest loop in agent work, a failing run, goes to the agent without copy and
     /// paste: select the output in the terminal tab and press Ask Agent, as on a file.
+    // Unix only: on Windows `sh` is MSYS bash, whose profile sets its own prompt over PS1.
+    #[cfg(unix)]
     #[test]
     fn ask_agent_on_terminal_output_sends_it_with_its_command_and_places() {
         let (dir, _) = project();
@@ -20078,6 +20080,8 @@ mod tests {
     }
 
     /// Inside Claude Code the question is asked in its prompt, with all of the output.
+    // Unix only: on Windows `sh` is MSYS bash, whose profile sets its own prompt over PS1.
+    #[cfg(unix)]
     #[test]
     fn inside_claude_code_terminal_output_goes_to_its_prompt_whole() {
         let (dir, _) = project();

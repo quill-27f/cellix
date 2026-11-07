@@ -156,7 +156,14 @@ fn put_first(list: &mut Vec<PathBuf>, path: &Path) {
 pub fn written(path: &Path, home: Option<&Path>) -> String {
     match home.and_then(|home| path.strip_prefix(home).ok()) {
         Some(inside) if inside.as_os_str().is_empty() => "~".to_string(),
-        Some(inside) => format!("~/{}", inside.display()),
+        // With `/` between the parts on every system, as `~` itself is written.
+        Some(inside) => {
+            let parts: Vec<String> = inside
+                .components()
+                .map(|part| part.as_os_str().to_string_lossy().into_owned())
+                .collect();
+            format!("~/{}", parts.join("/"))
+        }
         None => path.display().to_string(),
     }
 }

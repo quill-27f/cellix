@@ -1560,3 +1560,5 @@ Left from the review for after 0.6.0 (polish, not broken):
 - 89-git-stashes is scrolled with no commit box.
 - The "You" boxes on the Task page wrap early.
 - Wording: "1 lines", and "That's every change. Commit when it's ready." on a comparison.
+
+Windows CI on the merged code: held sessions' sockets and some test helpers were Unix-only, now gated. Open Recent split a row into name and folder at `/` only, so a Windows path outside home showed whole; it now splits at either separator, and `~` paths are written with `/` everywhere. The Agent Context tests built a JSON fixture with an unescaped Windows path, and compared paths with `/`. The two tests that select a shell's output in the side pane now run on Unix only: on Windows `sh` is MSYS bash, whose profile sets a prompt over the tests' PS1. Unverified on Windows itself: Ask Agent on terminal output.
