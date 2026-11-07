@@ -44,8 +44,11 @@ const MIN_MINIMAP_PANE: u16 = 90;
 const MAX_INLINE_HIGHLIGHT: usize = 32 * 1024;
 /// How far a tall heading sits below its row: closer to its own text than to what's above.
 const TALL_DROP: f32 = 0.9;
-const PAGE_MARGIN: u16 = 2;
-const WIDE_PAGE_MARGIN: u16 = 4;
+/// Columns left of a page's text: a comment's ◆ and a change's bar each have a cell of
+/// their own there at every width, clear of each other and of the text.
+const PAGE_MARGIN: u16 = 4;
+/// Columns right of it, which a narrow pane gives back to the text.
+const NARROW_RIGHT_MARGIN: u16 = 2;
 /// How wide a page can be set.
 const MAX_PAGE_WIDTH: u16 = 512;
 
@@ -514,18 +517,19 @@ impl Editor {
         }
     }
 
-    /// Pages use the whole pane, with room in the margin for marks.
-    fn page_margin(area: Rect) -> u16 {
-        if area.w < NARROW_PANE {
-            PAGE_MARGIN
-        } else {
-            WIDE_PAGE_MARGIN
-        }
+    /// Pages use the whole pane, with room in the left margin for marks.
+    fn page_margin(_area: Rect) -> u16 {
+        PAGE_MARGIN
     }
 
     fn page_width(area: Rect) -> usize {
+        let right = if area.w < NARROW_PANE {
+            NARROW_RIGHT_MARGIN
+        } else {
+            PAGE_MARGIN
+        };
         area.w
-            .saturating_sub(Self::page_margin(area) * 2 + 1)
+            .saturating_sub(Self::page_margin(area) + right + 1)
             .clamp(1, MAX_PAGE_WIDTH) as usize
     }
 
@@ -1220,10 +1224,19 @@ impl Editor {
             .unwrap_or_else(|| self.buffer.rope().len_lines())
     }
 
-    /// The furthest down the view goes: the end of the file at the bottom of the pane.
+    /// The furthest down the view goes: the end of the file at the bottom of the pane. A page
+    /// goes on past its end, as VS Code's editor does, until its last row is a third of the
+    /// way down, so its last block can always be brought clear of the status bar.
     fn last_top(&self) -> usize {
-        self.scroll_length()
-            .saturating_sub(self.view_rows.get().max(1) as usize)
+        let rows = self.view_rows.get().max(1) as usize;
+        let length = self.scroll_length();
+        // A page that fits has nothing to clear.
+        let past = if self.rendered && length > rows {
+            rows - rows / 3
+        } else {
+            0
+        };
+        (length + past).saturating_sub(rows)
     }
 
     pub fn scroll_by(&mut self, delta: isize) {

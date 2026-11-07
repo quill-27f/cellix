@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use std::path::PathBuf;
 
 use cellix_doc::table::Edit as TableEdit;
-use cellix_input::Command;
+use cellix_input::{Command, Key};
 use cellix_render::{Bounds, Font, Grid, Measure, Rect, Style};
 
 use crate::palette::{keys_of, raised};
@@ -55,6 +55,20 @@ pub enum Action {
     AddCodeCell,
     /// Runs a program in the side pane, to set something up.
     InPane(String, Vec<String>),
+    /// Opens the rows under this one, beside it.
+    Submenu,
+    /// Brings a file's tab to the front, from the list of those out of view.
+    ShowTab(usize),
+}
+
+/// What a click or a key on a menu came to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    Chose(Action),
+    /// It stays open: a greyed row, or a submenu opening.
+    Stay,
+    /// Outside every menu, which closes them.
+    Outside,
 }
 
 /// One row. `None` for an action shows what can't be done here, rather than hiding it, so
@@ -66,6 +80,8 @@ pub struct Item {
     pub action: Option<Action>,
     /// A line above this row, starting a new group.
     pub rule: bool,
+    /// The rows a submenu holds.
+    pub sub: Vec<Item>,
 }
 
 impl Item {
@@ -79,6 +95,20 @@ impl Item {
             keys,
             action: Some(action),
             rule: false,
+            sub: Vec::new(),
+        }
+    }
+
+    /// A row that opens `items` beside it, as Format › does.
+    pub fn submenu(label: &'static str, mut items: Vec<Item>) -> Self {
+        // Nothing above a submenu's first row to set it apart from.
+        if let Some(first) = items.first_mut() {
+            first.rule = false;
+        }
+        let usable = items.iter().any(|item| item.action.is_some());
+        Self {
+            sub: items,
+            ..Self::new(label, Action::Submenu).when(usable)
         }
     }
 
@@ -108,6 +138,9 @@ pub struct Menu {
     spaced: bool,
     /// The row the keyboard is on.
     pub selected: Option<usize>,
+    /// Each row's submenu, placed beside it, and the one open.
+    subs: Vec<Option<Menu>>,
+    open: Option<usize>,
 }
 
 impl Menu {
@@ -129,12 +162,154 @@ impl Menu {
         } else {
             y.max(1)
         };
-        Self {
+        let mut menu = Self {
             area: Rect::new(x, y, width, height),
             items,
             spaced,
             selected: None,
+            subs: Vec::new(),
+            open: None,
+        };
+        menu.subs = (0..menu.items.len())
+            .map(|row| menu.place_submenu(row, measure, screen))
+            .collect();
+        menu
+    }
+
+    /// A row's submenu, beside it: to the right where it fits, else to the left, else over
+    /// this menu's right edge, as near the row as the screen allows.
+    fn place_submenu(&self, row: usize, measure: &dyn Measure, screen: Rect) -> Option<Menu> {
+        let items = self.items[row].sub.clone();
+        if items.is_empty() {
+            return None;
         }
+        let width = Self::width(&items, measure).min(screen.w);
+        let x = if self.area.right() + width <= screen.right() {
+            self.area.right()
+        } else if self.area.x >= screen.x + width {
+            self.area.x - width
+        } else {
+            screen.right().saturating_sub(width)
+        };
+        // Its first row level with the row that opened it, as the pointer leaves that row.
+        Some(Menu::new((x, self.row_of(row)), items, measure, screen))
+    }
+
+    /// The submenu showing, if any.
+    fn child(&self) -> Option<&Menu> {
+        self.subs.get(self.open?)?.as_ref()
+    }
+
+    fn child_mut(&mut self) -> Option<&mut Menu> {
+        self.subs.get_mut(self.open?)?.as_mut()
+    }
+
+    /// Rows it has, not counting any submenu's.
+    #[cfg(test)]
+    pub fn rows(&self) -> usize {
+        self.items.len()
+    }
+
+    /// The label of the row the keyboard is on in this menu.
+    #[cfg(test)]
+    pub fn selected_label(&self) -> Option<&str> {
+        Some(&self.items[self.selected?].label)
+    }
+
+    /// The label the keyboard is on, in the submenu if it's there.
+    #[cfg(test)]
+    pub fn chosen_label(&self) -> Option<&str> {
+        let inside = self.child().filter(|c| c.selected.is_some());
+        inside.map_or_else(|| self.selected_label(), Menu::chosen_label)
+    }
+
+    /// Whether a point is on this menu or the submenu showing.
+    pub fn contains(&self, x: u16, y: u16) -> bool {
+        self.area.contains(x, y) || self.child().is_some_and(|c| c.contains(x, y))
+    }
+
+    /// The pointer moved: over a row with a submenu it opens, over another row it closes.
+    pub fn hover(&mut self, x: u16, y: u16) {
+        if let Some(child) = self.child_mut().filter(|c| c.contains(x, y)) {
+            child.hover(x, y);
+            return;
+        }
+        if let Some(row) = self.row_at(x, y) {
+            let opens = self.subs[row].is_some() && self.items[row].action.is_some();
+            if opens && self.open != Some(row) {
+                self.open_submenu(row);
+            } else if !opens {
+                self.open = None;
+            }
+        }
+    }
+
+    fn open_submenu(&mut self, row: usize) {
+        self.open = Some(row);
+        if let Some(child) = self.child_mut() {
+            child.selected = None;
+            child.open = None;
+        }
+    }
+
+    /// A click at a point.
+    pub fn click(&mut self, x: u16, y: u16) -> Outcome {
+        if let Some(child) = self.child_mut() {
+            match child.click(x, y) {
+                Outcome::Outside => {}
+                done => return done,
+            }
+        }
+        let Some(row) = self.row_at(x, y) else {
+            return Outcome::Outside;
+        };
+        match self.items[row].action.clone() {
+            Some(Action::Submenu) => {
+                self.open_submenu(row);
+                Outcome::Stay
+            }
+            Some(action) => Outcome::Chose(action),
+            None => Outcome::Stay,
+        }
+    }
+
+    /// A key while the menu is up: arrows move, Right and Enter open a submenu, Left and
+    /// Escape close the one open. `Outside` means close the menu.
+    pub fn key(&mut self, key: Key) -> Outcome {
+        let inside = self.child().is_some_and(|c| c.selected.is_some());
+        if inside {
+            if key == Key::Left
+                || (key == Key::Esc && self.child().is_some_and(|c| c.open.is_none()))
+            {
+                self.open = None;
+                return Outcome::Stay;
+            }
+            if let Some(child) = self.child_mut() {
+                return child.key(key);
+            }
+        }
+        match key {
+            Key::Up | Key::BackTab => self.step(-1),
+            Key::Down | Key::Tab => self.step(1),
+            Key::Right | Key::Enter => {
+                let Some(row) = self.selected else {
+                    return Outcome::Stay;
+                };
+                match self.items[row].action.clone() {
+                    Some(Action::Submenu) => {
+                        self.open_submenu(row);
+                        if let Some(child) = self.child_mut() {
+                            child.step(1);
+                        }
+                    }
+                    Some(action) if key == Key::Enter => return Outcome::Chose(action),
+                    _ => {}
+                }
+            }
+            Key::Esc => return Outcome::Outside,
+            _ => {}
+        }
+        Outcome::Stay
     }
 
     fn width(items: &[Item], measure: &dyn Measure) -> u16 {
@@ -144,7 +319,11 @@ impl Menu {
             ..Font::default()
         };
         let row = |item: &Item| {
-            let keys = item.keys.map_or(0.0, |k| measure.width(k, small) + GAP);
+            let mark = (!item.sub.is_empty()).then_some("›");
+            let keys = item
+                .keys
+                .or(mark)
+                .map_or(0.0, |k| measure.width(k, small) + GAP);
             measure.width(&item.label, plain) + keys
         };
         let widest = items.iter().map(row).fold(0.0, f32::max);
@@ -165,6 +344,7 @@ impl Menu {
         (0..self.items.len()).find(|i| self.row_of(*i) == y)
     }
 
+    #[cfg(test)]
     pub fn action(&self, row: usize) -> Option<&Action> {
         self.items.get(row)?.action.as_ref()
     }
@@ -175,6 +355,10 @@ impl Menu {
         let usable = self.items.iter().filter(|i| i.action.is_some()).count();
         if usable == 0 {
             return;
+        }
+        // Moving along this menu leaves the submenu its row opened.
+        if self.child().is_some_and(|c| c.selected.is_none()) {
+            self.open = None;
         }
         let start = match self.selected {
             Some(row) => row as isize,
@@ -222,8 +406,10 @@ impl Menu {
             }
             let usable = item.action.is_some();
             let hovered = hover.is_some_and(|h| line.contains(h.0, h.1));
-            if usable && (self.selected == Some(row) || hovered) {
-                let fill = if self.selected == Some(row) {
+            // The row whose submenu is open stays lit while the pointer is in the submenu.
+            let opened = self.open == Some(row);
+            if usable && (self.selected == Some(row) || hovered || opened) {
+                let fill = if self.selected == Some(row) || opened {
                     theme.pick
                 } else {
                     theme.popup_hover
@@ -238,6 +424,14 @@ impl Menu {
                 let shown = if usable { keys_style } else { greyed };
                 grid.label_right(right, y, keys, shown, KEYS_SIZE);
             }
+            if !item.sub.is_empty() {
+                let right = area.right().saturating_sub(1);
+                let shown = if usable { keys_style } else { greyed };
+                grid.label_right(right, y, "›", shown, 100);
+            }
+        }
+        if let Some(child) = self.child() {
+            child.draw(grid, hover, theme);
         }
     }
 }

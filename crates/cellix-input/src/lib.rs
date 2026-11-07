@@ -205,6 +205,8 @@ pub enum Command {
     SendBackPlan,
     ShowAgents,
     CloseDock,
+    /// Shows the side pane with what it showed last, or puts it away.
+    TogglePanel,
     /// Shows the document's headings in the sidebar.
     ShowOutline,
     /// Shows what's changed, to stage and commit, in the sidebar.

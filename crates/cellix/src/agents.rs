@@ -18,6 +18,12 @@ const STEPS: [&str; 3] = [
     "Click a file on the left to open it beside it.",
     "Ask in the agent, or comment on what you select.",
 ];
+/// The same, docked beside a chat with the file above: two lines, and no explorer to
+/// point at.
+const DOCKED_STEPS: [&str; 2] = [
+    "An agent you start runs here, under the file.",
+    "Select text in the file to comment or ask it.",
+];
 const AGENTS: [(&str, &str); 3] = [
     ("Claude Code", "claude"),
     ("Codex", "codex"),
@@ -108,6 +114,8 @@ pub struct Agents {
     installed: Vec<(&'static str, &'static str)>,
     /// When an agent here last finished its turn, until one starts working again.
     pub finished: Option<std::time::Instant>,
+    /// Docked beside a chat: short how-to, and one row for each agent.
+    pub docked: bool,
 }
 
 /// Names of the agents whose working folder is `root`, from `lsof -Fcn` output.
@@ -202,7 +210,9 @@ impl Agents {
         let mut lines = vec![Line::Gap];
         let silent = self.silent();
         let idle = self.running.is_empty() && silent.is_empty();
-        if idle {
+        if idle && self.docked {
+            lines.extend((0..DOCKED_STEPS.len()).map(Line::Step));
+        } else if idle {
             lines.push(Line::Section("HOW IT WORKS"));
             lines.extend((0..STEPS.len()).map(Line::Step));
         } else {
@@ -248,6 +258,9 @@ impl Agents {
     }
 
     fn height(&self, line: &Line) -> u16 {
+        if self.docked {
+            return 1;
+        }
         match line {
             Line::Reporting(_) | Line::Silent(_) | Line::Start(_) => 2,
             // One worktree is just this folder, so it needs no second line to tell them apart.
@@ -276,6 +289,9 @@ impl Agents {
                 Line::Section(text) => {
                     grid.label_at(side as f32, side, y, text, dim, area.right(), SECTION_SIZE);
                 }
+                Line::Step(index) if self.docked => {
+                    grid.label(side, y, DOCKED_STEPS[index], dim, area.right());
+                }
                 Line::Step(index) => {
                     let number = (index + 1).to_string();
                     grid.label(side, y, &number, dim, side + 2);
@@ -288,11 +304,21 @@ impl Agents {
                         AgentState::Working => ("working", theme.git_added),
                         AgentState::Idle | AgentState::Ended => ("idle", theme.gutter.fg),
                     };
-                    draw_agent(grid, (area, y), &agent.agent, (mark, color), theme);
-                    grid.label(side + 2, y + 1, &agent.detail, dim, area.right());
+                    let end = draw_agent(grid, (area, y), &agent.agent, (mark, color), theme);
+                    if self.docked {
+                        // On the agent's own row, between its name and how it is.
+                        let room = area.right().saturating_sub(mark.len() as u16 + 4);
+                        grid.label(end + 2, y, &agent.detail, dim, room);
+                    } else {
+                        grid.label(side + 2, y + 1, &agent.detail, dim, area.right());
+                    }
                 }
                 Line::Silent(agent) => {
                     draw_agent(grid, (area, y), &agent, ("running", theme.git_added), theme);
+                    if self.docked {
+                        y += rows;
+                        continue;
+                    }
                     grid.label(
                         side + 2,
                         y + 1,
@@ -320,6 +346,14 @@ impl Agents {
                     grid.label(side, y, "+", plus, side + 2);
                     let (label, program) = self.installed[index];
                     grid.label(side + 2, y, label, theme.sidebar, area.right());
+                    if self.docked {
+                        // What it runs, at the end of its one row.
+                        let shown = if program == SHELL.1 { "shell" } else { program };
+                        let right = area.right().saturating_sub(2);
+                        grid.label_right(right, y, shown, dim, DETAIL_SIZE);
+                        y += rows;
+                        continue;
+                    }
                     let note = if program == SHELL.1 {
                         "A plain terminal in this project"
                     } else {
@@ -399,19 +433,20 @@ fn draw_agent(
     agent: &str,
     (mark, color): (&str, Rgb),
     theme: &Theme,
-) {
+) -> u16 {
     let dot = Bounds::cells(area.x as f32 + 2.0, y as f32 + 0.32, 0.7, 0.36);
     grid.panel(dot, 18, Some(color), None);
     let name = Style {
         bold: true,
         ..theme.sidebar
     };
-    grid.label(area.x + 4, y, agent, name, area.right());
+    let end = grid.label(area.x + 4, y, agent, name, area.right());
     let badge = Style {
         fg: color,
         ..theme.sidebar
     };
     grid.label_right(area.right().saturating_sub(2), y, mark, badge, DETAIL_SIZE);
+    end
 }
 
 #[cfg(test)]

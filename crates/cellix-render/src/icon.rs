@@ -52,6 +52,8 @@ pub enum Icon {
     /// Lucide's maximize-2 and minimize-2: arrows out to two corners, and back in.
     Maximize = 42,
     Minimize = 43,
+    /// Lucide's panel-bottom: a window with a panel along its foot.
+    Panel = 44,
 }
 
 /// One cell of an icon that is `width` by `height` cells.
@@ -549,6 +551,9 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
             (12.5, 18.0),
             (20.5, 18.0),
         )),
+        Icon::Panel => {
+            rounded(p, (3.0, 3.0), (21.0, 21.0), 4.0).min(segment(p, (3.0, 15.0), (21.0, 15.0)))
+        }
         Icon::Diff => rounded(p, (3.0, 3.0), (21.0, 21.0), 4.0)
             .min(segment(p, (12.0, 6.5), (12.0, 12.5)))
             .min(segment(p, (9.0, 9.5), (15.0, 9.5)))
@@ -596,6 +601,7 @@ mod tests {
             Icon::File,
             Icon::Maximize,
             Icon::Minimize,
+            Icon::Panel,
         ] {
             let dots = (0..50)
                 .flat_map(|y| (0..50).map(move |x| (x, y)))

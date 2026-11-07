@@ -39,7 +39,7 @@ use crate::editor::{Editor, Marks};
 use crate::explorer::Explorer;
 use crate::find::Find;
 use crate::kernel::{self, Event as KernelEvent, Kernel};
-use crate::menu::{Action as MenuAction, Item as MenuItem, Menu};
+use crate::menu::{Action as MenuAction, Item as MenuItem, Menu, Outcome as MenuOutcome};
 use crate::neovim::{self, Neovim};
 use crate::outline::Outline;
 use crate::palette::{COMMANDS, Input, Item, Palette, input, popup, raised};
@@ -91,6 +91,8 @@ const PANE_ACTIONS: [(Icon, Command, &str); 5] = [
     (Icon::Globe, Command::ShowBrowser, "Browser"),
     (Icon::Agents, Command::ListAgents, "Agents"),
 ];
+/// What the top right keeps when docked: one icon that shows or hides the pane.
+const PANEL_TOGGLE: (Icon, Command, &str) = (Icon::Panel, Command::TogglePanel, "Toggle Panel");
 /// Columns each of those takes, and rows tall each icon is.
 const ACTION_WIDTH: u16 = 4;
 const ACTION_ICON: f32 = 0.62;
@@ -188,6 +190,11 @@ const SIDEBAR_MIN_WIDTH: u16 = 20;
 const COMPACT_WIDTH: u16 = 70;
 /// Columns for the menu button at the start of the tab bar, in the compact layout.
 const MENU_BUTTON: u16 = 3;
+/// Columns either side of the words in a "‹ 2 more" chip at the end of the tabs.
+const MORE_PADDING: u16 = 1;
+/// Below this width the window is laid out to be docked, as beside Claude Code's chat: the
+/// panels' icons move into the pane's header, and long menus fold into submenus.
+const DOCK_WIDTH: u16 = 80;
 /// Columns the status bar gives a branch's name, so a long one can't crowd the message.
 const STATUS_BRANCH_WIDTH: u16 = 28;
 /// Spaces per indent, which is what the status bar shows and formatters are told.
@@ -1203,6 +1210,8 @@ impl App {
             drawer: false,
             quit: false,
         };
+        app.dock.docked = app.docked();
+        app.agents.docked = app.docked();
         app.refresh_tree();
         app
     }
@@ -3000,6 +3009,11 @@ impl App {
         self.size.0 < self.compact_width
     }
 
+    /// Whether the window is laid out to be docked, about as wide as Claude Code leaves it.
+    fn docked(&self) -> bool {
+        self.size.0 < DOCK_WIDTH
+    }
+
     fn activity_area(&self) -> Rect {
         let width = if self.compact() { 0 } else { ACTIVITY_WIDTH };
         Rect::new(0, 0, width, self.size.1.saturating_sub(1))
@@ -3071,14 +3085,22 @@ impl App {
         let main = self.main_area();
         let inset = if self.compact() { MENU_BUTTON } else { 0 };
         let actions = self.pane_actions();
-        let shared = actions.first().filter(|(cell, ..)| cell.x < main.right());
-        let end = shared.map_or(main.right(), |(cell, ..)| cell.x - ACTION_MARGIN);
+        let shared = actions
+            .iter()
+            .filter(|(cell, ..)| cell.y == main.y && cell.x >= main.x && cell.x < main.right())
+            .map(|(cell, ..)| cell.x)
+            .min();
+        let end = shared.map_or(main.right(), |x| x - ACTION_MARGIN);
         let width = end.saturating_sub(main.x + inset);
         Rect::new(main.x + inset, main.y, width, 1)
     }
 
-    /// The icons at the top right, each with where it stands.
+    /// The icons at the top right, each with where it stands. Docked, the panels' icons
+    /// lead the pane's header instead.
     fn pane_actions(&self) -> Vec<(Rect, Icon, Command, &'static str)> {
+        if self.docked() {
+            return self.docked_actions();
+        }
         // The same place whatever's open, so a second click finds the same icon.
         let wide =
             ACTION_WIDTH * PANE_ACTIONS.len() as u16 + PANE_CLOSE + ACTION_MARGIN + APP_CLOSE;
@@ -3096,20 +3118,84 @@ impl App {
             .collect()
     }
 
+    /// Docked beside a chat there's no room for five icons at the top right. They lead the
+    /// pane's header, as VS Code's panel shows its views, the one showing named; the top right
+    /// keeps one icon that shows or hides the pane, beside quit.
+    fn docked_actions(&self) -> Vec<(Rect, Icon, Command, &'static str)> {
+        let mut actions = Vec::new();
+        if let Some(area) = self.dock_area() {
+            // Where the pane's first tab would start, so a stacked pane's icons line up with the files.
+            let mut x = self.dock.tabs_start(area);
+            for (icon, command, name) in PANE_ACTIONS {
+                let label = self.panel_label(command);
+                let width = ACTION_WIDTH
+                    + label.map_or(0, |l| {
+                        self.measure.width(&l, Font::default()).ceil() as u16 + 1
+                    });
+                actions.push((Rect::new(x, area.y, width, 1), icon, command, name));
+                x += width;
+            }
+        }
+        let toggle = APP_CLOSE + ACTION_MARGIN + ACTION_WIDTH;
+        let least = self.main_left() + MENU_BUTTON + PANE_TABS_ROOM;
+        if let Some(x) = self.size.0.checked_sub(toggle).filter(|x| *x >= least) {
+            let (icon, command, name) = PANEL_TOGGLE;
+            actions.push((Rect::new(x, 0, ACTION_WIDTH, 1), icon, command, name));
+        }
+        actions
+    }
+
+    /// The name an icon in the docked pane's header shows beside it: the view it stands for,
+    /// while that's showing, since it has no tab of its own.
+    fn panel_label(&self, command: Command) -> Option<String> {
+        if !self.action_on(command) {
+            return None;
+        }
+        match command {
+            Command::ShowComments => Some(match self.open_threads().len() {
+                0 => "Comments".to_string(),
+                count => format!("Comments {count}"),
+            }),
+            Command::ListAgents => Some("Agents".to_string()),
+            _ => None,
+        }
+    }
+
+    /// Columns the panels' icons take at the start of the docked pane's header, with the
+    /// one after them that parts them from the tabs.
+    fn panel_lead(&self, area: Rect) -> u16 {
+        // Wider, the icons at the top right may share the pane's row, but don't lead it.
+        if !self.docked() {
+            return 0;
+        }
+        let actions = self.pane_actions();
+        let header = actions
+            .iter()
+            .filter(|(cell, _, command, _)| cell.y == area.y && *command != Command::TogglePanel);
+        header
+            .map(|(cell, ..)| cell.right())
+            .max()
+            .map_or(0, |end| (end + 1).saturating_sub(area.x))
+    }
+
     /// The button that quits Cellix, at the very top right, when the icons beside it fit.
     fn app_close(&self) -> Option<Rect> {
         let x = self.size.0.checked_sub(APP_CLOSE)?;
-        (!self.pane_actions().is_empty()).then(|| Rect::new(x, 0, APP_CLOSE, 1))
+        let beside = self.pane_actions().iter().any(|(cell, ..)| cell.y == 0);
+        beside.then(|| Rect::new(x, 0, APP_CLOSE, 1))
     }
 
-    /// The pane's tab row, short of the quit button when it reaches the top right corner.
+    /// The pane's tab row, short of the quit button when it reaches the top right corner,
+    /// and after the panels' icons when docked.
     fn title_of(&self, area: Rect) -> Rect {
         let corner = area.y == 0 && area.right() >= self.size.0 && self.app_close().is_some();
-        if corner {
+        let area = if corner {
             Rect::new(area.x, area.y, area.w.saturating_sub(APP_CLOSE), area.h)
         } else {
             area
-        }
+        };
+        let lead = self.panel_lead(area);
+        Rect::new(area.x + lead, area.y, area.w.saturating_sub(lead), area.h)
     }
 
     fn action_at(&self, x: u16, y: u16) -> Option<Command> {
@@ -3148,6 +3234,7 @@ impl App {
             Command::OpenDiff => self.review.is_some(),
             Command::ShowBrowser => session.is_some_and(|s| s.browser),
             Command::ListAgents => self.dock.showing(Front::Agents),
+            Command::TogglePanel => self.dock.open,
             _ => false,
         }
     }
@@ -3197,6 +3284,32 @@ impl App {
             let hovered = self.hover.is_some_and(|h| cell.contains(h.0, h.1));
             let on = self.action_on(command);
             grid.fill(cell, theme.tab);
+            // Docked, the view showing is named beside its icon, on a tab as its own was.
+            let label = self.docked().then(|| self.panel_label(command)).flatten();
+            if let Some(label) = label {
+                // Lit with the chip an open panel's icon gets, so it reads as the one showing.
+                let (_, high) = ACTION_PILL;
+                let top = cell.y as f32 + (1.0 - high) / 2.0;
+                let bounds = Bounds::cells(cell.x as f32 + 0.15, top, cell.w as f32 - 0.3, high);
+                grid.panel(bounds, PILL_RADIUS, Some(theme.tint), None);
+                // Painted, the cells keep the tab's ground: the chip shows through, shorter than its row.
+                let icon_cell = Rect::new(cell.x, cell.y, ACTION_WIDTH, 1);
+                toolbar::draw_icon(
+                    grid,
+                    (icon, ACTION_ICON),
+                    icon_cell,
+                    theme.text.fg,
+                    theme.tab,
+                );
+                let style = Style {
+                    fg: theme.text.fg,
+                    ..theme.tab
+                };
+                let at = cell.x as f32 + ACTION_WIDTH as f32 - 0.5;
+                let start = cell.x + ACTION_WIDTH;
+                grid.label_at(at, start, cell.y, &label, style, cell.right(), 100);
+                continue;
+            }
             if on || hovered {
                 // The rail's chip, so the two bars of icons read as one set.
                 let fill = if on { theme.tint } else { theme.row_hover };
@@ -3223,7 +3336,7 @@ impl App {
                 _ => false,
             };
             if waiting {
-                let dot = Bounds::cells(cell.right() as f32 - 1.2, 0.1, 0.8, 0.4);
+                let dot = Bounds::cells(cell.right() as f32 - 1.2, cell.y as f32 + 0.1, 0.8, 0.4);
                 grid.panel(dot, 22, Some(theme.attention), None);
             }
         }
@@ -3362,7 +3475,11 @@ impl App {
             Event::Key(key) => self.key(key),
             Event::Mouse(mouse) => self.mouse(mouse),
             Event::Paste(text) => self.paste(&text),
-            Event::Resize(w, h) => self.size = (w, h),
+            Event::Resize(w, h) => {
+                self.size = (w, h);
+                self.dock.docked = self.docked();
+                self.agents.docked = self.docked();
+            }
             Event::Tick => self.tick(),
         }
         self.poll_pan_hint();
@@ -4750,22 +4867,10 @@ impl App {
                     self.overlay = Overlay::Math(panel);
                 }
             },
-            Overlay::Menu(mut menu) => match key.key {
-                Key::Up | Key::BackTab => {
-                    menu.step(-1);
-                    self.overlay = Overlay::Menu(menu);
-                }
-                Key::Down | Key::Tab => {
-                    menu.step(1);
-                    self.overlay = Overlay::Menu(menu);
-                }
-                Key::Enter => {
-                    if let Some(action) = menu.selected.and_then(|row| menu.action(row)) {
-                        self.menu_action(action.clone());
-                    }
-                }
-                Key::Esc => {}
-                _ => self.overlay = Overlay::Menu(menu),
+            Overlay::Menu(mut menu) => match menu.key(key.key) {
+                MenuOutcome::Chose(action) => self.menu_action(action),
+                MenuOutcome::Outside => {}
+                MenuOutcome::Stay => self.overlay = Overlay::Menu(menu),
             },
             Overlay::None => {}
         }
@@ -5505,6 +5610,14 @@ impl App {
             Command::CloseDock => {
                 self.dock.open = false;
                 self.dock.focused = false;
+            }
+            Command::TogglePanel if self.dock.open => self.run(Command::CloseDock),
+            // Back with what it showed, or with the agents when it never showed anything.
+            Command::TogglePanel => {
+                if self.dock.front == Front::Session && self.dock.session().is_none() {
+                    self.dock.show_list();
+                }
+                self.dock.open = true;
             }
             Command::BuildPdf => self.build_pdf(),
             Command::ExportPdf => self.export_pdf(),
@@ -7200,11 +7313,18 @@ impl App {
         let threads = self.open_threads();
         self.dock.comment_count.set(threads.len());
         let actions = self.pane_actions();
+        // What stands at the top right over this row: the icons, or docked, the toggle.
+        let docked = self.docked();
         let held = actions
-            .first()
-            .filter(|(cell, ..)| cell.x >= area.x && area.y == 0);
-        let end = held.map_or(area.right().saturating_sub(PANE_CLOSE), |(cell, ..)| {
-            cell.x - ACTION_MARGIN
+            .iter()
+            .filter(|(cell, _, command, _)| {
+                let top_right = !docked || *command == Command::TogglePanel;
+                top_right && cell.x >= area.x && cell.y == area.y
+            })
+            .map(|(cell, ..)| cell.x)
+            .min();
+        let end = held.map_or(area.right().saturating_sub(PANE_CLOSE), |x| {
+            x - ACTION_MARGIN
         });
         self.dock.tabs_end.set(end);
         self.dock.tabs_flush.set(self.dock_under());
@@ -9170,6 +9290,9 @@ impl App {
         };
         if mouse.kind == MouseKind::Move {
             self.hover = Some((mouse.x, mouse.y));
+            if let Overlay::Menu(menu) = &mut self.overlay {
+                menu.hover(mouse.x, mouse.y);
+            }
             let in_pane = self
                 .dock_screen()
                 .is_some_and(|a| a.contains(mouse.x, mouse.y));
@@ -9515,13 +9638,12 @@ impl App {
                     self.pick(palette.current().cloned());
                 }
             }
-            Overlay::Menu(menu) => {
+            Overlay::Menu(mut menu) => {
                 // A greyed row stays open, so a slip doesn't dismiss the menu.
-                if let Some(row) = menu.row_at(mouse.x, mouse.y) {
-                    match menu.action(row) {
-                        Some(action) => self.menu_action(action.clone()),
-                        None => self.overlay = Overlay::Menu(menu),
-                    }
+                match menu.click(mouse.x, mouse.y) {
+                    MenuOutcome::Chose(action) => self.menu_action(action),
+                    MenuOutcome::Stay => self.overlay = Overlay::Menu(menu),
+                    MenuOutcome::Outside => {}
                 }
             }
             Overlay::Find(find) => self.click_find(find, mouse.x, mouse.y),
@@ -9725,26 +9847,46 @@ impl App {
                 items.extend(agent);
                 return items;
             }
+            // Docked, the menu would reach the whole height of the window, so formatting
+            // and inserting fold into submenus, each named once.
+            let docked = self.docked();
+            let insert = |name: &'static str, short: &'static str, tool| {
+                MenuItem::new(if docked { short } else { name }, MenuAction::Tool(tool))
+            };
+            let grouped = |items: &mut Vec<MenuItem>, format: Vec<MenuItem>, inserts| {
+                items.push(MenuItem::submenu("Format", format).after_rule());
+                items.push(MenuItem::submenu("Insert", inserts));
+            };
             // A paper's menu names LaTeX's own things, and builds.
             if editor.dialect() == Dialect::Latex {
-                items.extend([
+                let formats = vec![
                     format("Bold", Format::Bold).after_rule(),
                     format("Italic", Format::Italic),
                     format("Typewriter", Format::Code),
                     format("Paragraph", Format::PlainText).after_rule(),
                     format("Section", Format::Heading),
                     format("Verbatim", Format::CodeBlock),
-                    MenuItem::new("Insert Citation…", MenuAction::Tool(Tool::Cite)).after_rule(),
-                    MenuItem::new("Insert Formula…", MenuAction::Tool(Tool::Math)),
-                    MenuItem::new("Insert Table…", MenuAction::Tool(Tool::Table)),
-                    MenuItem::new("Insert Figure…", MenuAction::Tool(Tool::Image)),
+                ];
+                let inserts = vec![
+                    insert("Insert Citation…", "Citation…", Tool::Cite).after_rule(),
+                    insert("Insert Formula…", "Formula…", Tool::Math),
+                    insert("Insert Table…", "Table…", Tool::Table),
+                    insert("Insert Figure…", "Figure…", Tool::Image),
+                ];
+                if docked {
+                    grouped(&mut items, formats, inserts);
+                } else {
+                    items.extend(formats);
+                    items.extend(inserts);
+                }
+                items.extend([
                     run("Build PDF", Command::BuildPdf).after_rule(),
                     run("Show in PDF", Command::ShowInPdf),
                 ]);
                 items.extend(agent);
                 return items;
             }
-            items.extend([
+            let formats = vec![
                 format("Bold", Format::Bold).after_rule(),
                 format("Italic", Format::Italic),
                 format("Strikethrough", Format::Strikethrough),
@@ -9752,11 +9894,19 @@ impl App {
                 format("Plain Text", Format::PlainText).after_rule(),
                 format("Heading", Format::Heading),
                 format("Code Block", Format::CodeBlock),
-                MenuItem::new("Insert Table…", MenuAction::Tool(Tool::Table)),
-                MenuItem::new("Insert Formula…", MenuAction::Tool(Tool::Math)),
-                MenuItem::new("Insert Image…", MenuAction::Tool(Tool::Image)),
-                MenuItem::new("Insert Diagram…", MenuAction::Tool(Tool::Diagram)),
-            ]);
+            ];
+            let inserts = vec![
+                insert("Insert Table…", "Table…", Tool::Table),
+                insert("Insert Formula…", "Formula…", Tool::Math),
+                insert("Insert Image…", "Image…", Tool::Image),
+                insert("Insert Diagram…", "Diagram…", Tool::Diagram),
+            ];
+            if docked {
+                grouped(&mut items, formats, inserts);
+            } else {
+                items.extend(formats);
+                items.extend(inserts);
+            }
             items.extend(agent);
         } else {
             let server = language.is_some_and(|l| self.servers.contains_key(l));
@@ -9905,6 +10055,9 @@ impl App {
                 self.start_session(&name, &argv, &[], &root);
             }
             MenuAction::AddCodeCell => self.add_cell(true),
+            MenuAction::ShowTab(index) => self.set_active(index),
+            // The menu opens these itself.
+            MenuAction::Submenu => {}
             MenuAction::ImageWidth(percent) => {
                 if let Some(editor) = self.editor_mut() {
                     editor.set_image_width(percent);
@@ -10289,26 +10442,106 @@ impl App {
     /// Tabs that fit, as (index, x, width), starting late enough to show the active one.
     /// Drawing and clicking share this, so a click always lands on what's shown.
     fn visible_tabs(&self) -> Vec<(usize, u16, u16)> {
+        self.tab_strip().0
+    }
+
+    /// What a "‹ 3 more" or "2 more ›" at the end of the tabs says, for tabs out of view.
+    fn more_label(count: usize, before: bool) -> String {
+        if before {
+            format!("‹ {count} more")
+        } else {
+            format!("{count} more ›")
+        }
+    }
+
+    /// Columns a "more" chip takes, with its padding and the gap after it.
+    fn more_width(&self, count: usize, before: bool) -> u16 {
+        let text = self
+            .measure
+            .width(&Self::more_label(count, before), Font::default());
+        text.ceil() as u16 + MORE_PADDING * 2 + 1
+    }
+
+    /// The tabs that fit, and where tabs are out of view, a chip at that end saying how many:
+    /// at the start for those scrolled off, at the end for those past it. A tab is shown
+    /// whole or not at all, unless the window can't hold even the active one.
+    #[allow(clippy::type_complexity)]
+    fn tab_strip(
+        &self,
+    ) -> (
+        Vec<(usize, u16, u16)>,
+        Option<(Rect, usize)>,
+        Option<(Rect, usize)>,
+    ) {
         let area = self.tabs_area();
         let widths: Vec<u16> = self.editors.iter().map(|e| self.tab_width(e) + 1).collect();
-        let active = self.active().min(widths.len().saturating_sub(1));
-        let mut first = 0;
-        while first < active && widths[first..=active].iter().sum::<u16>() > area.w {
-            first += 1;
-        }
-        let mut tabs = Vec::new();
-        let mut x = area.x;
-        for (i, width) in widths.iter().enumerate().skip(first) {
-            if x >= area.right() {
-                break;
+        let count = widths.len();
+        let active = self.active().min(count.saturating_sub(1));
+        let place = |first: usize, last: usize, left: u16| {
+            let mut x = area.x + left;
+            let mut tabs = Vec::new();
+            for (i, width) in widths.iter().enumerate().take(last).skip(first) {
+                tabs.push((i, x, (*width - 1).min(area.right().saturating_sub(x))));
+                x += width;
             }
-            tabs.push((i, x, *width - 1));
-            x += width;
+            tabs
+        };
+        if widths.iter().sum::<u16>() <= area.w {
+            return (place(0, count, 0), None, None);
         }
-        tabs
+        for first in 0..=active {
+            let left = if first > 0 {
+                self.more_width(first, true)
+            } else {
+                0
+            };
+            let mut end = first;
+            let mut used = left;
+            while end < count && used + widths[end] <= area.w {
+                used += widths[end];
+                end += 1;
+            }
+            // Room for the chip at the end, giving up tabs for it if need be.
+            while end < count && end > first && used + self.more_width(count - end, false) > area.w
+            {
+                end -= 1;
+                used -= widths[end];
+            }
+            if end > active {
+                let tabs = place(first, end, left);
+                let chip = |x: u16, w: u16| Rect::new(x, area.y, w.saturating_sub(1), 1);
+                let before = (first > 0).then(|| (chip(area.x, left), first));
+                let after = (end < count).then(|| {
+                    let width = self.more_width(count - end, false);
+                    (chip(area.x + used, width), count - end)
+                });
+                return (tabs, before, after);
+            }
+        }
+        // Too narrow for anything but the tab in front, which gets what there is.
+        (place(active, active + 1, 0), None, None)
+    }
+
+    /// Lists the tabs out of view on one side, to pick one.
+    fn show_more_tabs(&mut self, at: Rect, before: bool) {
+        let (tabs, ..) = self.tab_strip();
+        let shown: Vec<usize> = tabs.iter().map(|t| t.0).collect();
+        let first = shown.first().copied().unwrap_or(0);
+        let items = (0..self.editors.len())
+            .filter(|i| !shown.contains(i) && ((*i < first) == before))
+            .map(|i| MenuItem::new(self.editors[i].title(), MenuAction::ShowTab(i)))
+            .collect();
+        self.show_menu((at.x, at.y + 1), items);
     }
 
     fn click_tab(&mut self, x: u16) {
+        let (_, before, after) = self.tab_strip();
+        for (chip, side) in [(before, true), (after, false)] {
+            if let Some((rect, _)) = chip.filter(|(r, _)| x >= r.x && x < r.right()) {
+                self.show_more_tabs(rect, side);
+                return;
+            }
+        }
         for (i, at, width) in self.visible_tabs() {
             if x >= at && x < at + width {
                 self.set_active(i);
@@ -10493,7 +10726,7 @@ impl App {
         };
         let wide = |name: &str| self.measure.width(name, font) + 3.0;
         let cut = self.dock_area().filter(|a| y == a.y);
-        let cut = cut.and_then(|area| self.dock.cut_name(area, x));
+        let cut = cut.and_then(|area| self.dock.cut_name(self.title_of(area), x));
         // Where each one goes: its name, left edge and top, in cells and rows.
         let spot = match &self.overlay {
             Overlay::Find(_) => {
@@ -10528,7 +10761,7 @@ impl App {
                     MAXIMIZE_TIP
                 };
                 // Starting where the button's chip does, clear of the bar's text to its left.
-                let area = self.dock_area().unwrap_or_default();
+                let area = self.title_of(self.dock_area().unwrap_or_default());
                 let start = self.dock.maximize_button(area) as f32 + 0.5;
                 let left = start.min(self.size.0 as f32 - wide(name) - 0.5);
                 Some((name, left.max(0.5), area.y as f32 + 1.2))
@@ -10548,7 +10781,8 @@ impl App {
                 found.map(|(cell, _, _, name)| {
                     let middle = cell.x as f32 + cell.w as f32 / 2.0;
                     let left = middle - wide(name) / 2.0;
-                    (*name, left.min(self.size.0 as f32 - wide(name) - 0.5), 1.2)
+                    let left = left.max(0.5).min(self.size.0 as f32 - wide(name) - 0.5);
+                    (*name, left, cell.y as f32 + 1.2)
                 })
             }
             Overlay::None
@@ -10685,7 +10919,7 @@ impl App {
             Dragged::View(_) | Dragged::Session(_) => {
                 let views = matches!(drag.what, Dragged::View(_));
                 if let Some(area) = self.dock_area().filter(|a| y == a.y && a.contains(x, y)) {
-                    return Landing::PaneTabs(self.dock.slot(area, x, views).0);
+                    return Landing::PaneTabs(self.dock.slot(self.title_of(area), x, views).0);
                 }
                 if self.maximized.is_some() {
                     return Landing::Nowhere;
@@ -10808,7 +11042,7 @@ impl App {
             Landing::PaneTabs(_) => {
                 if let Some(area) = self.dock_area() {
                     let views = matches!(drag.what, Dragged::View(_));
-                    let (_, x) = self.dock.slot(area, drag.at.0, views);
+                    let (_, x) = self.dock.slot(self.title_of(area), drag.at.0, views);
                     self.insertion_bar(grid, f32::from(x), area.y);
                 }
             }
@@ -11283,6 +11517,40 @@ impl App {
                 let bounds = Bounds::inset(tab, 0.0, 0.0);
                 grid.corners(bounds, TAB_RADIUS, theme.tab.bg, TOP_LEFT | TOP_RIGHT);
             }
+        }
+        let (_, before, after) = self.tab_strip();
+        for (chip, side) in [(before, true), (after, false)] {
+            let Some((rect, count)) = chip else {
+                continue;
+            };
+            let hovered = self.hover.is_some_and(|h| rect.contains(h.0, h.1));
+            // A chip of its own, so it can't be taken for a tab.
+            let fill = if hovered { theme.tint } else { theme.row_hover };
+            grid.panel(
+                Bounds::inset(rect, 0.15, 0.12),
+                PILL_RADIUS,
+                Some(fill),
+                None,
+            );
+            let style = Style {
+                fg: if hovered {
+                    theme.text.fg
+                } else {
+                    theme.status.fg
+                },
+                ..theme.tab
+            };
+            let label = Self::more_label(count, side);
+            let at = (rect.x + MORE_PADDING) as f32;
+            grid.label_at(
+                at,
+                rect.x + MORE_PADDING,
+                rect.y,
+                &label,
+                style,
+                rect.right(),
+                92,
+            );
         }
     }
 
@@ -12440,13 +12708,16 @@ impl App {
     /// What to do next with nothing open, which depends on what's already going.
     fn welcome_lead(&self) -> String {
         let running = self.dock.sessions.iter().find(|s| s.agent());
+        // Compact, the files are behind the button at the top left, not beside.
+        let files = if self.compact() {
+            "Pick a file from ☰ at the top left"
+        } else {
+            "Click a file on the left"
+        };
         match running {
-            Some(agent) => format!(
-                "{} is running. Click a file on the left to work on it together.",
-                agent.name
-            ),
+            Some(agent) => format!("{} is running. {files} to work on it together.", agent.name),
             None if self.dock.session().is_some() => {
-                "Click a file on the left to open it beside the terminal.".to_string()
+                format!("{files} to open it beside the terminal.")
             }
             None => "Open a file, or start an agent to work beside it.".to_string(),
         }
@@ -19587,11 +19858,29 @@ mod tests {
             assert_eq!(action_spots(&app), shut, "with the pane beside the file");
         }
         let (dir, _) = project();
+        // Docked, the panels' icons lead the pane's header and come with it; what's at the top
+        // right, the icon that shows or hides the pane, stays put.
         let mut app = App::new(dir.path().to_path_buf(), (72, 40));
-        let shut = action_spots(&app);
+        let top = |app: &App| -> Vec<Rect> {
+            action_spots(app)
+                .into_iter()
+                .filter(|cell| cell.y == 0)
+                .collect()
+        };
+        let shut = top(&app);
+        assert_eq!(shut.len(), 1, "only Toggle Panel");
         app.run(Command::ListAgents);
         assert!(app.dock_under());
-        assert_eq!(action_spots(&app), shut, "with the pane under the file");
+        assert_eq!(top(&app), shut, "with the pane under the file");
+        let pane = app.dock_area().unwrap();
+        let header = action_spots(&app)
+            .into_iter()
+            .filter(|cell| cell.y == pane.y);
+        assert_eq!(
+            header.count(),
+            PANE_ACTIONS.len(),
+            "the panels lead its header"
+        );
     }
 
     #[test]
@@ -19743,8 +20032,9 @@ mod tests {
         app.run(Command::ListAgents);
         let _ = screen(&app);
         let pane = app.dock_area().unwrap();
-        let (_, _, tab) = app.dock.view_tabs_for_test(pane)[0];
-        assert_eq!(tab.x, app.main_area().x);
+        // Docked, the panels' icons are what the header starts with.
+        let first = app.pane_actions().into_iter().find(|a| a.0.y == pane.y);
+        assert_eq!(first.unwrap().0.x, app.main_area().x);
     }
 
     #[test]
@@ -19779,7 +20069,13 @@ mod tests {
     #[test]
     fn a_tiny_window_goes_without_the_icons() {
         let (dir, _) = project();
+        // The panels' five icons are gone from the top right under 80 columns; the one that
+        // shows the pane stays while the file's tabs keep their room, and then goes too.
         let app = App::new(dir.path().to_path_buf(), (40, 30));
+        let commands: Vec<Command> = app.pane_actions().iter().map(|a| a.2).collect();
+        assert_eq!(commands, [Command::TogglePanel]);
+        let (dir, _) = project();
+        let app = App::new(dir.path().to_path_buf(), (20, 30));
         assert!(app.pane_actions().is_empty());
     }
 
@@ -22631,5 +22927,247 @@ while True:
         app.say("Working…");
         app.handle(mouse(MouseKind::Up, 40, 12));
         assert!(screen(&app).text().contains("Working…"));
+    }
+
+    /// A page about as wide as Claude Code leaves Cellix, docked beside its chat.
+    fn docked_page(text: &str) -> (TempDir, App) {
+        let (dir, mut app) = page(text);
+        app.handle(Event::Resize(64, 40));
+        (dir, app)
+    }
+
+    #[test]
+    fn docked_the_panels_lead_the_pane_header() {
+        let (_dir, mut app) = docked_page("# Notes\n\nSome text.\n");
+        app.run(Command::ListAgents);
+        let grid = screen(&app);
+        let pane = app.dock_area().unwrap();
+        assert!(pane.y > 0, "the pane stands under the file");
+        let actions = app.pane_actions();
+        // The top right keeps one icon, which shows or hides the pane, and quit.
+        let top: Vec<_> = actions.iter().filter(|a| a.0.y == 0).collect();
+        assert_eq!(top.len(), 1, "{top:?}");
+        assert_eq!(top[0].2, Command::TogglePanel);
+        assert!(app.app_close().is_some());
+        assert!(
+            app.tabs_area().right() < top[0].0.x,
+            "tabs stop short of it"
+        );
+        // The five lead the pane's header, the one showing named beside its icon and
+        // with no tab of its own.
+        let header: Vec<_> = actions.iter().filter(|a| a.0.y == pane.y).collect();
+        let commands: Vec<Command> = header.iter().map(|a| a.2).collect();
+        assert_eq!(commands, PANE_ACTIONS.map(|a| a.1).to_vec());
+        let row = grid.row_text(pane.y);
+        assert_eq!(row.matches("Agents").count(), 1, "{row}");
+        let (x, y) = find(&grid, "Agents");
+        let agents = header.iter().find(|a| a.2 == Command::ListAgents).unwrap();
+        assert!(agents.0.contains(x, y), "named in its icon's place: {row}");
+        assert!(
+            header
+                .iter()
+                .all(|a| a.0.right() < app.title_of(pane).x + 1)
+        );
+        // Its icon brings the comments, named in turn.
+        let comments = header
+            .iter()
+            .find(|a| a.2 == Command::ShowComments)
+            .unwrap()
+            .0;
+        click(&mut app, comments.x + 1, comments.y);
+        assert!(app.dock.showing(Front::Comments));
+        let row = screen(&app).row_text(pane.y);
+        assert!(row.contains("Comments") && !row.contains("Agents"), "{row}");
+        // The toggle puts the pane away, and brings it back as it was.
+        let toggle = top[0].0;
+        click(&mut app, toggle.x + 1, 0);
+        assert!(!app.dock.open);
+        assert!(
+            app.pane_actions().iter().all(|a| a.0.y == 0),
+            "no header to stand in"
+        );
+        click(&mut app, toggle.x + 1, 0);
+        assert!(app.dock.showing(Front::Comments));
+        // Wider, the icons are back at the top right, with tabs of their own below.
+        app.handle(Event::Resize(120, 40));
+        let actions = app.pane_actions();
+        assert_eq!(actions.len(), PANE_ACTIONS.len());
+        assert!(actions.iter().all(|a| a.0.y == 0));
+        let text = screen(&app).text();
+        assert!(text.contains("Comments"), "{text}");
+    }
+
+    #[test]
+    fn docked_tabs_out_of_view_say_how_many_and_list_them() {
+        let (dir, mut app) = project();
+        let names = [
+            "one.txt",
+            "two.txt",
+            "three.txt",
+            "four.txt",
+            "five.txt",
+            "six.txt",
+        ];
+        for name in names {
+            fs::write(dir.path().join(name), "x\n").unwrap();
+            app.open(&dir.path().join(name)).unwrap();
+        }
+        app.handle(Event::Resize(64, 40));
+        let top = screen(&app).row_text(0);
+        assert!(top.contains("six.txt"), "{top}");
+        let (tabs, before, after) = app.tab_strip();
+        let (chip, count) = before.expect("tabs off to the left");
+        assert!(after.is_none(), "{top}");
+        assert!(top.contains(&format!("‹ {count} more")), "{top}");
+        assert_eq!(tabs.len() + count, app.editors.len());
+        // Every tab shown is whole, none cut at the end of the strip.
+        for (index, x, width) in &tabs {
+            let title = app.editors[*index].title();
+            assert!(x + width <= app.tabs_area().right());
+            assert!(top.contains(title.as_str()), "{title} whole in {top}");
+        }
+        // The chip lists those it stands for, and one picked comes to the front.
+        click(&mut app, chip.x + 1, 0);
+        let (x, y) = find(&screen(&app), "one.txt");
+        assert!(y > 0, "listed in the menu");
+        click(&mut app, x + 1, y);
+        assert_eq!(app.editors[app.active()].title(), "one.txt");
+        let (_, before, after) = app.tab_strip();
+        assert!(before.is_none());
+        let (_, count) = after.expect("the rest are now past the end");
+        let top = screen(&app).row_text(0);
+        assert!(top.contains(&format!("{count} more ›")), "{top}");
+    }
+
+    #[test]
+    fn docked_the_page_menu_folds_format_and_insert_into_submenus() {
+        let (_dir, mut app) = docked_page("# Notes\n\nSome plain words here.\n");
+        let (x, y) = find(&screen(&app), "plain");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        app.handle(mouse(MouseKind::Right, x + 1, y));
+        let text = screen(&app).text();
+        assert!(text.contains("Format") && text.contains("Insert"), "{text}");
+        assert!(
+            !text.contains("Bold") && !text.contains("Insert Table"),
+            "{text}"
+        );
+        let Overlay::Menu(menu) = &app.overlay else {
+            panic!("no menu");
+        };
+        assert!(menu.rows() <= 10, "{} rows", menu.rows());
+        // Pointing at Format opens it beside the menu, and at Insert, that one instead.
+        let (fx, fy) = find(&screen(&app), "Format");
+        app.handle(mouse(MouseKind::Move, fx + 1, fy));
+        let text = screen(&app).text();
+        assert!(
+            text.contains("Bold") && text.contains("Code Block"),
+            "{text}"
+        );
+        let (ix, iy) = find(&screen(&app), "Insert");
+        app.handle(mouse(MouseKind::Move, ix + 1, iy));
+        let text = screen(&app).text();
+        assert!(!text.contains("Bold") && text.contains("Table…"), "{text}");
+        // A row of a submenu does what it says.
+        app.handle(mouse(MouseKind::Move, fx + 1, fy));
+        let (hx, hy) = find(&screen(&app), "Heading");
+        click(&mut app, hx + 1, hy);
+        assert!(matches!(app.overlay, Overlay::None));
+        let source = app.active_text().unwrap();
+        assert!(source.contains("# Some plain words here."), "{source}");
+        // From the keyboard: down to Format, Right into it, Enter on its first row.
+        app.handle(mouse(MouseKind::Right, x + 1, y));
+        let Overlay::Menu(menu) = &mut app.overlay else {
+            panic!("no menu");
+        };
+        while menu.selected_label() != Some("Format") {
+            menu.step(1);
+        }
+        key(&mut app, Key::Right);
+        let Overlay::Menu(menu) = &app.overlay else {
+            panic!("no menu");
+        };
+        assert_eq!(
+            menu.chosen_label(),
+            Some("Bold"),
+            "the submenu has the keys"
+        );
+        key(&mut app, Key::Left);
+        let Overlay::Menu(menu) = &app.overlay else {
+            panic!("Left goes back to the menu, which stays");
+        };
+        assert_eq!(menu.chosen_label(), Some("Format"));
+        key(&mut app, Key::Esc);
+        // Wider, the menu stays flat as it was.
+        app.handle(Event::Resize(120, 40));
+        let (x, y) = find(&screen(&app), "plain");
+        app.handle(mouse(MouseKind::Right, x + 1, y));
+        let text = screen(&app).text();
+        assert!(
+            text.contains("Bold") && text.contains("Insert Table…"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn docked_the_agents_panel_is_short_and_true() {
+        let (_dir, mut app) = docked_page("# Notes\n");
+        app.run(Command::ListAgents);
+        let grid = screen(&app);
+        let text = grid.text();
+        assert!(
+            text.contains("An agent you start runs here, under the file."),
+            "{text}"
+        );
+        assert!(
+            !text.contains("on the left"),
+            "no explorer to point at: {text}"
+        );
+        assert!(!text.contains("HOW IT WORKS"), "{text}");
+        // One row each: what it is, and what it runs at the end of the row.
+        let (_, y) = find(&grid, "+ Terminal");
+        assert!(grid.row_text(y).contains("shell"), "{}", grid.row_text(y));
+        assert!(!text.contains("A plain terminal in this project"), "{text}");
+        // Wider, the steps come back.
+        app.handle(Event::Resize(140, 40));
+        assert!(screen(&app).text().contains("HOW IT WORKS"));
+    }
+
+    #[test]
+    fn a_comment_mark_keeps_cells_of_its_own_at_every_width() {
+        for width in [48u16, 64, 100, 140] {
+            let (_dir, mut app) = page("# Plan\n\nBound the queue.\n");
+            app.handle(Event::Resize(width, 30));
+            let (x, y) = find(&screen(&app), "Bound");
+            app.handle(mouse(MouseKind::Left, x + 1, y));
+            comment_on(&mut app, "How big");
+            let grid = screen(&app);
+            let (bound, y) = find(&grid, "Bound the queue");
+            let row: Vec<char> = grid.row_text(y).chars().collect();
+            let mark = row.iter().position(|c| *c == '◆');
+            let mark = mark.unwrap_or_else(|| panic!("no mark at {width}: {row:?}")) as u16;
+            let left = app.main_area().x;
+            assert!(mark > left, "clear of the pane's edge at {width}");
+            // A cell for the mark, one for a change's bar, then the text.
+            assert!(bound >= mark + 3, "at {width}: mark {mark}, text {bound}");
+        }
+    }
+
+    #[test]
+    fn a_page_scrolls_past_its_end_so_the_last_block_clears_the_bar() {
+        let text: String = (1..=60).map(|n| format!("Paragraph {n}.\n\n")).collect();
+        let (_dir, mut app) = docked_page(&text);
+        let (x, y) = find(&screen(&app), "Paragraph 1.");
+        for _ in 0..200 {
+            app.handle(mouse(MouseKind::ScrollDown, x + 2, y + 4));
+        }
+        let grid = screen(&app);
+        let (_, last) = find(&grid, "Paragraph 60.");
+        let bar = app.size().1 - 1;
+        assert!(last + 8 < bar, "row {last}, the status bar at {bar}");
+        // A page that fits doesn't move.
+        let (_dir, mut app) = docked_page("# Short\n\nOne line.\n");
+        let (x, y) = find(&screen(&app), "One line.");
+        app.handle(mouse(MouseKind::ScrollDown, x + 2, y));
+        assert_eq!(find(&screen(&app), "One line.").1, y);
     }
 }

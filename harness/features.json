@@ -3939,5 +3939,47 @@
     "title": "A row in the Problems tab has Ask Agent, which sends the problem, its file and line, and the code around it, to the pane's agent or Claude Code's prompt",
     "test": "ask_agent_on_a_problem_sends_the_problem_and_the_code_around_it",
     "passes": true
+  },
+  {
+    "id": "dock-panel-tabs",
+    "milestone": 11,
+    "title": "Docked under 80 columns, as beside Claude Code's chat, the five panel icons lead the pane's header with the one showing named, and the top right keeps one Toggle Panel icon beside quit",
+    "test": "docked_the_panels_lead_the_pane_header",
+    "passes": true
+  },
+  {
+    "id": "dock-tab-overflow",
+    "milestone": 11,
+    "title": "Tabs out of view show as '‹ N more' and 'N more ›' at the ends of the strip, and each lists its tabs to pick from",
+    "test": "docked_tabs_out_of_view_say_how_many_and_list_them",
+    "passes": true
+  },
+  {
+    "id": "dock-page-menu",
+    "milestone": 11,
+    "title": "Docked, the page's right-click menu folds formatting and inserting into Format › and Insert › submenus, by pointer and by keys",
+    "test": "docked_the_page_menu_folds_format_and_insert_into_submenus",
+    "passes": true
+  },
+  {
+    "id": "dock-agents-copy",
+    "milestone": 11,
+    "title": "Docked, the Agents panel says in two lines what's true at that width and gives each agent one row",
+    "test": "docked_the_agents_panel_is_short_and_true",
+    "passes": true
+  },
+  {
+    "id": "page-gutter",
+    "milestone": 11,
+    "title": "A page keeps cells of its own for a comment's mark and a change's bar at every width",
+    "test": "a_comment_mark_keeps_cells_of_its_own_at_every_width",
+    "passes": true
+  },
+  {
+    "id": "page-past-end",
+    "milestone": 11,
+    "title": "A long page scrolls past its end, so its last block clears the status bar",
+    "test": "a_page_scrolls_past_its_end_so_the_last_block_clears_the_bar",
+    "passes": true
   }
 ]

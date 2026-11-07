@@ -94,7 +94,7 @@ pub fn keys_of(command: Command) -> Option<&'static str> {
     })
 }
 
-pub const COMMANDS: [(&str, Command); 88] = [
+pub const COMMANDS: [(&str, Command); 89] = [
     ("Save", Command::Save),
     ("Undo", Command::Undo),
     ("Redo", Command::Redo),
@@ -146,6 +146,7 @@ pub const COMMANDS: [(&str, Command); 88] = [
     ("Send Plan Back", Command::SendBackPlan),
     ("Show Agents", Command::ShowAgents),
     ("Close Side Pane", Command::CloseDock),
+    ("Toggle Side Pane", Command::TogglePanel),
     ("Show Outline", Command::ShowOutline),
     ("Show Source Control", Command::ShowSourceControl),
     ("Toggle Terminal", Command::ToggleTerminal),

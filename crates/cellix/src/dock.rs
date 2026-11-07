@@ -1145,6 +1145,9 @@ pub struct Dock {
     pub under: bool,
     /// The order of the views' tabs, once one has been dragged.
     pub view_order: Vec<Front>,
+    /// Docked, icons at the start of the row stand for the comments and the agents, so
+    /// those have no tabs of their own.
+    pub docked: bool,
 }
 
 /// The views' tabs in the order they come in until one is dragged.
@@ -1299,10 +1302,11 @@ impl Dock {
     /// The views with a tab just now, in order, each with its name and width.
     fn views(&self) -> Vec<(Front, &'static str, u16)> {
         let mut views = Vec::new();
-        if self.comments_tab || self.front == Front::Comments {
+        let tabbed = !self.docked;
+        if tabbed && (self.comments_tab || self.front == Front::Comments) {
             views.push((Front::Comments, "Comments", self.comments_width()));
         }
-        if self.agents_tab || self.listing() {
+        if tabbed && (self.agents_tab || self.listing()) {
             views.push((Front::Agents, "Agents", AGENTS_WIDTH));
         }
         if self.pdf.is_some() {
@@ -1377,7 +1381,7 @@ impl Dock {
         session.name.chars().count() as u16 + TAB_PADDING * 2 + CLOSE_WIDTH
     }
 
-    fn tabs_start(&self, area: Rect) -> u16 {
+    pub fn tabs_start(&self, area: Rect) -> u16 {
         area.x + u16::from(!self.tabs_flush.get())
     }
 

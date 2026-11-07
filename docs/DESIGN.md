@@ -168,7 +168,8 @@ text, an arrow elsewhere. Left to itself a terminal picks one from its own state
 
 Nothing should leave someone wondering what to do next. An empty window lists its actions as rows
 that can be clicked, and its first line changes with what's going: with an agent running and no
-file open, it says to click a file on the left. The agents panel says how working beside an agent
+file open, it says to click a file on the left, or in the compact layout, to pick one from ☰. The
+agents panel says how working beside an agent
 goes before offering to start one. The first start says how to move between the two sides. Every
 panel says what would fill it. Getting Started is a real page, so reading it shows what a page does.
 
@@ -278,6 +279,15 @@ beside the panel with no list of its own.
 Cellix often lives in a pane beside an agent, so width decides the layout. Under 70
 columns the activity bar goes, the sidebar becomes a drawer over the code, splits collapse
 to the focused pane, the status bar keeps only what fits, and review stacks changes.
+Under 80 columns, about what Claude Code leaves Cellix beside its chat, the layout is made
+for that width rather than squeezed. The five panel icons lead the side pane's header, as
+VS Code's panel shows its views, with the one showing named and no tab of its own. The top
+right keeps one icon that shows or hides the pane, beside quit. Tabs out of view are
+counted at the ends of the strip ("‹ 2 more", "3 more ›"), and each count lists its tabs.
+The page's menu folds formatting and inserting into Format › and Insert ›, and the agents
+panel gives each agent one row under two lines of how-to. At every width a page keeps a
+cell for a comment's ◆ and one for a change's bar, and a long page scrolls past its end
+until its last row is a third of the way down.
 The side pane or one editor can be maximized, from the pane's own tab row or a double-click on
 a tab, while running only. The icons at the top right never move for it. Whatever asks for a
 hidden part, such as one of those icons or opening a file, restores first, so nothing opens

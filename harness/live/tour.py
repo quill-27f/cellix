@@ -423,6 +423,17 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("55-paper-cite", [["click", 69, 1]], PAPER_FILE, size="150x44", background="eff1f5")
     shoot("55-paper-menu", [["right", 70, 14]], PAPER_FILE, size="150x44", background="eff1f5")
     shoot("56-narrow-note", [*LIST_AGENTS, ["wait", 0.6]], NOTE_FILE, size="100x34")
+    # About the size Claude Code docks Cellix at: at most 45% of a window, beside the chat.
+    shoot("57-dock-page", [["wait", 1.5]], NOTE_FILE, size="64x40")
+    shoot("57-dock-comments", [["wait", 1.5], ["keys", "\\eOP"], ["wait", 0.6], ["keys", "show comments"],
+                               ["keys", "\r"], ["wait", 1.0]], NOTE_FILE, size="64x40")
+    shoot("57-dock-agents", [*LIST_AGENTS, ["wait", 0.6]], NOTE_FILE, size="64x40")
+    shoot("57-dock-menu", [["wait", 1.5], ["right", 20, 12], ["wait", 0.4]], NOTE_FILE, size="64x40")
+    shoot("57-dock-menu-format", [["wait", 1.5], ["right", 20, 12], ["wait", 0.4], ["move", 24, 16],
+                                  ["wait", 0.4]], NOTE_FILE, size="64x40")
+    # With the pane open the note is taller than its view, so it has an end to scroll past.
+    shoot("57-dock-end", [*LIST_AGENTS, ["wait", 0.6], ["wheel", 30, 10, 40], ["wait", 1.0]], NOTE_FILE,
+          size="64x40")
 
     # The Preview: an image beside the page that shows it.
     os.makedirs(f"{ROOT}/figures", exist_ok=True)

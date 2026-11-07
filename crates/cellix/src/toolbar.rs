@@ -347,6 +347,7 @@ fn fallback(icon: Icon) -> &'static str {
         Icon::ChevronDown => "⌄",
         Icon::Globe => "◍",
         Icon::Agents => "◎",
+        Icon::Panel => "▭",
         _ => "?",
     }
 }
