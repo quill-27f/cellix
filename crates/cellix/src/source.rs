@@ -249,10 +249,11 @@ impl Source {
     fn lines(&self) -> Vec<Line> {
         let mut lines = vec![Line::Title, Line::Gap, Line::Message(0)];
         lines.extend((1..MESSAGE_ROWS).map(Line::Message));
-        lines.extend([Line::Gap, Line::Buttons, Line::Gap]);
+        // What's under way comes before the button that finishes it, so it's read first.
         if self.underway.is_some() {
-            lines.extend([Line::Underway, Line::Gap]);
+            lines.extend([Line::Gap, Line::Underway]);
         }
+        lines.extend([Line::Gap, Line::Buttons, Line::Gap]);
         let list = |lines: &mut Vec<Line>, group: Group| {
             let matching = |entry: &&Entry| match group {
                 Group::Merge => entry.is_conflicted(),
@@ -765,28 +766,34 @@ impl Source {
         let width = area.w.saturating_sub(SIDE * 2);
         let card = Rect::new(left, y, width, 1);
         grid.fill(card, theme.sidebar);
-        grid.panel(Bounds::inset(card, 0.0, 0.04), 22, Some(theme.tint), None);
+        // What's under way says so in words, and Abort stands apart from them as a button
+        // of its own, as VS Code has it.
         let ground = Style {
-            bg: theme.tint,
             fg: theme.gutter.fg,
             ..theme.sidebar
         };
         let abort = card.right().saturating_sub(1 + "Abort".len() as u16);
         let on_abort = hover.is_some_and(|h| h.1 == y && h.0 >= abort && h.0 < card.right());
         let verb = underway.operation.verb();
-        let room = abort.saturating_sub(left + 2) as f32 - measure.width(verb, Font::default());
-        let text = format!(
-            "{verb} {}",
-            clip_middle(&underway.incoming, room - 1.0, measure)
-        );
-        grid.label(left + 1, y, &text, ground, abort.saturating_sub(1));
+        // Up to two columns short of Abort, after the verb and its space.
+        let room = abort.saturating_sub(left + 2) as f32
+            - measure.width(&format!("{verb} "), Font::default());
+        let text = format!("{verb} {}", clip_middle(&underway.incoming, room, measure));
+        grid.label(left, y, &text, ground, abort.saturating_sub(2));
+        let quiet = theme.quiet_button(theme.sidebar.bg);
         let fill = if on_abort {
-            theme.quiet_button(theme.tint)
+            theme.quiet_button(quiet)
         } else {
-            theme.tint
+            quiet
         };
+        // Painted, the cells keep the row's ground and the chip alone is filled, as every
+        // button is; in cells, the fill is all that shows it.
         let word = Style {
-            bg: fill,
+            bg: if measure.in_cells() {
+                fill
+            } else {
+                theme.sidebar.bg
+            },
             fg: theme.text.fg,
             ..theme.sidebar
         };

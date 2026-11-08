@@ -97,6 +97,10 @@ fn buttons(text: Rect) -> Vec<(Choice, u16, &'static str, &'static str)> {
     let least = text.x + 24;
     for (choice, cells, label) in CHOICES {
         let width = cells.chars().count() as u16;
+        // Compare isn't a way to settle the conflict: it stands apart from the three that are.
+        if choice == Choice::Compare {
+            end = end.saturating_sub(2);
+        }
         let Some(start) = end.checked_sub(width) else {
             break;
         };
@@ -109,8 +113,8 @@ fn buttons(text: Rect) -> Vec<(Choice, u16, &'static str, &'static str)> {
     placed
 }
 
-/// Share of a row a chip's height takes: 24 px of a 36 px row, as every chip has.
-const CHIP_HEIGHT: f32 = 0.67;
+/// Share of a row a chip's height takes: a button's, as every button has.
+const CHIP_HEIGHT: f32 = 0.8;
 
 /// A chip centred in its row. The cell tier shows `cells`.
 fn chip(
@@ -234,13 +238,12 @@ pub fn draw(
                     hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + cells.len() as u16);
                 let behind = tints.current_head;
                 // One primary, Incoming, as an agent's change usually is; the rest quiet chips
-                // that lighten on hover, and Compare a word until it's pointed at.
+                // that lighten on hover, Compare among them.
                 let (fill, fg) = match (choice, on) {
                     (Choice::Incoming, false) => (Some(theme.button), theme.button_text),
                     (Choice::Incoming, true) => {
                         (Some(theme.quiet_button(theme.button)), theme.button_text)
                     }
-                    (Choice::Compare, false) => (None, theme.text.fg),
                     (_, false) => (Some(mix(behind, theme.text.fg, 14)), theme.text.fg),
                     (_, true) => (Some(mix(behind, theme.text.fg, 26)), theme.text.fg),
                 };

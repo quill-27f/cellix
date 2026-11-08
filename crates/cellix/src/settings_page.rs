@@ -899,21 +899,15 @@ impl SettingsPage {
             .iter()
             .find(|(_, c)| *c == Control::InstallServer(index));
         if let Some((rect, _)) = spot {
-            // Quiet until wanted: twenty filled buttons in a column would drown the list.
-            if hovered {
-                let style = Style {
-                    fg: theme.button_text,
-                    ..theme.text
-                };
-                let cells = format!("{:^width$}", "Install", width = rect.w as usize);
-                grid.button(rect.x, rect.y, &cells, "Install", theme.button, style);
+            // A quiet button until wanted: twenty filled ones in a column would drown the list.
+            let cells = format!("{:^width$}", "Install", width = rect.w as usize);
+            let (fill, fg) = if hovered {
+                (theme.button, theme.button_text)
             } else {
-                let style = Style {
-                    fg: theme.accent,
-                    ..theme.text
-                };
-                grid.label_right(page.right(), y, "Install", style, NOTE_SIZE);
-            }
+                (theme.quiet_button(theme.text.bg), theme.text.fg)
+            };
+            let style = Style { fg, ..theme.text };
+            grid.button(rect.x, rect.y, &cells, "Install", fill, style);
         }
     }
 

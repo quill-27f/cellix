@@ -374,8 +374,13 @@ pub fn draw(
     if let Some((cells, x)) = clear_button(area, rows, measure) {
         let width = cells.chars().count() as u16;
         let on_it = hover.is_some_and(|h| h.1 == head && h.0 >= x && h.0 < x + width);
-        // Quiet, as Dismiss is on a comment, until it's pointed at.
-        let fill = if on_it { theme.row_hover } else { body.bg };
+        // A quiet button, as every one that isn't the main one is, lighter when pointed at.
+        let quiet = theme.quiet_button(body.bg);
+        let fill = if on_it {
+            theme.quiet_button(quiet)
+        } else {
+            quiet
+        };
         let style = Style { bg: fill, ..body };
         ground(grid, x, head, width, body.bg);
         grid.button(x, head, &cells, CLEAR_FINISHED, fill, style);
@@ -530,18 +535,11 @@ fn draw_empty(
         let width = cells.chars().count() as u16;
         let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
         let label = if index == 0 { SETTINGS } else { START };
-        let fill = if on_it || index == 0 {
-            theme.quiet_button(if on_it { theme.row_hover } else { body.bg })
-        } else {
-            body.bg
-        };
+        // Both quiet buttons, lighter when pointed at: neither is a bare word.
+        let fill = theme.quiet_button(if on_it { theme.row_hover } else { body.bg });
         let style = Style {
             bg: fill,
-            fg: if index == 0 || on_it {
-                body.fg
-            } else {
-                theme.gutter.fg
-            },
+            fg: body.fg,
             ..body
         };
         ground(grid, x, y, width, body.bg);

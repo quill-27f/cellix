@@ -13213,19 +13213,26 @@ impl App {
             90,
         );
         if let Some((cell, name)) = self.page_switch() {
-            if self.hover.is_some_and(|h| cell.contains(h.0, h.1)) {
-                let fill = Some(self.theme.row_hover);
-                grid.panel(Bounds::inset(cell, 0.1, 0.08), 16, fill, None);
-            }
-            grid.label_at(
-                cell.x as f32 + 1.0,
-                cell.x + 1,
-                1,
-                name,
-                style,
-                cell.right(),
-                90,
-            );
+            // A quiet button, lighter when pointed at, as every one that isn't the main one.
+            let behind = grid.cell(cell.x, cell.y).style.bg;
+            let quiet = self.theme.quiet_button(behind);
+            let fill = if self.hover.is_some_and(|h| cell.contains(h.0, h.1)) {
+                self.theme.quiet_button(quiet)
+            } else {
+                quiet
+            };
+            let cells = format!("{name:^width$}", width = cell.w as usize);
+            // Painted, the cells keep their ground and the chip alone is filled.
+            let label = Style {
+                fg: self.theme.text.fg,
+                bg: if self.measure.in_cells() {
+                    fill
+                } else {
+                    behind
+                },
+                ..style
+            };
+            grid.button(cell.x, cell.y, &cells, name, fill, label);
         }
     }
 
@@ -20690,6 +20697,63 @@ mod tests {
         // Its rail icon puts it away again.
         app.handle(mouse(MouseKind::Left, rail.x, app.rail_row(4, rail)));
         assert!(!app.rail_on(Command::ShowAgentContext));
+    }
+
+    /// Whether `word` on screen stands on a chip filled apart from `behind`, as a button
+    /// does, not bare text.
+    fn on_a_button(grid: &Grid, word: &str, behind: Rgb) -> bool {
+        button_at(grid, find(grid, word), behind)
+    }
+
+    /// Whether the cell at `(x, y)` stands on a chip filled apart from `behind`.
+    fn button_at(grid: &Grid, (x, y): (u16, u16), behind: Rgb) -> bool {
+        let middle = Bounds::cells(x as f32 + 0.5, y as f32 + 0.5, 0.0, 0.0);
+        grid.paint.iter().any(|p| {
+            matches!(p, Paint::Panel { bounds, fill: Some(fill), .. }
+                if *fill != behind
+                    && bounds.x <= middle.x && middle.x < bounds.x + bounds.w
+                    && bounds.y <= middle.y && middle.y < bounds.y + bounds.h)
+        })
+    }
+
+    #[test]
+    fn actions_that_were_words_are_buttons() {
+        // Show Source, over a page that has one.
+        let (_dir, app) = csv_app();
+        assert!(on_a_button(&screen(&app), "Show Source", app.theme.text.bg));
+        // Compare, beside a conflict's other choices, before it's pointed at.
+        let (dir, mut app) = project();
+        let file = dir.path().join("both.txt");
+        fs::write(
+            &file,
+            "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> agent\n",
+        )
+        .unwrap();
+        app.open(&file).unwrap();
+        let grid = screen(&app);
+        assert!(grid.text().contains("Incoming"), "{}", grid.text());
+        let (x, y) = find(&grid, "Compare");
+        assert!(on_a_button(&grid, "Compare", grid.cell(x, y).style.bg));
+        // Start an Agent, beside Notification Settings in the empty inbox.
+        let (_dir, mut app) = project();
+        app.handle(Event::Resize(150, 40));
+        app.run(Command::ShowInbox);
+        let grid = screen(&app);
+        let behind = app.theme.sidebar.bg;
+        assert!(
+            on_a_button(&grid, "Notification Settings", behind),
+            "{}",
+            grid.text()
+        );
+        // The welcome page says Start an Agent too: this is the one beside Notification Settings.
+        let (_, y) = find(&grid, "Notification Settings");
+        let row: Vec<char> = grid.row_text(y).chars().collect();
+        let word: Vec<char> = "Start an Agent".chars().collect();
+        let x = row
+            .windows(word.len())
+            .rposition(|w| w == word.as_slice())
+            .unwrap();
+        assert!(button_at(&grid, (x as u16, y), behind), "{}", grid.text());
     }
 
     #[test]

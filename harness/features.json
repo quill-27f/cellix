@@ -4338,5 +4338,12 @@
     "title": "Section headings look one way in Source Control, the Timeline, Agent Context and the Task page: small quiet bold capitals, a chevron when they fold",
     "test": "section_headings_look_one_way_in_source_control_and_agent_context",
     "passes": true
+  },
+  {
+    "id": "actions-are-buttons",
+    "milestone": 12,
+    "title": "Show Source, Compare, Clear Finished, Start an Agent and a language server's Install are quiet buttons, not bare words; Merging stands apart from its Abort button",
+    "test": "actions_that_were_words_are_buttons",
+    "passes": true
   }
 ]

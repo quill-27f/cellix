@@ -337,9 +337,12 @@ impl Theme {
 
     /// A button that isn't the main one, as a wash over whatever's behind it.
     pub fn quiet_button(&self, behind: Rgb) -> Rgb {
+        // Light grounds need a deeper wash to read as a button at all: Latte's base and a
+        // 14 step apart are 1.14:1, under the 1.3:1 a quiet button needs.
         const WASH: i16 = 14;
+        const LIGHT_WASH: i16 = 24;
         let lighter = behind.0 < 128;
-        let by = if lighter { WASH } else { -WASH };
+        let by = if lighter { WASH } else { -LIGHT_WASH };
         shifted(behind, (by, by, by))
     }
 
