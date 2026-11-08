@@ -772,8 +772,9 @@ fn codex_instructions(project: &Path, homes: &Homes) -> Vec<Instruction> {
         .into_iter()
         .filter(|d| d.starts_with(&root))
     {
+        // Codex reads the first of the two that has something in it.
         let over = dir.join("AGENTS.override.md");
-        let path = if over.is_file() {
+        let path = if fs::read_to_string(&over).is_ok_and(|t| !t.trim().is_empty()) {
             over
         } else {
             dir.join("AGENTS.md")
@@ -784,7 +785,13 @@ fn codex_instructions(project: &Path, homes: &Homes) -> Vec<Instruction> {
                 continue;
             }
             if text.len() > budget {
-                file.limit = Some(text[..budget.min(text.len())].lines().count());
+                // Cut where a character ends, so a dash or a word in another script that the
+                // cut falls inside doesn't stop the reading.
+                let mut cut = budget.min(text.len());
+                while !text.is_char_boundary(cut) {
+                    cut -= 1;
+                }
+                file.limit = Some(text[..cut].lines().count());
             }
             budget = budget.saturating_sub(text.len());
             found.push(file);

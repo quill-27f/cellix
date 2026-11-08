@@ -474,3 +474,20 @@ fn every_current_claude_model_has_a_million_and_only_old_ones_200k() {
     // A later 4.x isn't taken for an old one by its prefix.
     assert_eq!(claude_window("claude-opus-4-6-20260101", 10), 1_000_000);
 }
+
+#[test]
+fn codex_cuts_a_long_file_between_characters_and_skips_an_empty_override() {
+    let f = fixture();
+    // A dash of three bytes across the 32 KiB cut.
+    let mut long = "a".repeat(CODEX_BYTES - 1);
+    long.push_str("—\nmore\n");
+    write(&f.project.join("AGENTS.md"), &long);
+    write(&f.project.join("AGENTS.override.md"), "\n  \n");
+    let codex = discover(Agent::Codex, &f.project, &f.homes);
+    let file = codex
+        .instructions
+        .iter()
+        .find(|i| i.path.ends_with("AGENTS.md") && i.scope == Scope::Project)
+        .expect("AGENTS.md, since the override is empty");
+    assert_eq!(file.limit, Some(1));
+}

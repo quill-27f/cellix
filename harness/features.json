@@ -4401,5 +4401,12 @@
     "title": "A fenced code block closes only on a fence of the same mark at least as long, so output holding ``` stays inside a transcript's block",
     "test": "output_holding_a_shorter_fence_stays_inside_its_block",
     "passes": true
+  },
+  {
+    "id": "codex-cut-on-a-character",
+    "milestone": 12,
+    "title": "Agent Context reads Codex's instructions as Codex does: the 32 KiB cut lands between characters, and an empty AGENTS.override.md is passed over",
+    "test": "codex_cuts_a_long_file_between_characters_and_skips_an_empty_override",
+    "passes": true
   }
 ]
