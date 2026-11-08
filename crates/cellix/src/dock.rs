@@ -59,8 +59,8 @@ const CONTEXT_GAP: u16 = 1;
 const CONTEXT_AIR: f32 = 0.9;
 /// The size the context is set at, smaller than the name it follows.
 const CONTEXT_SIZE: u8 = 85;
-/// How narrow a session's tab can get, sharing the row with others.
-const SMALLEST_TAB: u16 = 6;
+/// Columns for the chevron on the tab in front that lists every tab, when they don't all fit.
+const PICK_WIDTH: u16 = 2;
 /// The button that closes the pane.
 const HIDE_WIDTH: u16 = 3;
 /// Its hover chip, the size and roundness of the one the icons at the top right have.
@@ -1132,6 +1132,15 @@ pub enum TabHit {
     CloseView(Front),
     /// The pane's own close button, at the far end.
     Hide,
+    /// The chevron on the tab in front, when the tabs don't all fit, which lists them all.
+    Pick,
+}
+
+/// A tab of the side pane, as the list of every tab names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaneTab {
+    View(Front),
+    Session(usize),
 }
 
 /// What the pane shows besides its sessions.
@@ -1470,34 +1479,74 @@ impl Dock {
             .collect()
     }
 
-    /// What each tab gets, views and then sessions. Out of room, the one in front keeps its
-    /// whole name and the rest share what's left, so none falls off the end.
-    fn tab_widths(&self, area: Rect) -> Vec<u16> {
-        let mut widths = self.wanted_widths();
-        let room = self
-            .tabs_end
-            .get()
-            .saturating_sub(self.tabs_start(area) + NEW_WIDTH + MAXIMIZE_GAP + MAXIMIZE_WIDTH);
-        if self.tabs_end.get() == 0 || widths.iter().sum::<u16>() <= room {
-            return widths;
-        }
+    /// Whether the tabs, and the + after them, don't all fit before the icons at the top
+    /// right. Then only the tab in front shows, with a chevron that lists every tab: a share
+    /// of the row each would leave the one in front a stub.
+    pub fn picking(&self, area: Rect) -> bool {
+        let end = self.tabs_end.get();
+        let wanted = self.wanted_widths().iter().sum::<u16>() + NEW_WIDTH;
+        end != 0 && self.tabs_start(area) + wanted > end
+    }
+
+    /// Where the tab in front comes among them all, views and then sessions.
+    fn front_index(&self) -> Option<usize> {
         let views = self.views();
         let shown = |view: &(Front, &str, u16)| {
             self.front == view.0 || (view.0 == Front::Agents && self.listing())
         };
-        let front = views.iter().position(shown).or_else(|| {
+        views.iter().position(shown).or_else(|| {
             let session = self.active.filter(|_| self.front == Front::Session)?;
             Some(views.len() + session)
-        });
-        let kept = front.map_or(0, |index| widths[index]);
-        let others = (widths.len() - usize::from(front.is_some())).max(1) as u16;
-        let each = (room.saturating_sub(kept) / others).max(SMALLEST_TAB);
+        })
+    }
+
+    /// What each tab gets, views and then sessions. When they don't all fit, the one in
+    /// front gets its whole name and the chevron, and the rest none: they're in its list.
+    fn tab_widths(&self, area: Rect) -> Vec<u16> {
+        let mut widths = self.wanted_widths();
+        if !self.picking(area) {
+            return widths;
+        }
+        let room = self.tabs_end.get().saturating_sub(self.tabs_start(area));
+        let front = self.front_index().unwrap_or(0);
         for (index, width) in widths.iter_mut().enumerate() {
-            if Some(index) != front {
-                *width = (*width).min(each);
-            }
+            *width = if index == front {
+                (*width + PICK_WIDTH).min(room)
+            } else {
+                0
+            };
         }
         widths
+    }
+
+    /// Every tab, views and then sessions, with what it's called and whether it's in front,
+    /// for the list the chevron opens.
+    pub fn every_tab(&self) -> Vec<(PaneTab, String, bool)> {
+        let front = self.front_index();
+        let views = self.views().into_iter().map(|(view, name, _)| {
+            let counted = match view {
+                Front::Comments => self.comment_count.get(),
+                Front::Inbox => self.inbox_count.get(),
+                _ => 0,
+            };
+            let name = if counted > 0 {
+                format!("{name} {counted}")
+            } else {
+                name.to_string()
+            };
+            (PaneTab::View(view), name)
+        });
+        let sessions = (self.sessions.iter().enumerate())
+            .map(|(index, session)| (PaneTab::Session(index), session.name.clone()));
+        let all = views.chain(sessions).enumerate();
+        all.map(|(index, (tab, name))| (tab, name, Some(index) == front))
+            .collect()
+    }
+
+    /// Where the tab in front ends its name when it carries the chevron, and where the chevron
+    /// stands, given where its × stands.
+    fn pick_at(&self, area: Rect, close: u16) -> Option<u16> {
+        self.picking(area).then(|| close.saturating_sub(PICK_WIDTH))
     }
 
     /// What an agent's tab says of its context, for a tooltip, with the pointer at `x`.
@@ -1522,9 +1571,10 @@ impl Dock {
             .map(|view| view.1)
             .chain(self.sessions.iter().map(|s| s.name.as_str()));
         let mut at = self.tabs_start(area);
+        let pick = if self.picking(area) { PICK_WIDTH } else { 0 };
         for ((name, width), full) in names.zip(widths).zip(wanted) {
             if x >= at && x < at + width {
-                return (width < full).then(|| name.to_string());
+                return (width < full + pick).then(|| name.to_string());
             }
             at += width;
         }
@@ -1654,8 +1704,13 @@ impl Dock {
         if x + HIDE_WIDTH >= area.right() {
             return Some(TabHit::Hide);
         }
+        let picking = self.picking(area);
         for (view, _, tab) in self.view_tabs(area) {
             if x >= tab.x && x < tab.right() {
+                let close = tab.right().saturating_sub(CLOSE_WIDTH + 1);
+                if picking && x + PICK_WIDTH >= close && x < close {
+                    return Some(TabHit::Pick);
+                }
                 let on_close = x + CLOSE_WIDTH + 1 >= tab.right();
                 return Some(if on_close {
                     TabHit::CloseView(view)
@@ -1667,7 +1722,11 @@ impl Dock {
         let tabs = self.tabs(area);
         for (index, (start, end)) in tabs.iter().enumerate() {
             if x >= *start && x < *end {
-                let on_close = x >= end.saturating_sub(CLOSE_WIDTH + 1);
+                let close = end.saturating_sub(CLOSE_WIDTH + 1);
+                if picking && x + PICK_WIDTH >= close && x < close {
+                    return Some(TabHit::Pick);
+                }
+                let on_close = x >= close;
                 return Some(if on_close {
                     TabHit::Close(index)
                 } else {
@@ -1676,6 +1735,10 @@ impl Dock {
             }
         }
         let end = tabs.last().map_or(self.first_tab(area), |t| t.1);
+        // Out of room, the + is in the chevron's list.
+        if picking {
+            return None;
+        }
         if x >= end && x < end + NEW_WIDTH {
             return Some(TabHit::New);
         }
@@ -1703,7 +1766,19 @@ impl Dock {
         let count = self.comment_count.get();
         let row = Rect::new(area.x, area.y, area.w, 1);
         grid.fill(row, theme.tab);
+        let picking = self.picking(area);
+        let chevron = |grid: &mut Grid, x: u16, style: Style| {
+            let quiet = Style {
+                bold: false,
+                ..style
+            };
+            grid.glyph(x as f32, area.y, Icon::ChevronDown, quiet.fg, "▾", quiet);
+        };
         for (view, name, tab) in self.view_tabs(area) {
+            // Out of room, only the tab in front has columns; the rest are in its list.
+            if tab.w == 0 {
+                continue;
+            }
             let on = self.front == view || (view == Front::Agents && self.listing());
             let hovered = hover.is_some_and(|h| tab.contains(h.0, h.1));
             if on {
@@ -1727,7 +1802,19 @@ impl Dock {
                 name.to_string()
             };
             let at = tab.x as f32 + TAB_TEXT;
-            grid.label_at(at, tab.x + 2, area.y, &text, quiet, close, 100);
+            let pick = self.pick_at(area, close);
+            grid.label_at(
+                at,
+                tab.x + 2,
+                area.y,
+                &text,
+                quiet,
+                pick.unwrap_or(close),
+                100,
+            );
+            if let Some(x) = pick {
+                chevron(grid, x, quiet);
+            }
             if on || hovered {
                 let plain = Style {
                     bold: false,
@@ -1737,6 +1824,9 @@ impl Dock {
             }
         }
         for (index, (start, end)) in self.tabs(area).into_iter().enumerate() {
+            if end == start {
+                continue;
+            }
             let session = &self.sessions[index];
             let active = self.active == Some(index) && self.front == Front::Session;
             let tab = Rect::new(start, area.y, end - start, 1);
@@ -1766,16 +1856,23 @@ impl Dock {
                 style
             };
             let close = end.saturating_sub(CLOSE_WIDTH + 1);
+            let pick = self.pick_at(area, close);
+            if let Some(x) = pick {
+                chevron(grid, x, style);
+            }
+            // Where its name and context stop: the chevron, or the ×.
+            let stop = pick.unwrap_or(close);
             let at = start as f32 + TAB_TEXT;
             // How full its context is, before the ×, when the tab has its whole width.
-            let whole = end - start >= Self::session_width(session);
+            let pick_room = if pick.is_some() { PICK_WIDTH } else { 0 };
+            let whole = end - start >= Self::session_width(session) + pick_room;
             let context = session.context().filter(|_| whole);
             let name_end = match &context {
                 Some(text) => {
                     // Right after the name, as the workspace's tile has it, not at the ×.
                     let font = cellix_render::Font::default();
                     let after = at + measure.width(&session.name, font) + CONTEXT_AIR;
-                    let x = after.ceil().min(close.saturating_sub(1) as f32) as u16;
+                    let x = after.ceil().min(stop.saturating_sub(1) as f32) as u16;
                     let percent = session.usage.as_ref().and_then(|u| u.percent());
                     let fg = match percent {
                         Some(p) if p >= crate::transcript::FULL => theme.error,
@@ -1784,10 +1881,10 @@ impl Dock {
                     };
                     let quiet = Style { fg, ..shown };
                     let px = after.min(x as f32);
-                    grid.label_at(px, x, area.y, text, quiet, close, CONTEXT_SIZE);
+                    grid.label_at(px, x, area.y, text, quiet, stop, CONTEXT_SIZE);
                     x
                 }
-                None => close,
+                None => stop,
             };
             grid.label_at(
                 at,
@@ -1809,7 +1906,8 @@ impl Dock {
         let plus = self.tabs(area).last().map_or(self.first_tab(area), |t| t.1);
         let button = Rect::new(plus, area.y, NEW_WIDTH, 1);
         let on_it = hover.is_some_and(|h| button.contains(h.0, h.1));
-        if on_it {
+        // Out of room, the + is in the chevron's list.
+        if on_it && !picking {
             grid.panel(
                 Bounds::inset(button, 0.1, 0.1),
                 16,
@@ -1825,10 +1923,12 @@ impl Dock {
             },
             ..theme.tab
         };
-        grid.label(plus + 1, area.y, "+", style, area.right());
+        if !picking {
+            grid.label(plus + 1, area.y, "+", style, area.right());
+        }
         // Maximized, it stands on the chip a selected icon has, so it's plain how to get back.
         let button = Rect::new(plus + NEW_WIDTH + MAXIMIZE_GAP, area.y, MAXIMIZE_WIDTH, 1);
-        if maximized || self.maximize_fits(plus) {
+        if maximized || (!picking && self.maximize_fits(plus)) {
             let on_it = hover.is_some_and(|h| button.contains(h.0, h.1));
             if maximized || on_it {
                 let fill = if maximized {

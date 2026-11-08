@@ -651,7 +651,7 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("11-replace", replacing, CODE_FILE)
     shoot("12-search-switches", [["click", RAIL_X, SEARCH], ["keys", "item"], ["keys", "\x1bw"], ["wait", 0.6]], CODE_FILE)
     shoot("13-review", [["keys", "\u0007"], ["wait", 1.2]], CODE_FILE)
-    shoot("13-strip-hover", [["wait", 0.8], ["move", 95, 0], ["wait", 0.4]], CODE_FILE)
+    shoot("13-strip-hover", [["wait", 0.8], ["move", 100, 0], ["wait", 0.4]], CODE_FILE)
     shoot("13-agents-click", [["wait", 1.5], ["click", 111, 0], ["wait", 1.5]], CODE_FILE)
     shoot("13-quit-hover", [["wait", 6], ["move", 119, 0], ["wait", 1.2]], CODE_FILE)
     shoot("13-quit-beside-pane", [["wait", 6], ["click", 111, 0], ["wait", 3.5], ["move", 116, 0], ["wait", 1.2]], CODE_FILE)

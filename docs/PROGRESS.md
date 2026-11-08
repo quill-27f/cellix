@@ -1571,3 +1571,13 @@ Both failed once on 0.6.0's CI and passed on rerun. Neither cause is new in 0.6.
 - **`cli_reads_comments_over_socket`** read `[]`. The test waited for a ◆ to show that the comment was kept, but on the cell tier the Comments icon at the top right is drawn as ◆, there from the start. So the CLI could ask before Enter reached the comment box. The test now waits for the box to close. A unit test printing the cell row confirmed the ◆ in the corner.
 
 Unverified: both only show on Windows CI, which can't be run from the Mac. The two tests pass here.
+
+## Side-pane tabs that don't fit (2026-11-08)
+
+At 120 columns the side pane has 40 columns and the icons at the top right took 26 of them, so its tabs ran under the icons (131-task-failed, 132-task-problems). Designed on the canvas (row "After 0.6.0: side-pane tabs that run under the icons"); the user picked B over an editor-style "+N" chip:
+- When the tabs and the + don't all fit before the icons, only the tab in front shows, whole, with a chevron before its ×. The chevron lists every tab, the front one lit, then New Agent or Terminal… (what + starts). Wider panes show every tab as before. A chip would have left "make build" cut at 120 columns.
+- The icons at the top right stand 3 columns apart instead of 4, so the tabs get 17 columns there instead of 12. They're drawn on the ground of the row they stand on, read just left of them, so the Task page header no longer shows a dark box behind each icon.
+- The old rule (the others shrink to 6 columns, their names on hover) is gone. `the_tab_in_front_keeps_its_name_and_the_others_say_theirs_on_hover` became `..._and_the_others_are_in_its_list`: the front tab still keeps its name, and the others are in the list instead of cut. `the_agents_list_is_a_tab_that_stays` now opens at 220 columns, since at 170 its three tabs no longer fit.
+- Test: `a_narrow_panes_tabs_stay_clear_of_the_icons_and_the_chevron_lists_them_all`. Before this change the shell's tab and the + stood under the Comments icon at 120 columns.
+
+Retaken and looked at: 131, 132, 150, 13-strip-hover (now pointed at column 100), 13-agents-click, 13-quit-*, 14-agents, 64-transcript-tab*, 02-code, 24-light-page, 57-dock-agents.

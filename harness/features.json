@@ -2130,8 +2130,8 @@
   {
     "id": "tabs-front",
     "milestone": 9,
-    "title": "The front tab keeps its name, others show it on hover",
-    "test": "the_tab_in_front_keeps_its_name_and_the_others_say_theirs_on_hover",
+    "title": "The front tab keeps its name; when the tabs don't all fit, the others are in its chevron's list",
+    "test": "the_tab_in_front_keeps_its_name_and_the_others_are_in_its_list",
     "passes": true
   },
   {
@@ -4323,6 +4323,13 @@
     "milestone": 12,
     "title": "A paste the Windows console hands over in two reads stays one paste, so its last line break can't accept a suggestion",
     "test": "a_paste_the_console_hands_over_in_two_reads_stays_one_paste",
+    "passes": true
+  },
+  {
+    "id": "pane-tabs-picker",
+    "milestone": 12,
+    "title": "A narrow side pane's tabs stay clear of the icons at the top right; the one in front keeps its name and a chevron lists every tab",
+    "test": "a_narrow_panes_tabs_stay_clear_of_the_icons_and_the_chevron_lists_them_all",
     "passes": true
   }
 ]

@@ -73,6 +73,10 @@ pub enum Action {
     Transcript(usize),
     /// Closes a tab of the side pane.
     CloseSession(usize),
+    /// Brings a tab of the side pane to the front, from the list of every tab.
+    PaneTab(crate::dock::PaneTab),
+    /// Lists what can be started in the side pane, as its + does.
+    PaneNew,
 }
 
 /// What a click or a key on a menu came to.

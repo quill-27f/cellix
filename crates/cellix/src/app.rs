@@ -107,8 +107,9 @@ const PANE_ACTIONS: [(Icon, Command, &str); 5] = [
 ];
 /// What the top right keeps when docked: one icon that shows or hides the pane.
 const PANEL_TOGGLE: (Icon, Command, &str) = (Icon::Panel, Command::TogglePanel, "Toggle Panel");
-/// Columns each of those takes, and rows tall each icon is.
-const ACTION_WIDTH: u16 = 4;
+/// Columns each of those takes, and rows tall each icon is. Three, so a narrow pane's tabs
+/// keep room beside them; still more air between them than VS Code leaves.
+const ACTION_WIDTH: u16 = 3;
 const ACTION_ICON: f32 = 0.62;
 /// Columns kept clear on each side of the whole bar.
 const ACTION_MARGIN: u16 = 1;
@@ -3467,12 +3468,12 @@ impl App {
         }
     }
 
-    fn draw_app_close(&self, grid: &mut Grid) {
+    fn draw_app_close(&self, grid: &mut Grid, ground: Style) {
         let Some(cell) = self.app_close() else {
             return;
         };
         let theme = &self.theme;
-        grid.fill(cell, theme.tab);
+        grid.fill(cell, ground);
         let hovered = self.hover.is_some_and(|h| cell.contains(h.0, h.1));
         let middle = cell.x as f32 + cell.w as f32 / 2.0;
         if hovered {
@@ -3493,7 +3494,7 @@ impl App {
         let style = Style {
             fg: color,
             painted: true,
-            ..theme.tab
+            ..ground
         };
         grid.put_str(cell.x, 0, "×", style, cell.right());
         // The size of the pane's ×, so every × in the row is the same, centred on its chip.
@@ -3505,13 +3506,32 @@ impl App {
         });
     }
 
+    /// The ground the icons at the top right stand on: their row's own, read just left of
+    /// them, so the cluster is one piece of whatever that row is, a tab bar or the Task page's
+    /// header, with no box behind each icon.
+    fn action_ground(&self, grid: &Grid) -> Style {
+        let actions = self.pane_actions();
+        let first = actions.iter().filter(|a| a.0.y == 0).map(|a| a.0.x).min();
+        let x = first.or_else(|| self.app_close().map(|c| c.x));
+        let bg = x
+            .filter(|x| *x > 0 && *x <= grid.width())
+            .map_or(self.theme.tab.bg, |x| grid.cell(x - 1, 0).style.bg);
+        Style {
+            bg,
+            ..self.theme.tab
+        }
+    }
+
     fn draw_pane_actions(&self, grid: &mut Grid) {
-        self.draw_app_close(grid);
+        let ground = self.action_ground(grid);
+        self.draw_app_close(grid, ground);
         let theme = &self.theme;
         for (cell, icon, command, _) in self.pane_actions() {
             let hovered = self.hover.is_some_and(|h| cell.contains(h.0, h.1));
             let on = self.action_on(command);
-            grid.fill(cell, theme.tab);
+            // Docked, the panels' icons lead the pane's header, on its ground.
+            let ground = if cell.y == 0 { ground } else { theme.tab };
+            grid.fill(cell, ground);
             // Docked, the view showing is named beside its icon, on a tab as its own was.
             let label = self.docked().then(|| self.panel_label(command)).flatten();
             if let Some(label) = label {
@@ -3522,16 +3542,10 @@ impl App {
                 grid.panel(bounds, PILL_RADIUS, Some(theme.tint), None);
                 // Painted, the cells keep the tab's ground: the chip shows through, shorter than its row.
                 let icon_cell = Rect::new(cell.x, cell.y, ACTION_WIDTH, 1);
-                toolbar::draw_icon(
-                    grid,
-                    (icon, ACTION_ICON),
-                    icon_cell,
-                    theme.text.fg,
-                    theme.tab,
-                );
+                toolbar::draw_icon(grid, (icon, ACTION_ICON), icon_cell, theme.text.fg, ground);
                 let style = Style {
                     fg: theme.text.fg,
-                    ..theme.tab
+                    ..ground
                 };
                 let at = cell.x as f32 + ACTION_WIDTH as f32 - 0.5;
                 let start = cell.x + ACTION_WIDTH;
@@ -3556,7 +3570,7 @@ impl App {
             } else {
                 theme.activity.fg
             };
-            toolbar::draw_icon(grid, (icon, ACTION_ICON), cell, color, theme.tab);
+            toolbar::draw_icon(grid, (icon, ACTION_ICON), cell, color, ground);
             // With no tab to say so, the icon does.
             let waiting = match command {
                 Command::ListAgents => self.agents.needing_you() > 0,
@@ -7880,6 +7894,7 @@ impl App {
                     _ => {}
                 }
                 match hit {
+                    Some(TabHit::Pick) => self.show_pane_tabs(),
                     Some(TabHit::Maximize) => self.toggle_maximized(Maximized::Pane),
                     Some(TabHit::Hide) => self.run(Command::CloseDock),
                     Some(TabHit::Tab(index)) => {
@@ -11363,6 +11378,11 @@ impl App {
             }
             MenuAction::AddCodeCell => self.add_cell(true),
             MenuAction::ShowTab(index) => self.set_active(index),
+            MenuAction::PaneTab(tab) => self.show_pane_tab(tab),
+            MenuAction::PaneNew => {
+                self.refresh_agents();
+                self.dock.show_list();
+            }
             // The menu opens these itself.
             MenuAction::Submenu => {}
             MenuAction::ImageWidth(percent) => {
@@ -11913,6 +11933,49 @@ impl App {
         }
         // Too narrow for anything but the tab in front, which gets what there is.
         (place(active, active + 1, 0), None, None)
+    }
+
+    /// Lists every tab of the side pane under the chevron of the one in front, when they don't
+    /// all fit, that one lit, and after them what the + would start.
+    fn show_pane_tabs(&mut self) {
+        let Some(area) = self.dock_area() else {
+            return;
+        };
+        let title = self.title_of(area);
+        let x = self.dock.tabs_start(title);
+        let tabs = self.dock.every_tab();
+        let lit = tabs.iter().position(|(.., front)| *front);
+        let mut items: Vec<MenuItem> = tabs
+            .into_iter()
+            .map(|(tab, name, _)| MenuItem::new(name, MenuAction::PaneTab(tab)))
+            .collect();
+        let mut new = MenuItem::new("New Agent or Terminal…", MenuAction::PaneNew);
+        new.rule = true;
+        items.push(new);
+        self.show_menu((x, title.y + 1), items);
+        if let Overlay::Menu(menu) = &mut self.overlay {
+            menu.selected = lit;
+        }
+    }
+
+    /// Brings a tab of the side pane to the front, as a click on it would.
+    fn show_pane_tab(&mut self, tab: crate::dock::PaneTab) {
+        match tab {
+            crate::dock::PaneTab::Session(index) if index < self.dock.sessions.len() => {
+                self.dock.active = Some(index);
+                self.dock.focused = true;
+                self.dock.front = Front::Session;
+            }
+            crate::dock::PaneTab::Session(_) => {}
+            crate::dock::PaneTab::View(Front::Agents) => {
+                self.refresh_agents();
+                self.dock.show_list();
+            }
+            crate::dock::PaneTab::View(view) => {
+                self.dock.front = view;
+                self.dock.focused = false;
+            }
+        }
     }
 
     /// Lists the tabs out of view on one side, to pick one.
@@ -22030,24 +22093,88 @@ mod tests {
     }
 
     #[test]
-    fn the_tab_in_front_keeps_its_name_and_the_others_say_theirs_on_hover() {
+    fn the_tab_in_front_keeps_its_name_and_the_others_are_in_its_list() {
         let (_dir, mut app) = project();
         with_a_shell(&mut app);
         app.run(Command::ShowComments);
         app.run(Command::ListAgents);
         let _ = screen(&app);
         let area = app.dock_area().unwrap();
+        assert!(app.dock.picking(app.title_of(area)), "they don't all fit");
         let tabs = app.dock.view_tabs_for_test(area);
         let agents = tabs.iter().find(|tab| tab.0 == Front::Agents).unwrap();
-        assert_eq!(agents.2.w, 11, "it's in front");
-        let comments = tabs.iter().find(|tab| tab.0 == Front::Comments).unwrap();
-        assert!(comments.2.w < 13, "the rest give way");
-        let name = app.dock.cut_name(area, comments.2.x + 1);
-        assert_eq!(name.as_deref(), Some("Comments"));
+        assert_eq!(agents.2.w, 13, "it's in front, whole, with its chevron");
         assert_eq!(
             app.dock.cut_name(area, agents.2.x + 1),
             None,
             "it shows in full"
+        );
+        let comments = tabs.iter().find(|tab| tab.0 == Front::Comments).unwrap();
+        assert_eq!(comments.2.w, 0, "the rest give way");
+        let listed: Vec<String> = app.dock.every_tab().into_iter().map(|t| t.1).collect();
+        assert!(listed.iter().any(|name| name == "Comments"), "{listed:?}");
+    }
+
+    #[test]
+    fn a_narrow_panes_tabs_stay_clear_of_the_icons_and_the_chevron_lists_them_all() {
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (120, 40));
+        with_a_shell(&mut app);
+        app.run(Command::ShowComments);
+        app.run(Command::ListAgents);
+        let grid = screen(&app);
+        let area = app.dock_area().unwrap();
+        let icons = app.pane_actions();
+        let first_icon = icons
+            .iter()
+            .filter(|a| a.0.y == area.y)
+            .map(|a| a.0.x)
+            .min();
+        let first_icon = first_icon.expect("the icons share the pane's row");
+        // Nothing of a tab, nor the +, reaches the icons.
+        let row = grid.row_text(area.y);
+        let tabs: String = row
+            .chars()
+            .skip(area.x as usize)
+            .take((first_icon - area.x) as usize)
+            .collect();
+        let shell = app.dock.sessions[0].name.clone();
+        assert!(!tabs.contains('+'), "the + is in the list: {row}");
+        for x in area.x..first_icon {
+            let hit = app.dock.hit(app.title_of(area), x);
+            assert!(hit != Some(TabHit::New), "no + at {x}: {row}");
+        }
+        // The one in front, whole; the chevron beside its name lists every tab.
+        assert!(tabs.contains("Agents"), "{row}");
+        let title = app.title_of(area);
+        let chevron = (area.x..first_icon).find(|x| app.dock.hit(title, *x) == Some(TabHit::Pick));
+        let chevron = chevron.expect("a chevron on the tab in front");
+        click(&mut app, chevron, area.y);
+        let text = screen(&app).text();
+        for name in [
+            "Comments",
+            "Agents",
+            shell.as_str(),
+            "New Agent or Terminal",
+        ] {
+            assert!(text.contains(name), "{name} listed: {text}");
+        }
+        // Picking the terminal brings it to the front, and its name is the tab now.
+        let Overlay::Menu(menu) = &app.overlay else {
+            panic!("no list");
+        };
+        assert_eq!(menu.selected, Some(1), "the one in front is lit");
+        app.handle(Event::Key(KeyEvent::plain(Key::Down)));
+        app.handle(Event::Key(KeyEvent::plain(Key::Enter)));
+        assert!(app.dock.showing(Front::Session), "the terminal is in front");
+        let row = screen(&app).row_text(area.y);
+        assert!(row.contains(&shell), "{row}");
+        // Wide enough, every tab shows, and the + after them.
+        app.handle(Event::Resize(200, 40));
+        let row = screen(&app).row_text(app.dock_area().unwrap().y);
+        assert!(
+            row.contains("Comments") && row.contains("Agents") && row.contains('+'),
+            "{row}"
         );
     }
 
@@ -22274,7 +22401,8 @@ mod tests {
     #[test]
     fn the_agents_list_is_a_tab_that_stays() {
         let (dir, _) = project();
-        let mut app = App::new(dir.path().to_path_buf(), (170, 44));
+        // Wide enough for every tab: narrower, the one in front lists the rest.
+        let mut app = App::new(dir.path().to_path_buf(), (220, 44));
         with_a_shell(&mut app);
         let area = app.dock_area().unwrap();
         let plus = app.dock.new_button_for_test(area);
