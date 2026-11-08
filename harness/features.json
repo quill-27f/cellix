@@ -4394,5 +4394,12 @@
     "title": "Control characters in a file, an agent's output or a transcript show as their pictures and never reach the terminal",
     "test": "control_characters_never_reach_a_cell",
     "passes": true
+  },
+  {
+    "id": "fence-length-closes",
+    "milestone": 12,
+    "title": "A fenced code block closes only on a fence of the same mark at least as long, so output holding ``` stays inside a transcript's block",
+    "test": "output_holding_a_shorter_fence_stays_inside_its_block",
+    "passes": true
   }
 ]

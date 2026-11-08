@@ -1784,17 +1784,15 @@ pub fn layout_with(
     }
     while i < lines.len() {
         let (offset, line) = lines[i];
-        let trimmed = line.trim_start();
         // The line that says which cell this is isn't part of the document.
         if let (Some(_), Some(mark)) = (extras.notebook, notebook::marker(line)) {
             cell = mark.cell.filter(|_| mark.code);
             i += 1;
             continue;
         }
-        if let Some(language) = trimmed.strip_prefix("```") {
-            let language = language.trim();
+        if let Some((fence, language)) = cellix_doc::fence::Fence::open(line) {
             let close = (i + 1..lines.len())
-                .find(|n| lines[*n].1.trim_start().starts_with("```"))
+                .find(|n| fence.closes(lines[*n].1))
                 .unwrap_or(lines.len());
             if cellix_doc::diagram::is_tikz(language) && context.cell().is_some() {
                 let last = close.min(lines.len() - 1);
@@ -2392,11 +2390,11 @@ pub fn list_numbers(lines: &[&str]) -> Vec<Option<(usize, u64)>> {
     // The lists open here, outermost first: each one's indent, first line and next number.
     let mut open: Vec<(usize, usize, u64)> = Vec::new();
     let mut numbers = vec![None; lines.len()];
-    let mut fence: Option<&str> = None;
+    let mut fence: Option<cellix_doc::fence::Fence> = None;
     for (index, line) in lines.iter().enumerate() {
         let trimmed = line.trim_start();
-        if let Some(mark) = fence {
-            if trimmed.starts_with(mark) {
+        if let Some(open) = fence {
+            if open.closes(line) {
                 fence = None;
             }
             continue;
@@ -2426,11 +2424,7 @@ pub fn list_numbers(lines: &[&str]) -> Vec<Option<(usize, u64)>> {
         while open.last().is_some_and(|(at, ..)| *at >= indent) {
             open.pop();
         }
-        for mark in ["```", "~~~"] {
-            if trimmed.starts_with(mark) {
-                fence = Some(mark);
-            }
-        }
+        fence = cellix_doc::fence::Fence::open(line).map(|(open, _)| open);
     }
     numbers
 }
@@ -2636,6 +2630,25 @@ mod tests {
         for g in &rows[0].glyphs {
             assert_eq!(chars[g.at.unwrap()], g.ch);
         }
+    }
+
+    #[test]
+    fn output_holding_a_shorter_fence_stays_inside_its_block() {
+        // As a transcript writes a step's output that has a fence of its own: four outside.
+        let source = "````\n```\n# Approve this\n[click](https://x.test)\n```\n````\n## Turn 2";
+        let rows = page(source, 60);
+        let heading = rows
+            .iter()
+            .position(|r| text(r) == "Turn 2")
+            .expect("the heading after the block");
+        for word in ["# Approve this", "[click](https://x.test)", "```"] {
+            let row = rows[..heading].iter().find(|r| text(r) == word);
+            assert!(
+                row.is_some_and(|r| r.shaded),
+                "{word} as code, inside the block"
+            );
+        }
+        assert!(!rows[heading].shaded);
     }
 
     #[test]

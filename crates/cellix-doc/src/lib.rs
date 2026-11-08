@@ -2,6 +2,7 @@
 
 pub mod changes;
 pub mod diagram;
+pub mod fence;
 pub mod figure;
 pub mod front;
 pub mod html;
