@@ -1981,7 +1981,14 @@ impl Dock {
         // the corner quits. The size of the icons beside it.
         let cell = Rect::new(hide.x, area.y, 2, 1);
         debug_assert_eq!(cell.x as f32 + cell.w as f32 / 2.0, middle);
-        crate::toolbar::draw_icon(grid, (Icon::HidePane, 0.62), cell, fg, theme.tab);
+        // Standing under the file, the window's foot is the part filled, as VS Code's panel
+        // button has it; beside the file, its right part.
+        let icon = if self.tabs_flush.get() {
+            Icon::HidePanel
+        } else {
+            Icon::HidePane
+        };
+        crate::toolbar::draw_icon(grid, (icon, 0.62), cell, fg, theme.tab);
     }
 }
 

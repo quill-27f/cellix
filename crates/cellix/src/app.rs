@@ -22341,6 +22341,37 @@ mod tests {
     }
 
     #[test]
+    fn a_pane_under_the_file_hides_with_the_bottom_panel_icon() {
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (170, 40));
+        app.run(Command::ListAgents);
+        app.dock.under = true;
+        let area = app.dock_area().unwrap();
+        assert!(app.dock_under() && area.y > 0, "it stands under the file");
+        let hide_icon = |app: &App, icon: Icon| {
+            screen(app).paint.iter().any(|p| {
+                matches!(p, Paint::Icon { icon: drawn, bounds, .. }
+                    if *drawn == icon && bounds.y / 64 == i32::from(area.y))
+            })
+        };
+        assert!(
+            hide_icon(&app, Icon::HidePanel),
+            "its foot filled, as VS Code's panel"
+        );
+        assert!(!hide_icon(&app, Icon::HidePane));
+        app.dock.under = false;
+        let area = app.dock_area().unwrap();
+        assert_eq!(area.y, 0, "beside the file again");
+        assert!(screen(&app).paint.iter().any(|p| matches!(
+            p,
+            Paint::Icon {
+                icon: Icon::HidePane,
+                ..
+            }
+        )));
+    }
+
+    #[test]
     fn the_icons_stand_clear_of_the_panes_close_button() {
         let (dir, _) = project();
         let mut app = App::new(dir.path().to_path_buf(), (170, 40));

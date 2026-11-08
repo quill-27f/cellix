@@ -1599,3 +1599,7 @@ Counts of lines said "1 lines" in the status bar and the transcript's Read and W
 ## The commit box stays while Source Control scrolls (2026-11-08)
 
 89-git-stashes showed blank rows where the commit box had been: a wheel over Source Control scrolled everything under the title, and the box is drawn from its first row, so once that row scrolled off the rest of it showed nothing. The title, the commit box, its buttons and what's under way now stay put, and only the lists under them (changes, stashes, the graph) scroll. Show Graph scrolls its heading to just under them. This departs from VS Code, whose input box scrolls with the view; in a terminal's few rows, keeping Commit in reach seemed worth more. Test: `the_commit_box_stays_whole_while_source_controls_lists_scroll` (fails on the old code).
+
+## The bottom dock hides with a bottom-panel icon (2026-11-08)
+
+A side pane standing under the file still showed the right-panel hide icon (a window with its right part filled). `Icon::HidePanel` is Lucide's panel-bottom with its foot filled, as VS Code's panel button is, and the pane's hide button uses it whenever the pane stands under the file. Test: `a_pane_under_the_file_hides_with_the_bottom_panel_icon`.

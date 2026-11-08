@@ -4359,5 +4359,12 @@
     "title": "Source Control's commit box, its buttons and what's under way stay put while the lists under them scroll",
     "test": "the_commit_box_stays_whole_while_source_controls_lists_scroll",
     "passes": true
+  },
+  {
+    "id": "hide-panel-icon",
+    "milestone": 12,
+    "title": "A side pane standing under the file hides with the bottom-panel icon, its foot filled; beside the file, with the right-panel one",
+    "test": "a_pane_under_the_file_hides_with_the_bottom_panel_icon",
+    "passes": true
   }
 ]

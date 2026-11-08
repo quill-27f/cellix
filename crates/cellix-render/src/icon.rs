@@ -71,6 +71,9 @@ pub enum Icon {
     /// A window with its right part filled, as VS Code's title bar has: the side pane
     /// shown, and the button that hides it. Not an ×, so the only × in the corner quits.
     HidePane = 54,
+    /// The same with its foot filled, Lucide's panel-bottom: the pane standing under the
+    /// file, and the button that hides it.
+    HidePanel = 55,
 }
 
 /// One cell of an icon that is `width` by `height` cells.
@@ -240,6 +243,7 @@ fn half_stroke(icon: Icon) -> f32 {
         | Icon::SymbolField
         | Icon::SymbolValue
         | Icon::HidePane
+        | Icon::HidePanel
         | Icon::ReplaceAll => 0.9,
         Icon::Agents => 0.8,
         Icon::Check => 1.7,
@@ -593,6 +597,9 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
         Icon::HidePane => rounded(p, (3.0, 3.0), (21.0, 21.0), 2.0)
             .min(segment(p, (15.0, 3.0), (15.0, 21.0)))
             .min(solid(p, (15.0, 3.0), (21.0, 21.0), 2.0)),
+        Icon::HidePanel => rounded(p, (3.0, 3.0), (21.0, 21.0), 2.0)
+            .min(segment(p, (3.0, 15.0), (21.0, 15.0)))
+            .min(solid(p, (3.0, 15.0), (21.0, 21.0), 2.0)),
         Icon::Maximize => path(p, &[(15.0, 3.0), (21.0, 3.0), (21.0, 9.0)])
             .min(path(p, &[(9.0, 21.0), (3.0, 21.0), (3.0, 15.0)]))
             .min(segment(p, (21.0, 3.0), (14.0, 10.0)))
@@ -761,6 +768,7 @@ mod tests {
             Icon::CircleCheck,
             Icon::CircleX,
             Icon::HidePane,
+            Icon::HidePanel,
         ] {
             let dots = (0..50)
                 .flat_map(|y| (0..50).map(move |x| (x, y)))
