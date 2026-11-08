@@ -679,6 +679,7 @@ impl Session {
     pub fn paste(&mut self, text: &str) {
         self.note_typing();
         self.term.scroll_display(Scroll::Bottom);
+        let text = &pasteable(text);
         if self.term.mode().contains(TermMode::BRACKETED_PASTE) {
             self.write(b"\x1b[200~");
             self.write(text.as_bytes());
@@ -2004,6 +2005,18 @@ fn tab_chip(tab: Rect) -> Bounds {
 }
 
 const TAB_CHIP_RADIUS: u8 = 22;
+
+/// Text as it's pasted into a program: what Cellix sends an agent holds file text, terminal
+/// output and agents' replies, any of which can carry control characters. An escape could end
+/// the paste early (`ESC[201~`) and type the rest as keys, a carriage return send the prompt
+/// half written, and Ctrl+C stop the agent, so none of them go: line breaks stay as `\n`,
+/// tabs stay, and the rest are dropped.
+pub fn pasteable(text: &str) -> String {
+    let text = text.replace("\r\n", "\n").replace('\r', "\n");
+    text.chars()
+        .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+        .collect()
+}
 
 #[cfg(test)]
 mod tests {

@@ -4422,5 +4422,12 @@
     "title": "An agent can't reply to a comment as the reviewer, and a backslash in its reply arrives as it wrote it",
     "test": "an_agent_cannot_reply_as_the_reviewer_and_its_backslashes_arrive",
     "passes": true
+  },
+  {
+    "id": "agent-paste-cannot-escape",
+    "milestone": 12,
+    "title": "What Cellix pastes into an agent can't end the paste early or send keys: control characters are dropped, and line breaks are line breaks",
+    "test": "what_is_pasted_into_an_agent_cannot_end_the_paste_or_send_keys",
+    "passes": true
   }
 ]
