@@ -4387,5 +4387,12 @@
     "title": "An agent's context meter takes the window its Claude model has: a million for every current model, 200k only for Haiku 4.5 and older",
     "test": "every_current_claude_model_has_a_million_and_only_old_ones_200k",
     "passes": true
+  },
+  {
+    "id": "no-control-in-cells",
+    "milestone": 12,
+    "title": "Control characters in a file, an agent's output or a transcript show as their pictures and never reach the terminal",
+    "test": "control_characters_never_reach_a_cell",
+    "passes": true
   }
 ]

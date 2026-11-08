@@ -27,6 +27,28 @@ pub struct Style {
     pub painted: bool,
 }
 
+/// `text` with nothing a terminal would act on: a control character, as a file, an agent's
+/// output or a transcript can hold, is shown by its picture (`␛` for escape), the way VS Code
+/// shows one, so it can't move the cursor, set the title or write the clipboard. A tab is a
+/// space.
+fn visible(text: &str) -> std::borrow::Cow<'_, str> {
+    let control = |c: char| c.is_control();
+    if !text.contains(control) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let shown = text
+        .chars()
+        .map(|c| match c {
+            '\t' => ' ',
+            '\0'..='\u{1f}' => char::from_u32(0x2400 + c as u32).unwrap_or('\u{fffd}'),
+            '\u{7f}' => '\u{2421}',
+            c if c.is_control() => '\u{fffd}',
+            c => c,
+        })
+        .collect();
+    std::borrow::Cow::Owned(shown)
+}
+
 /// A screen cell. An empty symbol is the right half of a wide character.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Cell {
@@ -524,6 +546,7 @@ impl Grid {
         }
         let max_x = max_x.min(self.width);
         let mut at = x;
+        let text = visible(text);
         for g in text.graphemes(true) {
             if at >= max_x {
                 break;
@@ -639,6 +662,20 @@ pub fn on_large_button((x, y): (u16, u16), width: u16, at: (f32, f32)) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn control_characters_never_reach_a_cell() {
+        let style = Style::default();
+        let mut grid = Grid::new(40, 2, style);
+        let text = "a\x1b]52;c;aGk=\x07b\r\n\x7f\u{9b}2Jc\td";
+        let end = grid.put_str(0, 0, text, style, 40);
+        let row: String = (0..end)
+            .map(|x| grid.cell(x, 0).symbol.to_string())
+            .collect();
+        assert_eq!(row, "a␛]52;c;aGk=␇b␍␊␡\u{fffd}2Jc d");
+        assert!(row.chars().all(|c| !c.is_control()), "{row:?}");
+    }
+
     use super::*;
 
     fn grid() -> Grid {
