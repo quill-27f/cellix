@@ -307,12 +307,12 @@ fn main() -> ExitCode {
         ["reply", id, "--suggest", text @ ..] if !text.is_empty() => {
             // A rewrite of the words the comment is about, which the reviewer can apply.
             let author = std::env::var("CELLIX_AGENT").unwrap_or_else(|_| "Agent".to_string());
-            let text = format!("Rewrite: {}", text.join(" ")).replace('\n', "\\n");
+            let text = cellix_agent::escape(&format!("Rewrite: {}", text.join(" ")));
             return client(&format!("reply {id} {author}\t{text}"), None);
         }
         ["reply", id, text @ ..] if !text.is_empty() => {
             let author = std::env::var("CELLIX_AGENT").unwrap_or_else(|_| "Agent".to_string());
-            let text = text.join(" ").replace('\n', "\\n");
+            let text = cellix_agent::escape(&text.join(" "));
             return client(&format!("reply {id} {author}\t{text}"), None);
         }
         ["suggest", file, line, kind, quote, text @ ..] if !text.is_empty() => {

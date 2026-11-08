@@ -4415,5 +4415,12 @@
     "title": "Neither Cellix nor an agent's hooks use a sockets folder someone else owns or can enter, so another user can't answer an agent as the reviewer",
     "test": "a_sockets_folder_others_own_or_can_enter_is_refused",
     "passes": true
+  },
+  {
+    "id": "agent-cannot-be-you",
+    "milestone": 12,
+    "title": "An agent can't reply to a comment as the reviewer, and a backslash in its reply arrives as it wrote it",
+    "test": "an_agent_cannot_reply_as_the_reviewer_and_its_backslashes_arrive",
+    "passes": true
   }
 ]
