@@ -20693,6 +20693,29 @@ mod tests {
     }
 
     #[test]
+    fn section_headings_look_one_way_in_source_control_and_agent_context() {
+        // The style of the first cell of `word` on screen: colour and weight.
+        let look = |grid: &Grid, word: &str| {
+            let (x, y) = find(grid, word);
+            let style = grid.cell(x, y).style;
+            (style.fg, style.bold)
+        };
+        let (_dir, app) = source_app();
+        let changes = look(&screen(&app), "CHANGES");
+        let (_dir, mut app, _project) = context_app();
+        let rail = app.activity_area();
+        app.handle(mouse(MouseKind::Left, rail.x, app.rail_row(4, rail)));
+        waits_for(&mut app, |app| app.context.loaded);
+        let grid = screen(&app);
+        assert_eq!(
+            look(&grid, "INSTRUCTIONS"),
+            changes,
+            "Agent Context's as Source Control's"
+        );
+        assert_eq!(changes, (app.theme.gutter.fg, true), "quiet and bold");
+    }
+
+    #[test]
     fn source_control_lists_changes_and_stages_and_unstages_them() {
         let (dir, mut app) = source_app();
         let text = screen(&app).text();

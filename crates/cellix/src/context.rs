@@ -598,26 +598,21 @@ impl ContextPanel {
                 }
                 Line::Gap => {}
                 Line::Heading(section, count) => {
-                    let icon = if self.is_folded(*section, *count) {
-                        (Icon::ChevronRight, "›")
-                    } else {
-                        (Icon::ChevronDown, "⌄")
-                    };
-                    let x = area.x as f32 + 0.4;
-                    grid.glyph(x, y, icon.0, theme.gutter.fg, icon.1, theme.sidebar);
-                    let title = Style {
-                        bold: true,
-                        ..quiet
-                    };
-                    grid.label(left + 1, y, section.title(), title, right);
                     let warn =
                         *section == Section::Checks && self.checks.iter().any(|c| c.kind.warns());
-                    let number = tone(if warn {
+                    let number = if warn {
                         theme.git_modified
                     } else {
                         theme.gutter.fg
-                    });
-                    grid.label_right(right, y, &count.to_string(), number, 100);
+                    };
+                    let shown = count.to_string();
+                    crate::palette::section_heading(
+                        grid,
+                        (left + 1, right, y),
+                        (section.title(), Some((&shown, number))),
+                        Some(self.is_folded(*section, *count)),
+                        theme,
+                    );
                 }
                 Line::Empty(section) => {
                     grid.label(left + 1, y, &section.empty(self.agent), quiet, right);

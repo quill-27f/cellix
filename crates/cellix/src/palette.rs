@@ -1015,6 +1015,50 @@ pub fn sidebar_title(grid: &mut Grid, row: Rect, title: &str, theme: &Theme) -> 
     )
 }
 
+/// The size of a section's heading, smaller than a sidebar's title.
+const SECTION_SIZE: u8 = 80;
+
+/// A section's heading in a sidebar or on a page: its name in capitals, small, bold and
+/// quiet, a chevron in the margin two columns before it when it folds, and a count at the
+/// right. Source Control, the Timeline and Agent Context share it, as the Task page's
+/// headings look, so a section reads the same wherever it is, as VS Code's do.
+pub fn section_heading(
+    grid: &mut Grid,
+    (left, right, y): (u16, u16, u16),
+    (name, count): (&str, Option<(&str, Rgb)>),
+    folded: Option<bool>,
+    theme: &Theme,
+) {
+    let quiet = Style {
+        fg: theme.gutter.fg,
+        bold: true,
+        ..theme.sidebar
+    };
+    if let Some(folded) = folded {
+        let (icon, cells) = if folded {
+            (Icon::ChevronRight, "›")
+        } else {
+            (Icon::ChevronDown, "⌄")
+        };
+        let plain = Style {
+            bold: false,
+            ..quiet
+        };
+        // Inside the margin's two columns, so its cell never reaches past the sidebar's edge.
+        let x = f32::from(left.saturating_sub(2)) + 0.2;
+        grid.glyph(x, y, icon, quiet.fg, cells, plain);
+    }
+    grid.label_at(f32::from(left), left, y, name, quiet, right, SECTION_SIZE);
+    if let Some((count, fg)) = count {
+        let number = Style {
+            fg,
+            bold: false,
+            ..quiet
+        };
+        grid.label_right(right, y, count, number, 85);
+    }
+}
+
 /// A floating panel. Its corner cells keep what's behind them, so rounded corners show the
 /// page rather than a square of panel colour.
 pub fn popup(grid: &mut Grid, area: Rect, theme: &Theme) {

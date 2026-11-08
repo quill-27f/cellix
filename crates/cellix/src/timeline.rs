@@ -137,12 +137,10 @@ impl Timeline {
             .and_then(|p| p.file_name())
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
         // The chevron in the margin, the name on the inset every sidebar heading has.
-        let mark = if self.folded { "▸" } else { "▾" };
-        grid.label(area.x, area.y, mark, quiet, left);
         let heading = format!("TIMELINE · {name}");
         let heading = crate::source::clip(&heading, (right - left) as f32, measure);
-        // A section's name small and quiet, as Source Control's are.
-        grid.label_at(f32::from(left), left, area.y, &heading, quiet, right, 80);
+        let place = (left, right, area.y);
+        crate::palette::section_heading(grid, place, (&heading, None), Some(self.folded), theme);
         if self.folded {
             return;
         }

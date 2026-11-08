@@ -1581,3 +1581,7 @@ At 120 columns the side pane has 40 columns and the icons at the top right took 
 - Test: `a_narrow_panes_tabs_stay_clear_of_the_icons_and_the_chevron_lists_them_all`. Before this change the shell's tab and the + stood under the Comments icon at 120 columns.
 
 Retaken and looked at: 131, 132, 150, 13-strip-hover (now pointed at column 100), 13-agents-click, 13-quit-*, 14-agents, 64-transcript-tab*, 02-code, 24-light-page, 57-dock-agents.
+
+## One section heading style (2026-11-08)
+
+Section headings came in three styles: Source Control's and the Timeline's small, plain and quiet, with ▾ ▸ as text; Agent Context's full size and bold, with line chevrons; the Task page's small, bold and quiet. `palette::section_heading` now draws them all as the Task page does: small, bold, quiet capitals, a line chevron two columns before the name when the section folds, and a count at the right. Source Control (STAGED CHANGES, CHANGES, MERGE CHANGES, STASHES, GRAPH), the Timeline and Agent Context use it. Test: `section_headings_look_one_way_in_source_control_and_agent_context`. Seen in 13-source-control, 81-context, 89-git-stashes and 140-inbox (the Timeline).

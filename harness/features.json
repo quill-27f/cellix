@@ -4331,5 +4331,12 @@
     "title": "A narrow side pane's tabs stay clear of the icons at the top right; the one in front keeps its name and a chevron lists every tab",
     "test": "a_narrow_panes_tabs_stay_clear_of_the_icons_and_the_chevron_lists_them_all",
     "passes": true
+  },
+  {
+    "id": "one-section-heading",
+    "milestone": 12,
+    "title": "Section headings look one way in Source Control, the Timeline, Agent Context and the Task page: small quiet bold capitals, a chevron when they fold",
+    "test": "section_headings_look_one_way_in_source_control_and_agent_context",
+    "passes": true
   }
 ]

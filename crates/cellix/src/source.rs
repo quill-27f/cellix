@@ -475,14 +475,23 @@ impl Source {
                 }
                 Line::Underway => self.draw_underway(grid, area, y, hover, (measure, theme)),
                 Line::StashHeading(count) => {
-                    fold_mark(grid, (left, y), self.stashes_folded, quiet);
-                    grid.label_at(f32::from(left), left, y, "STASHES", quiet, right, 80);
                     let number = count.to_string();
-                    grid.label_right(right.saturating_sub(SIDE), y, &number, quiet, 85);
+                    crate::palette::section_heading(
+                        grid,
+                        (left, right.saturating_sub(SIDE), y),
+                        ("STASHES", Some((&number, quiet.fg))),
+                        Some(self.stashes_folded),
+                        theme,
+                    );
                 }
                 Line::GraphHeading => {
-                    fold_mark(grid, (left, y), self.graph_folded, quiet);
-                    grid.label_at(f32::from(left), left, y, "GRAPH", quiet, right, 80);
+                    crate::palette::section_heading(
+                        grid,
+                        (left, right, y),
+                        ("GRAPH", None),
+                        Some(self.graph_folded),
+                        theme,
+                    );
                 }
                 Line::Commit(index) => {
                     let open = self.graph.is_open(*index);
@@ -559,10 +568,14 @@ impl Source {
                         Group::Staged => "STAGED CHANGES",
                         Group::Changes => "CHANGES",
                     };
-                    // A section's name small and quiet, as Review's and the agents' are.
-                    grid.label_at(f32::from(left), left, y, name, quiet, right, 80);
                     let number = count.to_string();
-                    grid.label_right(right.saturating_sub(SIDE), y, &number, quiet, 85);
+                    crate::palette::section_heading(
+                        grid,
+                        (left, right.saturating_sub(SIDE), y),
+                        (name, Some((&number, quiet.fg))),
+                        None,
+                        theme,
+                    );
                     if hovered && *group != Group::Merge {
                         let mark = if *group == Group::Staged { "−" } else { "+" };
                         let x = right.saturating_sub(STAGE_FROM_RIGHT);
@@ -896,12 +909,6 @@ impl Source {
             }
         }
     }
-}
-
-/// A chevron in the margin before a heading that folds.
-fn fold_mark(grid: &mut Grid, (left, y): (u16, u16), folded: bool, quiet: Style) {
-    let mark = if folded { "▸" } else { "▾" };
-    grid.label(left.saturating_sub(SIDE), y, mark, quiet, left);
 }
 
 /// Text cut to `room` cells as it's drawn, ending in an ellipsis when it doesn't fit.
