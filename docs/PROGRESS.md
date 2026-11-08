@@ -1595,3 +1595,7 @@ Left from that review, not done here: every section folding (Source Control's ch
 ## "1 line", and the end of a comparison (2026-11-08)
 
 Counts of lines said "1 lines" in the status bar and the transcript's Read and Write steps; `lines_word` now says "1 line" everywhere a count of lines is written (the status bar, the transcript, Agent Context, Compare With's clipboard row). The row after the last change said "That's every change. Commit when it's ready." on a commit, a stash and a comparison too, none of which can be committed. Now it ends "That's every change in this commit.", "… in this stash." and "That's every difference." Only the working tree's changes ask for a commit. Test: `counts_say_one_line_and_a_comparison_ends_without_asking_for_a_commit`.
+
+## The commit box stays while Source Control scrolls (2026-11-08)
+
+89-git-stashes showed blank rows where the commit box had been: a wheel over Source Control scrolled everything under the title, and the box is drawn from its first row, so once that row scrolled off the rest of it showed nothing. The title, the commit box, its buttons and what's under way now stay put, and only the lists under them (changes, stashes, the graph) scroll. Show Graph scrolls its heading to just under them. This departs from VS Code, whose input box scrolls with the view; in a terminal's few rows, keeping Commit in reach seemed worth more. Test: `the_commit_box_stays_whole_while_source_controls_lists_scroll` (fails on the old code).

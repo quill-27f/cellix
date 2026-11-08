@@ -299,14 +299,33 @@ impl Source {
         lines
     }
 
+    /// How many lines at the top stay put while the lists under them scroll: the title, the
+    /// commit box, its buttons and what's under way. A wheel never takes the box out of
+    /// reach, nor leaves it half drawn.
+    fn pinned(lines: &[Line]) -> usize {
+        let fixed = |line: &Line| {
+            matches!(
+                line,
+                Line::Title | Line::Gap | Line::Message(_) | Line::Buttons | Line::Underway
+            )
+        };
+        lines.iter().position(|l| !fixed(l)).unwrap_or(lines.len())
+    }
+
+    /// The line shown at `row` of the panel, counting the pinned ones.
+    fn line_at(&self, lines: &[Line], row: usize) -> usize {
+        let pinned = Self::pinned(lines);
+        if row < pinned { row } else { row + self.top }
+    }
+
     /// Scrolls so the graph's heading is at the top, opening it.
     pub fn show_graph(&mut self) {
         self.graph_folded = false;
         let at = self.lines().iter().position(|l| *l == Line::GraphHeading);
         self.graph_wanted = at.is_none();
         if let Some(at) = at {
-            // Just under the title, which stays put.
-            self.top = at.saturating_sub(1);
+            // Just under what stays put.
+            self.top = at.saturating_sub(Self::pinned(&self.lines()));
         }
     }
 
@@ -356,8 +375,9 @@ impl Source {
     pub fn hit(&self, area: Rect, x: u16, y: u16) -> Option<Hit> {
         // The title row stays put while the rest scrolls under it.
         let offset = y.checked_sub(area.y)? as usize;
-        let row = if offset == 0 { 0 } else { offset + self.top };
-        let line = self.lines().into_iter().nth(row)?;
+        let lines = self.lines();
+        let row = self.line_at(&lines, offset);
+        let line = lines.into_iter().nth(row)?;
         let right = area.right();
         match line {
             Line::Title => {
@@ -453,8 +473,9 @@ impl Source {
         let left = area.x + SIDE;
         let right = area.right();
         let lines = self.lines();
-        let rest = lines.iter().skip(1 + self.top);
-        let shown = lines.iter().take(1).chain(rest);
+        let pinned = Self::pinned(&lines);
+        let rest = lines.iter().skip(pinned + self.top);
+        let shown = lines.iter().take(pinned).chain(rest);
         for (row, line) in shown.take(area.h as usize).enumerate() {
             let y = area.y + row as u16;
             let whole = Rect::new(area.x, y, area.w, 1);

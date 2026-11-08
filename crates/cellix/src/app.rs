@@ -20780,6 +20780,27 @@ mod tests {
     }
 
     #[test]
+    fn the_commit_box_stays_whole_while_source_controls_lists_scroll() {
+        let (_dir, mut app) = source_app();
+        let hint = "Message (Enter";
+        let grid = screen(&app);
+        assert!(grid.text().contains(hint));
+        let heading =
+            |grid: &Grid| (0..grid.height()).find(|y| grid.row_text(*y).contains("CHANGES"));
+        let before = heading(&grid).expect("the list's heading");
+        let side = app.sidebar_area().unwrap();
+        for _ in 0..3 {
+            app.handle(mouse(MouseKind::ScrollDown, side.x + 4, side.y + 12));
+        }
+        let text = screen(&app).text();
+        assert!(text.contains(hint), "the box is still there: {text}");
+        assert!(text.contains("Commit"), "{text}");
+        // The lists moved under it.
+        let after = heading(&screen(&app));
+        assert!(after.is_none_or(|y| y < before), "{text}");
+    }
+
+    #[test]
     fn source_control_lists_changes_and_stages_and_unstages_them() {
         let (dir, mut app) = source_app();
         let text = screen(&app).text();
