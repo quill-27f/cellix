@@ -274,11 +274,7 @@ impl App {
         let clipboard = self.clipboard_text();
         if !clipboard.trim().is_empty() {
             let lines = clipboard.lines().count();
-            let note = if lines == 1 {
-                "1 line".to_string()
-            } else {
-                format!("{lines} lines")
-            };
+            let note = crate::lines_word(lines);
             items.push(Item::Git(
                 "Clipboard".into(),
                 note,

@@ -255,7 +255,7 @@ fn tool(name: &str, input: &Value, cwd: &str, id: &str) -> Tool {
         }
         "Write" => {
             let lines = line_count(&text("content"));
-            (path("file_path"), format!("{lines} lines"), false)
+            (path("file_path"), crate::lines_word(lines), false)
         }
         "Grep" | "Glob" => {
             let place = path("path");
@@ -314,7 +314,7 @@ fn settle(turns: &mut [Turn], id: &str, output: String, failed: bool) {
         {
             if !failed {
                 tool.note = match tool.name.as_str() {
-                    "Read" => format!("{} lines", line_count(&output)),
+                    "Read" => crate::lines_word(line_count(&output)),
                     // Claude Code's search says how much it found first.
                     "Grep" | "Glob" => match output.lines().next() {
                         Some(first) if first.starts_with("Found ") => first[6..].to_string(),

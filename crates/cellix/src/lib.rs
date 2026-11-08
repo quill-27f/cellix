@@ -54,3 +54,12 @@ mod workspaces;
 
 pub use app::App;
 pub use terminal::{Options, run};
+
+/// "1 line" or "N lines", as everything that counts lines says it.
+pub(crate) fn lines_word(count: usize) -> String {
+    if count == 1 {
+        "1 line".to_string()
+    } else {
+        format!("{count} lines")
+    }
+}

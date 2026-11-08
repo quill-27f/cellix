@@ -4345,5 +4345,12 @@
     "title": "Show Source, Compare, Clear Finished, Start an Agent and a language server's Install are quiet buttons, not bare words; Merging stands apart from its Abort button",
     "test": "actions_that_were_words_are_buttons",
     "passes": true
+  },
+  {
+    "id": "one-line-and-comparison-end",
+    "milestone": 12,
+    "title": "Counts say \"1 line\", not \"1 lines\"; a commit, stash or comparison ends without asking for a commit",
+    "test": "counts_say_one_line_and_a_comparison_ends_without_asking_for_a_commit",
+    "passes": true
   }
 ]

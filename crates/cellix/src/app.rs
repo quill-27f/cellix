@@ -14454,7 +14454,7 @@ impl App {
                 format!("{mode}   Ln {}, Col {column}", line + 1)
                     .trim_start()
                     .to_string(),
-                format!("{} lines", rope.len_lines().saturating_sub(trailing)),
+                crate::lines_word(rope.len_lines().saturating_sub(trailing)),
                 match editor.dialect() {
                     Dialect::Data(',') => "CSV".to_string(),
                     Dialect::Data(_) => "TSV".to_string(),
@@ -22347,6 +22347,47 @@ mod tests {
         app.handle(mouse(MouseKind::Left, hide, area.y));
         assert!(!app.dock.open, "the close button still closes");
         assert!(!app.quit, "and only the pane");
+    }
+
+    #[test]
+    fn counts_say_one_line_and_a_comparison_ends_without_asking_for_a_commit() {
+        let (dir, mut app) = project();
+        app.handle(Event::Resize(150, 40));
+        let one = dir.path().join("one.txt");
+        fs::write(&one, "only line\n").unwrap();
+        app.open(&one).unwrap();
+        let grid = screen(&app);
+        let status = (0..grid.height())
+            .map(|y| grid.row_text(y))
+            .find(|row| row.contains("Ln 1, Col"))
+            .expect("the status bar");
+        assert!(
+            status.contains("1 line") && !status.contains("1 lines"),
+            "{status}"
+        );
+        // A conflict compared side by side has nothing to commit at its end.
+        let file = dir.path().join("both.txt");
+        fs::write(
+            &file,
+            "<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> agent\n",
+        )
+        .unwrap();
+        app.open(&file).unwrap();
+        let (x, y) = find(&screen(&app), "Compare");
+        click(&mut app, x + 1, y);
+        let deadline = std::time::Instant::now() + BACKGROUND;
+        while !screen(&app).text().contains("That's every") {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "{}",
+                screen(&app).text()
+            );
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let text = screen(&app).text();
+        assert!(text.contains("That's every difference."), "{text}");
+        assert!(!text.contains("Commit when it's ready"), "{text}");
     }
 
     #[test]

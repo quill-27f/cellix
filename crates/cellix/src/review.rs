@@ -789,12 +789,19 @@ impl Review {
         rows
     }
 
-    /// What the row after a file's last change says.
+    /// What the row after a file's last change says. Only the working tree's changes can be
+    /// committed: a commit, a stash or a comparison just ends.
     fn end_words(&self) -> String {
-        match self.changes.get(self.selected + 1) {
-            Some(next) => format!("End of this file. Next: {}", next.path.display()),
-            None => "That's every change. Commit when it's ready.".to_string(),
+        if let Some(next) = self.changes.get(self.selected + 1) {
+            return format!("End of this file. Next: {}", next.path.display());
         }
+        match &self.fixed {
+            None => "That's every change. Commit when it's ready.",
+            Some(Fixed::Commit(_)) => "That's every change in this commit.",
+            Some(Fixed::Stash(..)) => "That's every change in this stash.",
+            Some(Fixed::File { .. }) => "That's every difference.",
+        }
+        .to_string()
     }
 
     /// What code surrounds a hunk: the nearest line above that sits further out.

@@ -794,11 +794,7 @@ impl ContextPanel {
             (quiet, "not there".to_string())
         } else {
             let lines = file.lines();
-            let size = if lines == 1 {
-                "1 line".into()
-            } else {
-                format!("{lines} lines")
-            };
+            let size = crate::lines_word(lines);
             (theme.sidebar, size)
         };
         let detail = if file.later.is_some() {
