@@ -4317,5 +4317,12 @@
     "title": "A page scrolled past its end keeps its scrollbar thumb inside its track, clear of a pane under the file",
     "test": "a_page_scrolled_past_its_end_keeps_its_scrollbar_over_the_file",
     "passes": true
+  },
+  {
+    "id": "windows-paste-in-parts",
+    "milestone": 12,
+    "title": "A paste the Windows console hands over in two reads stays one paste, so its last line break can't accept a suggestion",
+    "test": "a_paste_the_console_hands_over_in_two_reads_stays_one_paste",
+    "passes": true
   }
 ]

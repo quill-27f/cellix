@@ -1562,3 +1562,12 @@ Left from the review for after 0.6.0 (polish, not broken):
 - Wording: "1 lines", and "That's every change. Commit when it's ready." on a comparison.
 
 Windows CI on the merged code: held sessions' sockets and some test helpers were Unix-only, now gated. Open Recent split a row into name and folder at `/` only, so a Windows path outside home showed whole; it now splits at either separator, and `~` paths are written with `/` everywhere. The Agent Context tests built a JSON fixture with an unescaped Windows path, and compared paths with `/`. The two tests that select a shell's output in the side pane now run on Unix only: on Windows `sh` is MSYS bash, whose profile sets a prompt over the tests' PS1. Unverified on Windows itself: Ask Agent on terminal output.
+
+## Two Windows PTY tests that flaked on 0.6.0 (2026-11-08)
+
+Both failed once on 0.6.0's CI and passed on rerun. Neither cause is new in 0.6.0; both are races that a busier start or a slower runner can lose.
+
+- **`pty_bracketed_paste_inserts_verbatim`** saved `more` + `hello` + `hello from a file`. Windows' console gives Cellix the keys of a paste, not a paste, and Cellix groups the keys of one read into a paste. The console handed this paste over in two reads. The first ended at `more`, so the paste's last line break came alone as Enter, which accepted the open word suggestion, `morehello` (the word the caret stood in, since the line break was missing). Neither a reload nor a save was involved. A paste still open at the end of a read, or one that ran to the end of a read less than 50 ms ago, now takes the keys that start the next read, up to its closing marker if it had one. A person can't type that soon after a paste. Test: `a_paste_the_console_hands_over_in_two_reads_stays_one_paste`.
+- **`cli_reads_comments_over_socket`** read `[]`. The test waited for a ◆ to show that the comment was kept, but on the cell tier the Comments icon at the top right is drawn as ◆, there from the start. So the CLI could ask before Enter reached the comment box. The test now waits for the box to close. A unit test printing the cell row confirmed the ◆ in the corner.
+
+Unverified: both only show on Windows CI, which can't be run from the Mac. The two tests pass here.

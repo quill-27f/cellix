@@ -199,6 +199,19 @@ impl Screen {
         panic!("{text:?} never appeared:\n{}\n{story}", self.contents());
     }
 
+    /// Waits for `text` to leave the screen.
+    fn wait_gone(&mut self, text: &str) {
+        let deadline = Instant::now() + WAIT;
+        while self.contents().contains(text) {
+            assert!(
+                Instant::now() < deadline,
+                "{text:?} stayed:\n{}",
+                self.contents()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     fn send(&mut self, bytes: &[u8]) {
         let mut input = self.input.lock().unwrap();
         input.write_all(bytes).unwrap();
@@ -942,7 +955,9 @@ fn cli_reads_comments_over_socket() {
     screen.send(b"\x1bc");
     screen.wait_for("Enter sends");
     screen.send(b"from a human\r");
-    screen.wait_for("\u{25c6}");
+    // The box closing is the comment kept. A ◆ isn't: on the cell tier the Comments icon at
+    // the top right is one, there from the start, so the CLI could ask before Enter landed.
+    screen.wait_gone("Enter sends");
     let cli = |args: &[&str]| {
         let output = std::process::Command::new(env!("CARGO_BIN_EXE_cellix"))
             .args(args)

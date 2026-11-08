@@ -360,11 +360,26 @@ fn marker(events: &[ct::Event], last: char) -> bool {
             .eq(['[', '2', '0', last, '~'].map(Some))
 }
 
+/// How long after a paste read as keys more of it may still come, in the next read. The
+/// console hands a long paste over in parts, and no one types again this soon after one.
+const PASTE_TAIL: Duration = Duration::from_millis(50);
+
+/// A paste read as keys that may go on in the next read: one whose closing marker hasn't
+/// come yet, or one that ran to the end of what was read.
+#[derive(Default)]
+struct Pasting {
+    open: bool,
+    until: Option<Instant>,
+}
+
 /// Windows' console gives Cellix no pastes, only the keys that would type them, and typed,
 /// a paste's brackets close themselves and its lines indent. So in one batch of input, keys
 /// between a bracketed paste's markers become a paste, as do keys that type more after a line
 /// break or a tab, which no one types faster than Cellix reads. Anything else stays keys.
-fn pasted_keys(events: Vec<ct::Event>) -> Vec<ct::Event> {
+/// The console can hand a paste over in two reads, and its last line break, read alone as
+/// Enter, would accept a suggestion: so a paste still open, or one that ran to the end of the
+/// last read moments ago, takes the keys that start this one.
+fn pasted_keys(events: Vec<ct::Event>, pasting: &mut Pasting, now: Instant) -> Vec<ct::Event> {
     // Releases say nothing here, and would split a run of keys.
     let events: Vec<ct::Event> = events
         .into_iter()
@@ -373,14 +388,37 @@ fn pasted_keys(events: Vec<ct::Event>) -> Vec<ct::Event> {
     let text = |run: &[ct::Event]| run.iter().filter_map(typed).collect::<String>();
     let mut out = Vec::new();
     let mut i = 0;
+    let closing = |from: usize| (from..events.len()).find(|&j| marker(&events[j..], '1'));
+    let carried_on = pasting.until.take().is_some_and(|until| now <= until);
+    if std::mem::take(&mut pasting.open) {
+        let end = closing(0);
+        let stop = end.unwrap_or(events.len());
+        out.push(ct::Event::Paste(text(&events[..stop])));
+        pasting.open = end.is_none();
+        i = end.map_or(events.len(), |end| end + 6);
+    } else if carried_on {
+        let run = events.iter().take_while(|e| typed(e).is_some()).count();
+        if run > 0 {
+            out.push(ct::Event::Paste(text(&events[..run])));
+            i = run;
+        }
+        // Its closing marker, when it had one.
+        if marker(&events[i..], '1') {
+            i += 6;
+        }
+    }
+    // Whether what was read last went into a paste, up to its end.
+    let mut tail = !out.is_empty() && i >= events.len();
     while i < events.len() {
         if marker(&events[i..], '0') {
             let start = i + 6;
-            let end = (start..events.len())
-                .find(|&j| marker(&events[j..], '1'))
-                .unwrap_or(events.len());
-            out.push(ct::Event::Paste(text(&events[start..end])));
-            i = (end + 6).min(events.len());
+            let end = closing(start);
+            out.push(ct::Event::Paste(text(
+                &events[start..end.unwrap_or(events.len())],
+            )));
+            pasting.open = end.is_none();
+            i = end.map_or(events.len(), |end| end + 6);
+            tail = end.is_none();
             continue;
         }
         let run = events[i..]
@@ -394,10 +432,15 @@ fn pasted_keys(events: Vec<ct::Event>) -> Vec<ct::Event> {
             .any(|e| matches!(typed(e), Some('\n' | '\t')));
         if run >= 3 && breaks_then_types {
             out.push(ct::Event::Paste(text(typed_run)));
+            tail = i + run >= events.len();
         } else {
             out.extend_from_slice(&events[i..i + run.max(1)]);
+            tail = false;
         }
         i += run.max(1);
+    }
+    if tail && !pasting.open {
+        pasting.until = Some(now + PASTE_TAIL);
     }
     out
 }
@@ -586,6 +629,8 @@ pub fn run(options: Options) -> io::Result<()> {
     let mouse_cell = |display: &Display| display.cell.filter(|_| pixel_mouse);
     let mut redraw = true;
     let mut shape = None;
+    // A paste on Windows that the console handed over in parts.
+    let mut pasting = Pasting::default();
     let mut last_tick = std::time::Instant::now();
     let mut shown: Option<Grid> = None;
     let ghostty = std::env::var("TERM").is_ok_and(|t| t.contains("ghostty"));
@@ -725,7 +770,7 @@ pub fn run(options: Options) -> io::Result<()> {
                     }
                 }
                 if cfg!(windows) {
-                    batch = pasted_keys(batch);
+                    batch = pasted_keys(batch, &mut pasting, Instant::now());
                 }
                 for event in batch {
                     match translate(event, mouse_cell(&display)).map(|e| cmd_left(e, ghostty)) {
@@ -856,15 +901,56 @@ mod tests {
             .collect()
     }
 
+    /// One read of input, with nothing before it.
+    fn once(events: Vec<ct::Event>) -> Vec<ct::Event> {
+        pasted_keys(events, &mut Pasting::default(), Instant::now())
+    }
+
+    #[test]
+    fn a_paste_the_console_hands_over_in_two_reads_stays_one_paste() {
+        let now = Instant::now();
+        // Without markers: its last line break, read alone, would be Enter and take a
+        // suggestion. It's the paste's.
+        let mut pasting = Pasting::default();
+        let first = pasted_keys(keys("pasted(\n\ttext\nmore"), &mut pasting, now);
+        assert_eq!(pastes(&first), ["pasted(\n\ttext\nmore"]);
+        let rest = pasted_keys(keys("\n"), &mut pasting, now + Duration::from_millis(5));
+        assert_eq!(rest, vec![ct::Event::Paste("\n".into())]);
+        // Typed a moment after the paste's last part, Enter is a key again.
+        let typed = now + Duration::from_millis(5) + PASTE_TAIL * 2;
+        let later = pasted_keys(keys("\n"), &mut pasting, typed);
+        assert!(pastes(&later).is_empty(), "{later:?}");
+        let mut pasting = Pasting::default();
+        let _ = pasted_keys(keys("a(\n\tb"), &mut pasting, now);
+        let after = pasted_keys(keys("\n"), &mut pasting, now + PASTE_TAIL * 2);
+        assert!(pastes(&after).is_empty(), "{after:?}");
+        // Between markers, the rest is the paste's however late, up to the closing marker.
+        let mut pasting = Pasting::default();
+        let first = pasted_keys(keys("\x1b[200~a(\n"), &mut pasting, now);
+        assert_eq!(first, vec![ct::Event::Paste("a(\n".into())]);
+        let later = now + Duration::from_secs(1);
+        let rest = pasted_keys(keys("\tb\n\x1b[201~x"), &mut pasting, later);
+        assert_eq!(pastes(&rest), ["\tb\n"]);
+        assert_eq!(rest.len(), 2, "what follows the marker is typed: {rest:?}");
+        // A closing marker that comes on its own isn't typed.
+        let mut pasting = Pasting::default();
+        let _ = pasted_keys(keys("x(\n\ty\n"), &mut pasting, now);
+        let rest = pasted_keys(keys("\x1b[201~"), &mut pasting, now);
+        assert!(
+            rest.iter().all(|e| matches!(e, ct::Event::Paste(_))),
+            "{rest:?}"
+        );
+    }
+
     #[test]
     fn keys_that_paste_on_windows_become_a_paste() {
         // Between a bracketed paste's markers, whatever the text.
-        let marked = pasted_keys(keys("\x1b[200~f(x)\x1b[201~"));
+        let marked = once(keys("\x1b[200~f(x)\x1b[201~"));
         assert_eq!(marked, vec![ct::Event::Paste("f(x)".into())]);
-        let marked = pasted_keys(keys("\x1b[200~a(\n\tb\n\x1b[201~"));
+        let marked = once(keys("\x1b[200~a(\n\tb\n\x1b[201~"));
         assert_eq!(pastes(&marked), ["a(\n\tb\n"]);
         // Without markers, lines typed faster than anyone types.
-        let unmarked = pasted_keys(keys("pasted(\n\ttext\nmore\n"));
+        let unmarked = once(keys("pasted(\n\ttext\nmore\n"));
         assert_eq!(
             unmarked,
             vec![ct::Event::Paste("pasted(\n\ttext\nmore\n".into())]
@@ -877,12 +963,12 @@ mod tests {
                 .filter(|e| !matches!(e, ct::Event::Key(k) if k.kind == KeyEventKind::Release))
                 .cloned()
                 .collect();
-            assert_eq!(pasted_keys(events), presses, "{typed:?}");
+            assert_eq!(once(events), presses, "{typed:?}");
         }
         let ctrl_s = ct::Event::Key(CtKey::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
         let mut events = keys("a\nb");
         events.insert(2, ctrl_s.clone());
-        assert!(pastes(&pasted_keys(events)).is_empty());
+        assert!(pastes(&once(events)).is_empty());
     }
 
     #[test]
