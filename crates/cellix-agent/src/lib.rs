@@ -361,11 +361,41 @@ fn private_folder(dir: &Path) -> io::Result<()> {
             .recursive(true)
             .mode(0o700)
             .create(dir)?;
-        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))?;
+        check_private(dir)
     }
     // Inside the user's own local app data, which only they and administrators can read.
     #[cfg(not(unix))]
     fs::DirBuilder::new().recursive(true).create(dir)
+}
+
+/// Refuses a sockets folder that isn't this user's own and closed to everyone else. It's in
+/// the shared temp folder, so on a machine with other users someone could make it first, put
+/// their own socket in it and answer an agent's hooks: hand it comments as the reviewer's, or
+/// approve its plans. Neither end uses such a folder.
+#[cfg(unix)]
+fn check_private(dir: &Path) -> io::Result<()> {
+    let meta = fs::symlink_metadata(dir)?;
+    // SAFETY: getuid has no preconditions and cannot fail.
+    let uid = unsafe { libc::getuid() };
+    if owned_privately(&meta, uid) {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            ErrorKind::PermissionDenied,
+            format!(
+                "{} belongs to someone else or others can enter it, so it isn't used",
+                dir.display()
+            ),
+        ))
+    }
+}
+
+/// Whether a folder is a real one, owned by `uid`, that only its owner can enter.
+#[cfg(unix)]
+fn owned_privately(meta: &fs::Metadata, uid: u32) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    meta.file_type().is_dir() && meta.uid() == uid && meta.mode() & 0o077 == 0
 }
 
 /// Binds the workspace socket. Fails if another Cellix already serves this workspace.
@@ -447,6 +477,11 @@ fn patience(line: &str) -> Option<Duration> {
 
 /// `request`, over the transport given.
 pub fn request_with(root: &Path, line: &str, transport: Transport) -> io::Result<String> {
+    // Only a socket in this user's own folder is this user's Cellix.
+    #[cfg(unix)]
+    if let Some(dir) = socket_path(root).parent() {
+        check_private(dir)?;
+    }
     let mut reply = String::new();
     match transport {
         #[cfg(unix)]
@@ -473,6 +508,29 @@ pub fn request_with(root: &Path, line: &str, transport: Transport) -> io::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_sockets_folder_others_own_or_can_enter_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("cellix-x");
+        private_folder(&folder).unwrap();
+        // SAFETY: getuid has no preconditions and cannot fail.
+        let me = unsafe { libc::getuid() };
+        let meta = fs::symlink_metadata(&folder).unwrap();
+        assert!(owned_privately(&meta, me));
+        assert!(!owned_privately(&meta, me + 1), "someone else's");
+        // One anyone can enter, as another user could have made it, isn't used.
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o777)).unwrap();
+        let refused = check_private(&folder).unwrap_err();
+        assert_eq!(refused.kind(), ErrorKind::PermissionDenied);
+        // Nor is a link to a private one.
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&folder, &link).unwrap();
+        fs::set_permissions(&folder, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(check_private(&folder).is_ok());
+        assert!(check_private(&link).is_err());
+    }
 
     fn comment() -> Comment {
         Comment {

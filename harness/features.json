@@ -4408,5 +4408,12 @@
     "title": "Agent Context reads Codex's instructions as Codex does: the 32 KiB cut lands between characters, and an empty AGENTS.override.md is passed over",
     "test": "codex_cuts_a_long_file_between_characters_and_skips_an_empty_override",
     "passes": true
+  },
+  {
+    "id": "sockets-folder-private",
+    "milestone": 12,
+    "title": "Neither Cellix nor an agent's hooks use a sockets folder someone else owns or can enter, so another user can't answer an agent as the reviewer",
+    "test": "a_sockets_folder_others_own_or_can_enter_is_refused",
+    "passes": true
   }
 ]
