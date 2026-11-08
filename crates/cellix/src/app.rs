@@ -20644,7 +20644,7 @@ mod tests {
         for words in [
             "AGENT CONTEXT",
             "Claude Code",
-            "118k of 200k · 59%",
+            "118k of 1M · 11%",
             "CHECKS",
             "“cargo test”",
             "INSTRUCTIONS",
@@ -26190,13 +26190,13 @@ while True:
     #[test]
     fn an_agents_tab_shows_its_context_and_opens_its_transcript_as_a_page() {
         let (dir, mut app) = agent_with_transcript();
-        // 88k of a 200k window, from the last reply's tokens.
-        ticks_until(&mut app, "Claude Code 44%");
-        assert_eq!(app.context_percent(), Some(44));
-        let (x, y) = find(&screen(&app), "Claude Code 44%");
+        // 88k of Opus 5.5's million, from the last reply's tokens.
+        ticks_until(&mut app, "Claude Code 8%");
+        assert_eq!(app.context_percent(), Some(8));
+        let (x, y) = find(&screen(&app), "Claude Code 8%");
         app.handle(mouse(MouseKind::Move, x + 1, y));
         let tip = screen(&app).text();
-        assert!(tip.contains("Context 88k of 200k (44%)"), "{tip}");
+        assert!(tip.contains("Context 88k of 1M (8%)"), "{tip}");
         app.handle(mouse(MouseKind::Right, x + 1, y));
         let (x, y) = find(&screen(&app), "Open Transcript");
         app.handle(mouse(MouseKind::Left, x + 1, y));
@@ -26242,7 +26242,7 @@ while True:
     #[test]
     fn asking_the_agent_about_a_step_of_its_transcript_names_the_step() {
         let (dir, mut app) = agent_with_transcript();
-        ticks_until(&mut app, "44%");
+        ticks_until(&mut app, "8%");
         app.run(Command::CommandPalette);
         typed(&mut app, "Agent Transcript");
         enter(&mut app);

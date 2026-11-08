@@ -102,19 +102,10 @@ pub struct Session {
 }
 
 impl Session {
-    /// The model's context window: a million for a `[1m]` model, else 200k.
+    /// The model's context window, as `claude_window` gives it.
     pub fn window(&self) -> usize {
-        // As the transcript page reads it: the long window when the model's name says so, or
-        // once the context has gone past the short one.
-        let long = self
-            .model
-            .as_ref()
-            .is_some_and(|m| m.contains("[1m]") || m.ends_with("-1m"));
-        if long || self.breakdown.total > 200_000 {
-            1_000_000
-        } else {
-            200_000
-        }
+        let model = self.model.as_deref().unwrap_or("");
+        claude_window(model, self.breakdown.total as u64) as usize
     }
 
     /// Files it read that have changed on disk since, most recent read first.
@@ -132,6 +123,45 @@ impl Session {
             })
             .collect()
     }
+}
+
+/// The context window of a Claude model, by the id its transcript logs (`claude-opus-5-5`, or
+/// with a provider's prefix as `us.anthropic.claude-…`), and how much of it is `used`. Every
+/// Claude model since Opus and Sonnet 4.6 has a million, and so does a model not known here,
+/// since a new one is likelier to have the long window than an old one. Those up to 4.5 have
+/// 200k, unless the name says otherwise (`[1m]`, `-1m`) or the context has gone past it.
+pub fn claude_window(model: &str, used: u64) -> u64 {
+    const SHORT: u64 = 200_000;
+    const LONG: u64 = 1_000_000;
+    let long_named = model.contains("[1m]") || model.ends_with("-1m");
+    if short_windowed(model) && !long_named && used <= SHORT {
+        SHORT
+    } else {
+        LONG
+    }
+}
+
+/// Whether the model is a Claude from before the long window: `claude-3…`, or a
+/// `claude-<family>-4[-<minor>][-<date>]` up to 4.5.
+fn short_windowed(model: &str) -> bool {
+    let Some(at) = model.find("claude-") else {
+        return false;
+    };
+    let mut parts = model[at + "claude-".len()..].split(['-', '[', '@']);
+    let first = parts.next().unwrap_or("");
+    if first.parse::<u32>().is_ok_and(|major| major < 4) {
+        return true;
+    }
+    let Some(Ok(major)) = parts.next().map(str::parse::<u32>) else {
+        return false;
+    };
+    // A minor is a number or two; eight digits are a date, as in `claude-opus-4-20250514`.
+    let minor = parts
+        .next()
+        .filter(|p| (1..=2).contains(&p.len()))
+        .and_then(|p| p.parse::<u32>().ok())
+        .unwrap_or(0);
+    major < 4 || (major == 4 && minor <= 5)
 }
 
 /// Seconds since 1970 for an RFC 3339 time in UTC, as transcripts write them.

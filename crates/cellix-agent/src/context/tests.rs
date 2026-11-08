@@ -393,7 +393,7 @@ fn a_transcript_says_what_the_session_loaded_and_read() {
     assert_eq!(session.mcp[0].0, "postwren");
     assert_eq!(session.turns, 2);
     assert_eq!(session.model.as_deref(), Some("claude-opus-5-5"));
-    assert_eq!(session.window(), 200_000);
+    assert_eq!(session.window(), 1_000_000);
 
     assert_eq!(
         session.files.len(),
@@ -439,4 +439,38 @@ fn rfc3339_times_become_seconds() {
         transcript::unix_seconds("2026-11-07T10:00:01.500Z"),
         Some(1_794_045_601)
     );
+}
+
+#[test]
+fn every_current_claude_model_has_a_million_and_only_old_ones_200k() {
+    for model in [
+        "claude-opus-5-5",
+        "claude-sonnet-5-5",
+        "claude-haiku-5-5",
+        "claude-fable-5-1",
+        "claude-opus-4-6",
+        "claude-sonnet-4-6",
+        "us.anthropic.claude-opus-5-5",
+        "some-model-from-next-year",
+    ] {
+        assert_eq!(claude_window(model, 170_000), 1_000_000, "{model}");
+    }
+    for model in [
+        "claude-haiku-4-5",
+        "claude-haiku-4-5-20251001",
+        "claude-sonnet-4-5-20250929",
+        "claude-opus-4-5-20251101",
+        "claude-opus-4-1-20250805",
+        "claude-opus-4-20250514",
+        "claude-sonnet-4-20250514",
+        "claude-3-7-sonnet-20250219",
+        "anthropic.claude-haiku-4-5-20251001-v1:0",
+    ] {
+        assert_eq!(claude_window(model, 170_000), 200_000, "{model}");
+    }
+    // An old model says it has the long window by its name, or by using it.
+    assert_eq!(claude_window("claude-sonnet-4-5[1m]", 10), 1_000_000);
+    assert_eq!(claude_window("claude-sonnet-4-5", 250_000), 1_000_000);
+    // A later 4.x isn't taken for an old one by its prefix.
+    assert_eq!(claude_window("claude-opus-4-6-20260101", 10), 1_000_000);
 }

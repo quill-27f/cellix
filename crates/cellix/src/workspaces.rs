@@ -1155,7 +1155,7 @@ mod tests {
         said.transcript = log.display().to_string();
         spaces.app_mut().serve(Request::Agent(said));
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        while !bar(&spaces).contains("working · 44%") {
+        while !bar(&spaces).contains("working · 8%") {
             assert!(std::time::Instant::now() < deadline, "{}", bar(&spaces));
             spaces.handle(Event::Tick);
             std::thread::sleep(std::time::Duration::from_millis(10));

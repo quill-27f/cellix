@@ -16,7 +16,9 @@ use serde_json::{Map, Value};
 
 pub use checks::{Check, CheckKind, checks};
 pub use imports::{IMPORT_DEPTH, imports};
-pub use transcript::{Breakdown, FileRead, Loaded, Search, Session, read_session, transcript_path};
+pub use transcript::{
+    Breakdown, FileRead, Loaded, Search, Session, claude_window, read_session, transcript_path,
+};
 
 /// Claude Code loads only this many lines of its auto memory's `MEMORY.md`.
 pub const MEMORY_LINES: usize = 200;

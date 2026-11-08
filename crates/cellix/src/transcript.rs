@@ -20,8 +20,6 @@ pub const PAGES: &str = ".cellix/transcripts";
 const SHOWN_LINES: usize = 12;
 /// What an agent's window is taken to be when its log doesn't say.
 const WINDOW: u64 = 200_000;
-/// A Claude model with the long window, which its log only shows by using it.
-const LONG_WINDOW: u64 = 1_000_000;
 /// From here the tab warns that the agent will soon compact, and from `FULL` that it's about to.
 pub const WARN: u8 = 80;
 pub const FULL: u8 = 95;
@@ -348,13 +346,9 @@ fn last_turn(turns: &mut Vec<Turn>) -> &mut Turn {
     turns.last_mut().expect("just made sure")
 }
 
-/// The window a Claude model has: the long one when its name says, or once it's used.
+/// The window a Claude model has, by its id and how much of it is used.
 fn claude_window(model: &str, context: u64) -> u64 {
-    if model.contains("[1m]") || model.ends_with("-1m") || context > WINDOW {
-        LONG_WINDOW
-    } else {
-        WINDOW
-    }
+    cellix_agent::context::claude_window(model, context)
 }
 
 fn parse_claude(text: &str) -> Transcript {
@@ -1154,8 +1148,9 @@ pub mod tests {
         assert!(tools[2].failed);
         assert_eq!(first.context, Some((41_002, 88_002)));
         assert_eq!(t.usage.context, 88_002);
-        assert_eq!(t.usage.window, 200_000);
-        assert_eq!(t.usage.percent(), Some(44));
+        // Opus 5.5 has a million from the start.
+        assert_eq!(t.usage.window, 1_000_000);
+        assert_eq!(t.usage.percent(), Some(8));
         assert_eq!(t.turns[1].prompt, "Also reject unpaid orders.");
     }
 

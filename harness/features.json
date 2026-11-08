@@ -4380,5 +4380,12 @@
     "title": "Floating panels (palettes, signature help, suggestions) end on row lines and never cut through the text rows around them",
     "test": "floating_panels_end_on_row_lines",
     "passes": true
+  },
+  {
+    "id": "claude-window-1m",
+    "milestone": 12,
+    "title": "An agent's context meter takes the window its Claude model has: a million for every current model, 200k only for Haiku 4.5 and older",
+    "test": "every_current_claude_model_has_a_million_and_only_old_ones_200k",
+    "passes": true
   }
 ]
