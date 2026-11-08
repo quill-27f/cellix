@@ -995,7 +995,9 @@ impl TaskPage {
         let mut lines = Vec::new();
         match step {
             Step::Turn(turn) => {
-                let mut prompt = wrap(&turn.text, width.saturating_sub(8));
+                // Measured as it's drawn, so a proportional font fills the box before it wraps.
+                let room = width.saturating_sub(8) as f32;
+                let mut prompt = crate::threads::wrap(&turn.text, room, context.measure);
                 if prompt.len() > PROMPT_LINES {
                     prompt.truncate(PROMPT_LINES);
                     if let Some(last) = prompt.last_mut() {
@@ -1440,6 +1442,40 @@ mod tests {
         let text = grid.text();
         assert!(text.contains("context 41k → 88k"), "{text}");
         assert!(text.contains("[Open Transcript]"), "{text}");
+    }
+
+    #[test]
+    fn your_prompt_fills_its_box_before_it_wraps() {
+        let dir = tempfile::tempdir().unwrap();
+        // Longer in cells than the box, shorter as a proportional font draws it.
+        let text =
+            "Bound the queue so a fast producer can't outrun its consumer, and say why it refuses.";
+        let prompt = Event::Prompt {
+            at: tasks::now(),
+            session: "s1".into(),
+            agent: "Claude Code".into(),
+            text: text.into(),
+            commit: None,
+            threads: 0,
+        };
+        tasks::record(dir.path(), &prompt).unwrap();
+        let page = TaskPage::new(dir.path().to_path_buf());
+        let mut grid = Grid::new(140, 30, Style::default());
+        let measure = cellix_render::FontMeasure::new(17, 37);
+        let context = Context {
+            threads: &[],
+            running: &[],
+            pending_plan: None,
+            measure: &measure,
+        };
+        let area = grid.area();
+        page.draw(&mut grid, area, None, &context, &Theme::named(None));
+        let y = (0..grid.height())
+            .find(|y| grid.row_text(*y).contains("You "))
+            .expect("the You box");
+        // Its cells clip what the font fits; nothing carries on to the next row.
+        let next = grid.row_text(y + 1);
+        assert!(!next.contains("refuses"), "one row, not two: {next}");
     }
 
     #[test]

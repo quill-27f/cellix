@@ -4366,5 +4366,12 @@
     "title": "A side pane standing under the file hides with the bottom-panel icon, its foot filled; beside the file, with the right-panel one",
     "test": "a_pane_under_the_file_hides_with_the_bottom_panel_icon",
     "passes": true
+  },
+  {
+    "id": "task-prompt-wraps-measured",
+    "milestone": 12,
+    "title": "Your prompt on the Task page fills its box before it wraps, measured as the font draws it",
+    "test": "your_prompt_fills_its_box_before_it_wraps",
+    "passes": true
   }
 ]

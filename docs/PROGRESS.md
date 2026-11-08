@@ -1603,3 +1603,7 @@ Counts of lines said "1 lines" in the status bar and the transcript's Read and W
 ## The bottom dock hides with a bottom-panel icon (2026-11-08)
 
 A side pane standing under the file still showed the right-panel hide icon (a window with its right part filled). `Icon::HidePanel` is Lucide's panel-bottom with its foot filled, as VS Code's panel button is, and the pane's hide button uses it whenever the pane stands under the file. Test: `a_pane_under_the_file_hides_with_the_bottom_panel_icon`.
+
+## The Task page's "You" box wraps where it ends (2026-11-08)
+
+The prompt in a turn's "You" box was wrapped by counting cells, but drawn in a proportional font that's narrower, so it wrapped with a third of the box still empty (152-task-turn). It's now wrapped by `threads::wrap` with the page's measure, as comments are. Test: `your_prompt_fills_its_box_before_it_wraps` (fails on the old code).
