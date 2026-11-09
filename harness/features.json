@@ -4450,5 +4450,12 @@
     "title": "A failed test run in Codex or Gemini CLI shows as failed: the exit code is read from JSON in a string or from the result's words, and with none the output decides",
     "test": "a_failed_run_in_codex_or_gemini_is_not_taken_for_a_pass",
     "passes": true
+  },
+  {
+    "id": "repeated-prompt-context",
+    "milestone": 12,
+    "title": "On the Task page, a prompt said again, as \"continue\", shows its own turn's context, not the first one's",
+    "test": "a_prompt_said_again_gets_its_own_turns_context",
+    "passes": true
   }
 ]

@@ -74,8 +74,9 @@ pub struct Context<'a> {
     pub measure: &'a dyn Measure,
 }
 
-/// A session's prompts, by the name they'd give a task, with the context before and after.
-type Prompts = Vec<(String, (u64, u64))>;
+/// A session's prompts in order, by the name they'd give a task, with the context before and
+/// after where the transcript says it.
+type Prompts = Vec<(String, Option<(u64, u64)>)>;
 
 /// The Task page, which stands where the file would.
 pub struct TaskPage {
@@ -461,7 +462,7 @@ impl TaskPage {
             let prompts = read.map_or_else(Vec::new, |t| {
                 t.turns
                     .into_iter()
-                    .filter_map(|turn| Some((tasks::name_from(&turn.prompt), turn.context?)))
+                    .map(|turn| (tasks::name_from(&turn.prompt), turn.context))
                     .collect()
             });
             let _ = sender.send((session, prompts));
@@ -469,13 +470,27 @@ impl TaskPage {
     }
 
     /// How full the context was as a turn began and as it ended, where the transcript says.
+    /// Prompts such as "continue" or "yes" come again and again, so a turn is matched to the
+    /// transcript's by its words and by which time in the session those words were said: the
+    /// third "continue" logged is the transcript's third "continue".
     pub fn context_of(&self, task: &Task, turn: &TurnStep) -> Option<(u64, u64)> {
         let name = tasks::name_from(&turn.text);
+        let said_before = self
+            .tasks
+            .iter()
+            .filter(|t| t.session == task.session)
+            .flat_map(|t| &t.steps)
+            .filter(|step| match step {
+                Step::Turn(other) => other.at < turn.at && tasks::name_from(&other.text) == name,
+                Step::Plan(_) => false,
+            })
+            .count();
         self.contexts
             .get(&task.session)?
             .iter()
-            .find(|(prompt, _)| *prompt == name)
-            .map(|(_, context)| *context)
+            .filter(|(prompt, _)| *prompt == name)
+            .nth(said_before)?
+            .1
     }
 
     /// Whether a read of the changes is still out.
@@ -1428,7 +1443,7 @@ mod tests {
         // As the transcript tells it, for this session.
         page.contexts.insert(
             "s1".into(),
-            vec![("Add a refund route".into(), (41_000, 88_000))],
+            vec![("Add a refund route".into(), Some((41_000, 88_000)))],
         );
         let mut grid = Grid::new(140, 30, Style::default());
         let context = Context {
@@ -1476,6 +1491,53 @@ mod tests {
         // Its cells clip what the font fits; nothing carries on to the next row.
         let next = grid.row_text(y + 1);
         assert!(!next.contains("refuses"), "one row, not two: {next}");
+    }
+
+    #[test]
+    fn a_prompt_said_again_gets_its_own_turns_context() {
+        let dir = tempfile::tempdir().unwrap();
+        let start = tasks::now();
+        for (n, text) in ["Add a refund route", "continue", "continue"]
+            .iter()
+            .enumerate()
+        {
+            let prompt = Event::Prompt {
+                at: start + n as u64 * 1000,
+                session: "s1".into(),
+                agent: "Claude Code".into(),
+                text: (*text).into(),
+                commit: None,
+                threads: 0,
+            };
+            tasks::record(dir.path(), &prompt).unwrap();
+        }
+        let mut page = TaskPage::new(dir.path().to_path_buf());
+        page.contexts.insert(
+            "s1".into(),
+            vec![
+                ("Add a refund route".into(), Some((10_000, 20_000))),
+                ("continue".into(), Some((20_000, 30_000))),
+                ("continue".into(), Some((30_000, 45_000))),
+            ],
+        );
+        let task = page.tasks.iter().find(|t| t.session == "s1").unwrap();
+        let turns: Vec<&TurnStep> = task
+            .steps
+            .iter()
+            .filter_map(|s| match s {
+                Step::Turn(turn) => Some(turn),
+                Step::Plan(_) => None,
+            })
+            .collect();
+        let contexts: Vec<_> = turns.iter().map(|t| page.context_of(task, t)).collect();
+        assert_eq!(
+            contexts,
+            [
+                Some((10_000, 20_000)),
+                Some((20_000, 30_000)),
+                Some((30_000, 45_000))
+            ]
+        );
     }
 
     #[test]
