@@ -4429,5 +4429,12 @@
     "title": "What Cellix pastes into an agent can't end the paste early or send keys: control characters are dropped, and line breaks are line breaks",
     "test": "what_is_pasted_into_an_agent_cannot_end_the_paste_or_send_keys",
     "passes": true
+  },
+  {
+    "id": "agent-state-not-stale",
+    "milestone": 12,
+    "title": "An agent stopped by an API error or an interrupt isn't left working, and an answered question isn't counted as needing you",
+    "test": "a_turn_the_api_cut_short_is_not_left_working",
+    "passes": true
   }
 ]

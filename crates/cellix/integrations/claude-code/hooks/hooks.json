@@ -75,6 +75,16 @@
         ]
       }
     ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cellix hook stop-failed 2>/dev/null || \"$CELLIX_BIN\" hook stop-failed 2>/dev/null || true"
+          }
+        ]
+      }
+    ],
     "SessionEnd": [
       {
         "hooks": [

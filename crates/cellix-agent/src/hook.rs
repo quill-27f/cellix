@@ -210,19 +210,42 @@ fn process_of(pid: u32) -> Option<(u32, String)> {
 }
 
 /// Whether a notification asks the person for something. Claude Code also sends one when it
-/// has sat idle after a turn ("waiting for your input") and on signing in, and those ask for
-/// nothing: the agent is done. Its `notification_type` says which, as Gemini's does; without
-/// it, from older versions, the words do.
+/// has sat idle after a turn ("waiting for your input"), on signing in, and when a question
+/// was answered (`elicitation_complete`, `elicitation_response`), and those ask for nothing.
+/// Its `notification_type` says which, as Gemini's does; without it, from older versions, the
+/// words do.
 fn asks(input: &Value) -> bool {
     match input["notification_type"].as_str() {
         Some(kind) => {
             let kind = kind.to_lowercase();
-            kind.contains("permission") || kind.contains("elicitation")
+            kind.contains("permission")
+                || kind == "agent_needs_input"
+                || (kind.starts_with("elicitation") && kind.ends_with("dialog"))
         }
         None => {
             let message = input["message"].as_str().unwrap_or("").to_lowercase();
             !message.contains("waiting for your input")
         }
+    }
+}
+
+/// Whether a notification says the agent is waiting with nothing to do: after a turn, and
+/// after one was interrupted, when no Stop comes.
+fn idles(input: &Value) -> bool {
+    matches!(
+        input["notification_type"].as_str(),
+        Some("idle_prompt" | "agent_completed")
+    )
+}
+
+/// Why a turn stopped on an error, in a word for the agent's tile.
+fn failure_words(input: &Value) -> String {
+    let reason = ["error_type", "error", "reason", "message"]
+        .iter()
+        .find_map(|field| input[*field].as_str().filter(|s| !s.is_empty()));
+    match reason {
+        Some(reason) => format!("Stopped: {}", reason.replace('_', " ")),
+        None => "Stopped on an error".to_string(),
     }
 }
 
@@ -612,7 +635,9 @@ pub fn handle_for(agent: &str, kind: &str, stdin: &str) -> Option<String> {
             let detail = request_words(&input, agent);
             tell(&roots, &input, AgentState::NeedsYou, &detail);
         }
-        // An idle reminder or a sign-in: nothing to answer, so the state stays as it was.
+        // Waiting after a turn, which after an interrupt is the only word that it stopped.
+        "notify" if idles(&input) => tell(&roots, &input, AgentState::Idle, "Waiting for you"),
+        // A sign-in or an answered question: nothing to answer, so the state stays as it was.
         "notify" => {}
         "tool-done" => on_tool(&roots, &input, true),
         "tool-failed" => on_tool(&roots, &input, false),
@@ -622,6 +647,8 @@ pub fn handle_for(agent: &str, kind: &str, stdin: &str) -> Option<String> {
                 return on_codex_stop(&roots, &input);
             }
         }
+        // A turn cut short by the API: a limit, an outage, a sign-in. It isn't working.
+        "stop-failed" => tell(&roots, &input, AgentState::Idle, &failure_words(&input)),
         "session-end" => tell(&roots, &input, AgentState::Ended, "Ended"),
         _ => {}
     }
@@ -1077,8 +1104,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
         let server = start(&root, Arc::default()).unwrap();
-        // Claude Code's reminder after an idle turn, with and without its type, and a sign-in:
-        // none asks for anything, so none is told.
+        // Claude Code's reminder after an idle turn asks for nothing: it says the agent is
+        // waiting, which after an interrupt nothing else does.
         let idle = "Claude is waiting for your input";
         handle(
             "notify",
@@ -1087,14 +1114,24 @@ mod tests {
                 json!({"notification_type": "idle_prompt", "message": idle}),
             ),
         );
-        handle("notify", &input(&root, json!({"message": idle})));
-        handle(
-            "notify",
-            &input(
-                &root,
-                json!({"notification_type": "auth_success", "message": "Signed in"}),
-            ),
+        let event = next_event(&server, Duration::from_secs(5)).unwrap();
+        assert_eq!(
+            (event.state, event.detail.as_str()),
+            (AgentState::Idle, "Waiting for you")
         );
+        // Nor does the reminder without its type, a sign-in, or a question already answered,
+        // and none is told.
+        handle("notify", &input(&root, json!({"message": idle})));
+        for kind in [
+            "auth_success",
+            "elicitation_complete",
+            "elicitation_response",
+        ] {
+            handle(
+                "notify",
+                &input(&root, json!({"notification_type": kind, "message": "Done"})),
+            );
+        }
         // A permission prompt is, and comes first.
         let asking = "Claude needs your permission to use Bash";
         handle(
@@ -1129,6 +1166,28 @@ mod tests {
             AgentState::NeedsYou
         );
         assert_eq!(next_event(&server, Duration::from_millis(300)), None);
+    }
+
+    #[test]
+    fn a_turn_the_api_cut_short_is_not_left_working() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let server = start(&root, Arc::default()).unwrap();
+        // Claude Code's StopFailure, where a Stop would have come.
+        handle(
+            "stop-failed",
+            &input(&root, json!({"error_type": "rate_limit"})),
+        );
+        let event = next_event(&server, Duration::from_secs(5)).unwrap();
+        assert_eq!(
+            (event.state, event.detail.as_str()),
+            (AgentState::Idle, "Stopped: rate limit")
+        );
+        // And an elicitation is a question, as a permission prompt is.
+        let asking = json!({"notification_type": "elicitation_dialog", "message": "Which port?"});
+        handle("notify", &input(&root, asking));
+        let event = next_event(&server, Duration::from_secs(5)).unwrap();
+        assert_eq!(event.state, AgentState::NeedsYou);
     }
 
     #[test]
