@@ -4527,5 +4527,12 @@
     "title": "An agent that a held agent runs, as claude -p from its shell, doesn't replace the held agent's session to resume",
     "test": "an_agent_run_by_the_held_agent_leaves_its_resume_alone",
     "passes": true
+  },
+  {
+    "id": "checkpoints-at-once",
+    "milestone": 12,
+    "title": "Two agents prompting at once in one checkout each get their own checkpoint: neither replaces the other, and the shared checkpoint index is kept",
+    "test": "a_checkpoint_taken_meanwhile_is_neither_replaced_nor_its_index_lost",
+    "passes": true
   }
 ]

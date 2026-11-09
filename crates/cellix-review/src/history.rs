@@ -17,6 +17,10 @@ const PREFIX: &str = "refs/cellix/turns/";
 pub const LARGEST_UNTRACKED: u64 = 10 * 1024 * 1024;
 /// A lock on the checkpoint index older than this was left by a git that was stopped.
 const STALE_LOCK: Duration = Duration::from_secs(10 * 60);
+/// How long a checkpoint waits for another one to finish with the shared index.
+const LOCK_WAIT: Duration = Duration::from_millis(1500);
+/// How many numbers a checkpoint tries, when others take them first.
+const TRIES: u64 = 16;
 
 /// One checkpoint: the state of the tree when a turn began.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -54,17 +58,35 @@ fn git_with_index(root: &Path, index: &Path, args: &[&str]) -> Option<String> {
 /// over `LARGEST_UNTRACKED` aside.
 fn snapshot_tree(root: &Path) -> Option<String> {
     let dir = PathBuf::from(git(root, &["rev-parse", "--absolute-git-dir"])?.trim());
-    snapshot_with(root, &dir).or_else(|| {
-        // An index that can't be read, as when it was copied mid-write, is built again.
-        let _ = fs::remove_file(dir.join("cellix-index"));
-        snapshot_with(root, &dir)
-    })
-}
-
-fn snapshot_with(root: &Path, dir: &Path) -> Option<String> {
     // Kept from one checkpoint to the next, so git knows each file's size and time and hashes
     // only what changed. Rebuilt from scratch, every file was read again on every prompt.
     let index = dir.join("cellix-index");
+    let lock = dir.join("cellix-index.lock");
+    if let Some(tree) = snapshot_with(root, &dir, &index) {
+        return Some(tree);
+    }
+    // Another checkpoint has it, as when two agents prompt at once: this one waits a little,
+    // then works from a copy of its own, and leaves the shared one as it is.
+    if lock.exists() {
+        let deadline = SystemTime::now() + LOCK_WAIT;
+        while lock.exists() && SystemTime::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        if let Some(tree) = snapshot_with(root, &dir, &index) {
+            return Some(tree);
+        }
+        let own = dir.join(format!("cellix-index-{}", std::process::id()));
+        let _ = fs::copy(&index, &own);
+        let tree = snapshot_with(root, &dir, &own);
+        let _ = fs::remove_file(&own);
+        return tree;
+    }
+    // An index that can't be read, as when it was copied mid-write, is built again.
+    let _ = fs::remove_file(&index);
+    snapshot_with(root, &dir, &index)
+}
+
+fn snapshot_with(root: &Path, dir: &Path, index: &Path) -> Option<String> {
     let lock = dir.join("cellix-index.lock");
     if fs::metadata(&lock)
         .and_then(|m| m.modified())
@@ -75,16 +97,16 @@ fn snapshot_with(root: &Path, dir: &Path) -> Option<String> {
     if !index.exists() {
         // The repository's own index already knows the tracked files, so the first checkpoint
         // hashes only what has changed since they were staged.
-        let seeded = fs::copy(dir.join("index"), &index).is_ok();
+        let seeded = fs::copy(dir.join("index"), index).is_ok();
         if !seeded && git(root, &["rev-parse", "--verify", "-q", "HEAD"]).is_some() {
-            git_with_index(root, &index, &["read-tree", "HEAD"])?;
+            git_with_index(root, index, &["read-tree", "HEAD"])?;
         }
     }
     // What's already in it, tracked or added by an earlier checkpoint, as it stands now.
-    git_with_index(root, &index, &["add", "-u", "."])?;
+    git_with_index(root, index, &["add", "-u", "."])?;
     let untracked = git_with_index_fed(
         root,
-        &index,
+        index,
         &["ls-files", "-z", "-o", "--exclude-standard", "."],
         &[],
     )?;
@@ -99,9 +121,9 @@ fn snapshot_with(root: &Path, dir: &Path) -> Option<String> {
         let mut paths = small.join("\0").into_bytes();
         paths.push(0);
         let args = ["add", "--pathspec-from-file=-", "--pathspec-file-nul"];
-        git_with_index_fed(root, &index, &args, &paths)?;
+        git_with_index_fed(root, index, &args, &paths)?;
     }
-    git_with_index(root, &index, &["write-tree"])
+    git_with_index(root, index, &["write-tree"])
 }
 
 /// Every checkpoint, oldest first.
@@ -143,13 +165,21 @@ pub fn checkpoint(root: &Path, label: &str) -> Option<Turn> {
     let mut args = identity.to_vec();
     args.extend(["commit-tree", &tree, "-m", label]);
     let commit = git(root, &args)?.trim().to_string();
-    let number = previous.last().map_or(1, |t| t.number + 1);
-    let name = format!("{PREFIX}{number:010}");
-    git(root, &["update-ref", &name, &commit])?;
+    let number = claim(root, &commit, previous.last().map_or(1, |t| t.number + 1))?;
     Some(Turn {
         commit,
         number,
         label: label.to_string(),
+    })
+}
+
+/// Gives `commit` the first checkpoint number from `first` that no other has. A ref is made
+/// only where none is yet, so two checkpoints taken at once, as two agents prompting
+/// together, each get a number, and neither replaces the other.
+fn claim(root: &Path, commit: &str, first: u64) -> Option<u64> {
+    (first..first + TRIES).find(|number| {
+        let name = format!("{PREFIX}{number:010}");
+        git(root, &["update-ref", &name, commit, ""]).is_some()
     })
 }
 
@@ -213,6 +243,73 @@ mod tests {
 
     fn write(root: &Path, name: &str, text: &str) {
         fs::write(root.join(name), text).unwrap();
+    }
+
+    #[test]
+    fn a_checkpoint_taken_meanwhile_is_neither_replaced_nor_its_index_lost() {
+        let dir = repo();
+        let root = dir.path();
+        write(root, "kept.txt", "first\n");
+        let first = checkpoint(root, "agent one").unwrap();
+        // Another agent's checkpoint took the next number after this one looked.
+        write(root, "kept.txt", "second\n");
+        let other = checkpoint(root, "agent two").unwrap();
+        assert_eq!(
+            claim(root, &first.commit, other.number),
+            Some(other.number + 1)
+        );
+        let kept = turns(root);
+        assert!(
+            kept.iter()
+                .any(|k| k.number == other.number && k.commit == other.commit)
+        );
+        // And while another checkpoint holds the shared index, this one is still taken, and
+        // the shared index, which saves hashing every file again, is kept.
+        let git_dir = root.join(".git");
+        fs::write(git_dir.join("cellix-index.lock"), "").unwrap();
+        write(root, "kept.txt", "third\n");
+        let third = checkpoint(root, "agent three");
+        assert!(third.is_some(), "taken from a copy of its own");
+        assert!(git_dir.join("cellix-index").exists());
+        fs::remove_file(git_dir.join("cellix-index.lock")).unwrap();
+    }
+
+    #[test]
+    fn checkpoints_taken_at_once_each_keep_their_own() {
+        let dir = repo();
+        write(dir.path(), "kept.txt", "a turn begins\n");
+        let root = dir.path().to_path_buf();
+        let taken: Vec<Turn> = std::thread::scope(|scope| {
+            let runs: Vec<_> = (0..4)
+                .map(|n| {
+                    let root = &root;
+                    scope.spawn(move || checkpoint(root, &format!("agent {n}")))
+                })
+                .collect();
+            runs.into_iter()
+                .map(|run| run.join().unwrap())
+                .collect::<Option<_>>()
+        })
+        .expect("every checkpoint is taken");
+        let kept = turns(&root);
+        for turn in &taken {
+            assert!(
+                kept.iter()
+                    .any(|k| k.number == turn.number && k.commit == turn.commit),
+                "{turn:?} was replaced: {kept:?}"
+            );
+        }
+        let git_dir = root.join(".git");
+        assert!(
+            git_dir.join("cellix-index").exists(),
+            "the shared index is kept"
+        );
+        assert!(
+            !fs::read_dir(&git_dir)
+                .unwrap()
+                .flatten()
+                .any(|e| e.file_name().to_string_lossy().starts_with("cellix-index-"))
+        );
     }
 
     #[test]
