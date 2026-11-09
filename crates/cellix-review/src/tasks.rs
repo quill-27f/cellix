@@ -149,12 +149,12 @@ pub fn record(root: &Path, event: &Event) -> io::Result<()> {
 }
 
 /// Every event logged for the project, in the order written. A line that can't be read, as
-/// one cut short by a full disk, is skipped.
+/// one cut short by a full disk in the middle of a character, is skipped, and only that line.
 pub fn load(root: &Path) -> Vec<Event> {
-    fs::read_to_string(file(root))
+    fs::read(file(root))
         .unwrap_or_default()
-        .lines()
-        .filter_map(|line| serde_json::from_str(line).ok())
+        .split(|byte| *byte == b'\n')
+        .filter_map(|line| serde_json::from_slice(line).ok())
         .collect()
 }
 
@@ -578,6 +578,31 @@ pub fn plan_versions(task: &Task, step: &PlanStep) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_line_cut_inside_a_character_costs_only_that_line() {
+        let dir = tempfile::tempdir().unwrap();
+        record(dir.path(), &prompt(1, "s1", "First", 0)).unwrap();
+        // A write cut short by a full disk, in the middle of a dash.
+        let mut torn = serde_json::to_vec(&prompt(2, "s1", "Second — then", 0)).unwrap();
+        let dash = torn.windows(3).position(|w| w == "—".as_bytes()).unwrap();
+        torn.truncate(dash + 1);
+        torn.push(b'\n');
+        let mut log = fs::OpenOptions::new()
+            .append(true)
+            .open(file(dir.path()))
+            .unwrap();
+        std::io::Write::write_all(&mut log, &torn).unwrap();
+        record(dir.path(), &prompt(3, "s1", "Third", 0)).unwrap();
+        let texts: Vec<String> = load(dir.path())
+            .into_iter()
+            .filter_map(|event| match event {
+                Event::Prompt { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(texts, ["First", "Third"]);
+    }
 
     fn prompt(at: u64, session: &str, text: &str, threads: u32) -> Event {
         Event::Prompt {

@@ -4464,5 +4464,12 @@
     "title": "A compacted Claude Code session gets no turn for its summary, and its meter stops showing the context from before the compaction",
     "test": "a_compacted_session_goes_on_without_a_turn_for_its_summary",
     "passes": true
+  },
+  {
+    "id": "tasks-log-torn-line",
+    "milestone": 12,
+    "title": "A tasks log line cut inside a character costs only that line, not the whole log",
+    "test": "a_line_cut_inside_a_character_costs_only_that_line",
+    "passes": true
   }
 ]
