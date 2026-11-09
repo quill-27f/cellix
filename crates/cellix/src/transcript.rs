@@ -351,6 +351,14 @@ fn claude_window(model: &str, context: u64) -> u64 {
     cellix_agent::context::claude_window(model, context)
 }
 
+/// Whether a user entry is Claude Code's own: a reminder (`isMeta`), the summary it continues
+/// a compacted session with (`isCompactSummary`), or a line shown only in its transcript.
+pub(crate) fn written_by_claude_code(entry: &Value) -> bool {
+    ["isMeta", "isCompactSummary", "isVisibleInTranscriptOnly"]
+        .iter()
+        .any(|flag| entry[*flag].as_bool() == Some(true))
+}
+
 fn parse_claude(text: &str) -> Transcript {
     let mut transcript = Transcript {
         agent: "Claude Code".to_string(),
@@ -373,10 +381,16 @@ fn parse_claude(text: &str) -> Transcript {
                     transcript.title = title.to_string();
                 }
             }
+            // Compacted: the context the last reply had is gone until the next reply says.
+            Some("system") if entry["subtype"] == "compact_boundary" => {
+                transcript.usage.context = 0;
+            }
             Some("summary") if transcript.title.is_empty() => {
                 transcript.title = entry["summary"].as_str().unwrap_or("").to_string();
             }
-            Some("user") if entry["isMeta"].as_bool() != Some(true) => {
+            // What Claude Code wrote itself isn't a prompt: a reminder, or the summary that
+            // carries a compacted session on.
+            Some("user") if !written_by_claude_code(&entry) => {
                 let content = &entry["message"]["content"];
                 if let Some(said) = content.as_str() {
                     let said = typed(said);
@@ -1073,6 +1087,16 @@ impl Meter {
             }
             return;
         }
+        // Once compacted, the context the last reply had is gone, and how much the summary
+        // takes is known only at the next reply.
+        if line.contains("\"compact_boundary\"") {
+            if serde_json::from_str::<Value>(line)
+                .is_ok_and(|entry| entry["subtype"] == "compact_boundary")
+            {
+                self.usage.context = 0;
+            }
+            return;
+        }
         if !line.contains("\"usage\"") || line.contains("\"isSidechain\":true") {
             return;
         }
@@ -1233,6 +1257,35 @@ pub mod tests {
         assert_eq!(meter.usage.context, 88_002);
         assert_eq!(meter.usage.input, 41_002 + 62_002 + 83_002 + 88_002);
         assert_eq!(meter.usage, parse(CLAUDE).usage);
+    }
+
+    #[test]
+    fn a_compacted_session_goes_on_without_a_turn_for_its_summary() {
+        let compacted = format!(
+            "{CLAUDE}{}\n{}\n",
+            r#"{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"auto","preTokens":88002}}"#,
+            r#"{"type":"user","isCompactSummary":true,"message":{"role":"user","content":"This session is being continued from a previous conversation."}}"#,
+        );
+        let t = parse(&compacted);
+        assert_eq!(
+            t.turns.len(),
+            parse(CLAUDE).turns.len(),
+            "no turn for the summary"
+        );
+        assert!(
+            t.turns
+                .iter()
+                .all(|turn| !turn.prompt.contains("being continued"))
+        );
+        // The meter, like the page, no longer says the old context is still there.
+        assert_eq!(t.usage.percent(), None);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        std::fs::write(&path, &compacted).unwrap();
+        let mut meter = Meter::new(path);
+        meter.refresh();
+        assert_eq!(meter.usage.percent(), None);
+        assert_eq!(meter.usage, t.usage);
     }
 
     #[test]

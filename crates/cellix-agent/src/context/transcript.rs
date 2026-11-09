@@ -265,7 +265,10 @@ pub fn read_session(path: &Path) -> std::io::Result<Session> {
                     Value::Array(parts) => parts.iter().any(|p| p["type"] == "text"),
                     _ => false,
                 };
-                if prompt && record["isMeta"].as_bool() != Some(true) {
+                let own = ["isMeta", "isCompactSummary", "isVisibleInTranscriptOnly"]
+                    .iter()
+                    .any(|flag| record[*flag].as_bool() == Some(true));
+                if prompt && !own {
                     session.turns += 1;
                 }
                 for part in content.as_array().into_iter().flatten() {
