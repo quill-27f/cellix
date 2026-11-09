@@ -456,8 +456,9 @@ of Cellix's copy. The page is rewritten while it's open, as the transcript grows
 The same lines say how many tokens each reply took in, so each agent's tab shows how full its
 context is, as a percent after its name: grey, orange from 80%, red from 95%, with the numbers and
 the session's totals on hover, and the workspace's tile shows its fullest agent's. Context is the
-last reply's input with cache; the window is what Codex logs, and for Claude 200k, or 1M for a
-`[1m]` model or once more than 200k is used. Transcripts are followed a few times a second, away
+last reply's input with cache, cleared at a compaction until the next reply; the window is what
+Codex logs, and for Claude the model's: 1M for every model since Opus and Sonnet 4.6 and for ids
+not known, 200k for 4.5 and older unless named `[1m]` or used past it. Transcripts are followed a few times a second, away
 from the screen, reading only what was added.
 ### Agent context
 

@@ -20,7 +20,8 @@ targets = [
     ("macOS, Intel", "x86_64-apple-darwin", "tar.gz"),
     ("Linux, ARM (static)", "aarch64-unknown-linux-musl", "tar.gz"),
     ("Linux, x86-64 (static)", "x86_64-unknown-linux-musl", "tar.gz"),
-    ("Windows, x86-64", "x86_64-pc-windows-msvc", "zip"),
+    # Paused while no one tests on Windows (2026-11-09), with its build in release.yml.
+    # ("Windows, x86-64", "x86_64-pc-windows-msvc", "zip"),
 ]
 print(found.group(1).strip())
 print(f"""
@@ -43,7 +44,7 @@ mkdir -p ~/.local/bin
 curl -fL {DOWNLOAD.format(version, "<target>", "tar.gz")} | tar xz -C ~/.local/bin ./cellix
 ```
 
-On Windows, put `cellix.exe` from the zip in a folder on your `PATH`.
+There's no Windows build of this release; on Windows, `cargo install` as above.
 
-Then `cellix setup claude`, `codex` or `gemini` adds it to your agent (not yet tried on Windows). `checksums.txt` has the
+Then `cellix setup claude`, `codex` or `gemini` adds it to your agent. `checksums.txt` has the
 SHA-256 of each archive.""")

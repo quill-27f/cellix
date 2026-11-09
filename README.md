@@ -56,10 +56,10 @@ curl -fL https://github.com/quill-27f/cellix/releases/latest/download/cellix-$(u
   | tar xz -C ~/.local/bin ./cellix
 ```
 
-On Windows, `cargo install` as above (it needs the Visual Studio C++ build tools). From the next
-release, you can also take `cellix-x86_64-pc-windows-msvc.zip` from the releases page and put
-`cellix.exe` in a folder on your `PATH`. Windows is a preview. Its tests pass on a Windows CI
-runner, but it hasn't been run in a real Windows Terminal yet. On CI a click reaches it through the
+On Windows, `cargo install` as above (it needs the Visual Studio C++ build tools). Windows is a
+preview, and its builds and CI are paused while no one tests there, so releases since 0.6.1 have
+no Windows download. Its tests passed on a Windows CI runner up to 0.6.0, but it hasn't been run
+in a real Windows Terminal yet. On CI a click reaches it through the
 ConPTY Windows Terminal ships, though not through Windows' older built-in console, so the mouse
 should work in Windows Terminal and may not elsewhere. It draws text cells only, so the pane inside Claude Code isn't available
 there; run Cellix on its own. The agent plugins haven't been tried on Windows, and what runs in the
@@ -132,10 +132,13 @@ words and Comment as you go, then press **Check my review** in the Comments pane
   Right-click a changed line to comment on it or to undo just that line.
 - **Tasks.** Show Agent Task lays out one piece of agent work as a timeline: its plan versions and
   its turns, each with its prompt, what it changed, its tests and your comments. Review Turn reads
-  one turn's changes, Undo Turn takes them back, and a waiting plan has Approve, Send Back and Compare.
+  one turn's changes, Undo Turn takes them back (and says so when that also takes another agent's
+  later turns), and a waiting plan has Approve, Send Back and Compare. When two agents send plans,
+  the second waits until the first is answered.
 - **Transcripts.** Open Transcript on an agent's tab shows its Claude Code or Codex transcript as a
   page: each turn, its prompt, the steps it took and the output that failed. Comment on a step and
-  the agent hears which one.
+  the agent hears which one. What an agent printed is only shown: control characters appear as
+  symbols such as ␛, and output can't break out of its code block.
 - **Source Control** stages, commits, pushes and pulls, settles merge conflicts and shows history,
   as in VS Code.
 - **Data and notebooks.** CSV as a table with Excel's keys, and notebooks on a real Jupyter kernel.
@@ -289,14 +292,17 @@ When an agent needs you, Cellix says so once and drops it when you've answered: 
 plan to review, a finished turn, a reply to your comment, or a failed test run. The bell at the right
 of the status bar opens the Inbox with every workspace's, newest first. While Cellix is behind another
 window, the terminal shows each as a notification, through tmux too; `notify: false` turns that
-off. An agent's tab shows how full its context is, orange from 80%
-and red from 95%.
+off. An agent's tab shows how full its context is, against its model's window (a million tokens for
+every current Claude model), orange from 80% and red from 95%. A compaction clears it until the
+next reply.
 
 The Agent Context icon on the left shows what the agent works from: how its context fills up, its
 instruction files in the order it loads them with their imports, its skills, subagents, hooks and MCP
-servers, and the files it read. Checks point out instructions that contradict each other, imports that
-don't resolve, memory past the 200 lines that load, and hooks whose script is missing. Every row opens
-its file to edit. It reads Claude Code, Codex and Gemini CLI.
+servers, and the files it read, marking those changed since. It follows each agent's own rules, such
+as Claude Code reading AGENTS.md when a project has no CLAUDE.md, and its rules for some paths loading
+only when those files are worked on. Checks point out instructions that contradict each other, imports
+that don't resolve, memory past the 200 lines or 25 KB that load, and hooks whose script is missing.
+Every row opens its file to edit. It reads Claude Code, Codex and Gemini CLI.
 
 Getting Started, in the command palette or on the empty window, is a short guide.
 
@@ -442,7 +448,9 @@ each update travels as a PNG, so it costs more than the standalone app on a slow
 ## Beside an agent
 
 Running Cellix on its own works just as well: the Agents icon at the top right opens a side pane, and
-Claude Code, Codex, Gemini CLI or a shell runs there as the real program.
+Claude Code, Codex, Gemini CLI or a shell runs there as the real program. When a narrow pane's tabs
+don't all fit, the tab in front shows whole with a ⌄ beside it that lists every tab and starts a new
+agent or terminal.
 
 Set `VISUAL="cellix --wait"` so Ctrl+G in Claude Code opens plans in Cellix. Comments are
 written back into the file when you quit. Any other agent can run `cellix comments --take`

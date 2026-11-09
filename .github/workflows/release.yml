@@ -87,7 +87,8 @@ jobs:
           # Static, so it runs on any server, whatever its libc and with no Rust on it.
           - { target: x86_64-unknown-linux-musl, os: ubuntu-latest, runs: true }
           - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm, runs: true }
-          - { target: x86_64-pc-windows-msvc, os: windows-latest, runs: true }
+          # Windows is paused while no one tests there (2026-11-09); put this line back to ship it.
+          # - { target: x86_64-pc-windows-msvc, os: windows-latest, runs: true }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -164,7 +165,8 @@ jobs:
             echo "made=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          (cd archives && shasum -a 256 *.tar.gz *.zip > checksums.txt)
+          # A kind with no archive, as Windows while it's paused, is left out, not an error.
+          (cd archives && shopt -s nullglob && shasum -a 256 *.tar.gz *.zip > checksums.txt)
           python3 -I harness/formula.py "$VERSION" archives cellix.rb
           python3 -I harness/notes.py "$VERSION" > notes.md
           # Makes the tag too, on the commit CI passed.

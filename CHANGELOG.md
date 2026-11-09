@@ -4,6 +4,43 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-09
+
+A review from the side of someone building on coding agents, of how Cellix talks to them and what
+it reads from them, and the polish left from 0.6.0. There's no Windows build of this release:
+Windows builds and CI are paused while no one tests there.
+
+### Fixed
+- The context meter took a 200k window for every Claude model, so Opus 5.5 at 170k read 85% and "compacts soon". Every current Claude model has a million; only Claude 4.5 and older have 200k.
+- Control characters in an agent's output, a transcript or a file reached the terminal, where an escape could set its title or write the clipboard. They show as symbols such as ␛.
+- Text Cellix types into an agent, from a file or a terminal, could end the paste early and arrive as keys, which in Claude Code can run a shell command. Control characters are dropped from it.
+- Quoted code or output in a comment could close its quotes and read as your instruction to the agent. It's quoted so it can't.
+- An agent could reply to a comment as "You".
+- On a shared machine, another user could make Cellix's sockets folder first and answer your agents' hooks. A folder that isn't yours and private is refused.
+- A plan path from Gemini CLI was read and written without a check, so any file could be named; an edited Claude Code plan now also reaches its own plan file.
+- A failed test run in Codex or Gemini CLI could show as passed.
+- After an interrupt or an API error an agent stayed "working", and an answered question still counted as needing you. The Claude Code plugin now hooks `StopFailure`.
+- A second agent's plan replaced the first one waiting; it now waits its turn. Gemini CLI's news reaches its tab.
+- Two agents prompting at once in one checkout could overwrite each other's turn checkpoint.
+- An agent run by another, such as `claude -p` from its shell, took over the tab's session to resume.
+- Agent Context follows Claude Code's current rules: AGENTS.md when there's no CLAUDE.md, rules in subfolders and for some paths, memory found per repository and cut at 25 KB, imports four hops deep. It no longer hangs on a long AGENTS.md for Codex, and every part of its bar shows at a million tokens.
+- A compaction summary showed as your prompt, and the meter stayed red with the context from before it.
+- On the Task page every repeated prompt such as "continue" showed the first one's context.
+- Undo Turn says when it also takes another agent's later turns.
+- One torn line of the tasks log hid every task.
+- An older `cellix` on the PATH rolled the Claude Code plugin back every session.
+- Code blocks close only on a fence as long as the one that opened them, so output holding its own fence stays inside it on a transcript page.
+- A paste on Windows that arrived in two reads could take a word suggestion.
+
+### Changed
+- When a narrow side pane's tabs don't fit, the tab in front shows whole, with a ⌄ that lists every tab and starts a new agent or terminal. The icons at the top right sit closer, on their row's own background.
+- Section headings look one way in Source Control, the Timeline, Agent Context and the Task page.
+- Show Source, Compare, Clear Finished, Start an Agent and Install are buttons. Merging is a label, with Abort beside it.
+- Source Control's commit box stays in place while its lists scroll.
+- A pane under the file hides with a bottom-panel icon.
+- Palettes, signature help and other floating panels end on whole rows; the Task page's prompt box fills its width.
+- Wording: "1 line", and a comparison no longer ends by asking for a commit.
+
 ## [0.6.0] - 2026-11-07
 
 Cellix's goal now reaches past reviewing agents' work: it is the editor you keep open all day in the

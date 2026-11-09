@@ -1661,3 +1661,7 @@ Found by the review and not fixed yet, roughly by weight:
 - **Nits:** the IDE server compares its token in non-constant time, and its handshake has no read timeout (both negligible on loopback with a 128-bit token). The hooks run a `cellix` on the PATH before `$CELLIX_BIN`; that's kept, since only the downgrade did harm, and it's now guarded.
 
 The tour of the changed screens (64, 65, 67, 81, 150, 152), reviewed by the ui-expert, found one problem from the window change. At a million tokens, Agent Context's bar dropped any part under about 2,000 tokens, so a project's instructions vanished from it. The bar's round end also cut into the first part, leaving it looking like a seam. Every part there now takes at least a sliver, the first clear of the round end, and the width comes off the widest part, so the bar still ends where the context does. Test: `every_part_of_the_context_bar_shows_in_a_window_of_a_million`; retaken 81-context looked at.
+
+## 0.6.1 (2026-11-09)
+
+Released the polish session's eleven commits and the AI engineering review's fixes as 0.6.1. Windows is paused at the user's word, since no one tests there yet: the Windows CI job is `if: false`, the release builds no Windows archive, and the notes and README say so. Undo all three when Windows testing starts. The README covers the changes: the context window, Undo Turn naming other agents, waiting plans, Agent Context's rules, transcripts showing control characters as symbols, and the side pane's ⌄.
