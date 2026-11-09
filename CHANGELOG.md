@@ -4,6 +4,19 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-11-09
+
+### Added
+- Edit and Delete on your own comments: Edit changes the text in place, Delete asks once.
+
+### Changed
+- Review Changes opens beside Source Control, which stays on the left, with its own list of files, turns and tests. An × after its title, or Esc, closes it. The ± is gone from the top right, where every icon now opens the side pane. Where Review takes Source Control's place in a narrow window, Source Control's icon goes back to it.
+- Review's cards have air around their header and buttons, Accept as far in from the right as the title is from the left, and Reject in the secondary button style used elsewhere.
+- The workspaces bar has room under it at the window's edge.
+
+### Fixed
+- A terminal test that read the workspaces bar before it was drawn.
+
 ## [0.6.2] - 2026-11-09
 
 ### Changed

@@ -130,6 +130,7 @@ words and Comment as you go, then press **Check my review** in the Comments pane
 - **Plans** open as a page with Approve and Send back, and your edits and comments go with the answer.
 - **Diffs** stack hunk by hunk, against HEAD or any agent turn, with the tests the agent ran.
   Right-click a changed line to comment on it or to undo just that line.
+- **Comments** you write can be edited in place or deleted from their card.
 - **Tasks.** Show Agent Task lays out one piece of agent work as a timeline: its plan versions and
   its turns, each with its prompt, what it changed, its tests and your comments. Review Turn reads
   one turn's changes, Undo Turn takes them back (and says so when that also takes another agent's
@@ -311,7 +312,8 @@ Getting Started, in the command palette or on the empty window, is a short guide
 The Git icon on the left lists staged and unstaged files with a box for the message, and hovering
 over a file offers stage, unstage and discard. Enter commits what's staged, or everything if nothing
 is. The button beside Commit pushes, pulls or publishes, and clicking a file shows its diff. Ctrl+G
-opens the full Review, which reads what changed hunk by hunk.
+opens the full Review beside Source Control, with its own list of files, turns to compare against and
+test runs, and reads what changed hunk by hunk; the × after its title or Esc closes it.
 
 A merge or rebase that stops on conflicts lists the files under Merge Changes. Each conflict shows in
 the file as a card with Current, Incoming, Both and Compare; Mark Resolved stages a file once no

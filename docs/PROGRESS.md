@@ -1696,3 +1696,7 @@ The user asked for room under the workspaces bar, Edit and Delete for comments, 
     A second look found the list's selected row 4 px from the new edge, now half a column clear, and cards ending flush under their last line, now with a foot of 0.3 row to mirror the header's air, leaving 11 px between cards. Left: the +/- counts in the list are unevenly spaced (cell widths around smaller text). Kept on purpose: the empty slot before the window's × at the top right, which is the side pane's own × when one is open, so the icons don't move.
 
   Tests: `review_opens_beside_source_control_and_closes_with_its_x`, `a_click_on_git_in_full_review_returns_to_source_control`. Looked at in a direct render of Review at 160 and 120 columns: the tour's 13-review needs the scenes before it to have changes to review.
+
+## 0.6.3 (2026-11-09)
+
+Released at the user's word: the workspaces bar's air, comment Edit and Delete, and Review beside Source Control with its spacing fixed. README and CHANGELOG updated. Still no Windows build.

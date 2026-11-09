@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-cellix-review = { version = "0.6.2", path = "../cellix-review" }
+cellix-review = { version = "0.6.3", path = "../cellix-review" }
 # Canonical paths without Windows' `\\?\`, which git and Claude Code don't take. On Unix it's
 # std's own.
 dunce = "1"
