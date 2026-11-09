@@ -4436,5 +4436,12 @@
     "title": "An agent stopped by an API error or an interrupt isn't left working, and an answered question isn't counted as needing you",
     "test": "a_turn_the_api_cut_short_is_not_left_working",
     "passes": true
+  },
+  {
+    "id": "quoted-text-stays-quoted",
+    "milestone": 12,
+    "title": "File text and output in what an agent is told sit in quotes they can't close, so a line of code can't pass as the reviewer's words",
+    "test": "quoted_text_cannot_end_its_quotes_and_speak_as_the_reviewer",
+    "passes": true
   }
 ]
