@@ -554,6 +554,32 @@ impl TaskPage {
             .map_or(0, |t| t.turns().filter(|o| o.at > turn.at).count())
     }
 
+    /// Other sessions' turns in the project since the chosen turn began, by agent: undoing
+    /// it puts the whole tree back, so their work goes too.
+    pub fn others_after(&self) -> Vec<(String, usize)> {
+        let (Some(turn), Some(task)) = (self.chosen_turn(), self.task()) else {
+            return Vec::new();
+        };
+        let mut counts: Vec<(String, usize)> = Vec::new();
+        let later = self
+            .tasks
+            .iter()
+            .filter(|other| other.session != task.session)
+            .flat_map(|other| {
+                other
+                    .turns()
+                    .filter(|t| t.at > turn.at)
+                    .map(|_| &other.agent)
+            });
+        for agent in later {
+            match counts.iter_mut().find(|(name, _)| name == agent) {
+                Some((_, count)) => *count += 1,
+                None => counts.push((agent.clone(), 1)),
+            }
+        }
+        counts
+    }
+
     pub fn choose(&mut self, step: usize) {
         if self.task().is_some_and(|t| step < t.steps.len()) {
             self.step = step;

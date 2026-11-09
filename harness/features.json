@@ -4534,5 +4534,12 @@
     "title": "Two agents prompting at once in one checkout each get their own checkpoint: neither replaces the other, and the shared checkpoint index is kept",
     "test": "a_checkpoint_taken_meanwhile_is_neither_replaced_nor_its_index_lost",
     "passes": true
+  },
+  {
+    "id": "undo-names-others",
+    "milestone": 12,
+    "title": "Undo Turn says when it also undoes another agent's turns in the project, since it puts the whole tree back",
+    "test": "undoing_a_turn_names_other_agents_turns_it_undoes",
+    "passes": true
   }
 ]

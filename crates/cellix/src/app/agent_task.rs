@@ -282,6 +282,7 @@ impl App {
             }
             Hit::UndoTurn => {
                 let after = page.turns_after();
+                let others = page.others_after();
                 let Some(turn) = page.chosen_turn().cloned() else {
                     return;
                 };
@@ -296,10 +297,27 @@ impl App {
                     1 => format!("Undo turn {} and the one after it?", turn.number),
                     n => format!("Undo turn {} and the {n} after it?", turn.number),
                 };
-                let detail = format!(
-                    "Files go back to how they were before \u{201c}{}\u{201d}. A checkpoint is kept, so you can redo.",
-                    tasks::name_from(&turn.text)
-                );
+                // The whole tree goes back, so other agents' work since then goes too.
+                let also = others
+                    .iter()
+                    .map(|(agent, count)| match count {
+                        1 => format!("{}'s turn", crate::agents::tab_name(agent)),
+                        n => format!("{}'s {n} turns", crate::agents::tab_name(agent)),
+                    })
+                    .collect::<Vec<_>>();
+                // The detail has one line, so when other agents' work goes too, that's what
+                // it says.
+                let detail = if also.is_empty() {
+                    format!(
+                        "Files go back to how they were before \u{201c}{}\u{201d}. A checkpoint is kept, so you can redo.",
+                        tasks::name_from(&turn.text)
+                    )
+                } else {
+                    format!(
+                        "This also undoes {} since then. A checkpoint is kept, so you can redo.",
+                        also.join(" and ")
+                    )
+                };
                 self.overlay = Overlay::Confirm(Confirm {
                     title,
                     detail,
@@ -623,6 +641,35 @@ mod tests {
             "fn refund() {}\n"
         );
         assert!(!root.join("unpaid.rs").exists());
+    }
+
+    /// Undo puts the whole tree back, so it says when another agent's work goes with it.
+    #[test]
+    fn undoing_a_turn_names_other_agents_turns_it_undoes() {
+        let (dir, mut app) = worked_on();
+        let root = dir.path().canonicalize().unwrap();
+        // Between Claude Code's two turns, so its task is still the one shown.
+        let codex = Event::Prompt {
+            at: tasks::now() - 25 * MINUTE,
+            session: "s2".into(),
+            agent: "Codex".into(),
+            text: "Add a currency field".into(),
+            commit: None,
+            threads: 0,
+        };
+        tasks::record(&root, &codex).unwrap();
+        app.run(Command::ShowAgentTask);
+        wait_for(&mut app, "1 file +1 -0");
+        click_on(&mut app, MouseKind::Left, "1  Add a refund route");
+        click_on(&mut app, MouseKind::Left, "[Undo From Here]");
+        let text = screen(&app).text().replace('\n', " ");
+        assert!(text.contains("Undo turn 1 and the one after it?"), "{text}");
+        let flat: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            flat.contains("This also undoes Codex's turn since then."),
+            "{flat}"
+        );
+        press(&mut app, Key::Esc);
     }
 
     #[test]
