@@ -207,6 +207,7 @@ impl Theme {
         );
         // The rail and the status bar are the terminal's own colour, so its window padding
         // can't show as a seam around them.
+        let (text_was, sidebar_was, popup_was) = (self.text.bg, self.sidebar.bg, self.popup);
         for surface in [
             &mut self.sidebar,
             &mut self.bar,
@@ -221,25 +222,43 @@ impl Theme {
         ] {
             surface.bg = shifted(surface.bg, by);
         }
+        self.popup = shifted(self.popup, by);
+        // What's drawn on a surface moves as far as that surface did. A light surface stops at
+        // white, and a wash moved further would fade into it: a menu's highlight, a text box,
+        // a code block on the editor.
+        let moved = |was: Rgb, now: Rgb| {
+            (
+                i16::from(now.0) - i16::from(was.0),
+                i16::from(now.1) - i16::from(was.1),
+                i16::from(now.2) - i16::from(was.2),
+            )
+        };
+        let on_text = moved(text_was, self.text.bg);
+        let on_sidebar = moved(sidebar_was, self.sidebar.bg);
+        let on_popup = moved(popup_was, self.popup);
         for color in [
-            &mut self.row_hover,
             &mut self.page_hover,
-            &mut self.popup_hover,
-            &mut self.row_active,
             &mut self.line,
             &mut self.guide,
             &mut self.scrollbar,
-            &mut self.input,
             &mut self.code_bg,
             &mut self.minimap_view,
             &mut self.border,
-            &mut self.popup,
-            &mut self.popup_border,
             &mut self.tint,
             &mut self.accept_tint,
+        ] {
+            *color = shifted(*color, on_text);
+        }
+        for color in [&mut self.row_hover, &mut self.row_active] {
+            *color = shifted(*color, on_sidebar);
+        }
+        for color in [
+            &mut self.popup_hover,
+            &mut self.input,
+            &mut self.popup_border,
             &mut self.pick,
         ] {
-            *color = shifted(*color, by);
+            *color = shifted(*color, on_popup);
         }
         self
     }
@@ -479,6 +498,23 @@ mod tests {
         assert_eq!(theme.status.bg, base);
         assert!(brightness(theme.sidebar.bg) > brightness(theme.activity.bg));
         assert!(brightness(theme.text.bg) > brightness(theme.sidebar.bg));
+        // Surfaces stop at white; what's drawn on them keeps its step from them.
+        let latte = Theme::named(Some("light"));
+        assert_eq!(theme.popup, latte.popup, "menus were white already");
+        assert_eq!(
+            theme.pick, latte.pick,
+            "so their highlight stays where it was"
+        );
+        assert_eq!(theme.popup_hover, latte.popup_hover);
+        assert_eq!(theme.input, latte.input);
+        // On the editor, code blocks and lines keep about the step they had in Latte.
+        let step = |t: &Theme, wash: Rgb| brightness(t.text.bg) as i32 - brightness(wash) as i32;
+        for (now, then) in [
+            (step(&theme, theme.code_bg), step(&latte, latte.code_bg)),
+            (step(&theme, theme.border), step(&latte, latte.border)),
+        ] {
+            assert!((now - then).abs() <= 3 && now > 0, "{now} against {then}");
+        }
     }
 
     #[test]

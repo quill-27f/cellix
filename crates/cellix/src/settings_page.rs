@@ -1061,7 +1061,11 @@ fn draw_card(grid: &mut Grid, rect: Rect, name: &str, (on, hovered): (bool, bool
         .find(|t| t.0 == name)
         .copied()
         .unwrap_or(THEMES[0]);
+    // The theme showing now, as it sits on this terminal, when the card is its kind: picking
+    // it gives just that.
     let sample = match name {
+        "dark" if !theme.is_light() => *theme,
+        "light" if theme.is_light() => *theme,
         "dark" => Theme::default(),
         "light" => Theme::named(Some("light")),
         _ => *theme,
