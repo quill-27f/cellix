@@ -3,8 +3,8 @@
 
 use std::path::{Path, PathBuf};
 
-/// Imports are followed this many files deep and no further.
-pub const IMPORT_DEPTH: usize = 5;
+/// Imports are followed this many hops deep and no further, as Claude Code follows them.
+pub const IMPORT_DEPTH: usize = 4;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Import {

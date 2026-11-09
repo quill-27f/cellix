@@ -22,6 +22,8 @@ pub use transcript::{
 
 /// Claude Code loads only this many lines of its auto memory's `MEMORY.md`.
 pub const MEMORY_LINES: usize = 200;
+/// Nor more than this many bytes of it, whichever comes first.
+pub const MEMORY_BYTES: usize = 25 * 1024;
 /// Codex stops reading project instructions after this many bytes (`project_doc_max_bytes`).
 pub const CODEX_BYTES: usize = 32 * 1024;
 /// Claude Code warns of an instruction file past this many characters.
@@ -358,33 +360,101 @@ pub fn claude_project_dir(claude: &Path, project: &Path) -> PathBuf {
     claude.join("projects").join(name)
 }
 
-/// Claude Code's own notes for the project. A worktree shares its main checkout's.
+/// Claude Code's own notes for the project. They're kept for the repository, so a subfolder
+/// and a worktree share its main checkout's; outside a repository, for the folder. A folder
+/// set as `autoMemoryDirectory` in settings is used instead.
 fn claude_memory(project: &Path, claude: &Path) -> PathBuf {
+    if let Some(dir) = auto_memory_directory(project, claude) {
+        return dir.join("MEMORY.md");
+    }
     let index = |p: &Path| {
         claude_project_dir(claude, p)
             .join("memory")
             .join("MEMORY.md")
     };
-    let own = index(project);
-    if own.exists() {
-        return own;
+    let repo = main_checkout(project).unwrap_or_else(|| repo_root(project));
+    let shared = index(&repo);
+    if shared.exists() {
+        return shared;
     }
-    main_checkout(project)
-        .map(|m| index(&m))
-        .filter(|p| p.exists())
-        .unwrap_or(own)
+    // Older versions kept them for the folder Claude Code was started in.
+    let own = index(project);
+    if own.exists() { own } else { shared }
 }
 
+/// `autoMemoryDirectory` from Claude Code's settings, the project's over the user's.
+fn auto_memory_directory(project: &Path, claude: &Path) -> Option<PathBuf> {
+    let files = [
+        project.join(".claude/settings.local.json"),
+        project.join(".claude/settings.json"),
+        claude.join("settings.json"),
+    ];
+    let dir = files.iter().find_map(|file| {
+        let text = fs::read_to_string(file).ok()?;
+        let settings: Value = serde_json::from_str(&text).ok()?;
+        settings["autoMemoryDirectory"]
+            .as_str()
+            .filter(|d| !d.is_empty())
+            .map(str::to_string)
+    })?;
+    let home = claude.parent();
+    Some(match (dir.strip_prefix("~/"), home) {
+        (Some(rest), Some(home)) => home.join(rest),
+        _ => PathBuf::from(dir),
+    })
+}
+
+/// Markdown files in `dir` and the folders under it, as Claude Code finds its rules.
 fn markdown_files(dir: &Path) -> Vec<PathBuf> {
-    let mut files: Vec<PathBuf> = fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|e| e == "md") && p.is_file())
-        .collect();
+    let mut files = Vec::new();
+    let mut folders = vec![(dir.to_path_buf(), 0)];
+    while let Some((folder, depth)) = folders.pop() {
+        for path in fs::read_dir(&folder)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+        {
+            if path.is_dir() && depth < NESTED_DEPTH {
+                folders.push((path, depth + 1));
+            } else if path.extension().is_some_and(|e| e == "md") && path.is_file() {
+                files.push(path);
+            }
+        }
+    }
     files.sort();
     files
+}
+
+/// A rule as Claude Code loads it: at the start, or, with `paths` in its front matter, only
+/// once the agent works with a file those match, from the folder that holds its `.claude`.
+fn rule(path: PathBuf, scope: Scope, base: &Path) -> Instruction {
+    let mut rule = Instruction::new(path, scope);
+    let scoped = rule
+        .text
+        .as_deref()
+        .is_some_and(|text| front_matter(text).iter().any(|(key, _)| key == "paths"));
+    if scoped {
+        rule.later = Some(base.to_path_buf());
+    }
+    rule
+}
+
+/// Which instruction files Claude Code reads, as its built-in AGENTS.md plugin is set in the
+/// user's settings: `claude-md-or-agents-md` unless it says otherwise.
+fn claude_instruction_files(claude: Option<&Path>) -> String {
+    let setting = claude.and_then(|claude| {
+        let text = fs::read_to_string(claude.join("settings.json")).ok()?;
+        let settings: Value = serde_json::from_str(&text).ok()?;
+        ["cc-plugin-agents-md@builtin", "agents-md@builtin"]
+            .iter()
+            .find_map(|id| {
+                settings["pluginConfigs"][id]["options"]["instructionFiles"]
+                    .as_str()
+                    .map(str::to_string)
+            })
+    });
+    setting.unwrap_or_else(|| "claude-md-or-agents-md".to_string())
 }
 
 fn claude_instructions(project: &Path, homes: &Homes) -> Vec<Instruction> {
@@ -394,14 +464,30 @@ fn claude_instructions(project: &Path, homes: &Homes) -> Vec<Instruction> {
     }
     if let Some(claude) = &homes.claude {
         found.push(Instruction::new(claude.join("CLAUDE.md"), Scope::User));
+        let home = claude.parent().unwrap_or(claude);
         found.extend(
             markdown_files(&claude.join("rules"))
                 .into_iter()
-                .map(|p| Instruction::new(p, Scope::User)),
+                .map(|p| rule(p, Scope::User, home)),
         );
     }
     let user_file = homes.claude.as_ref().map(|c| c.join("CLAUDE.md"));
-    for dir in ancestors_down(project) {
+    let folders = ancestors_down(project);
+    // AGENTS.md is read in place of CLAUDE.md when the project has none, of the three names,
+    // from here up; the user's own CLAUDE.md doesn't count. A setting can read both, or neither.
+    let claude_files = ["CLAUDE.md", ".claude/CLAUDE.md", "CLAUDE.local.md"];
+    let has_claude_md = folders.iter().any(|dir| {
+        claude_files
+            .iter()
+            .map(|name| dir.join(name))
+            .any(|path| path.is_file() && Some(&path) != user_file.as_ref())
+    });
+    let reads_agents_md = match claude_instruction_files(homes.claude.as_deref()).as_str() {
+        "claude-md-and-agents-md" => true,
+        "managed-only" => false,
+        _ => !has_claude_md,
+    };
+    for dir in &folders {
         for name in ["CLAUDE.md", ".claude/CLAUDE.md"] {
             let path = dir.join(name);
             if Some(&path) != user_file.as_ref() {
@@ -412,10 +498,15 @@ fn claude_instructions(project: &Path, homes: &Homes) -> Vec<Instruction> {
             found.extend(
                 markdown_files(&dir.join(".claude").join("rules"))
                     .into_iter()
-                    .map(|p| Instruction::new(p, Scope::Project)),
+                    .map(|p| rule(p, Scope::Project, dir)),
             );
         }
         found.push(Instruction::new(dir.join("CLAUDE.local.md"), Scope::Local));
+        if reads_agents_md {
+            for name in ["AGENTS.md", ".claude/AGENTS.md"] {
+                found.push(Instruction::new(dir.join(name), Scope::Project));
+            }
+        }
     }
     // Only what's there, but the user's file stays so its absence can be shown.
     found.retain(|i| {
@@ -424,13 +515,40 @@ fn claude_instructions(project: &Path, homes: &Homes) -> Vec<Instruction> {
     });
     if let Some(claude) = &homes.claude {
         let mut memory = Instruction::new(claude_memory(project, claude), Scope::Memory);
-        memory.limit = Some(MEMORY_LINES);
+        // The first 200 lines or 25 KB, whichever comes first.
+        let text = memory.text.as_deref().unwrap_or("");
+        let mut cut = MEMORY_BYTES.min(text.len());
+        while !text.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        // The whole lines that fit.
+        let within = if cut < text.len() {
+            text[..cut].matches('\n').count()
+        } else {
+            MEMORY_LINES
+        };
+        memory.limit = Some(MEMORY_LINES.min(within));
         if memory.exists() {
             found.push(memory);
         }
     }
-    for path in nested(project, &["CLAUDE.md"]) {
-        let mut later = Instruction::new(path.clone(), Scope::Project);
+    // Below here, each folder's files load once the agent works there: its CLAUDE.md and
+    // CLAUDE.local.md, or its AGENTS.md when it has neither.
+    let mut below = nested(project, &["CLAUDE.md", "CLAUDE.local.md"]);
+    if reads_agents_md {
+        below.extend(nested(project, &["AGENTS.md"]).into_iter().filter(|path| {
+            let dir = path.parent().unwrap_or(project);
+            !claude_files.iter().any(|name| dir.join(name).is_file())
+        }));
+    }
+    below.sort();
+    for path in below {
+        let scope = if path.ends_with("CLAUDE.local.md") {
+            Scope::Local
+        } else {
+            Scope::Project
+        };
+        let mut later = Instruction::new(path.clone(), scope);
         later.later = path.parent().map(Path::to_path_buf);
         found.push(later);
     }

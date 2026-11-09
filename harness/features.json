@@ -4471,5 +4471,33 @@
     "title": "A tasks log line cut inside a character costs only that line, not the whole log",
     "test": "a_line_cut_inside_a_character_costs_only_that_line",
     "passes": true
+  },
+  {
+    "id": "claude-reads-agents-md",
+    "milestone": 12,
+    "title": "Agent Context shows Claude Code reading AGENTS.md when the project has no CLAUDE.md, CLAUDE.local.md or .claude/CLAUDE.md, or always when the user set it to read both",
+    "test": "claude_code_reads_agents_md_when_the_project_has_no_claude_md",
+    "passes": true
+  },
+  {
+    "id": "claude-rules-recursive",
+    "milestone": 12,
+    "title": "Agent Context finds Claude Code's rules in subfolders, and shows a rule with paths as loaded only when those files are worked on",
+    "test": "claude_code_rules_are_found_in_subfolders_and_path_rules_load_later",
+    "passes": true
+  },
+  {
+    "id": "claude-memory-repo-25kb",
+    "milestone": 12,
+    "title": "Agent Context finds Claude Code's auto memory by repository, from any subfolder, and shows MEMORY.md cut at 25 KB as well as 200 lines",
+    "test": "claude_code_memory_is_the_repositorys_and_cut_at_25_kb",
+    "passes": true
+  },
+  {
+    "id": "imports-four-hops",
+    "milestone": 12,
+    "title": "Instruction imports are followed four hops deep, as Claude Code follows them",
+    "test": "imports_go_four_hops_deep",
+    "passes": true
   }
 ]

@@ -491,3 +491,128 @@ fn codex_cuts_a_long_file_between_characters_and_skips_an_empty_override() {
         .expect("AGENTS.md, since the override is empty");
     assert_eq!(file.limit, Some(1));
 }
+
+#[test]
+fn claude_code_reads_agents_md_when_the_project_has_no_claude_md() {
+    let f = fixture();
+    fs::remove_file(f.project.join("CLAUDE.md")).unwrap();
+    write(&f.project.join("web/AGENTS.md"), "Web only.\n");
+    write(
+        &f.project.join("crates/core/AGENTS.md"),
+        "Not read: it has a CLAUDE.md.\n",
+    );
+    let context = discover(Agent::Claude, &f.project, &f.homes);
+    let got = names(&context, &f.project, &f.home);
+    assert!(got.contains(&"AGENTS.md".to_string()), "{got:?}");
+    assert!(
+        got.contains(&"  docs/MORE.md".to_string()),
+        "its imports: {got:?}"
+    );
+    assert!(
+        got.contains(&"web/AGENTS.md (later)".to_string()),
+        "{got:?}"
+    );
+    assert!(
+        !got.iter().any(|n| n.starts_with("crates/core/AGENTS.md")),
+        "{got:?}"
+    );
+    // So there's nothing to say about instructions Claude Code doesn't read.
+    let found = checks(Agent::Claude, &f.project, &context);
+    assert!(!found.iter().any(|c| c.kind == CheckKind::NotRead));
+
+    // A CLAUDE.local.md counts as a CLAUDE.md, and then AGENTS.md isn't read...
+    write(&f.project.join("CLAUDE.local.md"), "Mine.\n");
+    let context = discover(Agent::Claude, &f.project, &f.homes);
+    let got = names(&context, &f.project, &f.home);
+    assert!(!got.contains(&"AGENTS.md".to_string()), "{got:?}");
+    // ...unless the user set Claude Code to read both.
+    write(
+        &f.homes.claude.as_ref().unwrap().join("settings.json"),
+        r#"{"pluginConfigs": {"cc-plugin-agents-md@builtin": {"options": {"instructionFiles": "claude-md-and-agents-md"}}}}"#,
+    );
+    let context = discover(Agent::Claude, &f.project, &f.homes);
+    let got = names(&context, &f.project, &f.home);
+    assert!(got.contains(&"AGENTS.md".to_string()), "{got:?}");
+}
+
+#[test]
+fn claude_code_rules_are_found_in_subfolders_and_path_rules_load_later() {
+    let f = fixture();
+    write(&f.project.join(".claude/rules/testing.md"), "Test first.\n");
+    write(
+        &f.project.join(".claude/rules/frontend/react.md"),
+        "---\npaths:\n  - \"src/**/*.tsx\"\n---\nHooks at the top.\n",
+    );
+    write(
+        &f.project.join("crates/core/CLAUDE.local.md"),
+        "Mine, for core.\n",
+    );
+    let context = discover(Agent::Claude, &f.project, &f.homes);
+    let got = names(&context, &f.project, &f.home);
+    assert!(
+        got.contains(&".claude/rules/testing.md".to_string()),
+        "{got:?}"
+    );
+    assert!(
+        got.contains(&".claude/rules/frontend/react.md (later)".to_string()),
+        "a rule for some paths loads when they're worked on: {got:?}"
+    );
+    assert!(
+        got.contains(&"crates/core/CLAUDE.local.md (later)".to_string()),
+        "{got:?}"
+    );
+}
+
+#[test]
+fn claude_code_memory_is_the_repositorys_and_cut_at_25_kb() {
+    let f = fixture();
+    // Opened in a subfolder of the repository, it's still the repository's memory.
+    let web = f.project.join("web");
+    fs::create_dir_all(&web).unwrap();
+    let context = discover(Agent::Claude, &web, &f.homes);
+    let memory = context
+        .instructions
+        .iter()
+        .find(|i| i.scope == Scope::Memory)
+        .expect("the repository's memory");
+    assert_eq!(memory.limit, Some(MEMORY_LINES));
+    // 150 long lines are over 25 KB long before 200 lines.
+    let claude = f.homes.claude.as_ref().unwrap();
+    let path = claude_project_dir(claude, &f.project).join("memory/MEMORY.md");
+    let line = format!("- {}\n", "x".repeat(270));
+    write(&path, &line.repeat(150));
+    let context = discover(Agent::Claude, &f.project, &f.homes);
+    let memory = context
+        .instructions
+        .iter()
+        .find(|i| i.scope == Scope::Memory)
+        .unwrap();
+    assert_eq!(memory.limit, Some(MEMORY_BYTES / line.len()));
+    let found = checks(Agent::Claude, &f.project, &context);
+    assert!(
+        found.iter().any(|c| c.kind == CheckKind::CutOff),
+        "{found:?}"
+    );
+}
+
+#[test]
+fn imports_go_four_hops_deep() {
+    let f = fixture();
+    write(&f.project.join("CLAUDE.md"), "@one.md\n");
+    for (file, next) in [
+        ("one", "two"),
+        ("two", "three"),
+        ("three", "four"),
+        ("four", "five"),
+    ] {
+        write(
+            &f.project.join(format!("{file}.md")),
+            &format!("@{next}.md\n"),
+        );
+    }
+    write(&f.project.join("five.md"), "Too deep.\n");
+    let context = discover(Agent::Claude, &f.project, &f.homes);
+    let got = names(&context, &f.project, &f.home);
+    assert!(got.contains(&"        four.md".to_string()), "{got:?}");
+    assert!(!got.iter().any(|n| n.contains("five.md")), "{got:?}");
+}
