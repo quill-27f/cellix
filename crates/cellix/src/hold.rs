@@ -43,7 +43,7 @@ impl Stopped {
 
     /// Forgets it, once it has been resumed, started fresh or closed.
     pub fn forget(&self) {
-        for extension in ["json", "log", "agent"] {
+        for extension in ["json", "log", "agent", "pid"] {
             let _ = std::fs::remove_file(self.notes.with_extension(extension));
         }
     }

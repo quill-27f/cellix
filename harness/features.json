@@ -4520,5 +4520,12 @@
     "title": "An older Cellix still on the PATH leaves a newer Cellix's Claude Code plugin as it is",
     "test": "an_older_cellix_leaves_a_newer_plugin_alone",
     "passes": true
+  },
+  {
+    "id": "nested-agent-resume",
+    "milestone": 12,
+    "title": "An agent that a held agent runs, as claude -p from its shell, doesn't replace the held agent's session to resume",
+    "test": "an_agent_run_by_the_held_agent_leaves_its_resume_alone",
+    "passes": true
   }
 ]

@@ -132,7 +132,7 @@ pub fn left_running(folder: &Path) -> Vec<(String, PathBuf)> {
 }
 
 /// The files a host keeps beside its socket, by extension.
-const BESIDE: [&str; 3] = ["json", "log", "agent"];
+const BESIDE: [&str; 4] = ["json", "log", "agent", "pid"];
 
 /// Moves what a host that died left behind into the stopped folder, if its job can be read.
 fn put_aside(socket: &Path) {
@@ -467,6 +467,11 @@ pub fn serve(socket: &Path) -> io::Result<()> {
         .map_err(io::Error::other)?;
     drop(pair.slave);
     let pid = child.process_id();
+    // Which process is the program held here, so a hook can tell it from an agent that
+    // program started, which inherits where it's held.
+    if let Some(pid) = pid {
+        let _ = std::fs::write(socket.with_extension("pid"), pid.to_string());
+    }
     let mut reader = pair.master.try_clone_reader().map_err(io::Error::other)?;
     let writer = pair.master.take_writer().map_err(io::Error::other)?;
     let writer = Arc::new(Mutex::new(writer));

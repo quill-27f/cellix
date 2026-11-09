@@ -190,6 +190,35 @@ fn agent_pid() -> Option<u32> {
     None
 }
 
+/// Whether this hook's agent is the program held at `held`, and not an agent that program
+/// ran, as Claude Code running `codex exec` or `claude -p` through its shell: that one inherits
+/// where it's held too, and would leave its own session to resume in place of the tab's.
+fn is_held_program(held: &Path) -> bool {
+    let child = std::fs::read_to_string(held.with_extension("pid"))
+        .ok()
+        .and_then(|text| text.trim().parse().ok());
+    #[cfg(unix)]
+    let parent_of = |pid| process_of(pid).map(|(parent, _)| parent);
+    #[cfg(not(unix))]
+    let parent_of = |_| None;
+    held_program(child, agent_pid(), parent_of)
+}
+
+/// `is_held_program`, given the held program's process, the hook's agent's, and how to find a
+/// process's parent. The agent is the program, or run by it directly, as through a login
+/// shell; one with a shell between them was started by the program's own agent. Without the
+/// numbers to tell, as from an older host, it's taken to be the program.
+fn held_program(
+    child: Option<u32>,
+    agent: Option<u32>,
+    parent_of: impl Fn(u32) -> Option<u32>,
+) -> bool {
+    let (Some(child), Some(agent)) = (child, agent) else {
+        return true;
+    };
+    agent == child || parent_of(agent) == Some(child)
+}
+
 /// A process's parent and its command's name: from `/proc` where there is one, else `ps`.
 #[cfg(unix)]
 fn process_of(pid: u32) -> Option<(u32, String)> {
@@ -650,6 +679,7 @@ pub fn handle_for(agent: &str, kind: &str, stdin: &str) -> Option<String> {
     let roots = roots(&input);
     if matches!(kind, "session-start" | "prompt")
         && let Some(held) = std::env::var_os(HELD_VAR)
+        && is_held_program(Path::new(&held))
     {
         remember(
             Path::new(&held),
@@ -733,6 +763,36 @@ mod tests {
         let read = |name: &str| std::fs::read_to_string(dir.path().join(name)).unwrap();
         assert_eq!(read("Plan v1.md"), "first");
         assert_eq!(read("Plan v2.md"), "second");
+    }
+
+    #[test]
+    fn an_agent_run_by_the_held_agent_leaves_its_resume_alone() {
+        // Cellix holds Claude Code as 100, here started from a login shell as 150.
+        let parents = |pid| match pid {
+            150 => Some(100),
+            300 => Some(250), // `claude -p` run by the agent's Bash tool, 250
+            250 => Some(150),
+            _ => None,
+        };
+        assert!(held_program(Some(100), Some(100), parents), "the program");
+        assert!(
+            held_program(Some(100), Some(150), parents),
+            "under its shell"
+        );
+        assert!(!held_program(Some(100), Some(300), parents), "one it ran");
+        assert!(
+            held_program(None, Some(300), parents),
+            "an older host says nothing"
+        );
+        // And end to end, where processes' parents can be read: a hook for another process
+        // doesn't touch the record.
+        if cfg!(not(unix)) {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let held = dir.path().join("1-2.sock");
+        std::fs::write(held.with_extension("pid"), "1").unwrap();
+        assert!(!is_held_program(&held), "this test isn't pid 1's agent");
     }
 
     #[test]
