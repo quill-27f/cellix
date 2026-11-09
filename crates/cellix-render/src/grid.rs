@@ -177,6 +177,20 @@ impl Grid {
         self.label_at(x as f32, x, y, text, style, max_x, 100)
     }
 
+    /// How much has been painted so far, to `lift_since` later.
+    pub fn painted_so_far(&self) -> usize {
+        self.paint.len()
+    }
+
+    /// Moves what was painted since `from` up by `rows`, which only the pixel tiers can show:
+    /// the cells under it stay in their rows, and so does where a click lands.
+    pub fn lift_since(&mut self, from: usize, rows: f32) {
+        let by = units(rows);
+        for paint in self.paint.iter_mut().skip(from) {
+            paint.lift(by);
+        }
+    }
+
     /// A label starting between cells, at a size relative to the interface font.
     #[allow(clippy::too_many_arguments)]
     pub fn label_at(

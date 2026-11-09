@@ -27,7 +27,12 @@ const BETWEEN: f32 = 0.7;
 const CLOSE: f32 = 2.2;
 const MARK: f32 = 1.0;
 /// The chip behind a tile stands this far inside its row, above and below.
-const CHIP_INSET: f32 = 0.06;
+/// How far a chip stands in from the top and bottom of its row: two thirds of a row tall.
+const CHIP_INSET: f32 = 0.17;
+/// How far the bar's chips and words are raised in their row on the pixel tiers, so a third
+/// of a row of air is left under them at the window's edge, and none crosses into the row
+/// above, whose picture is made apart from this one's.
+pub const BAR_LIFT: f32 = 0.14;
 /// As a percentage of a row, about 9 pixels.
 const CHIP_RADIUS: u8 = 26;
 /// The button that opens another folder beside this one, and what its tip says.
@@ -619,7 +624,11 @@ impl Workspaces {
         }
         self.app().draw(grid);
         if self.shows_bar() {
+            // Lifted within its row, for air between the bar and the window's edge, where
+            // the pixel tiers can place it.
+            let from = grid.painted_so_far();
             self.draw_bar(grid);
+            grid.lift_since(from, BAR_LIFT);
         }
     }
 
@@ -1138,6 +1147,38 @@ mod tests {
             pid: None,
             transcript: String::new(),
         })
+    }
+
+    /// The bar keeps air under it at the window's edge, as it's drawn with pixels, and stays
+    /// in its own row.
+    #[test]
+    fn the_bar_leaves_air_at_the_windows_edge() {
+        let (_dir, first, _) = projects();
+        let mut spaces = spaces();
+        spaces.open(first);
+        let grid = screen(&spaces);
+        let row = f32::from(spaces.size().1 - 1);
+        let unit = cellix_render::UNIT as f32;
+        let tint = spaces.theme().tint;
+        let chip = grid
+            .paint
+            .iter()
+            .find_map(|p| match p {
+                cellix_render::Paint::Panel {
+                    bounds,
+                    fill: Some(fill),
+                    ..
+                } if *fill == tint && bounds.y as f32 >= (row - 1.0) * unit => Some(*bounds),
+                _ => None,
+            })
+            .expect("the open workspace's chip");
+        let (top, bottom) = (chip.y as f32 / unit, (chip.y + chip.h) as f32 / unit);
+        assert!(top >= row, "within its row: {top} {row}");
+        assert!(
+            row + 1.0 - bottom >= 0.3,
+            "air under it: {}",
+            row + 1.0 - bottom
+        );
     }
 
     #[test]

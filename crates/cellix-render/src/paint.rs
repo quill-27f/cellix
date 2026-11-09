@@ -178,6 +178,23 @@ fn beyond_the_row(bounds: Bounds, top: i32) -> Bounds {
 }
 
 impl Paint {
+    /// Moves it up by `by` paint units.
+    pub fn lift(&mut self, by: i32) {
+        match self {
+            Self::Text { y, .. } => *y -= by,
+            Self::Panel { bounds, .. }
+            | Self::Wash { bounds, .. }
+            | Self::Hairline { bounds, .. }
+            | Self::Icon { bounds, .. }
+            | Self::Corners { bounds, .. }
+            | Self::Strips { bounds, .. } => bounds.y -= by,
+            Self::Image { bounds, clip, .. } => {
+                bounds.y -= by;
+                clip.y -= by;
+            }
+        }
+    }
+
     /// Paint units of the columns this can touch, as (left, right). It may overstate them:
     /// that costs a tile, where understating would leave stale pixels.
     pub fn reach(&self) -> (i32, i32) {

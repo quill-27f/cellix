@@ -1676,3 +1676,9 @@ The ui-expert's review of the light screens found what the change broke. Latte's
 ## 0.6.2 (2026-11-09)
 
 Released the light theme's frame on the terminal's background, the fix for washes on white, and the steadier checkpoint fallback. Still no Windows build.
+
+## The user's asks after 0.6.2 (2026-11-09)
+
+The user asked for room under the workspaces bar, Edit and Delete for comments, and Review Changes in a better place. They picked these from options shown first: half a row under the bar, Edit and Delete buttons, and Review inside Source Control.
+
+- **Air under the workspaces bar.** Its chips sat 0.06 of a row from the window's edge, so in Ghostty they nearly touched the bottom. They're now two thirds of a row tall and raised in their row on the pixel tiers, which leaves about a third of a row (12 px) below them. Lifting them out of their row into the status bar's was tried first: rows are drawn as separate pictures, so the chips showed a seam where the two met. Text cells can't place half a row, so they're unchanged. Test: `the_bar_leaves_air_at_the_windows_edge`; 13-review and 24-light-page looked at.

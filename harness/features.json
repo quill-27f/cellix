@@ -4569,5 +4569,12 @@
     "title": "The light theme's frame sits on the terminal's background, as the dark theme's does, so a light terminal's window padding shows no seam",
     "test": "a_light_theme_meets_a_light_terminal_without_a_seam",
     "passes": true
+  },
+  {
+    "id": "workspace-bar-air",
+    "milestone": 12,
+    "title": "The workspaces bar keeps air under its chips at the window's edge, within its own row",
+    "test": "the_bar_leaves_air_at_the_windows_edge",
+    "passes": true
   }
 ]
