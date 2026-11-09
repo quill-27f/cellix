@@ -847,10 +847,11 @@ impl ContextPanel {
         let (top, tall) = (area.y as f32 + BAR_TOP, BAR_HEIGHT);
         let track = Bounds::cells(area.x as f32, top, width, tall);
         grid.panel(track, 0, Some(theme.border), None);
+        let tokens: Vec<u64> = parts.iter().map(|(t, _)| *t as u64).collect();
         let mut x = area.x as f32;
-        for (tokens, colour) in parts {
-            let cells = (tokens as f32 / window * width).min(area.right() as f32 - x);
-            if cells >= 0.05 {
+        for (cells, (_, colour)) in bar_widths(&tokens, window, width).into_iter().zip(parts) {
+            let cells = cells.min(area.right() as f32 - x);
+            if cells > 0.0 {
                 grid.panel(Bounds::cells(x, top, cells, tall), 0, Some(colour), None);
             }
             x += cells;
@@ -858,6 +859,45 @@ impl ContextPanel {
         // Rounded ends, cut from whatever reaches them.
         grid.corners(track, 30, theme.sidebar.bg, ALL_CORNERS);
     }
+}
+
+/// The narrowest a part of the context bar is drawn, in cells, so a small part, as a few
+/// hundred lines of instructions in a window of a million, still shows as itself.
+const LEAST_PART: f32 = 0.35;
+/// What the bar's round left end takes from its first part.
+const ROUND_END: f32 = 0.3;
+
+/// How wide each part of the bar is, in cells: its share of the window, but every part there
+/// is at least `LEAST_PART` wide, and the first one more for the round end that cuts into it.
+/// What that adds comes off the widest part, so the bar still ends where the context does.
+fn bar_widths(tokens: &[u64], window: f32, width: f32) -> Vec<f32> {
+    let mut cells: Vec<f32> = tokens
+        .iter()
+        .map(|t| *t as f32 / window.max(1.0) * width)
+        .collect();
+    let first = tokens.iter().position(|t| *t > 0);
+    let mut added = 0.0;
+    for (i, part) in cells.iter_mut().enumerate() {
+        if tokens[i] == 0 {
+            continue;
+        }
+        let least = LEAST_PART + if Some(i) == first { ROUND_END } else { 0.0 };
+        if *part < least {
+            added += least - *part;
+            *part = least;
+        }
+    }
+    let widest = (0..cells.len()).max_by(|a, b| cells[*a].total_cmp(&cells[*b]));
+    if let Some(widest) = widest {
+        let least = LEAST_PART
+            + if Some(widest) == first {
+                ROUND_END
+            } else {
+                0.0
+            };
+        cells[widest] = (cells[widest] - added).max(least);
+    }
+    cells
 }
 
 /// One list row: a name, a quiet detail a space after it where there's room, and a tail at
@@ -1032,6 +1072,28 @@ fn ago(when: SystemTime) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn every_part_of_the_context_bar_shows_in_a_window_of_a_million() {
+        // System and tools, instructions, listings, files, conversation: 118k of 1M.
+        let tokens = [8_000, 3_000, 0, 14_000, 93_000];
+        let cells = bar_widths(&tokens, 1_000_000.0, 23.0);
+        assert_eq!(cells[2], 0.0, "nothing there, nothing drawn");
+        for i in [0, 1, 3, 4] {
+            assert!(cells[i] >= LEAST_PART, "part {i}: {cells:?}");
+        }
+        assert!(
+            cells[0] >= LEAST_PART + ROUND_END,
+            "clear of the round end: {cells:?}"
+        );
+        let total: f32 = cells.iter().sum();
+        let share = 118_000.0 / 1_000_000.0 * 23.0;
+        assert!(
+            (total - share).abs() < 0.01,
+            "ends where the context does: {total} {share}"
+        );
+    }
+
     use super::*;
 
     #[test]

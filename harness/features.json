@@ -4555,5 +4555,12 @@
     "title": "An edited plan is written back to Claude Code's own plan file, and a plan path from an agent is read or written only if it's a Markdown file there, never another file",
     "test": "an_edited_plan_is_written_only_to_claude_codes_own_plan_file",
     "passes": true
+  },
+  {
+    "id": "context-bar-parts-show",
+    "milestone": 12,
+    "title": "Every part of Agent Context's bar shows in a window of a million, at least a sliver wide and clear of the round end",
+    "test": "every_part_of_the_context_bar_shows_in_a_window_of_a_million",
+    "passes": true
   }
 ]
