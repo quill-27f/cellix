@@ -22443,6 +22443,35 @@ mod tests {
     }
 
     #[test]
+    fn floating_panels_end_on_row_lines() {
+        let (_dir, mut app) = project();
+        app.run(Command::QuickOpen);
+        let grid = screen(&app);
+        let raised: Vec<_> = grid
+            .paint
+            .iter()
+            .filter_map(|p| match p {
+                Paint::Panel {
+                    bounds,
+                    shadow: true,
+                    ..
+                } => Some(*bounds),
+                _ => None,
+            })
+            .collect();
+        assert!(!raised.is_empty(), "the palette floats");
+        for bounds in raised {
+            let row = cellix_render::UNIT;
+            assert_eq!(bounds.y % row, 0, "its top on a row line: {bounds:?}");
+            assert_eq!(
+                (bounds.y + bounds.h) % row,
+                0,
+                "its foot on one: {bounds:?}"
+            );
+        }
+    }
+
+    #[test]
     fn the_button_at_the_top_right_quits_as_ctrl_q_does() {
         let (_dir, mut app) = project();
         let grid = screen(&app);

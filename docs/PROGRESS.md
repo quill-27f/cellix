@@ -1607,3 +1607,7 @@ A side pane standing under the file still showed the right-panel hide icon (a wi
 ## The Task page's "You" box wraps where it ends (2026-11-08)
 
 The prompt in a turn's "You" box was wrapped by counting cells, but drawn in a proportional font that's narrower, so it wrapped with a third of the box still empty (152-task-turn). It's now wrapped by `threads::wrap` with the page's measure, as comments are. Test: `your_prompt_fills_its_box_before_it_wraps` (fails on the old code).
+
+## Floating panels end on row lines (2026-11-08)
+
+Palettes, the signature pop-up, suggestions and the other floating panels drawn by `palette::raised` reached 0.3 of a row past their rows, so their edges cut through the text rows above and below (123-signature-help covered the top of `push_back(item)`). They now end exactly on row lines; a row's own air, about 11 px, keeps their text off the edge. Menus already stood on whole rows. Test: `floating_panels_end_on_row_lines`. Seen in 09-commands, 123-signature-help and 133-open-recent.

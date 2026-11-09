@@ -4373,5 +4373,12 @@
     "title": "Your prompt on the Task page fills its box before it wraps, measured as the font draws it",
     "test": "your_prompt_fills_its_box_before_it_wraps",
     "passes": true
+  },
+  {
+    "id": "panels-on-row-lines",
+    "milestone": 12,
+    "title": "Floating panels (palettes, signature help, suggestions) end on row lines and never cut through the text rows around them",
+    "test": "floating_panels_end_on_row_lines",
+    "passes": true
   }
 ]

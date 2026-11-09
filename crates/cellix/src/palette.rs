@@ -12,8 +12,10 @@ const INTERFACE_SIZE_PERCENT: u8 = 100;
 const ROWS: u16 = 12;
 /// Space from the panel's edge to the icon and the text of the list, which line up.
 const TEXT_INSET: f32 = 1.4;
-/// How far a floating panel reaches past its rows, so nothing sits on its edge.
-const PANEL_PADDING: f32 = 0.3;
+/// How far a floating panel reaches past its rows: not at all, so it ends on a row line and
+/// never cuts through the text rows above and below it. A row's own air keeps its text off
+/// the edge.
+const PANEL_PADDING: f32 = 0.0;
 /// Rows above the list: the search field, and a row holding the line under it.
 const HEADER_ROWS: u16 = 2;
 /// Where that line falls, as far below the field's text as the panel's edge is above it.
