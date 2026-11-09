@@ -300,7 +300,9 @@ The interface follows VS Code's layout, because that is what the target users al
 fluently: activity bar, explorer, tabs, breadcrumbs, current-line highlight, indent guides. The
 dark theme has deep blue-grey tones of its own; the light one is Catppuccin Latte, with the editor on
 base, the sidebars on mantle, the frame on crust, menus white and Latte's own colours for code.
-It's all drawn to the grid, so it holds on the cell tier. Activity icons span several cells:
+On a terminal, both themes move together so the frame sits on the terminal's own background and
+its window padding shows no seam; a Latte terminal therefore shows the light theme a step paler
+than Latte (decided with the user on 2026-11-09). It's all drawn to the grid, so it holds on the cell tier. Activity icons span several cells:
 shapes on the pixel tier and block art on cells, because a font glyph is too small beside a
 real IDE.
 

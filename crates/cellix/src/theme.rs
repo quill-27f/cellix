@@ -192,17 +192,14 @@ impl Theme {
     }
 
     /// Moves every surface by the same amount, so the panels keep their distance from the
-    /// terminal's background. Dark, the frame sits exactly on it, so the window's padding
-    /// can't show as a seam. Light, the editor does, as Latte's base is a light terminal's
-    /// background, so on one the sidebars and frame are Latte's mantle and crust exactly.
+    /// terminal's background. The frame sits exactly on it, light or dark, so the window's
+    /// padding, which is the terminal's background, can't show as a seam around the rail and
+    /// the status bar. Light, that puts the rest a step or two paler than Latte on a Latte
+    /// terminal; the seam was the worse of the two (decided with the user on 2026-11-09).
     /// Text colours stay, since they're chosen for contrast and a nearby background doesn't
     /// change that.
     pub fn on_background(mut self, background: Rgb) -> Self {
-        let base = if self.is_light() {
-            self.text.bg
-        } else {
-            self.activity.bg
-        };
+        let base = self.activity.bg;
         let by = (
             i16::from(background.0) - i16::from(base.0),
             i16::from(background.1) - i16::from(base.1),
@@ -468,6 +465,20 @@ mod tests {
             theme.text.bg, theme.sidebar.bg,
             "and the sidebar from the text"
         );
+    }
+
+    #[test]
+    fn a_light_theme_meets_a_light_terminal_without_a_seam() {
+        // Latte's base, as a light terminal's background.
+        let base = Rgb(0xEF, 0xF1, 0xF5);
+        let theme = Theme::named(Some("light")).on_background(base);
+        assert_eq!(
+            theme.activity.bg, base,
+            "the window's padding meets the rail"
+        );
+        assert_eq!(theme.status.bg, base);
+        assert!(brightness(theme.sidebar.bg) > brightness(theme.activity.bg));
+        assert!(brightness(theme.text.bg) > brightness(theme.sidebar.bg));
     }
 
     #[test]

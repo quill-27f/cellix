@@ -4562,5 +4562,12 @@
     "title": "Every part of Agent Context's bar shows in a window of a million, at least a sliver wide and clear of the round end",
     "test": "every_part_of_the_context_bar_shows_in_a_window_of_a_million",
     "passes": true
+  },
+  {
+    "id": "light-frame-on-terminal",
+    "milestone": 12,
+    "title": "The light theme's frame sits on the terminal's background, as the dark theme's does, so a light terminal's window padding shows no seam",
+    "test": "a_light_theme_meets_a_light_terminal_without_a_seam",
+    "passes": true
   }
 ]

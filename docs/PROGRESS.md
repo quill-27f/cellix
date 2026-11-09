@@ -1665,3 +1665,7 @@ The tour of the changed screens (64, 65, 67, 81, 150, 152), reviewed by the ui-e
 ## 0.6.1 (2026-11-09)
 
 Released the polish session's eleven commits and the AI engineering review's fixes as 0.6.1. Windows is paused at the user's word, since no one tests there yet: the Windows CI job is `if: false`, the release builds no Windows archive, and the notes and README say so. Undo all three when Windows testing starts. The README covers the changes: the context window, Undo Turn naming other agents, waiting plans, Agent Context's rules, transcripts showing control characters as symbols, and the side pane's ⌄.
+
+## Light theme: the frame on the terminal's background (2026-11-09)
+
+The user's call on the open polish item. The light theme put the editor on the terminal's background so a Latte terminal showed Latte exactly, which left the window's padding (the terminal's own background) paler than the activity bar beside it, a seam at the window's edge. Now the frame sits on the terminal's background in both themes, and every other surface moves with it: on a Latte terminal the sidebar and editor are a step or two paler than Latte, the editor near white. Setting the terminal's background while Cellix runs was the other way, turned down for the risk in tmux and of not restoring it. Test: `a_light_theme_meets_a_light_terminal_without_a_seam`; the light tour scenes 24, 25, 26, 66 and 115 were looked at.
