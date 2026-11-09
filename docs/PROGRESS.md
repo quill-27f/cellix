@@ -1672,3 +1672,7 @@ The user's call on the open polish item. The light theme put the editor on the t
 
 The ui-expert's review of the light screens found what the change broke. Latte's base shifted past white and stopped there, while everything drawn on the editor and on menus still moved the full amount. So a menu's highlight, a text box, the toolbar's active button and code blocks all faded into white. What's drawn on a surface now moves as far as that surface did. Menus, white already, keep Latte's highlight, and code blocks and lines keep their step from the editor. Settings' Light and Dark cards now show the theme as it sits on this terminal when it's their kind. Not done: a hairline between the sidebar and the editor (they're 1.04:1 apart now), and a check on a real light terminal that doesn't let the picture run into its right-hand padding.
 - **A checkpoint could still fail under contention.** `checkpoints_taken_at_once_each_keep_their_own` failed once in a full verify under load. When the shared index stayed locked past the wait, the copy taken of it could be mid-write and unreadable, and the checkpoint gave up. A copy that can't be read is now dropped and the checkpoint starts afresh, and each thread's copy has its own name. The test passed 13 runs in a row after.
+
+## 0.6.2 (2026-11-09)
+
+Released the light theme's frame on the terminal's background, the fix for washes on white, and the steadier checkpoint fallback. Still no Windows build.

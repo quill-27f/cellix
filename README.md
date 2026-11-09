@@ -488,7 +488,8 @@ saved to `~/.config/cellix/settings.json`. You can also edit that file, or
 
 `keymap` is `simple`, `vim` or `neovim`, which runs your own `nvim` and config behind the
 editor. `theme` is `auto`, `dark` or `light` (Catppuccin Latte), and `auto` also matches your
-terminal's background. `tier` is `direct`, `placeholder` or `cells`. `smooth_scroll: false` makes the
+terminal's background. Either theme sets its frame on your terminal's own background, so the window's
+padding shows no seam; on a light terminal that makes the light theme a shade paler than Latte. `tier` is `direct`, `placeholder` or `cells`. `smooth_scroll: false` makes the
 wheel jump by lines, for a slow link, and `minimap: false` hides the minimap. `word_wrap`,
 `sticky_scroll` (with `sticky_scroll_lines`, 5 unless set), `bracket_pairs` and `inlay_hints` turn
 those on or off for code.

@@ -4,6 +4,15 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-11-09
+
+### Changed
+- The light theme sets its frame on the terminal's background, as the dark theme does, so a light terminal's window padding no longer shows as a paler strip beside the activity bar. On a Latte terminal the sidebar and editor are a shade paler than Latte. Settings' theme cards show the theme as it sits on your terminal.
+
+### Fixed
+- Menu highlights, text boxes, the toolbar's active button and code blocks keep their contrast on the paler light surfaces.
+- Two agents taking checkpoints at once on a busy machine could still lose one.
+
 ## [0.6.1] - 2026-11-09
 
 A review from the side of someone building on coding agents, of how Cellix talks to them and what
