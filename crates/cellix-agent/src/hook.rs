@@ -546,11 +546,32 @@ fn piped(command: &str) -> bool {
     bare.contains('|') && !command.contains("pipefail")
 }
 
-/// What failing tests print, for when the exit can't be trusted.
+/// What failing tests print, for when the exit can't be trusted or isn't said: a mark, or a
+/// count of failures that isn't nought ("2 failed", not cargo's "0 failed").
 fn reads_as_failed(output: &str) -> bool {
-    ["FAILED", "failures:", "test result: F", " failed", "FAIL "]
+    let marked = ["FAILED", "failures:", "test result: F", "FAIL "]
         .iter()
-        .any(|mark| output.contains(mark))
+        .any(|mark| output.contains(mark));
+    marked
+        || output.match_indices(" failed").any(|(at, _)| {
+            let count = output[..at].split_whitespace().next_back().unwrap_or("");
+            count.parse::<u64>().is_ok_and(|n| n > 0)
+        })
+}
+
+/// The exit code a result says in its words, as Gemini CLI's does ("Exit Code: 1").
+fn said_exit(text: &str) -> Option<i64> {
+    let lower = text.to_lowercase();
+    ["exit code: ", "exit code ", "exited with code "]
+        .iter()
+        .find_map(|mark| {
+            let at = lower.find(mark)? + mark.len();
+            let digits: String = lower[at..]
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '-')
+                .collect();
+            digits.parse().ok()
+        })
 }
 
 fn on_tool(roots: &[PathBuf], input: &Value, passed: bool) {
@@ -560,22 +581,33 @@ fn on_tool(roots: &[PathBuf], input: &Value, passed: bool) {
     if !is_test_command(command) {
         return;
     }
-    let response = &input["tool_response"];
+    // Codex may send its result as JSON inside a string.
+    let unpacked: Option<Value> = input["tool_response"]
+        .as_str()
+        .and_then(|text| serde_json::from_str(text).ok())
+        .filter(Value::is_object);
+    let response = unpacked.as_ref().unwrap_or(&input["tool_response"]);
     let text = response["stdout"]
         .as_str()
         .or_else(|| input["error"].as_str())
         .or_else(|| response["returnDisplay"].as_str())
         .or_else(|| response["output"].as_str())
+        .or_else(|| response["llmContent"].as_str())
         .or_else(|| response.as_str())
         .unwrap_or("");
-    // Agents without a failure hook say so in the result.
+    // Agents without a failure hook say so in the result: as a field, or in its words.
     let exit = response["exit_code"]
         .as_i64()
-        .or(response["exitCode"].as_i64());
+        .or(response["exitCode"].as_i64())
+        .or_else(|| response["llmContent"].as_str().and_then(said_exit))
+        .or_else(|| said_exit(text));
+    // Claude Code has a hook of its own for a failed run. The others, when the result doesn't
+    // say how it exited, are judged by what the run printed, never taken to have passed.
+    let unsaid = exit.is_none() && agent_of(input) != "Claude Code";
     let passed = passed
         && exit.unwrap_or(0) == 0
         && response["error"].is_null()
-        && !(piped(command) && reads_as_failed(text));
+        && !((piped(command) || unsaid) && reads_as_failed(text));
     let start = text
         .char_indices()
         .rev()
@@ -710,6 +742,39 @@ mod tests {
         assert!(!piped("set -o pipefail; cargo test | tail"));
         assert!(reads_as_failed("test result: FAILED. 1 passed; 2 failed"));
         assert!(!reads_as_failed("test result: ok. 9 passed; 0 ignored"));
+        assert!(!reads_as_failed(
+            "test result: ok. 9 passed; 0 failed; 0 ignored"
+        ));
+        assert!(reads_as_failed("Tests: 1 failed, 5 passed, 6 total"));
+    }
+
+    #[test]
+    fn a_failed_run_in_codex_or_gemini_is_not_taken_for_a_pass() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let server = start(&root, Arc::default()).unwrap();
+        let run = |response: Value| {
+            input(
+                &root,
+                json!({"tool_input": {"command": "cargo test"}, "tool_response": response}),
+            )
+        };
+        // Codex's result as JSON in a string, with its exit code.
+        let codex = json!({"exit_code": 101, "stdout": "error: test failed"}).to_string();
+        handle_for("Codex", "tool-done", &run(Value::String(codex)));
+        assert!(!next_test(&server).passed, "Codex's exit code");
+        // Gemini CLI says the exit code in its words.
+        let gemini =
+            json!({"llmContent": "Command: cargo test\nExit Code: 101", "returnDisplay": "…"});
+        handle_for("Gemini", "tool-done", &run(gemini));
+        assert!(!next_test(&server).passed, "Gemini's words");
+        // With no exit code at all, what the run printed decides.
+        let failing = json!({"output": "test result: FAILED. 3 passed; 1 failed"});
+        handle_for("Codex", "tool-done", &run(failing));
+        assert!(!next_test(&server).passed, "the output");
+        let passing = json!({"output": "test result: ok. 3 passed; 0 failed"});
+        handle_for("Codex", "tool-done", &run(passing));
+        assert!(next_test(&server).passed, "a pass still passes");
     }
     use std::sync::Arc;
     use std::time::Duration;

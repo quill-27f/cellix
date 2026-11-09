@@ -4443,5 +4443,12 @@
     "title": "File text and output in what an agent is told sit in quotes they can't close, so a line of code can't pass as the reviewer's words",
     "test": "quoted_text_cannot_end_its_quotes_and_speak_as_the_reviewer",
     "passes": true
+  },
+  {
+    "id": "codex-gemini-failed-runs",
+    "milestone": 12,
+    "title": "A failed test run in Codex or Gemini CLI shows as failed: the exit code is read from JSON in a string or from the result's words, and with none the output decides",
+    "test": "a_failed_run_in_codex_or_gemini_is_not_taken_for_a_pass",
+    "passes": true
   }
 ]
