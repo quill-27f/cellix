@@ -503,6 +503,14 @@ fn on_plan(roots: &[PathBuf], input: &Value) -> Option<String> {
             // Claude Code only counts an approval as the user's answer if it carries the input.
             let mut plan_input = input["tool_input"].clone();
             if let Some(edited) = edited {
+                // It also keeps the plan in a file, which it may work from: the edit goes
+                // there too, if that's one of its own plan files.
+                if let (Some(file), Some(config)) = (
+                    input["tool_input"]["planFilePath"].as_str(),
+                    claude_config(),
+                ) {
+                    write_plan_file(Path::new(file), &edited, &config.join("plans"));
+                }
                 plan_input["plan"] = json!(edited);
             }
             json!({"behavior": "allow", "updatedInput": plan_input})
@@ -524,6 +532,11 @@ fn on_gemini_plan(roots: &[PathBuf], input: &Value) -> Option<String> {
         Some(folder) => Path::new(folder).join(path),
         None => path,
     };
+    // The path is in what the model sent, so only a Markdown file that is really there, not
+    // a link, is read and written as its plan. Anything else is left to Gemini's own dialog.
+    if !is_plain_markdown(&path) {
+        return None;
+    }
     let plan = std::fs::read_to_string(&path).ok()?;
     let (verdict, text) = review_plan(roots, input, &plan)?;
     let output = match (verdict.as_str(), text) {
@@ -537,6 +550,32 @@ fn on_gemini_plan(roots: &[PathBuf], input: &Value) -> Option<String> {
         _ => return None,
     };
     Some(output.to_string())
+}
+
+/// Claude Code's own folder: `CLAUDE_CONFIG_DIR`, or `~/.claude`.
+fn claude_config() -> Option<PathBuf> {
+    std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .or_else(|| {
+            let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
+            Some(PathBuf::from(home).join(".claude"))
+        })
+}
+
+/// A Markdown file that's there and is no link.
+fn is_plain_markdown(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e == "md")
+        && std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file())
+}
+
+/// Writes an edited plan to `file` if it's a plan file of Claude Code's in `plans`, already
+/// there: the path came with the tool's input, so nothing else is ever written.
+fn write_plan_file(file: &Path, edited: &str, plans: &Path) -> bool {
+    let (Ok(folder), Some(parent)) = (dunce::canonicalize(plans), file.parent()) else {
+        return false;
+    };
+    let inside = dunce::canonicalize(parent).is_ok_and(|parent| parent == folder);
+    inside && is_plain_markdown(file) && std::fs::write(file, edited).is_ok()
 }
 
 /// The plan in a message from Codex, which has no tool for proposing one.
@@ -1120,6 +1159,39 @@ mod tests {
             "../../cellix/integrations/codex/hooks/hooks.json"
         ));
         assert_eq!(codex["hooks"]["Stop"][0]["hooks"][0]["timeout"], 86_400);
+    }
+
+    #[test]
+    fn an_edited_plan_is_written_only_to_claude_codes_own_plan_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let plans = dir.path().join(".claude/plans");
+        std::fs::create_dir_all(&plans).unwrap();
+        let plan = plans.join("refunds.md");
+        std::fs::write(&plan, "# Old").unwrap();
+        assert!(write_plan_file(&plan, "# New", &plans));
+        assert_eq!(std::fs::read_to_string(&plan).unwrap(), "# New");
+        // Nothing outside its plans folder, nothing that isn't there yet, and no other kind.
+        let settings = dir.path().join(".claude/settings.json");
+        std::fs::write(&settings, "{}").unwrap();
+        assert!(!write_plan_file(&settings, "# New", &plans));
+        assert!(!write_plan_file(
+            &plans.join("../settings.json"),
+            "x",
+            &plans
+        ));
+        assert!(!write_plan_file(&plans.join("new.md"), "x", &plans));
+        assert!(!plans.join("new.md").exists());
+        assert_eq!(std::fs::read_to_string(&settings).unwrap(), "{}");
+        // A Gemini plan path must be a Markdown file that's really there.
+        assert!(is_plain_markdown(&plan));
+        assert!(!is_plain_markdown(&settings));
+        #[cfg(unix)]
+        {
+            let link = plans.join("link.md");
+            std::os::unix::fs::symlink(&settings, &link).unwrap();
+            assert!(!is_plain_markdown(&link));
+            assert!(!write_plan_file(&link, "x", &plans));
+        }
     }
 
     #[test]

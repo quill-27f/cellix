@@ -4548,5 +4548,12 @@
     "title": "Agent Context marks a file changed since the session read it, found once with the panel's read instead of on every frame",
     "test": "agent_context_marks_a_file_changed_since_the_session_read_it",
     "passes": true
+  },
+  {
+    "id": "plan-file-writes-guarded",
+    "milestone": 12,
+    "title": "An edited plan is written back to Claude Code's own plan file, and a plan path from an agent is read or written only if it's a Markdown file there, never another file",
+    "test": "an_edited_plan_is_written_only_to_claude_codes_own_plan_file",
+    "passes": true
   }
 ]
