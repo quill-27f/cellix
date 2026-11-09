@@ -4499,5 +4499,19 @@
     "title": "Instruction imports are followed four hops deep, as Claude Code follows them",
     "test": "imports_go_four_hops_deep",
     "passes": true
+  },
+  {
+    "id": "plans-queue",
+    "milestone": 12,
+    "title": "A second agent's plan waits until the open one is answered, then opens, instead of replacing it",
+    "test": "a_second_agents_plan_waits_until_the_first_is_answered",
+    "passes": true
+  },
+  {
+    "id": "gemini-hook-name",
+    "milestone": 12,
+    "title": "What Gemini CLI's hooks say reaches the Gemini CLI tab, though they call it Gemini",
+    "test": "gemini_hooks_reach_the_gemini_cli_tab",
+    "passes": true
   }
 ]

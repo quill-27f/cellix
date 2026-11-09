@@ -960,6 +960,8 @@ pub struct App {
     /// The last selection told to Claude Code, to send only changes.
     told_selection: Option<Value>,
     plan: Option<PendingPlan>,
+    /// Plans from other agents that came while one was open, in the order they came.
+    queued_plans: VecDeque<PendingPlan>,
     /// The side pane, where agents and shells run.
     dock: Dock,
     /// The user agreed to stop what's running, for this quit.
@@ -1251,6 +1253,7 @@ impl App {
             ide: None,
             proposal: None,
             queued_diffs: VecDeque::new(),
+            queued_plans: VecDeque::new(),
             told_selection: None,
             plan: None,
             dock: Dock::default(),
@@ -8496,6 +8499,14 @@ impl App {
             self.set_active(index);
             self.close_tab();
         }
+        // The next agent's plan, if one is still waiting for its answer.
+        while let Some(next) = self.queued_plans.pop_front() {
+            let PendingPlan { path, reply } = next;
+            if path.is_file() {
+                self.serve(Request::Plan { path, reply });
+                break;
+            }
+        }
     }
 
     /// Delivers comments now if Cellix knows the agent's pane. Otherwise they wait, and the
@@ -9522,7 +9533,9 @@ impl App {
             }
             // Only the pane loop reads these, and it handles them before they get here.
             Request::Pane(_) => {}
-            Request::Agent(event) => {
+            Request::Agent(mut event) => {
+                // Hooks name an agent as its tab is named.
+                event.agent = crate::agents::tab_name(&event.agent).to_string();
                 // A new session in the same process ends the old one, and what it asked.
                 let replaced = self.agents.running.iter().filter(|a| {
                     a.session != event.session && event.pid.is_some() && a.pid == event.pid
@@ -9547,6 +9560,14 @@ impl App {
                 if let Some(review) = &mut self.review {
                     review.tests.clone_from(&self.tests);
                 }
+            }
+            // Another agent's plan waits its turn; a new version of the open one replaces it,
+            // since its agent has stopped waiting on the old.
+            Request::Plan { path, reply }
+                if self.plan.as_ref().is_some_and(|open| open.path != path) =>
+            {
+                self.queued_plans.push_back(PendingPlan { path, reply });
+                self.say("Another agent is waiting with a plan. It opens after this one");
             }
             Request::Plan { path, reply } => {
                 self.review = None;
@@ -17597,6 +17618,45 @@ mod tests {
         let (reply, decision) = std::sync::mpsc::channel();
         app.serve(Request::Plan { path, reply });
         decision
+    }
+
+    /// Two agents in one project can each wait on a plan. The second waits its turn and
+    /// opens once the first is answered, instead of silently replacing it.
+    #[test]
+    fn a_second_agents_plan_waits_until_the_first_is_answered() {
+        let (dir, mut app) = project();
+        let first = pending_plan(&dir, &mut app);
+        let other = dir.path().join("other plan.md");
+        fs::write(&other, "# Other plan\n\nstep two\n").unwrap();
+        let (reply, second) = std::sync::mpsc::channel();
+        app.serve(Request::Plan {
+            path: other.clone(),
+            reply,
+        });
+        assert!(
+            screen(&app).text().contains("step one"),
+            "the first stays open"
+        );
+        assert!(first.try_recv().is_err() && second.try_recv().is_err());
+        app.run(Command::ApprovePlan);
+        assert_eq!(first.try_recv(), Ok(Decision::Approve(None)));
+        let text = screen(&app).text();
+        assert!(text.contains("step two"), "then the second opens: {text}");
+        app.run(Command::ApprovePlan);
+        assert_eq!(second.try_recv(), Ok(Decision::Approve(None)));
+    }
+
+    /// Gemini CLI's hooks call it "Gemini", and what they say reaches its tab.
+    #[test]
+    fn gemini_hooks_reach_the_gemini_cli_tab() {
+        let (_dir, mut app) = project();
+        let mut event = agent(cellix_agent::AgentState::Working, "Working");
+        event.agent = "Gemini".into();
+        app.serve(Request::Agent(event));
+        assert!(
+            app.agents.running.iter().any(|a| a.agent == "Gemini CLI"),
+            "named as its tab is"
+        );
     }
 
     #[test]

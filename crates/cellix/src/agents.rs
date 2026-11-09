@@ -29,6 +29,14 @@ const AGENTS: [(&str, &str); 3] = [
     ("Codex", "codex"),
     ("Gemini CLI", "gemini"),
 ];
+/// The name of an agent's tab for the name its hooks give it: Gemini CLI's say "Gemini".
+pub fn tab_name(agent: &str) -> &str {
+    match agent {
+        "Gemini" => "Gemini CLI",
+        other => other,
+    }
+}
+
 /// What the panel calls a plain shell, and what stands for it in `Hit::Start`.
 pub const SHELL: (&str, &str) = ("Terminal", "shell");
 
