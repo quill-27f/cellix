@@ -948,17 +948,20 @@ impl Session {
     }
 
     /// Says a finished agent is finished, on the row under what it last showed.
-    pub fn draw_ended(&self, grid: &mut Grid, area: Rect, theme: &Theme) {
+    /// `plus` says whether the pane's + shows: out of room, it's in the tab's list instead.
+    pub fn draw_ended(&self, grid: &mut Grid, area: Rect, plus: bool, theme: &Theme) {
         let row = Rect::new(area.x, area.bottom().saturating_sub(1), area.w, 1);
         let note = Style {
             fg: theme.gutter.fg,
             ..theme.tab
         };
         grid.fill(row, theme.tab);
-        let text = format!(
-            "{} has ended. Close this tab, or press + for another.",
-            self.name
-        );
+        let another = if plus {
+            "press + for another"
+        } else {
+            "use ⌄ for another"
+        };
+        let text = format!("{} has ended. Close this tab, or {another}.", self.name);
         grid.label(row.x + 1, row.y, &text, note, row.right());
     }
 

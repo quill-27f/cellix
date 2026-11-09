@@ -8380,7 +8380,8 @@ impl App {
                 if session.stopped.is_some() {
                     self.draw_stopped(grid);
                 } else if session.exited {
-                    session.draw_ended(grid, screen, theme);
+                    let plus = !self.dock.picking(self.title_of(area));
+                    session.draw_ended(grid, screen, plus, theme);
                 }
             }
             None => {
@@ -22301,12 +22302,26 @@ mod tests {
         assert!(app.dock.showing(Front::Session), "the terminal is in front");
         let row = screen(&app).row_text(area.y);
         assert!(row.contains(&shell), "{row}");
+        // A finished session's note never points at a + that isn't drawn.
+        app.dock.sessions[0].exited = true;
+        app.dock.sessions[0].name = "x".into();
+        let text = screen(&app).text();
+        assert!(
+            text.contains("x has ended. Close this tab, or use ⌄"),
+            "{text}"
+        );
         // Wide enough, every tab shows, and the + after them.
         app.handle(Event::Resize(200, 40));
-        let row = screen(&app).row_text(app.dock_area().unwrap().y);
+        let grid = screen(&app);
+        let row = grid.row_text(app.dock_area().unwrap().y);
         assert!(
             row.contains("Comments") && row.contains("Agents") && row.contains('+'),
             "{row}"
+        );
+        assert!(
+            grid.text().contains("or press + for another"),
+            "{}",
+            grid.text()
         );
     }
 
