@@ -135,11 +135,34 @@ pub(crate) fn folder(var: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
 /// starts: an upgrade replaces the binary, not the files it wrote. Nothing is written where
 /// the plugin never was.
 pub fn refresh() {
-    if let Some(folder) = folder(|name| std::env::var(name).ok())
-        && folder.join(".claude-plugin/plugin.json").exists()
-    {
-        let _ = write_to(&folder);
+    if let Some(folder) = folder(|name| std::env::var(name).ok()) {
+        refresh_in(&folder, env!("CARGO_PKG_VERSION"));
     }
+}
+
+/// `refresh`, for the plugin in `folder` and a Cellix of `version`. An older Cellix still on
+/// the PATH runs the hooks first, so it must not put its own files back over a newer one's:
+/// the newer Cellix's mod would then refuse it as another protocol, every session.
+fn refresh_in(folder: &Path, version: &str) {
+    let manifest = folder.join(".claude-plugin/plugin.json");
+    let Ok(text) = fs::read_to_string(&manifest) else {
+        return;
+    };
+    let installed = serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .and_then(|m| m["version"].as_str().map(numbers));
+    if installed.is_some_and(|installed| installed > numbers(version)) {
+        return;
+    }
+    let _ = write_to(folder);
+}
+
+/// A version's numbers, to compare: `0.6.10` after `0.6.9`.
+fn numbers(version: &str) -> Vec<u64> {
+    version
+        .split(['.', '-', '+'])
+        .map_while(|part| part.parse().ok())
+        .collect()
 }
 
 /// Writes the Claude Code plugin to the user's data folder, and returns where.
@@ -152,6 +175,33 @@ pub fn install() -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_older_cellix_leaves_a_newer_plugin_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        write_to(dir.path()).unwrap();
+        let manifest = dir.path().join(".claude-plugin/plugin.json");
+        let hooks = dir.path().join("hooks/hooks.json");
+        let newer = fs::read_to_string(&manifest)
+            .unwrap()
+            .replace(env!("CARGO_PKG_VERSION"), "99.0.0");
+        fs::write(&manifest, &newer).unwrap();
+        fs::write(&hooks, "{\"from\": \"a newer Cellix\"}").unwrap();
+        refresh_in(dir.path(), "0.6.10");
+        assert_eq!(
+            fs::read_to_string(&hooks).unwrap(),
+            "{\"from\": \"a newer Cellix\"}"
+        );
+        // An older plugin is brought up to this Cellix's.
+        let older = newer.replace("99.0.0", "0.5.4");
+        fs::write(&manifest, older).unwrap();
+        refresh_in(dir.path(), env!("CARGO_PKG_VERSION"));
+        assert_ne!(
+            fs::read_to_string(&hooks).unwrap(),
+            "{\"from\": \"a newer Cellix\"}"
+        );
+        assert!(numbers("0.6.10") > numbers("0.6.9"));
+    }
 
     #[test]
     fn the_plugin_unpacks_whole() {

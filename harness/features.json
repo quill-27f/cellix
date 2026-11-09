@@ -4513,5 +4513,12 @@
     "title": "What Gemini CLI's hooks say reaches the Gemini CLI tab, though they call it Gemini",
     "test": "gemini_hooks_reach_the_gemini_cli_tab",
     "passes": true
+  },
+  {
+    "id": "plugin-no-downgrade",
+    "milestone": 12,
+    "title": "An older Cellix still on the PATH leaves a newer Cellix's Claude Code plugin as it is",
+    "test": "an_older_cellix_leaves_a_newer_plugin_alone",
+    "passes": true
   }
 ]
