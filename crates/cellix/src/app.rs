@@ -20908,6 +20908,35 @@ mod tests {
         assert!(after.is_none_or(|y| y < before), "{text}");
     }
 
+    /// A file the session read that has changed since is marked, as found with the rest of
+    /// the panel, not by asking every file on every frame.
+    #[test]
+    fn agent_context_marks_a_file_changed_since_the_session_read_it() {
+        let (_dir, mut app, project) = context_app();
+        let claude = app
+            .context
+            .homes
+            .claude
+            .clone()
+            .expect("the test's Claude home");
+        let transcript = cellix_agent::context::transcript_path(&claude, &project, "s1");
+        let read = serde_json::json!({"type": "assistant", "timestamp": "2020-01-01T00:00:00Z",
+            "message": {"model": "claude-opus-5-5",
+            "content": [{"type": "tool_use", "id": "t1", "name": "Read",
+                "input": {"file_path": project.join("src/app.rs")}}],
+            "usage": {"input_tokens": 10, "cache_read_input_tokens": 118_000}}});
+        fs::write(&transcript, format!("{read}\n")).unwrap();
+        let rail = app.activity_area();
+        app.handle(mouse(MouseKind::Left, rail.x, app.rail_row(4, rail)));
+        waits_for(&mut app, |app| app.context.loaded);
+        let grid = screen(&app);
+        let row = (0..grid.height())
+            .map(|y| grid.row_text(y))
+            .find(|row| row.contains("app.rs"))
+            .expect("the file it read");
+        assert!(row.contains("changed"), "{row}");
+    }
+
     #[test]
     fn source_control_lists_changes_and_stages_and_unstages_them() {
         let (dir, mut app) = source_app();

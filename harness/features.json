@@ -4541,5 +4541,12 @@
     "title": "Undo Turn says when it also undoes another agent's turns in the project, since it puts the whole tree back",
     "test": "undoing_a_turn_names_other_agents_turns_it_undoes",
     "passes": true
+  },
+  {
+    "id": "stale-found-once",
+    "milestone": 12,
+    "title": "Agent Context marks a file changed since the session read it, found once with the panel's read instead of on every frame",
+    "test": "agent_context_marks_a_file_changed_since_the_session_read_it",
+    "passes": true
   }
 ]

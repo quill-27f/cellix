@@ -116,6 +116,8 @@ struct Read {
     context: Context,
     checks: Vec<Check>,
     session: Option<Session>,
+    /// Files the session read that changed since, found with the rest.
+    stale: HashSet<PathBuf>,
     /// When the session last wrote its transcript.
     age: Option<SystemTime>,
 }
@@ -125,6 +127,9 @@ pub struct ContextPanel {
     context: Context,
     checks: Vec<Check>,
     session: Option<Session>,
+    /// Files the session read that changed since. Found away from the screen as the panel is
+    /// read, since asking every file each frame stalled scrolling on a long session.
+    stale: HashSet<PathBuf>,
     age: Option<SystemTime>,
     /// Skills from the session's listing with no file here: (name, what it's for).
     listed: Vec<(String, String)>,
@@ -174,6 +179,7 @@ impl ContextPanel {
             context: Context::default(),
             checks: Vec::new(),
             session: None,
+            stale: HashSet::new(),
             age: None,
             listed: Vec::new(),
             folded: folded.into_iter().collect(),
@@ -211,11 +217,15 @@ impl ContextPanel {
                 Some((path, when)) => (read_session(&path).ok(), Some(when)),
                 None => (None, None),
             };
+            let stale = session.as_ref().map_or_else(HashSet::new, |s| {
+                s.stale().into_iter().map(|f| f.path.clone()).collect()
+            });
             let _ = done.send(Read {
                 agent,
                 context,
                 checks,
                 session,
+                stale,
                 age,
             });
         });
@@ -239,6 +249,7 @@ impl ContextPanel {
         self.context = read.context;
         self.checks = read.checks;
         self.session = read.session;
+        self.stale = read.stale;
         self.age = read.age;
         self.loaded = true;
         true
@@ -260,6 +271,7 @@ impl ContextPanel {
             self.context = Context::default();
             self.checks.clear();
             self.session = None;
+            self.stale.clear();
             self.listed.clear();
             self.loaded = false;
         }
@@ -698,10 +710,7 @@ impl ContextPanel {
                     let Some(file) = self.session.as_ref().and_then(|s| s.files.get(*i)) else {
                         continue;
                     };
-                    let stale = self
-                        .session
-                        .as_ref()
-                        .is_some_and(|s| s.stale().iter().any(|f| f.path == file.path));
+                    let stale = self.stale.contains(&file.path);
                     draw_read(grid, measure, (left, right, y), file, stale, project, theme);
                 }
             }
