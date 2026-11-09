@@ -75,9 +75,18 @@ fn snapshot_tree(root: &Path) -> Option<String> {
         if let Some(tree) = snapshot_with(root, &dir, &index) {
             return Some(tree);
         }
-        let own = dir.join(format!("cellix-index-{}", std::process::id()));
+        // Named for the process and thread, since checkpoints can run side by side in one.
+        let own = dir.join(format!(
+            "cellix-index-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
         let _ = fs::copy(&index, &own);
-        let tree = snapshot_with(root, &dir, &own);
+        // A copy taken while the other was writing can't be read; then this one starts afresh.
+        let tree = snapshot_with(root, &dir, &own).or_else(|| {
+            let _ = fs::remove_file(&own);
+            snapshot_with(root, &dir, &own)
+        });
         let _ = fs::remove_file(&own);
         return tree;
     }
