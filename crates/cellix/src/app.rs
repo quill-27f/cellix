@@ -434,6 +434,8 @@ enum Choice {
     ExportPdf(bool),
     CloseSession(usize),
     Undo(String),
+    /// Remove a comment and its replies.
+    DeleteComment(u32),
     Git(GitChoice),
 }
 
@@ -4036,6 +4038,21 @@ impl App {
         }
         let mut asked = None;
         match draft.thread {
+            // The comment itself, changed: and so is what waits to go with the review.
+            Some(id) if draft.editing => {
+                if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
+                    if let Ok(mut comments) = self.comments.lock() {
+                        for comment in comments.iter_mut() {
+                            if comment.file == thread.file && comment.text == thread.text {
+                                comment.text = text.clone();
+                            }
+                        }
+                    }
+                    thread.text = text;
+                }
+                self.save_threads();
+                return;
+            }
             Some(id) => {
                 if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
                     thread.replies.push(Reply {
@@ -4227,6 +4244,7 @@ impl App {
                 command,
                 places,
             }),
+            editing: false,
         });
     }
 
@@ -4288,6 +4306,7 @@ impl App {
             ask: true,
             code: true,
             about: Some(About::Problem { message }),
+            editing: false,
         });
     }
 
@@ -4436,6 +4455,7 @@ impl App {
             ask: false,
             code: false,
             about: None,
+            editing: false,
         });
     }
 
@@ -4532,6 +4552,7 @@ impl App {
             ask: false,
             code: false,
             about: None,
+            editing: false,
         });
     }
 
@@ -5139,6 +5160,16 @@ impl App {
                     self.say(format!("Could not delete it: {e}"));
                 }
                 self.refresh_tree();
+            }
+            Choice::DeleteComment(id) => {
+                if let Some(at) = self.threads.iter().position(|t| t.id == id) {
+                    let thread = self.threads.remove(at);
+                    if let Ok(mut comments) = self.comments.lock() {
+                        comments.retain(|c| !(c.file == thread.file && c.text == thread.text));
+                    }
+                    self.save_threads();
+                    self.say("Comment deleted");
+                }
             }
             Choice::Undo(commit) => {
                 let root = self.workspace.root().to_path_buf();
@@ -9160,6 +9191,7 @@ impl App {
                     ask: false,
                     code: false,
                     about: None,
+                    editing: false,
                 });
             }
             ThreadHit::Ask(id) => {
@@ -9241,6 +9273,46 @@ impl App {
                 self.save_threads();
             }
             ThreadHit::ToggleResolved => self.show_resolved = !self.show_resolved,
+            ThreadHit::Edit(id) => {
+                let Some(thread) = self.threads.iter().find(|t| t.id == id) else {
+                    return;
+                };
+                let text = thread.text.clone();
+                self.dock.draft = Some(Draft {
+                    thread: Some(id),
+                    file: String::new(),
+                    line: 0,
+                    quote: String::new(),
+                    selection: String::new(),
+                    caret: text.len(),
+                    text,
+                    ask: false,
+                    code: false,
+                    about: None,
+                    editing: true,
+                });
+            }
+            ThreadHit::Delete(id) => {
+                let replies = self
+                    .threads
+                    .iter()
+                    .find(|t| t.id == id)
+                    .map_or(0, |t| t.replies.len());
+                let detail = match replies {
+                    0 => "It's removed from the file's comments. This can't be undone.".to_string(),
+                    1 => "Its reply goes with it. This can't be undone.".to_string(),
+                    n => format!("Its {n} replies go with it. This can't be undone."),
+                };
+                self.overlay = Overlay::Confirm(Confirm {
+                    title: "Delete this comment?".to_string(),
+                    detail,
+                    buttons: vec![
+                        ("Delete", Choice::DeleteComment(id)),
+                        ("Cancel", Choice::Cancel),
+                    ],
+                    selected: 1,
+                });
+            }
         }
     }
 
@@ -9417,6 +9489,7 @@ impl App {
                     ask,
                     code,
                     about: None,
+                    editing: false,
                 });
                 return;
             }
@@ -22077,6 +22150,36 @@ mod tests {
         let text = screen(&app).text();
         assert!(text.contains("No open comments"), "{text}");
         assert!(text.contains("Show 1 resolved"), "{text}");
+    }
+
+    /// The reviewer can change what they wrote, in place, or take it back.
+    #[test]
+    fn your_comment_can_be_edited_in_place_and_deleted() {
+        let (_dir, mut app) = page_app("line\n");
+        comment_on(&mut app, "Note");
+        let (x, y) = find(&screen(&app), "Edit");
+        app.handle(mouse(MouseKind::Left, x, y));
+        typed(&mut app, " better");
+        enter(&mut app);
+        assert_eq!(app.threads[0].text, "Note better");
+        assert!(app.threads[0].replies.is_empty(), "an edit, not a reply");
+        assert!(screen(&app).text().contains("Note better"));
+        // Deleting asks first, and Cancel keeps it.
+        let (x, y) = find(&screen(&app), "Delete");
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert!(screen(&app).text().contains("Delete this comment?"));
+        key(&mut app, Key::Esc);
+        assert_eq!(app.threads.len(), 1);
+        let (x, y) = find(&screen(&app), "Delete");
+        app.handle(mouse(MouseKind::Left, x, y));
+        // The dialog's own Delete, on its row of buttons.
+        let grid = screen(&app);
+        let buttons = find(&grid, "Delete this comment?").1 + 3;
+        let row = grid.row_text(buttons);
+        let at = row.find("Delete").expect("the dialog's Delete");
+        let x = row[..at].chars().count() as u16 + 1;
+        app.handle(mouse(MouseKind::Left, x, buttons));
+        assert!(app.threads.is_empty(), "{}", screen(&app).text());
     }
 
     #[test]

@@ -4576,5 +4576,12 @@
     "title": "The workspaces bar keeps air under its chips at the window's edge, within its own row",
     "test": "the_bar_leaves_air_at_the_windows_edge",
     "passes": true
+  },
+  {
+    "id": "comment-edit-delete",
+    "milestone": 12,
+    "title": "Your own comment has Edit, which changes its text in place, and Delete, which asks once and removes it with its replies",
+    "test": "your_comment_can_be_edited_in_place_and_deleted",
+    "passes": true
   }
 ]

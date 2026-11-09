@@ -15,6 +15,8 @@ const CARD_AIR: (f32, f32) = (0.17, 0.45);
 /// How far an agent's answer sits in from the card's text.
 const INSET: f32 = 0.6;
 const BUTTONS: [&str; 3] = ["Reply", "Ask agent", "Resolve"];
+/// On the reviewer's own comment, after those, or on a row of their own when they don't fit.
+const EDITS: [&str; 2] = ["Edit", "Delete"];
 const CHOICES: [&str; 2] = ["Keep", "Dismiss"];
 const REWRITE: [&str; 2] = ["Apply", "Not this"];
 const REOPEN: [&str; 1] = ["Reopen"];
@@ -54,6 +56,9 @@ pub enum Hit {
     Decline(u32),
     /// Opens a resolved comment again.
     Reopen(u32),
+    /// Changes the reviewer's own comment, or removes it.
+    Edit(u32),
+    Delete(u32),
     /// Shows the resolved comments too, or hides them again.
     ToggleResolved,
 }
@@ -97,6 +102,8 @@ enum Line {
     Pill(u32, String, Words),
     /// Keep and Dismiss, under a suggestion.
     Choices(u32),
+    /// Edit and Delete, under the other buttons when they don't all fit on one row.
+    Edits(u32),
     /// Apply and Not this, under a rewrite still to be decided.
     Rewrite(u32),
     /// What a comment is about, and what became of those words in a plan's next version.
@@ -175,6 +182,8 @@ pub struct Draft {
     pub code: bool,
     /// Terminal output or a problem it's about, for the thread it becomes.
     pub about: Option<About>,
+    /// It's the comment of `thread` being changed, in place of its text, not a reply to it.
+    pub editing: bool,
 }
 
 const NEW_DRAFT: u32 = 0;
@@ -381,8 +390,14 @@ fn lines((threads, draft, agent, resolved): Shown, width: f32, measure: &dyn Mea
         }
         let quote = shown_quote(&thread.quote, thread.line, thread.about.as_ref());
         out.push(Line::Quote(id, quote, words));
-        let text = wrap(&thread.text, width, measure);
-        out.extend(text.into_iter().map(|row| Line::Text(id, row)));
+        let editing = draft.filter(|d| d.thread == Some(id) && d.editing);
+        match editing {
+            Some(edit) => draft_lines(edit, width, measure, &mut out),
+            None => {
+                let text = wrap(&thread.text, width, measure);
+                out.extend(text.into_iter().map(|row| Line::Text(id, row)));
+            }
+        }
         for reply in &thread.replies {
             // A verdict reads as one: its word on a chip, who said it, then why.
             let (word, author, body) = match (verdict(&reply.text), rewrite(&reply.text)) {
@@ -409,7 +424,7 @@ fn lines((threads, draft, agent, resolved): Shown, width: f32, measure: &dyn Mea
                 "{agent} sees this with its next prompt"
             )));
         }
-        if let Some(reply) = draft.filter(|d| d.thread == Some(id)) {
+        if let Some(reply) = draft.filter(|d| d.thread == Some(id) && !d.editing) {
             draft_lines(reply, width, measure, &mut out);
         }
         // The last word a rewrite: it's for the reviewer to apply or not.
@@ -428,6 +443,10 @@ fn lines((threads, draft, agent, resolved): Shown, width: f32, measure: &dyn Mea
         } else {
             Line::Buttons(id)
         });
+        // Edit and Delete go on a row of their own where the five don't fit on one.
+        if !thread.resolved && !suggested && !all_fit(width, measure) {
+            out.push(Line::Edits(id));
+        }
         out.push(Line::Gap);
     }
     if resolved.0 > 0 {
@@ -454,9 +473,26 @@ fn resolved_button(area: Rect, count: usize, shown: bool, measure: &dyn Measure)
     )
 }
 
-/// Each button as (label, padded cells, start column).
+/// Each button as (label, padded cells, start column): Edit and Delete with the others when
+/// all five fit.
 fn buttons(area: Rect, measure: &dyn Measure) -> Vec<(&'static str, String, u16)> {
-    row_of(area, &BUTTONS, measure)
+    let width = area.w.saturating_sub(SIDE * 2 + 2) as f32;
+    if all_fit(width, measure) {
+        let all: Vec<&'static str> = BUTTONS.iter().chain(EDITS.iter()).copied().collect();
+        row_of(area, &all, measure)
+    } else {
+        row_of(area, &BUTTONS, measure)
+    }
+}
+
+/// Whether the five buttons fit on one row of a card `width` wide.
+fn all_fit(width: f32, measure: &dyn Measure) -> bool {
+    let used: usize = BUTTONS
+        .iter()
+        .chain(EDITS.iter())
+        .map(|label| button_cells(label, measure).chars().count() + 1)
+        .sum();
+    used as f32 <= width + 1.0
 }
 
 /// Check my review, at the right of its row, as (padded cells, start column). In pixels it
@@ -525,7 +561,18 @@ pub fn hit(
             match pressed?.0 {
                 "Reply" => Some(Hit::Reply(*id)),
                 "Ask agent" => Some(Hit::Ask(*id)),
+                "Edit" => Some(Hit::Edit(*id)),
+                "Delete" => Some(Hit::Delete(*id)),
                 _ => Some(Hit::Resolve(*id)),
+            }
+        }
+        Line::Edits(id) => {
+            let pressed = row_of(area, &EDITS, measure)
+                .into_iter()
+                .find(|(_, cells, at)| x >= *at && x < at + cells.chars().count() as u16);
+            match pressed?.0 {
+                "Edit" => Some(Hit::Edit(*id)),
+                _ => Some(Hit::Delete(*id)),
             }
         }
         Line::Choices(id) => {
@@ -606,7 +653,8 @@ pub fn draw(
         match line {
             Line::Header(..) => start = Some(index),
             Line::Quote(..) if start.is_none() => start = Some(index),
-            Line::Buttons(_) | Line::Choices(_) | Line::Reopen(_) => {
+            Line::Buttons(_) if matches!(all.get(index + 1), Some(Line::Edits(_))) => {}
+            Line::Buttons(_) | Line::Edits(_) | Line::Choices(_) | Line::Reopen(_) => {
                 if let Some(first) = start.take() {
                     let (y, height) = (row_y(first), (index - first + 1) as f32);
                     let bounds = Bounds::cells(
@@ -903,6 +951,23 @@ pub fn draw(
             Line::Buttons(_) => {
                 // Check my review is the panel's one filled button; these are all quiet.
                 for (label, cells, x) in buttons(area, measure) {
+                    let width = cells.chars().count() as u16;
+                    let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
+                    let fill = if on_it {
+                        theme.popup_hover
+                    } else {
+                        theme.quiet_button(theme.text.bg)
+                    };
+                    let style = Style {
+                        bg: fill,
+                        fg: inner.fg,
+                        ..inner
+                    };
+                    grid.button(x, y, &cells, label, fill, style);
+                }
+            }
+            Line::Edits(_) => {
+                for (label, cells, x) in row_of(area, &EDITS, measure) {
                     let width = cells.chars().count() as u16;
                     let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
                     let fill = if on_it {
