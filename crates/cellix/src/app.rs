@@ -98,10 +98,11 @@ const ACTIVITY_ICON: (u8, u8) = (2, 1);
 const ACTIVITY_STEP: f32 = 1.5;
 const ACTIVITY_STEP_CELLS: f32 = 2.0;
 /// What's in reach at the top right, as in a desktop app, whatever the pane is showing.
-const PANE_ACTIONS: [(Icon, Command, &str); 5] = [
+/// Each opens the side pane. Review Changes isn't here: it opens beside Source Control, on
+/// the left, as VS Code's does.
+const PANE_ACTIONS: [(Icon, Command, &str); 4] = [
     (Icon::Comment, Command::ShowComments, "Comments"),
     (Icon::Terminal, Command::ToggleTerminal, "Terminal (Ctrl+J)"),
-    (Icon::Diff, Command::OpenDiff, "Review Changes (Ctrl+G)"),
     (Icon::Globe, Command::ShowBrowser, "Browser"),
     (Icon::Agents, Command::ListAgents, "Agents"),
 ];
@@ -1304,6 +1305,9 @@ impl App {
             editor.set_measure(measure.clone());
         }
         self.context.set_measure(measure.clone());
+        if let Some(review) = &mut self.review {
+            review.measure = Some(measure.clone());
+        }
         self.measure = measure;
     }
 
@@ -6212,14 +6216,26 @@ impl App {
             Command::MentionSelection => self.mention_selection(),
             Command::AcceptProposal => self.accept_proposal(),
             Command::RejectProposal => self.reject_proposal(),
+            // Beside Source Control, which stays as it is: Review takes the file's place with
+            // its own list, of turns to compare against and tests too, until its × or Esc. A
+            // window without room for both lists gives Review the panel's place, as before.
             Command::OpenDiff => {
                 self.review = match self.review {
                     Some(_) => None,
                     None => {
-                        let mut review = self.new_review(self.workspace.root().to_path_buf());
-                        review.beside_panel =
-                            self.show_sidebar && self.sidebar_view == SidebarView::Source;
-                        Some(review)
+                        let left = self.activity_area().right() + self.sidebar_width();
+                        let room = self.size.0.saturating_sub(left);
+                        if !self.compact() && room >= crate::review::MIN_SIDE_BY_SIDE {
+                            self.search.focus = None;
+                            self.show_sidebar = true;
+                            self.sidebar_view = SidebarView::Source;
+                            self.source_age = 0;
+                            // Read now, so the two lists agree from the first frame.
+                            self.source.entries =
+                                cellix_review::status_entries(self.workspace.root());
+                            self.source.refresh(self.workspace.root());
+                        }
+                        Some(self.new_review(self.workspace.root().to_path_buf()))
                     }
                 };
             }
@@ -6502,7 +6518,11 @@ impl App {
             Command::RenameSymbol => self.ask("Rename to", PromptAction::RenameSymbol),
             Command::BlameLine => self.blame(),
             Command::ToggleSidebar => self.toggle_sidebar(),
-            Command::ShowSourceControl if self.rail_on(Command::ShowSourceControl) => {
+            // A full Review stands where Source Control was, so its icon goes back to Source
+            // Control; with Source Control showing, it closes the side.
+            Command::ShowSourceControl
+                if self.rail_on(Command::ShowSourceControl) && self.source_showing() =>
+            {
                 self.hide_sidebar();
             }
             Command::ShowSourceControl => {
@@ -8576,6 +8596,7 @@ impl App {
         let mut review = Review::new(root, self.registry.clone());
         review.tests.clone_from(&self.tests);
         review.list_width.set(self.sidebar_width() - 1);
+        review.measure = Some(self.measure.clone());
         review
     }
 
@@ -8676,15 +8697,19 @@ impl App {
         }
     }
 
-    /// Closes the left side. Review takes back the list it gave up to the panel, and a Review
-    /// with no panel beside it is what the lit icon stood for, so it closes.
+    /// Whether Source Control's panel is what the left side shows.
+    fn source_showing(&self) -> bool {
+        self.sidebar_view == SidebarView::Source && self.sidebar_area().is_some()
+    }
+
+    /// Closes the left side. Review takes back the list it gave up to the panel, and stays
+    /// until its own × or Esc.
     fn hide_sidebar(&mut self) {
         self.search.focus = None;
         self.show_sidebar = false;
         self.drawer = false;
-        match &mut self.review {
-            Some(review) if review.beside_panel => review.beside_panel = false,
-            review => *review = None,
+        if let Some(review) = &mut self.review {
+            review.beside_panel = false;
         }
     }
 
@@ -10148,6 +10173,7 @@ impl App {
             Some(Hit::Reject(hunk)) => self.ask(REJECT_ASK, PromptAction::RejectHunk(hunk)),
             Some(Hit::PreviousFile) => review.step_file(-1),
             Some(Hit::NextFile) => review.step_file(1),
+            Some(Hit::Close) => self.review = None,
             Some(Hit::Line(file, line, quote, removed)) => {
                 self.comment_quote = Some((quote, removed));
                 self.ask(
@@ -11925,8 +11951,11 @@ impl App {
             if !settings {
                 self.settings_page = None;
             }
-            // A click on what's already showing closes it, as it does in VS Code.
-            if lit {
+            // A click on what's already showing closes it, as it does in VS Code. Source
+            // Control's lights for a Review standing in its place too, and goes back to it.
+            let review_in_its_place =
+                *command == Command::ShowSourceControl && !self.source_showing();
+            if lit && !review_in_its_place {
                 self.hide_sidebar();
                 return;
             }
@@ -12222,7 +12251,14 @@ impl App {
             review.title_room.set(self.actions_over_main());
             // The list and the column after it make one sidebar's width.
             review.list_width.set(self.sidebar_width() - 1);
-            review.draw(grid, self.main_area(), self.hover, theme, &comments);
+            let area = self.main_area();
+            review.draw(grid, area, self.hover, theme, &comments);
+            // Beside Source Control, Review's list is on the same ground: an edge between.
+            if self.source_showing() && !review.beside_panel {
+                // Half a column into Source Control's side, clear of Review's selected row.
+                let x = f32::from(area.x) - 0.5;
+                grid.hairline(Bounds::cells(x, 0.0, 0.0, f32::from(area.h)), theme.border);
+            }
             self.draw_status(grid);
             self.draw_pane_actions(grid);
             self.draw_overlay(grid);
@@ -22053,13 +22089,51 @@ mod tests {
         }
     }
 
+    /// Where Review has the panel's place, Source Control's icon goes back to Source Control.
     #[test]
-    fn a_click_on_git_in_full_review_closes_it() {
+    fn a_click_on_git_in_full_review_returns_to_source_control() {
         let (_dir, mut app) = reviewed();
         app.run(Command::OpenDiff);
+        assert!(
+            !app.source_showing(),
+            "a window this size gives Review the panel's place"
+        );
         let area = app.activity_area();
         app.handle(mouse(MouseKind::Left, 2, app.rail_row(3, area)));
         assert!(app.review.is_none());
+        assert!(app.source_showing());
+        assert!(screen(&app).text().contains("SOURCE CONTROL"));
+    }
+
+    /// With room for both, Review opens beside Source Control, which stays, keeps its own
+    /// list, and closes with the × on its title, which no icon at the top right stands for.
+    #[test]
+    fn review_opens_beside_source_control_and_closes_with_its_x() {
+        let (dir, _) = reviewed();
+        let mut app = App::new(dir.path().to_path_buf(), (200, 40));
+        app.handle(Event::Key(KeyEvent::ctrl('g')));
+        let grid = screen(&app);
+        let text = grid.text();
+        assert!(app.source_showing(), "{text}");
+        assert!(
+            text.contains("SOURCE CONTROL") && text.contains("since the last commit"),
+            "{text}"
+        );
+        assert!(
+            !app.review.as_ref().unwrap().beside_panel,
+            "with its own list"
+        );
+        assert!(!PANE_ACTIONS.iter().any(|(_, c, _)| *c == Command::OpenDiff));
+        // The × at the end of the title closes it, and Source Control stays.
+        // The first × after its title: the window's own is further right, past the icons.
+        let (at, y) = find(&grid, "since the last commit");
+        let row: Vec<char> = grid.row_text(y).chars().collect();
+        let x = (at as usize..row.len())
+            .find(|x| row[*x] == '×')
+            .expect("the review's ×") as u16;
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert!(app.review.is_none());
+        assert!(app.source_showing());
     }
 
     #[test]

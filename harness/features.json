@@ -2151,8 +2151,8 @@
   {
     "id": "rail-review",
     "milestone": 9,
-    "title": "A click on Git in full Review closes it",
-    "test": "a_click_on_git_in_full_review_closes_it",
+    "title": "Where Review has the panel's place, Source Control's icon goes back to Source Control",
+    "test": "a_click_on_git_in_full_review_returns_to_source_control",
     "passes": true
   },
   {
@@ -4582,6 +4582,13 @@
     "milestone": 12,
     "title": "Your own comment has Edit, which changes its text in place, and Delete, which asks once and removes it with its replies",
     "test": "your_comment_can_be_edited_in_place_and_deleted",
+    "passes": true
+  },
+  {
+    "id": "review-beside-source-control",
+    "milestone": 12,
+    "title": "Review Changes opens beside Source Control with its own list, closes with the × after its title or Esc, and Source Control's icon brings Source Control back; no ± at the top right",
+    "test": "review_opens_beside_source_control_and_closes_with_its_x",
     "passes": true
   }
 ]

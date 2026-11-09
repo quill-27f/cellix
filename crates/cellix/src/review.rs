@@ -21,9 +21,18 @@ const LIST_WIDTH: u16 = 24;
 const ACCEPT: &str = "[Accept]";
 const REJECT: &str = "[Reject]";
 const NUMBER_WIDTH: u16 = 5;
+/// How far a card's top edge reaches into the gap above it, and how far its header's
+/// words and buttons are raised, in rows: air of about 11 px above and below the buttons.
+const HEADER_REACH: f32 = 0.4;
+const HEADER_LIFT: f32 = 0.2;
+/// How far a card reaches under its last line, in rows: what's left of the gap to the next
+/// card's top edge stays clear of the 8 px rule.
+const CARD_FOOT: f32 = 0.3;
+/// Columns from the end of Review's title to its ×: about 45 px, as a tab's.
+const CLOSE_GAP: f32 = 2.6;
 /// Below this, two code columns are too narrow to read, so lines stack in one.
 /// Narrower than this, the list of files makes way for the cards.
-const MIN_SIDE_BY_SIDE: u16 = 90;
+pub const MIN_SIDE_BY_SIDE: u16 = 90;
 /// Corners as a percentage of a row's height.
 const CARD_RADIUS: u8 = 30;
 const HUNK_LABEL: usize = 120;
@@ -56,6 +65,8 @@ pub enum Hit {
     /// Step through the files, in the stacked layout.
     PreviousFile,
     NextFile,
+    /// The × at the end of the title: back to the file that was open.
+    Close,
 }
 
 /// A row of the stacked layout.
@@ -123,6 +134,11 @@ type LineTokens = Vec<(usize, usize, Token)>;
 pub struct Review {
     /// The Source Control panel stands beside this, so it has no list of its own.
     pub beside_panel: bool,
+    /// How wide the interface's text is drawn, so the title's parts and its × sit by what's
+    /// written, not by cells. None in cells.
+    pub measure: Option<std::rc::Rc<dyn cellix_render::Measure>>,
+    /// The column the title's × was drawn at, for a click to find.
+    close_at: Cell<u16>,
     /// Columns the title row leaves free at its end, for what stands there.
     pub title_room: Cell<u16>,
     /// The list's width: the sidebar's, so every sidebar is the same.
@@ -325,6 +341,8 @@ impl Review {
             hover: Cell::new(None),
             beside_panel: false,
             title_room: Cell::new(0),
+            measure: None,
+            close_at: Cell::new(u16::MAX),
             list_width: Cell::new(LIST_WIDTH),
             wanted: None,
             fixed: None,
@@ -388,6 +406,8 @@ impl Review {
             tokens: (Vec::new(), Vec::new()),
             beside_panel: false,
             title_room: Cell::new(0),
+            measure: None,
+            close_at: Cell::new(u16::MAX),
             list_width: Cell::new(LIST_WIDTH),
             wanted: None,
             fixed: None,
@@ -755,10 +775,10 @@ impl Review {
         };
         for row in &self.diff.rows {
             match row {
+                // A gap before every card, the first too: the card's top edge reaches into it,
+                // so its header has air above as well as below.
                 Row::Header(hunk) => {
-                    if !rows.is_empty() {
-                        rows.push(Stacked::Gap);
-                    }
+                    rows.push(Stacked::Gap);
                     rows.push(Stacked::Header(*hunk));
                 }
                 Row::Line {
@@ -842,7 +862,8 @@ impl Review {
 
     /// The two buttons at the end of a row, as (accept x, reject x).
     fn button_spots(body: Rect) -> (u16, u16) {
-        let accept = body.right().saturating_sub(ACCEPT.len() as u16 + 1);
+        // As far in from the card's right as its name is from its left.
+        let accept = body.right().saturating_sub(ACCEPT.len() as u16 + 2);
         (accept, accept.saturating_sub(REJECT.len() as u16 + 1))
     }
 
@@ -864,6 +885,9 @@ impl Review {
                 None
             };
         }
+        if self.on_close(x) {
+            return Some(Hit::Close);
+        }
         Some(if x < body.x + body.w / 2 {
             Hit::PreviousFile
         } else {
@@ -880,8 +904,9 @@ impl Review {
         comments: &[Comment],
     ) -> Option<Hit> {
         if y == body.y {
+            // With a list to pick files from, only the title's × answers.
             return if list && !self.is_proposal() {
-                None
+                self.on_close(x).then_some(Hit::Close)
             } else {
                 self.title_hit(body, x)
             };
@@ -938,7 +963,7 @@ impl Review {
             .current_path()
             .map(|p| p.to_string_lossy().into_owned())
         else {
-            grid.label(body.x + 1, y, "No changes", dim, body.right());
+            grid.label(body.x + 2, y, "No changes", dim, body.right());
             return;
         };
         if self.is_proposal() {
@@ -951,7 +976,7 @@ impl Review {
                 fg: theme.text.fg,
                 ..theme.sidebar
             };
-            grid.label(body.x + 1, y, &file, strong, reject.saturating_sub(1));
+            grid.label(body.x + 2, y, &file, strong, reject.saturating_sub(1));
             let reject_fill = if self.on_button(reject, y, REJECT) {
                 theme.quiet_button(theme.tint)
             } else {
@@ -968,38 +993,132 @@ impl Review {
         }
         if narrow {
             let title = format!("◂ {}/{}  {file}", self.selected + 1, self.changes.len());
-            let end = grid.label(
-                body.x + 1,
-                y,
-                &title,
-                strong,
-                body.right().saturating_sub(2),
-            );
+            let room = body.right().saturating_sub(5);
             // Beside Source Control there's no list, so the title says what this is.
-            if let Some(fixed) = &self.fixed {
-                let room = body.right().saturating_sub(3);
-                grid.label(end + 2, y, &fixed.describe(), dim, room);
-            }
-            grid.put_str(body.right().saturating_sub(2), y, "▸", dim, body.right());
+            let fixed = self
+                .fixed
+                .as_ref()
+                .map(|f| f.describe())
+                .unwrap_or_default();
+            let end = self.title_line(
+                grid,
+                (body.x + 2, y),
+                &[(&title, strong), (&fixed, dim)],
+                room,
+            );
+            grid.put_str(body.right().saturating_sub(3), y, "▸", dim, body.right());
+            self.draw_close(grid, end, y, theme);
             return;
         }
-        let end = grid.label(body.x + 1, y, &file, strong, body.right());
-        if let Some(fixed) = &self.fixed {
-            grid.label(end + 2, y, &fixed.describe(), dim, body.right());
-            return;
-        }
-        let since = match self.base.and_then(|b| self.turns.get(b)) {
-            Some(turn) if self.until.is_some() => {
+        let room = body.right().saturating_sub(3);
+        let described = match (&self.fixed, self.base.and_then(|b| self.turns.get(b))) {
+            (Some(fixed), _) => fixed.describe(),
+            (None, Some(turn)) if self.until.is_some() => {
                 format!("in the turn \u{201c}{}\u{201d}", turn.label)
             }
-            Some(turn) => format!("since \u{201c}{}\u{201d}", turn.label),
-            None => "since the last commit".to_string(),
+            (None, Some(turn)) => format!("since \u{201c}{}\u{201d}", turn.label),
+            (None, None) => "since the last commit".to_string(),
         };
-        grid.label(end + 2, y, &since, dim, body.right());
+        let end = self.title_line(
+            grid,
+            (body.x + 2, y),
+            &[(&file, strong), (&described, dim)],
+            room,
+        );
+        self.draw_close(grid, end, y, theme);
     }
 
-    fn draw_hunk_header(&self, grid: &mut Grid, card: Rect, y: u16, hunk: usize, theme: &Theme) {
+    /// Writes the title's parts from `x`, a measured gap apart where the text is drawn in
+    /// pixels and two columns apart in cells, and gives where the last one ends, in columns.
+    fn title_line(
+        &self,
+        grid: &mut Grid,
+        (x, y): (u16, u16),
+        parts: &[(&str, Style)],
+        room: u16,
+    ) -> f32 {
+        let measure = self.measure.as_ref().filter(|m| !m.in_cells());
+        let mut at = f32::from(x);
+        for (index, (text, style)) in parts.iter().enumerate() {
+            if text.is_empty() {
+                continue;
+            }
+            if index > 0 {
+                at += if measure.is_some() { 1.0 } else { 2.0 };
+            }
+            let end = grid.label_at(at, at.round() as u16, y, text, *style, room, 100);
+            at = match measure {
+                Some(measure) => {
+                    let font = cellix_render::Font {
+                        bold: style.bold,
+                        ..cellix_render::Font::default()
+                    };
+                    (at + measure.width(text, font)).min(f32::from(room))
+                }
+                None => f32::from(end),
+            };
+        }
+        at
+    }
+
+    /// The × that closes the review, after its title as a tab's is after its name, with the
+    /// tab's chip on hover.
+    fn draw_close(&self, grid: &mut Grid, end: f32, y: u16, theme: &Theme) {
+        let x = end + CLOSE_GAP;
+        // The cell the glyph lands in, as `glyph` places it.
+        let cell = x.floor() as u16;
+        self.close_at.set(cell);
+        let hovered = self.on_button(cell, y, "×");
+        if hovered {
+            let chip = Bounds::cells(x - 0.05, f32::from(y) + 0.12, 1.75, 0.76);
+            grid.panel(chip, 16, Some(theme.row_hover), None);
+        }
+        let style = Style {
+            fg: if hovered {
+                theme.text.fg
+            } else {
+                theme.gutter.fg
+            },
+            ..theme.sidebar
+        };
+        grid.glyph(x, y, cellix_render::Icon::Close, style.fg, "×", style);
+    }
+
+    /// Whether column `x` of the title row is on its ×.
+    fn on_close(&self, x: u16) -> bool {
+        let at = self.close_at.get();
+        x >= at && x < at.saturating_add(2)
+    }
+
+    /// A card's header: its name, and Reject and Accept. `first` is when it's the top row
+    /// showing, with no gap above to reach into.
+    fn draw_hunk_header(
+        &self,
+        grid: &mut Grid,
+        card: Rect,
+        (y, first): (u16, bool),
+        hunk: usize,
+        theme: &Theme,
+    ) {
         grid.fill(Rect::new(card.x, y, card.w, 1), theme.text);
+        if !first {
+            // The card's top edge, in the gap above, so the header sits in air.
+            let edge = Bounds::cells(
+                card.x as f32,
+                y as f32 - HEADER_REACH,
+                card.w as f32,
+                1.0 + HEADER_REACH,
+            );
+            grid.panel(edge, CARD_RADIUS, Some(theme.text.bg), None);
+        }
+        let from = grid.painted_so_far();
+        self.draw_header_parts(grid, card, y, hunk, theme);
+        if !first {
+            grid.lift_since(from, HEADER_LIFT);
+        }
+    }
+
+    fn draw_header_parts(&self, grid: &mut Grid, card: Rect, y: u16, hunk: usize, theme: &Theme) {
         let dim = Style {
             fg: theme.status.fg,
             ..theme.text
@@ -1022,7 +1141,7 @@ impl Review {
                 ..theme.text
             };
             let word = if self.is_proposal() { "Kept" } else { "Staged" };
-            grid.label_right(card.right().saturating_sub(1), y, word, done, 90);
+            grid.label_right(card.right().saturating_sub(2), y, word, done, 90);
             return;
         }
         // Accept is what a hunk is there for: the primary, filled with the accent.
@@ -1039,10 +1158,12 @@ impl Review {
         } else {
             theme.button
         };
+        // The secondary button every other surface has.
+        let rest = theme.quiet_button(theme.text.bg);
         let reject_fill = if self.on_button(reject, y, REJECT) {
-            theme.quiet_button(theme.line)
+            theme.quiet_button(rest)
         } else {
-            theme.line
+            rest
         };
         grid.button(accept, y, ACCEPT, "Accept", accept_fill, primary);
         grid.button(reject, y, REJECT, "Reject", reject_fill, quiet);
@@ -1100,7 +1221,9 @@ impl Review {
                     grid.label(body.x + 2, y, &self.end_words(), style, body.right());
                     continue;
                 }
-                Stacked::Header(hunk) => self.draw_hunk_header(grid, body, y, *hunk, theme),
+                Stacked::Header(hunk) => {
+                    self.draw_hunk_header(grid, body, (y, y == top), *hunk, theme)
+                }
                 Stacked::Note(text) => self.draw_note(grid, body, y, text, theme),
                 Stacked::Line(side, kind) => {
                     let bg = match kind {
@@ -1121,11 +1244,24 @@ impl Review {
                 }
             }
             let bounds = Bounds::inset(row, 0.0, 0.0);
-            if matches!(entry, Stacked::Header(_)) {
+            // Its top edge is in the gap above, unless that's out of view.
+            if matches!(entry, Stacked::Header(_)) && y == top {
                 grid.corners(bounds, CARD_RADIUS, ground, TOP_LEFT | TOP_RIGHT);
             }
             if matches!(rows.get(index + 1), None | Some(Stacked::Gap)) {
-                grid.corners(bounds, CARD_RADIUS, ground, BOTTOM_LEFT | BOTTOM_RIGHT);
+                // As much under its last line as above its header, where the row below shows.
+                if y + 1 < body.bottom() {
+                    let foot = Bounds::cells(
+                        f32::from(body.x),
+                        f32::from(y + 1),
+                        f32::from(body.w),
+                        CARD_FOOT,
+                    );
+                    grid.panel(foot, 0, Some(theme.text.bg), None);
+                    grid.corners(foot, CARD_RADIUS, ground, BOTTOM_LEFT | BOTTOM_RIGHT);
+                } else {
+                    grid.corners(bounds, CARD_RADIUS, ground, BOTTOM_LEFT | BOTTOM_RIGHT);
+                }
             }
         }
     }
@@ -1263,7 +1399,8 @@ impl Review {
                 grid.fill(line, style);
                 let change = &self.changes[*index];
                 let name = change.path.display().to_string();
-                let right = list.right().saturating_sub(1);
+                // As far in from the row's right as the name is from its left.
+                let right = list.right().saturating_sub(2);
                 let mut end = right.saturating_sub(2);
                 if let Some((added, removed)) = self.stats.get(&change.path) {
                     let green = Style {
@@ -1303,7 +1440,7 @@ impl Review {
 
     /// Whether the pointer is on a button at this place.
     fn on_button(&self, x: u16, y: u16, cells: &str) -> bool {
-        let spot = Rect::new(x, y, cells.len() as u16, 1);
+        let spot = Rect::new(x, y, cells.chars().count().max(2) as u16, 1);
         self.hover.get().is_some_and(|h| spot.contains(h.0, h.1))
     }
 
