@@ -1611,3 +1611,5 @@ The prompt in a turn's "You" box was wrapped by counting cells, but drawn in a p
 ## Floating panels end on row lines (2026-11-08)
 
 Palettes, the signature pop-up, suggestions and the other floating panels drawn by `palette::raised` reached 0.3 of a row past their rows, so their edges cut through the text rows above and below (123-signature-help covered the top of `push_back(item)`). They now end exactly on row lines; a row's own air, about 11 px, keeps their text off the edge. Menus already stood on whole rows. Test: `floating_panels_end_on_row_lines`. Seen in 09-commands, 123-signature-help and 133-open-recent.
+
+Then, from the ui-expert's review of the new headings: Source Control's and the Timeline's fold chevrons stood 5 px from the activity bar's edge line, and their headings at the title's own column, so SOURCE CONTROL read as one more section. Every section heading now stands one column in from its panel's title, as Agent Context's did, with its chevron a column and three quarters before it, more than 8 px clear of the edge. `section_headings_look_one_way_in_source_control_and_agent_context` now checks both.

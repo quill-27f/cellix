@@ -500,7 +500,7 @@ impl Source {
                     let number = count.to_string();
                     crate::palette::section_heading(
                         grid,
-                        (left, right.saturating_sub(SIDE), y),
+                        (left + 1, right.saturating_sub(SIDE), y),
                         ("STASHES", Some((&number, quiet.fg))),
                         Some(self.stashes_folded),
                         theme,
@@ -509,7 +509,7 @@ impl Source {
                 Line::GraphHeading => {
                     crate::palette::section_heading(
                         grid,
-                        (left, right, y),
+                        (left + 1, right, y),
                         ("GRAPH", None),
                         Some(self.graph_folded),
                         theme,
@@ -593,7 +593,7 @@ impl Source {
                     let number = count.to_string();
                     crate::palette::section_heading(
                         grid,
-                        (left, right.saturating_sub(SIDE), y),
+                        (left + 1, right.saturating_sub(SIDE), y),
                         (name, Some((&number, quiet.fg))),
                         None,
                         theme,

@@ -20765,7 +20765,30 @@ mod tests {
             (style.fg, style.bold)
         };
         let (_dir, app) = source_app();
-        let changes = look(&screen(&app), "CHANGES");
+        let grid = screen(&app);
+        let changes = look(&grid, "CHANGES");
+        let side = app.sidebar_area().unwrap();
+        // One column in from the panel's title, wherever it is.
+        let inset = |grid: &Grid, title: &str, heading: &str| {
+            find(grid, heading).0 as i32 - find(grid, title).0 as i32
+        };
+        let source_inset = inset(&grid, "SOURCE CONTROL", "CHANGES");
+        assert_eq!(source_inset, 1);
+        // A fold chevron stands more than 8 px, half a column, clear of the edge line.
+        let chevrons = grid.paint.iter().filter_map(|p| match p {
+            Paint::Icon {
+                icon: Icon::ChevronDown | Icon::ChevronRight,
+                bounds,
+                ..
+            } => Some(*bounds),
+            _ => None,
+        });
+        for bounds in chevrons.filter(|b| b.x < cellix_render::units(f32::from(side.x) + 4.0)) {
+            assert!(
+                bounds.x >= cellix_render::units(f32::from(side.x) + 0.5),
+                "{bounds:?}"
+            );
+        }
         let (_dir, mut app, _project) = context_app();
         let rail = app.activity_area();
         app.handle(mouse(MouseKind::Left, rail.x, app.rail_row(4, rail)));
@@ -20777,6 +20800,7 @@ mod tests {
             "Agent Context's as Source Control's"
         );
         assert_eq!(changes, (app.theme.gutter.fg, true), "quiet and bold");
+        assert_eq!(inset(&grid, "AGENT CONTEXT", "INSTRUCTIONS"), source_inset);
     }
 
     #[test]

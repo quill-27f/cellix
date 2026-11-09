@@ -138,8 +138,8 @@ impl Timeline {
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
         // The chevron in the margin, the name on the inset every sidebar heading has.
         let heading = format!("TIMELINE · {name}");
-        let heading = crate::source::clip(&heading, (right - left) as f32, measure);
-        let place = (left, right, area.y);
+        let heading = crate::source::clip(&heading, (right - left - 1) as f32, measure);
+        let place = (left + 1, right, area.y);
         crate::palette::section_heading(grid, place, (&heading, None), Some(self.folded), theme);
         if self.folded {
             return;

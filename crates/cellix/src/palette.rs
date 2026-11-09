@@ -1021,8 +1021,8 @@ pub fn sidebar_title(grid: &mut Grid, row: Rect, title: &str, theme: &Theme) -> 
 const SECTION_SIZE: u8 = 80;
 
 /// A section's heading in a sidebar or on a page: its name in capitals, small, bold and
-/// quiet, a chevron in the margin two columns before it when it folds, and a count at the
-/// right. Source Control, the Timeline and Agent Context share it, as the Task page's
+/// quiet, one column in from the panel's title, a chevron before it when it folds, and a
+/// count at the right. Source Control, the Timeline and Agent Context share it, as the Task page's
 /// headings look, so a section reads the same wherever it is, as VS Code's do.
 pub fn section_heading(
     grid: &mut Grid,
@@ -1046,8 +1046,9 @@ pub fn section_heading(
             bold: false,
             ..quiet
         };
-        // Inside the margin's two columns, so its cell never reaches past the sidebar's edge.
-        let x = f32::from(left.saturating_sub(2)) + 0.2;
+        // A column and three quarters before the name, as Agent Context has it: more than
+        // 8 px clear of the sidebar's edge line, its cell never past it.
+        let x = f32::from(left) - 1.75;
         grid.glyph(x, y, icon, quiet.fg, cells, plain);
     }
     grid.label_at(f32::from(left), left, y, name, quiet, right, SECTION_SIZE);
