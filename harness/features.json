@@ -4618,5 +4618,12 @@
     "title": "An agent's tab closes when its session ends, as on /exit, and the status bar says so; one that ends within seconds of starting keeps its tab to show why",
     "test": "an_agents_tab_closes_when_its_session_ends",
     "passes": true
+  },
+  {
+    "id": "bell-air",
+    "milestone": 12,
+    "title": "The status bar's bell keeps 8 px between its chip and the edge above, at the size of the status text, its chip ending under the workspaces bar's last word",
+    "test": "the_bell_keeps_air_above_it",
+    "passes": true
   }
 ]

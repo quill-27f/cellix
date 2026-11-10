@@ -155,6 +155,12 @@ const TAB_RADIUS: u8 = 22;
 /// Columns of a tab that aren't its name: margins, the gap and the close button.
 const TAB_PADDING: u16 = 5;
 const PILL_RADIUS: u8 = 30;
+/// The bell's chip in the status bar, from and to as fractions of its row: 8 px under the
+/// edge above, so it doesn't sit against the editor.
+const BELL_CHIP: (f32, f32) = (0.23, 0.81);
+/// Rows tall the bell is, and columns its chip reaches either side of it.
+const BELL_ICON: f32 = 0.44;
+const BELL_SIDE: f32 = 0.85;
 /// What the explorer's status holds for a folder with changes inside, not a file.
 const DIRECTORY_MARK: char = '•';
 const BADGE_SIZE: u8 = 56;
@@ -14733,7 +14739,13 @@ impl App {
             bar
         };
         grid.label_at(x as f32, x, y, left, bar, right_x.saturating_sub(1), 90);
-        grid.label_right(end.saturating_sub(1), y, &right, bar, 90);
+        // A status item's width from the bell, as the items are from each other.
+        let right_end = if bell.is_some() {
+            end
+        } else {
+            end.saturating_sub(1)
+        };
+        grid.label_right(right_end, y, &right, bar, 90);
         if let Some(spot) = bell {
             self.draw_status_bell(grid, spot, y);
         }
@@ -14749,16 +14761,27 @@ impl App {
         let hovered = self
             .hover
             .is_some_and(|h| h.1 == y && h.0 >= at && h.0 < end);
+        // The bell about as tall as the status text's capitals, centred in its chip, which
+        // keeps 8 px clear of the edge above the status bar.
+        // Its chip ends where the workspaces bar's last word does, under it.
+        let middle = at as f32 + 2.0 - BELL_SIDE;
+        let level = y as f32 + (BELL_CHIP.0 + BELL_CHIP.1) / 2.0;
+        let font = Font {
+            size: 90,
+            ..Font::default()
+        };
+        let digits = (count > 0).then(|| count.to_string());
+        let count_at = middle + BELL_ICON * 0.5 + 0.3;
         if hovered || showing {
             let fill = if showing { theme.tint } else { theme.row_hover };
             // Round the bell and its count, with air on every side of them.
-            let digits = if count > 0 {
-                count.to_string().len() as f32 + 0.8
-            } else {
-                0.0
-            };
-            let chip = Bounds::cells(at as f32 - 0.6, y as f32 + 0.05, 2.0 + digits + 0.6, 0.9);
-            grid.panel(chip, 16, Some(fill), None);
+            let right = digits.as_ref().map_or(middle + BELL_SIDE, |d| {
+                count_at + self.measure.width(d, font) + BELL_SIDE - BELL_ICON * 0.5
+            });
+            let left = middle - BELL_SIDE;
+            let (top, bottom) = BELL_CHIP;
+            let chip = Bounds::cells(left, y as f32 + top, right - left, bottom - top);
+            grid.panel(chip, 22, Some(fill), None);
         }
         let lit = count > 0 && !showing;
         let color = if lit {
@@ -14770,16 +14793,21 @@ impl App {
         };
         let style = Style { fg: color, ..bar };
         grid.glyph(at as f32, y, Icon::Bell, color, "◬", bar);
-        if count > 0 {
-            grid.label_at(
-                at as f32 + 1.8,
-                at + 2,
-                y,
-                &count.to_string(),
-                style,
-                end,
-                90,
+        if let Some(Paint::Icon { bounds, .. }) = grid.paint.last_mut() {
+            *bounds = Bounds::cells(
+                middle - BELL_ICON,
+                level - BELL_ICON / 2.0,
+                BELL_ICON * 2.0,
+                BELL_ICON,
             );
+        }
+        if let Some(digits) = digits {
+            let painted = grid.paint.len();
+            grid.label_at(count_at, at + 2, y, &digits, style, end, 90);
+            // Level with the bell, in the chip.
+            if grid.paint.len() > painted {
+                grid.drop_last(level - (y as f32 + 0.5));
+            }
         }
     }
 
@@ -21758,6 +21786,61 @@ mod tests {
     fn click(app: &mut App, x: u16, y: u16) {
         app.handle(mouse(MouseKind::Left, x, y));
         app.handle(mouse(MouseKind::Up, x, y));
+    }
+
+    #[test]
+    fn the_bell_keeps_air_above_it() {
+        let (_dir, mut app) = project();
+        // The tour's cells: 17 by 36 pixels.
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 36)));
+        let (at, _) = app.status_bell().unwrap();
+        let y = app.size().1 - 1;
+        click(&mut app, at, y);
+        assert!(app.dock.showing(Front::Inbox), "the bell opens the inbox");
+        let grid = screen(&app);
+        let row = i32::from(y) * 64;
+        let chip = grid
+            .paint
+            .iter()
+            .find_map(|p| match p {
+                Paint::Panel {
+                    bounds,
+                    fill: Some(fill),
+                    ..
+                } if *fill == app.theme.tint && bounds.y >= row && bounds.y < row + 64 => {
+                    Some(*bounds)
+                }
+                _ => None,
+            })
+            .expect("the bell stands on a chip while the inbox shows");
+        let bell = grid
+            .paint
+            .iter()
+            .find_map(|p| match p {
+                Paint::Icon {
+                    bounds,
+                    icon: Icon::Bell,
+                    ..
+                } if bounds.y >= row && bounds.y < row + 64 => Some(*bounds),
+                _ => None,
+            })
+            .expect("the bell");
+        let pixels = |units: i32, cell: i32| units * cell / 64;
+        // At least 8 px between the edge above the status bar and the chip, and the chip
+        // inside its row.
+        assert!(pixels(chip.y - row, 36) >= 8, "{chip:?}");
+        assert!(chip.y + chip.h <= row + 64, "{chip:?}");
+        // The bell inside its chip with air around it, not filling it.
+        assert!(pixels(bell.y - chip.y, 36) >= 2, "{bell:?} in {chip:?}");
+        assert!(
+            pixels(chip.y + chip.h - bell.y - bell.h, 36) >= 2,
+            "{bell:?} in {chip:?}"
+        );
+        assert!(pixels(bell.x - chip.x, 17) >= 6, "{bell:?} in {chip:?}");
+        assert!(
+            pixels(chip.x + chip.w - bell.x - bell.w, 17) >= 6,
+            "{bell:?} in {chip:?}"
+        );
     }
 
     #[test]
