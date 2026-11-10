@@ -49,6 +49,12 @@ portable-pty = "0.9"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.191"
 
+# On Linux, crossterm's default input source waits for an edge that a burst of input never
+# gives once the terminal's buffer is full: a pasted picture comes as thousands of keys, and
+# the read stalled after 4 KB. /dev/tty with poll() reads on while anything is waiting.
+[target.'cfg(target_os = "linux")'.dependencies]
+crossterm = { version = "0.29", features = ["use-dev-tty"] }
+
 # A closing console's handler, so Cellix finishes as it does on Quit.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"] }

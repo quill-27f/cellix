@@ -242,6 +242,59 @@ impl Screen {
         input.flush().unwrap();
     }
 
+    /// Sends more than a terminal's input buffer holds, so the write waits on Cellix reading
+    /// it: a Cellix that stops reading fails the test, where `send` would wait for ever.
+    #[cfg(unix)]
+    fn send_much(&mut self, bytes: Vec<u8>) {
+        let input = Arc::clone(&self.input);
+        let (done, sent) = std::sync::mpsc::channel();
+        let written = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let progress = Arc::clone(&written);
+        let total = bytes.len();
+        std::thread::spawn(move || {
+            let mut input = input.lock().unwrap();
+            let mut ok = true;
+            for chunk in bytes.chunks(1024) {
+                ok = input.write_all(chunk).and_then(|()| input.flush()).is_ok();
+                if !ok {
+                    break;
+                }
+                progress.fetch_add(chunk.len(), std::sync::atomic::Ordering::SeqCst);
+            }
+            let _ = done.send(ok);
+        });
+        match sent.recv_timeout(WAIT * 3) {
+            Ok(true) => {}
+            Ok(false) => panic!("the write failed: {}", self.story()),
+            Err(_) => {
+                let at = written.load(std::sync::atomic::Ordering::SeqCst);
+                let pid = self.child.process_id().unwrap_or(0);
+                let mut state = String::new();
+                for task in std::fs::read_dir(format!("/proc/{pid}/task"))
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                {
+                    let at = task.path();
+                    let read = |f: &str| std::fs::read_to_string(at.join(f)).unwrap_or_default();
+                    state += &format!(
+                        "\n[{}] {} syscall {} stack {}",
+                        read("comm").trim(),
+                        read("stat").split(' ').nth(2).unwrap_or(""),
+                        read("syscall").trim(),
+                        read("stack").replace('\n', " | ")
+                    );
+                }
+                let wchan = "";
+                panic!(
+                    "Cellix stopped reading after {at} of {total} bytes; stat {state} wchan {wchan}\n{}\n{}",
+                    self.contents(),
+                    self.story()
+                )
+            }
+        }
+    }
+
     fn wait_exit(&mut self) {
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
@@ -345,7 +398,7 @@ fn a_picture_pasted_from_the_terminals_clipboard_lands_in_the_project() {
         &mut screen,
         b"\x1b]5522;type=read:pw=c2Vjb25k:name=UGFzdGUgZXZlbnQ=;aW1hZ2UvcG5n\x1b\\",
     );
-    screen.send(&paste_data("image/png", &picture));
+    screen.send_much(paste_data("image/png", &picture));
     screen.wait_for("Pasted a picture, kept as .cellix/pasted/pasted-");
     let folder = dir.path().join(".cellix/pasted");
     let kept: Vec<_> = std::fs::read_dir(&folder)
@@ -763,7 +816,8 @@ fn closing_the_terminal_keeps_unsent_comments() {
     screen.send(b"\x1bc");
     screen.wait_for("Enter sends");
     screen.send(b"kept for later\r");
-    screen.wait_for("\u{25c6}");
+    // The comment itself, in the pane: the comments icon is a ◆ too, there from the start.
+    screen.wait_for("kept for later");
     assert!(cellix(&["comments"]).status.success());
     screen.close();
     screen.wait_exit();
