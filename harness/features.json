@@ -4681,5 +4681,12 @@
     "title": "The regular look at the disk reads each open file's committed text only when HEAD or the set of open files has changed, instead of a git show for every tab every two seconds",
     "test": "committed_text_is_read_again_only_when_the_commit_or_the_tabs_change",
     "passes": true
+  },
+  {
+    "id": "palette-ranks-word-starts",
+    "milestone": 12,
+    "title": "The palette ranks a command or file whose word starts with what was typed above one that only holds the letters: \"op\" lists Open Folder before Pop Stash",
+    "test": "a_command_that_starts_with_what_was_typed_comes_before_one_that_holds_it",
+    "passes": true
   }
 ]

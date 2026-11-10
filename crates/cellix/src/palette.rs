@@ -369,7 +369,9 @@ pub fn matched_chars(query: &str, text: &str) -> Vec<usize> {
 }
 
 /// Scores `text` against `query`, whose characters must appear in order. Runs of
-/// consecutive matches and matches in the file name score higher.
+/// consecutive matches, matches in the file name and matches that start a word score
+/// higher, and most of all a word that begins with the whole query: "op" is Open Folder
+/// before it's Pop Stash.
 pub fn fuzzy_score(query: &str, text: &str) -> Option<i32> {
     let name_start = text.rfind('/').map_or(0, |i| i + 1);
     let mut score = 0;
@@ -386,9 +388,44 @@ pub fn fuzzy_score(query: &str, text: &str) -> Option<i32> {
         if found >= name_start {
             score += 2;
         }
+        if word_start(text, found) {
+            score += 2;
+        }
         last = Some(found + c.len_utf8());
     }
+    if let Some(at) = word_beginning_with(query, text) {
+        score += 6;
+        // The first word of a command, or of a file's name, is what people type.
+        if at == name_start {
+            score += 3;
+        }
+    }
     Some(score - text.len() as i32 / 16)
+}
+
+/// Whether a word starts at byte `at` of `text`: at its beginning, after anything that
+/// isn't a letter or digit, or at a capital after a small letter.
+fn word_start(text: &str, at: usize) -> bool {
+    let Some(before) = text[..at].chars().next_back() else {
+        return true;
+    };
+    let capital = || text[at..].chars().next().is_some_and(char::is_uppercase);
+    !before.is_alphanumeric() || before.is_lowercase() && capital()
+}
+
+/// Where the first word of `text` that begins with all of `query` starts.
+fn word_beginning_with(query: &str, text: &str) -> Option<usize> {
+    if query.is_empty() {
+        return None;
+    }
+    let begins = |at: usize| {
+        let mut letters = text[at..].chars();
+        let mut typed = query.chars().flat_map(char::to_lowercase);
+        typed.all(|q| letters.next().is_some_and(|c| same_letter(c, q)))
+    };
+    text.char_indices()
+        .map(|(at, _)| at)
+        .find(|at| word_start(text, *at) && begins(*at))
 }
 
 /// Whether `c` is `lower`, whatever its case.
@@ -1118,6 +1155,7 @@ mod tests {
     #[test]
     fn subsequence_required() {
         assert!(fuzzy_score("xyz", "abc").is_none());
+        assert!(fuzzy_score("", "abc").is_some());
         assert!(fuzzy_score("abc", "a-b-c").is_some());
     }
 
@@ -1170,6 +1208,30 @@ mod tests {
             Some(&Item::NewBranch),
             "gaps don't match"
         );
+    }
+
+    #[test]
+    fn a_command_that_starts_with_what_was_typed_comes_before_one_that_holds_it() {
+        let items = COMMANDS
+            .iter()
+            .map(|(label, command)| Item::Command(label, *command))
+            .collect();
+        let mut palette = Palette::new(items);
+        palette.query = "op".to_string();
+        palette.filter();
+        let labels: Vec<&str> = palette
+            .matches
+            .iter()
+            .map(|index| palette.items[*index].label())
+            .collect();
+        assert!(labels[0].starts_with("Open"), "{labels:?}");
+        // Every Open… stands above the commands that only hold the letters, like Pop Stash.
+        let last_open = labels.iter().rposition(|l| l.starts_with("Open")).unwrap();
+        let pop = labels.iter().position(|l| l.starts_with("Pop Stash"));
+        assert!(pop.is_some_and(|pop| last_open < pop), "{labels:?}");
+        // A later word that starts with it counts too: "stash" finds Pop Stash before a
+        // command with those letters scattered through it.
+        assert!(fuzzy_score("stash", "Pop Stash…") > fuzzy_score("stash", "Stage All and Push"));
     }
 
     #[test]
