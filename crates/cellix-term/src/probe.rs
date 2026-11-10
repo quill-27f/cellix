@@ -25,6 +25,9 @@ pub struct Env {
     pub cell: Option<(usize, usize)>,
     /// The terminal can report the mouse in pixels (mode 1016).
     pub pixel_mouse: bool,
+    /// The terminal sends paste events (mode 5522), so a picture can be pasted. Only with no
+    /// multiplexer between, which wouldn't pass them on.
+    pub paste_events: bool,
     /// Whether the terminal's background is light, if it said.
     pub light: Option<bool>,
     /// The terminal's background colour, if it said.
@@ -85,6 +88,7 @@ mod tests {
             tmux_passthrough,
             cell: None,
             pixel_mouse: false,
+            paste_events: false,
             light: None,
             background: None,
         }

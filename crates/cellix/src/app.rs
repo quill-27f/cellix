@@ -845,6 +845,46 @@ fn is_image(path: &Path) -> bool {
 }
 
 /// The picture a pasted path names. Terminals quote a dropped path, or escape its spaces.
+/// Where pasted pictures are kept: Cellix's own notes in the project, ignored by git.
+pub const PASTED: &str = ".cellix/pasted";
+
+/// Writes a pasted picture into `folder` as `pasted-<time>.png` or the like, and says where.
+/// `ignored` keeps the folder out of git, as Cellix's own notes are.
+fn keep_pasted(folder: &Path, bytes: &[u8], mime: &str, ignored: bool) -> io::Result<PathBuf> {
+    std::fs::create_dir_all(folder)?;
+    let ignore = folder.join(".gitignore");
+    if ignored && !ignore.exists() {
+        std::fs::write(&ignore, "*\n")?;
+    }
+    let kept = match mime {
+        "image/png" => ("png", bytes.to_vec()),
+        "image/jpeg" => ("jpg", bytes.to_vec()),
+        "image/gif" => ("gif", bytes.to_vec()),
+        "image/webp" => ("webp", bytes.to_vec()),
+        _ => {
+            let picture = image::load_from_memory(bytes)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+            let mut png = Vec::new();
+            picture
+                .write_to(&mut io::Cursor::new(&mut png), image::ImageFormat::Png)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+            ("png", png)
+        }
+    };
+    let (extension, data) = kept;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let mut path = folder.join(format!("pasted-{stamp}.{extension}"));
+    let mut n = 2;
+    while path.exists() {
+        path = folder.join(format!("pasted-{stamp}-{n}.{extension}"));
+        n += 1;
+    }
+    std::fs::write(&path, data)?;
+    Ok(path)
+}
+
 fn dropped_image(text: &str) -> Option<PathBuf> {
     let text = text.trim();
     let unquoted = text
@@ -3811,6 +3851,36 @@ impl App {
                 }
                 self.reveal();
             }
+        }
+    }
+
+    /// Takes a picture pasted from the terminal's clipboard, which over SSH is the only way one
+    /// gets here. On a page it's kept beside the document and put in, as a picture pasted
+    /// there always is. Anywhere else it's kept in the project, out of git, and pasted as its
+    /// path, which an agent attaches as an image. A kind agents don't read, such as the TIFF a
+    /// Mac screenshot can be, is kept as PNG.
+    pub fn paste_picture(&mut self, bytes: &[u8], mime: &str) {
+        let to_page = self.on_page()
+            && !self.dock.focused
+            && self.dock.draft.is_none()
+            && !self.source.focused
+            && matches!(self.overlay, Overlay::None);
+        let folder = if to_page {
+            self.document_folder().join(IMAGE_FOLDER)
+        } else {
+            self.workspace.root().join(PASTED)
+        };
+        match keep_pasted(&folder, bytes, mime, !to_page) {
+            Ok(path) if to_page => self.place_image(&path, false),
+            Ok(path) => {
+                let shown = path.display().to_string().replace(' ', "\\ ");
+                self.paste(&shown);
+                self.say(format!(
+                    "Pasted a picture, kept as {}",
+                    self.relative(&path)
+                ));
+            }
+            Err(e) => self.say(format!("Could not keep the pasted picture: {e}")),
         }
     }
 
@@ -19554,6 +19624,56 @@ mod tests {
         app.set_measure(Rc::new(cellix_render::FontMeasure::new(10, 20)));
         app.open(&section).unwrap();
         assert_eq!(pictures(&app).len(), 2, "{}", painted_text(&app));
+    }
+
+    #[test]
+    fn a_pasted_picture_is_kept_in_the_project_and_pasted_as_its_path() {
+        let (dir, mut app) = project();
+        session(&mut app, "echo ready; cat");
+        // A Mac screenshot can come as TIFF only: it's kept as PNG, which agents read.
+        let mut tiff = Vec::new();
+        image::RgbImage::new(4, 3)
+            .write_to(
+                &mut std::io::Cursor::new(&mut tiff),
+                image::ImageFormat::Tiff,
+            )
+            .unwrap();
+        app.paste_picture(&tiff, "image/tiff");
+        let folder = dir.path().join(PASTED);
+        let kept: Vec<PathBuf> = fs::read_dir(&folder)
+            .unwrap()
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|e| e == "png"))
+            .collect();
+        assert_eq!(kept.len(), 1, "{kept:?}");
+        assert_eq!(image::open(&kept[0]).unwrap().width(), 4);
+        assert_eq!(
+            fs::read_to_string(folder.join(".gitignore")).unwrap(),
+            "*\n"
+        );
+        // The agent in front gets its path, which Claude Code attaches as an image.
+        let name = kept[0].file_name().unwrap().to_string_lossy().into_owned();
+        shows(&mut app, &name);
+        let status = screen(&app).row_text(app.size().1 - 1);
+        assert!(
+            status.contains("Pasted a picture, kept as .cellix/pasted/"),
+            "{status}"
+        );
+        // A second one in the same second gets a name of its own.
+        let png = fs::read(&kept[0]).unwrap();
+        app.paste_picture(&png, "image/png");
+        app.paste_picture(&png, "image/png");
+        let count = fs::read_dir(&folder).unwrap().count();
+        assert_eq!(count, 4, "three pictures and the .gitignore");
+    }
+
+    #[test]
+    fn a_picture_pasted_on_a_page_lands_in_the_document() {
+        let (dir, mut app) = picture_page("words\n");
+        let png = fs::read(dir.path().join("plot.png")).unwrap();
+        app.paste_picture(&png, "image/png");
+        let text = app.active_text().unwrap();
+        assert!(text.contains("![](images/pasted-"), "{text}");
     }
 
     #[test]

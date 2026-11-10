@@ -13,6 +13,8 @@ type Input = Arc<Mutex<Box<dyn Write + Send>>>;
 type Raw = Arc<Mutex<Vec<u8>>>;
 /// The background colour the "terminal" says it has when asked, as `rrrr/gggg/bbbb`.
 type Colour = Arc<Mutex<Option<String>>>;
+/// What else the "terminal" answers: when Cellix writes the first, it's sent the second.
+type Answers = Arc<Mutex<Vec<(Vec<u8>, Vec<u8>)>>>;
 
 /// How long a screen waits for text. Windows gets longer: a debug build there can take many
 /// seconds to start while it's scanned, with several starting at once.
@@ -25,7 +27,7 @@ fn pump(
     mut reader: Box<dyn Read + Send>,
     parser: Arc<Mutex<vt100::Parser>>,
     (input, raw): (Input, Raw),
-    colour: Colour,
+    (colour, answers): (Colour, Answers),
     all: Raw,
 ) {
     let started = Instant::now();
@@ -78,6 +80,12 @@ fn pump(
                     .write_all(answer.as_bytes())
                     .and_then(|()| input.flush());
             }
+            for (when, with) in answers.lock().unwrap().iter() {
+                if buf[..n].windows(when.len()).any(|w| w == when.as_slice()) {
+                    let mut input = input.lock().unwrap();
+                    let _ = input.write_all(with).and_then(|()| input.flush());
+                }
+            }
             all.lock().unwrap().extend_from_slice(&buf[..n]);
             parser.lock().unwrap().process(&buf[..n]);
         }
@@ -108,6 +116,22 @@ impl Screen {
 
     /// Starts Cellix in a terminal that answers what colour it is with `colour`.
     fn start_answering(dir: &Path, args: &[&str], env: &[(&str, &Path)], colour: Colour) -> Self {
+        Self::start_full(dir, args, env, (colour, Answers::default()))
+    }
+
+    /// Starts Cellix in a terminal that answers what it's asked as `answers` say.
+    #[cfg(unix)]
+    fn start_with_answers(dir: &Path, args: &[&str], answers: Vec<(Vec<u8>, Vec<u8>)>) -> Self {
+        let answers = Arc::new(Mutex::new(answers));
+        Self::start_full(dir, args, &[], (Colour::default(), answers))
+    }
+
+    fn start_full(
+        dir: &Path,
+        args: &[&str],
+        env: &[(&str, &Path)],
+        (colour, answers): (Colour, Answers),
+    ) -> Self {
         let pty = native_pty_system()
             .openpty(PtySize {
                 rows: 30,
@@ -147,7 +171,7 @@ impl Screen {
             reader,
             parser.clone(),
             (input.clone(), raw.clone()),
-            colour,
+            (colour, answers),
             all.clone(),
         );
         Self {
@@ -234,6 +258,110 @@ impl Drop for Screen {
     fn drop(&mut self) {
         let _ = self.child.kill();
     }
+}
+
+/// What a terminal with paste events (Kitty's clipboard protocol, as Ghostty 1.4 has it)
+/// sends when the person pastes: the kinds the clipboard holds, with a one-time password.
+#[cfg(unix)]
+fn paste_offer(types: &str, password: &str) -> Vec<u8> {
+    use base64::Engine;
+    let b64 = |s: &[u8]| base64::engine::general_purpose::STANDARD.encode(s);
+    let pw = b64(password.as_bytes());
+    format!(
+        "\x1b]5522;type=read:status=OK:pw={pw}\x1b\\\x1b]5522;type=read:status=DATA:mime=Lg==:pw={pw};{}\x1b\\\x1b]5522;type=read:status=DONE:pw={pw}\x1b\\",
+        b64(format!("{types}\n").as_bytes())
+    )
+    .into_bytes()
+}
+
+/// What the terminal answers to a read: the data, in chunks of 4096 bytes before encoding.
+#[cfg(unix)]
+fn paste_data(mime: &str, data: &[u8]) -> Vec<u8> {
+    use base64::Engine;
+    let b64 = |s: &[u8]| base64::engine::general_purpose::STANDARD.encode(s);
+    let mut out = b"\x1b]5522;type=read:status=OK\x1b\\".to_vec();
+    for chunk in data.chunks(4096) {
+        out.extend(
+            format!(
+                "\x1b]5522;type=read:status=DATA:mime={};{}\x1b\\",
+                b64(mime.as_bytes()),
+                b64(chunk)
+            )
+            .bytes(),
+        );
+    }
+    out.extend(b"\x1b]5522;type=read:status=DONE\x1b\\");
+    out
+}
+
+/// Waits for Cellix to have written `what` to the terminal.
+#[cfg(unix)]
+fn wait_written(screen: &mut Screen, what: &[u8]) {
+    let deadline = Instant::now() + WAIT;
+    while !screen
+        .all
+        .lock()
+        .unwrap()
+        .windows(what.len())
+        .any(|w| w == what)
+    {
+        assert!(
+            Instant::now() < deadline,
+            "never wrote {:?}",
+            String::from_utf8_lossy(what)
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Unix only: Windows asks the terminal nothing, so it has no paste events.
+#[test]
+#[cfg(unix)]
+fn a_picture_pasted_from_the_terminals_clipboard_lands_in_the_project() {
+    let dir = project();
+    // A terminal with paste events, as Ghostty 1.4 and kitty are.
+    let has_them = (b"\x1b[?5522$p".to_vec(), b"\x1b[?5522;2$y".to_vec());
+    let mut screen = Screen::start_with_answers(dir.path(), &["hello.txt"], vec![has_them]);
+    screen.wait_for("hello from a file");
+    wait_written(&mut screen, b"\x1b[?5522h");
+
+    // Text: the terminal lists what the clipboard holds, Cellix asks for the text with the
+    // paste's password, and the text lands as any paste does.
+    screen.send(&paste_offer("text/plain text/html", "first"));
+    wait_written(
+        &mut screen,
+        b"\x1b]5522;type=read:pw=Zmlyc3Q=:name=UGFzdGUgZXZlbnQ=;dGV4dC9wbGFpbg==\x1b\\",
+    );
+    screen.send(&paste_data("text/plain", b"PASTED WORDS "));
+    screen.wait_for("PASTED WORDS hello from a file");
+
+    // A picture, as a Mac screenshot is: PNG asked for, kept in the project, its path pasted.
+    // Any bytes do, since PNG is kept as it comes: enough for the terminal's write to be split
+    // mid-message, which once lost a chunk.
+    let mut picture = b"\x89PNG\r\n\x1a\n".to_vec();
+    picture.extend((0..200_000u32).map(|i| (i * 7 % 251) as u8));
+    screen.send(&paste_offer("image/tiff image/png", "second"));
+    wait_written(
+        &mut screen,
+        b"\x1b]5522;type=read:pw=c2Vjb25k:name=UGFzdGUgZXZlbnQ=;aW1hZ2UvcG5n\x1b\\",
+    );
+    screen.send(&paste_data("image/png", &picture));
+    screen.wait_for("Pasted a picture, kept as .cellix/pasted/pasted-");
+    let folder = dir.path().join(".cellix/pasted");
+    let kept: Vec<_> = std::fs::read_dir(&folder)
+        .unwrap()
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|e| e == "png"))
+        .collect();
+    assert_eq!(kept.len(), 1, "{kept:?}");
+    let got = std::fs::read(&kept[0]).unwrap();
+    let first = got.iter().zip(&picture).position(|(a, b)| a != b);
+    assert!(
+        got == picture,
+        "kept {} bytes of {}, first differing at {first:?}",
+        got.len(),
+        picture.len()
+    );
 }
 
 fn project() -> tempfile::TempDir {
@@ -452,7 +580,7 @@ fn pty_follows_a_resize() {
         reader,
         parser.clone(),
         (input, raw.clone()),
-        Colour::default(),
+        (Colour::default(), Answers::default()),
         Raw::default(),
     );
     let wait = |text: &str| {

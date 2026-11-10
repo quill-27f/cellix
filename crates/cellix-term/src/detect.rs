@@ -23,6 +23,7 @@ struct Reply {
     kitty: bool,
     cell: Option<(usize, usize)>,
     pixel_mouse: bool,
+    paste_events: bool,
     light: Option<bool>,
     background: Option<(u8, u8, u8)>,
 }
@@ -45,9 +46,14 @@ enum Asking {
 #[cfg(any(unix, test))]
 fn questions(asking: Asking) -> String {
     let (cell, graphics) = match asking {
+        // Whether it has paste events is asked with the graphics: only the terminal itself
+        // can say, and only it would send them.
         Asking::Terminal => (
             "\x1b[16t".to_string(),
-            format!("\x1b_Gi={QUERY_ID},s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\"),
+            format!(
+                "\x1b_Gi={QUERY_ID},s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\{}",
+                crate::clipboard::ASK_PASTE_EVENTS
+            ),
         ),
         Asking::Tmux => (String::new(), String::new()),
         Asking::TmuxPassthrough => ("\x1bPtmux;\x1b\x1b[16t\x1b\\".to_string(), String::new()),
@@ -119,6 +125,7 @@ fn query_terminal(out: &mut impl Write, asking: Asking) -> io::Result<Reply> {
         kitty: reply_has(&reply, format!("_Gi={QUERY_ID};OK").as_bytes()),
         cell: parse_cell_size(&reply),
         pixel_mouse: reply_has(&reply, b"?1016;1$y") || reply_has(&reply, b"?1016;2$y"),
+        paste_events: crate::clipboard::has_paste_events(&reply),
         light: parse_background_is_light(&reply),
         background: parse_background(&reply).map(|(r, g, b)| {
             let byte = |channel: f32| (channel * 255.0).round() as u8;
@@ -269,6 +276,7 @@ pub fn detect(var: impl Fn(&str) -> Option<String>) -> io::Result<Env> {
             tmux_passthrough,
             cell: reply.cell,
             pixel_mouse: false,
+            paste_events: false,
             light: reply.light,
             background: reply.background,
         });
@@ -280,6 +288,7 @@ pub fn detect(var: impl Fn(&str) -> Option<String>) -> io::Result<Env> {
         tmux_passthrough: false,
         cell: reply.cell,
         pixel_mouse: reply.pixel_mouse,
+        paste_events: reply.paste_events && multiplexer == Multiplexer::None,
         light: reply.light,
         background: reply.background,
     })

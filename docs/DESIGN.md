@@ -560,6 +560,30 @@ pictures. That is how `terminal-browser` shows a real browser inside Cellix, and
 training run shows in a shell. Frames become bitmaps on the `Grid`'s paint list like any other
 image, so a terminal without pictures falls back to the system browser.
 
+### Pasting a picture over SSH
+
+Cellix runs where the code is, so the clipboard it needs is the terminal's, on the person's own
+machine. OSC 52 carries only text, and a dropped file arrives as a path on that machine. Kitty's
+clipboard protocol carries any kind: with paste events on (mode 5522), a paste arrives as the
+list of kinds the clipboard holds and a one-time password, and Cellix asks for the one it wants
+with that password, which the terminal answers without asking the person
+(<https://rockorager.dev/misc/bracketed-paste-mime/>). Text wins if there is any, so pasting
+text is unchanged; otherwise a picture, PNG first. It's kept in the project under
+`.cellix/pasted` (ignored by git) and pasted as its path, which an agent such as Claude Code
+attaches as an image; on a page it's kept beside the document and put in, as a picture pasted
+there always was. A TIFF, which a Mac screenshot can be, is kept as PNG.
+
+The mode is asked for (DECRQM) with the questions at start and turned on only where the terminal
+itself says it has it, with nothing between: Ghostty from 1.4 and kitty from 0.44.1. crossterm
+knows nothing of the replies, so Cellix puts them back together from the keys crossterm makes of
+them, as it does a Windows paste; with the Kitty keyboard protocol on in those terminals, a real
+Esc or Alt+] can't be taken for one. `CELLIX_PASTE_EVENTS=0` leaves pastes as plain text.
+
+What other setups can't do: tmux and Zellij don't pass paste events on, and a terminal that
+doesn't answer that it has them (Ghostty 1.4 and kitty 0.44.1 do; others weren't checked) gets no
+paste events, so there a paste is text only and a picture can't cross. There, copy the file to
+the server (`scp`) or save it in the project and paste its path.
+
 Cellix runs the real agent and never rebuilds its interface. The side pane is a terminal on a
 PTY, using `alacritty_terminal` for the screen, so agents update themselves and nothing here
 knows what they look like. When a program there ends, as an agent does on `/exit`, its tab

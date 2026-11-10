@@ -4632,5 +4632,12 @@
     "title": "A selected or hovered icon on the activity rail and at the top right has 8 px or more between it and its highlight on every side",
     "test": "a_selected_icon_has_air_inside_its_highlight",
     "passes": true
+  },
+  {
+    "id": "paste-picture-over-ssh",
+    "milestone": 12,
+    "title": "A picture copied on the local machine pastes into Cellix over SSH through the terminal's paste events (Kitty clipboard protocol, Ghostty 1.4 and kitty): kept in the project and pasted as its path, or beside the document on a page",
+    "test": "a_picture_pasted_from_the_terminals_clipboard_lands_in_the_project",
+    "passes": true
   }
 ]

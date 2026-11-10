@@ -1,6 +1,7 @@
 //! Terminal side of Cellix: choosing a rendering tier and presenting grids.
 
 mod cells;
+pub mod clipboard;
 mod detect;
 mod notify;
 mod pixels;

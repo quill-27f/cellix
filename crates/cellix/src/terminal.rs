@@ -241,6 +241,7 @@ impl Drop for Session {
         let _ = execute!(
             io::stdout(),
             Print("\x1b[?1016l"),
+            Print(cellix_term::clipboard::PASTE_EVENTS_OFF),
             Print(if std::env::var_os("TMUX").is_some() {
                 "\x1b[>4;0m"
             } else {
@@ -343,6 +344,146 @@ fn typed(event: &ct::Event) -> Option<char> {
         KeyCode::Enter if key.modifiers.is_empty() => Some('\n'),
         KeyCode::Tab if key.modifiers.is_empty() => Some('\t'),
         _ => None,
+    }
+}
+
+/// What the terminal says of its clipboard (OSC 5522), put back together. crossterm doesn't
+/// know the sequence and hands it over as keys: Alt+] for `ESC ]`, or Esc and then `]` when a
+/// read ends between them, a key for each character, and Alt+\ (or Esc, `\`) for `ESC \`, or
+/// Ctrl+G for BEL, at its end. It's only done where paste events are on, so in Ghostty or kitty,
+/// whose Kitty keyboard protocol sends a real Esc or Alt+] as a CSI u key: what spells
+/// `ESC ] 5522 ;` there is the terminal's. Keys held back while it isn't yet clear go on as
+/// they were.
+#[derive(Default)]
+struct Osc {
+    /// Paste events are on, so messages can come.
+    on: bool,
+    /// Keys held while they spell the start of a message, and how much of it.
+    held: Vec<ct::Event>,
+    matched: usize,
+    /// The message so far, once it's certain, and whether an `ESC` just came in it.
+    body: Option<String>,
+    escaped: bool,
+}
+
+/// What a key comes to, read by `Osc`.
+enum Took {
+    /// Kept back, as part of a message.
+    Held,
+    /// Keys for Cellix as usual.
+    Keys(Vec<ct::Event>),
+    /// A whole message's body, after `5522;`.
+    Message(String),
+}
+
+/// A key as the bytes the terminal sent for it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Sent {
+    Esc,
+    Bell,
+    Char(char),
+}
+
+/// How a message starts: `ESC ] 5522 ;`.
+const OSC_START: [Sent; 7] = [
+    Sent::Esc,
+    Sent::Char(']'),
+    Sent::Char('5'),
+    Sent::Char('5'),
+    Sent::Char('2'),
+    Sent::Char('2'),
+    Sent::Char(';'),
+];
+
+/// How long to wait for the rest of a message under way before drawing a frame.
+const OSC_PATIENCE: Duration = Duration::from_millis(100);
+/// The most a message is let grow to: a picture over that isn't worth the memory.
+const OSC_LIMIT: usize = 96 << 20;
+
+/// The bytes behind a key, where it's one a message can be made of.
+fn sent(event: &ct::Event) -> Option<Vec<Sent>> {
+    let ct::Event::Key(key) = event else {
+        return None;
+    };
+    if key.kind != KeyEventKind::Press {
+        return None;
+    }
+    let mods = key.modifiers.difference(KeyModifiers::SHIFT);
+    match key.code {
+        KeyCode::Esc if mods.is_empty() => Some(vec![Sent::Esc]),
+        KeyCode::Char(c) if mods.is_empty() => Some(vec![Sent::Char(c)]),
+        KeyCode::Char(c) if mods == KeyModifiers::ALT => Some(vec![Sent::Esc, Sent::Char(c)]),
+        KeyCode::Char('g') if mods == KeyModifiers::CONTROL => Some(vec![Sent::Bell]),
+        _ => None,
+    }
+}
+
+impl Osc {
+    fn new(on: bool) -> Self {
+        Self {
+            on,
+            ..Self::default()
+        }
+    }
+
+    /// Whether a message may have started and not ended, so the input should be read on. The
+    /// start of one counts, since the terminal's write can be split anywhere.
+    fn reading(&self) -> bool {
+        self.body.is_some() || self.matched > 0
+    }
+
+    fn take(&mut self, event: ct::Event) -> Took {
+        if !self.on {
+            return Took::Keys(vec![event]);
+        }
+        let bytes = sent(&event);
+        if let Some(body) = &mut self.body {
+            let Some(bytes) = bytes else {
+                // Anything else ends it unfinished: what came of it is dropped.
+                self.body = None;
+                self.escaped = false;
+                return Took::Keys(vec![event]);
+            };
+            for byte in bytes {
+                match (self.escaped, byte) {
+                    (true, Sent::Char('\\')) | (false, Sent::Bell) => {
+                        self.escaped = false;
+                        return Took::Message(self.body.take().unwrap_or_default());
+                    }
+                    (false, Sent::Esc) => self.escaped = true,
+                    (false, Sent::Char(c)) if body.len() < OSC_LIMIT => body.push(c),
+                    _ => {
+                        self.body = None;
+                        self.escaped = false;
+                        return Took::Keys(vec![event]);
+                    }
+                }
+            }
+            return Took::Held;
+        }
+        let spells = bytes.as_ref().is_some_and(|bytes| {
+            let rest = &OSC_START[self.matched..];
+            rest.len() >= bytes.len() && rest[..bytes.len()] == bytes[..]
+        });
+        if !spells {
+            let mut keys = self.release();
+            keys.push(event);
+            return Took::Keys(keys);
+        }
+        self.matched += bytes.map_or(0, |b| b.len());
+        if self.matched == OSC_START.len() {
+            self.release();
+            self.body = Some(String::new());
+        } else {
+            self.held.push(event);
+        }
+        Took::Held
+    }
+
+    /// Gives back what's held when no more input came: an Alt+] on its own was a key.
+    fn release(&mut self) -> Vec<ct::Event> {
+        self.matched = 0;
+        std::mem::take(&mut self.held)
     }
 }
 
@@ -464,6 +605,8 @@ struct Display {
     /// tmux made up, so a resize doesn't overrule it.
     told_cell: bool,
     pixel_mouse: bool,
+    /// The terminal sends paste events, so pictures can be pasted.
+    paste_events: bool,
     light: Option<bool>,
     background: Option<(u8, u8, u8)>,
     /// Where the colour is asked again when Cellix comes back into focus.
@@ -496,6 +639,11 @@ impl Display {
             cell,
             told_cell: env.cell.is_some() && env.multiplexer == cellix_term::Multiplexer::Tmux,
             pixel_mouse: env.pixel_mouse,
+            // Set to 0, it leaves pastes as plain bracketed text, should paste events misbehave.
+            paste_events: env.paste_events
+                && std::env::var("CELLIX_PASTE_EVENTS")
+                    .ok()
+                    .is_none_or(|v| v != "0"),
             light: env.light,
             background: env.background,
             multiplexer: env.multiplexer,
@@ -627,6 +775,13 @@ pub fn run(options: Options) -> io::Result<()> {
         write!(out, "\x1b[?1016h")?;
     }
     let mouse_cell = |display: &Display| display.cell.filter(|_| pixel_mouse);
+    // A paste then says what the clipboard holds, so a picture can come over SSH as well as
+    // text: OSC 52 carries only text.
+    if display.paste_events {
+        write!(out, "{}", cellix_term::clipboard::PASTE_EVENTS_ON)?;
+    }
+    let mut osc = Osc::new(display.paste_events);
+    let mut clipboard = cellix_term::clipboard::Reader::default();
     let mut redraw = true;
     let mut shape = None;
     // A paste on Windows that the console handed over in parts.
@@ -725,48 +880,101 @@ pub fn run(options: Options) -> io::Result<()> {
                 let mut batch = Vec::new();
                 let mut came_back = false;
                 let mut left = false;
+                let mut messages = Vec::new();
                 loop {
-                    let event = ct::read()?;
-                    // Anything but the wheel or a passing pointer may change what's under a scroll.
-                    // A trackpad wanders sideways as it goes, so those count as the wheel too.
-                    let passing = matches!(
-                        &event,
-                        ct::Event::Mouse(mouse) if matches!(
-                            mouse.kind,
-                            ct::MouseEventKind::Moved
-                                | ct::MouseEventKind::ScrollUp
-                                | ct::MouseEventKind::ScrollDown
-                                | ct::MouseEventKind::ScrollLeft
-                                | ct::MouseEventKind::ScrollRight
-                        )
-                    );
-                    if !passing {
-                        backend.settle();
+                    let read = ct::read()?;
+                    let events = match osc.take(read) {
+                        Took::Held => Vec::new(),
+                        Took::Message(body) => {
+                            messages.push(body);
+                            Vec::new()
+                        }
+                        Took::Keys(keys) => keys,
+                    };
+                    let mut typing = false;
+                    for event in events {
+                        // Anything but the wheel or a passing pointer may change what's under a scroll.
+                        // A trackpad wanders sideways as it goes, so those count as the wheel too.
+                        let passing = matches!(
+                            &event,
+                            ct::Event::Mouse(mouse) if matches!(
+                                mouse.kind,
+                                ct::MouseEventKind::Moved
+                                    | ct::MouseEventKind::ScrollUp
+                                    | ct::MouseEventKind::ScrollDown
+                                    | ct::MouseEventKind::ScrollLeft
+                                    | ct::MouseEventKind::ScrollRight
+                            )
+                        );
+                        if !passing {
+                            backend.settle();
+                        }
+                        // A multiplexer forgets images when a client leaves, so a new one starts
+                        // with an empty window until everything is sent again.
+                        if matches!(event, ct::Event::FocusGained)
+                            && display.placement == Some(Placement::Placeholder)
+                        {
+                            backend.invalidate();
+                        }
+                        came_back |= matches!(event, ct::Event::FocusGained);
+                        left |= matches!(event, ct::Event::FocusLost);
+                        match event {
+                            ct::Event::FocusGained => spaces.set_focused(true),
+                            ct::Event::FocusLost => spaces.set_focused(false),
+                            _ => {}
+                        }
+                        // Coming back, or typing, can leave the terminal showing a pointer of its own.
+                        if matches!(event, ct::Event::FocusGained | ct::Event::Key(_)) {
+                            shape = None;
+                        }
+                        // Keys that type are taken whole on Windows, where a paste comes as them.
+                        typing |= cfg!(windows) && typed(&event).is_some();
+                        batch.push(event);
                     }
-                    // A multiplexer forgets images when a client leaves, so a new one starts
-                    // with an empty window until everything is sent again.
-                    if matches!(event, ct::Event::FocusGained)
-                        && display.placement == Some(Placement::Placeholder)
-                    {
-                        backend.invalidate();
+                    // Inside a message the rest is on its way: it's waited for, rather than
+                    // drawing a frame each time the terminal's pipe runs dry.
+                    let patience = if osc.reading() {
+                        OSC_PATIENCE
+                    } else {
+                        Duration::ZERO
+                    };
+                    let more = ct::poll(patience)?;
+                    // An Alt+] with nothing after it, even after waiting, was only a key.
+                    if !more {
+                        batch.extend(osc.release());
                     }
-                    came_back |= matches!(event, ct::Event::FocusGained);
-                    left |= matches!(event, ct::Event::FocusLost);
-                    match event {
-                        ct::Event::FocusGained => spaces.set_focused(true),
-                        ct::Event::FocusLost => spaces.set_focused(false),
-                        _ => {}
-                    }
-                    // Coming back, or typing, can leave the terminal showing a pointer of its own.
-                    if matches!(event, ct::Event::FocusGained | ct::Event::Key(_)) {
-                        shape = None;
-                    }
-                    // Keys that type are taken whole on Windows, where a paste comes as them.
-                    let typing = cfg!(windows) && typed(&event).is_some();
-                    batch.push(event);
-                    // A stream of input mustn't hold up the frames it's asking for.
-                    if (started.elapsed() >= INPUT_SLICE && !typing) || !ct::poll(Duration::ZERO)? {
+                    // A stream of input mustn't hold up the frames it's asking for, but a
+                    // pasted picture is read whole first.
+                    let slice = started.elapsed() >= INPUT_SLICE && !typing && !osc.reading();
+                    if slice || !more {
                         break;
+                    }
+                }
+                for body in messages {
+                    use cellix_term::clipboard::{Pasted, choose, read_request};
+                    match clipboard.take(&body) {
+                        // A paste: what to read of it is asked for with its password.
+                        Some(Pasted::Offer { types, password }) => {
+                            if let Some(mime) = choose(&types) {
+                                write!(out, "{}", read_request(mime, password.as_deref()))?;
+                                out.flush()?;
+                            }
+                        }
+                        Some(Pasted::Data { mime, bytes }) if mime.starts_with("text/") => {
+                            let text = String::from_utf8_lossy(&bytes).into_owned();
+                            batch.push(ct::Event::Paste(text));
+                        }
+                        Some(Pasted::Data { mime, bytes }) => {
+                            spaces.app_mut().paste_picture(&bytes, &mime);
+                        }
+                        // Nothing pastes then, so how to have plain pastes back is said.
+                        Some(Pasted::Refused(why)) => {
+                            spaces.app_mut().say(format!(
+                                "The terminal didn't hand over the clipboard ({why}): \
+                                 CELLIX_PASTE_EVENTS=0 pastes as before"
+                            ));
+                        }
+                        None => {}
                     }
                 }
                 if cfg!(windows) {
@@ -904,6 +1112,67 @@ mod tests {
     /// One read of input, with nothing before it.
     fn once(events: Vec<ct::Event>) -> Vec<ct::Event> {
         pasted_keys(events, &mut Pasting::default(), Instant::now())
+    }
+
+    /// Keys as crossterm makes them of what a terminal sent, each byte one key.
+    fn sent_as_keys(bytes: &str, split_escapes: bool) -> Vec<ct::Event> {
+        let mut out = Vec::new();
+        let mut chars = bytes.chars().peekable();
+        while let Some(c) = chars.next() {
+            let (code, modifiers) = match c {
+                '\x1b' if !split_escapes && chars.peek().is_some() => {
+                    (KeyCode::Char(chars.next().unwrap()), KeyModifiers::ALT)
+                }
+                '\x1b' => (KeyCode::Esc, KeyModifiers::NONE),
+                '\x07' => (KeyCode::Char('g'), KeyModifiers::CONTROL),
+                c if c.is_ascii_uppercase() => (KeyCode::Char(c), KeyModifiers::SHIFT),
+                c => (KeyCode::Char(c), KeyModifiers::NONE),
+            };
+            out.push(ct::Event::Key(CtKey {
+                code,
+                modifiers,
+                kind: KeyEventKind::Press,
+                state: KeyEventState::NONE,
+            }));
+        }
+        out
+    }
+
+    fn osc_messages(osc: &mut Osc, events: Vec<ct::Event>) -> (Vec<String>, usize) {
+        let (mut messages, mut keys) = (Vec::new(), 0);
+        for event in events {
+            match osc.take(event) {
+                Took::Held => {}
+                Took::Keys(k) => keys += k.len(),
+                Took::Message(m) => messages.push(m),
+            }
+        }
+        keys += osc.release().len();
+        (messages, keys)
+    }
+
+    #[test]
+    fn a_clipboard_message_comes_back_whole_from_keys() {
+        let two = "\x1b]5522;type=read:status=OK\x1b\\\x1b]5522;type=read:status=DONE\x07";
+        // Alt+] and Alt+\ as crossterm makes them, or Esc and the character when a read ends
+        // between the two bytes: either way, two messages and no keys.
+        for split in [false, true] {
+            let (messages, keys) = osc_messages(&mut Osc::new(true), sent_as_keys(two, split));
+            assert_eq!(
+                messages,
+                vec!["type=read:status=OK", "type=read:status=DONE"],
+                "split {split}"
+            );
+            assert_eq!(keys, 0, "split {split}");
+        }
+        // Typing Alt+] and then text is keys, held only until it's clear.
+        let (messages, keys) = osc_messages(&mut Osc::new(true), sent_as_keys("\x1b]55x", false));
+        assert!(messages.is_empty());
+        assert_eq!(keys, 4, "Alt+], 5, 5 and x go on as typed");
+        // Where paste events are off, nothing is held at all.
+        let (messages, keys) = osc_messages(&mut Osc::new(false), sent_as_keys(two, false));
+        assert!(messages.is_empty());
+        assert!(keys > 0);
     }
 
     #[test]
