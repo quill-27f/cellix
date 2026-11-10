@@ -7140,6 +7140,7 @@ impl App {
         // Left with the window, the pane takes it again, once there's something in it.
         if std::mem::take(&mut self.kept_maximized) && self.dock.open {
             self.maximized = Some(Maximized::Pane);
+            self.dock.focused |= self.pane_takes_keys();
             self.fit_dock();
         }
     }
@@ -12828,18 +12829,30 @@ impl App {
             self.maximized = None;
         } else {
             match which {
-                Maximized::Pane if !self.dock.open => self.toggle_dock(),
                 Maximized::Editor if self.editors.is_empty() => {
                     self.say("Open a file to maximize it");
                     return;
                 }
                 Maximized::Editor => self.dock.focused = false,
-                Maximized::Pane => {}
+                Maximized::Pane => {
+                    if !self.dock.open {
+                        self.toggle_dock();
+                    }
+                    // What takes the window takes the keyboard, as a click on it would: a
+                    // session or the Preview. The pane's lists leave keys to the window.
+                    self.dock.focused |= self.pane_takes_keys();
+                }
             }
             self.maximized = Some(which);
             self.drawer = false;
         }
         self.fit_dock();
+    }
+
+    /// Whether what the pane shows takes keys when clicked: a session or the Preview.
+    fn pane_takes_keys(&self) -> bool {
+        let session = self.dock.showing(Front::Session) && self.dock.session().is_some();
+        session || self.dock.showing(Front::Pdf)
     }
 
     fn in_view(&self) -> InView {
@@ -21695,6 +21708,36 @@ mod tests {
     fn click(app: &mut App, x: u16, y: u16) {
         app.handle(mouse(MouseKind::Left, x, y));
         app.handle(mouse(MouseKind::Up, x, y));
+    }
+
+    #[test]
+    fn full_screen_gives_the_pane_the_keyboard() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        session(&mut app, "echo ready; cat");
+        // A click in the file takes the keyboard from the pane.
+        let main = app.main_area();
+        click(&mut app, main.x + 12, main.y + 3);
+        assert!(!app.dock.focused);
+        // Its maximize button gives the pane the window, and the keyboard with it.
+        let area = app.dock_area().unwrap();
+        let button = app.dock.maximize_button(area);
+        click(&mut app, button + 1, area.y);
+        assert_eq!(app.maximized, Some(Maximized::Pane));
+        assert!(app.dock.focused);
+        for c in "typed here".chars() {
+            app.handle(Event::Key(KeyEvent::plain(Key::Char(c))));
+        }
+        shows(&mut app, "typed here");
+        assert!(
+            !app.active_text().unwrap().contains("typed here"),
+            "nothing went into the file"
+        );
+        // From the keyboard too, after the file had it back.
+        app.run(Command::MaximizePane);
+        app.dock.focused = false;
+        app.run(Command::MaximizePane);
+        assert!(app.dock.focused);
     }
 
     #[test]
