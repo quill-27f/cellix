@@ -337,10 +337,13 @@ panel gives each agent one row under two lines of how-to. At every width a page 
 cell for a comment's ◆ and one for a change's bar, and a long page scrolls past its end
 until its last row is a third of the way down.
 The side pane or one editor can be maximized, from the pane's own tab row or a double-click on
-a tab, while running only. The icons at the top right never move for it. Whatever asks for a
+a tab. The icons at the top right never move for it. Whatever asks for a
 hidden part, such as one of those icons or opening a file, restores first, so nothing opens
 out of sight. The side pane stands under the file when it's dragged there, as well as when the
-window is too narrow; that choice lasts while running. Panes split side by side only, so a tab
+window is too narrow. Its width or height, whether it was dragged under the file, and whether it
+had the window are kept in `state.json` with the tabs, so the next run puts it back as it was; it
+takes the window again only once something is back in it. An editor's maximize lasts while
+running. Panes split side by side only, so a tab
 dropped on a file splits left or right, and there is no split below.
 
 ### Code

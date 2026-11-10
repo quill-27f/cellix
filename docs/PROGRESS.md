@@ -1700,3 +1700,9 @@ The user asked for room under the workspaces bar, Edit and Delete for comments, 
 ## 0.6.3 (2026-11-09)
 
 Released at the user's word: the workspaces bar's air, comment Edit and Delete, and Review beside Source Control with its spacing fixed. README and CHANGELOG updated. Still no Windows build.
+
+## The user's feedback from daily use in Ghostty (2026-11-09)
+
+Seven points from using 0.6.3 every day, locally and over SSH, one commit each.
+
+- **The side pane comes back as it was left.** Its width, its height and place under the file, and whether it had the window (maximized) now go into `state.json` beside the tabs, and the next run puts them back. Full screen comes back only once something is back in the pane, a session that kept running or one that stopped, so an empty pane never takes the window. An editor's maximize still lasts while running only, since the user asked about the pane. Test: `the_side_panes_size_and_full_screen_come_back_next_run`. Unverified: a real restart in Ghostty with sessions kept running, which the test stands in for with a stopped session.

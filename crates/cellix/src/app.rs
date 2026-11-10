@@ -1053,6 +1053,9 @@ pub struct App {
     linger_answer: Option<bool>,
     /// What was last written of the tabs and unsaved edits, so it's written when it changes.
     kept_state: std::cell::Cell<u64>,
+    /// The pane had the window when the last run here ended, so it takes it again once
+    /// what ran in it is back.
+    kept_maximized: bool,
     /// Whether how the two sides work together has been said yet.
     pane_explained: bool,
     /// A comment waiting for an agent to be started.
@@ -1208,6 +1211,7 @@ impl App {
             #[cfg(test)]
             linger_answer: None,
             kept_state: std::cell::Cell::new(0),
+            kept_maximized: false,
             kernels: HashMap::new(),
             kernel_command: None,
             pane_explained: false,
@@ -7120,6 +7124,11 @@ impl App {
             let names = names.join(", ");
             self.say(format!("{names} kept running while you were away"));
         }
+        // Left with the window, the pane takes it again, once there's something in it.
+        if std::mem::take(&mut self.kept_maximized) && self.dock.open {
+            self.maximized = Some(Maximized::Pane);
+            self.fit_dock();
+        }
     }
 
     /// Finds out, once and off the main thread, whether logging out of this server would end
@@ -9983,6 +9992,12 @@ impl App {
         Kept {
             files,
             active: (!self.editors.is_empty()).then(|| self.active()),
+            pane: KeptPane {
+                width: self.dock.width,
+                height: self.dock.height,
+                under: self.dock.under,
+                maximized: self.maximized == Some(Maximized::Pane) && self.dock.open,
+            },
         }
     }
 
@@ -10017,6 +10032,10 @@ impl App {
         let Ok(state) = serde_json::from_str::<Kept>(&text) else {
             return 0;
         };
+        self.dock.width = state.pane.width;
+        self.dock.height = state.pane.height;
+        self.dock.under = state.pane.under;
+        self.kept_maximized = state.pane.maximized;
         let root = self.workspace.root().to_path_buf();
         let mut unsaved = 0;
         let mut opened = Vec::new();
@@ -14954,6 +14973,25 @@ struct Kept {
     files: Vec<KeptFile>,
     /// Which of `files` was in front.
     active: Option<usize>,
+    /// The side pane as it was left.
+    #[serde(default)]
+    pane: KeptPane,
+}
+
+/// The side pane's size and place as they were left, so it comes back the same.
+#[derive(Debug, Default, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+struct KeptPane {
+    /// Columns it was dragged to beside the file, and rows under it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    width: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    height: Option<u16>,
+    /// Dragged under the file.
+    #[serde(default)]
+    under: bool,
+    /// It had the window.
+    #[serde(default)]
+    maximized: bool,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -16983,6 +17021,60 @@ mod tests {
                 .text()
                 .contains("Unsaved edits to 1 file are back")
         );
+        let _ = fs::remove_dir_all(crate::hold::folder_of(&root));
+    }
+
+    /// Unix only: what was in the pane comes back as a session that stopped with the
+    /// machine, which is how the test makes one without a host.
+    #[test]
+    #[cfg(unix)]
+    fn the_side_panes_size_and_full_screen_come_back_next_run() {
+        let (dir, mut app) = project();
+        let root = dir.path().to_path_buf();
+        session(&mut app, "echo ready; sleep 30");
+        // Dragged wider by its edge, then given the window.
+        let area = app.dock_area().unwrap();
+        app.handle(mouse(MouseKind::Left, area.x, 10));
+        app.handle(mouse(MouseKind::Drag, area.x - 12, 10));
+        app.handle(mouse(MouseKind::Up, area.x - 12, 10));
+        let wide = app.dock_area().unwrap();
+        assert!(wide.w > area.w, "dragged wider: {area:?} {wide:?}");
+        app.run(Command::MaximizePane);
+        assert_eq!(app.maximized, Some(Maximized::Pane));
+        app.keep_state();
+        app.dock.stop_all();
+        drop(app);
+
+        // The next run here, with something to show in the pane again.
+        left_stopped(&root, "Codex", "working\r\n", Some("c-1"));
+        let mut again = App::new(root.clone(), (100, 30));
+        again.restore_state();
+        again.rejoin_sessions();
+        assert_eq!(again.maximized, Some(Maximized::Pane), "full screen again");
+        let full = again.dock_area().unwrap();
+        assert_eq!(full.x, again.activity_area().right());
+        assert!(again.sidebar_area().is_none());
+        // Given back the window, it's as wide as it was dragged.
+        again.run(Command::MaximizePane);
+        assert_eq!(again.dock_area(), Some(wide));
+
+        // Under the file, its height comes back too, and not full screen when it wasn't.
+        again.dock.under = true;
+        again.fit_dock();
+        let under = again.dock_area().unwrap();
+        again.handle(mouse(MouseKind::Left, under.x + 2, under.y - 1));
+        again.handle(mouse(MouseKind::Drag, under.x + 2, under.y - 5));
+        again.handle(mouse(MouseKind::Up, under.x + 2, under.y - 5));
+        let taller = again.dock_area().unwrap();
+        assert!(taller.h > under.h, "dragged taller: {under:?} {taller:?}");
+        again.keep_state();
+        drop(again);
+        let mut third = App::new(root.clone(), (100, 30));
+        third.restore_state();
+        third.rejoin_sessions();
+        assert_eq!(third.maximized, None);
+        assert!(third.dock.under);
+        assert_eq!(third.dock_area(), Some(taller));
         let _ = fs::remove_dir_all(crate::hold::folder_of(&root));
     }
 

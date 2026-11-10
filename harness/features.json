@@ -4590,5 +4590,12 @@
     "title": "Review Changes opens beside Source Control with its own list, closes with the × after its title or Esc, and Source Control's icon brings Source Control back; no ± at the top right",
     "test": "review_opens_beside_source_control_and_closes_with_its_x",
     "passes": true
+  },
+  {
+    "id": "pane-size-kept",
+    "milestone": 12,
+    "title": "The side pane's width, its height and place under the file, and whether it had the window come back as they were left in the next run",
+    "test": "the_side_panes_size_and_full_screen_come_back_next_run",
+    "passes": true
   }
 ]
