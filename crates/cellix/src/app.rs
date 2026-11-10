@@ -9299,9 +9299,28 @@ impl App {
                     self.dock.focused = false;
                     return;
                 }
-                let line = self.threads.iter().find(|t| t.id == id).map(|t| t.line);
+                let Some((file, line)) = self
+                    .threads
+                    .iter()
+                    .find(|t| t.id == id)
+                    .map(|t| (t.file.clone(), t.line))
+                else {
+                    return;
+                };
+                // With no file in view the pane lists every file's comments, so a comment on
+                // another file opens it first.
+                let path = self.workspace.root().join(&file);
+                let in_view = self
+                    .editors
+                    .get(self.active())
+                    .and_then(|e| e.buffer.path())
+                    .is_some_and(|p| self.relative(p) == file);
+                if !in_view && let Err(e) = self.open(&path) {
+                    self.say(format!("Could not open {file}: {e}"));
+                    return;
+                }
                 let area = self.focused_area();
-                if let (Some(line), Some(editor)) = (line, self.editor_mut()) {
+                if let Some(editor) = self.editor_mut() {
                     editor.go_to_line(line, area);
                 }
                 self.dock.focused = false;
@@ -19373,6 +19392,23 @@ mod tests {
         app.handle(mouse(MouseKind::Left, x, y));
         assert!(!app.threads[0].resolved);
         assert_eq!(marked(&app), 2, "marked again once it's open");
+    }
+
+    #[test]
+    fn clicking_a_comment_with_no_file_in_view_opens_its_file_at_it() {
+        let (dir, mut app) = page_app("the cache goes first\nand the queue after\n");
+        select_word(&mut app, "queue");
+        app.run(Command::AddComment);
+        typed(&mut app, "And this?");
+        enter(&mut app);
+        app.run(Command::CloseTab);
+        assert!(app.editors.get(app.active()).is_none(), "nothing in view");
+        // The pane lists every file's comments then, and clicking one goes to it.
+        let (x, y) = find(&screen(&app), "And this?");
+        click(&mut app, x, y);
+        let (path, line) = app.cursor_line().expect("its file opens");
+        assert_eq!(path, dir.path().join("note.md"));
+        assert_eq!(line, 2, "at the comment's line");
     }
 
     #[test]

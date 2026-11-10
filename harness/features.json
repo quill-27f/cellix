@@ -4646,5 +4646,12 @@
     "title": "A machine name too long for the workspaces bar gives way rather than covering its tiles, New Workspace or Resume",
     "test": "a_long_machine_name_leaves_the_bar_its_buttons",
     "passes": true
+  },
+  {
+    "id": "comment-click-opens-its-file",
+    "milestone": 12,
+    "title": "Clicking a comment in the Comments pane with no file in view, where every file's comments are listed, opens that comment's file at its line",
+    "test": "clicking_a_comment_with_no_file_in_view_opens_its_file_at_it",
+    "passes": true
   }
 ]
