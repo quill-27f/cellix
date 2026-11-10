@@ -1056,6 +1056,8 @@ pub struct App {
     /// The pane had the window when the last run here ended, so it takes it again once
     /// what ran in it is back.
     kept_maximized: bool,
+    /// The session that was in front when the last run here ended.
+    kept_session: Option<String>,
     /// Whether how the two sides work together has been said yet.
     pane_explained: bool,
     /// A comment waiting for an agent to be started.
@@ -1212,6 +1214,7 @@ impl App {
             linger_answer: None,
             kept_state: std::cell::Cell::new(0),
             kept_maximized: false,
+            kept_session: None,
             kernels: HashMap::new(),
             kernel_command: None,
             pane_explained: false,
@@ -7124,6 +7127,16 @@ impl App {
             let names = names.join(", ");
             self.say(format!("{names} kept running while you were away"));
         }
+        // The tab that was in front when the last run ended is in front again, an agent's
+        // chat rather than whichever terminal sorts last.
+        let kept = self.kept_session.take();
+        let front = kept.and_then(|key| {
+            let named = |s: &Session| s.kept_as().as_deref() == Some(key.as_str());
+            self.dock.sessions.iter().position(named)
+        });
+        if let Some(index) = front.filter(|_| self.dock.open) {
+            self.dock.active = Some(index);
+        }
         // Left with the window, the pane takes it again, once there's something in it.
         if std::mem::take(&mut self.kept_maximized) && self.dock.open {
             self.maximized = Some(Maximized::Pane);
@@ -9997,6 +10010,7 @@ impl App {
                 height: self.dock.height,
                 under: self.dock.under,
                 maximized: self.maximized == Some(Maximized::Pane) && self.dock.open,
+                session: self.dock.session().and_then(Session::kept_as),
             },
         }
     }
@@ -10036,6 +10050,7 @@ impl App {
         self.dock.height = state.pane.height;
         self.dock.under = state.pane.under;
         self.kept_maximized = state.pane.maximized;
+        self.kept_session = state.pane.session;
         let root = self.workspace.root().to_path_buf();
         let mut unsaved = 0;
         let mut opened = Vec::new();
@@ -14992,6 +15007,10 @@ struct KeptPane {
     /// It had the window.
     #[serde(default)]
     maximized: bool,
+    /// The session in front, by its host's socket, so the tab left in front comes back in
+    /// front.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    session: Option<String>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -17482,6 +17501,48 @@ mod tests {
             "{started:?}"
         );
         let _ = fs::remove_dir_all(crate::hold::folder_of(dir.path()));
+    }
+
+    /// Unix only: sessions outlive Cellix only on Unix. Stopped sessions stand in for ones
+    /// that kept running, since the tests have no host to keep them.
+    #[test]
+    #[cfg(unix)]
+    fn a_reopened_session_starts_on_the_tab_it_ended_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        left_stopped(&root, "Terminal", "$ cargo watch\r\n", None);
+        left_stopped(&root, "Claude Code", "Shall I go on?\r\n", Some("cc-1"));
+        let mut app = App::new(root.clone(), (160, 40));
+        app.restore_state();
+        app.rejoin_sessions();
+        let first = app.dock.active.expect("a tab in front");
+        let other = 1 - first;
+        let name = app.dock.sessions[other].name.clone();
+        // The other tab clicked to the front, as the user leaves it.
+        let area = app.dock_area().unwrap();
+        let title = app.title_of(area);
+        let x = (area.x..area.right())
+            .find(|x| app.dock.hit(title, *x) == Some(TabHit::Tab(other)))
+            .expect("its tab");
+        click(&mut app, x, area.y);
+        assert_eq!(app.dock.active, Some(other));
+        app.keep_state();
+        drop(app);
+
+        let mut again = App::new(root.clone(), (160, 40));
+        again.restore_state();
+        again.rejoin_sessions();
+        let front = again.dock.session().map(|s| s.name.clone());
+        assert_eq!(
+            front.as_deref(),
+            Some(name.as_str()),
+            "back on the tab it ended on"
+        );
+        assert!(again.dock.showing(Front::Session));
+        // Its tab is the one lit in the pane's row.
+        let row = screen(&again).row_text(again.dock_area().unwrap().y);
+        assert!(row.contains(&name), "{row}");
+        let _ = fs::remove_dir_all(crate::hold::folder_of(&root));
     }
 
     /// Unix only: sessions outlive Cellix only on Unix.

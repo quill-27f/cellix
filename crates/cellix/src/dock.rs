@@ -386,6 +386,15 @@ impl Session {
         !self.exited && !self.shell && !self.browser
     }
 
+    /// What names it among the sessions here from one run to the next: its host's socket,
+    /// or the record it left when it stopped, which is named the same.
+    pub fn kept_as(&self) -> Option<String> {
+        match &self.stopped {
+            Some(stopped) => stopped.key(),
+            None => Some(self.socket()?.file_stem()?.to_string_lossy().into_owned()),
+        }
+    }
+
     /// The socket of the host it runs under, beside which its agent's hooks leave word.
     pub fn socket(&self) -> Option<&Path> {
         match &self.link {

@@ -36,6 +36,12 @@ pub struct Stopped {
 }
 
 impl Stopped {
+    /// What names it among the sessions here: its job's file, which its host's socket was
+    /// named after.
+    pub fn key(&self) -> Option<String> {
+        Some(self.notes.file_stem()?.to_string_lossy().into_owned())
+    }
+
     /// Whether the machine has started since it stopped, so the restart is what stopped it.
     pub fn by_restart(&self) -> bool {
         matches!((self.ended, booted_at()), (Some(ended), Some(booted)) if ended <= booted)

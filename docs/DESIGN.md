@@ -342,7 +342,8 @@ hidden part, such as one of those icons or opening a file, restores first, so no
 out of sight. The side pane stands under the file when it's dragged there, as well as when the
 window is too narrow. Its width or height, whether it was dragged under the file, and whether it
 had the window are kept in `state.json` with the tabs, so the next run puts it back as it was; it
-takes the window again only once something is back in it. An editor's maximize lasts while
+takes the window again only once something is back in it. The session in front is kept too, by
+its host's socket, so a run that ended on an agent's chat starts on it again. An editor's maximize lasts while
 running. Panes split side by side only, so a tab
 dropped on a file splits left or right, and there is no split below.
 

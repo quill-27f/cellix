@@ -4597,5 +4597,12 @@
     "title": "The side pane's width, its height and place under the file, and whether it had the window come back as they were left in the next run",
     "test": "the_side_panes_size_and_full_screen_come_back_next_run",
     "passes": true
+  },
+  {
+    "id": "pane-front-kept",
+    "milestone": 12,
+    "title": "A reopened session starts on the pane tab it ended on, an agent's chat rather than whichever terminal sorts last",
+    "test": "a_reopened_session_starts_on_the_tab_it_ended_on",
+    "passes": true
   }
 ]
