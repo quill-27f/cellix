@@ -1722,3 +1722,15 @@ The first push of 0.6.4 failed CI on macOS: `a_task_runs_in_its_own_tab_and_its_
 The second push failed CI twice more. On macOS, `every_open_workspace_comes_back_next_time` found no "New Workspace" in the bar: the runner's machine name, some sixty characters, was drawn from the right edge over the button, which is how that test flaked at 0.6.2 too. The workspaces bar now leaves out a machine name that would reach its tiles, New Workspace or Resume. Test: `a_long_machine_name_leaves_the_bar_its_buttons`.
 
 On Linux the picture paste test hung until CI's six-hour limit. Reproduced in a Linux container: Cellix stopped reading after 16 KB of a 270 KB paste, asleep in `epoll_pwait`. crossterm's default input source on Unix waits on an edge-triggered epoll and, once a read of 1024 bytes yields an event, returns without draining the terminal. A picture paste comes as thousands of keys, so most reads yield one; with the terminal's 4 KB buffer full, Linux doesn't wake the writer until the buffer is nearly empty, so no more input comes and no new edge with it. Text pastes never hit this, since bracketed paste is one event that crossterm reads to its end. On Linux Cellix now uses crossterm's `use-dev-tty` source, which reads /dev/tty with `poll()` and is woken while anything is waiting. macOS keeps the default source, which passed there. The test now writes the paste in chunks with a deadline and, where the write stalls, says how far it got and what each of Cellix's threads was doing, so a stall fails in seconds instead of hanging CI. With the new source, `closing_the_terminal_keeps_unsent_comments` failed every time on Linux: it waited for "◆" to know the comment was in, but the Comments icon is a ◆ from the start, so the terminal could close before the comment was typed. It now waits for the comment's text. All 20 PTY tests, the hold and CLI tests pass twice in the container. Unverified: a real terminal on Linux with the new input source (mouse, keys, resize), beyond what the PTY tests drive.
+
+## After 0.6.4: comment clicks and starting an agent (2026-11-10)
+
+From the user's screenshots:
+- With no file in view, the Comments pane lists every file's comments, but clicking one only moved the caret in the file in view, so nothing happened. It now opens the comment's file at its line.
+- With agents running, START AN AGENT came after the worktrees. With 11 worktrees it fell off the bottom of the pane, which doesn't scroll, so there seemed to be no way to start an agent. It now always comes before the worktrees.
+
+Unverified: whether the user's Claude Code agents report through the plugin (the panel showed "No plugin, so no detail").
+
+Next:
+- The Agents panel can still cut off a long list of worktrees, because it doesn't scroll.
+- With no file in view, comment cards don't say which file they're on.

@@ -244,7 +244,7 @@ impl Agents {
     }
 
     /// The panel, top to bottom. Drawing and clicking share this. With nothing running, it
-    /// says what this is for and how it goes, and a way to start comes straight after.
+    /// says what this is for and how it goes; either way a way to start comes next.
     fn lines(&self) -> Vec<Line> {
         // The pane's tab already says what this is.
         let mut lines = vec![Line::Gap];
@@ -260,23 +260,17 @@ impl Agents {
         }
         lines.extend((0..self.running.len()).map(Line::Reporting));
         lines.extend(silent.into_iter().map(Line::Silent));
-        let starts = |lines: &mut Vec<Line>| {
-            if !self.installed.is_empty() {
-                lines.push(Line::Gap);
-                lines.push(Line::Section("START AN AGENT"));
-                lines.extend((0..self.installed.len()).map(Line::Start));
-            }
-        };
-        if idle {
-            starts(&mut lines);
+        // Starting one comes before the worktrees, which can be a long list: the panel
+        // doesn't scroll, and what doesn't fit is cut off at the bottom.
+        if !self.installed.is_empty() {
+            lines.push(Line::Gap);
+            lines.push(Line::Section("START AN AGENT"));
+            lines.extend((0..self.installed.len()).map(Line::Start));
         }
         if !self.worktrees.is_empty() {
             lines.push(Line::Gap);
             lines.push(Line::Section("WORKTREES"));
             lines.extend((0..self.worktrees.len()).map(Line::Tree));
-        }
-        if !idle {
-            starts(&mut lines);
         }
         lines
     }
@@ -523,6 +517,30 @@ p3\nccodex\nfcwd\nn/work/project/sub\n";
             "with nothing running, starting one comes first"
         );
         assert_eq!(agents.hit(area, 0), None, "the title does nothing");
+    }
+
+    #[test]
+    fn starting_an_agent_stays_in_reach_beside_many_worktrees() {
+        let running = vec!["Claude Code".to_string(); 6];
+        let agents = Agents {
+            installed: vec![("Claude Code", "claude"), SHELL],
+            seen: Arc::new(Mutex::new(running)),
+            worktrees: (0..11)
+                .map(|i| Worktree {
+                    path: PathBuf::from(format!("/work/tree-{i}")),
+                    branch: format!("claude/tree-{i}"),
+                    changes: 0,
+                })
+                .collect(),
+            ..Agents::default()
+        };
+        // As tall as a side pane in a laptop's window: the worktrees don't all fit.
+        let area = Rect::new(0, 0, 40, 36);
+        let found = (0..area.h).find(|y| agents.hit(area, *y) == Some(Hit::Start("claude")));
+        assert!(found.is_some(), "Claude Code can be started");
+        let mut grid = Grid::new(40, 36, Style::default());
+        agents.draw(&mut grid, area, None, &Theme::default());
+        assert!(grid.text().contains("START AN AGENT"), "{}", grid.text());
     }
 
     #[test]

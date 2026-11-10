@@ -4653,5 +4653,12 @@
     "title": "Clicking a comment in the Comments pane with no file in view, where every file's comments are listed, opens that comment's file at its line",
     "test": "clicking_a_comment_with_no_file_in_view_opens_its_file_at_it",
     "passes": true
+  },
+  {
+    "id": "start-agent-above-worktrees",
+    "milestone": 12,
+    "title": "The Agents panel offers starting an agent above the worktrees, so a long list of worktrees beside running agents doesn't push it out of the pane",
+    "test": "starting_an_agent_stays_in_reach_beside_many_worktrees",
+    "passes": true
   }
 ]
