@@ -392,6 +392,11 @@ impl Session {
     }
 
     /// Whether comments can go here.
+    /// Whether it runs a task, whose output is kept so its errors can be read once it ends.
+    pub fn task(&self) -> bool {
+        self.printed.is_some()
+    }
+
     pub fn agent(&self) -> bool {
         !self.exited && !self.shell && !self.browser
     }
@@ -1319,9 +1324,12 @@ impl Dock {
         // A session that's finished has nothing left to show, so its tab closes, as when an
         // agent is told /exit. One that ended as it started failed to, and what it printed
         // says why, and one that stopped with the machine waits to be resumed.
+        // A task's tab stays, whatever it took: its output is where its errors are read
+        // from, and it's what the user looks at to see how the build went.
         let done = |s: &Session| {
-            let failed = !s.shell && !s.browser && s.born.elapsed() < FAILED_START;
-            s.exited && s.stopped.is_none() && !failed
+            let agent = !s.shell && !s.browser && !s.task();
+            let failed = agent && s.born.elapsed() < FAILED_START;
+            s.exited && s.stopped.is_none() && !failed && (agent || s.shell || s.browser)
         };
         while let Some(index) = self.sessions.iter().position(done) {
             let session = &self.sessions[index];

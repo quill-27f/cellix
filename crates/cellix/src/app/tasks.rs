@@ -294,7 +294,20 @@ mod tests {
             cellix_input::Key::Enter,
         )));
         assert!(app.dock.sessions.iter().any(|s| s.name == "make build"));
+        // A real build takes longer than the few seconds in which an agent that ends is
+        // taken to have failed to start; its tab must stay all the same.
+        let task = app
+            .dock
+            .sessions
+            .iter_mut()
+            .find(|s| s.name == "make build");
+        let born = &mut task.unwrap().born;
+        *born = born.checked_sub(Duration::from_secs(60)).unwrap();
         wait_for(&mut app, |app| !app.workflow.tasks.problems.is_empty());
+        assert!(
+            app.dock.sessions.iter().any(|s| s.name == "make build"),
+            "the task's tab stays once it ends"
+        );
         let rows = app.all_problems();
         let file = dir.path().join("src/main.c");
         assert_eq!(rows[&file][0].line, 0);
