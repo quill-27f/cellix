@@ -4,6 +4,18 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-11-10
+
+### Added
+- Paste a picture from your own machine into Cellix over SSH, in Ghostty 1.4 or kitty 0.44 and later, outside tmux and Zellij. Cellix asks the terminal for it with Cmd+V, saves it in `.cellix/pasted` and pastes its path; on a Markdown page it goes into `images/`. `CELLIX_PASTE_EVENTS=0` turns it off.
+
+### Changed
+- The side pane's width, its height under the file and full screen come back next time.
+- A pane that takes the window also takes the keyboard when it shows a session or the Preview.
+- An agent's tab closes when its session ends. One that ends within 5 seconds of starting stays, to show why.
+- A reopened session starts on the pane tab that was in front, not on Terminal.
+- The status bar's bell has air above it, and selected icons have air inside their highlight.
+
 ## [0.6.3] - 2026-11-09
 
 ### Added

@@ -278,7 +278,10 @@ The icons at the top right start a real agent, a terminal or a browser in the si
 move the keyboard between the two, and the hide-pane icon at the top right, or Ctrl+Shift+`, to hide
 the pane. The only × there quits Cellix.
 The button after the pane's own tabs, or a double-click on one of them, lets the pane take the
-window; a double-click on a file's tab does the same for the file. Do it again to restore.
+window; a double-click on a file's tab does the same for the file. Do it again to restore. A pane
+that takes the window takes the keyboard too, and the pane's size and full screen come back next
+time. When an agent's session ends, its tab closes; one that ends right after starting stays open
+so you can read why.
 Hiding stops nothing. What runs there outlives Cellix too (not yet on Windows): quitting offers Keep Running, a dropped SSH
 connection keeps everything, and the next Cellix in that folder finds it with what it printed.
 
@@ -352,6 +355,11 @@ to go into a folder) (Ctrl+Alt+PageUp and PageDown move between
 them). A new `cellix` anywhere picks up every workspace left running on the machine, and `cellix`
 in your home folder lists them to choose from. `cellix ls` prints the same list. Two computers can
 show the same workspace at once; whichever typed into an agent last sets its size.
+
+Paste a picture from your own machine with Cmd+V in Ghostty 1.4 or kitty 0.44 and later: Cellix
+asks the terminal for it, saves it in `.cellix/pasted` and pastes its path, which is how Claude
+Code takes an image. Inside tmux or Zellij, and in other terminals, only text comes across; copy
+the file over with `scp` and paste its path. `CELLIX_PASTE_EVENTS=0` turns it off.
 
 If the server restarts, what was running has stopped. Its tab comes back with what it last showed,
 and Resume picks up the agent's own conversation (Claude Code and Codex), or Start Again opens a
