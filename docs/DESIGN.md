@@ -560,7 +560,9 @@ image, so a terminal without pictures falls back to the system browser.
 
 Cellix runs the real agent and never rebuilds its interface. The side pane is a terminal on a
 PTY, using `alacritty_terminal` for the screen, so agents update themselves and nothing here
-knows what they look like. Starting one in a host split left the file and the agent in two
+knows what they look like. When a program there ends, as an agent does on `/exit`, its tab
+closes and the status bar says so; an agent that ends within five seconds of starting didn't
+start, so its tab stays with what it printed. Starting one in a host split left the file and the agent in two
 programs, and real use showed that isn't side by side. It connects to the real tool in three ways, each proven
 against Claude Code 2.1.309:
 

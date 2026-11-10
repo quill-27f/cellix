@@ -229,6 +229,8 @@ pub struct Session {
     pub transcript: Option<(String, std::path::PathBuf)>,
     /// What the transcript says of its tokens, which the tab shows.
     pub usage: Option<crate::transcript::Usage>,
+    /// When it started here, or was joined.
+    pub born: std::time::Instant,
 }
 
 fn pty_size((columns, rows): (u16, u16), (width, height): CellPixels) -> PtySize {
@@ -339,6 +341,7 @@ impl Session {
             output,
             finished,
             exited: false,
+            born: std::time::Instant::now(),
             wrote: None,
             size,
             cell,
@@ -1227,7 +1230,12 @@ pub struct Dock {
     /// Docked, icons at the start of the row stand for the comments and the agents, so
     /// those have no tabs of their own.
     pub docked: bool,
+    /// Agents whose tabs closed as they ended, for the status bar to say.
+    pub ended: Vec<String>,
 }
+
+/// An agent that ends this soon after starting didn't start: its tab stays, with what it said.
+const FAILED_START: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// The views' tabs in the order they come in until one is dragged.
 const VIEW_ORDER: [Front; 6] = [
@@ -1301,10 +1309,18 @@ impl Dock {
         for session in &mut self.sessions {
             changed |= session.poll(theme);
         }
-        // A shell that's finished has nothing left to show. An agent may have said why, and
-        // one that stopped with the machine waits to be resumed.
-        let done = |s: &Session| s.exited && s.stopped.is_none() && (s.shell || s.browser);
+        // A session that's finished has nothing left to show, so its tab closes, as when an
+        // agent is told /exit. One that ended as it started failed to, and what it printed
+        // says why, and one that stopped with the machine waits to be resumed.
+        let done = |s: &Session| {
+            let failed = !s.shell && !s.browser && s.born.elapsed() < FAILED_START;
+            s.exited && s.stopped.is_none() && !failed
+        };
         while let Some(index) = self.sessions.iter().position(done) {
+            let session = &self.sessions[index];
+            if !session.shell && !session.browser {
+                self.ended.push(session.name.clone());
+            }
             self.close(index);
             changed = true;
         }

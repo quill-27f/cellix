@@ -2312,6 +2312,9 @@ impl App {
         self.keep_in_view(shown);
         self.tell_selection();
         let terminal = self.dock.poll(&self.theme);
+        for name in std::mem::take(&mut self.dock.ended) {
+            self.say(format!("{name} ended, so its tab closed"));
+        }
         if let Some(text) = self.dock.take_copied() {
             self.copy_text(text, "Copied");
         }
@@ -17385,6 +17388,53 @@ mod tests {
         app.handle(mouse(MouseKind::Left, x + 1, y));
         assert!(matches!(app.overlay, Overlay::None), "its row takes it");
         assert!(!app.quit);
+    }
+
+    #[test]
+    fn an_agents_tab_closes_when_its_session_ends() {
+        let (_dir, mut app) = project();
+        session(&mut app, "echo ready; read line; echo bye");
+        // Running a while, so its ending isn't a failure to start.
+        let started = &mut app.dock.sessions[0].born;
+        *started = started
+            .checked_sub(std::time::Duration::from_secs(60))
+            .unwrap();
+        // Told to exit, as /exit tells Claude Code, it ends and its tab goes.
+        for c in "/exit".chars() {
+            app.handle(Event::Key(KeyEvent::plain(Key::Char(c))));
+        }
+        app.handle(Event::Key(KeyEvent::plain(Key::Enter)));
+        let deadline = std::time::Instant::now() + BACKGROUND;
+        while !app.dock.sessions.is_empty() {
+            assert!(std::time::Instant::now() < deadline, "its tab stayed");
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let grid = screen(&app);
+        assert!(
+            app.dock_area().is_none(),
+            "nothing left, so the pane closed"
+        );
+        assert!(!app.dock.focused, "the keyboard went back to the window");
+        let status = grid.row_text(grid.height() - 1);
+        assert!(
+            status.contains("Stand-in ended, so its tab closed"),
+            "{status}"
+        );
+
+        // One that ends as it starts didn't start, and its tab stays to say why.
+        session(&mut app, "echo ready; echo 'Not logged in'");
+        let deadline = std::time::Instant::now() + BACKGROUND;
+        while !app.dock.sessions[0].exited {
+            assert!(std::time::Instant::now() < deadline, "never ended");
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        app.poll();
+        assert_eq!(app.dock.sessions.len(), 1);
+        let text = screen(&app).text();
+        assert!(text.contains("Not logged in"), "{text}");
+        assert!(text.contains("Stand-in has ended"), "{text}");
     }
 
     #[test]

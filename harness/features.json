@@ -4611,5 +4611,12 @@
     "title": "Making the side pane full screen gives it the keyboard, as a click on it would",
     "test": "full_screen_gives_the_pane_the_keyboard",
     "passes": true
+  },
+  {
+    "id": "ended-agent-tab-closes",
+    "milestone": 12,
+    "title": "An agent's tab closes when its session ends, as on /exit, and the status bar says so; one that ends within seconds of starting keeps its tab to show why",
+    "test": "an_agents_tab_closes_when_its_session_ends",
+    "passes": true
   }
 ]
