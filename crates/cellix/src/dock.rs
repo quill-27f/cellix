@@ -63,8 +63,15 @@ const CONTEXT_SIZE: u8 = 85;
 const PICK_WIDTH: u16 = 2;
 /// The button that closes the pane.
 const HIDE_WIDTH: u16 = 3;
-/// Its hover chip, the size and roundness of the one the icons at the top right have.
-const HIDE_PILL: (f32, f32) = (1.95, 0.89);
+/// Rows tall each icon at the top right is: the pane's buttons and the icons beside them.
+pub const ACTION_ICON: f32 = 0.55;
+/// The chip behind one of them that's showing or hovered, in columns and rows: 8 px or more
+/// between it and the icon on every side.
+pub const ACTION_PILL: (f32, f32) = (2.25, 0.89);
+/// The hover chip of the hide and quit buttons, either side of the line between them: as
+/// tall and round as the icons' chips, narrower, so 8 px stay clear of the line.
+pub const BESIDE_LINE_PILL: (f32, f32) = (1.95, 0.89);
+const HIDE_PILL: (f32, f32) = BESIDE_LINE_PILL;
 const HIDE_RADIUS: u8 = 30;
 /// The height in rows of every × in the title row: a tab's, the pane's, and the quit button's.
 pub const CLOSE_MARK: f32 = 0.72;
@@ -1965,9 +1972,12 @@ impl Dock {
                 } else {
                     theme.row_hover
                 };
-                // Two cells around the icon: about square, as the rail's and the strip's chips are.
-                let chip = Bounds::cells(button.x as f32 + 0.5, area.y as f32 + 0.12, 2.0, 0.76);
-                grid.panel(chip, 22, Some(fill), None);
+                // The chip the icons beside it have, around its middle.
+                let (wide, high) = ACTION_PILL;
+                let middle = button.x as f32 + button.w as f32 / 2.0;
+                let top = area.y as f32 + (1.0 - high) / 2.0;
+                let chip = Bounds::cells(middle - wide / 2.0, top, wide, high);
+                grid.panel(chip, HIDE_RADIUS, Some(fill), None);
             }
             let icon = if maximized {
                 Icon::Minimize
@@ -1980,7 +1990,7 @@ impl Dock {
                 theme.gutter.fg
             };
             // The size of the icons at the top right, which it stands among.
-            crate::toolbar::draw_icon(grid, (icon, 0.62), button, fg, theme.tab);
+            crate::toolbar::draw_icon(grid, (icon, ACTION_ICON), button, fg, theme.tab);
         }
         // Drawn last, over any tabs that reach this far, so it can always be found.
         let hide = Rect::new(
@@ -2017,7 +2027,7 @@ impl Dock {
         } else {
             Icon::HidePane
         };
-        crate::toolbar::draw_icon(grid, (icon, 0.62), cell, fg, theme.tab);
+        crate::toolbar::draw_icon(grid, (icon, ACTION_ICON), cell, fg, theme.tab);
     }
 }
 

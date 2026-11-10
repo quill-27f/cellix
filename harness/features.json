@@ -4625,5 +4625,12 @@
     "title": "The status bar's bell keeps 8 px between its chip and the edge above, at the size of the status text, its chip ending under the workspaces bar's last word",
     "test": "the_bell_keeps_air_above_it",
     "passes": true
+  },
+  {
+    "id": "icon-highlight-air",
+    "milestone": 12,
+    "title": "A selected or hovered icon on the activity rail and at the top right has 8 px or more between it and its highlight on every side",
+    "test": "a_selected_icon_has_air_inside_its_highlight",
+    "passes": true
   }
 ]

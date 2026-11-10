@@ -42,7 +42,7 @@ pub use agent_task::Act as TaskAct;
 
 use crate::agent_task::TaskPage;
 use crate::context::{ContextPanel, Hit as ContextHit};
-use crate::dock::{BROWSER, CellPixels, Dock, Front, Session, TabHit};
+use crate::dock::{ACTION_ICON, ACTION_PILL, BROWSER, CellPixels, Dock, Front, Session, TabHit};
 use crate::editor::{Editor, Marks};
 use crate::explorer::Explorer;
 use crate::find::Find;
@@ -108,21 +108,21 @@ const PANE_ACTIONS: [(Icon, Command, &str); 4] = [
 ];
 /// What the top right keeps when docked: one icon that shows or hides the pane.
 const PANEL_TOGGLE: (Icon, Command, &str) = (Icon::Panel, Command::TogglePanel, "Toggle Panel");
-/// Columns each of those takes, and rows tall each icon is. Three, so a narrow pane's tabs
-/// keep room beside them; still more air between them than VS Code leaves.
+/// Columns each of those takes. Three, so a narrow pane's tabs keep room beside them; still
+/// more air between them than VS Code leaves. Their size is `ACTION_ICON`.
 const ACTION_WIDTH: u16 = 3;
-const ACTION_ICON: f32 = 0.62;
 /// Columns kept clear on each side of the whole bar.
 const ACTION_MARGIN: u16 = 1;
 /// Rows tall a rail icon is on the pixel tiers. Text cells keep their block art.
 /// Larger than the top right icons' box, since line icons fill less of theirs, so the two
 /// sets look the same size.
-const RAIL_ICON: f32 = 0.91;
-/// The tile behind the rail icon that's showing, in columns and rows: square, a full row, so
-/// the large rail icons keep air inside it. Pixels only.
-const RAIL_PILL: (f32, f32) = (2.15, 1.0);
-/// The same tile for the smaller icons at the top right.
-const ACTION_PILL: (f32, f32) = (1.95, 0.89);
+const RAIL_ICON: f32 = 0.84;
+/// The tile behind the rail icon that's showing, in columns and rows: about square, with 8 px
+/// or more between it and the icon on every side. Taller than a row, so it reaches into the
+/// rows either side; the rail sits `RAIL_DROP` lower so the first stays inside the window.
+/// Pixels only.
+const RAIL_PILL: (f32, f32) = (2.5, 1.25);
+const RAIL_DROP: f32 = 0.125;
 /// Where the pane's own close button stands, which they keep clear of.
 const PANE_CLOSE: u16 = 3;
 /// Columns for the button at the very top right that quits Cellix, as a window's close
@@ -3502,8 +3502,8 @@ impl App {
         let hovered = self.hover.is_some_and(|h| cell.contains(h.0, h.1));
         let middle = cell.x as f32 + cell.w as f32 / 2.0;
         if hovered {
-            // The chip every icon at the top right has on hover.
-            let (wide, high) = ACTION_PILL;
+            // The chip every icon at the top right has on hover, kept clear of the line.
+            let (wide, high) = crate::dock::BESIDE_LINE_PILL;
             let chip = Bounds::cells(middle - wide / 2.0, (1.0 - high) / 2.0, wide, high);
             grid.panel(chip, PILL_RADIUS, Some(theme.row_hover), None);
         }
@@ -12965,8 +12965,14 @@ impl App {
         } else {
             ACTIVITY_STEP
         };
-        // The first level with the sidebar's header, as the design has it.
-        let stacked = area.y as f32 + index as f32 * step;
+        // The first level with the sidebar's header, as the design has it, less the drop
+        // that keeps its tile inside the window.
+        let drop = if self.measure.in_cells() {
+            0.0
+        } else {
+            RAIL_DROP
+        };
+        let stacked = area.y as f32 + drop + index as f32 * step;
         if index + 1 == ACTIVITY.len() {
             stacked.max(area.bottom().saturating_sub(2) as f32)
         } else {
@@ -21786,6 +21792,59 @@ mod tests {
     fn click(app: &mut App, x: u16, y: u16) {
         app.handle(mouse(MouseKind::Left, x, y));
         app.handle(mouse(MouseKind::Up, x, y));
+    }
+
+    #[test]
+    fn a_selected_icon_has_air_inside_its_highlight() {
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        // The tour's cells: 17 by 36 pixels.
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 36)));
+        app.run(Command::ListAgents);
+        let grid = screen(&app);
+        let tinted = |p: &Paint| match p {
+            Paint::Panel {
+                bounds,
+                fill: Some(fill),
+                ..
+            } if *fill == app.theme.tint => Some(*bounds),
+            _ => None,
+        };
+        // The rail's own, or the top right's: the same icons stand elsewhere too.
+        let rail = i32::from(app.activity_area().right()) * 64;
+        let icon = |which: Icon| {
+            grid.paint.iter().find_map(|p| match p {
+                Paint::Icon { bounds, icon, .. }
+                    if *icon == which && (bounds.x < rail) == (which == Icon::Files) =>
+                {
+                    Some(*bounds)
+                }
+                _ => None,
+            })
+        };
+        let around = |inner: Bounds| {
+            grid.paint.iter().filter_map(tinted).find(|b| {
+                b.x <= inner.x
+                    && b.y <= inner.y
+                    && b.x + b.w >= inner.x + inner.w
+                    && b.y + b.h >= inner.y + inner.h
+            })
+        };
+        // The explorer's icon on the rail, and Agents at the top right, both showing.
+        for which in [Icon::Files, Icon::Agents] {
+            let inner = icon(which).unwrap_or_else(|| panic!("no {which:?}"));
+            let chip = around(inner).unwrap_or_else(|| panic!("{which:?} has no chip"));
+            let air = [
+                (inner.x - chip.x) * 17 / 64,
+                (chip.x + chip.w - inner.x - inner.w) * 17 / 64,
+                (inner.y - chip.y) * 36 / 64,
+                (chip.y + chip.h - inner.y - inner.h) * 36 / 64,
+            ];
+            // The icon's box, rounded down: its strokes stand two or three pixels further in
+            // still, which the tour's pictures measure at 8 or more.
+            assert!(air.iter().all(|a| *a >= 5), "{which:?}: {air:?} px");
+            assert!(chip.y >= 0, "{which:?}'s chip starts inside the window");
+        }
     }
 
     #[test]

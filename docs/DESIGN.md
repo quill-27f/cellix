@@ -304,7 +304,9 @@ On a terminal, both themes move together so the frame sits on the terminal's own
 its window padding shows no seam; a Latte terminal therefore shows the light theme a step paler
 than Latte (decided with the user on 2026-11-09). It's all drawn to the grid, so it holds on the cell tier. Activity icons span several cells:
 shapes on the pixel tier and block art on cells, because a font glyph is too small beside a
-real IDE.
+real IDE. The highlight behind a selected or hovered icon, on the rail and at the top right,
+keeps 8 px or more from the icon on every side; the rail's reaches into the rows either side,
+so the rail sits an eighth of a row lower to keep the first one inside the window.
 
 One set of parts, everywhere. A button is one chip, four fifths of its row and inside it: the
 primary one filled with the accent, the rest a quiet fill, and each takes a click anywhere it's
