@@ -260,8 +260,7 @@ impl Agents {
         }
         lines.extend((0..self.running.len()).map(Line::Reporting));
         lines.extend(silent.into_iter().map(Line::Silent));
-        // Starting one comes before the worktrees, which can be a long list: the panel
-        // doesn't scroll, and what doesn't fit is cut off at the bottom.
+        // Starting one comes before the worktrees, which can be a long list to scroll past.
         if !self.installed.is_empty() {
             lines.push(Line::Gap);
             lines.push(Line::Section("START AN AGENT"));
@@ -275,9 +274,28 @@ impl Agents {
         lines
     }
 
-    pub fn hit(&self, area: Rect, y: u16) -> Option<Hit> {
+    /// The furthest the panel scrolls, in lines of it: where the last of them just fits in
+    /// `height` rows.
+    pub fn last_top(&self, height: u16) -> usize {
+        let lines = self.lines();
+        let mut room = height;
+        let mut fit = 0;
+        for line in lines.iter().rev() {
+            let rows = self.height(line);
+            if rows > room {
+                break;
+            }
+            room -= rows;
+            fit += 1;
+        }
+        lines.len() - fit
+    }
+
+    /// What's at row `y`, with the first `scrolled` lines of the panel above its top.
+    pub fn hit(&self, area: Rect, y: u16, scrolled: usize) -> Option<Hit> {
         let mut top = area.y;
-        for line in self.lines() {
+        let scrolled = scrolled.min(self.last_top(area.h));
+        for line in self.lines().into_iter().skip(scrolled) {
             let rows = self.height(&line);
             if y >= top && y < top + rows {
                 return match line {
@@ -303,15 +321,24 @@ impl Agents {
         }
     }
 
-    pub fn draw(&self, grid: &mut Grid, area: Rect, hover: Option<(u16, u16)>, theme: &Theme) {
+    /// Draws the panel with its first `scrolled` lines above the top.
+    pub fn draw(
+        &self,
+        grid: &mut Grid,
+        area: Rect,
+        scrolled: usize,
+        hover: Option<(u16, u16)>,
+        theme: &Theme,
+    ) {
         grid.fill(area, theme.sidebar);
+        let scrolled = scrolled.min(self.last_top(area.h));
         let dim = Style {
             fg: theme.gutter.fg,
             ..theme.sidebar
         };
         let side = area.x + 2;
         let mut y = area.y;
-        for line in self.lines() {
+        for line in self.lines().into_iter().skip(scrolled) {
             let rows = self.height(&line);
             if y + rows > area.bottom() {
                 break;
@@ -509,14 +536,14 @@ p3\nccodex\nfcwd\nn/work/project/sub\n";
             ..Agents::default()
         };
         let area = Rect::new(0, 0, 30, 40);
-        let at = |hit: &Hit| (0..40).find(|y| agents.hit(area, *y).as_ref() == Some(hit));
+        let at = |hit: &Hit| (0..40).find(|y| agents.hit(area, *y, 0).as_ref() == Some(hit));
         let start = at(&Hit::Start("codex")).unwrap();
         let tree = at(&Hit::Worktree(PathBuf::from("/work"))).unwrap();
         assert!(
             start < tree,
             "with nothing running, starting one comes first"
         );
-        assert_eq!(agents.hit(area, 0), None, "the title does nothing");
+        assert_eq!(agents.hit(area, 0, 0), None, "the title does nothing");
     }
 
     #[test]
@@ -536,11 +563,22 @@ p3\nccodex\nfcwd\nn/work/project/sub\n";
         };
         // As tall as a side pane in a laptop's window: the worktrees don't all fit.
         let area = Rect::new(0, 0, 40, 36);
-        let found = (0..area.h).find(|y| agents.hit(area, *y) == Some(Hit::Start("claude")));
+        let found = (0..area.h).find(|y| agents.hit(area, *y, 0) == Some(Hit::Start("claude")));
         assert!(found.is_some(), "Claude Code can be started");
         let mut grid = Grid::new(40, 36, Style::default());
-        agents.draw(&mut grid, area, None, &Theme::default());
+        agents.draw(&mut grid, area, 0, None, &Theme::default());
         assert!(grid.text().contains("START AN AGENT"), "{}", grid.text());
+
+        // The worktrees that don't fit are a scroll away, and it stops at the last of them.
+        assert!(!grid.text().contains("claude/tree-10"), "{}", grid.text());
+        let last = agents.last_top(area.h);
+        assert!(last > 0);
+        let mut grid = Grid::new(40, 36, Style::default());
+        agents.draw(&mut grid, area, usize::MAX, None, &Theme::default());
+        assert!(grid.text().contains("claude/tree-10"), "{}", grid.text());
+        let tree = Hit::Worktree(PathBuf::from("/work/tree-10"));
+        let found = (0..area.h).find(|y| agents.hit(area, *y, last) == Some(tree.clone()));
+        assert!(found.is_some(), "and the last one can be clicked");
     }
 
     #[test]

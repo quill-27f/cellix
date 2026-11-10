@@ -543,6 +543,18 @@ fn row_of(
         .collect()
 }
 
+/// The furthest a panel `height` rows tall scrolls over `rows` of comments: the last card
+/// whole, with the air under it.
+fn last_of(rows: usize, height: u16) -> usize {
+    (rows + 1).saturating_sub(height as usize)
+}
+
+/// The furthest the panel scrolls with what it shows.
+pub fn last_top(area: Rect, shown: Shown, measure: &dyn Measure) -> usize {
+    let width = area.w.saturating_sub(SIDE * 2 + 2) as f32;
+    last_of(lines(shown, width, measure).len(), area.h)
+}
+
 pub fn hit(
     area: Rect,
     shown: Shown,
@@ -552,6 +564,7 @@ pub fn hit(
 ) -> Option<Hit> {
     let width = area.w.saturating_sub(SIDE * 2 + 2) as f32;
     let all = lines(shown, width, measure);
+    let top = top.min(last_of(all.len(), area.h));
     let row = top + y.checked_sub(area.y)? as usize;
     match all.get(row)? {
         Line::Buttons(id) => {
@@ -627,6 +640,7 @@ pub fn draw(
     let width = area.w.saturating_sub(SIDE * 2 + 2) as f32;
     let threads = shown.0;
     let all = lines(shown, width, measure);
+    let top = top.min(last_of(all.len(), area.h));
     let (side, right) = (area.x + SIDE, area.right().saturating_sub(SIDE));
     let dim = Style {
         fg: theme.gutter.fg,

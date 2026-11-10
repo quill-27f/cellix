@@ -1188,6 +1188,33 @@ pub enum Front {
     Inbox,
 }
 
+/// How far each view of the pane has scrolled, in its own rows. They're kept in one place and
+/// turned one way, so a view can't be left out of scrolling, or scroll past its end.
+#[derive(Default)]
+pub struct Tops([usize; 7]);
+
+impl Tops {
+    pub fn of(&self, view: Front) -> usize {
+        self.0[view as usize]
+    }
+
+    pub fn set(&mut self, view: Front, top: usize) {
+        self.0[view as usize] = top;
+    }
+
+    /// A notch of the wheel: `step` rows, and never past `last`, the furthest the view goes
+    /// with what's in it now.
+    pub fn wheel(&mut self, view: Front, up: bool, (last, step): (usize, usize)) {
+        let top = self.of(view).min(last);
+        let top = if up {
+            top.saturating_sub(step)
+        } else {
+            (top + step).min(last)
+        };
+        self.set(view, top);
+    }
+}
+
 /// The side pane: its tabs, and whether it's open and has the keyboard.
 #[derive(Default)]
 pub struct Dock {
@@ -1204,26 +1231,23 @@ pub struct Dock {
     pub pdf: Option<PdfView>,
     /// The place on a page last pointed at, for a comment on it.
     pub pdf_spot: Option<(usize, f32, f32)>,
-    /// How far the comments have scrolled.
-    pub comments_top: usize,
+    /// How far each view has scrolled.
+    pub tops: Tops,
     /// How many comments are open, which the tab shows.
     pub comment_count: Cell<usize>,
     /// A comment or reply being written.
     pub draft: Option<Draft>,
-    /// What the last build said, how far it has scrolled, and where its paths start.
+    /// What the last build said, and where its paths start.
     pub log: Vec<String>,
-    pub log_top: usize,
-    /// Whether the problems have a tab, and how far they've scrolled.
+    /// Whether the problems have a tab.
     pub problems: bool,
-    pub problems_top: usize,
     pub log_folder: std::path::PathBuf,
     /// Whether the list of agents has a tab.
     pub agents_tab: bool,
     /// Whether the comments have a tab.
     pub comments_tab: bool,
-    /// Whether the inbox has a tab, how far it has scrolled, and how much is in it.
+    /// Whether the inbox has a tab, and how much is in it.
     pub inbox_tab: bool,
-    pub inbox_top: usize,
     pub inbox_count: Cell<usize>,
     /// The column tabs stop at, for what stands past them.
     pub tabs_end: Cell<u16>,
@@ -1397,7 +1421,7 @@ impl Dock {
     /// Brings the inbox forward, in a tab of its own.
     pub fn show_inbox(&mut self) {
         self.inbox_tab = true;
-        self.inbox_top = 0;
+        self.tops.set(Front::Inbox, 0);
         self.open = true;
         self.front = Front::Inbox;
         self.focused = false;
@@ -1683,10 +1707,19 @@ impl Dock {
         }
     }
 
+    /// The furthest the log scrolls in a screen `height` rows tall: its last line at the bottom.
+    pub fn log_last(&self, height: u16) -> usize {
+        self.log.len().saturating_sub(height as usize)
+    }
+
+    fn log_top(&self, height: u16) -> usize {
+        self.tops.of(Front::Log).min(self.log_last(height))
+    }
+
     /// The log line at a row of the screen.
     pub fn log_line(&self, screen: Rect, y: u16) -> Option<String> {
         let row = y.checked_sub(screen.y)? as usize;
-        self.log.get(self.log_top + row).cloned()
+        self.log.get(self.log_top(screen.h) + row).cloned()
     }
 
     pub fn draw_log(
@@ -1698,7 +1731,8 @@ impl Dock {
     ) {
         grid.fill(screen, theme.sidebar);
         let palette = palette_of(theme);
-        let lines = self.log.iter().skip(self.log_top).take(screen.h as usize);
+        let top = self.log_top(screen.h);
+        let lines = self.log.iter().skip(top).take(screen.h as usize);
         for (row, line) in lines.enumerate() {
             let y = screen.y + row as u16;
             let whole = Rect::new(screen.x, y, screen.w, 1);

@@ -206,7 +206,7 @@ impl App {
         if count > 0 {
             // Problems gets a tab beside the task's, which stays in front.
             self.dock.problems = true;
-            self.dock.problems_top = 0;
+            self.dock.tops.set(super::Front::Problems, 0);
         }
         self.say(note);
     }

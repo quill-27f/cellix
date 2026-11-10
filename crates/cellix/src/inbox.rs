@@ -262,6 +262,14 @@ fn row_y(area: Rect, index: usize, top: usize) -> Option<u16> {
     (y + 1 < area.bottom()).then_some(y)
 }
 
+/// The furthest the list scrolls: its last row the last that shows.
+pub fn last_top(area: Rect, rows: usize) -> usize {
+    let fit = (0..rows)
+        .take_while(|index| row_y(area, *index, 0).is_some())
+        .count();
+    rows.saturating_sub(fit)
+}
+
 /// Where the empty inbox's buttons stand: Notification Settings, then Start an Agent.
 fn empty_buttons(area: Rect, measure: &dyn Measure) -> [(String, u16, u16); 2] {
     let lines = empty_lines(area, measure);
@@ -335,6 +343,7 @@ pub fn hit(
         return Some(Hit::ClearFinished);
     }
     let right = area.right().saturating_sub(SIDE);
+    let top = top.min(last_top(area, rows.len()));
     (top..rows.len()).find_map(|index| {
         let row = row_y(area, index, top)?;
         if y != row && y != row + 1 {
@@ -389,6 +398,7 @@ pub fn draw(
     grid.label_at(left as f32, left, head, &summary(rows), dim, end, SMALL);
     let text_x = left + 3;
     let mut last = head;
+    let top = top.min(last_top(area, rows.len()));
     for (index, row) in rows.iter().enumerate().skip(top) {
         let Some(y) = row_y(area, index, top) else {
             break;

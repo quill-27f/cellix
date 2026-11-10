@@ -1734,3 +1734,9 @@ Unverified: whether the user's Claude Code agents report through the plugin (the
 Next:
 - The Agents panel can still cut off a long list of worktrees, because it doesn't scroll.
 - With no file in view, comment cards don't say which file they're on.
+
+## Improvements from the end-to-end review (2026-11-10)
+
+A Fable sub-agent reviewed the project end to end (design, usability, code quality, performance, product) from the code and the tour's pictures, and the user asked for its list to be applied. One entry per commit, in the order done.
+
+- **Every list in the pane scrolls, one way.** The Agents pane didn't scroll at all, and comments, problems and the log scrolled past their end into nothing, because each view had its own offset and its own wheel code. `Dock::tops` now holds every view's offset, one arm in the pane's mouse code turns the wheel for all of them, and each view says where its end is. The test `inside_claude_code_the_wheel_scrolls_the_comments_under_the_pointer` was changed to add comments first: it scrolled an empty list, which no longer moves.

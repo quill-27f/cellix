@@ -4660,5 +4660,12 @@
     "title": "The Agents panel offers starting an agent above the worktrees, so a long list of worktrees beside running agents doesn't push it out of the pane",
     "test": "starting_an_agent_stays_in_reach_beside_many_worktrees",
     "passes": true
+  },
+  {
+    "id": "pane-lists-scroll-to-their-end",
+    "milestone": 12,
+    "title": "Every list in the side pane (agents and worktrees, comments, problems, the build log, the inbox) scrolls with the wheel through one mechanism, to its last row and no further",
+    "test": "every_list_in_the_pane_scrolls_to_its_end_and_stops_there",
+    "passes": true
   }
 ]

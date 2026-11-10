@@ -4349,7 +4349,7 @@ impl App {
         let picked = self
             .problem_rows()
             .into_iter()
-            .nth(self.dock.problems_top + row as usize)?;
+            .nth(self.problems_top() + row as usize)?;
         let ProblemRow::Item(file, problem) = picked else {
             return None;
         };
@@ -4651,7 +4651,7 @@ impl App {
         self.dock.open = true;
         self.dock.show_comments();
         self.dock.focused = false;
-        self.dock.comments_top = 0;
+        self.dock.tops.set(Front::Comments, 0);
         self.dock.draft = Some(draft);
     }
 
@@ -8073,40 +8073,34 @@ impl App {
             }
             return true;
         }
+        // Every view that's a list scrolls the one way, and stops at its end.
+        if matches!(mouse.kind, MouseKind::ScrollUp | MouseKind::ScrollDown)
+            && let Some((view, limit)) = self.pane_scroll()
+        {
+            let up = mouse.kind == MouseKind::ScrollUp;
+            self.dock.tops.wheel(view, up, limit);
+            return true;
+        }
         if self.dock.front == Front::Inbox {
-            match mouse.kind {
-                MouseKind::ScrollUp => self.dock.inbox_top = self.dock.inbox_top.saturating_sub(1),
-                MouseKind::ScrollDown => {
-                    let last = self.inbox_listed().len().saturating_sub(1);
-                    self.dock.inbox_top = (self.dock.inbox_top + 1).min(last);
-                }
-                MouseKind::Left => self.inbox_click(x, y),
-                _ => {}
+            if mouse.kind == MouseKind::Left {
+                self.inbox_click(x, y);
             }
             return true;
         }
         if self.dock.front == Front::Problems {
-            match mouse.kind {
-                MouseKind::ScrollUp => {
-                    self.dock.problems_top = self.dock.problems_top.saturating_sub(3);
-                }
-                MouseKind::ScrollDown => self.dock.problems_top += 3,
-                MouseKind::Left => match self.problem_ask_at(y) {
+            if mouse.kind == MouseKind::Left {
+                match self.problem_ask_at(y) {
                     Some((chip, file, problem)) if chip.contains(x, y) => {
                         self.ask_about_problem(&file, &problem);
                     }
                     _ => self.click_problem(y),
-                },
-                _ => {}
+                }
             }
             return true;
         }
         if self.dock.front == Front::Log {
-            match mouse.kind {
-                MouseKind::ScrollUp => self.dock.log_top = self.dock.log_top.saturating_sub(3),
-                MouseKind::ScrollDown => self.dock.log_top += 3,
-                MouseKind::Left => self.log_click(y),
-                _ => {}
+            if mouse.kind == MouseKind::Left {
+                self.log_click(y);
             }
             return true;
         }
@@ -8116,36 +8110,24 @@ impl App {
         }
         if self.dock.front == Front::Comments {
             let screen = self.dock_panel().unwrap_or(area);
-            match mouse.kind {
-                MouseKind::Left => {
-                    let (threads, resolved) = self.shown_threads();
-                    let agent = self.dock.agent_name();
-                    let draft = self.dock.draft.as_ref();
-                    let threads = (threads.as_slice(), draft, agent.as_str(), resolved);
-                    let spot = (x, y);
-                    let hit = threads::hit(
-                        screen,
-                        threads,
-                        self.dock.comments_top,
-                        spot,
-                        &*self.measure,
-                    );
-                    if let Some(hit) = hit {
-                        self.thread_hit(hit);
-                    }
+            if mouse.kind == MouseKind::Left {
+                let (threads, resolved) = self.shown_threads();
+                let agent = self.dock.agent_name();
+                let draft = self.dock.draft.as_ref();
+                let threads = (threads.as_slice(), draft, agent.as_str(), resolved);
+                let top = self.dock.tops.of(Front::Comments);
+                let hit = threads::hit(screen, threads, top, (x, y), &*self.measure);
+                if let Some(hit) = hit {
+                    self.thread_hit(hit);
                 }
-                MouseKind::ScrollUp => {
-                    self.dock.comments_top = self.dock.comments_top.saturating_sub(3);
-                }
-                MouseKind::ScrollDown => self.dock.comments_top += 3,
-                _ => {}
             }
             return true;
         }
         if self.dock.listing() {
             if mouse.kind == MouseKind::Left {
                 let screen = self.dock_screen().unwrap_or(area);
-                match self.agents.hit(screen, y) {
+                let top = self.dock.tops.of(Front::Agents);
+                match self.agents.hit(screen, y, top) {
                     Some(AgentHit::Start(program)) => self.open_agent(program),
                     Some(AgentHit::Worktree(path)) => {
                         self.review = Some(self.new_review(path));
@@ -8511,17 +8493,14 @@ impl App {
         if self.dock.front == Front::Inbox {
             let rows = self.inbox_listed();
             let panel = self.dock_panel().unwrap_or(screen);
-            let shown = (
-                rows.as_slice(),
-                self.dock.inbox_top,
-                std::time::Instant::now(),
-            );
+            let top = self.dock.tops.of(Front::Inbox);
+            let shown = (rows.as_slice(), top, std::time::Instant::now());
             crate::inbox::draw(grid, panel, shown, self.hover, (&*self.measure, theme));
             return;
         }
         if self.dock.front == Front::Comments {
             let look = (&*self.measure, theme);
-            let top = self.dock.comments_top;
+            let top = self.dock.tops.of(Front::Comments);
             let agent = self.dock.agent_name();
             let (listed, resolved) = self.shown_threads();
             let draft = self.dock.draft.as_ref();
@@ -8542,7 +8521,8 @@ impl App {
             }
             None => {
                 let panel = self.dock_panel().unwrap_or(screen);
-                self.agents.draw(grid, panel, self.hover, theme);
+                let top = self.dock.tops.of(Front::Agents);
+                self.agents.draw(grid, panel, top, self.hover, theme);
             }
         }
     }
@@ -9947,7 +9927,7 @@ impl App {
             return;
         };
         let rows = self.inbox_listed();
-        let top = self.dock.inbox_top;
+        let top = self.dock.tops.of(Front::Inbox);
         let Some(hit) = crate::inbox::hit(panel, &rows, top, (x, y), &*self.measure) else {
             return;
         };
@@ -14145,7 +14125,7 @@ impl App {
             Vec::new()
         };
         self.dock.log = build.said.lines().map(str::to_string).collect();
-        self.dock.log_top = 0;
+        self.dock.tops.set(Front::Log, 0);
         self.dock.log_folder = folder.clone();
         let mut by_file: HashMap<PathBuf, Vec<Diagnostic>> = HashMap::new();
         for problem in &problems {
@@ -14259,6 +14239,39 @@ impl App {
         rows
     }
 
+    /// The furthest the problems scroll: the last of them at the bottom.
+    fn problems_last(&self) -> usize {
+        let height = self.dock_screen().map_or(0, |s| s.h as usize);
+        self.problem_rows().len().saturating_sub(height)
+    }
+
+    fn problems_top(&self) -> usize {
+        self.dock.tops.of(Front::Problems).min(self.problems_last())
+    }
+
+    /// The view in front of the pane when it's a list the wheel scrolls, with the furthest
+    /// it goes and how far a notch takes it. A session and the preview scroll themselves.
+    fn pane_scroll(&self) -> Option<(Front, (usize, usize))> {
+        let panel = self.dock_panel()?;
+        let limit = match self.dock.front {
+            Front::Inbox => (crate::inbox::last_top(panel, self.inbox_listed().len()), 1),
+            Front::Problems => (self.problems_last(), 3),
+            Front::Log => (self.dock.log_last(panel.h), 3),
+            Front::Comments => {
+                let (listed, resolved) = self.shown_threads();
+                let agent = self.dock.agent_name();
+                let draft = self.dock.draft.as_ref();
+                let shown = (listed.as_slice(), draft, agent.as_str(), resolved);
+                (threads::last_top(panel, shown, &*self.measure), 3)
+            }
+            Front::Agents | Front::Session if self.dock.listing() => {
+                return Some((Front::Agents, (self.agents.last_top(panel.h), 2)));
+            }
+            Front::Agents | Front::Session | Front::Pdf => return None,
+        };
+        Some((self.dock.front, limit))
+    }
+
     fn draw_problems(&self, grid: &mut Grid, screen: Rect) {
         let theme = &self.theme;
         grid.fill(screen, theme.sidebar);
@@ -14277,7 +14290,7 @@ impl App {
             );
             return;
         }
-        let shown = rows.iter().skip(self.dock.problems_top);
+        let shown = rows.iter().skip(self.problems_top());
         let ask = self
             .hover
             .filter(|h| screen.contains(h.0, h.1))
@@ -14338,7 +14351,7 @@ impl App {
             return;
         };
         let rows = self.problem_rows();
-        let picked = rows.get(self.dock.problems_top + row as usize);
+        let picked = rows.get(self.problems_top() + row as usize);
         if let Some(ProblemRow::Item(file, problem)) = picked {
             let line = problem.line + 1;
             if self.open(file).is_ok() {
@@ -14358,7 +14371,7 @@ impl App {
             return;
         }
         self.dock.problems = true;
-        self.dock.problems_top = 0;
+        self.dock.tops.set(Front::Problems, 0);
         self.dock.open = true;
         self.dock.front = Front::Problems;
         self.dock.focused = false;
@@ -18658,7 +18671,12 @@ mod tests {
         let (dir, mut app) = project();
         app.in_pane = true;
         app.open(&dir.path().join("alpha.txt")).unwrap();
-        app.run(Command::ShowComments);
+        // More comments than fit, so there's somewhere to scroll to.
+        for note in 0..12 {
+            app.run(Command::AddComment);
+            typed(&mut app, &format!("Note {note}"));
+            enter(&mut app);
+        }
         let area = app.dock_area().expect("the comments are open");
         let (x, y) = (area.x + area.w / 2, area.y + area.h / 2);
         // The mod's wheel has no position, as Claude Code's scroll event gives none.
@@ -18673,11 +18691,90 @@ mod tests {
         app.handle(mouse(MouseKind::Move, x, y));
         app.handle(wheel.clone());
         app.handle(wheel.clone());
-        assert_eq!(app.dock.comments_top, 6);
+        assert_eq!(app.dock.tops.of(Front::Comments), 6);
         // Back over the file, it scrolls the file again.
         app.handle(mouse(MouseKind::Move, 2, 3));
         app.handle(wheel);
-        assert_eq!(app.dock.comments_top, 6);
+        assert_eq!(app.dock.tops.of(Front::Comments), 6);
+    }
+
+    #[test]
+    fn every_list_in_the_pane_scrolls_to_its_end_and_stops_there() {
+        let (dir, mut app) = project();
+        let file = dir.path().join("alpha.txt");
+        app.open(&file).unwrap();
+        // A long way down, then one notch back: at its end the last row shows, and the
+        // notch back moves it at once, so it never went past.
+        let to_the_end = |app: &mut App, view: Front| {
+            assert_eq!(app.dock.front, view);
+            let area = app.dock_area().expect("the pane is open");
+            let (x, y) = (area.x + area.w / 2, area.y + area.h / 2);
+            for _ in 0..200 {
+                app.handle(mouse(MouseKind::ScrollDown, x, y));
+            }
+            let end = app.dock.tops.of(view);
+            let text = screen(app).text();
+            app.handle(mouse(MouseKind::ScrollUp, x, y));
+            assert!(app.dock.tops.of(view) < end, "{view:?} stopped at its end");
+            assert!(end > 0, "{view:?} scrolled");
+            text
+        };
+
+        // The agents, with more worktrees than fit.
+        app.run(Command::ListAgents);
+        app.agents.worktrees = (0..40)
+            .map(|tree| cellix_review::Worktree {
+                path: dir.path().join(format!("tree-{tree}")),
+                branch: format!("claude/tree-{tree}"),
+                changes: 0,
+            })
+            .collect();
+        assert!(!screen(&app).text().contains("claude/tree-39"));
+        let text = to_the_end(&mut app, Front::Agents);
+        assert!(text.contains("claude/tree-39"), "{text}");
+
+        // What a build said.
+        app.dock.log = (0..200).map(|line| format!("built part {line}")).collect();
+        app.dock.front = Front::Log;
+        let text = to_the_end(&mut app, Front::Log);
+        assert!(text.contains("built part 199"), "{text}");
+
+        // The problems.
+        let problems = (0..80).map(|line| Diagnostic {
+            line,
+            column: 0,
+            message: format!("Broken thing {line}"),
+            severity: 1,
+        });
+        app.diagnostics.insert(file.clone(), problems.collect());
+        app.dock.problems = true;
+        app.dock.front = Front::Problems;
+        let text = to_the_end(&mut app, Front::Problems);
+        assert!(text.contains("Broken thing 79"), "{text}");
+
+        // The inbox, newest first.
+        for job in 0..30 {
+            app.inbox.note(Waiting {
+                kind: Waits::Finished,
+                key: format!("job-{job}"),
+                title: format!("Finished job {job:02}"),
+                detail: String::new(),
+                since: std::time::Instant::now() + std::time::Duration::from_secs(job),
+                target: WaitTarget::Tests,
+            });
+        }
+        app.run(Command::ShowInbox);
+        let text = to_the_end(&mut app, Front::Inbox);
+        assert!(text.contains("Finished job 00"), "{text}");
+
+        // The comments.
+        for note in 0..12 {
+            app.run(Command::AddComment);
+            typed(&mut app, &format!("Note {note}"));
+            enter(&mut app);
+        }
+        let text = to_the_end(&mut app, Front::Comments);
+        assert!(text.contains("Note 11") && text.contains("Reply"), "{text}");
     }
 
     #[test]
