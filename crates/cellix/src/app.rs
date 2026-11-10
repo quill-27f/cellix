@@ -1097,8 +1097,12 @@ pub struct App {
     /// Stands in for asking the machine, in tests.
     #[cfg(test)]
     linger_answer: Option<bool>,
-    /// What was last written of the tabs and unsaved edits, so it's written when it changes.
+    /// A mark of what was last written of the tabs and unsaved edits, so it's written when
+    /// it changes.
     kept_state: std::cell::Cell<u64>,
+    /// How many times the tabs and unsaved edits were gathered to be written.
+    #[cfg(test)]
+    state_copies: std::cell::Cell<usize>,
     /// The pane had the window when the last run here ended, so it takes it again once
     /// what ran in it is back.
     kept_maximized: bool,
@@ -1259,6 +1263,8 @@ impl App {
             #[cfg(test)]
             linger_answer: None,
             kept_state: std::cell::Cell::new(0),
+            #[cfg(test)]
+            state_copies: std::cell::Cell::new(0),
             kept_maximized: false,
             kept_session: None,
             kernels: HashMap::new(),
@@ -10084,26 +10090,53 @@ impl App {
         Kept {
             files,
             active: (!self.editors.is_empty()).then(|| self.active()),
-            pane: KeptPane {
-                width: self.dock.width,
-                height: self.dock.height,
-                under: self.dock.under,
-                maximized: self.maximized == Some(Maximized::Pane) && self.dock.open,
-                session: self.dock.session().and_then(Session::kept_as),
-            },
+            pane: self.kept_pane(),
         }
+    }
+
+    fn kept_pane(&self) -> KeptPane {
+        KeptPane {
+            width: self.dock.width,
+            height: self.dock.height,
+            under: self.dock.under,
+            maximized: self.maximized == Some(Maximized::Pane) && self.dock.open,
+            session: self.dock.session().and_then(Session::kept_as),
+        }
+    }
+
+    /// A number that changes when what `state` gathers would, and costs next to nothing: a
+    /// buffer's revision stands for its text. This is asked twice a second, and gathering
+    /// the state itself copies every unsaved file and reads each of them from disk.
+    fn state_mark(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut mark = std::collections::hash_map::DefaultHasher::new();
+        for editor in &self.editors {
+            let Some(path) = editor.buffer.path() else {
+                continue;
+            };
+            let unsaved = editor.buffer.is_dirty() && !self.discarded;
+            let text = unsaved.then(|| editor.buffer.revision());
+            let place = (editor.selections.primary().head, editor.top);
+            (path, place, text).hash(&mut mark);
+        }
+        (self.editors.len(), self.active()).hash(&mut mark);
+        serde_json::to_vec(&self.kept_pane())
+            .unwrap_or_default()
+            .hash(&mut mark);
+        mark.finish()
     }
 
     /// Writes the open tabs and unsaved edits when they've changed since last time.
     pub fn keep_state(&self) {
-        let state = self.state();
-        let Ok(json) = serde_json::to_vec(&state) else {
-            return;
-        };
-        let hash = fnv_bytes(&json);
-        if self.kept_state.replace(hash) == hash {
+        let mark = self.state_mark();
+        if self.kept_state.replace(mark) == mark {
             return;
         }
+        #[cfg(test)]
+        self.state_copies.set(self.state_copies.get() + 1);
+        let Ok(json) = serde_json::to_vec(&self.state()) else {
+            return;
+        };
         let file = self.state_file();
         if let Some(folder) = file.parent() {
             let _ = std::fs::create_dir_all(folder);
@@ -10157,9 +10190,7 @@ impl App {
             self.set_active(*index);
         }
         // What came back is what's kept, so nothing is written until something changes.
-        if let Ok(json) = serde_json::to_vec(&self.state()) {
-            self.kept_state.set(fnv_bytes(&json));
-        }
+        self.kept_state.set(self.state_mark());
         if unsaved > 0 {
             let files = if unsaved == 1 { "file" } else { "files" };
             self.say(format!(
@@ -17247,6 +17278,30 @@ mod tests {
         assert!(third.dock.under);
         assert_eq!(third.dock_area(), Some(taller));
         let _ = fs::remove_dir_all(crate::hold::folder_of(&root));
+    }
+
+    #[test]
+    fn unsaved_text_is_gathered_for_keeping_only_when_something_changed() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        typed(&mut app, "EDIT ");
+        app.keep_state();
+        let gathered = app.state_copies.get();
+        assert!(gathered > 0);
+        // Twice a second with nothing new: the unsaved file isn't copied or read again.
+        for _ in 0..6 {
+            app.handle(Event::Tick);
+        }
+        assert_eq!(app.state_copies.get(), gathered);
+        // An edit, and then only moving the caret, are each kept.
+        typed(&mut app, "MORE ");
+        app.handle(Event::Tick);
+        assert_eq!(app.state_copies.get(), gathered + 1);
+        let kept = fs::read_to_string(app.state_file()).unwrap();
+        assert!(kept.contains("EDIT MORE "), "{kept}");
+        app.handle(Event::Key(KeyEvent::plain(Key::Right)));
+        app.handle(Event::Tick);
+        assert_eq!(app.state_copies.get(), gathered + 2);
     }
 
     #[test]

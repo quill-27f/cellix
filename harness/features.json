@@ -4667,5 +4667,12 @@
     "title": "Every list in the side pane (agents and worktrees, comments, problems, the build log, the inbox) scrolls with the wheel through one mechanism, to its last row and no further",
     "test": "every_list_in_the_pane_scrolls_to_its_end_and_stops_there",
     "passes": true
+  },
+  {
+    "id": "state-kept-without-copying",
+    "milestone": 12,
+    "title": "Twice a second Cellix checks whether tabs and unsaved edits need keeping from a cheap mark (each buffer's revision), instead of copying every unsaved file and reading it from disk",
+    "test": "unsaved_text_is_gathered_for_keeping_only_when_something_changed",
+    "passes": true
   }
 ]
