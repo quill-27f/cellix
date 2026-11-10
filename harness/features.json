@@ -4639,5 +4639,12 @@
     "title": "A picture copied on the local machine pastes into Cellix over SSH through the terminal's paste events (Kitty clipboard protocol, Ghostty 1.4 and kitty): kept in the project and pasted as its path, or beside the document on a page",
     "test": "a_picture_pasted_from_the_terminals_clipboard_lands_in_the_project",
     "passes": true
+  },
+  {
+    "id": "long-machine-name-gives-way",
+    "milestone": 12,
+    "title": "A machine name too long for the workspaces bar gives way rather than covering its tiles, New Workspace or Resume",
+    "test": "a_long_machine_name_leaves_the_bar_its_buttons",
+    "passes": true
   }
 ]

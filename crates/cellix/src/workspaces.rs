@@ -505,25 +505,39 @@ impl Workspaces {
         (spans, x)
     }
 
-    /// Where the machine's name starts: ending where the status bar's last words end.
-    fn machine_x(&self) -> f32 {
-        f32::from(self.size.0) - 1.0 - self.text_width(&self.machine)
+    /// Where the machine's name starts: ending where the status bar's last words end. None
+    /// when it would reach the tiles, New Workspace or Resume: a long name, as some machines
+    /// have, gives way rather than covering them.
+    fn machine_x(&self) -> Option<f32> {
+        let x = f32::from(self.size.0) - 1.0 - self.text_width(&self.machine);
+        let resume = self
+            .resume_label()
+            .map_or(0.0, |l| self.resume_width(&l) + 1.5);
+        let (_, new_end) = self.new_button();
+        (x - resume >= new_end + 1.5).then_some(x)
     }
 
-    /// The Resume button's place at the right, when something stopped: its start and label.
-    fn resume_button(&self) -> Option<(f32, String)> {
+    /// What the Resume button says, when something stopped.
+    fn resume_label(&self) -> Option<String> {
         let stopped = self.stopped();
         if stopped == 0 {
             return None;
         }
         let what = if stopped == 1 { "Session" } else { "Sessions" };
-        let label = format!("Resume {stopped} {what}");
-        let width = self.room(PAD)
-            + self.room(MARK)
-            + self.room(GAP)
-            + self.text_width(&label)
-            + self.room(PAD);
-        let right = self.machine_x() - 1.5;
+        Some(format!("Resume {stopped} {what}"))
+    }
+
+    fn resume_width(&self, label: &str) -> f32 {
+        self.room(PAD) + self.room(MARK) + self.room(GAP) + self.text_width(label) + self.room(PAD)
+    }
+
+    /// The Resume button's place at the right, when something stopped: its start and label.
+    fn resume_button(&self) -> Option<(f32, String)> {
+        let label = self.resume_label()?;
+        let width = self.resume_width(&label);
+        let right = self
+            .machine_x()
+            .map_or(f32::from(self.size.0) - 1.0, |x| x - 1.5);
         Some(((right - width).floor(), label))
     }
 
@@ -683,13 +697,9 @@ impl Workspaces {
             fg: theme.gutter.fg,
             ..base
         };
-        label(
-            grid,
-            (self.machine_x(), y),
-            &self.machine,
-            machine_style,
-            right,
-        );
+        if let Some(x) = self.machine_x() {
+            label(grid, (x, y), &self.machine, machine_style, right);
+        }
         if let Some((start, text)) = self.resume_button() {
             let width = self.room(PAD)
                 + self.room(MARK)
@@ -1248,6 +1258,37 @@ mod tests {
         let (x, _) = spot(&grid, 29, "infra");
         click(&mut spaces, MouseKind::Left, (x, 31));
         assert_eq!(spaces.active, 1);
+    }
+
+    /// Some machines have long names, as CI's Macs do: the name gives way rather than
+    /// covering New Workspace, which a click needs to find.
+    #[test]
+    fn a_long_machine_name_leaves_the_bar_its_buttons() {
+        let (_dir, first, second) = projects();
+        let start: Starter = Box::new(|root, size| Workspace {
+            app: App::new(root, size),
+            server: None,
+        });
+        let long = "Mac-1762900000-iad20-gt1021-0ace7a96-99fb-47be-b5dc-271f74ee0e80".to_string();
+        let mut spaces = Workspaces::new((100, 30), long.clone(), start);
+        spaces.open(first);
+        spaces.open(second);
+        let row = bar(&spaces);
+        assert!(row.contains("+ New Workspace"), "{row}");
+        assert!(!row.contains("iad20"), "the name gives way: {row}");
+        // A short one, with room, still shows.
+        assert!(spaces_named("dev-box").contains("dev-box"));
+    }
+
+    fn spaces_named(machine: &str) -> String {
+        let (_dir, first, _) = projects();
+        let start: Starter = Box::new(|root, size| Workspace {
+            app: App::new(root, size),
+            server: None,
+        });
+        let mut spaces = Workspaces::new((100, 30), machine.to_string(), start);
+        spaces.open(first);
+        bar(&spaces)
     }
 
     #[test]
