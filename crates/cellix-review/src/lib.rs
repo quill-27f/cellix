@@ -15,8 +15,8 @@ pub use diff::{
 };
 pub use git::{
     Branch, Change, Entry, Worktree, ahead_behind, blame_line, branches, changed_files, commit,
-    create_branch, current_branch, discard, has_remote, head_text, index_text, numstat, publish,
-    pull, push, stage, stage_patch, staged_count, status_entries, switch_branch, unstage,
+    create_branch, current_branch, discard, has_remote, head, head_text, index_text, numstat,
+    publish, pull, push, stage, stage_patch, staged_count, status_entries, switch_branch, unstage,
     worktrees,
 };
 pub use history::{

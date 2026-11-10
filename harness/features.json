@@ -4674,5 +4674,12 @@
     "title": "Twice a second Cellix checks whether tabs and unsaved edits need keeping from a cheap mark (each buffer's revision), instead of copying every unsaved file and reading it from disk",
     "test": "unsaved_text_is_gathered_for_keeping_only_when_something_changed",
     "passes": true
+  },
+  {
+    "id": "committed-text-read-when-head-moves",
+    "milestone": 12,
+    "title": "The regular look at the disk reads each open file's committed text only when HEAD or the set of open files has changed, instead of a git show for every tab every two seconds",
+    "test": "committed_text_is_read_again_only_when_the_commit_or_the_tabs_change",
+    "passes": true
   }
 ]

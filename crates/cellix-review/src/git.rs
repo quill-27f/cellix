@@ -403,6 +403,12 @@ pub fn commit(root: &Path, message: &str) -> Result<String, String> {
     }
 }
 
+/// The commit HEAD is at. None before the first commit, and outside a repository.
+pub fn head(root: &Path) -> Option<String> {
+    let hash = git(root, &["rev-parse", "--verify", "-q", "HEAD"])?;
+    Some(hash.trim().to_string())
+}
+
 /// The file as committed, or empty if it's new.
 pub fn head_text(root: &Path, path: &Path) -> String {
     let spec = format!("HEAD:./{}", path.display());

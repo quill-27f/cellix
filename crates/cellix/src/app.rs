@@ -651,8 +651,33 @@ struct DiskLook {
     /// Each changed file and folder, by git's letter: worked out here, since a repository
     /// can hold hundreds of thousands of untracked files.
     status: HashMap<PathBuf, char>,
-    /// Each open file as it was last committed.
-    committed: Vec<(PathBuf, String)>,
+    /// Each open file as it was last committed, when that was read, and what it was read
+    /// for.
+    committed: Option<Vec<(PathBuf, String)>>,
+    read_at: ReadAt,
+}
+
+/// The commit and the open files that committed text was read for. While neither changes,
+/// nor does the text.
+type ReadAt = (Option<String>, Vec<PathBuf>);
+
+/// Each open file as HEAD has it, and what that was read for. Nothing is read when HEAD and
+/// the open files are as `known` has them: it's a `git show` for every tab, and this is
+/// asked every couple of seconds.
+fn committed_texts(
+    root: &Path,
+    opened: Vec<PathBuf>,
+    known: Option<&ReadAt>,
+) -> (ReadAt, Option<Vec<(PathBuf, String)>>) {
+    let at = (cellix_review::head(root), opened);
+    if known == Some(&at) {
+        return (at, None);
+    }
+    let inside = |path: &PathBuf| path.strip_prefix(root).unwrap_or(path).to_path_buf();
+    let texts = at.1.iter();
+    let texts = texts.map(|path| (path.clone(), head_text(root, &inside(path))));
+    let texts = texts.collect();
+    (at, Some(texts))
 }
 
 /// A question with buttons, for the keyboard or the mouse.
@@ -1067,6 +1092,8 @@ pub struct App {
     source_age: u32,
     /// The periodic look at the tree and git, on its way.
     disk_look: Option<std::sync::mpsc::Receiver<DiskLook>>,
+    /// The commit and files the open files' committed text was last read for.
+    committed_at: Option<ReadAt>,
     search: Search,
     /// In the compact layout, whether the sidebar is open over the code.
     drawer: bool,
@@ -1346,6 +1373,7 @@ impl App {
             context: ContextPanel::default(),
             source_age: 0,
             disk_look: None,
+            committed_at: None,
             search,
             drawer: false,
             workflow: workflow::State::default(),
@@ -4034,18 +4062,17 @@ impl App {
         let workspace = self.workspace.clone();
         let opened = self.editors.iter().filter_map(|e| e.buffer.path());
         let opened: Vec<PathBuf> = opened.map(Path::to_path_buf).collect();
+        let known = self.committed_at.clone();
         let (done, look) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let root = workspace.root();
-            let inside = |path: &PathBuf| path.strip_prefix(root).unwrap_or(path).to_path_buf();
+            let (read_at, committed) = committed_texts(root, opened, known.as_ref());
             let _ = done.send(DiskLook {
                 entries: workspace.entries(),
                 branch: current_branch(root),
                 status: status_of(root, &changed_files(root)),
-                committed: opened
-                    .iter()
-                    .map(|path| (path.clone(), head_text(root, &inside(path))))
-                    .collect(),
+                committed,
+                read_at,
             });
         });
         self.disk_look = Some(look);
@@ -4072,7 +4099,10 @@ impl App {
         self.explorer.status = status;
         self.branch = look.branch;
         let mut committed = false;
-        for (path, text) in look.committed {
+        if look.committed.is_some() {
+            self.committed_at = Some(look.read_at);
+        }
+        for (path, text) in look.committed.unwrap_or_default() {
             let same = |e: &&mut Editor| e.buffer.path() == Some(path.as_path());
             let text = (!text.is_empty()).then_some(text);
             if let Some(editor) = self.editors.iter_mut().find(same)
@@ -15777,6 +15807,34 @@ mod tests {
         assert!(screen(&app).text().contains("gamma.txt"));
     }
 
+    #[test]
+    fn committed_text_is_read_again_only_when_the_commit_or_the_tabs_change() {
+        let (dir, mut app) = reviewed();
+        let root = app.workspace.root().to_path_buf();
+        let alpha = root.join("alpha.txt");
+        let opened = vec![alpha.clone()];
+        let (at, texts) = committed_texts(&root, opened.clone(), None);
+        let texts = texts.expect("read the first time");
+        assert_eq!(texts[0].1, "first line\nsecond line\n");
+        // Asked again with nothing committed since: no `git show` at all.
+        let (again, texts) = committed_texts(&root, opened.clone(), Some(&at));
+        assert!(texts.is_none() && again == at);
+        // Another tab, and then a commit, are each read for.
+        let both = vec![alpha.clone(), root.join("beta.rs")];
+        assert!(committed_texts(&root, both, Some(&at)).1.is_some());
+
+        app.open(&alpha).unwrap();
+        settle_disk(&mut app);
+        git(dir.path(), &["commit", "-q", "-am", "an agent's commit"]);
+        let (_, texts) = committed_texts(&root, opened, Some(&at));
+        assert_eq!(texts.unwrap()[0].1, "first line\nCHANGED\n");
+        // And the open file's margin follows the commit on the next look.
+        app.look_at_disk();
+        settle_disk(&mut app);
+        let committed = app.editors[app.active()].committed.as_deref();
+        assert_eq!(committed, Some("first line\nCHANGED\n"));
+    }
+
     /// `git status` in a repository with a great many untracked files takes seconds, and
     /// Cellix used to wait for it before its first frame: the pane said "Starting Cellix…".
     #[test]
@@ -17181,6 +17239,30 @@ mod tests {
     }
 
     #[test]
+    fn unsaved_text_is_gathered_for_keeping_only_when_something_changed() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        typed(&mut app, "EDIT ");
+        app.keep_state();
+        let gathered = app.state_copies.get();
+        assert!(gathered > 0);
+        // Twice a second with nothing new: the unsaved file isn't copied or read again.
+        for _ in 0..6 {
+            app.handle(Event::Tick);
+        }
+        assert_eq!(app.state_copies.get(), gathered);
+        // An edit, and then only moving the caret, are each kept.
+        typed(&mut app, "MORE ");
+        app.handle(Event::Tick);
+        assert_eq!(app.state_copies.get(), gathered + 1);
+        let kept = fs::read_to_string(app.state_file()).unwrap();
+        assert!(kept.contains("EDIT MORE "), "{kept}");
+        app.handle(Event::Key(KeyEvent::plain(Key::Right)));
+        app.handle(Event::Tick);
+        assert_eq!(app.state_copies.get(), gathered + 2);
+    }
+
+    #[test]
     fn tabs_and_unsaved_edits_come_back_in_the_next_run() {
         let (dir, mut app) = project();
         let root = dir.path().to_path_buf();
@@ -17278,30 +17360,6 @@ mod tests {
         assert!(third.dock.under);
         assert_eq!(third.dock_area(), Some(taller));
         let _ = fs::remove_dir_all(crate::hold::folder_of(&root));
-    }
-
-    #[test]
-    fn unsaved_text_is_gathered_for_keeping_only_when_something_changed() {
-        let (dir, mut app) = project();
-        app.open(&dir.path().join("alpha.txt")).unwrap();
-        typed(&mut app, "EDIT ");
-        app.keep_state();
-        let gathered = app.state_copies.get();
-        assert!(gathered > 0);
-        // Twice a second with nothing new: the unsaved file isn't copied or read again.
-        for _ in 0..6 {
-            app.handle(Event::Tick);
-        }
-        assert_eq!(app.state_copies.get(), gathered);
-        // An edit, and then only moving the caret, are each kept.
-        typed(&mut app, "MORE ");
-        app.handle(Event::Tick);
-        assert_eq!(app.state_copies.get(), gathered + 1);
-        let kept = fs::read_to_string(app.state_file()).unwrap();
-        assert!(kept.contains("EDIT MORE "), "{kept}");
-        app.handle(Event::Key(KeyEvent::plain(Key::Right)));
-        app.handle(Event::Tick);
-        assert_eq!(app.state_copies.get(), gathered + 2);
     }
 
     #[test]
