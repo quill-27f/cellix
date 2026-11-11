@@ -4702,5 +4702,19 @@
     "title": "Cellix ends when its terminal has gone even though no hang-up reached it, instead of reading the closed terminal for ever at a full core",
     "test": "a_terminal_that_goes_without_a_hang_up_still_ends_cellix",
     "passes": true
+  },
+  {
+    "id": "tables-keep-to-the-page",
+    "milestone": 12,
+    "title": "A table in a Markdown or LaTeX page is no wider than the page: columns share its width and a cell's text wraps onto rows of its own, a word longer than a column's share is broken, and a table with too many columns to fit is cut at the pane's edge instead of drawing over the side pane",
+    "test": "a_wide_table_wraps_inside_the_page_and_stops_at_the_panes_edge",
+    "passes": true
+  },
+  {
+    "id": "caret-in-wrapped-table-cells",
+    "milestone": 12,
+    "title": "The caret, clicks, Up and Down, Enter and selecting a cell work in a table cell whose text wraps over several rows",
+    "test": "the_caret_finds_its_way_through_a_wrapped_cell",
+    "passes": true
   }
 ]

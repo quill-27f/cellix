@@ -917,7 +917,7 @@ impl Page<'_, '_> {
             starts.push(cell_starts);
             places.push((index, offset + chars.len()));
         }
-        place_table(parsed, starts, &places, &aligns, self.rows);
+        place_table(parsed, starts, &places, (&aligns, self.width), self.rows);
     }
 
     fn title_block(&mut self, index: usize) {

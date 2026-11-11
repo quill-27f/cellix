@@ -174,6 +174,9 @@ pub struct TableRow {
     /// Where an empty cell's caret stands in each column, which alignment moves.
     pub carets: Vec<f32>,
     pub header: bool,
+    /// Which row of its source line this is. A cell whose text doesn't fit its column runs
+    /// on under itself, so a line of the table can take several rows of the page.
+    pub part: usize,
 }
 
 /// One screen row of the page.
@@ -968,7 +971,10 @@ fn wrap(template: Row, glyphs: Vec<Glyph>, lead: f32, width: f32, rows: &mut Vec
     let mut current: Vec<Glyph> = Vec::new();
     let mut x = 0.0;
     for mut g in glyphs {
-        if x + g.advance > width && !current.is_empty() {
+        // A space that doesn't fit stays at its row's end, past the edge, where it doesn't
+        // show: at the start of the next row it would set that row in by a space.
+        let hangs = g.ch == ' ' && g.at.is_some();
+        if x + g.advance > width && !current.is_empty() && !hangs {
             let cut = current
                 .iter()
                 .rposition(|g| g.ch == ' ' && g.at.is_some())
@@ -1042,8 +1048,15 @@ fn is_table_rule(line: &str) -> bool {
     text.contains('-') && text.contains('|') && text.chars().all(|c| "|-: ".contains(c))
 }
 
-/// Lays out a table with its pipes and rule hidden: real columns, with padding.
-fn table(lines: &[(usize, &str)], first: usize, context: &Context, rows: &mut Vec<Row>) {
+/// Lays out a table with its pipes and rule hidden: real columns, with padding, no wider
+/// together than `width` when their words allow it.
+fn table(
+    lines: &[(usize, &str)],
+    first: usize,
+    width: f32,
+    context: &Context,
+    rows: &mut Vec<Row>,
+) {
     let mut parsed: Vec<Vec<Vec<Glyph>>> = Vec::new();
     let mut starts: Vec<Vec<usize>> = Vec::new();
     for (index, (offset, line)) in lines.iter().enumerate() {
@@ -1088,28 +1101,68 @@ fn table(lines: &[(usize, &str)], first: usize, context: &Context, rows: &mut Ve
             _ => 'l',
         })
         .collect();
-    place_table(parsed, starts, &places, &aligns, rows);
+    place_table(parsed, starts, &places, (&aligns, width), rows);
 }
 
-/// Sets a table's cells in columns. Each row has its line and where that line ends.
+/// Space between a table cell's edge and its text, in cells.
+const CELL_PADDING: f32 = 1.0;
+/// The least a table's column holds, in cells of text.
+const NARROWEST_COLUMN: f32 = 3.0;
+
+/// How wide each column of a table is, text only, for a table `width` wide in all. Each
+/// gets what its longest cell needs when they all fit. When they don't, each keeps room for
+/// its longest word and they share what's left by how much more they wanted, so cells wrap
+/// rather than the table running off the page. A word longer than a column's even share of
+/// the page, as a link can be, is broken rather than widen the table for every row. Only a
+/// table with more columns than the page has room for at their narrowest is left wider.
+fn column_widths(parsed: &[Vec<Vec<Glyph>>], count: usize, width: f32) -> Vec<f32> {
+    let cells = |c: usize| parsed.iter().filter_map(move |row| row.get(c));
+    let wanted: Vec<f32> = (0..count)
+        .map(|c| {
+            let widths = cells(c).map(|cell| cell.iter().map(|g| g.advance).sum::<f32>());
+            widths.fold(NARROWEST_COLUMN, f32::max).ceil()
+        })
+        .collect();
+    let room = width - count as f32 * CELL_PADDING * 2.0;
+    if wanted.iter().sum::<f32>() <= room {
+        return wanted;
+    }
+    let even = (room / count.max(1) as f32).floor().max(NARROWEST_COLUMN);
+    let least: Vec<f32> = (0..count)
+        .map(|c| {
+            let words = cells(c).flat_map(|cell| cell.split(|g| g.ch == ' ' && g.at.is_some()));
+            let widths = words.map(|word| word.iter().map(|g| g.advance).sum::<f32>());
+            let longest = widths.fold(NARROWEST_COLUMN, f32::max).ceil();
+            longest.min(even).min(wanted[c])
+        })
+        .collect();
+    let (least_all, wanted_all) = (least.iter().sum::<f32>(), wanted.iter().sum::<f32>());
+    if least_all >= room {
+        return least;
+    }
+    let share = (room - least_all) / (wanted_all - least_all);
+    let shared = least.iter().zip(&wanted);
+    shared
+        .map(|(least, wanted)| (least + (wanted - least) * share).floor())
+        .collect()
+}
+
+/// Sets a table's cells in columns, no wider together than `width` when their words allow
+/// it: a cell with more than fits its column runs on under itself, and its line of the
+/// table takes as many rows as its longest cell. Each line has its place in the source and
+/// where that line ends.
 fn place_table(
     parsed: Vec<Vec<Vec<Glyph>>>,
     starts: Vec<Vec<usize>>,
     places: &[(usize, usize)],
-    aligns: &[char],
+    (aligns, width): (&[char], f32),
     rows: &mut Vec<Row>,
 ) {
-    /// Space between a cell's edge and its text, in cells.
-    const PADDING: f32 = 1.0;
     let count = parsed.iter().map(Vec::len).max().unwrap_or(0);
+    let widths = column_widths(&parsed, count, width);
     let mut columns = vec![0.0f32];
     for c in 0..count {
-        let widest = parsed
-            .iter()
-            .filter_map(|r| r.get(c))
-            .map(|cell| cell.iter().map(|g| g.advance).sum::<f32>())
-            .fold(3.0f32, f32::max);
-        columns.push(columns[c] + widest.ceil() + PADDING * 2.0);
+        columns.push(columns[c] + widths[c] + CELL_PADDING * 2.0);
     }
     let shift = |c: usize, room: f32| match aligns.get(c) {
         Some('r') => room,
@@ -1117,26 +1170,10 @@ fn place_table(
         _ => 0.0,
     };
     let carets: Vec<f32> = (0..count)
-        .map(|c| columns[c] + PADDING + shift(c, columns[c + 1] - columns[c] - PADDING * 2.0))
+        .map(|c| columns[c] + CELL_PADDING + shift(c, widths[c]))
         .collect();
-    for (index, cells) in parsed.iter().enumerate() {
+    for (index, cells) in parsed.into_iter().enumerate() {
         let (line, line_end) = places[index];
-        let mut glyphs = Vec::new();
-        for (c, left) in columns.iter().take(count).enumerate() {
-            if c > 0 {
-                let mut bar = decoration("│", Tone::TableLine);
-                bar[0].x = *left;
-                bar[0].advance = 1.0;
-                glyphs.extend(bar);
-            }
-            let width: f32 = cells.get(c).into_iter().flatten().map(|g| g.advance).sum();
-            let room = (columns[c + 1] - left - PADDING * 2.0 - width).max(0.0);
-            let mut x = left + PADDING + shift(c, room);
-            for g in cells.get(c).into_iter().flatten() {
-                glyphs.push(Glyph { x, ..*g });
-                x += g.advance;
-            }
-        }
         // The row runs to its last cell, written in or not, and never past the closing bar.
         let written = cells.iter().flatten().filter_map(|g| g.at).max();
         let end = written
@@ -1145,17 +1182,49 @@ fn place_table(
             .chain(starts[index].last().copied())
             .max()
             .unwrap_or(line_end);
-        rows.push(Row {
-            glyphs,
-            cells: starts[index].clone(),
-            lead: PADDING,
-            table: Some(TableRow {
-                columns: columns.clone(),
-                carets: carets.clone(),
-                header: index == 0,
-            }),
-            ..Row::new(line, end)
-        });
+        // Each cell's text, set in rows no wider than its column.
+        let set: Vec<Vec<Vec<Glyph>>> = cells
+            .into_iter()
+            .enumerate()
+            .map(|(c, cell)| {
+                let mut within = Vec::new();
+                wrap(Row::new(line, end), cell, 0.0, widths[c], &mut within);
+                within.into_iter().map(|row| row.glyphs).collect()
+            })
+            .collect();
+        let parts = set.iter().map(Vec::len).max().unwrap_or(1).max(1);
+        for part in 0..parts {
+            let mut glyphs = Vec::new();
+            for (c, left) in columns.iter().take(count).enumerate() {
+                if c > 0 {
+                    let mut bar = decoration("│", Tone::TableLine);
+                    bar[0].x = *left;
+                    bar[0].advance = 1.0;
+                    glyphs.extend(bar);
+                }
+                let Some(text) = set.get(c).and_then(|cell| cell.get(part)) else {
+                    continue;
+                };
+                // The space a row was broken at stands past its words, and isn't weighed.
+                let spaces = text.iter().rev().take_while(|g| g.ch == ' ').count();
+                let shown = &text[..text.len() - spaces];
+                let used: f32 = shown.iter().map(|g| g.advance).sum();
+                let at = left + CELL_PADDING + shift(c, (widths[c] - used).max(0.0));
+                glyphs.extend(text.iter().map(|g| Glyph { x: at + g.x, ..*g }));
+            }
+            rows.push(Row {
+                glyphs,
+                cells: starts[index].clone(),
+                lead: CELL_PADDING,
+                table: Some(TableRow {
+                    columns: columns.clone(),
+                    carets: carets.clone(),
+                    header: index == 0,
+                    part,
+                }),
+                ..Row::new(line, end)
+            });
+        }
     }
 }
 
@@ -1904,7 +1973,7 @@ pub fn layout_with(
             let end = (i + 2..lines.len())
                 .find(|n| !lines[*n].1.contains('|'))
                 .unwrap_or(lines.len());
-            table(&lines[i..end], i, &context, &mut rows);
+            table(&lines[i..end], i, width, &context, &mut rows);
             i = end;
             continue;
         }
@@ -2204,11 +2273,82 @@ pub fn locate(rows: &[Row], pos: usize) -> (usize, f32) {
             pos < row.end
         };
         if row.stop && inside {
-            return (index, row.caret_x(pos));
+            let index = table_part(rows, index, pos);
+            return (index, rows[index].caret_x(pos));
         }
     }
     let last = rows.iter().rposition(|r| r.stop).unwrap_or(0);
     (last, rows.get(last).map_or(0.0, |r| r.caret_x(usize::MAX)))
+}
+
+/// The rows a table's source line stands on, given any one of them.
+fn table_parts(rows: &[Row], index: usize) -> std::ops::Range<usize> {
+    let line = rows[index].line;
+    let same = |r: &Row| r.line == line && r.table.is_some();
+    if !same(&rows[index]) {
+        return index..index + 1;
+    }
+    let first = (0..index)
+        .rev()
+        .take_while(|i| same(&rows[*i]))
+        .last()
+        .unwrap_or(index);
+    let after = rows[index..].iter().take_while(|r| same(r)).count();
+    first..index + after
+}
+
+/// The places of the source a row shows from one of its cells.
+fn cell_places(row: &Row, cell: usize) -> impl Iterator<Item = usize> + '_ {
+    let start = row.cells[cell];
+    let end = row.cells.get(cell + 1).copied().unwrap_or(usize::MAX);
+    let places = row.glyphs.iter().filter_map(|g| g.at);
+    places.filter(move |at| (start..end).contains(at))
+}
+
+/// Which row of a table's line holds `pos`, given the line's first: the first whose share of
+/// the cell reaches it, or for the cell's end, the last with any of the cell on it.
+fn table_part(rows: &[Row], first: usize, pos: usize) -> usize {
+    let row = &rows[first];
+    if row.table.is_none() {
+        return first;
+    }
+    let Some(cell) = row.cell_holding(pos) else {
+        return first;
+    };
+    let mut last = first;
+    for index in table_parts(rows, first) {
+        let mut places = cell_places(&rows[index], cell).peekable();
+        if places.peek().is_none() {
+            continue;
+        }
+        last = index;
+        if places.any(|at| at >= pos) {
+            return index;
+        }
+    }
+    last
+}
+
+/// The source position nearest a column of a row. On a row of a table where the cell under
+/// that column has run out of text, it's the end of that cell's text, which is above.
+pub fn position_in(rows: &[Row], index: usize, column: f32) -> usize {
+    let row = &rows[index];
+    let Some(cell) = blank_cell(row, column) else {
+        return row.position_at(column);
+    };
+    let above = table_parts(rows, index).start..index;
+    let ends = above.filter_map(|i| cell_places(&rows[i], cell).max());
+    ends.max().map_or(row.cells[cell], |at| at + 1)
+}
+
+/// The cell under a column, when this row is a later row of its table line and that cell
+/// shows nothing on it.
+fn blank_cell(row: &Row, column: f32) -> Option<usize> {
+    let table = row.table.as_ref().filter(|t| t.part > 0)?;
+    let last = table.columns.len().checked_sub(2)?;
+    let cell = table.columns.iter().rposition(|x| *x <= column)?.min(last);
+    let cell = cell.min(row.cells.len().checked_sub(1)?);
+    cell_places(row, cell).next().is_none().then_some(cell)
 }
 
 /// Every place the caret can rest, in source order.
@@ -2279,13 +2419,15 @@ pub fn step(rows: &[Row], pos: usize, forward: bool) -> usize {
 /// Moves `delta` caret rows, keeping to column `goal`.
 pub fn vertical(rows: &[Row], pos: usize, delta: isize, goal: f32) -> usize {
     let (mut row, _) = locate(rows, pos);
+    // A row of a table where this column's cell has run out of text isn't a place to stop.
+    let stop = |r: &Row| r.stop && blank_cell(r, goal).is_none();
     for _ in 0..delta.unsigned_abs() {
         let next = if delta < 0 {
-            rows[..row].iter().rposition(|r| r.stop)
+            rows[..row].iter().rposition(stop)
         } else {
             rows.iter()
                 .skip(row + 1)
-                .position(|r| r.stop)
+                .position(stop)
                 .map(|i| row + 1 + i)
         };
         match next {
@@ -2293,7 +2435,11 @@ pub fn vertical(rows: &[Row], pos: usize, delta: isize, goal: f32) -> usize {
             None => break,
         }
     }
-    rows.get(row).map_or(pos, |r| r.position_at(goal))
+    if row < rows.len() {
+        position_in(rows, row, goal)
+    } else {
+        pos
+    }
 }
 
 pub fn row_edge(rows: &[Row], pos: usize, end: bool) -> usize {
@@ -2345,6 +2491,7 @@ pub fn cell_below(rows: &[Row], pos: usize) -> Option<usize> {
     let (row, _) = locate(rows, pos);
     let here = rows.get(row)?;
     let column = here.cell_holding(pos)?;
+    let row = table_parts(rows, row).end - 1;
     let below = rows[row + 1..].iter().find(|r| !r.cells.is_empty());
     let between = rows[row + 1..]
         .iter()
@@ -2376,9 +2523,10 @@ pub fn cell_range(rows: &[Row], start: usize) -> (usize, usize) {
     let Some(index) = here.cell_holding(start) else {
         return (start, start);
     };
-    let end = here.cells.get(index + 1).copied().unwrap_or(usize::MAX);
-    let held = here.glyphs.iter().filter_map(|g| g.at);
-    let last = held.filter(|at| (start..end).contains(at)).max();
+    let parts = table_parts(rows, row);
+    let last = parts
+        .filter_map(|i| cell_places(&rows[i], index).max())
+        .max();
     (start, last.map_or(start, |at| at + 1))
 }
 
@@ -2829,6 +2977,99 @@ body",
     fn padded_tables_show_every_column() {
         let rows = texts("| A   | B   |\n| --- | --- |\n| one | two |\n|     |     |\n");
         assert!(rows[1].contains("two"), "{rows:?}");
+    }
+
+    const WIDE_TABLE: &str = "| Name | What it does |\n|---|---|\n| queue | Refuses work once it is full so a fast producer cannot outrun it |\n| last | row |";
+
+    #[test]
+    fn a_table_wider_than_the_page_wraps_its_cells_to_fit() {
+        let rows = page(WIDE_TABLE, 40);
+        let shown: Vec<String> = rows.iter().map(text).collect();
+        let table = |r: &Row| r.table.clone().unwrap();
+        let edge = table(&rows[0]).columns.last().copied().unwrap();
+        assert!(edge <= 40.0, "the table is {edge} wide on a page of 40");
+        // The long line of the table takes several rows, its words in their own column.
+        let long: Vec<&Row> = rows.iter().filter(|r| r.line == 2).collect();
+        assert!(long.len() > 1, "{shown:?}");
+        let second = table(long[0]).columns[1];
+        let in_second = |r: &&Row| -> String {
+            let said = r.glyphs.iter().filter(|g| g.at.is_some() && g.x >= second);
+            said.map(|g| g.ch).collect()
+        };
+        let words: String = long.iter().map(in_second).collect();
+        assert_eq!(
+            words,
+            "Refuses work once it is full so a fast producer cannot outrun it"
+        );
+        let glyphs = rows.iter().flat_map(|r| &r.glyphs);
+        assert!(glyphs.clone().all(|g| g.x < edge), "{shown:?}");
+        assert!(text(long[0]).contains("queue") && !text(long[1]).contains("queue"));
+        // A word that fills its row exactly keeps its space: the next row starts with a word.
+        let exact = page("abcdefg hij", 7);
+        assert_eq!(text(&exact[1]), "hij");
+        assert_eq!(table(long[1]).part, 1);
+        // One that fits is as it was: a row for each line.
+        assert_eq!(page("| a | b |\n|---|---|\n| c | d |", 40).len(), 2);
+        // A word longer than the page, as a link can be, is broken to keep the table in it.
+        let link = "https://example.com/a/very/long/path/that/never/breaks";
+        let linked = page(&format!("| a | b |\n|---|---|\n| {link} | x |"), 30);
+        let edge = table(&linked[0]).columns.last().copied().unwrap();
+        assert!(edge <= 30.0, "{edge}");
+        let first = table(&linked[0]).columns[1];
+        let said = linked
+            .iter()
+            .filter(|r| r.line == 2)
+            .flat_map(|r| &r.glyphs);
+        let said: String = said.filter(|g| g.x < first).map(|g| g.ch).collect();
+        assert_eq!(said, link);
+        // Only more columns than the page has room for leave a table wider than it.
+        let many = page(
+            "| a | b | c | d | e | f |\n|---|---|---|---|---|---|\n| 1 | 2 | 3 | 4 | 5 | 6 |",
+            12,
+        );
+        assert!(table(&many[0]).columns.last().copied().unwrap() > 12.0);
+    }
+
+    #[test]
+    fn the_caret_finds_its_way_through_a_wrapped_cell() {
+        let rows = page(WIDE_TABLE, 40);
+        let chars: Vec<char> = WIDE_TABLE.chars().collect();
+        let at = |words: &str| WIDE_TABLE.find(words).unwrap();
+        let long: Vec<usize> = (0..rows.len()).filter(|i| rows[*i].line == 2).collect();
+        // A word further on in the cell is on a later row of it, under the cell's first.
+        let (first, x) = locate(&rows, at("Refuses"));
+        assert_eq!(first, long[0]);
+        let (later, _) = locate(&rows, at("outrun"));
+        assert!(later > first && rows[later].line == 2);
+        // Down from its first word stays in the cell, a row on.
+        let down = vertical(&rows, at("Refuses"), 1, x);
+        assert_eq!(locate(&rows, down).0, long[1]);
+        assert!(down > at("Refuses") && down < at("| last"));
+        // Down from the short cell beside it goes past the rows it isn't on, to the next line.
+        let (_, short) = locate(&rows, at("queue"));
+        let below = vertical(&rows, at("queue"), 1, short);
+        assert_eq!(chars[below], 'l');
+        assert_eq!(vertical(&rows, below, -1, short), at("queue"));
+        // A click under the short cell's text is at that text's end.
+        assert_eq!(position_in(&rows, long[1], short), at("queue") + 5);
+        // The cell is all of its rows, to select and to leave by Enter.
+        let end = at("outrun it") + "outrun it".len();
+        assert_eq!(cell_range(&rows, at("Refuses")), (at("Refuses"), end));
+        assert_eq!(cell_below(&rows, at("Refuses")), Some(at("row")));
+        // Its end is on its last row, after its last word.
+        let (last, end_x) = locate(&rows, end);
+        assert_eq!(last, *long.last().unwrap());
+        assert!(end_x > x);
+        // And every place in the table is still reached by stepping through it.
+        let mut pos = at("Name");
+        let mut seen = vec![pos];
+        while pos < at("row") {
+            let next = step(&rows, pos, true);
+            assert!(next > pos, "stuck at {pos}");
+            pos = next;
+            seen.push(pos);
+        }
+        assert!(seen.contains(&at("outrun")) && seen.contains(&at("last")));
     }
 
     #[test]

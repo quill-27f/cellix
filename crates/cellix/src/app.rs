@@ -19560,6 +19560,46 @@ mod tests {
     }
 
     #[test]
+    fn a_wide_table_wraps_inside_the_page_and_stops_at_the_panes_edge() {
+        let table = "| Setting | What it does |\n|---|---|\n\
+| wrap | Breaks lines that are longer than the page so that nothing runs off its right edge \
+and every word of it can still be read |\n\
+| link | https://example.com/a/very/long/path/that/never/breaks/and/keeps/going/for/a/long/\
+long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.html |\n";
+        // And a table with more columns than any page here has room for.
+        let columns = |cell: &str| format!("|{}\n", format!(" {cell} |").repeat(40));
+        let many = columns("c") + &columns("---") + &columns("x");
+        let (_dir, mut app) = page_app(&format!("{table}\n{many}"));
+        app.run(Command::ListAgents);
+        let pane = app.dock_area().expect("the side pane is open");
+        // The long cell takes rows of its own inside the page, all of it there to read.
+        let grid = screen(&app);
+        let (_, first) = find(&grid, "Breaks lines");
+        let (x, last) = find(&grid, "still be read");
+        assert!(last > first, "{}", grid.text());
+        assert!(x < pane.x);
+        assert!(find(&grid, "this/size.html").1 > find(&grid, "https://example").1);
+        // What can't fit is cut at the pane's edge. Nothing the page paints, a table's box
+        // and lines least of all, starts in the page and ends in the pane.
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(10, 20)));
+        let grid = screen(&app);
+        let edge = i32::from(pane.x) * 64;
+        let mut boxes = 0;
+        for paint in &grid.paint {
+            let bounds = match paint {
+                Paint::Panel { bounds, .. } | Paint::Hairline { bounds, .. } => bounds,
+                _ => continue,
+            };
+            boxes += 1;
+            assert!(
+                bounds.x >= edge || bounds.x + bounds.w <= edge,
+                "{bounds:?} runs into the pane, which starts at {edge}"
+            );
+        }
+        assert!(boxes > 0);
+    }
+
+    #[test]
     fn a_list_of_ones_shows_counted() {
         let (_dir, app) = page_app("1. one\n1. two\n1. three\n");
         assert!(

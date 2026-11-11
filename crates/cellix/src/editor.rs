@@ -1397,10 +1397,15 @@ impl Editor {
                 })
                 .flatten()
                 .filter(|r| r.figure.is_some());
-            let stop = above
-                .or(picture)
-                .or_else(|| rows[row..].iter().find(|r| r.stop));
-            return stop.map_or(self.buffer.rope().len_chars(), |r| r.position_at(column));
+            let Some(special) = above.or(picture) else {
+                // A row of a table is asked with the rows around it: under a cell whose
+                // text has ended, the place is that text's end.
+                let stop = (row..rows.len()).find(|index| rows[*index].stop);
+                return stop.map_or(self.buffer.rope().len_chars(), |index| {
+                    rendered::position_in(&rows, index, column)
+                });
+            };
+            return special.position_at(column);
         }
         let rows = self.code_rows(area.w);
         let index = (self.top + (y.saturating_sub(area.y)) as usize).min(rows.len() - 1);
@@ -4279,18 +4284,28 @@ impl Editor {
                 let bounds = Bounds::cells(left, top - 0.08, width, height + 0.2);
                 grid.panel(bounds, 22, Some(theme.code_bg), Some(theme.border));
             } else if let Some(table) = &row.table {
-                let width = table.columns.last().copied().unwrap_or(0.0);
+                // A table too wide even with its cells wrapped stops at the pane's edge
+                // rather than run on over what's beside it.
+                let room = area.right() as f32 - left;
+                let width = table.columns.last().copied().unwrap_or(0.0).min(room);
                 let bounds = Bounds::cells(left, top + 0.02, width, height - 0.04);
+                let part_of = |at: usize| rows[at].table.as_ref().map(|t| (t.header, t.part));
                 if table.header {
-                    let head = Bounds::cells(left, top + 0.02, width, 1.0);
+                    // Its line of the table can take several rows.
+                    let rows = (index..end).take_while(|at| part_of(*at).is_some_and(|p| p.0));
+                    let head = Bounds::cells(left, top + 0.02, width, rows.count() as f32);
                     grid.panel(head, 14, Some(theme.code_bg), None);
                 }
-                for at in index + 1..end {
+                // A line under each line of the table, not under each row one takes.
+                for at in (index + 1..end).filter(|at| part_of(*at).is_some_and(|p| p.1 == 0)) {
                     let line = Bounds::cells(left, y_of(at), width, 0.0);
                     grid.hairline(line, theme.popup_border);
                 }
                 let inner = table.columns.len().saturating_sub(2);
                 for x in table.columns.iter().skip(1).take(inner) {
+                    if *x >= width {
+                        break;
+                    }
                     let line = Bounds::cells(left + x, top + 0.02, 0.0, height - 0.04);
                     grid.hairline(line, theme.popup_border);
                 }
