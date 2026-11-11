@@ -21,12 +21,12 @@ const ZOOM_RANGE: (f32, f32) = (0.5, 3.0);
 /// tall, so this keeps pace with the three rows a notch moves down.
 pub const SIDEWAYS: f32 = 6.0;
 /// The scrollbars' thumbs: as thick as the editor's, and as far from the edge.
-const THUMB: f32 = 0.5;
+pub(crate) const THUMB: f32 = 0.5;
 const THUMB_INSET: f32 = 0.2;
 /// Rows between the bottom thumb and the edge under it.
-const BOTTOM_GAP: f32 = 0.25;
+pub(crate) const BOTTOM_GAP: f32 = 0.25;
 /// Columns kept clear at either end of a scrollbar's track.
-const END_GAP: f32 = 0.6;
+pub(crate) const END_GAP: f32 = 0.6;
 
 /// What a click in the view lands on.
 #[derive(Clone, Copy, Debug, PartialEq)]

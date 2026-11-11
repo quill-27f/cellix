@@ -4,7 +4,9 @@
 //!
 //! `view` is `review`, or a file to open. Agents use this to see the interface.
 //! `select:<file>:<word>` opens a file and double-clicks a word; `ask:<file>:<word>` then
-//! presses Ask Agent. `CELLIX_TIER=cells` lays it out on the cell tier, as a terminal
+//! presses Ask Agent. `across:<file>:<notches>` opens a file and tips the wheel sideways over
+//! it that many notches, and `pane:<file>:<columns>` opens it beside the side pane dragged
+//! that wide. `CELLIX_TIER=cells` lays it out on the cell tier, as a terminal
 //! without pictures shows it, and `CELLIX_PANE=1` as the pane inside Claude Code.
 
 use std::fs::File;
@@ -119,6 +121,26 @@ fn main() {
             select(&mut app, &root, &view[4..]);
             let ask = find(&app, "Ask Agent").expect("the Ask Agent button");
             click(&mut app, (ask.0 + 1, ask.1));
+        }
+        Some(view) if view.starts_with("across:") => {
+            let (file, notches) = view[7..].rsplit_once(':').expect("<file>:<notches>");
+            app.open(&root.join(file)).unwrap();
+            for _ in 0..notches.parse().expect("a number of notches") {
+                app.handle(Event::Mouse(MouseEvent {
+                    kind: MouseKind::ScrollRight,
+                    x: size.0 / 2,
+                    y: size.1 / 2,
+                    fine_x: f32::from(size.0 / 2),
+                    fine_y: f32::from(size.1 / 2),
+                    mods: Mods::default(),
+                }));
+            }
+        }
+        Some(view) if view.starts_with("pane:") => {
+            let (file, columns) = view[5..].rsplit_once(':').expect("<file>:<columns>");
+            app.open(&root.join(file)).unwrap();
+            app.run(Command::ListAgents);
+            app.set_pane_width(columns.parse().expect("a number of columns"));
         }
         Some(view) if view.starts_with("search:") => {
             app.run(Command::FindInProject);
