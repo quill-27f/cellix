@@ -31,6 +31,7 @@ const AUTO_SAVES: [(&str, &str); 3] = [
 /// Where the Editor section's rows start, from the top of the page.
 const FORMAT_ROW: u16 = 3;
 const AUTO_SAVE_ROW: u16 = 6;
+const READING_ROW: u16 = 9;
 /// The Keyboard section: the search field, the table's heading, and its first row.
 const KEYS_SEARCH_ROW: u16 = 6;
 const KEYS_HEAD_ROW: u16 = 8;
@@ -55,7 +56,7 @@ const TITLE_SIZE: u8 = 170;
 const NOTE_SIZE: u8 = 90;
 const RADIUS: u8 = 30;
 /// Where the servers' rows start, from the top of the page.
-const SERVERS_ROW: u16 = 10;
+const SERVERS_ROW: u16 = 13;
 const INSTALL_WIDTH: u16 = 9;
 /// Columns from an integration's name to its state.
 const STATUS_GAP: f32 = 1.1;
@@ -83,6 +84,7 @@ pub enum Control {
     Keymap(&'static str),
     FormatOnSave,
     AutoSave(&'static str),
+    ReadingWidth,
     /// A command's keys, by its place in `shortcuts`: a click records new ones.
     Shortcut(usize),
     /// Gives a command its own keys back.
@@ -108,6 +110,7 @@ pub struct Values<'a> {
     pub view: EditorView,
     pub inlay_hints: bool,
     pub format_on_save: bool,
+    pub reading_width: bool,
     pub auto_save: &'a str,
     pub notify: bool,
 }
@@ -469,6 +472,8 @@ impl SettingsPage {
                     let rect = Rect::new(x, page.y + AUTO_SAVE_ROW, AUTO_SAVE_WIDTH, 1);
                     spots.push((rect, Control::AutoSave(name)));
                 }
+                let reading = Rect::new(page.x, page.y + READING_ROW, page.w, 2);
+                spots.push((reading, Control::ReadingWidth));
                 for (row, index) in self.server_rows(page).into_iter().enumerate() {
                     if !self.found.servers.get(index).copied().unwrap_or(false) {
                         let x = page.right().saturating_sub(INSTALL_WIDTH);
@@ -812,7 +817,7 @@ impl SettingsPage {
             grid,
             page,
             "Editor",
-            "How files save, and the languages.",
+            "How files save, how pages are set, and the languages.",
             theme,
         );
         let format = (
@@ -839,6 +844,14 @@ impl SettingsPage {
                 draw_segment(grid, *rect, label, values.auto_save == *name, theme);
             }
         }
+        let y = page.y + READING_ROW;
+        let above = Bounds::cells(page.x as f32, y as f32 - 0.5, page.w as f32, 0.0);
+        grid.hairline(above, theme.border);
+        let reading = (
+            "Reading width",
+            "Pages keep their text to 88 columns, in the middle of a wider pane.",
+        );
+        draw_toggle(grid, page, y, reading, values.reading_width, theme);
         let line_y = page.y + SERVERS_ROW - 1;
         let above = Bounds::cells(page.x as f32, line_y as f32 - 0.5, page.w as f32, 0.0);
         grid.hairline(above, theme.border);

@@ -12,6 +12,7 @@ The script is a list of steps:
     ["double", col, row]         ["triple", col, row]      ["drag", col, row, col, row]
     ["press", col, row]          ["hold", col, row]        A press, and a move with it still held.
     ["move", col, row]           ["wheel", col, row, notches]  (negative is up)
+    ["tip", col, row, notches]   The wheel tipped sideways: to the right, or left when negative.
     ["paste", "text"]            ["resize", cols, rows]
     ["shot", "out.png"]          ["log", "label"]
     ["until", "text"]            Waits until the screen says it, and fails the script if it never does.
@@ -310,6 +311,12 @@ def main():
             pump(0.2)
         elif kind == "wheel":
             button = 65 if step[3] > 0 else 64
+            for _ in range(abs(step[3])):
+                os.write(master, mouse(button, step[1], step[2]))
+                pump(0.09)
+            pump(0.25)
+        elif kind == "tip":
+            button = 67 if step[3] > 0 else 66
             for _ in range(abs(step[3])):
                 os.write(master, mouse(button, step[1], step[2]))
                 pump(0.09)

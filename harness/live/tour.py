@@ -146,7 +146,7 @@ EXPECT = {
     "98-pane-drag-under": "loss.png",
 }
 # About how many scenes there are, to cut the tour into parts of a size.
-SCENES_IN_ALL = 180
+SCENES_IN_ALL = 188
 # Scenes come to, shot, and those that never reached their surface.
 SEEN, SHOT, FAILED = [0], [], []
 # Which commit the binary is, as far as git can say: the pictures are of that.
@@ -332,6 +332,35 @@ Each output is $y_i = \sum_j \alpha_{ij} x_j$, as in~\cite{knuth84}. The weights
 \end{table}
 
 \end{document}
+"""
+
+
+# A page with a table that wraps, one with more columns than fit, and a long line of code,
+# for a window wide enough that the page keeps to its reading width.
+WIDE = """# Reading width
+
+A paragraph long enough to wrap in the column: """ + "the quick brown fox jumps over the lazy dog. " * 8 + """
+
+| Setting | What it does |
+|---|---|
+| Reading width | """ + "Pages keep their text to a column in the middle of a wide pane. " * 3 + """|
+| Minimap | The file at a glance. |
+
+## A table with more columns than fit
+
+| """ + " | ".join(f"col{i:02d}" for i in range(1, 31)) + """ |
+|""" + "---|" * 30 + """
+""" + "\n".join("| " + " | ".join(f"{r}.{i}" for i in range(1, 31)) + " |" for r in range(1, 5)) + """
+
+## Code
+
+```rust
+fn main() {
+    let total = """ + " + ".join(f"value_{i:02d}" for i in range(1, 40)) + """;
+}
+```
+
+Text after the code.
 """
 
 
@@ -906,11 +935,11 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("34-hover-header", [["move", 18, 0]], CODE_FILE)
     shoot("35-hover-review", [["keys", "\u0007"], ["wait", 0.6], ["move", 12, 2]], CODE_FILE)
     shoot("36-hover-accept", [["keys", "\u0007"], ["wait", 0.6], ["move", 114, 1]], CODE_FILE)
-    shoot("37-hover-settings", [*settings, ["click", 45, 4], ["move", 80, 16]], CODE_FILE)
+    shoot("37-hover-settings", [*settings, ["click", 45, 4], ["move", 80, 19]], CODE_FILE)
     shoot("38-hover-dialog", [["keys", "x"], ["keys", CTRL("q")], ["move", 70, 17]], CODE_FILE)
     shoot("39-hover-agents", [*LIST_AGENTS, ["wait", 0.5], ["move", 90, 12]], CODE_FILE)
     shoot("41-hover-tab-close", [["move", 42, 0]], CODE_FILE)
-    shoot("42-hover-install", [*settings, ["click", 45, 4], ["move", 113, 16]], CODE_FILE)
+    shoot("42-hover-install", [*settings, ["click", 45, 4], ["move", 113, 19]], CODE_FILE)
     shoot("43-light-hover-menu", [["right", 60, 12], ["move", 64, 13]], CODE_FILE, background="eff1f5")
     shoot("40-hover-find", [["keys", CTRL("f")], ["keys", "item"], ["move", 112, 3]], CODE_FILE)
 
@@ -920,7 +949,8 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("46-formula-open", [["click", 90, 13], ["wait", 0.5]], NOTE_FILE, size="150x44")
     shoot("47-math-panel", [["click", *FORMULA]], NOTE_FILE, size="150x44", background="eff1f5")
     shoot("48-table-picker", [["click", *TABLE], ["move", 100, 7]], NOTE_FILE, size="150x44")
-    shoot("49-table-menu", [["right", 41, 29]], NOTE_FILE, size="150x44", background="eff1f5")
+    # In a window this wide the page stands eight columns in from where its pane's margin is.
+    shoot("49-table-menu", [["right", 49, 29]], NOTE_FILE, size="150x44", background="eff1f5")
     # A debug build presents a page of math slowly, so each step is given time to land.
     comment = [["wait", 1.5], ["click", 90, 5], ["wait", 0.6], *command("add comment", F1)]
     comment += [["until", "Enter sends"], ["keys", "Is this true for multi-head attention?\r"]]
@@ -1061,6 +1091,27 @@ with tempfile.TemporaryDirectory() as scratch:
     ):
         steps = [["wait", 1.0], ["wheel", 90, 20, notches], ["wait", 1.0]]
         shoot(f"{78 + number}-paper-{name}", steps, PAPER, **light)
+
+    # A window wider than a page is set: the page keeps to its reading width, in the middle,
+    # and what's wider than that moves sideways inside it.
+    WIDE_FILE = "docs/wide.md"
+    with open(f"{ROOT}/{WIDE_FILE}", "w") as f:
+        f.write(WIDE)
+    wide = {"size": "200x50"}
+    shoot("160-reading-width", [["wait", 1.0]], WIDE_FILE, **wide)
+    shoot("161-reading-width-across", [["wait", 1.0], ["tip", 100, 21, 6], ["tip", 100, 30, 4],
+                                       ["wait", 0.5]], WIDE_FILE, **wide)
+    shoot("162-reading-width-note", [["wait", 1.0]], NOTE_FILE, background="eff1f5", **wide)
+    shoot("163-reading-width-paper", [["wait", 1.0]], PAPER, **wide)
+    shoot("164-reading-width-sample", [["wait", 1.0], ["wheel", 100, 20, 9], ["wait", 1.0]], WRITING, **wide)
+    # A narrow side pane with more tabs than it has room for: the one in front whole, the
+    # others cut short, and one of those under the pointer.
+    three_tabs = [*LIST_AGENTS, *command("show comments", F1), ["until", "No comments"],
+                  *command("New Terminal"), ["wait", 1.5]]
+    shoot("165-pane-tabs-cut", three_tabs, CODE_FILE)
+    shoot("166-pane-tabs-cut-hover", [*three_tabs, ["move", 83, 0], ["wait", 1.2]], CODE_FILE)
+    shoot("167-pane-tabs-cut-light", [*three_tabs, ["click", 83, 0], ["wait", 0.6]], CODE_FILE,
+          background="eff1f5")
 
     # The code view: fold chevrons and chips, sticky scroll, word wrap, bracket pairs. The
     # file opens with the gutter's chevrons in columns 37 and 38, its line n on row n + 1.

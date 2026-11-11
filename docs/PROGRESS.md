@@ -1788,3 +1788,17 @@ The user's note from a day's use: "when the side panel is narrow it's not showin
 - Tests changed, because the design did: `the_tab_in_front_keeps_its_name_and_the_others_are_in_its_list` is now `..._and_those_behind_are_cut_short`, and `a_narrow_panes_tabs_stay_clear_of_the_icons_and_the_chevron_lists_them_all` is now `a_pane_too_narrow_for_cut_tabs_shows_the_one_in_front_and_a_chevron_lists_them_all`, with five tabs so the chevron is still reached. `an_agents_tab_closes_when_its_session_ends` reads the short note, since its pane is 44 columns.
 - `harness/x snapshot` gained `tabs:<file>:<columns>:<front>` (three tabs, one named in front) and `CELLIX_HOVER=<column>,<row>`.
 - Unverified: a real terminal. On the pixel tier a 4-column stub holds two letters and the "…".
+
+## Pages keep to a reading width (2026-11-10)
+
+From the same day's notes: "there should be a max width of docs in the reading pane". Tables were capped to the page earlier today; asked whether text was meant too, the user said yes, and picked 88 columns, centred, over the same column at the left and over leaving text full width. This reverses the choice of 1 November, when pages went full width over the canvas's 88-column page.
+
+- **Text is set to at most 88 columns** (`READING_WIDTH`): about 115 characters a line in the interface font, 88 on cells. In a pane wider than the page, the page stands in the middle. Tables wrap to that width, code blocks end with it, and a wide table or long code line moves sideways inside the page (`page_end` took the place of the pane's right edge in the page's drawing). The ◆ of a comment, a change's bar and a heading's # go with the page's margin.
+- **The middle is the pane's, minimap or not.** A page was first laid out as if it had a minimap and then, when it turned out to fit, set again without one, so its first frame stood 6 columns left of the rest. `shows_minimap` now lays an unseen page out before it answers, and the margin counts the minimap's columns whether or not one is showing. Test: `a_page_stands_in_one_place_with_and_without_its_minimap`, which failed 75 against 81 without the fix.
+- **A sheet of data keeps the whole pane** (`Dialect::Data`), and a pane no wider than the page is set exactly as before (`a_pane_no_wider_than_the_reading_width_sets_its_page_as_before`). At the tour's 120 columns nothing changes; at 150 a page stands 8 columns further in.
+- **Settings, Editor has a Reading width switch** (`reading_width: false` in the file). The language servers start three rows lower.
+- `a_page_uses_the_whole_width` is now `..._with_the_reading_width_off`, and sets the setting first: full width is the setting's other value now, not the default.
+- The tour: `["tip", col, row, notches]` tips the wheel sideways. Scenes 160 to 164 are a 200-column window (a page with a wrapped table, a wide one and long code; the same moved sideways; the note; the paper; the sample), and 165 to 167 a narrow pane's cut tabs. 37 and 42 hover three rows lower, and 49 right-clicks eight columns further in, where the table now is. 188 scenes.
+- Looked at before committing: the tour's 161, 162 and 164 to 167, with 16, 42, 46, 49, 50, 55 and 73 at their old sizes, and snapshots at 200 columns of the sample, the paper and the wide page on both tiers. The whole tour and the ui-expert's review come after this commit.
+- Unverified: a real terminal. The toolbar stays at the pane's left while the page stands in the middle, as a word processor's does.
+

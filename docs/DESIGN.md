@@ -148,9 +148,18 @@ between cells, so it keeps jumping by lines.
 
 ## Pages
 
-A page uses the pane's full width. A line break inside a paragraph shows as a space that
-keeps the newline's source position, so a hard-wrapped file fills the page and saves
-unchanged. On a page, arrows and Home and End move by what's shown.
+A page keeps to a reading width: its text is set to at most 88 columns, about 115 characters
+a line in the interface font and 88 on cells, and in a pane wider than that it stands in the
+middle. Tables wrap their cells to that width and blocks of code end with it; what's still
+wider (a table with too many columns, a long line of code) moves sideways inside the page.
+The middle is the pane's, with its minimap's columns counted whether or not one is showing,
+so a page doesn't move across as it grows long enough to have one. A pane no wider than the
+page sets it as before, from its own margin. A sheet of data (CSV, TSV) keeps the whole pane,
+since it's read across. `reading_width: false`, or Reading width under Settings, Editor, lets
+every page run the width of its pane, as all pages did from 1 to 10 November 2026 by the
+user's choice then; the user chose the reading width after a day in a wide window. A line
+break inside a paragraph shows as a space that keeps the newline's source position, so a
+hard-wrapped file fills the page and saves unchanged. On a page, arrows and Home and End move by what's shown.
 
 ### Companion
 

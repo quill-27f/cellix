@@ -1485,6 +1485,7 @@ impl App {
         };
         let mut editor = Editor::new(buffer, self.measure.clone(), self.registry.clone());
         editor.minimap_on = self.settings.minimap != Some(false);
+        editor.reading_width = self.settings.reading_width != Some(false);
         editor.bracket_pairs = self.settings.bracket_pairs != Some(false);
         editor.wrap = self.settings.word_wrap == Some(true) && !editor.rendered;
         editor.sticky_lines = self.sticky_lines();
@@ -11971,6 +11972,14 @@ impl App {
                     note = self.set_keys(name, None);
                 }
             }
+            Control::ReadingWidth => {
+                let on = self.settings.reading_width == Some(false);
+                self.settings.reading_width = Some(on);
+                for editor in &mut self.editors {
+                    editor.reading_width = on;
+                }
+                note = store("reading_width", on.into());
+            }
             Control::FormatOnSave => {
                 let on = self.settings.format_on_save != Some(true);
                 self.settings.format_on_save = Some(on);
@@ -12441,6 +12450,7 @@ impl App {
                 view: self.editor_view(),
                 inlay_hints,
                 format_on_save: self.settings.format_on_save == Some(true),
+                reading_width: self.settings.reading_width != Some(false),
                 auto_save,
                 notify: self.settings.notify != Some(false),
             };
@@ -19631,6 +19641,141 @@ mod tests {
         );
     }
 
+    /// Where the ink of the page's rows holding `word` starts and ends, in the file's pane.
+    fn ink(app: &App, word: &str, table: bool) -> (u16, u16) {
+        let main = app.main_area();
+        let grid = screen(app);
+        let mut reach: Option<(u16, u16)> = None;
+        for y in main.y + 1..main.bottom() {
+            let row: Vec<char> = grid.row_text(y).chars().collect();
+            // Without the scrollbar's column at the pane's right.
+            let cells = &row[main.x as usize..main.right() as usize - 1];
+            let text: String = cells.iter().collect();
+            if !text.contains(word) || text.contains('│') != table {
+                continue;
+            }
+            let first = cells.iter().position(|c| *c != ' ').unwrap() as u16;
+            let last = cells.iter().rposition(|c| *c != ' ').unwrap() as u16 + 1;
+            let (from, to) = reach.unwrap_or((u16::MAX, 0));
+            reach = Some((from.min(main.x + first), to.max(main.x + last)));
+        }
+        reach.unwrap_or_else(|| panic!("no row holds {word:?}:\n{}", grid.text()))
+    }
+
+    #[test]
+    fn a_page_keeps_to_a_reading_width_in_the_middle_of_a_wide_pane() {
+        use crate::editor::READING_WIDTH;
+        let (dir, _) = project();
+        let words = "word ".repeat(120);
+        let code = "x".repeat(150);
+        let text = format!(
+            "# Title\n\n{words}\n\n| one | two |\n|---|---|\n| {words} | b |\n\n```\n{code}\n```\n"
+        );
+        let path = dir.path().join("wide.md");
+        fs::write(&path, text).unwrap();
+        fs::write(dir.path().join("sheet.csv"), "name,size\nalpha,1\n").unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (220, 40));
+        app.open(&path).unwrap();
+        let main = app.main_area();
+        // Text stops at the reading width, however wide the pane.
+        let (left, right) = ink(&app, "word word", false);
+        assert!(right - left <= READING_WIDTH, "{left}..{right}");
+        assert!(
+            right - left > READING_WIDTH - 8,
+            "it fills it: {left}..{right}"
+        );
+        // It stands in the middle: as much of the pane before it as after.
+        let (before, after) = (left - main.x, main.right() - (left + READING_WIDTH));
+        assert!(before > 30, "{before} columns before it");
+        assert!(
+            before.abs_diff(after) <= 4,
+            "{before} before, {after} after"
+        );
+        // A table wraps to the page's width, and code is cut where the page ends.
+        let page_end = left + READING_WIDTH + 5;
+        let table = ink(&app, "word word", true);
+        assert!(table.0 + 1 >= left && table.1 <= page_end, "{table:?}");
+        let block = ink(&app, "xxxx", false);
+        assert!(block.1 <= page_end, "cut at the page's end: {block:?}");
+        // What's cut is a sideways turn of the wheel away, inside the page.
+        let grid = screen(&app);
+        let y = (main.y..main.bottom())
+            .find(|y| grid.row_text(*y).contains("xxxx"))
+            .unwrap();
+        let was = grid.row_text(y);
+        app.handle(mouse(MouseKind::ScrollRight, left + 10, y));
+        let now = screen(&app).row_text(y);
+        assert_ne!(was, now, "the code moved across");
+        assert!(
+            ink(&app, "xxxx", false).1 <= page_end,
+            "still inside the page"
+        );
+        assert_eq!(ink(&app, "word word", false).0, left, "and the text stayed");
+        // A sheet of data is read across, so it keeps the whole pane.
+        app.open(&dir.path().join("sheet.csv")).unwrap();
+        let sheet = ink(&app, "alpha", true).0;
+        assert!(sheet < main.x + 8, "at the pane's left: {sheet}");
+        // Settings turns it off, and a page runs the width of its pane again.
+        app.run(Command::OpenSettings);
+        let area = app.sheet_area();
+        app.settings_page.as_mut().unwrap().section = crate::settings_page::Section::Editor;
+        assert!(screen(&app).text().contains("Reading width"), "it's listed");
+        let page = app.settings_page.as_ref().unwrap();
+        let controls = page.controls(area);
+        let (rect, _) = controls
+            .iter()
+            .find(|(_, c)| *c == Control::ReadingWidth)
+            .unwrap();
+        app.handle(mouse(MouseKind::Left, rect.x + 1, rect.y));
+        assert_eq!(app.settings.reading_width, Some(false));
+        app.open(&path).unwrap();
+        let (left, right) = ink(&app, "word word", false);
+        assert_eq!(left, main.x + 4, "from the pane's own margin");
+        assert!(right - left > 150, "across the pane: {left}..{right}");
+    }
+
+    #[test]
+    fn a_pane_no_wider_than_the_reading_width_sets_its_page_as_before() {
+        let (dir, mut app) = project();
+        let path = dir.path().join("wide.md");
+        fs::write(&path, format!("# Title\n\n{}\n", "word ".repeat(120))).unwrap();
+        app.open(&path).unwrap();
+        let main = app.main_area();
+        let (left, right) = ink(&app, "word word", false);
+        assert_eq!(left, main.x + 4, "the margin a page has always had");
+        assert!(main.right() - right < 12, "to the pane's edge: {right}");
+    }
+
+    #[test]
+    fn a_page_stands_in_one_place_with_and_without_its_minimap() {
+        use crate::editor::READING_WIDTH;
+        let (dir, _) = project();
+        let short = dir.path().join("short.md");
+        let long = dir.path().join("long.md");
+        fs::write(&short, "# Short\n\nA line.\n").unwrap();
+        fs::write(&long, "# Long\n\nA line.\n\n".repeat(60)).unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (220, 40));
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 36)));
+        let main = app.main_area();
+        // The caret starts at the page's left edge.
+        let caret = |app: &App| screen(app).cursor.expect("a caret").0;
+        app.open(&short).unwrap();
+        let first = caret(&app);
+        assert_eq!(caret(&app), first, "its first frame is where it stays");
+        app.open(&long).unwrap();
+        assert_eq!(
+            caret(&app),
+            first,
+            "a page long enough for a minimap stands there too"
+        );
+        // That's the middle of the pane, the minimap's columns counted as part of it.
+        let (before, after) = (first - main.x, main.right() - (first + READING_WIDTH));
+        assert!(
+            before.abs_diff(after) <= 4,
+            "{before} before, {after} after"
+        );
+    }
+
     #[test]
     fn a_wide_table_wraps_inside_the_page_and_stops_at_the_panes_edge() {
         let table = "| Setting | What it does |\n|---|---|\n\
@@ -25001,8 +25146,9 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
     }
 
     #[test]
-    fn a_page_uses_the_whole_width() {
+    fn a_page_uses_the_whole_width_with_the_reading_width_off() {
         let (dir, mut app) = project();
+        app.settings.reading_width = Some(false);
         app.handle(Event::Resize(140, 30));
         let path = dir.path().join("wide.md");
         fs::write(&path, "word ".repeat(100)).unwrap();

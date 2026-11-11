@@ -4751,5 +4751,26 @@
     "title": "A table keeps ordinary words and numbers whole, staying wider than the page sooner than break them, breaks a link after a slash, and on the cell tier has a rule between its lines once any cell wraps",
     "test": "a_table_wider_than_the_page_wraps_its_cells_to_fit",
     "passes": true
+  },
+  {
+    "id": "pages-keep-a-reading-width",
+    "milestone": 13,
+    "title": "A page keeps its text, tables and code to 88 columns in the middle of a wider pane; Settings turns it off, and sheets of data keep the whole pane",
+    "test": "a_page_keeps_to_a_reading_width_in_the_middle_of_a_wide_pane",
+    "passes": true
+  },
+  {
+    "id": "page-stays-put-with-minimap",
+    "milestone": 13,
+    "title": "A page stands in the same place on its first frame and after, with or without a minimap",
+    "test": "a_page_stands_in_one_place_with_and_without_its_minimap",
+    "passes": true
+  },
+  {
+    "id": "narrow-pages-unchanged",
+    "milestone": 13,
+    "title": "A pane no wider than the reading width sets its page as before",
+    "test": "a_pane_no_wider_than_the_reading_width_sets_its_page_as_before",
+    "passes": true
   }
 ]

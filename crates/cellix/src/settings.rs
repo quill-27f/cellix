@@ -21,6 +21,9 @@ pub struct Settings {
     pub minimap: Option<bool>,
     /// `true` wraps long lines of code at the pane's width. Alt+Z changes one file.
     pub word_wrap: Option<bool>,
+    /// `false` lets a page's text run the width of its pane, however wide. Otherwise it
+    /// keeps to 88 columns, in the middle of a pane wider than that.
+    pub reading_width: Option<bool>,
     /// `false` lets the headers of the scopes scrolled into go by with the rest.
     pub sticky_scroll: Option<bool>,
     /// How many of those headers may stay at the top: 5 unless set, 0 for none.
@@ -73,6 +76,7 @@ impl Settings {
         self.spell_check = other.spell_check.or(self.spell_check.take());
         self.bracket_pairs = other.bracket_pairs.or(self.bracket_pairs.take());
         self.word_wrap = other.word_wrap.or(self.word_wrap.take());
+        self.reading_width = other.reading_width.or(self.reading_width.take());
         self.sticky_scroll = other.sticky_scroll.or(self.sticky_scroll.take());
         self.sticky_scroll_lines = other
             .sticky_scroll_lines

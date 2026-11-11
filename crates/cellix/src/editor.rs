@@ -55,6 +55,9 @@ const PAGE_MARGIN: u16 = 4;
 const NARROW_RIGHT_MARGIN: u16 = 2;
 /// How wide a page can be set.
 const MAX_PAGE_WIDTH: u16 = 512;
+/// The widest a page's text is set when pages keep to a reading width: about 115 characters
+/// a line in the interface font, and 88 on cells. Past that the eye loses its line.
+pub const READING_WIDTH: u16 = 88;
 
 /// Per-line marks for the gutter, as 1-based lines.
 #[derive(Default)]
@@ -180,6 +183,9 @@ pub struct Editor {
     pub conflict: bool,
     /// Whether the minimap may show, given the room.
     pub minimap_on: bool,
+    /// Whether a page keeps its text to `READING_WIDTH` columns, in the middle of a pane
+    /// wider than that. Off, a page runs the width of its pane.
+    pub reading_width: bool,
     /// The language server's inlay hints, as places in the text in order and what each
     /// says. They're drawn before the char at their place and are never part of the text.
     hints: Vec<(usize, String)>,
@@ -327,6 +333,7 @@ impl Editor {
             label: None,
             conflict: false,
             minimap_on: true,
+            reading_width: true,
             hints: Vec::new(),
             hints_for: (0, 0),
             hints_asked: None,
@@ -375,14 +382,23 @@ impl Editor {
 
     /// Whether a pane has room for a minimap, which only pixels can draw.
     fn shows_minimap(&self, area: Rect) -> bool {
+        if !self.minimap_on || self.measure.in_cells() || area.w < MIN_MINIMAP_PANE {
+            return false;
+        }
+        if !self.rendered {
+            return true;
+        }
+        // A page not laid out yet is, as it would stand beside a minimap, so the answer is
+        // the same before its first frame as after: one that fits that way fits without.
+        if self.page.borrow().is_none() {
+            let beside = Rect::new(area.x, area.y, area.w - MINIMAP_WIDTH, area.h);
+            let _ = self.page(beside);
+        }
         // A document that fits has nothing for a minimap to show.
-        let fits = self.rendered && {
-            let cache = self.page.borrow();
-            cache
-                .as_ref()
-                .is_some_and(|p| p.rows.len() <= area.h as usize)
-        };
-        self.minimap_on && !self.measure.in_cells() && area.w >= MIN_MINIMAP_PANE && !fits
+        let cache = self.page.borrow();
+        !cache
+            .as_ref()
+            .is_some_and(|p| p.rows.len() <= area.h as usize)
     }
 
     /// Where text goes in `area`: all of it, less the minimap or the scrollbar.
@@ -641,26 +657,71 @@ impl Editor {
         }
     }
 
-    /// Pages use the whole pane, with room in the left margin for marks.
-    fn page_margin(_area: Rect) -> u16 {
-        PAGE_MARGIN
-    }
-
-    fn page_width(area: Rect) -> usize {
-        let right = if area.w < NARROW_PANE {
+    /// Columns right of a page's text, which a narrow pane gives back to the text.
+    fn right_margin(area: Rect) -> u16 {
+        if area.w < NARROW_PANE {
             NARROW_RIGHT_MARGIN
         } else {
             PAGE_MARGIN
-        };
-        area.w
-            .saturating_sub(Self::page_margin(area) + right + 1)
-            .clamp(1, MAX_PAGE_WIDTH) as usize
+        }
     }
 
-    /// The columns a page shows of what's on it, from its own left edge to the pane's right.
-    fn page_room(area: Rect) -> f32 {
-        area.right()
-            .saturating_sub(area.x + Self::page_margin(area)) as f32
+    /// Columns a pane has for a page's text, between the margins either side.
+    fn text_room(area: Rect) -> u16 {
+        area.w
+            .saturating_sub(PAGE_MARGIN + Self::right_margin(area) + 1)
+    }
+
+    /// Whether this page keeps to the reading width. Rows of data don't: a sheet is read
+    /// across, and wants every column the pane can show.
+    fn keeps_reading_width(&self) -> bool {
+        self.reading_width && !matches!(self.dialect(), Dialect::Data(_))
+    }
+
+    /// Columns left of a page's text: room for marks, and in a pane wider than the page,
+    /// half of what's spare, so the page stands in the middle of the pane. That's the pane
+    /// with its minimap's columns, whether or not one is showing, so a page doesn't move
+    /// across when it grows long enough to have one; where a minimap would leave too little
+    /// room for that, the page keeps clear of it instead.
+    fn page_margin(&self, area: Rect) -> u16 {
+        let width = self.page_width(area) as u16;
+        let room = Self::text_room(area);
+        let minimap = MINIMAP_WIDTH - 1;
+        let could = self.minimap_on && !self.measure.in_cells() && area.w >= MIN_MINIMAP_PANE;
+        let (whole, beside) = if self.shows_minimap(area) {
+            (room + minimap, room)
+        } else if could {
+            (room, room.saturating_sub(minimap))
+        } else {
+            (room, room)
+        };
+        let middle = whole.saturating_sub(width) / 2;
+        PAGE_MARGIN + middle.min(beside.saturating_sub(width))
+    }
+
+    /// Columns a page's text is set to: what the pane has for it, and no more than the
+    /// reading width when pages keep to one.
+    fn page_width(&self, area: Rect) -> usize {
+        let most = if self.keeps_reading_width() {
+            READING_WIDTH
+        } else {
+            MAX_PAGE_WIDTH
+        };
+        Self::text_room(area).clamp(1, most) as usize
+    }
+
+    /// The column after the last one a page draws in. A page as wide as its pane ends where
+    /// the pane does; one standing in the middle of a wider pane ends its right margin past
+    /// its text, and what's wider than that moves sideways inside it.
+    fn page_end(&self, area: Rect) -> u16 {
+        let text = area.x + self.page_margin(area) + self.page_width(area) as u16;
+        (text + Self::right_margin(area) + 1).min(area.right())
+    }
+
+    /// The columns a page shows of what's on it, from its own left edge to its right one.
+    fn page_room(&self, area: Rect) -> f32 {
+        self.page_end(area)
+            .saturating_sub(area.x + self.page_margin(area)) as f32
     }
 
     /// The table or block of code a row is part of, when it's wider than the pane shows: the
@@ -671,7 +732,7 @@ impl Editor {
         let _ = self.page(area);
         let cache = self.page.borrow();
         let (line, reach) = (*cache.as_ref()?.blocks.get(index)?)?;
-        let most = (reach + 1.0 - Self::page_room(area)).ceil().max(0.0) as usize;
+        let most = (reach + 1.0 - self.page_room(area)).ceil().max(0.0) as usize;
         (most > 0).then_some((line, most))
     }
 
@@ -693,16 +754,16 @@ impl Editor {
         self.wide_block(area, index).is_some()
     }
 
-    /// What a row's pictures are cut to: the pane, and for a row moved sideways, no further
+    /// What a row's pictures are cut to: the page, and for a row moved sideways, no further
     /// left than the page's text starts.
-    fn row_clip(area: Rect, moved: f32) -> Bounds {
+    fn row_clip(&self, area: Rect, moved: f32) -> Bounds {
         let edge = area.x
             + if moved > 0.0 {
-                Self::page_margin(area)
+                self.page_margin(area)
             } else {
                 0
             };
-        let width = area.right().saturating_sub(edge);
+        let width = self.page_end(area).saturating_sub(edge);
         Bounds::cells(edge as f32, area.y as f32, width as f32, area.h as f32)
     }
 
@@ -896,7 +957,7 @@ impl Editor {
     /// The rendered page for this width, laid out again only after an edit, or when the
     /// caret moves into or out of a formula.
     fn page(&self, area: Rect) -> Rc<Vec<Row>> {
-        let width = Self::page_width(area);
+        let width = self.page_width(area);
         let revision = self.buffer.revision();
         let head = self.selections.primary().head;
         let mut cache = self.page.borrow_mut();
@@ -948,7 +1009,7 @@ impl Editor {
         let area = self.text_area(area);
         let rows = self.page(area);
         let figures = self.figures();
-        let left = (area.x + Self::page_margin(area)) as f32;
+        let left = (area.x + self.page_margin(area)) as f32;
         let row = (y as f32) + 0.5;
         for (index, found) in rows.iter().enumerate() {
             let Some((figure, x)) = found.figure else {
@@ -1039,8 +1100,8 @@ impl Editor {
     /// middle of the page, so the edge is half its width from there.
     pub fn drag_image(&mut self, area: Rect, line: usize, x: f32) {
         const STEP: f32 = 5.0;
-        let page = Self::page_width(self.text_area(area)) as f32;
-        let middle = (area.x + Self::page_margin(self.text_area(area))) as f32 + page / 2.0;
+        let page = self.page_width(self.text_area(area)) as f32;
+        let middle = (area.x + self.page_margin(self.text_area(area))) as f32 + page / 2.0;
         let share = (x - middle).max(0.0) * 2.0 / page.max(1.0) * 100.0;
         let percent = ((share / STEP).round() * STEP).clamp(STEP * 2.0, 100.0) as u32;
         let at = self.buffer.position(line, 0);
@@ -1060,7 +1121,7 @@ impl Editor {
 
     fn draw_figures(&self, grid: &mut Grid, area: Rect, rows: &[Row], theme: &Theme) {
         let figures = self.figures();
-        let left = (area.x + Self::page_margin(area)) as f32;
+        let left = (area.x + self.page_margin(area)) as f32;
         let end = (self.top + area.h as usize).min(rows.len());
         for (index, row) in rows.iter().enumerate().take(end) {
             let Some((figure, x)) = row.figure else {
@@ -1312,7 +1373,7 @@ impl Editor {
         let area = self.text_area(area);
         let rows = self.page(area);
         let row = self.top + y.saturating_sub(area.y) as usize;
-        let column = x - (area.x + Self::page_margin(area)) as f32;
+        let column = x - (area.x + self.page_margin(area)) as f32;
         let Some((at, mark)) = rows.get(row).and_then(|r| r.checkbox) else {
             return false;
         };
@@ -1505,7 +1566,7 @@ impl Editor {
         if self.rendered {
             let rows = self.page(area);
             let row = self.top + y.saturating_sub(area.y) as usize;
-            let column = (fine_x - (area.x + Self::page_margin(area)) as f32).max(0.0);
+            let column = (fine_x - (area.x + self.page_margin(area)) as f32).max(0.0);
             let row = row.min(rows.len().saturating_sub(1));
             // A tall heading's lower half is the spacer under it, and still the heading.
             let above = row
@@ -2365,7 +2426,7 @@ impl Editor {
             // In a table or code wider than the pane, sideways as far as shows the caret and
             // no further.
             if let Some((block, most)) = self.wide_block(area, row) {
-                let room = (Self::page_room(area) - 3.0).max(1.0);
+                let room = (self.page_room(area) - 3.0).max(1.0);
                 let left = self
                     .sideways
                     .get(&block)
@@ -2974,7 +3035,7 @@ impl Editor {
             if x < 0.0 {
                 return None;
             }
-            (row, (area.x + Self::page_margin(area)) as f32 + x)
+            (row, (area.x + self.page_margin(area)) as f32 + x)
         } else {
             let (row, column) = self.place_of(&self.code_rows(area.w), head);
             let column = column.checked_sub(self.left())?;
@@ -4412,7 +4473,7 @@ impl Editor {
 
     /// Backgrounds of code blocks and tables, drawn before the text on top of them.
     fn draw_page_blocks(&self, grid: &mut Grid, area: Rect, rows: &[Row], theme: &Theme) {
-        let left = (area.x + Self::page_margin(area)) as f32;
+        let left = (area.x + self.page_margin(area)) as f32;
         let visible = self.top..(self.top + area.h as usize).min(rows.len());
         let y_of = |index: usize| area.y as f32 + (index - self.top) as f32;
         let mut index = visible.start;
@@ -4428,8 +4489,8 @@ impl Editor {
                 .find(|i| !group(&rows[*i]))
                 .unwrap_or(visible.end);
             let (top, height) = (y_of(index), (end - index) as f32);
-            // Where the block's right edge can be: a column in from the pane's, as code's is.
-            let edge = area.right() as f32 - 1.0;
+            // Where the block's right edge can be: a column in from the page's, as code's is.
+            let edge = self.page_end(area) as f32 - 1.0;
             let whole = end < visible.end || end == rows.len() || !group(&rows[end]);
             let wide = (index..end).find_map(|at| Some((at, self.wide_block(area, at)?.1)));
             if row.shaded {
@@ -4516,7 +4577,8 @@ impl Editor {
         grid.fill(area, theme.text);
         let rows = self.page(area);
         let proportional = !self.measure.in_cells();
-        let left = area.x + Self::page_margin(area);
+        let left = area.x + self.page_margin(area);
+        let page_end = self.page_end(area);
         let primary = self.selections.primary();
         let (caret_row, caret_x) = rendered::locate(&rows, primary.head);
         if proportional {
@@ -4535,8 +4597,11 @@ impl Editor {
                 theme.text.bg
             };
             if !proportional {
+                // The page's own columns, margins and all: beside a page that stands in the
+                // middle of its pane, the pane keeps its ground.
+                let from = left - PAGE_MARGIN;
                 grid.fill(
-                    Rect::new(area.x, y, area.w, 1),
+                    Rect::new(from, y, page_end - from, 1),
                     cellix_render::Style { bg, ..theme.text },
                 );
             }
@@ -4557,7 +4622,7 @@ impl Editor {
                     bg,
                     ..theme.text
                 };
-                grid.put_str(area.x + 1, y, "◆", mark, left);
+                grid.put_str(left - PAGE_MARGIN + 1, y, "◆", mark, left);
             }
             // Xcode shows a heading's level in the margin, beside the caret.
             let commented = marks.comments.contains(&(row.line + 1));
@@ -4566,11 +4631,11 @@ impl Editor {
                     fg: theme.gutter.fg,
                     ..theme.text
                 };
-                self.draw_heading_mark(grid, row, (area.x, left, y), dim.fg);
+                self.draw_heading_mark(grid, row, (left - PAGE_MARGIN, left, y), dim.fg);
             }
             if row.rule && proportional {
-                // As long as a rule is, or as the pane has room for.
-                let room = area.right().saturating_sub(left + 1) as f32;
+                // As long as a rule is, or as the page has room for.
+                let room = page_end.saturating_sub(left + 1) as f32;
                 let line = Bounds::cells(left as f32, y as f32 + 0.5, room.min(60.0), 0.0);
                 grid.hairline(line, theme.popup_border);
             }
@@ -4593,7 +4658,7 @@ impl Editor {
             let y = area.y as usize + caret_row - self.top;
             let x = left as f32 + caret_x - moved;
             self.draw_preview(grid, area, (x, y as f32), theme);
-            if y < area.bottom() as usize && x < area.right() as f32 {
+            if y < area.bottom() as usize && x < page_end as f32 {
                 let row = &rows[caret_row];
                 let size = row.glyphs.first().map_or(100, |g| g.font.size) as f32 / 100.0;
                 grid.set_caret(x, y as u16, (0.62 * size).min(1.6));
@@ -4683,6 +4748,7 @@ impl Editor {
         // In a row moved sideways, what's left of the page's own edge is out of view, and
         // so is what would touch that edge: about 8 px of air is kept from it.
         const EDGE_AIR: f32 = 0.5;
+        let page_end = self.page_end(area);
         let origin = left as f32 - moved;
         let hidden = |g: &Glyph| moved > 0.0 && g.x - moved < EDGE_AIR;
         let fg_of = |tone: Tone| match tone {
@@ -4737,7 +4803,7 @@ impl Editor {
                 painted: proportional,
             };
             let x = left + (g.x - moved) as u16;
-            let end = area.right() - u16::from(cut);
+            let end = page_end - u16::from(cut);
             grid.put_str(x, y, g.ch.encode_utf8(&mut [0; 4]), style, end);
         }
         // Cells have no thumb to show there's more to either side, so the row says so.
@@ -4753,10 +4819,10 @@ impl Editor {
                 .map(|g| g.x + g.advance)
                 .fold(0.0, f32::max);
             if moved > 0.0 {
-                grid.put_str(left, y, "\u{2039}", more, area.right());
+                grid.put_str(left, y, "\u{2039}", more, page_end);
             }
-            if reach - moved > Self::page_room(area) - 1.0 {
-                grid.put_str(area.right() - 1, y, "\u{203a}", more, area.right());
+            if reach - moved > self.page_room(area) - 1.0 {
+                grid.put_str(page_end - 1, y, "\u{203a}", more, page_end);
             }
         }
         if !proportional {
@@ -4767,7 +4833,7 @@ impl Editor {
         // column in from the pane's.
         let code = row.shaded && row.table.is_none();
         let inset = if code || cut { 1.0 + EDGE_AIR } else { 0.0 };
-        let right = area.right() as f32 - inset;
+        let right = page_end as f32 - inset;
         for issue in issues {
             let inside = |g: &&Glyph| g.at.is_some_and(|at| at >= issue.start && at < issue.end);
             let mut word = row.glyphs.iter().filter(|g| !hidden(g)).filter(inside);
@@ -4830,7 +4896,7 @@ impl Editor {
                         let top = line - figure.baseline;
                         grid.paint.push(Paint::Image {
                             bounds: Bounds::cells(x, top, figure.width, figure.height),
-                            clip: Self::row_clip(area, moved),
+                            clip: self.row_clip(area, moved),
                             bitmap: figure.bitmap.clone(),
                             color: theme.text.fg,
                         });
