@@ -4,8 +4,19 @@ a design reviewer to look at. No window opens, and everything runs against a thr
 project and home folder, so a tour can't touch real settings.
 
     tour.py <binary> <out folder>
+
+Beside each PNG goes the screen's text, as `<name>.txt`. A scene can say what its surface
+shows (`expect=`), and steps can wait for words rather than a clock (`["until", "words"]`): a
+scene that never gets there writes no picture, is listed as failed, and fails the tour. A
+picture of the wrong screen has passed for the right one before. `manifest.json` says, for
+each scene, which commit its picture is of, when it was taken, and whether it failed, so a
+folder of pictures from several runs still says how old each one is.
+
+TOUR_ONLY=a,b takes just those scenes. TOUR_PART=2/3 takes the second third of them all, in
+order: the whole tour is longer than one guarded job may run. TOUR_LIST=1 names the scenes
+it would take, and takes none.
 """
-import json, os, shutil, subprocess, sys, tempfile
+import json, os, shutil, subprocess, sys, tempfile, time
 
 binary, out = sys.argv[1], os.path.abspath(sys.argv[2])
 here = os.path.dirname(os.path.abspath(__file__))
@@ -14,8 +25,146 @@ CTRL = lambda c: chr(ord(c) - 96)
 RAIL_X = 1
 # One row each since the rail's redesign, Files on the first.
 SEARCH, OUTLINE, REVIEW = 2, 3, 5  # a row and a half apart, at their middles
-LIST_AGENTS = [["keys", "\x1b[112;6u"], ["wait", 0.3], ["keys", "List Agents"], ["wait", 0.3], ["keys", "\r"]]
-SHOW_INBOX = [["wait", 1.0], ["keys", "\x1b[112;6u"], ["wait", 1.0], ["keys", "Show Inbox"], ["wait", 1.0], ["keys", "\r"]]
+# The command palette, opened with Ctrl+Shift+P or F1 and waited for, then a command typed
+# and run, and the palette gone with what was typed into it. Each step waits for the screen to
+# say the one before it landed: keys sent before the palette is up are typed into the file.
+PALETTE_UP = "Type to search"
+def command(words, opened="\x1b[112;6u"):
+    return [["keys", opened], ["until", PALETTE_UP], ["keys", words], ["until", words], ["keys", "\r"],
+            ["gone", words]]
+F1 = "\\eOP"
+LIST_AGENTS = [*command("List Agents"), ["until", "START AN AGENT"]]
+SHOW_INBOX = command("Show Inbox")
+# A word each scene's surface shows, where one can be named: the scene's picture is only
+# taken once the screen says it. Hover scenes and plain pages have none.
+EXPECT = {
+    "04-menu-page": "Paste",
+    "05-menu-code": "Rename Symbol",
+    "06-menu-explorer": "New File",
+    "07-menu-tab": "Close Others",
+    "08-open-file": "Search files",
+    "09-commands": "Open Settings",
+    "10-branches": "Switch branch",
+    "100-workspaces": "Resume",
+    "101-workspace-hover": "Resume",
+    "102-stopped-card": "building the index",
+    "103-running-here": "workspaces are open",
+    "104-logout-card": "when you disconnect",
+    "105-new-workspace-hover": "Resume",
+    "107-folder-path": "infra",
+    "108-terminal-ask": "FAILED",
+    "108-terminal-ask-hover": "FAILED",
+    "109-problem-ask": "Undefined control sequence",
+    "11-replace": "entry",
+    "12-search": "SEARCH",
+    "12-search-switches": "results",
+    "120-go-to-symbol": "structs",
+    "121-go-to-symbol-typed": "methods",
+    "122-workspace-symbols": "jobs.rs",
+    "123-signature-help": "index: usize",
+    "124-inlay-hints": "run.rs",
+    "125-inlay-hints-light": "run.rs",
+    "13-agents-click": "START AN AGENT",
+    "13-quit-beside-pane": "START AN AGENT",
+    "13-review": "Accept",
+    "13-source-control": "SOURCE CONTROL",
+    "13-source-diff": "SOURCE CONTROL",
+    "13-source-hover": "SOURCE CONTROL",
+    "13-source-message": "what changed and",
+    "13-source-staged": "STAGED CHANGES",
+    "13-stacked-pane": "START AN AGENT",
+    "130-run-task": "Select the task",
+    "131-task-failed": "make build",
+    "132-task-problems": "undeclared identifier",
+    "133-open-recent": "recent folder",
+    "134-settings-editor": "files save",
+    "135-settings-keyboard": "command's keys",
+    "136-settings-keys-search": "command's keys",
+    "137-settings-keys-record": "command's keys",
+    "138-welcome-recent": "RECENT",
+    "14-agents": "START AN AGENT",
+    "140-inbox": "waiting",
+    "141-inbox-hover": "waiting",
+    "15-settings-appearance": "Changes apply",
+    "150-task-page": "Open Transcript",
+    "151-task-plan": "Open Transcript",
+    "152-task-turn": "Open Transcript",
+    "153-task-review-turn": "COMPARE WITH",
+    "154-task-narrow": "Bound the queue",
+    "16-settings-editor": "files save",
+    "17-settings-integrations": "Cellix works with",
+    "18-settings-keyboard": "command's keys",
+    "19-dialog": "Save changes",
+    "26-light-settings": "Changes apply",
+    "30-hover-menu": "Rename Symbol",
+    "31-hover-palette": "Search files",
+    "35-hover-review": "Accept",
+    "36-hover-accept": "Accept",
+    "37-hover-settings": "files save",
+    "38-hover-dialog": "Save changes",
+    "39-hover-agents": "START AN AGENT",
+    "42-hover-install": "files save",
+    "43-light-hover-menu": "Rename Symbol",
+    "50-comments": "yours",
+    "50-plan-versions": "yours",
+    "50-plan-versions-narrow": "yours",
+    "50-review": "suggested",
+    "51-agent-list": "START AN AGENT",
+    "51-inbox-empty": "Nothing",
+    "56-narrow-note": "START AN AGENT",
+    "57-dock-agents": "START AN AGENT",
+    "64-transcript-tab": "stand-in",
+    "64-transcript-tab-full": "stand-in",
+    "64-transcript-tab-hover": "stand-in",
+    "64-transcript-tab-light": "stand-in",
+    "64-transcript-tab-menu": "Open Transcript",
+    "65-transcript-page": "Show Source",
+    "66-transcript-light": "Show Source",
+    "67-transcript-scrolled": "Show Source",
+    "74-outline": "OUTLINE",
+    "75-data": "Show Source",
+    "81-context": "AGENT CONTEXT",
+    "81-context-codex": "What Codex would",
+    "81-context-hover": "AGENT CONTEXT",
+    "81-context-open": "AGENT CONTEXT",
+    "81-git-graph": "SOURCE CONTROL",
+    "82-git-commit-open": "SOURCE CONTROL",
+    "83-git-timeline": "Bound the queue",
+    "84-git-compare": "Compare the file",
+    "85-git-compared": "COMPARED",
+    "86-git-merge-panel": "Merging",
+    "87-git-conflict": "conflict",
+    "88-git-conflict-hover": "conflict",
+    "89-git-stashes": "STASHES",
+    "90-preview-image": "loss.png",
+    "91-preview-zoomed": "loss.png",
+    "92-preview-panned": "loss.png",
+    "93-pane-maximized": "hidden while",
+    "94-pane-restore-hover": "hidden while",
+    "95-editor-maximized": "hidden while",
+    "96-tab-drag-split": "split right",
+    "98-pane-drag-under": "loss.png",
+}
+# About how many scenes there are, to cut the tour into parts of a size.
+SCENES_IN_ALL = 180
+# Scenes come to, shot, and those that never reached their surface.
+SEEN, SHOT, FAILED = [0], [], []
+# Which commit the binary is, as far as git can say: the pictures are of that.
+COMMIT = subprocess.run(["git", "-C", here, "describe", "--always", "--dirty"], capture_output=True,
+                        text=True).stdout.strip()
+MANIFEST = f"{out}/manifest.json"
+try:
+    with open(MANIFEST) as f:
+        SCENES = json.load(f)["scenes"]
+except (OSError, ValueError, KeyError):
+    SCENES = {}
+
+
+def note(name, why):
+    """Writes down how a scene went, at once, so a tour cut short still says what it took."""
+    SCENES[name] = {"commit": COMMIT, "at": time.strftime("%Y-%m-%d %H:%M:%S"), **({"failed": why} if why else {})}
+    with open(MANIFEST, "w") as f:
+        json.dump({"scenes": SCENES}, f, indent=1, sort_keys=True)
 
 CODE = """//! A bounded queue.
 use std::collections::VecDeque;
@@ -244,13 +393,29 @@ def chart(path, width=1600, height=900):
         f.write(chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
 
 
-def shoot(name, steps, *args, size="120x40", background="1e1e2e", cwd=None, env=None, timeout=70):
-    """Runs one scene and writes `<name>.png`, with `steps` run first."""
+def shoot(name, steps, *args, size="120x40", background="1e1e2e", cwd=None, env=None, timeout=70,
+          expect=None):
+    """Runs one scene and writes `<name>.png` and `<name>.txt`, with `steps` run first. With
+    `expect`, only once the screen says it."""
     # TOUR_ONLY=50-review,02-code retakes just those, for a quick look after a change.
     only = os.environ.get("TOUR_ONLY")
     if only and name not in only.split(","):
         return
-    script = [*steps, ["wait", 0.3], ["shot", f"{out}/{name}.png"]]
+    index, SEEN[0] = SEEN[0], SEEN[0] + 1
+    if not only and os.environ.get("TOUR_PART"):
+        part, parts = (int(n) for n in os.environ["TOUR_PART"].split("/"))
+        if min(index * parts // SCENES_IN_ALL, parts - 1) != part - 1:
+            return
+    if os.environ.get("TOUR_LIST"):
+        print(name, flush=True)
+        return
+    expect = expect or EXPECT.get(name)
+    waited = [["until", expect]] if expect else []
+    script = [*steps, *waited, ["wait", 0.3], ["shot", f"{out}/{name}.png"]]
+    # A picture from an earlier tour mustn't stand in for one this tour didn't take.
+    for old in (f"{out}/{name}.png", f"{out}/{name}.txt"):
+        if os.path.exists(old):
+            os.unlink(old)
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump(script, f)
     extra = env or {}
@@ -259,8 +424,11 @@ def shoot(name, steps, *args, size="120x40", background="1e1e2e", cwd=None, env=
     own_cache = None if "XDG_CACHE_HOME" in extra else tempfile.mkdtemp(prefix="cx", dir="/tmp")
     if own_cache:
         extra = {**extra, "XDG_CACHE_HOME": own_cache}
+    said = tempfile.NamedTemporaryFile(suffix=".txt", delete=False)
+    said.close()
     env = {
         **os.environ,
+        "CELLIX_SCREEN_TEXT": said.name,
         "HOME": HOME,
         "TERM_SIZE": size,
         "TERM_BG": background,
@@ -268,13 +436,36 @@ def shoot(name, steps, *args, size="120x40", background="1e1e2e", cwd=None, env=
         **extra,
     }
     env.pop("CLAUDE_CONFIG_DIR", None)
-    command = ["python3", "-I", f"{here}/term.py", f.name, binary, *args]
-    subprocess.run(command, cwd=cwd or ROOT, env=env, timeout=timeout, stdout=subprocess.DEVNULL)
+    run = ["python3", "-I", f"{here}/term.py", f.name, binary, *args]
+    # Taken once more if it misses: a loaded machine can lose a scene its place, and one
+    # that misses twice is worth a person's look.
+    for attempt in ("first", "second"):
+        try:
+            done = subprocess.run(run, cwd=cwd or ROOT, env=env, timeout=timeout, capture_output=True, text=True)
+            why = done.stdout.strip().splitlines()[-1:] if done.returncode else None
+        except subprocess.TimeoutExpired:
+            why = [f"took more than {timeout} seconds"]
+        if why is None:
+            break
+        print(f"retaking {name}: {' '.join(why)}" if attempt == "first" else f"missed twice: {name}", flush=True)
+        if own_cache:
+            subprocess.run(["pkill", "-9", "-f", own_cache])
     os.unlink(f.name)
+    for left in (said.name, said.name[:-4] + ".new"):
+        if os.path.exists(left):
+            os.unlink(left)
     if own_cache:
         subprocess.run(["pkill", "-9", "-f", own_cache])
         shutil.rmtree(own_cache, ignore_errors=True)
-    print(name, flush=True)
+    if why is None and os.path.exists(f"{out}/{name}.png"):
+        SHOT.append(name)
+        note(name, None)
+        print(name, flush=True)
+    else:
+        why = " ".join(why or ["no picture was written"])
+        FAILED.append(name)
+        note(name, why)
+        print(f"FAILED {name}: {why}", flush=True)
 
 
 def workspaces(scratch):
@@ -435,15 +626,14 @@ def git_scenes(scratch):
     git(root, "stash", "push", "-q", "-m", "Tidy the README")
     write("PLAN.md", "# Plan\n\nRing buffer?\n")
     git(root, "stash", "push", "-q")
-    graph = [["wait", 1.0], ["keys", "\x1b[112;6u"], ["wait", 0.8], ["keys", "Show Git History"], ["wait", 0.8],
-             ["keys", "\r"], ["wait", 3.0]]
+    graph = [["wait", 1.0], *command("Show Git History"), ["wait", 3.0]]
     shoot("81-git-graph", graph, "README.md", size="120x40", cwd=root)
     # The newest commit's row, opened to its files.
     # The newest commit's row, opened to its files: the graph's heading is the panel's top row.
     shoot("82-git-commit-open", [*graph, ["wait", 3.0], ["click", 14, 2], ["wait", 2.0]], "README.md", size="120x40", cwd=root)
     shoot("83-git-timeline", [["wait", 1.5]], "src/queue.rs", size="120x40", cwd=root)
-    compare = [["wait", 1.0], ["keys", "\x1b[112;6u"], ["wait", 0.8], ["keys", "Compare With"], ["wait", 0.8],
-               ["keys", "\r"], ["wait", 1.0]]
+    compare = [["wait", 1.0], ["keys", "\x1b[112;6u"], ["until", PALETTE_UP], ["keys", "Compare With"],
+               ["until", "Compare With"], ["keys", "\r"], ["until", "Compare the file"]]
     shoot("84-git-compare", compare, "src/queue.rs", size="120x40", cwd=root)
     shoot("85-git-compared", [*compare, ["keys", "agent"], ["wait", 0.8], ["keys", "\r"], ["wait", 1.5]],
           "src/queue.rs", size="120x40", cwd=root)
@@ -527,10 +717,8 @@ def transcripts(scratch):
                 f"exec sleep 300\n")
     os.chmod(f"{tools}/claude", 0o755)
     # The meter reads the transcript every couple of seconds, away from the screen.
-    start = [["keys", "\\eOP"], ["wait", 0.3], ["keys", "Open Claude Code"], ["wait", 0.3],
-             ["keys", "\r"], ["wait", 6.0]]
-    opened = [*start, ["keys", "\\eOP"], ["wait", 1.5], ["keys", "Agent Transcript"],
-              ["wait", 0.6], ["keys", "\r"], ["wait", 3.0]]
+    start = [*command("Open Claude Code", F1), ["until", "stand-in"], ["until", "%"]]
+    opened = [*start, *command("Agent Transcript", F1), ["until", "Show Source"], ["wait", 1.0]]
     scenes = [
         ("64-transcript-tab", start, [CODE_FILE], {}),
         ("64-transcript-tab-hover", [*start, ["move", 104, 0], ["wait", 0.6]], [CODE_FILE], {}),
@@ -595,8 +783,7 @@ def task_scenes(scratch):
     prompt(start + 20 * 60_000, "Add a test that a full queue still pops in order.")
     with open(f"{root}/src/lib.rs", "w") as f:
         f.write("mod queue;\n")
-    show = [["wait", 1.0], ["keys", "\\eOP"], ["wait", 0.6], ["keys", "show agent task"],
-            ["wait", 0.4], ["keys", "\r"], ["wait", 1.5]]
+    show = [["wait", 1.0], *command("show agent task", F1), ["until", "Bound the queue"], ["wait", 0.5]]
     up = ["keys", "\x1b[A"]
     cache = {"env": {"XDG_CACHE_HOME": tempfile.mkdtemp(prefix="cxt", dir="/tmp")}}
     shoot("150-task-page", show, cwd=root, size="150x44", **cache)
@@ -629,7 +816,7 @@ with tempfile.TemporaryDirectory() as scratch:
     OUTPUT_FROM, OUTPUT_TO, OUTPUT_ASK = (97, 7), (125, 10), (111, 6)
     PROBLEM_COUNT, PROBLEM_ROW = (9, 42), (150, 2)
     GEAR = (RAIL_X, 36)
-    settings = [["click", *GEAR]]
+    settings = [["click", *GEAR], ["until", "Changes apply"]]
 
     workspaces(scratch)
     code_intelligence(scratch)
@@ -643,7 +830,7 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("06-menu-explorer", [["right", 12, 2]])
     shoot("07-menu-tab", [["wait", 1.0], ["right", 36, 0], ["wait", 0.3]], CODE_FILE)
     shoot("08-open-file", [["keys", CTRL("p")]], CODE_FILE)
-    shoot("09-commands", [["keys", "\\eOP"], ["keys", "op"]], CODE_FILE)
+    shoot("09-commands", [["keys", F1], ["until", PALETTE_UP], ["keys", "op"]], CODE_FILE)
     shoot("10-branches", [["wait", 1.5], ["click", 3, 38], ["wait", 0.5]], CODE_FILE)
     shoot("11-find", [["keys", CTRL("f")], ["keys", "item"]], CODE_FILE)
     shoot("12-search", [["click", RAIL_X, SEARCH]], CODE_FILE)
@@ -671,8 +858,7 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("19-dialog", [["keys", "x"], ["keys", CTRL("q")]], CODE_FILE)
     # Workflow: tasks, Open Recent, and Settings' Editor and Keyboard sections, reached through
     # the palette so they don't hang on where the gear is.
-    palette = lambda words: [["keys", "\\eOP"], ["wait", 0.4], ["keys", words], ["wait", 0.4],
-                             ["keys", "\r"], ["wait", 0.8]]
+    palette = lambda words: [*command(words, F1), ["wait", 0.5]]
     shoot("130-run-task", palette("run task"), CODE_FILE)
     tasks = f"{scratch}/tasks"
     os.makedirs(f"{tasks}/src")
@@ -686,8 +872,8 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("132-task-problems", [*palette("run task"), ["keys", "\r"], ["wait", 2.5],
                                 ["click", 3, 38], ["wait", 0.6]], "src/main.c", cwd=tasks)
     shoot("133-open-recent", palette("open recent"), CODE_FILE)
-    to_section = lambda tabs: [*palette("open settings"), *[["keys", "\t"]] * tabs, ["keys", "\r"],
-                               ["wait", 0.5]]
+    to_section = lambda tabs: [*palette("open settings"), ["until", "Changes apply"],
+                               *[["keys", "\t"]] * tabs, ["keys", "\r"], ["wait", 0.5]]
     shoot("134-settings-editor", to_section(2), CODE_FILE)
     shoot("135-settings-keyboard", to_section(4), CODE_FILE)
     shoot("136-settings-keys-search", [*to_section(4), ["keys", "task"], ["wait", 0.4]], CODE_FILE)
@@ -736,14 +922,13 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("48-table-picker", [["click", *TABLE], ["move", 100, 7]], NOTE_FILE, size="150x44")
     shoot("49-table-menu", [["right", 41, 29]], NOTE_FILE, size="150x44", background="eff1f5")
     # A debug build presents a page of math slowly, so each step is given time to land.
-    comment = [["wait", 1.5], ["click", 90, 5], ["wait", 0.6], ["keys", "\\eOP"], ["wait", 0.6]]
-    comment += [["keys", "add comment"], ["keys", "\r"], ["wait", 0.6]]
-    comment += [["keys", "Is this true for multi-head attention?\r"], ["wait", 1.0]]
+    comment = [["wait", 1.5], ["click", 90, 5], ["wait", 0.6], *command("add comment", F1)]
+    comment += [["until", "Enter sends"], ["keys", "Is this true for multi-head attention?\r"]]
+    comment += [["gone", "Enter sends"], ["wait", 0.5]]
     shoot("50-comments", comment, NOTE_FILE, size="150x44", background="eff1f5")
     # Being typed: the caret stands after the space just typed.
-    typing = [["wait", 3.0], ["click", 90, 5], ["wait", 1.5], ["keys", "\\eOP"], ["wait", 1.5],
-              ["keys", "add comment"], ["wait", 1.0], ["keys", "\r"], ["wait", 1.5],
-              ["keys", "Is this true for "], ["wait", 1.5]]
+    typing = [["wait", 3.0], ["click", 90, 5], ["wait", 1.5], *command("add comment", F1),
+              ["until", "Enter sends"], ["keys", "Is this true for "], ["wait", 1.5]]
     shoot("50-comment-typing", typing, NOTE_FILE, size="150x44", background="eff1f5")
     # A review the agent has checked: a verdict on the reviewer's comment and a suggestion.
     review = [
@@ -774,22 +959,12 @@ with tempfile.TemporaryDirectory() as scratch:
     os.makedirs(f"{ROOT}/.cellix", exist_ok=True)
     with open(f"{ROOT}/.cellix/threads.json", "w") as f:
         json.dump(review, f)
-    shoot("50-review", [["wait", 1.5], ["keys", "\\eOP"], ["wait", 0.6], ["keys", "show comments"],
-                        ["wait", 3.0], ["keys", "\r"], ["wait", 3.0]],
-          NOTE_FILE, size="150x44")
-    shoot("50-plan-versions", [["wait", 1.0], ["keys", "\\eOP"], ["wait", 0.6], ["keys", "show comments"],
-                               ["wait", 1.0], ["keys", "\r"], ["wait", 1.5]],
-          "docs/PLAN.md", size="150x44")
+    comments = [["wait", 1.0], *command("show comments", F1), ["until", "yours"], ["wait", 1.0]]
+    shoot("50-review", comments, NOTE_FILE, size="150x44")
+    shoot("50-plan-versions", comments, "docs/PLAN.md", size="150x44")
     # Narrow beside the editor: a pill that can't share its header's row goes under it.
-    shoot("50-plan-versions-narrow", [["wait", 1.0], ["keys", "\\eOP"], ["wait", 0.6],
-                                      ["keys", "show comments"], ["wait", 1.0], ["keys", "\r"],
-                                      ["wait", 1.5]],
-          "docs/PLAN.md", size="96x44")
-    # The page takes a moment to typeset at this size, and keys sent before it's up are lost,
-    # so this goes as slowly as the inbox scene beside it.
-    list_slowly = [["wait", 1.0], ["keys", "\x1b[112;6u"], ["wait", 1.0], ["keys", "List Agents"], ["wait", 1.0],
-                   ["keys", "\r"]]
-    shoot("51-agent-list", [*list_slowly, ["wait", 1.0]], NOTE_FILE, size="150x44")
+    shoot("50-plan-versions-narrow", comments, "docs/PLAN.md", size="96x44")
+    shoot("51-agent-list", [*LIST_AGENTS, ["wait", 1.0]], NOTE_FILE, size="150x44")
     shoot("51-inbox-empty", [*SHOW_INBOX, ["wait", 0.6]], NOTE_FILE, size="150x44")
     shell = [*LIST_AGENTS, ["wait", 0.6]]
     shoot("52-paper", [], PAPER_FILE, size="150x44", background="eff1f5")
@@ -801,8 +976,8 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("56-narrow-note", [*LIST_AGENTS, ["wait", 0.6]], NOTE_FILE, size="100x34")
     # About the size Claude Code docks Cellix at: at most 45% of a window, beside the chat.
     shoot("57-dock-page", [["wait", 1.5]], NOTE_FILE, size="64x40")
-    shoot("57-dock-comments", [["wait", 1.5], ["keys", "\\eOP"], ["wait", 0.6], ["keys", "show comments"],
-                               ["keys", "\r"], ["wait", 1.0]], NOTE_FILE, size="64x40")
+    shoot("57-dock-comments", [["wait", 1.5], *command("show comments", F1), ["wait", 1.0]], NOTE_FILE,
+          size="64x40")
     shoot("57-dock-agents", [*LIST_AGENTS, ["wait", 0.6]], NOTE_FILE, size="64x40")
     shoot("57-dock-menu", [["wait", 1.5], ["right", 20, 12], ["wait", 0.4]], NOTE_FILE, size="64x40")
     # Format is the fourth item down, past the rule under Paste: menus stand on whole rows.
@@ -854,7 +1029,7 @@ with tempfile.TemporaryDirectory() as scratch:
     PAPER = os.path.join(samples, "paper", "main.tex")
     light = {"size": "150x44", "background": "eff1f5"}
     shoot("57-welcome", [], **light)
-    start_shell = [["keys", "\x1b[112;6u"], ["wait", 0.3], ["keys", "New Terminal"], ["wait", 0.3], ["keys", "\r"], ["wait", 1.5]]
+    start_shell = [*command("New Terminal"), ["wait", 1.5]]
     shoot("58-welcome-with-shell", start_shell, **light)
     shoot("59-sample-top", [], WRITING, **light)
     for number, (name, notches) in enumerate(
@@ -983,3 +1158,7 @@ with tempfile.TemporaryDirectory() as scratch:
     fold_checks = [["click", 14, 6], ["wait", 0.3]]
     shoot("81-context-open", [*show_context, *fold_checks, ["click", 14, 11], ["wait", 1.0]], cwd=ctx, size="150x44")
     shoot("81-context-codex", [*show_context, ["click", 14, 1], ["wait", 1.2]], cwd=ctx, size="150x44")
+
+if FAILED:
+    print(f"{len(FAILED)} of {len(SHOT) + len(FAILED)} scenes failed: {', '.join(FAILED)}", flush=True)
+    sys.exit(1)

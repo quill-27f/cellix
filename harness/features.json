@@ -4737,5 +4737,12 @@
     "title": "The command palette shows beside each command the keys it has now: every command with keys, and the person's own from the Keyboard page in place of the usual ones",
     "test": "the_command_palette_shows_the_keys_each_command_has_now",
     "passes": true
+  },
+  {
+    "id": "screen-text-for-the-harness",
+    "milestone": 12,
+    "title": "With CELLIX_SCREEN_TEXT set, Cellix writes the screen's text to that file on every frame, so the tour's headless terminal, which is sent pictures, can wait for a surface and refuse to shoot the wrong one",
+    "test": "the_screen_is_written_as_text_for_the_harness",
+    "passes": true
   }
 ]

@@ -841,6 +841,9 @@ pub fn run(options: Options) -> io::Result<()> {
     let mut lively = Instant::now();
     let mut shown: Option<Grid> = None;
     let ghostty = std::env::var("TERM").is_ok_and(|t| t.contains("ghostty"));
+    // Where the screen is also written as text, for the harness: its terminal gets pictures,
+    // and the tour has to know a scene reached its surface before taking one of it.
+    let screen_text = std::env::var_os("CELLIX_SCREEN_TEXT").map(PathBuf::from);
     // What the terminal is decides which notification sequence it reads.
     let notice =
         cellix_term::Notice::for_terminal(&cellix_term::terminal_names(|n| std::env::var(n).ok()));
@@ -900,6 +903,13 @@ pub fn run(options: Options) -> io::Result<()> {
                 phases.present = started.elapsed();
                 slow.note(&phases);
                 phases = crate::slow::Phases::default();
+                if let Some(path) = &screen_text {
+                    // Whole or not at all: it's read while Cellix writes.
+                    let fresh = path.with_extension("new");
+                    if std::fs::write(&fresh, grid.text()).is_ok() {
+                        let _ = std::fs::rename(&fresh, path);
+                    }
+                }
                 shown = Some(grid);
                 if let Some(text) = spaces.app_mut().outgoing_clipboard.take() {
                     let encoded = base64::engine::general_purpose::STANDARD.encode(text);

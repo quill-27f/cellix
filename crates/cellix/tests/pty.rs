@@ -798,6 +798,38 @@ fn a_stop_as_the_terminal_closes_still_ends_cellix() {
     }
 }
 
+/// The harness's terminal is sent pictures, so Cellix also says what's on screen in a file
+/// when asked to. The tour waits on it rather than on a clock.
+#[test]
+fn the_screen_is_written_as_text_for_the_harness() {
+    let dir = project();
+    let told = tempfile::tempdir().unwrap();
+    let file = told.path().join("screen.txt");
+    let mut screen =
+        Screen::start_with(dir.path(), &["hello.txt"], &[("CELLIX_SCREEN_TEXT", &file)]);
+    screen.wait_for("hello from a file");
+    let deadline = Instant::now() + WAIT;
+    let said = || std::fs::read_to_string(&file).unwrap_or_default();
+    while !said().contains("hello from a file") {
+        assert!(Instant::now() < deadline, "the file says: {}", said());
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    // It follows the screen: the other file's words come once it's opened.
+    let row = screen
+        .contents()
+        .lines()
+        .position(|l| l.contains("other.txt"))
+        .unwrap();
+    screen.send(format!("\x1b[<0;6;{}M\x1b[<0;6;{}m", row + 1, row + 1).as_bytes());
+    screen.wait_for("other contents");
+    while !said().contains("other contents") {
+        assert!(Instant::now() < deadline, "the file says: {}", said());
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    screen.send(b"\x11");
+    screen.wait_exit();
+}
+
 /// Closing the window is how a session often ends. Cellix finishes as it does on Quit: an
 /// unsent comment is kept for next time, and the socket goes. On Windows that's a console
 /// handler; elsewhere the hang-up.

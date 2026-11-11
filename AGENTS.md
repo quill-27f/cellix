@@ -39,9 +39,12 @@ window. `harness/visual.sh` opens real windows, so use it only to check terminal
 
 **Look at every surface before calling a UI change done.** `harness/x tour` drives the
 real binary through a headless terminal and writes a PNG of each surface to `target/tour`,
-going through the tile cache and smooth scrolling as a real terminal does. Then have the
-`ui-expert` agent review those pictures, and fix what it finds. Tests have repeatedly
-passed on things that looked wrong.
+going through the tile cache and smooth scrolling as a real terminal does. Beside each PNG
+is the screen's text, and `manifest.json` says which commit each picture is of. A scene
+waits for words its surface shows, and one that never gets there fails rather than leave a
+picture of the wrong screen: read the failures before the pictures. `TOUR_ONLY=a,b` retakes
+scenes. Then have the `ui-expert` agent review those pictures, and fix what it finds. Tests
+have repeatedly passed on things that looked wrong.
 
 **Every feature must work on the cell tier.** All UI draws to the `Grid`. Backends only
 present it, so a feature never talks to a backend directly.

@@ -14,10 +14,18 @@ The script is a list of steps:
     ["move", col, row]           ["wheel", col, row, notches]  (negative is up)
     ["paste", "text"]            ["resize", cols, rows]
     ["shot", "out.png"]          ["log", "label"]
+    ["until", "text"]            Waits until the screen says it, and fails the script if it never does.
+    ["gone", "text"]             Waits until the screen no longer says it.
+    ["until", "text", seconds]   Either, giving up after that long rather than 20 seconds.
     ["timed", "label", <step>]   Runs a step, and logs how long until the screen answered.
 
 Settings come from the environment: TERM_SIZE=170x46, TERM_CELL=17x36, TERM_PADDING=10x8,
-TERM_BG=1e1e2e. Clipboard writes and timings are printed. Stop when the script ends."""
+TERM_BG=1e1e2e. Clipboard writes and timings are printed. Stop when the script ends.
+
+The terminal is sent pictures, so it can't read the screen. With CELLIX_SCREEN_TEXT set to a
+path, Cellix writes the screen's text there on every frame: "until" reads it, and each shot
+leaves that text beside its PNG. A script whose "until" never comes takes no more shots and
+exits with 3, so a picture of the wrong surface is never written."""
 import subprocess, base64, fcntl, json, os, pty, re, select, signal, struct, sys, termios, time, zlib
 
 
@@ -30,6 +38,16 @@ COLS, ROWS = pair("TERM_SIZE", "170x46")
 CW, CH = pair("TERM_CELL", "17x36")
 PAD_X, PAD_Y = pair("TERM_PADDING", "10x8")
 BG = bytes.fromhex(os.environ.get("TERM_BG", "1e1e2e"))
+TEXT = os.environ.get("CELLIX_SCREEN_TEXT")
+
+
+def said():
+    """What Cellix says is on screen, as text. Empty before its first frame."""
+    try:
+        with open(TEXT, encoding="utf8", errors="replace") as f:
+            return f.read()
+    except (OSError, TypeError):
+        return ""
 CHANNEL = lambda byte: f"{byte:02x}{byte:02x}"
 BACKGROUND = "/".join(CHANNEL(b) for b in BG)
 
@@ -208,6 +226,7 @@ def main():
     screen = Screen()
     alive = [True]
     received = [0]
+    missed = []
 
     def pump(seconds):
         """Runs the terminal for a while. Returns seconds until the first frame, if any."""
@@ -245,6 +264,15 @@ def main():
         kind = step[0]
         if kind == "wait":
             pump(step[1])
+        elif kind in ("until", "gone"):
+            deadline = time.time() + (step[2] if len(step) > 2 else 20)
+            while (step[1] in said()) == (kind == "gone") and alive[0]:
+                if time.time() > deadline or not TEXT:
+                    missed.append(("never showed " if kind == "until" else "still showed ") + repr(step[1]))
+                    return
+                pump(0.05)
+            # The frame that says it is on its way to the terminal as well.
+            pump(0.1)
         elif kind == "keys":
             os.write(master, step[1].replace("\\e", "\x1b").encode())
             pump(0.25)
@@ -300,6 +328,9 @@ def main():
                 if received[0] - before > 256:
                     quiet = time.time()
             png(step[1], *screen.picture())
+            if TEXT:
+                with open(os.path.splitext(step[1])[0] + ".txt", "w", encoding="utf8") as f:
+                    f.write(said())
         elif kind == "log":
             print(step[1], flush=True)
         elif kind == "bg":
@@ -336,11 +367,18 @@ def main():
     while not screen.placements and alive[0] and time.time() < deadline:
         pump(0.05)
     pump(0.4)
+    # And with the screen told as text, until it has said its first frame.
+    while TEXT and not said().strip() and alive[0] and time.time() < deadline:
+        pump(0.05)
     for step in script:
         if not alive[0]:
             print("the program exited early", flush=True)
             break
         run(step)
+        if missed:
+            shown = " / ".join(line.strip() for line in said().splitlines() if line.strip())
+            print(f"{missed[0]}; the screen says: {shown[:400]}", flush=True)
+            break
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
@@ -355,6 +393,8 @@ def main():
         if done:
             break
         time.sleep(0.05)
+    if missed:
+        sys.exit(3)
 
 
 main()

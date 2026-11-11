@@ -39,7 +39,18 @@ case $task in
   tour)
     out=${1:-target/tour}
     guard build cargo build -q -p cellix || exit 1
-    guard tour python3 -I harness/live/tour.py "$root/target/debug/cellix" "$out" ;;
+    # The whole tour takes longer than one guarded job may run, so it goes in three parts.
+    # TOUR_ONLY=a,b retakes just those scenes, in one.
+    if [ -n "${TOUR_ONLY:-}" ]; then
+      guard tour python3 -I harness/live/tour.py "$root/target/debug/cellix" "$out"
+    else
+      status=0
+      for part in 1 2 3; do
+        TOUR_PART=$part/3 harness/guard.sh --label tour -- \
+          python3 -I harness/live/tour.py "$root/target/debug/cellix" "$out" || status=$?
+      done
+      exit $status
+    fi ;;
   mux) guard mux cargo test -p cellix --test mux -- --ignored --test-threads=1 "$@" ;;
   tex) guard tex cargo test -p cellix --test tex -- --ignored --test-threads=1 "$@" ;;
   verify)
