@@ -872,10 +872,15 @@ fn closing_the_terminal_keeps_unsent_comments() {
 /// own. Its input then reads as ended for ever, and crossterm reads that for ever: one was
 /// found a week later still using a whole core. Cellix sees its terminal is gone and ends.
 ///
-/// Only on macOS. On Linux, reading a terminal that has gone is an error, which ends the loop,
-/// and Cellix doesn't start there without a terminal of its own.
+/// Run only on macOS. On Linux, reading a terminal that has gone is an error, which ends the
+/// loop, and Cellix doesn't start there without a terminal of its own. It's built and
+/// listed there all the same, as ignored, so the ledger's check finds it on any Unix.
 #[test]
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
+#[cfg_attr(
+    not(target_os = "macos"),
+    ignore = "the read that never ends is macOS's"
+)]
 fn a_terminal_that_goes_without_a_hang_up_still_ends_cellix() {
     use std::os::fd::{FromRawFd, OwnedFd};
     use std::os::unix::process::CommandExt;

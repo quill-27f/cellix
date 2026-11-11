@@ -1825,4 +1825,5 @@ Everything since 0.6.4: the fixes from the end-to-end review, tables that keep t
 - Looked at from the second tour: 131, 132, 160 to 167, 46, 49 and the transcript scenes, with snapshots of the tabs at 40 columns on both tiers.
 - Unverified: all of it in a real terminal. The ui-expert has not seen the renders made after its findings were fixed.
 - Next: the user's pick on the 14 boards still on the canvas (comment cards, Task page close, terminal chips, Agents rows, palette, Settings search), and whether 88 columns, which is about 140 characters a line, should be narrower.
+- 0.6.5's first CI run failed on Linux, so nothing was released from it: `a_terminal_that_goes_without_a_hang_up_still_ends_cellix` was `#[cfg(target_os = "macos")]`, and CI's ledger step looks for every passing feature's test in the Linux log. It's now built on any Unix and ignored off macOS. `harness/x verify` runs on the Mac, where the test exists, so it couldn't have caught this: a feature's test must exist on Linux, as ignored if it can't run there.
 
