@@ -4,9 +4,10 @@
 //!
 //! `view` is `review`, or a file to open. Agents use this to see the interface.
 //! `select:<file>:<word>` opens a file and double-clicks a word; `ask:<file>:<word>` then
-//! presses Ask Agent. `across:<file>:<notches>` opens a file and tips the wheel sideways over
-//! it that many notches, and `pane:<file>:<columns>` opens it beside the side pane dragged
-//! that wide. `CELLIX_TIER=cells` lays it out on the cell tier, as a terminal
+//! presses Ask Agent. `across:<file>:<word>:<notches>` opens a file and tips the wheel
+//! sideways that many notches over the row that word is on, or over that row of the screen
+//! when it's a number, and `pane:<file>:<columns>` opens it beside the side pane dragged that
+//! wide. `CELLIX_TIER=cells` lays it out on the cell tier, as a terminal
 //! without pictures shows it, and `CELLIX_PANE=1` as the pane inside Claude Code.
 
 use std::fs::File;
@@ -123,15 +124,21 @@ fn main() {
             click(&mut app, (ask.0 + 1, ask.1));
         }
         Some(view) if view.starts_with("across:") => {
-            let (file, notches) = view[7..].rsplit_once(':').expect("<file>:<notches>");
+            let (rest, notches) = view[7..].rsplit_once(':').expect("<file>:<word>:<notches>");
+            let (file, word) = rest.split_once(':').expect("<file>:<word>:<notches>");
             app.open(&root.join(file)).unwrap();
+            // Proportional text isn't in the cells to be found, so a row can be named.
+            let (x, y) = match word.parse() {
+                Ok(row) => (size.0 * 2 / 3, row),
+                Err(_) => find(&app, word).expect("the word on screen"),
+            };
             for _ in 0..notches.parse().expect("a number of notches") {
                 app.handle(Event::Mouse(MouseEvent {
                     kind: MouseKind::ScrollRight,
-                    x: size.0 / 2,
-                    y: size.1 / 2,
-                    fine_x: f32::from(size.0 / 2),
-                    fine_y: f32::from(size.1 / 2),
+                    x,
+                    y,
+                    fine_x: f32::from(x),
+                    fine_y: f32::from(y),
                     mods: Mods::default(),
                 }));
             }

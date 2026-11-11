@@ -83,15 +83,17 @@ struct PageCache {
     spans: Rc<Vec<(usize, usize)>>,
     /// The picture of a formula being edited in a line.
     preview: Option<usize>,
-    /// For each row that's part of a table or a block of code, how far right that block
-    /// reaches, in cells from the page's left edge: these can be wider than the pane, and
-    /// then move sideways as one. Zero for every other row, which is set to fit.
-    reaches: Rc<Vec<f32>>,
+    /// For each row that's part of a table or a block of code, the source line that block
+    /// starts on and how far right it reaches, in cells from the page's left edge: these
+    /// can be wider than the pane, and then each moves sideways on its own. None for every
+    /// other row, which is set to fit.
+    blocks: Rc<Vec<Option<(usize, f32)>>>,
 }
 
-/// How far right each row's table or block of code reaches, and zero for the rest.
-fn reaches_of(rows: &[Row]) -> Vec<f32> {
-    let mut reaches = vec![0.0; rows.len()];
+/// The table or block of code each row is part of, as the source line it starts on and how
+/// far right it reaches. None for the rest.
+fn blocks_of(rows: &[Row]) -> Vec<Option<(usize, f32)>> {
+    let mut blocks = vec![None; rows.len()];
     let mut index = 0;
     while index < rows.len() {
         let row = &rows[index];
@@ -113,15 +115,16 @@ fn reaches_of(rows: &[Row]) -> Vec<f32> {
             .fold(0.0, f32::max);
         // Code keeps the room inside its block's right edge that it has inside its left.
         let reach = reach + if code(row) { row.lead } else { 0.0 };
-        // A row the caret can't stop on is a label over the block, which stays put.
-        for (at, row) in rows[index..index + block].iter().enumerate() {
-            if row.stop {
-                reaches[index + at] = reach;
+        // A row the caret can't stop on is a label over the code, which stays put, or a
+        // rule between a table's lines, which moves with it.
+        for (at, part) in rows[index..index + block].iter().enumerate() {
+            if part.stop || part.table.is_some() {
+                blocks[index + at] = Some((row.line, reach));
             }
         }
         index += block;
     }
-    reaches
+    blocks
 }
 
 /// One open document and where the view is within it.
@@ -156,6 +159,9 @@ pub struct Editor {
     minimap: RefCell<Option<MinimapRows>>,
     pub top: usize,
     pub left: usize,
+    /// How far each table or block of code wider than its page has been moved sideways,
+    /// by the source line it starts on.
+    sideways: HashMap<usize, usize>,
     spans: RefCell<Option<(u64, Vec<Span>)>>,
     /// How many rows the pane showed last, which is what bounds scrolling.
     view_rows: Cell<u16>,
@@ -311,6 +317,7 @@ impl Editor {
             minimap: RefCell::new(None),
             top: 0,
             left: 0,
+            sideways: HashMap::new(),
             spans: RefCell::new(None),
             view_rows: Cell::new(0),
             worker: OnceCell::new(),
@@ -656,39 +663,34 @@ impl Editor {
             .saturating_sub(area.x + Self::page_margin(area)) as f32
     }
 
-    /// How far a row of the page can move sideways: how much further its table or block of
-    /// code reaches than the pane shows. Text is set to fit and tables keep to the page, so
-    /// it's a table with more columns than fit, or a long line of code, that can move.
-    fn row_overflow(&self, area: Rect, index: usize) -> usize {
+    /// The table or block of code a row is part of, when it's wider than the pane shows: the
+    /// source line it starts on, and how far it can move sideways. Text is set to fit and
+    /// tables keep to the page, so it's a table with more columns than fit, or a long line
+    /// of code. Moved all the way, its end stands a column in from the pane's edge.
+    fn wide_block(&self, area: Rect, index: usize) -> Option<(usize, usize)> {
         let _ = self.page(area);
         let cache = self.page.borrow();
-        let reach = cache
-            .as_ref()
-            .and_then(|page| page.reaches.get(index).copied());
-        (reach.unwrap_or(0.0) + 1.0 - Self::page_room(area))
-            .ceil()
-            .max(0.0) as usize
+        let (line, reach) = (*cache.as_ref()?.blocks.get(index)?)?;
+        let most = (reach + 1.0 - Self::page_room(area)).ceil().max(0.0) as usize;
+        (most > 0).then_some((line, most))
     }
 
-    /// How far anything on the page can move sideways.
-    fn page_overflow(&self, area: Rect) -> usize {
-        let _ = self.page(area);
-        let cache = self.page.borrow();
-        let reaches = cache.as_ref().map(|page| page.reaches.clone());
-        let widest = reaches
-            .iter()
-            .flat_map(|r| r.iter())
-            .fold(0.0, |a: f32, b| a.max(*b));
-        (widest + 1.0 - Self::page_room(area)).ceil().max(0.0) as usize
-    }
-
-    /// How far a row stands moved sideways, in cells. The blocks wider than the pane move
-    /// together, each as far as it has more to show, and the rest of the page stays.
+    /// How far a row stands moved sideways, in cells: as far as its own block has been.
     fn row_shift(&self, area: Rect, index: usize) -> f32 {
-        if self.left == 0 {
+        if self.sideways.is_empty() {
             return 0.0;
         }
-        self.left.min(self.row_overflow(area, index)) as f32
+        let Some((block, most)) = self.wide_block(area, index) else {
+            return 0.0;
+        };
+        self.sideways
+            .get(&block)
+            .map_or(0, |left| (*left).min(most)) as f32
+    }
+
+    /// Whether a row's block has more to show than fits, and so is drawn cut at an edge.
+    fn row_is_cut(&self, area: Rect, index: usize) -> bool {
+        self.wide_block(area, index).is_some()
     }
 
     /// What a row's pictures are cut to: the pane, and for a row moved sideways, no further
@@ -704,16 +706,32 @@ impl Editor {
         Bounds::cells(edge as f32, area.y as f32, width as f32, area.h as f32)
     }
 
-    /// Moves what's wider than the pane sideways by `columns`, as far as there's more of it
-    /// to see. Returns whether anything moved.
-    pub fn scroll_sideways(&mut self, area: Rect, columns: isize) -> bool {
+    /// Moves the table or code under row `y` of the screen sideways by `columns`, when
+    /// it's wider than the pane, as far as it has more to show. Returns whether it moved.
+    pub fn scroll_sideways(&mut self, area: Rect, y: u16, columns: isize) -> bool {
         if !self.rendered {
             return false;
         }
-        let most = self.page_overflow(self.text_area(area));
-        let from = self.left.min(most);
-        self.left = from.saturating_add_signed(columns).min(most);
-        self.left != from
+        let area = self.text_area(area);
+        let index = self.top + y.saturating_sub(area.y) as usize;
+        let Some((block, most)) = self.wide_block(area, index) else {
+            return false;
+        };
+        let from = self
+            .sideways
+            .get(&block)
+            .map_or(0, |left| (*left).min(most));
+        let to = from.saturating_add_signed(columns).min(most);
+        self.set_sideways(block, to);
+        to != from
+    }
+
+    fn set_sideways(&mut self, block: usize, left: usize) {
+        if left == 0 {
+            self.sideways.remove(&block);
+        } else {
+            self.sideways.insert(block, left);
+        }
     }
 
     /// The paper this file is part of, read again once each time the file is saved.
@@ -892,7 +910,7 @@ impl Editor {
                 revision,
                 width,
                 open: None,
-                reaches: Rc::new(reaches_of(&rows)),
+                blocks: Rc::new(blocks_of(&rows)),
                 rows,
                 figures: Rc::new(figures),
                 spans: Rc::new(spans),
@@ -909,7 +927,7 @@ impl Editor {
             let text = self.buffer.text();
             let (rows, figures, _, preview) = self.lay_out(&text, width, open);
             page.open = open;
-            page.reaches = Rc::new(reaches_of(&rows));
+            page.blocks = Rc::new(blocks_of(&rows));
             page.rows = rows;
             page.figures = Rc::new(figures);
             page.preview = preview;
@@ -2345,19 +2363,23 @@ impl Editor {
                 self.top = row + 1 - height;
             }
             // In a table or code wider than the pane, sideways as far as shows the caret and
-            // no further. Elsewhere what was moved stays where it was put.
-            let most = self.row_overflow(area, row);
-            if most > 0 {
-                let room = (Self::page_room(area) - 2.0).max(1.0);
-                let left = self.left.min(most);
-                self.left = if x < left as f32 {
-                    x.floor() as usize
+            // no further.
+            if let Some((block, most)) = self.wide_block(area, row) {
+                let room = (Self::page_room(area) - 3.0).max(1.0);
+                let left = self
+                    .sideways
+                    .get(&block)
+                    .map_or(0, |left| (*left).min(most));
+                let to = if x < left as f32 + 1.0 {
+                    (x - 1.0).floor().max(0.0) as usize
                 } else if x > left as f32 + room {
                     ((x - room).ceil() as usize).min(most)
                 } else {
                     left
                 };
+                self.set_sideways(block, to);
             }
+            self.left = 0;
             return;
         }
         self.open_folds_at_carets();
@@ -4406,25 +4428,35 @@ impl Editor {
                 .find(|i| !group(&rows[*i]))
                 .unwrap_or(visible.end);
             let (top, height) = (y_of(index), (end - index) as f32);
+            // Where the block's right edge can be: a column in from the pane's, as code's is.
+            let edge = area.right() as f32 - 1.0;
+            let whole = end < visible.end || end == rows.len() || !group(&rows[end]);
+            let wide = (index..end).find_map(|at| Some((at, self.wide_block(area, at)?.1)));
             if row.shaded {
-                let width = area.right() as f32 - left - 1.0;
-                let bounds = Bounds::cells(left, top - 0.08, width, height + 0.2);
+                let bounds = Bounds::cells(left, top - 0.08, edge - left, height + 0.2);
                 grid.panel(bounds, 22, Some(theme.code_bg), Some(theme.border));
+                if let (Some((at, most)), true) = (wide, whole) {
+                    let moved = self.row_shift(area, at);
+                    let under = (top + height + 0.2).min(area.bottom() as f32 - 0.4);
+                    self.draw_block_thumb(grid, (left, edge, under), (moved, most), theme);
+                }
             } else if let Some(table) = &row.table {
-                // A table too wide even with its cells wrapped shows as far as the pane's
-                // edge rather than run on over what's beside it, and moved sideways, from
-                // the page's.
+                // A table too wide even with its cells wrapped shows as much as there's room
+                // for, between the page's edge and the pane's, and never over what's beside it.
                 let reach = table.columns.last().copied().unwrap_or(0.0);
-                let start = left - self.row_shift(area, index);
-                let (from, to) = (start.max(left), (start + reach).min(area.right() as f32));
+                let moved = wide.map_or(0.0, |(at, _)| self.row_shift(area, at));
+                let start = left - moved;
+                let (from, to) = (start.max(left), (start + reach).min(edge));
                 let width = (to - from).max(0.0);
-                let bounds = Bounds::cells(from, top + 0.02, width, height - 0.04);
                 let part_of = |at: usize| rows[at].table.as_ref().map(|t| (t.header, t.part));
+                // Where it's cut, its box is left open: a closed end says the table ends there.
+                let (cut_left, cut_right) = (start < left, start + reach > edge);
+                let open = cut_left || cut_right;
                 if table.header {
                     // Its line of the table can take several rows.
                     let rows = (index..end).take_while(|at| part_of(*at).is_some_and(|p| p.0));
                     let head = Bounds::cells(from, top + 0.02, width, rows.count() as f32);
-                    grid.panel(head, 14, Some(theme.code_bg), None);
+                    grid.panel(head, if open { 0 } else { 14 }, Some(theme.code_bg), None);
                 }
                 // A line under each line of the table, not under each row one takes.
                 for at in (index + 1..end).filter(|at| part_of(*at).is_some_and(|p| p.1 == 0)) {
@@ -4437,10 +4469,47 @@ impl Editor {
                     let line = Bounds::cells(x, top + 0.02, 0.0, height - 0.04);
                     grid.hairline(line, theme.popup_border);
                 }
-                grid.panel(bounds, 14, None, Some(theme.popup_border));
+                if open {
+                    let (above, below) = (top + 0.02, top + height - 0.02);
+                    for y in [above, below] {
+                        grid.hairline(Bounds::cells(from, y, width, 0.0), theme.popup_border);
+                    }
+                    let ends = [(from, cut_left), (to, cut_right)];
+                    for (x, _) in ends.into_iter().filter(|(_, cut)| !cut) {
+                        let line = Bounds::cells(x, above, 0.0, below - above);
+                        grid.hairline(line, theme.popup_border);
+                    }
+                } else {
+                    let bounds = Bounds::cells(from, top + 0.02, width, height - 0.04);
+                    grid.panel(bounds, 14, None, Some(theme.popup_border));
+                }
+                if let (Some((_, most)), true) = (wide, whole) {
+                    let under = (top + height).min(area.bottom() as f32 - 0.4);
+                    self.draw_block_thumb(grid, (left, edge, under), (moved, most), theme);
+                }
             }
             index = end;
         }
+    }
+
+    /// The thumb under a table or block of code that's wider than the pane, along its own
+    /// bottom edge: how much of its width shows, and where.
+    fn draw_block_thumb(
+        &self,
+        grid: &mut Grid,
+        (left, right, bottom): (f32, f32, f32),
+        (moved, most): (f32, usize),
+        theme: &Theme,
+    ) {
+        /// Rows of air between the block and its thumb, and how thick the thumb is.
+        const UNDER: f32 = 0.12;
+        const THICK: f32 = 0.12;
+        let shown = right - left;
+        let all = shown + most as f32;
+        let long = (shown * shown / all).max(2.0);
+        let start = left + moved / all * shown;
+        let bounds = Bounds::cells(start, bottom + UNDER, long.min(shown), THICK);
+        grid.panel(bounds, (THICK * 50.0) as u8, Some(theme.scrollbar), None);
     }
 
     fn draw_page(&self, grid: &mut Grid, area: Rect, theme: &Theme, focused: bool, marks: &Marks) {
@@ -4515,7 +4584,8 @@ impl Editor {
             // can't be clipped by, so it waits until it fits.
             if !(proportional && row.tall && y + 2 >= area.bottom()) {
                 let moved = self.row_shift(area, index);
-                self.draw_page_row(grid, row, (left, y, moved), area, bg, theme);
+                let cut = self.row_is_cut(area, index);
+                self.draw_page_row(grid, row, (left, y, moved, cut), area, bg, theme);
             }
         }
         let moved = self.row_shift(area, caret_row);
@@ -4534,30 +4604,6 @@ impl Editor {
                 }
             }
         }
-        if proportional {
-            self.draw_page_thumb(grid, area, theme);
-        }
-    }
-
-    /// The thumb along the bottom of a page that can move sideways, showing how much of its
-    /// width is in view and where, as the Preview's does.
-    fn draw_page_thumb(&self, grid: &mut Grid, area: Rect, theme: &Theme) {
-        use crate::pdfview::{BOTTOM_GAP, END_GAP, THUMB};
-        let most = self.page_overflow(area);
-        if most == 0 {
-            return;
-        }
-        let cell = self.measure.cell_pixels().unwrap_or((1, 2));
-        // A column is narrower than a row is tall, so the thumb is thinner in rows.
-        let thick = THUMB * cell.0 as f32 / cell.1.max(1) as f32;
-        let (x, w) = (f32::from(area.x), f32::from(area.w));
-        let track = w - 2.0 * END_GAP;
-        let all = w + most as f32;
-        let long = (track * w / all).max(2.0);
-        let start = x + END_GAP + self.left.min(most) as f32 / all * track;
-        let top = f32::from(area.bottom()) - BOTTOM_GAP - thick;
-        let bounds = Bounds::cells(start, top, long, thick);
-        grid.panel(bounds, (thick * 50.0) as u8, Some(theme.scrollbar), None);
     }
 
     /// Shows what the formula under the caret looks like, just below its line.
@@ -4628,7 +4674,7 @@ impl Editor {
         &self,
         grid: &mut Grid,
         row: &Row,
-        (left, y, moved): (u16, u16, f32),
+        (left, y, moved, cut): (u16, u16, f32, bool),
         area: Rect,
         bg: Rgb,
         theme: &Theme,
@@ -4691,15 +4737,37 @@ impl Editor {
                 painted: proportional,
             };
             let x = left + (g.x - moved) as u16;
-            grid.put_str(x, y, g.ch.encode_utf8(&mut [0; 4]), style, area.right());
+            let end = area.right() - u16::from(cut);
+            grid.put_str(x, y, g.ch.encode_utf8(&mut [0; 4]), style, end);
+        }
+        // Cells have no thumb to show there's more to either side, so the row says so.
+        if cut && !proportional {
+            let more = cellix_render::Style {
+                fg: theme.gutter.fg,
+                bg,
+                ..theme.text
+            };
+            let reach = row
+                .glyphs
+                .iter()
+                .map(|g| g.x + g.advance)
+                .fold(0.0, f32::max);
+            if moved > 0.0 {
+                grid.put_str(left, y, "\u{2039}", more, area.right());
+            }
+            if reach - moved > Self::page_room(area) - 1.0 {
+                grid.put_str(area.right() - 1, y, "\u{203a}", more, area.right());
+            }
         }
         if !proportional {
             return;
         }
         let text_y = y as f32 + if row.tall { TALL_DROP } else { 0.0 };
-        // Code stops short of its block's edge, which is a column in from the pane's.
+        // Code, and a table too wide to fit, stop short of their block's edge, which is a
+        // column in from the pane's.
         let code = row.shaded && row.table.is_none();
-        let right = area.right() as f32 - if code { 1.0 + EDGE_AIR } else { 0.0 };
+        let inset = if code || cut { 1.0 + EDGE_AIR } else { 0.0 };
+        let right = area.right() as f32 - inset;
         for issue in issues {
             let inside = |g: &&Glyph| g.at.is_some_and(|at| at >= issue.start && at < issue.end);
             let mut word = row.glyphs.iter().filter(|g| !hidden(g)).filter(inside);

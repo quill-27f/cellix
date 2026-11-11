@@ -4744,5 +4744,12 @@
     "title": "With CELLIX_SCREEN_TEXT set, Cellix writes the screen's text to that file on every frame, so the tour's headless terminal, which is sent pictures, can wait for a surface and refuse to shoot the wrong one",
     "test": "the_screen_is_written_as_text_for_the_harness",
     "passes": true
+  },
+  {
+    "id": "tables-read-on-cells-and-keep-words-whole",
+    "milestone": 12,
+    "title": "A table keeps ordinary words and numbers whole, staying wider than the page sooner than break them, breaks a link after a slash, and on the cell tier has a rule between its lines once any cell wraps",
+    "test": "a_table_wider_than_the_page_wraps_its_cells_to_fit",
+    "passes": true
   }
 ]

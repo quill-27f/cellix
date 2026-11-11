@@ -122,7 +122,13 @@ pub(super) fn layout(
         places.push((shown[row], offset + line.chars().count()));
     }
     // A sheet keeps each row on one line: its long cells were cut short above.
-    place_table(parsed, starts, &places, (&aligns, f32::INFINITY), rows);
+    place_table(
+        parsed,
+        starts,
+        &places,
+        (&aligns, f32::INFINITY, false),
+        rows,
+    );
     if present.len() > MAX_ROWS {
         let more = present.len();
         let note =

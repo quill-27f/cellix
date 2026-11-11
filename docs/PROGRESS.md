@@ -1764,3 +1764,15 @@ From the review: the tour shot each scene a fixed time after its last key, so on
 - `harness/x tour` runs in three parts, since the whole tour (about 45 minutes) is longer than one guarded job may run. `TOUR_PART=2/3` and `TOUR_LIST=1` are there for doing that by hand.
 - The first full run with the new waits but no expectations took three wrong pictures without a word: `65-transcript-page` and `57-dock-comments` showed the palette still open, and `135-settings-keyboard` the Appearance page. All three are right now.
 - Unverified: `65-transcript-page` had Enter pressed on "Open Agent Transcript" and the palette stayed up. Typed too early is the likely cause, and it didn't happen again, but if it shows up as "retaking 65-transcript-page" it's worth a look as a real bug. Scenes with no expectation (hovers, plain pages) can still be shot too soon.
+
+## After the design review of tables (2026-11-10)
+
+The ui-expert went through the tour's page scenes and snapshots of the new tables (`target/tour-tables`). The tour's own scenes were unchanged apart from tables that used to be too wide. What it found, and what was done:
+
+- **A table cut at an edge was drawn as a finished one**, its box closed with a line and round corners where it was cut, and that line ran through the cut text. Its box is now left open on a cut side, text stops half a cell short of the cut, and the cut is a column in from the pane's edge, where a block of code ends.
+- **One offset moved every wide block, with one thumb at the foot of the page.** Each table and block of code now has its own (`Editor::sideways`, by the source line it starts on), moved by the wheel when the pointer is over it, and its own thin thumb under it.
+- **On cells, a 30-column table broke "10.0" in two**, and a wrapped table's lines ran together. A column now keeps words up to 16 cells whole however many columns there are, leaving the table wider than the page; a rule goes between a table's lines once any cell wraps; and a row with more to either side says so with ‹ and ›, since cells have no thumb.
+- A link breaks after a slash when one is near the row's end. A table's spare cell from rounding goes to its widest column, so it ends where the text does.
+- Left as they were, and there before: the table picker's grid sits 2 px under its top edge; a table's bottom line is 3 px inside its last row; code blocks are four cells wider than the text.
+- Unverified: all of it in a real terminal. Not drawn: a sign of "more" at a cut edge on the pixel tier beyond the open box and the thumb.
+- An open question for the user: whether "a max width of docs" also meant a narrower column for text. Text still runs the width of the pane (162 characters a line in a wide window), by the earlier decision that pages use the whole pane.

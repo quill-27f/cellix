@@ -979,7 +979,7 @@ fn wrap(template: Row, glyphs: Vec<Glyph>, lead: f32, width: f32, rows: &mut Vec
                 .iter()
                 .rposition(|g| g.ch == ' ' && g.at.is_some())
                 .filter(|i| current[*i].x > lead)
-                .map_or(current.len(), |i| i + 1);
+                .map_or_else(|| after_slash(&current), |i| i + 1);
             let mut tail = current.split_off(cut);
             pieces.push(std::mem::take(&mut current));
             x = lead;
@@ -1009,6 +1009,16 @@ fn wrap(template: Row, glyphs: Vec<Glyph>, lead: f32, width: f32, rows: &mut Vec
             ..template.clone()
         });
     }
+}
+
+/// Where a row with no space in it is best broken: after a slash near its end, as a link or
+/// a path has, or else at its end.
+fn after_slash(row: &[Glyph]) -> usize {
+    /// How far back from the end a slash is still worth breaking at.
+    const NEAR: usize = 8;
+    let from = row.len().saturating_sub(NEAR);
+    let slash = row[from..].iter().rposition(|g| g.ch == '/');
+    slash.map_or(row.len(), |at| from + at + 1)
 }
 
 fn split_cells(line: &str) -> Vec<(usize, Vec<char>)> {
@@ -1101,7 +1111,8 @@ fn table(
             _ => 'l',
         })
         .collect();
-    place_table(parsed, starts, &places, (&aligns, width), rows);
+    let ruled = context.measure.in_cells();
+    place_table(parsed, starts, &places, (&aligns, width, ruled), rows);
 }
 
 /// Space between a table cell's edge and its text, in cells.
@@ -1113,8 +1124,9 @@ const NARROWEST_COLUMN: f32 = 3.0;
 /// gets what its longest cell needs when they all fit. When they don't, each keeps room for
 /// its longest word and they share what's left by how much more they wanted, so cells wrap
 /// rather than the table running off the page. A word longer than a column's even share of
-/// the page, as a link can be, is broken rather than widen the table for every row. Only a
-/// table with more columns than the page has room for at their narrowest is left wider.
+/// the page, as a link can be, is broken rather than widen the table for every row, though
+/// never an ordinary word: a table with more columns than the page has room for is left
+/// wider than it, to be moved sideways, sooner than have its numbers broken in two.
 fn column_widths(parsed: &[Vec<Vec<Glyph>>], count: usize, width: f32) -> Vec<f32> {
     let cells = |c: usize| parsed.iter().filter_map(move |row| row.get(c));
     let wanted: Vec<f32> = (0..count)
@@ -1127,7 +1139,9 @@ fn column_widths(parsed: &[Vec<Vec<Glyph>>], count: usize, width: f32) -> Vec<f3
     if wanted.iter().sum::<f32>() <= room {
         return wanted;
     }
-    let even = (room / count.max(1) as f32).floor().max(NARROWEST_COLUMN);
+    /// The longest word a column keeps whole, however many columns share the page.
+    const WHOLE_WORD: f32 = 16.0;
+    let even = (room / count.max(1) as f32).floor().max(WHOLE_WORD);
     let least: Vec<f32> = (0..count)
         .map(|c| {
             let words = cells(c).flat_map(|cell| cell.split(|g| g.ch == ' ' && g.at.is_some()));
@@ -1142,9 +1156,17 @@ fn column_widths(parsed: &[Vec<Vec<Glyph>>], count: usize, width: f32) -> Vec<f3
     }
     let share = (room - least_all) / (wanted_all - least_all);
     let shared = least.iter().zip(&wanted);
-    shared
+    let mut widths: Vec<f32> = shared
         .map(|(least, wanted)| (least + (wanted - least) * share).floor())
-        .collect()
+        .collect();
+    // What rounding down left over goes to the column that gave up most, so the table ends
+    // where the text around it does.
+    let spare = (room - widths.iter().sum::<f32>()).floor().max(0.0);
+    let gave = |c: &usize| wanted[*c] - widths[*c];
+    if let Some(most) = (0..count).max_by(|a, b| gave(a).total_cmp(&gave(b))) {
+        widths[most] += spare;
+    }
+    widths
 }
 
 /// Sets a table's cells in columns, no wider together than `width` when their words allow
@@ -1155,7 +1177,7 @@ fn place_table(
     parsed: Vec<Vec<Vec<Glyph>>>,
     starts: Vec<Vec<usize>>,
     places: &[(usize, usize)],
-    (aligns, width): (&[char], f32),
+    (aligns, width, ruled): (&[char], f32, bool),
     rows: &mut Vec<Row>,
 ) {
     let count = parsed.iter().map(Vec::len).max().unwrap_or(0);
@@ -1172,7 +1194,8 @@ fn place_table(
     let carets: Vec<f32> = (0..count)
         .map(|c| columns[c] + CELL_PADDING + shift(c, widths[c]))
         .collect();
-    for (index, cells) in parsed.into_iter().enumerate() {
+    // Each line's cells, set in rows no wider than their columns, and where the line ends.
+    let set = parsed.into_iter().enumerate().map(|(index, cells)| {
         let (line, line_end) = places[index];
         // The row runs to its last cell, written in or not, and never past the closing bar.
         let written = cells.iter().flatten().filter_map(|g| g.at).max();
@@ -1182,17 +1205,47 @@ fn place_table(
             .chain(starts[index].last().copied())
             .max()
             .unwrap_or(line_end);
-        // Each cell's text, set in rows no wider than its column.
-        let set: Vec<Vec<Vec<Glyph>>> = cells
-            .into_iter()
-            .enumerate()
-            .map(|(c, cell)| {
-                let mut within = Vec::new();
-                wrap(Row::new(line, end), cell, 0.0, widths[c], &mut within);
-                within.into_iter().map(|row| row.glyphs).collect()
-            })
-            .collect();
-        let parts = set.iter().map(Vec::len).max().unwrap_or(1).max(1);
+        let cells = cells.into_iter().enumerate().map(|(c, cell)| {
+            let mut within = Vec::new();
+            wrap(Row::new(line, end), cell, 0.0, widths[c], &mut within);
+            within.into_iter().map(|row| row.glyphs).collect()
+        });
+        (cells.collect(), end)
+    });
+    let set: Vec<(Vec<Vec<Vec<Glyph>>>, usize)> = set.collect();
+    // Where cells are all there is, nothing tells a line of the table from the rows a wrapped
+    // cell takes, so once any cell wraps a rule goes between the lines.
+    let wrapped = set
+        .iter()
+        .any(|(cells, _)| cells.iter().any(|cell| cell.len() > 1));
+    for (index, (cells, end)) in set.into_iter().enumerate() {
+        let line = places[index].0;
+        let table = |part: usize| TableRow {
+            columns: columns.clone(),
+            carets: carets.clone(),
+            header: index == 0,
+            part,
+        };
+        if ruled && wrapped && index > 0 {
+            let across = columns.last().copied().unwrap_or(0.0) as usize;
+            let dashes = (0..across).flat_map(|x| {
+                let crossing = columns[1..count]
+                    .iter()
+                    .any(|bar| (bar - x as f32).abs() < 0.5);
+                let mut dash = decoration(if crossing { "┼" } else { "─" }, Tone::TableLine);
+                dash[0].x = x as f32;
+                dash[0].advance = 1.0;
+                dash
+            });
+            rows.push(Row {
+                glyphs: dashes.collect(),
+                cells: starts[index].clone(),
+                stop: false,
+                table: Some(table(0)),
+                ..Row::new(line, end)
+            });
+        }
+        let parts = cells.iter().map(Vec::len).max().unwrap_or(1).max(1);
         for part in 0..parts {
             let mut glyphs = Vec::new();
             for (c, left) in columns.iter().take(count).enumerate() {
@@ -1202,7 +1255,7 @@ fn place_table(
                     bar[0].advance = 1.0;
                     glyphs.extend(bar);
                 }
-                let Some(text) = set.get(c).and_then(|cell| cell.get(part)) else {
+                let Some(text) = cells.get(c).and_then(|cell| cell.get(part)) else {
                     continue;
                 };
                 // The space a row was broken at stands past its words, and isn't weighed.
@@ -1216,12 +1269,7 @@ fn place_table(
                 glyphs,
                 cells: starts[index].clone(),
                 lead: CELL_PADDING,
-                table: Some(TableRow {
-                    columns: columns.clone(),
-                    carets: carets.clone(),
-                    header: index == 0,
-                    part,
-                }),
+                table: Some(table(part)),
                 ..Row::new(line, end)
             });
         }
@@ -2989,7 +3037,7 @@ body",
         let edge = table(&rows[0]).columns.last().copied().unwrap();
         assert!(edge <= 40.0, "the table is {edge} wide on a page of 40");
         // The long line of the table takes several rows, its words in their own column.
-        let long: Vec<&Row> = rows.iter().filter(|r| r.line == 2).collect();
+        let long: Vec<&Row> = rows.iter().filter(|r| r.line == 2 && r.stop).collect();
         assert!(long.len() > 1, "{shown:?}");
         let second = table(long[0]).columns[1];
         let in_second = |r: &&Row| -> String {
@@ -3008,6 +3056,21 @@ body",
         let exact = page("abcdefg hij", 7);
         assert_eq!(text(&exact[1]), "hij");
         assert_eq!(table(long[1]).part, 1);
+        // On cells, a rule parts the lines of a table whose cells wrap. With pictures its box
+        // does that.
+        let rules = |rows: &[Row]| {
+            rows.iter()
+                .filter(|r| !r.stop && text(r).starts_with('─'))
+                .count()
+        };
+        assert_eq!(rules(&rows), 2, "{shown:?}");
+        let painted = layout(
+            WIDE_TABLE,
+            40,
+            &FontMeasure::new(10, 20),
+            &Registry::default(),
+        );
+        assert_eq!(rules(&painted), 0);
         // One that fits is as it was: a row for each line.
         assert_eq!(page("| a | b |\n|---|---|\n| c | d |", 40).len(), 2);
         // A word longer than the page, as a link can be, is broken to keep the table in it.
@@ -3016,12 +3079,34 @@ body",
         let edge = table(&linked[0]).columns.last().copied().unwrap();
         assert!(edge <= 30.0, "{edge}");
         let first = table(&linked[0]).columns[1];
-        let said = linked
+        let said = linked.iter().filter(|r| r.line == 2 && r.stop);
+        let said = said
+            .flat_map(|r| &r.glyphs)
+            .filter(|g| g.x < first && g.at.is_some());
+        assert_eq!(said.map(|g| g.ch).collect::<String>(), link);
+        // And it's broken after a slash, as a person would break it.
+        let broken = linked
             .iter()
-            .filter(|r| r.line == 2)
-            .flat_map(|r| &r.glyphs);
-        let said: String = said.filter(|g| g.x < first).map(|g| g.ch).collect();
-        assert_eq!(said, link);
+            .filter(|r| r.line == 2 && r.stop && !r.glyphs.is_empty());
+        let ends: Vec<char> = broken
+            .filter_map(|r| r.glyphs.iter().rfind(|g| g.x < first && g.at.is_some()))
+            .map(|g| g.ch)
+            .collect();
+        assert!(
+            ends.len() > 1 && ends[..ends.len() - 1].iter().all(|c| *c == '/'),
+            "{ends:?}"
+        );
+        // Numbers too wide for a narrow column's share stay whole: the table is wider instead.
+        let numbers = page(
+            "| a | b | c | d |\n|---|---|---|---|\n| 1000.5 | 2000.5 | 3000.5 | 4000.5 |",
+            16,
+        );
+        assert_eq!(
+            numbers.len(),
+            2,
+            "{:?}",
+            numbers.iter().map(text).collect::<Vec<_>>()
+        );
         // Only more columns than the page has room for leave a table wider than it.
         let many = page(
             "| a | b | c | d | e | f |\n|---|---|---|---|---|---|\n| 1 | 2 | 3 | 4 | 5 | 6 |",
@@ -3035,7 +3120,8 @@ body",
         let rows = page(WIDE_TABLE, 40);
         let chars: Vec<char> = WIDE_TABLE.chars().collect();
         let at = |words: &str| WIDE_TABLE.find(words).unwrap();
-        let long: Vec<usize> = (0..rows.len()).filter(|i| rows[*i].line == 2).collect();
+        let long = (0..rows.len()).filter(|i| rows[*i].line == 2 && rows[*i].stop);
+        let long: Vec<usize> = long.collect();
         // A word further on in the cell is on a later row of it, under the cell's first.
         let (first, x) = locate(&rows, at("Refuses"));
         assert_eq!(first, long[0]);

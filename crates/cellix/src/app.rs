@@ -6614,8 +6614,6 @@ impl App {
                 let area = self.focused_area();
                 if let Some(editor) = self.editor_mut() {
                     editor.rendered = !editor.rendered;
-                    // The source isn't moved sideways as its page was.
-                    editor.left = 0;
                     editor.top = 0;
                     editor.reveal(area);
                 }
@@ -11022,8 +11020,8 @@ impl App {
                     self.run(Command::CloseTab);
                 }
             }
-            // Tipped sideways, or turned with Shift held, the wheel moves a page across when
-            // something on it is wider than the pane, as it does the Preview.
+            // Tipped sideways, or turned with Shift held, the wheel moves the table or code
+            // under the pointer across, when it's wider than the pane.
             MouseKind::ScrollLeft
             | MouseKind::ScrollRight
             | MouseKind::ScrollUp
@@ -11041,7 +11039,7 @@ impl App {
                 let area = self.focused_area();
                 let moved = self
                     .editor_mut()
-                    .is_some_and(|editor| editor.scroll_sideways(area, columns));
+                    .is_some_and(|editor| editor.scroll_sideways(area, y, columns));
                 if moved {
                     // What's on screen can't be slid up or down into the next frame.
                     self.scrolled = None;
@@ -19683,12 +19681,14 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             n => format!("c{n}"),
         };
         let table = row(&name) + &row(&|_| "---".to_string()) + &row(&|n| format!("v{n}"));
-        let source = format!("Before it.\n\n{table}\nAfter it.\n");
+        // And a line of code longer than the pane, which a page doesn't wrap.
+        let code = format!("code_starts {} code_ends", "and_goes_on ".repeat(20));
+        let source = format!("Before it.\n\n{table}\nAfter it.\n\n```\n{code}\n```\n");
         let (_dir, mut app) = page_app(&source);
         let grid = screen(&app);
         let (x, y) = find(&grid, "aaa");
         assert!(!grid.text().contains("zzz"), "{}", grid.text());
-        let wheel = |kind, shift| {
+        let wheel_at = |y: u16, kind, shift| {
             Event::Mouse(MouseEvent {
                 kind,
                 x: x + 8,
@@ -19701,6 +19701,7 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
                 },
             })
         };
+        let wheel = |kind, shift| wheel_at(y, kind, shift);
         // Tipped across as far as it goes: the table's far end is in view, and no further.
         for _ in 0..80 {
             app.handle(wheel(MouseKind::ScrollRight, false));
@@ -19708,11 +19709,13 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let text = screen(&app).text();
         assert!(text.contains("zzz") && text.contains("v40"), "{text}");
         assert!(!text.contains("aaa"), "{text}");
-        // Only the table moved: the words around it are set to fit, and stay.
+        // Only the table moved. The words around it are set to fit, and stay, and the code
+        // further down has a place of its own.
         assert!(
             text.contains("Before it.") && text.contains("After it."),
             "{text}"
         );
+        assert!(text.contains("code_starts"), "{text}");
         // A click lands on what's under it, moved as the page is.
         let (lx, ly) = find(&screen(&app), "zzz");
         click(&mut app, lx + 1, ly);
@@ -19731,6 +19734,21 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         // And the caret, still in the last column, brings its place back into view.
         app.handle(Event::Key(KeyEvent::plain(Key::Right)));
         assert!(screen(&app).text().contains("zzz"));
+        // The code moves when the pointer is over it, and leaves the table where it was put.
+        let (_, code_row) = find(&screen(&app), "code_starts");
+        for _ in 0..80 {
+            app.handle(wheel_at(code_row, MouseKind::ScrollRight, false));
+        }
+        let text = screen(&app).text();
+        assert!(
+            text.contains("code_ends") && !text.contains("code_starts"),
+            "{text}"
+        );
+        assert!(text.contains("zzz"), "{text}");
+        // Over plain text the wheel tipped across moves nothing.
+        let (_, words) = find(&screen(&app), "Before it.");
+        app.handle(wheel_at(words, MouseKind::ScrollLeft, false));
+        assert!(screen(&app).text().contains("code_ends"));
         // A page with nothing wider than the pane doesn't move.
         let (_dir, mut plain) = page_app("# Title\n\nSome words.\n");
         for _ in 0..5 {

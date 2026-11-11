@@ -582,7 +582,6 @@ impl App {
                 let area = self.focused_area();
                 if let Some(editor) = self.editor_mut() {
                     editor.rendered = false;
-                    editor.left = 0;
                     let first = conflict::conflicts(&editor.buffer.text())
                         .first()
                         .map(|c| c.start);
