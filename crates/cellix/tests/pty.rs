@@ -894,9 +894,12 @@ fn a_terminal_that_goes_without_a_hang_up_still_ends_cellix() {
         ws_ypixel: 0,
     };
     let (name, modes) = (std::ptr::null_mut(), std::ptr::null_mut());
+    // A pointer, since macOS takes the size as one it may write through and Linux as one it
+    // only reads: a pointer passes for both, where a `&mut` is one too many for Linux.
+    let size: *mut libc::winsize = &mut size;
     // SAFETY: openpty fills in the two descriptors, which this test then owns and closes.
     assert_eq!(
-        unsafe { libc::openpty(&mut master, &mut slave, name, modes, &mut size) },
+        unsafe { libc::openpty(&mut master, &mut slave, name, modes, size) },
         0
     );
     // Cellix mustn't inherit the terminal's own end, or closing it here wouldn't close it.

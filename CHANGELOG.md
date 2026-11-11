@@ -23,6 +23,7 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 - Clicking a comment in the Comments pane with no file open now opens its file at the comment.
 - A Cellix whose terminal went away without a hang-up kept running at full CPU. It now ends.
 - A session host whose socket was gone kept its program running where nothing could reach it. It now ends with its program.
+- A turn's checkpoint could still be lost when several agents prompted at the same moment.
 
 ## [0.6.4] - 2026-11-10
 
