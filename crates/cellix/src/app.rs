@@ -6690,7 +6690,8 @@ impl App {
                     .iter()
                     .map(|(label, command)| Item::Command(label, *command))
                     .collect();
-                self.overlay = Overlay::Palette(Palette::new(items));
+                let keys = crate::keys::shortcuts(&self.settings.keybindings);
+                self.overlay = Overlay::Palette(Palette::new(items).with_keys(&keys));
             }
             Command::Copy => self.copy(),
             Command::PasteLine => self.paste_line(),
@@ -15724,6 +15725,43 @@ mod tests {
         key(&mut app, Key::Esc);
         app.poll();
         assert!(app.finding.is_none(), "closing it stops the walk");
+    }
+
+    #[test]
+    fn the_command_palette_shows_the_keys_each_command_has_now() {
+        let (_dir, mut app) = project();
+        // The command's own row, under the field its name was typed into.
+        let row_of = |app: &App, name: &str| {
+            let grid = screen(app);
+            let rows = (0..grid.height()).map(|y| grid.row_text(y));
+            let named: Vec<String> = rows.filter(|row| row.contains(name)).collect();
+            assert!(named.len() > 1, "{}", grid.text());
+            named[1].clone()
+        };
+        // A command with keys of its own shows them, whether or not it's a well-known one.
+        let keys = crate::keys::shortcuts(&Default::default());
+        let known = |s: &&crate::keys::Shortcut| {
+            let listed = COMMANDS.iter().any(|(_, command)| *command == s.command);
+            listed && crate::palette::keys_of(s.command).is_none()
+        };
+        let lesser = keys.iter().filter(known).find(|s| !s.keys.is_empty());
+        let lesser = lesser.expect("a command with keys the palette's own list leaves out");
+        app.run(Command::CommandPalette);
+        typed(&mut app, lesser.name);
+        let row = row_of(&app, lesser.name);
+        assert!(row.contains(&lesser.keys[0]), "{row}");
+        app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
+        // Given other keys on the Keyboard page, it shows those and not its usual ones.
+        app.settings
+            .keybindings
+            .insert("Toggle Sidebar".to_string(), vec!["Ctrl+Alt+Y".to_string()]);
+        app.run(Command::CommandPalette);
+        typed(&mut app, "Toggle Sidebar");
+        let row = row_of(&app, "Toggle Sidebar");
+        assert!(
+            row.contains("Ctrl+Alt+Y") && !row.contains("Ctrl+B"),
+            "{row}"
+        );
     }
 
     #[test]

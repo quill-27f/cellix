@@ -4730,5 +4730,12 @@
     "title": "A session host whose socket is gone, so nothing can attach to it again, ends its program and itself instead of running on unseen",
     "test": "a_host_whose_socket_is_gone_ends_its_program",
     "passes": true
+  },
+  {
+    "id": "palette-shows-current-keys",
+    "milestone": 12,
+    "title": "The command palette shows beside each command the keys it has now: every command with keys, and the person's own from the Keyboard page in place of the usual ones",
+    "test": "the_command_palette_shows_the_keys_each_command_has_now",
+    "passes": true
   }
 ]

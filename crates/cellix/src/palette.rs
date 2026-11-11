@@ -353,6 +353,9 @@ pub struct Palette {
     /// Quick Open, where `@` or `#` at the start turns to symbols and taking it away turns
     /// back.
     pub quick: bool,
+    /// The keys each command has now, the person's own among them, to show beside it in
+    /// place of its usual ones. Kept apart, so a palette stays the size it was.
+    keys: Option<std::rc::Rc<HashMap<Command, String>>>,
 }
 
 /// Where the letters of `query` fall in `text`, as `fuzzy_score` finds them.
@@ -448,9 +451,28 @@ impl Palette {
             prefix: None,
             grouped: false,
             quick: false,
+            keys: None,
         };
         palette.filter();
         palette
+    }
+
+    /// Shows beside each command the keys it has now, as the Keyboard page lists them:
+    /// a command given other keys shows those, one whose keys were taken away shows none,
+    /// and every command with keys shows them, not only the best known.
+    pub fn with_keys(mut self, shortcuts: &[crate::keys::Shortcut]) -> Self {
+        let now = shortcuts.iter();
+        let now = now.filter_map(|s| Some((s.command, s.keys.first()?.clone())));
+        self.keys = Some(std::rc::Rc::new(now.collect()));
+        self
+    }
+
+    /// What sits at the right of a row.
+    fn keys_at(&self, index: usize) -> Option<&str> {
+        match (&self.items[index], &self.keys) {
+            (Item::Command(_, command), Some(keys)) => keys.get(command).map(String::as_str),
+            (item, _) => item.keys(),
+        }
     }
 
     /// Go to Symbol: the query starts with `prefix`, and the file's own symbols are grouped
@@ -844,7 +866,7 @@ impl Palette {
                 let from = inset + measure.width(&shown, Font::default()) + 1.0;
                 grid.label_at(from, from as u16, y, &task.command, quiet, end, 100);
             }
-            if let Some(keys) = self.items[*index].keys() {
+            if let Some(keys) = self.keys_at(*index) {
                 // The picked row's wash is lighter, so its keys need to be too.
                 let fg = if row == self.selected {
                     theme.text.fg
