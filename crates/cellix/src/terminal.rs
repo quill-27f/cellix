@@ -39,23 +39,57 @@ extern "C" fn stop(_: libc::c_int) {
     STOPPED.store(true, Ordering::Relaxed);
 }
 
+/// How often the watch looks at whether the terminal is still there.
+#[cfg(unix)]
+const TERMINAL_LOOK: Duration = Duration::from_secs(1);
+
+/// Whether the terminal Cellix reads has gone: closed at its other end, or taken away. It
+/// still answers as a terminal then, so it's asked the way a reader finds out, without
+/// reading anything.
+#[cfg(unix)]
+fn terminal_gone() -> bool {
+    let mut input = libc::pollfd {
+        fd: libc::STDIN_FILENO,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: one descriptor, in a struct that outlives the call, and no waiting.
+    let found = unsafe { libc::poll(&mut input, 1, 0) };
+    found > 0 && input.revents & (libc::POLLHUP | libc::POLLNVAL | libc::POLLERR) != 0
+}
+
 /// Hangs up and stops end the loop, so they leave the way Quit does.
 ///
 /// A stop that lands while crossterm waits for input is retried inside crossterm, and if the
 /// terminal then closes, crossterm reads its end over and over and never returns, so the loop
 /// never sees the stop. A watch outside the loop ends Cellix after a moment in that case,
 /// clearing `left` (the socket and the like) as the loop would have.
+///
+/// A terminal can also go with no hang-up reaching Cellix at all, when Cellix isn't in the
+/// terminal's own session. Its input then reads as ended for ever and crossterm reads that for
+/// ever: one Cellix was found a week later, still using a whole core. So the watch also looks
+/// at whether the terminal is still there, and counts its going as a stop.
 #[cfg(unix)]
 fn catch_stops(left: Left) {
+    use std::io::IsTerminal;
     for signal in [libc::SIGHUP, libc::SIGTERM] {
         // SAFETY: the handler only stores to an atomic, which is safe in a signal handler.
         unsafe {
             libc::signal(signal, stop as *const () as libc::sighandler_t);
         }
     }
+    // Started on a terminal, so one that's gone can be told from one that never was.
+    let on_terminal = io::stdin().is_terminal();
     std::thread::spawn(move || {
+        let mut looked = Instant::now();
         while !STOPPED.load(Ordering::Relaxed) {
             std::thread::sleep(Duration::from_millis(100));
+            if on_terminal && looked.elapsed() >= TERMINAL_LOOK {
+                looked = Instant::now();
+                if terminal_gone() {
+                    STOPPED.store(true, Ordering::Relaxed);
+                }
+            }
         }
         // The loop sees a stop within a frame; leaving normally ends this thread with it.
         std::thread::sleep(Duration::from_secs(2));

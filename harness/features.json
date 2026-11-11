@@ -4695,5 +4695,12 @@
     "title": "With a terminal or agent in the side pane, the main loop reads sessions every 8 ms only while keys or output are arriving; once quiet for a moment it rests 40 ms between looks, and the first key or line brings the quick wait back",
     "test": "a_quiet_session_is_read_less_often_until_something_happens",
     "passes": true
+  },
+  {
+    "id": "terminal-gone-ends-cellix",
+    "milestone": 12,
+    "title": "Cellix ends when its terminal has gone even though no hang-up reached it, instead of reading the closed terminal for ever at a full core",
+    "test": "a_terminal_that_goes_without_a_hang_up_still_ends_cellix",
+    "passes": true
   }
 ]

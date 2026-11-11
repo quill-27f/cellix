@@ -836,6 +836,95 @@ fn closing_the_terminal_keeps_unsent_comments() {
     again.wait_exit();
 }
 
+/// A terminal can go with no hang-up reaching Cellix, when Cellix runs in a session of its
+/// own. Its input then reads as ended for ever, and crossterm reads that for ever: one was
+/// found a week later still using a whole core. Cellix sees its terminal is gone and ends.
+///
+/// Only on macOS. On Linux, reading a terminal that has gone is an error, which ends the loop,
+/// and Cellix doesn't start there without a terminal of its own.
+#[test]
+#[cfg(target_os = "macos")]
+fn a_terminal_that_goes_without_a_hang_up_still_ends_cellix() {
+    use std::os::fd::{FromRawFd, OwnedFd};
+    use std::os::unix::process::CommandExt;
+    let dir = project();
+    let cache = tempfile::tempdir_in("/tmp").unwrap();
+    let (mut master, mut slave) = (0, 0);
+    let mut size = libc::winsize {
+        ws_row: 30,
+        ws_col: 100,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    let (name, modes) = (std::ptr::null_mut(), std::ptr::null_mut());
+    // SAFETY: openpty fills in the two descriptors, which this test then owns and closes.
+    assert_eq!(
+        unsafe { libc::openpty(&mut master, &mut slave, name, modes, &mut size) },
+        0
+    );
+    // Cellix mustn't inherit the terminal's own end, or closing it here wouldn't close it.
+    // SAFETY: sets a flag on the test's own descriptor.
+    unsafe { libc::fcntl(master, libc::F_SETFD, libc::FD_CLOEXEC) };
+    // SAFETY: each is a fresh copy of the terminal's end, owned by the command it's given to.
+    let end = || std::process::Stdio::from(unsafe { OwnedFd::from_raw_fd(libc::dup(slave)) });
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_cellix"));
+    command
+        .arg("hello.txt")
+        .current_dir(dir.path())
+        .env("XDG_CACHE_HOME", cache.path())
+        .stdin(end())
+        .stdout(end())
+        .stderr(end());
+    // A session of its own: the terminal isn't its controlling terminal, so closing it sends
+    // Cellix nothing.
+    // SAFETY: setsid is safe between fork and exec.
+    unsafe {
+        command.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    let mut child = command.spawn().unwrap();
+    // SAFETY: the test's own descriptors, used only here.
+    unsafe {
+        libc::close(slave);
+        libc::fcntl(master, libc::F_SETFL, libc::O_NONBLOCK);
+    }
+    // What it draws is read, as a terminal would, until the file is up and a little longer:
+    // by then it's waiting for keys.
+    let started = Instant::now();
+    let mut parser = vt100::Parser::new(30, 100, 0);
+    let mut up = None;
+    let mut buffer = [0u8; 65536];
+    while up.is_none_or(|at: Instant| at.elapsed() < Duration::from_secs(1)) {
+        if started.elapsed() > WAIT * 3 {
+            let _ = child.kill();
+            panic!("the file never showed: {}", parser.screen().contents());
+        }
+        // SAFETY: reads into a buffer of that length from the test's own descriptor.
+        let read = unsafe { libc::read(master, buffer.as_mut_ptr().cast(), buffer.len()) };
+        if read > 0 {
+            parser.process(&buffer[..read as usize]);
+            if up.is_none() && parser.screen().contents().contains("hello from a file") {
+                up = Some(Instant::now());
+            }
+        } else {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    assert!(child.try_wait().unwrap().is_none(), "Cellix is running");
+    // SAFETY: the terminal goes, as when its window is closed.
+    unsafe { libc::close(master) };
+    let deadline = Instant::now() + WAIT;
+    while child.try_wait().unwrap().is_none() {
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            panic!("Cellix ran on without its terminal");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// A dropped SSH connection hangs up on Cellix. The next Cellix in the folder has the same
 /// tabs, with what was typed and never saved.
 #[test]
