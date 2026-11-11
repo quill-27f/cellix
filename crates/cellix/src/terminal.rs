@@ -191,6 +191,22 @@ const SCROLL_PRESENT: Duration = Duration::from_millis(120);
 const POLL: Duration = Duration::from_millis(50);
 /// How long to wait with a session in the side pane, whose output should feel typed.
 const SESSION_POLL: Duration = Duration::from_millis(8);
+/// The same once nothing has been typed or printed for a while. A session at its prompt, or
+/// an agent thinking, is looked at less often; the first key or line brings the quick wait
+/// back.
+const SESSION_REST: Duration = Duration::from_millis(40);
+/// How long after the last key or output a session still counts as lively.
+const LIVELY: Duration = Duration::from_millis(300);
+
+/// How long the loop waits for input before it looks at the sessions again, `quiet` after
+/// the last key or change.
+fn session_wait(quiet: Duration) -> Duration {
+    if quiet < LIVELY {
+        SESSION_POLL
+    } else {
+        SESSION_REST
+    }
+}
 /// Background file checks run about twice a second.
 const TICK: Duration = Duration::from_millis(500);
 
@@ -787,6 +803,8 @@ pub fn run(options: Options) -> io::Result<()> {
     // A paste on Windows that the console handed over in parts.
     let mut pasting = Pasting::default();
     let mut last_tick = std::time::Instant::now();
+    // When a key last came or anything last changed, which sets how often sessions are read.
+    let mut lively = Instant::now();
     let mut shown: Option<Grid> = None;
     let ghostty = std::env::var("TERM").is_ok_and(|t| t.contains("ghostty"));
     // What the terminal is decides which notification sequence it reads.
@@ -866,9 +884,12 @@ pub fn run(options: Options) -> io::Result<()> {
                 break;
             }
             let has_session = spaces.list.iter().any(|w| w.app.has_session());
-            let wait = backend
-                .gliding()
-                .unwrap_or(if has_session { SESSION_POLL } else { POLL });
+            let rest = if has_session {
+                session_wait(lively.elapsed())
+            } else {
+                POLL
+            };
+            let wait = backend.gliding().unwrap_or(rest);
             // A signal interrupts the wait; the loop goes round and sees it.
             let ready = match ct::poll(wait) {
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
@@ -876,6 +897,7 @@ pub fn run(options: Options) -> io::Result<()> {
             };
             if ready {
                 let started = Instant::now();
+                lively = started;
                 // Drain everything queued, so a fast wheel doesn't redraw per event.
                 let mut batch = Vec::new();
                 let mut came_back = false;
@@ -1022,7 +1044,10 @@ pub fn run(options: Options) -> io::Result<()> {
                 redraw = true;
             }
             let started = Instant::now();
-            redraw |= spaces.poll();
+            if spaces.poll() {
+                lively = started;
+                redraw = true;
+            }
             phases.poll += started.elapsed();
             if !spaces.notifications.is_empty() {
                 for (title, body) in spaces.notifications.drain(..) {
@@ -1107,6 +1132,19 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn a_quiet_session_is_read_less_often_until_something_happens() {
+        // A key or a line of output just came: read as often as typing needs.
+        assert_eq!(session_wait(Duration::ZERO), SESSION_POLL);
+        assert_eq!(session_wait(Duration::from_millis(200)), SESSION_POLL);
+        // At its prompt for a while: a fifth as many wake-ups, and still no slower than a
+        // window with no session at all.
+        let resting = session_wait(Duration::from_secs(2));
+        assert!(resting >= SESSION_POLL * 5, "{resting:?}");
+        assert!(resting <= POLL, "{resting:?}");
+        assert_eq!(session_wait(Duration::from_secs(3600)), resting);
     }
 
     /// One read of input, with nothing before it.

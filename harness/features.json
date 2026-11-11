@@ -4688,5 +4688,12 @@
     "title": "The palette ranks a command or file whose word starts with what was typed above one that only holds the letters: \"op\" lists Open Folder before Pop Stash",
     "test": "a_command_that_starts_with_what_was_typed_comes_before_one_that_holds_it",
     "passes": true
+  },
+  {
+    "id": "quiet-sessions-read-less-often",
+    "milestone": 12,
+    "title": "With a terminal or agent in the side pane, the main loop reads sessions every 8 ms only while keys or output are arriving; once quiet for a moment it rests 40 ms between looks, and the first key or line brings the quick wait back",
+    "test": "a_quiet_session_is_read_less_often_until_something_happens",
+    "passes": true
   }
 ]
