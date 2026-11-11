@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use cellix_agent::hook::PLAN_WAITING;
 use cellix_agent::{AgentEvent, AgentState};
-use cellix_render::{Bounds, Grid, Rect, Rgb, Style};
+use cellix_render::{Bounds, Font, Grid, Icon, Measure, Paint, Rect, Rgb, Style};
 use cellix_review::Worktree;
 
 use crate::integrations;
@@ -11,6 +11,12 @@ use crate::theme::Theme;
 
 const SECTION_SIZE: u8 = 80;
 const DETAIL_SIZE: u8 = 85;
+/// What a worktree's row says a click on it opens, once the pointer is on it.
+const REVIEW: &str = "Review";
+/// How tall the icon before that word is, in rows, and the room between the two, in cells.
+const REVIEW_ICON: (f32, f32) = (0.5, 0.4);
+/// Cells between that word and the count of changes after it.
+const REVIEW_GAP: f32 = 1.0;
 /// Agents that can be started from here, as what the panel calls them and their programs.
 /// What the side pane is for, in the order it happens.
 const STEPS: [&str; 3] = [
@@ -261,10 +267,16 @@ impl Agents {
         lines.extend((0..self.running.len()).map(Line::Reporting));
         lines.extend(silent.into_iter().map(Line::Silent));
         // Starting one comes before the worktrees, which can be a long list to scroll past.
+        // A terminal isn't an agent, so it stands apart from them, under a name that fits both.
         if !self.installed.is_empty() {
             lines.push(Line::Gap);
-            lines.push(Line::Section("START AN AGENT"));
-            lines.extend((0..self.installed.len()).map(Line::Start));
+            lines.push(Line::Section("START"));
+            for (index, (_, program)) in self.installed.iter().enumerate() {
+                if *program == SHELL.1 && index > 0 && !self.docked {
+                    lines.push(Line::Gap);
+                }
+                lines.push(Line::Start(index));
+            }
         }
         if !self.worktrees.is_empty() {
             lines.push(Line::Gap);
@@ -328,7 +340,7 @@ impl Agents {
         area: Rect,
         scrolled: usize,
         hover: Option<(u16, u16)>,
-        theme: &Theme,
+        (measure, theme): (&dyn Measure, &Theme),
     ) {
         grid.fill(area, theme.sidebar);
         let scrolled = scrolled.min(self.last_top(area.h));
@@ -393,7 +405,8 @@ impl Agents {
                         let wash = Bounds::inset(row, 0.4, 0.055);
                         grid.panel(wash, 18, Some(theme.row_hover), None);
                     }
-                    self.draw_worktree(grid, area, (y, rows), index, theme);
+                    let row = (y, rows, hovered);
+                    self.draw_worktree(grid, area, row, index, (measure, theme));
                 }
                 Line::Start(index) => {
                     if hovered {
@@ -428,13 +441,15 @@ impl Agents {
         }
     }
 
+    /// One worktree: its branch, how much has changed in it, and under the pointer what a
+    /// click on it opens, before that count.
     fn draw_worktree(
         &self,
         grid: &mut Grid,
         area: Rect,
-        (y, rows): (u16, u16),
+        (y, rows, hovered): (u16, u16, bool),
         index: usize,
-        theme: &Theme,
+        (measure, theme): (&dyn Measure, &Theme),
     ) {
         let dim = Style {
             fg: theme.gutter.fg,
@@ -450,7 +465,46 @@ impl Agents {
         } else {
             worktree.branch.clone()
         };
-        grid.label(side, y, &title, theme.sidebar, area.right());
+        let right = area.right().saturating_sub(2);
+        // Where what stands at the row's end starts, which the branch's name stops short of.
+        let mut end = right as f32;
+        if worktree.changes > 0 {
+            let count = format!("{} changed", worktree.changes);
+            let badge = Style {
+                fg: theme.git_modified,
+                ..theme.sidebar
+            };
+            grid.label_right(right, y, &count, badge, DETAIL_SIZE);
+            let font = Font {
+                size: DETAIL_SIZE,
+                ..Font::default()
+            };
+            end -= measure.width(&count, font) + REVIEW_GAP;
+        }
+        if hovered {
+            let ground = theme.sidebar;
+            let (tall, gap) = REVIEW_ICON;
+            let words = end - measure.width(REVIEW, Font::default());
+            let icon = words - gap - tall * 2.0;
+            if icon > side as f32 + 4.0 {
+                let top = y as f32 + (1.0 - tall) / 2.0;
+                grid.paint.push(Paint::Icon {
+                    bounds: Bounds::cells(icon, top, tall * 2.0, tall),
+                    icon: Icon::Diff,
+                    color: theme.sidebar.fg,
+                });
+                let cell = words.floor() as u16;
+                let shown = Style {
+                    painted: true,
+                    ..ground
+                };
+                grid.put_str(cell.saturating_sub(2), y, "±", shown, cell);
+                grid.label_at(words, cell, y, REVIEW, ground, right, 100);
+                end = icon;
+            }
+        }
+        let stop = (end.floor() as u16).saturating_sub(1).max(side);
+        grid.label(side, y, &title, theme.sidebar, stop);
         if rows > 1 {
             let place = if detached {
                 "Detached HEAD".to_string()
@@ -459,15 +513,6 @@ impl Agents {
             };
             let x = side as f32;
             grid.label_at(x, side, y + 1, &place, dim, area.right(), DETAIL_SIZE);
-        }
-        if worktree.changes > 0 {
-            let count = format!("{} changed", worktree.changes);
-            let badge = Style {
-                fg: theme.git_modified,
-                ..theme.sidebar
-            };
-            let right = area.right().saturating_sub(2);
-            grid.label_right(right, y, &count, badge, DETAIL_SIZE);
         }
     }
 
@@ -565,20 +610,59 @@ p3\nccodex\nfcwd\nn/work/project/sub\n";
         let area = Rect::new(0, 0, 40, 36);
         let found = (0..area.h).find(|y| agents.hit(area, *y, 0) == Some(Hit::Start("claude")));
         assert!(found.is_some(), "Claude Code can be started");
+        let theme = Theme::default();
+        let look: (&dyn Measure, &Theme) = (&cellix_render::CellMeasure, &theme);
         let mut grid = Grid::new(40, 36, Style::default());
-        agents.draw(&mut grid, area, 0, None, &Theme::default());
-        assert!(grid.text().contains("START AN AGENT"), "{}", grid.text());
+        agents.draw(&mut grid, area, 0, None, look);
+        assert!(grid.text().contains("START"), "{}", grid.text());
 
         // The worktrees that don't fit are a scroll away, and it stops at the last of them.
         assert!(!grid.text().contains("claude/tree-10"), "{}", grid.text());
         let last = agents.last_top(area.h);
         assert!(last > 0);
         let mut grid = Grid::new(40, 36, Style::default());
-        agents.draw(&mut grid, area, usize::MAX, None, &Theme::default());
+        agents.draw(&mut grid, area, usize::MAX, None, look);
         assert!(grid.text().contains("claude/tree-10"), "{}", grid.text());
         let tree = Hit::Worktree(PathBuf::from("/work/tree-10"));
         let found = (0..area.h).find(|y| agents.hit(area, *y, last) == Some(tree.clone()));
         assert!(found.is_some(), "and the last one can be clicked");
+    }
+
+    #[test]
+    fn the_terminal_stands_apart_from_the_agents() {
+        let agents = Agents {
+            installed: vec![("Claude Code", "claude"), ("Codex", "codex"), SHELL],
+            ..Agents::default()
+        };
+        let area = Rect::new(0, 0, 40, 30);
+        let rows = |program: &'static str| -> Vec<u16> {
+            let hit = Some(Hit::Start(program));
+            (0..area.h)
+                .filter(|y| agents.hit(area, *y, 0) == hit)
+                .collect()
+        };
+        let (claude, codex, shell) = (rows("claude"), rows("codex"), rows(SHELL.1));
+        assert_eq!(codex[0], claude[1] + 1, "one agent right under the other");
+        assert_eq!(
+            shell[0],
+            codex[1] + 2,
+            "and a row of air before the terminal"
+        );
+        assert_eq!(agents.hit(area, codex[1] + 1, 0), None);
+
+        // With no agent installed there's nothing to stand apart from.
+        let alone = Agents {
+            installed: vec![SHELL],
+            ..Agents::default()
+        };
+        let theme = Theme::default();
+        let look: (&dyn Measure, &Theme) = (&cellix_render::CellMeasure, &theme);
+        let mut grid = Grid::new(40, 30, Style::default());
+        alone.draw(&mut grid, area, 0, None, look);
+        let text = grid.text();
+        let lines: Vec<&str> = text.lines().collect();
+        let start = lines.iter().position(|l| l.contains("START")).unwrap();
+        assert!(lines[start + 1].contains("Terminal"), "{text}");
     }
 
     #[test]

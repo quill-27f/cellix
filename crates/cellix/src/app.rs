@@ -8569,7 +8569,8 @@ impl App {
             None => {
                 let panel = self.dock_panel().unwrap_or(screen);
                 let top = self.dock.tops.of(Front::Agents);
-                self.agents.draw(grid, panel, top, self.hover, theme);
+                let look = (&*self.measure, theme);
+                self.agents.draw(grid, panel, top, self.hover, look);
             }
         }
     }
@@ -24129,7 +24130,7 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert_eq!((main.w, pane.w), (pane.w, main.w), "both take the width");
         assert_eq!(pane.right(), 70);
         assert_eq!(pane.bottom(), 39, "down to the status bar");
-        assert!(screen(&app).text().contains("START AN AGENT"));
+        assert!(screen(&app).text().contains("runs here, under the file"));
     }
 
     #[test]
@@ -24169,7 +24170,44 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let plus = app.dock.new_button_for_test(area);
         app.handle(mouse(MouseKind::Left, plus, area.y));
         assert!(app.dock.listing());
-        assert!(screen(&app).text().contains("START AN AGENT"));
+        assert!(screen(&app).text().contains("A plain terminal"));
+    }
+
+    #[test]
+    fn a_worktree_row_under_the_pointer_says_a_click_opens_review() {
+        let (dir, mut app) = project();
+        app.run(Command::ListAgents);
+        app.agents.worktrees = [("main", 5), ("fix-pop-order", 2)]
+            .into_iter()
+            .map(|(branch, changes)| cellix_review::Worktree {
+                path: dir.path().join(branch),
+                branch: branch.to_string(),
+                changes,
+            })
+            .collect();
+        let grid = screen(&app);
+        let (x, y) = find(&grid, "fix-pop-order");
+        let pane = app.dock_area().unwrap().x as usize;
+        let beside =
+            |grid: &Grid, y: u16| -> String { grid.row_text(y).chars().skip(pane).collect() };
+        assert!(!beside(&grid, y).contains("Review"), "{}", grid.text());
+        // START names what the rows under it do, which is a terminal as well as an agent.
+        assert!(!grid.text().contains("START AN AGENT"), "{}", grid.text());
+
+        app.handle(mouse(MouseKind::Move, x, y));
+        let grid = screen(&app);
+        let row = beside(&grid, y);
+        let (review, count) = (row.find("Review"), row.find("2 changed"));
+        assert!(review.is_some() && review < count, "{row}");
+        let other = beside(&grid, find(&grid, "5 changed").1);
+        assert!(
+            !other.contains("Review"),
+            "only the row pointed at: {other}"
+        );
+
+        // The whole row takes the click, and Review opens on that worktree.
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert!(app.review.is_some());
     }
 
     #[test]
@@ -24195,7 +24233,7 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let agents = tabs[1].2;
         app.handle(mouse(MouseKind::Left, agents.x + 1, area.y));
         assert!(app.dock.listing());
-        assert!(screen(&app).text().contains("START AN AGENT"));
+        assert!(screen(&app).text().contains("A plain terminal"));
         app.handle(mouse(MouseKind::Left, agents.right() - 2, area.y));
         assert!(!app.dock.agents_tab);
         assert_eq!(app.dock.front, Front::Session);

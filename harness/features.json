@@ -4779,5 +4779,12 @@
     "title": "When the row is short the tab in front stands in a chip that hugs its measured name, so two tabs in a 40-column pane both show whole and three keep three letters each",
     "test": "the_tab_in_front_hugs_its_name_so_those_behind_keep_theirs",
     "passes": true
+  },
+  {
+    "id": "agents-rows-say-the-click",
+    "milestone": 14,
+    "title": "In the Agents panel a worktree's row under the pointer says a click opens Review, before its count of changes; the list of what can start is headed START, with the terminal set apart from the agents",
+    "test": "a_worktree_row_under_the_pointer_says_a_click_opens_review",
+    "passes": true
   }
 ]

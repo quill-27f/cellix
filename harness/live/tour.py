@@ -33,7 +33,7 @@ def command(words, opened="\x1b[112;6u"):
     return [["keys", opened], ["until", PALETTE_UP], ["keys", words], ["until", words], ["keys", "\r"],
             ["gone", words]]
 F1 = "\\eOP"
-LIST_AGENTS = [*command("List Agents"), ["until", "START AN AGENT"]]
+LIST_AGENTS = [*command("List Agents"), ["until", "WORKTREES"]]
 SHOW_INBOX = command("Show Inbox")
 # A word each scene's surface shows, where one can be named: the scene's picture is only
 # taken once the screen says it. Hover scenes and plain pages have none.
@@ -64,15 +64,15 @@ EXPECT = {
     "123-signature-help": "index: usize",
     "124-inlay-hints": "run.rs",
     "125-inlay-hints-light": "run.rs",
-    "13-agents-click": "START AN AGENT",
-    "13-quit-beside-pane": "START AN AGENT",
+    "13-agents-click": "WORKTREES",
+    "13-quit-beside-pane": "WORKTREES",
     "13-review": "Accept",
     "13-source-control": "SOURCE CONTROL",
     "13-source-diff": "SOURCE CONTROL",
     "13-source-hover": "SOURCE CONTROL",
     "13-source-message": "what changed and",
     "13-source-staged": "STAGED CHANGES",
-    "13-stacked-pane": "START AN AGENT",
+    "13-stacked-pane": "WORKTREES",
     "130-run-task": "Select the task",
     "131-task-failed": "make build",
     "132-task-problems": "undeclared identifier",
@@ -82,7 +82,7 @@ EXPECT = {
     "136-settings-keys-search": "command's keys",
     "137-settings-keys-record": "command's keys",
     "138-welcome-recent": "RECENT",
-    "14-agents": "START AN AGENT",
+    "14-agents": "WORKTREES",
     "140-inbox": "waiting",
     "141-inbox-hover": "waiting",
     "15-settings-appearance": "Changes apply",
@@ -102,17 +102,17 @@ EXPECT = {
     "36-hover-accept": "Accept",
     "37-hover-settings": "files save",
     "38-hover-dialog": "Save changes",
-    "39-hover-agents": "START AN AGENT",
+    "39-hover-agents": "WORKTREES",
     "42-hover-install": "files save",
     "43-light-hover-menu": "Rename Symbol",
     "50-comments": "yours",
     "50-plan-versions": "yours",
     "50-plan-versions-narrow": "yours",
     "50-review": "suggested",
-    "51-agent-list": "START AN AGENT",
+    "51-agent-list": "WORKTREES",
     "51-inbox-empty": "Nothing",
-    "56-narrow-note": "START AN AGENT",
-    "57-dock-agents": "START AN AGENT",
+    "56-narrow-note": "WORKTREES",
+    "57-dock-agents": "WORKTREES",
     "64-transcript-tab": "stand-in",
     "64-transcript-tab-full": "stand-in",
     "64-transcript-tab-hover": "stand-in",
