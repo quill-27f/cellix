@@ -23,9 +23,6 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 - Clicking a comment in the Comments pane with no file open now opens its file at the comment.
 - A Cellix whose terminal went away without a hang-up kept running at full CPU. It now ends.
 - A session host whose socket was gone kept its program running where nothing could reach it. It now ends with its program.
-- A task's tab stays when the task ends, so its errors can be read.
-- A long machine name no longer covers New Workspace in the workspaces bar.
-- On Linux, a large paste, such as a picture over SSH, could stop being read part of the way through.
 
 ## [0.6.4] - 2026-11-10
 

@@ -1817,3 +1817,12 @@ The ui-expert measured the renders of both changes. What it found, and what was 
 - Left as they were, and older: the tooltip follows the pointer and stands 4 px under a chip; a cut table's left border is 2 px and square where a whole one's is 1 px and round; the selection bar touches the line above it; the tab chip and the icon chip beside it are two blues and two heights; the first tab's name isn't on the pane's text edge; scenes 37 and 42 are the same picture, since the server under the pointer is installed on this machine. No sign of "more" is drawn at a cut edge on the pixel tier beyond the open box and the thumb.
 - Open, and not from these changes: `checkpoints_taken_at_once_each_keep_their_own` (cellix-review) failed once more in a full gate run, "every checkpoint is taken", with the machine quiet, and passed five times alone straight after. It has been fixed twice (see the 0.6.1 and 0.6.2 entries), so a checkpoint can still come back empty when four are taken at once. `pty_follows_a_resize` also missed its 10 seconds once in a full run at load 29, and takes 6 to 9 seconds alone, most of it waiting on answers the test's terminal never sends.
 
+## Release 0.6.5 (2026-11-10)
+
+Everything since 0.6.4: the fixes from the end-to-end review, tables that keep to the page and move sideways, the palette's keys, a narrow pane's tabs and the reading width. The three commits that followed "Release 0.6.4" went out with 0.6.4, so they aren't in these notes.
+
+- The tour was taken whole twice: on `f37cc22`, before the design review, and on `b6a50b0`, after its fixes. Both took all 188 scenes with none failed or retaken. Between the two, 72 scenes are the same to the pixel; of the rest, the pages at 150 and 200 columns and the pane's tab rows changed as meant, and the others differ only in clocks, commit hashes and temp folder names. `67-transcript-scrolled` stood three rows further down the second time: six wheel notches, which Cellix reads as a wheel or a trackpad by their timing.
+- Looked at from the second tour: 131, 132, 160 to 167, 46, 49 and the transcript scenes, with snapshots of the tabs at 40 columns on both tiers.
+- Unverified: all of it in a real terminal. The ui-expert has not seen the renders made after its findings were fixed.
+- Next: the user's pick on the 14 boards still on the canvas (comment cards, Task page close, terminal chips, Agents rows, palette, Settings search), and whether 88 columns, which is about 140 characters a line, should be narrower.
+
