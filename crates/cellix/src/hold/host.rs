@@ -503,9 +503,16 @@ pub fn serve(socket: &Path) -> io::Result<()> {
 
     let looking = shared.clone();
     let front = master.clone();
+    let reached_at = socket.to_path_buf();
     std::thread::spawn(move || {
         loop {
             std::thread::sleep(LOOK);
+            // With its socket gone, nobody can reach this host again: the folder that held it
+            // was cleared, or a test's was deleted. Its program ends with it rather than
+            // running on unseen. Leaving closes the terminal the program runs in.
+            if !reached_at.exists() {
+                finish(&reached_at);
+            }
             let leader = front.lock().ok().and_then(|m| m.process_group_leader());
             let at_prompt = leader.is_some() && leader.map(|p| p as u32) == pid;
             if let Ok(mut shared) = looking.lock()

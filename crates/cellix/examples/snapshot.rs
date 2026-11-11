@@ -139,6 +139,8 @@ fn main() {
         Some(view) if view.starts_with("pane:") => {
             let (file, columns) = view[5..].rsplit_once(':').expect("<file>:<columns>");
             app.open(&root.join(file)).unwrap();
+            // Two tabs, so a narrow pane has more than it has room for.
+            app.run(Command::ShowComments);
             app.run(Command::ListAgents);
             app.set_pane_width(columns.parse().expect("a number of columns"));
         }

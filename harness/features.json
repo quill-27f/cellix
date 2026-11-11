@@ -4723,5 +4723,12 @@
     "title": "A table with more columns than fit, or a long line of code, in a Markdown or LaTeX page moves sideways with the wheel tipped across or turned with Shift, with a thumb along the bottom; the rest of the page stays, clicks land on what's under them, and the caret brings its place back into view",
     "test": "a_page_with_more_than_fits_across_moves_sideways",
     "passes": true
+  },
+  {
+    "id": "unreachable-host-ends",
+    "milestone": 12,
+    "title": "A session host whose socket is gone, so nothing can attach to it again, ends its program and itself instead of running on unseen",
+    "test": "a_host_whose_socket_is_gone_ends_its_program",
+    "passes": true
   }
 ]

@@ -113,6 +113,29 @@ fn a_new_size_reaches_the_program() {
     held.kill();
 }
 
+/// A host is reached through its socket. Once that's gone, as when the folder holding it is
+/// cleared, nobody can attach again, so the host ends its program and itself rather than
+/// run on unseen: dozens of these were found days after the tests that started them.
+#[test]
+fn a_host_whose_socket_is_gone_ends_its_program() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("held");
+    let held = start(&folder, &job("Left", "echo up; sleep 600", dir.path()));
+    let (seen, _over) = attach(&held);
+    read_until(&seen, "up");
+    let pid = std::fs::read_to_string(held.socket.with_extension("pid")).unwrap();
+    let pid: i32 = pid.trim().parse().unwrap();
+    // SAFETY: signal 0 only asks whether the process is there.
+    let running = || unsafe { libc::kill(pid, 0) } == 0;
+    assert!(running());
+    std::fs::remove_dir_all(&folder).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while running() {
+        assert!(Instant::now() < deadline, "the program ran on unreachable");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 #[test]
 fn a_dead_host_leaves_nothing_behind() {
     let dir = tempfile::tempdir().unwrap();
