@@ -61,16 +61,19 @@ const CONTEXT_AIR: f32 = 0.9;
 const CONTEXT_SIZE: u8 = 85;
 /// Columns for the chevron on the tab in front that lists every tab, when they don't all fit.
 const PICK_WIDTH: u16 = 2;
-/// The fewest columns a tab behind the one in front is cut to: a column of air, then two
-/// letters and the "…" that says there's more. Under that, the tabs go into a list.
-const CUT_LEAST: u16 = 4;
-/// Where a cut tab's name starts on the pixel tiers, in cells from its left edge. It stops
-/// `CUT_END` short of the right edge, so two names keep a cell between them.
-const CUT_TEXT: f32 = 0.6;
-const CUT_END: f32 = 0.4;
-/// How far a cut tab's chip stands in from its sides: less than a whole tab's, since it has
-/// less to stand in from.
-const CUT_CHIP: f32 = 0.2;
+/// The fewest columns a tab behind the one in front is cut to: three letters and the "…"
+/// that says there's more, with half a column of air either side. Two letters don't tell
+/// Comments from Codex. Under that, the tabs go into a list.
+const CUT_LEAST: u16 = 5;
+/// The air a tab behind the one in front has either side of its name, in cells: about 8 px.
+/// Its chip under the pointer is exactly its name and that air.
+const CUT_AIR: f32 = 0.5;
+/// What the tab in front has beside its name when the row is short, in cells: the lead a
+/// tab's name always has, 12 px to its ×, the ×, and 10 px to the chip's edge. With room,
+/// a tab has more than this; without, the slack is what would cut its neighbours.
+const HUG: f32 = 3.92;
+/// How far before a hugging tab's right edge its × is drawn, so 10 px stay past its ink.
+const HUG_CLOSE: f32 = 2.07;
 /// The button that closes the pane.
 const HIDE_WIDTH: u16 = 3;
 /// Rows tall each icon at the top right is: the pane's buttons and the icons beside them.
@@ -1281,6 +1284,9 @@ pub struct Dock {
     pub inbox_count: Cell<usize>,
     /// The column tabs stop at, for what stands past them.
     pub tabs_end: Cell<u16>,
+    /// Columns kept clear between that and the icons past it, which names with no chip
+    /// around them may use when the row is short: an icon has air of its own inside its cell.
+    pub tabs_slack: Cell<u16>,
     /// Whether the tabs start flush, under the file's, with no line beside them.
     pub tabs_flush: Cell<bool>,
     /// Rows the pane was dragged to, standing under the file.
@@ -1298,6 +1304,9 @@ pub struct Dock {
     pub docked: bool,
     /// Agents whose tabs closed as they ended, for the status bar to say.
     pub ended: Vec<String>,
+    /// How the interface's text is measured, so a tab can be as wide as its name. Without
+    /// one, a name is as many columns as it has letters, as on the cell tier.
+    pub measure: Option<std::rc::Rc<dyn cellix_render::Measure>>,
 }
 
 /// An agent that ends this soon after starting didn't start: its tab stays, with what it said.
@@ -1577,11 +1586,6 @@ impl Dock {
             .collect()
     }
 
-    /// What a session's tab needs for its name and its ×, without how full its context is.
-    fn session_bare(session: &Session) -> u16 {
-        session.name.chars().count() as u16 + TAB_PADDING * 2 + CLOSE_WIDTH
-    }
-
     /// Whether only the tab in front shows, with a chevron that lists every tab: the row
     /// before the icons at the top right is too short even for tabs cut to a few letters.
     pub fn picking(&self, area: Rect) -> bool {
@@ -1603,12 +1607,59 @@ impl Dock {
         }
     }
 
+    /// How wide `text` is in the interface's font, in cells.
+    fn text_width(&self, text: &str) -> f32 {
+        match &self.measure {
+            Some(measure) => measure.width(text, cellix_render::Font::default()),
+            None => text.chars().count() as f32,
+        }
+    }
+
+    fn in_cells(&self) -> bool {
+        self.measure.as_ref().is_none_or(|m| m.in_cells())
+    }
+
+    /// What each tab says, views and then sessions: a view's name with how many it holds.
+    fn tab_texts(&self) -> Vec<String> {
+        let views = self.views().into_iter().map(|(view, name, _)| {
+            let counted = match view {
+                Front::Comments => self.comment_count.get(),
+                Front::Inbox => self.inbox_count.get(),
+                _ => 0,
+            };
+            if counted > 0 {
+                format!("{name} {counted}")
+            } else {
+                name.to_string()
+            }
+        });
+        let sessions = self.sessions.iter().map(|session| session.name.clone());
+        views.chain(sessions).collect()
+    }
+
+    /// Columns the tab in front takes when the row is short: its name and its ×, with the
+    /// air a chip has around them and none to spare.
+    fn hugging(&self, text: &str) -> u16 {
+        if self.in_cells() {
+            // A column either side, and one between the name and the ×.
+            text.chars().count() as u16 + 4
+        } else {
+            (self.text_width(text) + HUG).ceil() as u16
+        }
+    }
+
+    /// Columns a tab behind the one in front takes to show its whole name, with no × and
+    /// half a column of air either side.
+    fn stub(&self, text: &str) -> u16 {
+        (self.text_width(text) + CUT_AIR * 2.0).ceil() as u16
+    }
+
     /// What each tab gets, views and then sessions, and how they stand. When they don't all
-    /// fit with the + after them, the one in front keeps its whole name and those behind it
-    /// share what's left, the widest giving way first, each cut short with a "…". The one in
-    /// front gives up how full its context is before any of them gives up its place. When
-    /// that would still leave them under `CUT_LEAST` columns each, only the one in front
-    /// shows, with a chevron that lists every tab.
+    /// fit with the + after them, the one in front keeps its whole name, in a chip that
+    /// hugs it, and those behind it stand as names alone: whole while there's room, and
+    /// then cut short with a "…", the longest giving way first. When that would leave them
+    /// under `CUT_LEAST` columns each, only the one in front shows, with a chevron that
+    /// lists every tab.
     fn fitted(&self, area: Rect) -> (Vec<u16>, Fit) {
         let mut widths = self.wanted_widths();
         let end = self.tabs_end.get();
@@ -1618,13 +1669,11 @@ impl Dock {
         }
         let front = self.front_index().unwrap_or(0);
         let behind = widths.len().saturating_sub(1) as u16;
-        let whole = widths.get(front).copied();
-        let session = front.checked_sub(self.views().len());
-        let bare = session
-            .and_then(|index| self.sessions.get(index))
-            .map(Self::session_bare);
-        let fits = |kept: &u16| kept + behind * CUT_LEAST <= room;
-        let Some(kept) = [whole, bare].into_iter().flatten().find(fits) else {
+        let texts = self.tab_texts();
+        let kept = texts.get(front).map_or(0, |text| self.hugging(text));
+        // Short of room, the row runs up to the icons' own cells.
+        let short = room + self.tabs_slack.get();
+        if kept + behind * CUT_LEAST > short {
             for (index, width) in widths.iter_mut().enumerate() {
                 *width = if index == front {
                     (*width + PICK_WIDTH).min(room)
@@ -1633,8 +1682,15 @@ impl Dock {
                 };
             }
             return (widths, Fit::Front);
-        };
-        let rest = room - kept;
+        }
+        for (index, (width, text)) in widths.iter_mut().zip(&texts).enumerate() {
+            *width = if index == front {
+                kept
+            } else {
+                self.stub(text)
+            };
+        }
+        let rest = short - kept;
         let taken = |cap: u16, widths: &[u16]| -> u16 {
             let behind = widths
                 .iter()
@@ -1649,9 +1705,7 @@ impl Dock {
         // What's left over goes a column each to the first of those cut.
         let mut spare = rest.saturating_sub(taken(cap, &widths));
         for (index, width) in widths.iter_mut().enumerate() {
-            if index == front {
-                *width = kept;
-            } else if *width > cap {
+            if index != front && *width > cap {
                 let more = u16::from(spare > 0);
                 spare -= more;
                 *width = cap + more;
@@ -1660,15 +1714,21 @@ impl Dock {
         (widths, Fit::Cut)
     }
 
-    /// Which tabs are cut short, views and then sessions: those behind the one in front that
-    /// got less than they asked for. One shows no ×, and a click anywhere on it brings it
-    /// forward.
+    /// Whether the tab in front stands in a chip that hugs its name, with its × two columns
+    /// from its end rather than three.
+    fn hugs(&self, area: Rect) -> bool {
+        self.fit(area) == Fit::Cut
+    }
+
+    /// Which tabs stand as names alone, views and then sessions: every one behind the tab
+    /// in front, when the row is too short for them all. One shows no ×, and a click
+    /// anywhere on it brings it forward.
     fn cut_short(&self, area: Rect) -> Vec<bool> {
-        let (widths, fit) = self.fitted(area);
+        let fit = self.fit(area);
         let front = self.front_index().unwrap_or(0);
-        let wanted = self.wanted_widths();
-        let tabs = widths.into_iter().zip(wanted).enumerate();
-        tabs.map(|(index, (width, full))| fit == Fit::Cut && index != front && width < full)
+        let count = self.wanted_widths().len();
+        (0..count)
+            .map(|index| fit == Fit::Cut && index != front)
             .collect()
     }
 
@@ -1743,10 +1803,14 @@ impl Dock {
         let mut at = self.tabs_start(area);
         let pick = if self.picking(area) { PICK_WIDTH } else { 0 };
         let cuts = self.cut_short(area);
-        for (((name, width), full), cut) in names.zip(widths).zip(wanted).zip(cuts) {
+        let texts = self.tab_texts();
+        let tabs = names.zip(widths).zip(wanted).zip(cuts).zip(texts);
+        for ((((name, width), full), cut), text) in tabs {
             if x >= at && x < at + width {
+                // Standing as a name alone, it's cut when that name has no room.
+                let short = cut && self.stub(&text) > width;
                 let stub = pick > 0 && width < full + pick;
-                return (cut || stub).then(|| name.to_string());
+                return (short || stub).then(|| name.to_string());
             }
             at += width;
         }
@@ -1889,19 +1953,21 @@ impl Dock {
         let fit = self.fit(area);
         let picking = fit == Fit::Front;
         let cuts = self.cut_short(area);
+        // Columns at a tab's end that are its ×: one fewer in a chip that hugs its name.
+        let reach = if fit == Fit::Cut { 2 } else { CLOSE_WIDTH + 1 };
         let views = self.view_tabs(area);
         let sessions_from = views.len();
         for (index, (view, _, tab)) in views.into_iter().enumerate() {
             if x >= tab.x && x < tab.right() {
-                // Cut short, a tab has no × to miss: all of it brings it forward.
+                // Behind the one in front, a tab has no × to miss: all of it brings it forward.
                 if cuts[index] {
                     return Some(TabHit::View(view));
                 }
-                let close = tab.right().saturating_sub(CLOSE_WIDTH + 1);
+                let close = tab.right().saturating_sub(reach);
                 if picking && x + PICK_WIDTH >= close && x < close {
                     return Some(TabHit::Pick);
                 }
-                let on_close = x + CLOSE_WIDTH + 1 >= tab.right();
+                let on_close = x >= close;
                 return Some(if on_close {
                     TabHit::CloseView(view)
                 } else {
@@ -1915,7 +1981,7 @@ impl Dock {
                 if cuts[sessions_from + index] {
                     return Some(TabHit::Tab(index));
                 }
-                let close = end.saturating_sub(CLOSE_WIDTH + 1);
+                let close = end.saturating_sub(reach);
                 if picking && x + PICK_WIDTH >= close && x < close {
                     return Some(TabHit::Pick);
                 }
@@ -1960,14 +2026,38 @@ impl Dock {
         let row = Rect::new(area.x, area.y, area.w, 1);
         grid.fill(row, theme.tab);
         let whole = self.fit(area) == Fit::Whole;
+        let hugs = self.hugs(area);
         let cuts = self.cut_short(area);
-        // A tab cut short: as much of its name as fits and a "…", with no × to crowd it.
-        let cut_name = |grid: &mut Grid, tab: Rect, name: &str, style: Style| {
-            let room = f32::from(tab.w) - CUT_TEXT - CUT_END;
+        let font = cellix_render::Font::default();
+        // A tab behind the one in front: its name, or as much as fits and a "…", with no ×
+        // to crowd it. Under the pointer its chip is that name and the air around it.
+        let cut_name = |grid: &mut Grid, tab: Rect, name: &str, (style, hovered): (Style, bool)| {
+            let room = f32::from(tab.w) - CUT_AIR * 2.0;
             let text = crate::context::elide(name, room, measure);
-            let at = f32::from(tab.x) + CUT_TEXT;
+            if hovered {
+                let (wide, high) = (measure.width(&text, font) + CUT_AIR * 2.0, 0.8);
+                let top = f32::from(tab.y) + (1.0 - high) / 2.0;
+                let chip = Bounds::cells(f32::from(tab.x), top, wide, high);
+                grid.panel(chip, TAB_CHIP_RADIUS, Some(theme.row_hover), None);
+            }
+            let at = f32::from(tab.x) + CUT_AIR;
             grid.label_at(at, tab.x + 1, area.y, &text, style, tab.right(), 100);
         };
+        // Where a whole tab's × stands, and the column its name stops before. In a chip that
+        // hugs its name the × is 10 px from the chip's edge and 12 px after the name.
+        let close_of = |tab: Rect| -> (f32, u16) {
+            let right = tab.right();
+            if !hugs {
+                let close = right.saturating_sub(CLOSE_WIDTH + 1);
+                (f32::from(close), close)
+            } else if measure.in_cells() {
+                (f32::from(right) - 2.0, right.saturating_sub(3))
+            } else {
+                (f32::from(right) - HUG_CLOSE, right.saturating_sub(2))
+            }
+        };
+        // The cell a whole tab's name starts in: a column sooner where the chip hugs it.
+        let name_cell = |tab: Rect| tab.x + if hugs { 1 } else { 2 };
         let chevron = |grid: &mut Grid, x: u16, style: Style| {
             let quiet = Style {
                 bold: false,
@@ -1984,17 +2074,11 @@ impl Dock {
             }
             let on = self.front == view || (view == Front::Agents && self.listing());
             let hovered = hover.is_some_and(|h| tab.contains(h.0, h.1));
-            let chip = tab_chip(tab, cuts[index]);
-            if on {
-                grid.panel(chip, TAB_CHIP_RADIUS, Some(theme.row_active), None);
-            } else if hovered {
-                grid.panel(chip, TAB_CHIP_RADIUS, Some(theme.row_hover), None);
-            }
             let quiet = Style {
                 fg: if on { theme.text.fg } else { theme.gutter.fg },
                 ..theme.tab
             };
-            let close = tab.right().saturating_sub(CLOSE_WIDTH + 1);
+            let (close_at, close) = close_of(tab);
             let counted = match view {
                 Front::Comments => count,
                 Front::Inbox => self.inbox_count.get(),
@@ -2006,14 +2090,19 @@ impl Dock {
                 name.to_string()
             };
             if cuts[index] {
-                cut_name(grid, tab, &text, quiet);
+                cut_name(grid, tab, &text, (quiet, hovered));
                 continue;
+            }
+            if on {
+                grid.panel(tab_chip(tab), TAB_CHIP_RADIUS, Some(theme.row_active), None);
+            } else if hovered {
+                grid.panel(tab_chip(tab), TAB_CHIP_RADIUS, Some(theme.row_hover), None);
             }
             let at = tab.x as f32 + TAB_TEXT;
             let pick = self.pick_at(area, close);
             grid.label_at(
                 at,
-                tab.x + 2,
+                name_cell(tab),
                 area.y,
                 &text,
                 quiet,
@@ -2028,7 +2117,7 @@ impl Dock {
                     bold: false,
                     ..quiet
                 };
-                grid.glyph(close as f32, area.y, Icon::Close, plain.fg, "×", plain);
+                grid.glyph(close_at, area.y, Icon::Close, plain.fg, "×", plain);
             }
         }
         for (index, (start, end)) in self.tabs(area).into_iter().enumerate() {
@@ -2050,12 +2139,6 @@ impl Dock {
                     ..theme.tab
                 }
             };
-            let chip = tab_chip(tab, cuts[sessions_from + index]);
-            if active {
-                grid.panel(chip, TAB_CHIP_RADIUS, Some(theme.row_active), None);
-            } else if hovered {
-                grid.panel(chip, TAB_CHIP_RADIUS, Some(theme.row_hover), None);
-            }
             let shown = if session.exited {
                 Style {
                     fg: theme.gutter.fg,
@@ -2065,10 +2148,15 @@ impl Dock {
                 style
             };
             if cuts[sessions_from + index] {
-                cut_name(grid, tab, &session.name, shown);
+                cut_name(grid, tab, &session.name, (shown, hovered));
                 continue;
             }
-            let close = end.saturating_sub(CLOSE_WIDTH + 1);
+            if active {
+                grid.panel(tab_chip(tab), TAB_CHIP_RADIUS, Some(theme.row_active), None);
+            } else if hovered {
+                grid.panel(tab_chip(tab), TAB_CHIP_RADIUS, Some(theme.row_hover), None);
+            }
+            let (close_at, close) = close_of(tab);
             let pick = self.pick_at(area, close);
             if let Some(x) = pick {
                 chevron(grid, x, style);
@@ -2083,7 +2171,6 @@ impl Dock {
             let name_end = match &context {
                 Some(text) => {
                     // Right after the name, as the workspace's tile has it, not at the ×.
-                    let font = cellix_render::Font::default();
                     let after = at + measure.width(&session.name, font) + CONTEXT_AIR;
                     let x = after.ceil().min(stop.saturating_sub(1) as f32) as u16;
                     let percent = session.usage.as_ref().and_then(|u| u.percent());
@@ -2101,7 +2188,7 @@ impl Dock {
             };
             grid.label_at(
                 at,
-                start + TAB_PADDING,
+                name_cell(tab),
                 area.y,
                 &session.name,
                 shown,
@@ -2113,7 +2200,7 @@ impl Dock {
                     fg: theme.gutter.fg,
                     ..style
                 };
-                grid.glyph(close as f32, area.y, Icon::Close, quiet.fg, "×", quiet);
+                grid.glyph(close_at, area.y, Icon::Close, quiet.fg, "×", quiet);
             }
         }
         let plus = self.tabs(area).last().map_or(self.first_tab(area), |t| t.1);
@@ -2209,13 +2296,11 @@ impl Dock {
 }
 
 /// A pane tab's chip: one chip height inside its row, a little in from its sides, as every
-/// tab and button is. A tab cut short has less to stand in from.
-fn tab_chip(tab: Rect, cut: bool) -> Bounds {
+/// tab and button is.
+fn tab_chip(tab: Rect) -> Bounds {
     let height = 0.8;
-    let inset = if cut { CUT_CHIP } else { 0.3 };
     let top = f32::from(tab.y) + (1.0 - height) / 2.0;
-    let wide = f32::from(tab.w) - inset * 2.0;
-    Bounds::cells(f32::from(tab.x) + inset, top, wide, height)
+    Bounds::cells(f32::from(tab.x) + 0.3, top, f32::from(tab.w) - 0.6, height)
 }
 
 const TAB_CHIP_RADIUS: u8 = 22;

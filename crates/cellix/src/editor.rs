@@ -55,7 +55,7 @@ const PAGE_MARGIN: u16 = 4;
 const NARROW_RIGHT_MARGIN: u16 = 2;
 /// How wide a page can be set.
 const MAX_PAGE_WIDTH: u16 = 512;
-/// The widest a page's text is set when pages keep to a reading width: about 115 characters
+/// The widest a page's text is set when pages keep to a reading width: about 140 characters
 /// a line in the interface font, and 88 on cells. Past that the eye loses its line.
 pub const READING_WIDTH: u16 = 88;
 
@@ -679,24 +679,15 @@ impl Editor {
     }
 
     /// Columns left of a page's text: room for marks, and in a pane wider than the page,
-    /// half of what's spare, so the page stands in the middle of the pane. That's the pane
-    /// with its minimap's columns, whether or not one is showing, so a page doesn't move
-    /// across when it grows long enough to have one; where a minimap would leave too little
-    /// room for that, the page keeps clear of it instead.
+    /// half of what's spare, so the page stands in the middle of the columns it has: the
+    /// pane's, less its minimap's when one is showing.
     fn page_margin(&self, area: Rect) -> u16 {
-        let width = self.page_width(area) as u16;
-        let room = Self::text_room(area);
-        let minimap = MINIMAP_WIDTH - 1;
-        let could = self.minimap_on && !self.measure.in_cells() && area.w >= MIN_MINIMAP_PANE;
-        let (whole, beside) = if self.shows_minimap(area) {
-            (room + minimap, room)
-        } else if could {
-            (room, room.saturating_sub(minimap))
-        } else {
-            (room, room)
-        };
-        let middle = whole.saturating_sub(width) / 2;
-        PAGE_MARGIN + middle.min(beside.saturating_sub(width))
+        PAGE_MARGIN + self.page_spare(area) / 2
+    }
+
+    /// Columns a pane has for a page's text beyond what the page is set to.
+    fn page_spare(&self, area: Rect) -> u16 {
+        Self::text_room(area).saturating_sub(self.page_width(area) as u16)
     }
 
     /// Columns a page's text is set to: what the pane has for it, and no more than the
@@ -710,12 +701,17 @@ impl Editor {
         Self::text_room(area).clamp(1, most) as usize
     }
 
-    /// The column after the last one a page draws in. A page as wide as its pane ends where
-    /// the pane does; one standing in the middle of a wider pane ends its right margin past
-    /// its text, and what's wider than that moves sideways inside it.
+    /// The column after the last one a page draws in. A page as wide as its pane lets its
+    /// blocks run into the pane's right margin, to a column from its edge. One standing in
+    /// the middle of a wider pane has one right edge: its blocks end where its text does,
+    /// and what's wider than that moves sideways inside it.
     fn page_end(&self, area: Rect) -> u16 {
         let text = area.x + self.page_margin(area) + self.page_width(area) as u16;
-        (text + Self::right_margin(area) + 1).min(area.right())
+        if self.page_spare(area) > 0 {
+            text + 1
+        } else {
+            (text + Self::right_margin(area) + 1).min(area.right())
+        }
     }
 
     /// The columns a page shows of what's on it, from its own left edge to its right one.
@@ -4498,7 +4494,7 @@ impl Editor {
                 grid.panel(bounds, 22, Some(theme.code_bg), Some(theme.border));
                 if let (Some((at, most)), true) = (wide, whole) {
                     let moved = self.row_shift(area, at);
-                    let under = (top + height + 0.2).min(area.bottom() as f32 - 0.4);
+                    let under = (top + height + 0.12).min(area.bottom() as f32 - 0.4);
                     self.draw_block_thumb(grid, (left, edge, under), (moved, most), theme);
                 }
             } else if let Some(table) = &row.table {
@@ -4545,7 +4541,7 @@ impl Editor {
                     grid.panel(bounds, 14, None, Some(theme.popup_border));
                 }
                 if let (Some((_, most)), true) = (wide, whole) {
-                    let under = (top + height).min(area.bottom() as f32 - 0.4);
+                    let under = (top + height - 0.02).min(area.bottom() as f32 - 0.4);
                     self.draw_block_thumb(grid, (left, edge, under), (moved, most), theme);
                 }
             }
@@ -4553,8 +4549,8 @@ impl Editor {
         }
     }
 
-    /// The thumb under a table or block of code that's wider than the pane, along its own
-    /// bottom edge: how much of its width shows, and where.
+    /// The thumb under a table or block of code that's wider than the page, under the
+    /// bottom edge it's drawn with (`bottom`): how much of its width shows, and where.
     fn draw_block_thumb(
         &self,
         grid: &mut Grid,
@@ -4562,8 +4558,8 @@ impl Editor {
         (moved, most): (f32, usize),
         theme: &Theme,
     ) {
-        /// Rows of air between the block and its thumb, and how thick the thumb is.
-        const UNDER: f32 = 0.12;
+        /// Rows of air between the block and its thumb, about 9 px, and how thick the thumb is.
+        const UNDER: f32 = 0.25;
         const THICK: f32 = 0.12;
         let shown = right - left;
         let all = shown + most as f32;
@@ -4750,7 +4746,15 @@ impl Editor {
         const EDGE_AIR: f32 = 0.5;
         let page_end = self.page_end(area);
         let origin = left as f32 - moved;
-        let hidden = |g: &Glyph| moved > 0.0 && g.x - moved < EDGE_AIR;
+        // Code, and a table too wide to fit, stop short of their block's edge, which is a
+        // column in from the page's.
+        let code = row.shaded && row.table.is_none();
+        let inset = if code || cut { 1.0 + EDGE_AIR } else { 0.0 };
+        let right = page_end as f32 - inset;
+        // A letter that would cross where a cut row stops is left out whole: half a letter
+        // at the edge reads as a mistake, not as more to come.
+        let past = |g: &Glyph| proportional && cut && origin + g.x + g.advance > right;
+        let hidden = |g: &Glyph| (moved > 0.0 && g.x - moved < EDGE_AIR) || past(g);
         let fg_of = |tone: Tone| match tone {
             Tone::Text | Tone::Block(None) => theme.text.fg,
             Tone::Heading => theme.heading,
@@ -4829,11 +4833,6 @@ impl Editor {
             return;
         }
         let text_y = y as f32 + if row.tall { TALL_DROP } else { 0.0 };
-        // Code, and a table too wide to fit, stop short of their block's edge, which is a
-        // column in from the pane's.
-        let code = row.shaded && row.table.is_none();
-        let inset = if code || cut { 1.0 + EDGE_AIR } else { 0.0 };
-        let right = page_end as f32 - inset;
         for issue in issues {
             let inside = |g: &&Glyph| g.at.is_some_and(|at| at >= issue.start && at < issue.end);
             let mut word = row.glyphs.iter().filter(|g| !hidden(g)).filter(inside);

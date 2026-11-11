@@ -1395,6 +1395,7 @@ impl App {
         if let Some(review) = &mut self.review {
             review.measure = Some(measure.clone());
         }
+        self.dock.measure = Some(measure.clone());
         self.measure = measure;
     }
 
@@ -8505,6 +8506,8 @@ impl App {
             x - ACTION_MARGIN
         });
         self.dock.tabs_end.set(end);
+        let slack = if held.is_some() { ACTION_MARGIN } else { 0 };
+        self.dock.tabs_slack.set(slack);
         self.dock.inbox_count.set(self.inbox_listed().len());
         self.dock.tabs_flush.set(self.dock_under());
         let maximized = self.maximized == Some(Maximized::Pane);
@@ -19691,8 +19694,9 @@ mod tests {
             before.abs_diff(after) <= 4,
             "{before} before, {after} after"
         );
-        // A table wraps to the page's width, and code is cut where the page ends.
-        let page_end = left + READING_WIDTH + 5;
+        // A table wraps to the page's width, and code is cut where the text ends: a page in
+        // the middle of its pane has one right edge, with a column for the › that says so.
+        let page_end = left + READING_WIDTH + 1;
         let table = ink(&app, "word word", true);
         assert!(table.0 + 1 >= left && table.1 <= page_end, "{table:?}");
         let block = ink(&app, "xxxx", false);
@@ -19747,7 +19751,7 @@ mod tests {
     }
 
     #[test]
-    fn a_page_stands_in_one_place_with_and_without_its_minimap() {
+    fn a_page_stands_in_the_middle_of_what_it_has_from_its_first_frame() {
         use crate::editor::READING_WIDTH;
         let (dir, _) = project();
         let short = dir.path().join("short.md");
@@ -19759,20 +19763,33 @@ mod tests {
         let main = app.main_area();
         // The caret starts at the page's left edge.
         let caret = |app: &App| screen(app).cursor.expect("a caret").0;
+        // A page that fits has no minimap, and stands in the middle of the pane. It was
+        // first laid out as if it had one, so its first frame stood to the left of the rest.
         app.open(&short).unwrap();
         let first = caret(&app);
         assert_eq!(caret(&app), first, "its first frame is where it stays");
-        app.open(&long).unwrap();
-        assert_eq!(
-            caret(&app),
-            first,
-            "a page long enough for a minimap stands there too"
-        );
-        // That's the middle of the pane, the minimap's columns counted as part of it.
         let (before, after) = (first - main.x, main.right() - (first + READING_WIDTH));
         assert!(
             before.abs_diff(after) <= 4,
             "{before} before, {after} after"
+        );
+        // One long enough for a minimap stands in the middle of what the minimap leaves,
+        // rather than against it.
+        app.open(&long).unwrap();
+        let left = caret(&app);
+        assert_eq!(caret(&app), left, "from its first frame too");
+        assert!(
+            left < first,
+            "further left than without one: {left}, {first}"
+        );
+        let minimap = (first - left) * 2;
+        let (before, after) = (
+            left - main.x,
+            main.right() - minimap - (left + READING_WIDTH),
+        );
+        assert!(
+            before.abs_diff(after) <= 4,
+            "{before} before, {after} to the minimap"
         );
     }
 
@@ -23628,7 +23645,10 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let first_icon = app.pane_actions()[0].0.x;
         let tabs = app.dock.view_tabs_for_test(area);
         let agents = tabs.iter().find(|tab| tab.0 == Front::Agents).unwrap().2;
-        assert_eq!(agents.w, 11, "it's in front, whole, with no chevron");
+        assert_eq!(
+            agents.w, 10,
+            "it's in front, in a chip that hugs its name and its ×"
+        );
         assert_eq!(
             app.dock.cut_name(area, agents.x + 1),
             None,
@@ -23636,8 +23656,8 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         );
         let comments = tabs.iter().find(|tab| tab.0 == Front::Comments).unwrap().2;
         assert!(
-            (4..10).contains(&comments.w),
-            "cut short, and still there: {comments:?}"
+            (5..9).contains(&comments.w),
+            "cut short, to no fewer than three letters: {comments:?}"
         );
         assert_eq!(
             app.dock.cut_name(area, comments.x + 1).as_deref(),
@@ -23648,7 +23668,7 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let row = grid.row_text(area.y);
         let before = (first_icon - area.x) as usize;
         let strip: String = row.chars().skip(area.x as usize).take(before).collect();
-        assert_eq!(strip.trim_end(), "  Comme…  Agents×   Term…", "{row}");
+        assert_eq!(strip.trim_end(), "  Commen… Agents ×  Termi…", "{row}");
         for x in area.x..first_icon {
             let hit = app.dock.hit(title, x);
             let gone = [TabHit::New, TabHit::Pick, TabHit::Maximize];
@@ -23667,7 +23687,12 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             None,
             "it shows in full"
         );
-        assert!((4..11).contains(&place(Front::Agents).w), "cut: {tabs:?}");
+        // Agents is a name alone now, with no chip and no × of its own.
+        assert!((5..=7).contains(&place(Front::Agents).w), "{tabs:?}");
+        let agents = place(Front::Agents);
+        for x in agents.x..agents.right() {
+            assert_eq!(app.dock.hit(title, x), Some(TabHit::View(Front::Agents)));
+        }
         assert!(
             tabs.iter().all(|(_, _, tab)| tab.right() <= first_icon),
             "{tabs:?}"
@@ -23689,6 +23714,59 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             text.contains("Terminal ended. Start another above."),
             "{text}"
         );
+    }
+
+    #[test]
+    fn the_tab_in_front_hugs_its_name_so_those_behind_keep_theirs() {
+        use crate::dock::Fit;
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (120, 40));
+        // The tour's cells, where the interface's letters are narrower than a column.
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 36)));
+        app.run(Command::ShowComments);
+        with_a_shell(&mut app);
+        let _ = screen(&app);
+        let area = app.dock_area().unwrap();
+        let title = app.title_of(area);
+        let first_icon = app.pane_actions()[0].0.x;
+        assert_eq!(app.dock.fit(title), Fit::Cut, "two tabs and a + don't fit");
+        // Counted in letters, the terminal's chip took 14 columns and held 81 px of nothing,
+        // which cut Comments to "Com…" beside it.
+        let (start, end) = (area.x..first_icon)
+            .filter(|x| app.dock.hit(title, *x) == Some(TabHit::Tab(0)))
+            .fold((u16::MAX, 0), |(from, to), x| (from.min(x), to.max(x + 1)));
+        assert!(end - start < 10, "the chip hugs its name: {start}..{end}");
+        let close: Vec<u16> = (area.x..first_icon)
+            .filter(|x| app.dock.hit(title, *x) == Some(TabHit::Close(0)))
+            .collect();
+        assert_eq!(
+            close,
+            [end, end + 1],
+            "its × is the two columns after its name"
+        );
+        let tabs = app.dock.view_tabs_for_test(area);
+        let comments = tabs.iter().find(|tab| tab.0 == Front::Comments).unwrap().2;
+        assert_eq!(
+            app.dock.cut_name(area, comments.x + 1),
+            None,
+            "Comments shows whole behind it"
+        );
+        // With a third tab, each one behind keeps room for three letters and the "…".
+        app.run(Command::ListAgents);
+        let _ = screen(&app);
+        assert_eq!(
+            app.dock.fit(title),
+            Fit::Cut,
+            "still a row of tabs, not a list"
+        );
+        let tabs = app.dock.view_tabs_for_test(area);
+        let width = |view: Front| tabs.iter().find(|tab| tab.0 == view).unwrap().2.w;
+        assert!(width(Front::Agents) <= 9, "{tabs:?}");
+        assert!(width(Front::Comments) >= 5, "{tabs:?}");
+        let terminal = (area.x..first_icon)
+            .filter(|x| app.dock.hit(title, *x) == Some(TabHit::Tab(0)))
+            .count();
+        assert!(terminal >= 5, "the terminal's stub is {terminal} columns");
     }
 
     #[test]

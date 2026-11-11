@@ -210,8 +210,8 @@ the Kitty keyboard protocol, such as Ghostty, Kitty or WezTerm. Ghostty keeps Cm
 for its own palette unless you rebind it.
 
 Markdown opens as one editable page, as in Xcode: the markers are hidden and you type on
-the rendered text. Paragraphs flow across the whole pane, and the file keeps its own line
-breaks. The toolbar has bold, italic, code, heading, list, task and quote, and
+the rendered text. Paragraphs flow to the page's width, 88 columns at most, and in a wider
+window the page stands in the middle. The file keeps its own line breaks. The toolbar has bold, italic, code, heading, list, task and quote, and
 Toggle Markdown Source in the palette shows the raw file.
 
 Under 70 columns, as beside an agent, the sidebar becomes a drawer behind the `☰` button
@@ -237,7 +237,9 @@ Dictionary on a right click.
 work on a server with no TeX. Click one and its source opens with the result under it.
 
 **Tables.** The table button has a size picker. Click any cell to type in it, and right-click for
-rows, columns and alignment.
+rows, columns and alignment. A table keeps to the page: its columns share the width and a long cell
+wraps. One with more columns than fit, like a long line in a block of code, moves sideways with
+Shift+scroll or a sideways scroll, and has a thin scrollbar of its own.
 
 **Pictures.** Pick one from the project, paste one from the clipboard, or drop a file on the page.
 Drag an image's edge to size it, or right-click to resize, replace or delete it. PNG, JPEG, WebP, GIF,
@@ -447,7 +449,7 @@ header, tabs that don't fit fold into "N more" chips, and the page menu folds in
   puts the tree back, keeping a checkpoint of what it replaced.
 - **Agents** (the robot icon at the top right) is what's happening here: who's running in this folder, who
   needs you, and every worktree. Agents started without a plugin still show up, found by
-  their working folder. Agents that are installed can be started from the bottom of it.
+  their working folder. Agents that are installed can be started from the list above the worktrees.
 - **Tests** an agent runs appear in review with their results.
 - **Staging**: Accept stages the hunk in git, and the Commit button commits what's staged.
 
@@ -459,8 +461,9 @@ each update travels as a PNG, so it costs more than the standalone app on a slow
 
 Running Cellix on its own works just as well: the Agents icon at the top right opens a side pane, and
 Claude Code, Codex, Gemini CLI or a shell runs there as the real program. When a narrow pane's tabs
-don't all fit, the tab in front shows whole with a ⌄ beside it that lists every tab and starts a new
-agent or terminal.
+don't all fit, the one in front stays whole and the others are cut short with a …: hover one for its
+name, or click it to bring it forward. A pane too narrow even for that shows the tab in front with a ⌄
+beside it that lists every tab and starts a new agent or terminal.
 
 Set `VISUAL="cellix --wait"` so Ctrl+G in Claude Code opens plans in Cellix. Comments are
 written back into the file when you quit. Any other agent can run `cellix comments --take`
@@ -502,7 +505,8 @@ terminal's background. Either theme sets its frame on your terminal's own backgr
 padding shows no seam; on a light terminal that makes the light theme a shade paler than Latte. `tier` is `direct`, `placeholder` or `cells`. `smooth_scroll: false` makes the
 wheel jump by lines, for a slow link, and `minimap: false` hides the minimap. `word_wrap`,
 `sticky_scroll` (with `sticky_scroll_lines`, 5 unless set), `bracket_pairs` and `inlay_hints` turn
-those on or off for code.
+those on or off for code. `reading_width: false` lets a page's text run the whole width of its pane
+rather than keep to 88 columns; it's Reading width under Settings › Editor.
 `language_servers` maps a language to a command, `formatters` maps one to a formatter that
 reads stdin and writes stdout, and `browser` replaces the command that opens web pages.
 
@@ -513,7 +517,8 @@ save, trailing whitespace, the final newline and line endings.
 
 Settings › Keyboard lists every command with its keys: search by name or by keys, and click a
 command's keys to set new ones. They're saved as `keybindings`, by the command's name in the
-palette, and win over the defaults; an empty list takes a command's keys away:
+palette, and win over the defaults; an empty list takes a command's keys away. The palette shows each
+command's keys as they are now:
 
 ```json
 { "keybindings": { "Rerun Last Task": ["Ctrl+Alt+R"], "Toggle Sidebar": [] } }

@@ -4,6 +4,29 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-11-10
+
+### Added
+- A page keeps to a reading width. Its text is set to 88 columns at most, about 140 characters a line, and in a window wider than that the page stands in the middle. Tables and code keep to it too. Reading width under Settings › Editor, or `reading_width: false`, gives pages the whole pane back. CSV and TSV sheets always use the whole pane.
+- A table with more columns than fit, and a long line in a block of code, scroll sideways on a page: tip the wheel across, or hold Shift and turn it, with the pointer over the block. Each has a thin scrollbar of its own, and the rest of the page stays put.
+- The command palette shows the keys each command has now, including ones set under Settings › Keyboard.
+
+### Changed
+- Tables in Markdown and LaTeX keep to the page. Columns share its width and a long cell wraps onto rows of its own, instead of the table running on over the side pane. Ordinary words and numbers stay whole; a long link breaks after a slash.
+- A narrow side pane keeps every tab in its row: the one in front whole, the others cut short with a "…". Hover one for its name, or click it to bring it forward. Before, only the tab in front showed. A pane too narrow even for that still lists its tabs under a ⌄.
+- Every list in the side pane (Agents, Comments, Inbox, Problems, the build log) scrolls the same way, to its end and no further. The Agents list didn't scroll at all.
+- The Agents panel lists Start an Agent above the worktrees, so a long list of worktrees can't push it out of view.
+- The palette puts commands with a word that starts with what you typed first: "op" finds Open Folder before Pop Stash.
+- Cellix does less while nothing is happening: it stops copying unsaved files twice a second to see whether they changed, asks git for committed text only when HEAD or the open files change, and reads a quiet terminal or agent 25 times a second rather than 125.
+
+### Fixed
+- Clicking a comment in the Comments pane with no file open now opens its file at the comment.
+- A Cellix whose terminal went away without a hang-up kept running at full CPU. It now ends.
+- A session host whose socket was gone kept its program running where nothing could reach it. It now ends with its program.
+- A task's tab stays when the task ends, so its errors can be read.
+- A long machine name no longer covers New Workspace in the workspaces bar.
+- On Linux, a large paste, such as a picture over SSH, could stop being read part of the way through.
+
 ## [0.6.4] - 2026-11-10
 
 ### Added

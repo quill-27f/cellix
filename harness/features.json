@@ -4760,10 +4760,10 @@
     "passes": true
   },
   {
-    "id": "page-stays-put-with-minimap",
+    "id": "page-in-the-middle-from-first-frame",
     "milestone": 13,
-    "title": "A page stands in the same place on its first frame and after, with or without a minimap",
-    "test": "a_page_stands_in_one_place_with_and_without_its_minimap",
+    "title": "A page stands in the middle of the columns it has, the pane's less a showing minimap's, from its first frame",
+    "test": "a_page_stands_in_the_middle_of_what_it_has_from_its_first_frame",
     "passes": true
   },
   {
@@ -4771,6 +4771,13 @@
     "milestone": 13,
     "title": "A pane no wider than the reading width sets its page as before",
     "test": "a_pane_no_wider_than_the_reading_width_sets_its_page_as_before",
+    "passes": true
+  },
+  {
+    "id": "pane-tab-hugs-when-short",
+    "milestone": 13,
+    "title": "When the row is short the tab in front stands in a chip that hugs its measured name, so two tabs in a 40-column pane both show whole and three keep three letters each",
+    "test": "the_tab_in_front_hugs_its_name_so_those_behind_keep_theirs",
     "passes": true
   }
 ]

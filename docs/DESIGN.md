@@ -148,13 +148,15 @@ between cells, so it keeps jumping by lines.
 
 ## Pages
 
-A page keeps to a reading width: its text is set to at most 88 columns, about 115 characters
+A page keeps to a reading width: its text is set to at most 88 columns, about 140 characters
 a line in the interface font and 88 on cells, and in a pane wider than that it stands in the
-middle. Tables wrap their cells to that width and blocks of code end with it; what's still
-wider (a table with too many columns, a long line of code) moves sideways inside the page.
-The middle is the pane's, with its minimap's columns counted whether or not one is showing,
-so a page doesn't move across as it grows long enough to have one. A pane no wider than the
-page sets it as before, from its own margin. A sheet of data (CSV, TSV) keeps the whole pane,
+middle. Tables wrap their cells to that width and blocks of code end with it, so the page has
+one right edge; what's still wider (a table with too many columns, a long line of code) moves
+sideways inside the page, and a letter that would be cut in half at its edge is left out.
+The middle is that of the columns the page has: the pane's, less its minimap's when one is
+showing, so a long page isn't pushed against its minimap. A page is laid out before that's
+decided, so its first frame is where it stays. A pane no wider than the page sets it as
+before, from its own margin, with blocks running into the right margin. A sheet of data (CSV, TSV) keeps the whole pane,
 since it's read across. `reading_width: false`, or Reading width under Settings, Editor, lets
 every page run the width of its pane, as all pages did from 1 to 10 November 2026 by the
 user's choice then; the user chose the reading width after a day in a wide window. A line
@@ -340,11 +342,15 @@ VS Code's panel shows its views, with the one showing named and no tab of its ow
 right keeps one icon that shows or hides the pane, beside quit. Tabs out of view are
 counted at the ends of the strip ("‹ 2 more", "3 more ›"), and each count lists its tabs.
 A side pane whose tabs don't all fit before the icons at the top right keeps every tab in
-the row: the one in front whole, those behind it cut short with a "…", the widest giving way
-first. The + gives way too, since the icons beside it start the same things. A cut tab has
-no ×, so a click anywhere on it brings it forward, and its whole name is a hover away. Only
-when that would leave them under four columns each does the row show the tab in front alone,
-with a chevron that lists every tab and what + would start. The icons stand three columns
+the row. The one in front stands in a chip that hugs its measured name and its ×, with none
+of the slack a tab has when there's room, since that slack is what would cut its neighbours.
+Those behind it stand as names alone, half a column of air either side, whole while they
+fit and then cut short with a "…", the longest giving way first. The + gives way too, since
+the icons beside it start the same things. A tab behind has no ×, so a click anywhere on it
+brings it forward, and a cut name is a hover away. Only when that would leave them under
+three letters and the "…" each (five columns) does the row show the tab in front alone, with
+a chevron that lists every tab and what + would start: two letters don't tell Comments from
+Codex. The icons stand three columns
 apart on their row's own ground, and nothing runs under them.
 The page's menu folds formatting and inserting into Format › and Insert ›, and the agents
 panel gives each agent one row under two lines of how-to. At every width a page keeps a
