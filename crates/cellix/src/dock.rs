@@ -61,6 +61,16 @@ const CONTEXT_AIR: f32 = 0.9;
 const CONTEXT_SIZE: u8 = 85;
 /// Columns for the chevron on the tab in front that lists every tab, when they don't all fit.
 const PICK_WIDTH: u16 = 2;
+/// The fewest columns a tab behind the one in front is cut to: a column of air, then two
+/// letters and the "…" that says there's more. Under that, the tabs go into a list.
+const CUT_LEAST: u16 = 4;
+/// Where a cut tab's name starts on the pixel tiers, in cells from its left edge. It stops
+/// `CUT_END` short of the right edge, so two names keep a cell between them.
+const CUT_TEXT: f32 = 0.6;
+const CUT_END: f32 = 0.4;
+/// How far a cut tab's chip stands in from its sides: less than a whole tab's, since it has
+/// less to stand in from.
+const CUT_CHIP: f32 = 0.2;
 /// The button that closes the pane.
 const HIDE_WIDTH: u16 = 3;
 /// Rows tall each icon at the top right is: the pane's buttons and the icons beside them.
@@ -974,19 +984,28 @@ impl Session {
 
     /// Says a finished agent is finished, on the row under what it last showed.
     /// `plus` says whether the pane's + shows: out of room, it's in the tab's list instead.
-    pub fn draw_ended(&self, grid: &mut Grid, area: Rect, plus: bool, theme: &Theme) {
+    pub fn draw_ended(
+        &self,
+        grid: &mut Grid,
+        area: Rect,
+        another: &str,
+        (theme, measure): (&Theme, &dyn cellix_render::Measure),
+    ) {
         let row = Rect::new(area.x, area.bottom().saturating_sub(1), area.w, 1);
         let note = Style {
             fg: theme.gutter.fg,
             ..theme.tab
         };
         grid.fill(row, theme.tab);
-        let another = if plus {
-            "press + for another"
+        let whole = format!("{} has ended. Close this tab, or {another}.", self.name);
+        // In a pane too narrow for all of it, what to do next is the part that stays.
+        let room = f32::from(row.w.saturating_sub(2));
+        let text = if measure.width(&whole, cellix_render::Font::default()) <= room {
+            whole
         } else {
-            "use ⌄ for another"
+            let (first, rest) = another.split_at(1);
+            format!("{} ended. {}{rest}.", self.name, first.to_uppercase())
         };
-        let text = format!("{} has ended. Close this tab, or {another}.", self.name);
         grid.label(row.x + 1, row.y, &text, note, row.right());
     }
 
@@ -1162,6 +1181,17 @@ pub enum TabHit {
     Hide,
     /// The chevron on the tab in front, when the tabs don't all fit, which lists them all.
     Pick,
+}
+
+/// How the pane's tabs stand in their row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fit {
+    /// Every tab whole, and the + after them.
+    Whole,
+    /// Every tab there: the one in front whole, those behind it cut short. The + gives way.
+    Cut,
+    /// Only the tab in front, with a chevron that lists them all.
+    Front,
 }
 
 /// A tab of the side pane, as the list of every tab names it.
@@ -1547,13 +1577,99 @@ impl Dock {
             .collect()
     }
 
-    /// Whether the tabs, and the + after them, don't all fit before the icons at the top
-    /// right. Then only the tab in front shows, with a chevron that lists every tab: a share
-    /// of the row each would leave the one in front a stub.
+    /// What a session's tab needs for its name and its ×, without how full its context is.
+    fn session_bare(session: &Session) -> u16 {
+        session.name.chars().count() as u16 + TAB_PADDING * 2 + CLOSE_WIDTH
+    }
+
+    /// Whether only the tab in front shows, with a chevron that lists every tab: the row
+    /// before the icons at the top right is too short even for tabs cut to a few letters.
     pub fn picking(&self, area: Rect) -> bool {
+        self.fit(area) == Fit::Front
+    }
+
+    /// How the tabs stand in the row they have before the icons at the top right.
+    pub fn fit(&self, area: Rect) -> Fit {
+        self.fitted(area).1
+    }
+
+    /// What starts another agent or terminal as the tabs stand now, for the note under one
+    /// that has ended: it never points at a + or a chevron that isn't drawn.
+    pub fn another(&self, area: Rect) -> &'static str {
+        match self.fit(area) {
+            Fit::Whole => "press + for another",
+            Fit::Cut => "start another above",
+            Fit::Front => "use ⌄ for another",
+        }
+    }
+
+    /// What each tab gets, views and then sessions, and how they stand. When they don't all
+    /// fit with the + after them, the one in front keeps its whole name and those behind it
+    /// share what's left, the widest giving way first, each cut short with a "…". The one in
+    /// front gives up how full its context is before any of them gives up its place. When
+    /// that would still leave them under `CUT_LEAST` columns each, only the one in front
+    /// shows, with a chevron that lists every tab.
+    fn fitted(&self, area: Rect) -> (Vec<u16>, Fit) {
+        let mut widths = self.wanted_widths();
         let end = self.tabs_end.get();
-        let wanted = self.wanted_widths().iter().sum::<u16>() + NEW_WIDTH;
-        end != 0 && self.tabs_start(area) + wanted > end
+        let room = end.saturating_sub(self.tabs_start(area));
+        if end == 0 || widths.iter().sum::<u16>() + NEW_WIDTH <= room {
+            return (widths, Fit::Whole);
+        }
+        let front = self.front_index().unwrap_or(0);
+        let behind = widths.len().saturating_sub(1) as u16;
+        let whole = widths.get(front).copied();
+        let session = front.checked_sub(self.views().len());
+        let bare = session
+            .and_then(|index| self.sessions.get(index))
+            .map(Self::session_bare);
+        let fits = |kept: &u16| kept + behind * CUT_LEAST <= room;
+        let Some(kept) = [whole, bare].into_iter().flatten().find(fits) else {
+            for (index, width) in widths.iter_mut().enumerate() {
+                *width = if index == front {
+                    (*width + PICK_WIDTH).min(room)
+                } else {
+                    0
+                };
+            }
+            return (widths, Fit::Front);
+        };
+        let rest = room - kept;
+        let taken = |cap: u16, widths: &[u16]| -> u16 {
+            let behind = widths
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| *index != front);
+            behind.map(|(_, width)| (*width).min(cap)).sum()
+        };
+        let mut cap = widths.iter().copied().max().unwrap_or(0);
+        while cap > CUT_LEAST && taken(cap, &widths) > rest {
+            cap -= 1;
+        }
+        // What's left over goes a column each to the first of those cut.
+        let mut spare = rest.saturating_sub(taken(cap, &widths));
+        for (index, width) in widths.iter_mut().enumerate() {
+            if index == front {
+                *width = kept;
+            } else if *width > cap {
+                let more = u16::from(spare > 0);
+                spare -= more;
+                *width = cap + more;
+            }
+        }
+        (widths, Fit::Cut)
+    }
+
+    /// Which tabs are cut short, views and then sessions: those behind the one in front that
+    /// got less than they asked for. One shows no ×, and a click anywhere on it brings it
+    /// forward.
+    fn cut_short(&self, area: Rect) -> Vec<bool> {
+        let (widths, fit) = self.fitted(area);
+        let front = self.front_index().unwrap_or(0);
+        let wanted = self.wanted_widths();
+        let tabs = widths.into_iter().zip(wanted).enumerate();
+        tabs.map(|(index, (width, full))| fit == Fit::Cut && index != front && width < full)
+            .collect()
     }
 
     /// Where the tab in front comes among them all, views and then sessions.
@@ -1568,23 +1684,9 @@ impl Dock {
         })
     }
 
-    /// What each tab gets, views and then sessions. When they don't all fit, the one in
-    /// front gets its whole name and the chevron, and the rest none: they're in its list.
+    /// What each tab gets, views and then sessions.
     fn tab_widths(&self, area: Rect) -> Vec<u16> {
-        let mut widths = self.wanted_widths();
-        if !self.picking(area) {
-            return widths;
-        }
-        let room = self.tabs_end.get().saturating_sub(self.tabs_start(area));
-        let front = self.front_index().unwrap_or(0);
-        for (index, width) in widths.iter_mut().enumerate() {
-            *width = if index == front {
-                (*width + PICK_WIDTH).min(room)
-            } else {
-                0
-            };
-        }
-        widths
+        self.fitted(area).0
     }
 
     /// Every tab, views and then sessions, with what it's called and whether it's in front,
@@ -1640,9 +1742,11 @@ impl Dock {
             .chain(self.sessions.iter().map(|s| s.name.as_str()));
         let mut at = self.tabs_start(area);
         let pick = if self.picking(area) { PICK_WIDTH } else { 0 };
-        for ((name, width), full) in names.zip(widths).zip(wanted) {
+        let cuts = self.cut_short(area);
+        for (((name, width), full), cut) in names.zip(widths).zip(wanted).zip(cuts) {
             if x >= at && x < at + width {
-                return (width < full + pick).then(|| name.to_string());
+                let stub = pick > 0 && width < full + pick;
+                return (cut || stub).then(|| name.to_string());
             }
             at += width;
         }
@@ -1782,9 +1886,17 @@ impl Dock {
         if x + HIDE_WIDTH >= area.right() {
             return Some(TabHit::Hide);
         }
-        let picking = self.picking(area);
-        for (view, _, tab) in self.view_tabs(area) {
+        let fit = self.fit(area);
+        let picking = fit == Fit::Front;
+        let cuts = self.cut_short(area);
+        let views = self.view_tabs(area);
+        let sessions_from = views.len();
+        for (index, (view, _, tab)) in views.into_iter().enumerate() {
             if x >= tab.x && x < tab.right() {
+                // Cut short, a tab has no × to miss: all of it brings it forward.
+                if cuts[index] {
+                    return Some(TabHit::View(view));
+                }
                 let close = tab.right().saturating_sub(CLOSE_WIDTH + 1);
                 if picking && x + PICK_WIDTH >= close && x < close {
                     return Some(TabHit::Pick);
@@ -1800,6 +1912,9 @@ impl Dock {
         let tabs = self.tabs(area);
         for (index, (start, end)) in tabs.iter().enumerate() {
             if x >= *start && x < *end {
+                if cuts[sessions_from + index] {
+                    return Some(TabHit::Tab(index));
+                }
                 let close = end.saturating_sub(CLOSE_WIDTH + 1);
                 if picking && x + PICK_WIDTH >= close && x < close {
                     return Some(TabHit::Pick);
@@ -1813,8 +1928,8 @@ impl Dock {
             }
         }
         let end = tabs.last().map_or(self.first_tab(area), |t| t.1);
-        // Out of room, the + is in the chevron's list.
-        if picking {
+        // Out of room, the + gives way: the icons at the top right start the same things.
+        if fit != Fit::Whole {
             return None;
         }
         if x >= end && x < end + NEW_WIDTH {
@@ -1844,7 +1959,15 @@ impl Dock {
         let count = self.comment_count.get();
         let row = Rect::new(area.x, area.y, area.w, 1);
         grid.fill(row, theme.tab);
-        let picking = self.picking(area);
+        let whole = self.fit(area) == Fit::Whole;
+        let cuts = self.cut_short(area);
+        // A tab cut short: as much of its name as fits and a "…", with no × to crowd it.
+        let cut_name = |grid: &mut Grid, tab: Rect, name: &str, style: Style| {
+            let room = f32::from(tab.w) - CUT_TEXT - CUT_END;
+            let text = crate::context::elide(name, room, measure);
+            let at = f32::from(tab.x) + CUT_TEXT;
+            grid.label_at(at, tab.x + 1, area.y, &text, style, tab.right(), 100);
+        };
         let chevron = |grid: &mut Grid, x: u16, style: Style| {
             let quiet = Style {
                 bold: false,
@@ -1852,17 +1975,20 @@ impl Dock {
             };
             grid.glyph(x as f32, area.y, Icon::ChevronDown, quiet.fg, "▾", quiet);
         };
-        for (view, name, tab) in self.view_tabs(area) {
+        let views = self.view_tabs(area);
+        let sessions_from = views.len();
+        for (index, (view, name, tab)) in views.into_iter().enumerate() {
             // Out of room, only the tab in front has columns; the rest are in its list.
             if tab.w == 0 {
                 continue;
             }
             let on = self.front == view || (view == Front::Agents && self.listing());
             let hovered = hover.is_some_and(|h| tab.contains(h.0, h.1));
+            let chip = tab_chip(tab, cuts[index]);
             if on {
-                grid.panel(tab_chip(tab), TAB_CHIP_RADIUS, Some(theme.row_active), None);
+                grid.panel(chip, TAB_CHIP_RADIUS, Some(theme.row_active), None);
             } else if hovered {
-                grid.panel(tab_chip(tab), TAB_CHIP_RADIUS, Some(theme.row_hover), None);
+                grid.panel(chip, TAB_CHIP_RADIUS, Some(theme.row_hover), None);
             }
             let quiet = Style {
                 fg: if on { theme.text.fg } else { theme.gutter.fg },
@@ -1879,6 +2005,10 @@ impl Dock {
             } else {
                 name.to_string()
             };
+            if cuts[index] {
+                cut_name(grid, tab, &text, quiet);
+                continue;
+            }
             let at = tab.x as f32 + TAB_TEXT;
             let pick = self.pick_at(area, close);
             grid.label_at(
@@ -1920,10 +2050,11 @@ impl Dock {
                     ..theme.tab
                 }
             };
+            let chip = tab_chip(tab, cuts[sessions_from + index]);
             if active {
-                grid.panel(tab_chip(tab), TAB_CHIP_RADIUS, Some(theme.row_active), None);
+                grid.panel(chip, TAB_CHIP_RADIUS, Some(theme.row_active), None);
             } else if hovered {
-                grid.panel(tab_chip(tab), TAB_CHIP_RADIUS, Some(theme.row_hover), None);
+                grid.panel(chip, TAB_CHIP_RADIUS, Some(theme.row_hover), None);
             }
             let shown = if session.exited {
                 Style {
@@ -1933,6 +2064,10 @@ impl Dock {
             } else {
                 style
             };
+            if cuts[sessions_from + index] {
+                cut_name(grid, tab, &session.name, shown);
+                continue;
+            }
             let close = end.saturating_sub(CLOSE_WIDTH + 1);
             let pick = self.pick_at(area, close);
             if let Some(x) = pick {
@@ -1984,8 +2119,8 @@ impl Dock {
         let plus = self.tabs(area).last().map_or(self.first_tab(area), |t| t.1);
         let button = Rect::new(plus, area.y, NEW_WIDTH, 1);
         let on_it = hover.is_some_and(|h| button.contains(h.0, h.1));
-        // Out of room, the + is in the chevron's list.
-        if on_it && !picking {
+        // Out of room, the + gives way: the icons at the top right start the same things.
+        if on_it && whole {
             grid.panel(
                 Bounds::inset(button, 0.1, 0.1),
                 16,
@@ -2001,12 +2136,12 @@ impl Dock {
             },
             ..theme.tab
         };
-        if !picking {
+        if whole {
             grid.label(plus + 1, area.y, "+", style, area.right());
         }
         // Maximized, it stands on the chip a selected icon has, so it's plain how to get back.
         let button = Rect::new(plus + NEW_WIDTH + MAXIMIZE_GAP, area.y, MAXIMIZE_WIDTH, 1);
-        if maximized || (!picking && self.maximize_fits(plus)) {
+        if maximized || (whole && self.maximize_fits(plus)) {
             let on_it = hover.is_some_and(|h| button.contains(h.0, h.1));
             if maximized || on_it {
                 let fill = if maximized {
@@ -2074,11 +2209,13 @@ impl Dock {
 }
 
 /// A pane tab's chip: one chip height inside its row, a little in from its sides, as every
-/// tab and button is.
-fn tab_chip(tab: Rect) -> Bounds {
+/// tab and button is. A tab cut short has less to stand in from.
+fn tab_chip(tab: Rect, cut: bool) -> Bounds {
     let height = 0.8;
+    let inset = if cut { CUT_CHIP } else { 0.3 };
     let top = f32::from(tab.y) + (1.0 - height) / 2.0;
-    Bounds::cells(f32::from(tab.x) + 0.3, top, f32::from(tab.w) - 0.6, height)
+    let wide = f32::from(tab.w) - inset * 2.0;
+    Bounds::cells(f32::from(tab.x) + inset, top, wide, height)
 }
 
 const TAB_CHIP_RADIUS: u8 = 22;

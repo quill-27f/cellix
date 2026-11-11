@@ -1776,3 +1776,15 @@ The ui-expert went through the tour's page scenes and snapshots of the new table
 - Left as they were, and there before: the table picker's grid sits 2 px under its top edge; a table's bottom line is 3 px inside its last row; code blocks are four cells wider than the text.
 - Unverified: all of it in a real terminal. Not drawn: a sign of "more" at a cut edge on the pixel tier beyond the open box and the thumb.
 - An open question for the user: whether "a max width of docs" also meant a narrower column for text. Text still runs the width of the pane (162 characters a line in a wide window), by the earlier decision that pages use the whole pane.
+
+## A narrow pane keeps its tabs (2026-11-10)
+
+The user's note from a day's use: "when the side panel is narrow it's not showing the tabs until you widen it". Since 0.6.1 a pane whose tabs didn't all fit showed only the one in front, with a chevron listing the rest. Three boards went on the canvas (Today, A, B); the user picked A.
+
+- **Every tab stays in the row.** The one in front keeps its whole name and its ×. Those behind it share what's left, the widest giving way first, each cut short with a "…" (`Dock::fitted`, `Fit::Cut`). A tab in front that shows how full its context is gives that up before any tab gives up its place. At 120 columns the pane has 20 columns before the icons, which is "Co… [Agents ×] Te…"; from about 48 columns of pane the names behind are nearly whole.
+- **A cut tab has no ×.** A click anywhere on it brings it forward, where it's whole and has one. Its whole name shows on hover, as before.
+- **The + gives way** when the tabs are cut: the Terminal and Agents icons beside the row start the same things. A session that has ended says "start another above" then, instead of pointing at a + that isn't drawn. That note was cut off in a narrow pane whatever it said; when the whole sentence doesn't fit it's now the short "Terminal ended. Start another above."
+- **The chevron stays as the last resort**: when the tabs behind would get under four columns each (five tabs in a 40-column pane), the one in front shows alone with its chevron, as before.
+- Tests changed, because the design did: `the_tab_in_front_keeps_its_name_and_the_others_are_in_its_list` is now `..._and_those_behind_are_cut_short`, and `a_narrow_panes_tabs_stay_clear_of_the_icons_and_the_chevron_lists_them_all` is now `a_pane_too_narrow_for_cut_tabs_shows_the_one_in_front_and_a_chevron_lists_them_all`, with five tabs so the chevron is still reached. `an_agents_tab_closes_when_its_session_ends` reads the short note, since its pane is 44 columns.
+- `harness/x snapshot` gained `tabs:<file>:<columns>:<front>` (three tabs, one named in front) and `CELLIX_HOVER=<column>,<row>`.
+- Unverified: a real terminal. On the pixel tier a 4-column stub holds two letters and the "…".

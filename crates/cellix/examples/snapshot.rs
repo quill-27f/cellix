@@ -7,8 +7,10 @@
 //! presses Ask Agent. `across:<file>:<word>:<notches>` opens a file and tips the wheel
 //! sideways that many notches over the row that word is on, or over that row of the screen
 //! when it's a number, and `pane:<file>:<columns>` opens it beside the side pane dragged that
-//! wide. `CELLIX_TIER=cells` lays it out on the cell tier, as a terminal
-//! without pictures shows it, and `CELLIX_PANE=1` as the pane inside Claude Code.
+//! wide. `tabs:<file>:<columns>:<front>` does the same with a terminal's tab as well, and
+//! `comments`, `agents` or `terminal` in front. `CELLIX_TIER=cells` lays it out on the cell
+//! tier, as a terminal without pictures shows it, and `CELLIX_PANE=1` as the pane inside
+//! Claude Code. `CELLIX_HOVER=<column>,<row>` rests the pointer there before the picture.
 
 use std::fs::File;
 use std::io::BufWriter;
@@ -151,6 +153,35 @@ fn main() {
             app.run(Command::ListAgents);
             app.set_pane_width(columns.parse().expect("a number of columns"));
         }
+        Some(view) if view.starts_with("tabs:") => {
+            let mut parts = view[5..].rsplitn(3, ':');
+            let front = parts.next().expect("<file>:<columns>:<front>");
+            let columns = parts.next().expect("<file>:<columns>:<front>");
+            let file = parts.next().expect("<file>:<columns>:<front>");
+            app.open(&root.join(file)).unwrap();
+            // Three tabs, with the named one in front, so the others have to give way.
+            let order = match front {
+                "comments" => [
+                    Command::NewTerminal,
+                    Command::ListAgents,
+                    Command::ShowComments,
+                ],
+                "agents" => [
+                    Command::NewTerminal,
+                    Command::ShowComments,
+                    Command::ListAgents,
+                ],
+                _ => [
+                    Command::ShowComments,
+                    Command::ListAgents,
+                    Command::NewTerminal,
+                ],
+            };
+            for command in order {
+                app.run(command);
+            }
+            app.set_pane_width(columns.parse().expect("a number of columns"));
+        }
         Some(view) if view.starts_with("search:") => {
             app.run(Command::FindInProject);
             type_text(&mut app, &view["search:".len()..]);
@@ -159,6 +190,18 @@ fn main() {
         }
         Some(file) => app.open(&root.join(file)).unwrap(),
         None => {}
+    }
+    if let Ok(at) = std::env::var("CELLIX_HOVER") {
+        let (x, y) = at.split_once(',').expect("<column>,<row>");
+        let (x, y): (u16, u16) = (x.parse().unwrap(), y.parse().unwrap());
+        app.handle(Event::Mouse(MouseEvent {
+            kind: MouseKind::Move,
+            x,
+            y,
+            fine_x: x as f32 + 0.5,
+            fine_y: y as f32 + 0.5,
+            mods: Mods::default(),
+        }));
     }
     let mut grid = Grid::new(size.0, size.1, app.background());
     app.draw(&mut grid);

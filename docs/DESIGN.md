@@ -330,10 +330,13 @@ for that width rather than squeezed. The five panel icons lead the side pane's h
 VS Code's panel shows its views, with the one showing named and no tab of its own. The top
 right keeps one icon that shows or hides the pane, beside quit. Tabs out of view are
 counted at the ends of the strip ("‹ 2 more", "3 more ›"), and each count lists its tabs.
-A side pane whose tabs don't all fit before the icons at the top right shows only the tab in
-front, whole, with a chevron that lists every tab and what + would start: a share of the row
-each would leave the front tab a stub. The icons stand three columns apart on their row's own
-ground, and nothing runs under them.
+A side pane whose tabs don't all fit before the icons at the top right keeps every tab in
+the row: the one in front whole, those behind it cut short with a "…", the widest giving way
+first. The + gives way too, since the icons beside it start the same things. A cut tab has
+no ×, so a click anywhere on it brings it forward, and its whole name is a hover away. Only
+when that would leave them under four columns each does the row show the tab in front alone,
+with a chevron that lists every tab and what + would start. The icons stand three columns
+apart on their row's own ground, and nothing runs under them.
 The page's menu folds formatting and inserting into Format › and Insert ›, and the agents
 panel gives each agent one row under two lines of how-to. At every width a page keeps a
 cell for a comment's ◆ and one for a change's bar, and a long page scrolls past its end

@@ -8558,8 +8558,8 @@ impl App {
                 if session.stopped.is_some() {
                     self.draw_stopped(grid);
                 } else if session.exited {
-                    let plus = !self.dock.picking(self.title_of(area));
-                    session.draw_ended(grid, screen, plus, theme);
+                    let another = self.dock.another(self.title_of(area));
+                    session.draw_ended(grid, screen, another, (theme, self.measure.as_ref()));
                 }
             }
             None => {
@@ -17752,7 +17752,10 @@ mod tests {
         assert_eq!(app.dock.sessions.len(), 1);
         let text = screen(&app).text();
         assert!(text.contains("Not logged in"), "{text}");
-        assert!(text.contains("Stand-in has ended"), "{text}");
+        assert!(
+            text.contains("Stand-in ended. Press + for another."),
+            "{text}"
+        );
     }
 
     #[test]
@@ -23467,37 +23470,100 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
     }
 
     #[test]
-    fn the_tab_in_front_keeps_its_name_and_the_others_are_in_its_list() {
+    fn the_tab_in_front_keeps_its_name_and_those_behind_are_cut_short() {
+        use crate::dock::Fit;
         let (_dir, mut app) = project();
-        with_a_shell(&mut app);
-        app.run(Command::ShowComments);
-        app.run(Command::ListAgents);
-        let _ = screen(&app);
-        let area = app.dock_area().unwrap();
-        assert!(app.dock.picking(app.title_of(area)), "they don't all fit");
-        let tabs = app.dock.view_tabs_for_test(area);
-        let agents = tabs.iter().find(|tab| tab.0 == Front::Agents).unwrap();
-        assert_eq!(agents.2.w, 13, "it's in front, whole, with its chevron");
-        assert_eq!(
-            app.dock.cut_name(area, agents.2.x + 1),
-            None,
-            "it shows in full"
-        );
-        let comments = tabs.iter().find(|tab| tab.0 == Front::Comments).unwrap();
-        assert_eq!(comments.2.w, 0, "the rest give way");
-        let listed: Vec<String> = app.dock.every_tab().into_iter().map(|t| t.1).collect();
-        assert!(listed.iter().any(|name| name == "Comments"), "{listed:?}");
-    }
-
-    #[test]
-    fn a_narrow_panes_tabs_stay_clear_of_the_icons_and_the_chevron_lists_them_all() {
-        let (dir, _) = project();
-        let mut app = App::new(dir.path().to_path_buf(), (120, 40));
         with_a_shell(&mut app);
         app.run(Command::ShowComments);
         app.run(Command::ListAgents);
         let grid = screen(&app);
         let area = app.dock_area().unwrap();
+        let title = app.title_of(area);
+        assert_eq!(app.dock.fit(title), Fit::Cut, "not all whole, each there");
+        let first_icon = app.pane_actions()[0].0.x;
+        let tabs = app.dock.view_tabs_for_test(area);
+        let agents = tabs.iter().find(|tab| tab.0 == Front::Agents).unwrap().2;
+        assert_eq!(agents.w, 11, "it's in front, whole, with no chevron");
+        assert_eq!(
+            app.dock.cut_name(area, agents.x + 1),
+            None,
+            "it shows in full"
+        );
+        let comments = tabs.iter().find(|tab| tab.0 == Front::Comments).unwrap().2;
+        assert!(
+            (4..10).contains(&comments.w),
+            "cut short, and still there: {comments:?}"
+        );
+        assert_eq!(
+            app.dock.cut_name(area, comments.x + 1).as_deref(),
+            Some("Comments"),
+            "its whole name is a hover away"
+        );
+        // Every tab is in the row, each cut one ending in "…", and nothing reaches the icons.
+        let row = grid.row_text(area.y);
+        let before = (first_icon - area.x) as usize;
+        let strip: String = row.chars().skip(area.x as usize).take(before).collect();
+        assert_eq!(strip.trim_end(), "  Comme…  Agents×   Term…", "{row}");
+        for x in area.x..first_icon {
+            let hit = app.dock.hit(title, x);
+            let gone = [TabHit::New, TabHit::Pick, TabHit::Maximize];
+            assert!(hit.is_none_or(|hit| !gone.contains(&hit)), "{hit:?} at {x}");
+        }
+        // A cut tab has no × to hit by mistake: its last column brings it forward too, whole,
+        // and the one that was in front is cut in its turn.
+        click(&mut app, comments.right() - 1, area.y);
+        assert!(app.dock.showing(Front::Comments), "Comments came forward");
+        let row = screen(&app).row_text(area.y);
+        assert!(row.contains("Comments"), "whole in front: {row}");
+        let tabs = app.dock.view_tabs_for_test(area);
+        let place = |view: Front| tabs.iter().find(|tab| tab.0 == view).unwrap().2;
+        assert_eq!(
+            app.dock.cut_name(area, place(Front::Comments).x + 1),
+            None,
+            "it shows in full"
+        );
+        assert!((4..11).contains(&place(Front::Agents).w), "cut: {tabs:?}");
+        assert!(
+            tabs.iter().all(|(_, _, tab)| tab.right() <= first_icon),
+            "{tabs:?}"
+        );
+        // The terminal's stub, clicked at its end, comes forward and isn't closed.
+        let end = (area.x..first_icon)
+            .rev()
+            .find(|x| app.dock.hit(title, *x) == Some(TabHit::Tab(0)));
+        click(&mut app, end.expect("the terminal has a place"), area.y);
+        assert_eq!(app.dock.sessions.len(), 1, "still open");
+        assert!(app.dock.showing(Front::Session), "the terminal is in front");
+        let row = screen(&app).row_text(area.y);
+        assert!(row.contains("Terminal"), "whole now: {row}");
+        // One that has ended points at what's there to start another, since no + is drawn,
+        // in words short enough for a pane this narrow.
+        app.dock.sessions[0].exited = true;
+        let text = screen(&app).text();
+        assert!(
+            text.contains("Terminal ended. Start another above."),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn a_pane_too_narrow_for_cut_tabs_shows_the_one_in_front_and_a_chevron_lists_them_all() {
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (120, 40));
+        for _ in 0..3 {
+            with_a_shell(&mut app);
+        }
+        app.run(Command::ShowComments);
+        app.run(Command::ListAgents);
+        let grid = screen(&app);
+        let area = app.dock_area().unwrap();
+        let title = app.title_of(area);
+        assert!(app.dock.picking(title), "five tabs have no room, even cut");
+        let tabs = app.dock.view_tabs_for_test(area);
+        let agents = tabs.iter().find(|tab| tab.0 == Front::Agents).unwrap();
+        assert_eq!(agents.2.w, 13, "it's in front, whole, with its chevron");
+        let comments = tabs.iter().find(|tab| tab.0 == Front::Comments).unwrap();
+        assert_eq!(comments.2.w, 0, "the rest give way");
         let icons = app.pane_actions();
         let first_icon = icons
             .iter()
@@ -23515,12 +23581,11 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let shell = app.dock.sessions[0].name.clone();
         assert!(!tabs.contains('+'), "the + is in the list: {row}");
         for x in area.x..first_icon {
-            let hit = app.dock.hit(app.title_of(area), x);
+            let hit = app.dock.hit(title, x);
             assert!(hit != Some(TabHit::New), "no + at {x}: {row}");
         }
         // The one in front, whole; the chevron beside its name lists every tab.
         assert!(tabs.contains("Agents"), "{row}");
-        let title = app.title_of(area);
         let chevron = (area.x..first_icon).find(|x| app.dock.hit(title, *x) == Some(TabHit::Pick));
         let chevron = chevron.expect("a chevron on the tab in front");
         click(&mut app, chevron, area.y);
@@ -23547,12 +23612,9 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         app.dock.sessions[0].exited = true;
         app.dock.sessions[0].name = "x".into();
         let text = screen(&app).text();
-        assert!(
-            text.contains("x has ended. Close this tab, or use ⌄"),
-            "{text}"
-        );
+        assert!(text.contains("x ended. Use ⌄ for another."), "{text}");
         // Wide enough, every tab shows, and the + after them.
-        app.handle(Event::Resize(200, 40));
+        app.handle(Event::Resize(260, 40));
         let grid = screen(&app);
         let row = grid.row_text(app.dock_area().unwrap().y);
         assert!(

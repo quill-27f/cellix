@@ -2130,8 +2130,8 @@
   {
     "id": "tabs-front",
     "milestone": 9,
-    "title": "The front tab keeps its name; when the tabs don't all fit, the others are in its chevron's list",
-    "test": "the_tab_in_front_keeps_its_name_and_the_others_are_in_its_list",
+    "title": "The front tab keeps its name; when the tabs don't all fit, those behind it stay, cut short, and a click on one brings it forward",
+    "test": "the_tab_in_front_keeps_its_name_and_those_behind_are_cut_short",
     "passes": true
   },
   {
@@ -4328,8 +4328,8 @@
   {
     "id": "pane-tabs-picker",
     "milestone": 12,
-    "title": "A narrow side pane's tabs stay clear of the icons at the top right; the one in front keeps its name and a chevron lists every tab",
-    "test": "a_narrow_panes_tabs_stay_clear_of_the_icons_and_the_chevron_lists_them_all",
+    "title": "A side pane too narrow even for cut tabs shows the one in front, whole, and a chevron lists every tab; nothing reaches the icons at the top right",
+    "test": "a_pane_too_narrow_for_cut_tabs_shows_the_one_in_front_and_a_chevron_lists_them_all",
     "passes": true
   },
   {

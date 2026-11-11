@@ -943,7 +943,7 @@ fn row_of(
 }
 
 /// `text` cut at its end with "…" until it fits `room` cells.
-fn elide(text: &str, room: f32, measure: &dyn Measure) -> String {
+pub(crate) fn elide(text: &str, room: f32, measure: &dyn Measure) -> String {
     let font = Font::default();
     if measure.width(text, font) <= room {
         return text.to_string();
