@@ -65,34 +65,37 @@ fn snapshot_tree(root: &Path) -> Option<String> {
     if let Some(tree) = snapshot_with(root, &dir, &index) {
         return Some(tree);
     }
-    // Another checkpoint has it, as when two agents prompt at once: this one waits a little,
-    // then works from a copy of its own, and leaves the shared one as it is.
-    if lock.exists() {
-        let deadline = SystemTime::now() + LOCK_WAIT;
-        while lock.exists() && SystemTime::now() < deadline {
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        if let Some(tree) = snapshot_with(root, &dir, &index) {
-            return Some(tree);
-        }
-        // Named for the process and thread, since checkpoints can run side by side in one.
-        let own = dir.join(format!(
-            "cellix-index-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let _ = fs::copy(&index, &own);
-        // A copy taken while the other was writing can't be read; then this one starts afresh.
-        let tree = snapshot_with(root, &dir, &own).or_else(|| {
-            let _ = fs::remove_file(&own);
-            snapshot_with(root, &dir, &own)
-        });
-        let _ = fs::remove_file(&own);
-        return tree;
+    // Another checkpoint has it, as when two agents prompt at once, or had it a moment ago
+    // and has let go since: this one waits a little for the lock to go, and tries again.
+    let deadline = SystemTime::now() + LOCK_WAIT;
+    while lock.exists() && SystemTime::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
     }
-    // An index that can't be read, as when it was copied mid-write, is built again.
-    let _ = fs::remove_file(&index);
-    snapshot_with(root, &dir, &index)
+    if let Some(tree) = snapshot_with(root, &dir, &index) {
+        return Some(tree);
+    }
+    // Still not: it works from an index of its own, which nothing else can hold, so a
+    // checkpoint is only ever lost to git itself. Named for the process and thread, since
+    // checkpoints can run side by side in one.
+    let own = dir.join(format!(
+        "cellix-index-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = fs::copy(&index, &own);
+    // A copy taken while the other was writing can't be read; then this one starts afresh.
+    let tree = snapshot_with(root, &dir, &own).or_else(|| {
+        let _ = fs::remove_file(&own);
+        snapshot_with(root, &dir, &own)
+    });
+    // With nobody writing the shared one, this one's takes its place in one step. If the
+    // shared one couldn't be read, that mends it; either way the next checkpoint has every
+    // file's size and time to go by. While another holds it, the shared one is left alone.
+    if tree.is_some() && !lock.exists() {
+        let _ = fs::rename(&own, &index);
+    }
+    let _ = fs::remove_file(&own);
+    tree
 }
 
 fn snapshot_with(root: &Path, dir: &Path, index: &Path) -> Option<String> {
