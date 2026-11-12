@@ -131,6 +131,8 @@ const PANE_CLOSE: u16 = 3;
 /// button does. It looks as the icons beside it do, set apart from the pane's × by a line.
 const APP_CLOSE: u16 = 2;
 const APP_CLOSE_TIP: &str = "Quit Cellix (Ctrl+Q)";
+/// What the corner's button says while the side pane is hidden.
+const SHOW_PANE_TIP: &str = "Show Side Pane";
 /// Columns kept for tabs beside them, in the pane and over the file. A window with less goes
 /// without them, sooner than move them somewhere else.
 const PANE_TABS_ROOM: u16 = 14;
@@ -3454,6 +3456,17 @@ impl App {
             .collect()
     }
 
+    /// The button that shows a hidden side pane, where the one that hides it stands while
+    /// it shows, so there's always something in view that brings the pane back. Docked, the
+    /// panel's own toggle does that.
+    fn show_pane(&self) -> Option<Rect> {
+        if self.dock.open || self.docked() {
+            return None;
+        }
+        let last = self.pane_actions().last()?.0;
+        Some(Rect::new(last.right() + ACTION_MARGIN, 0, PANE_CLOSE, 1))
+    }
+
     /// Docked beside a chat there's no room for five icons at the top right. They lead the
     /// pane's header, as VS Code's panel shows its views, the one showing named; the top right
     /// keeps one icon that shows or hides the pane, beside quit.
@@ -3537,6 +3550,9 @@ impl App {
     fn action_at(&self, x: u16, y: u16) -> Option<Command> {
         if self.app_close().is_some_and(|cell| cell.contains(x, y)) {
             return Some(Command::Quit);
+        }
+        if self.show_pane().is_some_and(|cell| cell.contains(x, y)) {
+            return Some(Command::TogglePanel);
         }
         let actions = self.pane_actions();
         let found = actions.into_iter().find(|(cell, ..)| cell.contains(x, y));
@@ -3634,6 +3650,31 @@ impl App {
         let ground = self.action_ground(grid);
         self.draw_app_close(grid, ground);
         let theme = &self.theme;
+        // The button that shows a hidden pane stands just where the one that hides it does,
+        // half a column left of its cell's middle, with that button's chip: the window with
+        // its side in outline, or its foot when the pane stands under the file.
+        if let Some(cell) = self.show_pane() {
+            let hovered = self.hover.is_some_and(|h| cell.contains(h.0, h.1));
+            grid.fill(cell, ground);
+            if hovered {
+                let (wide, high) = crate::dock::BESIDE_LINE_PILL;
+                let left = cell.x as f32 + 1.0 - wide / 2.0;
+                let chip = Bounds::cells(left, (1.0 - high) / 2.0, wide, high);
+                grid.panel(chip, PILL_RADIUS, Some(theme.row_hover), None);
+            }
+            let color = if hovered {
+                theme.text.fg
+            } else {
+                theme.activity.fg
+            };
+            let icon = if self.dock.under {
+                Icon::Panel
+            } else {
+                Icon::ShowPane
+            };
+            let mark = Rect::new(cell.x, cell.y, 2, 1);
+            toolbar::draw_icon(grid, (icon, ACTION_ICON), mark, color, ground);
+        }
         for (cell, icon, command, _) in self.pane_actions() {
             let hovered = self.hover.is_some_and(|h| cell.contains(h.0, h.1));
             let on = self.action_on(command);
@@ -12678,6 +12719,10 @@ impl App {
                 self.size.0 as f32 - wide(APP_CLOSE_TIP) - 0.5,
                 1.2,
             )),
+            Overlay::None if self.show_pane().is_some_and(|cell| cell.contains(x, y)) => {
+                let left = self.size.0 as f32 - wide(SHOW_PANE_TIP) - 0.5;
+                Some((SHOW_PANE_TIP, left, 1.2))
+            }
             Overlay::None if self.action_at(x, y).is_some() => {
                 let actions = self.pane_actions();
                 let found = actions.iter().find(|(cell, ..)| cell.contains(x, y));
@@ -24168,6 +24213,38 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
                 ..
             }
         )));
+    }
+
+    /// A hidden pane could only be brought back by knowing which icon had opened it. The
+    /// corner keeps a button for it, where the one that hides it stands.
+    #[test]
+    fn a_hidden_pane_leaves_a_button_in_the_corner_that_brings_it_back() {
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (170, 40));
+        let button = app.size.0 - APP_CLOSE - 2;
+        let shows = |app: &App| {
+            let grid = screen(app);
+            let drawn = grid.paint.iter().any(|p| {
+                matches!(p, Paint::Icon { icon: Icon::ShowPane, bounds, .. }
+                    if bounds.x / 64 >= i32::from(button) - 1 && bounds.y / 64 == 0)
+            });
+            drawn && grid.row_text(0).chars().nth(button as usize) == Some('◫')
+        };
+        assert!(shows(&app), "before the pane was ever opened");
+        app.run(Command::ListAgents);
+        assert!(
+            !shows(&app),
+            "the pane's own button hides it while it shows"
+        );
+        app.handle(mouse(MouseKind::Left, button, 0));
+        assert!(!app.dock.open);
+        assert!(shows(&app), "hidden, the corner still has its button");
+        app.handle(mouse(MouseKind::Move, button, 0));
+        assert!(screen(&app).text().contains(SHOW_PANE_TIP), "and names it");
+        app.handle(mouse(MouseKind::Left, button, 0));
+        assert!(app.dock.open, "a click brings the pane back");
+        assert!(app.dock.listing(), "with what it showed");
+        assert!(!app.quit);
     }
 
     #[test]

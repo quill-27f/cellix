@@ -694,7 +694,9 @@ the file.
   browser and the agents. Past them, in the corner, a close button quits Cellix as Ctrl+Q
   does. It's drawn as the icons are, grey with the same hover chip, and a thin line sets it
   apart from the pane's own control, which hides the pane and is drawn as a window with its
-  right part filled, so the only × in the corner quits. The
+  right part filled, so the only × in the corner quits. A hidden pane leaves that control in
+  its place, the window with its right part in outline, so something in view always brings
+  the pane back as it was. The
   explorer lists gitignored files, as VS Code does, since agents work in them, but dims them,
   and what's dimmed is exactly what Quick Open and search leave out. The pane stands under the file when the window is too narrow to have
   them side by side. The Agents icon opens the side pane. With nothing running, it lists what's running elsewhere,

@@ -5,6 +5,7 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 ## [Unreleased]
 
 ### Fixed
+- A hidden side pane leaves a button in the corner, where the one that hides it stands, which shows it again as it was. Before, it came back only through the icon of a view.
 - The first screen, where Cellix lists the workspaces that are open, had no way out: no button, and no key but the ones that pick. It now has Quit beside Open and the × in its corner, and Ctrl+Q works there. Quitting from it leaves every workspace as it is.
 
 ### Changed
