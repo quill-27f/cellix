@@ -178,7 +178,10 @@ takes a comment too, from a button or a right click, and a paper's PDF lands it 
 behind that place, so it stays put through every rebuild.
 
 Output is seen too, so a failing run needs no copy and paste. A selection in a terminal tab gets the
-same two buttons, and the agent hears all of the output, the command that printed it and every
+same two buttons, where they cover none of the output: on the row above the selection when its text
+ends before them, else on the row below, their right edge on the selection's, and failing both after
+the end of the selection's last row. Only output with no such room has them over the end of the row
+above. The agent hears all of the output, the command that printed it and every
 `file:line` in it that is a file of the project. Cellix knows the command from where the first key
 was typed while the shell was at its prompt, read off the screen when it's asked. A comment on output
 has no file, so it shows in the Comments tab whatever file is in view, and opening it goes to the

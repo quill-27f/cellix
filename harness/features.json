@@ -4786,5 +4786,12 @@
     "title": "In the Agents panel a worktree's row under the pointer says a click opens Review, before its count of changes; the list of what can start is headed START, with the terminal set apart from the agents",
     "test": "a_worktree_row_under_the_pointer_says_a_click_opens_review",
     "passes": true
+  },
+  {
+    "id": "output-buttons-clear-of-output",
+    "milestone": 14,
+    "title": "The Comment and Ask Agent buttons by a selection in a terminal stand where they cover none of its output: the row above, else the row below, with their right edge on the selection's, else after the end of the selection's last row",
+    "test": "the_buttons_by_selected_output_stand_clear_of_the_output",
+    "passes": true
   }
 ]

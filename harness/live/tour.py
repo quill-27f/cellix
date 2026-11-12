@@ -842,7 +842,7 @@ with tempfile.TemporaryDirectory() as scratch:
         os.makedirs(f"{HOME}/Library/Caches", exist_ok=True)
         os.symlink(real, f"{HOME}/Library/Caches/Tectonic")
     # Where the terminal's output and the Problems tab are, at 150x44 and 170x44.
-    OUTPUT_FROM, OUTPUT_TO, OUTPUT_ASK = (97, 7), (125, 10), (111, 6)
+    OUTPUT_FROM, OUTPUT_TO, OUTPUT_ASK = (97, 7), (125, 10), (143, 6)
     PROBLEM_COUNT, PROBLEM_ROW = (9, 42), (150, 2)
     GEAR = (RAIL_X, 36)
     settings = [["click", *GEAR], ["until", "Changes apply"]]

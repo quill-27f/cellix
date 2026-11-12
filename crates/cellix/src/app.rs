@@ -78,6 +78,8 @@ const KERNEL_STATUS_END: u16 = 6;
 /// The row the Comment button stands on over a PDF, clear of its zoom buttons.
 const VIEW_COMMENT_ROW: u16 = 2;
 const ASK_WIDTH: u16 = 11;
+/// How the buttons by a terminal's selection are drawn: not lifted, and this much of a row tall.
+const OUTPUT_CHIP: (f32, f32) = (0.0, 0.78);
 /// The list an empty window shows, its width, the rows above it, and the height it needs.
 const WELCOME_WIDTH: u16 = 44;
 const WELCOME_LEAD_ROWS: u16 = 4;
@@ -4277,8 +4279,11 @@ impl App {
         ))
     }
 
-    /// The same buttons by what's selected in a terminal tab: above its first row, or under
-    /// its last when that's the top.
+    /// The same buttons by what's selected in a terminal tab, where they cover none of its
+    /// output: on the row above the selection, else the row below, their right edge on the
+    /// selection's, or past the end of that row's text when it runs under there; failing
+    /// both, after the end of the selection's own last row. Only output that leaves no such
+    /// room has them over the end of the row above.
     fn output_bar(&self) -> Option<(Rect, Rect)> {
         let idle = matches!(self.overlay, Overlay::None) && self.drag != Drag::Session;
         // A terminal keeps its selection after a click elsewhere, as terminals do, but the
@@ -4288,15 +4293,40 @@ impl App {
             return None;
         }
         let screen = self.dock_screen()?;
-        let (_, from, to) = self.dock.session()?.selection()?;
-        let y = match from.1 {
-            0 => (screen.y + to.1 + 1).min(screen.bottom().saturating_sub(1)),
-            row => screen.y + row - 1,
-        };
+        let session = self.dock.session()?;
+        let (_, from, to) = session.selection()?;
         let width = COMMENT_WIDTH + ASK_WIDTH;
-        let x = (screen.x + from.0)
-            .min(screen.right().saturating_sub(width + 1))
-            .max(screen.x);
+        // Whole rows are selected to the pane's edge, and part of one row ends where it ends.
+        let furthest = screen.right().saturating_sub(width + 1).max(screen.x);
+        let wanted = if from.1 == to.1 {
+            (screen.x + to.0 + 1)
+                .saturating_sub(width)
+                .clamp(screen.x, furthest)
+        } else {
+            furthest
+        };
+        let rows = session.rows();
+        // Where on a row the buttons stand clear of its text, with a cell of air before them.
+        let clear = |row: u16| -> Option<u16> {
+            let text: Vec<char> = rows.get(row as usize)?.chars().collect();
+            let before = (wanted - screen.x).saturating_sub(1) as usize;
+            let mut under = text.iter().skip(before).take(width as usize + 1);
+            if under.all(|c| *c == ' ') {
+                return Some(wanted);
+            }
+            let after = screen.x + text.len() as u16 + 1;
+            (after <= furthest).then_some(after)
+        };
+        let above = from.1.checked_sub(1);
+        let below = Some(to.1 + 1).filter(|row| *row < screen.h);
+        let beside = [above, below]
+            .into_iter()
+            .flatten()
+            .find_map(|row| Some((clear(row)?, row)));
+        let (x, row) = beside
+            .or_else(|| Some((clear(to.1)?, to.1)))
+            .unwrap_or((wanted, above.or(below).unwrap_or(to.1)));
+        let y = screen.y + row;
         Some((
             Rect::new(x, y, COMMENT_WIDTH, 1),
             Rect::new(x + COMMENT_WIDTH, y, ASK_WIDTH, 1),
@@ -4596,8 +4626,9 @@ impl App {
             self.draw_chip(grid, chip, "Run");
         }
         if let Some((comment, ask)) = self.output_bar() {
-            self.draw_chip(grid, comment, "Comment");
-            self.draw_chip(grid, ask, "Ask Agent");
+            // In the middle of a row they have to themselves, with nothing to lift clear of.
+            self.draw_chip_lifted(grid, comment, "Comment", OUTPUT_CHIP);
+            self.draw_chip_lifted(grid, ask, "Ask Agent", OUTPUT_CHIP);
         }
         if let Some((comment, ask)) = self.selection_bar() {
             self.draw_chip(grid, comment, "Comment");
@@ -21232,6 +21263,120 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         app.handle(mouse(MouseKind::Up, right, end));
     }
 
+    /// What the terminal in front itself has under the buttons by its selection, and in the
+    /// cell of air before them.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    fn output_under(app: &App, comment: Rect, ask: Rect) -> String {
+        let screen = app.dock_screen().unwrap();
+        let rows = app.dock.session().unwrap().rows();
+        let row = &rows[(comment.y - screen.y) as usize];
+        let from = (comment.x - screen.x).saturating_sub(1) as usize;
+        let cells = (ask.right() - comment.x) as usize + 1;
+        row.chars().skip(from).take(cells).collect()
+    }
+
+    /// The buttons by output selected in a terminal cover none of it. They stand on the row
+    /// above when its text ends before them, else on the row below, else after the end of
+    /// the selection's last row; a word selected on one row has them end where it ends.
+    #[cfg(unix)]
+    #[test]
+    fn the_buttons_by_selected_output_stand_clear_of_the_output() {
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (160, 40));
+        app.run(Command::ListAgents);
+        let width = app.dock_screen().unwrap().w as usize;
+        let long = |c: &str| c.repeat(width - 2);
+        let led = |name: &str, c: &str| format!("{name}{}", c.repeat(width - 2 - name.len()));
+        let lines = [
+            "short".to_string(),
+            led("Afirst", "a"),
+            long("b"),
+            "tail".to_string(),
+            long("c"),
+            led("Bfirst", "d"),
+            long("e"),
+            "after".to_string(),
+            long("f"),
+            led("Cfirst", "g"),
+            "Clast".to_string(),
+            long("h"),
+            led("Dfirst", "i"),
+            long("j"),
+            long("k"),
+            format!("{}Eword rest", "pad ".repeat(8)),
+            "zlast".to_string(),
+        ];
+        let script = format!("printf 'ready\\n{}\\n'; cat", lines.join("\\n"));
+        session(&mut app, &script);
+        shows(&mut app, "zlast");
+        let pane = app.dock_screen().unwrap();
+        assert_eq!(
+            pane.w as usize, width,
+            "the session has the room the list had"
+        );
+        // Selects from `first` to the end of the row `rows` below it, and says where the
+        // buttons stand, what's under them, and the row `first` is on.
+        let placed = |app: &mut App, first: &str, rows: u16| {
+            select_output(app, first, rows);
+            let (_, y) = find(&screen(app), first);
+            let (comment, ask) = app.output_bar().expect("buttons by the selected output");
+            let under = output_under(app, comment, ask);
+            app.dock.session_mut().unwrap().clear_selection();
+            (ask, under, y)
+        };
+
+        let (ask, under, y) = placed(&mut app, "Afirst", 1);
+        assert_eq!(ask.y, y - 1, "on the short row above");
+        assert_eq!(under.trim(), "", "over nothing");
+        assert_eq!(
+            ask.right(),
+            pane.right() - 1,
+            "at the selection's right edge"
+        );
+
+        let (ask, under, y) = placed(&mut app, "Bfirst", 1);
+        assert_eq!(
+            ask.y,
+            y + 2,
+            "the row above runs under them, so the row below"
+        );
+        assert_eq!(under.trim(), "", "over nothing");
+
+        let (ask, under, y) = placed(&mut app, "Cfirst", 1);
+        assert_eq!(
+            ask.y,
+            y + 1,
+            "neither has room, so after the end of the last row"
+        );
+        assert_eq!(under.trim(), "", "over nothing");
+
+        let (ask, under, y) = placed(&mut app, "Dfirst", 1);
+        assert_eq!(
+            ask.y,
+            y - 1,
+            "with no room anywhere, over the end of the row above"
+        );
+        assert!(
+            !under.trim().is_empty(),
+            "which is the one time they cover output"
+        );
+
+        // One word on a row: they end where it ends, on the row below, which is clear there.
+        let (x, y) = find(&screen(&app), "Eword");
+        app.handle(mouse(MouseKind::Left, x, y));
+        app.handle(mouse(MouseKind::Drag, x + 4, y));
+        app.handle(mouse(MouseKind::Up, x + 4, y));
+        let (comment, ask) = app.output_bar().expect("buttons by the selected word");
+        assert_eq!(ask.y, y + 1);
+        assert_eq!(ask.right(), x + 5, "their right edge on the word's");
+        assert_eq!(output_under(&app, comment, ask).trim(), "");
+        let row = screen(&app).row_text(ask.y);
+        assert!(
+            row.contains("Comment") && row.contains("Ask Agent"),
+            "{row}"
+        );
+    }
+
     /// What the stand-in agent wrote down, once it has `want`.
     fn heard(app: &mut App, log: &Path, want: &str) -> String {
         let deadline = std::time::Instant::now() + BACKGROUND;
@@ -21288,7 +21433,15 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         select_output(&mut app, "BOOM failed", 1);
         let (_, first) = find(&screen(&app), "BOOM failed");
         let (comment, ask) = app.output_bar().expect("buttons by the selected output");
-        assert_eq!(ask.y, first - 1, "above the first selected row");
+        assert!(
+            (first - 1..=first + 2).contains(&ask.y),
+            "by the selection, which starts on row {first}: {ask:?}"
+        );
+        assert_eq!(
+            output_under(&app, comment, ask).trim(),
+            "",
+            "over no output"
+        );
         let row = screen(&app).row_text(ask.y);
         assert!(
             row.contains("Comment") && row.contains("Ask Agent"),
