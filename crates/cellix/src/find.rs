@@ -3,6 +3,18 @@ const MAX_MATCHES: usize = 10_000;
 
 use cellix_core::pattern::{Options, char_ranges};
 
+/// A screen Find looks through that isn't a file or a terminal: everything it lists.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Looked {
+    /// The list in front of the side pane.
+    #[default]
+    Pane,
+    /// The changes Review shows.
+    Review,
+    /// The Task page: its timeline and the step beside it.
+    Task,
+}
+
 /// Find in the current file, and replace when that row is open. Matches are char ranges.
 #[derive(Default)]
 pub struct Find {
@@ -24,6 +36,11 @@ pub struct Find {
     pub listed: bool,
     /// Every row that list holds, as it draws them from its top, not only those in view.
     pub rows: Vec<String>,
+    /// Which screen `listed` looks through.
+    pub looked: Looked,
+    /// How many of `rows` each part of that screen has: a part scrolls on its own, as the
+    /// Task page's two columns do.
+    pub parts: Vec<usize>,
 }
 
 impl Find {
@@ -54,9 +71,9 @@ impl Find {
         }
     }
 
-    /// Each match in a list's rows, in order, as (where it starts in its row, its letters):
-    /// what tells which of them a match on screen is.
-    pub fn listed_matches(&self) -> Vec<(usize, String)> {
+    /// Each match in a list's rows, in order, as (the part it's in, where it starts in its
+    /// row, its letters): what tells which of them a match on screen is.
+    pub fn listed_matches(&self) -> Vec<(usize, usize, String)> {
         let mut starts = Vec::with_capacity(self.rows.len());
         let mut at = 0;
         for row in &self.rows {
@@ -71,9 +88,40 @@ impl Find {
                 let letters = self.rows.get(row).map_or_else(String::new, |r| {
                     r.chars().skip(from).take(end - start).collect()
                 });
-                (from, letters)
+                (self.part_of(row), from, letters)
             })
             .collect()
+    }
+
+    /// The row of its own part that match `index` starts in.
+    pub fn row_in_part(&self, index: usize) -> usize {
+        let Some(&(start, _)) = self.matches.get(index) else {
+            return 0;
+        };
+        let mut at = 0;
+        let mut row = 0;
+        for (n, text) in self.rows.iter().enumerate() {
+            let next = at + text.chars().count() + 1;
+            if start < next {
+                row = n;
+                break;
+            }
+            at = next;
+        }
+        let part = self.part_of(row);
+        row - self.parts.iter().take(part).sum::<usize>()
+    }
+
+    /// The part of the screen that row of `rows` is in.
+    fn part_of(&self, row: usize) -> usize {
+        let mut before = 0;
+        for (part, rows) in self.parts.iter().enumerate() {
+            before += rows;
+            if row < before {
+                return part;
+            }
+        }
+        self.parts.len().saturating_sub(1)
     }
 
     pub fn selected(&self) -> Option<(usize, usize)> {

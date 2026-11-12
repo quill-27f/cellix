@@ -301,6 +301,9 @@ After a click in one of the side pane's lists (Comments, the Inbox, Problems, Ag
 log), Ctrl+F finds in that list: everything it holds, not only what's in view. Enter goes to the
 next match and the list scrolls to it. A click on a file takes Find back to the file.
 
+In Review and on the Task page Ctrl+F finds in what that page shows: every change of the file in
+Review, or the task's timeline and the step beside it.
+
 Select output in a terminal tab of the side pane, or hover a row in Problems, and Ask Agent sends it
 to the agent: all of the output, the command that printed it and the project's files it names, or
 the problem with the lines around it. Inside Claude Code it goes into Claude's prompt.

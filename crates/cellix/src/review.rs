@@ -655,6 +655,17 @@ impl Review {
         self.load();
     }
 
+    /// The part that scrolls, for Find: where it stands in `area`, how far it's scrolled
+    /// and the furthest it goes.
+    pub fn scrolling(&self, area: Rect) -> (Rect, usize, usize) {
+        let (_, body) = self.layout(area);
+        (body, self.top, self.stacked(&[]).len().saturating_sub(1))
+    }
+
+    pub fn scroll_to(&mut self, top: usize) {
+        self.top = top.min(self.stacked(&[]).len().saturating_sub(1));
+    }
+
     pub fn scroll_by(&mut self, delta: isize) {
         let last = self.stacked(&[]).len().saturating_sub(1) as isize;
         self.top = (self.top as isize + delta).clamp(0, last.max(0)) as usize;

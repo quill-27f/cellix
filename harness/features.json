@@ -4863,5 +4863,19 @@
     "title": "Find, after a press on the side pane, looks through everything the list in front of it holds and scrolls to what it finds",
     "test": "find_looks_through_the_list_in_front_of_the_side_pane",
     "passes": true
+  },
+  {
+    "id": "find-in-review",
+    "milestone": 14,
+    "title": "Find in Review looks through every change it shows and scrolls to what it finds",
+    "test": "find_looks_through_the_changes_review_shows",
+    "passes": true
+  },
+  {
+    "id": "find-on-the-task-page",
+    "milestone": 14,
+    "title": "Find on the Task page looks through its timeline and the step beside it",
+    "test": "find_looks_through_the_task_page",
+    "passes": true
   }
 ]

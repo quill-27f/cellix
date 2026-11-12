@@ -90,7 +90,7 @@ impl App {
         Rect::new(sheet.x, sheet.y + air, sheet.w, sheet.h - air)
     }
 
-    fn task_context(&self) -> Context<'_> {
+    pub(super) fn task_context(&self) -> Context<'_> {
         Context {
             threads: &self.threads,
             running: &self.agents.running,
@@ -697,6 +697,30 @@ mod tests {
         app.run(Command::CloseTab);
         assert!(app.task_page.is_none());
         assert_eq!(app.editors.len(), 1, "the file stays open");
+    }
+
+    /// Find on the Task page looks through its timeline and the step beside it, and marks
+    /// what it finds.
+    #[test]
+    fn find_looks_through_the_task_page() {
+        let (_dir, mut app) = worked_on();
+        app.run(Command::ShowAgentTask);
+        wait_for(&mut app, "1 file +1 -0");
+        app.handle(Input::Key(KeyEvent::ctrl('f')));
+        let on_task = matches!(&app.overlay, crate::app::Overlay::Find(find)
+            if find.listed && find.looked == crate::find::Looked::Task);
+        assert!(on_task, "Find is the Task page's");
+        for letter in "refund".chars() {
+            press(&mut app, Key::Char(letter));
+        }
+        let grid = screen(&app);
+        let text = grid.text();
+        assert!(text.contains("1 of "), "{text}");
+        let marked = (0..grid.height())
+            .any(|y| (0..grid.width()).any(|x| grid.cell(x, y).style.bg == app.theme.selection));
+        assert!(marked, "the one Find is on is marked:\n{text}");
+        press(&mut app, Key::Esc);
+        assert!(matches!(app.overlay, crate::app::Overlay::None));
     }
 
     #[test]

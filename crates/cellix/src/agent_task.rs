@@ -639,6 +639,29 @@ impl TaskPage {
         self.changes.get(&turn_key(turn))
     }
 
+    /// Its columns, for Find: each one's place in `area`, how far it's scrolled and the
+    /// furthest it goes. The step's side has no end of its own, so it's given `rows`.
+    pub fn scrolling(&self, area: Rect, rows: usize) -> Vec<(Rect, usize, usize)> {
+        let (timeline, detail) = Self::columns(area);
+        let steps = self.task().map_or(0, |t| t.steps.len());
+        let mut parts = Vec::new();
+        if let Some(timeline) = timeline {
+            parts.push((timeline, self.top, steps.saturating_sub(1)));
+        }
+        parts.push((detail, self.detail_top, rows));
+        parts
+    }
+
+    /// Scrolls one of those columns to `top`.
+    pub fn scroll_to(&mut self, area: Rect, part: usize, top: usize) {
+        let timeline = Self::columns(area).0.is_some();
+        if timeline && part == 0 {
+            self.top = top;
+        } else {
+            self.detail_top = top;
+        }
+    }
+
     pub fn scroll_by(&mut self, area: Rect, x: u16, delta: isize) {
         let (timeline, _) = Self::columns(area);
         if timeline.is_some_and(|t| x < t.right()) {

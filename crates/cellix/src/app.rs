@@ -45,7 +45,7 @@ use crate::context::{ContextPanel, Hit as ContextHit};
 use crate::dock::{ACTION_ICON, ACTION_PILL, BROWSER, CellPixels, Dock, Front, Session, TabHit};
 use crate::editor::{Editor, Marks};
 use crate::explorer::Explorer;
-use crate::find::Find;
+use crate::find::{Find, Looked};
 use crate::inbox::{Hit as InboxHit, Inbox, Kind as Waits, Listed, Target as WaitTarget, Waiting};
 use crate::kernel::{self, Event as KernelEvent, Kernel};
 use crate::measures::{self, BUTTON_GAP};
@@ -5827,123 +5827,237 @@ impl App {
         session.show_found(found, on);
     }
 
-    /// Every row the list in front of the side pane holds, as it draws them from its top:
-    /// what Find looks through there. A list longer than `LIST_ROWS` is read that far.
-    fn list_rows(&mut self) -> Vec<String> {
-        let Some((front, _)) = self.pane_scroll() else {
-            return Vec::new();
+    /// The parts of a screen Find looks through, each scrolling on its own: its place, how
+    /// far it's scrolled and the furthest it goes. `tall` is every part from its top in a
+    /// grid `LIST_ROWS` tall, which is how all a screen holds is read. `rows` is how many
+    /// rows each part held when it was read, for a part with no end of its own.
+    fn looked_parts(
+        &self,
+        looked: Looked,
+        tall: bool,
+        rows: &[usize],
+    ) -> Vec<(Rect, usize, usize)> {
+        let stretch = |rect: Rect| {
+            if tall {
+                Rect::new(rect.x, 0, rect.w, LIST_ROWS)
+            } else {
+                rect
+            }
         };
-        let (Some(area), Some(screen), Some(panel)) =
-            (self.dock_area(), self.dock_screen(), self.dock_panel())
-        else {
-            return Vec::new();
-        };
-        let was = self.dock.tops.of(front);
-        self.dock.tops.set(front, 0);
-        let tall = |rect: Rect| Rect::new(rect.x, 0, rect.w, LIST_ROWS);
-        let mut grid = Grid::new(self.size.0, LIST_ROWS, self.theme.sidebar);
-        self.draw_pane_view(&mut grid, (area, tall(screen), tall(panel)));
-        self.dock.tops.set(front, was);
-        let mut rows: Vec<String> = (0..LIST_ROWS)
-            .map(|y| row_chars(&grid, panel, y).0)
-            .collect();
-        while rows.last().is_some_and(|row| row.trim().is_empty()) {
-            rows.pop();
+        match looked {
+            Looked::Pane => match (self.dock_panel(), self.pane_scroll()) {
+                (Some(panel), Some((front, (last, _)))) => {
+                    vec![(stretch(panel), self.dock.tops.of(front), last)]
+                }
+                _ => Vec::new(),
+            },
+            Looked::Review => self
+                .review
+                .iter()
+                .map(|review| review.scrolling(stretch(self.main_area())))
+                .collect(),
+            Looked::Task => self.task_page.as_ref().map_or_else(Vec::new, |page| {
+                page.scrolling(stretch(self.task_area()), rows.last().copied().unwrap_or(0))
+            }),
         }
-        rows
     }
 
-    /// Searches the list in front of the side pane for the query as it stands: all it
-    /// holds, from its top.
+    /// Scrolls one part of such a screen.
+    fn looked_scroll(&mut self, looked: Looked, part: usize, top: usize) {
+        match looked {
+            Looked::Pane => {
+                if let Some((front, _)) = self.pane_scroll() {
+                    self.dock.tops.set(front, top);
+                }
+            }
+            Looked::Review => {
+                if let Some(review) = &mut self.review {
+                    review.scroll_to(top);
+                }
+            }
+            Looked::Task => {
+                let area = self.task_area();
+                if let Some(page) = &mut self.task_page {
+                    page.scroll_to(area, part, top);
+                }
+            }
+        }
+    }
+
+    /// Draws such a screen as it stands, or `tall`, into a grid with room for all of it.
+    fn looked_draw(&self, grid: &mut Grid, looked: Looked, tall: bool) {
+        let stretch = |rect: Rect| {
+            if tall {
+                Rect::new(rect.x, 0, rect.w, LIST_ROWS)
+            } else {
+                rect
+            }
+        };
+        let theme = &self.theme;
+        match looked {
+            Looked::Pane => {
+                if let (Some(area), Some(screen), Some(panel)) =
+                    (self.dock_area(), self.dock_screen(), self.dock_panel())
+                {
+                    self.draw_pane_view(grid, (area, stretch(screen), stretch(panel)));
+                }
+            }
+            Looked::Review => {
+                if let Some(review) = &self.review {
+                    let comments = self.comments.lock().map(|c| c.clone()).unwrap_or_default();
+                    review.draw(grid, stretch(self.main_area()), None, theme, &comments);
+                }
+            }
+            Looked::Task => {
+                if let Some(page) = &self.task_page {
+                    let area = stretch(self.task_area());
+                    page.draw(grid, area, None, &self.task_context(), theme);
+                }
+            }
+        }
+    }
+
+    /// Every row the screen Find is on holds, part by part and each from its top, with how
+    /// many rows each part has: what Find looks through there. A part longer than
+    /// `LIST_ROWS` is read that far.
+    fn looked_rows(&mut self, looked: Looked) -> (Vec<String>, Vec<usize>) {
+        let parts = self.looked_parts(looked, false, &[]);
+        for part in 0..parts.len() {
+            self.looked_scroll(looked, part, 0);
+        }
+        let mut grid = Grid::new(self.size.0, LIST_ROWS, self.theme.sidebar);
+        self.looked_draw(&mut grid, looked, true);
+        let (mut rows, mut counts) = (Vec::new(), Vec::new());
+        for (rect, ..) in self.looked_parts(looked, true, &[]) {
+            let mut part: Vec<String> = (rect.y..rect.bottom().min(LIST_ROWS))
+                .map(|y| row_chars(&grid, rect, y).0)
+                .collect();
+            while part.last().is_some_and(|row| row.trim().is_empty()) {
+                part.pop();
+            }
+            counts.push(part.len());
+            rows.extend(part);
+        }
+        for (part, (_, top, _)) in parts.iter().enumerate() {
+            self.looked_scroll(looked, part, *top);
+        }
+        (rows, counts)
+    }
+
+    /// Searches the screen Find is on for the query as it stands: all it holds, each part
+    /// from its top.
     fn search_list(&mut self) {
-        let rows = self.list_rows();
+        let Overlay::Find(find) = &self.overlay else {
+            return;
+        };
+        let (rows, parts) = self.looked_rows(find.looked);
         if let Overlay::Find(find) = &mut self.overlay {
             find.search(&rows.join("\n"), 0);
             find.rows = rows;
+            find.parts = parts;
         }
         self.show_list_match();
     }
 
-    /// Scrolls the list so the match Find is on shows, a third of the way down where the
-    /// list goes that far. Each view scrolls in its own rows, so it's found by looking.
+    /// Scrolls the part the match Find is on stands in so the match shows, a third of the
+    /// way down where it goes that far. Each part scrolls in its own rows, so the place is
+    /// found by looking.
     fn show_list_match(&mut self) {
-        let Some((front, (last, _))) = self.pane_scroll() else {
-            return;
-        };
-        let (Some(area), Some(screen), Some(panel)) =
-            (self.dock_area(), self.dock_screen(), self.dock_panel())
-        else {
-            return;
-        };
         let overlay = std::mem::replace(&mut self.overlay, Overlay::None);
         if let Overlay::Find(find) = &overlay
-            && !find.matches.is_empty()
+            && let Some((part, ..)) = find.listed_matches().get(find.current)
         {
-            let wanted = panel.y + panel.h / 3;
-            let was = self.dock.tops.of(front);
-            let mut best: Option<(u16, usize)> = None;
-            for top in 0..=last {
-                self.dock.tops.set(front, top);
-                let mut grid = Grid::new(self.size.0, self.size.1, self.theme.sidebar);
-                self.draw_pane_view(&mut grid, (area, screen, panel));
-                let on = self.listed_marks(&grid, find).into_iter().find(|m| m.3);
-                match (on, best) {
-                    (Some((y, ..)), _) => {
-                        let off = y.abs_diff(wanted);
-                        if best.is_none_or(|(least, _)| off < least) {
-                            best = Some((off, top));
+            let (looked, part) = (find.looked, *part);
+            let parts = self.looked_parts(looked, false, &find.parts);
+            if let Some(&(rect, was, last)) = parts.get(part) {
+                let wanted = rect.y + rect.h / 3;
+                // The row the match shows on with the part scrolled to `top`, if it shows.
+                let shows = |app: &mut Self, top: usize| -> Option<u16> {
+                    app.looked_scroll(looked, part, top);
+                    let mut grid = Grid::new(app.size.0, app.size.1, app.theme.sidebar);
+                    app.looked_draw(&mut grid, looked, false);
+                    let on = app.listed_marks(&grid, find).into_iter().find(|m| m.3);
+                    on.map(|(y, ..)| y)
+                };
+                // Where a part scrolls a row at a time, the match's own row says how far,
+                // and a long diff isn't drawn once for every row it has.
+                let above = usize::from(rect.h / 3);
+                let guess = find
+                    .row_in_part(find.current)
+                    .saturating_sub(above)
+                    .min(last);
+                let mut best = shows(self, guess).map(|y| (y.abs_diff(wanted), guess));
+                if best.is_none() {
+                    for top in 0..=last.min(usize::from(LIST_ROWS)) {
+                        match (shows(self, top), best) {
+                            (Some(y), _) => {
+                                let off = y.abs_diff(wanted);
+                                if best.is_none_or(|(least, _)| off < least) {
+                                    best = Some((off, top));
+                                }
+                            }
+                            // Past the tops that show it.
+                            (None, Some(_)) => break,
+                            (None, None) => {}
                         }
                     }
-                    // Past the tops that show it.
-                    (None, Some(_)) => break,
-                    (None, None) => {}
                 }
+                self.looked_scroll(looked, part, best.map_or(was, |(_, top)| top));
             }
-            self.dock.tops.set(front, best.map_or(was, |(_, top)| top));
         }
         self.overlay = overlay;
     }
 
-    /// Each match in view in the pane's list as it's drawn on `grid`: its row, its first
-    /// column, its columns, and whether it's the one Find is on. Which of all the list's
-    /// matches these are is told from their order, since the list's rows aren't the screen's.
+    /// Each match in view on the screen Find is on, as it's drawn on `grid`: its row, its
+    /// first column, its columns, and whether it's the one Find is on. Which of all a part's
+    /// matches these are is told from their order, since a part's rows aren't the screen's.
     fn listed_marks(&self, grid: &Grid, find: &Find) -> Vec<(u16, u16, u16, bool)> {
-        let Some(panel) = self.dock_panel() else {
-            return Vec::new();
-        };
         let Ok(matcher) = find.options.matcher(&find.query) else {
             return Vec::new();
         };
-        let mut seen = Vec::new();
-        for y in panel.y..panel.bottom().min(grid.height()) {
-            let (text, columns) = row_chars(grid, panel, y);
-            for (start, end) in cellix_core::pattern::char_ranges(&matcher, &text, LIST_MATCHES) {
-                if end <= start || end > columns.len() {
-                    continue;
+        let all = find.listed_matches();
+        let mut marks = Vec::new();
+        let parts = self.looked_parts(find.looked, false, &find.parts);
+        for (part, (rect, ..)) in parts.into_iter().enumerate() {
+            let mut seen = Vec::new();
+            for y in rect.y..rect.bottom().min(grid.height()) {
+                let (text, columns) = row_chars(grid, rect, y);
+                let found = cellix_core::pattern::char_ranges(&matcher, &text, LIST_MATCHES);
+                for (start, end) in found {
+                    if end <= start || end > columns.len() {
+                        continue;
+                    }
+                    let letters: String = text.chars().skip(start).take(end - start).collect();
+                    let x = columns[start];
+                    seen.push((y, x, columns[end - 1] + 1 - x, (start, letters)));
                 }
-                let letters: String = text.chars().skip(start).take(end - start).collect();
-                let x = columns[start];
-                seen.push((y, x, columns[end - 1] + 1 - x, (start, letters)));
+            }
+            // This part's matches, each with its place among all of them.
+            let own: Vec<(usize, &(usize, usize, String))> = all
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| m.0 == part)
+                .collect();
+            let fits = |from: usize| {
+                seen.iter().enumerate().all(|(i, mark)| {
+                    own.get(from + i)
+                        .is_some_and(|(_, m)| m.1 == mark.3.0 && m.2 == mark.3.1)
+                })
+            };
+            let on = own.iter().position(|(index, _)| *index == find.current);
+            // Where their order fits more than one run of the part's, the one Find is in.
+            let runs: Vec<usize> = (0..own.len()).filter(|from| fits(*from)).collect();
+            let from = runs
+                .iter()
+                .copied()
+                .find(|from| on.is_some_and(|on| (*from..from + seen.len()).contains(&on)))
+                .or(runs.first().copied());
+            for (i, (y, x, w, _)) in seen.into_iter().enumerate() {
+                let it = from.zip(on).is_some_and(|(from, on)| from + i == on);
+                marks.push((y, x, w, it));
             }
         }
-        let all = find.listed_matches();
-        let fits = |from: usize| {
-            seen.iter()
-                .enumerate()
-                .all(|(i, mark)| all.get(from + i) == Some(&mark.3))
-        };
-        let on = find.current;
-        // Where their order fits more than one run of the list's, the one Find is in.
-        let runs: Vec<usize> = (0..all.len()).filter(|from| fits(*from)).collect();
-        let from = runs
-            .iter()
-            .copied()
-            .find(|from| (*from..from + seen.len()).contains(&on))
-            .or(runs.first().copied());
-        seen.into_iter()
-            .enumerate()
-            .map(|(i, (y, x, w, _))| (y, x, w, from.is_some_and(|from| from + i == on)))
-            .collect()
+        marks
     }
 
     /// Marks what Find found in the pane's list: the cells, and behind what's painted over
@@ -5957,11 +6071,12 @@ impl App {
             };
             let spot = Rect::new(x, y, w, 1);
             // One or the other: painted letters aren't over their cells, so a mark on the
-            // cells too would show beside them.
-            if self.measure.in_cells() {
-                grid.set_style(spot, |style| Style { bg: color, ..style });
-            } else {
+            // cells too would show beside them. Code is its cells' own letters in pixels too.
+            let painted = !self.measure.in_cells() && grid.cell(x, y).style.painted;
+            if painted {
                 self.mark_painted(grid, spot, color);
+            } else {
+                grid.set_style(spot, |style| Style { bg: color, ..style });
             }
         }
     }
@@ -6090,11 +6205,27 @@ impl App {
         // that keeps its own screen has no scrollback here, so its transcript is opened and
         // searched: that holds the whole chat.
         // The last press was on the side pane and a list is in front of it: Find looks
-        // through all that list holds.
-        if self.pane_pressed && !self.in_session() && self.dock.open && self.pane_scroll().is_some()
-        {
+        // through all that list holds. Review and the Task page are looked through the same
+        // way when one of them is what's showing.
+        let on_list = self.pane_pressed
+            && !self.in_session()
+            && self.dock.open
+            && self.pane_scroll().is_some();
+        let looked = if on_list {
+            Some(Looked::Pane)
+        } else if self.in_session() || self.settings_page.is_some() {
+            None
+        } else if self.task_shown && self.task_page.is_some() {
+            Some(Looked::Task)
+        } else if self.review.is_some() {
+            Some(Looked::Review)
+        } else {
+            None
+        };
+        if let Some(looked) = looked {
             self.overlay = Overlay::Find(Find {
                 listed: true,
+                looked,
                 ..Find::default()
             });
             self.search_file();
@@ -6145,7 +6276,8 @@ impl App {
     /// The Find bar, a row taller with the replace row. Over a terminal it stands on the
     /// terminal's first row, at its right, as it does over a file.
     fn find_bar_for(&self, replacing: bool) -> Rect {
-        let on_pane = matches!(&self.overlay, Overlay::Find(find) if find.pane || find.listed);
+        let on_pane = matches!(&self.overlay, Overlay::Find(find)
+            if find.pane || (find.listed && find.looked == Looked::Pane));
         let pane = match self.dock_screen().filter(|_| on_pane) {
             Some(screen) => Rect::new(screen.x, screen.y.saturating_sub(1), screen.w, screen.h),
             None => self.focused_area(),
@@ -8967,12 +9099,6 @@ impl App {
         grid.hairline(line, theme.border);
         let panel = self.dock_panel().unwrap_or(screen);
         self.draw_pane_view(grid, (area, screen, panel));
-        // What Find found in the list, over it.
-        if let Overlay::Find(find) = &self.overlay
-            && find.listed
-        {
-            self.mark_listed(grid, find);
-        }
     }
 
     /// What's in front of the pane, under its tabs: a list on `panel`, or a session, the
@@ -13674,7 +13800,13 @@ impl App {
                 menu.draw(grid, hover, theme);
             }
             Overlay::Prompt(prompt) => self.draw_prompt(grid, prompt),
-            Overlay::Find(find) => self.draw_find(grid, find),
+            Overlay::Find(find) => {
+                // What it found on a screen that lists things, marked over that screen.
+                if find.listed {
+                    self.mark_listed(grid, find);
+                }
+                self.draw_find(grid, find);
+            }
             Overlay::Confirm(confirm) => self.draw_confirm(grid, confirm),
             Overlay::TablePicker(picker) => picker.draw(grid, self.hover, theme),
             Overlay::Math(panel) => panel.draw(grid, self.hover, theme),
@@ -20682,6 +20814,58 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         app.handle(mouse(MouseKind::Up, sheet.x + 10, sheet.y + 3));
         app.handle(Event::Key(KeyEvent::ctrl('f')));
         assert!(matches!(&app.overlay, Overlay::Find(find) if !find.listed && !find.pane));
+    }
+
+    /// Find in Review looks through every change it shows, not only those in view, and
+    /// scrolls to what it finds. Before, Ctrl+F there opened the project's Search.
+    #[test]
+    fn find_looks_through_the_changes_review_shows() {
+        let (dir, mut app) = reviewed();
+        // Changed near its start and far down, so the second change is out of view.
+        let old: String = (1..=120).map(|n| format!("line {n}\n")).collect();
+        fs::write(dir.path().join("long.txt"), &old).unwrap();
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-q", "-m", "long"]);
+        let mut new = old
+            .replace("line 3\n", "line 3 needle\n")
+            .replace("line 110\n", "line 110 needle\n");
+        // Changes between them, each a card of its own, fill the rows in between.
+        for n in [20, 40, 60, 80] {
+            new = new.replace(&format!("line {n}\n"), &format!("line {n} hay\n"));
+        }
+        fs::write(dir.path().join("long.txt"), &new).unwrap();
+        app.run(Command::OpenDiff);
+        let text = screen(&app).text();
+        assert!(text.contains("line 3 needle"), "{text}");
+        assert!(
+            !text.contains("line 110 needle"),
+            "the second is out of view"
+        );
+
+        app.handle(Event::Key(KeyEvent::ctrl('f')));
+        assert!(
+            matches!(&app.overlay, Overlay::Find(find) if find.listed && find.looked == Looked::Review)
+        );
+        typed(&mut app, "needle");
+        let grid = screen(&app);
+        assert!(grid.text().contains("1 of 2"), "{}", grid.text());
+        let (x, y) = find(&grid, "line 3 needle");
+        let at = x + "line 3 ".len() as u16;
+        assert_eq!(grid.cell(at, y).style.bg, app.theme.selection, "marked");
+
+        enter(&mut app);
+        let grid = screen(&app);
+        assert!(grid.text().contains("2 of 2"), "{}", grid.text());
+        let (x, y) = find(&grid, "line 110 needle");
+        let at = x + "line 110 ".len() as u16;
+        assert_eq!(
+            grid.cell(at, y).style.bg,
+            app.theme.selection,
+            "scrolled to"
+        );
+
+        app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
+        assert!(matches!(app.overlay, Overlay::None));
     }
 
     /// With no file in view the pane lists every file's comments, so each file's stand under

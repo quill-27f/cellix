@@ -625,8 +625,12 @@ holds, not only what's in view: the list is drawn once more from its top into a 
 enough for all of it (600 rows) and its rows are what's searched, so every list is covered by
 the one way and a new one needs nothing. The matches in view are marked as they're drawn, in
 cells or behind the painted letters, and which of the list's matches they are is told from
-their order, since each list scrolls in its own rows. Review and the Task page aren't covered:
-Ctrl+F in Review still opens the project's Search.
+their order, since each list scrolls in its own rows. Review and the Task page are looked
+through the same way when one of them is what's showing (`find::Looked`): Review's changes,
+and the Task page's timeline and the step beside it, which are two parts that each scroll on
+their own. Where a part scrolls a row at a time the match's own row says how far to scroll;
+only a part that scrolls by items is tried a position at a time. Ctrl+F in Review opened the
+project's Search before; that's still Ctrl+Shift+F.
 
 The side pane's terminal also reads the Kitty graphics protocol, so a program in it can draw
 pictures. That is how `terminal-browser` shows a real browser inside Cellix, and how a plot from a
