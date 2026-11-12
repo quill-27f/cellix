@@ -986,6 +986,12 @@ const LIST_MATCHES: usize = 64;
 const MARK_HEIGHT: f32 = 0.76;
 const MARK_AIR: f32 = 0.1;
 
+/// A list's place in the pane's screen with a row of air under the tabs.
+fn under_strip(screen: Rect) -> Rect {
+    let air = u16::from(screen.h > 1);
+    Rect::new(screen.x, screen.y + air, screen.w, screen.h - air)
+}
+
 /// A row's letters across `rect` and the column each stands in: a wide letter takes two
 /// columns and is one letter.
 fn row_chars(grid: &Grid, rect: Rect, y: u16) -> (String, Vec<u16>) {
@@ -2227,7 +2233,7 @@ impl App {
         let Some(area) = self.sidebar_area() else {
             return;
         };
-        let hit = self.source.hit(area, x, y);
+        let hit = self.source.hit(area, (x, y), &*self.measure);
         self.source.focused = hit == Some(SourceHit::Message);
         let root = self.workspace.root().to_path_buf();
         let result = match hit {
@@ -4508,7 +4514,7 @@ impl App {
         if self.dock.front != Front::Problems || !matches!(self.overlay, Overlay::None) {
             return None;
         }
-        let screen = self.dock_screen()?;
+        let screen = self.problems_screen()?;
         let row = y.checked_sub(screen.y).filter(|_| y < screen.bottom())?;
         let picked = self
             .problem_rows()
@@ -9116,7 +9122,7 @@ impl App {
             return;
         }
         if self.dock.front == Front::Problems {
-            self.draw_problems(grid, screen);
+            self.draw_problems(grid, under_strip(screen));
             return;
         }
         if self.dock.front == Front::Inbox {
@@ -13227,7 +13233,8 @@ impl App {
                 // While a comment is being written the keys go to it, and so does the caret.
                 let focused = pane == self.focus && self.dock.draft.is_none();
                 editor.draw(grid, area, theme, focused, &self.registry, &marks);
-                crate::conflicts::draw(grid, editor, area, self.hover, theme);
+                let look = (self.hover, &*self.measure);
+                crate::conflicts::draw(grid, editor, area, look, theme);
                 if let Some(hover) = self.hover.filter(|h| area.contains(h.0, h.1)) {
                     editor.draw_hover(grid, area, hover, &self.theme);
                 }
@@ -15087,8 +15094,14 @@ impl App {
     }
 
     /// The furthest the problems scroll: the last of them at the bottom.
+    /// Where the Problems list stands: a row under the pane's tabs, as the Inbox and the
+    /// Agents list start, so its first file isn't 8 px under the strip.
+    fn problems_screen(&self) -> Option<Rect> {
+        self.dock_screen().map(under_strip)
+    }
+
     fn problems_last(&self) -> usize {
-        let height = self.dock_screen().map_or(0, |s| s.h as usize);
+        let height = self.problems_screen().map_or(0, |s| s.h as usize);
         self.problem_rows().len().saturating_sub(height)
     }
 
@@ -15211,7 +15224,7 @@ impl App {
 
     /// A problem goes to its place.
     fn click_problem(&mut self, y: u16) {
-        let Some(screen) = self.dock_screen() else {
+        let Some(screen) = self.problems_screen() else {
             return;
         };
         let Some(row) = y.checked_sub(screen.y) else {
@@ -24816,7 +24829,8 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let row = grid.row_text(area.y);
         let before = (first_icon - area.x) as usize;
         let strip: String = row.chars().skip(area.x as usize).take(before).collect();
-        assert_eq!(strip.trim_end(), "  Commen… Agents ×  Termi…", "{row}");
+        // The first tab starts flush with the pane, so the row has a column more to give.
+        assert_eq!(strip.trim_end(), " Commen… Agents ×  Termin…", "{row}");
         for x in area.x..first_icon {
             let hit = app.dock.hit(title, x);
             let gone = [TabHit::New, TabHit::Pick, TabHit::Maximize];
@@ -28395,6 +28409,15 @@ while True:
         fs::write(dir.path().join("alpha.txt"), "first line\nchanged\n").unwrap();
         app.run(Command::OpenDiff);
         check(&app, &["Reject", "Accept"]);
+
+        // Source Control's Commit, which was as wide as its panel whatever it said.
+        let (_dir, mut app) = source_app();
+        app.set_measure(measure.clone());
+        let commit = painted_buttons(&app)
+            .into_iter()
+            .find(|button| button.0.starts_with("Commit"))
+            .expect("Commit is painted");
+        check(&app, &[commit.0.as_str()]);
     }
 
     /// The pane's tab in front is the shape a file's is: it takes the colour of the pane

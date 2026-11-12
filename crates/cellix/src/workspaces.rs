@@ -17,12 +17,12 @@ use crate::theme::Theme;
 /// The bar's size, relative to the interface font, as the status bar's.
 const BAR_SIZE: u8 = 90;
 /// Room inside a tile, in cells: before its mark, between its parts, and at its end.
-const PAD: f32 = 0.8;
+const PAD: f32 = 1.5;
 const GAP: f32 = 0.7;
 /// Between a tile's name and what it says.
 const WORD_GAP: f32 = 0.8;
 /// Between one tile's chip and the next.
-const BETWEEN: f32 = 0.7;
+const BETWEEN: f32 = 2.0;
 /// Kept on every tile for its close button, so tiles don't move as it comes and goes.
 const CLOSE: f32 = 2.2;
 const MARK: f32 = 1.0;

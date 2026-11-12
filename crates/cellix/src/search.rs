@@ -60,7 +60,7 @@ pub struct Search {
 /// They sit inside the search field's end, a column clear of its edge.
 fn switches_start(area: Rect) -> u16 {
     area.right()
-        .saturating_sub(2 + SWITCH * SWITCHES.len() as u16)
+        .saturating_sub(3 + SWITCH * SWITCHES.len() as u16)
 }
 
 /// The three switches from `at`, each lit while it's on. The Find bar draws them too.
@@ -192,11 +192,11 @@ impl Search {
 
     pub fn hit(&self, area: Rect, x: u16, y: u16) -> Option<Hit> {
         match y.checked_sub(area.y)? {
-            1 if x >= switches_start(area) && x < area.right().saturating_sub(1) => Some(
+            1 if x >= switches_start(area) && x < area.right().saturating_sub(2) => Some(
                 Hit::Switch(((x - switches_start(area)) / SWITCH).min(2) as usize),
             ),
             1 => Some(Hit::Field(Field::Query)),
-            REPLACE_ROW if x + REPLACE_ALL.len() as u16 + 2 >= area.right() => {
+            REPLACE_ROW if x + REPLACE_ALL.len() as u16 + 3 >= area.right() => {
                 Some(Hit::ReplaceAll)
             }
             REPLACE_ROW => Some(Hit::Field(Field::Replace)),
@@ -224,13 +224,14 @@ impl Search {
             Field::Query => (self.query.as_str(), "Search"),
             Field::Replace => (self.replace.as_str(), "Replace"),
         };
-        let end = area.right().saturating_sub(1);
+        // On the panel's text edge, two columns in from either side, as its title is.
+        let end = area.right().saturating_sub(2);
         let width = if field == Field::Replace {
-            end.saturating_sub(area.x + 5)
+            end.saturating_sub(area.x + 6)
         } else {
-            end.saturating_sub(area.x + 1)
+            end.saturating_sub(area.x + 2)
         };
-        let line = Rect::new(area.x + 1, y, width, 1);
+        let line = Rect::new(area.x + 2, y, width, 1);
         let box_state = Input {
             text,
             hint,
@@ -270,7 +271,7 @@ impl Search {
             measure,
             theme,
         );
-        let button = area.right().saturating_sub(REPLACE_ALL.len() as u16 + 1);
+        let button = area.right().saturating_sub(REPLACE_ALL.len() as u16 + 2);
         grid.glyph(
             button as f32 - 0.2,
             area.y + REPLACE_ROW,

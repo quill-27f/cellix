@@ -1650,7 +1650,8 @@ impl Dock {
     }
 
     pub fn tabs_start(&self, area: Rect) -> u16 {
-        area.x + u16::from(!self.tabs_flush.get())
+        // Flush with the pane, as a file's first tab is with its sheet.
+        area.x
     }
 
     /// How wide each tab would like to be, views and then sessions.

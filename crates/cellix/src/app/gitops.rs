@@ -399,7 +399,8 @@ impl App {
         let Some(editor) = self.editors.get(self.active()) else {
             return false;
         };
-        let Some((index, choice)) = crate::conflicts::hit(editor, area, x, y) else {
+        let hit = crate::conflicts::hit(editor, area, (x, y), &*self.measure);
+        let Some((index, choice)) = hit else {
             return false;
         };
         let Some(found) = crate::conflicts::found(editor).get(index).cloned() else {

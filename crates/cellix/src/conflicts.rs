@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use cellix_render::{
-    BOTTOM_LEFT, BOTTOM_RIGHT, Bounds, Grid, Rect, Rgb, Style, TOP_LEFT, TOP_RIGHT,
+    BOTTOM_LEFT, BOTTOM_RIGHT, Bounds, Grid, Measure, Rect, Rgb, Style, TOP_LEFT, TOP_RIGHT,
 };
 use cellix_review::conflict::{Conflict, conflicts};
 
@@ -26,11 +26,11 @@ pub enum Choice {
     Compare,
 }
 
-const CHOICES: [(Choice, &str, &str); 4] = [
-    (Choice::Incoming, "[Incoming]", "Incoming"),
-    (Choice::Current, "[Current]", "Current"),
-    (Choice::Both, "[Both]", "Both"),
-    (Choice::Compare, "[Compare]", "Compare"),
+const CHOICES: [(Choice, &str); 4] = [
+    (Choice::Incoming, "Incoming"),
+    (Choice::Current, "Current"),
+    (Choice::Both, "Both"),
+    (Choice::Compare, "Compare"),
 ];
 
 /// A file's conflicts, with the file and the revision they were found at.
@@ -90,12 +90,14 @@ impl Tints {
 }
 
 /// Where each choice's button starts on a header row, right to left, for the room there is.
-fn buttons(text: Rect) -> Vec<(Choice, u16, &'static str, &'static str)> {
+fn buttons(text: Rect, measure: &dyn Measure) -> Vec<(Choice, u16, String, &'static str)> {
     let mut placed = Vec::new();
     let mut end = text.right().saturating_sub(1);
     // The header's label wants room too; Compare goes first when there's little.
     let least = text.x + 24;
-    for (choice, cells, label) in CHOICES {
+    for (choice, label) in CHOICES {
+        // The room every button has around its words, and its gap to the next.
+        let cells = crate::measures::button_cells(label, measure);
         let width = cells.chars().count() as u16;
         // Compare isn't a way to settle the conflict: it stands apart from the three that are.
         if choice == Choice::Compare {
@@ -108,7 +110,7 @@ fn buttons(text: Rect) -> Vec<(Choice, u16, &'static str, &'static str)> {
             break;
         }
         placed.push((choice, start, cells, label));
-        end = start.saturating_sub(1);
+        end = start.saturating_sub(crate::measures::BUTTON_GAP);
     }
     placed
 }
@@ -156,7 +158,7 @@ pub fn draw(
     grid: &mut Grid,
     editor: &Editor,
     area: Rect,
-    hover: Option<(u16, u16)>,
+    (hover, measure): (Option<(u16, u16)>, &dyn Measure),
     theme: &Theme,
 ) {
     if editor.rendered {
@@ -229,7 +231,7 @@ pub fn draw(
                 fg: theme.gutter.fg,
                 ..theme.text
             };
-            let placed = buttons(text);
+            let placed = buttons(text, measure);
             let first = placed.last().map_or(text.right(), |b| b.1);
             let place = format!("conflict {} of {count}", index + 1);
             grid.label(end, y, &place, dim, first.saturating_sub(1));
@@ -247,7 +249,7 @@ pub fn draw(
                     (_, false) => (Some(mix(behind, theme.text.fg, 14)), theme.text.fg),
                     (_, true) => (Some(mix(behind, theme.text.fg, 26)), theme.text.fg),
                 };
-                chip(grid, (x, y), (cells, label), fill, fg, behind);
+                chip(grid, (x, y), (&cells, label), fill, fg, behind);
             }
             let card = Bounds::cells(text.x as f32, y as f32, text.w as f32, 1.0);
             grid.corners(card, CARD_RADIUS, theme.text.bg, TOP_LEFT | TOP_RIGHT);
@@ -275,7 +277,12 @@ fn base_label(_conflict: &Conflict, editor: &Editor, line: usize) -> String {
 }
 
 /// The conflict and choice under a click, if it's on a header's button.
-pub fn hit(editor: &Editor, area: Rect, x: u16, y: u16) -> Option<(usize, Choice)> {
+pub fn hit(
+    editor: &Editor,
+    area: Rect,
+    (x, y): (u16, u16),
+    measure: &dyn Measure,
+) -> Option<(usize, Choice)> {
     if editor.rendered {
         return None;
     }
@@ -284,7 +291,7 @@ pub fn hit(editor: &Editor, area: Rect, x: u16, y: u16) -> Option<(usize, Choice
     let index = list
         .iter()
         .position(|c| row_of(editor, area, c.start) == Some(y))?;
-    buttons(text)
+    buttons(text, measure)
         .into_iter()
         .find(|(_, start, cells, _)| x >= *start && x < start + cells.len() as u16)
         .map(|(choice, ..)| (index, choice))

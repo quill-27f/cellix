@@ -65,16 +65,17 @@ impl Explorer {
                 ..Font::default()
             };
             let name = root_name.to_uppercase();
-            let x = area.x as f32 + 2.0 + measure.width(&name, title) + 1.0;
+            // Its chip starts a column and a half after the title, its letters a column in.
+            let x = area.x as f32 + 2.0 + measure.width(&name, title) + 2.5;
             let chevron = 0.9;
-            let wide = measure.width(branch, small) + 1.0 + chevron;
+            let wide = measure.width(branch, small) + 1.0 + 0.5 + chevron + 0.4;
             let hovered = hover.is_some_and(|h| h.1 == area.y && area.contains(h.0, h.1));
             let fill = if hovered {
                 theme.row_active
             } else {
                 theme.row_hover
             };
-            let pill = Bounds::cells(x - 0.5, area.y as f32 + 0.14, wide, 0.72);
+            let pill = Bounds::cells(x - 1.0, area.y as f32 + 0.14, wide, 0.72);
             grid.panel(pill, 18, Some(fill), None);
             let dim = Style {
                 fg: if hovered {
@@ -86,7 +87,7 @@ impl Explorer {
             };
             grid.label_at(x, end + 1, area.y, branch, dim, area.right(), BRANCH_SIZE);
             grid.paint.push(Paint::Icon {
-                bounds: Bounds::cells(x + wide - chevron - 0.8, area.y as f32 + 0.27, 0.8, 0.46),
+                bounds: Bounds::cells(x + wide - chevron - 1.5, area.y as f32 + 0.27, 0.8, 0.46),
                 icon: Icon::ChevronDown,
                 color: theme.status.fg,
             });

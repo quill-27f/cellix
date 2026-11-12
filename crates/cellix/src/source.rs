@@ -21,12 +21,12 @@ const MESSAGE_ROWS: u16 = 3;
 const LETTER_FROM_RIGHT: u16 = 3;
 pub const STAGE_FROM_RIGHT: u16 = 5;
 pub const DISCARD_FROM_RIGHT: u16 = 7;
-/// How wide the button beside Commit is.
-const SYNC_WIDTH: u16 = 10;
 /// Columns from a row's icon to its name.
 const NAME_FROM_ICON: u16 = 3;
 /// Cells between a file's name and its folder.
 const FOLDER_GAP: f32 = 0.8;
+/// The most columns Abort's button takes: its words and a button's room.
+const ABORT_WIDTH: u16 = 7;
 /// How far the message box stands past its rows, so its text has air above it.
 const BOX_ROOM: f32 = 0.12;
 /// Where the ⋯ button stands in the title row, from the panel's right edge.
@@ -330,16 +330,22 @@ impl Source {
     }
 
     /// Where the Commit and Sync buttons stand on their row.
-    fn buttons(&self, area: Rect, y: u16) -> (Rect, Option<Rect>) {
+    fn buttons(&self, area: Rect, y: u16, measure: &dyn Measure) -> (Rect, Option<Rect>) {
         let left = area.x + SIDE;
         let width = area.w.saturating_sub(SIDE * 2);
-        if self.sync_label().is_some() && width > SYNC_WIDTH + 8 {
-            let commit = Rect::new(left, y, width - SYNC_WIDTH - 1, 1);
-            let sync = Rect::new(commit.right() + 1, y, SYNC_WIDTH, 1);
-            (commit, Some(sync))
-        } else {
-            (Rect::new(left, y, width, 1), None)
-        }
+        // Each as wide as its words with a button's room, from the panel's text edge:
+        // Commit, then Sync a button's gap on, where there's room for it.
+        let wide = |label: &str| {
+            let cells = crate::measures::button_cells(label, measure);
+            (cells.chars().count() as u16).min(width)
+        };
+        let commit = Rect::new(left, y, wide(self.commit_label()), 1);
+        let sync = self.sync_label().and_then(|label| {
+            let x = commit.right() + crate::measures::BUTTON_GAP;
+            let w = wide(&label);
+            (x + w <= left + width).then(|| Rect::new(x, y, w, 1))
+        });
+        (commit, sync)
     }
 
     fn commit_label(&self) -> &'static str {
@@ -372,7 +378,7 @@ impl Source {
         }
     }
 
-    pub fn hit(&self, area: Rect, x: u16, y: u16) -> Option<Hit> {
+    pub fn hit(&self, area: Rect, (x, y): (u16, u16), measure: &dyn Measure) -> Option<Hit> {
         // The title row stays put while the rest scrolls under it.
         let offset = y.checked_sub(area.y)? as usize;
         let lines = self.lines();
@@ -385,7 +391,9 @@ impl Source {
                 (x >= more && x < more + 2).then_some(Hit::More)
             }
             Line::Underway => {
-                let abort = right.saturating_sub(SIDE + 1 + "Abort".len() as u16);
+                // As wide as the button gets, in cells or measured: what it's about is cut
+                // two columns short of it, so a column either way takes nothing else.
+                let abort = right.saturating_sub(SIDE + ABORT_WIDTH);
                 (x >= abort).then_some(Hit::Abort)
             }
             Line::StashHeading(_) => Some(Hit::ToggleStashes),
@@ -409,7 +417,7 @@ impl Source {
             }
             Line::Message(_) => Some(Hit::Message),
             Line::Buttons => {
-                let (commit, sync) = self.buttons(area, y);
+                let (commit, sync) = self.buttons(area, y, measure);
                 if sync.is_some_and(|b| b.contains(x, y)) {
                     return Some(Hit::Sync);
                 }
@@ -579,7 +587,7 @@ impl Source {
                 Line::Message(0) => self.draw_message(grid, area, y, measure, theme),
                 Line::Message(_) | Line::Gap => {}
                 Line::Buttons => {
-                    self.draw_buttons(grid, (area, y), hover, measure.in_cells(), theme);
+                    self.draw_buttons(grid, (area, y), hover, measure, theme);
                 }
                 Line::Clean => {
                     grid.label(left, y, "No changes", quiet, right);
@@ -683,11 +691,12 @@ impl Source {
         grid: &mut Grid,
         (area, y): (Rect, u16),
         hover: Option<(u16, u16)>,
-        in_cells: bool,
+        measure: &dyn Measure,
         theme: &Theme,
     ) {
+        let in_cells = measure.in_cells();
         let ground = |fill| if in_cells { fill } else { theme.sidebar.bg };
-        let (commit, sync) = self.buttons(area, y);
+        let (commit, sync) = self.buttons(area, y, measure);
         let ready = !self.entries.is_empty();
         let fill = if ready {
             theme.button
@@ -704,7 +713,7 @@ impl Source {
             ..theme.sidebar
         };
         let name = self.commit_label();
-        let cells = format!("{name:^0$}", commit.w as usize);
+        let cells = crate::measures::button_cells(name, measure);
         grid.large_button(commit.x, y, &cells, name, fill, label);
         if let (Some(button), Some(name)) = (sync, self.sync_label()) {
             let on_it = hover.is_some_and(|h| button.contains(h.0, h.1));
@@ -717,7 +726,7 @@ impl Source {
                 bg: ground(fill),
                 ..theme.sidebar
             };
-            let cells = format!("{name:^0$}", button.w as usize);
+            let cells = crate::measures::button_cells(&name, measure);
             grid.large_button(button.x, y, &cells, &name, fill, label);
         }
     }
@@ -793,7 +802,12 @@ impl Source {
             fg: theme.gutter.fg,
             ..theme.sidebar
         };
-        let abort = card.right().saturating_sub(1 + "Abort".len() as u16);
+        let cells = if measure.in_cells() {
+            "Abort".to_string()
+        } else {
+            crate::measures::button_cells("Abort", measure)
+        };
+        let abort = card.right().saturating_sub(cells.chars().count() as u16);
         let on_abort = hover.is_some_and(|h| h.1 == y && h.0 >= abort && h.0 < card.right());
         let verb = underway.operation.verb();
         // Up to two columns short of Abort, after the verb and its space.
@@ -818,7 +832,7 @@ impl Source {
             fg: theme.text.fg,
             ..theme.sidebar
         };
-        grid.button(abort, y, "Abort", "Abort", fill, word);
+        grid.button(abort, y, &cells, "Abort", fill, word);
     }
 
     fn draw_stash(

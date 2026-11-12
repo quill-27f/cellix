@@ -8,9 +8,10 @@ use crate::paint::{Bounds, Paint, UNIT, units};
 
 /// Heights of a button, in rows.
 /// Every button is one chip centred inside its row, so none stands past it and what's
-/// painted is what takes a click: about 30 px of a 37 px row, the air the design's 24 of 32
-/// gives its smaller text.
-const BUTTON_HEIGHT: f32 = 0.8;
+/// painted is what takes a click: about 32 px of a 36 px row. At four fifths of a row its
+/// words stood 7 px under its top and their tails 2 px over its foot, which the review of
+/// the applied design measured as the last of "buttons and text too close".
+const BUTTON_HEIGHT: f32 = 0.88;
 const LARGE_BUTTON_HEIGHT: f32 = BUTTON_HEIGHT;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]

@@ -333,7 +333,8 @@ real IDE. The highlight behind a selected or hovered icon, on the rail and at th
 keeps 8 px or more from the icon on every side; the rail's reaches into the rows either side,
 so the rail sits an eighth of a row lower to keep the first one inside the window.
 
-One set of parts, everywhere. A button is one chip, four fifths of its row and inside it: the
+One set of parts, everywhere. A button is one chip, nearly nine tenths of its row and inside it
+(four fifths left its words 7 px under its top, which read as cramped): the
 primary one filled with the accent, the rest a quiet fill, the least of them plain words (Edit and
 Delete on a comment), and each takes a click anywhere it's painted, from one rectangle the painter
 and the hit test share. One measure sizes them all (`measures.rs`): a button's words keep a column
@@ -343,7 +344,11 @@ whatever holds it, a panel, a card, a menu, a prompt; a card starts one column f
 edge and is raised over it, as a menu is over the page. A bar that holds a text box, the Find bar
 and a prompt, keeps a quarter of a row clear above and below its rows, which only paint can show,
 and a box's text starts a column inside it. A section's heading is small, bold, quiet capitals
-wherever it is. Settings has one box that looks through every page, where only its Keyboard page
+wherever it is. Nothing is as wide as its panel for its own sake: Commit and Sync are as wide as
+their words, from the panel's text edge, where Commit had filled the sidebar. In a list of many
+rows an action is words in the accent until its row is pointed at, then a button: Install,
+beside the language servers. Every list in the side pane starts a row under its tabs, and the
+pane's first tab starts flush with the pane, as a file's does with its sheet. Settings has one box that looks through every page, where only its Keyboard page
 had a search of its own: what fits is listed in one column with each row's page named beside
 it, the pages at the left count what was found on them, and a row works there as it does on
 its own page, a switch, a choice or a command's keys. These came from the end-to-end design (canvas PLJ1YE4pkaPSHEfKwBv42N, version 7)

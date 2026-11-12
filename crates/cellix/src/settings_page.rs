@@ -856,7 +856,9 @@ impl SettingsPage {
                 let y = below + 6 + 3 * VIEW_SWITCHES.len() as u16;
                 draw_toggle(grid, page, y, NOTIFY, values.notify, theme);
             }
-            Section::Editor => self.draw_editor(grid, page, &spots, values, hover, theme),
+            Section::Editor => {
+                self.draw_editor(grid, page, &spots, values, (hover, measure), theme)
+            }
             Section::Integrations => self.draw_integrations(grid, page, (hover, measure), theme),
             Section::Keyboard => {
                 let state = (&spots[..], values, hover, measure);
@@ -1040,7 +1042,7 @@ impl SettingsPage {
                 }
                 Row::Server(index) => {
                     let place = (y, index, SERVER_DETAIL.1);
-                    self.draw_server(grid, page, place, spots, hover, theme);
+                    self.draw_server(grid, page, place, spots, (hover, measure), theme);
                     let name = SERVERS[index].languages[0];
                     tag(
                         grid,
@@ -1061,7 +1063,7 @@ impl SettingsPage {
                         && let Some((rect, _)) =
                             spots.iter().find(|(r, c)| *c == control && r.y == y)
                     {
-                        draw_button(grid, *rect, label, false, hover, theme);
+                        draw_button(grid, *rect, label, false, (hover, measure), theme);
                     }
                 }
                 Row::Shortcut(index) => {
@@ -1245,7 +1247,7 @@ impl SettingsPage {
                 }
                 for key in &shortcut.keys {
                     let width = measure.width(key, Font::default());
-                    let cap = Bounds::cells(x as f32 - 0.3, y as f32 + 0.12, width + 0.6, 0.76);
+                    let cap = Bounds::cells(x as f32 - 0.6, y as f32 + 0.12, width + 1.2, 0.76);
                     grid.panel(cap, 24, Some(theme.tab.bg), Some(theme.popup_border));
                     x = grid.label(x, y, key, theme.text, keys_end) + 2;
                     if x >= keys_end {
@@ -1290,7 +1292,7 @@ impl SettingsPage {
         page: Rect,
         spots: &[(Rect, Control)],
         values: &Values,
-        hover: Option<(u16, u16)>,
+        (hover, measure): (Option<(u16, u16)>, &dyn Measure),
         theme: &Theme,
     ) {
         heading(
@@ -1354,7 +1356,7 @@ impl SettingsPage {
         for (row, index) in self.server_rows(page).into_iter().enumerate() {
             let y = page.y + SERVERS_ROW + row as u16;
             let place = (y, index, SERVER_DETAIL.0);
-            self.draw_server(grid, page, place, spots, hover, theme);
+            self.draw_server(grid, page, place, spots, (hover, measure), theme);
         }
     }
 
@@ -1366,7 +1368,7 @@ impl SettingsPage {
         page: Rect,
         (y, index, detail): (u16, usize, u16),
         spots: &[(Rect, Control)],
-        hover: Option<(u16, u16)>,
+        (hover, measure): (Option<(u16, u16)>, &dyn Measure),
         theme: &Theme,
     ) {
         let server: &Server = &SERVERS[index];
@@ -1407,15 +1409,24 @@ impl SettingsPage {
             .iter()
             .find(|(_, c)| *c == Control::InstallServer(index));
         if let Some((rect, _)) = spot {
-            // A quiet button until wanted: twenty filled ones in a column would drown the list.
-            let cells = format!("{:^width$}", "Install", width = rect.w as usize);
-            let (fill, fg) = if hovered {
-                (theme.button, theme.button_text)
+            // Words in the accent until its row is pointed at: twenty chips in a column
+            // stood a few pixels apart, a wall beside the list.
+            let (x, wide) = button_place(*rect, "Install", measure);
+            let cells = format!("{:^width$}", "Install", width = wide as usize);
+            if hovered {
+                let style = Style {
+                    fg: theme.button_text,
+                    ..theme.text
+                };
+                grid.button(x, rect.y, &cells, "Install", theme.button, style);
             } else {
-                (theme.quiet_button(theme.text.bg), theme.text.fg)
-            };
-            let style = Style { fg, ..theme.text };
-            grid.button(rect.x, rect.y, &cells, "Install", fill, style);
+                // Its word where Found stands on the rows beside it.
+                let word = Style {
+                    fg: theme.accent,
+                    ..theme.text
+                };
+                grid.label_right(page.right(), y, "Install", word, NOTE_SIZE);
+            }
         }
     }
 
@@ -1449,7 +1460,7 @@ impl SettingsPage {
                 let spot = spots.iter().find(|(_, c)| *c == control);
                 if let Some((rect, _)) = spot {
                     let primary = primary && std::mem::take(&mut primary_left);
-                    draw_button(grid, *rect, label, primary, hover, theme);
+                    draw_button(grid, *rect, label, primary, (hover, measure), theme);
                 }
             }
         }
@@ -1684,12 +1695,22 @@ fn draw_block(
     grid.label(x, top + 1, &detail, quiet, room);
 }
 
+/// As many columns of `rect` as a button with these words takes, from its right end: the
+/// place it's clicked stays `rect`, and the chip is no wider than its words need.
+fn button_place(rect: Rect, label: &str, measure: &dyn Measure) -> (u16, u16) {
+    if measure.in_cells() {
+        return (rect.x, rect.w);
+    }
+    let wide = crate::measures::button_width(label, measure).min(rect.w);
+    (rect.right() - wide, wide)
+}
+
 fn draw_button(
     grid: &mut Grid,
     rect: Rect,
     label: &str,
     primary: bool,
-    hover: Option<(u16, u16)>,
+    (hover, measure): (Option<(u16, u16)>, &dyn Measure),
     theme: &Theme,
 ) {
     let hovered = hover.is_some_and(|h| rect.contains(h.0, h.1));
@@ -1704,8 +1725,9 @@ fn draw_button(
         theme.text.fg
     };
     let style = Style { fg, ..theme.text };
-    let cells = format!("{label:^width$}", width = rect.w as usize);
-    grid.large_button_between(rect.x, rect.y, &cells, label, fill, style);
+    let (x, wide) = button_place(rect, label, measure);
+    let cells = format!("{label:^width$}", width = wide as usize);
+    grid.large_button_between(x, rect.y, &cells, label, fill, style);
 }
 
 #[cfg(test)]
