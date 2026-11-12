@@ -343,7 +343,10 @@ whatever holds it, a panel, a card, a menu, a prompt; a card starts one column f
 edge and is raised over it, as a menu is over the page. A bar that holds a text box, the Find bar
 and a prompt, keeps a quarter of a row clear above and below its rows, which only paint can show,
 and a box's text starts a column inside it. A section's heading is small, bold, quiet capitals
-wherever it is. These came from the end-to-end design (canvas PLJ1YE4pkaPSHEfKwBv42N, version 7)
+wherever it is. Settings has one box that looks through every page, where only its Keyboard page
+had a search of its own: what fits is listed in one column with each row's page named beside
+it, the pages at the left count what was found on them, and a row works there as it does on
+its own page, a switch, a choice or a command's keys. These came from the end-to-end design (canvas PLJ1YE4pkaPSHEfKwBv42N, version 7)
 and the measurements taken of every surface before it was applied: buttons had from 1.4 to 3.6
 columns of room and stood one apart, and a menu's text stood one column in while a dialog's
 stood two. Every sidebar is one width,

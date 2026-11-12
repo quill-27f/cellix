@@ -1,6 +1,6 @@
 use std::sync::mpsc::Receiver;
 
-use cellix_render::{Bounds, Font, Grid, Measure, Rect, Rgb, Style};
+use cellix_render::{Bounds, Font, Grid, Icon, Measure, Rect, Rgb, Style};
 
 use crate::integrations;
 use crate::keys::{self, Shortcut};
@@ -32,10 +32,41 @@ const AUTO_SAVES: [(&str, &str); 3] = [
 const FORMAT_ROW: u16 = 3;
 const AUTO_SAVE_ROW: u16 = 6;
 const READING_ROW: u16 = 9;
-/// The Keyboard section: the search field, the table's heading, and its first row.
-const KEYS_SEARCH_ROW: u16 = 6;
-const KEYS_HEAD_ROW: u16 = 8;
-const KEYS_FIRST_ROW: u16 = 9;
+/// The Keyboard section: the table's heading, and its first row.
+const KEYS_HEAD_ROW: u16 = 6;
+const KEYS_FIRST_ROW: u16 = 7;
+/// Rows the filter's field takes over every page: its own, and one of air under it.
+const FILTER_ROWS: u16 = 2;
+/// Columns at the field's end that clear it.
+const CLEAR_WIDTH: u16 = 3;
+/// What the field says before anything is typed.
+const FILTER_HINT: &str = "Search settings";
+/// Where a language server's program starts on its row, from the page's left: on the Editor
+/// page, and among what the filter found, where its page's name comes first.
+const SERVER_DETAIL: (u16, u16) = (16, 24);
+/// What each switch and choice is called and says, wherever it's drawn.
+const THEME: (&str, &str) = ("Theme", "Follows the terminal, or stays dark or light.");
+const SMOOTH: (&str, &str) = (
+    "Smooth scrolling",
+    "The wheel moves by pixels. Turn this off on a slow link.",
+);
+const MINIMAP: (&str, &str) = ("Minimap", "The file at a glance, when the window has room.");
+const NOTIFY: (&str, &str) = (
+    "Notifications",
+    "When something needs you and Cellix isn't the window in front, the terminal says so.",
+);
+const FORMAT: (&str, &str) = (
+    "Format on save",
+    "Formats code with its language server or formatter as it's saved.",
+);
+const AUTO_SAVE: (&str, &str) = ("Auto save", "Saves on its own.");
+const READING: (&str, &str) = (
+    "Reading width",
+    "Pages keep their text to 88 columns, in the middle of a wider pane.",
+);
+const KEYMAP: (&str, &str) = ("Keymap", "Standard works as in VS Code.");
+/// The theme cards' names as a row of choices has room for them.
+const THEME_SHORT: [(&str, &str); 3] = [("auto", "Auto"), ("dark", "Dark"), ("light", "Light")];
 /// The Source column's width, and the reset button's at the end of a row.
 const SOURCE_WIDTH: u16 = 9;
 const RESET_WIDTH: u16 = 3;
@@ -85,6 +116,8 @@ pub enum Control {
     FormatOnSave,
     AutoSave(&'static str),
     ReadingWidth,
+    /// Empties the filter.
+    ClearFilter,
     /// A command's keys, by its place in `shortcuts`: a click records new ones.
     Shortcut(usize),
     /// Gives a command its own keys back.
@@ -126,38 +159,18 @@ pub struct EditorView {
 /// The switches under the theme cards, in order, with their words.
 fn view_switches(values: &Values) -> [(Control, (&'static str, &'static str), bool); 4] {
     [
-        (
-            Control::WordWrap,
-            (
-                "Word wrap",
-                "Long lines of code wrap at the pane's width. Alt+Z changes one file.",
-            ),
-            values.view.word_wrap,
-        ),
+        (Control::WordWrap, WORD_WRAP, values.view.word_wrap),
         (
             Control::StickyScroll,
-            (
-                "Sticky scroll",
-                "The lines that open the scopes you've scrolled into stay at the top.",
-            ),
+            STICKY_SCROLL,
             values.view.sticky_scroll,
         ),
         (
             Control::BracketPairs,
-            (
-                "Bracket pair colours",
-                "Brackets in code coloured by depth, with the caret's pair marked.",
-            ),
+            BRACKET_PAIRS,
             values.view.bracket_pairs,
         ),
-        (
-            Control::InlayHints,
-            (
-                "Inlay hints",
-                "Types and parameter names inside the lines, from the language server.",
-            ),
-            values.inlay_hints,
-        ),
+        (Control::InlayHints, INLAY_HINTS, values.inlay_hints),
     ]
 }
 
@@ -168,6 +181,94 @@ const VIEW_SWITCHES: [Control; 4] = [
     Control::BracketPairs,
     Control::InlayHints,
 ];
+
+/// One row of what the filter found, whichever page it's from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Row {
+    Theme,
+    /// A switch, by what it does.
+    Switch(Control),
+    AutoSave,
+    Keymap,
+    /// A language server, by its place in `SERVERS`.
+    Server(usize),
+    /// An integration's card, by its place among them.
+    Block(usize),
+    /// A command and its keys, by its place in `shortcuts`.
+    Shortcut(usize),
+}
+
+impl Row {
+    fn section(self) -> Section {
+        match self {
+            Row::Theme => Section::Appearance,
+            Row::Switch(Control::FormatOnSave | Control::ReadingWidth) => Section::Editor,
+            Row::Switch(_) => Section::Appearance,
+            Row::AutoSave | Row::Server(_) => Section::Editor,
+            Row::Block(_) => Section::Integrations,
+            Row::Keymap | Row::Shortcut(_) => Section::Keyboard,
+        }
+    }
+
+    /// Rows it takes, with the air under it.
+    fn rows(self) -> u16 {
+        match self {
+            Row::Server(_) | Row::Shortcut(_) => 1,
+            Row::Block(_) => BLOCK_STEP,
+            _ => 3,
+        }
+    }
+}
+
+/// Every switch in Settings, in the order its pages have them, with its words.
+const SWITCHES: [(Control, (&str, &str)); 9] = [
+    (Control::SmoothScroll, SMOOTH),
+    (Control::Minimap, MINIMAP),
+    (Control::WordWrap, WORD_WRAP),
+    (Control::StickyScroll, STICKY_SCROLL),
+    (Control::BracketPairs, BRACKET_PAIRS),
+    (Control::InlayHints, INLAY_HINTS),
+    (Control::Notify, NOTIFY),
+    (Control::FormatOnSave, FORMAT),
+    (Control::ReadingWidth, READING),
+];
+const WORD_WRAP: (&str, &str) = (
+    "Word wrap",
+    "Long lines of code wrap at the pane's width. Alt+Z changes one file.",
+);
+const STICKY_SCROLL: (&str, &str) = (
+    "Sticky scroll",
+    "The lines that open the scopes you've scrolled into stay at the top.",
+);
+const BRACKET_PAIRS: (&str, &str) = (
+    "Bracket pair colours",
+    "Brackets in code coloured by depth, with the caret's pair marked.",
+);
+const INLAY_HINTS: (&str, &str) = (
+    "Inlay hints",
+    "Types and parameter names inside the lines, from the language server.",
+);
+
+/// Whether a switch is on, as the settings stand.
+fn switch_on(control: Control, values: &Values) -> bool {
+    match control {
+        Control::SmoothScroll => values.smooth_scroll,
+        Control::Minimap => values.minimap,
+        Control::WordWrap => values.view.word_wrap,
+        Control::StickyScroll => values.view.sticky_scroll,
+        Control::BracketPairs => values.view.bracket_pairs,
+        Control::InlayHints => values.inlay_hints,
+        Control::Notify => values.notify,
+        Control::FormatOnSave => values.format_on_save,
+        Control::ReadingWidth => values.reading_width,
+        _ => false,
+    }
+}
+
+/// What a section is called.
+fn section_name(section: Section) -> &'static str {
+    SECTIONS.iter().find(|s| s.1 == section).map_or("", |s| s.0)
+}
 
 /// What was found on this machine. Looking touches the disk, so it happens on opening and
 /// after a change rather than every frame.
@@ -238,9 +339,11 @@ pub struct SettingsPage {
     pub installing: Option<Receiver<String>>,
     /// Every command and its keys, as the Keyboard section lists them.
     pub shortcuts: Vec<Shortcut>,
-    /// What's typed in the Keyboard section's search.
-    pub keys_query: String,
-    /// The first command in view there.
+    /// What's typed in the filter, which narrows the rows of every page to those that fit.
+    pub filter: String,
+    /// The first of what it found that's in view.
+    pub found_top: usize,
+    /// The first command in view in the Keyboard section.
     pub keys_top: usize,
     /// A command whose new keys are being pressed, and those pressed so far.
     pub recording: Option<(usize, Option<String>)>,
@@ -256,15 +359,16 @@ impl SettingsPage {
             top: 0,
             installing: None,
             shortcuts: Vec::new(),
-            keys_query: String::new(),
+            filter: String::new(),
+            found_top: 0,
             keys_top: 0,
             recording: None,
         }
     }
 
-    /// The commands that fit the search, by their place in `shortcuts`.
+    /// The commands that fit the filter, by their place in `shortcuts`: by name, or by keys.
     pub fn shown_shortcuts(&self) -> Vec<usize> {
-        let query = &self.keys_query;
+        let query = &self.filter;
         let fits = |(_, s): &(usize, &Shortcut)| keys::matches(s, query);
         self.shortcuts
             .iter()
@@ -272,6 +376,96 @@ impl SettingsPage {
             .filter(fits)
             .map(|(i, _)| i)
             .collect()
+    }
+
+    /// Whether something is typed in the filter, so the rows it found stand in the page's place.
+    pub fn filtering(&self) -> bool {
+        !self.filter.trim().is_empty()
+    }
+
+    /// Every row of every page that fits the filter, in the pages' order: a switch or choice
+    /// by its name or what it says, a language server by its language or program, an
+    /// integration by its name and state, a command by its name or keys.
+    fn found_rows(&self) -> Vec<Row> {
+        let query = self.filter.trim().to_lowercase();
+        let fits = |texts: &[&str]| texts.iter().any(|t| t.to_lowercase().contains(&query));
+        let pair = |(name, says): (&str, &str)| fits(&[name, says]);
+        let mut rows = Vec::new();
+        if pair(THEME) || fits(&["dark", "light"]) {
+            rows.push(Row::Theme);
+        }
+        let switches = |section: Section, rows: &mut Vec<Row>| {
+            for (control, words) in SWITCHES {
+                if Row::Switch(control).section() == section && pair(words) {
+                    rows.push(Row::Switch(control));
+                }
+            }
+        };
+        switches(Section::Appearance, &mut rows);
+        // The Editor page has Auto save between its two switches.
+        if pair(FORMAT) {
+            rows.push(Row::Switch(Control::FormatOnSave));
+        }
+        if pair(AUTO_SAVE) || AUTO_SAVES.iter().any(|a| fits(&[a.1])) {
+            rows.push(Row::AutoSave);
+        }
+        if pair(READING) {
+            rows.push(Row::Switch(Control::ReadingWidth));
+        }
+        for (index, server) in SERVERS.iter().enumerate() {
+            if fits(server.languages) || fits(&[server.command[0]]) {
+                rows.push(Row::Server(index));
+            }
+        }
+        for (index, block) in self.blocks().iter().enumerate() {
+            if fits(&[block.name, block.state, block.detail]) {
+                rows.push(Row::Block(index));
+            }
+        }
+        if pair(KEYMAP) || KEYMAPS.iter().any(|k| fits(&[k.1])) {
+            rows.push(Row::Keymap);
+        }
+        rows.extend(self.shown_shortcuts().into_iter().map(Row::Shortcut));
+        rows
+    }
+
+    /// How many rows of each page the filter found.
+    fn found_in(&self, section: Section) -> usize {
+        let rows = self.found_rows();
+        rows.iter().filter(|r| r.section() == section).count()
+    }
+
+    /// The first of what the filter found on a page, as a place to scroll to.
+    pub fn first_found_in(&self, section: Section) -> Option<usize> {
+        self.found_rows()
+            .iter()
+            .position(|r| r.section() == section)
+    }
+
+    /// What the filter found that's in view, each with its row. A run of one-row rows keeps
+    /// a row of air from a taller one after it.
+    fn found_layout(&self, page: Rect) -> Vec<(Row, u16)> {
+        let mut placed = Vec::new();
+        let mut y = page.y;
+        let mut short = false;
+        for row in self.found_rows().into_iter().skip(self.found_top) {
+            if short && row.rows() > 1 {
+                y += 1;
+            }
+            if y + row.rows().min(2) > page.bottom() {
+                break;
+            }
+            placed.push((row, y));
+            short = row.rows() == 1;
+            y += row.rows();
+        }
+        placed
+    }
+
+    /// The filter's field, over every page.
+    fn filter_field(area: Rect) -> Rect {
+        let page = Self::content(area);
+        Rect::new(page.x, page.y - FILTER_ROWS, page.w, 1)
     }
 
     /// The shortcut rows in view: each one's row, and its place in `shortcuts`.
@@ -296,6 +490,11 @@ impl SettingsPage {
     }
 
     pub fn scroll_by(&mut self, delta: isize) {
+        if self.filtering() {
+            let last = self.found_rows().len().saturating_sub(1) as isize;
+            self.found_top = (self.found_top as isize + delta).clamp(0, last) as usize;
+            return;
+        }
         if self.section == Section::Keyboard {
             let last = self.shown_shortcuts().len().saturating_sub(1) as isize;
             self.keys_top = (self.keys_top as isize + delta).clamp(0, last) as usize;
@@ -421,10 +620,10 @@ impl SettingsPage {
         }
     }
 
-    /// Where the page's content goes, under the tabs.
+    /// Where the page's content goes, under the tabs and the filter's field.
     fn content(area: Rect) -> Rect {
         let side = if area.w >= SIDE_NAV { NAV_WIDTH + 2 } else { 0 };
-        let top = area.y + if side > 0 { 2 } else { 4 };
+        let top = area.y + FILTER_ROWS + if side > 0 { 2 } else { 4 };
         let left = area.x + side + 2;
         let width = area.right().saturating_sub(left + 2).min(MAX_WIDTH);
         Rect::new(left, top, width, area.bottom().saturating_sub(top))
@@ -445,6 +644,18 @@ impl SettingsPage {
             spots.push((rect, Control::Section(*section)));
         }
         let page = Self::content(area);
+        if self.filtering() {
+            let field = Self::filter_field(area);
+            let clear = Rect::new(
+                field.right().saturating_sub(CLEAR_WIDTH),
+                field.y,
+                CLEAR_WIDTH,
+                1,
+            );
+            spots.push((clear, Control::ClearFilter));
+            self.found_controls(page, &mut spots);
+            return spots;
+        }
         match self.section {
             Section::Appearance => {
                 let card = CARD_WIDTH.min(page.w.saturating_sub(4) / 3);
@@ -514,6 +725,58 @@ impl SettingsPage {
         spots
     }
 
+    /// The controls of what the filter found, each on the row it's laid out at.
+    fn found_controls(&self, page: Rect, spots: &mut Vec<(Rect, Control)>) {
+        let segments = |y: u16, width: u16, spots: &mut Vec<(Rect, Control)>, of: [Control; 3]| {
+            let start = page.right().saturating_sub(width * 3);
+            for (i, control) in of.into_iter().enumerate() {
+                let rect = Rect::new(start + i as u16 * width, y, width, 1);
+                spots.push((rect, control));
+            }
+        };
+        let blocks = self.blocks();
+        for (row, y) in self.found_layout(page) {
+            match row {
+                Row::Theme => {
+                    let of = THEMES.map(|t| Control::Theme(t.0));
+                    segments(y, SEGMENT_WIDTH, spots, of);
+                }
+                Row::Switch(control) => spots.push((Rect::new(page.x, y, page.w, 2), control)),
+                Row::AutoSave => {
+                    let of = AUTO_SAVES.map(|a| Control::AutoSave(a.0));
+                    segments(y, AUTO_SAVE_WIDTH, spots, of);
+                }
+                Row::Keymap => {
+                    let of = KEYMAPS.map(|k| Control::Keymap(k.0));
+                    segments(y, SEGMENT_WIDTH, spots, of);
+                }
+                Row::Server(index) => {
+                    if !self.found.servers.get(index).copied().unwrap_or(false) {
+                        let x = page.right().saturating_sub(INSTALL_WIDTH);
+                        let rect = Rect::new(x, y, INSTALL_WIDTH, 1);
+                        spots.push((rect, Control::InstallServer(index)));
+                    }
+                }
+                Row::Block(index) => {
+                    if let Some((_, _, control)) = blocks[index].action {
+                        let x = page.right().saturating_sub(BUTTON_WIDTH + 2);
+                        spots.push((Rect::new(x, y, BUTTON_WIDTH, 2), control));
+                    }
+                }
+                Row::Shortcut(index) => {
+                    let (keys_x, source_x) = Self::key_columns(page);
+                    let width = source_x.saturating_sub(keys_x + 1);
+                    spots.push((Rect::new(keys_x, y, width, 1), Control::Shortcut(index)));
+                    if self.shortcuts[index].user {
+                        let x = page.right().saturating_sub(RESET_WIDTH);
+                        let rect = Rect::new(x, y, RESET_WIDTH, 1);
+                        spots.push((rect, Control::ResetShortcut(index)));
+                    }
+                }
+            }
+        }
+    }
+
     /// The servers that fit on the page, by their place in `SERVERS`.
     fn server_rows(&self, page: Rect) -> Vec<usize> {
         let room = page.h.saturating_sub(SERVERS_ROW) as usize;
@@ -562,6 +825,13 @@ impl SettingsPage {
             }
         }
         let page = Self::content(area);
+        self.draw_filter(grid, area, (hover, measure), theme);
+        if self.filtering() {
+            let state = (&spots[..], values, hover, measure);
+            self.draw_found(grid, page, state, theme);
+            self.draw_focus(grid, &spots, theme);
+            return;
+        }
         match self.section {
             Section::Appearance => {
                 heading(
@@ -578,22 +848,13 @@ impl SettingsPage {
                     }
                 }
                 let below = page.y + 3 + CARD_HEIGHT + 2;
-                let smooth = (
-                    "Smooth scrolling",
-                    "The wheel moves by pixels. Turn this off on a slow link.",
-                );
-                draw_toggle(grid, page, below, smooth, values.smooth_scroll, theme);
-                let minimap = ("Minimap", "The file at a glance, when the window has room.");
-                draw_toggle(grid, page, below + 3, minimap, values.minimap, theme);
+                draw_toggle(grid, page, below, SMOOTH, values.smooth_scroll, theme);
+                draw_toggle(grid, page, below + 3, MINIMAP, values.minimap, theme);
                 for (i, (_, text, on)) in view_switches(values).into_iter().enumerate() {
                     draw_toggle(grid, page, below + 6 + 3 * i as u16, text, on, theme);
                 }
-                let notify = (
-                    "Notifications",
-                    "When something needs you and Cellix isn't the window in front, the terminal says so.",
-                );
                 let y = below + 6 + 3 * VIEW_SWITCHES.len() as u16;
-                draw_toggle(grid, page, y, notify, values.notify, theme);
+                draw_toggle(grid, page, y, NOTIFY, values.notify, theme);
             }
             Section::Editor => self.draw_editor(grid, page, &spots, values, hover, theme),
             Section::Integrations => self.draw_integrations(grid, page, (hover, measure), theme),
@@ -602,12 +863,219 @@ impl SettingsPage {
                 self.draw_keyboard(grid, page, state, theme);
             }
         }
+        self.draw_focus(grid, &spots, theme);
+    }
+
+    /// The ring round the control the keyboard is on.
+    fn draw_focus(&self, grid: &mut Grid, spots: &[(Rect, Control)], theme: &Theme) {
         // A row taking new keys has its own outline: a second ring would only blur it.
         let ringed = self.focus.and_then(|f| spots.get(f));
         let ringed = ringed.filter(|_| self.recording.is_none());
         if let Some((rect, _)) = ringed {
             let ring = Bounds::inset(*rect, -0.15, -0.1);
             grid.panel(ring, RADIUS, None, Some(theme.focus));
+        }
+    }
+
+    /// The filter's field over every page: what's typed, how many rows fit it, and an ×
+    /// that empties it. Typing anywhere in Settings lands here, so the caret is always in it.
+    fn draw_filter(
+        &self,
+        grid: &mut Grid,
+        area: Rect,
+        (hover, measure): (Option<(u16, u16)>, &dyn Measure),
+        theme: &Theme,
+    ) {
+        let field = Self::filter_field(area);
+        let y = field.y;
+        let bounds = Bounds::cells(field.x as f32, y as f32 + 0.06, field.w as f32, 0.88);
+        grid.panel(bounds, 18, Some(theme.input), Some(theme.focus));
+        let quiet = Style {
+            fg: theme.gutter.fg,
+            ..theme.text
+        };
+        let icon = field.x as f32 + 0.6;
+        grid.glyph(icon, y, Icon::Search, theme.gutter.fg, "⌕", theme.text);
+        let (text, cell) = (icon + 2.3, field.x + 4);
+        let mut end = field.right().saturating_sub(1);
+        if self.filtering() {
+            let count = match self.found_rows().len() {
+                0 => "No settings".to_string(),
+                1 => "1 setting".to_string(),
+                n => format!("{n} settings"),
+            };
+            let clear = Rect::new(field.right().saturating_sub(CLEAR_WIDTH), y, CLEAR_WIDTH, 1);
+            let on = hover.is_some_and(|h| clear.contains(h.0, h.1));
+            let colour = if on { theme.text.fg } else { theme.gutter.fg };
+            grid.glyph(
+                clear.x as f32 + 0.5,
+                y,
+                Icon::Close,
+                colour,
+                "×",
+                theme.text,
+            );
+            let right = clear.x.saturating_sub(1);
+            grid.label_right(right, y, &count, quiet, NOTE_SIZE);
+            end = right.saturating_sub(count.chars().count() as u16 + 1);
+        }
+        if self.filter.is_empty() {
+            grid.label_at(text + 0.4, cell, y, FILTER_HINT, quiet, end, 100);
+        } else {
+            grid.label_at(text, cell, y, &self.filter, theme.text, end, 100);
+        }
+        if self.recording.is_none() {
+            // Where the text really ends, which proportional letters make short of its cells.
+            let caret = text + measure.width(&self.filter, Font::default());
+            grid.set_caret(caret, y, 0.56);
+        }
+    }
+
+    /// What the filter found, in the page's place: each row as its own page draws it, with
+    /// that page's name beside its own.
+    #[allow(clippy::type_complexity)]
+    fn draw_found(
+        &self,
+        grid: &mut Grid,
+        page: Rect,
+        (spots, values, hover, measure): (
+            &[(Rect, Control)],
+            &Values,
+            Option<(u16, u16)>,
+            &dyn Measure,
+        ),
+        theme: &Theme,
+    ) {
+        let placed = self.found_layout(page);
+        if placed.is_empty() {
+            let quiet = Style {
+                fg: theme.gutter.fg,
+                ..theme.text
+            };
+            let none = "Nothing in Settings fits that. Esc clears it.";
+            grid.label(page.x, page.y, none, quiet, page.right());
+            return;
+        }
+        let bold = Font {
+            bold: true,
+            ..Font::default()
+        };
+        // The page a row is from, after its name, when there's room before what follows.
+        let tag = |grid: &mut Grid, (name, font): (&str, Font), (y, stop): (u16, u16), row: Row| {
+            let quiet = Style {
+                fg: theme.gutter.fg,
+                ..theme.text
+            };
+            let word = section_name(row.section());
+            let x = page.x as f32 + measure.width(name, font) + 1.0;
+            let size = Font {
+                size: NOTE_SIZE,
+                ..Font::default()
+            };
+            if x + measure.width(word, size) + 1.0 <= f32::from(stop) {
+                grid.label_at(x, x.ceil() as u16, y, word, quiet, stop, NOTE_SIZE);
+            }
+        };
+        let rule = |grid: &mut Grid, y: u16| {
+            let above = Bounds::cells(page.x as f32, y as f32 - 0.5, page.w as f32, 0.0);
+            grid.hairline(above, theme.border);
+        };
+        let segments =
+            |grid: &mut Grid, y: u16, label: &dyn Fn(Control) -> Option<(&'static str, bool)>| {
+                for (rect, control) in spots.iter().filter(|(r, _)| r.y == y && r.h == 1) {
+                    if let Some((word, on)) = label(*control) {
+                        draw_segment(grid, *rect, word, on, theme);
+                    }
+                }
+            };
+        let shared = keys::sharing(&self.shortcuts);
+        let blocks = self.blocks();
+        for (row, y) in placed {
+            match row {
+                Row::Theme => {
+                    rule(grid, y);
+                    let room = page.right().saturating_sub(SEGMENT_WIDTH * 3 + 1);
+                    draw_text(grid, page, (y, room), THEME, theme);
+                    tag(grid, (THEME.0, bold), (y, room), row);
+                    segments(grid, y, &|control| match control {
+                        Control::Theme(name) => {
+                            let word = THEME_SHORT.iter().find(|t| t.0 == name)?.1;
+                            Some((word, values.theme == name))
+                        }
+                        _ => None,
+                    });
+                }
+                Row::Switch(control) => {
+                    let words = SWITCHES.iter().find(|s| s.0 == control).map(|s| s.1);
+                    let words = words.unwrap_or_default();
+                    draw_toggle(grid, page, y, words, switch_on(control, values), theme);
+                    let stop = page.right().saturating_sub(TOGGLE_WIDTH.ceil() as u16 + 2);
+                    tag(grid, (words.0, bold), (y, stop), row);
+                }
+                Row::AutoSave => {
+                    rule(grid, y);
+                    let room = page.right().saturating_sub(AUTO_SAVE_WIDTH * 3 + 1);
+                    draw_text(grid, page, (y, room), AUTO_SAVE, theme);
+                    tag(grid, (AUTO_SAVE.0, bold), (y, room), row);
+                    segments(grid, y, &|control| match control {
+                        Control::AutoSave(name) => {
+                            let word = AUTO_SAVES.iter().find(|a| a.0 == name)?.1;
+                            Some((word, values.auto_save == name))
+                        }
+                        _ => None,
+                    });
+                }
+                Row::Keymap => {
+                    rule(grid, y);
+                    let room = page.right().saturating_sub(SEGMENT_WIDTH * 3 + 1);
+                    draw_text(grid, page, (y, room), KEYMAP, theme);
+                    tag(grid, (KEYMAP.0, bold), (y, room), row);
+                    segments(grid, y, &|control| match control {
+                        Control::Keymap(name) => {
+                            let word = KEYMAPS.iter().find(|k| k.0 == name)?.1;
+                            Some((word, values.keymap == name))
+                        }
+                        _ => None,
+                    });
+                }
+                Row::Server(index) => {
+                    let place = (y, index, SERVER_DETAIL.1);
+                    self.draw_server(grid, page, place, spots, hover, theme);
+                    let name = SERVERS[index].languages[0];
+                    tag(
+                        grid,
+                        (name, Font::default()),
+                        (y, page.x + SERVER_DETAIL.1 - 1),
+                        row,
+                    );
+                }
+                Row::Block(index) => {
+                    let block = &blocks[index];
+                    let colour = match block.tone {
+                        Tone::Good => theme.git_added,
+                        Tone::Quiet => theme.gutter.fg,
+                    };
+                    let text = (block.name, block.state, colour);
+                    draw_block(grid, page, (y, measure), text, block.detail, theme);
+                    if let Some((label, _, control)) = block.action
+                        && let Some((rect, _)) =
+                            spots.iter().find(|(r, c)| *c == control && r.y == y)
+                    {
+                        draw_button(grid, *rect, label, false, hover, theme);
+                    }
+                }
+                Row::Shortcut(index) => {
+                    self.draw_shortcut(grid, page, (y, index), (hover, measure, &shared), theme);
+                    let (keys_x, _) = Self::key_columns(page);
+                    let name = self.shortcuts[index].name;
+                    tag(
+                        grid,
+                        (name, Font::default()),
+                        (y, keys_x.saturating_sub(2)),
+                        row,
+                    );
+                }
+            }
         }
     }
 
@@ -619,8 +1087,11 @@ impl SettingsPage {
         hovered: bool,
         theme: &Theme,
     ) {
-        let on = self.section == section;
-        let name = SECTIONS.iter().find(|s| s.1 == section).map_or("", |s| s.0);
+        // With a filter typed no page is the one showing: each says how many of its rows fit.
+        let filtering = self.filtering();
+        let found = if filtering { self.found_in(section) } else { 0 };
+        let on = self.section == section && !filtering;
+        let name = section_name(section);
         let wash = if on {
             Some(theme.tint)
         } else {
@@ -629,12 +1100,29 @@ impl SettingsPage {
         if let Some(fill) = wash {
             grid.panel(Bounds::inset(rect, 0.0, 0.055), 18, Some(fill), None);
         }
-        let style = Style {
-            fg: if on { theme.accent } else { theme.text.fg },
-            ..theme.text
+        let fg = match (on, filtering && found == 0) {
+            (true, _) => theme.accent,
+            (false, true) => theme.gutter.fg,
+            (false, false) => theme.text.fg,
         };
+        let style = Style { fg, ..theme.text };
         let x = rect.x as f32 + 1.0;
         grid.label_at(x, rect.x + 1, rect.y, name, style, rect.right(), 100);
+        // Beside the name where the sections run down the side; across the top there's no room.
+        if found > 0 && rect.w >= NAV_WIDTH {
+            let quiet = Style {
+                fg: theme.gutter.fg,
+                ..theme.text
+            };
+            let count = found.to_string();
+            grid.label_right(
+                rect.right().saturating_sub(1),
+                rect.y,
+                &count,
+                quiet,
+                NOTE_SIZE,
+            );
+        }
     }
 
     /// Every command and its keys, searchable, with a click to set new ones.
@@ -659,8 +1147,7 @@ impl SettingsPage {
             theme,
         );
         let room = page.right().saturating_sub(SEGMENT_WIDTH * 3 + 1);
-        let keymap = ("Keymap", "Standard works as in VS Code.");
-        draw_text(grid, page, (page.y + 3, room), keymap, theme);
+        draw_text(grid, page, (page.y + 3, room), KEYMAP, theme);
         for (rect, control) in spots {
             if let Control::Keymap(name) = control {
                 let label = KEYMAPS.iter().find(|k| k.0 == *name).map_or("", |k| k.1);
@@ -671,31 +1158,6 @@ impl SettingsPage {
             fg: theme.gutter.fg,
             ..theme.text
         };
-        // The search field, a row of its own.
-        let y = page.y + KEYS_SEARCH_ROW;
-        let field = Bounds::cells(page.x as f32, y as f32 + 0.06, page.w as f32, 0.88);
-        grid.panel(field, 18, Some(theme.input), Some(theme.popup_border));
-        let shown = self.shown_shortcuts().len();
-        let count = match shown {
-            1 => "1 command".to_string(),
-            n => format!("{n} commands"),
-        };
-        grid.label_right(page.right().saturating_sub(1), y, &count, quiet, NOTE_SIZE);
-        let end = page.right().saturating_sub(count.len() as u16 + 3);
-        if self.keys_query.is_empty() {
-            grid.label(
-                page.x + 1,
-                y,
-                "Search commands or keys, as Ctrl+R",
-                quiet,
-                end,
-            );
-        } else {
-            grid.label(page.x + 1, y, &self.keys_query, theme.text, end);
-            // Where the text really ends, which proportional letters make short of its cells.
-            let caret = f32::from(page.x + 1) + measure.width(&self.keys_query, Font::default());
-            grid.set_caret(caret, y, 0.56);
-        }
         let (keys_x, source_x) = Self::key_columns(page);
         let head = Style {
             bold: true,
@@ -717,90 +1179,108 @@ impl SettingsPage {
         grid.hairline(under, theme.border);
         let shared = keys::sharing(&self.shortcuts);
         for (y, index) in self.shortcut_rows(page) {
-            let shortcut = &self.shortcuts[index];
-            let row = Rect::new(page.x, y, page.w, 1);
-            if hover.is_some_and(|h| row.contains(h.0, h.1)) {
-                let wash = Bounds::cells(
-                    page.x as f32 - 0.6,
-                    y as f32 + 0.055,
-                    page.w as f32 + 1.2,
-                    0.89,
-                );
-                grid.panel(wash, 18, Some(theme.page_hover), None);
-            }
-            grid.label(
-                page.x,
-                y,
-                shortcut.name,
-                theme.text,
-                keys_x.saturating_sub(1),
+            self.draw_shortcut(grid, page, (y, index), (hover, measure, &shared), theme);
+        }
+    }
+
+    /// One command's row: its name, its keys or the keys being pressed for it, and whether
+    /// they're its own or the person's, with a way back to its own.
+    fn draw_shortcut(
+        &self,
+        grid: &mut Grid,
+        page: Rect,
+        (y, index): (u16, usize),
+        (hover, measure, shared): Shown<'_>,
+        theme: &Theme,
+    ) {
+        let quiet = Style {
+            fg: theme.gutter.fg,
+            ..theme.text
+        };
+        let (keys_x, source_x) = Self::key_columns(page);
+        let shortcut = &self.shortcuts[index];
+        let row = Rect::new(page.x, y, page.w, 1);
+        if hover.is_some_and(|h| row.contains(h.0, h.1)) {
+            let wash = Bounds::cells(
+                page.x as f32 - 0.6,
+                y as f32 + 0.055,
+                page.w as f32 + 1.2,
+                0.89,
             );
-            let keys_end = source_x.saturating_sub(1);
-            match &self.recording {
-                Some((recording, pressed)) if *recording == index => {
-                    // One outline, inside the row, the keys on their column with air before.
-                    let box_ = Bounds::cells(
-                        keys_x as f32 - 1.0,
-                        y as f32 + 0.1,
-                        (keys_end - keys_x) as f32 + 1.0,
-                        0.8,
-                    );
-                    grid.panel(box_, 18, Some(theme.input), Some(theme.focus));
-                    match pressed {
-                        Some(keys) => grid.label(keys_x, y, keys, theme.text, keys_end),
-                        None => grid.label(keys_x, y, "Press the keys", quiet, keys_end),
-                    };
-                    let hint = if pressed.is_some() {
-                        "Enter saves · Esc cancels"
-                    } else {
-                        "Esc cancels"
-                    };
-                    grid.label_right(keys_end.saturating_sub(1), y, hint, quiet, NOTE_SIZE);
+            grid.panel(wash, 18, Some(theme.page_hover), None);
+        }
+        grid.label(
+            page.x,
+            y,
+            shortcut.name,
+            theme.text,
+            keys_x.saturating_sub(1),
+        );
+        let keys_end = source_x.saturating_sub(1);
+        match &self.recording {
+            Some((recording, pressed)) if *recording == index => {
+                // One outline, inside the row, the keys on their column with air before.
+                let box_ = Bounds::cells(
+                    keys_x as f32 - 1.0,
+                    y as f32 + 0.1,
+                    (keys_end - keys_x) as f32 + 1.0,
+                    0.8,
+                );
+                grid.panel(box_, 18, Some(theme.input), Some(theme.focus));
+                match pressed {
+                    Some(keys) => grid.label(keys_x, y, keys, theme.text, keys_end),
+                    None => grid.label(keys_x, y, "Press the keys", quiet, keys_end),
+                };
+                let hint = if pressed.is_some() {
+                    "Enter saves · Esc cancels"
+                } else {
+                    "Esc cancels"
+                };
+                grid.label_right(keys_end.saturating_sub(1), y, hint, quiet, NOTE_SIZE);
+            }
+            _ => {
+                let mut x = keys_x;
+                if shortcut.keys.is_empty() {
+                    grid.label(x, y, "—", quiet, keys_end);
                 }
-                _ => {
-                    let mut x = keys_x;
-                    if shortcut.keys.is_empty() {
-                        grid.label(x, y, "—", quiet, keys_end);
+                for key in &shortcut.keys {
+                    let width = measure.width(key, Font::default());
+                    let cap = Bounds::cells(x as f32 - 0.3, y as f32 + 0.12, width + 0.6, 0.76);
+                    grid.panel(cap, 24, Some(theme.tab.bg), Some(theme.popup_border));
+                    x = grid.label(x, y, key, theme.text, keys_end) + 2;
+                    if x >= keys_end {
+                        break;
                     }
-                    for key in &shortcut.keys {
-                        let width = measure.width(key, Font::default());
-                        let cap = Bounds::cells(x as f32 - 0.3, y as f32 + 0.12, width + 0.6, 0.76);
-                        grid.panel(cap, 24, Some(theme.tab.bg), Some(theme.popup_border));
-                        x = grid.label(x, y, key, theme.text, keys_end) + 2;
-                        if x >= keys_end {
-                            break;
-                        }
-                    }
-                    let clash = shortcut.keys.iter().filter_map(|k| shared.get(k)).max();
-                    if let Some(&many) = clash.filter(|n| **n > 1) {
-                        let warn = Style {
-                            fg: theme.attention,
-                            ..theme.text
-                        };
-                        grid.label(x, y, &format!("⚠ {many} commands"), warn, keys_end);
-                    }
+                }
+                let clash = shortcut.keys.iter().filter_map(|k| shared.get(k)).max();
+                if let Some(&many) = clash.filter(|n| **n > 1) {
+                    let warn = Style {
+                        fg: theme.attention,
+                        ..theme.text
+                    };
+                    grid.label(x, y, &format!("⚠ {many} commands"), warn, keys_end);
                 }
             }
-            let (source, tone) = if shortcut.user {
-                ("User", theme.accent)
-            } else {
-                ("Default", theme.gutter.fg)
-            };
+        }
+        let (source, tone) = if shortcut.user {
+            ("User", theme.accent)
+        } else {
+            ("Default", theme.gutter.fg)
+        };
+        let style = Style {
+            fg: tone,
+            ..theme.text
+        };
+        grid.label(source_x, y, source, style, page.right());
+        if shortcut.user {
+            let x = page.right().saturating_sub(RESET_WIDTH);
+            let reset = Rect::new(x, y, RESET_WIDTH, 1);
+            let on = hover.is_some_and(|h| reset.contains(h.0, h.1));
             let style = Style {
-                fg: tone,
+                fg: if on { theme.text.fg } else { theme.gutter.fg },
                 ..theme.text
             };
-            grid.label(source_x, y, source, style, page.right());
-            if shortcut.user {
-                let x = page.right().saturating_sub(RESET_WIDTH);
-                let reset = Rect::new(x, y, RESET_WIDTH, 1);
-                let on = hover.is_some_and(|h| reset.contains(h.0, h.1));
-                let style = Style {
-                    fg: if on { theme.text.fg } else { theme.gutter.fg },
-                    ..theme.text
-                };
-                grid.label(x + 1, y, "↺", style, page.right());
-            }
+            grid.label(x + 1, y, "↺", style, page.right());
         }
     }
 
@@ -820,15 +1300,11 @@ impl SettingsPage {
             "How files save, how pages are set, and the languages.",
             theme,
         );
-        let format = (
-            "Format on save",
-            "Formats code with its language server or formatter as it's saved.",
-        );
         draw_toggle(
             grid,
             page,
             page.y + FORMAT_ROW,
-            format,
+            FORMAT,
             values.format_on_save,
             theme,
         );
@@ -836,8 +1312,7 @@ impl SettingsPage {
         let above = Bounds::cells(page.x as f32, y as f32 - 0.5, page.w as f32, 0.0);
         grid.hairline(above, theme.border);
         let room = page.right().saturating_sub(AUTO_SAVE_WIDTH * 3 + 1);
-        let auto = ("Auto save", "Saves on its own.");
-        draw_text(grid, page, (y, room), auto, theme);
+        draw_text(grid, page, (y, room), AUTO_SAVE, theme);
         for (rect, control) in spots {
             if let Control::AutoSave(name) = control {
                 let label = AUTO_SAVES.iter().find(|a| a.0 == *name).map_or("", |a| a.1);
@@ -847,11 +1322,7 @@ impl SettingsPage {
         let y = page.y + READING_ROW;
         let above = Bounds::cells(page.x as f32, y as f32 - 0.5, page.w as f32, 0.0);
         grid.hairline(above, theme.border);
-        let reading = (
-            "Reading width",
-            "Pages keep their text to 88 columns, in the middle of a wider pane.",
-        );
-        draw_toggle(grid, page, y, reading, values.reading_width, theme);
+        draw_toggle(grid, page, y, READING, values.reading_width, theme);
         let line_y = page.y + SERVERS_ROW - 1;
         let above = Bounds::cells(page.x as f32, line_y as f32 - 0.5, page.w as f32, 0.0);
         grid.hairline(above, theme.border);
@@ -882,16 +1353,18 @@ impl SettingsPage {
         grid.label_right(page.right(), line_y, &found, plain, NOTE_SIZE);
         for (row, index) in self.server_rows(page).into_iter().enumerate() {
             let y = page.y + SERVERS_ROW + row as u16;
-            self.draw_server(grid, page, (y, index), spots, hover, theme);
+            let place = (y, index, SERVER_DETAIL.0);
+            self.draw_server(grid, page, place, spots, hover, theme);
         }
     }
 
-    /// One server: its languages and program, and whether it's here or a click from it.
+    /// One server: its languages and program, the program starting `detail` columns in, and
+    /// whether it's here or a click from it.
     fn draw_server(
         &self,
         grid: &mut Grid,
         page: Rect,
-        (y, index): (u16, usize),
+        (y, index, detail): (u16, usize, u16),
         spots: &[(Rect, Control)],
         hover: Option<(u16, u16)>,
         theme: &Theme,
@@ -912,15 +1385,15 @@ impl SettingsPage {
             fg: theme.gutter.fg,
             ..theme.text
         };
-        grid.label(page.x, y, server.languages[0], theme.text, page.x + 16);
+        grid.label(page.x, y, server.languages[0], theme.text, page.x + detail);
         let found = self.found.servers.get(index).copied().unwrap_or(false);
         // Hovering a missing server shows what its button will run.
         let end = page.right().saturating_sub(INSTALL_WIDTH + 1);
         if hovered && !found {
             let runs = format!("Runs {}", server.install);
-            grid.label(page.x + 16, y, &runs, theme.text, end);
+            grid.label(page.x + detail, y, &runs, theme.text, end);
         } else {
-            grid.label(page.x + 16, y, server.command[0], quiet, end);
+            grid.label(page.x + detail, y, server.command[0], quiet, end);
         }
         if found {
             let state = Style {
@@ -969,14 +1442,8 @@ impl SettingsPage {
                 Tone::Quiet => theme.gutter.fg,
             };
             let text = (block.name, block.state, color);
-            draw_block(
-                grid,
-                page,
-                (index as u16, measure),
-                text,
-                block.detail,
-                theme,
-            );
+            let top = page.y + 3 + index as u16 * BLOCK_STEP;
+            draw_block(grid, page, (top, measure), text, block.detail, theme);
             if let Some((label, primary, control)) = block.action {
                 let spots = self.controls_at(page);
                 let spot = spots.iter().find(|(_, c)| *c == control);
@@ -1045,6 +1512,14 @@ fn draw_text(
     grid.label(page.x, y, title, name, room);
     grid.label(page.x, y + 1, detail, quiet, room);
 }
+
+/// What a command's row is drawn with: the pointer, the text's measure, and how many
+/// commands each set of keys is bound to, which marks keys two commands share.
+type Shown<'a> = (
+    Option<(u16, u16)>,
+    &'a dyn Measure,
+    &'a std::collections::HashMap<String, usize>,
+);
 
 /// One choice of a row of them, filled when it's the one chosen.
 fn draw_segment(grid: &mut Grid, rect: Rect, label: &str, on: bool, theme: &Theme) {
@@ -1172,12 +1647,11 @@ fn badge(grid: &mut Grid, x: f32, y: u16, word: &str, color: Rgb, theme: &Theme)
 fn draw_block(
     grid: &mut Grid,
     page: Rect,
-    (index, measure): (u16, &dyn Measure),
+    (top, measure): (u16, &dyn Measure),
     (name, word, color): (&str, &str, Rgb),
     detail: &str,
     theme: &Theme,
 ) {
-    let top = page.y + 3 + index * BLOCK_STEP;
     let surface = Bounds::cells(page.x as f32, top as f32 - 0.4, page.w as f32, 2.8);
     grid.panel(surface, RADIUS, Some(theme.tab.bg), Some(theme.border));
     let style = Style {

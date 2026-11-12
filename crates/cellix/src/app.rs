@@ -12072,7 +12072,7 @@ impl App {
 
     fn settings_key(&mut self, key: KeyEvent) -> bool {
         let area = self.sheet_area();
-        if self.search_shortcuts(key) {
+        if self.filter_settings(key) {
             return true;
         }
         let Some(page) = &mut self.settings_page else {
@@ -12140,7 +12140,23 @@ impl App {
         match control {
             Control::Section(section) => {
                 if let Some(page) = &mut self.settings_page {
-                    page.section = section;
+                    // With a filter typed, a page that has rows among what it found is gone
+                    // to in that list; one that has none is opened, and the filter let go.
+                    match page.first_found_in(section).filter(|_| page.filtering()) {
+                        Some(first) => page.found_top = first,
+                        None => {
+                            page.filter.clear();
+                            page.found_top = 0;
+                            page.section = section;
+                        }
+                    }
+                    page.focus = None;
+                }
+            }
+            Control::ClearFilter => {
+                if let Some(page) = &mut self.settings_page {
+                    page.filter.clear();
+                    page.found_top = 0;
                     page.focus = None;
                 }
             }

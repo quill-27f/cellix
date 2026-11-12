@@ -4849,5 +4849,12 @@
     "title": "The Task page is a tab in the strip: it stays there while a file is in front, comes back as it was left, and closes on its own",
     "test": "the_task_page_is_a_tab_that_stays_in_the_strip_until_it_is_closed",
     "passes": true
+  },
+  {
+    "id": "settings-filter",
+    "milestone": 14,
+    "title": "Typing in Settings narrows the rows of every page to those that fit, each with its page's name",
+    "test": "typing_in_settings_narrows_the_rows_of_every_page_to_those_that_fit",
+    "passes": true
   }
 ]

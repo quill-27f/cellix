@@ -297,23 +297,28 @@ impl App {
         true
     }
 
-    /// Typing on the Keyboard section searches it.
-    pub(super) fn search_shortcuts(&mut self, key: KeyEvent) -> bool {
+    /// Typing anywhere in Settings goes to its filter, which narrows the rows of every page
+    /// to those that fit. A space is for the control the keyboard is on while there is one,
+    /// and Escape empties the filter before it closes Settings.
+    pub(super) fn filter_settings(&mut self, key: KeyEvent) -> bool {
         let Some(page) = &mut self.settings_page else {
             return false;
         };
-        if page.section != crate::settings_page::Section::Keyboard {
-            return false;
-        }
+        let typed = !key.mods.ctrl && !key.mods.alt;
         match key.key {
-            Key::Char(c) if !key.mods.ctrl && !key.mods.alt => {
-                page.keys_query.push(c);
-                page.keys_top = 0;
+            Key::Char(' ') if page.focus.is_some() || page.filter.is_empty() => return false,
+            Key::Char(c) if typed => {
+                page.filter.push(c);
+                page.found_top = 0;
                 page.focus = None;
             }
-            Key::Backspace if !page.keys_query.is_empty() => {
-                page.keys_query.pop();
-                page.keys_top = 0;
+            Key::Backspace if !page.filter.is_empty() => {
+                page.filter.pop();
+                page.found_top = 0;
+            }
+            Key::Esc if !page.filter.is_empty() => {
+                page.filter.clear();
+                page.found_top = 0;
             }
             _ => return false,
         }
@@ -692,6 +697,74 @@ mod tests {
         panic!("{text} not on screen:\n{}", grid.text());
     }
 
+    /// Settings had pages down its side and no way to find a setting but to read each one.
+    /// Typing narrows the rows of every page to those that fit, each with its page's name.
+    #[test]
+    fn typing_in_settings_narrows_the_rows_of_every_page_to_those_that_fit() {
+        let (_dir, mut app) = project("{}");
+        app.size = (140, 40);
+        app.run(Command::OpenSettings);
+        assert!(screen(&app).text().contains("Search settings"));
+        typed(&mut app, "reading");
+        let grid = screen(&app);
+        let text = grid.text();
+        assert!(text.contains("1 setting"), "{text}");
+        assert!(
+            !text.contains("Changes apply"),
+            "in the page's place: {text}"
+        );
+        let (x, y) = find(&grid, "Reading width");
+        let row = grid.row_text(y);
+        let from = row.find("Reading width").unwrap();
+        assert!(
+            row[from..].contains("Editor"),
+            "its page beside its name: {row}"
+        );
+        // It works where it's found.
+        click(&mut app, x + 1, y);
+        assert_eq!(app.settings.reading_width, Some(false));
+
+        // A page with nothing among what was found opens, and the filter is let go.
+        let (x, y) = find(&grid, "Keyboard");
+        click(&mut app, x + 1, y);
+        let text = screen(&app).text();
+        assert!(
+            text.contains("COMMAND") && text.contains("Search settings"),
+            "{text}"
+        );
+
+        // Settings and commands together, the commands with their keys.
+        typed(&mut app, "save");
+        let grid = screen(&app);
+        let text = grid.text();
+        assert!(
+            text.contains("Format on save") && text.contains("Auto save"),
+            "{text}"
+        );
+        let (_, y) = find(&grid, "Ctrl+S");
+        let row = grid.row_text(y);
+        assert!(row.contains("Save") && row.contains("Keyboard"), "{row}");
+        let (_, y) = find(&grid, "Format on save");
+        assert!(grid.row_text(y).contains("Editor"), "{}", grid.row_text(y));
+
+        // Escape empties the filter, and only then closes Settings.
+        app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
+        let text = screen(&app).text();
+        assert!(
+            text.contains("COMMAND") && text.contains("Search settings"),
+            "{text}"
+        );
+        typed(&mut app, "zzzz");
+        let grid = screen(&app);
+        assert!(grid.text().contains("No settings"), "{}", grid.text());
+        // The × at the field's end empties it too.
+        let (x, y) = find(&grid, "No settings");
+        click(&mut app, x + "No settings".len() as u16 + 2, y);
+        assert!(screen(&app).text().contains("Search settings"));
+        app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
+        assert!(app.settings_page.is_none());
+    }
+
     #[test]
     fn a_command_gets_new_keys_on_the_shortcuts_page_and_they_work() {
         let (_dir, mut app) = project("{}");
@@ -732,8 +805,10 @@ mod tests {
         }
         let _ = app.set_keys("Open Recent…", Some("Ctrl+R".into()));
         typed(&mut app, "ctrl+r");
-        assert!(screen(&app).text().contains("2 commands"));
-        // Out of Settings, the new keys run the command.
+        assert!(screen(&app).text().contains("2 settings"));
+        // Out of Settings, the new keys run the command. Escape empties the filter first.
+        app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
+        assert!(app.settings_page.is_some());
         app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
         app.handle(Event::Key(ctrl_alt_r));
         assert!(screen(&app).text().contains("No tasks here"));

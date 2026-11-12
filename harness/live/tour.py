@@ -80,8 +80,8 @@ EXPECT = {
     "133-open-recent": "recent folder",
     "134-settings-editor": "files save",
     "135-settings-keyboard": "command's keys",
-    "136-settings-keys-search": "command's keys",
-    "137-settings-keys-record": "command's keys",
+    "136-settings-keys-search": " setting",
+    "137-settings-keys-record": " setting",
     "138-welcome-recent": "RECENT",
     "14-agents": "WORKTREES",
     "140-inbox": "waiting",
@@ -908,7 +908,7 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("135-settings-keyboard", to_section(4), CODE_FILE)
     shoot("136-settings-keys-search", [*to_section(4), ["keys", "task"], ["wait", 0.4]], CODE_FILE)
     shoot("137-settings-keys-record", [*to_section(4), ["keys", "rerun"], ["wait", 0.4],
-                                       *[["keys", "\t"]] * 8, ["keys", "\r"], ["keys", "\x1b\x12"],
+                                       *[["keys", "\t"]] * 6, ["keys", "\r"], ["keys", "\x1b\x12"],
                                        ["wait", 0.4]], CODE_FILE)
     # The tasks folder and its file recent, beside Start. Each scene has a cache of its own,
     # so the list the scenes above left isn't there: this one is written for it.
@@ -936,11 +936,11 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("34-hover-header", [["move", 18, 0]], CODE_FILE)
     shoot("35-hover-review", [["keys", "\u0007"], ["wait", 0.6], ["move", 12, 2]], CODE_FILE)
     shoot("36-hover-accept", [["keys", "\u0007"], ["wait", 0.6], ["move", 114, 1]], CODE_FILE)
-    shoot("37-hover-settings", [*settings, ["click", 45, 4], ["move", 80, 19]], CODE_FILE)
+    shoot("37-hover-settings", [*settings, ["click", 45, 4], ["move", 80, 21]], CODE_FILE)
     shoot("38-hover-dialog", [["keys", "x"], ["keys", CTRL("q")], ["move", 70, 17]], CODE_FILE)
     shoot("39-hover-agents", [*LIST_AGENTS, ["wait", 0.5], ["move", 90, 12]], CODE_FILE)
     shoot("41-hover-tab-close", [["move", 42, 0]], CODE_FILE)
-    shoot("42-hover-install", [*settings, ["click", 45, 4], ["move", 113, 19]], CODE_FILE)
+    shoot("42-hover-install", [*settings, ["click", 45, 4], ["move", 113, 26]], CODE_FILE)
     shoot("43-light-hover-menu", [["right", 60, 12], ["move", 64, 13]], CODE_FILE, background="eff1f5")
     shoot("40-hover-find", [["keys", CTRL("f")], ["keys", "item"], ["move", 112, 3]], CODE_FILE)
 
