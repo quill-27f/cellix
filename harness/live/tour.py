@@ -119,7 +119,7 @@ EXPECT = {
     "64-transcript-tab-full": "stand-in",
     "64-transcript-tab-hover": "stand-in",
     "64-transcript-tab-light": "stand-in",
-    "64-transcript-tab-menu": "Open Transcript",
+    "64-transcript-tab-menu": "Open Trans",
     "65-transcript-page": "Show Source",
     "66-transcript-light": "Show Source",
     "67-transcript-scrolled": "Show Source",
@@ -940,10 +940,10 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("33-hover-branch", [["move", 3, 38]], CODE_FILE)
     shoot("34-hover-header", [["move", 18, 0]], CODE_FILE)
     shoot("35-hover-review", [["keys", "\u0007"], ["wait", 0.6], ["move", 12, 2]], CODE_FILE)
-    shoot("36-hover-accept", [["keys", "\u0007"], ["wait", 0.6], ["move", 114, 1]], CODE_FILE)
+    shoot("36-hover-accept", [["keys", "\u0007"], ["wait", 0.6], ["move", 114, 2]], CODE_FILE)
     shoot("37-hover-settings", [*settings, ["click", 45, 4], ["move", 80, 21]], CODE_FILE)
     shoot("38-hover-dialog", [["keys", "x"], ["keys", CTRL("q")], ["move", 70, 17]], CODE_FILE)
-    shoot("39-hover-agents", [*LIST_AGENTS, ["wait", 0.5], ["move", 90, 12]], CODE_FILE)
+    shoot("39-hover-agents", [*LIST_AGENTS, ["wait", 0.5], ["move", 90, 8]], CODE_FILE)
     shoot("41-hover-tab-close", [["move", 42, 0]], CODE_FILE)
     shoot("42-hover-install", [*settings, ["click", 45, 4], ["move", 113, 26]], CODE_FILE)
     shoot("43-light-hover-menu", [["right", 60, 12], ["move", 64, 13]], CODE_FILE, background="eff1f5")

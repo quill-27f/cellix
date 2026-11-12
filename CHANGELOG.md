@@ -10,6 +10,9 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 - Find works in the side pane. With the keyboard in a terminal's tab, Ctrl+F looks through everything the terminal has printed, its scrollback included: matches are marked, Enter and Shift+Enter step through them, and new output is searched as it arrives. In the tab of an agent that keeps its own screen, such as Claude Code, it opens the agent's transcript and searches that, which is the whole chat.
 
 ### Fixed
+- In the light theme a line stands between the sidebar and the file, which on a white terminal were almost one colour.
+- A line of an integration's card in Settings was cut mid-word at its button. It ends in an ellipsis.
+- A stopped terminal's pane showed three shades behind its card. It's one colour.
 - A hidden side pane leaves a button in the corner, where the one that hides it stands, which shows it again as it was. Before, it came back only through the icon of a view.
 - The first screen, where Cellix lists the workspaces that are open, had no way out: no button, and no key but the ones that pick. It now has Quit beside Open and the × in its corner, and Ctrl+Q works there. Quitting from it leaves every workspace as it is.
 

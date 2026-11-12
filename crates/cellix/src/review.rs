@@ -957,16 +957,18 @@ impl Review {
     }
 
     fn draw_title(&self, grid: &mut Grid, body: Rect, narrow: bool, theme: &Theme) {
+        // Its title stands in the strip's row, on the frame's colour as every strip is.
+        grid.fill(Rect::new(body.x, body.y, body.w, 1), theme.tab);
         let body = self.title_body(body);
         let y = body.y;
         let strong = Style {
             bold: true,
             fg: theme.heading,
-            ..theme.sidebar
+            ..theme.tab
         };
         let dim = Style {
             fg: theme.status.fg,
-            ..theme.sidebar
+            ..theme.tab
         };
         let Some(file) = self
             .current_path()
@@ -979,11 +981,11 @@ impl Review {
             let (accept, reject) = self.button_spots(body);
             let primary = Style {
                 fg: theme.button_text,
-                ..theme.sidebar
+                ..theme.tab
             };
             let quiet = Style {
                 fg: theme.text.fg,
-                ..theme.sidebar
+                ..theme.tab
             };
             grid.label(body.x + 2, y, &file, strong, reject.saturating_sub(1));
             let reject_fill = if self.on_button(reject, y, &self.cells_of("Reject")) {

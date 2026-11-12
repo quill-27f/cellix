@@ -2173,7 +2173,8 @@ impl Dock {
                 cut_name(grid, tab, &text, (quiet, hovered));
                 continue;
             }
-            if on {
+            // Where the views are icons, the one showing has a column and no tab to draw.
+            if on && tab.w > CLOSE_WIDTH + 1 {
                 front_tab(grid, tab, theme, measure.in_cells());
             }
             let at = tab.x as f32 + TAB_TEXT;

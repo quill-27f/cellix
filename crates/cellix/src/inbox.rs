@@ -247,11 +247,10 @@ fn clear_button(area: Rect, rows: &[Listed], measure: &dyn Measure) -> Option<(S
         return None;
     }
     let cells = button_cells(CLEAR_FINISHED, measure);
-    // Its padding stands past the column, so its words end where the ages do.
+    // Its chip ends on the pane's text edge, where the ages do.
     let x = area
         .right()
-        .saturating_sub(SIDE + cells.chars().count() as u16)
-        + 1;
+        .saturating_sub(SIDE + cells.chars().count() as u16);
     Some((cells, x))
 }
 

@@ -165,7 +165,7 @@ const TAB_PADDING: u16 = 5;
 const TASK_TAB_ICON: u16 = 2;
 const TASK_TAB_MARK: f32 = 0.5;
 /// The most of a task's name its tab shows, in cells.
-const TASK_TAB_NAME: f32 = 26.0;
+const TASK_TAB_NAME: f32 = 18.0;
 /// A sheet with more rows than this gives the Task page a row of air over its title.
 const TASK_AIR_FROM: u16 = 20;
 const PILL_RADIUS: u8 = 30;
@@ -6150,7 +6150,7 @@ impl App {
             Some(screen) => Rect::new(screen.x, screen.y.saturating_sub(1), screen.w, screen.h),
             None => self.focused_area(),
         };
-        let width = FIND_WIDTH.min(pane.w);
+        let width = FIND_WIDTH.min(pane.w.saturating_sub(2));
         let x = pane.right().saturating_sub(width + 1).max(pane.x);
         // Just its rows: the panel is painted around them, so it's no taller than it needs.
         Rect::new(x, pane.y + 1, width, if replacing { 2 } else { 1 })
@@ -6209,7 +6209,7 @@ impl App {
         };
         input(grid, line, &text, &*self.measure, theme);
         let base = Style {
-            fg: theme.gutter.fg,
+            fg: theme.popup_dim,
             bg: theme.popup,
             ..theme.bar
         };
@@ -7845,7 +7845,7 @@ impl App {
     /// A card's panel, raised and rounded. It starts and ends inside its first and last rows,
     /// so the title and the buttons have the same air above and below them, and what's under
     /// those rows is cleared so no text shows half covered.
-    fn draw_card(&self, grid: &mut Grid, area: Rect) {
+    fn draw_card(&self, grid: &mut Grid, area: Rect, ground: Style) {
         let theme = &self.theme;
         let plain = self.measure.in_cells();
         let base = Style {
@@ -7855,7 +7855,8 @@ impl App {
         };
         for y in area.y..area.bottom() {
             let edge = y == area.y || y + 1 == area.bottom();
-            let fill = if edge && !plain { theme.text } else { base };
+            // Behind its rounded ends, the colour of what it stands on: the sheet, or the pane.
+            let fill = if edge && !plain { ground } else { base };
             grid.fill(Rect::new(area.x, y, area.w, 1), fill);
         }
         let bounds = Bounds::cells(
@@ -7910,7 +7911,7 @@ impl App {
         }
         let theme = &self.theme;
         let area = self.linger_area();
-        self.draw_card(grid, area);
+        self.draw_card(grid, area, self.theme.text);
         let base = Style {
             fg: theme.text.fg,
             bg: theme.popup,
@@ -8168,11 +8169,11 @@ impl App {
             grid.wash(
                 Bounds::inset(screen, 0.0, 0.0),
                 0,
-                (theme.text.bg, 150),
+                (theme.sidebar.bg, 150),
                 None,
             );
         }
-        self.draw_card(grid, card);
+        self.draw_card(grid, card, theme.sidebar);
         let base = Style {
             fg: theme.text.fg,
             bg: theme.popup,
@@ -12998,6 +12999,13 @@ impl App {
                     source.draw(grid, area, branch, self.hover, measure.as_ref(), theme);
                 }
             }
+            // Light, the sidebar and the sheet are a step apart that's hard to see (1.04 to
+            // 1 on a white terminal), so a line says where one ends.
+            if theme.is_light() {
+                let (x, y) = (f32::from(area.right()), f32::from(area.y));
+                let edge = Bounds::cells(x, y, 0.0, f32::from(area.h));
+                grid.hairline(edge, theme.border);
+            }
         }
         self.draw_dock(grid);
         if self.maximized == Some(Maximized::Pane) && self.dock.open {
@@ -13686,7 +13694,7 @@ impl App {
             ..self.theme.bar
         };
         let dim = Style {
-            fg: self.theme.gutter.fg,
+            fg: self.theme.popup_dim,
             ..base
         };
         // The question and its box on the text edge, two columns in.

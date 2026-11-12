@@ -1044,12 +1044,13 @@ pub fn raised(grid: &mut Grid, area: Rect, theme: &Theme) {
     grid.popup(bounds, 28, theme.popup, theme.popup_border);
 }
 
-/// How far a bar that holds a text box reaches past its rows, in rows: a quarter, so the
-/// box isn't 3 px from the bar's own edge.
-const BAR_AIR: f32 = 0.25;
+/// How far a bar that holds a text box reaches past its rows, in rows: a tenth, which
+/// doubles the air around its box and stays clear of the letters in the rows beside it. A
+/// quarter covered the tops of the code under the Find bar.
+const BAR_AIR: f32 = 0.1;
 
 /// A floating bar around a text box or two, as the Find bar and a prompt are: `raised`, with
-/// a quarter row of air past its rows above and below, which only paint can show.
+/// a little air past its rows above and below, which only paint can show.
 pub fn raised_bar(grid: &mut Grid, area: Rect, theme: &Theme) {
     let base = Style {
         fg: theme.text.fg,

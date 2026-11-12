@@ -1653,11 +1653,11 @@ fn draw_block(
     theme: &Theme,
 ) {
     let surface = Bounds::cells(page.x as f32, top as f32 - 0.4, page.w as f32, 2.8);
-    grid.panel(surface, RADIUS, Some(theme.tab.bg), Some(theme.border));
+    grid.panel(surface, RADIUS, Some(theme.popup), Some(theme.border));
     let style = Style {
         fg: theme.heading,
         bold: true,
-        bg: theme.tab.bg,
+        bg: theme.popup,
         ..theme.text
     };
     let x = page.x + 2;
@@ -1674,11 +1674,14 @@ fn draw_block(
     badge(grid, at, top, word, color, theme);
     let quiet = Style {
         fg: theme.gutter.fg,
-        bg: theme.tab.bg,
+        bg: theme.popup,
         ..theme.text
     };
+    // Two columns short of the button, and cut with an ellipsis, not mid-word at its edge.
     let room = page.right().saturating_sub(BUTTON_WIDTH + 3);
-    grid.label(x, top + 1, detail, quiet, room);
+    let wide = f32::from(room.saturating_sub(x + 2));
+    let detail = crate::context::elide(detail, wide, measure);
+    grid.label(x, top + 1, &detail, quiet, room);
 }
 
 fn draw_button(
@@ -1693,7 +1696,7 @@ fn draw_button(
     let fill = match (primary, hovered) {
         (true, _) => theme.button,
         (false, true) => theme.pick,
-        (false, false) => theme.quiet_button(theme.tab.bg),
+        (false, false) => theme.quiet_button(theme.popup),
     };
     let fg = if primary {
         theme.button_text

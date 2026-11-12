@@ -1147,9 +1147,11 @@ impl TaskPage {
         let mut y = column.y + 1;
         if narrow {
             let place = format!("Step {} of {}", self.step + 1, task.steps.len());
-            let after = pen.button(left + 3, y, "◂", false, theme, Hit::Previous);
-            let end = pen.label(after + 4, y, &place, dim, right);
-            pen.button(end + 4, y, "▸", false, theme, Hit::Next);
+            // From the page's text edge: a button, its gap, where it is, the gap, a button.
+            let wide = crate::measures::button_cells("◂", pen.measure).width() as u16;
+            let after = pen.button(left + wide, y, "◂", false, theme, Hit::Previous);
+            let end = pen.label(after + wide + BUTTON_GAP, y, &place, dim, right);
+            pen.button(end + BUTTON_GAP + wide, y, "▸", false, theme, Hit::Next);
             y += 2;
         }
         // The step's own title, and what can be done with it.

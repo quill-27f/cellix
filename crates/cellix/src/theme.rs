@@ -425,10 +425,12 @@ impl Default for Theme {
             function: blue,
             kind: yellow,
             number: peach,
-            added: mix(sheet, green, 0.14),
-            removed: mix(sheet, red, 0.14),
-            added_word: mix(sheet, green, 0.3),
-            removed_word: mix(sheet, red, 0.3),
+            // Deeper than a wash of Mocha's green and red, which on this blue sheet came
+            // out grey: a line added has to read as green at a glance.
+            added: Rgb(50, 72, 70),
+            removed: Rgb(78, 54, 66),
+            added_word: Rgb(60, 102, 86),
+            removed_word: Rgb(116, 62, 72),
             moved: Rgb(38, 46, 70),
             activity: style(third, frame),
             status: style(second, frame),
