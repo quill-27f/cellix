@@ -799,7 +799,9 @@ impl TaskPage {
             fg: theme.status.fg,
             ..theme.text
         };
-        let right = area.right().saturating_sub(self.title_room.get() + 1);
+        // Two columns from the page's edge, as its title is from the other, and as the
+        // step's own buttons under it are.
+        let right = area.right().saturating_sub(self.title_room.get() + 2);
         let mut buttons = right;
         if self.first_commit().is_some() && area.w >= NARROW {
             buttons = pen.button(right, y, "Review All Changes", false, theme, Hit::ReviewAll);

@@ -556,7 +556,12 @@ agree on them, and a log line that can't be read is skipped. A turn runs from it
 the next one taken in the project, or to the tree now, and the comments made while it was the
 latest are its comments. Nothing is logged outside a repository or a folder Cellix serves.
 
-The Task page (Show Agent Task) stands where the file would, like Review: the task's name with
+The Task page (Show Agent Task) is a tab in the strip, after the files', as Settings and a
+transcript are: its mark, "Task ·" and the task's name, cut short when long. It stays there
+while a file is in front, a click brings it back as it was left, and its × or Close Tab closes
+it and not the file behind. It had stood where the file would with no tab, so nothing said how
+to leave it or get back (the canvas's board B, picked for the user on 2026-11-11). Under the
+strip: the task's name with
 a list of the others, then the timeline of plan versions and turns beside the chosen step. A
 turn shows its prompt, what it changed, its tests and its comments, with Review Turn (Review
 limited to that turn, read-only, since the tree has moved on) and Undo Turn (back to its

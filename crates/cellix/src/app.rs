@@ -160,6 +160,14 @@ const PLAN_BAR_WIDTH: u16 = 48;
 const TAB_RADIUS: u8 = 22;
 /// Columns of a tab that aren't its name: margins, the gap and the close button.
 const TAB_PADDING: u16 = 5;
+/// Columns the Task page's tab keeps for its mark, before its name, and how tall the mark
+/// is, in rows.
+const TASK_TAB_ICON: u16 = 2;
+const TASK_TAB_MARK: f32 = 0.5;
+/// The most of a task's name its tab shows, in cells.
+const TASK_TAB_NAME: f32 = 26.0;
+/// A sheet with more rows than this gives the Task page a row of air over its title.
+const TASK_AIR_FROM: u16 = 20;
 const PILL_RADIUS: u8 = 30;
 /// The bell's chip in the status bar, from and to as fractions of its row: 8 px under the
 /// edge above, so it doesn't sit against the editor.
@@ -6533,6 +6541,8 @@ impl App {
             Command::Quit => self.quit_now(),
             // Settings shows as the only tab, so closing a tab closes it, not the file behind.
             Command::CloseTab if self.settings_page.is_some() => self.settings_page = None,
+            // The Task page's tab is the one in front while it shows.
+            Command::CloseTab if self.task_shown() => self.close_task_page(),
             Command::CloseTab
                 if self
                     .editors
@@ -11033,11 +11043,19 @@ impl App {
         }
     }
 
+    /// Steps through the tabs of the strip, the Task page's among them, and round again.
     fn cycle_tab(&mut self, delta: isize) {
-        let count = self.editors.len() as isize;
-        if count > 0 {
-            self.set_active((self.active() as isize + delta).rem_euclid(count) as usize);
+        let files = self.editors.len() as isize;
+        let count = files + isize::from(self.task_tab().is_some());
+        if count == 0 {
+            return;
         }
+        let at = if self.task_shown() {
+            files
+        } else {
+            self.active() as isize
+        };
+        self.show_tab((at + delta).rem_euclid(count) as usize);
     }
 
     fn close_tab(&mut self) {
@@ -11223,7 +11241,7 @@ impl App {
                     .into_iter()
                     .find(|(_, at, width)| x >= *at && x < at + width);
                 if let Some((index, _, _)) = tab {
-                    self.set_active(index);
+                    self.show_tab(index);
                     self.run(Command::CloseTab);
                 }
             }
@@ -11570,6 +11588,17 @@ impl App {
         // Dropped from the tab's bottom edge, left-aligned to it. Its edges are row lines,
         // so the breadcrumbs it covers are covered whole.
         let (x, y) = (left, y + 1);
+        if self.task_tab() == Some(index) {
+            let items = vec![
+                MenuItem::new("Close", MenuAction::CloseTab(index)),
+                MenuItem::new("Close All", MenuAction::CloseAllTabs),
+                MenuItem::new("Rename Task…", MenuAction::Task(TaskAct::Rename))
+                    .after_rule()
+                    .when(self.task_page.as_ref().is_some_and(|p| p.task().is_some())),
+            ];
+            self.show_menu((x, y), items);
+            return;
+        }
         let path = self.editors[index].buffer.path().map(Path::to_path_buf);
         let others = self.editors.len() > 1;
         let on_file = |action: fn(PathBuf) -> MenuAction| {
@@ -11911,7 +11940,7 @@ impl App {
                 self.start_session(&name, &argv, &[], &root);
             }
             MenuAction::AddCodeCell => self.add_cell(true),
-            MenuAction::ShowTab(index) => self.set_active(index),
+            MenuAction::ShowTab(index) => self.show_tab(index),
             MenuAction::PaneTab(tab) => self.show_pane_tab(tab),
             MenuAction::PaneNew => {
                 self.refresh_agents();
@@ -11991,13 +12020,19 @@ impl App {
             }
             MenuAction::Reveal(path) => self.reveal_in_sidebar(&path),
             MenuAction::CloseTab(index) => {
-                self.set_active(index);
+                self.show_tab(index);
                 self.run(Command::CloseTab);
             }
-            MenuAction::CloseOtherTabs(index) => self.close_tabs_except(Some(index)),
+            MenuAction::CloseOtherTabs(index) => {
+                self.close_task_page();
+                self.close_tabs_except(Some(index));
+            }
             MenuAction::Transcript(index) => self.open_transcript(Some(index)),
             MenuAction::CloseSession(index) => self.close_session_tab(index),
-            MenuAction::CloseAllTabs => self.close_tabs_except(None),
+            MenuAction::CloseAllTabs => {
+                self.close_task_page();
+                self.close_tabs_except(None);
+            }
         }
     }
 
@@ -12437,9 +12472,16 @@ impl App {
         Option<(Rect, usize)>,
     ) {
         let area = self.tabs_area();
-        let widths: Vec<u16> = self.editors.iter().map(|e| self.tab_width(e) + 1).collect();
+        let mut widths: Vec<u16> = self.editors.iter().map(|e| self.tab_width(e) + 1).collect();
+        // The Task page's tab comes after every file's.
+        if self.task_tab().is_some() {
+            widths.push(self.task_tab_width() + 1);
+        }
         let count = widths.len();
-        let active = self.active().min(count.saturating_sub(1));
+        let active = match self.task_tab() {
+            Some(task) if self.task_shown() => task,
+            _ => self.active().min(self.editors.len().saturating_sub(1)),
+        };
         let place = |first: usize, last: usize, left: u16| {
             let mut x = area.x + left;
             let mut tabs = Vec::new();
@@ -12533,11 +12575,39 @@ impl App {
         let (tabs, ..) = self.tab_strip();
         let shown: Vec<usize> = tabs.iter().map(|t| t.0).collect();
         let first = shown.first().copied().unwrap_or(0);
-        let items = (0..self.editors.len())
+        let count = self.editors.len() + usize::from(self.task_tab().is_some());
+        let items = (0..count)
             .filter(|i| !shown.contains(i) && ((*i < first) == before))
-            .map(|i| MenuItem::new(self.editors[i].title(), MenuAction::ShowTab(i)))
+            .map(|i| MenuItem::new(self.tab_title(i), MenuAction::ShowTab(i)))
             .collect();
         self.show_menu((at.x, at.y + 1), items);
+    }
+
+    /// What a tab of the strip is called: a file's name, or the Task page's.
+    fn tab_title(&self, index: usize) -> String {
+        match self.editors.get(index) {
+            Some(editor) => editor.title(),
+            None => self.task_tab_title(),
+        }
+    }
+
+    /// Whether a tab of the strip is the one in front: the Task page's while that shows,
+    /// and otherwise the file's in the focused pane.
+    fn tab_in_front(&self, index: usize) -> bool {
+        match self.task_tab() {
+            Some(task) if self.task_shown() => index == task,
+            Some(task) if index == task => false,
+            _ => index == self.active(),
+        }
+    }
+
+    /// Brings a tab of the strip to the front.
+    fn show_tab(&mut self, index: usize) {
+        if self.task_tab() == Some(index) {
+            self.front_task();
+        } else {
+            self.set_active(index);
+        }
     }
 
     fn click_tab(&mut self, x: u16) {
@@ -12550,6 +12620,15 @@ impl App {
         }
         for (i, at, width) in self.visible_tabs() {
             if x >= at && x < at + width {
+                // The Task page's tab comes forward or closes; it has nowhere to be dragged.
+                if self.task_tab() == Some(i) {
+                    if x + 3 >= at + width {
+                        self.close_task_page();
+                    } else {
+                        self.front_task();
+                    }
+                    return;
+                }
                 self.set_active(i);
                 // A little wider than the glyph, so it isn't a pixel hunt.
                 let y = self.tabs_area().y;
@@ -13547,7 +13626,8 @@ impl App {
         }
         let area = self.tabs_area();
         for (i, x, width) in self.visible_tabs() {
-            let active = i == self.active();
+            let active = self.tab_in_front(i);
+            let task = self.task_tab() == Some(i);
             let hovered = self
                 .hover
                 .is_some_and(|h| h.1 == area.y && h.0 >= x && h.0 < x + width);
@@ -13558,12 +13638,20 @@ impl App {
                 let edge = Bounds::cells(x as f32, area.y as f32, tab.w as f32, 0.06);
                 grid.panel(edge, 0, Some(theme.accent), None);
             }
-            let editor = &self.editors[i];
-            let name = editor.title();
+            let name = self.tab_title(i);
             let close_x = x + width.saturating_sub(2);
-            grid.label_at(x as f32 + 1.5, x + 2, area.y, &name, style, close_x, 100);
+            // The Task page's tab has its mark before its name, in the accent colour.
+            let lead = if task { TASK_TAB_ICON } else { 0 };
+            if task && x + 3 < close_x {
+                let cell = Rect::new(x + 1, area.y, 2, 1);
+                let mark = (Icon::ListTask, TASK_TAB_MARK);
+                crate::toolbar::draw_icon(grid, mark, cell, theme.accent, style);
+            }
+            let at = x + lead + 2;
+            let from = f32::from(x + lead) + 1.5 - f32::from(lead) * 0.25;
+            grid.label_at(from, at, area.y, &name, style, close_x, 100);
             if close_x < area.right() {
-                let dirty = editor.buffer.is_dirty();
+                let dirty = self.editors.get(i).is_some_and(|e| e.buffer.is_dirty());
                 let shown = if dirty { "●" } else { "×" };
                 let mark = Style {
                     painted: true,
@@ -13635,6 +13723,10 @@ impl App {
 
     /// Whether the plan waiting for review is the tab in view.
     fn plan_in_view(&self) -> bool {
+        // Behind the Task page, which answers a plan itself, it isn't.
+        if self.task_shown() {
+            return false;
+        }
         let open = self
             .editors
             .get(self.active())

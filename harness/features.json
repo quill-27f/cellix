@@ -4842,5 +4842,12 @@
     "title": "Every surface's buttons keep the same room either side of their words and stand two columns apart",
     "test": "buttons_keep_the_same_room_and_stand_two_columns_apart_on_every_surface",
     "passes": true
+  },
+  {
+    "id": "task-page-is-a-tab",
+    "milestone": 14,
+    "title": "The Task page is a tab in the strip: it stays there while a file is in front, comes back as it was left, and closes on its own",
+    "test": "the_task_page_is_a_tab_that_stays_in_the_strip_until_it_is_closed",
+    "passes": true
   }
 ]

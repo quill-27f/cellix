@@ -5,10 +5,13 @@ use std::path::PathBuf;
 
 use cellix_core::Buffer;
 use cellix_input::{Key, KeyEvent, MouseEvent, MouseKind};
-use cellix_render::Grid;
+use cellix_render::{Font, Grid, Rect};
 use cellix_review::tasks::{self, Event as TaskEvent, Step};
 
-use super::{App, Choice, Command, Confirm, Front, Overlay, Prompt, PromptAction};
+use super::{
+    App, Choice, Command, Confirm, Front, Overlay, Prompt, PromptAction, TAB_PADDING,
+    TASK_AIR_FROM, TASK_TAB_ICON, TASK_TAB_NAME,
+};
 use crate::agent_task::{Context, Hit, TaskPage};
 use crate::editor::Editor;
 use crate::menu::{Action as MenuAction, Item as MenuItem};
@@ -30,16 +33,61 @@ impl App {
         self.task_shown && self.task_page.is_some()
     }
 
-    /// Opens the Task page on the work an agent did last here, or where it was left.
+    /// Opens the Task page on the work an agent did last here, or where it was left. It's a
+    /// tab among the files', which stays in the strip until it's closed.
     pub(super) fn show_task_page(&mut self) {
         let root = self.workspace.root().to_path_buf();
         match &mut self.task_page {
             Some(page) if page.root() == root => page.reload(),
             _ => self.task_page = Some(TaskPage::new(root)),
         }
-        self.review = None;
-        self.settings_page = None;
-        self.task_shown = true;
+        self.front_task();
+    }
+
+    /// Brings the Task page's tab to the front, as it was left.
+    pub(super) fn front_task(&mut self) {
+        if self.task_page.is_some() {
+            self.review = None;
+            self.settings_page = None;
+            self.task_shown = true;
+        }
+    }
+
+    /// Closes the Task page's tab, which leaves the file that was behind it.
+    pub(super) fn close_task_page(&mut self) {
+        self.task_page = None;
+        self.task_shown = false;
+    }
+
+    /// Where the Task page's tab stands among the tabs while it's open: after every file's.
+    pub(super) fn task_tab(&self) -> Option<usize> {
+        self.task_page.is_some().then_some(self.editors.len())
+    }
+
+    /// What the tab says: the task in view, as much of its name as a tab has room for.
+    pub(super) fn task_tab_title(&self) -> String {
+        let task = self.task_page.as_ref().and_then(|page| page.task());
+        match task {
+            Some(task) => {
+                let name = crate::context::elide(&task.name, TASK_TAB_NAME, &*self.measure);
+                format!("Task · {name}")
+            }
+            None => "Task".to_string(),
+        }
+    }
+
+    /// Columns that tab takes: a file's tab's, and its mark's.
+    pub(super) fn task_tab_width(&self) -> u16 {
+        let name = self.measure.width(&self.task_tab_title(), Font::default());
+        name.ceil() as u16 + TAB_PADDING + TASK_TAB_ICON
+    }
+
+    /// Where the page stands: under the tabs, with a row of air over its title when the
+    /// window has rows to spare.
+    pub(super) fn task_area(&self) -> Rect {
+        let sheet = self.sheet_area();
+        let air = u16::from(sheet.h > TASK_AIR_FROM);
+        Rect::new(sheet.x, sheet.y + air, sheet.w, sheet.h - air)
     }
 
     fn task_context(&self) -> Context<'_> {
@@ -56,10 +104,13 @@ impl App {
         let Some(page) = self.task_page.as_ref().filter(|_| self.task_shown) else {
             return false;
         };
-        page.title_room.set(self.actions_over_main());
+        // Its tab is lit among the files', and the icons at the top right stand in that row.
+        self.draw_tabs(grid);
+        grid.fill(self.sheet_area(), theme.text);
+        page.title_room.set(0);
         page.draw(
             grid,
-            self.main_area(),
+            self.task_area(),
             self.hover,
             &self.task_context(),
             theme,
@@ -93,6 +144,7 @@ impl App {
             return false;
         };
         match key.key {
+            // Back to the file; the tab stays in the strip.
             Key::Esc => self.task_shown = false,
             Key::Down | Key::Right => page.step_by(1),
             Key::Up | Key::Left => page.step_by(-1),
@@ -101,6 +153,10 @@ impl App {
                 Some(Step::Plan(_)) => self.use_task_hit(Hit::OpenPlan),
                 None => {}
             },
+            // Typing has nowhere to go on this page, and mustn't reach the file behind it.
+            // Ctrl keys and the like still reach the app, so Ctrl+P works from here.
+            Key::Char(_) if !key.mods.ctrl && !key.mods.alt => {}
+            Key::Backspace | Key::Delete | Key::Tab => {}
             _ => return false,
         }
         true
@@ -108,10 +164,12 @@ impl App {
 
     /// Handles the pointer over the page. Says whether it was the page's.
     pub(super) fn task_mouse(&mut self, mouse: MouseEvent) -> bool {
-        let area = self.main_area();
-        if !self.task_shown() || self.review.is_some() || !area.contains(mouse.x, mouse.y) {
+        // The row of tabs over the page is the strip's own.
+        let sheet = self.sheet_area();
+        if !self.task_shown() || self.review.is_some() || !sheet.contains(mouse.x, mouse.y) {
             return false;
         }
+        let area = self.task_area();
         let hit = {
             let context = self.task_context();
             let page = self.task_page.as_ref();
@@ -196,7 +254,7 @@ impl App {
             })
             .collect();
         items.push(MenuItem::new("Rename This Task…", MenuAction::Task(Act::Rename)).after_rule());
-        let area = self.main_area();
+        let area = self.task_area();
         self.show_menu((area.x + 2, area.y + 1), items);
     }
 
@@ -572,6 +630,73 @@ mod tests {
             key,
             mods: Mods::default(),
         }));
+    }
+
+    /// The Task page is a tab among the files'. It stays in the strip while a file is in
+    /// front, a click on it brings the page back as it was left, and its × or Close Tab closes
+    /// it and not the file behind. Typing on the page doesn't reach that file.
+    #[test]
+    fn the_task_page_is_a_tab_that_stays_in_the_strip_until_it_is_closed() {
+        let (dir, mut app) = worked_on();
+        let root = dir.path().canonicalize().unwrap();
+        app.open(&root.join("orders.rs")).unwrap();
+        app.run(Command::ShowAgentTask);
+        wait_for(&mut app, "1 file +1 -0");
+        let strip = |app: &App| screen(app).row_text(app.tabs_area().y);
+        // A press and its release, as a click on a tab is.
+        let press_tab = |app: &mut App, name: &str| {
+            let at = spot(app, name);
+            click(app, MouseKind::Left, at);
+            click(app, MouseKind::Up, at);
+        };
+        let tab = "Task · Add a refund route";
+        let row = strip(&app);
+        assert!(row.contains("orders.rs") && row.contains(tab), "{row}");
+        let (_, title) = spot(&app, "Open Transcript");
+        assert!(
+            title > app.tabs_area().y,
+            "the page's title is under the strip"
+        );
+
+        // Typing has nowhere to go on the page, and the file behind it is left alone.
+        let before = app.editors[0].buffer.text();
+        press(&mut app, Key::Char('x'));
+        press(&mut app, Key::Backspace);
+        assert_eq!(app.editors[0].buffer.text(), before);
+
+        // The file's tab shows the file, and the Task page's tab stays beside it.
+        press_tab(&mut app, "orders.rs");
+        assert!(!app.task_shown());
+        let text = screen(&app).text();
+        assert!(text.contains("fn refund_paid() {}"), "{text}");
+        assert!(strip(&app).contains(tab), "{}", strip(&app));
+
+        // A click on it brings the page back, where it was left.
+        press_tab(&mut app, tab);
+        assert!(app.task_shown());
+        click_on(&mut app, MouseKind::Left, "Plan v1  sent back");
+        press_tab(&mut app, "orders.rs");
+        press_tab(&mut app, tab);
+        assert!(app.task_shown());
+        let text = screen(&app).text();
+        assert!(
+            text.contains("Refund any order."),
+            "the step it was on:\n{text}"
+        );
+
+        // Its × closes it, and the file is in view again.
+        let (x, y) = spot(&app, tab);
+        let close = x + tab.chars().count() as u16 + 1;
+        click(&mut app, MouseKind::Left, (close - 1, y));
+        assert!(app.task_page.is_none());
+        assert!(!strip(&app).contains("Task ·"), "{}", strip(&app));
+        assert!(screen(&app).text().contains("fn refund_paid() {}"));
+
+        // Close Tab closes the page's tab while it's in front, not the file behind it.
+        app.run(Command::ShowAgentTask);
+        app.run(Command::CloseTab);
+        assert!(app.task_page.is_none());
+        assert_eq!(app.editors.len(), 1, "the file stays open");
     }
 
     #[test]
