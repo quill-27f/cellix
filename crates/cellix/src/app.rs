@@ -2403,6 +2403,10 @@ impl App {
         self.keep_in_view(shown);
         self.tell_selection();
         let terminal = self.dock.poll(&self.theme);
+        // What a terminal prints while Find looks through it is looked through as it comes.
+        if terminal && matches!(&self.overlay, Overlay::Find(find) if find.pane) {
+            self.refresh_pane_find();
+        }
         for name in std::mem::take(&mut self.dock.ended) {
             self.say(format!("{name} ended, so its tab closed"));
         }
@@ -4811,6 +4815,7 @@ impl App {
                     Command::FocusAgent
                         | Command::CloseDock
                         | Command::CommandPalette
+                        | Command::FindInFile
                         | Command::Quit
                 )
             );
@@ -5597,12 +5602,19 @@ impl App {
         let mut searched = false;
         match key.key {
             Key::Esc => {
-                if let Some(editor) = self.editor_mut() {
+                if find.pane
+                    && let Some(session) = self.dock.session_mut()
+                {
+                    session.clear_found();
+                }
+                if let Some(editor) = self.editor_mut().filter(|_| !find.pane) {
                     editor.found.clear();
                 }
                 return;
             }
             Key::Char(c) if key.mods.alt && find.options.flip_key(c) => searched = true,
+            // A terminal's output is only to be found, not replaced.
+            Key::Char('r' | 'R') if key.mods.ctrl && find.pane => {}
             Key::Char('r' | 'R') if key.mods.ctrl => {
                 find.replace = Some(find.replace.take().unwrap_or_default());
                 find.in_replace = !find.query.is_empty();
@@ -5711,8 +5723,76 @@ impl App {
         self.show_match();
     }
 
+    /// Searches the terminal tab in front for the query as it stands: all it holds, the
+    /// scrollback too, starting from the newest, which is nearest what was just read.
+    fn search_pane(&mut self) {
+        let Some(session) = self.dock.session() else {
+            return;
+        };
+        let text = session.lines().join("\n");
+        if let Overlay::Find(find) = &mut self.overlay {
+            find.search(&text, 0);
+            find.current = find.matches.len().saturating_sub(1);
+        }
+        self.show_match();
+    }
+
+    /// Searches the terminal again after it has printed. Find stays on the match it was on,
+    /// unless that was the newest: then it goes on to what's newest now.
+    fn refresh_pane_find(&mut self) {
+        let Some(session) = self.dock.session() else {
+            return;
+        };
+        let text = session.lines().join("\n");
+        if let Overlay::Find(find) = &mut self.overlay {
+            let on = find.selected();
+            let newest = find.current + 1 >= find.matches.len();
+            find.search(&text, 0);
+            let last = find.matches.len().saturating_sub(1);
+            let kept = on.filter(|_| !newest);
+            let kept = kept.and_then(|on| find.matches.iter().position(|m| *m == on));
+            find.current = kept.unwrap_or(last);
+        }
+        self.show_pane_match();
+    }
+
+    /// Marks what Find found in the terminal tab in front, and brings the one it's on into view.
+    fn show_pane_match(&mut self) {
+        let Overlay::Find(find) = &self.overlay else {
+            return;
+        };
+        let (matches, current) = (find.matches.clone(), find.current);
+        let Some(session) = self.dock.session_mut() else {
+            return;
+        };
+        // Each line's first char in the text that was searched.
+        let lines = session.lines();
+        let mut starts = Vec::with_capacity(lines.len());
+        let mut at = 0;
+        for line in &lines {
+            starts.push(at);
+            at += line.chars().count() + 1;
+        }
+        let found: Vec<(usize, u16, u16)> = matches
+            .iter()
+            .map(|&(start, end)| {
+                let line = starts.partition_point(|s| *s <= start).saturating_sub(1);
+                let column = start - starts.get(line).copied().unwrap_or(0);
+                let room = lines.get(line).map_or(0, |l| l.chars().count());
+                let columns = (end - start).min(room.saturating_sub(column)).max(1);
+                (line, column as u16, columns as u16)
+            })
+            .collect();
+        let on = (!found.is_empty()).then_some(current);
+        session.show_found(found, on);
+    }
+
     /// Searches the open file for the query as it stands.
     fn search_file(&mut self) {
+        if matches!(&self.overlay, Overlay::Find(find) if find.pane) {
+            self.search_pane();
+            return;
+        }
         let index = self.active();
         let Some(editor) = self.editors.get(index) else {
             return;
@@ -5726,6 +5806,10 @@ impl App {
     }
 
     fn show_match(&mut self) {
+        if matches!(&self.overlay, Overlay::Find(find) if find.pane) {
+            self.show_pane_match();
+            return;
+        }
         let area = self.focused_area();
         let index = self.active();
         let Overlay::Find(find) = &self.overlay else {
@@ -5746,7 +5830,38 @@ impl App {
         }
     }
 
+    /// Whether a terminal or agent's tab of the side pane has the keyboard.
+    fn in_session(&self) -> bool {
+        let front = self.dock.open && self.dock.focused && self.dock.front == Front::Session;
+        front && !self.dock.listing() && self.dock.session().is_some()
+    }
+
     fn open_find(&mut self) {
+        // With the keyboard in a terminal or agent's tab, Find looks through that. An agent
+        // that keeps its own screen has no scrollback here, so its transcript is opened and
+        // searched: that holds the whole chat.
+        if self.in_session() {
+            let own_screen = self
+                .dock
+                .session()
+                .is_some_and(|s| s.agent() && s.keeps_own_screen());
+            let transcript = self.dock.active.filter(|_| own_screen);
+            let transcript = transcript.filter(|&index| self.resolve_transcript(index).is_some());
+            match transcript {
+                Some(index) => {
+                    self.open_transcript(Some(index));
+                    self.dock.focused = false;
+                }
+                None => {
+                    self.overlay = Overlay::Find(Find {
+                        pane: true,
+                        ..Find::default()
+                    });
+                    self.search_file();
+                    return;
+                }
+            }
+        }
         if self.review.is_some() || self.active() >= self.editors.len() {
             self.show_search(Field::Query);
             return;
@@ -5767,9 +5882,14 @@ impl App {
         self.find_bar_for(replacing)
     }
 
-    /// The Find bar, a row taller with the replace row.
+    /// The Find bar, a row taller with the replace row. Over a terminal it stands on the
+    /// terminal's first row, at its right, as it does over a file.
     fn find_bar_for(&self, replacing: bool) -> Rect {
-        let pane = self.focused_area();
+        let on_pane = matches!(&self.overlay, Overlay::Find(find) if find.pane);
+        let pane = match self.dock_screen().filter(|_| on_pane) {
+            Some(screen) => Rect::new(screen.x, screen.y.saturating_sub(1), screen.w, screen.h),
+            None => self.focused_area(),
+        };
         let width = FIND_WIDTH.min(pane.w);
         let x = pane.right().saturating_sub(width + 1).max(pane.x);
         // Just its rows: the panel is painted around them, so it's no taller than it needs.
@@ -5817,7 +5937,10 @@ impl App {
             Icon::ChevronRight
         };
         let toggle = Rect::new(area.x + 1, area.y, FIND_CHEVRON, 1);
-        self.find_button(grid, toggle, chevron, false);
+        // Nothing to replace in a terminal's output, so no chevron to open that row.
+        if !find.pane {
+            self.find_button(grid, toggle, chevron, false);
+        }
         let text = Input {
             text: &find.query,
             hint: "Find",
@@ -5869,6 +5992,10 @@ impl App {
         let area = self.find_bar_for(find.replace.is_some());
         let (field, switches, _, first) = Self::find_layout(area);
         let toggle = Rect::new(area.x + 1, area.y, FIND_CHEVRON, 1);
+        if toggle.contains(x, y) && find.pane {
+            self.overlay = Overlay::Find(find);
+            return;
+        }
         if toggle.contains(x, y) {
             find.replace = match find.replace {
                 Some(_) => None,
@@ -21502,6 +21629,81 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         );
     }
 
+    /// With the keyboard in a terminal's tab, Find looks through what the terminal holds, its
+    /// scrollback too: it counts what it finds, marks it, and scrolls to the one it's on.
+    #[cfg(unix)]
+    #[test]
+    fn find_looks_through_a_terminal_tab_and_its_scrollback() {
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (160, 40));
+        // More than the screen holds, so most of it is scrollback by the time it's all out.
+        // Then it waits to be told, and prints one line more.
+        let lines = "i=0; while [ $i -lt 120 ]; do echo \"row $i\"; i=$((i+1)); done; \
+                     while [ ! -f go ]; do sleep 0.1; done; echo late-needle; cat";
+        let argv = ["sh".to_string(), "-c".to_string(), lines.to_string()];
+        let root = app.workspace.root().to_path_buf();
+        app.start_session("Stand-in", &argv, &[], &root);
+        shows(&mut app, "row 119");
+        app.dock.focused = true;
+        let showing = |app: &App, line: &str| {
+            let rows = app.dock.session().unwrap().rows();
+            rows.iter().position(|row| row == line)
+        };
+        assert!(showing(&app, "row 59").is_none(), "scrolled out of view");
+
+        app.handle(Event::Key(KeyEvent::ctrl('f')));
+        assert!(matches!(&app.overlay, Overlay::Find(find) if find.pane));
+        typed(&mut app, "row 5");
+        // "row 5" and "row 50" to "row 59", starting from the newest.
+        let grid = screen(&app);
+        assert!(grid.text().contains("11 of 11"), "{}", grid.text());
+        let row = showing(&app, "row 59").expect("the one it's on is brought into view");
+        let pane = app.dock_screen().unwrap();
+        let cell =
+            |grid: &Grid, row: usize, x: u16| grid.cell(pane.x + x, pane.y + row as u16).style.bg;
+        assert_eq!(
+            cell(&grid, row, 0),
+            app.theme.selection,
+            "marked as the one"
+        );
+        assert_eq!(
+            cell(&grid, row, 4),
+            app.theme.selection,
+            "all of its letters"
+        );
+        assert_ne!(cell(&grid, row, 5), app.theme.selection, "and only those");
+        let other = showing(&app, "row 58").expect("beside it");
+        assert_eq!(
+            cell(&grid, other, 0),
+            app.theme.found,
+            "the others marked too"
+        );
+
+        // Enter goes on to the next, round to the oldest, far up the scrollback.
+        enter(&mut app);
+        let grid = screen(&app);
+        assert!(grid.text().contains("1 of 11"), "{}", grid.text());
+        let row = showing(&app, "row 5").expect("scrolled up to it");
+        assert_eq!(cell(&grid, row, 0), app.theme.selection);
+
+        // What the terminal prints while Find is open is looked through as it comes.
+        for _ in 0.."row 5".len() {
+            app.handle(Event::Key(KeyEvent::plain(Key::Backspace)));
+        }
+        typed(&mut app, "late-needle");
+        assert!(screen(&app).text().contains("No results"));
+        fs::write(dir.path().join("go"), "").unwrap();
+        shows(&mut app, "1 of 1");
+
+        // Escape puts Find away, the marks with it, and the keyboard is the terminal's still.
+        app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
+        assert!(matches!(app.overlay, Overlay::None));
+        assert!(app.dock.focused);
+        let grid = screen(&app);
+        let row = showing(&app, "late-needle").unwrap();
+        assert_ne!(cell(&grid, row, 0), app.theme.selection);
+    }
+
     /// What the stand-in agent wrote down, once it has `want`.
     fn heard(app: &mut App, log: &Path, want: &str) -> String {
         let deadline = std::time::Instant::now() + BACKGROUND;
@@ -28060,6 +28262,43 @@ while True:
             assert!(std::time::Instant::now() < deadline, "no {want}: {text}");
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+    }
+
+    /// An agent that keeps a screen of its own, as Claude Code does, leaves the terminal no
+    /// scrollback to look through. Find in its tab opens its transcript, which holds the whole
+    /// chat, and looks there.
+    #[cfg(unix)]
+    #[test]
+    fn find_in_the_tab_of_an_agent_with_its_own_screen_looks_through_its_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("session.jsonl");
+        fs::write(&log, crate::transcript::tests::CLAUDE).unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        let own_screen = "printf '\\033[?1049hready'; cat".to_string();
+        let argv = ["sh".to_string(), "-c".to_string(), own_screen];
+        let root = dir.path().to_path_buf();
+        app.start_session("Claude Code", &argv, &[], &root);
+        shows(&mut app, "ready");
+        let mut event = agent(cellix_agent::AgentState::Idle, "Finished");
+        event.session = "abc-123".into();
+        event.transcript = log.display().to_string();
+        app.serve(Request::Agent(event));
+        ticks_until(&mut app, "Claude Code 8%");
+        app.dock.focused = true;
+        assert!(app.dock.session().unwrap().keeps_own_screen());
+
+        app.handle(Event::Key(KeyEvent::ctrl('f')));
+        assert!(
+            matches!(&app.overlay, Overlay::Find(find) if !find.pane),
+            "Find is on a page, not the terminal"
+        );
+        typed(&mut app, "refund");
+        let page = screen(&app).text();
+        assert!(page.contains("Transcript · Claude Code"), "its tab: {page}");
+        assert!(
+            page.contains("1 of "),
+            "what it found there, counted: {page}"
+        );
     }
 
     #[test]

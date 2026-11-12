@@ -54,6 +54,7 @@ EXPECT = {
     "107-folder-path": "infra",
     "108-terminal-ask": "FAILED",
     "108-terminal-ask-hover": "FAILED",
+    "108-terminal-find": "FAILED",
     "109-problem-ask": "Undefined control sequence",
     "11-replace": "entry",
     "12-search": "SEARCH",
@@ -146,7 +147,7 @@ EXPECT = {
     "98-pane-drag-under": "loss.png",
 }
 # About how many scenes there are, to cut the tour into parts of a size.
-SCENES_IN_ALL = 188
+SCENES_IN_ALL = 189
 # Scenes come to, shot, and those that never reached their surface.
 SEEN, SHOT, FAILED = [0], [], []
 # Which commit the binary is, as far as git can say: the pictures are of that.
@@ -1141,7 +1142,7 @@ with tempfile.TemporaryDirectory() as scratch:
     # the agent about it, as by a selection in a file.
     # Each scene has a cache of its own, or the second rejoins the first one's shell.
     in_shell = lambda cache: {"XDG_CACHE_HOME": cache, "SHELL": "/bin/sh", "PS1": "$ ", "ENV": ""}
-    caches = [tempfile.mkdtemp(prefix="cx", dir="/tmp") for _ in range(2)]
+    caches = [tempfile.mkdtemp(prefix="cx", dir="/tmp") for _ in range(3)]
     failing = ("printf 'test refuses_once_full ... FAILED\\n\\nthread panicked at src/queue.rs:16:9:\\n"
                "assertion failed: queue.push(4).is_err()\\n  left: Ok(())\\n right: Err(Full)\\n'\r")
     selected = [["keys", CTRL("j")], ["wait", 1.5], ["keys", failing], ["wait", 1.0],
@@ -1149,6 +1150,10 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("108-terminal-ask", selected, CODE_FILE, size="150x44", env=in_shell(caches[0]))
     shoot("108-terminal-ask-hover", [*selected, ["move", *OUTPUT_ASK], ["wait", 0.4]], CODE_FILE,
           size="150x44", env=in_shell(caches[1]))
+    # Find, with the keyboard in the terminal: what it printed is searched and marked.
+    found = [["keys", CTRL("j")], ["wait", 1.5], ["keys", failing], ["wait", 1.0], ["keys", CTRL("f")],
+             ["wait", 0.4], ["keys", "queue"], ["wait", 0.5]]
+    shoot("108-terminal-find", found, CODE_FILE, size="150x44", env=in_shell(caches[2]))
     for cache in caches:
         subprocess.run(["pkill", "-9", "-f", cache])
         shutil.rmtree(cache, ignore_errors=True)

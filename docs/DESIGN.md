@@ -580,6 +580,14 @@ says so the first time a session starts and offers `loginctl enable-linger`.
 Claude Code is told the IDE port when it starts, so Cellix keeps its port and token per folder, and
 the next Cellix takes the same ones for an agent that outlived the last.
 
+Find follows the keyboard. In a terminal's tab it looks through all the terminal holds, the
+scrollback too, with the file's own Find bar standing on the terminal's first row: what it finds is
+marked, Enter and Shift+Enter step through it from the newest, the view scrolls to the one it's on,
+and what the terminal prints meanwhile is looked through as it comes. There's nothing to replace
+there, so that row can't be opened. An agent that keeps a screen of its own, as Claude Code does,
+leaves the terminal no scrollback: Find in its tab opens its transcript, which holds the whole chat,
+and looks there. As in VS Code, this takes Ctrl+F from the program in the terminal.
+
 The side pane's terminal also reads the Kitty graphics protocol, so a program in it can draw
 pictures. That is how `terminal-browser` shows a real browser inside Cellix, and how a plot from a
 training run shows in a shell. Frames become bitmaps on the `Grid`'s paint list like any other

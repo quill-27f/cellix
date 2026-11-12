@@ -251,6 +251,10 @@ pub struct Session {
     pub usage: Option<crate::transcript::Usage>,
     /// When it started here, or was joined.
     pub born: std::time::Instant,
+    /// What Find found here, each as its line counting from the top of the scrollback, its
+    /// first column and how many it takes, and which of them Find is on.
+    found: Vec<(usize, u16, u16)>,
+    found_at: Option<usize>,
 }
 
 fn pty_size((columns, rows): (u16, u16), (width, height): CellPixels) -> PtySize {
@@ -362,6 +366,8 @@ impl Session {
             finished,
             exited: false,
             born: std::time::Instant::now(),
+            found: Vec::new(),
+            found_at: None,
             wrote: None,
             size,
             cell,
@@ -896,6 +902,52 @@ impl Session {
         place_of(&word)
     }
 
+    /// Every line it holds as text, the scrollback's first and the screen's after them.
+    pub fn lines(&self) -> Vec<String> {
+        let grid = self.term.grid();
+        let history = grid.history_size() as i32;
+        let (columns, screen) = (self.term.columns(), self.term.screen_lines() as i32);
+        (-history..screen)
+            .map(|y| {
+                let line = (0..columns)
+                    .map(|x| grid[Point::new(Line(y), Column(x))].c)
+                    .collect::<String>();
+                line.trim_end().to_string()
+            })
+            .collect()
+    }
+
+    /// Whether the program keeps a screen of its own, as Claude Code does: then there's no
+    /// scrollback here, only what it shows now.
+    pub fn keeps_own_screen(&self) -> bool {
+        self.term.mode().contains(TermMode::ALT_SCREEN)
+    }
+
+    /// Marks what Find found, and scrolls so the one it's on is in view.
+    pub fn show_found(&mut self, found: Vec<(usize, u16, u16)>, at: Option<usize>) {
+        self.found = found;
+        self.found_at = at;
+        let Some(&(line, ..)) = at.and_then(|at| self.found.get(at)) else {
+            return;
+        };
+        let grid = self.term.grid();
+        let history = grid.history_size() as i32;
+        let top = history - grid.display_offset() as i32;
+        let screen = self.term.screen_lines() as i32;
+        let line = line as i32;
+        if line < top || line >= top + screen {
+            // A third of the way down, so what led to it shows too.
+            let wanted = (line - screen / 3).clamp(0, history);
+            self.term.scroll_display(Scroll::Delta(top - wanted));
+        }
+    }
+
+    /// Lets go of what Find marked.
+    pub fn clear_found(&mut self) {
+        self.found.clear();
+        self.found_at = None;
+    }
+
     /// The screen as text, one string a row.
     pub fn rows(&self) -> Vec<String> {
         let offset = self.term.grid().display_offset() as i32;
@@ -933,6 +985,16 @@ impl Session {
         };
         let content = self.term.renderable_content();
         let offset = content.display_offset as i32;
+        // What Find found on a cell: whether it's the one Find is on.
+        let top = self.term.grid().history_size() as i32 - offset;
+        let found = |x: u16, y: u16| {
+            let line = (top + i32::from(y)) as usize;
+            let on = |(at, column, columns): &(usize, u16, u16)| {
+                *at == line && x >= *column && x < column + columns
+            };
+            let index = self.found.iter().position(on)?;
+            Some(Some(index) == self.found_at)
+        };
         let cursor = content.cursor;
         let show_cursor = focused
             && content.mode.contains(TermMode::SHOW_CURSOR)
@@ -957,6 +1019,11 @@ impl Session {
             }
             if picked(x, y) {
                 bg = theme.selection;
+            }
+            match found(x, y) {
+                Some(true) => bg = theme.selection,
+                Some(false) => bg = theme.found,
+                None => {}
             }
             let at_cursor = show_cursor
                 && point.line == cursor.point.line

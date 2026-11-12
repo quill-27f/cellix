@@ -16,6 +16,9 @@ pub struct Find {
     pub in_replace: bool,
     /// Why the query can't be searched for, as a regular expression that doesn't parse.
     pub invalid: Option<String>,
+    /// It looks through the terminal tab in front of the side pane, not a file. Matches are
+    /// char ranges of all its lines joined, the scrollback's first.
+    pub pane: bool,
 }
 
 impl Find {

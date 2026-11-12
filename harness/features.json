@@ -4814,5 +4814,19 @@
     "title": "A hidden side pane leaves a button in the corner, where the one that hides it stands, that shows the pane again with what it showed",
     "test": "a_hidden_pane_leaves_a_button_in_the_corner_that_brings_it_back",
     "passes": true
+  },
+  {
+    "id": "find-in-a-terminal-tab",
+    "milestone": 14,
+    "title": "With the keyboard in a terminal's tab of the side pane, Find looks through everything the terminal holds, its scrollback too: matches are counted and marked, Enter steps through them, the view scrolls to the one it's on, and new output is searched as it comes",
+    "test": "find_looks_through_a_terminal_tab_and_its_scrollback",
+    "passes": true
+  },
+  {
+    "id": "find-in-an-agents-chat",
+    "milestone": 14,
+    "title": "Find in the tab of an agent that keeps its own screen opens the agent's transcript, which holds the whole chat, and searches there",
+    "test": "find_in_the_tab_of_an_agent_with_its_own_screen_looks_through_its_transcript",
+    "passes": true
   }
 ]

@@ -170,7 +170,7 @@ been tried for real. [docs/PROGRESS.md](docs/PROGRESS.md) says what has and hasn
 | Ctrl+J | Bring up or put away a terminal in the side pane |
 | Ctrl+B | Close or open the left side, or Bold with words picked on a page |
 | Alt+C, or select text | Comment on what's selected |
-| Ctrl+F | Find in the file |
+| Ctrl+F | Find in the file, or with the keyboard in the side pane, in the terminal or the agent's chat |
 | Ctrl+Shift+F | Search the project |
 | Ctrl+\\ | Split pane |
 | F12, F2, Ctrl+Space | Definition, rename, completion |
@@ -292,6 +292,10 @@ connection keeps everything, and the next Cellix in that folder finds it with wh
 
 A program in a shell there can draw pictures with the Kitty graphics protocol, and Open in Browser
 runs a real browser there with `terminal-browser` if it's installed.
+
+Ctrl+F with the keyboard in a terminal's tab finds in what it has printed, its scrollback too, and
+keeps looking as more is printed. In the tab of an agent that keeps its own screen, as Claude Code
+does, it opens the agent's transcript and finds there, since that holds the whole chat.
 
 Select output in a terminal tab of the side pane, or hover a row in Problems, and Ask Agent sends it
 to the agent: all of the output, the command that printed it and the project's files it names, or
