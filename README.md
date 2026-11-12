@@ -297,6 +297,10 @@ Ctrl+F with the keyboard in a terminal's tab finds in what it has printed, its s
 keeps looking as more is printed. In the tab of an agent that keeps its own screen, as Claude Code
 does, it opens the agent's transcript and finds there, since that holds the whole chat.
 
+After a click in one of the side pane's lists (Comments, the Inbox, Problems, Agents, a build's
+log), Ctrl+F finds in that list: everything it holds, not only what's in view. Enter goes to the
+next match and the list scrolls to it. A click on a file takes Find back to the file.
+
 Select output in a terminal tab of the side pane, or hover a row in Problems, and Ask Agent sends it
 to the agent: all of the output, the command that printed it and the project's files it names, or
 the problem with the lines around it. Inside Claude Code it goes into Claude's prompt.

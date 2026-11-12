@@ -86,6 +86,7 @@ EXPECT = {
     "14-agents": "WORKTREES",
     "140-inbox": "waiting",
     "141-inbox-hover": "waiting",
+    "142-inbox-find": "1 of",
     "15-settings-appearance": "Changes apply",
     "150-task-page": "test run",
     "151-task-plan": "test run",
@@ -147,7 +148,7 @@ EXPECT = {
     "98-pane-drag-under": "loss.png",
 }
 # About how many scenes there are, to cut the tour into parts of a size.
-SCENES_IN_ALL = 189
+SCENES_IN_ALL = 190
 # Scenes come to, shot, and those that never reached their surface.
 SEEN, SHOT, FAILED = [0], [], []
 # Which commit the binary is, as far as git can say: the pictures are of that.
@@ -542,6 +543,10 @@ def workspaces(scratch):
     inbox = [*told, failed, ["wait", 0.6], *SHOW_INBOX, ["wait", 0.8]]
     shoot("140-inbox", inbox, CODE_FILE, size="150x44", **space)
     shoot("141-inbox-hover", [*inbox, ["move", 120, 7], ["wait", 0.4]], CODE_FILE, size="150x44", **space)
+    # Find, after a press on the pane, looks through the list in front of it.
+    find = [*inbox, ["click", 100, 1], ["wait", 0.3], ["keys", CTRL("f")], ["wait", 0.4],
+            ["keys", "server"], ["wait", 0.6]]
+    shoot("142-inbox-find", find, CODE_FILE, size="150x44", **space)
     # Its tile brings back what stopped, with what it last showed.
     shoot("102-stopped-card", [["wait", 1.0], ["keys", "\x1b[6;7~"], ["keys", "\x1b[6;7~"],
                                 ["keys", "\x1b[6;7~"], ["wait", 1.0]], CODE_FILE, size="150x44", **space)

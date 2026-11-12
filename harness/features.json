@@ -4856,5 +4856,12 @@
     "title": "Typing in Settings narrows the rows of every page to those that fit, each with its page's name",
     "test": "typing_in_settings_narrows_the_rows_of_every_page_to_those_that_fit",
     "passes": true
+  },
+  {
+    "id": "find-in-pane-lists",
+    "milestone": 14,
+    "title": "Find, after a press on the side pane, looks through everything the list in front of it holds and scrolls to what it finds",
+    "test": "find_looks_through_the_list_in_front_of_the_side_pane",
+    "passes": true
   }
 ]

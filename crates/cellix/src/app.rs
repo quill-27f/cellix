@@ -978,6 +978,27 @@ const FINDING_BATCH: std::time::Duration = std::time::Duration::from_millis(50);
 const FINDING_WAIT: std::time::Duration = std::time::Duration::from_millis(100);
 /// Past this many files a walk stops: a home folder can hold millions.
 const MAX_FILES: usize = 500_000;
+/// Rows a list in the side pane is drawn into for Find to read all it holds.
+const LIST_ROWS: u16 = 600;
+/// Most matches marked on one row of a list.
+const LIST_MATCHES: usize = 64;
+/// A mark behind painted letters: its share of the row, and how far it reaches past them.
+const MARK_HEIGHT: f32 = 0.76;
+const MARK_AIR: f32 = 0.1;
+
+/// A row's letters across `rect` and the column each stands in: a wide letter takes two
+/// columns and is one letter.
+fn row_chars(grid: &Grid, rect: Rect, y: u16) -> (String, Vec<u16>) {
+    let mut text = String::new();
+    let mut columns = Vec::new();
+    for x in rect.x..rect.right().min(grid.width()) {
+        if let Some(letter) = grid.cell(x, y).symbol.chars().next() {
+            text.push(letter);
+            columns.push(x);
+        }
+    }
+    (text, columns)
+}
 
 pub struct App {
     pub workspace: Workspace,
@@ -1230,6 +1251,8 @@ pub struct App {
     browser_result: Option<(String, std::sync::mpsc::Receiver<bool>)>,
     /// No browser would open and terminal-browser isn't here, so the corner card offers it.
     browser_offer: bool,
+    /// The last press landed on the side pane, so Find looks through the list in front of it.
+    pane_pressed: bool,
     /// terminal-browser's installer, running, and what it said.
     browser_install: Option<std::sync::mpsc::Receiver<String>>,
     /// Saving on its own, and saving after formatting.
@@ -1326,6 +1349,7 @@ impl App {
             system_browser: crate::agents::opener(),
             browser_result: None,
             browser_offer: false,
+            pane_pressed: false,
             browser_install: None,
             missing_servers: HashMap::new(),
             not_now: Vec::new(),
@@ -3883,7 +3907,14 @@ impl App {
             })
             .flatten();
         match event {
-            Event::Key(key) => self.key(key),
+            Event::Key(key) => {
+                // Typing into a file takes Find back to it.
+                let typing = matches!(key.key, Key::Char(_)) && !key.mods.ctrl && !key.mods.alt;
+                if typing && matches!(self.overlay, Overlay::None) && !self.dock.focused {
+                    self.pane_pressed = false;
+                }
+                self.key(key);
+            }
             Event::Mouse(mouse) => self.mouse(mouse),
             Event::Paste(text) => self.paste(&text),
             Event::Resize(w, h) => {
@@ -5623,7 +5654,7 @@ impl App {
             }
             Key::Char(c) if key.mods.alt && find.options.flip_key(c) => searched = true,
             // A terminal's output is only to be found, not replaced.
-            Key::Char('r' | 'R') if key.mods.ctrl && find.pane => {}
+            Key::Char('r' | 'R') if key.mods.ctrl && (find.pane || find.listed) => {}
             Key::Char('r' | 'R') if key.mods.ctrl => {
                 find.replace = Some(find.replace.take().unwrap_or_default());
                 find.in_replace = !find.query.is_empty();
@@ -5796,8 +5827,213 @@ impl App {
         session.show_found(found, on);
     }
 
+    /// Every row the list in front of the side pane holds, as it draws them from its top:
+    /// what Find looks through there. A list longer than `LIST_ROWS` is read that far.
+    fn list_rows(&mut self) -> Vec<String> {
+        let Some((front, _)) = self.pane_scroll() else {
+            return Vec::new();
+        };
+        let (Some(area), Some(screen), Some(panel)) =
+            (self.dock_area(), self.dock_screen(), self.dock_panel())
+        else {
+            return Vec::new();
+        };
+        let was = self.dock.tops.of(front);
+        self.dock.tops.set(front, 0);
+        let tall = |rect: Rect| Rect::new(rect.x, 0, rect.w, LIST_ROWS);
+        let mut grid = Grid::new(self.size.0, LIST_ROWS, self.theme.sidebar);
+        self.draw_pane_view(&mut grid, (area, tall(screen), tall(panel)));
+        self.dock.tops.set(front, was);
+        let mut rows: Vec<String> = (0..LIST_ROWS)
+            .map(|y| row_chars(&grid, panel, y).0)
+            .collect();
+        while rows.last().is_some_and(|row| row.trim().is_empty()) {
+            rows.pop();
+        }
+        rows
+    }
+
+    /// Searches the list in front of the side pane for the query as it stands: all it
+    /// holds, from its top.
+    fn search_list(&mut self) {
+        let rows = self.list_rows();
+        if let Overlay::Find(find) = &mut self.overlay {
+            find.search(&rows.join("\n"), 0);
+            find.rows = rows;
+        }
+        self.show_list_match();
+    }
+
+    /// Scrolls the list so the match Find is on shows, a third of the way down where the
+    /// list goes that far. Each view scrolls in its own rows, so it's found by looking.
+    fn show_list_match(&mut self) {
+        let Some((front, (last, _))) = self.pane_scroll() else {
+            return;
+        };
+        let (Some(area), Some(screen), Some(panel)) =
+            (self.dock_area(), self.dock_screen(), self.dock_panel())
+        else {
+            return;
+        };
+        let overlay = std::mem::replace(&mut self.overlay, Overlay::None);
+        if let Overlay::Find(find) = &overlay
+            && !find.matches.is_empty()
+        {
+            let wanted = panel.y + panel.h / 3;
+            let was = self.dock.tops.of(front);
+            let mut best: Option<(u16, usize)> = None;
+            for top in 0..=last {
+                self.dock.tops.set(front, top);
+                let mut grid = Grid::new(self.size.0, self.size.1, self.theme.sidebar);
+                self.draw_pane_view(&mut grid, (area, screen, panel));
+                let on = self.listed_marks(&grid, find).into_iter().find(|m| m.3);
+                match (on, best) {
+                    (Some((y, ..)), _) => {
+                        let off = y.abs_diff(wanted);
+                        if best.is_none_or(|(least, _)| off < least) {
+                            best = Some((off, top));
+                        }
+                    }
+                    // Past the tops that show it.
+                    (None, Some(_)) => break,
+                    (None, None) => {}
+                }
+            }
+            self.dock.tops.set(front, best.map_or(was, |(_, top)| top));
+        }
+        self.overlay = overlay;
+    }
+
+    /// Each match in view in the pane's list as it's drawn on `grid`: its row, its first
+    /// column, its columns, and whether it's the one Find is on. Which of all the list's
+    /// matches these are is told from their order, since the list's rows aren't the screen's.
+    fn listed_marks(&self, grid: &Grid, find: &Find) -> Vec<(u16, u16, u16, bool)> {
+        let Some(panel) = self.dock_panel() else {
+            return Vec::new();
+        };
+        let Ok(matcher) = find.options.matcher(&find.query) else {
+            return Vec::new();
+        };
+        let mut seen = Vec::new();
+        for y in panel.y..panel.bottom().min(grid.height()) {
+            let (text, columns) = row_chars(grid, panel, y);
+            for (start, end) in cellix_core::pattern::char_ranges(&matcher, &text, LIST_MATCHES) {
+                if end <= start || end > columns.len() {
+                    continue;
+                }
+                let letters: String = text.chars().skip(start).take(end - start).collect();
+                let x = columns[start];
+                seen.push((y, x, columns[end - 1] + 1 - x, (start, letters)));
+            }
+        }
+        let all = find.listed_matches();
+        let fits = |from: usize| {
+            seen.iter()
+                .enumerate()
+                .all(|(i, mark)| all.get(from + i) == Some(&mark.3))
+        };
+        let on = find.current;
+        // Where their order fits more than one run of the list's, the one Find is in.
+        let runs: Vec<usize> = (0..all.len()).filter(|from| fits(*from)).collect();
+        let from = runs
+            .iter()
+            .copied()
+            .find(|from| (*from..from + seen.len()).contains(&on))
+            .or(runs.first().copied());
+        seen.into_iter()
+            .enumerate()
+            .map(|(i, (y, x, w, _))| (y, x, w, from.is_some_and(|from| from + i == on)))
+            .collect()
+    }
+
+    /// Marks what Find found in the pane's list: the cells, and behind what's painted over
+    /// them, since text set in pixels doesn't stand on its cells' columns.
+    fn mark_listed(&self, grid: &mut Grid, find: &Find) {
+        for (y, x, w, on) in self.listed_marks(grid, find) {
+            let color = if on {
+                self.theme.selection
+            } else {
+                self.theme.found
+            };
+            let spot = Rect::new(x, y, w, 1);
+            // One or the other: painted letters aren't over their cells, so a mark on the
+            // cells too would show beside them.
+            if self.measure.in_cells() {
+                grid.set_style(spot, |style| Style { bg: color, ..style });
+            } else {
+                self.mark_painted(grid, spot, color);
+            }
+        }
+    }
+
+    /// Puts a mark behind the painted letters that stand in `spot`'s cells: the run of text
+    /// painted on that row whose letters those are, measured to where they start and end.
+    fn mark_painted(&self, grid: &mut Grid, spot: Rect, color: Rgb) {
+        let unit = cellix_render::UNIT;
+        let letters: Vec<char> = (spot.x..spot.right())
+            .filter_map(|x| grid.cell(x, spot.y).symbol.chars().next())
+            .collect();
+        let row = i32::from(spot.y) * unit;
+        let mut place = None;
+        for (index, paint) in grid.paint.iter().enumerate() {
+            let Paint::Text {
+                x,
+                y,
+                text,
+                font,
+                align_right,
+                centred: false,
+                ..
+            } = paint
+            else {
+                continue;
+            };
+            // On this row, or lifted a little in it.
+            if (*y - row).abs() > unit / 2 {
+                continue;
+            }
+            let wide = |text: &str| self.measure.width(text, *font);
+            let right = *x as f32 / unit as f32;
+            let left = if *align_right {
+                right - wide(text)
+            } else {
+                right
+            };
+            let chars: Vec<char> = text.chars().collect();
+            // Its first letter's cell is at or just after where it's painted from.
+            let found = [left.floor(), left.ceil(), left.ceil() + 1.0]
+                .into_iter()
+                .filter_map(|first| usize::try_from(i32::from(spot.x) - first as i32).ok())
+                .find(|from| chars.get(*from..from + letters.len()) == Some(&letters[..]));
+            if let Some(from) = found {
+                let before: String = chars[..from].iter().collect();
+                let these: String = letters.iter().collect();
+                place = Some((index, left + wide(&before), wide(&these), *y));
+                break;
+            }
+        }
+        let Some((index, at, wide, y)) = place else {
+            return;
+        };
+        let top = y as f32 / unit as f32 + (1.0 - MARK_HEIGHT) / 2.0;
+        let bounds = Bounds::cells(at - MARK_AIR, top, wide + MARK_AIR * 2.0, MARK_HEIGHT);
+        let mark = Paint::Panel {
+            bounds,
+            radius: 8,
+            fill: Some(color),
+            border: None,
+            shadow: false,
+            dashed: false,
+        };
+        grid.paint.insert(index, mark);
+    }
+
     /// Searches the open file for the query as it stands.
     fn search_file(&mut self) {
+        if matches!(&self.overlay, Overlay::Find(find) if find.listed) {
+            self.search_list();
+            return;
+        }
         if matches!(&self.overlay, Overlay::Find(find) if find.pane) {
             self.search_pane();
             return;
@@ -5815,6 +6051,10 @@ impl App {
     }
 
     fn show_match(&mut self) {
+        if matches!(&self.overlay, Overlay::Find(find) if find.listed) {
+            self.show_list_match();
+            return;
+        }
         if matches!(&self.overlay, Overlay::Find(find) if find.pane) {
             self.show_pane_match();
             return;
@@ -5849,6 +6089,17 @@ impl App {
         // With the keyboard in a terminal or agent's tab, Find looks through that. An agent
         // that keeps its own screen has no scrollback here, so its transcript is opened and
         // searched: that holds the whole chat.
+        // The last press was on the side pane and a list is in front of it: Find looks
+        // through all that list holds.
+        if self.pane_pressed && !self.in_session() && self.dock.open && self.pane_scroll().is_some()
+        {
+            self.overlay = Overlay::Find(Find {
+                listed: true,
+                ..Find::default()
+            });
+            self.search_file();
+            return;
+        }
         if self.in_session() {
             let own_screen = self
                 .dock
@@ -5894,7 +6145,7 @@ impl App {
     /// The Find bar, a row taller with the replace row. Over a terminal it stands on the
     /// terminal's first row, at its right, as it does over a file.
     fn find_bar_for(&self, replacing: bool) -> Rect {
-        let on_pane = matches!(&self.overlay, Overlay::Find(find) if find.pane);
+        let on_pane = matches!(&self.overlay, Overlay::Find(find) if find.pane || find.listed);
         let pane = match self.dock_screen().filter(|_| on_pane) {
             Some(screen) => Rect::new(screen.x, screen.y.saturating_sub(1), screen.w, screen.h),
             None => self.focused_area(),
@@ -5947,7 +6198,7 @@ impl App {
         };
         let toggle = Rect::new(area.x + 1, area.y, FIND_CHEVRON, 1);
         // Nothing to replace in a terminal's output, so no chevron to open that row.
-        if !find.pane {
+        if !find.pane && !find.listed {
             self.find_button(grid, toggle, chevron, false);
         }
         let text = Input {
@@ -6001,7 +6252,7 @@ impl App {
         let area = self.find_bar_for(find.replace.is_some());
         let (field, switches, _, first) = Self::find_layout(area);
         let toggle = Rect::new(area.x + 1, area.y, FIND_CHEVRON, 1);
-        if toggle.contains(x, y) && find.pane {
+        if toggle.contains(x, y) && (find.pane || find.listed) {
             self.overlay = Overlay::Find(find);
             return;
         }
@@ -8713,6 +8964,21 @@ impl App {
             Bounds::cells(area.x as f32, area.y as f32, 0.0, area.h as f32)
         };
         grid.hairline(line, theme.border);
+        let panel = self.dock_panel().unwrap_or(screen);
+        self.draw_pane_view(grid, (area, screen, panel));
+        // What Find found in the list, over it.
+        if let Overlay::Find(find) = &self.overlay
+            && find.listed
+        {
+            self.mark_listed(grid, find);
+        }
+    }
+
+    /// What's in front of the pane, under its tabs: a list on `panel`, or a session, the
+    /// preview or a log on `screen`. Find draws a list this way into a grid tall enough for
+    /// all of it, to read every row it holds.
+    fn draw_pane_view(&self, grid: &mut Grid, (area, screen, panel): (Rect, Rect, Rect)) {
+        let theme = &self.theme;
         if let (Front::Pdf, Some(view)) = (self.dock.front, &self.dock.pdf) {
             view.draw(grid, screen, self.measure.in_cells(), theme);
             self.draw_pan_hint(grid, screen);
@@ -8728,7 +8994,6 @@ impl App {
         }
         if self.dock.front == Front::Inbox {
             let rows = self.inbox_listed();
-            let panel = self.dock_panel().unwrap_or(screen);
             let top = self.dock.tops.of(Front::Inbox);
             let shown = (rows.as_slice(), top, std::time::Instant::now());
             crate::inbox::draw(grid, panel, shown, self.hover, (&*self.measure, theme));
@@ -8742,7 +9007,6 @@ impl App {
             let draft = self.dock.draft.as_ref();
             let grouped = self.comments_grouped();
             let shown = (listed.as_slice(), draft, agent.as_str(), resolved, grouped);
-            let panel = self.dock_panel().unwrap_or(screen);
             threads::draw(grid, panel, shown, top, self.hover, look);
             return;
         }
@@ -8757,7 +9021,6 @@ impl App {
                 }
             }
             None => {
-                let panel = self.dock_panel().unwrap_or(screen);
                 let top = self.dock.tops.of(Front::Agents);
                 let look = (&*self.measure, theme);
                 self.agents.draw(grid, panel, top, self.hover, look);
@@ -11122,6 +11385,12 @@ impl App {
                 self.note_view_spot(mouse.x, mouse.y);
             }
             return;
+        }
+        // Where the last press landed says what Find looks through: the side pane, or the file.
+        if mouse.kind == MouseKind::Left {
+            self.pane_pressed = self
+                .dock_area()
+                .is_some_and(|area| area.contains(mouse.x, mouse.y));
         }
         if self.tab_drag.is_some() && matches!(mouse.kind, MouseKind::Drag | MouseKind::Up) {
             self.drag_tab(mouse);
@@ -20317,6 +20586,94 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         app.handle(mouse(MouseKind::Left, x, y));
         assert!(!app.threads[0].resolved);
         assert_eq!(marked(&app), 2, "marked again once it's open");
+    }
+
+    /// Find looks through the list in front of the side pane when the last press was there:
+    /// every comment the pane lists, not only those in view. It marks them, Enter goes on to
+    /// the next, and the list scrolls to the one it's on. A press on the file takes Find back
+    /// to the file.
+    #[test]
+    fn find_looks_through_the_list_in_front_of_the_side_pane() {
+        let (dir, mut app) = project();
+        app.show_sidebar = false;
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        let thread = |id: u32, text: &str| -> Thread {
+            let fields = format!(r#""id":{id},"file":"alpha.txt","line":1,"text":"{text}""#);
+            serde_json::from_str(&format!("{{{fields},\"quote\":\"\"}}")).unwrap()
+        };
+        // More than the pane shows at once: a card is five rows or so.
+        app.threads = (1..=12)
+            .map(|n| {
+                let about = if n % 4 == 0 { "needles" } else { "hay" };
+                thread(n, &format!("note {n} about {about}"))
+            })
+            .collect();
+        app.run(Command::ShowComments);
+        let grid = screen(&app);
+        assert!(grid.text().contains("note 1 about hay"), "{}", grid.text());
+        assert!(
+            !grid.text().contains("note 12 about"),
+            "the last is out of view"
+        );
+
+        // A press on the pane, where nothing takes it, and Find is the list's.
+        let panel = app.dock_panel().unwrap();
+        app.handle(mouse(MouseKind::Left, panel.x + 3, panel.y));
+        app.handle(mouse(MouseKind::Up, panel.x + 3, panel.y));
+        app.handle(Event::Key(KeyEvent::ctrl('f')));
+        assert!(matches!(&app.overlay, Overlay::Find(find) if find.listed));
+        typed(&mut app, "needles");
+        let grid = screen(&app);
+        assert!(grid.text().contains("1 of 3"), "{}", grid.text());
+        // The one it's on is in view and marked, all of its letters and only those.
+        let (x, y) = find(&grid, "note 4 about needles");
+        let at = x + "note 4 about ".len() as u16;
+        let bg = |grid: &Grid, x: u16, y: u16| grid.cell(x, y).style.bg;
+        assert_eq!(bg(&grid, at, y), app.theme.selection, "the one Find is on");
+        assert_eq!(bg(&grid, at + 6, y), app.theme.selection);
+        assert_ne!(bg(&grid, at - 1, y), app.theme.selection);
+        assert_ne!(bg(&grid, at + 7, y), app.theme.selection);
+
+        // Enter goes on, and the list scrolls to what was far below.
+        enter(&mut app);
+        enter(&mut app);
+        let grid = screen(&app);
+        assert!(grid.text().contains("3 of 3"), "{}", grid.text());
+        let (x, y) = find(&grid, "note 12 about needles");
+        let at = x + "note 12 about ".len() as u16;
+        assert_eq!(
+            bg(&grid, at, y),
+            app.theme.selection,
+            "scrolled to and marked"
+        );
+        // Another in view is marked as found, not as the one.
+        if let Some(row) = (0..grid.height()).find(|r| grid.row_text(*r).contains("note 8 about")) {
+            let x = grid.row_text(row).find("needles").unwrap();
+            let x = grid.row_text(row)[..x].chars().count() as u16;
+            assert_eq!(bg(&grid, x, row), app.theme.found);
+        }
+
+        // Where text is set in pixels the mark is painted behind the letters themselves.
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        let painted = screen(&app).paint.iter().any(|p| {
+            matches!(p, Paint::Panel { fill: Some(f), radius: 8, .. } if *f == app.theme.selection)
+        });
+        assert!(painted, "a mark behind the painted letters");
+        app.set_measure(Rc::new(cellix_render::CellMeasure));
+
+        // Escape puts Find away and the marks with it.
+        app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
+        assert!(matches!(app.overlay, Overlay::None));
+        let grid = screen(&app);
+        let (x, y) = find(&grid, "note 12 about needles");
+        assert_ne!(bg(&grid, x + 14, y), app.theme.selection);
+
+        // A press on the file, and Find is the file's again.
+        let sheet = app.sheet_area();
+        app.handle(mouse(MouseKind::Left, sheet.x + 10, sheet.y + 3));
+        app.handle(mouse(MouseKind::Up, sheet.x + 10, sheet.y + 3));
+        app.handle(Event::Key(KeyEvent::ctrl('f')));
+        assert!(matches!(&app.overlay, Overlay::Find(find) if !find.listed && !find.pane));
     }
 
     /// With no file in view the pane lists every file's comments, so each file's stand under

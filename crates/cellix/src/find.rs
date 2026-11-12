@@ -19,6 +19,11 @@ pub struct Find {
     /// It looks through the terminal tab in front of the side pane, not a file. Matches are
     /// char ranges of all its lines joined, the scrollback's first.
     pub pane: bool,
+    /// It looks through the list in front of the side pane: comments, the Inbox, problems,
+    /// agents or a build's log. Matches are char ranges of `rows` joined.
+    pub listed: bool,
+    /// Every row that list holds, as it draws them from its top, not only those in view.
+    pub rows: Vec<String>,
 }
 
 impl Find {
@@ -47,6 +52,28 @@ impl Find {
         if count > 0 {
             self.current = (self.current as isize + delta).rem_euclid(count) as usize;
         }
+    }
+
+    /// Each match in a list's rows, in order, as (where it starts in its row, its letters):
+    /// what tells which of them a match on screen is.
+    pub fn listed_matches(&self) -> Vec<(usize, String)> {
+        let mut starts = Vec::with_capacity(self.rows.len());
+        let mut at = 0;
+        for row in &self.rows {
+            starts.push(at);
+            at += row.chars().count() + 1;
+        }
+        self.matches
+            .iter()
+            .map(|&(start, end)| {
+                let row = starts.partition_point(|s| *s <= start).saturating_sub(1);
+                let from = start - starts.get(row).copied().unwrap_or(0);
+                let letters = self.rows.get(row).map_or_else(String::new, |r| {
+                    r.chars().skip(from).take(end - start).collect()
+                });
+                (from, letters)
+            })
+            .collect()
     }
 
     pub fn selected(&self) -> Option<(usize, usize)> {

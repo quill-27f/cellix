@@ -617,6 +617,17 @@ there, so that row can't be opened. An agent that keeps a screen of its own, as 
 leaves the terminal no scrollback: Find in its tab opens its transcript, which holds the whole chat,
 and looks there. As in VS Code, this takes Ctrl+F from the program in the terminal.
 
+Find follows where the last press landed. On a file it's the file's. In a terminal's tab it
+looks through the terminal's scrollback, and in the tab of an agent that keeps its own screen
+through the agent's transcript. After a press on the side pane with a list in front of it,
+Comments, the Inbox, Problems, Agents or a build's log, it looks through everything that list
+holds, not only what's in view: the list is drawn once more from its top into a grid tall
+enough for all of it (600 rows) and its rows are what's searched, so every list is covered by
+the one way and a new one needs nothing. The matches in view are marked as they're drawn, in
+cells or behind the painted letters, and which of the list's matches they are is told from
+their order, since each list scrolls in its own rows. Review and the Task page aren't covered:
+Ctrl+F in Review still opens the project's Search.
+
 The side pane's terminal also reads the Kitty graphics protocol, so a program in it can draw
 pictures. That is how `terminal-browser` shows a real browser inside Cellix, and how a plot from a
 training run shows in a shell. Frames become bitmaps on the `Grid`'s paint list like any other

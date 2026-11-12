@@ -6,6 +6,7 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 
 ### Added
 - Settings can be searched. A box at the top of the page looks through every page at once: the settings and commands that fit are listed together, each with its page's name, and each page in the list at the left shows how many it has. Before, only the Keyboard page could be searched.
+- Find works in the side pane's lists too. Click in Comments, the Inbox, Problems, Agents or a build's log and press Ctrl+F: it looks through everything the list holds, marks what it finds, and Enter scrolls to the next. A click on a file takes Find back to the file.
 - Find works in the side pane. With the keyboard in a terminal's tab, Ctrl+F looks through everything the terminal has printed, its scrollback included: matches are marked, Enter and Shift+Enter step through them, and new output is searched as it arrives. In the tab of an agent that keeps its own screen, such as Claude Code, it opens the agent's transcript and searches that, which is the whole chat.
 
 ### Fixed
