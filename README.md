@@ -357,7 +357,8 @@ saying whether its agent is working, needs you, or is done, a click to switch to
 **+ New Workspace** to find another folder and open it beside this one (type a path and press Tab
 to go into a folder) (Ctrl+Alt+PageUp and PageDown move between
 them). A new `cellix` anywhere picks up every workspace left running on the machine, and `cellix`
-in your home folder lists them to choose from. `cellix ls` prints the same list. Two computers can
+in your home folder lists them to choose from, with Quit beside Open (or Ctrl+Q) to leave them as
+they are. `cellix ls` prints the same list. Two computers can
 show the same workspace at once; whichever typed into an agent last sets its size.
 
 Paste a picture from your own machine with Cmd+V in Ghostty 1.4 or kitty 0.44 and later: Cellix

@@ -4,6 +4,9 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 
 ## [Unreleased]
 
+### Fixed
+- The first screen, where Cellix lists the workspaces that are open, had no way out: no button, and no key but the ones that pick. It now has Quit beside Open and the × in its corner, and Ctrl+Q works there. Quitting from it leaves every workspace as it is.
+
 ### Changed
 - With no file open, the Comments tab puts each file's comments under a heading with the file's name and how many there are. A click on a heading opens the file. Before, the cards didn't say which file they were on.
 - The Comment and Ask Agent buttons by a selection in a terminal no longer cover its output. They stand on the row above the selection when that row's text ends before them, on the row below otherwise, and after the end of the selection's last row when neither has room.

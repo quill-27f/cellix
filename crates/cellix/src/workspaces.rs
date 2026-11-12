@@ -37,6 +37,11 @@ pub const BAR_LIFT: f32 = 0.14;
 const CHIP_RADIUS: u8 = 26;
 /// The button that opens another folder beside this one, and what its tip says.
 const NEW_WORKSPACE: &str = "New Workspace";
+/// The first screen's way out, beside Open: its word, how far it stands from the column's
+/// left edge, and the columns the × in the corner takes, as in the app.
+const QUIT: &str = "Quit";
+const QUIT_FROM: u16 = 8;
+const QUIT_CORNER: u16 = 2;
 const NEW_WORKSPACE_TIP: &str = "Open another folder beside this one";
 /// The tip's size, relative to the interface font.
 const TIP_SIZE: u8 = 85;
@@ -840,6 +845,10 @@ impl Workspaces {
         if mouse.kind != MouseKind::Left {
             return;
         }
+        if self.on_quit(mouse.x, mouse.y) {
+            self.quit = true;
+            return;
+        }
         let picked = self
             .choice_at(mouse.y)
             .or_else(|| (mouse.y == self.open_all_row()).then_some(self.active));
@@ -848,8 +857,34 @@ impl Workspaces {
         }
     }
 
-    /// Up and Down pick a workspace on the first screen, and Enter opens it.
+    /// Where Quit stands on the first screen, beside Open.
+    fn quit_link(&self) -> Rect {
+        let (left, ..) = self.choice_rows();
+        let width = QUIT.len() as u16;
+        Rect::new(left + QUIT_FROM, self.open_all_row(), width, 1)
+    }
+
+    /// The × in the corner of the first screen, which quits as it does everywhere else.
+    fn quit_corner(&self) -> Rect {
+        let x = self.size.0.saturating_sub(QUIT_CORNER);
+        Rect::new(x, 0, QUIT_CORNER, 1)
+    }
+
+    /// Whether a place on the first screen is one of its ways out.
+    fn on_quit(&self, x: u16, y: u16) -> bool {
+        let link = self.quit_link();
+        // A column either side of the word counts, so it isn't a pixel hunt.
+        let near = y == link.y && x + 1 >= link.x && x <= link.right();
+        near || self.quit_corner().contains(x, y)
+    }
+
+    /// Up and Down pick a workspace on the first screen, and Enter opens it. The key that
+    /// quits Cellix quits here too: every workspace stays as it is, for next time.
     fn choose_key(&mut self, key: KeyEvent) {
+        if self.app().command_for(key) == Some(Command::Quit) {
+            self.quit = true;
+            return;
+        }
         let count = self.list.len();
         match key.key {
             Key::Up => self.active = (self.active + count - 1) % count,
@@ -963,8 +998,39 @@ impl Workspaces {
         };
         let y = self.open_all_row();
         grid.label(left, y, "Open", link, right);
-        let hint = "↑ ↓ to pick, or run cellix in a project's folder";
-        let hint_x = f32::from(right) - self.text_width(hint);
+        // The way out, beside it and in the corner, where it is on every other screen.
+        let leaving = self.hover.is_some_and(|(x, y)| self.on_quit(x, y));
+        let quit = self.quit_link();
+        let style = if leaving { base } else { dim };
+        grid.label(quit.x, quit.y, QUIT, style, right);
+        let corner = self.quit_corner();
+        let middle = f32::from(corner.x) + f32::from(corner.w) / 2.0;
+        grid.fill(corner, theme.tab);
+        if self.hover.is_some_and(|(x, y)| corner.contains(x, y)) {
+            let (wide, high) = crate::dock::BESIDE_LINE_PILL;
+            let chip = Bounds::cells(middle - wide / 2.0, (1.0 - high) / 2.0, wide, high);
+            grid.panel(chip, CHIP_RADIUS, Some(theme.row_hover), None);
+        }
+        let color = if leaving { base.fg } else { theme.activity.fg };
+        let cross = Style {
+            fg: color,
+            painted: true,
+            ..theme.tab
+        };
+        grid.put_str(corner.x, 0, "×", cross, corner.right());
+        let side = crate::dock::CLOSE_MARK;
+        grid.paint.push(cellix_render::Paint::Icon {
+            bounds: Bounds::cells(middle - side, (1.0 - side) / 2.0, side * 2.0, side),
+            icon: Icon::Close,
+            color,
+        });
+        // What the pointer is on says what it does, where the keys are named otherwise.
+        let hint = if leaving {
+            "Quits Cellix. Every workspace stays as it is, for next time"
+        } else {
+            "↑ ↓ to pick, Ctrl+Q to quit, or run cellix in a folder"
+        };
+        let hint_x = (f32::from(right) - self.text_width(hint)).max(f32::from(quit.right() + 2));
         label(grid, (hint_x, y), hint, dim, right);
     }
 
@@ -1682,6 +1748,55 @@ mod tests {
         assert!(!bar(&spaces).contains("Resume"), "{}", bar(&spaces));
         assert!(!bar(&spaces).contains("stopped"));
         let _ = fs::remove_dir_all(crate::hold::folder_of(&second));
+    }
+
+    /// The first screen had no way out at all: no button, and no key but those that pick.
+    #[test]
+    fn the_first_screen_can_be_quit_and_leaves_every_workspace_as_it_is() {
+        let (_dir, first, second) = projects();
+        let mut spaces = spaces();
+        spaces.open(first);
+        spaces.open(second);
+        spaces.choosing = true;
+        spaces.fit();
+        let grid = screen(&spaces);
+        let row = (0..30)
+            .find(|&y| grid.row_text(y).contains("Open"))
+            .expect("the row under the list");
+        let quit = spot(&grid, row, "Quit");
+        assert!(
+            grid.row_text(0).trim_end().ends_with('×'),
+            "and in the corner"
+        );
+        assert!(grid.text().contains("Ctrl+Q to quit"), "{}", grid.text());
+
+        click(&mut spaces, MouseKind::Left, quit);
+        assert!(spaces.quit, "the word quits");
+        assert_eq!(spaces.list.len(), 2, "and closes nothing");
+        assert!(spaces.choosing);
+
+        spaces.quit = false;
+        let corner = (spaces.size.0 - 1, 0);
+        click(&mut spaces, MouseKind::Move, corner);
+        assert!(screen(&spaces).text().contains("stays as it is"));
+        click(&mut spaces, MouseKind::Left, corner);
+        assert!(spaces.quit, "the × in the corner quits");
+
+        spaces.quit = false;
+        let ctrl = Mods {
+            ctrl: true,
+            ..Mods::default()
+        };
+        key(&mut spaces, Key::Char('q'), ctrl);
+        assert!(
+            spaces.quit,
+            "and so does the key that quits everywhere else"
+        );
+
+        // Opening one still works from the row's other end.
+        spaces.quit = false;
+        click(&mut spaces, MouseKind::Left, spot(&grid, row, "Open"));
+        assert!(!spaces.choosing && !spaces.quit);
     }
 
     #[test]

@@ -4800,5 +4800,12 @@
     "title": "With no file in view the Comments tab lists every file's comments under a heading for each file, with its name and how many; a click on a heading opens the file, and the list is then that file's alone",
     "test": "with_no_file_in_view_comments_stand_under_a_heading_for_each_file",
     "passes": true
+  },
+  {
+    "id": "first-screen-can-be-quit",
+    "milestone": 14,
+    "title": "The first screen, which lists the workspaces open on the machine, can be left: Quit beside Open, the × in its corner and the key that quits all end Cellix, leaving every workspace as it is",
+    "test": "the_first_screen_can_be_quit_and_leaves_every_workspace_as_it_is",
+    "passes": true
   }
 ]

@@ -1424,6 +1424,11 @@ impl App {
         }
     }
 
+    /// The command a key is bound to here, for a screen outside the app to honour.
+    pub(crate) fn command_for(&self, key: KeyEvent) -> Option<Command> {
+        self.workflow.keys.command(key)
+    }
+
     pub(crate) fn say(&self, text: impl Into<String>) {
         *self.message.borrow_mut() = text.into();
     }
