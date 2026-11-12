@@ -4793,5 +4793,12 @@
     "title": "The Comment and Ask Agent buttons by a selection in a terminal stand where they cover none of its output: the row above, else the row below, with their right edge on the selection's, else after the end of the selection's last row",
     "test": "the_buttons_by_selected_output_stand_clear_of_the_output",
     "passes": true
+  },
+  {
+    "id": "comments-under-their-files",
+    "milestone": 14,
+    "title": "With no file in view the Comments tab lists every file's comments under a heading for each file, with its name and how many; a click on a heading opens the file, and the list is then that file's alone",
+    "test": "with_no_file_in_view_comments_stand_under_a_heading_for_each_file",
+    "passes": true
   }
 ]

@@ -186,7 +186,10 @@ above. The agent hears all of the output, the command that printed it and every
 was typed while the shell was at its prompt, read off the screen when it's asked. A comment on output
 has no file, so it shows in the Comments tab whatever file is in view, and opening it goes to the
 first place it names. A row of the Problems tab gets Ask Agent under the pointer, which sends what the
-checker said, the file and line, and three lines of code either side.
+checker said, the file and line, and three lines of code either side. With no file in view the tab lists every file's
+comments, so each file's stand under a heading with its icon, its name and how many, as in VS Code's
+Comments view: a file at a time by name, a terminal's output last. A click on a heading opens the
+file, and the list is then that file's alone.
 
 ## The pointer
 

@@ -4,6 +4,11 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 
 ## [Unreleased]
 
+### Changed
+- With no file open, the Comments tab puts each file's comments under a heading with the file's name and how many there are. A click on a heading opens the file. Before, the cards didn't say which file they were on.
+- The Comment and Ask Agent buttons by a selection in a terminal no longer cover its output. They stand on the row above the selection when that row's text ends before them, on the row below otherwise, and after the end of the selection's last row when neither has room.
+- In the Agents panel a worktree's row says Review under the pointer, since that's what a click opens. The list of what can start is headed Start, with the terminal set apart from the agents.
+
 ## [0.6.5] - 2026-11-10
 
 ### Added

@@ -8190,7 +8190,8 @@ impl App {
                 let (threads, resolved) = self.shown_threads();
                 let agent = self.dock.agent_name();
                 let draft = self.dock.draft.as_ref();
-                let threads = (threads.as_slice(), draft, agent.as_str(), resolved);
+                let grouped = self.comments_grouped();
+                let threads = (threads.as_slice(), draft, agent.as_str(), resolved, grouped);
                 let top = self.dock.tops.of(Front::Comments);
                 let hit = threads::hit(screen, threads, top, (x, y), &*self.measure);
                 if let Some(hit) = hit {
@@ -8582,7 +8583,8 @@ impl App {
             let agent = self.dock.agent_name();
             let (listed, resolved) = self.shown_threads();
             let draft = self.dock.draft.as_ref();
-            let shown = (listed.as_slice(), draft, agent.as_str(), resolved);
+            let grouped = self.comments_grouped();
+            let shown = (listed.as_slice(), draft, agent.as_str(), resolved, grouped);
             let panel = self.dock_panel().unwrap_or(screen);
             threads::draw(grid, panel, shown, top, self.hover, look);
             return;
@@ -9284,9 +9286,17 @@ impl App {
         }
     }
 
+    /// Whether the Comments pane lists every file's comments, each file's under a heading
+    /// that names it: so it is with no file in view to say whose they are.
+    fn comments_grouped(&self) -> bool {
+        let open = self.editors.get(self.active());
+        open.and_then(|e| e.buffer.path()).is_none()
+    }
+
     /// What the Comments pane lists for the file in view, top to bottom: the open comments,
     /// and the resolved ones too when they're asked for. Also how many are resolved, and
-    /// whether they're listed.
+    /// whether they're listed. With no file in view it's every file's, a file at a time by
+    /// name, and what's on a terminal's output after them.
     fn shown_threads(&self) -> (Vec<&Thread>, (usize, bool)) {
         let file = self
             .editors
@@ -9308,7 +9318,12 @@ impl App {
             .filter(|t| shown || !t.resolved)
             .filter(here)
             .collect();
-        threads.sort_by_key(|t| t.line);
+        if file.is_none() {
+            // By name whatever its case, as the explorer lists files.
+            threads.sort_by_key(|t| (on_output(t), threads::place_of(t).to_lowercase(), t.line));
+        } else {
+            threads.sort_by_key(|t| t.line);
+        }
         (threads, (resolved, shown))
     }
 
@@ -9330,6 +9345,15 @@ impl App {
 
     fn thread_hit(&mut self, hit: ThreadHit) {
         match hit {
+            ThreadHit::File(id) => {
+                let named = self.threads.iter().find(|t| t.id == id);
+                let Some(file) = named.map(|t| t.file.clone()) else {
+                    return;
+                };
+                if let Err(e) = self.open(&self.workspace.root().join(&file)) {
+                    self.say(format!("Could not open {file}: {e}"));
+                }
+            }
             ThreadHit::Open(id) => {
                 // Output goes to the first place it names, as Ctrl+click on it does.
                 let output =
@@ -14399,7 +14423,8 @@ impl App {
                 let (listed, resolved) = self.shown_threads();
                 let agent = self.dock.agent_name();
                 let draft = self.dock.draft.as_ref();
-                let shown = (listed.as_slice(), draft, agent.as_str(), resolved);
+                let grouped = self.comments_grouped();
+                let shown = (listed.as_slice(), draft, agent.as_str(), resolved, grouped);
                 (threads::last_top(panel, shown, &*self.measure), 3)
             }
             Front::Agents | Front::Session if self.dock.listing() => {
@@ -19997,6 +20022,56 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         app.handle(mouse(MouseKind::Left, x, y));
         assert!(!app.threads[0].resolved);
         assert_eq!(marked(&app), 2, "marked again once it's open");
+    }
+
+    /// With no file in view the pane lists every file's comments, so each file's stand under
+    /// a heading that names it and counts them, as in VS Code's Comments view. A click on a
+    /// heading opens its file, and then the list is that file's alone, with no heading.
+    #[test]
+    fn with_no_file_in_view_comments_stand_under_a_heading_for_each_file() {
+        let (dir, mut app) = project();
+        app.show_sidebar = false;
+        let thread = |id: u32, file: &str, line: usize, text: &str| -> Thread {
+            let fields = format!(r#""id":{id},"file":"{file}","line":{line},"text":"{text}""#);
+            serde_json::from_str(&format!("{{{fields},\"quote\":\"\"}}")).unwrap()
+        };
+        app.threads = vec![
+            thread(1, "src/lib.rs", 1, "Name it better"),
+            thread(2, "alpha.txt", 2, "Why second"),
+            thread(3, "alpha.txt", 1, "Why first"),
+        ];
+        app.run(Command::ShowComments);
+        let grid = screen(&app);
+        let text = grid.text();
+        assert!(text.contains("3 of yours · 2 files"), "{text}");
+        // A file at a time by name, each one's comments from its top down.
+        let row = |words: &str| find(&grid, words).1;
+        let order = [
+            row("alpha.txt"),
+            row("Why first"),
+            row("Why second"),
+            row("src/lib.rs"),
+            row("Name it better"),
+        ];
+        assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
+        let heading = grid.row_text(row("alpha.txt"));
+        assert!(heading.trim_end().ends_with('2'), "how many: {heading}");
+
+        let (x, y) = find(&grid, "src/lib.rs");
+        click(&mut app, x, y);
+        let open = app.editors[app.active()]
+            .buffer
+            .path()
+            .map(Path::to_path_buf);
+        assert_eq!(open, Some(dir.path().join("src/lib.rs")));
+        let text = screen(&app).text();
+        assert!(text.contains("Name it better"), "{text}");
+        assert!(!text.contains("Why first"), "only this file's now:\n{text}");
+        assert!(text.contains("1 of yours"), "{text}");
+        assert!(
+            !text.contains("src/lib.rs") && !text.contains(" files"),
+            "a file in view needs no heading:\n{text}"
+        );
     }
 
     #[test]

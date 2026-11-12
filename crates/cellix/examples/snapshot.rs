@@ -2,7 +2,8 @@
 //!
 //!   snapshot <workspace> <out.png> [view] [columns] [rows]
 //!
-//! `view` is `review`, or a file to open. Agents use this to see the interface.
+//! `view` is `review`, `comments` for the Comments pane with no file open, or a file to open.
+//! Agents use this to see the interface.
 //! `select:<file>:<word>` opens a file and double-clicks a word; `ask:<file>:<word>` then
 //! presses Ask Agent. `across:<file>:<word>:<notches>` opens a file and tips the wheel
 //! sideways that many notches over the row that word is on, or over that row of the screen
@@ -92,6 +93,8 @@ fn main() {
         Some("review") => app.run(Command::OpenDiff),
         Some("welcome") => {}
         Some("palette") => app.run(Command::CommandPalette),
+        // The Comments pane with no file in view, where it lists every file's.
+        Some("comments") => app.run(Command::ShowComments),
         // Quick Open a moment after it opens, while a big tree is still being walked.
         Some("quick-open") => {
             app.finding_wait = std::time::Duration::ZERO;

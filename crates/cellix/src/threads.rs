@@ -32,6 +32,8 @@ pub const KINDS: [&str; 5] = [
     "Structure",
     "Reproducibility",
 ];
+/// How far a file's heading is lifted in its row, clear of the card under it.
+const FILE_LIFT: f32 = 0.3;
 const BUTTON_PADDING: usize = 1;
 /// Columns either side of a button's text, in pixels, about 24 px.
 const BUTTON_ROOM: f32 = 1.4;
@@ -61,6 +63,8 @@ pub enum Hit {
     Delete(u32),
     /// Shows the resolved comments too, or hides them again.
     ToggleResolved,
+    /// Opens the file a heading names, by a comment on it.
+    File(u32),
 }
 
 /// An agent's verdict on a comment, from how its reply starts: `Agree (Evidence): …` or
@@ -89,8 +93,12 @@ enum Line {
     /// Nothing open; true when there are resolved comments to show.
     Empty(bool),
     /// The button that asks the agent to check the review, after how many comments are the
-    /// reviewer's and how many the agent's.
-    Check(usize, usize),
+    /// reviewer's and how many the agent's, and how many files they're on when the list
+    /// covers every file.
+    Check(usize, usize, usize),
+    /// The heading over a file's comments, when the list covers every file: a comment on it
+    /// for a click to open it by, none for a terminal's output, then its name and how many.
+    File(Option<u32>, String, usize),
     /// How many comments of each kind there are, so what's not covered stands out. A narrow
     /// panel takes more than one row.
     Coverage(Vec<(&'static str, usize)>),
@@ -314,17 +322,41 @@ fn draft_lines(draft: &Draft, width: f32, measure: &dyn Measure, out: &mut Vec<L
     out.push(Line::Hint);
 }
 
-/// What the panel shows: the comments, the one being written, the agent's name, and how
-/// many comments are resolved and whether they're among those shown.
-pub type Shown<'a> = (&'a [&'a Thread], Option<&'a Draft>, &'a str, (usize, bool));
+/// What the panel shows: the comments, the one being written, the agent's name, how many
+/// comments are resolved and whether they're among those shown, and whether each file's
+/// stand under a heading, as they do when no one file is in view.
+pub type Shown<'a> = (
+    &'a [&'a Thread],
+    Option<&'a Draft>,
+    &'a str,
+    (usize, bool),
+    bool,
+);
 
-fn lines((threads, draft, agent, resolved): Shown, width: f32, measure: &dyn Measure) -> Vec<Line> {
+/// Where a comment is, as its heading says it: its file, or the terminal tab whose output
+/// it's on.
+pub fn place_of(thread: &Thread) -> String {
+    match &thread.about {
+        Some(About::Output { tab, .. }) => format!("{tab} output"),
+        _ => thread.file.clone(),
+    }
+}
+
+fn lines(
+    (threads, draft, agent, resolved, grouped): Shown,
+    width: f32,
+    measure: &dyn Measure,
+) -> Vec<Line> {
     let mut out = vec![Line::Gap];
     // The counts are of what's still open, whether or not the resolved ones show.
     let open: Vec<&Thread> = threads.iter().copied().filter(|t| !t.resolved).collect();
     if !open.is_empty() {
         let mine = open.iter().filter(|t| t.suggested_by.is_empty()).count();
-        out.push(Line::Check(mine, open.len() - mine));
+        let mut places: Vec<String> = open.iter().map(|t| place_of(t)).collect();
+        places.sort();
+        places.dedup();
+        let files = if grouped { places.len() } else { 0 };
+        out.push(Line::Check(mine, open.len() - mine, files));
         let count = |kind: &str| open.iter().filter(|t| t.kind == kind).count();
         // As many pills to a row as fit.
         let mut row = Vec::new();
@@ -353,8 +385,17 @@ fn lines((threads, draft, agent, resolved): Shown, width: f32, measure: &dyn Mea
     } else if open.is_empty() {
         out.push(Line::Empty(resolved.0 > 0));
     }
+    let mut place = None;
     for thread in threads {
         let id = thread.id;
+        // The list comes a file at a time, so a heading goes where the file changes.
+        let here = place_of(thread);
+        if grouped && place.as_ref() != Some(&here) {
+            let count = threads.iter().filter(|t| place_of(t) == here).count();
+            let on_output = matches!(thread.about, Some(About::Output { .. }));
+            out.push(Line::File((!on_output).then_some(id), here.clone(), count));
+            place = Some(here);
+        }
         let suggested = !thread.suggested_by.is_empty();
         let kind = if thread.kind.is_empty() {
             String::new()
@@ -610,6 +651,7 @@ pub fn hit(
             let (cells, at) = check_button(area, measure);
             (x >= at && x < at + cells.chars().count() as u16).then_some(Hit::Check)
         }
+        Line::File(opens, ..) => opens.map(Hit::File),
         Line::Reopen(id) => {
             let (_, cells, at) = row_of(area, &REOPEN, measure).pop()?;
             (x >= at && x < at + cells.chars().count() as u16).then_some(Hit::Reopen(*id))
@@ -849,7 +891,49 @@ pub fn draw(
                 // Lifted a little, so the block keeps air above the buttons and below its text.
                 grid.drop_last(-0.12);
             }
-            Line::Check(mine, suggested) => {
+            Line::File(opens, place, count) => {
+                let from = grid.painted_so_far();
+                let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= side && h.0 < right);
+                if opens.is_some() && on_it {
+                    let wash = Bounds::cells(
+                        side as f32 - 0.5,
+                        y as f32 + 0.055,
+                        (right - side) as f32 + 1.0,
+                        0.89,
+                    );
+                    grid.panel(wash, 18, Some(theme.row_hover), None);
+                }
+                // How many, on a chip at the row's end.
+                let number = count.to_string();
+                let wide = measure.width(&number, small());
+                let chip = (wide + 0.9).max(1.3);
+                let chip_x = right as f32 - chip;
+                let bounds = Bounds::cells(chip_x, y as f32 + 0.22, chip, 0.56);
+                grid.panel(bounds, 40, Some(theme.tint), None);
+                let at = chip_x + (chip - wide) / 2.0;
+                let cell = right.saturating_sub(number.chars().count() as u16 + 1);
+                grid.label_at(at, cell, y, &number, body, right, SMALL);
+                let stop = (chip_x.floor() as u16).saturating_sub(1);
+                // A file's own icon in its own colour, then its folder quietly and its name.
+                let (folder, name) = match place.rsplit_once('/') {
+                    Some((folder, name)) if opens.is_some() => (format!("{folder}/"), name),
+                    _ => (String::new(), place.as_str()),
+                };
+                let (icon, colour, fallback) = if opens.is_some() {
+                    (Icon::File, crate::explorer::file_color(name), "▪")
+                } else {
+                    (Icon::Terminal, theme.gutter.fg, ">")
+                };
+                grid.glyph(side as f32, y, icon, colour, fallback, body);
+                let start = side + 2;
+                let end = grid.label(start, y, &folder, dim, stop);
+                let at = start as f32 + measure.width(&folder, Font::default());
+                grid.label_at(at, end, y, name, body, stop, 100);
+                // Its card starts right under its row, so it stands a little up in it, with
+                // air from the card's edge and still more from the card before.
+                grid.lift_since(from, FILE_LIFT);
+            }
+            Line::Check(mine, suggested, files) => {
                 let (cells, x) = check_button(area, measure);
                 // Nothing is painted under the pane, so the button's corners need a ground.
                 let ground = Bounds::cells(x as f32, y as f32, cells.chars().count() as f32, 1.0);
@@ -888,10 +972,15 @@ pub fn draw(
                         BUTTON_TEXT,
                     );
                 }
-                let note = match suggested {
+                let mut note = match suggested {
                     0 => format!("{mine} of yours"),
                     n => format!("{mine} of yours · {n} suggested"),
                 };
+                match files {
+                    0 => {}
+                    1 => note.push_str(" · 1 file"),
+                    n => note.push_str(&format!(" · {n} files")),
+                }
                 let end = x.saturating_sub(1);
                 grid.label_at(text_x as f32, text_x, y, &note, dim, end, SMALL);
             }
