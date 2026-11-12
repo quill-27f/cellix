@@ -276,7 +276,7 @@ fn empty_buttons(area: Rect, measure: &dyn Measure) -> [(String, u16, u16); 2] {
     let y = area.y + 2 + lines.len() as u16 + 1;
     let first = button_cells(SETTINGS, measure);
     let x = area.x + SIDE;
-    let second_x = x + first.chars().count() as u16 + 1;
+    let second_x = x + first.chars().count() as u16 + crate::measures::BUTTON_GAP;
     let second = button_cells(START, measure);
     [(first, x, y), (second, second_x, y)]
 }

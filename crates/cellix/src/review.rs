@@ -18,8 +18,6 @@ use cellix_review::{
 use crate::theme::Theme;
 
 const LIST_WIDTH: u16 = 24;
-const ACCEPT: &str = "[Accept]";
-const REJECT: &str = "[Reject]";
 const NUMBER_WIDTH: u16 = 5;
 /// How far a card's top edge reaches into the gap above it, and how far its header's
 /// words and buttons are raised, in rows: air of about 11 px above and below the buttons.
@@ -860,11 +858,21 @@ impl Review {
         )
     }
 
+    /// A button's cells: the room every button has, measured where text is drawn.
+    fn cells_of(&self, label: &str) -> String {
+        match &self.measure {
+            Some(measure) => crate::measures::button_cells(label, &**measure),
+            None => format!("[{label}]"),
+        }
+    }
+
     /// The two buttons at the end of a row, as (accept x, reject x).
-    fn button_spots(body: Rect) -> (u16, u16) {
+    fn button_spots(&self, body: Rect) -> (u16, u16) {
+        let width = |label: &str| self.cells_of(label).chars().count() as u16;
         // As far in from the card's right as its name is from its left.
-        let accept = body.right().saturating_sub(ACCEPT.len() as u16 + 2);
-        (accept, accept.saturating_sub(REJECT.len() as u16 + 1))
+        let accept = body.right().saturating_sub(width("Accept") + 2);
+        let gap = crate::measures::BUTTON_GAP;
+        (accept, accept.saturating_sub(width("Reject") + gap))
     }
 
     /// The body with its width cut to what the title row may use.
@@ -876,7 +884,7 @@ impl Review {
     fn title_hit(&self, body: Rect, x: u16) -> Option<Hit> {
         let body = self.title_body(body);
         if self.is_proposal() {
-            let (accept, reject) = Self::button_spots(body);
+            let (accept, reject) = self.button_spots(body);
             return if x >= accept {
                 Some(Hit::AcceptProposal)
             } else if x >= reject {
@@ -915,10 +923,11 @@ impl Review {
         match self.stacked(comments).get(self.top + row)? {
             Stacked::Header(_) if self.fixed.is_some() || self.until.is_some() => None,
             Stacked::Header(hunk) => {
-                let (accept, reject) = Self::button_spots(body);
-                if x >= accept && x < accept + ACCEPT.len() as u16 {
+                let (accept, reject) = self.button_spots(body);
+                let width = |label: &str| self.cells_of(label).chars().count() as u16;
+                if x >= accept && x < accept + width("Accept") {
                     Some(Hit::Accept(*hunk))
-                } else if x >= reject && x < reject + REJECT.len() as u16 {
+                } else if x >= reject && x < reject + width("Reject") {
                     Some(Hit::Reject(*hunk))
                 } else {
                     None
@@ -967,7 +976,7 @@ impl Review {
             return;
         };
         if self.is_proposal() {
-            let (accept, reject) = Self::button_spots(body);
+            let (accept, reject) = self.button_spots(body);
             let primary = Style {
                 fg: theme.button_text,
                 ..theme.sidebar
@@ -977,18 +986,32 @@ impl Review {
                 ..theme.sidebar
             };
             grid.label(body.x + 2, y, &file, strong, reject.saturating_sub(1));
-            let reject_fill = if self.on_button(reject, y, REJECT) {
+            let reject_fill = if self.on_button(reject, y, &self.cells_of("Reject")) {
                 theme.quiet_button(theme.tint)
             } else {
                 theme.tint
             };
-            let accept_fill = if self.on_button(accept, y, ACCEPT) {
+            let accept_fill = if self.on_button(accept, y, &self.cells_of("Accept")) {
                 theme.quiet_button(theme.button)
             } else {
                 theme.button
             };
-            grid.button(reject, y, REJECT, "Reject", reject_fill, quiet);
-            grid.button(accept, y, ACCEPT, "Accept", accept_fill, primary);
+            grid.button(
+                reject,
+                y,
+                &self.cells_of("Reject"),
+                "Reject",
+                reject_fill,
+                quiet,
+            );
+            grid.button(
+                accept,
+                y,
+                &self.cells_of("Accept"),
+                "Accept",
+                accept_fill,
+                primary,
+            );
             return;
         }
         if narrow {
@@ -1123,7 +1146,7 @@ impl Review {
             fg: theme.status.fg,
             ..theme.text
         };
-        let (accept, reject) = Self::button_spots(card);
+        let (accept, reject) = self.button_spots(card);
         grid.label(
             card.x + 2,
             y,
@@ -1153,20 +1176,34 @@ impl Review {
             fg: theme.text.fg,
             ..theme.text
         };
-        let accept_fill = if self.on_button(accept, y, ACCEPT) {
+        let accept_fill = if self.on_button(accept, y, &self.cells_of("Accept")) {
             theme.quiet_button(theme.button)
         } else {
             theme.button
         };
         // The secondary button every other surface has.
         let rest = theme.quiet_button(theme.text.bg);
-        let reject_fill = if self.on_button(reject, y, REJECT) {
+        let reject_fill = if self.on_button(reject, y, &self.cells_of("Reject")) {
             theme.quiet_button(rest)
         } else {
             rest
         };
-        grid.button(accept, y, ACCEPT, "Accept", accept_fill, primary);
-        grid.button(reject, y, REJECT, "Reject", reject_fill, quiet);
+        grid.button(
+            accept,
+            y,
+            &self.cells_of("Accept"),
+            "Accept",
+            accept_fill,
+            primary,
+        );
+        grid.button(
+            reject,
+            y,
+            &self.cells_of("Reject"),
+            "Reject",
+            reject_fill,
+            quiet,
+        );
     }
 
     fn draw_note(&self, grid: &mut Grid, card: Rect, y: u16, text: &str, theme: &Theme) {
@@ -1351,8 +1388,10 @@ impl Review {
         }
         match row {
             ListRow::Heading(text) => {
+                // Small, bold and quiet, as a section's heading is in every panel.
                 let dim = Style {
                     fg: theme.gutter.fg,
+                    bold: true,
                     ..theme.sidebar
                 };
                 // Where every sidebar's title starts, two columns in.

@@ -5,6 +5,7 @@ use cellix_render::{Bounds, Font, Grid, Icon, Measure, Rect, Style};
 use cellix_review::threads::YOU;
 use cellix_review::{About, Thread};
 
+use crate::measures::BUTTON_GAP;
 use crate::theme::Theme;
 
 const SIDE: u16 = 2;
@@ -12,6 +13,9 @@ const CARD_RADIUS: u8 = 33;
 /// How far a card reaches above its first row and below its last. Text sits low in its row
 /// and buttons fill theirs, so the two differ to look the same.
 const CARD_AIR: (f32, f32) = (0.17, 0.45);
+/// How far a card reaches past the pane's text edge either side: it starts a column from
+/// the pane's edge, and its own text two columns inside it.
+const CARD_REACH: f32 = 1.0;
 /// How far an agent's answer sits in from the card's text.
 const INSET: f32 = 0.6;
 const BUTTONS: [&str; 3] = ["Reply", "Ask agent", "Resolve"];
@@ -32,13 +36,14 @@ pub const KINDS: [&str; 5] = [
     "Structure",
     "Reproducibility",
 ];
+/// How far the summary and Check my review are lifted in their row, so the pills under
+/// them have half a row of clear air.
+const CHECK_LIFT: f32 = 0.25;
 /// How far a file's heading is lifted in its row, clear of the card under it.
 const FILE_LIFT: f32 = 0.3;
 const BUTTON_PADDING: usize = 1;
-/// Columns either side of a button's text, in pixels, about 24 px.
-const BUTTON_ROOM: f32 = 1.4;
 /// The size buttons set their text at, as `Grid::button` does.
-pub(crate) const BUTTON_TEXT: u8 = 90;
+pub(crate) const BUTTON_TEXT: u8 = crate::measures::BUTTON_TEXT;
 pub(crate) const SMALL: u8 = 85;
 
 /// What a click in the panel lands on.
@@ -258,7 +263,7 @@ fn pill_width(text: &str, measure: &dyn Measure) -> f32 {
     measure.width(text, small()) + 0.9
 }
 
-const PILL_GAP: f32 = 0.35;
+const PILL_GAP: f32 = 0.75;
 
 /// A pill outlined in `tone`, its words in it, starting at `x`.
 fn draw_pill(
@@ -363,7 +368,7 @@ fn lines(
         let mut used = 0.0;
         for kind in KINDS {
             let pill = pill_width(&format!("{kind} {}", count(kind)), measure) + PILL_GAP;
-            if used + pill > width + 1.0 && !row.is_empty() {
+            if used + pill > width + 2.0 + PILL_GAP && !row.is_empty() {
                 out.push(Line::Coverage(std::mem::take(&mut row)));
                 used = 0.0;
             }
@@ -518,22 +523,59 @@ fn resolved_button(area: Rect, count: usize, shown: bool, measure: &dyn Measure)
 /// all five fit.
 fn buttons(area: Rect, measure: &dyn Measure) -> Vec<(&'static str, String, u16)> {
     let width = area.w.saturating_sub(SIDE * 2 + 2) as f32;
+    let mut placed = row_of(area, &BUTTONS, measure);
     if all_fit(width, measure) {
-        let all: Vec<&'static str> = BUTTONS.iter().chain(EDITS.iter()).copied().collect();
-        row_of(area, &all, measure)
-    } else {
-        row_of(area, &BUTTONS, measure)
+        placed.extend(edits(area, measure));
     }
+    placed
 }
 
-/// Whether the five buttons fit on one row of a card `width` wide.
+/// Columns either side of a plain-word button's letters, for its wash under the pointer.
+const PLAIN_ROOM: f32 = 0.5;
+/// Columns between two of them.
+const PLAIN_GAP: u16 = 1;
+
+/// The cells a button of plain words takes: Edit and Delete, the least of a card's actions.
+fn plain_cells(label: &str, measure: &dyn Measure) -> String {
+    if measure.in_cells() {
+        return format!(" {label} ");
+    }
+    let font = Font {
+        size: BUTTON_TEXT,
+        ..Font::default()
+    };
+    let width = (measure.width(label, font) + PLAIN_ROOM * 2.0).ceil() as usize;
+    " ".repeat(width.max(2))
+}
+
+/// Edit and Delete as (label, cells, start column), ending at the card's far text edge, so
+/// they stand apart from what answers the comment.
+fn edits(area: Rect, measure: &dyn Measure) -> Vec<(&'static str, String, u16)> {
+    let mut end = area.right().saturating_sub(SIDE + 1);
+    let mut placed = Vec::new();
+    for label in EDITS.iter().rev() {
+        let cells = plain_cells(label, measure);
+        let x = end.saturating_sub(cells.chars().count() as u16);
+        placed.push((*label, cells, x));
+        end = x.saturating_sub(PLAIN_GAP);
+    }
+    placed.reverse();
+    placed
+}
+
+/// Whether the five fit on one row of a card `width` wide: the three chips, then Edit and
+/// Delete with a button's gap before them.
 fn all_fit(width: f32, measure: &dyn Measure) -> bool {
-    let used: usize = BUTTONS
+    let gap = BUTTON_GAP as usize;
+    let chips: usize = BUTTONS
         .iter()
-        .chain(EDITS.iter())
-        .map(|label| button_cells(label, measure).chars().count() + 1)
+        .map(|label| button_cells(label, measure).chars().count() + gap)
         .sum();
-    used as f32 <= width + 1.0
+    let words: usize = EDITS
+        .iter()
+        .map(|label| plain_cells(label, measure).chars().count() + PLAIN_GAP as usize)
+        .sum();
+    (chips + words) as f32 <= width + f32::from(PLAIN_GAP)
 }
 
 /// Check my review, at the right of its row, as (padded cells, start column). In pixels it
@@ -544,27 +586,18 @@ fn check_button(area: Rect, measure: &dyn Measure) -> (String, u16) {
         cells.push_str(&" ".repeat(CHECK_ICON as usize));
     }
     let width = cells.chars().count() as u16;
-    let x = area
-        .right()
-        .saturating_sub(SIDE + 1 + width)
-        .max(area.x + SIDE + 1);
+    let x = area.right().saturating_sub(SIDE + width).max(area.x + SIDE);
     (cells, x)
 }
 
 /// The cells a button takes: its letters and a space either side where every letter is a
-/// cell, and in pixels its set width with the same room either side, whatever its letters.
+/// cell, since a card's buttons are filled there, and in pixels the room every button has.
 pub(crate) fn button_cells(label: &str, measure: &dyn Measure) -> String {
     let padding = " ".repeat(BUTTON_PADDING);
     if measure.in_cells() {
         return format!("{padding}{label}{padding}");
     }
-    let font = Font {
-        size: BUTTON_TEXT,
-        ..Font::default()
-    };
-    let width = (measure.width(label, font) + BUTTON_ROOM * 2.0).ceil() as usize;
-    // Hidden under the paint, so only their count matters.
-    " ".repeat(width.max(3))
+    crate::measures::button_cells(label, measure)
 }
 
 fn row_of(
@@ -578,7 +611,7 @@ fn row_of(
         .map(|label| {
             let cells = button_cells(label, measure);
             let at = x;
-            x += cells.chars().count() as u16 + 1;
+            x += cells.chars().count() as u16 + BUTTON_GAP;
             (*label, cells, at)
         })
         .collect()
@@ -621,7 +654,7 @@ pub fn hit(
             }
         }
         Line::Edits(id) => {
-            let pressed = row_of(area, &EDITS, measure)
+            let pressed = edits(area, measure)
                 .into_iter()
                 .find(|(_, cells, at)| x >= *at && x < at + cells.chars().count() as u16);
             match pressed?.0 {
@@ -691,7 +724,9 @@ pub fn draw(
     let body = theme.sidebar;
     // Each card is drawn whole before what's on it, so text sits on top. A suggestion's is a
     // shade of the accent until it's kept, so it reads as offered rather than chosen.
-    let suggested_card = mix(theme.accent, theme.text.bg, 0.06);
+    // A card is raised over the pane, as a menu is over the page.
+    let card = theme.popup;
+    let suggested_card = mix(theme.accent, card, 0.06);
     let card_of = |id: u32| {
         if threads
             .iter()
@@ -699,7 +734,7 @@ pub fn draw(
         {
             suggested_card
         } else {
-            theme.text.bg
+            card
         }
     };
     let row_y = |index: usize| area.y as f32 + index as f32 - top as f32;
@@ -713,16 +748,17 @@ pub fn draw(
             Line::Buttons(_) | Line::Edits(_) | Line::Choices(_) | Line::Reopen(_) => {
                 if let Some(first) = start.take() {
                     let (y, height) = (row_y(first), (index - first + 1) as f32);
+                    // A column from the pane's edge, so its text stands two inside it.
                     let bounds = Bounds::cells(
-                        side as f32,
+                        side as f32 - CARD_REACH,
                         y - CARD_AIR.0,
-                        (right - side) as f32,
+                        (right - side) as f32 + CARD_REACH * 2.0,
                         height + CARD_AIR.0 + CARD_AIR.1,
                     );
                     let (fill, edge) = if matches!(line, Line::Choices(_)) {
-                        (suggested_card, mix(theme.accent, theme.text.bg, 0.5))
+                        (suggested_card, mix(theme.accent, card, 0.5))
                     } else {
-                        (theme.text.bg, theme.border)
+                        (card, theme.border)
                     };
                     // Offered, not yet the reviewer's: a suggestion's edge is dashed until kept.
                     let offered = matches!(line, Line::Choices(_));
@@ -763,7 +799,7 @@ pub fn draw(
     }
     let inner = Style {
         fg: theme.text.fg,
-        bg: theme.text.bg,
+        bg: card,
         ..body
     };
     let inner_dim = Style {
@@ -934,6 +970,7 @@ pub fn draw(
                 grid.lift_since(from, FILE_LIFT);
             }
             Line::Check(mine, suggested, files) => {
+                let from = grid.painted_so_far();
                 let (cells, x) = check_button(area, measure);
                 // Nothing is painted under the pane, so the button's corners need a ground.
                 let ground = Bounds::cells(x as f32, y as f32, cells.chars().count() as f32, 1.0);
@@ -947,7 +984,12 @@ pub fn draw(
                 if measure.in_cells() {
                     grid.button(x, y, &cells, CHECK, fill, style);
                 } else {
-                    // The pill, then the agent's icon and the words beside it, as one.
+                    // The pill, then the agent's icon and the words beside it, as one. Its
+                    // cells keep the pane's colour, since the pill is lifted off its row.
+                    let style = Style {
+                        bg: body.bg,
+                        ..style
+                    };
                     grid.button(x, y, &cells, "", fill, style);
                     let font = Font {
                         size: BUTTON_TEXT,
@@ -982,12 +1024,14 @@ pub fn draw(
                     n => note.push_str(&format!(" · {n} files")),
                 }
                 let end = x.saturating_sub(1);
-                grid.label_at(text_x as f32, text_x, y, &note, dim, end, SMALL);
+                grid.label_at(side as f32, side, y, &note, dim, end, SMALL);
+                // Half a row clear over the pills under it.
+                grid.lift_since(from, CHECK_LIFT);
             }
             Line::Coverage(kinds) => {
                 // A pill for each kind: filled where there are comments of it, and only
                 // outlined and quiet where there are none, so the filled ones read first.
-                let mut x = text_x as f32;
+                let mut x = side as f32;
                 for (kind, count) in kinds {
                     let text = format!("{kind} {count}");
                     let width = pill_width(&text, measure);
@@ -1017,7 +1061,7 @@ pub fn draw(
                     let fill = if main {
                         theme.button
                     } else {
-                        theme.quiet_button(theme.text.bg)
+                        theme.quiet_button(card)
                     };
                     let style = Style {
                         bg: fill,
@@ -1056,31 +1100,34 @@ pub fn draw(
                 for (label, cells, x) in buttons(area, measure) {
                     let width = cells.chars().count() as u16;
                     let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
-                    let fill = if on_it {
-                        theme.popup_hover
-                    } else {
-                        theme.quiet_button(theme.text.bg)
+                    // Edit and Delete are the least of them: plain words until pointed at.
+                    let plain = EDITS.contains(&label);
+                    let fill = match (on_it, plain) {
+                        (true, _) => theme.popup_hover,
+                        (false, true) => card,
+                        (false, false) => theme.quiet_button(card),
                     };
                     let style = Style {
                         bg: fill,
-                        fg: inner.fg,
+                        fg: if plain && !on_it {
+                            theme.popup_dim
+                        } else {
+                            inner.fg
+                        },
                         ..inner
                     };
                     grid.button(x, y, &cells, label, fill, style);
                 }
             }
             Line::Edits(_) => {
-                for (label, cells, x) in row_of(area, &EDITS, measure) {
+                for (label, cells, x) in edits(area, measure) {
                     let width = cells.chars().count() as u16;
                     let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
-                    let fill = if on_it {
-                        theme.popup_hover
-                    } else {
-                        theme.quiet_button(theme.text.bg)
-                    };
+                    // Plain words until pointed at, as beside the other three.
+                    let fill = if on_it { theme.popup_hover } else { card };
                     let style = Style {
                         bg: fill,
-                        fg: inner.fg,
+                        fg: if on_it { inner.fg } else { theme.popup_dim },
                         ..inner
                     };
                     grid.button(x, y, &cells, label, fill, style);
@@ -1093,7 +1140,7 @@ pub fn draw(
                     let fill = if on_it {
                         theme.popup_hover
                     } else {
-                        theme.quiet_button(theme.text.bg)
+                        theme.quiet_button(card)
                     };
                     let style = Style {
                         bg: fill,

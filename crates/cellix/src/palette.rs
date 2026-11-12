@@ -10,8 +10,9 @@ const WIDTH: u16 = 64;
 /// Text in the search field, as a percentage of the interface font.
 const INTERFACE_SIZE_PERCENT: u8 = 100;
 const ROWS: u16 = 12;
-/// Space from the panel's edge to the icon and the text of the list, which line up.
-const TEXT_INSET: f32 = 1.4;
+/// Space from the panel's edge to the icon and the text of the list, which line up: two
+/// columns, as text stands inside whatever holds it.
+const TEXT_INSET: f32 = 2.0;
 /// How far a floating panel reaches past its rows: not at all, so it ends on a row line and
 /// never cuts through the text rows above and below it. A row's own air keeps its text off
 /// the edge.
@@ -993,8 +994,8 @@ pub struct Input<'a> {
 /// A one-line text box. Text, placeholder and caret share one origin, and the caret comes
 /// from measuring the text, so it can't drift out of the box or onto the words.
 pub fn input(grid: &mut Grid, line: Rect, field: &Input, measure: &dyn Measure, theme: &Theme) {
-    /// Space between the box's edge and its text.
-    const PADDING: f32 = 0.8;
+    /// Space between the box's edge and its text: a column.
+    const PADDING: f32 = 1.0;
     let style = Style {
         fg: theme.text.fg,
         bg: theme.input,
@@ -1040,6 +1041,23 @@ pub fn raised(grid: &mut Grid, area: Rect, theme: &Theme) {
     };
     grid.fill(area, base);
     let bounds = Bounds::inset(area, 0.0, -PANEL_PADDING);
+    grid.popup(bounds, 28, theme.popup, theme.popup_border);
+}
+
+/// How far a bar that holds a text box reaches past its rows, in rows: a quarter, so the
+/// box isn't 3 px from the bar's own edge.
+const BAR_AIR: f32 = 0.25;
+
+/// A floating bar around a text box or two, as the Find bar and a prompt are: `raised`, with
+/// a quarter row of air past its rows above and below, which only paint can show.
+pub fn raised_bar(grid: &mut Grid, area: Rect, theme: &Theme) {
+    let base = Style {
+        fg: theme.text.fg,
+        bg: theme.popup,
+        ..theme.bar
+    };
+    grid.fill(area, base);
+    let bounds = Bounds::inset(area, 0.0, -BAR_AIR);
     grid.popup(bounds, 28, theme.popup, theme.popup_border);
 }
 

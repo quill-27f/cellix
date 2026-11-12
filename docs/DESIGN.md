@@ -334,8 +334,19 @@ keeps 8 px or more from the icon on every side; the rail's reaches into the rows
 so the rail sits an eighth of a row lower to keep the first one inside the window.
 
 One set of parts, everywhere. A button is one chip, four fifths of its row and inside it: the
-primary one filled with the accent, the rest a quiet fill, and each takes a click anywhere it's
-painted, from one rectangle the painter and the hit test share. Every sidebar is one width,
+primary one filled with the accent, the rest a quiet fill, the least of them plain words (Edit and
+Delete on a comment), and each takes a click anywhere it's painted, from one rectangle the painter
+and the hit test share. One measure sizes them all (`measures.rs`): a button's words keep a column
+and a half either side inside its chip, whatever they are, and buttons side by side stand two
+columns apart. In cells a button is its words between brackets. Text stands two columns inside
+whatever holds it, a panel, a card, a menu, a prompt; a card starts one column from its pane's
+edge and is raised over it, as a menu is over the page. A bar that holds a text box, the Find bar
+and a prompt, keeps a quarter of a row clear above and below its rows, which only paint can show,
+and a box's text starts a column inside it. A section's heading is small, bold, quiet capitals
+wherever it is. These came from the end-to-end design (canvas PLJ1YE4pkaPSHEfKwBv42N, version 7)
+and the measurements taken of every surface before it was applied: buttons had from 1.4 to 3.6
+columns of room and stood one apart, and a menu's text stood one column in while a dialog's
+stood two. Every sidebar is one width,
 Review's list too, with the same title row: its name in small quiet capitals, two columns in.
 A tab is one shape, in the editor and in the pane: the strip is the frame's colour, and the
 tab in front takes the colour of what's under it, the sheet or the pane, with the accent's

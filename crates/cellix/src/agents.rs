@@ -360,7 +360,17 @@ impl Agents {
             match line {
                 Line::Gap => {}
                 Line::Section(text) => {
-                    grid.label_at(side as f32, side, y, text, dim, area.right(), SECTION_SIZE);
+                    // Small, bold and quiet, as a section's heading is in every panel.
+                    let heading = Style { bold: true, ..dim };
+                    grid.label_at(
+                        side as f32,
+                        side,
+                        y,
+                        text,
+                        heading,
+                        area.right(),
+                        SECTION_SIZE,
+                    );
                 }
                 Line::Step(index) if self.docked => {
                     grid.label(side, y, DOCKED_STEPS[index], dim, area.right());

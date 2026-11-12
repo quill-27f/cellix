@@ -23,6 +23,7 @@ mod kernel;
 mod keys;
 mod kitty;
 mod linger;
+mod measures;
 mod menu;
 mod neovim;
 mod outline;

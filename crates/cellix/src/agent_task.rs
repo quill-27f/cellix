@@ -15,6 +15,7 @@ use cellix_review::tasks::{self, Event, Outcome, PlanStep, Step, Task, TestStep,
 use cellix_review::{Thread, changed_between, changed_since, numstat, numstat_between};
 use unicode_width::UnicodeWidthStr;
 
+use crate::measures::BUTTON_GAP;
 use crate::theme::Theme;
 
 /// Below this the timeline and the step can't stand side by side, so the page shows the step
@@ -309,15 +310,16 @@ impl Pen<'_> {
         theme: &Theme,
         hit: Hit,
     ) -> u16 {
-        let cells = format!("[{label}]");
+        let cells = crate::measures::button_cells(label, self.measure);
         let x = right.saturating_sub(cells.width() as u16);
         let spot = Rect::new(x, y, cells.width() as u16, 1);
         let hovered = self.hovered(spot);
         if let Some(grid) = self.grid.as_deref_mut() {
+            // The one quiet fill every button on the sheet has.
             let (fill, fg) = if primary {
                 (theme.button, theme.button_text)
             } else {
-                (theme.tint, theme.text.fg)
+                (theme.quiet_button(theme.text.bg), theme.text.fg)
             };
             let fill = if hovered {
                 theme.quiet_button(fill)
@@ -806,7 +808,7 @@ impl TaskPage {
             let at = if buttons == right {
                 right
             } else {
-                buttons.saturating_sub(1)
+                buttons.saturating_sub(BUTTON_GAP)
             };
             buttons = pen.button(at, y, "Open Transcript", false, theme, Hit::Transcript);
         }
@@ -1160,7 +1162,7 @@ impl TaskPage {
                         "Undo From Here"
                     };
                     buttons = pen.button(
-                        buttons.saturating_sub(1),
+                        buttons.saturating_sub(BUTTON_GAP),
                         y,
                         undo,
                         false,
@@ -1187,7 +1189,7 @@ impl TaskPage {
                 if waiting {
                     buttons = pen.button(buttons, y, "Approve", true, theme, Hit::Approve);
                     buttons = pen.button(
-                        buttons.saturating_sub(1),
+                        buttons.saturating_sub(BUTTON_GAP),
                         y,
                         "Send Back",
                         false,
@@ -1196,7 +1198,7 @@ impl TaskPage {
                     );
                     if plan.version > 1 {
                         buttons = pen.button(
-                            buttons.saturating_sub(1),
+                            buttons.saturating_sub(BUTTON_GAP),
                             y,
                             "Compare",
                             false,
@@ -1209,7 +1211,7 @@ impl TaskPage {
                     let at = if buttons == right {
                         right
                     } else {
-                        buttons.saturating_sub(1)
+                        buttons.saturating_sub(BUTTON_GAP)
                     };
                     buttons = pen.button(at, y, "Open Plan", !waiting, theme, Hit::OpenPlan);
                 }

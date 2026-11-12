@@ -48,10 +48,11 @@ use crate::explorer::Explorer;
 use crate::find::Find;
 use crate::inbox::{Hit as InboxHit, Inbox, Kind as Waits, Listed, Target as WaitTarget, Waiting};
 use crate::kernel::{self, Event as KernelEvent, Kernel};
+use crate::measures::{self, BUTTON_GAP};
 use crate::menu::{Action as MenuAction, Item as MenuItem, Menu, Outcome as MenuOutcome};
 use crate::neovim::{self, Neovim};
 use crate::outline::Outline;
-use crate::palette::{COMMANDS, Input, Item, Palette, SymbolRow, input, popup, raised};
+use crate::palette::{COMMANDS, Input, Item, Palette, SymbolRow, input, popup};
 use crate::panels::{MathPanel, SYMBOLS, TablePicker};
 use crate::pdfview::{Hit as PdfHit, PdfView};
 use crate::rendered::{self, Dialect, Target};
@@ -142,6 +143,7 @@ const STACK_HEIGHT: u16 = 16;
 const STACK_SHARE: u16 = 45;
 /// Rows each side keeps, however far the line between them is dragged.
 const STACK_LEAST: u16 = 6;
+#[cfg(test)]
 const APPROVE: &str = "[Approve]";
 const FIND_WIDTH: u16 = 58;
 const CONFIRM_WIDTH: u16 = 56;
@@ -177,6 +179,7 @@ const FIND_CHEVRON: u16 = 2;
 const FIND_COUNT: u16 = 11;
 /// The three search switches, three columns each.
 const SWITCHES_WIDTH: u16 = 9;
+#[cfg(test)]
 const SEND_BACK: &str = "[Send back]";
 /// The card that offers a language's support.
 const OFFER_WIDTH: u16 = 46;
@@ -1601,10 +1604,14 @@ impl App {
         OFFER_BUTTONS
             .iter()
             .map(|label| {
-                let padding = " ".repeat(CONFIRM_PADDING / 2);
-                let cells = format!("{padding}{label}{padding}");
+                let cells = if self.measure.in_cells() {
+                    let padding = " ".repeat(CONFIRM_PADDING / 2);
+                    format!("{padding}{label}{padding}")
+                } else {
+                    measures::button_cells(label, &*self.measure)
+                };
                 let at = x;
-                x += cells.chars().count() as u16 + 1;
+                x += cells.chars().count() as u16 + BUTTON_GAP;
                 (*label, cells, at)
             })
             .collect()
@@ -4471,9 +4478,13 @@ impl App {
         let ProblemRow::Item(file, problem) = picked else {
             return None;
         };
-        // As far from the row's end as the dot is from its start.
-        let left = screen.right().saturating_sub(ASK_WIDTH + 2);
-        Some((Rect::new(left, y, ASK_WIDTH, 1), file, problem))
+        // As far from the row's end as the dot is from its start, and as wide as any
+        // button with its words.
+        let width = measures::button_cells("Ask Agent", &*self.measure)
+            .chars()
+            .count() as u16;
+        let left = screen.right().saturating_sub(width + 2);
+        Some((Rect::new(left, y, width, 1), file, problem))
     }
 
     /// Asks the agent about a problem: what the checker said, where, and the code around it.
@@ -5439,22 +5450,12 @@ impl App {
         let area = self.confirm_area();
         let mut x = area.right().saturating_sub(2);
         let mut placed = Vec::new();
-        // The same padding on each, which only a measured width gives proportional text.
-        let plain = self.measure.in_cells();
-        let font = Font {
-            size: 90,
-            ..Font::default()
-        };
         for (label, _) in confirm.buttons.iter().rev() {
-            let cells = if plain {
-                format!("[{label}]")
-            } else {
-                let width = self.measure.width(label, font).ceil() as usize + CONFIRM_PADDING;
-                format!("{label:^width$}")
-            };
+            // The same room in each, which only a measured width gives proportional text.
+            let cells = measures::button_cells(label, &*self.measure);
             x = x.saturating_sub(cells.chars().count() as u16);
             placed.push((cells, x));
-            x = x.saturating_sub(1);
+            x = x.saturating_sub(BUTTON_GAP);
         }
         placed.reverse();
         placed
@@ -5929,7 +5930,7 @@ impl App {
     fn draw_find(&self, grid: &mut Grid, find: &Find) {
         let theme = &self.theme;
         let area = self.find_bar_for(find.replace.is_some());
-        crate::palette::raised(grid, area, theme);
+        crate::palette::raised_bar(grid, area, theme);
         let (line, switches, count_x, first) = Self::find_layout(area);
         let chevron = if find.replace.is_some() {
             Icon::ChevronDown
@@ -7569,22 +7570,12 @@ impl App {
     /// A card's buttons as (cells, x), from `x` along, each padded alike, which only a
     /// measured width gives proportional text.
     fn card_buttons(&self, mut x: u16, labels: &[&str]) -> Vec<(String, u16)> {
-        let plain = self.measure.in_cells();
-        let font = Font {
-            size: 90,
-            ..Font::default()
-        };
         labels
             .iter()
             .map(|label| {
-                let cells = if plain {
-                    format!("[{label}]")
-                } else {
-                    let width = self.measure.width(label, font).ceil() as usize + CONFIRM_PADDING;
-                    format!("{label:^width$}")
-                };
+                let cells = measures::button_cells(label, &*self.measure);
                 let at = x;
-                x += cells.chars().count() as u16 + 1;
+                x += cells.chars().count() as u16 + BUTTON_GAP;
                 (cells, at)
             })
             .collect()
@@ -7862,27 +7853,17 @@ impl App {
     /// The card's buttons as (cells, x, row counting from the first, choice), laid out from
     /// the left, onto another row where the card is too narrow for them all.
     fn flow_buttons(&self, card: Rect, buttons: &[Offer]) -> Vec<(String, u16, u16, Revive)> {
-        let plain = self.measure.in_cells();
-        let font = Font {
-            size: 90,
-            ..Font::default()
-        };
         let start = card.x + 2;
         let (mut x, mut row) = (start, 0);
         let mut placed = Vec::new();
         for (label, choice) in buttons {
-            let cells = if plain {
-                format!("[{label}]")
-            } else {
-                let width = self.measure.width(label, font).ceil() as usize + CONFIRM_PADDING;
-                format!("{label:^width$}")
-            };
+            let cells = measures::button_cells(label, &*self.measure);
             let width = cells.chars().count() as u16;
             if x > start && x + width > card.right().saturating_sub(1) {
                 (x, row) = (start, row + 1);
             }
             placed.push((cells, x, row, *choice));
-            x += width + 1;
+            x += width + BUTTON_GAP;
         }
         placed
     }
@@ -12338,6 +12319,11 @@ impl App {
         let tab = Rect::new(area.x, area.y, width, 1);
         let style = theme.tab_active;
         grid.fill(tab, style);
+        // The accent's line on top, as on every tab in front.
+        if !self.measure.in_cells() {
+            let edge = Bounds::cells(tab.x as f32, tab.y as f32, tab.w as f32, 0.06);
+            grid.panel(edge, 0, Some(theme.accent), None);
+        }
         let close = tab.right().saturating_sub(2);
         grid.label_at(
             area.x as f32 + 1.5,
@@ -13329,7 +13315,7 @@ impl App {
         let screen = Rect::new(0, 0, self.size.0, self.size.1);
         let top = Palette::area(screen);
         let area = Rect::new(top.x, top.y, top.w, 2);
-        raised(grid, area, &self.theme);
+        crate::palette::raised_bar(grid, area, &self.theme);
         let base = Style {
             fg: self.theme.text.fg,
             bg: self.theme.popup,
@@ -13339,16 +13325,17 @@ impl App {
             fg: self.theme.gutter.fg,
             ..base
         };
+        // The question and its box on the text edge, two columns in.
         grid.label_at(
-            area.x as f32 + 1.0,
-            area.x + 1,
+            area.x as f32 + 2.0,
+            area.x + 2,
             area.y,
             &prompt.label,
             dim,
             area.right(),
             90,
         );
-        let line = Rect::new(area.x + 1, area.y + 1, area.w.saturating_sub(2), 1);
+        let line = Rect::new(area.x + 2, area.y + 1, area.w.saturating_sub(4), 1);
         let field = Input {
             text: &prompt.input,
             hint: "",
@@ -13720,8 +13707,8 @@ impl App {
             count => format!("{count} comments"),
         };
         grid.label(bar.x + 2, y, &words, base, bar.right());
-        let approve = bar.right().saturating_sub(APPROVE.len() as u16 + 2);
-        let back = approve.saturating_sub(SEND_BACK.len() as u16 + 1);
+        let ((approve_cells, approve), (back_cells, back)) = self.plan_buttons();
+        let (approve_cells, back_cells) = (approve_cells.as_str(), back_cells.as_str());
         let lit = |x: u16, cells: &str, fill: Rgb| {
             let spot = Rect::new(x, y, cells.len() as u16, 1);
             if self.hover.is_some_and(|h| spot.contains(h.0, h.1)) {
@@ -13730,19 +13717,30 @@ impl App {
                 fill
             }
         };
-        let back_fill = lit(back, SEND_BACK, theme.quiet_button(theme.popup));
-        let approve_fill = lit(approve, APPROVE, theme.button);
-        grid.button(back, y, SEND_BACK, "Send back", back_fill, secondary);
-        grid.button(approve, y, APPROVE, "Approve", approve_fill, primary);
+        let back_fill = lit(back, back_cells, theme.quiet_button(theme.popup));
+        let approve_fill = lit(approve, approve_cells, theme.button);
+        grid.button(back, y, back_cells, "Send back", back_fill, secondary);
+        grid.button(approve, y, approve_cells, "Approve", approve_fill, primary);
+    }
+
+    /// The plan bar's two buttons, as (Approve, Send back), each its cells and its column:
+    /// Approve two columns in from the bar's end, as the bar's words are from its start.
+    fn plan_buttons(&self) -> ((String, u16), (String, u16)) {
+        let bar = self.plan_bar();
+        let approve = measures::button_cells("Approve", &*self.measure);
+        let back = measures::button_cells("Send back", &*self.measure);
+        let width = |cells: &str| cells.chars().count() as u16;
+        let approve_x = bar.right().saturating_sub(width(&approve) + 2);
+        let back_x = approve_x.saturating_sub(width(&back) + BUTTON_GAP);
+        ((approve, approve_x), (back, back_x))
     }
 
     fn click_plan_bar(&mut self, x: u16) {
-        let bar = self.plan_bar();
-        let approve = bar.right().saturating_sub(APPROVE.len() as u16 + 2);
-        let back = approve.saturating_sub(SEND_BACK.len() as u16 + 1);
-        if x >= approve && x < approve + APPROVE.len() as u16 {
+        let ((approve_cells, approve), (back_cells, back)) = self.plan_buttons();
+        let width = |cells: &str| cells.chars().count() as u16;
+        if x >= approve && x < approve + width(&approve_cells) {
             self.run(Command::ApprovePlan);
-        } else if x >= back && x < back + SEND_BACK.len() as u16 {
+        } else if x >= back && x < back + width(&back_cells) {
             self.run(Command::SendBackPlan);
         }
     }
@@ -14670,8 +14668,27 @@ impl App {
             }
         }
         if let Some(chip) = ask {
-            // Inside the row's highlight, with room above and below.
-            self.draw_chip_lifted(grid, chip, "Ask Agent", (0.0, 0.78));
+            // A quiet button on the row's wash, lighter under the pointer, as every button
+            // at the end of a row is.
+            let ground = theme.row_hover;
+            let quiet = theme.quiet_button(ground);
+            let on_it = self.hover.is_some_and(|h| chip.contains(h.0, h.1));
+            let fill = if on_it {
+                theme.quiet_button(quiet)
+            } else {
+                quiet
+            };
+            let cells = measures::button_cells("Ask Agent", &*self.measure);
+            let style = Style {
+                fg: theme.text.fg,
+                bg: if self.measure.in_cells() {
+                    fill
+                } else {
+                    ground
+                },
+                ..theme.sidebar
+            };
+            grid.button(chip.x, chip.y, &cells, "Ask Agent", fill, style);
         }
     }
 
@@ -27634,6 +27651,95 @@ while True:
         assert!(fill.is_some(), "filled");
     }
 
+    /// Every button painted on screen, as (words, left, right, top) in columns and rows.
+    fn painted_buttons(app: &App) -> Vec<(String, f32, f32, f32)> {
+        let grid = screen(app);
+        let unit = cellix_render::UNIT as f32;
+        let mut found = Vec::new();
+        for pair in grid.paint.windows(2) {
+            let (
+                Paint::Panel {
+                    bounds,
+                    fill: Some(_),
+                    radius: 22,
+                    ..
+                },
+                Paint::Text {
+                    text,
+                    centred: true,
+                    ..
+                },
+            ) = (&pair[0], &pair[1])
+            else {
+                continue;
+            };
+            let left = bounds.x as f32 / unit;
+            let right = (bounds.x + bounds.w) as f32 / unit;
+            found.push((text.clone(), left, right, bounds.y as f32 / unit));
+        }
+        found
+    }
+
+    /// One measure for every button, from the end-to-end design: its words keep a column and
+    /// a half either side inside its chip, whatever they are, and buttons side by side stand
+    /// two columns apart. A dialog, a comment's card, Review and the Task page each sized
+    /// theirs their own way before, from 1.4 columns of room to 3.6 and a column apart.
+    #[test]
+    fn buttons_keep_the_same_room_and_stand_two_columns_apart_on_every_surface() {
+        let measure = Rc::new(cellix_render::FontMeasure::new(17, 37));
+        let font = Font {
+            size: 90,
+            ..Font::default()
+        };
+        let check = |app: &App, labels: &[&str]| {
+            let all = painted_buttons(app);
+            let mut row: Vec<&(String, f32, f32, f32)> = labels
+                .iter()
+                .map(|label| {
+                    all.iter()
+                        .find(|b| b.0 == *label)
+                        .unwrap_or_else(|| panic!("no {label} among {all:?}"))
+                })
+                .collect();
+            for (label, left, right, _) in &row {
+                let air = (right - left - measure.width(label, font)) / 2.0;
+                assert!(
+                    (1.5..2.0).contains(&air),
+                    "{label} has {air} columns either side of its words"
+                );
+            }
+            row.sort_by(|a, b| a.1.total_cmp(&b.1));
+            for pair in row.windows(2) {
+                assert_eq!(pair[0].3, pair[1].3, "{labels:?} share a row");
+                let gap = pair[1].1 - pair[0].2;
+                assert_eq!(gap, 2.0, "between {} and {}", pair[0].0, pair[1].0);
+            }
+        };
+
+        // A dialog.
+        let (dir, mut app) = project();
+        app.set_measure(measure.clone());
+        dirty(&dir, &mut app);
+        app.run(Command::CloseTab);
+        check(&app, &["Save", "Don't Save", "Cancel"]);
+
+        // A comment's card.
+        let (_dir, mut app) = project();
+        app.set_measure(measure.clone());
+        app.show_sidebar = false;
+        let fields = r#""id":1,"file":"alpha.txt","line":1,"text":"Why first","quote":"""#;
+        app.threads = vec![serde_json::from_str(&format!("{{{fields}}}")).unwrap()];
+        app.run(Command::ShowComments);
+        check(&app, &["Reply", "Ask agent", "Resolve"]);
+
+        // A change in Review.
+        let (dir, mut app) = reviewed();
+        app.set_measure(measure.clone());
+        fs::write(dir.path().join("alpha.txt"), "first line\nchanged\n").unwrap();
+        app.run(Command::OpenDiff);
+        check(&app, &["Reject", "Accept"]);
+    }
+
     /// The pane's tab in front is the shape a file's is: it takes the colour of the pane
     /// under it, with the accent's line along its top, and no chip. The design's rule 4.
     #[test]
@@ -27757,8 +27863,9 @@ while True:
         app.handle(mouse(MouseKind::Right, tab + 2, 0));
         assert!(screen(&app).text().contains("Close Others"));
         let (x2, y2) = find(&screen(&app), "Close Others");
-        // Dropped from the tab's bottom edge, left-aligned to it: Close, then this.
-        assert_eq!((x2, y2), (tab + 1, 2), "{}", screen(&app).text());
+        // Dropped from the tab's bottom edge, left-aligned to it: Close, then this, its
+        // words two columns inside the menu, as text is inside whatever holds it.
+        assert_eq!((x2, y2), (tab + 2, 2), "{}", screen(&app).text());
         app.handle(mouse(MouseKind::Left, x2 + 1, y2));
         assert_eq!(app.editors.len(), 1);
         assert!(app.editors[0].title().contains("alpha"), "{x}");

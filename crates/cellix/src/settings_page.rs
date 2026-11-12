@@ -856,8 +856,30 @@ impl SettingsPage {
         let above = Bounds::cells(page.x as f32, line_y as f32 - 0.5, page.w as f32, 0.0);
         grid.hairline(above, theme.border);
         let count = self.found.servers.iter().filter(|found| **found).count();
-        let title = format!("LANGUAGE SERVERS, {count} OF {} FOUND", SERVERS.len());
-        draw_note(grid, page, line_y, &title, theme);
+        // A section's heading as every panel has it, small, bold and quiet, with what it
+        // counts at the row's end in plain words.
+        let heading = Style {
+            fg: theme.gutter.fg,
+            bold: true,
+            ..theme.text
+        };
+        let x = page.x as f32;
+        let size = NOTE_SIZE - 10;
+        grid.label_at(
+            x,
+            page.x,
+            line_y,
+            "LANGUAGE SERVERS",
+            heading,
+            page.right(),
+            size,
+        );
+        let found = format!("{count} of {} found", SERVERS.len());
+        let plain = Style {
+            bold: false,
+            ..heading
+        };
+        grid.label_right(page.right(), line_y, &found, plain, NOTE_SIZE);
         for (row, index) in self.server_rows(page).into_iter().enumerate() {
             let y = page.y + SERVERS_ROW + row as u16;
             self.draw_server(grid, page, (y, index), spots, hover, theme);
@@ -1002,15 +1024,6 @@ fn heading(grid: &mut Grid, page: Rect, title: &str, note: &str, theme: &Theme) 
         ..theme.text
     };
     grid.label(page.x, page.y + 1, note, quiet, page.right());
-}
-
-fn draw_note(grid: &mut Grid, page: Rect, y: u16, text: &str, theme: &Theme) {
-    let quiet = Style {
-        fg: theme.gutter.fg,
-        ..theme.text
-    };
-    let x = page.x as f32;
-    grid.label_at(x, page.x, y, text, quiet, page.right(), NOTE_SIZE - 10);
 }
 
 /// A title with a line under it, at the left of a row of two, stopping before `room`.

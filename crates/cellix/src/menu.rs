@@ -10,8 +10,9 @@ use crate::palette::{keys_of, popup, raised};
 use crate::theme::Theme;
 use crate::toolbar::Tool;
 
-/// Space from the menu's edge to its text.
-const INSET: f32 = 1.0;
+/// Space from the menu's edge to its text: two columns, as text stands inside whatever
+/// holds it.
+const INSET: f32 = 2.0;
 /// Space between a label and its keys.
 const GAP: f32 = 3.0;
 const KEYS_SIZE: u8 = 85;
@@ -21,9 +22,10 @@ const MIN_WIDTH: u16 = 16;
 const PADDING: f32 = 0.25;
 /// What a rule between groups takes, in rows, so a hover band never meets it.
 const RULE_ROOM: f32 = 0.5;
-/// The hover band inside its row: 26 px of 32 tall, 6 px in from each side.
+/// The hover band inside its row: 26 px of 32 tall, and a column in from each side, as a
+/// wash is from a panel's edge.
 const BAND_HEIGHT: f32 = 26.0 / 32.0;
-const BAND_INSET: f32 = 0.375;
+const BAND_INSET: f32 = 1.0;
 
 /// What a row of a menu does.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -494,7 +496,8 @@ impl Menu {
                 (area.right(), 100, false),
             );
             if let Some(keys) = item.keys {
-                let right = area.right().saturating_sub(1);
+                // As far from the menu's far edge as its words are from the near one.
+                let right = area.right().saturating_sub(INSET as u16);
                 let shown = if usable { keys_style } else { greyed };
                 words(
                     grid,
@@ -505,7 +508,8 @@ impl Menu {
                 );
             }
             if !item.sub.is_empty() {
-                let right = area.right().saturating_sub(1);
+                // As far from the menu's far edge as its words are from the near one.
+                let right = area.right().saturating_sub(INSET as u16);
                 let shown = if usable { keys_style } else { greyed };
                 words(grid, (right as f32, top), "›", shown, (right, 100, true));
             }

@@ -4835,5 +4835,12 @@
     "title": "The dark theme is the design's three surfaces, with text and code that read at 4.5 to 1 on them",
     "test": "the_dark_theme_is_three_surfaces_and_text_that_reads_on_them",
     "passes": true
+  },
+  {
+    "id": "buttons-one-measure",
+    "milestone": 14,
+    "title": "Every surface's buttons keep the same room either side of their words and stand two columns apart",
+    "test": "buttons_keep_the_same_room_and_stand_two_columns_apart_on_every_surface",
+    "passes": true
   }
 ]
