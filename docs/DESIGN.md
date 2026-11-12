@@ -314,9 +314,17 @@ its background with OSC 11 and takes the matching theme, staying dark if nothing
 ## Look
 
 The interface follows VS Code's layout, because that is what the target users already read
-fluently: activity bar, explorer, tabs, breadcrumbs, current-line highlight, indent guides. The
-dark theme has deep blue-grey tones of its own; the light one is Catppuccin Latte, with the editor on
-base, the sidebars on mantle, the frame on crust, menus white and Latte's own colours for code.
+fluently: activity bar, explorer, tabs, breadcrumbs, current-line highlight, indent guides.
+Both themes are three surfaces a step apart: the frame (the rail, the tab strips, the status
+bar), the panels (the sidebar and the side pane, whatever it shows, a terminal too) and the
+sheet (the file). Cards, menus and dialogs are raised over those, and a text box is sunk. Text
+has three weights of colour and there is one blue. The dark theme has deep blue-grey surfaces
+of its own with Catppuccin Mocha's colours for code and for meaning (green added, peach
+changed or waiting, red removed or failed). The light one is Catppuccin Latte's surfaces, the
+editor on base, the sidebars on mantle, the frame on crust and menus white; its text and code
+colours are Latte's hues deepened until each reads at 4.5 to 1, which Latte's own green,
+yellow and blue don't (the end-to-end design the user approved on 2026-11-12, which replaced
+"Latte's own colours for code" of 2026-11-09).
 On a terminal, both themes move together so the frame sits on the terminal's own background and
 its window padding shows no seam; a Latte terminal therefore shows the light theme a step paler
 than Latte (decided with the user on 2026-11-09). It's all drawn to the grid, so it holds on the cell tier. Activity icons span several cells:
@@ -329,7 +337,9 @@ One set of parts, everywhere. A button is one chip, four fifths of its row and i
 primary one filled with the accent, the rest a quiet fill, and each takes a click anywhere it's
 painted, from one rectangle the painter and the hit test share. Every sidebar is one width,
 Review's list too, with the same title row: its name in small quiet capitals, two columns in.
-A tab, in the editor or the pane, is a chip inside its row. Overlays sit on row lines: a menu
+A tab is one shape, in the editor and in the pane: the strip is the frame's colour, and the
+tab in front takes the colour of what's under it, the sheet or the pane, with the accent's
+line along its top. One behind is its name, brighter under the pointer. Overlays sit on row lines: a menu
 is whole rows, padded 8 px above and below, with half a row for each rule and its hover band
 clear of them, and it drops from the bottom edge of what opened it; a tooltip is one row, on
 the row under its icon. Nothing covers part of a row.
@@ -348,7 +358,7 @@ VS Code's panel shows its views, with the one showing named and no tab of its ow
 right keeps one icon that shows or hides the pane, beside quit. Tabs out of view are
 counted at the ends of the strip ("‹ 2 more", "3 more ›"), and each count lists its tabs.
 A side pane whose tabs don't all fit before the icons at the top right keeps every tab in
-the row. The one in front stands in a chip that hugs its measured name and its ×, with none
+the row. The one in front, a tab in the shape every tab has, hugs its measured name and its ×, with none
 of the slack a tab has when there's room, since that slack is what would cut its neighbours.
 Those behind it stand as names alone, half a column of air either side, whole while they
 fit and then cut short with a "…", the longest giving way first. The + gives way too, since

@@ -8685,15 +8685,8 @@ impl App {
             return;
         };
         let theme = &self.theme;
-        let on_session = self.dock.front == Front::Session && self.dock.session().is_some();
-        grid.fill(
-            area,
-            if on_session {
-                theme.text
-            } else {
-                theme.sidebar
-            },
-        );
+        // One colour for the pane whatever it shows, a view or a session.
+        grid.fill(area, theme.sidebar);
         let threads = self.open_threads();
         self.dock.comment_count.set(threads.len());
         let actions = self.pane_actions();
@@ -27641,20 +27634,64 @@ while True:
         assert!(fill.is_some(), "filled");
     }
 
-    /// The pane's tab is a chip inside its row, as every tab and button is.
+    /// The pane's tab in front is the shape a file's is: it takes the colour of the pane
+    /// under it, with the accent's line along its top, and no chip. The design's rule 4.
     #[test]
-    fn the_panes_tab_is_a_chip_inside_its_row() {
-        let (_dir, mut app) = project();
+    fn the_panes_tab_in_front_is_the_shape_a_files_is() {
+        let (dir, mut app) = project();
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        app.open(&dir.path().join("alpha.txt")).unwrap();
         app.run(Command::ListAgents);
-        let (fill, _) = panel_under(&app, "Agents");
-        assert_eq!(fill, Some(app.theme.row_active));
-        let area = app.dock_area().unwrap();
-        let top = i32::from(area.y) * 64;
-        let chip = screen(&app).paint.iter().any(|p| {
+        let grid = screen(&app);
+        let theme = app.theme;
+        // The accent's line on top of a tab, as (left, top, width) in paint units.
+        let lines: Vec<(i32, i32, i32)> = grid
+            .paint
+            .iter()
+            .filter_map(|p| match p {
+                Paint::Panel {
+                    bounds,
+                    fill: Some(f),
+                    ..
+                } if *f == theme.accent && bounds.h < 8 && bounds.w > 64 => {
+                    Some((bounds.x, bounds.y, bounds.w))
+                }
+                _ => None,
+            })
+            .collect();
+        let (name_x, name_y) = find(&grid, "Agents");
+        // A tab's cells hold as much of its name as its width in cells has room for.
+        let (file_x, file_y) = find(&grid, "alpha");
+        assert_eq!((name_y, file_y), (0, 0), "both in the strip");
+        let over = |x: u16, y: u16| {
+            lines.iter().any(|(left, top, width)| {
+                let at = i32::from(x) * 64;
+                *top == i32::from(y) * 64 && *left <= at && at < left + width
+            })
+        };
+        assert!(over(file_x, file_y), "a file's tab has the line: {lines:?}");
+        assert!(over(name_x, name_y), "and so has the pane's: {lines:?}");
+        // Each stands on the colour of what's under it, and the strip on the frame's.
+        assert_eq!(grid.cell(name_x, name_y).style.bg, theme.sidebar.bg);
+        assert_eq!(grid.cell(file_x, file_y).style.bg, theme.text.bg);
+        assert_eq!(theme.tab.bg, theme.activity.bg, "the strip is the frame's");
+        // No chip is left inside the row.
+        let top = i32::from(name_y) * 64;
+        let chip = grid.paint.iter().any(|p| {
             matches!(p, Paint::Panel { bounds, fill: Some(f), .. }
-                if *f == app.theme.row_active && bounds.y > top && bounds.y + bounds.h < top + 64)
+                if *f == theme.row_active && bounds.y > top && bounds.y + bounds.h < top + 64
+                    && bounds.x >= i32::from(app.dock_area().unwrap().x) * 64)
         });
-        assert!(chip, "inside its row");
+        assert!(!chip, "no chip under the tab in front");
+        // A session's tab is the same, and its screen is the pane's colour.
+        app.set_measure(Rc::new(cellix_render::CellMeasure));
+        let grid = screen(&app);
+        let (x, y) = find(&grid, "Agents");
+        assert_eq!(
+            grid.cell(x, y).style.bg,
+            theme.sidebar.bg,
+            "in cells the colour alone says which is in front"
+        );
     }
 
     /// Scrolled to the end, code keeps a row of air over the status bar.

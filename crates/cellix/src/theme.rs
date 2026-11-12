@@ -271,61 +271,66 @@ impl Theme {
         }
     }
 
-    /// Catppuccin Latte: the editor on base, the sidebars on mantle, the frame on crust, and
-    /// menus white, with Latte's own colours for code.
+    /// Catppuccin Latte's surfaces: the editor on base, the sidebars on mantle, the frame on
+    /// crust, and menus white. Its text and code colours are deepened until each reads at
+    /// 4.5 to 1 on those surfaces, which Latte's own green, yellow and blue don't.
     fn light() -> Self {
         let text = Rgb(0x4C, 0x4F, 0x69);
-        let subtext = Rgb(0x6C, 0x6F, 0x85);
+        let second = Rgb(0x53, 0x56, 0x6F);
+        let third = Rgb(0x5C, 0x5F, 0x77);
         let base = Rgb(0xEF, 0xF1, 0xF5);
         let mantle = Rgb(0xE6, 0xE9, 0xEF);
         let crust = Rgb(0xDC, 0xE0, 0xE8);
         let surface0 = Rgb(0xCC, 0xD0, 0xDA);
         let surface1 = Rgb(0xBC, 0xC0, 0xCC);
+        let line = Rgb(0xAC, 0xB0, 0xBE);
         let overlay0 = Rgb(0x9C, 0xA0, 0xB0);
         let overlay2 = Rgb(0x7C, 0x7F, 0x93);
-        let blue = Rgb(0x1E, 0x66, 0xF5);
-        let mauve = Rgb(0x88, 0x39, 0xEF);
-        let green = Rgb(0x40, 0xA0, 0x2B);
-        let yellow = Rgb(0xDF, 0x8E, 0x1D);
-        // Latte's yellow is 2.5:1 on mantle, too faint for words; this is it darkened to 4:1.
-        let amber = Rgb(0xA8, 0x6A, 0x0B);
-        let peach = Rgb(0xFE, 0x64, 0x0B);
-        let red = Rgb(0xD2, 0x0F, 0x39);
+        let blue = Rgb(0x1A, 0x5A, 0xE0);
+        let mauve = Rgb(0x7C, 0x3A, 0xED);
+        let green = Rgb(0x1F, 0x7A, 0x1A);
+        // Washes keep Latte's own green, yellow and red: they sit behind text, not as it.
+        let wash_green = Rgb(0x40, 0xA0, 0x2B);
+        let wash_yellow = Rgb(0xDF, 0x8E, 0x1D);
+        let wash_red = Rgb(0xD2, 0x0F, 0x39);
+        let amber = Rgb(0x8A, 0x5A, 0x00);
+        let peach = Rgb(0xB3, 0x4A, 0x05);
+        let red = Rgb(0xC2, 0x0E, 0x35);
         let lavender = Rgb(0x72, 0x87, 0xFD);
         let white = Rgb(0xFF, 0xFF, 0xFF);
+        let chosen = Rgb(0xC8, 0xD6, 0xF8);
         Self {
             text: style(text, base),
             sidebar: style(text, mantle),
             bar: style(text, mantle),
-            tab: style(subtext, mantle),
+            tab: style(second, crust),
             tab_active: style(text, base),
-            // Latte's subtext, not overlay1, so line numbers and descriptions read at 4.5:1.
-            gutter: style(subtext, base),
-            selection: surface0,
-            found: mix(base, yellow, 0.3),
+            gutter: style(third, base),
+            selection: chosen,
+            found: mix(base, wash_yellow, 0.3),
             row_hover: crust,
             page_hover: mantle,
             popup_hover: mantle,
-            row_active: surface0,
+            row_active: chosen,
             accent: blue,
             tint: mix(base, blue, 0.13),
-            accept_tint: mix(base, green, 0.15),
+            accept_tint: mix(base, wash_green, 0.15),
             attention: peach,
             keyword: mauve,
             string: green,
-            comment: overlay2,
+            comment: third,
             function: blue,
             kind: amber,
             number: peach,
-            added: mix(base, green, 0.15),
-            removed: mix(base, red, 0.15),
-            added_word: mix(base, green, 0.3),
-            removed_word: mix(base, red, 0.3),
+            added: mix(base, wash_green, 0.15),
+            removed: mix(base, wash_red, 0.15),
+            added_word: mix(base, wash_green, 0.3),
+            removed_word: mix(base, wash_red, 0.3),
             moved: mix(base, lavender, 0.15),
-            activity: style(subtext, crust),
-            status: style(subtext, crust),
-            workspaces: style(subtext, crust),
-            breadcrumb: style(subtext, base),
+            activity: style(third, crust),
+            status: style(second, crust),
+            workspaces: style(second, crust),
+            breadcrumb: style(second, base),
             line: mantle,
             number_active: text,
             guide: surface0,
@@ -334,17 +339,17 @@ impl Theme {
             heading: text,
             git_modified: amber,
             git_added: green,
-            input: base,
-            find_match: mix(base, yellow, 0.45),
+            input: white,
+            find_match: mix(base, wash_yellow, 0.45),
             code_bg: mantle,
             minimap_view: crust,
-            border: crust,
+            border: surface0,
             focus: blue,
             popup: white,
-            popup_dim: subtext,
+            popup_dim: second,
             disabled: overlay0,
             ignored: overlay2,
-            popup_border: surface0,
+            popup_border: line,
             pick: mix(white, blue, 0.16),
             button: blue,
             button_text: white,
@@ -376,64 +381,81 @@ impl Theme {
 }
 
 impl Default for Theme {
+    /// The dark theme: three surfaces a step apart (the frame, the panels, the sheet), three
+    /// weights of text, one blue, and Catppuccin Mocha's colours for code and for meaning.
     fn default() -> Self {
-        let bg = Rgb(43, 43, 66);
+        let sheet = Rgb(43, 43, 66);
         let frame = Rgb(30, 30, 46);
         let panel = Rgb(36, 36, 56);
+        let raised = Rgb(51, 51, 77);
+        let text = Rgb(205, 214, 244);
+        let second = Rgb(166, 173, 200);
+        let third = Rgb(147, 153, 178);
+        let line = Rgb(58, 58, 86);
+        let strong_line = Rgb(80, 80, 111);
+        let blue = Rgb(137, 180, 250);
+        let chosen = Rgb(57, 66, 107);
+        let green = Rgb(166, 227, 161);
+        let peach = Rgb(250, 179, 135);
+        let red = Rgb(243, 139, 168);
+        let yellow = Rgb(249, 226, 175);
+        let mauve = Rgb(203, 166, 247);
+        // What's under the pointer: the text's colour, an eighth of the way over its ground.
+        let hover = |ground: Rgb| mix(ground, text, 0.08);
         Self {
-            text: style(Rgb(214, 214, 226), bg),
-            sidebar: style(Rgb(201, 201, 216), panel),
-            bar: style(Rgb(201, 201, 216), panel),
-            tab: style(Rgb(154, 154, 178), panel),
-            tab_active: style(Rgb(255, 255, 255), bg),
-            gutter: style(Rgb(154, 154, 178), bg),
-            selection: Rgb(62, 80, 130),
-            found: Rgb(106, 84, 28),
-            row_hover: Rgb(46, 46, 68),
-            page_hover: Rgb(53, 53, 80),
-            popup_hover: Rgb(66, 66, 106),
-            row_active: Rgb(52, 52, 78),
-            accent: Rgb(143, 180, 255),
-            tint: Rgb(52, 60, 94),
+            text: style(text, sheet),
+            sidebar: style(text, panel),
+            bar: style(text, panel),
+            tab: style(second, frame),
+            tab_active: style(text, sheet),
+            gutter: style(third, sheet),
+            selection: chosen,
+            found: mix(sheet, yellow, 0.28),
+            row_hover: hover(panel),
+            page_hover: hover(sheet),
+            popup_hover: hover(raised),
+            row_active: chosen,
+            accent: blue,
+            tint: Rgb(54, 60, 92),
             accept_tint: Rgb(44, 66, 66),
-            attention: Rgb(240, 180, 90),
-            keyword: Rgb(143, 180, 255),
-            string: Rgb(240, 185, 160),
-            comment: Rgb(135, 149, 171),
-            function: Rgb(232, 217, 160),
-            kind: Rgb(127, 214, 194),
-            number: Rgb(190, 214, 160),
-            added: Rgb(50, 72, 70),
-            removed: Rgb(78, 54, 66),
-            added_word: Rgb(60, 102, 86),
-            removed_word: Rgb(116, 62, 72),
+            attention: peach,
+            keyword: mauve,
+            string: green,
+            comment: third,
+            function: blue,
+            kind: yellow,
+            number: peach,
+            added: mix(sheet, green, 0.14),
+            removed: mix(sheet, red, 0.14),
+            added_word: mix(sheet, green, 0.3),
+            removed_word: mix(sheet, red, 0.3),
             moved: Rgb(38, 46, 70),
-            activity: style(Rgb(127, 132, 156), frame),
-            status: style(Rgb(154, 154, 178), frame),
-            workspaces: style(Rgb(166, 173, 200), frame),
-            breadcrumb: style(Rgb(154, 154, 178), bg),
-            line: Rgb(50, 50, 75),
-            number_active: Rgb(198, 198, 198),
-            guide: Rgb(60, 60, 84),
-            scrollbar: Rgb(79, 79, 79),
-            error: Rgb(244, 71, 71),
-            heading: Rgb(240, 240, 240),
-            git_modified: Rgb(240, 180, 90),
-            git_added: Rgb(127, 214, 160),
-            input: Rgb(30, 30, 46),
-            find_match: Rgb(106, 84, 28),
+            activity: style(third, frame),
+            status: style(second, frame),
+            workspaces: style(second, frame),
+            breadcrumb: style(second, sheet),
+            line: hover(sheet),
+            number_active: text,
+            guide: line,
+            scrollbar: strong_line,
+            error: red,
+            heading: text,
+            git_modified: peach,
+            git_added: green,
+            input: Rgb(28, 28, 42),
+            find_match: mix(sheet, yellow, 0.45),
             code_bg: Rgb(34, 34, 52),
             minimap_view: Rgb(72, 74, 110),
-            border: Rgb(56, 56, 80),
-            focus: Rgb(143, 180, 255),
-            popup: Rgb(55, 55, 90),
-            popup_dim: Rgb(168, 168, 190),
+            border: line,
+            focus: blue,
+            popup: raised,
+            popup_dim: second,
             disabled: Rgb(122, 122, 150),
             ignored: Rgb(122, 122, 150),
-            popup_border: Rgb(78, 78, 112),
-            pick: Rgb(72, 80, 128),
-            button: Rgb(143, 180, 255),
-            button_text: Rgb(20, 20, 31),
+            popup_border: strong_line,
+            pick: chosen,
+            button: blue,
+            button_text: Rgb(17, 17, 27),
         }
     }
 }
@@ -452,8 +474,9 @@ fn mix(from: Rgb, to: Rgb, by: f32) -> Rgb {
 mod tests {
     use super::*;
 
-    /// Light is Catppuccin Latte: base, mantle and crust for the editor, the sidebars and the
-    /// frame, menus white, and Latte's colours for code.
+    /// Light is Catppuccin Latte's surfaces: base, mantle and crust for the editor, the
+    /// sidebars and the frame, and menus white. Its code colours are Latte's hues deepened,
+    /// since Latte's own green is 3 to 1 on base and its yellow less.
     #[test]
     fn the_light_theme_is_catppuccin_latte() {
         let latte = Theme::named(Some("light"));
@@ -461,10 +484,19 @@ mod tests {
         assert_eq!(latte.sidebar.bg, Rgb(0xE6, 0xE9, 0xEF), "mantle");
         assert_eq!(latte.activity.bg, Rgb(0xDC, 0xE0, 0xE8), "crust");
         assert_eq!(latte.popup, Rgb(0xFF, 0xFF, 0xFF), "menus");
-        assert_eq!(latte.comment, Rgb(0x7C, 0x7F, 0x93));
-        assert_eq!(latte.keyword, Rgb(0x88, 0x39, 0xEF));
-        assert_eq!(latte.string, Rgb(0x40, 0xA0, 0x2B));
-        assert_eq!(latte.selection, Rgb(0xCC, 0xD0, 0xDA));
+        assert_eq!(latte.text.fg, Rgb(0x4C, 0x4F, 0x69), "Latte's text");
+        for (name, color) in [
+            ("comment", latte.comment),
+            ("keyword", latte.keyword),
+            ("string", latte.string),
+            ("function", latte.function),
+            ("type", latte.kind),
+            ("number", latte.number),
+            ("quiet text", latte.gutter.fg),
+        ] {
+            let ratio = contrast(color, latte.text.bg);
+            assert!(ratio >= 4.5, "{name} is {ratio:.2} to 1 on base");
+        }
     }
 
     #[test]
@@ -523,6 +555,57 @@ mod tests {
         let theme = Theme::default().on_background(brown);
         assert!(brightness(theme.sidebar.bg) > brightness(theme.activity.bg));
         assert!(brightness(theme.text.bg) > brightness(theme.sidebar.bg));
+    }
+
+    /// How far apart two colours are to the eye, as WCAG counts it: 1 to 21.
+    fn contrast(a: Rgb, b: Rgb) -> f32 {
+        let channel = |c: u8| {
+            let c = f32::from(c) / 255.0;
+            if c <= 0.03928 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let light = |c: Rgb| 0.2126 * channel(c.0) + 0.7152 * channel(c.1) + 0.0722 * channel(c.2);
+        let (a, b) = (light(a), light(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    /// The dark theme's text and code read at 4.5 to 1 on the sheet, and its three surfaces
+    /// are the design's: the frame, the panels and the sheet.
+    #[test]
+    fn the_dark_theme_is_three_surfaces_and_text_that_reads_on_them() {
+        let dark = Theme::default();
+        assert_eq!(dark.activity.bg, Rgb(30, 30, 46), "the frame");
+        assert_eq!(dark.sidebar.bg, Rgb(36, 36, 56), "the panels");
+        assert_eq!(dark.text.bg, Rgb(43, 43, 66), "the sheet");
+        assert_eq!(dark.tab.bg, dark.activity.bg, "tabs stand on the frame");
+        assert_eq!(
+            dark.tab_active.bg, dark.text.bg,
+            "the one in front on its sheet"
+        );
+        for (name, color) in [
+            ("text", dark.text.fg),
+            ("comment", dark.comment),
+            ("keyword", dark.keyword),
+            ("string", dark.string),
+            ("function", dark.function),
+            ("type", dark.kind),
+            ("number", dark.number),
+            ("quiet text", dark.gutter.fg),
+            ("a failure", dark.error),
+        ] {
+            let ratio = contrast(color, dark.text.bg);
+            assert!(ratio >= 4.5, "{name} is {ratio:.2} to 1 on the sheet");
+        }
+        for (name, color) in [
+            ("quiet text", dark.status.fg),
+            ("an icon", dark.activity.fg),
+        ] {
+            let ratio = contrast(color, dark.activity.bg);
+            assert!(ratio >= 4.5, "{name} is {ratio:.2} to 1 on the frame");
+        }
     }
 
     fn brightness(color: Rgb) -> u32 {

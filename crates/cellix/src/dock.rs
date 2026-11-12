@@ -15,7 +15,7 @@ use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor, Rgb as TermRgb};
 use cellix_input::{Key, KeyEvent, MouseKind};
-use cellix_render::{Bitmap, Bounds, Grid, Icon, Paint, Rect, Rgb, Style};
+use cellix_render::{Bitmap, Bounds, Grid, Icon, Paint, Rect, Rgb, Style, TOP_LEFT, TOP_RIGHT};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use unicode_width::UnicodeWidthStr;
 
@@ -978,7 +978,7 @@ impl Session {
     }
 
     pub fn draw(&self, grid: &mut Grid, area: Rect, theme: &Theme, focused: bool) {
-        grid.fill(area, theme.text);
+        grid.fill(area, pane_of(theme));
         let selection = self.ordered().filter(|(a, b)| a != b);
         let picked = |x: u16, y: u16| {
             selection.is_some_and(|(from, to)| (y, x) >= (from.1, from.0) && (y, x) <= (to.1, to.0))
@@ -1010,7 +1010,7 @@ impl Session {
                 continue;
             }
             let mut fg = self.color(cell.fg, theme, theme.text.fg);
-            let mut bg = self.color(cell.bg, theme, theme.text.bg);
+            let mut bg = self.color(cell.bg, theme, theme.sidebar.bg);
             if cell.flags.contains(Flags::INVERSE) {
                 std::mem::swap(&mut fg, &mut bg);
             }
@@ -1029,7 +1029,7 @@ impl Session {
                 && point.line == cursor.point.line
                 && point.column == cursor.point.column;
             if at_cursor {
-                (fg, bg) = (theme.text.bg, theme.text.fg);
+                (fg, bg) = (theme.sidebar.bg, theme.text.fg);
             }
             let style = Style {
                 fg,
@@ -1102,11 +1102,19 @@ fn palette_of(theme: &Theme) -> &'static [Rgb; 16] {
     if theme.is_light() { &LIGHT } else { &DARK }
 }
 
+/// What a session is drawn on: the pane's own colour, with the text's.
+fn pane_of(theme: &Theme) -> Style {
+    Style {
+        fg: theme.text.fg,
+        ..theme.sidebar
+    }
+}
+
 /// The colour a program asks for. Programs read the background to choose their own look, so
-/// these are the sheet's, and a palette entry is what the pane really draws for that number.
+/// these are the pane's, and a palette entry is what the pane really draws for that number.
 fn asked_colour(index: usize, theme: &Theme) -> Rgb {
     match index {
-        _ if index == NamedColor::Background as usize => theme.text.bg,
+        _ if index == NamedColor::Background as usize => theme.sidebar.bg,
         _ if index == NamedColor::Foreground as usize => theme.text.fg,
         _ if index == NamedColor::Cursor as usize => theme.text.fg,
         _ => indexed(index.min(255) as u8, palette_of(theme)),
@@ -2142,7 +2150,12 @@ impl Dock {
             let on = self.front == view || (view == Front::Agents && self.listing());
             let hovered = hover.is_some_and(|h| tab.contains(h.0, h.1));
             let quiet = Style {
-                fg: if on { theme.text.fg } else { theme.gutter.fg },
+                fg: if on || hovered {
+                    theme.text.fg
+                } else {
+                    theme.tab.fg
+                },
+                bg: if on { theme.sidebar.bg } else { theme.tab.bg },
                 ..theme.tab
             };
             let (close_at, close) = close_of(tab);
@@ -2161,9 +2174,7 @@ impl Dock {
                 continue;
             }
             if on {
-                grid.panel(tab_chip(tab), TAB_CHIP_RADIUS, Some(theme.row_active), None);
-            } else if hovered {
-                grid.panel(tab_chip(tab), TAB_CHIP_RADIUS, Some(theme.row_hover), None);
+                front_tab(grid, tab, theme, measure.in_cells());
             }
             let at = tab.x as f32 + TAB_TEXT;
             let pick = self.pick_at(area, close);
@@ -2198,13 +2209,16 @@ impl Dock {
             let style = if active {
                 Style {
                     fg: theme.text.fg,
+                    bg: theme.sidebar.bg,
+                    ..theme.tab
+                }
+            } else if hovered {
+                Style {
+                    fg: theme.text.fg,
                     ..theme.tab
                 }
             } else {
-                Style {
-                    fg: theme.gutter.fg,
-                    ..theme.tab
-                }
+                theme.tab
             };
             let shown = if session.exited {
                 Style {
@@ -2219,9 +2233,7 @@ impl Dock {
                 continue;
             }
             if active {
-                grid.panel(tab_chip(tab), TAB_CHIP_RADIUS, Some(theme.row_active), None);
-            } else if hovered {
-                grid.panel(tab_chip(tab), TAB_CHIP_RADIUS, Some(theme.row_hover), None);
+                front_tab(grid, tab, theme, measure.in_cells());
             }
             let (close_at, close) = close_of(tab);
             let pick = self.pick_at(area, close);
@@ -2362,13 +2374,31 @@ impl Dock {
     }
 }
 
-/// A pane tab's chip: one chip height inside its row, a little in from its sides, as every
-/// tab and button is.
-fn tab_chip(tab: Rect) -> Bounds {
-    let height = 0.8;
-    let top = f32::from(tab.y) + (1.0 - height) / 2.0;
-    Bounds::cells(f32::from(tab.x) + 0.3, top, f32::from(tab.w) - 0.6, height)
+/// The pane's tab in front, in the shape a file's has: the colour of the pane under it, the
+/// accent's line along its top, and its top corners rounded into the strip. In cells the
+/// colour alone says it.
+fn front_tab(grid: &mut Grid, tab: Rect, theme: &Theme, in_cells: bool) {
+    let style = Style {
+        bg: theme.sidebar.bg,
+        ..theme.tab
+    };
+    grid.fill(tab, style);
+    if in_cells {
+        return;
+    }
+    let (x, y, w) = (f32::from(tab.x), f32::from(tab.y), f32::from(tab.w));
+    grid.panel(
+        Bounds::cells(x, y, w, FRONT_LINE),
+        0,
+        Some(theme.accent),
+        None,
+    );
+    let whole = Bounds::inset(tab, 0.0, 0.0);
+    grid.corners(whole, TAB_CHIP_RADIUS, theme.tab.bg, TOP_LEFT | TOP_RIGHT);
 }
+
+/// How tall the accent's line on the tab in front is, in rows: the file tabs' own.
+const FRONT_LINE: f32 = 0.06;
 
 const TAB_CHIP_RADIUS: u8 = 22;
 
@@ -2485,7 +2515,7 @@ mod tests {
     fn a_program_is_told_the_real_background() {
         let theme = Theme::named(Some("light"));
         let background = NamedColor::Background as usize;
-        assert_eq!(asked_colour(background, &theme), theme.text.bg);
+        assert_eq!(asked_colour(background, &theme), theme.sidebar.bg);
         let foreground = NamedColor::Foreground as usize;
         assert_eq!(asked_colour(foreground, &theme), theme.text.fg);
         assert_eq!(asked_colour(11, &theme), LIGHT[11]);
