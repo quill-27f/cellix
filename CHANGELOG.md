@@ -6,6 +6,7 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 
 ### Added
 - Click text that has a comment and its card is lit in the Comments tab, which scrolls to it.
+- Alt+A asks the agent about what's selected, as the Ask Agent button does. The Comment and Ask Agent buttons by a selection show their keys in brackets, "Comment (Alt+C)" and "Ask Agent (Alt+A)", or whichever keys you've set.
 - The Comments tab can list in the document's order, newest first or oldest first. The order is on a row under the kinds; click it to change it.
 
 ## [0.6.8] - 2026-11-13

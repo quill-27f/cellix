@@ -165,6 +165,8 @@ pub enum Command {
     FindInProject,
     OpenDiff,
     AddComment,
+    /// Writes a comment on what's selected and sends it to the agent as it's written.
+    AskAgent,
     BlameLine,
     ReplaceInProject,
     MarkdownPreview,

@@ -184,7 +184,8 @@ quiet row under the kinds whose list marks the one in use. With no file in view 
 goes wherever the file changes, so by recency a file can have more than one.
 
 Whatever can be seen can be talked about. A selection, in code or on a page, gets Comment and Ask
-Agent beside it, and a picture, diagram or formula gets a Comment button under the pointer. Comments
+Agent beside it, each naming in brackets the keys that do the same as they're set now (Alt+C and
+Alt+A unless changed), and a picture, diagram or formula gets a Comment button under the pointer. Comments
 are written in the side pane, with what they're about in view. Ask Agent sends the comment to the
 agent as soon as it's written, with its file, line and all of what was selected, and how to answer
 with `cellix reply`, so the answer lands under it. Inside Claude Code it puts the file and the whole

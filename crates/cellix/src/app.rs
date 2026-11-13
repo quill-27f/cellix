@@ -4398,14 +4398,46 @@ impl App {
                 (x, (y + 1).min(area.bottom().saturating_sub(1)))
             }
         };
-        let width = COMMENT_WIDTH + ASK_WIDTH;
+        let (comment, ask) = self.selection_labels();
+        let (comment, ask) = (self.chip_width(&comment), self.chip_width(&ask));
+        let width = comment + ask;
         let x = (x as u16)
             .min(area.right().saturating_sub(width + 1))
             .max(area.x);
         Some((
-            Rect::new(x, y, COMMENT_WIDTH, 1),
-            Rect::new(x + COMMENT_WIDTH, y, ASK_WIDTH, 1),
+            Rect::new(x, y, comment, 1),
+            Rect::new(x + comment, y, ask, 1),
         ))
+    }
+
+    /// What the two buttons by a file's selection say: what each does and, in brackets, the
+    /// keys that do the same, as they're set now.
+    fn selection_labels(&self) -> (String, String) {
+        let keys = crate::keys::shortcuts(&self.settings.keybindings);
+        let named = |name: &str, command: Command| {
+            let key = keys
+                .iter()
+                .find(|shortcut| shortcut.command == command)
+                .and_then(|shortcut| shortcut.keys.first());
+            match key {
+                Some(key) => format!("{name} ({key})"),
+                None => name.to_string(),
+            }
+        };
+        (
+            named("Comment", Command::AddComment),
+            named("Ask Agent", Command::AskAgent),
+        )
+    }
+
+    /// The columns a button by a selection takes for its words: a column either side where
+    /// every letter is a cell, and the room every button has where they're measured.
+    fn chip_width(&self, label: &str) -> u16 {
+        if self.measure.in_cells() {
+            return label.chars().count() as u16 + 2;
+        }
+        let wide = self.measure.width(label, Font::default()) + measures::BUTTON_ROOM * 2.0;
+        wide.ceil() as u16
     }
 
     /// The same buttons by what's selected in a terminal tab, where they cover none of its
@@ -4764,8 +4796,9 @@ impl App {
             self.draw_chip_lifted(grid, ask, "Ask Agent", OUTPUT_CHIP);
         }
         if let Some((comment, ask)) = self.selection_bar() {
-            self.draw_chip(grid, comment, "Comment");
-            self.draw_chip(grid, ask, "Ask Agent");
+            let (comment_says, ask_says) = self.selection_labels();
+            self.draw_chip(grid, comment, &comment_says);
+            self.draw_chip(grid, ask, &ask_says);
         } else if let Some((chip, _)) = self.picture_comment() {
             self.draw_chip(grid, chip, "Comment");
         }
@@ -6995,6 +7028,7 @@ impl App {
                 };
             }
             Command::AddComment => self.prompt_comment_at_cursor(false),
+            Command::AskAgent => self.prompt_comment_at_cursor(true),
             Command::FindInFile => self.open_find(),
             Command::NextChange => self.step_change(true),
             Command::PreviousChange => self.step_change(false),
@@ -22957,6 +22991,45 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             1,
             "it goes with the review"
         );
+    }
+
+    /// The buttons by a file's selection say the keys that do the same, in brackets, as the
+    /// keys are set now, and Alt+A asks the agent as the Ask Agent button does.
+    #[test]
+    fn the_buttons_by_a_selection_name_their_keys_and_alt_a_asks_the_agent() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        select_word(&mut app, "first");
+        let text = screen(&app).text();
+        assert!(text.contains("Comment (Alt+C)"), "{text}");
+        assert!(text.contains("Ask Agent (Alt+A)"), "{text}");
+        // The two stand side by side, neither over the other.
+        let (comment, ask) = app.selection_bar().expect("a bar by the selection");
+        assert!(comment.right() <= ask.x, "{comment:?} then {ask:?}");
+
+        let alt = |c: char| {
+            Event::Key(KeyEvent {
+                key: Key::Char(c),
+                mods: Mods {
+                    alt: true,
+                    ..Mods::default()
+                },
+            })
+        };
+        app.handle(alt('a'));
+        let draft = app.dock.draft.as_ref().expect("a comment being written");
+        assert!(draft.ask, "to be sent to the agent as it's written");
+        assert_eq!(draft.quote, "first");
+        app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
+
+        // Keys set by the person are the ones the buttons name.
+        select_word(&mut app, "first");
+        let own = vec!["Ctrl+Shift+M".to_string()];
+        app.settings
+            .keybindings
+            .insert("Add Comment".to_string(), own);
+        let text = screen(&app).text();
+        assert!(text.contains("Comment (Ctrl+Shift+M)"), "{text}");
     }
 
     #[test]

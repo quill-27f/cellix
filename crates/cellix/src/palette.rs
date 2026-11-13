@@ -199,13 +199,14 @@ pub fn keys_of(command: Command) -> Option<&'static str> {
         Command::FormatDocument => "Alt+Shift+F",
         Command::RenameSymbol => "F2",
         Command::AddComment => "Alt+C",
+        Command::AskAgent => "Alt+A",
         Command::SplitPane => "Ctrl+\\",
         Command::Quit => "Ctrl+Q",
         _ => return None,
     })
 }
 
-pub const COMMANDS: [(&str, Command); 121] = [
+pub const COMMANDS: [(&str, Command); 122] = [
     ("Save", Command::Save),
     ("Undo", Command::Undo),
     ("Redo", Command::Redo),
@@ -219,6 +220,7 @@ pub const COMMANDS: [(&str, Command); 121] = [
     ("Find in Project", Command::FindInProject),
     ("Review Changes", Command::OpenDiff),
     ("Add Comment", Command::AddComment),
+    ("Ask Agent", Command::AskAgent),
     ("Blame Line", Command::BlameLine),
     ("Replace in Project", Command::ReplaceInProject),
     ("Toggle Markdown Source", Command::MarkdownPreview),

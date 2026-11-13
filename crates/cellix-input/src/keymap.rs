@@ -77,6 +77,7 @@ pub fn simple_keymap(event: KeyEvent) -> Option<Command> {
         Key::Char(' ') if mods.ctrl => Complete,
         Key::Char('p') if mods.alt => CommandPalette,
         Key::Char('c') if mods.alt => AddComment,
+        Key::Char('a') if mods.alt => AskAgent,
         // As in VS Code. Telling these from Ctrl+P needs the Kitty keyboard protocol.
         Key::Char('p' | 'P') if mods.ctrl && mods.shift => CommandPalette,
         Key::Char('f' | 'F') if mods.ctrl && mods.shift => FindInProject,

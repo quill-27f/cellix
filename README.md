@@ -170,6 +170,7 @@ been tried for real. [docs/PROGRESS.md](docs/PROGRESS.md) says what has and hasn
 | Ctrl+J | Bring up or put away a terminal in the side pane |
 | Ctrl+B | Close or open the left side, or Bold with words picked on a page |
 | Alt+C, or select text | Comment on what's selected |
+| Alt+A | Ask the agent about what's selected: a comment that's sent as it's written |
 | Ctrl+F | Find in the file; in a terminal or an agent's chat; in the side pane's lists, Review and the Task page |
 | Ctrl+Shift+F | Search the project |
 | Ctrl+\\ | Split pane |
