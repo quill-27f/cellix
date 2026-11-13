@@ -1911,3 +1911,4 @@ The user said to release. Everything since 0.6.5, seventeen commits: the review'
 - README: Find's row in the keys table, the Task page as a tab, and what the light theme is now. The rest was written with each change.
 - Unverified: all of it in a real terminal. The ui-expert has not seen the pictures taken after its third report's fixes.
 - Windows is still paused: no Windows build in this release.
+- 0.6.6's first CI run failed on Linux, so nothing was released from it: CI's toolchain is `stable`, which had moved to 1.100 while this Mac has 1.99, and its clippy counts a loop over a range that indexes a list (`needless_range_loop`) where it starts part way in. The loop was in the palette, from before this release, and walks the items themselves now. `harness/x verify` can't catch a lint the local toolchain doesn't have; the toolchain here wants updating before the next release.

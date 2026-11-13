@@ -612,8 +612,8 @@ impl Palette {
             .copied()
             .zip(self.matches.iter().copied())
             .collect();
-        for i in from..self.items.len() {
-            if let Some(score) = fuzzy_score(&typed, self.items[i].label()) {
+        for (i, item) in self.items.iter().enumerate().skip(from) {
+            if let Some(score) = fuzzy_score(&typed, item.label()) {
                 scored.push((score, i));
             }
         }
