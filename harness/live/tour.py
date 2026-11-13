@@ -533,9 +533,9 @@ def workspaces(scratch):
     ]
     shoot("100-workspaces", told, CODE_FILE, size="150x44", **space)
     # New Workspace stands after the four tiles, which keep more room than they did.
-    shoot("105-new-workspace-hover", [*told, ["move", 68, 43], ["wait", 0.4]], CODE_FILE, size="150x44", **space)
-    shoot("106-folder-finder", [*told, ["click", 68, 43], ["wait", 0.6]], CODE_FILE, size="150x44", **space)
-    shoot("107-folder-path", [*told, ["click", 68, 43], ["keys", "../in"], ["wait", 0.6]], CODE_FILE,
+    shoot("105-new-workspace-hover", [*told, ["move", 74, 43], ["wait", 0.4]], CODE_FILE, size="150x44", **space)
+    shoot("106-folder-finder", [*told, ["click", 74, 43], ["wait", 0.6]], CODE_FILE, size="150x44", **space)
+    shoot("107-folder-path", [*told, ["click", 74, 43], ["keys", "../in"], ["wait", 0.6]], CODE_FILE,
           size="150x44", **space)
     shoot("101-workspace-hover", [*told, ["move", 40, 43], ["wait", 0.4]], CODE_FILE, size="150x44", **space)
     # What waits everywhere, in the side pane: an agent asking, a finished turn, a failed run.
