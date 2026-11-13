@@ -177,8 +177,9 @@ hard-wrapped file fills the page and saves unchanged. On a page, arrows and Home
 
 A press on words a comment is about lights that comment's card in the Comments pane, with
 the accent's edge, and scrolls the pane to it, when Comments is the tab in front; a press on
-other words puts the light out. It goes the other way already: a click on a card goes to its
-words. The pane lists in the document's order, or by which comment was made last or first
+other words puts the light out. It goes the other way too: a click on a card goes to its
+words, selects them so they're plain to see, lights the card, and leaves the keyboard in the
+file; the buttons that offer to comment on a selection stay away from those words. The pane lists in the document's order, or by which comment was made last or first
 (a comment's number counts up as they're made, which is the only record of when), chosen from a
 quiet row under the kinds whose list marks the one in use. With no file in view a heading still
 goes wherever the file changes, so by recency a file can have more than one.

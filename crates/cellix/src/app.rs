@@ -988,6 +988,19 @@ const LIST_MATCHES: usize = 64;
 const MARK_HEIGHT: f32 = 0.76;
 const MARK_AIR: f32 = 0.1;
 
+/// Where a comment's words are in the file an editor holds, as chars from its start.
+fn quote_range(editor: &Editor, thread: &Thread) -> Option<(usize, usize)> {
+    let rope = editor.buffer.rope();
+    let index = thread.line.checked_sub(1)?;
+    if thread.quote.is_empty() || index >= rope.len_lines() {
+        return None;
+    }
+    let text = editor.line_text(index);
+    let at = text.find(thread.quote.as_str())?;
+    let start = rope.line_to_char(index) + text[..at].chars().count();
+    Some((start, start + thread.quote.chars().count()))
+}
+
 /// A list's place in the pane's screen with a row of air under the tabs.
 fn under_strip(screen: Rect) -> Rect {
     let air = u16::from(screen.h > 1);
@@ -1186,6 +1199,9 @@ pub struct App {
     dock_guide: Option<(u16, u16)>,
     /// The comment whose words were last pressed in the document, lit in the Comments pane.
     lit_thread: Option<u32>,
+    /// The words a click on a comment's card selected in the file: the comment's own, so the
+    /// buttons that offer to comment on a selection stay away from them.
+    lit_range: Option<(usize, usize)>,
     /// The order the Comments pane lists them in.
     comment_sort: threads::Sort,
     /// The session that was in front when the last run here ended.
@@ -1354,6 +1370,7 @@ impl App {
             over_ssh: !cfg!(test) && crate::pane::over_ssh(),
             dock_guide: None,
             lit_thread: None,
+            lit_range: None,
             comment_sort: threads::Sort::Document,
             kept_session: None,
             kernels: HashMap::new(),
@@ -4385,6 +4402,10 @@ impl App {
         editor.selected_text().filter(|t| !t.trim().is_empty())?;
         let area = self.focused_area();
         let primary = editor.selections.primary();
+        // A comment's own words, selected by a click on its card, already have their comment.
+        if self.lit_range == Some((primary.start(), primary.end())) {
+            return None;
+        }
         let (start, end) = (
             primary.anchor.min(primary.head),
             primary.anchor.max(primary.head),
@@ -10044,7 +10065,6 @@ impl App {
             return;
         };
         let head = editor.selections.primary().head;
-        let rope = editor.buffer.rope();
         // The comment whose words hold the caret; the shortest, where one's are inside
         // another's.
         let found = self
@@ -10052,18 +10072,12 @@ impl App {
             .iter()
             .filter(|t| t.file == file && !t.resolved && t.earlier.is_none())
             .filter_map(|t| {
-                let index = t.line.checked_sub(1)?;
-                if t.quote.is_empty() || index >= rope.len_lines() {
-                    return None;
-                }
-                let text = editor.line_text(index);
-                let at = text.find(t.quote.as_str())?;
-                let start = rope.line_to_char(index) + text[..at].chars().count();
-                let end = start + t.quote.chars().count();
+                let (start, end) = quote_range(editor, t)?;
                 (head >= start && head <= end).then_some((end - start, t.id))
             })
             .min();
         self.lit_thread = found.map(|(_, id)| id);
+        self.lit_range = None;
         if let Some(id) = self.lit_thread {
             self.show_lit_comment(id);
         }
@@ -10207,9 +10221,26 @@ impl App {
                     return;
                 }
                 let area = self.focused_area();
+                // Its own words are selected, so they're plain to see in the file, and the
+                // keyboard is the file's.
+                let range = self
+                    .editors
+                    .get(self.active())
+                    .zip(self.threads.iter().find(|t| t.id == id))
+                    .and_then(|(editor, thread)| quote_range(editor, thread));
                 if let Some(editor) = self.editor_mut() {
                     editor.go_to_line(line, area);
+                    if let Some((start, end)) = range {
+                        editor.selections.set_single(Selection {
+                            anchor: start,
+                            head: end,
+                            goal: None,
+                        });
+                        editor.reveal(area);
+                    }
                 }
+                self.lit_thread = Some(id);
+                self.lit_range = range;
                 self.dock.focused = false;
             }
             ThreadHit::Reply(id) => {
@@ -21210,6 +21241,21 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             grid.text()
         );
         assert_eq!(lit_cards(&app), 1, "and its card alone is lit");
+
+        // A click on a card goes the other way: its words are selected in the file, the
+        // keyboard is the file's, and no button offers to comment on them again.
+        let (x, y) = find(&screen(&app), "remark 7");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        app.handle(mouse(MouseKind::Up, x + 1, y));
+        let editor = &app.editors[app.active()];
+        assert_eq!(editor.selected_text().as_deref(), Some("row 14 of"));
+        assert_eq!(app.lit_thread, Some(7));
+        assert!(!app.dock.focused, "the keyboard is the file's");
+        assert!(
+            app.selection_bar().is_none(),
+            "its own words need no Comment button"
+        );
+        assert_eq!(lit_cards(&app), 1);
 
         // Words no comment is about put the light out, and the pane stays where it is.
         let (x, y) = find(&screen(&app), "row 15 of the note");
