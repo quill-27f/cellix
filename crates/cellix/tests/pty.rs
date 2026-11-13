@@ -611,6 +611,135 @@ fn pty_pixel_tier_uses_the_reported_cell_size_without_window_pixels() {
     );
 }
 
+/// A press reported in pixels lands on the line under the pointer after the window has
+/// changed size, in a terminal whose window is taller than its rows: one that counts its
+/// padding or a tab bar in the height it reports. The cell's height was taken at each resize
+/// as the window's pixels over its rows, two or three pixels too tall here, so low in the
+/// window a press landed lines above the pointer until some later resize happened to guess
+/// right. The terminal says its cell size exactly, and is asked again once the size settles.
+#[test]
+#[cfg(unix)]
+fn pty_a_press_in_pixels_lands_on_its_line_after_a_resize() {
+    let dir = tempfile::tempdir().unwrap();
+    let text: String = (1..=40).map(|n| format!("line {n}\n")).collect();
+    let file = dir.path().join("lines.txt");
+    std::fs::write(&file, text).unwrap();
+    // Cells of 10 by 20, and 90 pixels of the window that aren't rows.
+    let size = |rows: u16| PtySize {
+        rows,
+        cols: 100,
+        pixel_width: 1000,
+        pixel_height: rows * 20 + 90,
+    };
+    let pty = native_pty_system().openpty(size(30)).unwrap();
+    let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_cellix"));
+    command.cwd(dir.path());
+    command.arg("lines.txt");
+    let mut child = pty.slave.spawn_command(command).unwrap();
+    let mut reader = pty.master.try_clone_reader().unwrap();
+    let input: Input = Arc::new(Mutex::new(pty.master.take_writer().unwrap()));
+    let raw = Arc::new(Mutex::new(Vec::new()));
+    let sink = raw.clone();
+    std::thread::spawn(move || {
+        let mut buf = [0; 65536];
+        while let Ok(n) = reader.read(&mut buf) {
+            if n == 0 {
+                break;
+            }
+            sink.lock().unwrap().extend_from_slice(&buf[..n]);
+        }
+    });
+    // The terminal: every time it's asked what it is, it says its cell size first, and the
+    // first time that it draws pictures and reports the mouse in pixels.
+    let answered = Arc::new(Mutex::new(0usize));
+    {
+        let (raw, input, answered) = (raw.clone(), input.clone(), answered.clone());
+        std::thread::spawn(move || {
+            loop {
+                let asked = {
+                    let raw = raw.lock().unwrap();
+                    raw.windows(3).filter(|w| *w == b"\x1b[c").count()
+                };
+                let mut done = answered.lock().unwrap();
+                while *done < asked {
+                    let mut reply = b"\x1b[6;20;10t".to_vec();
+                    if *done == 0 {
+                        reply.extend_from_slice(b"\x1b[?1016;2$y\x1b_Gi=31;OK\x1b\\");
+                    }
+                    reply.extend_from_slice(b"\x1b[?62c");
+                    let mut input = input.lock().unwrap();
+                    if input.write_all(&reply).is_err() {
+                        return;
+                    }
+                    let _ = input.flush();
+                    *done += 1;
+                }
+                drop(done);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        });
+    }
+    let send = |bytes: &[u8]| {
+        let mut input = input.lock().unwrap();
+        input.write_all(bytes).unwrap();
+        input.flush().unwrap();
+    };
+    let wait = |what: &str, met: &dyn Fn() -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !met() {
+            assert!(Instant::now() < deadline, "{what}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    let sent = |needle: &[u8]| {
+        let raw = raw.lock().unwrap();
+        raw.windows(needle.len()).any(|w| w == needle)
+    };
+    wait("no pictures were sent", &|| sent(b"a=t,f=24"));
+    // A press past the end of a line low in the window, a letter, and a save: the line the
+    // letter is on is the line the press landed on.
+    let press = b"\x1b[<0;701;431M\x1b[<0;701;431m";
+    let marked = |letter: char| {
+        let saved = std::fs::read_to_string(&file).unwrap_or_default();
+        saved
+            .lines()
+            .find(|line| line.contains(letter))
+            .map(str::to_string)
+    };
+    std::thread::sleep(Duration::from_millis(500));
+    send(press);
+    send(b"A\x13");
+    wait("the first letter was never saved", &|| {
+        marked('A').is_some()
+    });
+    let line = marked('A').unwrap();
+    assert!(line.starts_with("line "), "{line}");
+
+    // A row more, with the same pixels that aren't rows.
+    let before = *answered.lock().unwrap();
+    pty.master.resize(size(31)).unwrap();
+    wait("the cell's size wasn't asked again", &|| {
+        *answered.lock().unwrap() > before
+    });
+    std::thread::sleep(Duration::from_millis(700));
+    send(press);
+    send(b"Z\x13");
+    wait("the second letter was never saved", &|| {
+        marked('Z').is_some()
+    });
+    assert_eq!(
+        marked('Z'),
+        Some(format!("{line}Z")),
+        "the same place in the window is the same line"
+    );
+    send(b"\x11");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while child.try_wait().unwrap().is_none() {
+        assert!(Instant::now() < deadline, "cellix did not exit");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 #[test]
 fn pty_follows_a_resize() {
     let dir = project();

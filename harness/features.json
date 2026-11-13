@@ -4912,5 +4912,12 @@
     "title": "Alt+A asks the agent about the selection, and the buttons by a selection name their keys in brackets",
     "test": "the_buttons_by_a_selection_name_their_keys_and_alt_a_asks_the_agent",
     "passes": true
+  },
+  {
+    "id": "pixel-press-after-resize",
+    "milestone": 14,
+    "title": "A press reported in pixels lands on its line after a resize, in a terminal whose window is taller than its rows",
+    "test": "pty_a_press_in_pixels_lands_on_its_line_after_a_resize",
+    "passes": true
   }
 ]

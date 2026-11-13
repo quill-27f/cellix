@@ -112,6 +112,28 @@ pub fn background(multiplexer: Multiplexer, passthrough: bool) -> Option<(bool, 
     Some((light, (byte(r), byte(g), byte(b))))
 }
 
+/// Asks the terminal how big a cell is, in pixels, as (width, height): what it says is
+/// exact, where the window's pixels over its cells is a guess that takes its padding, and a
+/// tab bar some terminals count, for part of every row. Asked when the window's size has
+/// settled after a change. Must run in raw mode, between reads of input. `None` when the
+/// terminal doesn't say, or under tmux without passthrough, which would answer for itself.
+pub fn cell_size(multiplexer: Multiplexer, passthrough: bool) -> Option<(usize, usize)> {
+    let (question, asking) = match multiplexer {
+        Multiplexer::Tmux if passthrough => (
+            "\x1bPtmux;\x1b\x1b[16t\x1b\\\x1b[c",
+            Asking::TmuxPassthrough,
+        ),
+        Multiplexer::Tmux => return None,
+        Multiplexer::None | Multiplexer::Zellij => ("\x1b[16t\x1b[c", Asking::Terminal),
+    };
+    let mut out = io::stdout();
+    let reply = ask_for(&mut out, question, asking, |reply| {
+        asking != Asking::TmuxPassthrough || parse_cell_size(reply).is_some()
+    })
+    .ok()?;
+    parse_cell_size(&reply)
+}
+
 /// Asks for the cell size and for Kitty graphics, then device attributes, which every
 /// terminal answers, so a terminal without graphics doesn't cost the full timeout.
 /// Expects raw mode. Returns (kitty graphics, cell size).

@@ -216,6 +216,14 @@ file, and the list is then that file's alone.
 Cellix tells the terminal which pointer to show with OSC 22: a hand on what can be pressed, a bar on
 text, an arrow elsewhere. Left to itself a terminal picks one from its own state, which can stick.
 
+Where the terminal reports the mouse in pixels, a press is turned into a cell by the cell's size,
+so that size has to be the terminal's own. It's asked for at the start (`CSI 16 t`) and asked
+again whenever the window's size in cells or in pixels has changed and held still for a fifth of
+a second, by a terminal that answered the first time. The window's pixels over its cells is only
+the fallback: a terminal that counts its padding or a tab bar in the height it reports makes
+every row seem a few pixels taller than it is, and a press low in the window then lands lines
+above the pointer. That guess used to replace the terminal's answer at every resize.
+
 ## Guidance
 
 Nothing should leave someone wondering what to do next. An empty window lists its actions as rows

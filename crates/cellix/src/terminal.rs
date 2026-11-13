@@ -654,6 +654,10 @@ struct Display {
     /// The terminal said its cell size itself. Under tmux the window's own size can be one
     /// tmux made up, so a resize doesn't overrule it.
     told_cell: bool,
+    /// The terminal said its cell size when it was asked at the start, so it can be asked
+    /// again. One that doesn't answer would only be waited on, with what's typed meanwhile
+    /// taken for its answer.
+    answers_cell: bool,
     pixel_mouse: bool,
     /// The terminal sends paste events, so pictures can be pasted.
     paste_events: bool,
@@ -688,6 +692,7 @@ impl Display {
             placement,
             cell,
             told_cell: env.cell.is_some() && env.multiplexer == cellix_term::Multiplexer::Tmux,
+            answers_cell: env.cell.is_some(),
             pixel_mouse: env.pixel_mouse,
             // Set to 0, it leaves pastes as plain bracketed text, should paste events misbehave.
             paste_events: env.paste_events
@@ -744,6 +749,16 @@ impl Display {
 }
 
 /// Cell size from the window's pixel size, or None when the terminal reports no pixels.
+/// How long the window's size has to hold still before the terminal is asked its cell size:
+/// a window being dragged changes many times a second, and each question is a round trip.
+const CELL_SETTLE: Duration = Duration::from_millis(200);
+
+/// The window's size in pixels, as the terminal reports it, to tell when it changes.
+fn window_pixels() -> Option<(u16, u16)> {
+    let window = window_size().ok()?;
+    Some((window.width, window.height))
+}
+
 fn window_cell() -> Option<(usize, usize)> {
     let window = window_size().ok()?;
     let cell = (
@@ -848,6 +863,9 @@ pub fn run(options: Options) -> io::Result<()> {
     let notice =
         cellix_term::Notice::for_terminal(&cellix_term::terminal_names(|n| std::env::var(n).ok()));
     let inside_tmux = display.multiplexer == cellix_term::Multiplexer::Tmux;
+    // When the terminal is next asked how big a cell is, and the window's pixels as last seen.
+    let mut cell_asked: Option<Instant> = None;
+    let mut pixels = window_pixels();
     // The loop's errors still come back, but only after what Quit does: a console closing
     // under Cellix can fail its last frame.
     #[allow(clippy::redundant_closure_call)]
@@ -857,22 +875,44 @@ pub fn run(options: Options) -> io::Result<()> {
             let now = size()?;
             if now != spaces.size() {
                 spaces.handle(Event::Resize(now.0, now.1));
-                let cell = window_cell();
-                if display.placement.is_some()
-                    && !display.told_cell
-                    && cell.is_some()
-                    && cell != display.cell
-                {
-                    display.cell = cell;
-                    backend = display.backend();
-                    let measure = display.measure();
-                    look.borrow_mut().measure = measure.clone();
-                    for workspace in &mut spaces.list {
-                        workspace.app.set_measure(measure.clone());
-                    }
-                }
+                // The cell's size is asked of the terminal once the window has settled. The
+                // window's pixels over its cells was taken at once here, and is a guess:
+                // padding, or a tab bar the terminal counts, made each row two or three
+                // pixels taller than it is, and a press in pixels then landed three or four
+                // lines above the pointer, low in the window.
+                cell_asked = Some(Instant::now() + CELL_SETTLE);
                 backend.invalidate();
                 redraw = true;
+            }
+            // Its pixels can change with its cells as they were: a font size that keeps the
+            // grid, a move to a display of another density, a size passed on late over SSH.
+            let seen = window_pixels();
+            if seen != pixels {
+                pixels = seen;
+                cell_asked = Some(Instant::now() + CELL_SETTLE);
+            }
+            if cell_asked.is_some_and(|at| Instant::now() >= at) {
+                cell_asked = None;
+                if display.placement.is_some() && !display.told_cell {
+                    // What the terminal says, and the guess only where it says nothing.
+                    let told = display
+                        .answers_cell
+                        .then(|| cellix_term::cell_size(display.multiplexer, display.passthrough))
+                        .flatten();
+                    let cell = told.or_else(window_cell);
+                    if cell.is_some() && cell != display.cell {
+                        display.cell = cell;
+                        backend = display.backend();
+                        let measure = display.measure();
+                        look.borrow_mut().measure = measure.clone();
+                        for workspace in &mut spaces.list {
+                            workspace.app.set_measure(measure.clone());
+                        }
+                        backend.invalidate();
+                        shown = None;
+                        redraw = true;
+                    }
+                }
             }
             if spaces.take_switched() {
                 // Another workspace is in front: none of what's on screen can be kept.

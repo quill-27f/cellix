@@ -4,6 +4,9 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 
 ## [Unreleased]
 
+### Fixed
+- After the window had changed size, a click could land three or four lines above the pointer, low in the window, until another resize happened to put it right. Cellix guessed the height of a row from the window's size, which is off in terminals whose window is taller than its rows. It now asks the terminal for the exact size again after any resize.
+
 ### Added
 - Click text that has a comment and its card is lit in the Comments tab, which scrolls to it. Click a comment's card and its words are selected in the file, with the keyboard there.
 - Alt+A asks the agent about what's selected, as the Ask Agent button does. The Comment and Ask Agent buttons by a selection show their keys in brackets, "Comment (Alt+C)" and "Ask Agent (Alt+A)", or whichever keys you've set.

@@ -8,7 +8,7 @@ mod pixels;
 mod probe;
 
 pub use cells::CellBackend;
-pub use detect::{background, detect};
+pub use detect::{background, cell_size, detect};
 pub use notify::{Notice, sequence as notification, terminal_names};
 pub use pixels::{Bleed, DEFAULT_QUOTA, PixelBackend, Placement, Smooth, row_key};
 pub use probe::{Env, Multiplexer, Tier, select_tier};
