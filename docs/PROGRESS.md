@@ -1912,3 +1912,11 @@ The user said to release. Everything since 0.6.5, seventeen commits: the review'
 - Unverified: all of it in a real terminal. The ui-expert has not seen the pictures taken after its third report's fixes.
 - Windows is still paused: no Windows build in this release.
 - 0.6.6's first CI run failed on Linux, so nothing was released from it: CI's toolchain is `stable`, which had moved to 1.100 while this Mac has 1.99, and its clippy counts a loop over a range that indexes a list (`needless_range_loop`) where it starts part way in. The loop was in the palette, from before this release, and walks the items themselves now. `harness/x verify` can't catch a lint the local toolchain doesn't have; the toolchain here wants updating before the next release.
+- 0.6.6 was released from `32149e2` once CI passed: four binaries (macOS on Apple silicon and Intel, Linux on ARM and x86-64), the Homebrew formula and checksums, published 09:34 UTC. `target` is 20 GB and the disk has 324 GB free. The whole tour on the release commit timed out in one of its three parts with the machine under another session's load: 146 of 190 scenes are of the release, none failed.
+
+## A maximized pane comes back maximized (2026-11-13)
+
+The user's note while 0.6.6 was going out: the right pane was full screen, they clicked its collapse button twice, and it came back at its default width.
+
+- `keep_in_view` gives the window back when what's maximized goes out of sight, and a hidden pane is out of sight, so hiding a maximized pane cleared `maximized` for good. It still gives the window to the file while the pane is hidden, and now remembers that the pane had it (`hid_maximized`); `bring_back_maximized`, run after every event that could show the pane, gives it back when the pane is shown again, by the corner's button, Toggle Panel or a view's icon. A pane restored by hand before it's hidden comes back beside the file. Test: `a_pane_hidden_while_it_has_the_window_comes_back_with_it`, through the corner's button both ways.
+- Not released: this is on `main` after 0.6.6.

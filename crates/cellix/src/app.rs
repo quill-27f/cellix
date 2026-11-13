@@ -1175,6 +1175,8 @@ pub struct App {
     /// The pane had the window when the last run here ended, so it takes it again once
     /// what ran in it is back.
     kept_maximized: bool,
+    /// The pane had the window when it was hidden, so it takes it again when it's shown.
+    hid_maximized: bool,
     /// The session that was in front when the last run here ended.
     kept_session: Option<String>,
     /// Whether how the two sides work together has been said yet.
@@ -1337,6 +1339,7 @@ impl App {
             #[cfg(test)]
             state_copies: std::cell::Cell::new(0),
             kept_maximized: false,
+            hid_maximized: false,
             kept_session: None,
             kernels: HashMap::new(),
             kernel_command: None,
@@ -2441,11 +2444,13 @@ impl App {
         }
         let called = !calls.is_empty();
         let shown = self.maximized.map(|_| self.in_view());
+        let was_open = self.dock.open;
         for call in calls {
             self.ide_call(call);
         }
         let built = self.poll_build();
         self.keep_in_view(shown);
+        self.bring_back_maximized(was_open);
         self.tell_selection();
         let terminal = self.dock.poll(&self.theme);
         // What a terminal prints while Find looks through it is looked through as it comes.
@@ -3889,6 +3894,7 @@ impl App {
         }
         self.follow_rest(&event);
         let shown = self.maximized.map(|_| self.in_view());
+        let was_open = self.dock.open;
         let wheel = matches!(
             event,
             Event::Mouse(MouseEvent {
@@ -3932,6 +3938,7 @@ impl App {
         }
         self.poll_pan_hint();
         self.keep_in_view(shown);
+        self.bring_back_maximized(was_open);
         self.fit_dock();
         if let Some((index, revision)) = edited
             && index == self.active()
@@ -13787,9 +13794,23 @@ impl App {
             Maximized::Pane => !self.dock.open || now.editor != before.editor,
         };
         if around || behind {
+            // Hidden with the window, the pane is owed it when it's shown again.
+            self.hid_maximized = which == Maximized::Pane && !self.dock.open && !around;
             self.maximized = None;
             self.fit_dock();
         }
+    }
+
+    /// A pane hidden while it had the window takes the window again when it's shown, as it
+    /// was. It came back at its default width, which read as the pane having lost its place.
+    fn bring_back_maximized(&mut self, was_open: bool) {
+        if !self.hid_maximized || was_open || !self.dock.open {
+            return;
+        }
+        self.hid_maximized = false;
+        self.maximized = Some(Maximized::Pane);
+        self.dock.focused |= self.pane_takes_keys();
+        self.fit_dock();
     }
 
     fn draw_overlay(&self, grid: &mut Grid) {
@@ -25130,6 +25151,49 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert!(app.dock.open, "a click brings the pane back");
         assert!(app.dock.listing(), "with what it showed");
         assert!(!app.quit);
+    }
+
+    /// A pane hidden while it has the window takes the window again when it's shown. The
+    /// user had the side pane full screen, hid it and brought it back with the corner's
+    /// button, and it came back at its default width.
+    #[test]
+    fn a_pane_hidden_while_it_has_the_window_comes_back_with_it() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        let button = app.show_pane().expect("the corner's button").x;
+        app.run(Command::ListAgents);
+        let beside = app.dock_area().unwrap().w;
+        app.run(Command::MaximizePane);
+        assert_eq!(app.maximized, Some(Maximized::Pane));
+        let whole = app.dock_area().unwrap().w;
+        assert!(whole > beside, "{whole} against {beside}");
+
+        // Its hide button, then the button it leaves in the corner.
+        app.handle(mouse(MouseKind::Left, button, 0));
+        assert!(!app.dock.open, "hidden");
+        assert_eq!(app.maximized, None, "the file has the window meanwhile");
+        let text = screen(&app).text();
+        assert!(text.contains("first line"), "and shows:\n{text}");
+        app.handle(mouse(MouseKind::Left, button, 0));
+        assert!(app.dock.open, "shown again");
+        assert_eq!(
+            app.maximized,
+            Some(Maximized::Pane),
+            "with the window, as it was"
+        );
+        assert_eq!(app.dock_area().unwrap().w, whole);
+
+        // Restored by hand, a later hide and show leaves it beside the file.
+        app.run(Command::MaximizePane);
+        assert_eq!(app.maximized, None);
+        app.handle(mouse(MouseKind::Left, button, 0));
+        app.handle(mouse(MouseKind::Left, button, 0));
+        assert!(app.dock.open);
+        assert_eq!(
+            app.maximized, None,
+            "it wasn't maximized when it was hidden"
+        );
+        assert_eq!(app.dock_area().unwrap().w, beside);
     }
 
     #[test]

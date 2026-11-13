@@ -396,7 +396,9 @@ a tab. The side pane takes the keyboard as it takes the window, as a click on it
 shows a session or the Preview. The
 icons at the top right never move for it. Whatever asks for a
 hidden part, such as one of those icons or opening a file, restores first, so nothing opens
-out of sight. The side pane stands under the file when it's dragged there, as well as when the
+out of sight. A pane hidden while it has the window gives the window to the file, and takes
+it again when it's shown, by its button in the corner or any other way: it comes back as it
+was, as VS Code's maximized panel does. The side pane stands under the file when it's dragged there, as well as when the
 window is too narrow. Its width or height, whether it was dragged under the file, and whether it
 had the window are kept in `state.json` with the tabs, so the next run puts it back as it was; it
 takes the window again only once something is back in it. The session in front is kept too, by

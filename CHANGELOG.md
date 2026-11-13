@@ -2,6 +2,11 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
+## [Unreleased]
+
+### Fixed
+- A side pane hidden while it filled the window came back at its usual width. It comes back filling the window, as it was.
+
 ## [0.6.6] - 2026-11-13
 
 ### Added

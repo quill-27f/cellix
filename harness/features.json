@@ -4877,5 +4877,12 @@
     "title": "Find on the Task page looks through its timeline and the step beside it",
     "test": "find_looks_through_the_task_page",
     "passes": true
+  },
+  {
+    "id": "hidden-maximized-pane-returns",
+    "milestone": 14,
+    "title": "A side pane hidden while it has the window takes the window again when it's shown",
+    "test": "a_pane_hidden_while_it_has_the_window_comes_back_with_it",
+    "passes": true
   }
 ]
