@@ -1920,3 +1920,10 @@ The user's note while 0.6.6 was going out: the right pane was full screen, they 
 
 - `keep_in_view` gives the window back when what's maximized goes out of sight, and a hidden pane is out of sight, so hiding a maximized pane cleared `maximized` for good. It still gives the window to the file while the pane is hidden, and now remembers that the pane had it (`hid_maximized`); `bring_back_maximized`, run after every event that could show the pane, gives it back when the pane is shown again, by the corner's button, Toggle Panel or a view's icon. A pane restored by hand before it's hidden comes back beside the file. Test: `a_pane_hidden_while_it_has_the_window_comes_back_with_it`, through the corner's button both ways.
 - Not released: this is on `main` after 0.6.6.
+
+## Release 0.6.7 (2026-11-13)
+
+The user said to release the one fix since 0.6.6: a side pane hidden while it filled the window comes back filling it. README says so where it describes the hidden pane's button.
+
+- This Mac's toolchain is still 1.99 against CI's 1.100, which failed 0.6.6's first run on a lint; it wasn't updated, since that changes the user's machine. The change since 0.6.6 is small.
+- Unverified: a real terminal.

@@ -280,7 +280,8 @@ and a click on a name or a comment opens the file.
 
 The icons at the top right start a real agent, a terminal or a browser in the side pane, beside your file. Press Ctrl+` to
 move the keyboard between the two, and the hide-pane icon at the top right, or Ctrl+Shift+`, to hide
-the pane. Hidden, it leaves a button in the same place that shows it again as it was. The only × there
+the pane. Hidden, it leaves a button in the same place that shows it again as it was, filling the
+window if it did. The only × there
 quits Cellix.
 The button after the pane's own tabs, or a double-click on one of them, lets the pane take the
 window; a double-click on a file's tab does the same for the file. Do it again to restore. A pane
