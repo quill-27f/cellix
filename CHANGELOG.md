@@ -11,6 +11,8 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 - Find works in the side pane. With the keyboard in a terminal's tab, Ctrl+F looks through everything the terminal has printed, its scrollback included: matches are marked, Enter and Shift+Enter step through them, and new output is searched as it arrives. In the tab of an agent that keeps its own screen, such as Claude Code, it opens the agent's transcript and searches that, which is the whole chat.
 
 ### Fixed
+- On a merge conflict, the count of conflicts and the words on Compare, Both and Current were hard to read on the bar's tint. They read clearly now.
+- What a stopped terminal last printed was dimmed too far to read.
 - In the light theme a line stands between the sidebar and the file, which on a white terminal were almost one colour.
 - A line of an integration's card in Settings was cut mid-word at its button. It ends in an ellipsis.
 - A stopped terminal's pane showed three shades behind its card. It's one colour.

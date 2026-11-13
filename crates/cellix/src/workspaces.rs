@@ -24,7 +24,7 @@ const WORD_GAP: f32 = 0.8;
 /// Between one tile's chip and the next.
 const BETWEEN: f32 = 2.0;
 /// Kept on every tile for its close button, so tiles don't move as it comes and goes.
-const CLOSE: f32 = 2.2;
+const CLOSE: f32 = 3.0;
 const MARK: f32 = 1.0;
 /// The chip behind a tile stands this far inside its row, above and below.
 /// How far a chip stands in from the top and bottom of its row: two thirds of a row tall.

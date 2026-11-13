@@ -226,9 +226,10 @@ pub fn draw(
         );
         if let Some(y) = head {
             let end = text.x + gutter + words.chars().count() as u16 + 1;
+            // The text's own colour: the quiet one is 2.6 to 1 on the band's tint.
             let dim = Style {
                 bg: tints.current_head,
-                fg: theme.gutter.fg,
+                fg: theme.text.fg,
                 ..theme.text
             };
             let placed = buttons(text, measure);
@@ -246,8 +247,10 @@ pub fn draw(
                     (Choice::Incoming, true) => {
                         (Some(theme.quiet_button(theme.button)), theme.button_text)
                     }
-                    (_, false) => (Some(mix(behind, theme.text.fg, 14)), theme.text.fg),
-                    (_, true) => (Some(mix(behind, theme.text.fg, 26)), theme.text.fg),
+                    // Toward the sheet, not the text: a chip lighter than the band left
+                    // its words at 3.8 to 1.
+                    (_, false) => (Some(mix(behind, theme.text.bg, 45)), theme.text.fg),
+                    (_, true) => (Some(mix(behind, theme.text.bg, 70)), theme.text.fg),
                 };
                 chip(grid, (x, y), (&cells, label), fill, fg, behind);
             }

@@ -1177,7 +1177,8 @@ impl SettingsPage {
             page.right(),
             80,
         );
-        let under = Bounds::cells(page.x as f32, y as f32 + 1.0, page.w as f32, 0.0);
+        // Midway between the heads' letters and the first row's, which sit low in their rows.
+        let under = Bounds::cells(page.x as f32, y as f32 + 0.92, page.w as f32, 0.0);
         grid.hairline(under, theme.border);
         let shared = keys::sharing(&self.shortcuts);
         for (y, index) in self.shortcut_rows(page) {
@@ -1684,7 +1685,7 @@ fn draw_block(
     };
     badge(grid, at, top, word, color, theme);
     let quiet = Style {
-        fg: theme.gutter.fg,
+        fg: theme.popup_dim,
         bg: theme.popup,
         ..theme.text
     };
@@ -1726,7 +1727,10 @@ fn draw_button(
     };
     let style = Style { fg, ..theme.text };
     let (x, wide) = button_place(rect, label, measure);
-    let cells = format!("{label:^width$}", width = wide as usize);
+    // As many of its letters as its width has cells: more would widen the chip past it,
+    // which stood Copy install on its card's edge.
+    let held: String = label.chars().take(wide as usize).collect();
+    let cells = format!("{held:^width$}", width = wide as usize);
     grid.large_button_between(x, rect.y, &cells, label, fill, style);
 }
 

@@ -1115,7 +1115,7 @@ impl Review {
             } else {
                 theme.gutter.fg
             },
-            ..theme.sidebar
+            ..theme.tab
         };
         grid.glyph(x, y, cellix_render::Icon::Close, style.fg, "×", style);
     }

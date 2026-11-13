@@ -8304,10 +8304,12 @@ impl App {
         let theme = &self.theme;
         // What it last showed stays readable, but dimmed, so it doesn't look alive.
         if let Some(screen) = self.dock_screen() {
+            // Dimmed as far as the quiet text's colour and no further: at 150 its words
+            // were 3 to 1, and they're what's read to see why it stopped.
             grid.wash(
                 Bounds::inset(screen, 0.0, 0.0),
                 0,
-                (theme.sidebar.bg, 150),
+                (theme.sidebar.bg, 90),
                 None,
             );
         }

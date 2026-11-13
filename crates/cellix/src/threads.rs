@@ -12,7 +12,7 @@ const SIDE: u16 = 2;
 const CARD_RADIUS: u8 = 33;
 /// How far a card reaches above its first row and below its last. Text sits low in its row
 /// and buttons fill theirs, so the two differ to look the same.
-const CARD_AIR: (f32, f32) = (0.17, 0.45);
+const CARD_AIR: (f32, f32) = (0.17, 0.6);
 /// How far a card reaches past the pane's text edge either side: it starts a column from
 /// the pane's edge, and its own text two columns inside it.
 const CARD_REACH: f32 = 1.0;
@@ -260,10 +260,15 @@ fn small() -> Font {
 
 /// A coverage pill's width, its text's and the room either side of it.
 fn pill_width(text: &str, measure: &dyn Measure) -> f32 {
-    measure.width(text, small()) + 0.9
+    measure.width(text, small()) + PILL_ROOM * 2.0
 }
 
-const PILL_GAP: f32 = 0.75;
+/// Columns either side of a pill's words, and between two pills.
+const PILL_ROOM: f32 = 1.0;
+const PILL_GAP: f32 = 1.0;
+/// How far a card's buttons are dropped in their row, in rows, so they stand half a row
+/// under the words above them: 13 px was the tightest words-to-button gap left.
+const ACTIONS_DROP: f32 = 0.14;
 
 /// A pill outlined in `tone`, its words in it, starting at `x`.
 fn draw_pill(
@@ -278,7 +283,7 @@ fn draw_pill(
     let bounds = Bounds::cells(x, y as f32 + 0.16, width, 0.68);
     grid.panel(bounds, 34, None, Some(tone));
     let tag = Style { fg: tone, ..inner };
-    let at = x + 0.45;
+    let at = x + PILL_ROOM;
     grid.label_at(at, at.floor() as u16, y, text, tag, right, SMALL);
 }
 
@@ -814,6 +819,15 @@ pub fn draw(
         if y >= area.bottom() {
             break;
         }
+        let from = grid.painted_so_far();
+        let actions = matches!(
+            line,
+            Line::Buttons(_)
+                | Line::Edits(_)
+                | Line::Choices(_)
+                | Line::Reopen(_)
+                | Line::Rewrite(_)
+        );
         match line {
             Line::Status(text) => {
                 grid.label_at(text_x as f32, text_x, y, text, inner_dim, right, SMALL);
@@ -1050,7 +1064,7 @@ pub fn draw(
                         },
                         ..body
                     };
-                    let at = x + 0.45;
+                    let at = x + PILL_ROOM;
                     grid.label_at(at, at.floor() as u16, y, &text, style, right, SMALL);
                     x += width + PILL_GAP;
                 }
@@ -1172,6 +1186,9 @@ pub fn draw(
                 grid.button(x, y, &cells, &label, fill, style);
             }
             Line::Gap => {}
+        }
+        if actions {
+            grid.lift_since(from, -ACTIONS_DROP);
         }
     }
 }
