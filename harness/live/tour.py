@@ -532,9 +532,10 @@ def workspaces(scratch):
         ["wait", 0.6],
     ]
     shoot("100-workspaces", told, CODE_FILE, size="150x44", **space)
-    shoot("105-new-workspace-hover", [*told, ["move", 56, 43], ["wait", 0.4]], CODE_FILE, size="150x44", **space)
-    shoot("106-folder-finder", [*told, ["click", 56, 43], ["wait", 0.6]], CODE_FILE, size="150x44", **space)
-    shoot("107-folder-path", [*told, ["click", 56, 43], ["keys", "../in"], ["wait", 0.6]], CODE_FILE,
+    # New Workspace stands after the four tiles, which keep more room than they did.
+    shoot("105-new-workspace-hover", [*told, ["move", 68, 43], ["wait", 0.4]], CODE_FILE, size="150x44", **space)
+    shoot("106-folder-finder", [*told, ["click", 68, 43], ["wait", 0.6]], CODE_FILE, size="150x44", **space)
+    shoot("107-folder-path", [*told, ["click", 68, 43], ["keys", "../in"], ["wait", 0.6]], CODE_FILE,
           size="150x44", **space)
     shoot("101-workspace-hover", [*told, ["move", 40, 43], ["wait", 0.4]], CODE_FILE, size="150x44", **space)
     # What waits everywhere, in the side pane: an agent asking, a finished turn, a failed run.
@@ -849,7 +850,7 @@ with tempfile.TemporaryDirectory() as scratch:
         os.symlink(real, f"{HOME}/Library/Caches/Tectonic")
     # Where the terminal's output and the Problems tab are, at 150x44 and 170x44.
     OUTPUT_FROM, OUTPUT_TO, OUTPUT_ASK = (97, 7), (125, 10), (143, 6)
-    PROBLEM_COUNT, PROBLEM_ROW = (9, 42), (150, 2)
+    PROBLEM_COUNT, PROBLEM_ROW = (9, 42), (150, 3)
     GEAR = (RAIL_X, 36)
     settings = [["click", *GEAR], ["until", "Changes apply"]]
 
