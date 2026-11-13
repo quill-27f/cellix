@@ -4926,5 +4926,12 @@
     "title": "A link in a comment is underlined in the accent and opens on a click",
     "test": "a_link_in_a_comment_stands_out_and_opens_on_a_click",
     "passes": true
+  },
+  {
+    "id": "comment-emoji",
+    "milestone": 14,
+    "title": "A comment takes emoji by name between colons, from the eight last used, and from a searchable list of them all",
+    "test": "a_comment_takes_emoji_by_name_by_a_click_and_from_the_whole_set",
+    "passes": true
   }
 ]

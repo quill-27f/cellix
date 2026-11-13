@@ -11,7 +11,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::grid::{Grid, Rgb};
 use crate::icon::{Icon, Piece, inked};
-use crate::measure::{Font, attrs};
+use crate::measure::{Font, attrs, emoji_letter, runs};
 use crate::paint::{
     BOTTOM_LEFT, BOTTOM_RIGHT, Bitmap, Bounds, Paint, Pixels, TOP_LEFT, TOP_RIGHT, UNIT,
 };
@@ -52,6 +52,9 @@ struct TextMask {
     width: usize,
     height: usize,
     alpha: Vec<u8>,
+    /// The colour of each pixel that has one of its own, as an emoji's do, where the line
+    /// holds any. The rest take the text's.
+    own: Option<Vec<Option<Rgb>>>,
 }
 
 /// Fonts that hold Chinese and Japanese. The usual choices can be on-demand downloads a
@@ -94,6 +97,60 @@ fn system_fonts() -> fontdb::Database {
     db
 }
 
+/// The fonts text is drawn with: the ones in the binary, and behind them whatever the
+/// machine has, for the scripts and emoji those don't hold.
+fn drawing_fonts() -> FontSystem {
+    let mut fonts = FontSystem::new_with_locale_and_db_and_fallback(
+        "en-US".to_string(),
+        system_fonts(),
+        WiderFallback(PlatformFallback),
+    );
+    let db = fonts.db_mut();
+    db.load_font_data(INTER.to_vec());
+    db.load_font_data(INTER_ITALIC.to_vec());
+    db.load_font_data(MONO.to_vec());
+    db.load_font_data(MONO_ITALIC.to_vec());
+    db.set_monospace_family("JetBrains Mono");
+    db.set_sans_serif_family("Inter Variable");
+    EMOJI_FONT.get_or_init(|| find_emoji_font(&fonts));
+    fonts
+}
+
+/// The machine's emoji font, as its family and where it's read from. Found once: finding it
+/// means looking at every font there is, which the rasterizer does as it starts.
+static EMOJI_FONT: std::sync::OnceLock<Option<(String, fontdb::Source)>> =
+    std::sync::OnceLock::new();
+
+fn find_emoji_font(fonts: &FontSystem) -> Option<(String, fontdb::Source)> {
+    const KNOWN: [&str; 6] = [
+        "Apple Color Emoji",
+        "Noto Color Emoji",
+        "Segoe UI Emoji",
+        "Twemoji Mozilla",
+        "Twitter Color Emoji",
+        "JoyPixels",
+    ];
+    let named = |wanted: &dyn Fn(&str) -> bool| {
+        fonts.db().faces().find_map(|face| {
+            let family = face.families.iter().find(|(name, _)| wanted(name))?;
+            Some((family.0.clone(), face.source.clone()))
+        })
+    };
+    KNOWN
+        .iter()
+        .find_map(|known| named(&|name| name == *known))
+        .or_else(|| named(&|name| name.contains("Emoji")))
+}
+
+/// The font emoji are drawn in, if the machine has one. Whatever measures text sets its
+/// emoji in the same one, or a caret after an emoji stands in the wrong place.
+pub(crate) fn emoji_font() -> Option<&'static (String, fontdb::Source)> {
+    if EMOJI_FONT.get().is_none() {
+        drop(drawing_fonts());
+    }
+    EMOJI_FONT.get().and_then(Option::as_ref)
+}
+
 /// How dark a floating panel's shadow is at its edge, out of 255.
 const DARK_SHADOW: f32 = 110.0;
 const LIGHT_SHADOW: f32 = 38.0;
@@ -116,6 +173,8 @@ pub(crate) fn text_pixels(row_height: usize, font: Font) -> f32 {
 /// locked to the grid and a row costs little more than a copy.
 pub struct SoftwareRasterizer {
     fonts: FontSystem,
+    /// The font emoji are drawn in, where the machine has one.
+    emoji: Option<String>,
     swash: SwashCache,
     metrics: Metrics,
     cell: (usize, usize),
@@ -132,21 +191,12 @@ impl SoftwareRasterizer {
         if cell_width == 0 || cell_height == 0 {
             return None;
         }
-        let mut fonts = FontSystem::new_with_locale_and_db_and_fallback(
-            "en-US".to_string(),
-            system_fonts(),
-            WiderFallback(PlatformFallback),
-        );
-        let db = fonts.db_mut();
-        db.load_font_data(INTER.to_vec());
-        db.load_font_data(INTER_ITALIC.to_vec());
-        db.load_font_data(MONO.to_vec());
-        db.load_font_data(MONO_ITALIC.to_vec());
-        db.set_monospace_family("JetBrains Mono");
-        db.set_sans_serif_family("Inter Variable");
+        let mut fonts = drawing_fonts();
         let metrics = fit_font(&mut fonts, cell_width, cell_height)?;
+        let emoji = emoji_font().map(|(family, _)| family.clone());
         Some(Self {
             fonts,
+            emoji,
             swash: SwashCache::new(),
             metrics,
             cell: (cell_width, cell_height),
@@ -165,7 +215,11 @@ impl SoftwareRasterizer {
         buffer.set_size(Some(width as f32 * 2.0), Some(height as f32));
         // Asked for a monospaced Han glyph, the search stops at a font that only has blanks.
         // A wide glyph fills its two cells whatever font it's from.
-        let family = if UnicodeWidthStr::width(key.symbol.as_str()) > 1 {
+        // And an emoji is drawn in the emoji font: a text font may hold a plain form of it.
+        let emoji = self.emoji.clone().filter(|_| emoji_letter(&key.symbol));
+        let family = if let Some(emoji) = &emoji {
+            Family::Name(emoji)
+        } else if UnicodeWidthStr::width(key.symbol.as_str()) > 1 {
             Family::SansSerif
         } else {
             Family::Monospace
@@ -230,9 +284,9 @@ impl SoftwareRasterizer {
         let height = self.cell.1.max((px * 1.45).ceil() as usize);
         let mut buffer = Buffer::new(&mut self.fonts, Metrics::new(px, height as f32));
         buffer.set_size(None, Some(height as f32));
-        let style = attrs(font);
-        let rich = std::iter::once((text, style.clone()));
-        buffer.set_rich_text(rich, &style, Shaping::Advanced, None);
+        let emoji = self.emoji.clone();
+        let rich = runs(text, font, emoji.as_deref());
+        buffer.set_rich_text(rich, &attrs(font), Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut self.fonts, false);
         let width = buffer
             .layout_runs()
@@ -241,26 +295,51 @@ impl SoftwareRasterizer {
             .ceil() as usize
             + 2;
         let mut alpha = vec![0; width * height];
-        let white = Color::rgb(255, 255, 255);
+        // Text comes out in the colour it's asked for, and an emoji in its own. Drawn in
+        // white, anything that isn't white is an emoji's.
+        let white = Rgb(255, 255, 255);
+        let mut drawn = vec![white; width * height];
+        let mut tinted = false;
         buffer.draw(
             &mut self.fonts,
             &mut self.swash,
-            white,
+            Color::rgb(255, 255, 255),
             |x, y, w, h, color| {
-                for py in y..y + h as i32 {
-                    for px in x..x + w as i32 {
-                        if px >= 0 && py >= 0 && (px as usize) < width && (py as usize) < height {
-                            let at = py as usize * width + px as usize;
-                            alpha[at] = alpha[at].max(color.a());
-                        }
+                let rgb = Rgb(color.r(), color.g(), color.b());
+                tinted |= color.a() > 0 && rgb != white;
+                for at in spots((width, height), (x, y), (w, h)) {
+                    if color.a() >= alpha[at] {
+                        drawn[at] = rgb;
                     }
+                    alpha[at] = alpha[at].max(color.a());
                 }
             },
         );
+        // An emoji has white of its own too, which drawn in white can't be told from text.
+        // Drawn again in black, what turned black is text and what stayed is the emoji's.
+        let own = tinted.then(|| {
+            let black = Rgb(0, 0, 0);
+            let mut own = vec![None; width * height];
+            buffer.draw(
+                &mut self.fonts,
+                &mut self.swash,
+                Color::rgb(0, 0, 0),
+                |x, y, w, h, color| {
+                    let rgb = Rgb(color.r(), color.g(), color.b());
+                    for at in spots((width, height), (x, y), (w, h)) {
+                        if color.a() > 0 && (rgb != black || drawn[at] != white) {
+                            own[at] = Some(drawn[at]);
+                        }
+                    }
+                },
+            );
+            own
+        });
         let mask = Rc::new(TextMask {
             width,
             height,
             alpha,
+            own,
         });
         self.text.insert(key, mask.clone());
         mask
@@ -414,6 +493,17 @@ impl SoftwareRasterizer {
             }
         }
     }
+}
+
+/// The places in a `size` image that a box at `at`, `by` across and down, covers.
+fn spots(
+    (width, height): (usize, usize),
+    (x, y): (i32, i32),
+    (w, h): (u32, u32),
+) -> impl Iterator<Item = usize> {
+    let across = x.max(0) as usize..((x + w as i32).max(0) as usize).min(width);
+    let down = y.max(0) as usize..((y + h as i32).max(0) as usize).min(height);
+    down.flat_map(move |py| across.clone().map(move |px| py * width + px))
 }
 
 /// Where the caret goes: its exact place, or the cell the cursor is in.
@@ -573,8 +663,9 @@ impl Target<'_> {
         let to = ((self.top + self.height as i32 - top).max(0) as usize).min(mask.height);
         for y in from..to {
             for x in 0..mask.width.min(limit) {
-                let alpha = mask.alpha[y * mask.width + x];
-                self.blend(left + x as i32, top + y as i32, color, alpha);
+                let at = y * mask.width + x;
+                let ink = mask.own.as_ref().and_then(|own| own[at]).unwrap_or(color);
+                self.blend(left + x as i32, top + y as i32, ink, mask.alpha[at]);
             }
         }
     }
@@ -852,7 +943,7 @@ impl Rasterizer for SoftwareRasterizer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::grid::{Grid, Style};
+    use crate::grid::{Grid, Rect, Style};
 
     fn rasterizer() -> Option<SoftwareRasterizer> {
         SoftwareRasterizer::new(10, 20)
@@ -955,6 +1046,33 @@ mod tests {
             .flat_map(|y| (40..200).map(move |x| (x, y)))
             .any(|(x, y)| with_paint.rgb[(y * with_paint.width + x) * 3] > 128);
         assert!(!lit_right, "drew past the narrow label");
+    }
+
+    /// An emoji in a line of painted text keeps its own colours, where the machine has a
+    /// font that holds them: the letters beside it take the text's.
+    #[test]
+    fn an_emoji_in_painted_text_keeps_its_own_colours() {
+        let Some(mut r) = rasterizer() else { return };
+        let mask = r.text_mask("ok 🚀", Font::default());
+        // Without a colour emoji font it's a blank, in the text's colour like the rest.
+        let Some(own) = &mask.own else { return };
+        let coloured = own.iter().flatten().filter(|rgb| rgb.0 != rgb.2).count();
+        assert!(coloured > 10, "a rocket has red and blue in it: {coloured}");
+        let plain = r.text_mask("ok", Font::default());
+        assert!(plain.own.is_none(), "letters have no colour of their own");
+        // Drawn in dark text on light, the letters are dark and the emoji is still itself.
+        let mut grid = Grid::new(12, 1, style());
+        let dark = Style {
+            fg: Rgb(10, 10, 10),
+            bg: Rgb(240, 240, 240),
+            ..Style::default()
+        };
+        grid.fill(Rect::new(0, 0, 12, 1), dark);
+        grid.label(0, 0, "ok 🚀", dark, 12);
+        let image = r.row(&grid, 0);
+        let pixels: Vec<Rgb> = image.rgb.chunks(3).map(|p| Rgb(p[0], p[1], p[2])).collect();
+        let tinted = |p: &&Rgb| p.0.abs_diff(p.2) > 60;
+        assert!(pixels.iter().filter(tinted).count() > 10);
     }
 
     #[test]

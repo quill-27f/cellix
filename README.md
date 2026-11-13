@@ -283,6 +283,11 @@ lit in the Comments tab, which scrolls to it; click a card and its words are sel
 click it for the document's order, newest first or oldest first. A link in a comment or a reply is
 underlined, and a click opens it, in the side pane's browser where there is one.
 
+Comments take emoji. Type a name between colons, as on GitHub: `:+1:` becomes 👍 and `:100:` becomes 💯
+as you type the second colon, and part of a name, such as `:roc`, lists the ones that fit, with Tab
+for the first. The eight you used last stand under a comment while you write it, and the face after
+them opens every emoji, searched by name.
+
 The icons at the top right start a real agent, a terminal or a browser in the side pane, beside your file. Press Ctrl+` to
 move the keyboard between the two, and the hide-pane icon at the top right, or Ctrl+Shift+`, to hide
 the pane. Hidden, it leaves a button in the same place that shows it again as it was, filling the

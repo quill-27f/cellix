@@ -76,6 +76,8 @@ pub enum Icon {
     HidePanel = 55,
     /// Lucide's panel-right in outline: the side pane hidden, and the button that shows it.
     ShowPane = 56,
+    /// Lucide's smile: a face, for every emoji there is.
+    Smile = 57,
 }
 
 /// One cell of an icon that is `width` by `height` cells.
@@ -711,6 +713,19 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
         Icon::CircleCheck => {
             ring(p, (12.0, 12.0), 9.5).min(path(p, &[(8.0, 12.3), (10.8, 15.0), (16.0, 9.5)]))
         }
+        Icon::Smile => ring(p, (12.0, 12.0), 9.5)
+            .min(circle(p, (9.0, 9.6)) - 0.35)
+            .min(circle(p, (15.0, 9.6)) - 0.35)
+            .min(path(
+                p,
+                &[
+                    (8.0, 14.0),
+                    (9.6, 15.5),
+                    (12.0, 16.1),
+                    (14.4, 15.5),
+                    (16.0, 14.0),
+                ],
+            )),
         Icon::CircleX => ring(p, (12.0, 12.0), 9.5)
             .min(segment(p, (8.8, 8.8), (15.2, 15.2)))
             .min(segment(p, (15.2, 8.8), (8.8, 15.2))),
@@ -776,6 +791,7 @@ mod tests {
             Icon::HidePane,
             Icon::HidePanel,
             Icon::ShowPane,
+            Icon::Smile,
         ] {
             let dots = (0..50)
                 .flat_map(|y| (0..50).map(move |x| (x, y)))

@@ -806,6 +806,7 @@ dependencies = [
  "cellix-term",
  "crossterm",
  "dunce",
+ "emojis",
  "flate2",
  "image",
  "libc",
@@ -815,6 +816,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "unicode-segmentation",
  "unicode-width",
  "vt100",
  "windows-sys 0.61.2",
@@ -2055,6 +2057,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c4c685bbef7fe13c3c6dd4da26841ed3980ef33e841cddfa15ce8a8fb3f1884"
 dependencies = [
  "embedded-hal 1.0.0",
+]
+
+[[package]]
+name = "emojis"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "589871e639330783bc20ad89d32ac1b049e02c273d96c907ca27478c8bc674a2"
+dependencies = [
+ "phf 0.13.1",
 ]
 
 [[package]]

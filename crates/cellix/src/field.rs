@@ -2,6 +2,7 @@
 //! line, and the deletes a Mac or a shell has taught everyone, Option+Backspace among them.
 
 use cellix_input::{Command, Direction, Key, KeyEvent, simple_keymap};
+use unicode_segmentation::UnicodeSegmentation;
 
 /// Applies a key to `text` with its caret at byte `caret`. Returns whether the key meant
 /// anything here; Enter and Esc are the box's own to handle.
@@ -85,12 +86,20 @@ fn on_boundary(text: &str, at: usize) -> usize {
     at
 }
 
+/// The start of what reads as one letter before `at`: an emoji built of several code points,
+/// a flag or a letter with its accent, is one press of Backspace or the arrow.
 fn previous(text: &str, at: usize) -> usize {
-    text[..at].char_indices().next_back().map_or(0, |(i, _)| i)
+    text[..at]
+        .grapheme_indices(true)
+        .next_back()
+        .map_or(0, |(i, _)| i)
 }
 
 fn next(text: &str, at: usize) -> usize {
-    text[at..].chars().next().map_or(at, |c| at + c.len_utf8())
+    text[at..]
+        .graphemes(true)
+        .next()
+        .map_or(at, |letter| at + letter.len())
 }
 
 fn is_word(c: char) -> bool {

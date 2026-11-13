@@ -150,6 +150,15 @@ carets and wrapping use real glyph positions. The cell tier measures one column 
 character. Where the terminal offers mode 1016 the mouse reports pixels, because a cell
 can hold two thin letters.
 
+An emoji in painted text is drawn in the machine's emoji font, in its own colours: a line's
+mask keeps the colour of each pixel that has one (told from text by drawing the line in white
+and again in black: what changes is text). It's set as a run of its own in that font, because
+Inter holds a plain heart and a plain smiling face and would draw those. The measure sets it in
+the same font, which it finds once for the process and loads by itself beside the built-in ones,
+so a caret after an emoji is where the emoji ends. The cell tier measures by what reads as one
+letter, so an emoji of several code points is its two columns once. A server with no emoji font
+has none to draw: bundling one is not done.
+
 Tiles are whole rows, so one region can't scroll by itself. For a wheel notch on the direct
 tier, a layer of region tiles goes above the row tiles, moves by pixel offsets, and is
 removed in the same synchronized frame as the final page. Nothing in the row pipeline
@@ -189,6 +198,19 @@ without the full stop or bracket that ends its sentence) is drawn in the accent 
 on every row it wraps onto, and a click on it opens it the way Open in Browser opens a page: the
 side pane's browser where one is set up, the system's otherwise. A click anywhere else on the
 comment is still the comment's.
+
+A comment takes emoji three ways, all of which leave the emoji itself in its words, so an agent
+reads it as written. A name between colons, GitHub's names, becomes its emoji as its second colon
+is typed (`:+1:`, `:100:`), unless a letter, a digit or another colon comes right before it, so
+`a::x::b` and 10:30:00 stay as typed. A name half typed (two letters or more) is offered under the
+words in place of the hint, the nearest first: Tab takes that one and a click any. Under the words
+stand the eight last used, the usual eight until then, each a click, kept between runs with the
+project's other state; after them a face opens every emoji in a grid under a search field, by kind
+under the most used, where the arrows move, Enter or a click takes one and typing looks through
+names and GitHub's names both. Only emoji up to Emoji 15.0 are offered, since newer ones are a
+box on many machines; one typed by name is taken whatever its age. A name an agent spells out in
+an answer shows as its emoji. Where the screen can't draw emoji (painted text on a machine with
+no emoji font) none of this shows and names stay as typed.
 
 Whatever can be seen can be talked about. A selection, in code or on a page, gets Comment and Ask
 Agent beside it, each naming in brackets the keys that do the same as they're set now (Alt+C and

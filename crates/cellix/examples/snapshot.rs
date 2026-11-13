@@ -12,6 +12,8 @@
 //! `comments`, `agents` or `terminal` in front. `CELLIX_TIER=cells` lays it out on the cell
 //! tier, as a terminal without pictures shows it, and `CELLIX_PANE=1` as the pane inside
 //! Claude Code. `CELLIX_HOVER=<column>,<row>` rests the pointer there before the picture.
+//! `draft:<file>:<words>` opens a file and types a comment on it without sending it, and
+//! `emoji:<file>:<name>` then opens the list of every emoji and types a name to look for.
 
 use std::fs::File;
 use std::io::BufWriter;
@@ -39,7 +41,14 @@ fn find(app: &App, word: &str) -> Option<(u16, u16)> {
     (0..rows).find_map(|y| {
         let row = grid.row_text(y);
         let at = row.find(word)?;
-        Some((row[..at].chars().count() as u16, y))
+        // By the cells before it: a wide letter is one place in the text and two columns.
+        let mut seen = 0;
+        let x = (0..columns).find(|x| {
+            let here = seen == at;
+            seen += grid.cell(*x, y).symbol.len();
+            here
+        })?;
+        Some((x, y))
     })
 }
 
@@ -116,6 +125,19 @@ fn main() {
             app.open(&root.join("README.md")).unwrap();
             app.run(Command::AddComment);
             type_text(&mut app, "Tighten this");
+        }
+        Some(view) if view.starts_with("draft:") || view.starts_with("emoji:") => {
+            let (file, words) = view[6..].split_once(':').expect("<file>:<words>");
+            app.open(&root.join(file)).unwrap();
+            app.run(Command::AddComment);
+            if view.starts_with("draft:") {
+                type_text(&mut app, words);
+            } else {
+                type_text(&mut app, "Ship it ");
+                let button = find(&app, "☺").expect("the emoji button");
+                click(&mut app, button);
+                type_text(&mut app, words);
+            }
         }
         Some(view) if view.starts_with("find:") => {
             app.open(&root.join("README.md")).unwrap();

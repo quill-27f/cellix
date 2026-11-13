@@ -54,6 +54,12 @@ pub enum Hit {
     Link(u32, usize),
     /// Asks which order to list the comments in.
     Sort,
+    /// One of the emoji that stand under a comment being written, by its place among them.
+    Quick(usize),
+    /// The button after them, which lists every emoji.
+    Emoji,
+    /// One of the emoji offered for the name being typed, by its place among them.
+    Suggested(usize),
     Open(u32),
     Reply(u32),
     Ask(u32),
@@ -136,6 +142,11 @@ enum Line {
     Status(String),
     /// A row of what's being written, and where the caret is on it, in bytes, when it is.
     Input(String, Option<usize>),
+    /// Under what's being written: the emoji most reached for, and the button for the rest.
+    Tools,
+    /// The emoji whose names start as the one being typed after a colon does, each with its
+    /// name, in place of the hint.
+    Suggest(Vec<(&'static str, &'static str)>),
     Hint,
     Buttons(u32),
     /// Reopen, under a resolved comment.
@@ -325,7 +336,7 @@ pub fn wrap_spans(text: &str, width: f32, measure: &dyn Measure) -> Vec<(usize, 
     rows
 }
 
-fn draft_lines(draft: &Draft, width: f32, measure: &dyn Measure, out: &mut Vec<Line>) {
+fn draft_lines(draft: &Draft, view: View, width: f32, measure: &dyn Measure, out: &mut Vec<Line>) {
     let spans = wrap_spans(&draft.text, width, measure);
     let caret = draft.caret.min(draft.text.len());
     // At a row's end and the next one's start, it's at the start of the next.
@@ -336,7 +347,15 @@ fn draft_lines(draft: &Draft, width: f32, measure: &dyn Measure, out: &mut Vec<L
         let at = (on == Some(index)).then(|| caret - start);
         out.push(Line::Input(draft.text[start..end].to_string(), at));
     }
-    out.push(Line::Hint);
+    if view.quick.is_some() {
+        out.push(Line::Tools);
+    }
+    let found = suggested(draft, view);
+    out.push(if found.is_empty() {
+        Line::Hint
+    } else {
+        Line::Suggest(found)
+    });
 }
 
 /// What the panel shows: the comments, the one being written, the agent's name, how many
@@ -376,12 +395,104 @@ impl Sort {
 
 /// How the pane shows what it lists: whether each file's stand under a heading, the comment
 /// lit because its text was pressed in the document, and the order they're in.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct View {
     pub grouped: bool,
     pub lit: Option<u32>,
     pub sort: Sort,
+    /// The emoji that stand under a comment being written. None where the screen can't
+    /// draw them, and then names between colons stay as they're typed too.
+    pub quick: Option<[&'static str; 8]>,
 }
+
+impl Default for View {
+    fn default() -> Self {
+        Self {
+            grouped: false,
+            lit: None,
+            sort: Sort::default(),
+            quick: Some(crate::emoji::QUICK),
+        }
+    }
+}
+
+/// How many emoji a name being typed is offered.
+pub const SUGGESTED: usize = 5;
+
+/// The emoji offered for the name being typed at a draft's caret, each with its name.
+pub fn suggested(draft: &Draft, view: View) -> Vec<(&'static str, &'static str)> {
+    let caret = draft.caret.min(draft.text.len());
+    let Some(quick) = view.quick else {
+        return Vec::new();
+    };
+    crate::emoji::open_code(&draft.text, caret)
+        .map(|(_, typed)| crate::emoji::suggest(typed, &quick, SUGGESTED))
+        .unwrap_or_default()
+}
+
+/// What stands under a comment being written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Tool {
+    Quick(usize),
+    Emoji,
+}
+
+/// Columns a tool takes: an emoji's two and one before the next.
+const TOOL: u16 = 3;
+/// Columns between the emoji and the buttons after them.
+const TOOL_GAP: u16 = 1;
+
+/// Each tool under a comment being written and the column it starts in: as many of the
+/// quick emoji as leave room for the button after them.
+fn tools(area: Rect, view: View) -> Vec<(Tool, u16)> {
+    if view.quick.is_none() {
+        return Vec::new();
+    }
+    let width = area.w.saturating_sub(SIDE * 2 + 2);
+    let x = area.x + SIDE + 1;
+    let count = (width.saturating_sub(TOOL_GAP + TOOL) / TOOL).min(8);
+    let mut out: Vec<(Tool, u16)> = (0..count)
+        .map(|i| (Tool::Quick(usize::from(i)), x + TOOL * i))
+        .collect();
+    out.push((Tool::Emoji, x + TOOL * count + TOOL_GAP.min(count)));
+    out
+}
+
+/// What the hint under a comment being written says of the tool the pointer is on.
+fn tool_hint(tool: Tool) -> Option<&'static str> {
+    match tool {
+        Tool::Quick(_) => None,
+        Tool::Emoji => Some("Every emoji. Or type a name between colons, like :tada:"),
+    }
+}
+
+/// Where each emoji offered for a name starts, and how many columns it and its name take.
+fn suggest_spots(
+    area: Rect,
+    found: &[(&'static str, &'static str)],
+    measure: &dyn Measure,
+) -> Vec<(f32, f32)> {
+    let right = f32::from(area.right().saturating_sub(SIDE + 1));
+    let mut x = f32::from(area.x + SIDE + 1);
+    let mut out = Vec::new();
+    for (emoji, code) in found {
+        let wide = suggest_emoji(emoji, measure) + measure.width(&format!(":{code}:"), small());
+        if x + wide > right && !out.is_empty() {
+            break;
+        }
+        out.push((x, wide));
+        x += wide + SUGGEST_GAP;
+    }
+    out
+}
+
+/// Columns an offered emoji takes before its name: itself and a gap.
+fn suggest_emoji(emoji: &str, measure: &dyn Measure) -> f32 {
+    (measure.width(emoji, Font::default()) + 0.6).ceil()
+}
+
+/// Columns between one offered emoji's name and the next emoji.
+const SUGGEST_GAP: f32 = 2.0;
 
 /// Each link in a run of words, as the bytes it takes: `http://` or `https://` to the next
 /// space, without the stop or bracket a sentence puts after it.
@@ -536,7 +647,7 @@ fn lines(
             shown_quote(&new.quote, new.line, new.about.as_ref()),
             Words::Here,
         ));
-        draft_lines(new, width, measure, &mut out);
+        draft_lines(new, view, width, measure, &mut out);
         out.push(Line::Buttons(NEW_DRAFT));
         out.push(Line::Gap);
     } else if open.is_empty() {
@@ -590,9 +701,9 @@ fn lines(
         out.push(Line::Quote(id, quote, words));
         let editing = draft.filter(|d| d.thread == Some(id) && d.editing);
         match editing {
-            Some(edit) => draft_lines(edit, width, measure, &mut out),
+            Some(edit) => draft_lines(edit, view, width, measure, &mut out),
             None => {
-                let text = wrap(&thread.text, width, measure);
+                let text = wrap(&shown_words(&thread.text, view), width, measure);
                 out.extend(text.into_iter().map(|row| Line::Text(id, row)));
             }
         }
@@ -610,7 +721,7 @@ fn lines(
                 _ => (None, reply.author.clone(), reply.text.clone()),
             };
             out.push(Line::Answer(id, word, author));
-            let text = wrap(&body, width - INSET * 2.0, measure);
+            let text = wrap(&shown_words(&body, view), width - INSET * 2.0, measure);
             out.extend(text.into_iter().map(|row| Line::Reply(id, row)));
         }
         // A suggestion is the agent's own, so there's nothing to wait for.
@@ -623,7 +734,7 @@ fn lines(
             )));
         }
         if let Some(reply) = draft.filter(|d| d.thread == Some(id) && !d.editing) {
-            draft_lines(reply, width, measure, &mut out);
+            draft_lines(reply, view, width, measure, &mut out);
         }
         // The last word a rewrite: it's for the reviewer to apply or not.
         if !thread.resolved
@@ -652,6 +763,16 @@ fn lines(
         out.push(Line::Gap);
     }
     out
+}
+
+/// A comment's words as the pane shows them: a name between colons as its emoji, where the
+/// screen draws emoji, since an agent's answer may spell one out.
+fn shown_words(text: &str, view: View) -> std::borrow::Cow<'_, str> {
+    if view.quick.is_some() {
+        crate::emoji::expand(text)
+    } else {
+        std::borrow::Cow::Borrowed(text)
+    }
 }
 
 /// What the button for resolved comments says.
@@ -839,6 +960,20 @@ pub fn hit(
         Line::Sort => {
             let (_, from, wide) = sort_control(area, shown.4.sort, measure);
             (x >= from && x < from + wide).then_some(Hit::Sort)
+        }
+        Line::Tools => tools(area, shown.4)
+            .into_iter()
+            .find(|(_, at)| x >= *at && x < at + TOOL)
+            .map(|(tool, _)| match tool {
+                Tool::Quick(which) => Hit::Quick(which),
+                Tool::Emoji => Hit::Emoji,
+            }),
+        Line::Suggest(found) => {
+            let at = f32::from(x) + 0.5;
+            suggest_spots(area, found, measure)
+                .into_iter()
+                .position(|(from, wide)| at >= from && at < from + wide)
+                .map(Hit::Suggested)
         }
         Line::File(opens, ..) => opens.map(Hit::File),
         Line::Reopen(id) => {
@@ -1028,8 +1163,73 @@ pub fn draw(
                     grid.set_caret(x, y, 0.62);
                 }
             }
+            Line::Tools => {
+                for (tool, at) in tools(area, view) {
+                    let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= at && h.0 < at + TOOL);
+                    if on_it {
+                        let wash = Bounds::cells(
+                            f32::from(at) - 0.45,
+                            f32::from(y) + 0.055,
+                            f32::from(TOOL) - 0.1,
+                            0.89,
+                        );
+                        grid.panel(wash, 18, Some(theme.popup_hover), None);
+                    }
+                    match tool {
+                        Tool::Quick(which) => {
+                            // In the middle of its two columns, however wide it's drawn.
+                            let emoji = view.quick.map_or("", |quick| quick[which]);
+                            let wide = measure.width(emoji, Font::default()).min(2.0);
+                            let x = f32::from(at) + (2.0 - wide) / 2.0;
+                            grid.label_at(x, at, y, emoji, inner, at + TOOL, 100);
+                        }
+                        Tool::Emoji => {
+                            let colour = if on_it { theme.text.fg } else { raised_muted };
+                            let style = Style {
+                                fg: colour,
+                                ..inner
+                            };
+                            grid.glyph(f32::from(at), y, Icon::Smile, colour, "☺", style);
+                        }
+                    }
+                }
+            }
+            Line::Suggest(found) => {
+                // The first is the one Tab takes, so its name is the plain one.
+                let spots = suggest_spots(area, found, measure);
+                for (index, ((emoji, code), (x, wide))) in found.iter().zip(spots).enumerate() {
+                    let pointed = hover.is_some_and(|h| {
+                        let at = f32::from(h.0) + 0.5;
+                        h.1 == y && at >= x && at < x + wide
+                    });
+                    let cell = x.floor() as u16;
+                    grid.label_at(x, cell, y, emoji, inner, right, 100);
+                    let name = Style {
+                        fg: if index == 0 || pointed {
+                            theme.text.fg
+                        } else {
+                            raised_muted
+                        },
+                        ..inner
+                    };
+                    let after = suggest_emoji(emoji, measure);
+                    let at = x + after;
+                    let code = format!(":{code}:");
+                    grid.label_at(at, cell + after as u16, y, &code, name, right, SMALL);
+                }
+            }
             Line::Hint => {
-                let hint = "Enter sends. Shift+Enter starts a new line. Esc cancels.";
+                // What the tool under the pointer does, when it's on one of the row above.
+                let pointed = hover
+                    .filter(|h| h.1 + 1 == y && matches!(all.get(index - 1), Some(Line::Tools)))
+                    .and_then(|h| {
+                        tools(area, view)
+                            .into_iter()
+                            .find(|(_, at)| h.0 >= *at && h.0 < at + TOOL)
+                    })
+                    .and_then(|(tool, _)| tool_hint(tool));
+                let usual = "Enter sends. Shift+Enter starts a new line. Esc cancels.";
+                let hint = pointed.unwrap_or(usual);
                 grid.label_at(text_x as f32, text_x, y, hint, inner_dim, right, SMALL);
             }
             Line::Empty(resolved) => {

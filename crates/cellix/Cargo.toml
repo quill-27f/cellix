@@ -37,8 +37,10 @@ cellix-review = { path = "../cellix-review", version = "0.6.8" }
 cellix-term = { path = "../cellix-term", version = "0.6.8" }
 base64 = "0.22"
 dunce = "1"
+emojis = "0.9"
 flate2 = "1"
 crossterm = "0.29"
+unicode-segmentation = "1"
 unicode-width = "0.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["preserve_order"] }

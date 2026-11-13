@@ -420,6 +420,8 @@ enum Overlay {
     Confirm(Confirm),
     TablePicker(TablePicker),
     Math(MathPanel),
+    /// Every emoji, for the comment being written.
+    Emoji(crate::emoji::Picker),
 }
 
 /// What's left to do after a choice about unsaved changes.
@@ -1204,6 +1206,8 @@ pub struct App {
     lit_range: Option<(usize, usize)>,
     /// The order the Comments pane lists them in.
     comment_sort: threads::Sort,
+    /// The emoji put in comments, the last first, so the ones reached for stand ready.
+    emoji_used: Vec<&'static str>,
     /// The session that was in front when the last run here ended.
     kept_session: Option<String>,
     /// Whether how the two sides work together has been said yet.
@@ -1372,6 +1376,7 @@ impl App {
             lit_thread: None,
             lit_range: None,
             comment_sort: threads::Sort::Document,
+            emoji_used: Vec::new(),
             kept_session: None,
             kernels: HashMap::new(),
             kernel_command: None,
@@ -3989,6 +3994,10 @@ impl App {
     }
 
     fn paste(&mut self, text: &str) {
+        if let Overlay::Emoji(picker) = &mut self.overlay {
+            picker.paste(text);
+            return;
+        }
         if let Some(draft) = &mut self.dock.draft {
             crate::field::insert(&mut draft.text, &mut draft.caret, text);
             return;
@@ -4299,9 +4308,20 @@ impl App {
                 let draft = self.dock.draft.take().expect("checked above");
                 self.finish_draft(draft);
             }
+            // The first of the emoji offered for the name being typed.
+            Key::Tab => {
+                self.take_suggestion(0);
+            }
             // Everything else is typing, as in any text box: words, moves and deletes.
             _ => {
                 crate::field::key(&mut draft.text, &mut draft.caret, key);
+                // A name's second colon makes it its emoji, where the screen draws them.
+                let closed = (key.key == Key::Char(':') && self.measure.shows_emoji())
+                    .then(|| crate::emoji::close_code(&mut draft.text, &mut draft.caret))
+                    .flatten();
+                if let Some(emoji) = closed {
+                    self.used_emoji(emoji);
+                }
             }
         }
         true
@@ -5714,6 +5734,21 @@ impl App {
                 other => {
                     panel.key(other);
                     self.overlay = Overlay::Math(panel);
+                }
+            },
+            Overlay::Emoji(mut picker) => match key.key {
+                Key::Esc => {}
+                Key::Enter => {
+                    if let Some(emoji) = picker.current() {
+                        self.put_emoji(emoji, false);
+                    }
+                }
+                Key::Char(_) if key.mods.ctrl || key.mods.alt => {
+                    self.overlay = Overlay::Emoji(picker);
+                }
+                other => {
+                    picker.key(other);
+                    self.overlay = Overlay::Emoji(picker);
                 }
             },
             Overlay::Menu(mut menu) => match menu.key(key.key) {
@@ -8932,6 +8967,8 @@ impl App {
                 match hit {
                     // Its list drops from under its own row.
                     Some(ThreadHit::Sort) => self.show_sort_menu((screen.x + 2, y + 1)),
+                    // Every emoji, in a panel dropping from its button.
+                    Some(ThreadHit::Emoji) => self.show_emoji((x.saturating_sub(1), y + 1)),
                     Some(hit) => self.thread_hit(hit),
                     None => {}
                 }
@@ -10054,7 +10091,62 @@ impl App {
             grouped: self.comments_grouped(),
             lit: self.lit_thread,
             sort: self.comment_sort,
+            quick: self.quick_emoji(),
         }
+    }
+
+    /// The emoji that stand under a comment being written: the last used, then the usual.
+    /// None where this screen can't draw them.
+    fn quick_emoji(&self) -> Option<[&'static str; 8]> {
+        self.measure
+            .shows_emoji()
+            .then(|| crate::emoji::quick(&self.emoji_used))
+    }
+
+    /// Puts an emoji in the comment being written, in place of the name being typed for
+    /// it when `named`, and remembers it was reached for.
+    fn put_emoji(&mut self, emoji: &'static str, named: bool) {
+        let Some(draft) = &mut self.dock.draft else {
+            return;
+        };
+        let caret = draft.caret.min(draft.text.len());
+        let open = crate::emoji::open_code(&draft.text, caret).map(|(colon, _)| colon);
+        if let Some(colon) = open.filter(|_| named) {
+            draft.text.replace_range(colon..caret, "");
+            draft.caret = colon;
+        }
+        crate::field::insert(&mut draft.text, &mut draft.caret, emoji);
+        self.used_emoji(emoji);
+    }
+
+    fn used_emoji(&mut self, emoji: &'static str) {
+        self.emoji_used.retain(|used| *used != emoji);
+        self.emoji_used.insert(0, emoji);
+        self.emoji_used.truncate(crate::emoji::QUICK.len());
+    }
+
+    /// Takes one of the emoji offered for the name being typed. Returns whether there was one.
+    fn take_suggestion(&mut self, which: usize) -> bool {
+        let view = self.comments_view();
+        let found = self
+            .dock
+            .draft
+            .as_ref()
+            .map(|draft| threads::suggested(draft, view))
+            .and_then(|found| found.get(which).copied());
+        if let Some((emoji, _)) = found {
+            self.put_emoji(emoji, true);
+        }
+        found.is_some()
+    }
+
+    /// Every emoji in a panel dropping from `at`, for the comment being written.
+    fn show_emoji(&mut self, at: (u16, u16)) {
+        let Some(first) = self.quick_emoji() else {
+            return;
+        };
+        let screen = Rect::new(0, 0, self.size.0, self.size.1);
+        self.overlay = Overlay::Emoji(crate::emoji::Picker::new(at, screen, &first));
     }
 
     /// A press on words a comment is about lights that comment in the Comments pane and
@@ -10313,6 +10405,19 @@ impl App {
                 if let Some(panel) = self.dock_panel() {
                     self.show_sort_menu((panel.x + 2, panel.y + 4));
                 }
+            }
+            ThreadHit::Quick(which) => {
+                if let Some(quick) = self.quick_emoji() {
+                    self.put_emoji(quick[which.min(quick.len() - 1)], false);
+                }
+            }
+            ThreadHit::Emoji => {
+                if let Some(panel) = self.dock_panel() {
+                    self.show_emoji((panel.x + 2, panel.y + 4));
+                }
+            }
+            ThreadHit::Suggested(which) => {
+                self.take_suggestion(which);
             }
             ThreadHit::Apply(id) => self.apply_rewrite(id),
             ThreadHit::Decline(id) => {
@@ -11043,6 +11148,7 @@ impl App {
             files,
             active: (!self.editors.is_empty()).then(|| self.active()),
             pane: self.kept_pane(),
+            emoji: self.emoji_used.iter().map(|e| e.to_string()).collect(),
         }
     }
 
@@ -11072,6 +11178,7 @@ impl App {
             (path, place, text).hash(&mut mark);
         }
         (self.editors.len(), self.active()).hash(&mut mark);
+        self.emoji_used.hash(&mut mark);
         serde_json::to_vec(&self.kept_pane())
             .unwrap_or_default()
             .hash(&mut mark);
@@ -11115,6 +11222,11 @@ impl App {
         self.dock.under = state.pane.under;
         self.kept_maximized = state.pane.maximized;
         self.kept_session = state.pane.session;
+        self.emoji_used = state
+            .emoji
+            .iter()
+            .filter_map(|emoji| crate::emoji::known(emoji))
+            .collect();
         let root = self.workspace.root().to_path_buf();
         let mut unsaved = 0;
         let mut opened = Vec::new();
@@ -12200,12 +12312,33 @@ impl App {
             self.mouse(mouse);
             return;
         }
+        if let Overlay::Emoji(picker) = &mut self.overlay {
+            match mouse.kind {
+                MouseKind::ScrollUp => picker.scroll(-2),
+                MouseKind::ScrollDown => picker.scroll(2),
+                _ => {}
+            }
+        }
         if mouse.kind != MouseKind::Left {
             return;
         }
         let screen = Rect::new(0, 0, self.size.0, self.size.1);
         let overlay = std::mem::replace(&mut self.overlay, Overlay::None);
         match overlay {
+            Overlay::Emoji(mut picker) => {
+                // A press in the panel that isn't on an emoji leaves it open.
+                let inside = picker.area().contains(mouse.x, mouse.y);
+                match picker.at(mouse.x, mouse.y) {
+                    Some(index) => {
+                        picker.selected = index;
+                        if let Some(emoji) = picker.current() {
+                            self.put_emoji(emoji, false);
+                        }
+                    }
+                    None if inside => self.overlay = Overlay::Emoji(picker),
+                    None => {}
+                }
+            }
             Overlay::Palette(mut palette) => {
                 if let Some(row) = palette.row_at(screen, mouse.y) {
                     palette.selected = row;
@@ -14119,7 +14252,11 @@ impl App {
         // The text's caret would stand on top of anything that floats over it.
         if matches!(
             self.overlay,
-            Overlay::Menu(_) | Overlay::Confirm(_) | Overlay::TablePicker(_) | Overlay::Math(_)
+            Overlay::Menu(_)
+                | Overlay::Confirm(_)
+                | Overlay::TablePicker(_)
+                | Overlay::Math(_)
+                | Overlay::Emoji(_)
         ) {
             grid.caret = None;
             grid.cursor = None;
@@ -14141,6 +14278,7 @@ impl App {
             Overlay::Confirm(confirm) => self.draw_confirm(grid, confirm),
             Overlay::TablePicker(picker) => picker.draw(grid, self.hover, theme),
             Overlay::Math(panel) => panel.draw(grid, self.hover, theme),
+            Overlay::Emoji(picker) => picker.draw(grid, self.hover, &*self.measure, theme),
             Overlay::None => {}
         }
     }
@@ -16347,6 +16485,9 @@ struct Kept {
     /// The side pane as it was left.
     #[serde(default)]
     pane: KeptPane,
+    /// The emoji last put in comments, the last first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    emoji: Vec<String>,
 }
 
 /// The side pane's size and place as they were left, so it comes back the same.
@@ -21330,6 +21471,107 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert_eq!(order(&app), [1, 2, 3]);
         choose(&mut app, "Oldest first", "Document order");
         assert_eq!(order(&app), [2, 1, 3]);
+    }
+
+    /// The column a string starts in on a row: an emoji takes two columns and one place in
+    /// the row's text, so counting letters would come up short after one.
+    fn column_of(grid: &Grid, y: u16, text: &str) -> u16 {
+        let mut seen = String::new();
+        for x in 0..grid.width() {
+            if grid.row_text(y)[seen.len()..].starts_with(text) {
+                return x;
+            }
+            seen.push_str(grid.cell(x, y).symbol.as_str());
+        }
+        panic!("{text:?} isn't on row {y}: {}", grid.row_text(y));
+    }
+
+    /// Emoji in a comment, each way they get there: a name between colons as its second
+    /// colon is typed, a name half typed and taken from what's offered with Tab or a click,
+    /// one of the eight that stand under the words, and the whole set from the button after
+    /// them, searched by name. The one last used stands first from then on, and an answer
+    /// that spells a name out shows its emoji.
+    #[test]
+    fn a_comment_takes_emoji_by_name_by_a_click_and_from_the_whole_set() {
+        let (dir, mut app) = project();
+        app.show_sidebar = false;
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        app.run(Command::AddComment);
+        let draft = |app: &App| app.dock.draft.as_ref().unwrap().text.clone();
+        // A path and a time are left as they're typed; a name becomes its emoji.
+        typed(&mut app, "a::x::b at 10:30: ok :+1:");
+        assert_eq!(draft(&app), "a::x::b at 10:30: ok 👍");
+        // A name half typed is offered, the nearest first, and Tab takes that one.
+        typed(&mut app, " :roc");
+        let grid = screen(&app);
+        let (_, y) = find(&grid, ":rocket:");
+        assert!(grid.row_text(y).contains("🚀"), "{}", grid.row_text(y));
+        key(&mut app, Key::Tab);
+        assert_eq!(draft(&app), "a::x::b at 10:30: ok 👍 🚀");
+        // The others offered take a click.
+        typed(&mut app, " :hea");
+        let grid = screen(&app);
+        let (_, y) = find(&grid, ":heart:");
+        // Each is itself, a column, and its name.
+        assert!(
+            grid.row_text(y).contains("❤\u{fe0f} :heart:"),
+            "{}",
+            grid.row_text(y)
+        );
+        let x = column_of(&grid, y, ":hearts:");
+        app.handle(mouse(MouseKind::Left, x + 2, y));
+        assert!(draft(&app).ends_with("🚀 ♥\u{fe0f}"), "{}", draft(&app));
+        // With no name being typed the hint is back, under the eight that stand ready.
+        let grid = screen(&app);
+        let (_, hint) = find(&grid, "Enter sends.");
+        let row = grid.row_text(hint - 1);
+        assert!(row.contains("♥\u{fe0f}") && row.contains("💯"), "{row}");
+        // The suit of hearts stands first now, then the rocket and the thumb, as last used.
+        let first = column_of(&grid, hint - 1, "♥\u{fe0f}");
+        assert!(first < column_of(&grid, hint - 1, "🚀"));
+        assert!(column_of(&grid, hint - 1, "🚀") < column_of(&grid, hint - 1, "👍"));
+        // One of them, by a click.
+        let x = column_of(&grid, hint - 1, "💯");
+        app.handle(mouse(MouseKind::Left, x, hint - 1));
+        assert!(draft(&app).ends_with("♥\u{fe0f}💯"), "{}", draft(&app));
+        // The button after them lists every emoji, and what's typed there is looked for.
+        let grid = screen(&app);
+        let x = column_of(&grid, hint - 1, "☺");
+        app.handle(mouse(MouseKind::Left, x, hint - 1));
+        assert!(matches!(app.overlay, Overlay::Emoji(_)));
+        let grid = screen(&app);
+        assert!(grid.text().contains("Search emoji"), "{}", grid.text());
+        assert!(grid.text().contains("MOST USED") && grid.text().contains("SMILEYS"));
+        typed(&mut app, "tada");
+        assert!(screen(&app).text().contains("party popper"));
+        enter(&mut app);
+        assert!(matches!(app.overlay, Overlay::None));
+        assert!(draft(&app).ends_with("💯🎉"), "{}", draft(&app));
+        // And a click in the list takes the one under it.
+        let grid = screen(&app);
+        let x = column_of(&grid, hint - 1, "☺");
+        app.handle(mouse(MouseKind::Left, x, hint - 1));
+        let grid = screen(&app);
+        let (_, y) = find(&grid, "😀");
+        let x = column_of(&grid, y, "😁");
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert!(draft(&app).ends_with("🎉😁"), "{}", draft(&app));
+        // One press of Backspace takes a whole emoji, though it's several bytes.
+        key(&mut app, Key::Backspace);
+        assert!(draft(&app).ends_with("💯🎉"), "{}", draft(&app));
+        enter(&mut app);
+        let saved = &app.threads[0];
+        assert_eq!(saved.text, "a::x::b at 10:30: ok 👍 🚀 ♥\u{fe0f}💯🎉");
+        // The ones used are kept for the next run, the last first.
+        let kept = app.state().emoji;
+        assert_eq!(kept[..3], ["😁", "🎉", "💯"]);
+        // An answer that spells a name out shows its emoji.
+        app.threads[0].replies.push(Reply {
+            author: "Claude".to_string(),
+            text: "Done :tada: on both".to_string(),
+        });
+        let text = screen(&app).text();
+        assert!(text.contains("Done 🎉 on both"), "{text}");
     }
 
     /// A link in a comment's words stands out, in the accent and underlined, and a click on

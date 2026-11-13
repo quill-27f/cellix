@@ -9,6 +9,7 @@ mod context;
 mod dock;
 mod editor;
 mod editorconfig;
+mod emoji;
 mod explorer;
 mod field;
 mod find;

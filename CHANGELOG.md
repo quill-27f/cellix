@@ -12,6 +12,7 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 - Alt+A asks the agent about what's selected, as the Ask Agent button does. The Comment and Ask Agent buttons by a selection show their keys in brackets, "Comment (Alt+C)" and "Ask Agent (Alt+A)", or whichever keys you've set.
 - The Comments tab can list in the document's order, newest first or oldest first. The order is on a row under the kinds; click it to change it.
 - A link in a comment or a reply is underlined in the accent colour, and a click opens it: in the side pane's browser where there is one, in your own browser otherwise.
+- Emoji in comments. Type a name between colons, as on GitHub, and it becomes its emoji when you type the second colon: `:+1:` is 👍 and `:100:` is 💯. Part of a name, such as `:roc`, lists the emoji that fit under what you're writing: Tab takes the first, a click any of them. The eight you used last stand under a comment as you write it, a click each, and the face after them opens every emoji, searched by name. Emoji keep their colours where Cellix draws the text itself, and one press of Backspace takes a whole one.
 
 ## [0.6.8] - 2026-11-13
 
