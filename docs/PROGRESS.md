@@ -1902,3 +1902,12 @@ The ui-expert measured twenty of the pictures taken on `ecf759c`. All eight chan
 - Left: the side pane's tab label stands 8 px left of the pane's text edge (a file's tab and its breadcrumb share one edge), and a name behind the tab in front starts 11 px after it; both come from how the pane's tabs are sized to fit a narrow pane, which several tests pin. The conflict bar's chips keep the old height in their one-row band.
 - Looked at after the fixes: the conflict bar, the integration cards and a comment's card. Unverified: a real terminal, and the ui-expert has not seen these last pictures.
 - The tiles' longer ends moved New Workspace three columns on, so the tour's three scenes that point at it point six columns further, into its words.
+
+## Release 0.6.6 (2026-11-13)
+
+The user said to release. Everything since 0.6.5, seventeen commits: the review's boards built (Agents rows, the terminal's chips, comments under their files), the day's three notes (the first screen's Quit, the hidden pane's button, Find in terminals and agents' chats), the end-to-end design applied (one look, room, the Task page as a tab, Settings' search, Find in the pane's lists, in Review and on the Task page) and what three design reviews found in it.
+
+- The whole tour was last taken on `ecf759c` (190 scenes, the two that failed being the tour's own pointing, fixed and retaken). The scenes changed by the two commits after it were retaken and looked at; a whole retake on `99632e5` was stopped part way to make this release, so 173 pictures in `target/tour` are of `ecf759c`. A whole tour on the release commit follows it.
+- README: Find's row in the keys table, the Task page as a tab, and what the light theme is now. The rest was written with each change.
+- Unverified: all of it in a real terminal. The ui-expert has not seen the pictures taken after its third report's fixes.
+- Windows is still paused: no Windows build in this release.
