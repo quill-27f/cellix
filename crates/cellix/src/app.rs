@@ -6332,7 +6332,7 @@ impl App {
             shadow: false,
             dashed: false,
         };
-        grid.paint.insert(index, mark);
+        grid.insert_paint(index, mark);
     }
 
     /// Searches the open file for the query as it stands.
@@ -10665,6 +10665,12 @@ impl App {
                     self.show_picture_menu((panel.x + 2, panel.y + 4));
                 }
             }
+            ThreadHit::Send => {
+                if let Some(draft) = self.dock.draft.take() {
+                    self.finish_draft(draft);
+                }
+            }
+            ThreadHit::Cancel => self.dock.draft = None,
             ThreadHit::Sort => {
                 if let Some(panel) = self.dock_panel() {
                     self.show_sort_menu((panel.x + 2, panel.y + 4));
@@ -22370,6 +22376,108 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             .collect();
         assert_eq!(rows.len(), 2, "the row, and the link over it: {rows:?}");
         assert_eq!(rows[0].0, rows[1].0, "one is lifted without the other");
+        // And the link is underlined where it's painted, as it is in cells.
+        let lined = grid.paint.iter().any(|paint| {
+            matches!(paint, cellix_render::Paint::Text { text, underline: true, .. }
+                if text == "https://example.com/a")
+        });
+        assert!(lined, "a painted link has no line under it");
+    }
+
+    /// A card is painted whole, and one that runs past the pane's last row used to be painted
+    /// on the status bar under it too. What the Comments pane paints stays on its own rows.
+    #[test]
+    fn a_card_running_past_the_panes_foot_stays_off_the_bar_under_it() {
+        let (_dir, mut app) = picture_page("words here\n");
+        app.threads = (1..=9)
+            .map(|id| {
+                let fields = format!(
+                    r#""id":{id},"file":"note.md","line":1,"quote":"words","text":"Comment {id}""#
+                );
+                serde_json::from_str(&format!("{{{fields}}}")).unwrap()
+            })
+            .collect();
+        app.run(Command::ShowComments);
+        let grid = screen(&app);
+        let pane = app.dock_panel().unwrap();
+        let cards = |y: u16| {
+            grid.paint_on_row(y)
+                .filter(|paint| {
+                    matches!(paint, cellix_render::Paint::Panel { fill: Some(fill), .. }
+                        if *fill == app.theme.popup)
+                })
+                .count()
+        };
+        assert!(
+            cards(pane.bottom() - 1) > 0,
+            "a card is cut by the pane's foot"
+        );
+        assert_eq!(
+            cards(pane.bottom()),
+            0,
+            "and none of it is on the row under the pane"
+        );
+        assert_eq!(cards(pane.y - 1), 0, "nor on the row over it");
+    }
+
+    /// A comment being written has a button that sends it, named for what sending does, and
+    /// one that drops it, so neither needs a key. While a comment is answered or changed
+    /// those two stand in place of its own buttons.
+    #[test]
+    fn a_comment_being_written_has_a_button_that_sends_it_and_one_that_drops_it() {
+        let (dir, mut app) = project();
+        app.show_sidebar = false;
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        // A button's cells are its words with a space either side.
+        let press = |app: &mut App, words: &str| {
+            let (x, y) = find(&screen(app), words);
+            app.handle(mouse(MouseKind::Left, x + 2, y));
+            app.handle(mouse(MouseKind::Up, x + 2, y));
+        };
+        app.run(Command::AddComment);
+        typed(&mut app, "First");
+        assert!(
+            screen(&app).text().contains(" Cancel"),
+            "{}",
+            screen(&app).text()
+        );
+        press(&mut app, " Comment ");
+        assert!(app.dock.draft.is_none());
+        assert_eq!(app.threads.len(), 1);
+        assert_eq!(app.threads[0].text, "First");
+        // An answer: its card's own buttons give way to Reply and Cancel, and Cancel drops it.
+        press(&mut app, " Reply ");
+        typed(&mut app, "Second");
+        let text = screen(&app).text();
+        assert!(
+            text.contains(" Reply ") && text.contains(" Cancel"),
+            "{text}"
+        );
+        assert!(!text.contains(" Resolve"), "{text}");
+        press(&mut app, " Cancel ");
+        assert!(app.dock.draft.is_none());
+        assert!(app.threads[0].replies.is_empty());
+        assert!(screen(&app).text().contains(" Resolve"));
+        // And sent by its button.
+        press(&mut app, " Reply ");
+        typed(&mut app, "Third");
+        press(&mut app, " Reply ");
+        assert_eq!(app.threads[0].replies.len(), 1);
+        assert_eq!(app.threads[0].replies[0].text, "Third");
+        // Changing the comment itself is saved.
+        press(&mut app, "Edit");
+        typed(&mut app, "!");
+        press(&mut app, " Save ");
+        assert_eq!(app.threads[0].text, "First!");
+        // A new one that goes straight to the agent says so on its button.
+        app.run(Command::AskAgent);
+        let grid = screen(&app);
+        let (_, y) = find(&grid, " Cancel");
+        assert!(
+            grid.row_text(y).contains(" Ask agent "),
+            "{}",
+            grid.row_text(y)
+        );
     }
 
     /// Where the screen can't show pictures, one a comment names is a link, in the accent

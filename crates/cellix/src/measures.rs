@@ -6,6 +6,40 @@ use cellix_render::{Font, Measure};
 
 /// Columns between buttons side by side, and between a button and the words beside it.
 pub const BUTTON_GAP: u16 = 2;
+
+/// The chip behind a glyph that takes a click, an emoji or a small icon, while it's pointed
+/// at or picked: square on screen, nearly a row tall, with the glyph in its middle.
+pub fn glyph_chip(middle: f32, y: u16, measure: &dyn Measure) -> cellix_render::Bounds {
+    const TALL: f32 = 0.92;
+    let wide = TALL * rows_to_columns(measure);
+    let top = f32::from(y) + (1.0 - TALL) / 2.0;
+    cellix_render::Bounds::cells(middle - wide / 2.0, top, wide, TALL)
+}
+
+/// Where an emoji starts so that it stands in the middle of `middle`, at `size` percent of
+/// the words' size. Its measure holds the air kept after it in a line of words, which isn't
+/// part of what's seen.
+pub fn emoji_start(emoji: &str, middle: f32, size: u8, measure: &dyn Measure) -> f32 {
+    let font = Font {
+        size,
+        ..Font::default()
+    };
+    let air = if measure.in_cells() {
+        0.0
+    } else {
+        let text = cellix_render::INTERFACE_SIZE * f32::from(size) / 100.0;
+        cellix_render::EMOJI_AIR * text * rows_to_columns(measure)
+    };
+    let seen = (measure.width(emoji, font) - air).clamp(0.0, 2.4);
+    middle - seen / 2.0
+}
+
+/// How many columns are as long as a row is tall: about two, and exactly what the cell's
+/// pixels say where there are pixels.
+pub fn rows_to_columns(measure: &dyn Measure) -> f32 {
+    let (wide, tall) = measure.cell_pixels().unwrap_or((1, 2));
+    tall as f32 / wide.max(1) as f32
+}
 /// Columns of air either side of a button's words inside its chip, where text is drawn in
 /// pixels: a cell and a half, about 13 px.
 pub const BUTTON_ROOM: f32 = 1.5;

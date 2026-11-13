@@ -295,6 +295,9 @@ the comment names it by its path, which is how the agent finds it. On its card t
 under your words, and a click opens it in the Preview; in a terminal without pictures its name is a
 link that does the same.
 
+What you're writing stands in a box, with a button under it that sends it and one that cancels, for
+the mouse; Enter and Esc do the same from the keyboard.
+
 The icons at the top right start a real agent, a terminal or a browser in the side pane, beside your file. Press Ctrl+` to
 move the keyboard between the two, and the hide-pane icon at the top right, or Ctrl+Shift+`, to hide
 the pane. Hidden, it leaves a button in the same place that shows it again as it was, filling the

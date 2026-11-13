@@ -7,7 +7,7 @@ use cellix_input::Key;
 use cellix_render::{Bounds, Font, Grid, Icon, Measure, Rect, Style};
 use emojis::{Emoji, EmojiVersion, Group};
 
-use crate::palette::raised;
+use crate::measures::{emoji_start, glyph_chip};
 use crate::theme::Theme;
 
 /// The ones a click away beside a comment being written, until the person's own use says
@@ -189,8 +189,16 @@ const HEADER_ROWS: u16 = 2;
 const LIST_ROWS: u16 = 9;
 /// A line, and the name of the one pointed at.
 const FOOT_ROWS: u16 = 2;
-/// Where the line under the field is, in rows from the panel's top.
-const HEADER_LINE: f32 = 1.3;
+/// Where the line under the field is, in rows from the panel's top: the middle of the gap.
+const HEADER_LINE: f32 = 1.5;
+/// How far the panel reaches past its first and last rows, in rows, so the field and the
+/// name at its foot keep clear of its edges. Dropped from the row under a comment's tools,
+/// that puts its top edge on the bottom line of the box they stand in.
+const PADDING: f32 = crate::threads::FIELD_INSET;
+/// The least the thumb at the list's edge is, in rows: less is a speck.
+const THUMB: f32 = 1.4;
+/// How far a heading after the first is dropped in its row, toward the emoji it names.
+const HEADING_DROP: f32 = 0.2;
 /// An emoji in the picker is drawn a little larger than text, as a percentage.
 const SIZE: u8 = 115;
 const MOST_USED: &str = "MOST USED";
@@ -242,8 +250,9 @@ impl Picker {
     }
 
     fn size() -> (u16, u16) {
+        // The last emoji has no gap to keep after it, so each side has the same air.
         (
-            INSET * 2 + SQUARE * COLUMNS as u16,
+            INSET * 2 + SQUARE * COLUMNS as u16 - 1,
             HEADER_ROWS + LIST_ROWS + FOOT_ROWS,
         )
     }
@@ -405,12 +414,14 @@ impl Picker {
         theme: &Theme,
     ) {
         let area = self.area();
-        raised(grid, area, theme);
         let base = Style {
             fg: theme.text.fg,
             bg: theme.popup,
             ..theme.bar
         };
+        grid.fill(area, base);
+        let panel = Bounds::inset(area, 0.0, -PADDING);
+        grid.popup(panel, 28, theme.popup, theme.popup_border);
         let dim = Style {
             fg: theme.popup_dim,
             ..base
@@ -443,10 +454,6 @@ impl Picker {
         );
         grid.hairline(line, theme.popup_border);
         let pointed = hover.and_then(|h| self.at(h.0, h.1));
-        let font = Font {
-            size: SIZE,
-            ..Font::default()
-        };
         for (line, row) in self
             .rows
             .iter()
@@ -458,7 +465,12 @@ impl Picker {
             match row {
                 Row::Heading(name) => {
                     let small = Style { bold: true, ..dim };
+                    let from = grid.painted_so_far();
                     grid.label_at(f32::from(left), left, y, name, small, right, 80);
+                    // Nearer the emoji it names than the ones above it.
+                    if line > 0 {
+                        grid.lift_since(from, -HEADING_DROP);
+                    }
                 }
                 Row::Emoji(from, count) => {
                     for (column, index) in (*from..from + count).enumerate() {
@@ -470,21 +482,25 @@ impl Picker {
                             } else {
                                 theme.popup_hover
                             };
-                            let wash = Bounds::cells(
-                                f32::from(x) - 0.45,
-                                f32::from(y) + 0.055,
-                                f32::from(SQUARE) - 0.1,
-                                0.89,
-                            );
-                            grid.panel(wash, 18, Some(fill), None);
+                            let chip = glyph_chip(f32::from(x) + 1.0, y, measure);
+                            grid.panel(chip, 18, Some(fill), None);
                         }
                         // In the middle of its two columns, however wide the font draws it.
-                        let wide = measure.width(emoji, font).min(2.4);
-                        let at = f32::from(x) + (2.0 - wide) / 2.0;
-                        grid.label_at(at, x, y, emoji, base, x + SQUARE, SIZE);
+                        let at = emoji_start(emoji, f32::from(x) + 1.0, SIZE, measure);
+                        grid.label_at(at.max(f32::from(x)), x, y, emoji, base, x + SQUARE, SIZE);
                     }
                 }
             }
+        }
+        // A thumb at the list's edge, where there's more than is in view.
+        if self.rows.len() > LIST_ROWS as usize {
+            let all = self.rows.len() as f32;
+            let tall = (f32::from(LIST_ROWS) * f32::from(LIST_ROWS) / all).max(THUMB);
+            let room = f32::from(LIST_ROWS) - tall;
+            let last = (all - f32::from(LIST_ROWS)).max(1.0);
+            let top = f32::from(area.y + HEADER_ROWS) + room * self.top as f32 / last;
+            let thumb = Bounds::cells(f32::from(area.right()) - 0.95, top + 0.1, 0.4, tall - 0.2);
+            grid.panel(thumb, 12, Some(theme.scrollbar), None);
         }
         if self.shown.is_empty() {
             let y = area.y + HEADER_ROWS;

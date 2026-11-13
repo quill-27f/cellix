@@ -64,6 +64,9 @@ pub enum Hit {
     Suggested(usize),
     /// The button that adds a picture to the comment being written.
     AddPicture,
+    /// Sends the comment being written, as Enter does, or drops it, as Esc does.
+    Send,
+    Cancel,
     /// A picture on a comment's card: the comment, and which of its pictures, counting
     /// through its words and then its replies as `pictures_of` does.
     Picture(u32, usize),
@@ -149,6 +152,9 @@ enum Line {
     Status(String),
     /// A row of what's being written, and where the caret is on it, in bytes, when it is.
     Input(String, Option<usize>),
+    /// Between what's being written and the tools under it, in their box: the words stand
+    /// a little down into it and the tools a little up, so neither is on the box's lines.
+    Pad,
     /// Under what's being written: the emoji most reached for, the button for the rest, and
     /// the one that adds a picture.
     Tools,
@@ -166,6 +172,9 @@ enum Line {
     /// name, in place of the hint.
     Suggest(Vec<(&'static str, &'static str)>),
     Hint,
+    /// Under what's being written: the button that sends it, named for what it does, and
+    /// Cancel. The comment it's on, so its card ends here while it's answered or changed.
+    Send(u32, &'static str),
     Buttons(u32),
     /// Reopen, under a resolved comment.
     Reopen(u32),
@@ -361,6 +370,18 @@ pub fn wrap_spans(text: &str, width: f32, measure: &dyn Measure) -> Vec<(usize, 
     rows
 }
 
+/// What the button that sends a comment being written says: what sending it does.
+fn send_label(draft: &Draft) -> &'static str {
+    match (draft.thread, draft.editing, draft.ask) {
+        (Some(_), true, _) => "Save",
+        (Some(_), false, _) => "Reply",
+        (None, _, true) => "Ask agent",
+        (None, _, false) => "Comment",
+    }
+}
+
+const CANCEL: &str = "Cancel";
+
 fn draft_lines(draft: &Draft, view: View, width: f32, measure: &dyn Measure, out: &mut Vec<Line>) {
     let spans = wrap_spans(&draft.text, width, measure);
     let caret = draft.caret.min(draft.text.len());
@@ -378,6 +399,7 @@ fn draft_lines(draft: &Draft, view: View, width: f32, measure: &dyn Measure, out
         .map(|(start, end)| draft.text[start..end].to_string())
         .collect();
     picture_lines((DRAFT_PICTURE, false), &named, &mut 0, (view, width), out);
+    out.push(Line::Pad);
     out.push(Line::Tools);
     let found = suggested(draft, view);
     out.push(if found.is_empty() {
@@ -406,6 +428,9 @@ const PICTURE_ENDINGS: [&str; 6] = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
 /// The most rows a picture takes on a card, and the air it keeps under it.
 const PICTURE_ROWS: f32 = 8.0;
 const PICTURE_AIR: f32 = 0.5;
+/// How far under its row's top a picture starts: as clear of the words over it as of what
+/// comes after it.
+const PICTURE_DROP: f32 = 0.36;
 /// The comment a picture's rows say they're on while it's still being written.
 const DRAFT_PICTURE: u32 = u32::MAX;
 
@@ -632,8 +657,18 @@ enum Tool {
     Picture,
 }
 
+/// How far the box round a comment being written stands inside its first and last rows, in
+/// rows: clear of the quote over it and the hint under it.
+pub(crate) const FIELD_INSET: f32 = 0.22;
+/// How far the words are dropped and the tools lifted into the row kept between them, so
+/// each is a quarter of a row and more inside the box's line.
+const FIELD_SHIFT: f32 = 0.3;
 /// Columns a tool takes: an emoji's two and one before the next.
 const TOOL: u16 = 3;
+/// The size the quick emoji are drawn at, as a percentage of the words'.
+const QUICK_SIZE: u8 = 115;
+/// How tall the icons after them are, in rows: the emoji's size.
+const TOOL_ICON: f32 = 0.6;
 /// Columns between the emoji and the buttons after them.
 const TOOL_GAP: u16 = 1;
 
@@ -687,7 +722,13 @@ fn suggest_spots(
 
 /// Columns an offered emoji takes before its name: itself and a gap.
 fn suggest_emoji(emoji: &str, measure: &dyn Measure) -> f32 {
-    (measure.width(emoji, Font::default()) + 0.6).ceil()
+    let wide = measure.width(emoji, Font::default()) + 0.5;
+    // In cells its name starts on a cell; painted, right where that comes to.
+    if measure.in_cells() {
+        wide.ceil()
+    } else {
+        wide
+    }
 }
 
 /// Columns between one offered emoji's name and the next emoji.
@@ -771,6 +812,10 @@ fn draw_linked(
             ..style
         };
         grid.label_at(at, from, y, &text[start..end], link, right, size);
+        // Painted text takes its line from the paint, not from the cells' style.
+        if let Some(Paint::Text { underline, .. }) = grid.paint.last_mut() {
+            *underline = true;
+        }
     }
 }
 
@@ -857,7 +902,7 @@ fn lines(
             Words::Here,
         ));
         draft_lines(new, view, width, measure, &mut out);
-        out.push(Line::Buttons(NEW_DRAFT));
+        out.push(Line::Send(NEW_DRAFT, send_label(new)));
         out.push(Line::Gap);
     } else if open.is_empty() {
         out.push(Line::Empty(resolved.0 > 0));
@@ -955,7 +1000,12 @@ fn lines(
         {
             out.push(Line::Rewrite(id));
         }
-        out.push(if thread.resolved {
+        // While it's answered or changed its own buttons give way to the two that send
+        // what's being written or drop it: one thing is being done to it at a time.
+        let writing = draft.filter(|d| d.thread == Some(id));
+        out.push(if let Some(written) = writing {
+            Line::Send(id, send_label(written))
+        } else if thread.resolved {
             Line::Reopen(id)
         } else if suggested {
             Line::Choices(id)
@@ -963,7 +1013,7 @@ fn lines(
             Line::Buttons(id)
         });
         // Edit and Delete go on a row of their own where the five don't fit on one.
-        if !thread.resolved && !suggested && !all_fit(width, measure) {
+        if writing.is_none() && !thread.resolved && !suggested && !all_fit(width, measure) {
             out.push(Line::Edits(id));
         }
         out.push(Line::Gap);
@@ -1135,6 +1185,15 @@ pub fn hit(
                 _ => Some(Hit::Delete(*id)),
             }
         }
+        Line::Send(_, label) => {
+            let pressed = row_of(area, &[label, CANCEL], measure)
+                .into_iter()
+                .find(|(_, cells, at)| x >= *at && x < at + cells.chars().count() as u16);
+            match pressed?.0 {
+                CANCEL => Some(Hit::Cancel),
+                _ => Some(Hit::Send),
+            }
+        }
         Line::Choices(id) => {
             let pressed = row_of(area, &CHOICES, measure)
                 .into_iter()
@@ -1251,6 +1310,8 @@ pub fn draw(
     (measure, theme): (&dyn Measure, &Theme),
 ) {
     grid.fill(area, theme.sidebar);
+    // A card is painted whole, and one half out of the pane would land on the bar under it.
+    let begun = grid.painted_so_far();
     let width = area.w.saturating_sub(SIDE * 2 + 2) as f32;
     let threads = shown.0;
     let view = shown.4;
@@ -1285,7 +1346,11 @@ pub fn draw(
             Line::Header(..) => start = Some(index),
             Line::Quote(..) if start.is_none() => start = Some(index),
             Line::Buttons(_) if matches!(all.get(index + 1), Some(Line::Edits(_))) => {}
-            Line::Buttons(_) | Line::Edits(_) | Line::Choices(_) | Line::Reopen(_) => {
+            Line::Buttons(_)
+            | Line::Edits(_)
+            | Line::Choices(_)
+            | Line::Reopen(_)
+            | Line::Send(..) => {
                 if let Some(first) = start.take() {
                     let (y, height) = (row_y(first), (index - first + 1) as f32);
                     // A column from the pane's edge, so its text stands two inside it.
@@ -1297,7 +1362,7 @@ pub fn draw(
                     );
                     let of = match line {
                         Line::Buttons(id) | Line::Edits(id) | Line::Choices(id) => Some(*id),
-                        Line::Reopen(id) => Some(*id),
+                        Line::Reopen(id) | Line::Send(id, _) => Some(*id),
                         _ => None,
                     };
                     let lit = view.lit.is_some() && of == view.lit;
@@ -1321,8 +1386,27 @@ pub fn draw(
             _ => {}
         }
     }
-    // An agent's answer is set in, on a shade of its card, so who said what is plain.
     let text_x = side + 1;
+    // What's being written stands in a box with the tools under it, as a field does: a
+    // column inside the card, with the words a column inside it.
+    let first_input = all.iter().position(|line| matches!(line, Line::Input(..)));
+    if let Some(first) = first_input {
+        let last = all[first..]
+            .iter()
+            .position(|line| matches!(line, Line::Tools))
+            .map_or(first, |tools| first + tools);
+        let (y, height) = (row_y(first), (last - first + 1) as f32);
+        if shown(y, height) {
+            let bounds = Bounds::cells(
+                f32::from(text_x) - 1.0,
+                y + FIELD_INSET,
+                f32::from(right - text_x) + 1.0,
+                height - FIELD_INSET * 2.0,
+            );
+            grid.panel(bounds, 16, Some(theme.input), Some(theme.popup_border));
+        }
+    }
+    // An agent's answer is set in, on a shade of its card, so who said what is plain.
     let mut index = 0;
     while index < all.len() {
         if let Line::Answer(id, ..) = all[index] {
@@ -1371,6 +1455,7 @@ pub fn draw(
                 | Line::Choices(_)
                 | Line::Reopen(_)
                 | Line::Rewrite(_)
+                | Line::Send(..)
         );
         match line {
             Line::Status(text) => {
@@ -1382,27 +1467,31 @@ pub fn draw(
                     let font = Font::default();
                     let x = text_x as f32 + measure.width(&text[..*at], font);
                     grid.set_caret(x, y, 0.62);
+                    // The caret goes down into the box with the words it's among.
+                    if let Some(caret) = &mut grid.caret {
+                        caret.y += cellix_render::units(FIELD_SHIFT);
+                    }
                 }
+                grid.lift_since(from, -FIELD_SHIFT);
             }
+            Line::Pad => {}
             Line::Tools => {
                 for (tool, at) in tools(area, view) {
                     let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= at && h.0 < at + TOOL);
+                    // Each in the middle of its first two columns, with its chip round it.
+                    let middle = f32::from(at) + 1.0;
                     if on_it {
-                        let wash = Bounds::cells(
-                            f32::from(at) - 0.45,
-                            f32::from(y) + 0.055,
-                            f32::from(TOOL) - 0.1,
-                            0.89,
-                        );
-                        grid.panel(wash, 18, Some(theme.popup_hover), None);
+                        let chip = crate::measures::glyph_chip(middle, y, measure);
+                        grid.panel(chip, 18, Some(theme.popup_hover), None);
                     }
                     match tool {
                         Tool::Quick(which) => {
-                            // In the middle of its two columns, however wide it's drawn.
+                            // A size up from the words, where the small ones blur.
                             let emoji = view.quick.map_or("", |quick| quick[which]);
-                            let wide = measure.width(emoji, Font::default()).min(2.0);
-                            let x = f32::from(at) + (2.0 - wide) / 2.0;
-                            grid.label_at(x, at, y, emoji, inner, at + TOOL, 100);
+                            let x =
+                                crate::measures::emoji_start(emoji, middle, QUICK_SIZE, measure);
+                            let x = x.max(f32::from(at));
+                            grid.label_at(x, at, y, emoji, inner, at + TOOL, QUICK_SIZE);
                         }
                         Tool::Emoji | Tool::Picture => {
                             let colour = if on_it { theme.text.fg } else { raised_muted };
@@ -1415,10 +1504,24 @@ pub fn draw(
                             } else {
                                 (Icon::Picture, "▣")
                             };
-                            grid.glyph(f32::from(at), y, icon, colour, cells, style);
+                            // The size the emoji beside it are, and in its chip's middle.
+                            let painted = Style {
+                                painted: true,
+                                ..style
+                            };
+                            grid.put_str(at, y, cells, painted, at + TOOL);
+                            let wide = TOOL_ICON * crate::measures::rows_to_columns(measure);
+                            let top = f32::from(y) + (1.0 - TOOL_ICON) / 2.0;
+                            grid.paint.push(Paint::Icon {
+                                bounds: Bounds::cells(middle - wide / 2.0, top, wide, TOOL_ICON),
+                                icon,
+                                color: colour,
+                            });
                         }
                     }
                 }
+                // Up into the row kept over them, clear of the box's bottom line.
+                grid.lift_since(from, FIELD_SHIFT);
             }
             Line::Picture {
                 name, row, inset, ..
@@ -1429,7 +1532,7 @@ pub fn draw(
                 if let Some(figure) = figure.filter(|_| *row == 0 || index == top) {
                     let (left, (wide, tall)) = picture_place(area, figure, *inset);
                     let above = f32::from(y) - *row as f32;
-                    let bounds = Bounds::cells(left, above + PICTURE_AIR / 2.0, wide, tall);
+                    let bounds = Bounds::cells(left, above + PICTURE_DROP, wide, tall);
                     let clip = Bounds::cells(
                         f32::from(area.x),
                         f32::from(area.y),
@@ -1445,18 +1548,32 @@ pub fn draw(
                     // A line round it, so a dark picture has an edge on a dark card. Only
                     // where it's whole: a line can't be cut at the pane's edge as it is.
                     if *row == 0 && f32::from(y) + tall < f32::from(area.bottom()) {
-                        grid.panel(bounds, 0, None, Some(theme.border));
+                        grid.panel(bounds, 0, None, Some(theme.popup_border));
                     }
                 }
             }
             Line::Suggest(found) => {
                 // The first is the one Tab takes, so its name is the plain one.
                 let spots = suggest_spots(area, found, measure);
+                // And Tab is named at the row's end, where there's room for it.
+                let end = spots.last().map_or(0.0, |(x, wide)| x + wide);
+                if end + SUGGEST_GAP + 3.0 <= f32::from(right) {
+                    grid.label_right(right, y, "Tab", inner_dim, SMALL);
+                }
                 for (index, ((emoji, code), (x, wide))) in found.iter().zip(spots).enumerate() {
                     let pointed = hover.is_some_and(|h| {
                         let at = f32::from(h.0) + 0.5;
                         h.1 == y && at >= x && at < x + wide
                     });
+                    if index == 0 || pointed {
+                        let fill = if index == 0 {
+                            theme.pick
+                        } else {
+                            theme.popup_hover
+                        };
+                        let chip = Bounds::cells(x - 0.5, f32::from(y) + 0.08, wide + 1.0, 0.84);
+                        grid.panel(chip, 18, Some(fill), None);
+                    }
                     let cell = x.floor() as u16;
                     grid.label_at(x, cell, y, emoji, inner, right, 100);
                     let name = Style {
@@ -1754,7 +1871,25 @@ pub fn draw(
                     grid.button(x, y, &cells, label, fill, style);
                 }
             }
-            Line::Buttons(NEW_DRAFT) => {}
+            Line::Send(_, label) => {
+                // What's being written is the one thing under way, so its button is filled.
+                for (name, cells, x) in row_of(area, &[label, CANCEL], measure) {
+                    let width = cells.chars().count() as u16;
+                    let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
+                    let main = name != CANCEL;
+                    let fill = match (main, on_it) {
+                        (true, _) => theme.button,
+                        (false, true) => theme.popup_hover,
+                        (false, false) => theme.quiet_button(card),
+                    };
+                    let style = Style {
+                        bg: fill,
+                        fg: if main { theme.button_text } else { inner.fg },
+                        ..inner
+                    };
+                    grid.button(x, y, &cells, name, fill, style);
+                }
+            }
             Line::Buttons(_) => {
                 // Check my review is the panel's one filled button; these are all quiet.
                 for (label, cells, x) in buttons(area, measure) {
@@ -1859,6 +1994,7 @@ pub fn draw(
             grid.lift_since(from, -ACTIONS_DROP);
         }
     }
+    grid.keep_to_rows(begun, area.y, area.bottom());
 }
 
 #[cfg(test)]

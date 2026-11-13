@@ -9,7 +9,7 @@ mod raster;
 
 pub use grid::{Cell, Grid, Rect, Rgb, Run, Style, on_large_button};
 pub use icon::{Icon, Piece};
-pub use measure::{CellMeasure, Font, FontMeasure, Measure};
+pub use measure::{CellMeasure, EMOJI_AIR, Font, FontMeasure, Measure};
 pub use paint::{
     ALL_CORNERS, BOTTOM_LEFT, BOTTOM_RIGHT, Bitmap, Bounds, Paint, Pixels, Strip, TOP_LEFT,
     TOP_RIGHT, UNIT, units,

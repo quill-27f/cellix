@@ -159,6 +159,11 @@ so a caret after an emoji is where the emoji ends. The cell tier measures by wha
 letter, so an emoji of several code points is its two columns once. A server with no emoji font
 has none to draw: bundling one is not done.
 
+Paint can be kept to a band of rows (`Grid::keep_to_rows`): on any other row it isn't drawn, and
+a row's tile doesn't hash it. A list scrolled in a pane paints its cards whole, and the part of
+one past the pane's foot was landing on the status bar. The Comments pane keeps all it paints to
+its own rows; rows are what tiles are made of, so a band of rows is an exact cut.
+
 Tiles are whole rows, so one region can't scroll by itself. For a wheel notch on the direct
 tier, a layer of region tiles goes above the row tiles, moves by pixel offsets, and is
 removed in the same synchronized frame as the final page. Nothing in the row pipeline
@@ -226,6 +231,17 @@ comment, and under the words being written too; a click on it opens it in the Pr
 small once and again when its file changes, so a picture an agent makes after naming it shows
 when it's there. Where the screen can't, or the file is missing, the name stays in the words as
 a link that opens it.
+
+A comment being written stands in a box, as a field does: its words and, inside the box under
+them, the eight emoji and the two buttons for the rest and for a picture, each a glyph in the
+middle of a square chip that shows while it's pointed at. A row is kept between the words and
+the tools, with the words a little down into it and the tools a little up, so both stand clear
+of the box's lines, and the list of every emoji hangs from its bottom line. Under the box is the hint, or the emoji
+offered for a name (the first on the selection's chip, with Tab named at the row's end), and under
+that two buttons: the one that sends it, filled and named for what sending does (Comment, Reply,
+Save, Ask agent), and Cancel. They do what Enter and Esc do. While a comment is answered or
+changed they stand in place of its own buttons, since one thing is being done to it. The filled
+button is the pane's second with Check my review; what's being written is what's under way.
 
 Whatever can be seen can be talked about. A selection, in code or on a page, gets Comment and Ask
 Agent beside it, each naming in brackets the keys that do the same as they're set now (Alt+C and

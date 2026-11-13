@@ -30,7 +30,7 @@ SEARCH, OUTLINE, REVIEW = 2, 3, 5  # a row and a half apart, at their middles
 # say the one before it landed: keys sent before the palette is up are typed into the file.
 PALETTE_UP = "Type to search"
 # The face under a comment being written in a 150-column window, after the eight emoji.
-EMOJI_BUTTON = (124, 4)
+EMOJI_BUTTON = (124, 5)
 def command(words, opened="\x1b[112;6u"):
     return [["keys", opened], ["until", PALETTE_UP], ["keys", words], ["until", words], ["keys", "\r"],
             ["gone", words]]

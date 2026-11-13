@@ -65,6 +65,9 @@ pub(crate) fn emoji_letter(letter: &str) -> bool {
         })
 }
 
+/// The air after an emoji in a line of words, as a share of the text's size.
+pub const EMOJI_AIR: f32 = 0.14;
+
 /// A line of text as runs to set: its emoji in the emoji font, and the rest in its own.
 pub(crate) fn runs<'a>(
     text: &'a str,
@@ -75,7 +78,11 @@ pub(crate) fn runs<'a>(
     let Some(family) = emoji.filter(|_| !text.is_ascii()) else {
         return vec![(text, plain)];
     };
-    let coloured = plain.clone().family(Family::Name(family));
+    // With a little air after each: two set together touch, and so does a caret after one.
+    let coloured = plain
+        .clone()
+        .family(Family::Name(family))
+        .letter_spacing(EMOJI_AIR);
     let pick = |emoji: bool| {
         if emoji {
             coloured.clone()

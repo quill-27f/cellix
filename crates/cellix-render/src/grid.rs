@@ -118,6 +118,10 @@ pub struct Grid {
     /// Columns where a new band starts, in order. Each band of a row is its own tile, so text
     /// that scrolls isn't tied to whatever the sidebar or minimap shows at that height.
     pub bands: Vec<u16>,
+    /// Runs of `paint` kept to a band of rows: as (from, to) in `paint` and (top, bottom) in
+    /// rows. A list scrolled in a pane paints its cards whole, and the part of one that's
+    /// past the pane's edge mustn't land on the bar beside it.
+    kept: Vec<((usize, usize), (u16, u16))>,
 }
 
 impl Grid {
@@ -170,6 +174,7 @@ impl Grid {
             caret: None,
             paint: Vec::new(),
             bands: Vec::new(),
+            kept: Vec::new(),
         }
     }
 
@@ -181,6 +186,29 @@ impl Grid {
     /// How much has been painted so far, to `lift_since` later.
     pub fn painted_so_far(&self) -> usize {
         self.paint.len()
+    }
+
+    /// Keeps what was painted since `from` to the rows from `top` up to `bottom`: on any other
+    /// row none of it is drawn, however far it reaches.
+    pub fn keep_to_rows(&mut self, from: usize, top: u16, bottom: u16) {
+        if from < self.paint.len() {
+            self.kept.push(((from, self.paint.len()), (top, bottom)));
+        }
+    }
+
+    /// Puts paint in under what's already painted from `index` on, as a mark under words is.
+    pub fn insert_paint(&mut self, index: usize, paint: Paint) {
+        let index = index.min(self.paint.len());
+        self.paint.insert(index, paint);
+        // What was kept to its rows still is, and what's put inside a kept run is kept too.
+        for ((from, to), _) in &mut self.kept {
+            if index < *from {
+                *from += 1;
+            }
+            if index < *to {
+                *to += 1;
+            }
+        }
     }
 
     /// Moves what was painted since `from` up by `rows`, which only the pixel tiers can show:
@@ -499,10 +527,19 @@ impl Grid {
 
     pub fn paint_on_row(&self, y: u16) -> impl Iterator<Item = &Paint> {
         let (top, bottom) = (y as i32 * UNIT, (y as i32 + 1) * UNIT);
-        self.paint.iter().filter(move |p| {
-            let (from, to) = p.span();
-            from < bottom && to > top
-        })
+        let kept_off = move |index: usize| {
+            self.kept.iter().any(|((from, to), (first, end))| {
+                (*from..*to).contains(&index) && !(*first..*end).contains(&y)
+            })
+        };
+        self.paint
+            .iter()
+            .enumerate()
+            .filter(move |(index, p)| {
+                let (from, to) = p.span();
+                from < bottom && to > top && !kept_off(*index)
+            })
+            .map(|(_, paint)| paint)
     }
 
     pub fn width(&self) -> u16 {
@@ -677,6 +714,35 @@ pub fn on_large_button((x, y): (u16, u16), width: u16, at: (f32, f32)) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// Paint kept to a band of rows shows on those rows only, and paint put in under it
+    /// later doesn't move which paint that is.
+    #[test]
+    fn paint_kept_to_its_rows_is_on_no_other() {
+        let style = Style::default();
+        let mut grid = Grid::new(10, 6, style);
+        let panel = |grid: &mut Grid, y: f32, h: f32| {
+            grid.panel(Bounds::cells(0.0, y, 10.0, h), 0, Some(Rgb(1, 2, 3)), None);
+        };
+        panel(&mut grid, 0.0, 1.0);
+        let from = grid.painted_so_far();
+        // A card from the second row to past the fifth, in a list that ends before it.
+        panel(&mut grid, 1.0, 4.5);
+        grid.keep_to_rows(from, 2, 4);
+        panel(&mut grid, 5.0, 1.0);
+        let on = |grid: &Grid, y: u16| grid.paint_on_row(y).count();
+        let rows: Vec<usize> = (0..6).map(|y| on(&grid, y)).collect();
+        assert_eq!(rows, [1, 0, 1, 1, 0, 1]);
+        // A mark put in before the card: the card is still the one that's kept.
+        grid.insert_paint(
+            0,
+            Paint::Hairline {
+                bounds: Bounds::cells(0.0, 1.0, 10.0, 0.0),
+                color: Rgb(9, 9, 9),
+            },
+        );
+        let rows: Vec<usize> = (0..6).map(|y| on(&grid, y)).collect();
+        assert_eq!(rows, [1, 1, 1, 1, 0, 1]);
+    }
 
     #[test]
     fn control_characters_never_reach_a_cell() {

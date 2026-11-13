@@ -4940,5 +4940,19 @@
     "title": "A picture pasted, dropped or picked while a comment is written is kept in the project and stands on its card",
     "test": "a_picture_in_a_comment_is_kept_in_the_project_and_stands_on_its_card",
     "passes": true
+  },
+  {
+    "id": "comment-draft-buttons",
+    "milestone": 14,
+    "title": "A comment being written has a button that sends it and one that drops it, in place of its card's own while it's answered",
+    "test": "a_comment_being_written_has_a_button_that_sends_it_and_one_that_drops_it",
+    "passes": true
+  },
+  {
+    "id": "comment-cards-clipped",
+    "milestone": 14,
+    "title": "A comment's card cut by the pane's foot isn't painted on the bar under it",
+    "test": "a_card_running_past_the_panes_foot_stays_off_the_bar_under_it",
+    "passes": true
   }
 ]

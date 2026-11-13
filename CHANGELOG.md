@@ -4,7 +4,11 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 
 ## [Unreleased]
 
+### Changed
+- A comment being written stands in a box, with the emoji and picture buttons inside it and two buttons under it: one that sends it, named for what that does (Comment, Reply, Save or Ask agent), and Cancel. Enter and Esc still do the same. While you answer or change a comment, those two take the place of its own buttons.
+
 ### Fixed
+- A comment's card that ran past the bottom of the Comments pane was painted over the status bar under it. The pane's cards stay inside the pane.
 - After the window had changed size, a click could land three or four lines above the pointer, low in the window, until another resize happened to put it right. Cellix guessed the height of a row from the window's size, which is off in terminals whose window is taller than its rows. It now asks the terminal for the exact size again after any resize.
 
 ### Added
