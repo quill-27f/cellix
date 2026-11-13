@@ -29,6 +29,8 @@ SEARCH, OUTLINE, REVIEW = 2, 3, 5  # a row and a half apart, at their middles
 # and run, and the palette gone with what was typed into it. Each step waits for the screen to
 # say the one before it landed: keys sent before the palette is up are typed into the file.
 PALETTE_UP = "Type to search"
+# The face under a comment being written in a 150-column window, after the eight emoji.
+EMOJI_BUTTON = (124, 4)
 def command(words, opened="\x1b[112;6u"):
     return [["keys", opened], ["until", PALETTE_UP], ["keys", words], ["until", words], ["keys", "\r"],
             ["gone", words]]
@@ -108,6 +110,11 @@ EXPECT = {
     "42-hover-install": "files save",
     "43-light-hover-menu": "Rename Symbol",
     "50-comments": "yours",
+    "50-comment-emoji": ":rock",
+    "50-emoji-picker": "Search emoji",
+    "50-emoji-picker-light": "fire",
+    "50-comment-picture": "yours",
+    "50-comment-picture-light": "yours",
     "50-plan-versions": "yours",
     "50-plan-versions-narrow": "yours",
     "50-review": "suggested",
@@ -148,7 +155,7 @@ EXPECT = {
     "98-pane-drag-under": "loss.png",
 }
 # About how many scenes there are, to cut the tour into parts of a size.
-SCENES_IN_ALL = 190
+SCENES_IN_ALL = 195
 # Scenes come to, shot, and those that never reached their surface.
 SEEN, SHOT, FAILED = [0], [], []
 # Which commit the binary is, as far as git can say: the pictures are of that.
@@ -967,6 +974,38 @@ with tempfile.TemporaryDirectory() as scratch:
     typing = [["wait", 3.0], ["click", 90, 5], ["wait", 1.5], *command("add comment", F1),
               ["until", "Enter sends"], ["keys", "Is this true for "], ["wait", 1.5]]
     shoot("50-comment-typing", typing, NOTE_FILE, size="150x44", background="eff1f5")
+    # A name between colons is its emoji once its second colon is typed, and one half typed
+    # is offered under the words, in place of the hint. A name's cells are cut short by the
+    # next emoji's, since small text takes less room than its cells, so less of it is waited for.
+    # With no comment made yet, so the one being written starts at the pane's top whichever
+    # scenes ran before, and the face is where the next scene clicks.
+    if os.path.exists(f"{ROOT}/.cellix/threads.json"):
+        os.unlink(f"{ROOT}/.cellix/threads.json")
+    named = [["wait", 3.0], ["click", 90, 5], ["wait", 1.5], *command("add comment", F1),
+             ["until", "Enter sends"], ["keys", "Looks right :+1: and fast :roc"],
+             ["until", ":rock"], ["wait", 0.6]]
+    shoot("50-comment-emoji", named, NOTE_FILE, size="150x44")
+    # Every emoji, from the face after the eight that stand under the words.
+    every = [["wait", 3.0], ["click", 90, 5], ["wait", 1.5], *command("add comment", F1),
+             ["until", "Enter sends"], ["keys", "Ship it "], ["wait", 0.6], ["click", *EMOJI_BUTTON],
+             ["until", "Search emoji"], ["wait", 0.6]]
+    shoot("50-emoji-picker", every, NOTE_FILE, size="150x44")
+    shoot("50-emoji-picker-light", [*every, ["keys", "fire"], ["wait", 0.6]], NOTE_FILE,
+          size="150x44", background="eff1f5")
+    # A comment with a picture on it, an emoji and a link, and an answer with a link.
+    os.makedirs(f"{ROOT}/.cellix/pasted", exist_ok=True)
+    shutil.copy(f"{here}/../../docs/images/comments.png", f"{ROOT}/.cellix/pasted/pasted-1.png")
+    pictured = [
+        {"id": 1, "file": NOTE_FILE, "line": 3, "quote": "the weights sum to one",
+         "text": "The card should read like this one .cellix/pasted/pasted-1.png 👀",
+         "replies": [{"author": "Claude", "text": "Agree: it follows https://arxiv.org/abs/1706.03762 too."}],
+         "resolved": False, "told": 1, "asked": False, "kind": "", "suggested_by": ""},
+    ]
+    with open(f"{ROOT}/.cellix/threads.json", "w") as f:
+        json.dump(pictured, f)
+    with_picture = [["wait", 1.0], *command("show comments", F1), ["until", "yours"], ["wait", 1.5]]
+    shoot("50-comment-picture", with_picture, NOTE_FILE, size="150x44")
+    shoot("50-comment-picture-light", with_picture, NOTE_FILE, size="150x44", background="eff1f5")
     # A review the agent has checked: a verdict on the reviewer's comment and a suggestion.
     review = [
         {"id": 1, "file": NOTE_FILE, "line": 3, "quote": "the weights sum to one",

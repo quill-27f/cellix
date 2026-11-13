@@ -1,8 +1,10 @@
 //! The comments on a document, beside it: each one a short conversation with whoever's
 //! working on it, where the agent's answer lands under the question.
 
-use cellix_render::{Bounds, Font, Grid, Icon, Measure, Rect, Style};
-use cellix_review::threads::YOU;
+use std::borrow::Cow;
+
+use cellix_render::{Bounds, Font, Grid, Icon, Measure, Paint, Rect, Style};
+use cellix_review::threads::{Reply, YOU};
 use cellix_review::{About, Thread};
 
 use crate::measures::BUTTON_GAP;
@@ -60,6 +62,11 @@ pub enum Hit {
     Emoji,
     /// One of the emoji offered for the name being typed, by its place among them.
     Suggested(usize),
+    /// The button that adds a picture to the comment being written.
+    AddPicture,
+    /// A picture on a comment's card: the comment, and which of its pictures, counting
+    /// through its words and then its replies as `pictures_of` does.
+    Picture(u32, usize),
     Open(u32),
     Reply(u32),
     Ask(u32),
@@ -142,8 +149,19 @@ enum Line {
     Status(String),
     /// A row of what's being written, and where the caret is on it, in bytes, when it is.
     Input(String, Option<usize>),
-    /// Under what's being written: the emoji most reached for, and the button for the rest.
+    /// Under what's being written: the emoji most reached for, the button for the rest, and
+    /// the one that adds a picture.
     Tools,
+    /// A row of a picture standing on a card: the comment it's on and which of its pictures,
+    /// the word that names it, which of the picture's rows this is, and whether it's set in
+    /// as an answer's words are.
+    Picture {
+        thread: u32,
+        which: usize,
+        name: String,
+        row: usize,
+        inset: bool,
+    },
     /// The emoji whose names start as the one being typed after a colon does, each with its
     /// name, in place of the hint.
     Suggest(Vec<(&'static str, &'static str)>),
@@ -263,6 +281,13 @@ fn quote_of(quote: &str, line: usize) -> String {
 
 /// The first letter raised, so an answer reads as a sentence once its verdict is taken off.
 fn sentence(text: &str) -> String {
+    // A link or a file's name is spelled as it is.
+    if link_spans(text)
+        .first()
+        .is_some_and(|(start, _)| *start == 0)
+    {
+        return text.to_string();
+    }
     let mut chars = text.chars();
     chars.next().map_or_else(String::new, |first| {
         first.to_uppercase().chain(chars).collect()
@@ -347,9 +372,13 @@ fn draft_lines(draft: &Draft, view: View, width: f32, measure: &dyn Measure, out
         let at = (on == Some(index)).then(|| caret - start);
         out.push(Line::Input(draft.text[start..end].to_string(), at));
     }
-    if view.quick.is_some() {
-        out.push(Line::Tools);
-    }
+    // The pictures it names so far, so what's being sent is in view.
+    let named: Vec<String> = picture_spans(&draft.text)
+        .into_iter()
+        .map(|(start, end)| draft.text[start..end].to_string())
+        .collect();
+    picture_lines((DRAFT_PICTURE, false), &named, &mut 0, (view, width), out);
+    out.push(Line::Tools);
     let found = suggested(draft, view);
     out.push(if found.is_empty() {
         Line::Hint
@@ -366,8 +395,169 @@ pub type Shown<'a> = (
     Option<&'a Draft>,
     &'a str,
     (usize, bool),
-    View,
+    View<'a>,
 );
+
+/// The pictures comments name, by the word that names each, read small to stand on a card.
+pub type Pictures = std::collections::HashMap<String, crate::rendered::Figure>;
+
+/// The endings a picture's file has.
+const PICTURE_ENDINGS: [&str; 6] = ["png", "jpg", "jpeg", "gif", "webp", "svg"];
+/// The most rows a picture takes on a card, and the air it keeps under it.
+const PICTURE_ROWS: f32 = 8.0;
+const PICTURE_AIR: f32 = 0.5;
+/// The comment a picture's rows say they're on while it's still being written.
+const DRAFT_PICTURE: u32 = u32::MAX;
+
+/// How wide and tall a picture stands on a card with `width` columns for it: its own size
+/// where that fits, and smaller in its own shape where it doesn't.
+fn picture_size(figure: &crate::rendered::Figure, width: f32) -> (f32, f32) {
+    let across = width / figure.width.max(0.01);
+    let down = PICTURE_ROWS / figure.height.max(0.01);
+    let scale = across.min(down).min(1.0);
+    (figure.width * scale, figure.height * scale)
+}
+
+/// Each word of a comment that names a picture, as the bytes it takes: a path whose file
+/// ends as a picture's does, without the bracket or stop a sentence puts around it. A web
+/// address isn't one, wherever it leads.
+pub fn picture_spans(text: &str) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut rest = 0;
+    while let Some(found) = text[rest..].find(|c: char| !c.is_whitespace()) {
+        let start = rest + found;
+        let end = text[start..]
+            .find(char::is_whitespace)
+            .map_or(text.len(), |i| start + i);
+        rest = end;
+        let word = &text[start..end];
+        let lead = word.len() - word.trim_start_matches(['(', '[', '"', '\'', '<']).len();
+        let name =
+            word[lead..].trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']', '"', '\'', '>']);
+        let named = name.rsplit_once('.').is_some_and(|(stem, ending)| {
+            !stem.is_empty()
+                && !stem.ends_with('/')
+                && PICTURE_ENDINGS
+                    .iter()
+                    .any(|known| ending.eq_ignore_ascii_case(known))
+        });
+        if named && !name.contains("://") {
+            spans.push((start + lead, start + lead + name.len()));
+        }
+    }
+    spans
+}
+
+/// A comment's words as its card shows them, and the pictures that stand under them: a name
+/// between colons as its emoji, where the screen draws emoji, since an agent's answer may
+/// spell one out; and a picture's name taken out, where the picture itself is shown.
+fn shown<'t>(text: &'t str, view: View) -> (Cow<'t, str>, Vec<String>) {
+    let words = if view.quick.is_some() {
+        crate::emoji::expand(text)
+    } else {
+        Cow::Borrowed(text)
+    };
+    let Some(pictures) = view.pictures else {
+        return (words, Vec::new());
+    };
+    let spans: Vec<(usize, usize)> = picture_spans(&words)
+        .into_iter()
+        .filter(|(start, end)| pictures.contains_key(&words[*start..*end]))
+        .collect();
+    if spans.is_empty() {
+        return (words, Vec::new());
+    }
+    let names = spans
+        .iter()
+        .map(|(start, end)| words[*start..*end].to_string())
+        .collect();
+    let mut left = String::new();
+    let mut from = 0;
+    for (start, end) in spans {
+        left.push_str(&words[from..start]);
+        // The space after it goes with it, or the one before where it ends a line.
+        from = end;
+        if words[end..].starts_with(' ') {
+            from += 1;
+        } else if left.ends_with(' ') {
+            left.pop();
+        }
+    }
+    left.push_str(&words[from..]);
+    (Cow::Owned(left.trim().to_string()), names)
+}
+
+/// An answer as its card shows it: its verdict's word if it gives one, who wrote it, and
+/// its words.
+fn reply_parts(reply: &Reply) -> (Option<String>, String, String) {
+    match (verdict(&reply.text), rewrite(&reply.text)) {
+        (Some((shown, _, rest)), _) => {
+            (Some(sentence(shown)), reply.author.clone(), sentence(rest))
+        }
+        (_, Some(words)) => (
+            None,
+            format!("{} suggests a rewrite", reply.author),
+            words.to_string(),
+        ),
+        _ => (None, reply.author.clone(), reply.text.clone()),
+    }
+}
+
+/// A comment's words and then each of its answers', as its card shows them, each with the
+/// pictures under it.
+fn shown_parts(thread: &Thread, view: View) -> Vec<(String, Vec<String>)> {
+    let own = |(words, pictures): (Cow<'_, str>, Vec<String>)| (words.into_owned(), pictures);
+    let mut parts = vec![own(shown(&thread.text, view))];
+    for reply in &thread.replies {
+        let (_, _, body) = reply_parts(reply);
+        parts.push(own(shown(&body, view)));
+    }
+    parts
+}
+
+/// The pictures on a comment's card, by the words that name them: those under its own
+/// words, then those under each answer.
+pub fn pictures_of(thread: &Thread, view: View) -> Vec<String> {
+    shown_parts(thread, view)
+        .into_iter()
+        .flat_map(|(_, pictures)| pictures)
+        .collect()
+}
+
+/// A picture's rows on a card, after the words it was named in.
+fn picture_lines(
+    (thread, inset): (u32, bool),
+    names: &[String],
+    which: &mut usize,
+    (view, width): (View, f32),
+    out: &mut Vec<Line>,
+) {
+    for name in names {
+        let Some(figure) = view.pictures.and_then(|pictures| pictures.get(name)) else {
+            continue;
+        };
+        let rows = (picture_size(figure, width).1 + PICTURE_AIR).ceil() as usize;
+        out.extend((0..rows).map(|row| Line::Picture {
+            thread,
+            which: *which,
+            name: name.clone(),
+            row,
+            inset,
+        }));
+        *which += 1;
+    }
+}
+
+/// Where a picture stands on its rows: the column it starts in and how wide and tall it is.
+fn picture_place(area: Rect, figure: &crate::rendered::Figure, inset: bool) -> (f32, (f32, f32)) {
+    let width = f32::from(area.w.saturating_sub(SIDE * 2 + 2));
+    let x = f32::from(area.x + SIDE + 1);
+    if inset {
+        (x + INSET, picture_size(figure, width - INSET * 2.0))
+    } else {
+        (x, picture_size(figure, width))
+    }
+}
 
 /// The order the pane lists comments in.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -396,22 +586,26 @@ impl Sort {
 /// How the pane shows what it lists: whether each file's stand under a heading, the comment
 /// lit because its text was pressed in the document, and the order they're in.
 #[derive(Clone, Copy, Debug)]
-pub struct View {
+pub struct View<'a> {
     pub grouped: bool,
     pub lit: Option<u32>,
     pub sort: Sort,
     /// The emoji that stand under a comment being written. None where the screen can't
     /// draw them, and then names between colons stay as they're typed too.
     pub quick: Option<[&'static str; 8]>,
+    /// The pictures comments name, where the screen shows pictures: each stands on its card
+    /// under the words, in place of its name among them. Without them a name is a link.
+    pub pictures: Option<&'a Pictures>,
 }
 
-impl Default for View {
+impl Default for View<'_> {
     fn default() -> Self {
         Self {
             grouped: false,
             lit: None,
             sort: Sort::default(),
             quick: Some(crate::emoji::QUICK),
+            pictures: None,
         }
     }
 }
@@ -435,6 +629,7 @@ pub fn suggested(draft: &Draft, view: View) -> Vec<(&'static str, &'static str)>
 enum Tool {
     Quick(usize),
     Emoji,
+    Picture,
 }
 
 /// Columns a tool takes: an emoji's two and one before the next.
@@ -443,18 +638,21 @@ const TOOL: u16 = 3;
 const TOOL_GAP: u16 = 1;
 
 /// Each tool under a comment being written and the column it starts in: as many of the
-/// quick emoji as leave room for the button after them.
+/// quick emoji as leave room for the buttons after them, where the screen draws emoji, and
+/// the picture's button either way.
 fn tools(area: Rect, view: View) -> Vec<(Tool, u16)> {
-    if view.quick.is_none() {
-        return Vec::new();
-    }
     let width = area.w.saturating_sub(SIDE * 2 + 2);
     let x = area.x + SIDE + 1;
-    let count = (width.saturating_sub(TOOL_GAP + TOOL) / TOOL).min(8);
+    if view.quick.is_none() {
+        return vec![(Tool::Picture, x)];
+    }
+    let count = (width.saturating_sub(TOOL_GAP + TOOL * 2) / TOOL).min(8);
     let mut out: Vec<(Tool, u16)> = (0..count)
         .map(|i| (Tool::Quick(usize::from(i)), x + TOOL * i))
         .collect();
-    out.push((Tool::Emoji, x + TOOL * count + TOOL_GAP.min(count)));
+    let after = x + TOOL * count + TOOL_GAP.min(count);
+    out.push((Tool::Emoji, after));
+    out.push((Tool::Picture, after + TOOL));
     out
 }
 
@@ -463,6 +661,7 @@ fn tool_hint(tool: Tool) -> Option<&'static str> {
     match tool {
         Tool::Quick(_) => None,
         Tool::Emoji => Some("Every emoji. Or type a name between colons, like :tada:"),
+        Tool::Picture => Some("Add a picture. Or paste one, or drop its file here."),
     }
 }
 
@@ -494,9 +693,9 @@ fn suggest_emoji(emoji: &str, measure: &dyn Measure) -> f32 {
 /// Columns between one offered emoji's name and the next emoji.
 const SUGGEST_GAP: f32 = 2.0;
 
-/// Each link in a run of words, as the bytes it takes: `http://` or `https://` to the next
-/// space, without the stop or bracket a sentence puts after it.
-pub fn link_spans(text: &str) -> Vec<(usize, usize)> {
+/// Each web address in a run of words, as the bytes it takes: `http://` or `https://` to the
+/// next space, without the stop or bracket a sentence puts after it.
+pub fn web_spans(text: &str) -> Vec<(usize, usize)> {
     let mut spans = Vec::new();
     let mut from = 0;
     while let Some(found) = text[from..].find("http") {
@@ -522,15 +721,25 @@ pub fn link_spans(text: &str) -> Vec<(usize, usize)> {
     spans
 }
 
-/// Every link a comment holds, in its words and then its replies in order.
-pub fn links(thread: &Thread) -> Vec<String> {
-    let texts =
-        std::iter::once(thread.text.as_str()).chain(thread.replies.iter().map(|r| r.text.as_str()));
-    texts
-        .flat_map(|text| {
-            link_spans(text)
+/// Each thing in a run of words that a click opens, as the bytes it takes: a web address,
+/// or the name of a picture's file. Where a picture stands on its card its name isn't among
+/// the words, so the names left are of pictures that can't be shown.
+pub fn link_spans(text: &str) -> Vec<(usize, usize)> {
+    let mut spans = web_spans(text);
+    spans.extend(picture_spans(text));
+    spans.sort_unstable();
+    spans
+}
+
+/// Every link on a comment's card, in its words and then its answers in order.
+pub fn links(thread: &Thread, view: View) -> Vec<String> {
+    shown_parts(thread, view)
+        .into_iter()
+        .flat_map(|(words, _)| {
+            link_spans(&words)
                 .into_iter()
-                .map(|(start, end)| text[start..end].to_string())
+                .map(|(start, end)| words[start..end].to_string())
+                .collect::<Vec<_>>()
         })
         .collect()
 }
@@ -700,29 +909,30 @@ fn lines(
         let quote = shown_quote(&thread.quote, thread.line, thread.about.as_ref());
         out.push(Line::Quote(id, quote, words));
         let editing = draft.filter(|d| d.thread == Some(id) && d.editing);
+        // Its pictures are counted through its words and then its answers.
+        let mut which = 0;
         match editing {
-            Some(edit) => draft_lines(edit, view, width, measure, &mut out),
+            Some(edit) => {
+                draft_lines(edit, view, width, measure, &mut out);
+                // Its own pictures are still counted, so its answers' keep their places.
+                which += shown(&thread.text, view).1.len();
+            }
             None => {
-                let text = wrap(&shown_words(&thread.text, view), width, measure);
+                let (words, pictures) = shown(&thread.text, view);
+                let text = wrap(&words, width, measure);
                 out.extend(text.into_iter().map(|row| Line::Text(id, row)));
+                picture_lines((id, false), &pictures, &mut which, (view, width), &mut out);
             }
         }
         for reply in &thread.replies {
             // A verdict reads as one: its word on a chip, who said it, then why.
-            let (word, author, body) = match (verdict(&reply.text), rewrite(&reply.text)) {
-                (Some((shown, _, rest)), _) => {
-                    (Some(sentence(shown)), reply.author.clone(), sentence(rest))
-                }
-                (_, Some(words)) => (
-                    None,
-                    format!("{} suggests a rewrite", reply.author),
-                    words.to_string(),
-                ),
-                _ => (None, reply.author.clone(), reply.text.clone()),
-            };
+            let (word, author, body) = reply_parts(reply);
             out.push(Line::Answer(id, word, author));
-            let text = wrap(&shown_words(&body, view), width - INSET * 2.0, measure);
+            let room = width - INSET * 2.0;
+            let (words, pictures) = shown(&body, view);
+            let text = wrap(&words, room, measure);
             out.extend(text.into_iter().map(|row| Line::Reply(id, row)));
+            picture_lines((id, true), &pictures, &mut which, (view, room), &mut out);
         }
         // A suggestion is the agent's own, so there's nothing to wait for.
         let waiting = !suggested && !thread.resolved && thread.waiting_answer();
@@ -763,16 +973,6 @@ fn lines(
         out.push(Line::Gap);
     }
     out
-}
-
-/// A comment's words as the pane shows them: a name between colons as its emoji, where the
-/// screen draws emoji, since an agent's answer may spell one out.
-fn shown_words(text: &str, view: View) -> std::borrow::Cow<'_, str> {
-    if view.quick.is_some() {
-        crate::emoji::expand(text)
-    } else {
-        std::borrow::Cow::Borrowed(text)
-    }
 }
 
 /// What the button for resolved comments says.
@@ -967,7 +1167,28 @@ pub fn hit(
             .map(|(tool, _)| match tool {
                 Tool::Quick(which) => Hit::Quick(which),
                 Tool::Emoji => Hit::Emoji,
+                Tool::Picture => Hit::AddPicture,
             }),
+        Line::Picture {
+            thread,
+            which,
+            name,
+            inset,
+            ..
+        } => {
+            if *thread == DRAFT_PICTURE {
+                return None;
+            }
+            // The picture opens itself; the card beside it goes to the comment's place.
+            let figure = shown.4.pictures.and_then(|pictures| pictures.get(name))?;
+            let (left, (wide, _)) = picture_place(area, figure, *inset);
+            let at = f32::from(x) + 0.5;
+            if at >= left && at < left + wide {
+                Some(Hit::Picture(*thread, *which))
+            } else {
+                Some(Hit::Open(*thread))
+            }
+        }
         Line::Suggest(found) => {
             let at = f32::from(x) + 0.5;
             suggest_spots(area, found, measure)
@@ -1107,7 +1328,7 @@ pub fn draw(
         if let Line::Answer(id, ..) = all[index] {
             let rows = 1 + all[index + 1..]
                 .iter()
-                .take_while(|l| matches!(l, Line::Reply(..)))
+                .take_while(|l| matches!(l, Line::Reply(..) | Line::Picture { inset: true, .. }))
                 .count();
             let (y, height) = (row_y(index), rows as f32);
             if shown(y, height) {
@@ -1183,14 +1404,48 @@ pub fn draw(
                             let x = f32::from(at) + (2.0 - wide) / 2.0;
                             grid.label_at(x, at, y, emoji, inner, at + TOOL, 100);
                         }
-                        Tool::Emoji => {
+                        Tool::Emoji | Tool::Picture => {
                             let colour = if on_it { theme.text.fg } else { raised_muted };
                             let style = Style {
                                 fg: colour,
                                 ..inner
                             };
-                            grid.glyph(f32::from(at), y, Icon::Smile, colour, "☺", style);
+                            let (icon, cells) = if tool == Tool::Emoji {
+                                (Icon::Smile, "☺")
+                            } else {
+                                (Icon::Picture, "▣")
+                            };
+                            grid.glyph(f32::from(at), y, icon, colour, cells, style);
                         }
+                    }
+                }
+            }
+            Line::Picture {
+                name, row, inset, ..
+            } => {
+                // Drawn whole from whichever of its rows is the first in view, and cut at
+                // the pane's edges, which a card scrolled half out of it runs past.
+                let figure = view.pictures.and_then(|pictures| pictures.get(name));
+                if let Some(figure) = figure.filter(|_| *row == 0 || index == top) {
+                    let (left, (wide, tall)) = picture_place(area, figure, *inset);
+                    let above = f32::from(y) - *row as f32;
+                    let bounds = Bounds::cells(left, above + PICTURE_AIR / 2.0, wide, tall);
+                    let clip = Bounds::cells(
+                        f32::from(area.x),
+                        f32::from(area.y),
+                        f32::from(area.w),
+                        f32::from(area.h),
+                    );
+                    grid.paint.push(Paint::Image {
+                        bounds,
+                        clip,
+                        bitmap: figure.bitmap.clone(),
+                        color: theme.text.fg,
+                    });
+                    // A line round it, so a dark picture has an edge on a dark card. Only
+                    // where it's whole: a line can't be cut at the pane's edge as it is.
+                    if *row == 0 && f32::from(y) + tall < f32::from(area.bottom()) {
+                        grid.panel(bounds, 0, None, Some(theme.border));
                     }
                 }
             }
@@ -1328,8 +1583,9 @@ pub fn draw(
                 };
                 let place = (reply_x, text_x + 1, y);
                 draw_linked(grid, place, text, (style, SMALL, right), (measure, theme));
-                // Lifted a little, so the block keeps air above the buttons and below its text.
-                grid.drop_last(-0.12);
+                // Lifted a little, so the block keeps air above the buttons and below its
+                // text: the row and the links drawn over it together.
+                grid.lift_since(from, 0.12);
             }
             Line::File(opens, place, count) => {
                 let from = grid.painted_so_far();
@@ -1629,5 +1885,90 @@ mod tests {
     #[test]
     fn a_long_word_stays_whole() {
         assert_eq!(wrap("abcdefghij", 4.0, &CellMeasure), ["abcdefghij"]);
+    }
+
+    fn words_at<'t>(text: &'t str, spans: &[(usize, usize)]) -> Vec<&'t str> {
+        spans
+            .iter()
+            .map(|(start, end)| &text[*start..*end])
+            .collect()
+    }
+
+    #[test]
+    fn a_word_that_ends_as_a_pictures_file_does_names_a_picture() {
+        let text = "See (shots/a.PNG), then \"b c.jpg\" and .cellix/pasted/p-1.webp. Not a.txt";
+        let named = words_at(text, &picture_spans(text));
+        assert_eq!(named, ["shots/a.PNG", "c.jpg", ".cellix/pasted/p-1.webp"]);
+        // A web address is a link wherever it leads, and an ending alone names nothing.
+        let text = "https://example.com/a.png .png and folder/.gif";
+        assert!(picture_spans(text).is_empty());
+        assert_eq!(
+            words_at(text, &link_spans(text)),
+            ["https://example.com/a.png"]
+        );
+        // Both are links to a click, in the order they're written.
+        let text = "a.png https://x.org/y b.svg";
+        let links = words_at(text, &link_spans(text));
+        assert_eq!(links, ["a.png", "https://x.org/y", "b.svg"]);
+    }
+
+    #[test]
+    fn a_picture_that_is_shown_leaves_the_words_and_one_that_is_not_stays() {
+        let figure = crate::rendered::Figure {
+            bitmap: cellix_render::Bitmap {
+                id: 1,
+                width: 40,
+                height: 20,
+                kind: cellix_render::Pixels::Rgba,
+                pixels: std::sync::Arc::new(vec![0; 40 * 20 * 4]),
+            },
+            width: 4.0,
+            height: 1.0,
+            baseline: 0.0,
+        };
+        let mut pictures = Pictures::new();
+        pictures.insert("a.png".to_string(), figure.clone());
+        let view = View {
+            pictures: Some(&pictures),
+            ..View::default()
+        };
+        let (words, held) = shown("Look a.png here, and b.png :+1:", view);
+        assert_eq!(words, "Look here, and b.png 👍");
+        assert_eq!(held, ["a.png"]);
+        let (words, held) = shown("Look\na.png", view);
+        assert_eq!((words.as_ref(), held.len()), ("Look", 1));
+        // With no pictures to show, every name stays where it was written.
+        let (words, held) = shown("Look a.png", View::default());
+        assert_eq!((words.as_ref(), held.len()), ("Look a.png", 0));
+        // A picture keeps its shape, at its own size where that fits and smaller where not.
+        assert_eq!(picture_size(&figure, 40.0), (4.0, 1.0));
+        assert_eq!(picture_size(&figure, 2.0), (2.0, 0.5));
+        let tall = crate::rendered::Figure {
+            width: 10.0,
+            height: 32.0,
+            ..figure
+        };
+        assert_eq!(picture_size(&tall, 40.0), (2.5, 8.0));
+    }
+
+    /// An answer that begins with a link or a file's name keeps its spelling, and its links
+    /// are counted as its card shows them, so a click opens the one under it.
+    #[test]
+    fn an_answers_links_are_counted_as_its_card_shows_them() {
+        let fields =
+            r#""id":3,"file":"a.txt","line":1,"quote":"q","text":"See https://a.example/x""#;
+        let mut thread: Thread = serde_json::from_str(&format!("{{{fields}}}")).unwrap();
+        thread.replies.push(Reply {
+            author: "Claude".to_string(),
+            text: "Agree: https://b.example/y and plot.png".to_string(),
+        });
+        let found = links(&thread, View::default());
+        assert_eq!(
+            found,
+            ["https://a.example/x", "https://b.example/y", "plot.png"]
+        );
+        let (_, _, body) = reply_parts(&thread.replies[0]);
+        assert_eq!(body, "https://b.example/y and plot.png");
+        assert_eq!(sentence("yes, it does"), "Yes, it does");
     }
 }

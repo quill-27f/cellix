@@ -219,7 +219,10 @@ impl Picker {
     /// A picker dropping from `at`, or standing over it where the screen ends first.
     pub fn new(at: (u16, u16), screen: Rect, first: &[&'static str]) -> Self {
         let (width, height) = Self::size();
-        let x = at.0.min(screen.right().saturating_sub(width)).max(screen.x);
+        // A column clear of the screen's edge, so its own edge and shadow show.
+        let x =
+            at.0.min(screen.right().saturating_sub(width + 1))
+                .max(screen.x);
         let y = if at.1 + height > screen.bottom() {
             at.1.saturating_sub(height + 1).max(screen.y)
         } else {
@@ -615,7 +618,7 @@ mod tests {
         let screen = Rect::new(0, 0, 80, 24);
         let picker = Picker::new((78, 20), screen, &QUICK);
         let area = picker.area();
-        assert!(area.right() <= 80 && area.bottom() <= 24, "{area:?}");
+        assert!(area.right() < 80 && area.bottom() <= 24, "{area:?}");
         let mut picker = Picker::new((10, 2), screen, &QUICK);
         for _ in 0..30 {
             picker.key(Key::Down);

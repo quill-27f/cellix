@@ -632,6 +632,39 @@ fn load_image(path: &Path, cell: (u32, u32), fit: Fit) -> Option<Figure> {
     Some(sized(figure, fit))
 }
 
+/// A picture read small, to stand on a comment's card: no wider than `columns` and no taller
+/// than `rows`, in its own shape.
+pub(crate) fn thumbnail(
+    path: &Path,
+    cell: (u32, u32),
+    (columns, rows): (f32, f32),
+) -> Option<Figure> {
+    let figure = load_image(path, cell, Fit::AtMost(columns))?;
+    let tall = ((rows * cell.1 as f32) as u32).max(1);
+    let (width, height) = (figure.bitmap.width, figure.bitmap.height);
+    if height <= tall {
+        return Some(figure);
+    }
+    let pixels = figure.bitmap.pixels.as_ref().clone();
+    let image = image::RgbaImage::from_raw(width, height, pixels)?;
+    let across = (width * tall / height).max(1);
+    let small = image::imageops::thumbnail(&image, across, tall);
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (figure.bitmap.id, across, tall).hash(&mut hasher);
+    Some(Figure {
+        bitmap: Bitmap {
+            id: hasher.finish(),
+            width: across,
+            height: tall,
+            kind: Pixels::Rgba,
+            pixels: Arc::new(small.into_raw()),
+        },
+        width: across as f32 / cell.0 as f32,
+        height: tall as f32 / cell.1 as f32,
+        baseline: 0.0,
+    })
+}
+
 /// Stands a figure at the width the document asks for, keeping its shape.
 fn sized(mut figure: Figure, fit: Fit) -> Figure {
     if let Fit::Exactly(cells) = fit {

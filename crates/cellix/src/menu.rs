@@ -54,6 +54,10 @@ pub enum Action {
     ChooseImage,
     PasteImage,
     TypeImagePath,
+    /// Adds a picture to the comment being written: one of the project's, or the
+    /// clipboard's.
+    AttachPicture,
+    AttachClipboard,
     /// Adds a new diagram from a template.
     Diagram(usize),
     /// Adds a drawing to a paper from a template.

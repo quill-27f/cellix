@@ -39,6 +39,8 @@ pub enum Item {
     Citation(String, String),
     /// A picture, how it's shown, and whether it takes the place of the one at the caret.
     Image(PathBuf, String, bool),
+    /// A picture to add to the comment being written, and how it's shown.
+    Attach(PathBuf, String),
     /// A folder to open as a workspace, as it's written, and a word about it.
     Folder(PathBuf, String, &'static str),
     /// A symbol to go to, in this file or elsewhere in the workspace.
@@ -138,6 +140,7 @@ impl Item {
         match self {
             Self::File(_, label)
             | Self::Image(_, label, _)
+            | Self::Attach(_, label)
             | Self::Folder(_, label, _)
             | Self::Recent(_, label, _) => label,
             Self::Command(label, _) => label,
@@ -153,9 +156,12 @@ impl Item {
     /// What sits at the right of the row.
     fn keys(&self) -> Option<&str> {
         match self {
-            Self::File(..) | Self::Image(..) | Self::NewBranch | Self::Gap | Self::Recent(..) => {
-                None
-            }
+            Self::File(..)
+            | Self::Image(..)
+            | Self::Attach(..)
+            | Self::NewBranch
+            | Self::Gap
+            | Self::Recent(..) => None,
             Self::Command(_, command) => keys_of(*command),
             Self::Branch(_, when) | Self::Citation(_, when) | Self::Git(_, when, _) => Some(when),
             Self::Folder(_, _, note) => (!note.is_empty()).then_some(note),

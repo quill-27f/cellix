@@ -125,6 +125,11 @@ pub struct CellMeasure;
 
 impl Measure for CellMeasure {
     fn advances(&self, text: &str, _font: Font) -> Rc<Vec<f32>> {
+        // Plain text, which is nearly all of it, is a column a letter.
+        if text.is_ascii() {
+            let column = |byte: u8| f32::from(u8::from(!byte.is_ascii_control()));
+            return Rc::new(text.bytes().map(column).collect());
+        }
         // By what reads as one letter, as the grid places them: an emoji made of several
         // code points takes its two columns once, on its first.
         let mut out = Vec::with_capacity(text.len());

@@ -212,6 +212,21 @@ box on many machines; one typed by name is taken whatever its age. A name an age
 an answer shows as its emoji. Where the screen can't draw emoji (painted text on a machine with
 no emoji font) none of this shows and names stay as typed.
 
+A picture is in a comment as a word of it: its path from the project's root, which is what an
+agent reads and can open, so nothing about a comment's shape changed. It gets there while the
+comment is written: pasted through the terminal, dropped as a file (which arrives as its path),
+with Paste's key when the clipboard holds a picture and no words, or from the picture button under
+the words, which offers the project's pictures and the clipboard's. One from outside the project,
+or with a space in its path, is copied in under `.cellix/pasted`, out of git, with its spaces
+closed up; one of the project's own is named where it is. A word names a picture when it ends as
+a picture's file does (png, jpg, jpeg, gif, webp, svg) and isn't a web address. Where the screen
+shows pictures the card takes the name out of the words and stands the picture under them, at its
+own size up to the card's width and eight rows, with a line round it, on an answer as on the
+comment, and under the words being written too; a click on it opens it in the Preview. It's read
+small once and again when its file changes, so a picture an agent makes after naming it shows
+when it's there. Where the screen can't, or the file is missing, the name stays in the words as
+a link that opens it.
+
 Whatever can be seen can be talked about. A selection, in code or on a page, gets Comment and Ask
 Agent beside it, each naming in brackets the keys that do the same as they're set now (Alt+C and
 Alt+A unless changed), and a picture, diagram or formula gets a Comment button under the pointer. Comments

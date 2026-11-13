@@ -228,6 +228,8 @@ fn main() {
             mods: Mods::default(),
         }));
     }
+    // What the app does between events, such as reading the pictures its comments name.
+    app.handle(Event::Tick);
     let mut grid = Grid::new(size.0, size.1, app.background());
     app.draw(&mut grid);
 

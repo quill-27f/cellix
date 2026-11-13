@@ -288,6 +288,13 @@ as you type the second colon, and part of a name, such as `:roc`, lists the ones
 for the first. The eight you used last stand under a comment while you write it, and the face after
 them opens every emoji, searched by name.
 
+Comments take pictures too. While you write one, paste a picture, drop its file on the window, press
+Ctrl+V with one on the clipboard, or click the picture button under your words for one from the
+project or the clipboard. The picture is kept in the project under `.cellix/pasted`, out of git, and
+the comment names it by its path, which is how the agent finds it. On its card the picture stands
+under your words, and a click opens it in the Preview; in a terminal without pictures its name is a
+link that does the same.
+
 The icons at the top right start a real agent, a terminal or a browser in the side pane, beside your file. Press Ctrl+` to
 move the keyboard between the two, and the hide-pane icon at the top right, or Ctrl+Shift+`, to hide
 the pane. Hidden, it leaves a button in the same place that shows it again as it was, filling the

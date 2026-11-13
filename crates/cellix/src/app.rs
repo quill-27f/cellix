@@ -812,8 +812,15 @@ fn store(key: &str, value: serde_json::Value) -> String {
 /// Where pictures added to a document go, beside it.
 const IMAGE_FOLDER: &str = "images";
 
+/// The most columns and rows a picture on a comment's card is read at.
+const THUMBNAIL: (f32, f32) = (64.0, 8.0);
+
 /// Saves the clipboard's picture to the file named last, on this platform.
 fn clipboard_image_command() -> Vec<String> {
+    // A test that pastes names a stand-in: none reads the clipboard of whoever runs it.
+    if cfg!(test) {
+        return vec!["false".to_string()];
+    }
     let script = if cfg!(target_os = "macos") {
         "osascript -e 'on run {path}' -e 'set out to open for access POSIX file path with write permission' \
          -e 'write (the clipboard as «class PNGf») to out' -e 'close access out' -e 'end run' \"$1\""
@@ -925,6 +932,38 @@ fn keep_pasted(folder: &Path, bytes: &[u8], mime: &str, ignored: bool) -> io::Re
     }
     std::fs::write(&path, data)?;
     Ok(path)
+}
+
+/// Copies a picture into `folder`, which is kept out of git, under its own name with any
+/// spaces closed up, and says where it is. One already there under that name and of that
+/// size is taken to be the same picture; another gets a number after its name.
+fn keep_copy(folder: &Path, picture: &Path) -> io::Result<PathBuf> {
+    std::fs::create_dir_all(folder)?;
+    let ignore = folder.join(".gitignore");
+    if !ignore.exists() {
+        std::fs::write(&ignore, "*\n")?;
+    }
+    let size = picture.metadata()?.len();
+    let name = picture.file_name().ok_or(io::ErrorKind::InvalidInput)?;
+    let name: Vec<String> = name
+        .to_string_lossy()
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
+    let name = PathBuf::from(name.join("-"));
+    let stem = name.file_stem().unwrap_or_default().to_string_lossy();
+    let ending = name.extension().unwrap_or_default().to_string_lossy();
+    let mut target = folder.join(&name);
+    let mut n = 2;
+    while target.exists() {
+        if target.metadata().is_ok_and(|kept| kept.len() == size) {
+            return Ok(target);
+        }
+        target = folder.join(format!("{stem}-{n}.{ending}"));
+        n += 1;
+    }
+    std::fs::copy(picture, &target)?;
+    Ok(target)
 }
 
 fn dropped_image(text: &str) -> Option<PathBuf> {
@@ -1208,6 +1247,11 @@ pub struct App {
     comment_sort: threads::Sort,
     /// The emoji put in comments, the last first, so the ones reached for stand ready.
     emoji_used: Vec<&'static str>,
+    /// The pictures the comments in view name, read small to stand on their cards, by the
+    /// word that names each; and when each one's file was last changed, None for a file
+    /// that isn't there, so it's read again only when that changes.
+    comment_pictures: threads::Pictures,
+    picture_stamps: HashMap<String, Option<std::time::SystemTime>>,
     /// The session that was in front when the last run here ended.
     kept_session: Option<String>,
     /// Whether how the two sides work together has been said yet.
@@ -1377,6 +1421,8 @@ impl App {
             lit_range: None,
             comment_sort: threads::Sort::Document,
             emoji_used: Vec::new(),
+            comment_pictures: threads::Pictures::new(),
+            picture_stamps: HashMap::new(),
             kept_session: None,
             kernels: HashMap::new(),
             kernel_command: None,
@@ -3990,6 +4036,7 @@ impl App {
             editor.renumber_lists();
         }
         self.follow_threads();
+        self.refresh_comment_pictures();
         self.after_event(had_keys);
     }
 
@@ -3998,8 +4045,13 @@ impl App {
             picker.paste(text);
             return;
         }
-        if let Some(draft) = &mut self.dock.draft {
-            crate::field::insert(&mut draft.text, &mut draft.caret, text);
+        if self.dock.draft.is_some() {
+            // A picture's file dropped on the terminal arrives as its path.
+            if let Some(path) = dropped_image(text) {
+                self.attach_picture(&path);
+            } else if let Some(draft) = &mut self.dock.draft {
+                crate::field::insert(&mut draft.text, &mut draft.caret, text);
+            }
             return;
         }
         if self.source.focused {
@@ -4053,6 +4105,15 @@ impl App {
     /// path, which an agent attaches as an image. A kind agents don't read, such as the TIFF a
     /// Mac screenshot can be, is kept as PNG.
     pub fn paste_picture(&mut self, bytes: &[u8], mime: &str) {
+        // Into the comment being written, where it stands on the card once it's sent.
+        if self.dock.draft.is_some() && matches!(self.overlay, Overlay::None) {
+            let folder = self.workspace.root().join(PASTED);
+            match keep_pasted(&folder, bytes, mime, true) {
+                Ok(path) => self.attach_picture(&path),
+                Err(e) => self.say(format!("Could not keep the pasted picture: {e}")),
+            }
+            return;
+        }
         let to_page = self.on_page()
             && !self.dock.focused
             && self.dock.draft.is_none()
@@ -4083,6 +4144,8 @@ impl App {
             self.inbox.drop_key(&format!("ask:{session}"));
         }
         self.keep_state();
+        // An agent's answer, or a picture it has only now made, arrives between events.
+        self.refresh_comment_pictures();
         if let Some(view) = &mut self.dock.pdf {
             view.refresh();
         }
@@ -4296,6 +4359,13 @@ impl App {
 
     /// Types into the comment being written. Returns true if there is one.
     fn draft_key(&mut self, key: KeyEvent) -> bool {
+        if self.dock.draft.is_none() {
+            return false;
+        }
+        if self.workflow.keys.command(key) == Some(Command::Paste) {
+            self.paste_into_draft();
+            return true;
+        }
         let Some(draft) = &mut self.dock.draft else {
             return false;
         };
@@ -6565,6 +6635,7 @@ impl App {
             }
             Some(Item::NewBranch) => self.ask("New branch", PromptAction::NewBranch),
             Some(Item::Image(path, _, replacing)) => self.place_image(&path, replacing),
+            Some(Item::Attach(path, _)) => self.attach_picture(&path),
             Some(Item::Citation(key, _)) => {
                 let area = self.focused_area();
                 if let Some(editor) = self.editor_mut() {
@@ -8969,6 +9040,9 @@ impl App {
                     Some(ThreadHit::Sort) => self.show_sort_menu((screen.x + 2, y + 1)),
                     // Every emoji, in a panel dropping from its button.
                     Some(ThreadHit::Emoji) => self.show_emoji((x.saturating_sub(1), y + 1)),
+                    Some(ThreadHit::AddPicture) => {
+                        self.show_picture_menu((x.saturating_sub(1), y + 1));
+                    }
                     Some(hit) => self.thread_hit(hit),
                     None => {}
                 }
@@ -10086,12 +10160,182 @@ impl App {
 
     /// How the Comments pane shows its list: under headings or not, which is lit, and in
     /// what order.
-    fn comments_view(&self) -> threads::View {
+    fn comments_view(&self) -> threads::View<'_> {
         threads::View {
             grouped: self.comments_grouped(),
             lit: self.lit_thread,
             sort: self.comment_sort,
             quick: self.quick_emoji(),
+            pictures: self.measure.cell_pixels().map(|_| &self.comment_pictures),
+        }
+    }
+
+    /// The file a comment's words name as a picture: from the project's root, unless the
+    /// path is whole or starts at home.
+    fn comment_picture_path(&self, name: &str) -> PathBuf {
+        if let Some(rest) = name.strip_prefix("~/")
+            && let Some(home) = std::env::var_os("HOME")
+        {
+            return PathBuf::from(home).join(rest);
+        }
+        self.workspace.root().join(name)
+    }
+
+    /// Reads the pictures the comments in view name, to stand on their cards: those not
+    /// read yet, and any whose file has changed since. Only where the screen shows pictures
+    /// and the Comments pane is the one in front.
+    fn refresh_comment_pictures(&mut self) {
+        let Some(cell) = self.measure.cell_pixels() else {
+            return;
+        };
+        if !self.dock.open || self.dock.front != Front::Comments {
+            return;
+        }
+        let mut names: Vec<String> = Vec::new();
+        let mut note = |text: &str| {
+            let spans = threads::picture_spans(text);
+            names.extend(
+                spans
+                    .into_iter()
+                    .map(|(start, end)| text[start..end].to_string()),
+            );
+        };
+        for thread in self.shown_threads().0 {
+            note(&thread.text);
+            thread.replies.iter().for_each(|reply| note(&reply.text));
+        }
+        if let Some(draft) = &self.dock.draft {
+            note(&draft.text);
+        }
+        names.sort();
+        names.dedup();
+        for name in names {
+            let path = self.comment_picture_path(&name);
+            let stamp = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+            if self.picture_stamps.get(&name) == Some(&stamp) {
+                continue;
+            }
+            self.picture_stamps.insert(name.clone(), stamp);
+            let read = stamp.and_then(|_| crate::rendered::thumbnail(&path, cell, THUMBNAIL));
+            match read {
+                Some(figure) => self.comment_pictures.insert(name, figure),
+                None => self.comment_pictures.remove(&name),
+            };
+        }
+    }
+
+    /// Puts a picture in the comment being written, as its path from the project's root:
+    /// what its card shows it from, and what the agent is told. One from outside the
+    /// project, or with a space in its path, is copied in among the pasted ones first.
+    fn attach_picture(&mut self, path: &Path) {
+        let root = self.workspace.root().to_path_buf();
+        let spaced = |inside: &Path| inside.to_string_lossy().contains(char::is_whitespace);
+        let inside = path
+            .strip_prefix(&root)
+            .ok()
+            .filter(|inside| !spaced(inside))
+            .map(Path::to_path_buf);
+        let inside = match inside.map_or_else(|| keep_copy(&root.join(PASTED), path), Ok) {
+            Ok(kept) => kept
+                .strip_prefix(&root)
+                .map_or(kept.clone(), Path::to_path_buf),
+            Err(e) => {
+                self.say(format!("Could not add the picture: {e}"));
+                return;
+            }
+        };
+        let name = inside
+            .to_string_lossy()
+            .replace(std::path::MAIN_SEPARATOR, "/");
+        let Some(draft) = &mut self.dock.draft else {
+            return;
+        };
+        let caret = draft.caret.min(draft.text.len());
+        let joined = draft.text[..caret]
+            .chars()
+            .next_back()
+            .is_some_and(|before| !before.is_whitespace());
+        let lead = if joined { " " } else { "" };
+        crate::field::insert(&mut draft.text, &mut draft.caret, &format!("{lead}{name} "));
+        self.say(format!("Added {name} to the comment"));
+    }
+
+    /// Takes the picture on the clipboard into the comment being written. Returns whether
+    /// there was one.
+    fn attach_clipboard_picture(&mut self) -> bool {
+        let folder = self.workspace.root().join(PASTED);
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let mut target = folder.join(format!("pasted-{stamp}.png"));
+        let mut n = 2;
+        while target.exists() {
+            target = folder.join(format!("pasted-{stamp}-{n}.png"));
+            n += 1;
+        }
+        let ignore = folder.join(".gitignore");
+        let ready = std::fs::create_dir_all(&folder).is_ok()
+            && (ignore.exists() || std::fs::write(&ignore, "*\n").is_ok());
+        let saved = ready
+            && ran_well(&self.clipboard_image, &target.display().to_string())
+            && target.metadata().is_ok_and(|m| m.len() > 0);
+        if saved {
+            self.attach_picture(&target);
+        } else {
+            let _ = std::fs::remove_file(&target);
+        }
+        saved
+    }
+
+    /// Paste, while a comment is being written: the clipboard's words, or its picture when
+    /// it holds none.
+    fn paste_into_draft(&mut self) {
+        // Over SSH the clipboard a tool here can read is the far machine's, not the one
+        // the picture was copied on: there a picture comes through the terminal's own paste.
+        if let Some(text) = system_clipboard() {
+            self.paste(&text);
+        } else if self.over_ssh || !self.attach_clipboard_picture() {
+            let text = self.clipboard.clone();
+            self.paste(&text);
+        }
+    }
+
+    /// Where a picture for the comment being written comes from, in a list dropping from
+    /// its button.
+    fn show_picture_menu(&mut self, at: (u16, u16)) {
+        let items = vec![
+            MenuItem::new("From This Project…", MenuAction::AttachPicture),
+            MenuItem::new("Paste from Clipboard", MenuAction::AttachClipboard),
+        ];
+        self.show_menu(at, items);
+    }
+
+    /// Lists the project's pictures, to add one to the comment being written.
+    fn choose_comment_picture(&mut self) {
+        let items: Vec<Item> = self
+            .workspace
+            .files()
+            .into_iter()
+            .filter(|path| is_image(path))
+            .map(|path| {
+                let label = self.relative(&path);
+                Item::Attach(path, label)
+            })
+            .collect();
+        if items.is_empty() {
+            self.say("No pictures in this project yet: paste one, or drop its file here");
+            return;
+        }
+        self.overlay = Overlay::Palette(Palette::asking(items, "Picture"));
+    }
+
+    /// Opens a picture a comment names, where it can be seen whole.
+    fn open_comment_picture(&mut self, name: &str) {
+        let path = self.comment_picture_path(name);
+        if !path.is_file() {
+            self.say(format!("There's no picture at {name}"));
+        } else if let Err(e) = self.open(&path) {
+            self.say(format!("Could not open {name}: {e}"));
         }
     }
 
@@ -10392,13 +10636,33 @@ impl App {
             }
             ThreadHit::Check => self.check_review(),
             ThreadHit::Link(id, index) => {
+                let view = self.comments_view();
                 let link = self
                     .threads
                     .iter()
                     .find(|t| t.id == id)
-                    .and_then(|t| threads::links(t).into_iter().nth(index));
-                if let Some(link) = link {
-                    self.open_page(link);
+                    .and_then(|t| threads::links(t, view).into_iter().nth(index));
+                match link {
+                    Some(link) if link.contains("://") => self.open_page(link),
+                    // A picture's name, where the picture itself can't stand on the card.
+                    Some(name) => self.open_comment_picture(&name),
+                    None => {}
+                }
+            }
+            ThreadHit::Picture(id, which) => {
+                let view = self.comments_view();
+                let name = self
+                    .threads
+                    .iter()
+                    .find(|t| t.id == id)
+                    .and_then(|t| threads::pictures_of(t, view).into_iter().nth(which));
+                if let Some(name) = name {
+                    self.open_comment_picture(&name);
+                }
+            }
+            ThreadHit::AddPicture => {
+                if let Some(panel) = self.dock_panel() {
+                    self.show_picture_menu((panel.x + 2, panel.y + 4));
                 }
             }
             ThreadHit::Sort => {
@@ -12797,6 +13061,17 @@ impl App {
             }
             MenuAction::ReplaceImage => self.choose_image(true),
             MenuAction::PasteImage => self.paste_image(),
+            MenuAction::AttachPicture => self.choose_comment_picture(),
+            MenuAction::AttachClipboard => {
+                if self.over_ssh {
+                    self.say(
+                        "Over SSH the clipboard here is the far machine's: paste the picture \
+                         in your terminal, or drop its file on the window",
+                    );
+                } else if !self.attach_clipboard_picture() {
+                    self.say("There's no picture on the clipboard");
+                }
+            }
             MenuAction::ChooseImage => self.choose_image(false),
             MenuAction::TypeImagePath => {
                 self.overlay = Overlay::Prompt(Prompt {
@@ -21982,6 +22257,158 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         app.paste_picture(&png, "image/png");
         let count = fs::read_dir(&folder).unwrap().count();
         assert_eq!(count, 4, "three pictures and the .gitignore");
+    }
+
+    /// A picture gets into a comment as it's written four ways: pasted through the terminal,
+    /// dropped as a file, taken from the clipboard with Paste's key, and picked from the
+    /// project with the button under the words. Each is in the project by then, and written
+    /// into the words by its path from the root. On its card it stands under the words, in
+    /// place of its name, and a click on it opens it.
+    #[test]
+    fn a_picture_in_a_comment_is_kept_in_the_project_and_stands_on_its_card() {
+        let (dir, mut app) = picture_page("words here\n");
+        let png = fs::read(dir.path().join("plot.png")).unwrap();
+        let draft = |app: &App| app.dock.draft.as_ref().unwrap().text.clone();
+        app.run(Command::AddComment);
+        typed(&mut app, "Like this");
+        // Pasted through the terminal: kept among the pasted ones, out of git.
+        app.paste_picture(&png, "image/png");
+        let text = draft(&app);
+        assert!(
+            text.starts_with("Like this .cellix/pasted/pasted-"),
+            "{text}"
+        );
+        assert!(text.ends_with(".png "), "{text}");
+        let pasted = text.trim_start_matches("Like this ").trim().to_string();
+        assert!(dir.path().join(&pasted).is_file());
+        let ignore = dir.path().join(PASTED).join(".gitignore");
+        assert_eq!(fs::read_to_string(ignore).unwrap(), "*\n");
+        // While it's written its picture is already in view, under the words.
+        app.handle(Event::Key(KeyEvent::plain(Key::Char('!'))));
+        assert_eq!(pictures(&app).len(), 1, "{}", painted_text(&app));
+        // Dropped as a file from outside the project: copied in, its spaces closed up.
+        let outside = tempfile::tempdir().unwrap();
+        let far = outside.path().join("my shot.png");
+        fs::copy(dir.path().join("plot.png"), &far).unwrap();
+        app.handle(Event::Paste(far.display().to_string().replace(' ', "\\ ")));
+        let text = draft(&app);
+        assert!(text.ends_with("! .cellix/pasted/my-shot.png "), "{text}");
+        assert!(dir.path().join(PASTED).join("my-shot.png").is_file());
+        // The clipboard's picture, by Paste's key, from a stand-in for the clipboard.
+        let source = dir.path().join("plot.png");
+        app.clipboard_image = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            format!("cp '{}' \"$1\"", source.display()),
+            "clipboard".to_string(),
+        ];
+        app.handle(Event::Key(KeyEvent::ctrl('v')));
+        assert_eq!(
+            draft(&app).matches(".cellix/pasted/").count(),
+            3,
+            "{}",
+            draft(&app)
+        );
+        // One of the project's own, from the button under the words: written as where it
+        // is, and not copied.
+        let grid = screen(&app);
+        let (_, hint) = find(&grid, "Enter sends.");
+        let x = column_of(&grid, hint - 1, "▣");
+        app.handle(mouse(MouseKind::Left, x, hint - 1));
+        let (x, y) = find(&screen(&app), "From This");
+        app.handle(mouse(MouseKind::Left, x + 2, y));
+        assert!(matches!(app.overlay, Overlay::Palette(_)));
+        typed(&mut app, "plot");
+        enter(&mut app);
+        assert!(draft(&app).ends_with(" plot.png "), "{}", draft(&app));
+        enter(&mut app);
+        let saved = app.threads[0].text.clone();
+        assert_eq!(saved.matches(".png").count(), 4, "{saved}");
+        // On the card stand the four pictures, and their names aren't among the words.
+        let text = painted_text(&app);
+        assert!(text.lines().any(|line| line == "Like this !"), "{text}");
+        assert!(!text.contains("pasted"), "{text}");
+        let shown = pictures(&app);
+        assert_eq!(shown.len(), 4, "{text}");
+        // Each under the one before, clear of it.
+        for pair in shown.windows(2) {
+            assert!(pair[1].y >= pair[0].y + pair[0].h, "{shown:?}");
+        }
+        // A click on one opens it where it can be seen whole.
+        let unit = cellix_render::UNIT;
+        let last = shown[3];
+        let (x, y) = ((last.x + last.w / 2) / unit, (last.y + last.h / 2) / unit);
+        app.handle(mouse(MouseKind::Left, x as u16, y as u16));
+        app.handle(mouse(MouseKind::Up, x as u16, y as u16));
+        assert_eq!(app.dock.front, Front::Pdf);
+        let opened = app.dock.pdf.as_ref().map(|view| view.path.clone());
+        assert_eq!(opened, Some(dir.path().join("plot.png")));
+    }
+
+    /// A link in an answer is drawn over its own letters. An answer's words are lifted a
+    /// little in their block, and the link used to be lifted without them, so it stood
+    /// twice, one a little above the other.
+    #[test]
+    fn a_link_in_an_answer_is_drawn_on_its_own_letters() {
+        let (_dir, mut app) = picture_page("words here\n");
+        let fields = r#""id":2,"file":"note.md","line":1,"quote":"words","text":"Why?""#;
+        app.threads = vec![serde_json::from_str(&format!("{{{fields}}}")).unwrap()];
+        app.threads[0].replies.push(Reply {
+            author: "Claude".to_string(),
+            text: "See https://example.com/a for why".to_string(),
+        });
+        app.run(Command::ShowComments);
+        let grid = screen(&app);
+        let rows: Vec<(i32, &str)> = grid
+            .paint
+            .iter()
+            .filter_map(|paint| match paint {
+                cellix_render::Paint::Text { y, text, .. } => Some((*y, text.as_str())),
+                _ => None,
+            })
+            .filter(|(_, text)| text.contains("https://example.com/a"))
+            .collect();
+        assert_eq!(rows.len(), 2, "the row, and the link over it: {rows:?}");
+        assert_eq!(rows[0].0, rows[1].0, "one is lifted without the other");
+    }
+
+    /// Where the screen can't show pictures, one a comment names is a link, in the accent
+    /// and underlined, that opens it; and an answer's first word keeps its spelling when
+    /// it's a file's name.
+    #[test]
+    fn without_pictures_a_comments_picture_is_a_link_that_opens_it() {
+        let (dir, mut app) = project();
+        app.show_sidebar = false;
+        let image = image::RgbaImage::from_pixel(8, 4, image::Rgba([20, 30, 200, 255]));
+        image.save(dir.path().join("shot.png")).unwrap();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        let fields =
+            r#""id":7,"file":"alpha.txt","line":1,"quote":"first","text":"See shot.png, here""#;
+        app.threads = vec![serde_json::from_str(&format!("{{{fields}}}")).unwrap()];
+        app.threads[0].replies.push(Reply {
+            author: "Claude".to_string(),
+            text: "Agree: shot.png shows it".to_string(),
+        });
+        app.run(Command::ShowComments);
+        let grid = screen(&app);
+        let (x, y) = find(&grid, "shot.png, here");
+        let style = grid.cell(x + 2, y).style;
+        assert_eq!(style.fg, app.theme.accent);
+        assert!(style.underline);
+        assert_ne!(
+            grid.cell(x + 8, y).style.fg,
+            app.theme.accent,
+            "the comma isn't its"
+        );
+        assert!(grid.text().contains("shot.png shows it"), "{}", grid.text());
+        assert!(pictures(&app).is_empty(), "nothing to show a picture with");
+        // The answer's link is the comment's second, and opens the same file.
+        let (x, y) = find(&grid, "shot.png shows it");
+        app.handle(mouse(MouseKind::Left, x + 2, y));
+        app.handle(mouse(MouseKind::Up, x + 2, y));
+        assert_eq!(app.dock.front, Front::Pdf);
+        let opened = app.dock.pdf.as_ref().map(|view| view.path.clone());
+        assert_eq!(opened, Some(dir.path().join("shot.png")));
     }
 
     #[test]
