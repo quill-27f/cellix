@@ -2,6 +2,12 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
+## [Unreleased]
+
+### Added
+- Click text that has a comment and its card is lit in the Comments tab, which scrolls to it.
+- The Comments tab can list in the document's order, newest first or oldest first. The order is on a row under the kinds; click it to change it.
+
 ## [0.6.8] - 2026-11-13
 
 ### Changed

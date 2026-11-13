@@ -49,6 +49,8 @@ pub(crate) const SMALL: u8 = 85;
 /// What a click in the panel lands on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hit {
+    /// Asks which order to list the comments in.
+    Sort,
     Open(u32),
     Reply(u32),
     Ask(u32),
@@ -95,6 +97,8 @@ pub fn verdict(text: &str) -> Option<(&'static str, &str, &str)> {
 
 /// One row of the panel.
 enum Line {
+    /// The order the comments are listed in, which a press changes.
+    Sort,
     /// Nothing open; true when there are resolved comments to show.
     Empty(bool),
     /// The button that asks the agent to check the review, after how many comments are the
@@ -340,8 +344,60 @@ pub type Shown<'a> = (
     Option<&'a Draft>,
     &'a str,
     (usize, bool),
-    bool,
+    View,
 );
+
+/// The order the pane lists comments in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Sort {
+    /// As they stand in the document, top to bottom, a file at a time.
+    #[default]
+    Document,
+    /// The last one made first.
+    Newest,
+    /// The first one made first.
+    Oldest,
+}
+
+impl Sort {
+    pub const ALL: [Sort; 3] = [Sort::Document, Sort::Newest, Sort::Oldest];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Sort::Document => "Document order",
+            Sort::Newest => "Newest first",
+            Sort::Oldest => "Oldest first",
+        }
+    }
+}
+
+/// How the pane shows what it lists: whether each file's stand under a heading, the comment
+/// lit because its text was pressed in the document, and the order they're in.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct View {
+    pub grouped: bool,
+    pub lit: Option<u32>,
+    pub sort: Sort,
+}
+
+/// The order's control at the start of the summary row: where its words start, the cell
+/// they start in, and how many columns it takes with its chevron.
+fn sort_control(area: Rect, sort: Sort, measure: &dyn Measure) -> (f32, u16, u16) {
+    let x = area.x + SIDE;
+    let words = measure.width(sort.label(), small());
+    (f32::from(x), x, (words + SORT_CHEVRON + 0.6).ceil() as u16)
+}
+
+/// Columns the chevron after the order's name takes, with its gap.
+const SORT_CHEVRON: f32 = 1.4;
+
+/// The row of the list a comment's card starts on, to scroll the pane to it.
+pub fn top_of(area: Rect, shown: Shown, id: u32, measure: &dyn Measure) -> Option<usize> {
+    let width = area.w.saturating_sub(SIDE * 2 + 2) as f32;
+    lines(shown, width, measure)
+        .iter()
+        .position(|line| matches!(line, Line::Header(of, ..) | Line::Quote(of, ..) if *of == id))
+}
 
 /// Where a comment is, as its heading says it: its file, or the terminal tab whose output
 /// it's on.
@@ -353,10 +409,11 @@ pub fn place_of(thread: &Thread) -> String {
 }
 
 fn lines(
-    (threads, draft, agent, resolved, grouped): Shown,
+    (threads, draft, agent, resolved, view): Shown,
     width: f32,
     measure: &dyn Measure,
 ) -> Vec<Line> {
+    let grouped = view.grouped;
     let mut out = vec![Line::Gap];
     // The counts are of what's still open, whether or not the resolved ones show.
     let open: Vec<&Thread> = threads.iter().copied().filter(|t| !t.resolved).collect();
@@ -381,6 +438,7 @@ fn lines(
             used += pill;
         }
         out.push(Line::Coverage(row));
+        out.push(Line::Sort);
         out.push(Line::Gap);
     }
     if let Some(new) = draft.filter(|d| d.thread.is_none()) {
@@ -689,6 +747,10 @@ pub fn hit(
             let (cells, at) = check_button(area, measure);
             (x >= at && x < at + cells.chars().count() as u16).then_some(Hit::Check)
         }
+        Line::Sort => {
+            let (_, from, wide) = sort_control(area, shown.4.sort, measure);
+            (x >= from && x < from + wide).then_some(Hit::Sort)
+        }
         Line::File(opens, ..) => opens.map(Hit::File),
         Line::Reopen(id) => {
             let (_, cells, at) = row_of(area, &REOPEN, measure).pop()?;
@@ -719,6 +781,7 @@ pub fn draw(
     grid.fill(area, theme.sidebar);
     let width = area.w.saturating_sub(SIDE * 2 + 2) as f32;
     let threads = shown.0;
+    let view = shown.4;
     let all = lines(shown, width, measure);
     let top = top.min(last_of(all.len(), area.h));
     let (side, right) = (area.x + SIDE, area.right().saturating_sub(SIDE));
@@ -760,7 +823,16 @@ pub fn draw(
                         (right - side) as f32 + CARD_REACH * 2.0,
                         height + CARD_AIR.0 + CARD_AIR.1,
                     );
-                    let (fill, edge) = if matches!(line, Line::Choices(_)) {
+                    let of = match line {
+                        Line::Buttons(id) | Line::Edits(id) | Line::Choices(id) => Some(*id),
+                        Line::Reopen(id) => Some(*id),
+                        _ => None,
+                    };
+                    let lit = view.lit.is_some() && of == view.lit;
+                    let (fill, edge) = if lit {
+                        // The one whose words were pressed in the document.
+                        (mix(theme.accent, card, 0.1), theme.accent)
+                    } else if matches!(line, Line::Choices(_)) {
                         (suggested_card, mix(theme.accent, card, 0.5))
                     } else {
                         (card, theme.border)
@@ -1184,6 +1256,28 @@ pub fn draw(
                 };
                 let label = resolved_label(*count, *shown);
                 grid.button(x, y, &cells, &label, fill, style);
+            }
+            Line::Sort => {
+                // Quiet words and a chevron, brighter under the pointer.
+                let (at, cell, wide) = sort_control(area, view.sort, measure);
+                let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= cell && h.0 < cell + wide);
+                let order = Style {
+                    fg: if on_it { theme.text.fg } else { dim.fg },
+                    ..dim
+                };
+                let name = view.sort.label();
+                let end = grid.label_at(at, cell, y, name, order, right, SMALL);
+                let after = at + measure.width(name, small()) + 0.4;
+                let plain = Style {
+                    bold: false,
+                    ..order
+                };
+                let mark = if measure.in_cells() {
+                    f32::from(end) + 1.0
+                } else {
+                    after
+                };
+                grid.glyph(mark, y, Icon::ChevronDown, order.fg, "▾", plain);
             }
             Line::Gap => {}
         }

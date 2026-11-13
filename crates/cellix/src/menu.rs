@@ -31,6 +31,8 @@ const BAND_INSET: f32 = 1.0;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Action {
     Run(Command),
+    /// Lists the Comments pane in another order.
+    SortComments(crate::threads::Sort),
     /// One of the language server's fixes, by its place in the list it sent.
     ServerFix(usize),
     NewFile(PathBuf),

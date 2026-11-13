@@ -4891,5 +4891,19 @@
     "title": "Over SSH, dragging the pane's edge moves a line and the two sides are laid out once, on release",
     "test": "over_ssh_dragging_the_panes_edge_moves_a_line_and_resizes_on_release",
     "passes": true
+  },
+  {
+    "id": "comment-lit-from-its-text",
+    "milestone": 14,
+    "title": "A press on words a comment is about lights its card in the Comments pane and scrolls the pane to it",
+    "test": "a_press_on_commented_text_lights_its_comment_and_scrolls_the_pane_to_it",
+    "passes": true
+  },
+  {
+    "id": "comments-order",
+    "milestone": 14,
+    "title": "The Comments pane lists in the document's order, newest first or oldest first",
+    "test": "comments_are_listed_in_the_documents_order_or_by_which_was_made_when",
+    "passes": true
   }
 ]

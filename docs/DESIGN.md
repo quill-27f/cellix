@@ -175,6 +175,14 @@ hard-wrapped file fills the page and saves unchanged. On a page, arrows and Home
 
 ### Companion
 
+A press on words a comment is about lights that comment's card in the Comments pane, with
+the accent's edge, and scrolls the pane to it, when Comments is the tab in front; a press on
+other words puts the light out. It goes the other way already: a click on a card goes to its
+words. The pane lists in the document's order, or by which comment was made last or first
+(a comment's number counts up as they're made, which is the only record of when), chosen from a
+quiet row under the kinds whose list marks the one in use. With no file in view a heading still
+goes wherever the file changes, so by recency a file can have more than one.
+
 Whatever can be seen can be talked about. A selection, in code or on a page, gets Comment and Ask
 Agent beside it, and a picture, diagram or formula gets a Comment button under the pointer. Comments
 are written in the side pane, with what they're about in view. Ask Agent sends the comment to the

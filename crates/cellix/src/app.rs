@@ -1184,6 +1184,10 @@ pub struct App {
     /// Where the pane's edge would stand if it were let go now, and the width or height
     /// that asks for, while it's dragged over such a link.
     dock_guide: Option<(u16, u16)>,
+    /// The comment whose words were last pressed in the document, lit in the Comments pane.
+    lit_thread: Option<u32>,
+    /// The order the Comments pane lists them in.
+    comment_sort: threads::Sort,
     /// The session that was in front when the last run here ended.
     kept_session: Option<String>,
     /// Whether how the two sides work together has been said yet.
@@ -1349,6 +1353,8 @@ impl App {
             hid_maximized: false,
             over_ssh: !cfg!(test) && crate::pane::over_ssh(),
             dock_guide: None,
+            lit_thread: None,
+            comment_sort: threads::Sort::Document,
             kept_session: None,
             kernels: HashMap::new(),
             kernel_command: None,
@@ -3936,7 +3942,12 @@ impl App {
                 }
                 self.key(key);
             }
-            Event::Mouse(mouse) => self.mouse(mouse),
+            Event::Mouse(mouse) => {
+                self.mouse(mouse);
+                if mouse.kind == MouseKind::Left {
+                    self.light_comment_at_caret(mouse.x, mouse.y);
+                }
+            }
             Event::Paste(text) => self.paste(&text),
             Event::Resize(w, h) => {
                 self.size = (w, h);
@@ -8854,12 +8865,15 @@ impl App {
                 let (threads, resolved) = self.shown_threads();
                 let agent = self.dock.agent_name();
                 let draft = self.dock.draft.as_ref();
-                let grouped = self.comments_grouped();
-                let threads = (threads.as_slice(), draft, agent.as_str(), resolved, grouped);
+                let view = self.comments_view();
+                let threads = (threads.as_slice(), draft, agent.as_str(), resolved, view);
                 let top = self.dock.tops.of(Front::Comments);
                 let hit = threads::hit(screen, threads, top, (x, y), &*self.measure);
-                if let Some(hit) = hit {
-                    self.thread_hit(hit);
+                match hit {
+                    // Its list drops from under its own row.
+                    Some(ThreadHit::Sort) => self.show_sort_menu((screen.x + 2, y + 1)),
+                    Some(hit) => self.thread_hit(hit),
+                    None => {}
                 }
             }
             return true;
@@ -9248,8 +9262,8 @@ impl App {
             let agent = self.dock.agent_name();
             let (listed, resolved) = self.shown_threads();
             let draft = self.dock.draft.as_ref();
-            let grouped = self.comments_grouped();
-            let shown = (listed.as_slice(), draft, agent.as_str(), resolved, grouped);
+            let view = self.comments_view();
+            let shown = (listed.as_slice(), draft, agent.as_str(), resolved, view);
             threads::draw(grid, panel, shown, top, self.hover, look);
             return;
         }
@@ -9956,6 +9970,94 @@ impl App {
         open.and_then(|e| e.buffer.path()).is_none()
     }
 
+    /// The orders the Comments pane can list in, as a menu at `at`, the one in use marked.
+    fn show_sort_menu(&mut self, at: (u16, u16)) {
+        let items = threads::Sort::ALL
+            .iter()
+            .map(|sort| {
+                let mark = if *sort == self.comment_sort {
+                    "✓ "
+                } else {
+                    "   "
+                };
+                let label = format!("{mark}{}", sort.label());
+                MenuItem::new(label, MenuAction::SortComments(*sort))
+            })
+            .collect();
+        self.show_menu(at, items);
+    }
+
+    /// How the Comments pane shows its list: under headings or not, which is lit, and in
+    /// what order.
+    fn comments_view(&self) -> threads::View {
+        threads::View {
+            grouped: self.comments_grouped(),
+            lit: self.lit_thread,
+            sort: self.comment_sort,
+        }
+    }
+
+    /// A press on words a comment is about lights that comment in the Comments pane and
+    /// scrolls the pane to it. A press anywhere else in the file puts the light out.
+    fn light_comment_at_caret(&mut self, x: u16, y: u16) {
+        if !matches!(self.overlay, Overlay::None) || !self.focused_area().contains(x, y) {
+            return;
+        }
+        let Some(editor) = self.editors.get(self.active()) else {
+            return;
+        };
+        let Some(file) = editor.buffer.path().map(|p| self.relative(p)) else {
+            return;
+        };
+        let head = editor.selections.primary().head;
+        let rope = editor.buffer.rope();
+        // The comment whose words hold the caret; the shortest, where one's are inside
+        // another's.
+        let found = self
+            .threads
+            .iter()
+            .filter(|t| t.file == file && !t.resolved && t.earlier.is_none())
+            .filter_map(|t| {
+                let index = t.line.checked_sub(1)?;
+                if t.quote.is_empty() || index >= rope.len_lines() {
+                    return None;
+                }
+                let text = editor.line_text(index);
+                let at = text.find(t.quote.as_str())?;
+                let start = rope.line_to_char(index) + text[..at].chars().count();
+                let end = start + t.quote.chars().count();
+                (head >= start && head <= end).then_some((end - start, t.id))
+            })
+            .min();
+        self.lit_thread = found.map(|(_, id)| id);
+        if let Some(id) = self.lit_thread {
+            self.show_lit_comment(id);
+        }
+    }
+
+    /// Scrolls the Comments pane, when it's the one in front, so that comment's card shows.
+    fn show_lit_comment(&mut self, id: u32) {
+        if !self.dock.open || self.dock.front != Front::Comments {
+            return;
+        }
+        let Some(panel) = self.dock_panel() else {
+            return;
+        };
+        let top = {
+            let (listed, resolved) = self.shown_threads();
+            let agent = self.dock.agent_name();
+            let draft = self.dock.draft.as_ref();
+            let view = self.comments_view();
+            let shown = (listed.as_slice(), draft, agent.as_str(), resolved, view);
+            let last = threads::last_top(panel, shown, &*self.measure);
+            threads::top_of(panel, shown, id, &*self.measure)
+                .map(|row| row.saturating_sub(1).min(last))
+        };
+        if let Some(top) = top {
+            self.dock.tops.set(Front::Comments, top);
+        }
+    }
+
     /// What the Comments pane lists for the file in view, top to bottom: the open comments,
     /// and the resolved ones too when they're asked for. Also how many are resolved, and
     /// whether they're listed. With no file in view it's every file's, a file at a time by
@@ -9981,11 +10083,16 @@ impl App {
             .filter(|t| shown || !t.resolved)
             .filter(here)
             .collect();
-        if file.is_none() {
-            // By name whatever its case, as the explorer lists files.
-            threads.sort_by_key(|t| (on_output(t), threads::place_of(t).to_lowercase(), t.line));
-        } else {
-            threads.sort_by_key(|t| t.line);
+        match self.comment_sort {
+            // A comment's number counts up as they're made, so it says which came first.
+            threads::Sort::Newest => threads.sort_by_key(|t| std::cmp::Reverse(t.id)),
+            threads::Sort::Oldest => threads.sort_by_key(|t| t.id),
+            threads::Sort::Document if file.is_none() => {
+                // By name whatever its case, as the explorer lists files.
+                threads
+                    .sort_by_key(|t| (on_output(t), threads::place_of(t).to_lowercase(), t.line));
+            }
+            threads::Sort::Document => threads.sort_by_key(|t| t.line),
         }
         (threads, (resolved, shown))
     }
@@ -10122,6 +10229,11 @@ impl App {
                 }
             }
             ThreadHit::Check => self.check_review(),
+            ThreadHit::Sort => {
+                if let Some(panel) = self.dock_panel() {
+                    self.show_sort_menu((panel.x + 2, panel.y + 4));
+                }
+            }
             ThreadHit::Apply(id) => self.apply_rewrite(id),
             ThreadHit::Decline(id) => {
                 if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
@@ -12540,6 +12652,13 @@ impl App {
                 self.close_tabs_except(Some(index));
             }
             MenuAction::Transcript(index) => self.open_transcript(Some(index)),
+            MenuAction::SortComments(sort) => {
+                self.comment_sort = sort;
+                self.dock.tops.set(Front::Comments, 0);
+                if let Some(id) = self.lit_thread {
+                    self.show_lit_comment(id);
+                }
+            }
             MenuAction::CloseSession(index) => self.close_session_tab(index),
             MenuAction::CloseAllTabs => {
                 self.close_task_page();
@@ -15246,8 +15365,8 @@ impl App {
                 let (listed, resolved) = self.shown_threads();
                 let agent = self.dock.agent_name();
                 let draft = self.dock.draft.as_ref();
-                let grouped = self.comments_grouped();
-                let shown = (listed.as_slice(), draft, agent.as_str(), resolved, grouped);
+                let view = self.comments_view();
+                let shown = (listed.as_slice(), draft, agent.as_str(), resolved, view);
                 (threads::last_top(panel, shown, &*self.measure), 3)
             }
             Front::Agents | Front::Session if self.dock.listing() => {
@@ -21004,6 +21123,118 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
 
         app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
         assert!(matches!(app.overlay, Overlay::None));
+    }
+
+    /// A press on words a comment is about lights that comment's card in the Comments pane
+    /// and scrolls the pane to it. A press on other words puts the light out.
+    #[test]
+    fn a_press_on_commented_text_lights_its_comment_and_scrolls_the_pane_to_it() {
+        let (dir, mut app) = project();
+        app.show_sidebar = false;
+        let text: String = (1..=20).map(|n| format!("row {n} of the note\n")).collect();
+        fs::write(dir.path().join("note.txt"), text).unwrap();
+        app.open(&dir.path().join("note.txt")).unwrap();
+        let thread = |id: u32, line: usize, quote: &str, text: &str| -> Thread {
+            let fields = format!(
+                r#""id":{id},"file":"note.txt","line":{line},"quote":"{quote}","text":"{text}""#
+            );
+            serde_json::from_str(&format!("{{{fields}}}")).unwrap()
+        };
+        // More cards than the pane shows at once, the last on row 14 of the file.
+        app.threads = (1..=7)
+            .map(|n| {
+                let line = n as usize * 2;
+                thread(n, line, &format!("row {line} of"), &format!("remark {n}"))
+            })
+            .collect();
+        app.run(Command::ShowComments);
+        let grid = screen(&app);
+        assert!(
+            !grid.text().contains("remark 7"),
+            "the last card is out of view"
+        );
+        let lit_cards = |app: &App| {
+            screen(app)
+                .paint
+                .iter()
+                .filter(|p| {
+                    matches!(p, Paint::Panel { border: Some(edge), .. } if *edge == app.theme.accent)
+                })
+                .count()
+        };
+        assert_eq!(lit_cards(&app), 0, "none is lit to begin with");
+
+        // Its words in the file, which are in view, are pressed.
+        let (x, y) = find(&grid, "row 14 of the note");
+        app.handle(mouse(MouseKind::Left, x + 2, y));
+        app.handle(mouse(MouseKind::Up, x + 2, y));
+        assert_eq!(app.lit_thread, Some(7));
+        let grid = screen(&app);
+        assert!(
+            grid.text().contains("remark 7"),
+            "scrolled to:\n{}",
+            grid.text()
+        );
+        assert_eq!(lit_cards(&app), 1, "and its card alone is lit");
+
+        // Words no comment is about put the light out, and the pane stays where it is.
+        let (x, y) = find(&screen(&app), "row 15 of the note");
+        app.handle(mouse(MouseKind::Left, x + 2, y));
+        app.handle(mouse(MouseKind::Up, x + 2, y));
+        assert_eq!(app.lit_thread, None);
+        assert_eq!(lit_cards(&app), 0);
+    }
+
+    /// The Comments pane lists in the document's order, or by which was made last or first,
+    /// from a row under the kinds. The order in use is marked in its list.
+    #[test]
+    fn comments_are_listed_in_the_documents_order_or_by_which_was_made_when() {
+        let (dir, mut app) = project();
+        app.show_sidebar = false;
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        let thread = |id: u32, line: usize, text: &str| -> Thread {
+            let fields = format!(r#""id":{id},"file":"alpha.txt","line":{line},"text":"{text}""#);
+            serde_json::from_str(&format!("{{{fields},\"quote\":\"\"}}")).unwrap()
+        };
+        // Made in one order, standing in the file in another.
+        app.threads = vec![
+            thread(1, 2, "made first"),
+            thread(2, 1, "made second"),
+            thread(3, 2, "made third"),
+        ];
+        app.run(Command::ShowComments);
+        let order = |app: &App| {
+            let grid = screen(app);
+            let row = |words: &str| find(&grid, words).1;
+            let mut rows = [
+                (row("made first"), 1),
+                (row("made second"), 2),
+                (row("made third"), 3),
+            ];
+            rows.sort();
+            rows.map(|(_, id)| id)
+        };
+        assert_eq!(order(&app), [2, 1, 3], "by where they stand in the file");
+        let choose = |app: &mut App, from: &str, to: &str| {
+            let (x, y) = find(&screen(app), from);
+            app.handle(mouse(MouseKind::Left, x + 1, y));
+            app.handle(mouse(MouseKind::Up, x + 1, y));
+            let grid = screen(app);
+            assert!(
+                grid.text().contains(&format!("✓ {from}")),
+                "{}",
+                grid.text()
+            );
+            let (x, y) = find(&grid, to);
+            app.handle(mouse(MouseKind::Left, x + 1, y));
+            app.handle(mouse(MouseKind::Up, x + 1, y));
+        };
+        choose(&mut app, "Document order", "Newest first");
+        assert_eq!(order(&app), [3, 2, 1]);
+        choose(&mut app, "Newest first", "Oldest first");
+        assert_eq!(order(&app), [1, 2, 3]);
+        choose(&mut app, "Oldest first", "Document order");
+        assert_eq!(order(&app), [2, 1, 3]);
     }
 
     /// With no file in view the pane lists every file's comments, so each file's stand under
