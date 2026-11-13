@@ -216,7 +216,8 @@ Toggle Markdown Source in the palette shows the raw file.
 
 Under 70 columns, as beside an agent, the sidebar becomes a drawer behind the `☰` button
 and review stacks changes in one column. In a window too narrow for the side pane, it stands
-under the file, and its top edge can be dragged. Drag one of its tabs over the bottom half of the
+under the file, and its top edge can be dragged. Over SSH, dragging the pane's edge moves a line
+and the two sides resize when you let go, since resizing at every step sends the whole window again. Drag one of its tabs over the bottom half of the
 file to put it there in any window, and onto the right edge to put it back. A file's tab dragged
 along the tab bar moves there, and dropped on a file it opens a pane beside it, or shows there.
 

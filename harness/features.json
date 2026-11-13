@@ -4884,5 +4884,12 @@
     "title": "A side pane hidden while it has the window takes the window again when it's shown",
     "test": "a_pane_hidden_while_it_has_the_window_comes_back_with_it",
     "passes": true
+  },
+  {
+    "id": "pane-edge-drag-over-ssh",
+    "milestone": 14,
+    "title": "Over SSH, dragging the pane's edge moves a line and the two sides are laid out once, on release",
+    "test": "over_ssh_dragging_the_panes_edge_moves_a_line_and_resizes_on_release",
+    "passes": true
   }
 ]

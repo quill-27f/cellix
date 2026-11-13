@@ -1,6 +1,6 @@
 {
   "name": "cellix",
-  "version": "0.6.7",
+  "version": "0.6.8",
   "description": "Review Gemini's work in Cellix and read the reviewer's comments back",
   "contextFileName": "GEMINI.md"
 }

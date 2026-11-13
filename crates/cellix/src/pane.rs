@@ -594,6 +594,12 @@ fn parent() -> u32 {
     0
 }
 
+/// Whether Cellix runs at the far end of an SSH connection, so all it draws crosses a link.
+pub fn over_ssh() -> bool {
+    let set = |name: &str| std::env::var_os(name).is_some_and(|value| !value.is_empty());
+    set("SSH_CONNECTION") || set("SSH_TTY")
+}
+
 /// Whether Claude Code can show the pane from a picture file here. It reads one only in kitty
 /// and Ghostty on this machine, never through tmux or Zellij, and over SSH the file isn't
 /// where the terminal is. Everywhere else the pictures go by value, a row each.

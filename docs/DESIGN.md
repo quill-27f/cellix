@@ -56,6 +56,16 @@ Conclusion: never stream frames. Render each line or UI region once as a tile, k
 it in the terminal's image store, and move tiles by reference. Only new content
 crosses the wire.
 
+Dragging the side pane's edge is the one common gesture that breaks this: each step lays
+both sides out at a new width, so every row is a new tile, about a first paint a step
+against a scrolled line's thirtieth of that. With Cellix at the far end of an SSH connection
+(`SSH_CONNECTION` or `SSH_TTY` is set) the edge isn't moved while it's dragged: a line in the
+accent follows the pointer, stopping where the edge could really go, and the two sides are
+laid out once, when it's let go. With no link between, the sides follow the pointer as they
+did, and the edge is drawn in the accent while it's held, as VS Code's sash is. Keeping the
+resize live over a link would take placing the tiles already sent with a different crop
+instead of sending new ones, which hasn't been built or measured.
+
 ### No GPU renderer
 
 Output would have to be read back to the CPU before it could be sent to the terminal, one

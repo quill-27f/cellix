@@ -2,6 +2,11 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
+## [0.6.8] - 2026-11-13
+
+### Changed
+- Over SSH, dragging the side pane's edge moves a line that follows the pointer, and the file and the pane resize once, when you let go. Resizing at every step sent the whole window again each time, so the edge jumped after the pointer. Without SSH the two sides still follow as you drag, and the edge is drawn in the accent colour while you hold it.
+
 ## [0.6.7] - 2026-11-13
 
 ### Fixed

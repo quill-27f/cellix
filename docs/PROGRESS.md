@@ -1927,3 +1927,13 @@ The user said to release the one fix since 0.6.6: a side pane hidden while it fi
 
 - This Mac's toolchain is still 1.99 against CI's 1.100, which failed 0.6.6's first run on a lint; it wasn't updated, since that changes the user's machine. The change since 0.6.6 is small.
 - Unverified: a real terminal.
+- 0.6.7 was released from `6d71ff3`, CI passing first time: the same four binaries, 14:30 UTC. A whole tour on it was stopped part way to make 0.6.8.
+
+## Dragging the pane's edge over SSH, and release 0.6.8 (2026-11-13)
+
+The user's note: over SSH scrolling is smooth now, but dragging the pane jumps. Then: release 0.6.8 once tests pass.
+
+- **Why it jumped.** A step of the drag set the pane's width and laid both sides out again, so every row's tile was new and sent again: by this document's own table about a first paint a step (0.2 to 0.5 MB) where a scrolled line is 0.006. Each step also resized every session's PTY, so what runs in the pane drew itself again at each width. The loop already takes all waiting events before it draws, so the frames were few and late, and the edge caught the pointer up in jumps. The user's own `slow-frames.log` wasn't read: Cellix ran on their far machine, and the log on this one was empty.
+- **What changed.** With `SSH_CONNECTION` or `SSH_TTY` set (`pane::over_ssh`, held in `App::over_ssh`), a drag of the edge moves only a line in the accent (`dock_guide`, `draw_dock_drag`), which stops where the edge could really go (`dock_landing` asks the pane's own clamping), and the width or height is applied once on release, with one resize of the sessions. With no link the sides follow live as before, and the edge is the accent's while held. Only the drag that held the line applies it. Test: `over_ssh_dragging_the_panes_edge_moves_a_line_and_resizes_on_release`, which holds that only the line's column changes on screen during the drag.
+- Unverified: over a real SSH connection, and how it feels; the test holds what's drawn, not the bytes sent. Not built: a live resize that's cheap over a link, by placing tiles already sent with a new crop.
+- A guarded test gave up twice (exit 75) behind a whole tour that held the guard for more than its fifteen minutes of waiting; the tour was stopped both times.

@@ -978,6 +978,8 @@ const FINDING_BATCH: std::time::Duration = std::time::Duration::from_millis(50);
 const FINDING_WAIT: std::time::Duration = std::time::Duration::from_millis(100);
 /// Past this many files a walk stops: a home folder can hold millions.
 const MAX_FILES: usize = 500_000;
+/// How thick the pane's edge is drawn while it's dragged, in rows; half of it in columns.
+const DRAG_LINE: f32 = 0.12;
 /// Rows a list in the side pane is drawn into for Find to read all it holds.
 const LIST_ROWS: u16 = 600;
 /// Most matches marked on one row of a list.
@@ -1177,6 +1179,11 @@ pub struct App {
     kept_maximized: bool,
     /// The pane had the window when it was hidden, so it takes it again when it's shown.
     hid_maximized: bool,
+    /// Cellix runs at the far end of an SSH connection, so everything it draws crosses a link.
+    over_ssh: bool,
+    /// Where the pane's edge would stand if it were let go now, and the width or height
+    /// that asks for, while it's dragged over such a link.
+    dock_guide: Option<(u16, u16)>,
     /// The session that was in front when the last run here ended.
     kept_session: Option<String>,
     /// Whether how the two sides work together has been said yet.
@@ -1340,6 +1347,8 @@ impl App {
             state_copies: std::cell::Cell::new(0),
             kept_maximized: false,
             hid_maximized: false,
+            over_ssh: !cfg!(test) && crate::pane::over_ssh(),
+            dock_guide: None,
             kept_session: None,
             kernels: HashMap::new(),
             kernel_command: None,
@@ -8553,6 +8562,77 @@ impl App {
         }
     }
 
+    /// Where the pane's edge would stand if it were let go with the pointer at (x, y), and
+    /// the width or height that asks for: the pane keeps its least and the file its own.
+    fn dock_landing(&mut self, x: u16, y: u16) -> (u16, u16) {
+        let under = self.dock_under();
+        let asked = if under {
+            self.size.1.saturating_sub(y + 1)
+        } else {
+            self.size.0.saturating_sub(x)
+        };
+        let was = (self.dock.width, self.dock.height);
+        if under {
+            self.dock.height = Some(asked);
+        } else {
+            self.dock.width = Some(asked);
+        }
+        let pointer = if under { y } else { x };
+        let edge = self
+            .dock_area()
+            .map_or(pointer, |area| if under { area.y } else { area.x });
+        (self.dock.width, self.dock.height) = was;
+        (edge, asked)
+    }
+
+    /// The pane's edge while it's dragged, in the accent as VS Code's is: where it stands,
+    /// or over SSH where it would land.
+    fn draw_dock_drag(&self, grid: &mut Grid) {
+        if self.drag != Drag::Dock {
+            return;
+        }
+        let Some(area) = self.dock_area() else {
+            return;
+        };
+        let under = self.dock_under();
+        let edge = if under { area.y } else { area.x };
+        let at = self.dock_guide.map_or(edge, |(landing, _)| landing);
+        let accent = self.theme.accent;
+        if !self.measure.in_cells() {
+            let line = if under {
+                let top = f32::from(at) - DRAG_LINE / 2.0;
+                Bounds::cells(f32::from(area.x), top, f32::from(area.w), DRAG_LINE)
+            } else {
+                let left = f32::from(at) - DRAG_LINE / 4.0;
+                Bounds::cells(left, f32::from(area.y), DRAG_LINE / 2.0, f32::from(area.h))
+            };
+            grid.panel(line, 0, Some(accent), None);
+            return;
+        }
+        // In cells the line is drawn in its column or row, over what's there.
+        let (width, height) = (grid.width(), grid.height());
+        let spots: Vec<(u16, u16, &str)> = if under {
+            (area.x..area.right().min(width))
+                .map(|x| (x, at, "─"))
+                .collect()
+        } else {
+            (area.y..area.bottom().min(height))
+                .map(|y| (at, y, "│"))
+                .collect()
+        };
+        for (x, y, mark) in spots {
+            if x >= width || y >= height {
+                continue;
+            }
+            let style = Style {
+                fg: accent,
+                painted: false,
+                ..grid.cell(x, y).style
+            };
+            grid.put_str(x, y, mark, style, x + 1);
+        }
+    }
+
     /// Opens or closes the side pane. With nothing running it shows what can be started.
     fn toggle_dock(&mut self) {
         self.dock.open = !self.dock.open;
@@ -8615,6 +8695,15 @@ impl App {
         let (x, y) = (mouse.x, mouse.y);
         let dragging = matches!(self.drag, Drag::Dock | Drag::Session);
         if mouse.kind == MouseKind::Drag && self.drag == Drag::Dock {
+            // A step of a live resize lays both sides out again, which is every row's
+            // picture sent once more: about a first paint a step, where a scrolled line is
+            // a thirtieth of that. Over SSH that shows as the edge jumping after the
+            // pointer, so there the line alone follows it and the sides are laid out
+            // once, when it's let go.
+            if self.over_ssh {
+                self.dock_guide = Some(self.dock_landing(x, y));
+                return true;
+            }
             if self.dock_under() {
                 self.dock.height = Some(self.size.1.saturating_sub(y + 1));
             } else {
@@ -8624,6 +8713,17 @@ impl App {
             return true;
         }
         if mouse.kind == MouseKind::Up && dragging {
+            // Only the drag that held the line lets it go: a line left by one that never
+            // ended mustn't be applied by the next thing released.
+            let held = self.dock_guide.take().filter(|_| self.drag == Drag::Dock);
+            if let Some((_, asked)) = held {
+                if self.dock_under() {
+                    self.dock.height = Some(asked);
+                } else {
+                    self.dock.width = Some(asked);
+                }
+                self.fit_dock();
+            }
             let was = std::mem::replace(&mut self.drag, Drag::None);
             if was == Drag::Session {
                 self.dock_session_mouse(mouse);
@@ -8643,6 +8743,7 @@ impl App {
         let on_edge = self.on_dock_edge(x, y);
         if on_edge && mouse.kind == MouseKind::Left {
             self.drag = Drag::Dock;
+            self.dock_guide = None;
             return true;
         }
         if !area.contains(x, y) {
@@ -13815,6 +13916,7 @@ impl App {
 
     fn draw_overlay(&self, grid: &mut Grid) {
         let theme = &self.theme;
+        self.draw_dock_drag(grid);
         // The text's caret would stand on top of anything that floats over it.
         if matches!(
             self.overlay,
@@ -25151,6 +25253,66 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert!(app.dock.open, "a click brings the pane back");
         assert!(app.dock.listing(), "with what it showed");
         assert!(!app.quit);
+    }
+
+    /// Over SSH a drag of the pane's edge moves a line and lays the two sides out once, when
+    /// it's let go. Laid out at every step, each step sent every row's picture again, and
+    /// over a link the edge jumped after the pointer. Without a link between, it follows live.
+    #[test]
+    fn over_ssh_dragging_the_panes_edge_moves_a_line_and_resizes_on_release() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        app.run(Command::ListAgents);
+        app.over_ssh = true;
+        let area = app.dock_area().unwrap();
+        let before = screen(&app);
+        app.handle(mouse(MouseKind::Left, area.x, 5));
+        let to = area.x - 6;
+        app.handle(mouse(MouseKind::Drag, to, 5));
+        assert_eq!(app.dock_area(), Some(area), "nothing is laid out again yet");
+        let during = screen(&app);
+        // Only the line differs from what was on screen: its column, and the edge's own,
+        // which is drawn in the accent while it's held.
+        let changed: std::collections::BTreeSet<u16> = during
+            .diff(&before)
+            .iter()
+            .filter(|run| run.y > 0 && run.y < area.bottom())
+            .flat_map(|run| run.x..run.x + run.len)
+            .collect();
+        assert!(
+            changed.contains(&to),
+            "the line is at the pointer: {changed:?}"
+        );
+        assert!(
+            changed.iter().all(|x| *x == to || *x == area.x),
+            "and nothing else moved: {changed:?}"
+        );
+        assert_eq!(during.cell(to, 5).symbol.as_str(), "│");
+        assert_eq!(during.cell(to, 5).style.fg, app.theme.accent);
+
+        app.handle(mouse(MouseKind::Up, to, 5));
+        assert_eq!(
+            app.dock_area().unwrap().x,
+            to,
+            "laid out where it was let go"
+        );
+        assert_ne!(screen(&app).cell(to, 5).style.fg, app.theme.accent);
+
+        // Dragged past what the file keeps, the line stops where the edge would.
+        app.handle(mouse(MouseKind::Left, to, 5));
+        app.handle(mouse(MouseKind::Drag, 2, 5));
+        let (landing, _) = app.dock_guide.expect("held");
+        assert!(landing > 2, "the file keeps its columns: {landing}");
+        app.handle(mouse(MouseKind::Up, 2, 5));
+        assert_eq!(app.dock_area().unwrap().x, landing);
+
+        // With no link between, the sides follow the pointer as it moves.
+        app.over_ssh = false;
+        let edge = app.dock_area().unwrap().x;
+        app.handle(mouse(MouseKind::Left, edge, 5));
+        app.handle(mouse(MouseKind::Drag, edge + 4, 5));
+        assert_eq!(app.dock_area().unwrap().x, edge + 4, "live");
+        app.handle(mouse(MouseKind::Up, edge + 4, 5));
     }
 
     /// A pane hidden while it has the window takes the window again when it's shown. The
