@@ -280,7 +280,8 @@ agent answers with `cellix reply <id> "text"`, and the answer lands under your q
 open the Comments tab lists that file's; with none it lists every file's, each under its file's name,
 and a click on a name or a comment opens the file. Click words a comment is about and its card is
 lit in the Comments tab, which scrolls to it; click a card and its words are selected in the file. Under the kinds, the tab says what order it lists in:
-click it for the document's order, newest first or oldest first.
+click it for the document's order, newest first or oldest first. A link in a comment or a reply is
+underlined, and a click opens it, in the side pane's browser where there is one.
 
 The icons at the top right start a real agent, a terminal or a browser in the side pane, beside your file. Press Ctrl+` to
 move the keyboard between the two, and the hide-pane icon at the top right, or Ctrl+Shift+`, to hide

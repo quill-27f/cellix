@@ -49,6 +49,9 @@ pub(crate) const SMALL: u8 = 85;
 /// What a click in the panel lands on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hit {
+    /// A link in a comment's words or a reply: the comment, and which of its links, counting
+    /// through its words and then its replies as `links` does.
+    Link(u32, usize),
     /// Asks which order to list the comments in.
     Sort,
     Open(u32),
@@ -378,6 +381,92 @@ pub struct View {
     pub grouped: bool,
     pub lit: Option<u32>,
     pub sort: Sort,
+}
+
+/// Each link in a run of words, as the bytes it takes: `http://` or `https://` to the next
+/// space, without the stop or bracket a sentence puts after it.
+pub fn link_spans(text: &str) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut from = 0;
+    while let Some(found) = text[from..].find("http") {
+        let start = from + found;
+        let rest = &text[start..];
+        let starts_word = text[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|before| !before.is_alphanumeric());
+        if !starts_word || !(rest.starts_with("http://") || rest.starts_with("https://")) {
+            from = start + 4;
+            continue;
+        }
+        let run = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        let link =
+            rest[..run].trim_end_matches(['.', ',', ';', ':', '!', '?', ')', ']', '"', '\'']);
+        // The scheme alone links to nothing.
+        if link.len() > "https://".len() {
+            spans.push((start, start + link.len()));
+        }
+        from = start + run.max(4);
+    }
+    spans
+}
+
+/// Every link a comment holds, in its words and then its replies in order.
+pub fn links(thread: &Thread) -> Vec<String> {
+    let texts =
+        std::iter::once(thread.text.as_str()).chain(thread.replies.iter().map(|r| r.text.as_str()));
+    texts
+        .flat_map(|text| {
+            link_spans(text)
+                .into_iter()
+                .map(|(start, end)| text[start..end].to_string())
+        })
+        .collect()
+}
+
+/// Draws a row of a comment's words with its links in the accent, underlined: the row, then
+/// each link over its own letters, which a measured start puts exactly on them.
+fn draw_linked(
+    grid: &mut Grid,
+    (x, cell, y): (f32, u16, u16),
+    text: &str,
+    (style, size, right): (Style, u8, u16),
+    (measure, theme): (&dyn Measure, &Theme),
+) {
+    grid.label_at(x, cell, y, text, style, right, size);
+    let font = Font {
+        size,
+        ..Font::default()
+    };
+    for (start, end) in link_spans(text) {
+        let before = &text[..start];
+        let at = x + measure.width(before, font);
+        let from = cell + before.chars().count() as u16;
+        if from >= right {
+            continue;
+        }
+        let link = Style {
+            fg: theme.accent,
+            underline: true,
+            ..style
+        };
+        grid.label_at(at, from, y, &text[start..end], link, right, size);
+    }
+}
+
+/// Which of a row's links column `x` is on, counting from the row's first, where the row
+/// starts at `from` and is set at `size`.
+fn link_at(text: &str, (from, x): (f32, u16), size: u8, measure: &dyn Measure) -> Option<usize> {
+    let font = Font {
+        size,
+        ..Font::default()
+    };
+    let x = f32::from(x) + 0.5;
+    link_spans(text).into_iter().position(|(start, end)| {
+        let left = from + measure.width(&text[..start], font);
+        let right = from + measure.width(&text[..end], font);
+        x >= left && x < right
+    })
 }
 
 /// The order's control at the start of the summary row: where its words start, the cell
@@ -760,12 +849,39 @@ pub fn hit(
             let (cells, at) = resolved_button(area, *count, *shown, measure);
             (x >= at && x < at + cells.chars().count() as u16).then_some(Hit::ToggleResolved)
         }
-        Line::Quote(id, ..)
-        | Line::Text(id, _)
-        | Line::Answer(id, ..)
-        | Line::Reply(id, _)
-        | Line::Pill(id, ..)
-        | Line::Header(id, ..) => Some(Hit::Open(*id)),
+        Line::Text(id, text) | Line::Reply(id, text) => {
+            // A link takes the click; anywhere else on the row goes to the comment's place.
+            let reply = matches!(all.get(row)?, Line::Reply(..));
+            let text_x = f32::from(area.x + SIDE + 1);
+            let (from, size) = if reply {
+                (text_x + INSET, SMALL)
+            } else {
+                (text_x, 100)
+            };
+            let Some(here) = link_at(text, (from, x), size, measure) else {
+                return Some(Hit::Open(*id));
+            };
+            // Its place among all the comment's links: those on its rows before this one.
+            let first = all
+                .iter()
+                .position(
+                    |line| matches!(line, Line::Header(of, ..) | Line::Quote(of, ..) if of == id),
+                )
+                .unwrap_or(0);
+            let before: usize = all[first..row]
+                .iter()
+                .map(|line| match line {
+                    Line::Text(of, text) | Line::Reply(of, text) if of == id => {
+                        link_spans(text).len()
+                    }
+                    _ => 0,
+                })
+                .sum();
+            Some(Hit::Link(*id, before + here))
+        }
+        Line::Quote(id, ..) | Line::Answer(id, ..) | Line::Pill(id, ..) | Line::Header(id, ..) => {
+            Some(Hit::Open(*id))
+        }
         _ => None,
     }
 }
@@ -970,7 +1086,8 @@ pub fn draw(
                 }
             }
             Line::Text(_, text) => {
-                grid.label(text_x, y, text, inner, right);
+                let place = (f32::from(text_x), text_x, y);
+                draw_linked(grid, place, text, (inner, 100, right), (measure, theme));
             }
             Line::Answer(id, word, author) => {
                 let block = theme.quiet_button(card_of(*id));
@@ -1009,7 +1126,8 @@ pub fn draw(
                     bg: theme.quiet_button(card_of(*id)),
                     ..inner
                 };
-                grid.label_at(reply_x, text_x + 1, y, text, style, right, SMALL);
+                let place = (reply_x, text_x + 1, y);
+                draw_linked(grid, place, text, (style, SMALL, right), (measure, theme));
                 // Lifted a little, so the block keeps air above the buttons and below its text.
                 grid.drop_last(-0.12);
             }

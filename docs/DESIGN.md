@@ -184,6 +184,12 @@ file; the buttons that offer to comment on a selection stay away from those word
 quiet row under the kinds whose list marks the one in use. With no file in view a heading still
 goes wherever the file changes, so by recency a file can have more than one.
 
+A web address in a comment's words or a reply's (`http://` or `https://`, up to the next space,
+without the full stop or bracket that ends its sentence) is drawn in the accent and underlined,
+on every row it wraps onto, and a click on it opens it the way Open in Browser opens a page: the
+side pane's browser where one is set up, the system's otherwise. A click anywhere else on the
+comment is still the comment's.
+
 Whatever can be seen can be talked about. A selection, in code or on a page, gets Comment and Ask
 Agent beside it, each naming in brackets the keys that do the same as they're set now (Alt+C and
 Alt+A unless changed), and a picture, diagram or formula gets a Comment button under the pointer. Comments

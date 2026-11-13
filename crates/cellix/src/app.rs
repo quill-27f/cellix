@@ -7487,6 +7487,11 @@ impl App {
             self.say("Nothing to open: put the cursor on a link, or open an HTML file");
             return;
         };
+        self.open_page(target);
+    }
+
+    /// Opens a page: in the side pane's browser where there is one, else the system's.
+    fn open_page(&mut self, target: String) {
         if self.open_in_pane(&target) {
             return;
         }
@@ -10294,6 +10299,16 @@ impl App {
                 }
             }
             ThreadHit::Check => self.check_review(),
+            ThreadHit::Link(id, index) => {
+                let link = self
+                    .threads
+                    .iter()
+                    .find(|t| t.id == id)
+                    .and_then(|t| threads::links(t).into_iter().nth(index));
+                if let Some(link) = link {
+                    self.open_page(link);
+                }
+            }
             ThreadHit::Sort => {
                 if let Some(panel) = self.dock_panel() {
                     self.show_sort_menu((panel.x + 2, panel.y + 4));
@@ -21315,6 +21330,57 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert_eq!(order(&app), [1, 2, 3]);
         choose(&mut app, "Oldest first", "Document order");
         assert_eq!(order(&app), [2, 1, 3]);
+    }
+
+    /// A link in a comment's words stands out, in the accent and underlined, and a click on
+    /// it opens it, whichever row of the comment it wrapped onto. A click on the words beside
+    /// it still goes to the comment's place.
+    #[test]
+    fn a_link_in_a_comment_stands_out_and_opens_on_a_click() {
+        let (dir, mut app) = project();
+        app.show_sidebar = false;
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        // A stand-in for the browser, which writes down what it was asked to open.
+        let log = dir.path().join("opened.txt");
+        let script = format!("printf %s \"$1\" > '{}'", log.display());
+        app.settings.browser = None;
+        app.system_browser = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            script,
+            "browser".to_string(),
+        ];
+        let text = "See https://example.com/a, and then https://example.org/b.";
+        let fields =
+            format!(r#""id":4,"file":"alpha.txt","line":1,"quote":"first","text":"{text}""#);
+        app.threads = vec![serde_json::from_str(&format!("{{{fields}}}")).unwrap()];
+        app.run(Command::ShowComments);
+        let grid = screen(&app);
+        let (x, y) = find(&grid, "https://example.com/a");
+        let style = grid.cell(x + 3, y).style;
+        assert_eq!(style.fg, app.theme.accent, "a link is the accent's");
+        assert!(style.underline);
+        let comma = grid.cell(x + "https://example.com/a".len() as u16, y).style;
+        assert_ne!(
+            comma.fg, app.theme.accent,
+            "the comma after it isn't the link's"
+        );
+        // The second wrapped onto the next row, and is the one opened.
+        let (x2, y2) = find(&grid, "https://example.org/b");
+        assert!(y2 > y, "wrapped: {}", grid.text());
+        app.handle(mouse(MouseKind::Left, x2 + 4, y2));
+        app.handle(mouse(MouseKind::Up, x2 + 4, y2));
+        assert_eq!(wait_for_file(&log), "https://example.org/b");
+        assert_eq!(app.lit_thread, None, "a link's click isn't the comment's");
+        // The words beside a link go to the comment's own words, as before.
+        let (x, y) = find(&screen(&app), "See https");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        app.handle(mouse(MouseKind::Up, x + 1, y));
+        assert_eq!(app.lit_thread, Some(4));
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            "https://example.org/b"
+        );
     }
 
     /// With no file in view the pane lists every file's comments, so each file's stand under
