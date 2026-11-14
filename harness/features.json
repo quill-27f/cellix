@@ -4968,5 +4968,12 @@
     "title": "A long list of comments is laid out when it changes, not at each notch of the wheel or each frame",
     "test": "a_long_list_of_comments_is_laid_out_once_however_far_the_wheel_turns",
     "passes": true
+  },
+  {
+    "id": "comment-press-shows-tab",
+    "milestone": 14,
+    "title": "A press on words a comment is about brings the Comments tab forward in a pane that's open on another",
+    "test": "a_press_on_commented_words_brings_the_comments_forward_in_an_open_pane",
+    "passes": true
   }
 ]

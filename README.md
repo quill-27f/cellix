@@ -279,7 +279,7 @@ kept in `.cellix/threads.json`. Ask Agent sends yours to the agent with its file
 agent answers with `cellix reply <id> "text"`, and the answer lands under your question. With a file
 open the Comments tab lists that file's; with none it lists every file's, each under its file's name,
 and a click on a name or a comment opens the file. Click words a comment is about and its card is
-lit in the Comments tab, which scrolls to it; click a card and its words are selected in the file. Under the kinds, the tab says what order it lists in:
+lit in the Comments tab, which scrolls to it, and comes forward if the pane was open on another tab; click a card and its words are selected in the file. Under the kinds, the tab says what order it lists in:
 click it for the document's order, newest first or oldest first. A link in a comment or a reply is
 underlined, and a click opens it, in the side pane's browser where there is one.
 

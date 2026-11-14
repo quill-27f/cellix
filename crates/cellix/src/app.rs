@@ -10402,7 +10402,8 @@ impl App {
     }
 
     /// A press on words a comment is about lights that comment in the Comments pane and
-    /// scrolls the pane to it. A press anywhere else in the file puts the light out.
+    /// scrolls the pane to it, bringing the Comments forward where the pane is open on
+    /// something else. A press anywhere else in the file puts the light out.
     fn light_comment_at_caret(&mut self, x: u16, y: u16) {
         if !matches!(self.overlay, Overlay::None) || !self.focused_area().contains(x, y) {
             return;
@@ -10428,6 +10429,16 @@ impl App {
         self.lit_thread = found.map(|(_, id)| id);
         self.lit_range = None;
         if let Some(id) = self.lit_thread {
+            // A pane open on another tab turns to the comments, since the one pressed is
+            // what's wanted now, and the tab it was on stays in the row. Only for a press
+            // that put the caret there: one on the scrollbar or a checkbox, with the caret
+            // already in those words, is about something else. A pane that's shut stays
+            // shut: nothing opens it but a press on what does.
+            let placed = self.drag == Drag::Text;
+            if placed && self.dock.open && self.dock.front != Front::Comments {
+                self.dock.show_comments();
+                self.dock.focused = false;
+            }
             self.show_lit_comment(id);
         }
     }
@@ -21762,6 +21773,74 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert!(changed.contains("said another way"), "{changed}");
         screen(&app);
         assert_eq!(app.comment_rows.times(), laid + 1);
+    }
+
+    /// With the pane open on another tab, a press on words a comment is about brings the
+    /// Comments forward, with its card lit and in view. A press on other words leaves the
+    /// pane on what it showed, and a pane that's shut stays shut.
+    #[test]
+    fn a_press_on_commented_words_brings_the_comments_forward_in_an_open_pane() {
+        let (dir, mut app) = project();
+        app.show_sidebar = false;
+        let text: String = (1..=20).map(|n| format!("row {n} of the note\n")).collect();
+        fs::write(dir.path().join("note.txt"), text).unwrap();
+        app.open(&dir.path().join("note.txt")).unwrap();
+        let thread = |id: u32, line: usize, quote: &str, text: &str| -> Thread {
+            let fields = format!(
+                r#""id":{id},"file":"note.txt","line":{line},"quote":"{quote}","text":"{text}""#
+            );
+            serde_json::from_str(&format!("{{{fields}}}")).unwrap()
+        };
+        app.threads = (1..=7)
+            .map(|n| {
+                let line = n as usize * 2;
+                thread(n, line, &format!("row {line} of"), &format!("remark {n}"))
+            })
+            .collect();
+        let press = |app: &mut App, words: &str| {
+            let (x, y) = find(&screen(app), words);
+            app.handle(mouse(MouseKind::Left, x + 2, y));
+            app.handle(mouse(MouseKind::Up, x + 2, y));
+        };
+        // The pane is open on the Inbox.
+        app.run(Command::ShowInbox);
+        assert!(app.dock.open);
+        assert_eq!(app.dock.front, Front::Inbox);
+        assert!(!screen(&app).text().contains("remark"));
+
+        // Words no comment is about leave it there.
+        press(&mut app, "row 15 of the note");
+        assert_eq!(app.dock.front, Front::Inbox);
+
+        // A comment's words bring the Comments forward, scrolled to its card, which is lit;
+        // the keyboard stays in the file, and the Inbox keeps its tab.
+        press(&mut app, "row 14 of the note");
+        assert_eq!(app.dock.front, Front::Comments);
+        assert_eq!(app.lit_thread, Some(7));
+        assert!(!app.dock.focused, "the keyboard is the file's");
+        let grid = screen(&app);
+        assert!(grid.text().contains("remark 7"), "{}", grid.text());
+        let lit = grid.paint.iter().any(
+            |p| matches!(p, Paint::Panel { border: Some(edge), .. } if *edge == app.theme.accent),
+        );
+        assert!(lit, "its card is lit");
+        assert!(grid.text().contains("Inbox"), "{}", grid.text());
+
+        // Back on the Inbox, a press on the scrollbar, with the caret still in those words,
+        // isn't a press on them.
+        app.run(Command::ShowInbox);
+        assert_eq!(app.dock.front, Front::Inbox);
+        let area = app.focused_area();
+        app.handle(mouse(MouseKind::Left, area.right() - 1, area.y + 1));
+        app.handle(mouse(MouseKind::Up, area.right() - 1, area.y + 1));
+        assert_eq!(app.lit_thread, Some(7), "the caret is where it was");
+        assert_eq!(app.dock.front, Front::Inbox);
+
+        // A pane that's shut stays shut, and the comment is lit for when it opens.
+        app.run(Command::CloseDock);
+        press(&mut app, "row 14 of the note");
+        assert!(!app.dock.open);
+        assert_eq!(app.lit_thread, Some(7));
     }
 
     /// The Comments pane lists in the document's order, or by which was made last or first,

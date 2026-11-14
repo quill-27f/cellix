@@ -2037,3 +2037,13 @@ The user: "After a big comment list scroll to the top. UI freezes for a while". 
 - Not done, and measured while here: the first event after a file opened took 20 ms with 300 open comments on it and 270 ms with 1,000. By the code that's each open comment being looked for through the whole file (`Thread::place`), which happens again at every change to the file, so typing in such a file would pay it at each key; not timed on a keystroke, and resolved comments aren't looked for. The first frame with the pane still shapes every comment once (150 to 170 ms at 300). `FontMeasure` still forgets everything at 20,000 strings, so a change to the list just after that shapes it all again, once.
 - Unverified: the user's own project. The figures are from made-up comments of 6 to 120 words.
 
+## A press on commented words brings Comments forward (2026-11-14)
+
+The user: "When I click a comment from the doc if sidebar is active with another tab, we should move to the comment tab automatically?" Yes: the card was being lit behind whatever tab was in front, where it couldn't be seen.
+
+- `light_comment_at_caret` now shows the Comments tab when the pane is open on something else, and the card is lit and scrolled to as before. The tab that was in front keeps its place in the row, a click away.
+- Only for a press that put the caret in those words (`Drag::Text` after the press). The lighting goes by where the caret is after any press in the file's area, so a press on the scrollbar or a checkbox with the caret already in commented words lit the card too; harmless when all it did was light, but it shouldn't take the pane off an agent.
+- A pane that's shut stays shut: the user asked about an open one, and the pane's rule is that it holds what was opened. The comment is still lit for when it opens.
+- The cost: with the Preview or an agent in front, a click into commented words to edit them now turns the pane to Comments. One click on the tab goes back. If that grates, the next thing to try is doing it only when a Comments tab is already in the row.
+- Test: `a_press_on_commented_words_brings_the_comments_forward_in_an_open_pane`. DESIGN's Companion section and the README say it.
+

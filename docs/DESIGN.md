@@ -196,8 +196,12 @@ hard-wrapped file fills the page and saves unchanged. On a page, arrows and Home
 ### Companion
 
 A press on words a comment is about lights that comment's card in the Comments pane, with
-the accent's edge, and scrolls the pane to it, when Comments is the tab in front; a press on
-other words puts the light out. It goes the other way too: a click on a card goes to its
+the accent's edge, and scrolls the pane to it; a press on other words puts the light out. A
+pane open on another tab turns to Comments for it, the tab it was on staying in the row (the
+user's ask, 14 November 2026: until then the card was lit behind whatever was in front, where
+nobody saw it). That's only for a press that puts the caret in those words, not one on the
+scrollbar or a checkbox while the caret is already there. A pane that's shut stays shut, since
+the pane holds what was opened and a press in the text isn't a press on the pane. It goes the other way too: a click on a card goes to its
 words, selects them so they're plain to see, lights the card, and leaves the keyboard in the
 file; the buttons that offer to comment on a selection stay away from those words. The pane lists in the document's order, or by which comment was made last or first
 (a comment's number counts up as they're made, which is the only record of when), chosen from a
