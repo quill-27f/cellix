@@ -31,6 +31,9 @@ SEARCH, OUTLINE, REVIEW = 2, 3, 5  # a row and a half apart, at their middles
 PALETTE_UP = "Type to search"
 # The face under a comment being written in a 150-column window, after the eight emoji.
 EMOJI_BUTTON = (124, 5)
+# The button that shows the resolved comments, when none is open: under the two lines that
+# say so, in that window.
+SHOW_RESOLVED = (103, 5)
 def command(words, opened="\x1b[112;6u"):
     return [["keys", opened], ["until", PALETTE_UP], ["keys", words], ["until", words], ["keys", "\r"],
             ["gone", words]]
@@ -118,6 +121,9 @@ EXPECT = {
     "50-plan-versions": "yours",
     "50-plan-versions-narrow": "yours",
     "50-review": "suggested",
+    "50-comments-all-resolved": "No open comments",
+    # A button's cells are fewer than its words, so less of it is waited for.
+    "50-comments-resolved-shown": "Hide res",
     "51-agent-list": "WORKTREES",
     "51-inbox-empty": "Nothing",
     "56-narrow-note": "WORKTREES",
@@ -155,7 +161,7 @@ EXPECT = {
     "98-pane-drag-under": "loss.png",
 }
 # About how many scenes there are, to cut the tour into parts of a size.
-SCENES_IN_ALL = 195
+SCENES_IN_ALL = 197
 # Scenes come to, shot, and those that never reached their surface.
 SEEN, SHOT, FAILED = [0], [], []
 # Which commit the binary is, as far as git can say: the pictures are of that.
@@ -1040,6 +1046,19 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("50-plan-versions", comments, "docs/PLAN.md", size="150x44")
     # Narrow beside the editor: a pill that can't share its header's row goes under it.
     shoot("50-plan-versions-narrow", comments, "docs/PLAN.md", size="96x44")
+    # Every comment on the file settled: the pane says none is open, says how one is made and
+    # offers the settled ones, each on a row of its own. Then with them shown, under those rows.
+    settled = [dict(thread, resolved=True) for thread in review
+               if thread["file"] == NOTE_FILE and not thread["suggested_by"]]
+    with open(f"{ROOT}/.cellix/threads.json", "w") as f:
+        json.dump(settled, f)
+    none_open = [["wait", 1.0], *command("show comments", F1), ["until", "No open comments"],
+                 ["wait", 1.0]]
+    shoot("50-comments-all-resolved", none_open, NOTE_FILE, size="150x44")
+    shoot("50-comments-resolved-shown", [*none_open, ["click", *SHOW_RESOLVED], ["wait", 0.6]],
+          NOTE_FILE, size="150x44")
+    with open(f"{ROOT}/.cellix/threads.json", "w") as f:
+        json.dump(review, f)
     shoot("51-agent-list", [*LIST_AGENTS, ["wait", 1.0]], NOTE_FILE, size="150x44")
     shoot("51-inbox-empty", [*SHOW_INBOX, ["wait", 0.6]], NOTE_FILE, size="150x44")
     shell = [*LIST_AGENTS, ["wait", 0.6]]

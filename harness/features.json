@@ -4975,5 +4975,12 @@
     "title": "A press on words a comment is about brings the Comments tab forward in a pane that's open on another",
     "test": "a_press_on_commented_words_brings_the_comments_forward_in_an_open_pane",
     "passes": true
+  },
+  {
+    "id": "comments-empty-hint-row",
+    "milestone": 14,
+    "title": "With no open comments, the hint, the button that shows the resolved ones and their cards each have rows of their own",
+    "test": "the_hint_under_no_open_comments_has_a_row_to_itself",
+    "passes": true
   }
 ]

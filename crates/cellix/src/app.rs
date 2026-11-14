@@ -21843,6 +21843,72 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert_eq!(app.lit_thread, Some(7));
     }
 
+    /// With every comment resolved the pane says so, says how one is made, and offers the
+    /// resolved ones, each on a row of its own. The hint was drawn on the row after its
+    /// sentence without having it, so the button, or the first resolved card, stood on it.
+    #[test]
+    fn the_hint_under_no_open_comments_has_a_row_to_itself() {
+        let (dir, mut app) = project();
+        app.show_sidebar = false;
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        let thread = |id: u32, text: &str| -> Thread {
+            let fields = format!(r#""id":{id},"file":"alpha.txt","line":1,"text":"{text}""#);
+            serde_json::from_str(&format!("{{{fields},\"quote\":\"\",\"resolved\":true}}")).unwrap()
+        };
+        app.threads = vec![thread(1, "settled once"), thread(2, "settled twice")];
+        app.run(Command::ShowComments);
+        let rows = |app: &App| -> Vec<String> {
+            let grid = screen(app);
+            (0..grid.height()).map(|y| grid.row_text(y)).collect()
+        };
+        let row_of = |rows: &[String], words: &str| {
+            rows.iter()
+                .position(|row| row.contains(words))
+                .unwrap_or_else(|| panic!("{words:?} not on screen:\n{}", rows.join("\n")))
+        };
+        let shown = rows(&app);
+        let none = row_of(&shown, "No open comments.");
+        let hint = row_of(&shown, "Select text in a file");
+        let button = row_of(&shown, "Show 2 resolved");
+        assert_eq!(hint, none + 1, "the hint is under its sentence");
+        assert!(
+            shown[hint].contains("then press Alt+C."),
+            "and whole: {:?}",
+            shown[hint]
+        );
+        assert_eq!(button, hint + 2, "the button a row clear of it");
+        assert!(!shown[button].contains("Alt+C"), "{:?}", shown[button]);
+
+        // The resolved ones shown: their first card starts clear of the hint too.
+        let (x, y) = find(&screen(&app), "Show 2 resolved");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        app.handle(mouse(MouseKind::Up, x + 1, y));
+        let shown = rows(&app);
+        let hint = row_of(&shown, "Select text in a file");
+        assert!(
+            shown[hint].contains("then press Alt+C."),
+            "{:?}",
+            shown[hint]
+        );
+        let card = row_of(&shown, "Resolved");
+        assert!(card >= hint + 2, "{}", shown.join("\n"));
+        assert!(row_of(&shown, "settled once") > card);
+
+        // A pane too narrow for the hint breaks it over two rows, which are both its own:
+        // the first card starts a row clear of the second.
+        app.set_pane_width(34);
+        let shown = rows(&app);
+        let hint = row_of(&shown, "Select text in a file");
+        assert!(!shown[hint].contains("Alt+C"), "{:?}", shown[hint]);
+        let rest = row_of(&shown, "Alt+C.");
+        assert_eq!(rest, hint + 1, "{}", shown.join("\n"));
+        assert!(
+            row_of(&shown, "Resolved") >= rest + 2,
+            "{}",
+            shown.join("\n")
+        );
+    }
+
     /// The Comments pane lists in the document's order, or by which was made last or first,
     /// from a row under the kinds. The order in use is marked in its list.
     #[test]

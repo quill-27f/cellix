@@ -2036,6 +2036,7 @@ The user: "After a big comment list scroll to the top. UI freezes for a while". 
 - With the pixel measure a row could break a word earlier or later than before where it was within a pixel of the width: a row's width is now the sum of its letters as the paragraph was shaped, not the row shaped by itself, and the two differ by the kerning at the row's ends. On cells they're the same.
 - Not done, and measured while here: the first event after a file opened took 20 ms with 300 open comments on it and 270 ms with 1,000. By the code that's each open comment being looked for through the whole file (`Thread::place`), which happens again at every change to the file, so typing in such a file would pay it at each key; not timed on a keystroke, and resolved comments aren't looked for. The first frame with the pane still shapes every comment once (150 to 170 ms at 300). `FontMeasure` still forgets everything at 20,000 strings, so a change to the list just after that shapes it all again, once.
 - Unverified: the user's own project. The figures are from made-up comments of 6 to 120 words.
+- Measured afterwards, with the wheel over the file and the long list in the pane beside it: a frame is 1.5 ms at 300 comments and 3.6 ms at 1,000, and a notch nothing. Before, that frame laid the list out as well, so scrolling the document froze the same way while Comments was the tab in front. (Timed with the example's pointer moved over the file, not kept.)
 
 ## A press on commented words brings Comments forward (2026-11-14)
 
@@ -2046,4 +2047,12 @@ The user: "When I click a comment from the doc if sidebar is active with another
 - A pane that's shut stays shut: the user asked about an open one, and the pane's rule is that it holds what was opened. The comment is still lit for when it opens.
 - The cost: with the Preview or an agent in front, a click into commented words to edit them now turns the pane to Comments. One click on the tab goes back. If that grates, the next thing to try is doing it only when a Comments tab is already in the row.
 - Test: `a_press_on_commented_words_brings_the_comments_forward_in_an_open_pane`. DESIGN's Companion section and the README say it.
+
+## The button over the empty list's hint (2026-11-14)
+
+The user sent a photo of the Comments tab with 80 resolved comments and none open: "Show 80 resolved" stood on top of "Select text in a file, then press Alt+C.", so the row read "Se Show 80 resolved ess Alt+C."
+
+- `Line::Empty` drew its hint on the row after its own without that row being one of the list's, so whatever came next was drawn there too: the button, or with the resolved ones showing, the first card's heading. It has been so since the button was added; with no resolved comments nothing follows, which is the only state the tour shows.
+- The hint is a row of the list (`Line::EmptyHint`) with a gap after it, and as many rows as a narrow pane breaks it into: it was cut at the pane's edge before, losing the key it names. Test: `the_hint_under_no_open_comments_has_a_row_to_itself`, which reads the rows of the screen with the resolved ones hidden, shown, and in a pane 34 columns wide.
+- The tour has the two states now, `50-comments-all-resolved` and `50-comments-resolved-shown` (197 scenes). A snapshot of the user's state before the change read as their photo did, and after it each line stands alone.
 

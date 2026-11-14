@@ -32,6 +32,8 @@ const REWRITE: [&str; 2] = ["Apply", "Not this"];
 const REOPEN: [&str; 1] = ["Reopen"];
 const HIDE_RESOLVED: &str = "Hide resolved";
 const CHECK: &str = "Check my review";
+/// Under the words that say no comment is open: how one is made.
+const EMPTY_HINT: &str = "Select text in a file, then press Alt+C.";
 /// Columns the agent's icon takes on Check my review.
 const CHECK_ICON: u16 = 2;
 /// The kinds of comment a careful review covers, in the order the strip shows them.
@@ -124,6 +126,10 @@ enum Line {
     Sort,
     /// Nothing open; true when there are resolved comments to show.
     Empty(bool),
+    /// Under it, how a comment is made, a row of it. It has rows of its own, as many as a
+    /// narrow pane breaks it into: the button that shows the resolved comments comes next,
+    /// or their cards.
+    EmptyHint(String),
     /// The button that asks the agent to check the review, after how many comments are the
     /// reviewer's and how many the agent's, and how many files they're on when the list
     /// covers every file.
@@ -1017,6 +1023,10 @@ fn lay_out(
         out.push(Line::Gap);
     } else if open.is_empty() {
         out.push(Line::Empty(resolved.0 > 0));
+        // It starts at the pane's text edge, a column outside a card's words either side.
+        let hint = wrap(EMPTY_HINT, width + 2.0, measure);
+        out.extend(hint.into_iter().map(Line::EmptyHint));
+        out.push(Line::Gap);
     }
     let mut place = None;
     for thread in threads {
@@ -1722,8 +1732,9 @@ pub fn draw(
                     "No comments yet."
                 };
                 grid.label(side, y, none, dim, right);
-                let hint = "Select text in a file, then press Alt+C.";
-                grid.label_at(side as f32, side, y + 1, hint, dim, right, SMALL);
+            }
+            Line::EmptyHint(hint) => {
+                grid.label_at(side as f32, side, y, hint, dim, right, SMALL);
             }
             Line::Header(_, label, suggested, pill) => {
                 let style = Style {
