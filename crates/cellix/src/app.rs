@@ -23447,7 +23447,9 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             .unwrap();
         app.handle(mouse(MouseKind::Left, button.x + 1, row.y));
         cell_ran(&mut app, "ran: import torch");
-        assert!(screen(&app).text().contains("python3, idle"));
+        // The first cell's output comes before the kernel says it's done, and the second
+        // cell after that, so the bar is waited for as the output is.
+        cell_ran(&mut app, "python3, idle");
     }
 
     #[test]

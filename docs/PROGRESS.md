@@ -2086,4 +2086,5 @@ The user said: "0.7.1 release it". It holds what their first evening with 0.7.0 
 - The changelog's entry for the stall says it comes after the scroll, as the user put it, not during.
 - Unverified in a real terminal: all of it, and on the user's own project. If the stall is still there over SSH, the next suspect is the 90 KB a notch the pane writes, and their `slow-frames.log` says which.
 - This Mac's toolchain is still 1.99 against CI's 1.100.
+- CI failed on the release commit, on macOS, in a test nothing here touched: `a_notebook_has_its_own_bar_that_says_what_the_kernel_is_doing` read the bar the moment the first cell's output showed, and the kernel says it's done on a later line, with a second cell still to run. It had always won that race here and on CI. The test now waits for the bar to say idle the way it waits for the output, with the same deadline; what it holds is unchanged. The release workflow was skipped, so nothing was published from `27740e4`.
 
