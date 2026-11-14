@@ -2,14 +2,7 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
-## [Unreleased]
-
-### Changed
-- A comment being written stands in a box, with the emoji and picture buttons inside it and two buttons under it: one that sends it, named for what that does (Comment, Reply, Save or Ask agent), and Cancel. Enter and Esc still do the same. While you answer or change a comment, those two take the place of its own buttons.
-
-### Fixed
-- A comment's card that ran past the bottom of the Comments pane was painted over the status bar under it. The pane's cards stay inside the pane.
-- After the window had changed size, a click could land three or four lines above the pointer, low in the window, until another resize happened to put it right. Cellix guessed the height of a row from the window's size, which is off in terminals whose window is taller than its rows. It now asks the terminal for the exact size again after any resize.
+## [0.7.0] - 2026-11-14
 
 ### Added
 - Click text that has a comment and its card is lit in the Comments tab, which scrolls to it. Click a comment's card and its words are selected in the file, with the keyboard there.
@@ -18,6 +11,13 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 - A link in a comment or a reply is underlined in the accent colour, and a click opens it: in the side pane's browser where there is one, in your own browser otherwise.
 - Emoji in comments. Type a name between colons, as on GitHub, and it becomes its emoji when you type the second colon: `:+1:` is 👍 and `:100:` is 💯. Part of a name, such as `:roc`, lists the emoji that fit under what you're writing: Tab takes the first, a click any of them. The eight you used last stand under a comment as you write it, a click each, and the face after them opens every emoji, searched by name. Emoji keep their colours where Cellix draws the text itself, and one press of Backspace takes a whole one. They're drawn in your machine's own emoji font, and where it has none, as a server over SSH rarely does, in Twemoji, which is now in the binary (about 1.5 MB). `CELLIX_EMOJI=built-in` uses Twemoji everywhere.
 - Pictures in comments. While you write a comment or a reply, paste a picture, drop its file on the window, press Ctrl+V with one on the clipboard, or use the picture button under your words to take one from the project or the clipboard. It's kept in the project under `.cellix/pasted`, out of git, and the comment names it by its path, so the agent can open it. On the card the picture stands under your words, and a click opens it in the Preview. A terminal without pictures shows its name as a link that opens it.
+
+### Changed
+- A comment being written stands in a box, with the emoji and picture buttons inside it and two buttons under it: one that sends it, named for what that does (Comment, Reply, Save or Ask agent), and Cancel. Enter and Esc still do the same. While you answer or change a comment, those two take the place of its own buttons.
+
+### Fixed
+- A comment's card that ran past the bottom of the Comments pane was painted over the status bar under it. The pane's cards stay inside the pane.
+- After the window had changed size, a click could land three or four lines above the pointer, low in the window, until another resize happened to put it right. Cellix guessed the height of a row from the window's size, which is off in terminals whose window is taller than its rows. It now asks the terminal for the exact size again after any resize.
 
 ## [0.6.8] - 2026-11-13
 

@@ -2012,3 +2012,11 @@ The user's answer to the open question: "Can we install a free emoji font togeth
 - Tests: `the_emoji_font_in_the_binary_draws_in_colour_by_itself` builds fonts with nothing of the machine's and holds that Twemoji is found, draws the usual eight, and gives a line of words red pixels of its own; `the_emoji_offered_are_ones_the_built_in_font_holds`. Looked at with `CELLIX_EMOJI=built-in` in snapshots of the list and a card: every emoji in view drew.
 - Unverified: a real server over SSH with no fonts; a Linux desktop whose Noto is COLR 1 (the check is there for it, and has only been run against a family that doesn't exist). The download grows by about a megabyte; not measured on a release build.
 - Twemoji stops at 2021's emoji and Twitter no longer keeps it up; newer ones typed by name show as a box on a machine that has only Twemoji.
+
+## Release 0.7.0 (2026-11-14)
+
+The user said: "0.7.0 release it". It holds everything since 0.6.8, all of it in comments but one fix: a press on commented words lights its card and a card's click selects its words; the pane's order; Alt+A and keys named on the buttons; links; emoji, with Twemoji in the binary; pictures; the comment being written in a box with buttons to send or drop it; cards kept off the status bar; and the press that landed lines above the pointer after a resize. README already says each where it describes comments, and credits Twemoji.
+
+- This Mac's toolchain is still 1.99 against CI's 1.100, not updated since that changes the user's machine, so CI may reject a lint `harness/x verify` passed.
+- Unverified in a real terminal: all of it. The cell-size fix helps only a terminal that answers `CSI 16 t`.
+- A whole tour wasn't taken before the release: the comment scenes were, twice, with the ui-expert's two reviews.

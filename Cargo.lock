@@ -792,7 +792,7 @@ dependencies = [
 
 [[package]]
 name = "cellix"
-version = "0.6.8"
+version = "0.7.0"
 dependencies = [
  "alacritty_terminal",
  "base64 0.22.1",
@@ -824,7 +824,7 @@ dependencies = [
 
 [[package]]
 name = "cellix-agent"
-version = "0.6.8"
+version = "0.7.0"
 dependencies = [
  "cellix-review",
  "dunce",
@@ -839,7 +839,7 @@ dependencies = [
 
 [[package]]
 name = "cellix-core"
-version = "0.6.8"
+version = "0.7.0"
 dependencies = [
  "ignore",
  "regex",
@@ -850,7 +850,7 @@ dependencies = [
 
 [[package]]
 name = "cellix-doc"
-version = "0.6.8"
+version = "0.7.0"
 dependencies = [
  "base64 0.22.1",
  "flate2",
@@ -870,11 +870,11 @@ dependencies = [
 
 [[package]]
 name = "cellix-input"
-version = "0.6.8"
+version = "0.7.0"
 
 [[package]]
 name = "cellix-lang"
-version = "0.6.8"
+version = "0.7.0"
 dependencies = [
  "serde_json",
  "tempfile",
@@ -915,7 +915,7 @@ dependencies = [
 
 [[package]]
 name = "cellix-render"
-version = "0.6.8"
+version = "0.7.0"
 dependencies = [
  "compact_str",
  "cosmic-text",
@@ -926,7 +926,7 @@ dependencies = [
 
 [[package]]
 name = "cellix-review"
-version = "0.6.8"
+version = "0.7.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -936,7 +936,7 @@ dependencies = [
 
 [[package]]
 name = "cellix-term"
-version = "0.6.8"
+version = "0.7.0"
 dependencies = [
  "base64 0.22.1",
  "cellix-render",
