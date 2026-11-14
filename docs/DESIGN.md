@@ -142,8 +142,8 @@ Paint positions are in 64ths of a cell, so they can sit between cells. A row's t
 the paint that touches it, so caching and reuse work as before. Cell text marked `painted`
 is skipped on pixel tiers and kept for the cell tier and tests.
 
-Fonts are embedded (Inter, JetBrains Mono), because pixels are drawn on the remote host
-over SSH and servers rarely have fonts.
+Fonts are embedded (Inter, JetBrains Mono, and Twemoji for emoji), because pixels are drawn
+on the remote host over SSH and servers rarely have fonts.
 
 Text is measured with the same fonts the rasterizer draws, through the `Measure` trait, so
 carets and wrapping use real glyph positions. The cell tier measures one column per
@@ -156,8 +156,14 @@ and again in black: what changes is text). It's set as a run of its own in that 
 Inter holds a plain heart and a plain smiling face and would draw those. The measure sets it in
 the same font, which it finds once for the process and loads by itself beside the built-in ones,
 so a caret after an emoji is where the emoji ends. The cell tier measures by what reads as one
-letter, so an emoji of several code points is its two columns once. A server with no emoji font
-has none to draw: bundling one is not done.
+letter, so an emoji of several code points is its two columns once.
+
+Which font that is: the machine's own (Apple Color Emoji, Noto Color Emoji, Segoe UI Emoji), so
+emoji look as they do in its other programs, when it has one this rasterizer draws in colour,
+which is tried, since a newer Noto is in a format it can't read; and otherwise Twemoji, which is
+in the binary (Mozilla's COLR build, 1.5 MB, vector, Emoji 14.0), so a server reached over SSH
+shows emoji too. `CELLIX_EMOJI=built-in` keeps to Twemoji everywhere. Noto's bitmap font draws
+as well and is current, but is 10.7 MB, a third of the download; the user chose Twemoji.
 
 Paint can be kept to a band of rows (`Grid::keep_to_rows`): on any other row it isn't drawn, and
 a row's tile doesn't hash it. A list scrolled in a pane paints its cards whole, and the part of
@@ -212,10 +218,10 @@ words in place of the hint, the nearest first: Tab takes that one and a click an
 stand the eight last used, the usual eight until then, each a click, kept between runs with the
 project's other state; after them a face opens every emoji in a grid under a search field, by kind
 under the most used, where the arrows move, Enter or a click takes one and typing looks through
-names and GitHub's names both. Only emoji up to Emoji 15.0 are offered, since newer ones are a
-box on many machines; one typed by name is taken whatever its age. A name an agent spells out in
-an answer shows as its emoji. Where the screen can't draw emoji (painted text on a machine with
-no emoji font) none of this shows and names stay as typed.
+names and GitHub's names both. What's offered is what the emoji font in the binary holds whole (Emoji 14.0, asked of the font
+itself once), so no machine is offered a box; one typed by name is taken whatever its age. A name
+an agent spells out in an answer shows as its emoji. Should no font draw emoji in colour, none
+of this shows and names stay as typed.
 
 A picture is in a comment as a word of it: its path from the project's root, which is what an
 agent reads and can open, so nothing about a comment's shape changed. It gets there while the

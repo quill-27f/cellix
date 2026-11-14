@@ -286,7 +286,9 @@ underlined, and a click opens it, in the side pane's browser where there is one.
 Comments take emoji. Type a name between colons, as on GitHub: `:+1:` becomes 👍 and `:100:` becomes 💯
 as you type the second colon, and part of a name, such as `:roc`, lists the ones that fit, with Tab
 for the first. The eight you used last stand under a comment while you write it, and the face after
-them opens every emoji, searched by name.
+them opens every emoji, searched by name. Emoji are drawn in your machine's own emoji font; where it
+has none, as a server over SSH rarely does, they're drawn in Twemoji, which is in the binary.
+`CELLIX_EMOJI=built-in` uses Twemoji everywhere.
 
 Comments take pictures too. While you write one, paste a picture, drop its file on the window, press
 Ctrl+V with one on the clipboard, or click the picture button under your words for one from the
@@ -598,4 +600,7 @@ option.
 
 Cellix embeds [Inter](crates/cellix-render/fonts/LICENSE-Inter.txt) and
 [JetBrains Mono](crates/cellix-render/fonts/LICENSE-JetBrainsMono.txt), both under the SIL
-Open Font License.
+Open Font License, and [Twemoji](crates/cellix-render/fonts/LICENSE-Twemoji.txt) as built by
+Mozilla ([twemoji-colr](https://github.com/mozilla/twemoji-colr) 0.7.0, unchanged): the emoji are
+by Twitter and other contributors, under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/),
+and the font's build is under the Apache 2.0 license.

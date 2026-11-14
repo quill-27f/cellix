@@ -28,11 +28,18 @@ fn may_start(before: Option<char>) -> bool {
     before.is_none_or(|c| !c.is_alphanumeric() && c != ':')
 }
 
-/// Whether an emoji is one to offer: those from the last year or two are missing from the
-/// fonts and terminals of many machines, where they'd show as a box. One typed by its name
-/// is still taken.
-fn offered(emoji: &Emoji) -> bool {
-    emoji.emoji_version() <= EmojiVersion::new(15, 0)
+/// The emoji to offer: those the emoji font in the binary holds, which is what draws them
+/// on a machine with no emoji font of its own. A newer one would show there as a box, and
+/// is missing from many terminals too. One typed by its name is still taken. Worked out
+/// once: asking the font about each takes a moment.
+fn offered() -> &'static [&'static Emoji] {
+    static OFFERED: std::sync::OnceLock<Vec<&'static Emoji>> = std::sync::OnceLock::new();
+    OFFERED.get_or_init(|| {
+        emojis::iter()
+            .filter(|emoji| emoji.emoji_version() <= EmojiVersion::new(14, 0))
+            .filter(|emoji| cellix_render::built_in_emoji_holds(emoji.as_str()))
+            .collect()
+    })
 }
 
 fn named(name: &str) -> Option<&'static Emoji> {
@@ -117,7 +124,7 @@ pub fn suggest(
         return Vec::new();
     }
     let mut found = Vec::new();
-    for (order, emoji) in emojis::iter().filter(|e| offered(e)).enumerate() {
+    for (order, emoji) in offered().iter().enumerate() {
         let best = emoji
             .shortcodes()
             .filter_map(|code| Some((rank(&typed, code)?, code.len(), code)))
@@ -278,12 +285,14 @@ impl Picker {
             }
             for group in Group::iter() {
                 self.rows.push(Row::Heading(group_name(group)));
-                self.add(group.emojis().filter(|e| offered(e)).collect());
+                let of_it = offered().iter().filter(|e| e.group() == group);
+                self.add(of_it.copied().collect());
             }
             return;
         }
-        let mut found: Vec<((u8, usize), &'static Emoji)> = emojis::iter()
-            .filter(|e| offered(e))
+        let mut found: Vec<((u8, usize), &'static Emoji)> = offered()
+            .iter()
+            .copied()
             .enumerate()
             .filter_map(|(order, emoji)| {
                 let names = emoji.shortcodes().chain(std::iter::once(emoji.name()));
@@ -605,7 +614,7 @@ mod tests {
     fn the_picker_lists_every_emoji_and_finds_them_by_name() {
         let screen = Rect::new(0, 0, 100, 40);
         let mut picker = Picker::new((60, 10), screen, &QUICK);
-        let offered = emojis::iter().filter(|e| offered(e)).count();
+        let offered = offered().len();
         assert!(offered > 1500, "{offered}");
         assert_eq!(picker.shown.len(), QUICK.len() + offered);
         assert_eq!(picker.rows[0], Row::Heading(MOST_USED));
@@ -627,6 +636,32 @@ mod tests {
         picker.query = "zzzz".to_string();
         picker.list();
         assert_eq!(picker.current(), None);
+    }
+
+    /// What's offered is what the emoji font in the binary can draw, so a machine with no
+    /// emoji font of its own shows no boxes: the usual eight are among them, an emoji from
+    /// after the font isn't, and the font lacks next to none from before.
+    #[test]
+    fn the_emoji_offered_are_ones_the_built_in_font_holds() {
+        let all = offered();
+        for usual in QUICK {
+            let known = known(usual).unwrap();
+            assert!(all.iter().any(|e| e.as_str() == known), "{usual}");
+        }
+        assert!(
+            !all.iter().any(|e| e.as_str() == "🫨"),
+            "from a year after the font"
+        );
+        let old: Vec<&str> = emojis::iter()
+            .filter(|e| e.emoji_version() <= EmojiVersion::new(14, 0))
+            .filter(|e| !all.contains(e))
+            .map(|e| e.as_str())
+            .collect();
+        assert!(old.len() < 20, "the font lacks {}: {old:?}", old.len());
+        // A name typed whole is still taken, whatever its age.
+        let mut text = ":shaking_face:".to_string();
+        let mut caret = text.len();
+        assert_eq!(close_code(&mut text, &mut caret), Some("🫨"));
     }
 
     #[test]

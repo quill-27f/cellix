@@ -4954,5 +4954,12 @@
     "title": "A comment's card cut by the pane's foot isn't painted on the bar under it",
     "test": "a_card_running_past_the_panes_foot_stays_off_the_bar_under_it",
     "passes": true
+  },
+  {
+    "id": "emoji-font-built-in",
+    "milestone": 14,
+    "title": "An emoji font in the binary draws emoji in colour on a machine that has none",
+    "test": "the_emoji_font_in_the_binary_draws_in_colour_by_itself",
+    "passes": true
   }
 ]

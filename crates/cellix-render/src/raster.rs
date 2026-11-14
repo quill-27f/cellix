@@ -98,7 +98,7 @@ fn system_fonts() -> fontdb::Database {
 }
 
 /// The fonts text is drawn with: the ones in the binary, and behind them whatever the
-/// machine has, for the scripts and emoji those don't hold.
+/// machine has, for the scripts those don't hold and for emoji in the machine's own style.
 fn drawing_fonts() -> FontSystem {
     let mut fonts = FontSystem::new_with_locale_and_db_and_fallback(
         "en-US".to_string(),
@@ -110,40 +110,108 @@ fn drawing_fonts() -> FontSystem {
     db.load_font_data(INTER_ITALIC.to_vec());
     db.load_font_data(MONO.to_vec());
     db.load_font_data(MONO_ITALIC.to_vec());
+    db.load_font_data(EMOJI.to_vec());
     db.set_monospace_family("JetBrains Mono");
     db.set_sans_serif_family("Inter Variable");
-    EMOJI_FONT.get_or_init(|| find_emoji_font(&fonts));
+    if EMOJI_FONT.get().is_none() {
+        let found = find_emoji_font(&mut fonts);
+        EMOJI_FONT.get_or_init(|| found);
+    }
     fonts
 }
 
-/// The machine's emoji font, as its family and where it's read from. Found once: finding it
-/// means looking at every font there is, which the rasterizer does as it starts.
+/// The font emoji are drawn in, as its family and where it's read from. Found once: finding
+/// it means looking at every font there is, which the rasterizer does as it starts.
 static EMOJI_FONT: std::sync::OnceLock<Option<(String, fontdb::Source)>> =
     std::sync::OnceLock::new();
 
-fn find_emoji_font(fonts: &FontSystem) -> Option<(String, fontdb::Source)> {
-    const KNOWN: [&str; 6] = [
-        "Apple Color Emoji",
-        "Noto Color Emoji",
-        "Segoe UI Emoji",
-        "Twemoji Mozilla",
-        "Twitter Color Emoji",
-        "JoyPixels",
-    ];
-    let named = |wanted: &dyn Fn(&str) -> bool| {
-        fonts.db().faces().find_map(|face| {
-            let family = face.families.iter().find(|(name, _)| wanted(name))?;
-            Some((family.0.clone(), face.source.clone()))
-        })
+/// The machine's own emoji fonts, in the order they're reached for, so emoji look here as
+/// they do in its other programs.
+const SYSTEM_EMOJI: [&str; 3] = ["Apple Color Emoji", "Noto Color Emoji", "Segoe UI Emoji"];
+/// What the emoji font in the binary calls itself: Twemoji, as Mozilla builds it.
+const BUILT_IN_EMOJI: &str = "Twemoji Mozilla";
+
+/// A line of emoji set in one family, when every one of them came from it and not from a
+/// font the search fell back to.
+fn set_in(fonts: &mut FontSystem, family: &str, emoji: &str) -> Option<Buffer> {
+    let mut buffer = Buffer::new(fonts, Metrics::new(32.0, 40.0));
+    buffer.set_size(None, Some(40.0));
+    let attrs = Attrs::new().family(Family::Name(family));
+    let rich = std::iter::once((emoji, attrs.clone()));
+    buffer.set_rich_text(rich, &attrs, Shaping::Advanced, None);
+    buffer.shape_until_scroll(fonts, false);
+    let from_it = |glyph: &cosmic_text::LayoutGlyph| {
+        let face = fonts.db().face(glyph.font_id);
+        glyph.glyph_id != 0
+            && face.is_some_and(|face| face.families.iter().any(|(name, _)| name == family))
     };
-    KNOWN
-        .iter()
-        .find_map(|known| named(&|name| name == *known))
-        .or_else(|| named(&|name| name.contains("Emoji")))
+    let glyphs: Vec<&cosmic_text::LayoutGlyph> = buffer
+        .layout_runs()
+        .flat_map(|run| run.glyphs.iter())
+        .collect();
+    let whole = !glyphs.is_empty() && glyphs.into_iter().all(from_it);
+    whole.then_some(buffer)
 }
 
-/// The font emoji are drawn in, if the machine has one. Whatever measures text sets its
-/// emoji in the same one, or a caret after an emoji stands in the wrong place.
+/// Whether the emoji font in the binary holds an emoji, whole: one it only has the parts of
+/// would be drawn as those, side by side. This is what a machine with no emoji font of its
+/// own can show, so it's what's worth offering.
+pub fn built_in_emoji_holds(emoji: &str) -> bool {
+    thread_local! {
+        static FONTS: std::cell::RefCell<FontSystem> = std::cell::RefCell::new({
+            let mut db = fontdb::Database::new();
+            db.load_font_data(EMOJI.to_vec());
+            FontSystem::new_with_locale_and_db("en-US".to_string(), db)
+        });
+    }
+    FONTS.with(|fonts| {
+        let set = set_in(&mut fonts.borrow_mut(), BUILT_IN_EMOJI, emoji);
+        set.is_some_and(|buffer| {
+            let glyphs = buffer.layout_runs().flat_map(|run| run.glyphs.iter());
+            glyphs.filter(|glyph| glyph.w > 0.0).count() == 1
+        })
+    })
+}
+
+/// Whether a family's emoji come out in colour here. A font in a format the rasterizer
+/// can't read, as a newer Noto Color Emoji is, draws nothing or a plain shape.
+fn draws_colour(fonts: &mut FontSystem, family: &str) -> bool {
+    let Some(mut buffer) = set_in(fonts, family, "👍") else {
+        return false;
+    };
+    let mut coloured = false;
+    let mut swash = SwashCache::new();
+    let white = Color::rgb(255, 255, 255);
+    buffer.draw(fonts, &mut swash, white, |_, _, _, _, color| {
+        coloured |= color.a() > 0 && (color.r(), color.g(), color.b()) != (255, 255, 255);
+    });
+    coloured
+}
+
+/// The machine's own emoji font where it has one this can draw, and the one in the binary
+/// where it doesn't: a server reached over SSH rarely has any.
+fn find_emoji_font(fonts: &mut FontSystem) -> Option<(String, fontdb::Source)> {
+    // `CELLIX_EMOJI=built-in` keeps to the one in the binary, for the same emoji on every
+    // machine.
+    let built_in_only = std::env::var("CELLIX_EMOJI").is_ok_and(|choice| choice == "built-in");
+    let own = SYSTEM_EMOJI.iter().copied().filter(|_| !built_in_only);
+    for family in own.chain([BUILT_IN_EMOJI]) {
+        let source = fonts
+            .db()
+            .faces()
+            .find(|face| face.families.iter().any(|(name, _)| name == family))
+            .map(|face| face.source.clone());
+        if let Some(source) = source
+            && draws_colour(fonts, family)
+        {
+            return Some((family.to_string(), source));
+        }
+    }
+    None
+}
+
+/// The font emoji are drawn in. Whatever measures text sets its emoji in the same one, or a
+/// caret after an emoji stands in the wrong place.
 pub(crate) fn emoji_font() -> Option<&'static (String, fontdb::Source)> {
     if EMOJI_FONT.get().is_none() {
         drop(drawing_fonts());
@@ -163,6 +231,8 @@ pub(crate) const INTER: &[u8] = include_bytes!("../fonts/InterVariable.ttf");
 pub(crate) const INTER_ITALIC: &[u8] = include_bytes!("../fonts/InterVariable-Italic.ttf");
 pub(crate) const MONO: &[u8] = include_bytes!("../fonts/JetBrainsMonoVariable.ttf");
 pub(crate) const MONO_ITALIC: &[u8] = include_bytes!("../fonts/JetBrainsMonoVariable-Italic.ttf");
+/// Twemoji, for emoji on a machine with no emoji font of its own.
+pub(crate) const EMOJI: &[u8] = include_bytes!("../fonts/TwemojiMozilla.ttf");
 
 /// The pixel size painted text is drawn at, for a row height and font.
 pub(crate) fn text_pixels(row_height: usize, font: Font) -> f32 {
@@ -1126,6 +1196,62 @@ mod tests {
             .collect();
         assert!(reds.iter().any(|r| *r > 200), "dashes are drawn");
         assert!(reds.iter().any(|r| *r < 60), "with gaps between them");
+    }
+
+    /// The emoji font in the binary draws in colour with none of the machine's fonts, which
+    /// is what a server reached over SSH has, and holds the eight emoji that stand under a
+    /// comment being written.
+    #[test]
+    fn the_emoji_font_in_the_binary_draws_in_colour_by_itself() {
+        let mut db = fontdb::Database::new();
+        for data in [INTER, INTER_ITALIC, MONO, MONO_ITALIC, EMOJI] {
+            db.load_font_data(data.to_vec());
+        }
+        db.set_monospace_family("JetBrains Mono");
+        db.set_sans_serif_family("Inter Variable");
+        let mut fonts = FontSystem::new_with_locale_and_db("en-US".to_string(), db);
+        assert!(draws_colour(&mut fonts, BUILT_IN_EMOJI));
+        let found = find_emoji_font(&mut fonts).map(|(family, _)| family);
+        assert_eq!(found.as_deref(), Some(BUILT_IN_EMOJI));
+        for emoji in ["👍", "💯", "❤\u{fe0f}", "🎉", "😄", "👀", "🚀", "✅"] {
+            assert!(
+                set_in(&mut fonts, BUILT_IN_EMOJI, emoji).is_some(),
+                "{emoji}"
+            );
+        }
+        // A family the machine doesn't have draws nothing in colour.
+        assert!(!draws_colour(&mut fonts, "No Such Emoji"));
+        // It holds a flag and a family whole, and not an emoji newer than it is.
+        for emoji in ["🇹🇷", "👩\u{200d}💻", "❤\u{fe0f}", "1\u{fe0f}\u{20e3}"] {
+            assert!(built_in_emoji_holds(emoji), "{emoji}");
+        }
+        assert!(
+            !built_in_emoji_holds("🫨"),
+            "a face from a year after the font"
+        );
+        assert!(!built_in_emoji_holds("ok"));
+        // And through the rasterizer itself: a line of words with two in it.
+        let metrics = fit_font(&mut fonts, 10, 20).unwrap();
+        let mut r = SoftwareRasterizer {
+            fonts,
+            emoji: Some(BUILT_IN_EMOJI.to_string()),
+            swash: SwashCache::new(),
+            metrics,
+            cell: (10, 20),
+            masks: HashMap::new(),
+            painted: HashMap::new(),
+            text: HashMap::new(),
+        };
+        let mask = r.text_mask("ok 🚀 ❤\u{fe0f}", Font::default());
+        let own = mask
+            .own
+            .as_ref()
+            .expect("the emoji have colours of their own");
+        let red = own
+            .iter()
+            .flatten()
+            .filter(|rgb| rgb.0 > 150 && rgb.2 < 120);
+        assert!(red.count() > 10, "a heart and a rocket's flame are red");
     }
 
     #[test]

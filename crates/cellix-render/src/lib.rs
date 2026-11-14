@@ -14,4 +14,4 @@ pub use paint::{
     ALL_CORNERS, BOTTOM_LEFT, BOTTOM_RIGHT, Bitmap, Bounds, Paint, Pixels, Strip, TOP_LEFT,
     TOP_RIGHT, UNIT, units,
 };
-pub use raster::{INTERFACE_SIZE, Image, Rasterizer, SoftwareRasterizer};
+pub use raster::{INTERFACE_SIZE, Image, Rasterizer, SoftwareRasterizer, built_in_emoji_holds};
