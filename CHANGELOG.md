@@ -2,14 +2,14 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
-## [Unreleased]
+## [0.7.1] - 2026-11-14
 
 ### Changed
 - The Comments tab's order and its resolved comments each have a button with a chevron, where there were plain words. **Show N resolved** now stays where it is when you click it: it stands after the comments still open and the resolved ones unfold under it, so the same click folds them away again. They used to be mixed in among the open ones, with the button at the very end of the list.
 - Click words that have a comment while the side pane is open on another tab, an agent or the Preview say, and the Comments tab comes forward with that comment lit and in view. The tab you were on keeps its place in the row. A pane that's closed stays closed.
 
 ### Fixed
-- A long list of comments froze the window when the Comments tab was scrolled, for seconds at a time with a trackpad. The whole list was laid out again at every turn of the wheel, every click and every frame, and past about 20,000 words of comments and answers each of those measured all the text from scratch: 0.7 s a notch for 300 comments. The list is laid out once, when something in it changes, and a notch now takes under a millisecond.
+- A long list of comments froze the window for a while after the Comments tab was scrolled. Every turn of the wheel laid the whole list out again, as did every click and every frame, and a trackpad goes on sending turns after the list has stopped, so the window answered nothing until they had all been gone through. Past about 20,000 words of comments and answers each layout also measured all the text from scratch: 0.7 s a turn for 300 comments. The list is laid out once, when something in it changes, and a turn now takes under a millisecond.
 - With every comment resolved, the "Show resolved" button was drawn on top of the hint under "No open comments.", and with the resolved ones showing, the first of them was. The hint has a row of its own.
 
 ## [0.7.0] - 2026-11-14

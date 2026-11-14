@@ -2079,3 +2079,11 @@ The user, on the long list's fix: "For scroll part, it's fast enough actually fo
 - **What the fix doesn't touch.** `wheel` now prints what each frame writes to the terminal. Scrolling the pane into cards it hasn't shown writes 91 KB a notch (330 at most), and coming back up after a long scroll 48 KB a notch, since the terminal's picture quota has dropped those rows by then; 15 KB when it still holds them. That's 11 MB for 120 notches down. On the same machine a terminal takes that in its stride, but over SSH it's seconds of backlog that would also read as a stall after scrolling, with the time under `present`. Whether the user's Cellix is across SSH for this isn't known. Pane lists don't glide as the editor does, so each notch is three new rows of tiles.
 - **A trap, sprung and cleared.** The old commit was built with `CARGO_TARGET_DIR` pointed at this checkout's `target`, to reuse the dependencies. Cargo names a workspace crate's output without the checkout's path, so 0.7.0's crates replaced this checkout's, and afterwards looked fresh, this checkout's sources being older than they were. A run meant as the fixed code was 0.7.0 again (the same figures gave it away), and the next edit failed to compile against the old `cellix-render`. `cargo clean -p` for the nine crates put it right: 34.6 GB went, `target` is 8 GB, and the next gate builds every test again. The gate for `44be8a0` ran before any of this. A second checkout gets its own target directory.
 
+## Release 0.7.1 (2026-11-14)
+
+The user said: "0.7.1 release it". It holds what their first evening with 0.7.0 turned up, all in the Comments tab: the stall after scrolling a long list, the Comments tab coming forward for a press on commented words, the button drawn over the empty list's hint, and the order and the resolved comments as buttons with chevrons, the resolved ones unfolding under theirs. README already says the press and the buttons where it describes comments.
+
+- The changelog's entry for the stall says it comes after the scroll, as the user put it, not during.
+- Unverified in a real terminal: all of it, and on the user's own project. If the stall is still there over SSH, the next suspect is the 90 KB a notch the pane writes, and their `slow-frames.log` says which.
+- This Mac's toolchain is still 1.99 against CI's 1.100.
+
