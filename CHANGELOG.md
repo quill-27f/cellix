@@ -2,6 +2,11 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
+## [Unreleased]
+
+### Fixed
+- A long list of comments froze the window when the Comments tab was scrolled, for seconds at a time with a trackpad. The whole list was laid out again at every turn of the wheel, every click and every frame, and past about 20,000 words of comments and answers each of those measured all the text from scratch: 0.7 s a notch for 300 comments. The list is laid out once, when something in it changes, and a notch now takes under a millisecond.
+
 ## [0.7.0] - 2026-11-14
 
 ### Added

@@ -909,3 +909,13 @@ the pane. A row's key says nothing of where the row stands. Whole-window tiles t
 whatever the sidebar showed at that height, so every row of a scroll was new, and settling redrew the
 window. The periodic look at the tree and git runs on a thread for the same reason: anything on the
 main loop shows up as a stall in the glide.
+
+A list in the pane moves by lines, and every notch asks how far the list goes, as every press asks
+what's under it and every frame what's in view. For the comments all three used to lay the whole
+list out, and wrapping measured a row again each time it grew by a word, so a long list asked for
+more strings than the measure keeps (20,000) and shaped every one afresh each time: 0.7 s a notch
+for 300 comments, where the loop takes all the notches waiting before it draws. Now a paragraph is
+measured once and wrapped from that (`threads::wrap`), and the rows are kept until what they were
+laid out from changes (`threads::Laid`, by a hash of the comments, the one being written, the view
+and the width, so nothing has to remember to say a comment changed). A notch is 0.4 ms at 300
+comments. `harness/guard.sh -- cargo run --release -p cellix --example wheel <project> <file>` times it on any project, and `harness/many_comments.py` makes one with as many comments as asked for.

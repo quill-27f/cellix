@@ -2,6 +2,10 @@
 //! working on it, where the agent's answer lands under the question.
 
 use std::borrow::Cow;
+use std::cell::{Cell, RefCell};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::rc::Rc;
 
 use cellix_render::{Bounds, Font, Grid, Icon, Measure, Paint, Rect, Style};
 use cellix_review::threads::{Reply, YOU};
@@ -222,7 +226,7 @@ fn pill_tone(words: Words, theme: &Theme) -> cellix_render::Rgb {
 const PILL_AIR: f32 = 1.0;
 
 /// A comment or reply being written, in place, so what it's about stays in view.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Draft {
     /// The thread it answers. None starts a new one.
     pub thread: Option<u32>,
@@ -246,23 +250,49 @@ pub struct Draft {
 
 const NEW_DRAFT: u32 = 0;
 
+/// How wide a stretch of a paragraph's letters is, from the advances the whole of it was
+/// measured to: `from` and `count` are in letters.
+fn stretch(advances: &[f32], from: usize, count: usize) -> f32 {
+    let end = (from + count).min(advances.len());
+    advances[from.min(end)..end].iter().sum()
+}
+
 /// Breaks text into rows no wider than `width`, at spaces.
+///
+/// A paragraph is measured once, whole, and its rows are sums of that. Measuring each row
+/// again as it grew by a word asked for a different string per word, and a long list of
+/// comments then held more strings than the measure remembers, so every frame shaped all
+/// of them afresh: two thirds of a second for three hundred comments.
 pub fn wrap(text: &str, width: f32, measure: &dyn Measure) -> Vec<String> {
     let font = Font::default();
     let mut rows = Vec::new();
     for paragraph in text.lines() {
+        let advances = measure.advances(paragraph, font);
         let mut row = String::new();
+        // How wide the row is so far, and how many of the paragraph's letters are behind.
+        let mut wide = 0.0;
+        let mut letters = 0;
         for word in paragraph.split(' ') {
-            let longer = if row.is_empty() {
-                word.to_string()
-            } else {
-                format!("{row} {word}")
-            };
-            if measure.width(&longer, font) > width && !row.is_empty() {
+            let count = word.chars().count();
+            let word_wide = stretch(&advances, letters, count);
+            // The space that parts it from the word before.
+            let space = stretch(
+                &advances,
+                letters.saturating_sub(1),
+                usize::from(letters > 0),
+            );
+            letters += count + 1;
+            if row.is_empty() {
+                row.push_str(word);
+                wide = word_wide;
+            } else if wide + space + word_wide > width {
                 rows.push(std::mem::take(&mut row));
-                row = word.to_string();
+                row.push_str(word);
+                wide = word_wide;
             } else {
-                row = longer;
+                row.push(' ');
+                row.push_str(word);
+                wide += space + word_wide;
             }
         }
         rows.push(row);
@@ -352,15 +382,26 @@ pub fn wrap_spans(text: &str, width: f32, measure: &dyn Measure) -> Vec<(usize, 
     let mut rows = Vec::new();
     let mut start = 0;
     for paragraph in text.split('\n') {
+        // Measured once, as `wrap` does, so the two break a comment at the same words.
+        let advances = measure.advances(paragraph, font);
         let mut row = start;
         let mut word = start;
+        // How wide the row is up to this word, and how many letters are behind.
+        let mut wide = 0.0;
+        let mut letters = 0;
         for piece in paragraph.split(' ') {
+            let count = piece.chars().count();
+            let piece_wide = stretch(&advances, letters, count);
             let end = word + piece.len();
             let before = &text[row..word];
-            if !before.trim().is_empty() && measure.width(&text[row..end], font) > width {
+            if !before.trim().is_empty() && wide + piece_wide > width {
                 rows.push((row, word));
                 row = word;
+                wide = 0.0;
             }
+            // With the space after it, which stays at the row's end.
+            wide += piece_wide + stretch(&advances, letters + count, 1);
+            letters += count + 1;
             word = end + 1;
         }
         let end = start + paragraph.len();
@@ -585,7 +626,7 @@ fn picture_place(area: Rect, figure: &crate::rendered::Figure, inset: bool) -> (
 }
 
 /// The order the pane lists comments in.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Sort {
     /// As they stand in the document, top to bottom, a file at a time.
     #[default]
@@ -621,6 +662,75 @@ pub struct View<'a> {
     /// The pictures comments name, where the screen shows pictures: each stands on its card
     /// under the words, in place of its name among them. Without them a name is a link.
     pub pictures: Option<&'a Pictures>,
+    /// Where the list's rows are kept from one look at them to the next. Without it
+    /// they're laid out at each.
+    pub laid: Option<&'a Laid>,
+}
+
+/// A list's rows as they were last laid out, with a mark of all they were laid out from.
+/// Each notch of the wheel, each press and each frame asks for the rows, and in a long list
+/// laying them out is nearly all any of those costs: three hundred comments took 4 ms a
+/// time, so a trackpad's hundred notches held the screen still for a third of a second.
+/// With the same mark the rows are the ones already made.
+#[derive(Default)]
+pub struct Laid {
+    rows: RefCell<Option<(u64, Rc<Vec<Line>>)>>,
+    /// How many times a list has been laid out here, which a test holds it to.
+    times: Cell<usize>,
+}
+
+impl Laid {
+    #[cfg(test)]
+    pub fn times(&self) -> usize {
+        self.times.get()
+    }
+}
+
+impl std::fmt::Debug for Laid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Laid({})", self.times.get())
+    }
+}
+
+/// A number that's the same while everything the rows are laid out from is: the comments
+/// whole, the one being written with its caret, and how and how wide they're shown. It
+/// reads every word of them, and still costs a tenth of what laying them out does.
+fn mark((threads, draft, agent, resolved, view): Shown, width: f32, measure: &dyn Measure) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    threads.hash(&mut hasher);
+    draft.hash(&mut hasher);
+    agent.hash(&mut hasher);
+    resolved.hash(&mut hasher);
+    (view.grouped, view.lit, view.sort, view.quick).hash(&mut hasher);
+    // A picture takes rows by its size. They're summed, since a map has no order.
+    let pictures = view.pictures.map(|pictures| {
+        let sum = pictures.iter().fold(0u64, |sum, (name, figure)| {
+            let mut one = DefaultHasher::new();
+            (name, figure.width.to_bits(), figure.height.to_bits()).hash(&mut one);
+            sum.wrapping_add(one.finish())
+        });
+        (pictures.len(), sum)
+    });
+    pictures.hash(&mut hasher);
+    (width.to_bits(), measure.in_cells(), measure.cell_pixels()).hash(&mut hasher);
+    hasher.finish()
+}
+
+/// The list's rows: those kept, when nothing they were laid out from has changed.
+fn lines(shown: Shown, width: f32, measure: &dyn Measure) -> Rc<Vec<Line>> {
+    let Some(laid) = shown.4.laid else {
+        return Rc::new(lay_out(shown, width, measure));
+    };
+    let mark = mark(shown, width, measure);
+    if let Some((of, rows)) = &*laid.rows.borrow()
+        && *of == mark
+    {
+        return rows.clone();
+    }
+    let rows = Rc::new(lay_out(shown, width, measure));
+    laid.times.set(laid.times.get() + 1);
+    *laid.rows.borrow_mut() = Some((mark, rows.clone()));
+    rows
 }
 
 impl Default for View<'_> {
@@ -631,6 +741,7 @@ impl Default for View<'_> {
             sort: Sort::default(),
             quick: Some(crate::emoji::QUICK),
             pictures: None,
+            laid: None,
         }
     }
 }
@@ -862,7 +973,7 @@ pub fn place_of(thread: &Thread) -> String {
     }
 }
 
-fn lines(
+fn lay_out(
     (threads, draft, agent, resolved, view): Shown,
     width: f32,
     measure: &dyn Measure,
@@ -2010,6 +2121,58 @@ mod tests {
         );
         assert_eq!(verdict("Disagree: no"), Some(("pushes back", "", "no")));
         assert_eq!(verdict("Thanks"), None);
+    }
+
+    /// Counts what it's asked to measure, and measures as the cell tier does.
+    struct Counting(Cell<usize>);
+
+    impl Measure for Counting {
+        fn advances(&self, text: &str, font: Font) -> Rc<Vec<f32>> {
+            self.0.set(self.0.get() + 1);
+            CellMeasure.advances(text, font)
+        }
+
+        fn in_cells(&self) -> bool {
+            true
+        }
+    }
+
+    /// A paragraph is measured once, whole, however many rows it breaks into: measured a
+    /// word at a time, a long list of comments asked for more strings than the measure
+    /// keeps, and shaped all of them again at every frame.
+    #[test]
+    fn a_paragraph_is_measured_once_however_many_rows_it_breaks_into() {
+        let text =
+            "one two three four five six seven eight\nand a second one, far too long for a row";
+        let measure = Counting(Cell::new(0));
+        let rows = wrap(text, 12.0, &measure);
+        assert_eq!(
+            rows,
+            [
+                "one two",
+                "three four",
+                "five six",
+                "seven eight",
+                "and a second",
+                "one, far too",
+                "long for a",
+                "row"
+            ]
+        );
+        assert_eq!(measure.0.get(), 2, "once a paragraph");
+        // And they're the rows that measuring each row by itself gives.
+        let by_row = |row: &String| CellMeasure.width(row, Font::default()) <= 12.0;
+        assert!(rows.iter().all(by_row));
+
+        // What's being written breaks at the same words, measured as few times.
+        let measure = Counting(Cell::new(0));
+        let spans = wrap_spans(text, 12.0, &measure);
+        let typed: Vec<&str> = spans
+            .iter()
+            .map(|(start, end)| text[*start..*end].trim_end())
+            .collect();
+        assert_eq!(typed, rows);
+        assert_eq!(measure.0.get(), 2);
     }
 
     #[test]

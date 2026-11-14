@@ -1252,6 +1252,9 @@ pub struct App {
     /// that isn't there, so it's read again only when that changes.
     comment_pictures: threads::Pictures,
     picture_stamps: HashMap<String, Option<std::time::SystemTime>>,
+    /// The Comments pane's rows as they were last laid out, kept until what they're laid
+    /// out from changes.
+    comment_rows: threads::Laid,
     /// The session that was in front when the last run here ended.
     kept_session: Option<String>,
     /// Whether how the two sides work together has been said yet.
@@ -1423,6 +1426,7 @@ impl App {
             emoji_used: Vec::new(),
             comment_pictures: threads::Pictures::new(),
             picture_stamps: HashMap::new(),
+            comment_rows: threads::Laid::default(),
             kept_session: None,
             kernels: HashMap::new(),
             kernel_command: None,
@@ -4036,7 +4040,10 @@ impl App {
             editor.renumber_lists();
         }
         self.follow_threads();
-        self.refresh_comment_pictures();
+        // The wheel changes no comment, and finding the pictures reads every one of them.
+        if !wheel {
+            self.refresh_comment_pictures();
+        }
         self.after_event(had_keys);
     }
 
@@ -10167,6 +10174,7 @@ impl App {
             sort: self.comment_sort,
             quick: self.quick_emoji(),
             pictures: self.measure.cell_pixels().map(|_| &self.comment_pictures),
+            laid: Some(&self.comment_rows),
         }
     }
 
@@ -10477,9 +10485,11 @@ impl App {
             threads::Sort::Newest => threads.sort_by_key(|t| std::cmp::Reverse(t.id)),
             threads::Sort::Oldest => threads.sort_by_key(|t| t.id),
             threads::Sort::Document if file.is_none() => {
-                // By name whatever its case, as the explorer lists files.
-                threads
-                    .sort_by_key(|t| (on_output(t), threads::place_of(t).to_lowercase(), t.line));
+                // By name whatever its case, as the explorer lists files. The name is made
+                // once a comment, not at each comparison of two.
+                threads.sort_by_cached_key(|t| {
+                    (on_output(t), threads::place_of(t).to_lowercase(), t.line)
+                });
             }
             threads::Sort::Document => threads.sort_by_key(|t| t.line),
         }
@@ -21700,6 +21710,58 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         app.handle(mouse(MouseKind::Up, x + 2, y));
         assert_eq!(app.lit_thread, None);
         assert_eq!(lit_cards(&app), 0);
+    }
+
+    /// A long list of comments is laid out when it changes and not again: not at a notch
+    /// of the wheel, which asks how far the list goes, nor at the frame after it. Laying
+    /// it out at each held the screen still while a trackpad's notches were gone through.
+    #[test]
+    fn a_long_list_of_comments_is_laid_out_once_however_far_the_wheel_turns() {
+        let (dir, mut app) = project();
+        app.show_sidebar = false;
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        let thread = |id: u32| -> Thread {
+            let fields =
+                format!(r#""id":{id},"file":"alpha.txt","line":1,"text":"remark {id} of many""#);
+            serde_json::from_str(&format!("{{{fields},\"quote\":\"\"}}")).unwrap()
+        };
+        app.threads = (1..=200).map(thread).collect();
+        app.run(Command::ShowComments);
+        let grid = screen(&app);
+        let (x, y) = find(&grid, "remark 1 of many");
+        // The first notch follows the comments to their file's words, which is a change.
+        app.handle(mouse(MouseKind::ScrollDown, x, y));
+        screen(&app);
+        let laid = app.comment_rows.times();
+        assert!(laid >= 1, "the list was laid out to be drawn");
+
+        for _ in 0..40 {
+            app.handle(mouse(MouseKind::ScrollDown, x, y));
+            screen(&app);
+        }
+        let down = screen(&app).text();
+        assert!(
+            !down.contains("remark 1 of many"),
+            "the list moved:\n{down}"
+        );
+        // To the top again, and past it.
+        for _ in 0..60 {
+            app.handle(mouse(MouseKind::ScrollUp, x, y));
+            screen(&app);
+        }
+        assert!(screen(&app).text().contains("remark 1 of many"));
+        assert_eq!(
+            app.comment_rows.times(),
+            laid,
+            "a hundred notches and their frames laid nothing out again"
+        );
+
+        // What changes the list is laid out, once, and shows.
+        app.threads[0].text = "said another way".to_string();
+        let changed = screen(&app).text();
+        assert!(changed.contains("said another way"), "{changed}");
+        screen(&app);
+        assert_eq!(app.comment_rows.times(), laid + 1);
     }
 
     /// The Comments pane lists in the document's order, or by which was made last or first,

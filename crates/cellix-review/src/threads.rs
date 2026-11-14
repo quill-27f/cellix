@@ -10,13 +10,13 @@ use serde::{Deserialize, Serialize};
 /// Who the person at the keyboard is, in a thread.
 pub const YOU: &str = "You";
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Reply {
     pub author: String,
     pub text: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Thread {
     pub id: u32,
     pub file: String,
@@ -69,7 +69,7 @@ pub struct Thread {
 }
 
 /// What a thread is about besides a file's words.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "is", rename_all = "lowercase")]
 pub enum About {
     /// Output in a terminal tab, which the quote and selection hold: the tab's name, the

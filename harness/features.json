@@ -4961,5 +4961,12 @@
     "title": "An emoji font in the binary draws emoji in colour on a machine that has none",
     "test": "the_emoji_font_in_the_binary_draws_in_colour_by_itself",
     "passes": true
+  },
+  {
+    "id": "comments-long-list",
+    "milestone": 14,
+    "title": "A long list of comments is laid out when it changes, not at each notch of the wheel or each frame",
+    "test": "a_long_list_of_comments_is_laid_out_once_however_far_the_wheel_turns",
+    "passes": true
   }
 ]
