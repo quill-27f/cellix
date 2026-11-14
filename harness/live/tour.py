@@ -32,8 +32,10 @@ PALETTE_UP = "Type to search"
 # The face under a comment being written in a 150-column window, after the eight emoji.
 EMOJI_BUTTON = (124, 5)
 # The button that shows the resolved comments, when none is open: under the two lines that
-# say so, in that window.
+# say so, in that window. And where it stands under the review's two cards, and the order's
+# button over them.
 SHOW_RESOLVED = (103, 5)
+REVIEW_RESOLVED, REVIEW_ORDER = (103, 18), (103, 4)
 def command(words, opened="\x1b[112;6u"):
     return [["keys", opened], ["until", PALETTE_UP], ["keys", words], ["until", words], ["keys", "\r"],
             ["gone", words]]
@@ -121,9 +123,12 @@ EXPECT = {
     "50-plan-versions": "yours",
     "50-plan-versions-narrow": "yours",
     "50-review": "suggested",
+    "50-review-resolved": "Hide 1",
+    "50-review-resolved-light": "Hide 1",
+    "50-review-order": "Newest first",
     "50-comments-all-resolved": "No open comments",
     # A button's cells are fewer than its words, so less of it is waited for.
-    "50-comments-resolved-shown": "Hide res",
+    "50-comments-resolved-shown": "Hide 2",
     "51-agent-list": "WORKTREES",
     "51-inbox-empty": "Nothing",
     "56-narrow-note": "WORKTREES",
@@ -161,7 +166,7 @@ EXPECT = {
     "98-pane-drag-under": "loss.png",
 }
 # About how many scenes there are, to cut the tour into parts of a size.
-SCENES_IN_ALL = 197
+SCENES_IN_ALL = 200
 # Scenes come to, shot, and those that never reached their surface.
 SEEN, SHOT, FAILED = [0], [], []
 # Which commit the binary is, as far as git can say: the pictures are of that.
@@ -1043,6 +1048,15 @@ with tempfile.TemporaryDirectory() as scratch:
         json.dump(review, f)
     comments = [["wait", 1.0], *command("show comments", F1), ["until", "yours"], ["wait", 1.0]]
     shoot("50-review", comments, NOTE_FILE, size="150x44")
+    # The resolved one unfolded under its button, after the two still open, with the pointer
+    # on the order's button; and the same in the light theme with it off both.
+    unfolded = [*comments, ["click", *REVIEW_RESOLVED], ["wait", 0.6]]
+    shoot("50-review-resolved", [*unfolded, ["move", *REVIEW_ORDER], ["wait", 0.4]], NOTE_FILE,
+          size="150x44")
+    shoot("50-review-resolved-light", unfolded, NOTE_FILE, size="150x44", background="eff1f5")
+    # The order's list, dropped from under its button.
+    shoot("50-review-order", [*comments, ["click", *REVIEW_ORDER], ["wait", 0.6]], NOTE_FILE,
+          size="150x44")
     shoot("50-plan-versions", comments, "docs/PLAN.md", size="150x44")
     # Narrow beside the editor: a pill that can't share its header's row goes under it.
     shoot("50-plan-versions-narrow", comments, "docs/PLAN.md", size="96x44")

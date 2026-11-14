@@ -9041,10 +9041,14 @@ impl App {
                 let view = self.comments_view();
                 let threads = (threads.as_slice(), draft, agent.as_str(), resolved, view);
                 let top = self.dock.tops.of(Front::Comments);
-                let hit = threads::hit(screen, threads, top, (x, y), &*self.measure);
+                let at = (x, y, mouse.fine_y);
+                let hit = threads::hit(screen, threads, top, at, &*self.measure);
+                // Its list drops from under what's painted of its button.
+                let menu = threads::order_menu_row(screen, threads, top, &*self.measure);
                 match hit {
-                    // Its list drops from under its own row.
-                    Some(ThreadHit::Sort) => self.show_sort_menu((screen.x + 2, y + 1)),
+                    Some(ThreadHit::Sort) => {
+                        self.show_sort_menu((screen.x + 2, menu.unwrap_or(y + 1)));
+                    }
                     // Every emoji, in a panel dropping from its button.
                     Some(ThreadHit::Emoji) => self.show_emoji((x.saturating_sub(1), y + 1)),
                     Some(ThreadHit::AddPicture) => {
@@ -21501,7 +21505,7 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             text.contains("Why first?") && text.contains("Resolved"),
             "{text}"
         );
-        assert!(text.contains("Hide resolved"), "{text}");
+        assert!(text.contains("Hide 1 resolved"), "{text}");
         let (x, y) = find(&screen(&app), "Reopen");
         app.handle(mouse(MouseKind::Left, x, y));
         assert!(!app.threads[0].resolved);
@@ -21907,6 +21911,64 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             "{}",
             shown.join("\n")
         );
+    }
+
+    /// The order and the resolved comments each have a button with a chevron. The resolved
+    /// one stands after the comments still open and stays where it is when it's pressed:
+    /// what it shows unfolds under it, wherever in the file those are, so the same press
+    /// folds them away again. It used to end the list, a list of resolved comments away.
+    #[test]
+    fn the_resolved_comments_unfold_under_their_button_which_stays_where_it_is() {
+        let (dir, mut app) = project();
+        app.show_sidebar = false;
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        let thread = |id: u32, line: usize, text: &str, resolved: bool| -> Thread {
+            let fields =
+                format!(r#""id":{id},"file":"alpha.txt","line":{line},"quote":"","text":"{text}""#);
+            serde_json::from_str(&format!("{{{fields},\"resolved\":{resolved}}}")).unwrap()
+        };
+        // In the file's order a resolved one comes first and another last.
+        app.threads = vec![
+            thread(1, 1, "settled early", true),
+            thread(2, 1, "still open", false),
+            thread(3, 2, "settled late", true),
+        ];
+        app.run(Command::ShowComments);
+        let press = |app: &mut App, words: &str| {
+            let (x, y) = find(&screen(app), words);
+            app.handle(mouse(MouseKind::Left, x + 1, y));
+            app.handle(mouse(MouseKind::Up, x + 1, y));
+        };
+        let grid = screen(&app);
+        // Each is a button: a chip's fill under its words, its chevron on the chip.
+        let chip = app.theme.quiet_button(app.theme.sidebar.bg);
+        let (x, order) = find(&grid, "Document order \u{25be}");
+        assert_eq!(grid.cell(x, order).style.bg, chip);
+        assert_eq!(
+            grid.cell(x + 15, order).style.bg,
+            chip,
+            "the chevron is on it"
+        );
+        let (x, button) = find(&grid, "\u{25b8} Show 2 resolved");
+        assert_eq!(grid.cell(x, button).style.bg, chip);
+        assert_eq!(grid.cell(x + 4, button).style.bg, chip);
+        assert!(button > find(&grid, "still open").1, "after what's open");
+        assert!(!grid.text().contains("settled"), "{}", grid.text());
+
+        // Pressed, it's on the row it was on, pointing down, with the resolved under it.
+        press(&mut app, "Show 2 resolved");
+        let grid = screen(&app);
+        assert_eq!(find(&grid, "\u{25be} Hide 2 resolved").1, button);
+        let row = |words: &str| find(&grid, words).1;
+        assert!(row("still open") < button, "{}", grid.text());
+        assert!(row("settled early") > button, "{}", grid.text());
+        assert!(row("settled late") > row("settled early"));
+
+        // The same place folds them away.
+        press(&mut app, "Hide 2 resolved");
+        let grid = screen(&app);
+        assert!(!grid.text().contains("settled"), "{}", grid.text());
+        assert_eq!(find(&grid, "Show 2 resolved").1, button);
     }
 
     /// The Comments pane lists in the document's order, or by which was made last or first,

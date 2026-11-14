@@ -342,6 +342,14 @@ impl Grid {
         self.button_of((BUTTON_HEIGHT, 0.0), (x, y), cells, label, fill, style);
     }
 
+    /// A button's chip by itself, as wide as asked and not a whole number of cells, for one
+    /// whose words and marks are placed by what draws it.
+    pub fn chip(&mut self, x: f32, y: u16, wide: f32, fill: Rgb) {
+        let top = y as f32 + (1.0 - BUTTON_HEIGHT) / 2.0;
+        let bounds = Bounds::cells(x, top, wide, BUTTON_HEIGHT);
+        self.panel(bounds, 22, Some(fill), None);
+    }
+
     /// A button that stands past its row, for where there's air around it.
     pub fn large_button(
         &mut self,

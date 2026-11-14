@@ -4982,5 +4982,12 @@
     "title": "With no open comments, the hint, the button that shows the resolved ones and their cards each have rows of their own",
     "test": "the_hint_under_no_open_comments_has_a_row_to_itself",
     "passes": true
+  },
+  {
+    "id": "comments-list-controls",
+    "milestone": 14,
+    "title": "The order and the resolved comments each have a button with a chevron, and the resolved ones unfold under theirs, which stays where it is",
+    "test": "the_resolved_comments_unfold_under_their_button_which_stays_where_it_is",
+    "passes": true
   }
 ]

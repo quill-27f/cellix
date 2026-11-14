@@ -205,8 +205,28 @@ the pane holds what was opened and a press in the text isn't a press on the pane
 words, selects them so they're plain to see, lights the card, and leaves the keyboard in the
 file; the buttons that offer to comment on a selection stay away from those words. The pane lists in the document's order, or by which comment was made last or first
 (a comment's number counts up as they're made, which is the only record of when), chosen from a
-quiet row under the kinds whose list marks the one in use. With no file in view a heading still
+button under the kinds, which names the order in use beside a chevron and opens a list that marks
+it. With no file in view a heading still
 goes wherever the file changes, so by recency a file can have more than one.
+
+Resolved comments are folded away under a button that stands after those still open: a chevron
+and "Show N resolved". Pressed, it stays where it is, its chevron turns down, and the resolved
+ones unfold under it in the pane's order, so the same press in the same place folds them away.
+Until 14 November 2026 they were mixed in among the open ones and the button ended the list, so
+with eighty resolved it was eighty cards from where it had been pressed, and it was loose words
+that read as a third line of the hint over it. The user asked for both controls as buttons with
+chevrons. They're the quiet chip a card's own buttons are, on the pane's ground, starting at the
+pane's text edge where the summary and the kinds start, with their words a column inside, on the
+column the kinds' words and a card's are on (`threads::control`). The order's chevron comes after
+its words and is the small one the branch's and the heading's menus have, since it opens a list;
+the other's comes before and is a folder's, right while they're folded and down while they show,
+since it unfolds what's under it. That one says "Hide N resolved" unfolded and is as wide as the
+wider of the two, so nothing of it moves when it's pressed. Under the kinds or a card a chip is
+painted two fifths of a row down its row, into the empty row after it: 21 px under the kinds and
+18 over the first card, 30 under a card and 18 over the one it heads, where a row of its own each
+side left it adrift in three. It's pressed where it's painted, by the row's fraction the terminal
+reports (`threads::hit`), and the order's list drops from the first whole row under it. Under the
+words that say no comment is open it keeps its row, an empty one each side.
 
 A web address in a comment's words or a reply's (`http://` or `https://`, up to the next space,
 without the full stop or bracket that ends its sentence) is drawn in the accent and underlined,

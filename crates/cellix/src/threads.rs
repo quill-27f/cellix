@@ -30,7 +30,6 @@ const EDITS: [&str; 2] = ["Edit", "Delete"];
 const CHOICES: [&str; 2] = ["Keep", "Dismiss"];
 const REWRITE: [&str; 2] = ["Apply", "Not this"];
 const REOPEN: [&str; 1] = ["Reopen"];
-const HIDE_RESOLVED: &str = "Hide resolved";
 const CHECK: &str = "Check my review";
 /// Under the words that say no comment is open: how one is made.
 const EMPTY_HINT: &str = "Select text in a file, then press Alt+C.";
@@ -951,16 +950,193 @@ fn link_at(text: &str, (from, x): (f32, u16), size: u8, measure: &dyn Measure) -
     })
 }
 
-/// The order's control at the start of the summary row: where its words start, the cell
-/// they start in, and how many columns it takes with its chevron.
-fn sort_control(area: Rect, sort: Sort, measure: &dyn Measure) -> (f32, u16, u16) {
-    let x = area.x + SIDE;
-    let words = measure.width(sort.label(), small());
-    (f32::from(x), x, (words + SORT_CHEVRON + 0.6).ceil() as u16)
+/// Which side of a control's words its chevron stands, and which way it points.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Chevron {
+    /// After the words, pointing down: the control opens a list.
+    Opens,
+    /// Before them: the control unfolds what's under it, and points down while that shows.
+    Unfolds(bool),
 }
 
-/// Columns the chevron after the order's name takes, with its gap.
-const SORT_CHEVRON: f32 = 1.4;
+/// Columns of air inside a control's chip, either side of what it holds: a column, as the
+/// kinds' pills over it keep, so its words start where theirs do and where a card's do.
+const CONTROL_ROOM: f32 = 1.0;
+/// How tall the square a chevron is drawn in is, in rows: one that unfolds, as a folder's
+/// in the explorer, and the smaller one of a menu, as the branch's and the heading's are.
+const FOLD_CHEVRON: f32 = 0.72;
+const MENU_CHEVRON: f32 = 0.5;
+/// Columns between a chevron and the words: after one that unfolds, and before a menu's.
+const FOLD_GAP: f32 = 0.5;
+const MENU_GAP: f32 = 0.65;
+/// How far down its row a control is painted where it follows the kinds or a card, in
+/// rows: into the empty row under it, so it stands a little nearer what it's over than
+/// what's over it, and the two rows it takes aren't three.
+const CONTROL_DROP: f32 = 0.4;
+
+/// Where a control's parts stand, in columns from its chip's left edge.
+struct Parts {
+    /// How wide the chip is: what it holds and the room either side, not whole cells.
+    wide: f32,
+    /// Where the square its chevron is drawn in starts, and how tall that is, in rows.
+    square: (f32, f32),
+    /// Where its words start.
+    words: f32,
+}
+
+/// A control's parts in pixels. `labels` are all it ever says, the one it says now first:
+/// it's as wide as the widest, so it's the same chip folded and unfolded.
+fn control_parts(labels: &[&str], chevron: Chevron, measure: &dyn Measure) -> Parts {
+    let font = Font {
+        size: BUTTON_TEXT,
+        ..Font::default()
+    };
+    let width = |label: &&str| measure.width(label, font);
+    let words = labels.iter().map(width).fold(0.0, f32::max);
+    let across = crate::measures::rows_to_columns(measure);
+    // A chevron's strokes take the middle 11 of the 24 its square is drawn to.
+    let ink = |tall: f32| (tall * across * 6.5 / 24.0, tall * across * 11.0 / 24.0);
+    match chevron {
+        Chevron::Opens => {
+            let (inset, mark) = ink(MENU_CHEVRON);
+            let at = CONTROL_ROOM + words + MENU_GAP;
+            Parts {
+                wide: at + mark + CONTROL_ROOM,
+                square: (at - inset, MENU_CHEVRON),
+                words: CONTROL_ROOM,
+            }
+        }
+        Chevron::Unfolds(_) => {
+            let (inset, mark) = ink(FOLD_CHEVRON);
+            let at = CONTROL_ROOM + mark + FOLD_GAP;
+            Parts {
+                wide: at + words + CONTROL_ROOM,
+                square: (CONTROL_ROOM - inset, FOLD_CHEVRON),
+                words: at,
+            }
+        }
+    }
+}
+
+/// A control of the list, the order or the resolved comments: a quiet chip with a
+/// chevron, starting at the pane's text edge, where the summary and the kinds start. As
+/// its cells and the column it starts in. Where every letter is a cell the chevron is one
+/// of them; in pixels the cells are what the chip covers, holding what they can of its
+/// words so the screen's text says what it is.
+fn control(area: Rect, labels: &[&str], chevron: Chevron, measure: &dyn Measure) -> (String, u16) {
+    let x = area.x + SIDE;
+    let label = labels.first().copied().unwrap_or_default();
+    if measure.in_cells() {
+        let cells = match chevron {
+            Chevron::Opens => format!(" {label} \u{25be} "),
+            Chevron::Unfolds(true) => format!(" \u{25be} {label} "),
+            Chevron::Unfolds(false) => format!(" \u{25b8} {label} "),
+        };
+        return (cells, x);
+    }
+    let width = control_parts(labels, chevron, measure).wide.ceil() as usize;
+    let held: String = label.chars().take(width).collect();
+    (format!("{held:<width$}"), x)
+}
+
+/// How far down its row the control on row `index` is painted: part of a row where it
+/// follows the kinds or a card, and not at all under the words that say no comment is
+/// open, which it's already apart from, or where every letter is a cell.
+fn control_drop(all: &[Line], index: usize, measure: &dyn Measure) -> f32 {
+    let under_hint = index
+        .checked_sub(2)
+        .and_then(|over| all.get(over))
+        .is_some_and(|line| matches!(line, Line::EmptyHint(_)));
+    match all.get(index) {
+        Some(Line::Sort | Line::Resolved(..)) if !measure.in_cells() && !under_hint => CONTROL_DROP,
+        _ => 0.0,
+    }
+}
+
+/// Draws such a control: its chip, lighter under the pointer, with its chevron and its
+/// words from its left edge, `drop` of a row down its row.
+fn draw_control(
+    grid: &mut Grid,
+    (x, y): (u16, u16),
+    (cells, labels, chevron): (&str, &[&str], Chevron),
+    (on_it, drop): (bool, f32),
+    (measure, theme): (&dyn Measure, &Theme),
+) {
+    let ground = theme.sidebar.bg;
+    let quiet = theme.quiet_button(ground);
+    let fill = if on_it {
+        theme.quiet_button(quiet)
+    } else {
+        quiet
+    };
+    let style = Style {
+        bg: fill,
+        fg: theme.text.fg,
+        ..theme.sidebar
+    };
+    if measure.in_cells() {
+        grid.button(x, y, cells, "", fill, style);
+        return;
+    }
+    let from = grid.painted_so_far();
+    // Its cells keep the pane's colour: the chip isn't as wide as they are, and may stand
+    // part of a row under them.
+    let under = Style {
+        bg: ground,
+        painted: true,
+        ..style
+    };
+    let end = x + cells.chars().count() as u16;
+    grid.put_str(x, y, cells, under, end);
+    let parts = control_parts(labels, chevron, measure);
+    let left = f32::from(x);
+    grid.chip(left, y, parts.wide, fill);
+    let (icon, tone) = match chevron {
+        Chevron::Opens => (Icon::ChevronDown, 0.78),
+        Chevron::Unfolds(true) => (Icon::ChevronDown, 0.5),
+        Chevron::Unfolds(false) => (Icon::ChevronRight, 0.5),
+    };
+    let (square, tall) = parts.square;
+    let across = tall * crate::measures::rows_to_columns(measure);
+    grid.paint.push(Paint::Icon {
+        bounds: Bounds::cells(
+            left + square,
+            f32::from(y) + (1.0 - tall) / 2.0,
+            across,
+            tall,
+        ),
+        icon,
+        color: mix(theme.text.fg, theme.gutter.fg, tone),
+    });
+    let words = left + parts.words;
+    let label = labels.first().copied().unwrap_or_default();
+    grid.label_at(
+        words,
+        words.floor() as u16,
+        y,
+        label,
+        under,
+        end,
+        BUTTON_TEXT,
+    );
+    grid.lift_since(from, -drop);
+}
+
+/// The row a list drops from under the order's button, for its menu: the first whole row
+/// under what's painted of it. None when the button isn't in the list.
+pub fn order_menu_row(area: Rect, shown: Shown, top: usize, measure: &dyn Measure) -> Option<u16> {
+    let width = area.w.saturating_sub(SIDE * 2 + 2) as f32;
+    let all = lines(shown, width, measure);
+    let top = top.min(last_of(all.len(), area.h));
+    let index = all.iter().position(|line| matches!(line, Line::Sort))?;
+    let row = area.y + index.checked_sub(top)? as u16;
+    let under = if control_drop(&all, index, measure) > 0.0 {
+        2
+    } else {
+        1
+    };
+    Some(row + under)
+}
 
 /// The row of the list a comment's card starts on, to scroll the pane to it.
 pub fn top_of(area: Rect, shown: Shown, id: u32, measure: &dyn Measure) -> Option<usize> {
@@ -1029,12 +1205,23 @@ fn lay_out(
         out.push(Line::Gap);
     }
     let mut place = None;
-    for thread in threads {
+    // Those still open, then the resolved ones under the button that shows them: it stays
+    // where it is when it's pressed, and what it shows unfolds under it.
+    let still_open = threads.iter().filter(|t| !t.resolved);
+    let mut unfolded = false;
+    for thread in still_open.chain(threads.iter().filter(|t| t.resolved)) {
         let id = thread.id;
+        if thread.resolved && !unfolded {
+            unfolded = true;
+            out.push(Line::Resolved(resolved.0, true));
+            out.push(Line::Gap);
+            place = None;
+        }
         // The list comes a file at a time, so a heading goes where the file changes.
         let here = place_of(thread);
         if grouped && place.as_ref() != Some(&here) {
-            let count = threads.iter().filter(|t| place_of(t) == here).count();
+            let same = |t: &&&Thread| t.resolved == thread.resolved && place_of(t) == here;
+            let count = threads.iter().filter(same).count();
             let on_output = matches!(thread.about, Some(About::Output { .. }));
             out.push(Line::File((!on_output).then_some(id), here.clone(), count));
             place = Some(here);
@@ -1139,28 +1326,28 @@ fn lay_out(
         }
         out.push(Line::Gap);
     }
-    if resolved.0 > 0 {
-        out.push(Line::Resolved(resolved.0, resolved.1));
+    if resolved.0 > 0 && !unfolded {
+        out.push(Line::Resolved(resolved.0, false));
         out.push(Line::Gap);
     }
     out
 }
 
-/// What the button for resolved comments says.
-fn resolved_label(count: usize, shown: bool) -> String {
-    if shown {
-        HIDE_RESOLVED.to_string()
-    } else {
-        format!("Show {count} resolved")
-    }
+/// What the button for resolved comments says, and then what it says the other way: the
+/// count stays, so it's as wide folded as unfolded.
+fn resolved_labels(count: usize, shown: bool) -> [String; 2] {
+    let (show, hide) = (
+        format!("Show {count} resolved"),
+        format!("Hide {count} resolved"),
+    );
+    if shown { [hide, show] } else { [show, hide] }
 }
 
 /// That button's cells and start column.
 fn resolved_button(area: Rect, count: usize, shown: bool, measure: &dyn Measure) -> (String, u16) {
-    (
-        button_cells(&resolved_label(count, shown), measure),
-        area.x + SIDE + 1,
-    )
+    let labels = resolved_labels(count, shown);
+    let labels = [labels[0].as_str(), labels[1].as_str()];
+    control(area, &labels, Chevron::Unfolds(shown), measure)
 }
 
 /// Each button as (label, padded cells, start column): Edit and Delete with the others when
@@ -1273,17 +1460,30 @@ pub fn last_top(area: Rect, shown: Shown, measure: &dyn Measure) -> usize {
     last_of(lines(shown, width, measure).len(), area.h)
 }
 
+/// What a press at column `x`, row `y` lands on. `fine_y` is the row with its fraction,
+/// where the terminal says, and the row's middle where it doesn't.
 pub fn hit(
     area: Rect,
     shown: Shown,
     top: usize,
-    (x, y): (u16, u16),
+    (x, y, fine_y): (u16, u16, f32),
     measure: &dyn Measure,
 ) -> Option<Hit> {
     let width = area.w.saturating_sub(SIDE * 2 + 2) as f32;
     let all = lines(shown, width, measure);
     let top = top.min(last_of(all.len(), area.h));
-    let row = top + y.checked_sub(area.y)? as usize;
+    let mut row = top + y.checked_sub(area.y)? as usize;
+    // A control painted part of a row down is pressed where it's painted: not on the top
+    // of its own row, and on the top of the row under it.
+    let within = (fine_y - f32::from(y)).clamp(0.0, 1.0);
+    if within < control_drop(&all, row, measure) {
+        return None;
+    }
+    if let Some(over) = row.checked_sub(1)
+        && within < control_drop(&all, over, measure)
+    {
+        row = over;
+    }
     match all.get(row)? {
         Line::Buttons(id) => {
             let pressed = buttons(area, measure)
@@ -1338,8 +1538,8 @@ pub fn hit(
             (x >= at && x < at + cells.chars().count() as u16).then_some(Hit::Check)
         }
         Line::Sort => {
-            let (_, from, wide) = sort_control(area, shown.4.sort, measure);
-            (x >= from && x < from + wide).then_some(Hit::Sort)
+            let (cells, at) = control(area, &[shown.4.sort.label()], Chevron::Opens, measure);
+            (x >= at && x < at + cells.chars().count() as u16).then_some(Hit::Sort)
         }
         Line::Tools => tools(area, shown.4)
             .into_iter()
@@ -2068,47 +2268,25 @@ pub fn draw(
                 }
             }
             Line::Resolved(count, shown) => {
-                // Quiet, as Dismiss is: words only, filled while pointed at. Nothing is painted
-                // under the pane, so the button's corners need a ground, as Check my review's do.
+                // A button that unfolds the resolved comments under it, and folds them away.
                 let (cells, x) = resolved_button(area, *count, *shown, measure);
                 let width = cells.chars().count() as u16;
                 let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
-                let ground = Bounds::cells(x as f32, y as f32, width as f32, 1.0);
-                grid.panel(ground, 0, Some(body.bg), None);
-                let fill = if on_it { theme.popup_hover } else { body.bg };
-                let style = Style {
-                    bg: fill,
-                    fg: if on_it {
-                        theme.text.fg
-                    } else {
-                        theme.gutter.fg
-                    },
-                    ..body
-                };
-                let label = resolved_label(*count, *shown);
-                grid.button(x, y, &cells, &label, fill, style);
+                let labels = resolved_labels(*count, *shown);
+                let labels = [labels[0].as_str(), labels[1].as_str()];
+                let what = (cells.as_str(), &labels[..], Chevron::Unfolds(*shown));
+                let how = (on_it, control_drop(&all, index, measure));
+                draw_control(grid, (x, y), what, how, (measure, theme));
             }
             Line::Sort => {
-                // Quiet words and a chevron, brighter under the pointer.
-                let (at, cell, wide) = sort_control(area, view.sort, measure);
-                let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= cell && h.0 < cell + wide);
-                let order = Style {
-                    fg: if on_it { theme.text.fg } else { dim.fg },
-                    ..dim
-                };
-                let name = view.sort.label();
-                let end = grid.label_at(at, cell, y, name, order, right, SMALL);
-                let after = at + measure.width(name, small()) + 0.4;
-                let plain = Style {
-                    bold: false,
-                    ..order
-                };
-                let mark = if measure.in_cells() {
-                    f32::from(end) + 1.0
-                } else {
-                    after
-                };
-                grid.glyph(mark, y, Icon::ChevronDown, order.fg, "▾", plain);
+                // A button that opens the list of orders, saying the one in use.
+                let names = [view.sort.label()];
+                let (cells, x) = control(area, &names, Chevron::Opens, measure);
+                let width = cells.chars().count() as u16;
+                let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
+                let what = (cells.as_str(), &names[..], Chevron::Opens);
+                let how = (on_it, control_drop(&all, index, measure));
+                draw_control(grid, (x, y), what, how, (measure, theme));
             }
             Line::Gap => {}
         }
@@ -2184,6 +2362,55 @@ mod tests {
             .collect();
         assert_eq!(typed, rows);
         assert_eq!(measure.0.get(), 2);
+    }
+
+    /// In pixels the order's button is painted part of a row down, into the empty row
+    /// under it, and is pressed where it's painted: not on the bare top of its own row, and
+    /// on the part of it that's in the row below. On cells it's its own row, whole.
+    #[test]
+    fn a_control_painted_down_its_row_is_pressed_where_it_is_painted() {
+        let thread: Thread =
+            serde_json::from_str(r#"{"id":1,"file":"a.md","line":1,"quote":"","text":"open"}"#)
+                .unwrap();
+        let threads = [&thread];
+        let shown: Shown = (&threads, None, "", (0, false), View::default());
+        let area = Rect::new(0, 0, 60, 30);
+        let pixels = cellix_render::FontMeasure::new(17, 37);
+        let pressed = |measure: &dyn Measure, fine: f32| {
+            hit(
+                area,
+                shown,
+                0,
+                (area.x + SIDE + 2, fine as u16, fine),
+                measure,
+            )
+        };
+        let middle = |measure: &dyn Measure| {
+            (0..30u8)
+                .map(f32::from)
+                .find(|row| pressed(measure, row + 0.5) == Some(Hit::Sort))
+                .expect("the order's button")
+        };
+        let row = middle(&pixels);
+        assert_eq!(pressed(&pixels, row + 0.2), None, "over the chip");
+        assert_eq!(pressed(&pixels, row + 0.6), Some(Hit::Sort));
+        assert_eq!(
+            pressed(&pixels, row + 1.2),
+            Some(Hit::Sort),
+            "its foot is in the row under"
+        );
+        assert_eq!(pressed(&pixels, row + 1.6), None, "under the chip");
+        // And its list drops from the first whole row under it.
+        let menu = order_menu_row(area, shown, 0, &pixels);
+        assert_eq!(menu, Some(row as u16 + 2));
+
+        let row = middle(&CellMeasure);
+        assert_eq!(pressed(&CellMeasure, row + 0.2), Some(Hit::Sort));
+        assert_eq!(pressed(&CellMeasure, row + 1.2), None);
+        assert_eq!(
+            order_menu_row(area, shown, 0, &CellMeasure),
+            Some(row as u16 + 1)
+        );
     }
 
     #[test]

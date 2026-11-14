@@ -5,6 +5,7 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 ## [Unreleased]
 
 ### Changed
+- The Comments tab's order and its resolved comments each have a button with a chevron, where there were plain words. **Show N resolved** now stays where it is when you click it: it stands after the comments still open and the resolved ones unfold under it, so the same click folds them away again. They used to be mixed in among the open ones, with the button at the very end of the list.
 - Click words that have a comment while the side pane is open on another tab, an agent or the Preview say, and the Comments tab comes forward with that comment lit and in view. The tab you were on keeps its place in the row. A pane that's closed stays closed.
 
 ### Fixed
