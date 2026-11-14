@@ -34,10 +34,10 @@ fn main() {
         app.draw(&mut grid);
         let drawn = start.elapsed();
         backend.present(&grid, &mut sink).unwrap();
-        (drawn, start.elapsed() - drawn)
+        (drawn, start.elapsed() - drawn, sink.len())
     };
     let ms = |time: Duration| time.as_secs_f64() * 1000.0;
-    let (draw, present) = frame(&app);
+    let (draw, present, _) = frame(&app);
     println!(
         "first frame: draw {:.1} ms, present {:.1} ms",
         ms(draw),
@@ -55,13 +55,15 @@ fn main() {
     };
     for (name, kind) in [("down", MouseKind::ScrollDown), ("up", MouseKind::ScrollUp)] {
         let (mut handled, mut drawn, mut shown) = (Vec::new(), Vec::new(), Vec::new());
+        let mut sent = Vec::new();
         for _ in 0..notches {
             let start = Instant::now();
             app.handle(wheel(kind));
             handled.push(start.elapsed());
-            let (draw, present) = frame(&app);
+            let (draw, present, bytes) = frame(&app);
             drawn.push(draw);
             shown.push(present);
+            sent.push(bytes);
         }
         let stats = |times: &[Duration]| {
             let total: Duration = times.iter().sum();
@@ -76,6 +78,13 @@ fn main() {
         println!("  handle  {}", stats(&handled));
         println!("  draw    {}", stats(&drawn));
         println!("  present {}", stats(&shown));
+        let total: usize = sent.iter().sum();
+        println!(
+            "  written {} KB a notch, most {} KB, {} KB in all",
+            total / sent.len() / 1024,
+            sent.iter().max().copied().unwrap_or(0) / 1024,
+            total / 1024
+        );
     }
     // A trackpad's flood: every notch waiting is handled before the next frame.
     for (name, kind) in [("down", MouseKind::ScrollDown), ("up", MouseKind::ScrollUp)] {
@@ -84,12 +93,13 @@ fn main() {
             app.handle(wheel(kind));
         }
         let handled = start.elapsed();
-        let (draw, present) = frame(&app);
+        let (draw, present, bytes) = frame(&app);
         println!(
-            "{notches} notches {name} at once: handle {:.0} ms, then draw {:.1} ms, present {:.1} ms",
+            "{notches} notches {name} at once: handle {:.0} ms, then draw {:.1} ms, present {:.1} ms, {} KB",
             ms(handled),
             ms(draw),
-            ms(present)
+            ms(present),
+            bytes / 1024
         );
     }
 }
