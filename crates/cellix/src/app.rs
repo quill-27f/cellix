@@ -1019,6 +1019,11 @@ const FINDING_BATCH: std::time::Duration = std::time::Duration::from_millis(50);
 const FINDING_WAIT: std::time::Duration = std::time::Duration::from_millis(100);
 /// Past this many files a walk stops: a home folder can hold millions.
 const MAX_FILES: usize = 500_000;
+/// How many files Quick Open lists as recently opened, before the folder's own.
+const RECENT_FILES: usize = 8;
+/// What Quick Open calls its two groups when it has recent files to list.
+const RECENTLY_OPENED: &str = "RECENTLY OPENED";
+const ALL_FILES: &str = "FILES";
 /// How thick the pane's edge is drawn while it's dragged, in rows; half of it in columns.
 const DRAG_LINE: f32 = 0.12;
 /// Rows a list in the side pane is drawn into for Find to read all it holds.
@@ -1302,6 +1307,9 @@ pub struct App {
     /// Places left by jumps, for Go Back, and the ones Go Back left, for Go Forward.
     back: Vec<(PathBuf, usize)>,
     forward: Vec<(PathBuf, usize)>,
+    /// The files brought to the front in this run, the last first: what Quick Open lists
+    /// before anything is typed.
+    looked_at: Vec<PathBuf>,
     /// What a comment from Review's line numbers is about, and whether that line was removed.
     comment_quote: Option<(String, bool)>,
     /// Where an exported PDF goes once its hidden build is done.
@@ -1424,6 +1432,7 @@ impl App {
             lit_range: None,
             comment_sort: threads::Sort::Document,
             emoji_used: Vec::new(),
+            looked_at: Vec::new(),
             comment_pictures: threads::Pictures::new(),
             picture_stamps: HashMap::new(),
             comment_rows: threads::Laid::default(),
@@ -1574,6 +1583,33 @@ impl App {
         self.panes[self.focus] = index;
         // A file brought to the front stands where the Task page was.
         self.task_shown = false;
+        let path = self.editors.get(index).and_then(|e| e.buffer.path());
+        if let Some(path) = path.map(Path::to_path_buf) {
+            self.looked_at.retain(|seen| *seen != path);
+            self.looked_at.insert(0, path);
+            self.looked_at.truncate(RECENT_FILES * 4);
+        }
+    }
+
+    /// The files Quick Open offers before anything is typed: those looked at in this run,
+    /// the last first, then the ones this folder had open before, without the file in view,
+    /// which needs no going to. Each is still there.
+    fn recent_files(&mut self) -> Vec<PathBuf> {
+        let here = self.editors.get(self.active());
+        let here = here.and_then(|e| e.buffer.path()).map(Path::to_path_buf);
+        let root = self.workspace.root().to_path_buf();
+        let before = self.workflow.recent.files();
+        let before = before.into_iter().filter(|path| path.starts_with(&root));
+        let mut recent: Vec<PathBuf> = Vec::new();
+        for path in self.looked_at.iter().cloned().chain(before) {
+            if Some(&path) != here.as_ref() && !recent.contains(&path) && path.is_file() {
+                recent.push(path);
+            }
+            if recent.len() == RECENT_FILES {
+                break;
+            }
+        }
+        recent
     }
 
     fn editor_mut(&mut self) -> Option<&mut Editor> {
@@ -15401,7 +15437,27 @@ impl App {
     /// big tree takes seconds, and everything used to wait for the whole walk.
     fn quick_open(&mut self) {
         let hint = "Search files, path:line, @ for symbols, # for all symbols";
-        let mut palette = Palette::asking(Vec::new(), hint);
+        let root = self.workspace.root().to_path_buf();
+        let home = self.home.clone();
+        // A file as the list writes it: from the folder, or from home when it's outside.
+        let item = move |path: PathBuf, root: &Path| {
+            let label = match path.strip_prefix(root) {
+                Ok(inside) => inside.to_string_lossy().into_owned(),
+                Err(_) => crate::recent::written(&path, home.as_deref()),
+            };
+            Item::File(path, label)
+        };
+        // The files last looked at come first, the one before this at the top, so Ctrl+P
+        // and Enter goes back to it. The walk leaves them out of what it lists after.
+        let recent = self.recent_files();
+        let mut items = Vec::new();
+        if !recent.is_empty() {
+            items.push(Item::Header(RECENTLY_OPENED.into()));
+            items.extend(recent.iter().map(|path| item(path.clone(), &root)));
+            items.push(Item::Header(ALL_FILES.into()));
+        }
+        let listed: std::collections::HashSet<PathBuf> = recent.into_iter().collect();
+        let mut palette = Palette::asking(items, hint);
         palette.quick = true;
         palette.status = Some("0 files…".to_string());
         self.overlay = Overlay::Palette(palette);
@@ -15411,19 +15467,16 @@ impl App {
         let (send, found) = std::sync::mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
         let stopping = stop.clone();
-        let root = self.workspace.root().to_path_buf();
         std::thread::spawn(move || {
             // Labels are made here, so the main thread only adds them to the list.
-            let item = |path: PathBuf| {
-                let label = path.strip_prefix(&root).unwrap_or(&path);
-                let label = label.to_string_lossy().into_owned();
-                Item::File(path, label)
-            };
             let mut batch = Vec::new();
             let mut sent = std::time::Instant::now();
             let mut count = 0;
             cellix_core::walk_files(&root, |path| {
-                batch.push(item(path));
+                if listed.contains(&path) {
+                    return !stopping.load(Ordering::Relaxed);
+                }
+                batch.push(item(path, &root));
                 count += 1;
                 if sent.elapsed() >= FINDING_BATCH {
                     sent = std::time::Instant::now();
@@ -17764,11 +17817,18 @@ mod tests {
         enter(&mut app);
         assert_eq!(at(&app), ("lib.rs".to_string(), 4, 1));
 
-        // A name alone still finds its file, and the place after it is still gone to.
+        // An ignored file that hasn't been opened isn't found by its name alone, and one
+        // that has been is, being among the files last looked at.
+        fs::write(root.join("out/unseen.rs"), lines).unwrap();
         app.run(Command::QuickOpen);
-        typed(&mut app, "built");
+        typed(&mut app, "unseen");
         assert_eq!(first(&app), "No matches", "ignored, and not named outright");
         key(&mut app, Key::Esc);
+        app.run(Command::QuickOpen);
+        typed(&mut app, "built");
+        assert!(first(&app).starts_with("▪ built.rs out"), "{}", first(&app));
+        key(&mut app, Key::Esc);
+        // A name alone finds its file, and the place after it is gone to.
         app.run(Command::QuickOpen);
         typed(&mut app, "alp:2");
         assert!(first(&app).starts_with("▪ alpha.txt"), "{}", first(&app));
@@ -18122,6 +18182,89 @@ mod tests {
         app.run(Command::OpenRecent);
         let text = screen(&app).text();
         assert!(text.contains("▪ alpha.txt"), "{text}");
+    }
+
+    /// Quick Open opened on the folder's files in name order, whatever had just been
+    /// worked on.
+    #[test]
+    fn quick_open_lists_the_files_last_looked_at_first() {
+        let (dir, mut app) = project();
+        let root = dir.path().to_path_buf();
+        // The rows of the list, as they're shown inside the panel.
+        let rows = |app: &App| -> Vec<String> {
+            let grid = screen(app);
+            let Overlay::Palette(palette) = &app.overlay else {
+                panic!("Quick Open isn't open");
+            };
+            let area = palette.shown(grid.area());
+            let row = |y: u16| -> String {
+                let cells = (area.x + 1..area.right() - 1).map(|x| grid.cell(x, y));
+                let text: String = cells.map(|cell| cell.symbol.as_str()).collect();
+                text.trim().to_string()
+            };
+            (area.y + 2..area.bottom()).map(row).collect()
+        };
+        let named = |row: &str, name: &str| row.trim_start_matches("▪ ").starts_with(name);
+        // Nothing opened yet: the folder's files, with no groups.
+        app.run(Command::QuickOpen);
+        let listed = rows(&app);
+        assert!(
+            !listed.iter().any(|row| row.contains(RECENTLY_OPENED)),
+            "{listed:?}"
+        );
+        assert_eq!(listed.len(), 3, "{listed:?}");
+        key(&mut app, Key::Esc);
+
+        app.open(&root.join("alpha.txt")).unwrap();
+        app.open(&root.join("src/lib.rs")).unwrap();
+        app.open(&root.join("beta.rs")).unwrap();
+        app.run(Command::QuickOpen);
+        let listed = rows(&app);
+        // The one before this first, then the one before that; the file in view isn't
+        // among them, and the folder's other files follow under their own name.
+        assert!(listed[0].starts_with(RECENTLY_OPENED), "{listed:?}");
+        assert!(
+            named(&listed[1], "lib.rs") && named(&listed[2], "alpha.txt"),
+            "{listed:?}"
+        );
+        assert!(listed[3].starts_with(ALL_FILES), "{listed:?}");
+        assert!(named(&listed[4], "beta.rs"), "{listed:?}");
+        assert_eq!(listed.len(), 5, "each file once: {listed:?}");
+        // Enter goes back to the file before this one, and again comes back.
+        enter(&mut app);
+        assert!(screen(&app).text().contains("pub fn x()"));
+        app.run(Command::QuickOpen);
+        assert!(named(&rows(&app)[1], "beta.rs"), "{:?}", rows(&app));
+        enter(&mut app);
+        assert!(screen(&app).text().contains("fn main()"));
+
+        // Typed, the groups are gone and the best match leads, a recent file first where
+        // two match alike.
+        fs::write(root.join("src/alpha.txt"), "").unwrap();
+        app.run(Command::QuickOpen);
+        typed(&mut app, "alpha");
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while app.finding.is_some() && std::time::Instant::now() < until {
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let listed = rows(&app);
+        assert_eq!(listed.len(), 2, "{listed:?}");
+        assert!(
+            !listed[0].contains(RECENTLY_OPENED) && !listed[0].contains("src"),
+            "{listed:?}"
+        );
+        key(&mut app, Key::Esc);
+
+        // A file that's gone since isn't offered.
+        fs::remove_file(root.join("alpha.txt")).unwrap();
+        app.run(Command::QuickOpen);
+        let listed = rows(&app);
+        assert!(
+            !listed
+                .iter()
+                .any(|row| named(row, "alpha.txt") && !row.contains("src"))
+        );
     }
 
     #[test]

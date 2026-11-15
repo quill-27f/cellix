@@ -5031,5 +5031,12 @@
     "title": "A palette's rows are drawn one way: a file is its icon, its name and then its folder, the letters typed are picked out in files, commands and symbols alike, and a row's words stop short of what's at its far end",
     "test": "a_palettes_rows_show_a_files_name_then_its_folder_and_pick_out_what_was_typed",
     "passes": true
+  },
+  {
+    "id": "quick-open-recent-first",
+    "milestone": 14,
+    "title": "Quick Open lists the files last looked at first, the one before this at the top, so Ctrl+P and Enter goes back to it; the folder's other files follow, each once",
+    "test": "quick_open_lists_the_files_last_looked_at_first",
+    "passes": true
   }
 ]

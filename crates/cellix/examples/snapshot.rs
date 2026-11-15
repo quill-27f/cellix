@@ -15,7 +15,8 @@
 //! `draft:<file>:<words>` opens a file and types a comment on it without sending it, and
 //! `emoji:<file>:<name>` then opens the list of every emoji and types a name to look for.
 //! `quick:<typed>` is Quick Open and `palette:<typed>` the command palette with that typed,
-//! and `CELLIX_DOWN=<n>` then presses Down that many times.
+//! and `CELLIX_DOWN=<n>` then presses Down that many times. `CELLIX_OPEN=<file>,<file>` opens
+//! those files before the view is set up, the last in front.
 
 use std::fs::File;
 use std::io::BufWriter;
@@ -99,6 +100,12 @@ fn main() {
     if let Ok(hex) = std::env::var("CELLIX_BACKGROUND") {
         let channel = |at: usize| u8::from_str_radix(&hex[at..at + 2], 16).unwrap();
         app.match_terminal_background(Some((channel(0), channel(2), channel(4))));
+    }
+    // Files to open first, the last in front.
+    if let Ok(files) = std::env::var("CELLIX_OPEN") {
+        for file in files.split(',') {
+            app.open(&root.join(file)).unwrap();
+        }
     }
     match rest.first().map(String::as_str) {
         Some("review") => app.run(Command::OpenDiff),

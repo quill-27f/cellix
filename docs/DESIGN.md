@@ -514,6 +514,14 @@ so the name is tried before the folders. That's a second reading of the match, f
 and the ranking is still `fuzzy_score`'s. The picked row of a file says the place typed after
 its name ("line 120"), which is where Enter opens it.
 
+Before anything is typed, Quick Open lists the files last looked at, up to eight, under
+RECENTLY OPENED, and the folder's own under FILES: those brought to the front in this run, the
+last first, then the ones the folder had open before (`recent.json`), without the file in view.
+The one before this is the first row and so the picked one, which makes Ctrl+P and Enter the way
+back and forth between two files, as it is in VS Code. The walk leaves those files out of what
+it lists after, so each is there once. Typed, the groups go and the ranking is the match's, with
+a recent file ahead of another that matches as well, being earlier in the list.
+
 Quick Open reads a path the way it's copied, since the file a person wants is most often one
 an agent or a compiler has just named. What's pasted is cleaned of what it was copied with
 (`palette::pasted_path`: quotes, backticks, brackets, a `file://`, an agent's `@`, a full stop, a
