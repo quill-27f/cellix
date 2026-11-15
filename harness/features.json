@@ -5010,5 +5010,12 @@
     "title": "Ctrl+P opens Quick Open while the keyboard is in the side pane's agent or terminal, and a file picked there takes the keyboard",
     "test": "ctrl_p_opens_quick_open_from_the_side_pane_and_a_pick_takes_the_keyboard",
     "passes": true
+  },
+  {
+    "id": "palette-list-scrolls",
+    "milestone": 14,
+    "title": "A palette's list scrolls: it follows the picked row past the twelfth, Page Up and Page Down move a screen of it, the wheel moves it and leaves the pick, and a thumb at its edge shows where it is",
+    "test": "a_palettes_list_scrolls_to_the_picked_row_and_with_the_wheel",
+    "passes": true
   }
 ]

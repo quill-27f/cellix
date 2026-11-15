@@ -490,7 +490,13 @@ In cells the field has the first row, the list starts on the third, and the pick
 is in its cells. It was a field with no box and a line under it, 18 px from the panel's top and
 30 from the line, which read as off-centre (the user, 2026-11-14), with the list hanging from
 the line and nothing under its last row. The list keeps a row when nothing matches, which says
-so, so the field never moves as the list empties.
+so, so the field never moves as the list empties. A list longer than its twelve rows scrolls:
+it follows the picked row, a group's name or rule coming with the first row under it, Page Up
+and Page Down move a screen less a row, and the wheel moves it two rows a notch wherever the
+pointer is, leaving the pick where it was. A thumb in the gutter between the band and the
+panel's edge shows how much there is and how far down this is; in cells it's half blocks in the
+panel's last column. Rows that arrive while a big folder is still being walked don't move what's
+being looked at.
 
 Quick Open reads a path the way it's copied, since the file a person wants is most often one
 an agent or a compiler has just named. What's pasted is cleaned of what it was copied with

@@ -13,6 +13,7 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 - Quick Open (Ctrl+P), the command palette (Ctrl+Shift+P) and every list like them have a box around what you type, as the Find bar has. The words stood nearer the panel's top than the line under them. The box is in the middle of its space now: the air above it, between it and the list, and under the last row is the same. The picked row's band is the one menus have, and a list with nothing in it says "No matches" in place of closing up.
 
 ### Fixed
+- A list in Quick Open, the command palette or Go to Symbol showed its first twelve rows and never moved: the arrows could pick a row past them that wasn't on screen, and the wheel did nothing. The list follows the picked row, Page Up and Page Down move a screen of it, the wheel scrolls it, and a thumb at its edge shows there's more and where you are in it.
 - A paste while Quick Open or a prompt was open went into the commit message or the comment being written under it, when one of those had the keyboard before. The list or box on top takes it.
 - A long path in Quick Open was cut at its end, where the file's name is. It loses its middle.
 - On a terminal without pictures the picked row of Quick Open or the command palette looked like every other row. It has the picked colour behind it there too.

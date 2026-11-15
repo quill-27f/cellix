@@ -51,6 +51,7 @@ EXPECT = {
     "07-menu-tab": "Close Others",
     "08-open-file": "Search files",
     "09-commands": "Open Settings",
+    "09-commands-scrolled": "Blame Line",
     "10-branches": "Switch branch",
     "100-workspaces": "Resume",
     "101-workspace-hover": "Resume",
@@ -166,7 +167,7 @@ EXPECT = {
     "98-pane-drag-under": "loss.png",
 }
 # About how many scenes there are, to cut the tour into parts of a size.
-SCENES_IN_ALL = 200
+SCENES_IN_ALL = 201
 # Scenes come to, shot, and those that never reached their surface.
 SEEN, SHOT, FAILED = [0], [], []
 # Which commit the binary is, as far as git can say: the pictures are of that.
@@ -885,6 +886,9 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("07-menu-tab", [["wait", 1.0], ["right", 36, 0], ["wait", 0.3]], CODE_FILE)
     shoot("08-open-file", [["keys", CTRL("p")]], CODE_FILE)
     shoot("09-commands", [["keys", F1], ["until", PALETTE_UP], ["keys", "op"]], CODE_FILE)
+    # Past the twelfth row, the list follows the pick and a thumb says where it is.
+    shoot("09-commands-scrolled", [["keys", F1], ["until", PALETTE_UP], *[["keys", "\x1b[B"]] * 14, ["wait", 0.4]],
+          CODE_FILE)
     shoot("10-branches", [["wait", 1.5], ["click", 3, 38], ["wait", 0.5]], CODE_FILE)
     shoot("11-find", [["keys", CTRL("f")], ["keys", "item"]], CODE_FILE)
     shoot("12-search", [["click", RAIL_X, SEARCH]], CODE_FILE)

@@ -38,6 +38,10 @@ const FIELD_DROP: f32 = AIR - BOX_AIR;
 const LIST_LIFT: f32 = AIR - BAND_AIR;
 /// How tall the caret is, in rows.
 const CARET: f32 = 0.56;
+/// The least the thumb at the list's edge is, in rows: less is a speck.
+const THUMB: f32 = 1.2;
+/// Rows the list moves for a notch of the wheel.
+const NOTCH: isize = 2;
 /// Air between what's typed and the status at the field's right end, in cells.
 const STATUS_GAP: f32 = 1.5;
 /// Space between the caret and the hint in an empty field.
@@ -381,6 +385,9 @@ pub struct Palette {
     /// What the matches were found for: a longer query only needs to look among them.
     matched: String,
     pub selected: usize,
+    /// The first row of the list that's shown: it scrolls to keep the picked row in it, and
+    /// with the wheel.
+    top: usize,
     /// What's still happening, as "8,310 files…", shown at the right of the field.
     pub status: Option<String>,
     /// Set when the palette finds a folder, which lists again as a path is typed.
@@ -651,6 +658,7 @@ impl Palette {
             scores: Vec::new(),
             matched: String::new(),
             selected: 0,
+            top: 0,
             status: None,
             folders: None,
             prefix: None,
@@ -774,6 +782,7 @@ impl Palette {
                 self.selected = row;
             }
         }
+        self.show_picked();
     }
 
     /// What's typed, without the prefix that chose what's listed.
@@ -872,6 +881,9 @@ impl Palette {
     /// tree. What's typed applies to them too, and the picked row stays picked.
     pub fn extend(&mut self, items: Vec<Item>) {
         let picked = self.matches.get(self.selected).copied();
+        // Where the picked row stands in the list as shown, which is where it stays: more
+        // files arriving don't move what's being looked at.
+        let stood = self.selected as isize - self.top as isize;
         let from = self.items.len();
         self.items.extend(items);
         if self.alone {
@@ -901,6 +913,8 @@ impl Palette {
         if let Some(picked) = picked {
             self.selected = self.matches.iter().position(|&i| i == picked).unwrap_or(0);
         }
+        let last = self.matches.len().saturating_sub(ROWS as usize) as isize;
+        self.top = (self.selected as isize - stood).clamp(0, last.max(0)) as usize;
     }
 
     /// How many items it holds.
@@ -931,7 +945,14 @@ impl Palette {
         self.filter();
     }
 
+    /// Lists what fits what's typed, best first, from the top.
     pub fn filter(&mut self) {
+        self.refilter();
+        self.top = 0;
+        self.show_picked();
+    }
+
+    fn refilter(&mut self) {
         let typed = self.sought().to_string();
         let slot = self.direct.map(|(slot, _)| slot);
         if self.alone {
@@ -980,16 +1001,56 @@ impl Palette {
         self.pin();
     }
 
+    /// Moves the pick by `delta` rows, over a rule or a group's name the way it's going, and
+    /// back off one at either end.
     pub fn move_by(&mut self, delta: isize) {
         let last = self.matches.len().saturating_sub(1) as isize;
-        self.selected = (self.selected as isize + delta).clamp(0, last) as usize;
-        if self.current().is_some_and(Item::divider) {
-            self.selected = (self.selected as isize + delta).clamp(0, last) as usize;
+        let step = delta.signum();
+        let divider = |at: isize| {
+            let index = self.matches.get(at as usize);
+            index.is_some_and(|index| self.items[*index].divider())
+        };
+        let mut at = (self.selected as isize + delta).clamp(0, last);
+        while step != 0 && divider(at) && (0..=last).contains(&(at + step)) {
+            at += step;
         }
-        // Two dividers together, or one at the end: back the other way.
-        if self.current().is_some_and(Item::divider) {
-            self.selected = (self.selected as isize - delta).clamp(0, last) as usize;
+        while step != 0 && divider(at) && (0..=last).contains(&(at - step)) {
+            at -= step;
         }
+        self.selected = at as usize;
+        self.show_picked();
+    }
+
+    /// Moves the pick a screen of the list up or down, less a row, so the last one seen is
+    /// the first.
+    pub fn page(&mut self, down: bool) {
+        let rows = ROWS as isize - 1;
+        self.move_by(if down { rows } else { -rows });
+    }
+
+    /// Scrolls the list by notches of the wheel. The pick stays on its row, in view or not.
+    pub fn wheel(&mut self, notches: isize) {
+        let last = self.matches.len().saturating_sub(ROWS as usize) as isize;
+        self.top = (self.top as isize + notches * NOTCH).clamp(0, last) as usize;
+    }
+
+    /// Scrolls the list so the picked row is in it, with the rule or the name over it when
+    /// it's the first of its group.
+    fn show_picked(&mut self) {
+        let rows = ROWS as usize;
+        if self.selected < self.top {
+            self.top = self.selected;
+        } else if self.selected >= self.top + rows {
+            self.top = self.selected + 1 - rows;
+        }
+        let over = self
+            .top
+            .checked_sub(1)
+            .and_then(|over| self.matches.get(over));
+        if self.top == self.selected && over.is_some_and(|index| self.items[*index].divider()) {
+            self.top -= 1;
+        }
+        self.top = self.top.min(self.matches.len().saturating_sub(rows));
     }
 
     pub fn current(&self) -> Option<&Item> {
@@ -1028,8 +1089,12 @@ impl Palette {
         }
         let lift = if measure.in_cells() { 0.0 } else { LIST_LIFT };
         let row = (y - (f32::from(area.y + HEADER_ROWS) - lift)).floor();
-        let shown = self.matches.len().min(ROWS as usize);
-        (row >= 0.0 && (row as usize) < shown).then_some(row as usize)
+        let shown = self
+            .matches
+            .len()
+            .saturating_sub(self.top)
+            .min(ROWS as usize);
+        (row >= 0.0 && (row as usize) < shown).then(|| self.top + row as usize)
     }
 
     /// `hover` is where the pointer is, its row with the fraction.
@@ -1065,14 +1130,44 @@ impl Palette {
             let y = area.y + HEADER_ROWS;
             grid.label_at(inset, area.x + 2, y, self.nothing(), quiet, end, 100);
         }
-        for (row, index) in self.matches.iter().take(ROWS as usize).enumerate() {
-            let y = area.y + HEADER_ROWS + row as u16;
+        let rows = self.matches.iter().enumerate();
+        for (row, index) in rows.skip(self.top).take(ROWS as usize) {
+            let y = area.y + HEADER_ROWS + (row - self.top) as u16;
             let lit = (row == self.selected, pointed == Some(row));
             self.draw_row(grid, (area, y), (row, *index), lit, measure, theme);
         }
+        self.draw_thumb(grid, area, theme);
         if fine {
             grid.lift_since(from, LIST_LIFT);
         }
+    }
+
+    /// A thumb at the list's edge when there's more than is in view, in the gutter between
+    /// the picked row's band and the panel's edge: as much of the list's height as the rows
+    /// in view are of all the rows, and as far down it as they are.
+    fn draw_thumb(&self, grid: &mut Grid, area: Rect, theme: &Theme) {
+        let (all, shown) = (self.matches.len() as f32, f32::from(ROWS));
+        if all <= shown {
+            return;
+        }
+        let tall = (shown * shown / all).max(THUMB);
+        let down = (shown - tall) * self.top as f32 / (all - shown);
+        let top = f32::from(area.y + HEADER_ROWS) + down;
+        // In cells it's half blocks down the panel's last column, which a row's band leaves
+        // clear.
+        let style = Style {
+            fg: theme.scrollbar,
+            bg: theme.popup,
+            painted: true,
+            ..theme.bar
+        };
+        let x = area.right().saturating_sub(1);
+        let cells = top.round() as u16..(top + tall).round().max(top.round() + 1.0) as u16;
+        for y in cells {
+            grid.put_str(x, y, "▐", style, area.right());
+        }
+        let thumb = Bounds::cells(f32::from(area.right()) - 0.7, top + 0.1, 0.35, tall - 0.2);
+        grid.panel(thumb, 12, Some(theme.scrollbar), None);
     }
 
     /// What the list's one row says when there's nothing in it.

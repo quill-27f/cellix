@@ -5817,6 +5817,11 @@ impl App {
                     self.overlay = Overlay::Palette(palette);
                     self.preview_symbol();
                 }
+                Key::PageUp | Key::PageDown => {
+                    palette.page(key.key == Key::PageDown);
+                    self.overlay = Overlay::Palette(palette);
+                    self.preview_symbol();
+                }
                 Key::Backspace => {
                     palette.query.pop();
                     self.palette_typed(palette);
@@ -12797,6 +12802,15 @@ impl App {
                 _ => {}
             }
         }
+        // A palette's list is the only thing that scrolls while it's open, wherever the
+        // pointer is.
+        if let Overlay::Palette(palette) = &mut self.overlay {
+            match mouse.kind {
+                MouseKind::ScrollUp => palette.wheel(-1),
+                MouseKind::ScrollDown => palette.wheel(1),
+                _ => {}
+            }
+        }
         if mouse.kind != MouseKind::Left {
             return;
         }
@@ -17803,6 +17817,124 @@ mod tests {
             },
         }));
         assert!(matches!(app.overlay, Overlay::None));
+    }
+
+    /// Twelve rows were drawn and nothing moved them: the thirteenth match could be picked
+    /// and not seen, and the wheel did nothing.
+    #[test]
+    fn a_palettes_list_scrolls_to_the_picked_row_and_with_the_wheel() {
+        let (_dir, mut app) = project();
+        app.run(Command::CommandPalette);
+        let name = |at: usize| COMMANDS[at].0;
+        // The rows of the list as they're shown, under the field and the air.
+        let rows = |app: &App| -> Vec<String> {
+            let grid = screen(app);
+            let (_, field) = find(&grid, "⌕");
+            let rows = (field + 2..field + 14).map(|y| grid.row_text(y));
+            rows.map(|row| row.trim().trim_end_matches('▐').trim().to_string())
+                .collect()
+        };
+        let picked = |app: &App| match &app.overlay {
+            Overlay::Palette(palette) => match palette.current() {
+                Some(Item::Command(label, _)) => *label,
+                other => panic!("{other:?}"),
+            },
+            _ => panic!("the palette closed"),
+        };
+        let wheel = |app: &mut App, kind: MouseKind| app.handle(mouse(kind, 50, 10));
+        assert!(rows(&app)[0].starts_with(name(0)), "{:?}", rows(&app));
+        assert!(rows(&app)[11].starts_with(name(11)));
+
+        // Down past the last row shown brings the next one in, at the foot.
+        for _ in 0..12 {
+            key(&mut app, Key::Down);
+        }
+        assert_eq!(picked(&app), name(12));
+        assert!(rows(&app)[11].starts_with(name(12)), "{:?}", rows(&app));
+        assert!(rows(&app)[0].starts_with(name(1)));
+        // A page at a time, less a row, and back to the top.
+        key(&mut app, Key::PageDown);
+        assert_eq!(picked(&app), name(23));
+        assert!(rows(&app)[11].starts_with(name(23)), "{:?}", rows(&app));
+        for _ in 0..3 {
+            key(&mut app, Key::PageUp);
+        }
+        assert_eq!(picked(&app), name(0));
+        assert!(rows(&app)[0].starts_with(name(0)));
+
+        // The wheel moves the list and leaves the pick where it was, in view or not. The
+        // next arrow brings the list back to it.
+        wheel(&mut app, MouseKind::ScrollDown);
+        assert!(rows(&app)[0].starts_with(name(2)), "{:?}", rows(&app));
+        assert_eq!(picked(&app), name(0));
+        wheel(&mut app, MouseKind::ScrollUp);
+        wheel(&mut app, MouseKind::ScrollUp);
+        assert!(rows(&app)[0].starts_with(name(0)), "it stops at the top");
+        wheel(&mut app, MouseKind::ScrollDown);
+        key(&mut app, Key::Down);
+        assert_eq!(picked(&app), name(1));
+        assert!(rows(&app)[0].starts_with(name(1)), "{:?}", rows(&app));
+
+        // A row scrolled into view is pressed where it stands.
+        for _ in 0..80 {
+            if screen(&app).text().contains("Open Settings") {
+                break;
+            }
+            wheel(&mut app, MouseKind::ScrollDown);
+        }
+        let (x, y) = find(&screen(&app), "Open Settings");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        assert!(app.settings_page.is_some(), "Open Settings ran");
+        app.settings_page = None;
+
+        // The wheel stops at the end, with the last command on the last row.
+        app.run(Command::CommandPalette);
+        for _ in 0..80 {
+            wheel(&mut app, MouseKind::ScrollDown);
+        }
+        let last = name(COMMANDS.len() - 1);
+        assert!(rows(&app)[11].starts_with(last), "{:?}", rows(&app));
+
+        // A thumb at the list's edge says there's more, and how far down this is. In cells
+        // it's in the panel's last column.
+        let thumb_cells = |app: &App| {
+            let grid = screen(app);
+            let rows = (0..grid.height()).filter(|y| grid.row_text(*y).contains('▐'));
+            rows.collect::<Vec<u16>>()
+        };
+        let at_end = thumb_cells(&app);
+        assert!(!at_end.is_empty());
+        for _ in 0..80 {
+            wheel(&mut app, MouseKind::ScrollUp);
+        }
+        let at_top = thumb_cells(&app);
+        assert!(at_top[0] < at_end[0], "{at_top:?} {at_end:?}");
+        typed(&mut app, "sidebar");
+        assert!(
+            thumb_cells(&app).is_empty(),
+            "a list that's all in view has none"
+        );
+        key(&mut app, Key::Esc);
+
+        // Painted, it's a bar in the gutter between the picked row's band and the edge.
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        app.run(Command::CommandPalette);
+        let grid = screen(&app);
+        let (scrollbar, pick) = (app.theme.scrollbar, app.theme.pick);
+        let bar = |fill: Rgb| {
+            grid.paint.iter().find_map(|p| match p {
+                Paint::Panel {
+                    bounds,
+                    fill: Some(f),
+                    shadow: false,
+                    ..
+                } if *f == fill => Some(*bounds),
+                _ => None,
+            })
+        };
+        let (thumb, band) = (bar(scrollbar).expect("a thumb"), bar(pick).expect("a band"));
+        assert!(thumb.x > band.x + band.w, "{thumb:?} {band:?}");
+        assert!(thumb.h < band.h * 12 && thumb.h >= band.h);
     }
 
     #[test]
