@@ -24,7 +24,8 @@ pub use history::{
 };
 pub use log::{Commit, GraphRow, age, commit_files, commit_sides, file_history, graph, log};
 pub use stash::{
-    Keep, Stash, apply_stash, drop_stash, pop_stash, stash, stash_files, stash_sides, stashes,
+    Keep, Stash, any_stashed, apply_stash, drop_stash, pop_stash, stash, stash_files, stash_sides,
+    stashes,
 };
 pub use threads::{About, Reply, Thread, YOU};
 

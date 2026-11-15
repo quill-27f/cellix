@@ -219,6 +219,12 @@ impl Workspaces {
     }
 
     pub fn handle(&mut self, event: Event) {
+        // An app can't see the others. It's told how many there are, for the commands that
+        // move between them.
+        let count = self.list.len();
+        if let Some(front) = self.list.get_mut(self.active) {
+            front.app.workspaces = count;
+        }
         // The last row is drawn down into the window's bottom padding, and a click there
         // counts rows past the grid. It's on that row all the same.
         let event = match event {
@@ -1178,6 +1184,23 @@ mod tests {
 
     fn bar(spaces: &Workspaces) -> String {
         screen(spaces).row_text(spaces.size().1 - 1)
+    }
+
+    /// An app can't see the other workspaces, and its palette offers Next Workspace only
+    /// when there's one to go to: it's told how many the window holds.
+    #[test]
+    fn an_app_is_told_how_many_workspaces_the_window_holds() {
+        use cellix_input::{Command, Key, KeyEvent};
+        let (_dir, first, second) = projects();
+        let mut spaces = spaces();
+        spaces.open(first);
+        spaces.handle(Event::Key(KeyEvent::plain(Key::Esc)));
+        assert_eq!(spaces.app().workspaces, 1);
+        assert!(!spaces.app().can_run(Command::NextWorkspace));
+        spaces.open(second);
+        spaces.handle(Event::Key(KeyEvent::plain(Key::Esc)));
+        assert_eq!(spaces.app().workspaces, 2);
+        assert!(spaces.app().can_run(Command::PreviousWorkspace));
     }
 
     /// Where `text` starts on row `y`, in cells.

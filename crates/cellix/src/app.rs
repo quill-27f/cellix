@@ -63,10 +63,12 @@ use crate::settings_page::{Control, Found, SettingsPage, Values};
 use crate::snippets::Snippet;
 use crate::source::{Hit as SourceHit, Source as SourceControl};
 
+mod available;
 mod gitops;
 use crate::theme::Theme;
 use crate::threads::{self, Draft, Hit as ThreadHit};
 use crate::toolbar::{self, Bar, Tool};
+use available::GitNow;
 use cellix_agent::context::Agent as ContextAgent;
 use gitops::GitChoice;
 
@@ -665,6 +667,8 @@ fn status_of(root: &Path, changes: &[cellix_review::Change]) -> HashMap<PathBuf,
 struct DiskLook {
     entries: Vec<cellix_core::Entry>,
     branch: Option<String>,
+    /// Whether there's a repository here, and a merge under way or anything stashed in it.
+    git: GitNow,
     /// Each changed file and folder, by git's letter: worked out here, since a repository
     /// can hold hundreds of thousands of untracked files.
     status: HashMap<PathBuf, char>,
@@ -1109,6 +1113,12 @@ pub struct App {
     /// that text, so one runs at a time and a stale reply is dropped.
     pending_rename: Option<(PathBuf, u64)>,
     branch: Option<String>,
+    /// What git said at the last look at the disk, for the commands that turn on it. `None`
+    /// until the first look.
+    git_now: Option<GitNow>,
+    /// How many workspaces the window holds, this one among them. An app can't see the
+    /// others, so `Workspaces` says.
+    pub workspaces: usize,
     measure: Rc<dyn Measure>,
     agents: Agents,
     /// Set in the `neovim` keymap, when `nvim` could start.
@@ -1481,6 +1491,8 @@ impl App {
             diagnostics: HashMap::new(),
             pending_rename: None,
             branch: None,
+            git_now: None,
+            workspaces: 1,
             measure: Rc::new(CellMeasure),
             agents: Agents::default(),
             in_pane: false,
@@ -4381,6 +4393,7 @@ impl App {
             let _ = done.send(DiskLook {
                 entries: workspace.entries(),
                 branch: current_branch(root),
+                git: GitNow::of(root),
                 status: status_of(root, &changed_files(root)),
                 committed,
                 read_at,
@@ -4409,6 +4422,7 @@ impl App {
         }
         self.explorer.status = status;
         self.branch = look.branch;
+        self.git_now = Some(look.git);
         let mut committed = false;
         if look.committed.is_some() {
             self.committed_at = Some(look.read_at);
@@ -6779,15 +6793,19 @@ impl App {
     /// Enter runs it again, and every other command by name, as VS Code lists them.
     fn command_palette(&mut self) {
         let named = |command: &Command| COMMANDS.iter().find(|(_, listed)| listed == command);
+        // Only what has something to act on now: a command last run on another file may
+        // have nothing here.
         let used: Vec<Item> = self
             .commands_used
             .iter()
+            .filter(|command| self.can_run(**command))
             .filter_map(named)
             .map(|(label, command)| Item::Command(label, *command))
             .collect();
         let mut rest: Vec<&(&'static str, Command)> = COMMANDS
             .iter()
             .filter(|(_, command)| !self.commands_used.contains(command))
+            .filter(|(_, command)| self.can_run(*command))
             .collect();
         rest.sort_by_cached_key(|(label, _)| label.to_lowercase());
         let rest = rest
@@ -17638,7 +17656,7 @@ mod tests {
         let keys = crate::keys::shortcuts(&Default::default());
         let known = |s: &&crate::keys::Shortcut| {
             let listed = COMMANDS.iter().any(|(_, command)| *command == s.command);
-            listed && crate::palette::keys_of(s.command).is_none()
+            listed && app.can_run(s.command) && crate::palette::keys_of(s.command).is_none()
         };
         let lesser = keys.iter().filter(known).find(|s| !s.keys.is_empty());
         let lesser = lesser.expect("a command with keys the palette's own list leaves out");
@@ -17977,10 +17995,15 @@ mod tests {
     #[test]
     fn a_palettes_list_scrolls_to_the_picked_row_and_with_the_wheel() {
         let (_dir, mut app) = project();
+        // What git has to say is in, so the list is the same each time it's opened.
+        settle_disk(&mut app);
         app.run(Command::CommandPalette);
-        // The commands as the palette lists them with none run yet: by name.
-        let mut names: Vec<&str> = COMMANDS.iter().map(|(label, _)| *label).collect();
+        // The commands as the palette lists them with none run yet: those that can run
+        // with no file open, by name.
+        let able = COMMANDS.iter().filter(|(_, command)| app.can_run(*command));
+        let mut names: Vec<&str> = able.map(|(label, _)| *label).collect();
         names.sort_by_key(|label| label.to_lowercase());
+        assert!(names.len() > 24 && names.len() < COMMANDS.len());
         let name = |at: usize| names[at];
         // The rows of the list as they're shown, under the field and the air.
         let rows = |app: &App| -> Vec<String> {
@@ -18048,7 +18071,7 @@ mod tests {
         for _ in 0..80 {
             wheel(&mut app, MouseKind::ScrollDown);
         }
-        let last = name(COMMANDS.len() - 1);
+        let last = name(names.len() - 1);
         assert!(rows(&app)[11].starts_with(last), "{:?}", rows(&app));
 
         // A thumb at the list's edge says there's more, and how far down this is. In cells
@@ -18101,7 +18124,9 @@ mod tests {
     /// palette.
     #[test]
     fn a_palettes_field_is_edited_like_any_text_box_and_a_press_inside_keeps_it_open() {
-        let (_dir, mut app) = project();
+        let (dir, mut app) = project();
+        // A file in front, for Go to Line to be among the commands.
+        app.open(&dir.path().join("beta.rs")).unwrap();
         let query = |app: &App| match &app.overlay {
             Overlay::Palette(palette) => palette.query.clone(),
             _ => panic!("the palette closed"),
@@ -18402,13 +18427,17 @@ mod tests {
         assert!(screen(&app).text().contains("alpha.txt"), "and shown again");
         // The last run leads, and neither is listed a second time among the rest.
         app.run(Command::CommandPalette);
-        typed(&mut app, "fold all");
+        typed(&mut app, "spell check");
         enter(&mut app);
         app.run(Command::CommandPalette);
         let listed = rows(&app);
         assert_eq!(
             listed[..3],
-            [RECENTLY_USED, "View: Fold All", "View: Toggle Sidebar"]
+            [
+                RECENTLY_USED,
+                "Document: Toggle Spell Check",
+                "View: Toggle Sidebar"
+            ]
         );
         typed(&mut app, "toggle sidebar");
         let found = rows(&app);
@@ -18419,13 +18448,13 @@ mod tests {
         app.run(Command::ToggleWordWrap);
         assert_eq!(
             app.commands_used,
-            [Command::FoldAll, Command::ToggleSidebar]
+            [Command::ToggleSpelling, Command::ToggleSidebar]
         );
 
         // They're kept for the next run of Cellix in this folder.
         assert_eq!(
             app.state().commands,
-            ["View: Fold All", "View: Toggle Sidebar"]
+            ["Document: Toggle Spell Check", "View: Toggle Sidebar"]
         );
         app.keep_state();
         let mut next = App::new(dir.path().to_path_buf(), (100, 30));
@@ -18433,7 +18462,11 @@ mod tests {
         next.run(Command::CommandPalette);
         assert_eq!(
             rows(&next)[..3],
-            [RECENTLY_USED, "View: Fold All", "View: Toggle Sidebar"]
+            [
+                RECENTLY_USED,
+                "Document: Toggle Spell Check",
+                "View: Toggle Sidebar"
+            ]
         );
     }
 
@@ -18456,7 +18489,9 @@ mod tests {
             names.push(name);
         }
 
-        let (dir, mut app) = project();
+        // A repository with a file in front, so the commands looked for here can all run.
+        let (dir, mut app) = reviewed();
+        app.open(&dir.path().join("beta.rs")).unwrap();
         // The rows of the list, as they're shown inside the panel, without their keys.
         let rows = |app: &App| -> Vec<String> {
             let grid = screen(app);
@@ -18566,6 +18601,207 @@ mod tests {
         let mut next = App::new(dir.path().to_path_buf(), (100, 30));
         next.restore_state();
         assert_eq!(next.commands_used, [Command::ToggleSidebar]);
+    }
+
+    /// The palette listed every command whatever was in view: Abort Merge with nothing being
+    /// merged, six ways to settle a conflict in a file that has none, Run Cell on a Rust
+    /// file. It lists the ones with something to act on now. One it leaves out still runs by
+    /// its keys, and says what's missing.
+    #[test]
+    fn the_command_palette_lists_only_the_commands_that_can_run_now() {
+        let (dir, mut app) = reviewed();
+        let root = dir.path().to_path_buf();
+        // Whether the palette offers a command: its title, typed, is the first row.
+        let offers = |app: &mut App, title: &str| -> bool {
+            app.run(Command::CommandPalette);
+            typed(app, title);
+            let grid = screen(app);
+            let Overlay::Palette(palette) = &app.overlay else {
+                panic!("the palette isn't open");
+            };
+            let area = palette.shown(grid.area());
+            let cells = (area.x + 2..area.right() - 16).map(|x| grid.cell(x, area.y + 2));
+            let first: String = cells.map(|cell| cell.symbol.as_str()).collect();
+            key(app, Key::Esc);
+            // Up to the gap before its keys, where long ones reach this far in.
+            first.trim().split("  ").next() == Some(title)
+        };
+        let offered = |app: &mut App, titles: &[&'static str]| -> Vec<&'static str> {
+            let titles = titles.iter().copied();
+            titles.filter(|title| offers(app, title)).collect()
+        };
+        let none: [&str; 0] = [];
+
+        // Nothing open: nothing for a file's commands to act on, and nothing git has.
+        assert!(app.editors.is_empty());
+        let for_a_file = [
+            "File: Save",
+            "Edit: Undo",
+            "Comments: Add Comment",
+            "Navigate: Go to Line",
+            "Git: Blame Line",
+            "View: Close Tab",
+            "Git: Abort Merge",
+            "Git: Pop Latest Stash",
+            "Git: Commit Staged Changes",
+        ];
+        assert_eq!(offered(&mut app, &for_a_file), none);
+        let whatever = [
+            "View: Toggle Sidebar",
+            "File: Open Recent…",
+            "Agent: Open Claude Code",
+            "Git: Stash Changes",
+            "Search: Find in Project",
+            "Tasks: Run Task…",
+        ];
+        assert_eq!(offered(&mut app, &whatever), whatever);
+        // Left out, a command still runs by its keys and says what's missing.
+        app.run(Command::AbortMerge);
+        let said = app.message.borrow().clone();
+        assert!(said.contains("No merge"), "{said}");
+
+        // A text file: something to save and to comment on, with no language behind it.
+        app.open(&root.join("alpha.txt")).unwrap();
+        let for_text = [
+            "File: Save",
+            "Edit: Undo",
+            "Comments: Add Comment",
+            "Navigate: Go to Line",
+            "View: Close Tab",
+        ];
+        assert_eq!(offered(&mut app, &for_text), for_text);
+        let not_for_text = [
+            "Navigate: Go to Definition",
+            "Edit: Rename Symbol",
+            "Edit: Format Document",
+            "Edit: Toggle Comment",
+            "View: Fold All",
+            "View: Next Tab",
+        ];
+        assert_eq!(offered(&mut app, &not_for_text), none);
+
+        // A Rust file: what edits code, and nothing for writing, notebooks or conflicts.
+        fs::write(root.join("beta.rs"), "fn main() {\n    let x = 1;\n}\n").unwrap();
+        app.open(&root.join("beta.rs")).unwrap();
+        let for_code = [
+            "File: Save",
+            "Edit: Undo",
+            "Edit: Toggle Comment",
+            "Edit: Format Document",
+            "View: Toggle Word Wrap",
+            "View: Fold All",
+            "View: Close Tab",
+            "Comments: Add Comment",
+            "Git: Blame Line",
+        ];
+        assert_eq!(offered(&mut app, &for_code), for_code);
+        let not_for_code = [
+            "Format: Bold",
+            "Document: Build PDF",
+            "Document: Export to PDF",
+            "Notebook: Run Cell",
+            "Track Changes: Toggle Track Changes",
+            "Track Changes: Accept All Changes",
+            "Merge Conflict: Accept Current Change",
+            "Merge Conflict: Next Conflict",
+            "Agent: Approve Plan",
+            "Agent: Accept Proposed Change",
+            "View: Unfold All",
+            "View: Focus Next Pane",
+            "View: Close Side Pane",
+            "Workspace: Next Workspace",
+        ];
+        assert_eq!(offered(&mut app, &not_for_code), none);
+        // Folded, there's something to unfold.
+        app.run(Command::FoldAll);
+        assert!(offers(&mut app, "View: Unfold All"));
+        app.run(Command::UnfoldAll);
+
+        // A page of writing, with a suggestion in it.
+        fs::write(root.join("notes.md"), "# Notes\n\nKept {++added++} here.\n").unwrap();
+        app.open(&root.join("notes.md")).unwrap();
+        assert!(app.editors[app.active()].rendered);
+        let for_writing = [
+            "Format: Bold",
+            "Document: Export to PDF",
+            "Document: Toggle Markdown Source",
+            "File: Open in Browser",
+            "Track Changes: Toggle Track Changes",
+            "Track Changes: Accept All Changes",
+            "Track Changes: Next Change",
+            "View: Next Tab",
+        ];
+        assert_eq!(offered(&mut app, &for_writing), for_writing);
+        let not_for_writing = [
+            "Edit: Toggle Comment",
+            "View: Toggle Word Wrap",
+            "View: Fold All",
+            "Document: Build PDF",
+            "Notebook: Run Cell",
+            "Track Changes: Accept Change",
+        ];
+        assert_eq!(offered(&mut app, &not_for_writing), none);
+
+        // What was last run from the palette isn't offered where it has nothing to do.
+        app.open(&root.join("beta.rs")).unwrap();
+        app.run(Command::CommandPalette);
+        typed(&mut app, "word wrap");
+        enter(&mut app);
+        assert_eq!(app.commands_used, [Command::ToggleWordWrap]);
+        app.run(Command::CommandPalette);
+        assert!(screen(&app).text().contains(RECENTLY_USED));
+        key(&mut app, Key::Esc);
+        app.open(&root.join("notes.md")).unwrap();
+        app.run(Command::CommandPalette);
+        assert!(!screen(&app).text().contains(RECENTLY_USED));
+        key(&mut app, Key::Esc);
+
+        // A file left in conflict has its conflicts to settle.
+        let both = "one\n<<<<<<< HEAD\nmine\n=======\ntheirs\n>>>>>>> feature\ntwo\n";
+        fs::write(root.join("both.txt"), both).unwrap();
+        app.open(&root.join("both.txt")).unwrap();
+        let for_a_conflict = [
+            "Merge Conflict: Accept Current Change",
+            "Merge Conflict: Accept Both Changes",
+            "Merge Conflict: Compare Current and Incoming",
+            "Merge Conflict: Next Conflict",
+        ];
+        assert_eq!(offered(&mut app, &for_a_conflict), for_a_conflict);
+
+        // What git has, as the look at the disk finds it: something stashed, and then a
+        // merge that stopped.
+        let stashed = [
+            "Git: Pop Latest Stash",
+            "Git: Apply Stash…",
+            "Git: Drop Stash…",
+        ];
+        assert_eq!(offered(&mut app, &stashed), none);
+        git(&root, &["stash"]);
+        app.refresh_tree();
+        settle_disk(&mut app);
+        assert_eq!(offered(&mut app, &stashed), stashed);
+        assert!(!offers(&mut app, "Git: Abort Merge"));
+        git(&root, &["checkout", "-q", "-b", "feature"]);
+        fs::write(root.join("alpha.txt"), "theirs\n").unwrap();
+        git(&root, &["commit", "-q", "-am", "theirs"]);
+        git(&root, &["checkout", "-q", "-"]);
+        fs::write(root.join("alpha.txt"), "mine\n").unwrap();
+        git(&root, &["commit", "-q", "-am", "mine"]);
+        let merge = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(["merge", "-q", "feature"])
+            .output()
+            .unwrap();
+        assert!(!merge.status.success(), "the merge stops on alpha.txt");
+        app.refresh_tree();
+        settle_disk(&mut app);
+        assert!(offers(&mut app, "Git: Abort Merge"));
+
+        // And with another workspace in the window, there's one to go to.
+        assert!(!offers(&mut app, "Workspace: Next Workspace"));
+        app.workspaces = 2;
+        assert!(offers(&mut app, "Workspace: Next Workspace"));
     }
 
     /// What the design review found in the palettes once they were built: a list of plain
@@ -18726,7 +18962,7 @@ mod tests {
         typed(&mut app, ">");
         let shown = panel(&app);
         assert!(
-            shown.contains("Agent: Ask Agent") && !shown.contains("alpha.txt"),
+            shown.contains("Agent: List Agents") && !shown.contains("alpha.txt"),
             "{shown}"
         );
         // What follows it finds a command, and Enter runs it.

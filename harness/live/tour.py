@@ -54,7 +54,7 @@ EXPECT = {
     "08-open-file-recent": "RECENTLY OPENED",
     "09-commands": "Open Settings",
     "09-commands-recent": "RECENTLY USED",
-    "09-commands-scrolled": "Show Agent Task",
+    "09-commands-scrolled": "Open Folder as a Workspace",
     "10-branches": "Switch branch",
     "100-workspaces": "Resume",
     "101-workspace-hover": "Resume",
@@ -901,7 +901,7 @@ with tempfile.TemporaryDirectory() as scratch:
            ["keys", "\r"], ["wait", 0.5], ["keys", F1], ["wait", 0.4]]
     shoot("09-commands-recent", ran, CODE_FILE)
     # Past the twelfth row, the list follows the pick and a thumb says where it is.
-    shoot("09-commands-scrolled", [["keys", F1], ["until", PALETTE_UP], *[["keys", "\x1b[B"]] * 14, ["wait", 0.4]],
+    shoot("09-commands-scrolled", [["keys", F1], ["until", PALETTE_UP], *[["keys", "\x1b[6~"]] * 12, ["wait", 0.4]],
           CODE_FILE)
     shoot("10-branches", [["wait", 1.5], ["click", 3, 38], ["wait", 0.5]], CODE_FILE)
     shoot("11-find", [["keys", CTRL("f")], ["keys", "item"]], CODE_FILE)

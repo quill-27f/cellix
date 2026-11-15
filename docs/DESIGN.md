@@ -545,7 +545,15 @@ category typed before a space narrows to it: `git st` is Git's commands with "st
 names and `git ` is all of them, in the list's order. Failing both, the letters anywhere in the
 title. The name alone is what settings and a folder's state
 knew a command by, and still means it (`palette::goes_by`); keys set on the Keyboard page are
-written under the title and the old entry goes. `>` typed first in Quick Open is the same list, the
+written under the title and the old entry goes. The list holds the commands that have something to act on now (`App::can_run`, in
+`app/available.rs`), as VS Code's does by its `when` clauses: each is the test the command's own
+handler makes before it does anything, or the one a menu greys it by. A command is left out
+only when what it needs is known to be missing. What can't be told without reading the disk
+again stays and says what's missing when run: a project's tasks, the folders opened lately, an
+agent's turns while Review is closed. Whether there's a repository, a merge under way and
+anything stashed are asked of git with the rest of the look at the disk every couple of
+seconds, and until the first answer the commands that turn on them are listed. Keys run a
+command whether it's listed or not. `>` typed first in Quick Open is the same list, the
 sign staying in the field as `@` and `#` do for symbols, and taking it away lists the files
 again. The hint names all three and `:line`, in as few words as the field's cells need.
 

@@ -5073,5 +5073,12 @@
     "title": "Every command has its category before its name, so the palette lists a category's commands together; a name is found as before and a category finds its commands; settings and state that name a command without its category still mean it",
     "test": "every_command_has_a_category_and_its_name_alone_still_means_it",
     "passes": true
+  },
+  {
+    "id": "palette-what-can-run",
+    "milestone": 14,
+    "title": "The command palette lists the commands that have something to act on now: a file's with a file in front and by its kind, the merge's and the stash's by what git has, a notebook's on a notebook; one left out still runs by its keys",
+    "test": "the_command_palette_lists_only_the_commands_that_can_run_now",
+    "passes": true
   }
 ]

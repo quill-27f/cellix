@@ -2003,6 +2003,11 @@ impl Editor {
         self.code_rows(self.view_width.get())
     }
 
+    /// Whether anything is folded away, for Unfold to open.
+    pub fn any_folded(&self) -> bool {
+        !self.hidden().is_empty()
+    }
+
     /// Lines folded away, as regions in order.
     fn hidden(&self) -> Vec<fold::Range> {
         self.follow_folds();

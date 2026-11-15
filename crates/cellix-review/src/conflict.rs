@@ -190,6 +190,25 @@ fn name_of(root: &Path, commit: &str) -> String {
     }
 }
 
+/// Whether a merge, rebase, cherry-pick or revert is waiting to be finished: what `underway`
+/// knows without the names, in one question to git, so it can be asked at every look at the
+/// disk. `None` where there's no repository to ask.
+pub fn is_underway(root: &Path) -> Option<bool> {
+    let marks = [
+        "rebase-merge",
+        "rebase-apply",
+        "MERGE_HEAD",
+        "CHERRY_PICK_HEAD",
+        "REVERT_HEAD",
+    ];
+    let mut args = vec!["rev-parse"];
+    for mark in marks {
+        args.extend(["--git-path", mark]);
+    }
+    let paths = git(root, &args)?;
+    Some(paths.lines().any(|line| root.join(line.trim()).exists()))
+}
+
 /// The merge, rebase, cherry-pick or revert waiting to be finished, if there is one.
 pub fn underway(root: &Path) -> Option<Underway> {
     let read = |name: &str| std::fs::read_to_string(git_path(root, name)?).ok();
@@ -390,6 +409,7 @@ end
         let under = underway(path).expect("a merge is under way");
         assert_eq!(under.operation, Operation::Merge);
         assert_eq!(under.incoming, "feature");
+        assert_eq!(is_underway(path), Some(true));
         assert!(merge_message(path).unwrap().contains("feature"));
         let entries = crate::status_entries(path);
         let kept = entries
@@ -411,6 +431,10 @@ end
         assert!(!entries.iter().any(|e| e.is_conflicted()));
         crate::commit(path, &merge_message(path).unwrap()).unwrap();
         assert!(underway(path).is_none());
+        assert_eq!(is_underway(path), Some(false));
+        // A folder git knows nothing of has nothing under way, and says so differently.
+        let plain = tempfile::tempdir().unwrap();
+        assert_eq!(is_underway(plain.path()), None);
         assert_eq!(
             fs::read_to_string(path.join("kept.txt")).unwrap(),
             "theirs\n"
@@ -440,9 +464,11 @@ end
         assert!(!run(path, &["rebase", "-q", "-"]), "the rebase conflicts");
         let under = underway(path).expect("a rebase is under way");
         assert_eq!(under.operation, Operation::Rebase);
+        assert_eq!(is_underway(path), Some(true));
         fs::write(path.join("kept.txt"), "both\n").unwrap();
         crate::stage(path, &[PathBuf::from("kept.txt")]).unwrap();
         proceed(path, Operation::Rebase).unwrap();
         assert!(underway(path).is_none());
+        assert_eq!(is_underway(path), Some(false));
     }
 }

@@ -55,6 +55,11 @@ fn run(root: &Path, args: &[&str]) -> Result<(), String> {
     Err(first.unwrap_or("git refused").trim().to_string())
 }
 
+/// Whether anything is stashed, without listing it.
+pub fn any_stashed(root: &Path) -> bool {
+    git(root, &["rev-parse", "--quiet", "--verify", "refs/stash"]).is_some()
+}
+
 /// Every stash, newest first.
 pub fn stashes(root: &Path) -> Vec<Stash> {
     let Some(output) = git(root, &["stash", "list", "--format=%H%x00%ct%x00%gs"]) else {
@@ -186,10 +191,12 @@ mod tests {
         let dir = repo();
         let path = dir.path();
         fs::write(path.join("kept.txt"), "two\n").unwrap();
+        assert!(!any_stashed(path));
         stash(path, "Halfway", Keep::Tracked).unwrap();
         assert_eq!(fs::read_to_string(path.join("kept.txt")).unwrap(), "one\n");
         let list = stashes(path);
         assert_eq!(list.len(), 1);
+        assert!(any_stashed(path));
         assert_eq!(list[0].title(), "Halfway");
         let files = stash_files(path, &list[0].hash);
         assert_eq!(files.len(), 1);
@@ -198,6 +205,7 @@ mod tests {
         pop_stash(path, &list[0].hash).unwrap();
         assert_eq!(fs::read_to_string(path.join("kept.txt")).unwrap(), "two\n");
         assert!(stashes(path).is_empty());
+        assert!(!any_stashed(path));
     }
 
     #[test]

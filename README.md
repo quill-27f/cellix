@@ -190,7 +190,8 @@ commands. Before you
 type, the files you last looked at are at the top, so Ctrl+P and Enter goes back to the one
 before this. Ctrl+Shift+P lists the commands by category and name (`Git: Stash Changes`,
 `View: Toggle Sidebar`), with the ones you last ran from it first: type a name, or a category
-to see what it holds.
+to see what it holds. It lists what can run now: the notebook's commands on a notebook, the
+merge's while one is under way, and so on. A command it leaves out still runs by its keys.
 Both lists scroll with the arrows, Page Up and Page Down and the wheel, their field takes the
 caret keys and Ctrl+V, and the letters you typed are picked out in each row.
 
