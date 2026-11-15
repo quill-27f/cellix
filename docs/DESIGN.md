@@ -504,7 +504,10 @@ there puts that file first, whether the walk found it or not: the walk leaves ou
 `.gitignore` names, can't reach outside the folder, and in a big tree may not have got there.
 Enter opens the picked file at the place. VS Code does the same with `file:line` and with whole
 paths. A list or box that's open has the keyboard, so it takes what's pasted, by the terminal
-or by Ctrl+V, before anything written under it does.
+or by Ctrl+V, before anything written under it does. Ctrl+P is one of the few keys that leave
+the side pane's program (with the commands, Find, the pane's own keys and Quit), as it's one
+VS Code keeps from its terminal: the file an agent names is wanted while the keyboard is still
+in its chat. A file picked from Quick Open takes the keyboard.
 
 Git has two places. Source Control in the sidebar decides what goes in: a message, staged and
 unstaged files, Commit, and Push or Pull, as in VS Code. Review reads what changed, hunk by hunk,

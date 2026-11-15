@@ -5003,5 +5003,12 @@
     "title": "Quick Open goes where a pasted path says: a path with a line after it, from the top of the disk or home, in quotes or a sentence, pasted by the terminal or Ctrl+V, lists its file first even when .gitignore or the folder leaves it out, and Enter opens it at the line; :120 alone is a line of the file in view",
     "test": "quick_open_goes_where_a_pasted_path_says",
     "passes": true
+  },
+  {
+    "id": "quick-open-from-the-pane",
+    "milestone": 14,
+    "title": "Ctrl+P opens Quick Open while the keyboard is in the side pane's agent or terminal, and a file picked there takes the keyboard",
+    "test": "ctrl_p_opens_quick_open_from_the_side_pane_and_a_pick_takes_the_keyboard",
+    "passes": true
   }
 ]

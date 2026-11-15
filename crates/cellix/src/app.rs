@@ -5083,6 +5083,7 @@ impl App {
                     Command::FocusAgent
                         | Command::CloseDock
                         | Command::CommandPalette
+                        | Command::QuickOpen
                         | Command::FindInFile
                         | Command::Quit
                 )
@@ -17759,6 +17760,49 @@ mod tests {
         app.handle(Event::Paste("beta.rs".into()));
         assert_eq!(query(&app), "beta.rs");
         assert!(app.source.message.is_empty());
+    }
+
+    /// With the keyboard in an agent's chat, Ctrl+P went to the agent, so a file it had just
+    /// named was a click on the file and Ctrl+P away. It opens Quick Open from there, as it
+    /// does from VS Code's terminal, and picking a file takes the keyboard to it.
+    #[test]
+    fn ctrl_p_opens_quick_open_from_the_side_pane_and_a_pick_takes_the_keyboard() {
+        let (_dir, mut app) = project();
+        let cat = ["cat".to_string()];
+        let root = app.workspace.root().to_path_buf();
+        app.start_session("Claude Code", &cat, &[], &root);
+        assert!(app.dock.focused && app.dock.open);
+        let ctrl_p = |app: &mut App| {
+            app.handle(Event::Key(KeyEvent {
+                key: Key::Char('p'),
+                mods: Mods {
+                    ctrl: true,
+                    ..Mods::default()
+                },
+            }));
+        };
+        ctrl_p(&mut app);
+        assert!(matches!(app.overlay, Overlay::Palette(_)), "Quick Open");
+        // Esc leaves the keyboard where it was.
+        key(&mut app, Key::Esc);
+        assert!(matches!(app.overlay, Overlay::None) && app.dock.focused);
+        ctrl_p(&mut app);
+        typed(&mut app, "src/lib.rs:1");
+        enter(&mut app);
+        assert!(screen(&app).text().contains("pub fn x()"));
+        assert!(!app.dock.focused, "the keyboard is in the file");
+        typed(&mut app, "// ");
+        assert!(app.active_text().unwrap().starts_with("// pub fn x()"));
+        // Other keys still reach the program: Ctrl+L is the shell's, not Go to Line.
+        app.dock.focused = true;
+        app.handle(Event::Key(KeyEvent {
+            key: Key::Char('l'),
+            mods: Mods {
+                ctrl: true,
+                ..Mods::default()
+            },
+        }));
+        assert!(matches!(app.overlay, Overlay::None));
     }
 
     #[test]
