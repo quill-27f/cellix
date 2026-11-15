@@ -2208,3 +2208,5 @@ The user said: "release it as 0.9.0", and then "ok run targeted from now on and 
 - One run of the gate failed on two PTY tests that time a resize, with the machine's load at twenty from another program; the same tree passed on the next run.
 - Unverified in a real terminal: all of it.
 - Open with the user: Agent: List Agents and Agent: Show Agents read alike (the first is the list of agents in the pane, the second opens or closes the side pane); and the Keyboard page's rows under category headings, so names fit a narrow page in cells.
+- 0.9.0 was released from `93d13cb`, the release commit, CI passing first time and crates.io with it this time: the same four binaries, 14:03 UTC, the Apple Silicon download 29.1 MB, and the Homebrew tap has it.
+- `target` is 22 GB, which is the project folder's size, up 3 GB since 0.8.0. Nothing was cleared. The disk has 290 GB free where it had 415 GB this morning: not this project's doing, and another program had the machine's load at twenty through the afternoon.
