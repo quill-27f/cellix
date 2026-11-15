@@ -5094,5 +5094,12 @@
     "title": "Commands that match what's typed equally well stay in the palette's order, so a category's stay together; a long name no longer drops below shorter ones",
     "test": "commands_that_match_alike_stay_in_the_lists_order",
     "passes": true
+  },
+  {
+    "id": "keyboard-page-title-room",
+    "milestone": 14,
+    "title": "The Keyboard page gives a command's title half the page, and one that still doesn't fit ends in an ellipsis in place of being cut where the column ends",
+    "test": "a_commands_title_has_room_on_the_keyboard_page_or_ends_in_an_ellipsis",
+    "passes": true
   }
 ]

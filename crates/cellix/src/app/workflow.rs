@@ -768,6 +768,90 @@ mod tests {
         assert!(app.settings_page.is_none());
     }
 
+    /// A command's title is its category and its name, and the Keyboard page's first column
+    /// was two fifths of the page: on a terminal without pictures, where every letter is a
+    /// cell, a third of the titles were cut through a word. The column has half the page,
+    /// and a title that still doesn't fit ends in an ellipsis.
+    #[test]
+    fn a_commands_title_has_room_on_the_keyboard_page_or_ends_in_an_ellipsis() {
+        let all = crate::keys::shortcuts(&Default::default());
+        let titles: Vec<&str> = all.iter().map(|shortcut| shortcut.name).collect();
+        // The rows' names as the page shows them, and how many end in an ellipsis.
+        let names = |width: u16| -> (Vec<String>, usize) {
+            let (_dir, mut app) = project("{}");
+            app.size = (width, 40);
+            app.run(Command::OpenSettings);
+            let (x, y) = find(&screen(&app), "Keyboard");
+            click(&mut app, x + 1, y);
+            let grid = screen(&app);
+            let (from, header) = find(&grid, "COMMAND");
+            let (keys, _) = find(&grid, "KEYS");
+            let mut shown = Vec::new();
+            let mut cut = 0;
+            for y in header + 1..grid.height() {
+                let row: Vec<char> = grid.row_text(y).chars().collect();
+                let name: String = row[from as usize..keys as usize].iter().collect();
+                let name = name.trim().to_string();
+                if !name.contains(": ") {
+                    continue;
+                }
+                assert_eq!(
+                    row[keys as usize - 1],
+                    ' ',
+                    "a cell clear before the keys: {name}"
+                );
+                match name.strip_suffix('…') {
+                    Some(stem) => {
+                        assert!(titles.iter().any(|title| title.starts_with(stem)), "{name}");
+                        cut += 1;
+                    }
+                    None => assert!(titles.contains(&name.as_str()), "{name} is cut short"),
+                }
+                shown.push(name);
+            }
+            (shown, cut)
+        };
+        // A narrow window: what fits is whole, and what doesn't says so.
+        let (shown, cut) = names(100);
+        assert!(shown.len() > 10 && cut > 0, "{shown:?}");
+        assert!(
+            shown.iter().any(|name| name == "Agent: Approve Plan"),
+            "{shown:?}"
+        );
+        // A wide one has every title on its first screen whole.
+        let (shown, cut) = names(170);
+        assert_eq!(cut, 0, "{shown:?}");
+        let long = "Agent: Review Previous Agent Turn";
+        assert!(shown.iter().any(|name| name == long), "{shown:?}");
+
+        // The keys being pressed for a command are never written over by what Enter and
+        // Escape do: the hint is as long as the room after them, or isn't there.
+        let (_dir, mut app) = project("{}");
+        app.size = (100, 40);
+        app.run(Command::OpenSettings);
+        let (x, y) = find(&screen(&app), "Keyboard");
+        click(&mut app, x + 1, y);
+        let grid = screen(&app);
+        let (_, row) = find(&grid, "Agent: Approve Plan");
+        let keys_x = grid.row_text(row).find('—').expect("no keys yet") as u16;
+        click(&mut app, keys_x, row);
+        let pressed = KeyEvent {
+            key: Key::F(5),
+            mods: Mods {
+                ctrl: true,
+                alt: true,
+                shift: true,
+            },
+        };
+        app.handle(Event::Key(pressed));
+        let row = screen(&app).row_text(row);
+        assert!(row.contains("Ctrl+Alt+Shift+F5"), "{row}");
+        assert!(
+            !row.contains("saves"),
+            "no room for it after the keys: {row}"
+        );
+    }
+
     #[test]
     fn a_command_gets_new_keys_on_the_shortcuts_page_and_they_work() {
         let (_dir, mut app) = project("{}");

@@ -482,11 +482,22 @@ impl SettingsPage {
             .collect()
     }
 
-    /// The table's columns: where the keys start, and where the source does.
+    /// The table's columns: where the keys start, and where the source does. The names have
+    /// half the page, up to what the longest of them needs in cells: a command's title is
+    /// its category and its name, and two fifths of a page cut a third of them short on a
+    /// terminal without pictures.
     fn key_columns(page: Rect) -> (u16, u16) {
         let source = page.right().saturating_sub(SOURCE_WIDTH + RESET_WIDTH);
-        let keys = page.x + (page.w * 2 / 5).clamp(16, 34);
+        let keys = page.x + (page.w / 2).clamp(16, 40);
         (keys, source)
+    }
+
+    /// A command's title as its row shows it: whole, or ending in an ellipsis where the
+    /// column is too narrow for it, never cut through a word with nothing to say so.
+    fn shown_name(&self, index: usize, page: Rect, measure: &dyn Measure) -> String {
+        let (keys_x, _) = Self::key_columns(page);
+        let room = f32::from(keys_x.saturating_sub(1).saturating_sub(page.x));
+        crate::context::elide(self.shortcuts[index].name, room, measure)
     }
 
     pub fn scroll_by(&mut self, delta: isize) {
@@ -1069,10 +1080,10 @@ impl SettingsPage {
                 Row::Shortcut(index) => {
                     self.draw_shortcut(grid, page, (y, index), (hover, measure, &shared), theme);
                     let (keys_x, _) = Self::key_columns(page);
-                    let name = self.shortcuts[index].name;
+                    let name = self.shown_name(index, page, measure);
                     tag(
                         grid,
-                        (name, Font::default()),
+                        (&name, Font::default()),
                         (y, keys_x.saturating_sub(2)),
                         row,
                     );
@@ -1212,13 +1223,8 @@ impl SettingsPage {
             );
             grid.panel(wash, 18, Some(theme.page_hover), None);
         }
-        grid.label(
-            page.x,
-            y,
-            shortcut.name,
-            theme.text,
-            keys_x.saturating_sub(1),
-        );
+        let name = self.shown_name(index, page, measure);
+        grid.label(page.x, y, &name, theme.text, keys_x.saturating_sub(1));
         let keys_end = source_x.saturating_sub(1);
         match &self.recording {
             Some((recording, pressed)) if *recording == index => {
@@ -1234,12 +1240,23 @@ impl SettingsPage {
                     Some(keys) => grid.label(keys_x, y, keys, theme.text, keys_end),
                     None => grid.label(keys_x, y, "Press the keys", quiet, keys_end),
                 };
-                let hint = if pressed.is_some() {
-                    "Enter saves · Esc cancels"
-                } else {
-                    "Esc cancels"
+                // What Enter and Escape do, in as many words as there's room for after the
+                // keys, and in none where the keys fill the box: it was written over them.
+                let shown = pressed.as_deref().unwrap_or("Press the keys");
+                let taken = keys_x as f32 + measure.width(shown, Font::default()) + 1.0;
+                let hints: &[&str] = match pressed {
+                    Some(_) => &["Enter saves · Esc cancels", "Enter saves"],
+                    None => &["Esc cancels"],
                 };
-                grid.label_right(keys_end.saturating_sub(1), y, hint, quiet, NOTE_SIZE);
+                let note = Font {
+                    size: NOTE_SIZE,
+                    ..Font::default()
+                };
+                let end = keys_end.saturating_sub(1);
+                let fits = |hint: &&&str| taken + measure.width(hint, note) <= f32::from(end);
+                if let Some(hint) = hints.iter().find(fits) {
+                    grid.label_right(end, y, hint, quiet, NOTE_SIZE);
+                }
             }
             _ => {
                 let mut x = keys_x;
