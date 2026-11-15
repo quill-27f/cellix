@@ -1735,6 +1735,51 @@ mod tests {
         assert_eq!(spaces.app().workspace.root(), opened);
     }
 
+    /// The empty field's hint says Tab goes into a folder, and the hint goes with the first
+    /// letter typed: someone who typed a name saw the folder they meant in the list, and
+    /// nothing saying how to carry on into it. The field's far end says what the keys do
+    /// with the folder picked, for as long as something is typed.
+    #[test]
+    fn the_folder_finder_says_what_tab_and_enter_do_while_a_name_is_typed() {
+        let (dir, first, _second) = projects();
+        let long = "a".repeat(45);
+        fs::create_dir_all(dir.path().join("workplace/app").join(&long)).unwrap();
+        let mut spaces = spaces();
+        spaces.open(first);
+        spaces.app_mut().home = Some(dir.path().to_path_buf());
+        spaces.app_mut().run(Command::OpenWorkspace);
+        let goes_in = crate::palette::GOES_IN;
+        // Nothing typed: the hint says it, and the field's end doesn't say it again.
+        let text = screen(&spaces).text();
+        assert!(text.contains("Tab goes into it"), "{text}");
+        assert!(!text.contains(goes_in), "{text}");
+        // A name finds the folder among the suggestions. The hint has gone, and the field
+        // says what the keys do with the folder picked.
+        type_text(&mut spaces, "work");
+        let text = screen(&spaces).text();
+        assert!(text.contains("~/workplace"), "{text}");
+        assert!(text.contains(goes_in), "{text}");
+        // Tab goes in. The folder itself is picked now, and Tab has nowhere to take it.
+        key(&mut spaces, Key::Tab, Mods::default());
+        let text = screen(&spaces).text();
+        assert!(text.contains("~/workplace/app"), "{text}");
+        assert!(text.contains("Enter opens it"), "{text}");
+        assert!(!text.contains("Tab goes into it"), "{text}");
+        // A folder inside it, picked, can be gone into in turn.
+        key(&mut spaces, Key::Down, Mods::default());
+        assert!(screen(&spaces).text().contains(goes_in));
+        key(&mut spaces, Key::Tab, Mods::default());
+        let text = screen(&spaces).text();
+        assert!(text.contains("~/workplace/app/"), "{text}");
+        assert!(text.contains("Enter opens it"), "{text}");
+        // What's typed comes first: a path as long as the field, with its folder picked
+        // under it, leaves no room to say anything.
+        type_text(&mut spaces, &long[..40]);
+        let text = screen(&spaces).text();
+        assert!(text.contains(&long[..20]), "{text}");
+        assert!(!text.contains("opens it"), "{text}");
+    }
+
     /// Unix only: sessions outlive Cellix only there.
     #[test]
     #[cfg(unix)]

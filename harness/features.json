@@ -5080,5 +5080,12 @@
     "title": "The command palette lists the commands that have something to act on now: a file's with a file in front and by its kind, the merge's and the stash's by what git has, a notebook's on a notebook; one left out still runs by its keys",
     "test": "the_command_palette_lists_only_the_commands_that_can_run_now",
     "passes": true
+  },
+  {
+    "id": "folder-finder-says-tab",
+    "milestone": 14,
+    "title": "While a name or a path is typed in the folder finder, the end of its field says what the keys do with the folder picked: Tab goes into it, Enter opens it",
+    "test": "the_folder_finder_says_what_tab_and_enter_do_while_a_name_is_typed",
+    "passes": true
   }
 ]

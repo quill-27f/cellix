@@ -282,6 +282,11 @@ pub fn keys_of(command: Command) -> Option<&'static str> {
     })
 }
 
+/// What the folder finder's field says the keys do with the folder picked, while a name or
+/// a path is typed.
+pub const GOES_IN: &str = "Tab goes into it · Enter opens it";
+const OPENS: &str = "Enter opens it";
+
 /// A command's name without its category: "Toggle Sidebar" of "View: Toggle Sidebar".
 pub fn bare(title: &str) -> &str {
     title.split_once(": ").map_or(title, |(_, name)| name)
@@ -1447,6 +1452,22 @@ impl Palette {
         }
     }
 
+    /// What the field says at its far end: what's still happening, or in the folder finder
+    /// what the keys do with the folder picked. The hint in the empty field says Tab goes
+    /// into a folder, and it's gone with the first letter typed, which is when someone sees
+    /// the folder they meant in the list and wants to carry on into it.
+    fn status_now(&self) -> Option<&str> {
+        if self.folders.is_none() || self.query.is_empty() {
+            return self.status.as_deref();
+        }
+        match self.current() {
+            // The folder what's typed names: there's nowhere further for Tab to go.
+            Some(Item::Folder(_, _, note)) if *note == crate::folders::THIS_FOLDER => Some(OPENS),
+            Some(Item::Folder(..)) => Some(GOES_IN),
+            _ => None,
+        }
+    }
+
     /// The field: its box a column in from the panel's edges, where the picked row's band
     /// stands too, the search icon and what's typed where a row's icon and words are, and
     /// what's still happening at its far end. Returns where the caret stands.
@@ -1496,7 +1517,7 @@ impl Palette {
         let end_of_words = x + wide(&advances[hidden..]);
         // The status keeps clear of what's typed, and gives way to it when both don't fit:
         // the query is what the person is working on.
-        let status = self.status.as_deref().map(|text| {
+        let status = self.status_now().map(|text| {
             let width = measure.width(
                 text,
                 Font {
