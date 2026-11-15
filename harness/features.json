@@ -5115,5 +5115,33 @@
     "title": "The Keyboard page lists commands under their categories: a heading for each, its commands by name alone, an empty row before the next, and the category scrolled into held on the list's first row; what the filter finds keeps its whole title",
     "test": "the_keyboard_page_lists_commands_under_their_categories",
     "passes": true
+  },
+  {
+    "id": "install-card-room",
+    "milestone": 14,
+    "title": "The card that offers a language's server keeps half a row clear over its title and under its buttons, a row between its words and its buttons and its words two cells inside it, where its title stood on its top edge and its buttons on its bottom one; while it installs it keeps its size, with its words in its middle",
+    "test": "the_install_card_keeps_room_around_its_words_and_buttons",
+    "passes": true
+  },
+  {
+    "id": "install-card-detail-wraps",
+    "milestone": 14,
+    "title": "The install card's detail takes the lines it needs and the card grows by them, where a long tool's sentence was cut at the card's edge on a terminal without pictures",
+    "test": "the_install_cards_detail_takes_the_lines_it_needs",
+    "passes": true
+  },
+  {
+    "id": "card-ends-keep-ground",
+    "milestone": 14,
+    "title": "The rows a corner card's round ends are on keep the colour of whatever each cell lies on, where they were filled with the file's and showed as a strip over a card on the side pane",
+    "test": "a_cards_end_rows_keep_the_colour_of_what_they_lie_on",
+    "passes": true
+  },
+  {
+    "id": "card-covers-words-under",
+    "milestone": 14,
+    "title": "Words painted under the row a corner card's panel starts part way into, a page's or a pane's, don't show their tops over the card: the ground is painted over that row before the panel",
+    "test": "words_under_a_cards_first_row_dont_show_over_it",
+    "passes": true
   }
 ]

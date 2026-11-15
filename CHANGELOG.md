@@ -2,6 +2,12 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
+## [Unreleased]
+
+### Fixed
+- The card that offers to install a language's server, "Install Terraform support?", had its title on its top edge and its buttons on its bottom one. It's the same kind of card as the logout notice now: half a row clear over the title and under the buttons, and a row between its words and its buttons. A tool with a long name gets a second line, where its sentence was cut at the card's edge on a terminal without pictures. While it installs the card keeps its size. Its middle button reads Not Now, as the logout notice's does.
+- A card in the window's corner that lay over the side pane had a strip of the file's colour above it and below it. Its round corners show what's under them.
+
 ## [0.9.1] - 2026-11-15
 
 ### Changed

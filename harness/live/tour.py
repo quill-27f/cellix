@@ -35,6 +35,8 @@ EMOJI_BUTTON = (124, 5)
 # say so, in that window. And where it stands under the review's two cards, and the order's
 # button over them.
 SHOW_RESOLVED = (103, 5)
+# Not Now, on the card that offers a language's server, in a 120-column window of 40 rows.
+INSTALL_NOT_NOW = (86, 35)
 REVIEW_RESOLVED, REVIEW_ORDER = (103, 18), (103, 4)
 def command(words, opened="\x1b[112;6u"):
     return [["keys", opened], ["until", PALETTE_UP], ["keys", words], ["until", words], ["keys", "\r"],
@@ -57,6 +59,10 @@ EXPECT = {
     "09-commands-scrolled": "Open Folder as a Workspace",
     "10-branches": "Switch branch",
     "100-workspaces": "Resume",
+    "108-install-card": "Install Terraform support?",
+    "108-install-card-hover": "Install Terraform support?",
+    "108-install-card-light": "Install Terraform support?",
+    "108-install-card-pane": "Install Terraform support?",
     "101-workspace-hover": "Resume",
     "102-stopped-card": "building the index",
     "103-running-here": "workspaces are open",
@@ -172,7 +178,7 @@ EXPECT = {
     "98-pane-drag-under": "loss.png",
 }
 # About how many scenes there are, to cut the tour into parts of a size.
-SCENES_IN_ALL = 205
+SCENES_IN_ALL = 209
 # Scenes come to, shot, and those that never reached their surface.
 SEEN, SHOT, FAILED = [0], [], []
 # Which commit the binary is, as far as git can say: the pictures are of that.
@@ -491,7 +497,8 @@ def shoot(name, steps, *args, size="120x40", background="1e1e2e", cwd=None, env=
         **extra,
     }
     env.pop("CLAUDE_CONFIG_DIR", None)
-    run = ["python3", "-I", f"{here}/term.py", f.name, binary, *args]
+    # By its own path, so a scene can have a PATH of its own.
+    run = [sys.executable, "-I", f"{here}/term.py", f.name, binary, *args]
     # Taken once more if it misses: a loaded machine can lose a scene its place, and one
     # that misses twice is worth a person's look.
     for attempt in ("first", "second"):
@@ -651,6 +658,57 @@ pub struct Full;
     shoot("123-signature-help", typing, "src/queue.rs", cwd=root)
     shoot("124-inlay-hints", [["wait", 1.5]], "src/run.rs", cwd=root)
     shoot("125-inlay-hints-light", [["wait", 1.5]], "src/run.rs", cwd=root, background="eff1f5")
+
+
+TERRAFORM = """terraform {
+  required_version = ">= 1.6"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
+
+provider "aws" {
+  region = var.region
+}
+
+module "network" {
+  source = "./modules/network"
+  cidr   = "10.0.0.0/16"
+}
+
+resource "aws_instance" "api" {
+  ami           = data.aws_ami.ubuntu.id
+  instance_type = "t3.small"
+  subnet_id     = module.network.private_subnet_ids[0]
+}
+"""
+
+
+def install_card(scratch):
+    """The card in the window's corner that offers a language's server, for a Terraform file
+    where terraform-ls isn't installed: the PATH here is the system's own, which has none.
+    Nothing presses Install, which would run a real installer."""
+    root = f"{scratch}/terraform"
+    os.makedirs(root)
+    files = {"main.tf": TERRAFORM, "variables.tf": 'variable "region" {\n  type = string\n}\n'}
+    for name, text in files.items():
+        with open(f"{root}/{name}", "w") as f:
+            f.write(text)
+    git(root, "init", "-q", "-b", "main")
+    git(root, "add", "-A")
+    git(root, "commit", "-qm", "First")
+    bare = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"}
+    shoot("108-install-card", [["wait", 1.0]], "main.tf", cwd=root, env=bare)
+    # Not Now, under the pointer.
+    shoot("108-install-card-hover", [["until", "Not Now"], ["move", *INSTALL_NOT_NOW], ["wait", 0.4]],
+          "main.tf", cwd=root, env=bare)
+    shoot("108-install-card-light", [["wait", 1.0]], "main.tf", cwd=root, env=bare, background="eff1f5")
+    # Over the side pane, which isn't the file's colour: the card's corners show the pane's.
+    shoot("108-install-card-pane", [["wait", 1.0], *command("show comments", F1), ["wait", 1.0]],
+          "main.tf", cwd=root, env=bare)
 
 
 def git_scenes(scratch):
@@ -880,6 +938,7 @@ with tempfile.TemporaryDirectory() as scratch:
 
     workspaces(scratch)
     code_intelligence(scratch)
+    install_card(scratch)
     transcripts(scratch)
     task_scenes(scratch)
     shoot("01-welcome", [])

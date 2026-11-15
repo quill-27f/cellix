@@ -458,7 +458,14 @@ and the hit test share. One measure sizes them all (`measures.rs`): a button's w
 and a half either side inside its chip, whatever they are, and buttons side by side stand two
 columns apart. In cells a button is its words between brackets. Text stands two columns inside
 whatever holds it, a panel, a card, a menu, a prompt; a card starts one column from its pane's
-edge and is raised over it, as a menu is over the page. A bar that holds a text box, the Find bar
+edge and is raised over it, as a menu is over the page. A card in the window's corner, the
+logout notice or the offer to install a language's server, starts and ends inside its first and
+last rows: half a row and more is clear over its title and under its buttons, a row stands
+between its words and its buttons, and its words wrap inside it. The rows its round ends are on
+keep the colour of whatever each cell lies on, since the corner can be over the file, the side
+pane and the line between them, and that colour is painted over them, so a page's words under
+the card don't show their tops over it. Its panel's top and bottom are moved to the nearest whole
+pixel, which keeps those two lines as sharp as its sides'. A bar that holds a text box, the Find bar
 and a prompt, keeps a quarter of a row clear above and below its rows, which only paint can show,
 and a box's text starts a column inside it. A section's heading is small, bold, quiet capitals
 wherever it is. Nothing is as wide as its panel for its own sake: Commit and Sync are as wide as
