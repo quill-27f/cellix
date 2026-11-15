@@ -2,7 +2,7 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
-## [Unreleased]
+## [0.8.0] - 2026-11-15
 
 ### Added
 - Paste a path into Quick Open (Ctrl+P) and Enter goes there. It's read the way it was copied: with a line after it (`src/app.rs:120`, `src/app.rs:120:8`, `app.rs#L120`, `app.rs(120,8)`), from the top of the disk or from `~`, between quotes, backticks or brackets, as a `file://` link, as an agent's `@src/app.rs`, as a diff's `b/src/app.rs`, with the rest of a compiler's or a search's line after it, or in the middle of a sentence. A file the path names is the first row even when the list wouldn't have it: one `.gitignore` leaves out, one outside the folder, or one the walk of a big folder hasn't reached yet. Typing a place works the same, so `app:120` opens the file you'd have picked at line 120, and `:120` alone goes to that line of the file in view.

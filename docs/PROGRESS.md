@@ -2124,3 +2124,13 @@ A whole tour ran on the eight commits above (205 scenes, none failed; five of th
 - Tests: `a_palettes_field_stands_over_its_rows_and_what_is_quiet_stays_quiet_when_picked`; the scroll test finds the list by the panel's place, the search icon being gone from the commands, and checks the thumb is in the middle of its column.
 - Also here: an agent's transcript page isn't offered among the files last looked at; the README says what both lists do.
 - **`>` in Quick Open** lists the commands, the palette's own list with what was last run at its top, and taking the sign away lists the files again (the review's fifth point). Test: `a_greater_than_sign_in_quick_open_lists_commands_and_deleting_it_lists_files`. The hint doesn't name it: it's as long as the field has cells for. The caret keeps its place in what's typed when a sign put in or taken out turns the list to another kind (`palette_typed` hands it on); it went to the end, the new list being a new palette.
+
+
+## Release 0.8.0 (2026-11-15)
+
+The user said: "0.8.0 release it". It holds the ten commits on the palettes since 0.7.1, which their three notes on Ctrl+P began: the field's box and its air, a pasted or typed path with its line, Ctrl+V in palettes, prompts and Find, Ctrl+P from the side pane, lists that scroll, a field edited like any text box, rows as icon, name and folder with the typed letters picked out, the files last looked at and the commands last run first, the commands by name, and `>` for commands. It's 0.8.0 and not 0.7.2 because most of it is new. README already says what both lists do, under the keys and where it describes the side pane.
+
+- Before the release commit the palette scenes were retaken on `da20b8f` (22 scenes, none failed), the first tour pictures of the code after the design review's fixes, and given to the ui-expert for a second review.
+- Unanswered by the user, so as it was: commands that can't run now are listed, and commands have no category before their names.
+- Unverified in a real terminal: all of it.
+- This Mac's toolchain may still be behind CI's `stable`; `rustup update` wants asking first.
