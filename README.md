@@ -573,8 +573,8 @@ Settings has a box at its top that looks through every page at once: type a few 
 settings and commands that fit are listed together, each with the name of its page, and how many
 were found on each page stands beside it in the list at the left. Escape or the × clears it.
 
-Settings › Keyboard lists every command with its keys: type in that box to find one by name or by
-its keys, and click a command's keys to set new ones. They're saved as `keybindings`, by the command's name in the
+Settings › Keyboard lists every command with its keys, under its category: type in that box to
+find one by name or by its keys, and click a command's keys to set new ones. They're saved as `keybindings`, by the command's name in the
 palette, and win over the defaults; an empty list takes a command's keys away. The palette shows each
 command's keys as they are now:
 

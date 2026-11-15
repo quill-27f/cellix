@@ -2,7 +2,7 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
-## [Unreleased]
+## [0.9.1] - 2026-11-15
 
 ### Changed
 - The Keyboard page in Settings lists the commands under their categories: each category is a heading, with its commands under it by name alone, and the one you've scrolled into stays at the top of the list. Every row used to carry its category, Agent: Ask Agent, which on a terminal without pictures left 19 of the 138 shortened in a 120-column window; one is now. What the filter finds keeps its whole title.

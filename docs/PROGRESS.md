@@ -2229,3 +2229,12 @@ The user, on the two boards drawn for it on the canvas: "build it as drawn and r
 - Tests: `the_keyboard_page_lists_commands_under_their_categories` (the headings and names in cells, the empty row, the held heading, keys set on a row under a heading, the filter's titles, and the painted heading). `a_commands_title_has_room_on_the_keyboard_page_or_ends_in_an_ellipsis` reads names now, and a window has to be 48 columns wide before one is shortened on the first screen.
 - Unverified: a real terminal.
 
+
+## Release 0.9.1 (2026-11-15)
+
+The user said: "build it as drawn and release as 0.9.1". It holds the two commits since 0.9.0: Show Agents out of the palette and the Keyboard page, and the Keyboard page's commands under their categories. README says the second where it describes Settings.
+
+- The scenes these two can reach were taken, not the whole tour: the Keyboard page's four and the command palette's, none failed.
+- The ui-expert measured the Keyboard page's pictures against the board's markup, and all five of its checks pass: a heading's capitals are 81 percent of a name's, bold, in the board's secondary tone, at the names' left edge, with its rule starting a cell after the name and ending where the column heads' rule does; names alone, with the keys and the source where they were to the pixel; an empty row before each heading but the first; no headings and whole titles in the filter; nothing nearer a line than 11 px.
+- **What it found, none of it from this change, all left:** the heading's rule is a pixel under the row's middle, as the palette's groups' rules are (raise both together). The filter's rows differ from the Settings board drawn on 2026-11-12: the Keyboard tag is plain words where the board has an outlined chip, the count beside a page's name is a bare numeral where the board has a pill, and "Escape clears the filter." isn't under the results. "Default" and the page's descriptions are a tone darker than the board's, which makes a heading brighter than the Source column; the expert would rather the board changed. In a found row the tag's cells are written over the end of the title's, so the screen's text reads "Agent: Show AgenKeyboard" though the picture is right. Under the column heads, the first heading's rule and the heads' rule read as a pair, as the board has them.
+- Unverified in a real terminal: all of it. Not pictured: the list scrolled with a heading held, a row under the pointer, keys of the user's own, and the page in cells; the tests hold the first and the last.
