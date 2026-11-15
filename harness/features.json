@@ -5045,5 +5045,12 @@
     "title": "The command palette lists the commands last run from it first, the last at the top so Enter runs it again, and every other command by name; the recent ones are kept between runs",
     "test": "the_command_palette_lists_what_was_last_run_first_and_the_rest_by_name",
     "passes": true
+  },
+  {
+    "id": "palette-after-review",
+    "milestone": 14,
+    "title": "After the design review: what's typed in a palette stands over its rows' words, with the search icon only where rows have icons; the hint starts where typing does and the caret stands clear of the last letter; what's quiet on the picked row stays quieter than its words; the box is nine tenths of its row and a step down from a white panel",
+    "test": "a_palettes_field_stands_over_its_rows_and_what_is_quiet_stays_quiet_when_picked",
+    "passes": true
   }
 ]

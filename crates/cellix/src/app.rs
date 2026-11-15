@@ -1611,7 +1611,10 @@ impl App {
         let before = before.into_iter().filter(|path| path.starts_with(&root));
         let mut recent: Vec<PathBuf> = Vec::new();
         for path in self.looked_at.iter().cloned().chain(before) {
-            if Some(&path) != here.as_ref() && !recent.contains(&path) && path.is_file() {
+            // An agent's transcript is a page Cellix made, not a file of the project's.
+            let made = crate::transcript::is_page(&root, &path);
+            let new = Some(&path) != here.as_ref() && !recent.contains(&path);
+            if new && !made && path.is_file() {
                 recent.push(path);
             }
             if recent.len() == RECENT_FILES {
@@ -17960,7 +17963,7 @@ mod tests {
         // The rows of the list as they're shown, under the field and the air.
         let rows = |app: &App| -> Vec<String> {
             let grid = screen(app);
-            let (_, field) = find(&grid, "⌕");
+            let field = Palette::area(grid.area()).y;
             let rows = (field + 2..field + 14).map(|y| grid.row_text(y));
             rows.map(|row| row.trim().trim_end_matches('▐').trim().to_string())
                 .collect()
@@ -18051,7 +18054,7 @@ mod tests {
         app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
         app.run(Command::CommandPalette);
         let grid = screen(&app);
-        let (scrollbar, pick) = (app.theme.scrollbar, app.theme.pick);
+        let (scrollbar, pick) = (app.theme.popup_thumb(), app.theme.pick);
         let bar = |fill: Rgb| {
             grid.paint.iter().find_map(|p| match p {
                 Paint::Panel {
@@ -18066,6 +18069,10 @@ mod tests {
         let (thumb, band) = (bar(scrollbar).expect("a thumb"), bar(pick).expect("a band"));
         assert!(thumb.x > band.x + band.w, "{thumb:?} {band:?}");
         assert!(thumb.h < band.h * 12 && thumb.h >= band.h);
+        // In the middle of the column it has, as far from the band as from the panel's edge.
+        let edge = i32::from(Palette::area(grid.area()).right()) * cellix_render::UNIT;
+        let (before, after) = (thumb.x - (band.x + band.w), edge - (thumb.x + thumb.w));
+        assert!((before - after).abs() <= 1, "{before} and {after}");
     }
 
     /// The field took letters and Backspace and nothing else, and a press on it closed the
@@ -18398,6 +18405,93 @@ mod tests {
             rows(&next)[..3],
             [RECENTLY_USED, "Fold All", "Toggle Sidebar"]
         );
+    }
+
+    /// What the design review found in the palettes once they were built: a list of plain
+    /// rows had its words 39 px to the right of every row, a file's folder was as loud as
+    /// its name on the picked row, the caret stood on the last letter typed, the hint began
+    /// 8 px after where typing does, and in the light theme the box was the panel's white.
+    #[test]
+    fn a_palettes_field_stands_over_its_rows_and_what_is_quiet_stays_quiet_when_picked() {
+        let (_dir, mut app) = project();
+        // A list of plain rows: no search icon, and what's typed starts where they do.
+        app.run(Command::CommandPalette);
+        let grid = screen(&app);
+        let area = Palette::area(grid.area());
+        let panel = |grid: &Grid, y: u16| -> String {
+            let cells = (area.x..area.right()).map(|x| grid.cell(x, y));
+            cells.map(|cell| cell.symbol.as_str()).collect()
+        };
+        assert!(
+            !panel(&grid, area.y).contains('⌕'),
+            "{}",
+            panel(&grid, area.y)
+        );
+        let (hint, _) = find(&grid, "Type to search");
+        typed(&mut app, "toggle side");
+        let grid = screen(&app);
+        let (typed_at, field) = find(&grid, "toggle side");
+        let (row_at, _) = find(&grid, "Toggle Sidebar");
+        assert_eq!((typed_at, field), (row_at, area.y));
+        assert_eq!(hint, typed_at, "the hint starts where typing does");
+        key(&mut app, Key::Esc);
+        // A list whose rows have icons keeps the search icon, over theirs.
+        app.run(Command::QuickOpen);
+        let grid = screen(&app);
+        assert!(panel(&grid, area.y).contains('⌕'));
+        typed(&mut app, "lib");
+
+        // Painted: the folder after a picked file's name is quieter than the name, and
+        // lighter than it is off the band.
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        let grid = screen(&app);
+        // In the palette, which is painted last: the tree has a `src` of its own.
+        let colour = |grid: &Grid, words: &str| {
+            let found = grid.paint.iter().rev().find_map(|p| match p {
+                Paint::Text { text, color, .. } if text == words => Some(*color),
+                _ => None,
+            });
+            found.unwrap_or_else(|| panic!("{words} isn't painted"))
+        };
+        let (quiet, name) = (app.theme.popup_dim, app.theme.text.fg);
+        let folder = colour(&grid, "src");
+        assert_eq!(folder, app.theme.quiet_on_pick());
+        assert!(folder != quiet && folder != name, "{folder:?}");
+        // The caret stands after the last letter, clear of it.
+        let unit = cellix_render::UNIT;
+        let typed = grid.paint.iter().find_map(|p| match p {
+            Paint::Text { text, x, .. } if text == "lib" => Some(*x),
+            _ => None,
+        });
+        let font = cellix_render::Font::default();
+        let wide = (app.measure.width("lib", font) * unit as f32) as i32;
+        let caret = grid.caret.expect("a caret").x;
+        let after = caret - (typed.expect("the query") + wide);
+        assert!((1..unit / 4).contains(&after), "{after} units after the b");
+        // The box is nine tenths of its row.
+        let boxed = grid.paint.iter().find_map(|p| match p {
+            Paint::Panel {
+                bounds,
+                border: Some(b),
+                ..
+            } if *b == app.theme.focus => Some(bounds.h),
+            _ => None,
+        });
+        assert!((unit * 88 / 100..unit * 92 / 100).contains(&boxed.unwrap()));
+
+        // In the light theme the box is a step down from the panel, which is white too.
+        app.follow_terminal_theme(Some(true));
+        let grid = screen(&app);
+        let fill = grid.paint.iter().find_map(|p| match p {
+            Paint::Panel {
+                fill: Some(fill),
+                border: Some(b),
+                ..
+            } if *b == app.theme.focus => Some(*fill),
+            _ => None,
+        });
+        assert_eq!(app.theme.input, app.theme.popup, "both white");
+        assert!(fill.is_some_and(|fill| fill != app.theme.popup), "{fill:?}");
     }
 
     #[test]

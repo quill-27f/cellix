@@ -50,7 +50,10 @@ EXPECT = {
     "06-menu-explorer": "New File",
     "07-menu-tab": "Close Others",
     "08-open-file": "Search files",
+    "08-open-file-path": "line 12",
+    "08-open-file-recent": "RECENTLY OPENED",
     "09-commands": "Open Settings",
+    "09-commands-recent": "RECENTLY USED",
     "09-commands-scrolled": "Close Side Pane",
     "10-branches": "Switch branch",
     "100-workspaces": "Resume",
@@ -105,6 +108,7 @@ EXPECT = {
     "17-settings-integrations": "Cellix works with",
     "18-settings-keyboard": "command's keys",
     "19-dialog": "Save changes",
+    "25-light-open-file": "queue.rs",
     "26-light-settings": "Changes apply",
     "30-hover-menu": "Rename Symbol",
     "31-hover-palette": "Search files",
@@ -167,7 +171,7 @@ EXPECT = {
     "98-pane-drag-under": "loss.png",
 }
 # About how many scenes there are, to cut the tour into parts of a size.
-SCENES_IN_ALL = 201
+SCENES_IN_ALL = 205
 # Scenes come to, shot, and those that never reached their surface.
 SEEN, SHOT, FAILED = [0], [], []
 # Which commit the binary is, as far as git can say: the pictures are of that.
@@ -885,7 +889,17 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("06-menu-explorer", [["right", 12, 2]])
     shoot("07-menu-tab", [["wait", 1.0], ["right", 36, 0], ["wait", 0.3]], CODE_FILE)
     shoot("08-open-file", [["keys", CTRL("p")]], CODE_FILE)
+    # A path as a chat or a compiler writes it: the file, and the line it will open at.
+    shoot("08-open-file-path", [["keys", CTRL("p")], ["until", "Search files"], ["keys", "src/queue.rs:12"]], PAGE_FILE)
+    # After another file has been in front, the ones last looked at lead the list.
+    again = [["keys", CTRL("p")], ["until", "Search files"], ["keys", "readme"], ["until", "README.md"],
+             ["keys", "\r"], ["wait", 0.6], ["keys", CTRL("p")], ["wait", 0.4]]
+    shoot("08-open-file-recent", again, CODE_FILE)
     shoot("09-commands", [["keys", F1], ["until", PALETTE_UP], ["keys", "op"]], CODE_FILE)
+    # A command run from the palette leads it the next time.
+    ran = [["keys", F1], ["until", PALETTE_UP], ["keys", "word wrap"], ["until", "Toggle Word Wrap"],
+           ["keys", "\r"], ["wait", 0.5], ["keys", F1], ["wait", 0.4]]
+    shoot("09-commands-recent", ran, CODE_FILE)
     # Past the twelfth row, the list follows the pick and a thumb says where it is.
     shoot("09-commands-scrolled", [["keys", F1], ["until", PALETTE_UP], *[["keys", "\x1b[B"]] * 14, ["wait", 0.4]],
           CODE_FILE)
@@ -953,6 +967,8 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("23-narrow-menu", [["right", 20, 10]], PAGE_FILE, size="64x30")
     shoot("24-light-page", [], PAGE_FILE, background="eff1f5")
     shoot("25-light-menu", [["right", 60, 12]], PAGE_FILE, background="eff1f5")
+    shoot("25-light-open-file", [["keys", CTRL("p")], ["until", "Search files"], ["keys", "que"]], PAGE_FILE,
+          background="eff1f5")
     shoot("26-light-settings", settings, CODE_FILE, background="eff1f5")
     shoot("27-hover-rail", [["move", RAIL_X, REVIEW]], CODE_FILE)
     shoot("28-hover-tree", [["move", 12, 3]], CODE_FILE)

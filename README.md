@@ -187,7 +187,9 @@ an agent's chat or a compiler: paste `src/app.rs:120`, a whole path from the top
 is listed even when `.gitignore` leaves it out of the list or it's outside the folder. `:120`
 goes to a line of the file in view, `@` lists its symbols and `#` the project's. Before you
 type, the files you last looked at are at the top, so Ctrl+P and Enter goes back to the one
-before this.
+before this. Ctrl+Shift+P lists every command by name, with the ones you last ran from it first.
+Both lists scroll with the arrows, Page Up and Page Down and the wheel, their field takes the
+caret keys and Ctrl+V, and the letters you typed are picked out in each row.
 
 Ctrl+W closes a tab and Ctrl+Q quits. Ghostty keeps Cmd+W and Cmd+Q for itself, so they
 only reach Cellix if you unbind them with `keybind = cmd+w=unbind` and

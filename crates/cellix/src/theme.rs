@@ -356,6 +356,19 @@ impl Theme {
         }
     }
 
+    /// What's quieter on the picked row of a list in a floating panel: halfway from the
+    /// quiet colour to the words' own. The quiet colour itself is 4.4 to 1 on the band, and
+    /// the words' own made a file's folder as loud as its name.
+    pub fn quiet_on_pick(&self) -> Rgb {
+        mix(self.popup_dim, self.text.fg, 0.5)
+    }
+
+    /// The thumb at the edge of a list in a floating panel: a third of the way from the
+    /// scrollbar's colour, which is the panel's edge line's too, to the quiet text's.
+    pub fn popup_thumb(&self) -> Rgb {
+        mix(self.scrollbar, self.popup_dim, 0.35)
+    }
+
     /// A button that isn't the main one, as a wash over whatever's behind it.
     pub fn quiet_button(&self, behind: Rgb) -> Rgb {
         // Light grounds need a deeper wash to read as a button at all: Latte's base and a

@@ -480,11 +480,17 @@ is whole rows, padded 8 px above and below, with half a row for each rule and it
 clear of them, and it drops from the bottom edge of what opened it; a tooltip is one row, on
 the row under its icon. Nothing covers part of a row. A palette (Quick Open, the commands, and
 every list that asks with a field) is whole rows too: the field's row, one row of air, and its
-list. The field is a box, as the Find bar's and a prompt's are, a column in from the panel's
-edges where the picked row's band stands too, with the search icon and what's typed where a
-row's icon and words are. The row of air is shared out so that the box stands as far under the
+list. The field is a box, as the Find bar's and a prompt's are, nine tenths of its row as the
+canvas draws a field, a column in from the panel's edges where the picked row's band stands
+too. What's typed starts where a row's words start: in a list whose rows have icons (files,
+symbols, folders) the field has the search icon over theirs and its words after it, and in a
+list of plain rows (the commands, branches, tasks) it has no icon and its words stand over
+theirs, as VS Code's do. The hint starts where typing will, with the caret just before it,
+and the caret stands just after the last letter typed. A box is sunk into what holds it: where
+the text box's colour is the panel's own, as both are white in the light theme, the box takes
+the sheet's. The row of air is shared out so that the box stands as far under the
 panel's top as the first row's band stands under the box and the panel's foot under the last
-row's band, 0.47 of a row each: the field is painted a third of a row down its own row and the
+row's band, 0.43 of a row each: the field is painted a third of a row down its own row and the
 list as much up theirs, which only paint can show, and a press lands on the row painted there.
 In cells the field has the first row, the list starts on the third, and the picked row's colour
 is in its cells. It was a field with no box and a line under it, 18 px from the panel's top and
@@ -493,9 +499,9 @@ the line and nothing under its last row. The list keeps a row when nothing match
 so, so the field never moves as the list empties. A list longer than its twelve rows scrolls:
 it follows the picked row, a group's name or rule coming with the first row under it, Page Up
 and Page Down move a screen less a row, and the wheel moves it two rows a notch wherever the
-pointer is, leaving the pick where it was. A thumb in the gutter between the band and the
-panel's edge shows how much there is and how far down this is; in cells it's half blocks in the
-panel's last column. Rows that arrive while a big folder is still being walked don't move what's
+pointer is, leaving the pick where it was. A thumb 4 px wide in the middle of the column between
+the band and the panel's edge, lighter than the edge's line, shows how much there is and how far
+down this is; in cells it's half blocks in the panel's last column. Rows that arrive while a big folder is still being walked don't move what's
 being looked at. The field is a text box like the others: `field::key`, which a comment's box
 uses, moves its caret and deletes by letter and by word, a press puts the caret at the nearer
 edge of the letter pressed, and a query longer than the box shows the part the caret is in. A
@@ -503,7 +509,9 @@ press anywhere in the panel that isn't on a row to pick leaves it open.
 
 Every row to pick is drawn one way (`palette::Parts`): an icon where its kind has one, its
 words, something quieter after them at 85 percent, and something at its far end, which the
-words stop two columns short of. A file is its icon in the colour the tree gives its type, its
+words stop two columns short of. What's set smaller is dropped a pixel to stand on the words'
+baseline, and on the picked row's band it's halfway between the quiet colour and the words',
+since the quiet colour is too faint there and the words' own made a folder as loud as its name. A file is its icon in the colour the tree gives its type, its
 name, then the folder it's in, as VS Code lists one: the name is what's looked for and a long
 path used to lose it. A folder too long for the row loses its middle. A symbol is its kind's
 icon, its name, what it sits in, and its group or file; a command its name and its keys; a

@@ -21,8 +21,10 @@ const PANEL_PADDING: f32 = 0.0;
 /// Rows above the list: the field's, and one of air, shared out above the field, between it
 /// and the list, and under the list.
 const HEADER_ROWS: u16 = 2;
-/// How far the field's box stands inside its row, above and below, as every text box does.
-const BOX_AIR: f32 = 0.11;
+/// How far the field's box stands inside its row, above and below: the box is nine tenths of
+/// its row, as the design draws a field. At the four fifths the Find bar's box has, a
+/// descender stood 1.5 px over the box's bottom line.
+const BOX_AIR: f32 = 0.055;
 /// The band behind the picked row, as a menu's is: 26 px of a 32 px row, and a column in
 /// from each side, where the field's box stands too.
 const BAND_HEIGHT: f32 = 26.0 / 32.0;
@@ -51,8 +53,15 @@ const THUMB: f32 = 1.2;
 const NOTCH: isize = 2;
 /// Air between what's typed and the status at the field's right end, in cells.
 const STATUS_GAP: f32 = 1.5;
-/// Space between the caret and the hint in an empty field.
-const HINT_GAP: f32 = 0.45;
+/// How far before the hint the caret stands in an empty field, and how far after the last
+/// letter typed, so it touches neither.
+const CARET_BEFORE: f32 = 0.15;
+const CARET_AFTER: f32 = 0.05;
+/// How far what's set smaller on a row is dropped, in rows, to stand on the words' own
+/// baseline: centred in the row it stood a pixel high.
+const QUIET_DROP: f32 = 0.028;
+/// The thumb's width, in columns: 4 px, in the middle of the column it has.
+const THUMB_WIDE: f32 = 0.25;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Item {
@@ -763,8 +772,9 @@ impl Palette {
             size: INTERFACE_SIZE_PERCENT,
             ..Font::default()
         };
-        // Clear of the icon, where a row's words start after its own.
-        let x = area.x as f32 + TEXT_INSET + 2.3;
+        // Where a row's words start: after its icon, in a list whose rows have icons.
+        let after_icon = if self.has_icons() { AFTER_ICON } else { 0.0 };
+        let x = area.x as f32 + TEXT_INSET + after_icon;
         let room = f32::from(area.right().saturating_sub(2)) - x - 0.5;
         let advances = measure.advances(&self.query, font);
         let before = self.query[..self.caret()]
@@ -778,6 +788,31 @@ impl Palette {
         (x, advances, hidden)
     }
 
+    /// Whether this list's rows have icons. Then the field has its own, the search icon over
+    /// the rows' icons and what's typed over their words. A list of plain rows, as the
+    /// commands are, has what's typed over its words and no icon, as VS Code's has: with
+    /// one, the words stood 39 px to the right of every row under them.
+    fn has_icons(&self) -> bool {
+        match self.items.iter().find(|item| !item.divider()) {
+            Some(item) => matches!(
+                item,
+                Item::File(..)
+                    | Item::Image(..)
+                    | Item::Attach(..)
+                    | Item::Folder(..)
+                    | Item::Recent(..)
+                    | Item::Symbol(_)
+            ),
+            // Nothing listed yet: by what's on its way.
+            None => self.folders.is_some() || self.quick && self.prefix != Some('>'),
+        }
+    }
+
+    /// The cell what's typed starts in.
+    fn first_cell(&self, area: Rect) -> u16 {
+        area.x + if self.has_icons() { 4 } else { 2 }
+    }
+
     /// Puts the caret where the field was pressed, `x` with its fraction of a column: at the
     /// nearer edge of the letter there.
     pub fn press_field(&mut self, screen: Rect, x: f32, measure: &dyn Measure) {
@@ -785,7 +820,7 @@ impl Palette {
         let (painted, advances, hidden) = self.typed_window(area, measure);
         // In cells the words start on a cell, a little before where they're painted.
         let start = if measure.in_cells() {
-            f32::from(area.x + 4)
+            f32::from(self.first_cell(area))
         } else {
             painted
         };
@@ -1285,7 +1320,7 @@ impl Palette {
         // In cells it's half blocks down the panel's last column, which a row's band leaves
         // clear.
         let style = Style {
-            fg: theme.scrollbar,
+            fg: theme.popup_thumb(),
             bg: theme.popup,
             painted: true,
             ..theme.bar
@@ -1295,8 +1330,11 @@ impl Palette {
         for y in cells {
             grid.put_str(x, y, "▐", style, area.right());
         }
-        let thumb = Bounds::cells(f32::from(area.right()) - 0.7, top + 0.1, 0.35, tall - 0.2);
-        grid.panel(thumb, 12, Some(theme.scrollbar), None);
+        // In the middle of the column between the band's end and the panel's edge, and
+        // lighter than the panel's edge line, which it read as a second one of.
+        let left = f32::from(area.right()) - 0.5 - THUMB_WIDE / 2.0;
+        let thumb = Bounds::cells(left, top + 0.1, THUMB_WIDE, tall - 0.2);
+        grid.panel(thumb, 12, Some(theme.popup_thumb()), None);
     }
 
     /// What the list's one row says when there's nothing in it.
@@ -1314,9 +1352,16 @@ impl Palette {
     /// stands too, the search icon and what's typed where a row's icon and words are, and
     /// what's still happening at its far end. Returns where the caret stands.
     fn draw_field(&self, grid: &mut Grid, area: Rect, measure: &dyn Measure, theme: &Theme) -> f32 {
+        // A box is sunk into what holds it. Where a text box is the panel's own colour, as
+        // both are white in the light theme, it takes the sheet's, a step down.
+        let sunk = if theme.input == theme.popup {
+            theme.text.bg
+        } else {
+            theme.input
+        };
         let base = Style {
             fg: theme.text.fg,
-            bg: theme.input,
+            bg: sunk,
             ..theme.bar
         };
         let dim = Style {
@@ -1328,18 +1373,19 @@ impl Palette {
         // In cells the box is a band of the field's colour.
         grid.fill(inside, base);
         let boxed = Bounds::inset(inside, 0.0, BOX_AIR);
-        grid.panel(boxed, 22, Some(theme.input), Some(theme.focus));
-        grid.glyph(
-            area.x as f32 + TEXT_INSET,
-            y,
-            Icon::Search,
-            theme.popup_dim,
-            "⌕",
-            base,
-        );
-        // The hint waits a little past the caret, so they don't touch.
+        grid.panel(boxed, 22, Some(base.bg), Some(theme.focus));
+        if self.has_icons() {
+            grid.glyph(
+                area.x as f32 + TEXT_INSET,
+                y,
+                Icon::Search,
+                theme.popup_dim,
+                "⌕",
+                base,
+            );
+        }
         let (x, advances, hidden) = self.typed_window(area, measure);
-        let cell = area.x + 4;
+        let cell = self.first_cell(area);
         // A column inside the box's far edge, as the icon is inside its near one.
         let right = area.right().saturating_sub(2);
         let from = self.query.char_indices().nth(hidden);
@@ -1349,7 +1395,12 @@ impl Palette {
             .count()
             .min(advances.len());
         let wide = |letters: &[f32]| letters.iter().sum::<f32>();
-        let caret = x - 0.1 + wide(&advances[hidden..before]);
+        // Just before the hint, which starts where what's typed will, so the first letter
+        // doesn't move anything; and just after the letter it follows.
+        let caret = match before {
+            0 => x - CARET_BEFORE,
+            _ => x + CARET_AFTER + wide(&advances[hidden..before]),
+        };
         let end_of_words = x + wide(&advances[hidden..]);
         // The status keeps clear of what's typed, and gives way to it when both don't fit:
         // the query is what the person is working on.
@@ -1366,12 +1417,13 @@ impl Palette {
         let status = status.filter(|(_, left)| end_of_words + STATUS_GAP <= *left);
         let end = status.map_or(right, |(_, left)| (left - STATUS_GAP / 2.0) as u16);
         if self.query.is_empty() {
-            grid.label_at(x + HINT_GAP, cell, y, self.hint, dim, end, 100);
+            grid.label_at(x, cell, y, self.hint, dim, end, 100);
         } else {
             grid.label_at(x, cell, y, shown, base, end, 100);
         }
         if let Some((text, _)) = status {
             grid.label_right(right, y, text, dim, 85);
+            grid.drop_last(QUIET_DROP);
         }
         caret.min(right as f32)
     }
@@ -1441,9 +1493,10 @@ impl Palette {
         }
         let parts = self.parts(row, index, picked, theme);
         let quiet = Style {
-            // The picked row's band is lighter, so what's quiet on it needs to be lighter too.
+            // The picked row's band is lighter, so what's quiet on it needs to be lighter
+            // too, and still quieter than the words.
             fg: if picked {
-                theme.text.fg
+                theme.quiet_on_pick()
             } else {
                 theme.popup_dim
             },
@@ -1458,6 +1511,7 @@ impl Palette {
         let mut end = f32::from(right);
         if let Some(far) = &parts.far {
             grid.label_right(right, y, far, quiet, QUIET_SIZE);
+            grid.drop_last(QUIET_DROP);
             end -= measure.width(far, small) + FAR_GAP;
         }
         let (mut x, mut cell) = (area.x as f32 + TEXT_INSET, area.x + 2);
@@ -1466,6 +1520,10 @@ impl Palette {
             x += AFTER_ICON;
             cell += 2;
         }
+        // Words are cut at a cell's edge, so that's what a path is fitted to: fitted to the
+        // fraction of a cell past it, its last letter was cut through.
+        let stop = end.max(0.0) as u16;
+        let end = f32::from(stop);
         // A path too long for its row keeps its end, which names the file or the folder,
         // and loses its middle. What was picked out in it no longer stands where it did.
         let (words, hits) = match parts.path {
@@ -1476,7 +1534,6 @@ impl Palette {
             }
             false => (parts.words.clone(), parts.hits.as_slice()),
         };
-        let stop = end.max(0.0) as u16;
         let lit = theme.accent;
         let after = runs(
             grid,
@@ -1511,6 +1568,7 @@ impl Palette {
             false => (parts.aside.clone(), parts.aside_hits.as_slice()),
         };
         let size = (stop, QUIET_SIZE);
+        let painted = grid.painted_so_far();
         runs(
             grid,
             (from, cell, y),
@@ -1519,6 +1577,7 @@ impl Palette {
             size,
             measure,
         );
+        grid.lift_since(painted, -QUIET_DROP);
     }
 
     /// What a row shows, for the item it is.
