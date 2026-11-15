@@ -11,13 +11,15 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 - Ctrl+P opens Quick Open while the keyboard is in the side pane's agent or terminal, as Ctrl+Shift+P opens the commands from there. It went to the program in the pane. Pick a file and the keyboard goes to it.
 
 ### Changed
+- A file in Quick Open is its icon, its name, and then its folder, quieter, as VS Code lists one. It was the whole path as one run of words. The letters you typed are picked out in the row, in a file's name or folder and in a command's name, and they're looked for in the name before the folders. When a line follows the name, the picked row says where it will open, "line 120". Open Recent, the folder finder and the picture lists have icons too.
 - Quick Open (Ctrl+P), the command palette (Ctrl+Shift+P) and every list like them have a box around what you type, as the Find bar has. The words stood nearer the panel's top than the line under them. The box is in the middle of its space now: the air above it, between it and the list, and under the last row is the same. The picked row's band is the one menus have, and a list with nothing in it says "No matches" in place of closing up.
 
 ### Fixed
 - A click on a palette's own field, or on a group's name in its list, closed the palette. Only a click outside it does.
 - A list in Quick Open, the command palette or Go to Symbol showed its first twelve rows and never moved: the arrows could pick a row past them that wasn't on screen, and the wheel did nothing. The list follows the picked row, Page Up and Page Down move a screen of it, the wheel scrolls it, and a thumb at its edge shows there's more and where you are in it.
 - A paste while Quick Open or a prompt was open went into the commit message or the comment being written under it, when one of those had the keyboard before. The list or box on top takes it.
-- A long path in Quick Open was cut at its end, where the file's name is. It loses its middle.
+- A long path in Quick Open was cut at its end, where the file's name is. The name is whole now, and a folder too long for the row loses its middle.
+- A command with a long name ran under its keys at the row's end. Its words stop short of them.
 - On a terminal without pictures the picked row of Quick Open or the command palette looked like every other row. It has the picked colour behind it there too.
 
 ## [0.7.1] - 2026-11-14

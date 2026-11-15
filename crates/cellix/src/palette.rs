@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use cellix_input::{Command, Format, KeyEvent};
@@ -39,6 +39,12 @@ const FIELD_DROP: f32 = AIR - BOX_AIR;
 const LIST_LIFT: f32 = AIR - BAND_AIR;
 /// How tall the caret is, in rows.
 const CARET: f32 = 0.56;
+/// How far a row's words stand after its icon, as the field's stand after its own.
+const AFTER_ICON: f32 = 2.3;
+/// Columns between a row's words and what's at its far end, at the least.
+const FAR_GAP: f32 = 2.0;
+/// The size of what's quieter on a row: what follows its words, and what's at its far end.
+const QUIET_SIZE: u8 = 85;
 /// The least the thumb at the list's edge is, in rows: less is a speck.
 const THUMB: f32 = 1.2;
 /// Rows the list moves for a notch of the wheel.
@@ -575,14 +581,57 @@ fn unescaped(path: &str) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
-/// Where the letters of `query` fall in `text`, as `fuzzy_score` finds them.
-pub fn matched_chars(query: &str, text: &str) -> Vec<usize> {
+/// Which letters of `text` to pick out for `query`, by their place among its letters: the
+/// whole of it where it stands together, at the start of a word for choice, and otherwise
+/// its letters in order. `from_end` is for a path, where the name is looked in before the
+/// folders it's in.
+pub fn picked_out(query: &str, text: &str, from_end: bool) -> Vec<usize> {
+    let chars: Vec<char> = text.chars().collect();
+    let wanted: Vec<char> = query.chars().flat_map(char::to_lowercase).collect();
+    if wanted.is_empty() || wanted.len() > chars.len() {
+        return Vec::new();
+    }
+    let whole = |at: &usize| {
+        let letters = wanted.iter().zip(&chars[*at..]);
+        letters.into_iter().all(|(q, c)| same_letter(*c, *q))
+    };
+    let begins_word = |at: &usize| {
+        let before = at.checked_sub(1).map(|before| chars[before]);
+        before.is_none_or(|b| !b.is_alphanumeric() || b.is_lowercase() && chars[*at].is_uppercase())
+    };
+    let places: Vec<usize> = (0..=chars.len() - wanted.len()).filter(whole).collect();
+    let at_words: Vec<usize> = places.iter().copied().filter(begins_word).collect();
+    let places = if at_words.is_empty() {
+        places
+    } else {
+        at_words
+    };
+    let together = if from_end {
+        places.last()
+    } else {
+        places.first()
+    };
+    if let Some(at) = together {
+        return (*at..at + wanted.len()).collect();
+    }
+    // Its letters in order: from the end for a path, from the start for anything else.
     let mut found = Vec::new();
-    let mut rest = text.chars().enumerate();
-    for q in query.chars().flat_map(char::to_lowercase) {
-        match rest.by_ref().find(|(_, c)| same_letter(*c, q)) {
-            Some((at, _)) => found.push(at),
-            None => return Vec::new(),
+    if from_end {
+        let mut rest = chars.iter().enumerate().rev();
+        for q in wanted.iter().rev() {
+            match rest.by_ref().find(|(_, c)| same_letter(**c, *q)) {
+                Some((at, _)) => found.push(at),
+                None => return Vec::new(),
+            }
+        }
+        found.reverse();
+    } else {
+        let mut rest = chars.iter().enumerate();
+        for q in &wanted {
+            match rest.by_ref().find(|(_, c)| same_letter(**c, *q)) {
+                Some((at, _)) => found.push(at),
+                None => return Vec::new(),
+            }
         }
     }
     found
@@ -1390,35 +1439,9 @@ impl Palette {
             );
             grid.panel(band, 18, Some(fill), None);
         }
-        if let Item::Symbol(symbol) = &self.items[index] {
-            let group = self.group_label(row);
-            let right = group.as_deref().or(Some(symbol.place.as_str()));
-            let right = right.filter(|r| !r.is_empty());
-            self.draw_symbol(grid, (area, y), symbol, right, picked, measure, theme);
-            return;
-        }
-        let text = self.items[index].label();
-        // A file has nothing at its right, so its path has the row.
-        let end = match &self.items[index] {
-            Item::File(..) => area.right().saturating_sub(2),
-            _ => area.right().saturating_sub(16),
-        };
-        let inset = area.x as f32 + TEXT_INSET;
-        // A file or folder from Open Recent: its name, then where it is.
-        let away = match &self.items[index] {
-            // Either separator: a Windows path outside home keeps its own.
-            Item::Recent(_, label, _) => label.rsplit_once(['/', '\\']),
-            _ => None,
-        };
-        // A long path keeps its end, which names the folder or the file, and loses its
-        // middle.
-        let shown = match &self.items[index] {
-            Item::Folder(..) | Item::File(..) => middle_out(text, f32::from(end) - inset, measure),
-            _ => away.map_or(text, |(_, name)| name).to_string(),
-        };
-        grid.label_at(inset, area.x + 2, y, &shown, base, end, 100);
-        // The picked row's band is lighter, so what's quiet on it needs to be lighter too.
+        let parts = self.parts(row, index, picked, theme);
         let quiet = Style {
+            // The picked row's band is lighter, so what's quiet on it needs to be lighter too.
             fg: if picked {
                 theme.text.fg
             } else {
@@ -1426,104 +1449,220 @@ impl Palette {
             },
             ..base
         };
-        if let Some((folder, _)) = away {
-            // A cell after the name as it's drawn, and on to the row's end: no keys here.
-            let from = inset + measure.width(&shown, Font::default()) + 1.0;
-            let right = area.right().saturating_sub(2);
-            let folder = middle_out(folder, f32::from(right) - from, measure);
-            grid.label_at(from, from as u16, y, &folder, quiet, right, 100);
+        let right = area.right().saturating_sub(2);
+        let small = Font {
+            size: QUIET_SIZE,
+            ..Font::default()
+        };
+        // What's at the far end first: the words stop short of it.
+        let mut end = f32::from(right);
+        if let Some(far) = &parts.far {
+            grid.label_right(right, y, far, quiet, QUIET_SIZE);
+            end -= measure.width(far, small) + FAR_GAP;
         }
-        // A task shows what it runs, quietly, when its name doesn't already say.
-        if let Item::Task(task) = &self.items[index]
-            && task.command != task.label
-        {
-            let from = inset + measure.width(&shown, Font::default()) + 1.0;
-            grid.label_at(from, from as u16, y, &task.command, quiet, end, 100);
+        let (mut x, mut cell) = (area.x as f32 + TEXT_INSET, area.x + 2);
+        if let Some((icon, fallback, colour)) = parts.icon {
+            grid.glyph(x, y, icon, colour, fallback, Style { fg: colour, ..base });
+            x += AFTER_ICON;
+            cell += 2;
         }
-        if let Some(keys) = self.keys_at(index) {
-            grid.label_right(area.right().saturating_sub(2), y, keys, quiet, 85);
+        // A path too long for its row keeps its end, which names the file or the folder,
+        // and loses its middle. What was picked out in it no longer stands where it did.
+        let (words, hits) = match parts.path {
+            true => {
+                let fitted = middle_out(&parts.words, end - x, measure);
+                let whole = fitted == parts.words;
+                (fitted, if whole { parts.hits.as_slice() } else { &[] })
+            }
+            false => (parts.words.clone(), parts.hits.as_slice()),
+        };
+        let stop = end.max(0.0) as u16;
+        let lit = theme.accent;
+        let after = runs(
+            grid,
+            (x, cell, y),
+            (&words, hits),
+            (base, lit),
+            (stop, 100),
+            measure,
+        );
+        if parts.aside.is_empty() {
+            return;
         }
+        // A column after the words, and nothing at all when there's no room to say much.
+        let (from, cell) = (after.0 + 1.0, after.1 + 1);
+        let room = end - from;
+        if room < 4.0 {
+            return;
+        }
+        let (aside, hits) = match parts.aside_path {
+            true => {
+                let fitted = middle_out_at(&parts.aside, room, QUIET_SIZE, measure);
+                let whole = fitted == parts.aside;
+                (
+                    fitted,
+                    if whole {
+                        parts.aside_hits.as_slice()
+                    } else {
+                        &[]
+                    },
+                )
+            }
+            false => (parts.aside.clone(), parts.aside_hits.as_slice()),
+        };
+        let size = (stop, QUIET_SIZE);
+        runs(
+            grid,
+            (from, cell, y),
+            (&aside, hits),
+            (quiet, lit),
+            size,
+            measure,
+        );
+    }
+
+    /// What a row shows, for the item it is.
+    fn parts(&self, row: usize, index: usize, picked: bool, theme: &Theme) -> Parts {
+        let item = &self.items[index];
+        let mut parts = Parts {
+            words: item.label().to_string(),
+            far: self.keys_at(index).map(str::to_string),
+            ..Parts::default()
+        };
+        // A path as its name, then the folder it's in, with what was typed picked out of
+        // whichever holds it.
+        let named = |parts: &mut Parts, label: &str, sought: &str| {
+            let (folder, name) = label.rsplit_once(['/', '\\']).unwrap_or(("", label));
+            let all = picked_out(sought, label, true);
+            let start = label.chars().count() - name.chars().count();
+            parts.hits = all.iter().filter_map(|at| at.checked_sub(start)).collect();
+            parts.aside_hits = all.into_iter().filter(|at| at + 1 < start).collect();
+            parts.words = name.to_string();
+            parts.aside = folder.to_string();
+            parts.aside_path = true;
+        };
+        let file = |path: &Path| {
+            let name = path.file_name().map(|name| name.to_string_lossy());
+            let colour = crate::explorer::file_color(&name.unwrap_or_default());
+            Some((Icon::File, "▪", colour))
+        };
+        let folder = |path: &Path| {
+            let name = path.file_name().map(|name| name.to_string_lossy());
+            let colour = crate::explorer::folder_color(&name.unwrap_or_default());
+            Some((Icon::Folder, "▸", colour))
+        };
+        match item {
+            Item::File(path, label) => {
+                parts.icon = file(path);
+                named(&mut parts, label, self.sought());
+                // The place typed after the name, which is where the picked file opens.
+                if let (true, Some(place)) = (picked, self.place) {
+                    parts.far = Some(match place.column {
+                        Some(column) => format!("line {}, column {column}", place.line),
+                        None => format!("line {}", place.line),
+                    });
+                }
+            }
+            Item::Image(path, label, _) | Item::Attach(path, label) => {
+                parts.icon = file(path);
+                named(&mut parts, label, self.typed());
+            }
+            Item::Recent(path, label, is_folder) => {
+                parts.icon = if *is_folder { folder(path) } else { file(path) };
+                named(&mut parts, label, self.typed());
+            }
+            Item::Folder(path, ..) => {
+                parts.icon = folder(path);
+                parts.path = true;
+                parts.hits = picked_out(self.typed(), &parts.words, true);
+            }
+            Item::Symbol(symbol) => {
+                let (icon, fallback, colour) = kind_icon(symbol.kind, theme);
+                parts.icon = Some((icon, fallback, colour));
+                parts.hits = picked_out(self.typed(), &symbol.name, false);
+                parts.aside = symbol.detail.clone();
+                let place = Some(symbol.place.clone()).filter(|place| !place.is_empty());
+                parts.far = self.group_label(row).or(place);
+            }
+            Item::Task(task) => {
+                parts.hits = picked_out(self.typed(), &task.label, false);
+                // What it runs, when its name doesn't already say.
+                if task.command != task.label {
+                    parts.aside = task.command.clone();
+                }
+            }
+            _ => parts.hits = picked_out(self.typed(), &parts.words, false),
+        }
+        parts
     }
 }
 
-impl Palette {
-    /// A symbol's row: its kind's icon, its name with the typed letters picked out, what it
-    /// sits in, and its group or place at the right.
-    #[allow(clippy::too_many_arguments)]
-    fn draw_symbol(
-        &self,
-        grid: &mut Grid,
-        (area, y): (Rect, u16),
-        symbol: &SymbolRow,
-        right: Option<&str>,
-        picked: bool,
-        measure: &dyn Measure,
-        theme: &Theme,
-    ) {
-        let base = Style {
-            fg: theme.text.fg,
-            bg: if picked { theme.pick } else { theme.popup },
-            ..theme.bar
-        };
-        // The picked row's wash is lighter, so what's quiet on it needs to be lighter too.
-        let quiet = Style {
-            fg: if picked {
-                theme.text.fg
-            } else {
-                theme.popup_dim
+/// What a row to pick shows: an icon, its words with the typed letters picked out,
+/// something quieter after them, and something at its far end.
+#[derive(Default)]
+struct Parts {
+    /// The icon, what a terminal without pictures shows for it, and its colour.
+    icon: Option<(Icon, &'static str, Rgb)>,
+    words: String,
+    /// Which letters of the words were typed.
+    hits: Vec<usize>,
+    /// Whether the words are a path, which loses its middle when it's too long for the row.
+    path: bool,
+    /// After the words and quieter: a file's folder, what a symbol sits in, what a task runs.
+    aside: String,
+    aside_hits: Vec<usize>,
+    aside_path: bool,
+    /// At the row's far end: its keys, a note, its group, the line it opens at.
+    far: Option<String>,
+}
+
+/// Paints `text` from `x`, the letters in `hits` picked out in `lit` and bold. Returns
+/// where it ends, painted and in cells.
+fn runs(
+    grid: &mut Grid,
+    (x, cell, y): (f32, u16, u16),
+    (text, hits): (&str, &[usize]),
+    (style, lit): (Style, Rgb),
+    (end, size): (u16, u8),
+    measure: &dyn Measure,
+) -> (f32, u16) {
+    let chars: Vec<char> = text.chars().collect();
+    let font = Font {
+        size,
+        ..Font::default()
+    };
+    let (mut at_px, mut at_cell, mut i) = (x, cell, 0);
+    while i < chars.len() {
+        let hit = hits.contains(&i);
+        let run_end = (i..chars.len())
+            .find(|j| hits.contains(j) != hit)
+            .unwrap_or(chars.len());
+        let run: String = chars[i..run_end].iter().collect();
+        let shown = match hit {
+            true => Style {
+                fg: lit,
+                bold: true,
+                ..style
             },
-            ..base
+            false => style,
         };
-        let (icon, fallback, colour) = kind_icon(symbol.kind, theme);
-        let inset = area.x as f32 + TEXT_INSET;
-        let icon_style = Style { fg: colour, ..base };
-        grid.glyph(inset, y, icon, colour, fallback, icon_style);
-        let right_width = right.map_or(0, |r| r.chars().count() as u16 + 3);
-        let end = area.right().saturating_sub(right_width.max(2));
-        // Clear of the icon, as the field's text is of its search icon.
-        let x = inset + 2.3;
-        let cell = area.x + 4;
-        let font = Font {
-            size: INTERFACE_SIZE_PERCENT,
-            ..Font::default()
-        };
-        let hits = matched_chars(self.typed(), &symbol.name);
-        let chars: Vec<char> = symbol.name.chars().collect();
-        let (mut at_px, mut at_cell, mut i) = (x, cell, 0);
-        while i < chars.len() {
-            let hit = hits.contains(&i);
-            let run_end = (i..chars.len())
-                .find(|j| hits.contains(j) != hit)
-                .unwrap_or(chars.len());
-            let run: String = chars[i..run_end].iter().collect();
-            let style = if hit {
-                Style {
-                    fg: theme.accent,
-                    bold: true,
-                    ..base
-                }
-            } else {
-                base
-            };
-            grid.label_at(at_px, at_cell, y, &run, style, end, INTERFACE_SIZE_PERCENT);
-            at_px += measure.width(&run, Font { bold: hit, ..font });
-            at_cell += (run_end - i) as u16;
-            i = run_end;
-        }
-        if !symbol.detail.is_empty() {
-            let gap = 1.0;
-            grid.label_at(at_px + gap, at_cell + 1, y, &symbol.detail, quiet, end, 85);
-        }
-        if let Some(right) = right {
-            grid.label_right(area.right().saturating_sub(2), y, right, quiet, 85);
-        }
+        grid.label_at(at_px, at_cell, y, &run, shown, end, size);
+        at_px += measure.width(&run, Font { bold: hit, ..font });
+        at_cell += (run_end - i) as u16;
+        i = run_end;
     }
+    (at_px, at_cell)
 }
 
 /// `text` with characters taken from its middle until it fits `room` cells.
 pub fn middle_out(text: &str, room: f32, measure: &dyn Measure) -> String {
+    middle_out_at(text, room, INTERFACE_SIZE_PERCENT, measure)
+}
+
+/// The same for text at `size` percent of the interface font's.
+fn middle_out_at(text: &str, room: f32, size: u8, measure: &dyn Measure) -> String {
     let font = Font {
-        size: INTERFACE_SIZE_PERCENT,
+        size,
         ..Font::default()
     };
     if measure.width(text, font) <= room {
@@ -1889,6 +2028,33 @@ mod tests {
         palette.filter();
         assert_eq!(labels(&palette), ["vendor/src/app.rs"]);
         assert_eq!(palette.place, None);
+    }
+
+    #[test]
+    fn what_was_typed_is_picked_out_where_it_reads_best() {
+        let letters = |query: &str, text: &str, from_end: bool| -> String {
+            let chars: Vec<char> = text.chars().collect();
+            let found = picked_out(query, text, from_end);
+            found.into_iter().map(|at| chars[at]).collect()
+        };
+        let places = |query: &str, text: &str, from_end: bool| picked_out(query, text, from_end);
+        // Together, at the start of a word, where it stands so.
+        assert_eq!(places("op", "Pop Stash to Open", false), [13, 14]);
+        assert_eq!(places("side", "Toggle Sidebar", false), [7, 8, 9, 10]);
+        // In a path the name comes before the folders.
+        assert_eq!(places("app", "app/src/app.rs", true), [8, 9, 10]);
+        assert_eq!(places("app", "app/src/main.rs", true), [0, 1, 2]);
+        // Scattered letters are found from the name's end backwards.
+        assert_eq!(
+            places("crs", "crates/cellix/src/cars.rs", true),
+            [18, 23, 24]
+        );
+        assert_eq!(letters("lbr", "src/lib.rs", true), "lbr");
+        assert_eq!(places("tsb", "Toggle Sidebar", false), [0, 7, 11]);
+        // Whatever the case, and nothing where it isn't there.
+        assert_eq!(letters("TOG", "Toggle Sidebar", false), "Tog");
+        assert!(places("xyz", "Toggle Sidebar", false).is_empty());
+        assert!(places("", "Toggle Sidebar", false).is_empty());
     }
 
     #[test]

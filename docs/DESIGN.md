@@ -501,6 +501,19 @@ uses, moves its caret and deletes by letter and by word, a press puts the caret 
 edge of the letter pressed, and a query longer than the box shows the part the caret is in. A
 press anywhere in the panel that isn't on a row to pick leaves it open.
 
+Every row to pick is drawn one way (`palette::Parts`): an icon where its kind has one, its
+words, something quieter after them at 85 percent, and something at its far end, which the
+words stop two columns short of. A file is its icon in the colour the tree gives its type, its
+name, then the folder it's in, as VS Code lists one: the name is what's looked for and a long
+path used to lose it. A folder too long for the row loses its middle. A symbol is its kind's
+icon, its name, what it sits in, and its group or file; a command its name and its keys; a
+task its name and what it runs. The row's icon and words stand under the field's own. The
+letters that were typed are picked out in the accent and bold (`picked_out`): where they stand
+together, at the start of a word for choice, there; otherwise in order, from the end of a path
+so the name is tried before the folders. That's a second reading of the match, for the eye,
+and the ranking is still `fuzzy_score`'s. The picked row of a file says the place typed after
+its name ("line 120"), which is where Enter opens it.
+
 Quick Open reads a path the way it's copied, since the file a person wants is most often one
 an agent or a compiler has just named. What's pasted is cleaned of what it was copied with
 (`palette::pasted_path`: quotes, backticks, brackets, a `file://`, an agent's `@`, a full stop, a

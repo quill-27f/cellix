@@ -174,7 +174,7 @@ impl Explorer {
 }
 
 /// A folder's colour, for the names that mean something, as VS Code's icon themes do.
-fn folder_color(name: &str) -> Rgb {
+pub fn folder_color(name: &str) -> Rgb {
     match name {
         "src" | "lib" | "app" | "crates" | "packages" => Rgb(120, 170, 240),
         "test" | "tests" | "spec" | "__tests__" => Rgb(120, 200, 150),

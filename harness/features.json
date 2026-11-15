@@ -5024,5 +5024,12 @@
     "title": "A palette's field is edited like any text box: the caret moves by letter and by word, Home and End and the deletes work, a paste goes in at the caret, a press puts the caret at the letter pressed, and a press in the panel that isn't on a row leaves it open",
     "test": "a_palettes_field_is_edited_like_any_text_box_and_a_press_inside_keeps_it_open",
     "passes": true
+  },
+  {
+    "id": "palette-rows",
+    "milestone": 14,
+    "title": "A palette's rows are drawn one way: a file is its icon, its name and then its folder, the letters typed are picked out in files, commands and symbols alike, and a row's words stop short of what's at its far end",
+    "test": "a_palettes_rows_show_a_files_name_then_its_folder_and_pick_out_what_was_typed",
+    "passes": true
   }
 ]

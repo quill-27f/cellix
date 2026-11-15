@@ -17444,9 +17444,8 @@ mod tests {
         let (_dir, mut app) = project();
         app.run(Command::QuickOpen);
         typed(&mut app, "lbr");
-        // As the platform writes it: `src\lib.rs` on Windows, as VS Code shows it there.
-        let shown = Path::new("src").join("lib.rs").display().to_string();
-        assert!(screen(&app).text().contains(&shown));
+        // A file's name, then the folder it's in, as VS Code lists one.
+        assert!(screen(&app).text().contains("lib.rs src"));
         enter(&mut app);
         assert!(screen(&app).text().contains("pub fn x()"));
     }
@@ -17720,7 +17719,10 @@ mod tests {
         app.run(Command::QuickOpen);
         app.handle(Event::Paste("`src/lib.rs:3:7`\n".into()));
         assert_eq!(query(&app), "src/lib.rs:3:7");
-        assert!(first(&app).starts_with("src/lib.rs"), "{}", first(&app));
+        // Its name, its folder, and at the row's end the place it will open at.
+        let row = first(&app);
+        assert!(row.starts_with("▪ lib.rs src"), "{row}");
+        assert!(row.ends_with("line 3, column 7"), "{row}");
         enter(&mut app);
         assert_eq!(at(&app), ("lib.rs".to_string(), 3, 7));
 
@@ -17739,7 +17741,7 @@ mod tests {
         app.run(Command::QuickOpen);
         let whole = root.join("out/built.rs");
         app.handle(Event::Paste(format!("{}:4", whole.display())));
-        assert!(first(&app).starts_with("out/built.rs"), "{}", first(&app));
+        assert!(first(&app).starts_with("▪ built.rs out"), "{}", first(&app));
         enter(&mut app);
         assert_eq!(at(&app), ("built.rs".to_string(), 4, 1));
         assert_eq!(
@@ -17758,7 +17760,7 @@ mod tests {
         // A diff's `b/`, and a place typed rather than pasted.
         app.run(Command::QuickOpen);
         typed(&mut app, "b/src/lib.rs#L4");
-        assert!(first(&app).starts_with("src/lib.rs"), "{}", first(&app));
+        assert!(first(&app).starts_with("▪ lib.rs src"), "{}", first(&app));
         enter(&mut app);
         assert_eq!(at(&app), ("lib.rs".to_string(), 4, 1));
 
@@ -17769,7 +17771,7 @@ mod tests {
         key(&mut app, Key::Esc);
         app.run(Command::QuickOpen);
         typed(&mut app, "alp:2");
-        assert!(first(&app).starts_with("alpha.txt"), "{}", first(&app));
+        assert!(first(&app).starts_with("▪ alpha.txt"), "{}", first(&app));
         enter(&mut app);
         assert_eq!(at(&app), ("alpha.txt".to_string(), 2, 1));
 
@@ -18051,6 +18053,75 @@ mod tests {
         key(&mut app, Key::Home);
         let row = screen(&app).row_text(y);
         assert!(row.contains("⌕ a/very/long"), "{row}");
+    }
+
+    /// A file was its whole path, cut at the end where its name is when it was long, and
+    /// nothing showed which letters had found it.
+    #[test]
+    fn a_palettes_rows_show_a_files_name_then_its_folder_and_pick_out_what_was_typed() {
+        let (dir, mut app) = project();
+        let deep = "a/long/way/down/into/the/folders/of/a/big/project/that/goes/on";
+        fs::create_dir_all(dir.path().join(deep)).unwrap();
+        fs::write(dir.path().join(deep).join("the_file_itself.rs"), "").unwrap();
+        let accent = app.theme.accent;
+        // The letters of `word` on screen that are picked out: in the accent and bold.
+        let lit = |app: &App, word: &str| -> String {
+            let grid = screen(app);
+            let (x, y) = find(&grid, word);
+            let cells = (x..x + word.chars().count() as u16).map(|x| grid.cell(x, y));
+            cells
+                .filter(|cell| cell.style.fg == accent && cell.style.bold)
+                .map(|cell| cell.symbol.clone())
+                .collect()
+        };
+        app.run(Command::QuickOpen);
+        typed(&mut app, "lbr");
+        let grid = screen(&app);
+        let (x, y) = find(&grid, "lib.rs");
+        assert!(
+            grid.row_text(y).contains("▪ lib.rs src"),
+            "{}",
+            grid.row_text(y)
+        );
+        assert_eq!(lit(&app, "lib.rs"), "lbr");
+        // The icon and the name stand under the field's own icon and words.
+        let (field_x, _) = find(&grid, "lbr");
+        assert_eq!(x, field_x);
+        assert_eq!(find(&grid, "▪ lib.rs").0, find(&grid, "⌕").0);
+        key(&mut app, Key::Esc);
+
+        // Letters that stand together in the name are picked out there, not scattered
+        // through the folders before it.
+        app.run(Command::QuickOpen);
+        typed(&mut app, "itself");
+        let grid = screen(&app);
+        let (_, y) = find(&grid, "the_file_itself.rs");
+        let row = grid.row_text(y);
+        assert_eq!(lit(&app, "the_file_itself.rs"), "itself");
+        // A folder too long for the row loses its middle; the name is whole.
+        assert!(row.contains("the_file_itself.rs a/long/"), "{row}");
+        assert!(
+            row.contains('…') && row.trim_end().ends_with("/goes/on"),
+            "{row}"
+        );
+        key(&mut app, Key::Esc);
+
+        // A command's letters too, and its keys stay at the row's far end.
+        app.run(Command::CommandPalette);
+        typed(&mut app, "tog");
+        assert_eq!(lit(&app, "Toggle Sidebar"), "Tog");
+        let grid = screen(&app);
+        let (x, y) = find(&grid, "Toggle Sidebar");
+        let (keys, _) = find(&grid, "Ctrl+B");
+        let far = Palette::area(grid.area()).right() - 2;
+        assert_eq!((keys + 6, find(&grid, "Ctrl+B").1), (far, y), "from {x}");
+        key(&mut app, Key::Esc);
+
+        // Open Recent's rows are drawn the same way.
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        app.run(Command::OpenRecent);
+        let text = screen(&app).text();
+        assert!(text.contains("▪ alpha.txt"), "{text}");
     }
 
     #[test]
@@ -18763,9 +18834,8 @@ mod tests {
         let (_dir, mut app) = project();
         app.run(Command::FindInProject);
         app.handle(Event::Key(KeyEvent::ctrl('p')));
-        // As the platform writes it: `src\lib.rs` on Windows, as VS Code shows it there.
-        let shown = Path::new("src").join("lib.rs").display().to_string();
-        assert!(screen(&app).text().contains(&shown));
+        // A file's name, then the folder it's in, as VS Code lists one.
+        assert!(screen(&app).text().contains("lib.rs src"));
     }
 
     #[test]
