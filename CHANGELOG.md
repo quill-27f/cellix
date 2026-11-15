@@ -2,7 +2,7 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
-## [Unreleased]
+## [0.9.0] - 2026-11-15
 
 ### Changed
 - The folder finder (+ New Workspace) says what its keys do while you type: "Tab goes into it · Enter opens it" at the end of the field, with a folder picked in the list. Tab already went into the picked folder to carry on with the ones inside it, but only the hint in the empty field said so, and that goes with the first letter typed.

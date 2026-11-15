@@ -2197,3 +2197,14 @@ The user said to release as 0.9.0, and asked whether the whole tour is needed ev
 - **The keys being pressed were written over.** With the keys' column narrower by what the names gained, the scene that records new keys showed "Enter saves · Esc cancels" on top of "Ctrl+Alt+R". The hint had always been put at the column's end whatever stood before it, and long keys in a narrow page would have had it over them before. It's now the longest of "Enter saves · Esc cancels" and "Enter saves" that fits after the keys, or nothing. In the tour's 120-column window it's "Enter saves", where both were said.
 - Test: `a_commands_title_has_room_on_the_keyboard_page_or_ends_in_an_ellipsis`, in cells at two widths, with long keys pressed in the narrow one.
 - Left: at the cell tier in a narrow page a fifth of the titles are still shortened. Grouping the page's rows under their categories, with the names alone in the rows, would fit them all; that's a new layout for the page, to design first.
+
+
+## Release 0.9.0 (2026-11-15)
+
+The user said: "release it as 0.9.0", and then "ok run targeted from now on and release the latest changes". It holds the five commits since 0.8.0: every command titled by its category, the palette listing what can run now, the folder finder saying what Tab and Enter do, commands that match alike kept in the list's order, and room for titles on the Keyboard page. It's 0.9.0 because every command's title changed. README says the first three where it describes the palettes and the workspaces bar.
+
+- **The whole tour gives way to the scenes a change can reach**, at the user's word, and AGENTS.md says so from this commit. For this release: 71 scenes on `f61cc7b`, none failed, and the Keyboard page's four again after its fix.
+- The ui-expert's third review was of the pictures before the last two commits. The pictures after them were looked at by me only: `09-commands`, `106-folder-finder`, the Keyboard page and its recording row.
+- One run of the gate failed on two PTY tests that time a resize, with the machine's load at twenty from another program; the same tree passed on the next run.
+- Unverified in a real terminal: all of it.
+- Open with the user: Agent: List Agents and Agent: Show Agents read alike (the first is the list of agents in the pane, the second opens or closes the side pane); and the Keyboard page's rows under category headings, so names fit a narrow page in cells.
