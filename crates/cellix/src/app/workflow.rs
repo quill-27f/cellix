@@ -768,15 +768,14 @@ mod tests {
         assert!(app.settings_page.is_none());
     }
 
-    /// A command's title is its category and its name, and the Keyboard page's first column
-    /// was two fifths of the page: on a terminal without pictures, where every letter is a
-    /// cell, a third of the titles were cut through a word. The column has half the page,
-    /// and a title that still doesn't fit ends in an ellipsis.
+    /// A command's name had two fifths of the Keyboard page, and one too long for that was
+    /// cut where the column ended. The column has half the page, and a name that still
+    /// doesn't fit ends in an ellipsis.
     #[test]
     fn a_commands_title_has_room_on_the_keyboard_page_or_ends_in_an_ellipsis() {
         let all = crate::keys::shortcuts(&Default::default());
-        let titles: Vec<&str> = all.iter().map(|shortcut| shortcut.name).collect();
-        // The rows' names as the page shows them, and how many end in an ellipsis.
+        let known: Vec<&str> = all.iter().map(|s| crate::palette::bare(s.name)).collect();
+        // The commands' names as the page shows them, and how many end in an ellipsis.
         let names = |width: u16| -> (Vec<String>, usize) {
             let (_dir, mut app) = project("{}");
             app.size = (width, 40);
@@ -788,11 +787,12 @@ mod tests {
             let (keys, _) = find(&grid, "KEYS");
             let mut shown = Vec::new();
             let mut cut = 0;
-            for y in header + 1..grid.height() {
+            for y in header + 1..grid.height() - 1 {
                 let row: Vec<char> = grid.row_text(y).chars().collect();
                 let name: String = row[from as usize..keys as usize].iter().collect();
                 let name = name.trim().to_string();
-                if !name.contains(": ") {
+                // A category's heading, or the empty row before one.
+                if name.is_empty() || name.contains('─') {
                     continue;
                 }
                 assert_eq!(
@@ -802,26 +802,23 @@ mod tests {
                 );
                 match name.strip_suffix('…') {
                     Some(stem) => {
-                        assert!(titles.iter().any(|title| title.starts_with(stem)), "{name}");
+                        assert!(known.iter().any(|name| name.starts_with(stem)), "{name}");
                         cut += 1;
                     }
-                    None => assert!(titles.contains(&name.as_str()), "{name} is cut short"),
+                    None => assert!(known.contains(&name.as_str()), "{name} is cut short"),
                 }
                 shown.push(name);
             }
             (shown, cut)
         };
         // A narrow window: what fits is whole, and what doesn't says so.
-        let (shown, cut) = names(100);
+        let (shown, cut) = names(48);
         assert!(shown.len() > 10 && cut > 0, "{shown:?}");
-        assert!(
-            shown.iter().any(|name| name == "Agent: Approve Plan"),
-            "{shown:?}"
-        );
-        // A wide one has every title on its first screen whole.
-        let (shown, cut) = names(170);
+        assert!(shown.iter().any(|name| name == "Approve Plan"), "{shown:?}");
+        // A wider one has every name on its first screen whole.
+        let (shown, cut) = names(120);
         assert_eq!(cut, 0, "{shown:?}");
-        let long = "Agent: Review Previous Agent Turn";
+        let long = "Review Previous Agent Turn";
         assert!(shown.iter().any(|name| name == long), "{shown:?}");
 
         // The keys being pressed for a command are never written over by what Enter and
@@ -832,7 +829,7 @@ mod tests {
         let (x, y) = find(&screen(&app), "Keyboard");
         click(&mut app, x + 1, y);
         let grid = screen(&app);
-        let (_, row) = find(&grid, "Agent: Approve Plan");
+        let (_, row) = find(&grid, "Approve Plan");
         let keys_x = grid.row_text(row).find('—').expect("no keys yet") as u16;
         click(&mut app, keys_x, row);
         let pressed = KeyEvent {
@@ -850,6 +847,95 @@ mod tests {
             !row.contains("saves"),
             "no room for it after the keys: {row}"
         );
+    }
+
+    /// Every row of the Keyboard page carried its category, Agent: Ask Agent, and on a
+    /// terminal without pictures 19 of the 138 didn't fit a 120-column window. The category
+    /// is a heading over its commands, as the canvas's board draws it, and a row holds the
+    /// name alone.
+    #[test]
+    fn the_keyboard_page_lists_commands_under_their_categories() {
+        let (_dir, mut app) = project("{}");
+        app.size = (140, 40);
+        app.run(Command::OpenSettings);
+        let (x, y) = find(&screen(&app), "Keyboard");
+        click(&mut app, x + 1, y);
+        // The list's rows from under the column heads: what stands in the names' column.
+        let list = |app: &App| -> Vec<String> {
+            let grid = screen(app);
+            let (from, header) = find(&grid, "COMMAND");
+            let (keys, _) = find(&grid, "KEYS");
+            let rows = header + 1..grid.height() - 1;
+            rows.map(|y| {
+                let row: Vec<char> = grid.row_text(y).chars().collect();
+                let name: String = row[from as usize..keys as usize].iter().collect();
+                name.trim_end().to_string()
+            })
+            .collect()
+        };
+        let scroll = |app: &mut App, by: isize| {
+            app.settings_page.as_mut().expect("Settings").scroll_by(by);
+        };
+        // A heading, in capitals with a rule after it, then its commands by name alone.
+        let rows = list(&app);
+        assert!(rows[0].starts_with("AGENT ─"), "{rows:?}");
+        assert_eq!(
+            rows[1..4],
+            ["Accept Proposed Change", "Approve Plan", "Ask Agent"]
+        );
+        assert!(!rows.iter().any(|row| row.contains(": ")), "{rows:?}");
+        // An empty row parts two categories.
+        let comments = rows.iter().position(|row| row.starts_with("COMMENTS ─"));
+        let comments = comments.expect("the second category");
+        assert_eq!(rows[comments - 1], "");
+        assert_eq!(rows[comments + 1], "Add Comment");
+
+        // Scrolled into a category, its heading stays as the list's first row.
+        scroll(&mut app, 3);
+        let rows = list(&app);
+        assert!(rows[0].starts_with("AGENT ─"), "{rows:?}");
+        assert_eq!(rows[1], "Compare Plan Versions");
+        // At the row between two categories nothing is held: the next heading is coming.
+        scroll(&mut app, comments as isize - 4);
+        let rows = list(&app);
+        assert_eq!(rows[0], "");
+        assert!(rows[1].starts_with("COMMENTS ─"), "{rows:?}");
+        scroll(&mut app, -1000);
+
+        // Keys are set on a command's own row, and kept under its whole title.
+        let (keys_x, row) = find(&screen(&app), "Alt+A");
+        click(&mut app, keys_x, row);
+        assert!(screen(&app).text().contains("Press the keys"));
+        let pressed = KeyEvent {
+            key: Key::Char('g'),
+            mods: Mods {
+                ctrl: true,
+                alt: true,
+                shift: false,
+            },
+        };
+        app.handle(Event::Key(pressed));
+        app.handle(Event::Key(KeyEvent::plain(Key::Enter)));
+        assert_eq!(app.settings.keybindings["Agent: Ask Agent"], ["Ctrl+Alt+G"]);
+
+        // What the filter finds has no heading over it, so it keeps its whole title.
+        typed(&mut app, "ask ag");
+        let text = screen(&app).text();
+        assert!(text.contains("Agent: Ask Agent"), "{text}");
+        assert!(!text.contains("AGENT ─"), "{text}");
+        for _ in 0.."ask ag".len() {
+            app.handle(Event::Key(KeyEvent::plain(Key::Backspace)));
+        }
+
+        // Painted, the heading is small capitals with a hairline after them, not dashes.
+        app.set_measure(std::rc::Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        let grid = screen(&app);
+        let size = grid.paint.iter().find_map(|paint| match paint {
+            cellix_render::Paint::Text { text, font, .. } if text == "AGENT" => Some(font.size),
+            _ => None,
+        });
+        assert_eq!(size, Some(80));
+        assert!(!grid.text().contains('─'), "{}", grid.text());
     }
 
     #[test]

@@ -538,8 +538,13 @@ the list. They're kept in the folder's `state.json` with the tabs. With none run
 every command by name, with no groups. A command's title is its category and its name, `Git:
 Stash Changes`, as VS Code's are, so by name a category's commands stand together: Agent,
 Comments, Document, Edit, File, Format, Git, Help, Merge Conflict, Navigate, Notebook,
-Preferences, Search, Tasks, Terminal, Track Changes, View, Workspace. The Keyboard page names
-them the same way. What's typed is looked for in the name first and scored as it was before
+Preferences, Search, Tasks, Terminal, Track Changes, View, Workspace. The Keyboard page lists
+them under the same categories, each a heading in small capitals with a rule after it, as a
+group in the palette is headed, with its commands under it by name alone and an empty row
+before the next: a title in every row left a fifth of them shortened in a 120-column window on
+a terminal without pictures, and a name alone has the column to itself. Scrolled into a
+category, its heading stays on the list's first row. In cells the rule is a run of dashes.
+What the page's filter finds has no heading over it, so it keeps its whole title. What's typed is looked for in the name first and scored as it was before
 there were categories, so the letters a category happens to share don't rank a command. A
 category typed before a space narrows to it: `git st` is Git's commands with "st" in their
 names and `git ` is all of them, in the list's order. Failing both, the letters anywhere in the

@@ -5108,5 +5108,12 @@
     "title": "Show Agents is in neither the palette nor the Keyboard page, where it read like List Agents and did what Toggle Side Pane does; keys set for it in settings still run it",
     "test": "a_command_dropped_from_the_lists_keeps_the_keys_set_for_it",
     "passes": true
+  },
+  {
+    "id": "keyboard-page-categories",
+    "milestone": 14,
+    "title": "The Keyboard page lists commands under their categories: a heading for each, its commands by name alone, an empty row before the next, and the category scrolled into held on the list's first row; what the filter finds keeps its whole title",
+    "test": "the_keyboard_page_lists_commands_under_their_categories",
+    "passes": true
   }
 ]

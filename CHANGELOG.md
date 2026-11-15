@@ -4,6 +4,9 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 
 ## [Unreleased]
 
+### Changed
+- The Keyboard page in Settings lists the commands under their categories: each category is a heading, with its commands under it by name alone, and the one you've scrolled into stays at the top of the list. Every row used to carry its category, Agent: Ask Agent, which on a terminal without pictures left 19 of the 138 shortened in a 120-column window; one is now. What the filter finds keeps its whole title.
+
 ### Removed
 - "Agent: Show Agents" is gone from the command palette and the Keyboard page. It opened or closed the side pane, which "View: Toggle Side Pane" does, and stood beside "Agent: List Agents" with nothing to tell the two apart. Keys set for it in settings still run it.
 

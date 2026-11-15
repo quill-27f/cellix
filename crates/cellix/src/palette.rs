@@ -294,6 +294,11 @@ pub fn bare(title: &str) -> &str {
     title.split_once(": ").map_or(title, |(_, name)| name)
 }
 
+/// A command's category: "View" of "View: Toggle Sidebar".
+pub fn category(title: &str) -> &str {
+    title.split_once(": ").map_or("", |(category, _)| category)
+}
+
 /// Whether `name` is what the command titled `title` goes by: its title, or its name
 /// without the category, which is how settings and a folder's state written before
 /// commands had categories know it.

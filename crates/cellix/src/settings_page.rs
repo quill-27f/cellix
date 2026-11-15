@@ -85,6 +85,8 @@ const BUTTON_WIDTH: u16 = 12;
 const TOGGLE_WIDTH: f32 = 2.6;
 const TITLE_SIZE: u8 = 170;
 const NOTE_SIZE: u8 = 90;
+/// The size of what heads a column or a category, as a section's heading is anywhere.
+const HEADING_SIZE: u8 = 80;
 const RADIUS: u8 = 30;
 /// Where the servers' rows start, from the top of the page.
 const SERVERS_ROW: u16 = 13;
@@ -196,6 +198,63 @@ enum Row {
     Block(usize),
     /// A command and its keys, by its place in `shortcuts`.
     Shortcut(usize),
+}
+
+/// A line of the Keyboard page's list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KeyLine {
+    /// A category's name, over its commands.
+    Heading(&'static str),
+    /// A command, by its place in `shortcuts`.
+    Command(usize),
+    /// The empty row that parts two categories.
+    Gap,
+}
+
+/// A category's heading over its commands: its name in small capitals and a rule after it
+/// to the page's edge, as a group in the palette is headed. In cells the rule is a run of
+/// dashes: capitals alone would be all there is to tell a heading from a name by.
+fn draw_category(
+    grid: &mut Grid,
+    page: Rect,
+    y: u16,
+    category: &str,
+    measure: &dyn Measure,
+    theme: &Theme,
+) {
+    let head = Style {
+        fg: theme.breadcrumb.fg,
+        bold: true,
+        ..theme.text
+    };
+    let name = category.to_uppercase();
+    grid.label_at(
+        page.x as f32,
+        page.x,
+        y,
+        &name,
+        head,
+        page.right(),
+        HEADING_SIZE,
+    );
+    let font = Font {
+        size: HEADING_SIZE,
+        bold: true,
+        ..Font::default()
+    };
+    let from = page.x as f32 + measure.width(&name, font) + 1.0;
+    let across = (f32::from(page.right()) - from).max(0.0);
+    if measure.in_cells() {
+        let rule = Style {
+            fg: theme.border,
+            ..theme.text
+        };
+        let dashes = "─".repeat(across as usize);
+        grid.put_str(from as u16, y, &dashes, rule, page.right());
+    } else {
+        let rule = Bounds::cells(from, y as f32 + 0.5, across, 0.0);
+        grid.hairline(rule, theme.border);
+    }
 }
 
 impl Row {
@@ -468,17 +527,50 @@ impl SettingsPage {
         Rect::new(page.x, page.y - FILTER_ROWS, page.w, 1)
     }
 
+    /// The Keyboard page's list, top to bottom: each category's heading, its commands by
+    /// name, and an empty row before the next. A row holds a command's name alone, so the
+    /// category is read once, over its commands, and a name has the column to itself.
+    fn key_lines(&self) -> Vec<KeyLine> {
+        let mut lines = Vec::new();
+        let mut last = None;
+        for index in self.shown_shortcuts() {
+            let category = crate::palette::category(self.shortcuts[index].name);
+            if last != Some(category) {
+                if last.is_some() {
+                    lines.push(KeyLine::Gap);
+                }
+                lines.push(KeyLine::Heading(category));
+                last = Some(category);
+            }
+            lines.push(KeyLine::Command(index));
+        }
+        lines
+    }
+
+    /// The lines of the list in view, each with its row. Scrolled into a category, its
+    /// heading stands on the list's first row in place of the command there, so the names
+    /// under it are never read without it.
+    fn key_lines_in_view(&self, page: Rect) -> Vec<(u16, KeyLine)> {
+        let room = page.h.saturating_sub(KEYS_FIRST_ROW) as usize;
+        let lines = self.key_lines();
+        let mut shown: Vec<KeyLine> = lines.into_iter().skip(self.keys_top).take(room).collect();
+        if let Some(KeyLine::Command(index)) = shown.first().copied() {
+            let category = crate::palette::category(self.shortcuts[index].name);
+            shown[0] = KeyLine::Heading(category);
+        }
+        let first = page.y + KEYS_FIRST_ROW;
+        let rows = shown.into_iter().enumerate();
+        rows.map(|(row, line)| (first + row as u16, line)).collect()
+    }
+
     /// The shortcut rows in view: each one's row, and its place in `shortcuts`.
     fn shortcut_rows(&self, page: Rect) -> Vec<(u16, usize)> {
-        let room = page.h.saturating_sub(KEYS_FIRST_ROW) as usize;
-        let shown = self
-            .shown_shortcuts()
-            .into_iter()
-            .skip(self.keys_top)
-            .take(room);
-        shown
-            .enumerate()
-            .map(|(row, index)| (page.y + KEYS_FIRST_ROW + row as u16, index))
+        let lines = self.key_lines_in_view(page).into_iter();
+        lines
+            .filter_map(|(y, line)| match line {
+                KeyLine::Command(index) => Some((y, index)),
+                _ => None,
+            })
             .collect()
     }
 
@@ -492,12 +584,20 @@ impl SettingsPage {
         (keys, source)
     }
 
-    /// A command's title as its row shows it: whole, or ending in an ellipsis where the
-    /// column is too narrow for it, never cut through a word with nothing to say so.
-    fn shown_name(&self, index: usize, page: Rect, measure: &dyn Measure) -> String {
+    /// A command as its row shows it: its name under its category's heading, or its whole
+    /// title among what the filter found, where no heading stands over it. Whole, or ending
+    /// in an ellipsis where the column is too narrow, never cut through a word with nothing
+    /// to say so.
+    fn shown_name(&self, index: usize, titled: bool, page: Rect, measure: &dyn Measure) -> String {
         let (keys_x, _) = Self::key_columns(page);
         let room = f32::from(keys_x.saturating_sub(1).saturating_sub(page.x));
-        crate::context::elide(self.shortcuts[index].name, room, measure)
+        let title = self.shortcuts[index].name;
+        let name = if titled {
+            title
+        } else {
+            crate::palette::bare(title)
+        };
+        crate::context::elide(name, room, measure)
     }
 
     pub fn scroll_by(&mut self, delta: isize) {
@@ -507,7 +607,7 @@ impl SettingsPage {
             return;
         }
         if self.section == Section::Keyboard {
-            let last = self.shown_shortcuts().len().saturating_sub(1) as isize;
+            let last = self.key_lines().len().saturating_sub(1) as isize;
             self.keys_top = (self.keys_top as isize + delta).clamp(0, last) as usize;
             return;
         }
@@ -1078,9 +1178,10 @@ impl SettingsPage {
                     }
                 }
                 Row::Shortcut(index) => {
-                    self.draw_shortcut(grid, page, (y, index), (hover, measure, &shared), theme);
+                    let shown = (hover, measure, &shared);
+                    self.draw_shortcut(grid, page, (y, index, true), shown, theme);
                     let (keys_x, _) = Self::key_columns(page);
-                    let name = self.shown_name(index, page, measure);
+                    let name = self.shown_name(index, true, page, measure);
                     tag(
                         grid,
                         (&name, Font::default()),
@@ -1192,8 +1293,17 @@ impl SettingsPage {
         let under = Bounds::cells(page.x as f32, y as f32 + 0.92, page.w as f32, 0.0);
         grid.hairline(under, theme.border);
         let shared = keys::sharing(&self.shortcuts);
-        for (y, index) in self.shortcut_rows(page) {
-            self.draw_shortcut(grid, page, (y, index), (hover, measure, &shared), theme);
+        for (y, line) in self.key_lines_in_view(page) {
+            match line {
+                KeyLine::Heading(category) => {
+                    draw_category(grid, page, y, category, measure, theme);
+                }
+                KeyLine::Command(index) => {
+                    let shown = (hover, measure, &shared);
+                    self.draw_shortcut(grid, page, (y, index, false), shown, theme);
+                }
+                KeyLine::Gap => {}
+            }
         }
     }
 
@@ -1203,7 +1313,7 @@ impl SettingsPage {
         &self,
         grid: &mut Grid,
         page: Rect,
-        (y, index): (u16, usize),
+        (y, index, titled): (u16, usize, bool),
         (hover, measure, shared): Shown<'_>,
         theme: &Theme,
     ) {
@@ -1223,7 +1333,7 @@ impl SettingsPage {
             );
             grid.panel(wash, 18, Some(theme.page_hover), None);
         }
-        let name = self.shown_name(index, page, measure);
+        let name = self.shown_name(index, titled, page, measure);
         grid.label(page.x, y, &name, theme.text, keys_x.saturating_sub(1));
         let keys_end = source_x.saturating_sub(1);
         match &self.recording {

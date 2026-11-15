@@ -2220,3 +2220,12 @@ The user's answers to the two things 0.9.0 left open: "drop Show Agents and yes 
 - Test: `a_command_dropped_from_the_lists_keeps_the_keys_set_for_it`.
 - **Category headings on the Keyboard page** are a new layout, so they're drawn first: a board on the end-to-end canvas, for the user to see before anything is built.
 
+
+## The Keyboard page under category headings (2026-11-15)
+
+The user, on the two boards drawn for it on the canvas: "build it as drawn and release as 0.9.1".
+
+- **What's built** (`settings_page.rs`): the page's list is `key_lines`, a heading for each category, its commands, and an empty row before the next. A row shows the command's name alone (`shown_name` with `titled` false); a heading is the category in small capitals in the breadcrumb's tone, with a hairline after it to the page's edge, and in cells a run of dashes (`draw_category`). `keys_top` counts lines now. Scrolled so a command is first, that row shows its category's heading in its place (`key_lines_in_view`), so the list moves a row at a time with no jump; at the empty row between two categories nothing is held. Hit-testing reads the same lines, so a click on a command's keys still records for that command, and the keys are kept under its whole title. What the filter finds is drawn with its whole title, as before.
+- Tests: `the_keyboard_page_lists_commands_under_their_categories` (the headings and names in cells, the empty row, the held heading, keys set on a row under a heading, the filter's titles, and the painted heading). `a_commands_title_has_room_on_the_keyboard_page_or_ends_in_an_ellipsis` reads names now, and a window has to be 48 columns wide before one is shortened on the first screen.
+- Unverified: a real terminal.
+
