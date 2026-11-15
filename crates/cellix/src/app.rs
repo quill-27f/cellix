@@ -1021,6 +1021,11 @@ const FINDING_WAIT: std::time::Duration = std::time::Duration::from_millis(100);
 const MAX_FILES: usize = 500_000;
 /// How many files Quick Open lists as recently opened, before the folder's own.
 const RECENT_FILES: usize = 8;
+/// How many commands the palette lists as recently used.
+const RECENT_COMMANDS: usize = 6;
+/// What the command palette calls its two groups when it has those to list.
+const RECENTLY_USED: &str = "RECENTLY USED";
+const OTHER_COMMANDS: &str = "OTHER COMMANDS";
 /// What Quick Open calls its two groups when it has recent files to list.
 const RECENTLY_OPENED: &str = "RECENTLY OPENED";
 const ALL_FILES: &str = "FILES";
@@ -1310,6 +1315,9 @@ pub struct App {
     /// The files brought to the front in this run, the last first: what Quick Open lists
     /// before anything is typed.
     looked_at: Vec<PathBuf>,
+    /// The commands last run from the palette, the last first, which it lists before the
+    /// rest. Kept between runs.
+    commands_used: Vec<Command>,
     /// What a comment from Review's line numbers is about, and whether that line was removed.
     comment_quote: Option<(String, bool)>,
     /// Where an exported PDF goes once its hidden build is done.
@@ -1433,6 +1441,7 @@ impl App {
             comment_sort: threads::Sort::Document,
             emoji_used: Vec::new(),
             looked_at: Vec::new(),
+            commands_used: Vec::new(),
             comment_pictures: threads::Pictures::new(),
             picture_stamps: HashMap::new(),
             comment_rows: threads::Laid::default(),
@@ -6718,7 +6727,12 @@ impl App {
                     self.say(format!("Could not open: {e}"));
                 }
             }
-            Some(Item::Command(_, command)) => self.run(command),
+            Some(Item::Command(_, command)) => {
+                self.commands_used.retain(|used| *used != command);
+                self.commands_used.insert(0, command);
+                self.commands_used.truncate(RECENT_COMMANDS);
+                self.run(command);
+            }
             Some(Item::Branch(name, _)) => {
                 let result = switch_branch(self.workspace.root(), &name);
                 self.branch_changed(&name, result);
@@ -6756,6 +6770,35 @@ impl App {
             }
             Some(Item::Gap | Item::Header(_)) | None => {}
         }
+    }
+
+    /// The command palette: the commands last run from it first, the last at the top, so
+    /// Enter runs it again, and every other command by name, as VS Code lists them.
+    fn command_palette(&mut self) {
+        let named = |command: &Command| COMMANDS.iter().find(|(_, listed)| listed == command);
+        let used: Vec<Item> = self
+            .commands_used
+            .iter()
+            .filter_map(named)
+            .map(|(label, command)| Item::Command(label, *command))
+            .collect();
+        let mut rest: Vec<&(&'static str, Command)> = COMMANDS
+            .iter()
+            .filter(|(_, command)| !self.commands_used.contains(command))
+            .collect();
+        rest.sort_by_cached_key(|(label, _)| label.to_lowercase());
+        let rest = rest
+            .into_iter()
+            .map(|(label, command)| Item::Command(label, *command));
+        let mut items = Vec::with_capacity(COMMANDS.len() + 2);
+        if !used.is_empty() {
+            items.push(Item::Header(RECENTLY_USED.into()));
+            items.extend(used);
+            items.push(Item::Header(OTHER_COMMANDS.into()));
+        }
+        items.extend(rest);
+        let keys = crate::keys::shortcuts(&self.settings.keybindings);
+        self.overlay = Overlay::Palette(Palette::new(items).with_keys(&keys));
     }
 
     /// Picks a row of Quick Open and, where a place was typed after the file's name, as in
@@ -7706,14 +7749,7 @@ impl App {
             Command::QuickOpen => self.quick_open(),
             Command::GoToSymbol => self.go_to_symbol(""),
             Command::GoToWorkspaceSymbol => self.workspace_symbol(""),
-            Command::CommandPalette => {
-                let items = COMMANDS
-                    .iter()
-                    .map(|(label, command)| Item::Command(label, *command))
-                    .collect();
-                let keys = crate::keys::shortcuts(&self.settings.keybindings);
-                self.overlay = Overlay::Palette(Palette::new(items).with_keys(&keys));
-            }
+            Command::CommandPalette => self.command_palette(),
             Command::Copy => self.copy(),
             Command::PasteLine => self.paste_line(),
             Command::Cut => {
@@ -11665,6 +11701,12 @@ impl App {
             active: (!self.editors.is_empty()).then(|| self.active()),
             pane: self.kept_pane(),
             emoji: self.emoji_used.iter().map(|e| e.to_string()).collect(),
+            commands: self
+                .commands_used
+                .iter()
+                .filter_map(|used| COMMANDS.iter().find(|(_, command)| command == used))
+                .map(|(label, _)| label.to_string())
+                .collect(),
         }
     }
 
@@ -11742,6 +11784,12 @@ impl App {
             .emoji
             .iter()
             .filter_map(|emoji| crate::emoji::known(emoji))
+            .collect();
+        self.commands_used = state
+            .commands
+            .iter()
+            .filter_map(|name| COMMANDS.iter().find(|(label, _)| label == name))
+            .map(|(_, command)| *command)
             .collect();
         let root = self.workspace.root().to_path_buf();
         let mut unsaved = 0;
@@ -17059,6 +17107,9 @@ struct Kept {
     /// The emoji last put in comments, the last first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     emoji: Vec<String>,
+    /// The commands last run from the palette, by name, the last first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    commands: Vec<String>,
 }
 
 /// The side pane's size and place as they were left, so it comes back the same.
@@ -17902,7 +17953,10 @@ mod tests {
     fn a_palettes_list_scrolls_to_the_picked_row_and_with_the_wheel() {
         let (_dir, mut app) = project();
         app.run(Command::CommandPalette);
-        let name = |at: usize| COMMANDS[at].0;
+        // The commands as the palette lists them with none run yet: by name.
+        let mut names: Vec<&str> = COMMANDS.iter().map(|(label, _)| *label).collect();
+        names.sort_by_key(|label| label.to_lowercase());
+        let name = |at: usize| names[at];
         // The rows of the list as they're shown, under the field and the air.
         let rows = |app: &App| -> Vec<String> {
             let grid = screen(app);
@@ -18264,6 +18318,85 @@ mod tests {
             !listed
                 .iter()
                 .any(|row| named(row, "alpha.txt") && !row.contains("src"))
+        );
+    }
+
+    /// The palette listed its commands in the order they were written into Cellix, Save
+    /// first and Quit last with a hundred and twenty between in no order at all.
+    #[test]
+    fn the_command_palette_lists_what_was_last_run_first_and_the_rest_by_name() {
+        let (dir, mut app) = project();
+        // The rows of the list, as they're shown inside the panel, without their keys.
+        let rows = |app: &App| -> Vec<String> {
+            let grid = screen(app);
+            let Overlay::Palette(palette) = &app.overlay else {
+                panic!("the palette isn't open");
+            };
+            let area = palette.shown(grid.area());
+            let row = |y: u16| -> String {
+                let cells = (area.x + 2..area.right() - 16).map(|x| grid.cell(x, y));
+                let text: String = cells.map(|cell| cell.symbol.as_str()).collect();
+                text.trim().to_string()
+            };
+            (area.y + 2..area.bottom()).map(row).collect()
+        };
+        app.run(Command::CommandPalette);
+        let listed = rows(&app);
+        assert_eq!(listed[0], "Abort Merge", "{listed:?}");
+        let mut sorted = listed.clone();
+        sorted.sort_by_key(|name| name.to_lowercase());
+        assert_eq!(listed, sorted, "by name");
+        assert!(!screen(&app).text().contains(RECENTLY_USED));
+
+        // One run from the palette is at its top the next time, and Enter runs it again.
+        typed(&mut app, "sidebar");
+        enter(&mut app);
+        assert!(
+            !screen(&app).text().contains("alpha.txt"),
+            "the sidebar is hidden"
+        );
+        app.run(Command::CommandPalette);
+        let listed = rows(&app);
+        assert_eq!(
+            listed[..4],
+            [
+                RECENTLY_USED,
+                "Toggle Sidebar",
+                OTHER_COMMANDS,
+                "Abort Merge"
+            ],
+            "{listed:?}"
+        );
+        enter(&mut app);
+        assert!(screen(&app).text().contains("alpha.txt"), "and shown again");
+        // The last run leads, and neither is listed a second time among the rest.
+        app.run(Command::CommandPalette);
+        typed(&mut app, "fold all");
+        enter(&mut app);
+        app.run(Command::CommandPalette);
+        let listed = rows(&app);
+        assert_eq!(listed[..3], [RECENTLY_USED, "Fold All", "Toggle Sidebar"]);
+        typed(&mut app, "toggle sidebar");
+        let found = rows(&app);
+        assert_eq!(found, ["Toggle Sidebar"], "once");
+        key(&mut app, Key::Esc);
+
+        // A command run by its keys or a menu isn't one the palette was used for.
+        app.run(Command::ToggleWordWrap);
+        assert_eq!(
+            app.commands_used,
+            [Command::FoldAll, Command::ToggleSidebar]
+        );
+
+        // They're kept for the next run of Cellix in this folder.
+        assert_eq!(app.state().commands, ["Fold All", "Toggle Sidebar"]);
+        app.keep_state();
+        let mut next = App::new(dir.path().to_path_buf(), (100, 30));
+        next.restore_state();
+        next.run(Command::CommandPalette);
+        assert_eq!(
+            rows(&next)[..3],
+            [RECENTLY_USED, "Fold All", "Toggle Sidebar"]
         );
     }
 

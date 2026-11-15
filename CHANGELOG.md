@@ -12,6 +12,7 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 - Ctrl+P opens Quick Open while the keyboard is in the side pane's agent or terminal, as Ctrl+Shift+P opens the commands from there. It went to the program in the pane. Pick a file and the keyboard goes to it.
 
 ### Changed
+- The command palette lists the commands you last ran from it first, under "Recently used", the last at the top, so Ctrl+Shift+P and Enter runs it again. Every other command follows by name. They were in the order they'd been added to Cellix, Save first and Quit last. The recent ones are kept for the folder between runs.
 - A file in Quick Open is its icon, its name, and then its folder, quieter, as VS Code lists one. It was the whole path as one run of words. The letters you typed are picked out in the row, in a file's name or folder and in a command's name, and they're looked for in the name before the folders. When a line follows the name, the picked row says where it will open, "line 120". Open Recent, the folder finder and the picture lists have icons too.
 - Quick Open (Ctrl+P), the command palette (Ctrl+Shift+P) and every list like them have a box around what you type, as the Find bar has. The words stood nearer the panel's top than the line under them. The box is in the middle of its space now: the air above it, between it and the list, and under the last row is the same. The picked row's band is the one menus have, and a list with nothing in it says "No matches" in place of closing up.
 

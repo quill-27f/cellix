@@ -51,7 +51,7 @@ EXPECT = {
     "07-menu-tab": "Close Others",
     "08-open-file": "Search files",
     "09-commands": "Open Settings",
-    "09-commands-scrolled": "Blame Line",
+    "09-commands-scrolled": "Close Side Pane",
     "10-branches": "Switch branch",
     "100-workspaces": "Resume",
     "101-workspace-hover": "Resume",

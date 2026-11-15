@@ -5038,5 +5038,12 @@
     "title": "Quick Open lists the files last looked at first, the one before this at the top, so Ctrl+P and Enter goes back to it; the folder's other files follow, each once",
     "test": "quick_open_lists_the_files_last_looked_at_first",
     "passes": true
+  },
+  {
+    "id": "palette-recent-commands",
+    "milestone": 14,
+    "title": "The command palette lists the commands last run from it first, the last at the top so Enter runs it again, and every other command by name; the recent ones are kept between runs",
+    "test": "the_command_palette_lists_what_was_last_run_first_and_the_rest_by_name",
+    "passes": true
   }
 ]

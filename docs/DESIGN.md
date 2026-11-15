@@ -522,6 +522,12 @@ back and forth between two files, as it is in VS Code. The walk leaves those fil
 it lists after, so each is there once. Typed, the groups go and the ranking is the match's, with
 a recent file ahead of another that matches as well, being earlier in the list.
 
+The command palette does the same with commands: the six last run from it under RECENTLY USED,
+the last at the top, and every other command under OTHER COMMANDS by name, as VS Code has them.
+Only a command picked in the palette counts, since one with keys that are used never needs
+the list. They're kept in the folder's `state.json` with the tabs. With none run yet the list is
+every command by name, with no groups.
+
 Quick Open reads a path the way it's copied, since the file a person wants is most often one
 an agent or a compiler has just named. What's pasted is cleaned of what it was copied with
 (`palette::pasted_path`: quotes, backticks, brackets, a `file://`, an agent's `@`, a full stop, a
