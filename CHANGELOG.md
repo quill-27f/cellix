@@ -7,12 +7,14 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 ### Added
 - Paste a path into Quick Open (Ctrl+P) and Enter goes there. It's read the way it was copied: with a line after it (`src/app.rs:120`, `src/app.rs:120:8`, `app.rs#L120`, `app.rs(120,8)`), from the top of the disk or from `~`, between quotes, backticks or brackets, as a `file://` link, as an agent's `@src/app.rs`, as a diff's `b/src/app.rs`, with the rest of a compiler's or a search's line after it, or in the middle of a sentence. A file the path names is the first row even when the list wouldn't have it: one `.gitignore` leaves out, one outside the folder, or one the walk of a big folder hasn't reached yet. Typing a place works the same, so `app:120` opens the file you'd have picked at line 120, and `:120` alone goes to that line of the file in view.
 - Ctrl+V pastes into Quick Open, the command palette, a prompt and the Find bar. It did nothing there.
+- What you type in Quick Open or the command palette is edited like any text: Left, Right, Home and End move the caret, Option or Ctrl with them moves by word, Delete and Option+Backspace work, and a click puts the caret at the letter clicked. Only letters and Backspace did anything before, at the end. A query longer than the box shows the part the caret is in.
 - Ctrl+P opens Quick Open while the keyboard is in the side pane's agent or terminal, as Ctrl+Shift+P opens the commands from there. It went to the program in the pane. Pick a file and the keyboard goes to it.
 
 ### Changed
 - Quick Open (Ctrl+P), the command palette (Ctrl+Shift+P) and every list like them have a box around what you type, as the Find bar has. The words stood nearer the panel's top than the line under them. The box is in the middle of its space now: the air above it, between it and the list, and under the last row is the same. The picked row's band is the one menus have, and a list with nothing in it says "No matches" in place of closing up.
 
 ### Fixed
+- A click on a palette's own field, or on a group's name in its list, closed the palette. Only a click outside it does.
 - A list in Quick Open, the command palette or Go to Symbol showed its first twelve rows and never moved: the arrows could pick a row past them that wasn't on screen, and the wheel did nothing. The list follows the picked row, Page Up and Page Down move a screen of it, the wheel scrolls it, and a thumb at its edge shows there's more and where you are in it.
 - A paste while Quick Open or a prompt was open went into the commit message or the comment being written under it, when one of those had the keyboard before. The list or box on top takes it.
 - A long path in Quick Open was cut at its end, where the file's name is. It loses its middle.

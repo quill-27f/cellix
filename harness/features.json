@@ -5017,5 +5017,12 @@
     "title": "A palette's list scrolls: it follows the picked row past the twelfth, Page Up and Page Down move a screen of it, the wheel moves it and leaves the pick, and a thumb at its edge shows where it is",
     "test": "a_palettes_list_scrolls_to_the_picked_row_and_with_the_wheel",
     "passes": true
+  },
+  {
+    "id": "palette-field-edits",
+    "milestone": 14,
+    "title": "A palette's field is edited like any text box: the caret moves by letter and by word, Home and End and the deletes work, a paste goes in at the caret, a press puts the caret at the letter pressed, and a press in the panel that isn't on a row leaves it open",
+    "test": "a_palettes_field_is_edited_like_any_text_box_and_a_press_inside_keeps_it_open",
+    "passes": true
   }
 ]

@@ -496,7 +496,10 @@ and Page Down move a screen less a row, and the wheel moves it two rows a notch 
 pointer is, leaving the pick where it was. A thumb in the gutter between the band and the
 panel's edge shows how much there is and how far down this is; in cells it's half blocks in the
 panel's last column. Rows that arrive while a big folder is still being walked don't move what's
-being looked at.
+being looked at. The field is a text box like the others: `field::key`, which a comment's box
+uses, moves its caret and deletes by letter and by word, a press puts the caret at the nearer
+edge of the letter pressed, and a query longer than the box shows the part the caret is in. A
+press anywhere in the panel that isn't on a row to pick leaves it open.
 
 Quick Open reads a path the way it's copied, since the file a person wants is most often one
 an agent or a compiler has just named. What's pasted is cleaned of what it was copied with

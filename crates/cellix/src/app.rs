@@ -4136,7 +4136,7 @@ impl App {
             let line = text.lines().map(str::trim).find(|line| !line.is_empty());
             line.unwrap_or("").to_string()
         };
-        palette.query.push_str(&pasted);
+        palette.insert(&pasted);
         self.palette_typed(palette);
     }
 
@@ -5822,15 +5822,12 @@ impl App {
                     self.overlay = Overlay::Palette(palette);
                     self.preview_symbol();
                 }
-                Key::Backspace => {
-                    palette.query.pop();
-                    self.palette_typed(palette);
-                }
-                Key::Char(c) if !key.mods.ctrl && !key.mods.alt => {
-                    palette.query.push(c);
-                    self.palette_typed(palette);
-                }
-                _ => self.overlay = Overlay::Palette(palette),
+                // The field is a text box like any other: letters go in at the caret, and
+                // the arrows, Home, End and the deletes do what they do everywhere.
+                _ => match palette.key(key) {
+                    true => self.palette_typed(palette),
+                    false => self.overlay = Overlay::Palette(palette),
+                },
             },
             Overlay::Prompt(mut prompt) => match key.key {
                 Key::Esc => {}
@@ -8912,7 +8909,7 @@ impl App {
         let mut picker = crate::folders::Picker::new(root, self.home.clone(), running);
         let items = picker.items_for("").unwrap_or_default();
         let mut palette = Palette::asking(items, "Folder to open, or a path · Tab goes into it");
-        palette.folders = Some(picker);
+        palette.folders = Some(Box::new(picker));
         self.overlay = Overlay::Palette(palette);
     }
 
@@ -12833,11 +12830,25 @@ impl App {
             }
             Overlay::Palette(mut palette) => {
                 let at = (mouse.x, mouse.fine_y);
-                if let Some(row) = palette.row_at(screen, at, &*self.measure) {
-                    palette.selected = row;
-                    self.pick_at(palette.current().cloned(), palette.place);
-                } else {
-                    self.restore_symbol_origin();
+                let row = palette.row_at(screen, at, &*self.measure);
+                let was = palette.selected;
+                palette.selected = row.unwrap_or(was);
+                match row {
+                    // A rule or a group's name isn't something to pick.
+                    Some(_) if palette.current().is_some_and(Item::divider) => {
+                        palette.selected = was;
+                        self.overlay = Overlay::Palette(palette);
+                    }
+                    Some(_) => self.pick_at(palette.current().cloned(), palette.place),
+                    // A press in the panel that isn't on a row leaves it open, and in the
+                    // field puts the caret there.
+                    None if palette.shown(screen).contains(mouse.x, mouse.y) => {
+                        if mouse.y == Palette::area(screen).y {
+                            palette.press_field(screen, mouse.fine_x, &*self.measure);
+                        }
+                        self.overlay = Overlay::Palette(palette);
+                    }
+                    None => self.restore_symbol_origin(),
                 }
             }
             Overlay::Menu(mut menu) => {
@@ -17609,7 +17620,11 @@ mod tests {
         app.run(Command::CommandPalette);
         typed(&mut app, "sidebar");
         press(&mut app, x + 1, f32::from(y) + 0.9);
-        assert!(matches!(app.overlay, Overlay::None), "a press off the list");
+        assert!(
+            matches!(app.overlay, Overlay::Palette(_)),
+            "a press in the panel and off the list leaves it open"
+        );
+        key(&mut app, Key::Esc);
         assert!(
             !screen(&app).text().contains("alpha.txt"),
             "the foot of its cells is under its band, and isn't the row"
@@ -17935,6 +17950,107 @@ mod tests {
         let (thumb, band) = (bar(scrollbar).expect("a thumb"), bar(pick).expect("a band"));
         assert!(thumb.x > band.x + band.w, "{thumb:?} {band:?}");
         assert!(thumb.h < band.h * 12 && thumb.h >= band.h);
+    }
+
+    /// The field took letters and Backspace and nothing else, and a press on it closed the
+    /// palette.
+    #[test]
+    fn a_palettes_field_is_edited_like_any_text_box_and_a_press_inside_keeps_it_open() {
+        let (_dir, mut app) = project();
+        let query = |app: &App| match &app.overlay {
+            Overlay::Palette(palette) => palette.query.clone(),
+            _ => panic!("the palette closed"),
+        };
+        let with = |app: &mut App, key: Key, mods: Mods| {
+            app.handle(Event::Key(KeyEvent { key, mods }));
+        };
+        let alt = Mods {
+            alt: true,
+            ..Mods::default()
+        };
+        app.run(Command::CommandPalette);
+        // A wrong letter is put right where it stands, and the list follows.
+        typed(&mut app, "sidebqr");
+        assert!(!screen(&app).text().contains("Toggle Sidebar"));
+        key(&mut app, Key::Left);
+        key(&mut app, Key::Backspace);
+        typed(&mut app, "a");
+        assert_eq!(query(&app), "sidebar");
+        let grid = screen(&app);
+        assert!(grid.text().contains("Toggle Sidebar"));
+        let (x, y) = find(&grid, "sidebar");
+        assert_eq!(grid.cursor, Some((x + 6, y)), "the caret is before the r");
+        // Home, End and both deletes.
+        key(&mut app, Key::Home);
+        key(&mut app, Key::Delete);
+        assert_eq!(query(&app), "idebar");
+        key(&mut app, Key::End);
+        key(&mut app, Key::Backspace);
+        assert_eq!(query(&app), "ideba");
+        // By word, as Option+Left and Option+Backspace go.
+        with(&mut app, Key::Backspace, alt);
+        assert_eq!(query(&app), "");
+        typed(&mut app, "go to line");
+        with(&mut app, Key::Left, alt);
+        typed(&mut app, "a ");
+        assert_eq!(query(&app), "go to a line");
+        with(&mut app, Key::Backspace, alt);
+        with(&mut app, Key::Backspace, alt);
+        assert_eq!(query(&app), "go line");
+        // What's pasted goes in at the caret too, without the line break it came with.
+        app.handle(Event::Paste("to\n".into()));
+        typed(&mut app, " ");
+        assert_eq!(query(&app), "go to line");
+        assert!(screen(&app).text().contains("Go to Line"));
+
+        // A press on the field puts the caret at the letter pressed, and the palette stays.
+        let (x, y) = find(&screen(&app), "go to line");
+        app.handle(mouse(MouseKind::Left, x + 3, y));
+        typed(&mut app, "in");
+        assert_eq!(query(&app), "go into line");
+        // Past the words is their end, and before them their start.
+        app.handle(mouse(MouseKind::Left, x + 40, y));
+        typed(&mut app, "s");
+        app.handle(mouse(MouseKind::Left, x - 2, y));
+        typed(&mut app, "> ");
+        assert_eq!(query(&app), "> go into lines");
+        // A press on the air under the field leaves it open too, and one outside closes it.
+        app.handle(mouse(MouseKind::Left, x, y + 1));
+        assert!(matches!(app.overlay, Overlay::Palette(_)));
+        app.handle(mouse(MouseKind::Left, 2, y));
+        assert!(matches!(app.overlay, Overlay::None));
+
+        // A group's name is not a row to pick: a press on it leaves the list as it was.
+        fs::write(
+            app.workspace.root().join("Makefile"),
+            "build:\n\ttrue\n\ntest:\n\ttrue\n",
+        )
+        .unwrap();
+        app.run(Command::RunTask);
+        let grid = screen(&app);
+        let (x, y) = find(&grid, "MAKE");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        assert!(matches!(app.overlay, Overlay::Palette(_)), "still open");
+        key(&mut app, Key::Esc);
+
+        // A query longer than the field keeps its caret in the box and shows its end.
+        app.run(Command::QuickOpen);
+        let long = "a/very/long/path/".repeat(6) + "the_end.rs";
+        app.handle(Event::Paste(long.clone()));
+        let grid = screen(&app);
+        let (_, y) = find(&grid, "⌕");
+        let row = grid.row_text(y);
+        assert!(row.contains("the_end.rs") && !row.contains(&long), "{row}");
+        let area = Palette::area(grid.area());
+        let (caret, _) = grid.cursor.expect("a caret");
+        assert!(
+            caret < area.right() - 1 && caret > area.x,
+            "{caret} in {area:?}"
+        );
+        // And goes back to its start when the caret does.
+        key(&mut app, Key::Home);
+        let row = screen(&app).row_text(y);
+        assert!(row.contains("⌕ a/very/long"), "{row}");
     }
 
     #[test]

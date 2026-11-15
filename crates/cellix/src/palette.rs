@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::rc::Rc;
 
-use cellix_input::{Command, Format};
+use cellix_input::{Command, Format, KeyEvent};
 use cellix_render::{Bounds, Font, Grid, Icon, Measure, Rect, Rgb, Style};
 
 use crate::theme::Theme;
@@ -376,6 +377,9 @@ pub const COMMANDS: [(&str, Command); 122] = [
 /// Quick open and the command palette: a filtered list with a text box.
 pub struct Palette {
     pub query: String,
+    /// How much of what's typed stands after the caret, in bytes. It's counted from the end,
+    /// so whatever sets or adds to the words leaves the caret after them.
+    back: usize,
     /// What the empty field says.
     hint: &'static str,
     items: Vec<Item>,
@@ -390,8 +394,9 @@ pub struct Palette {
     top: usize,
     /// What's still happening, as "8,310 files…", shown at the right of the field.
     pub status: Option<String>,
-    /// Set when the palette finds a folder, which lists again as a path is typed.
-    pub folders: Option<crate::folders::Picker>,
+    /// Set when the palette finds a folder, which lists again as a path is typed. Kept
+    /// apart, as the keys are: every other palette carries nothing for it.
+    pub folders: Option<Box<crate::folders::Picker>>,
     /// What starts the query and isn't part of the search: Quick Open's `@` for this file's
     /// symbols and `#` for the workspace's.
     pub prefix: Option<char>,
@@ -652,6 +657,7 @@ impl Palette {
     pub fn new(items: Vec<Item>) -> Self {
         let mut palette = Self {
             query: String::new(),
+            back: 0,
             hint: "Type to search",
             items,
             matches: Vec::new(),
@@ -672,6 +678,80 @@ impl Palette {
         };
         palette.filter();
         palette
+    }
+
+    /// Where the caret is in what's typed, in bytes.
+    pub fn caret(&self) -> usize {
+        let mut at = self.query.len().saturating_sub(self.back);
+        while !self.query.is_char_boundary(at) {
+            at -= 1;
+        }
+        at
+    }
+
+    /// Takes a key that edits what's typed or moves the caret in it, as any text box does:
+    /// the arrows, Home and End, by word with Alt or Ctrl, Delete, and the deletes a Mac or
+    /// a shell has taught. Returns whether the words changed.
+    pub fn key(&mut self, key: KeyEvent) -> bool {
+        let was = self.query.clone();
+        let mut caret = self.caret();
+        crate::field::key(&mut self.query, &mut caret, key);
+        self.back = self.query.len().saturating_sub(caret);
+        self.query != was
+    }
+
+    /// Puts text in at the caret, which ends up after it.
+    pub fn insert(&mut self, text: &str) {
+        let at = self.caret();
+        self.query.insert_str(at, text);
+    }
+
+    /// Where what's typed starts in the field, how wide each of its letters is, and how
+    /// many of them are out of sight before the field's start: a query longer than the
+    /// field shows the part the caret is in.
+    fn typed_window(&self, area: Rect, measure: &dyn Measure) -> (f32, Rc<Vec<f32>>, usize) {
+        let font = Font {
+            size: INTERFACE_SIZE_PERCENT,
+            ..Font::default()
+        };
+        // Clear of the icon, where a row's words start after its own.
+        let x = area.x as f32 + TEXT_INSET + 2.3;
+        let room = f32::from(area.right().saturating_sub(2)) - x - 0.5;
+        let advances = measure.advances(&self.query, font);
+        let before = self.query[..self.caret()]
+            .chars()
+            .count()
+            .min(advances.len());
+        let mut hidden = 0;
+        while advances[hidden..before].iter().sum::<f32>() > room {
+            hidden += 1;
+        }
+        (x, advances, hidden)
+    }
+
+    /// Puts the caret where the field was pressed, `x` with its fraction of a column: at the
+    /// nearer edge of the letter there.
+    pub fn press_field(&mut self, screen: Rect, x: f32, measure: &dyn Measure) {
+        let area = Self::area(screen);
+        let (painted, advances, hidden) = self.typed_window(area, measure);
+        // In cells the words start on a cell, a little before where they're painted.
+        let start = if measure.in_cells() {
+            f32::from(area.x + 4)
+        } else {
+            painted
+        };
+        let mut edge = start;
+        let mut letters = hidden;
+        for advance in advances.iter().skip(hidden) {
+            if x < edge + advance / 2.0 {
+                break;
+            }
+            edge += advance;
+            letters += 1;
+        }
+        let at = self.query.char_indices().nth(letters);
+        let at = at.map_or(self.query.len(), |(at, _)| at);
+        self.back = self.query.len() - at;
     }
 
     /// Takes what Quick Open is asked for, to list by at the next `filter`.
@@ -1208,16 +1288,20 @@ impl Palette {
             "⌕",
             base,
         );
-        // Clear of the icon. The hint waits a little past the caret, so they don't touch.
-        let x = area.x as f32 + TEXT_INSET + 2.3;
+        // The hint waits a little past the caret, so they don't touch.
+        let (x, advances, hidden) = self.typed_window(area, measure);
         let cell = area.x + 4;
-        let font = Font {
-            size: INTERFACE_SIZE_PERCENT,
-            ..Font::default()
-        };
         // A column inside the box's far edge, as the icon is inside its near one.
         let right = area.right().saturating_sub(2);
-        let caret = x - 0.1 + measure.width(&self.query, font);
+        let from = self.query.char_indices().nth(hidden);
+        let shown = &self.query[from.map_or(self.query.len(), |(from, _)| from)..];
+        let before = self.query[..self.caret()]
+            .chars()
+            .count()
+            .min(advances.len());
+        let wide = |letters: &[f32]| letters.iter().sum::<f32>();
+        let caret = x - 0.1 + wide(&advances[hidden..before]);
+        let end_of_words = x + wide(&advances[hidden..]);
         // The status keeps clear of what's typed, and gives way to it when both don't fit:
         // the query is what the person is working on.
         let status = self.status.as_deref().map(|text| {
@@ -1230,12 +1314,12 @@ impl Palette {
             );
             (text, right as f32 - width)
         });
-        let status = status.filter(|(_, left)| caret + STATUS_GAP <= *left);
+        let status = status.filter(|(_, left)| end_of_words + STATUS_GAP <= *left);
         let end = status.map_or(right, |(_, left)| (left - STATUS_GAP / 2.0) as u16);
         if self.query.is_empty() {
             grid.label_at(x + HINT_GAP, cell, y, self.hint, dim, end, 100);
         } else {
-            grid.label_at(x, cell, y, &self.query, base, end, 100);
+            grid.label_at(x, cell, y, shown, base, end, 100);
         }
         if let Some((text, _)) = status {
             grid.label_right(right, y, text, dim, 85);
