@@ -5052,5 +5052,12 @@
     "title": "After the design review: what's typed in a palette stands over its rows' words, with the search icon only where rows have icons; the hint starts where typing does and the caret stands clear of the last letter; what's quiet on the picked row stays quieter than its words; the box is nine tenths of its row and a step down from a white panel",
     "test": "a_palettes_field_stands_over_its_rows_and_what_is_quiet_stays_quiet_when_picked",
     "passes": true
+  },
+  {
+    "id": "quick-open-commands",
+    "milestone": 14,
+    "title": "A > typed first in Quick Open lists the commands, the palette's own list, and taking it away lists the files again",
+    "test": "a_greater_than_sign_in_quick_open_lists_commands_and_deleting_it_lists_files",
+    "passes": true
   }
 ]

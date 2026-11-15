@@ -185,7 +185,8 @@ Ctrl+P finds a file by letters of its name or path, and takes a path as you'd co
 an agent's chat or a compiler: paste `src/app.rs:120`, a whole path from the top of the disk, a
 `file://` link or a line of an error, and Enter opens the file at that line. A file a path names
 is listed even when `.gitignore` leaves it out of the list or it's outside the folder. `:120`
-goes to a line of the file in view, `@` lists its symbols and `#` the project's. Before you
+goes to a line of the file in view, `@` lists its symbols, `#` the project's and `>` the
+commands. Before you
 type, the files you last looked at are at the top, so Ctrl+P and Enter goes back to the one
 before this. Ctrl+Shift+P lists every command by name, with the ones you last ran from it first.
 Both lists scroll with the arrows, Page Up and Page Down and the wheel, their field takes the

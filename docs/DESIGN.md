@@ -534,7 +534,9 @@ The command palette does the same with commands: the six last run from it under 
 the last at the top, and every other command under OTHER COMMANDS by name, as VS Code has them.
 Only a command picked in the palette counts, since one with keys that are used never needs
 the list. They're kept in the folder's `state.json` with the tabs. With none run yet the list is
-every command by name, with no groups.
+every command by name, with no groups. `>` typed first in Quick Open is the same list, the
+sign staying in the field as `@` and `#` do for symbols, and taking it away lists the files
+again.
 
 Quick Open reads a path the way it's copied, since the file a person wants is most often one
 an agent or a compiler has just named. What's pasted is cleaned of what it was copied with

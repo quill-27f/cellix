@@ -6934,7 +6934,16 @@ impl App {
 
     /// Follows what's typed in a palette. In Quick Open an `@` at the start lists the file's
     /// symbols, and taking it away lists files again.
-    fn palette_typed(&mut self, mut palette: Palette) {
+    fn palette_typed(&mut self, palette: Palette) {
+        // The caret stays where it was in what's typed, whichever list that turns this to.
+        let after_caret = palette.after_caret();
+        self.list_for_typed(palette);
+        if let Overlay::Palette(now) = &mut self.overlay {
+            now.set_after_caret(after_caret);
+        }
+    }
+
+    fn list_for_typed(&mut self, mut palette: Palette) {
         match palette.prefix {
             Some(prefix) if !palette.query.starts_with(prefix) => {
                 self.restore_symbol_origin();
@@ -6967,6 +6976,18 @@ impl App {
             None if palette.quick && palette.query.starts_with('#') => {
                 let typed = palette.query['#'.len_utf8()..].to_string();
                 self.workspace_symbol(&typed);
+            }
+            // `>` lists the commands, as it does in VS Code, and taking it away lists the
+            // files again.
+            None if palette.quick && palette.query.starts_with('>') => {
+                let typed = palette.query.clone();
+                self.command_palette();
+                if let Overlay::Palette(commands) = &mut self.overlay {
+                    commands.prefix = Some('>');
+                    commands.quick = true;
+                    commands.query = typed;
+                    commands.filter();
+                }
             }
             None => {
                 if palette.quick {
@@ -18492,6 +18513,71 @@ mod tests {
         });
         assert_eq!(app.theme.input, app.theme.popup, "both white");
         assert!(fill.is_some_and(|fill| fill != app.theme.popup), "{fill:?}");
+    }
+
+    /// `@` and `#` turned Quick Open to symbols, and `>`, which VS Code's users type for
+    /// the commands, looked for a file with a `>` in its name.
+    #[test]
+    fn a_greater_than_sign_in_quick_open_lists_commands_and_deleting_it_lists_files() {
+        let (_dir, mut app) = project();
+        // What the panel shows, without what's behind it.
+        let panel = |app: &App| -> String {
+            let grid = screen(app);
+            let Overlay::Palette(palette) = &app.overlay else {
+                panic!("Quick Open isn't open");
+            };
+            let area = palette.shown(grid.area());
+            let row = |y: u16| -> String {
+                let cells = (area.x..area.right()).map(|x| grid.cell(x, y));
+                cells.map(|cell| cell.symbol.as_str()).collect()
+            };
+            let rows: Vec<String> = (area.y..area.bottom()).map(row).collect();
+            rows.join("\n")
+        };
+        app.run(Command::QuickOpen);
+        assert!(panel(&app).contains("alpha.txt"));
+        typed(&mut app, ">");
+        let shown = panel(&app);
+        assert!(
+            shown.contains("Abort Merge") && !shown.contains("alpha.txt"),
+            "{shown}"
+        );
+        // What follows it finds a command, and Enter runs it.
+        typed(&mut app, "sidebar");
+        let shown = panel(&app);
+        assert!(
+            shown.contains(">sidebar") && shown.contains("Toggle Sidebar"),
+            "{shown}"
+        );
+        enter(&mut app);
+        assert!(
+            !screen(&app).text().contains("alpha.txt"),
+            "the sidebar is hidden"
+        );
+        // It's the palette's own list, with what was last run at its top.
+        app.run(Command::QuickOpen);
+        typed(&mut app, ">");
+        let shown = panel(&app);
+        assert!(
+            shown.contains(RECENTLY_USED) && shown.contains("Toggle Sidebar"),
+            "{shown}"
+        );
+        // Taking the sign away lists the files again, and what's typed looks among them.
+        key(&mut app, Key::Backspace);
+        let shown = panel(&app);
+        assert!(
+            shown.contains("Search files,") && shown.contains("alpha.txt"),
+            "{shown}"
+        );
+        typed(&mut app, ">x");
+        key(&mut app, Key::Home);
+        key(&mut app, Key::Delete);
+        typed(&mut app, "be");
+        let shown = panel(&app);
+        assert!(
+            shown.contains("bex") && !shown.contains("Abort Merge"),
+            "{shown}"
+        );
     }
 
     #[test]

@@ -747,6 +747,17 @@ impl Palette {
         at
     }
 
+    /// How much of what's typed stands after the caret, to hand to the list that takes
+    /// this one's place when what's typed turns Quick Open to symbols, commands or files.
+    pub fn after_caret(&self) -> usize {
+        self.back
+    }
+
+    /// Puts the caret that far from the end of what's typed.
+    pub fn set_after_caret(&mut self, back: usize) {
+        self.back = back.min(self.query.len());
+    }
+
     /// Takes a key that edits what's typed or moves the caret in it, as any text box does:
     /// the arrows, Home and End, by word with Alt or Ctrl, Delete, and the deletes a Mac or
     /// a shell has taught. Returns whether the words changed.
