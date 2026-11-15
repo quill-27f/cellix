@@ -210,12 +210,14 @@ impl Item {
         match self {
             // In its name by choice: the letters of "op" are in Workspace too, and
             // found there first they'd put Open Folder under every other Open. Then its
-            // category typed first, and last the letters anywhere in its title.
+            // category typed first, and last the letters anywhere in its title. A long
+            // name loses nothing by its length, as a long path does: commands that match
+            // alike stay in the list's order, which keeps a category's together.
             Self::Command(..) => {
                 let name = bare(label);
                 let category = &label[..label.len() - name.len()];
-                let whole = fuzzy_score_from(typed, label, category.len());
-                let named = fuzzy_score(typed, name);
+                let whole = matched(typed, label, category.len());
+                let named = matched(typed, name, 0);
                 named.max(whole).max(in_category(typed, category, name))
             }
             _ => fuzzy_score(typed, label),
@@ -725,6 +727,13 @@ pub fn fuzzy_score(query: &str, text: &str) -> Option<i32> {
 /// `fuzzy_score` with the name starting at byte `name_start` of `text`: after a path's last
 /// folder, or after a command's category.
 fn fuzzy_score_from(query: &str, text: &str, name_start: usize) -> Option<i32> {
+    // A point off for every sixteen letters: of two files that match alike, the one with
+    // less around the match is the nearer.
+    matched(query, text, name_start).map(|score| score - text.len() as i32 / 16)
+}
+
+/// How well `text` holds `query`, whatever its length.
+fn matched(query: &str, text: &str, name_start: usize) -> Option<i32> {
     let mut score = 0;
     // Where the last match ended, to see a run.
     let mut last = None;
@@ -752,7 +761,7 @@ fn fuzzy_score_from(query: &str, text: &str, name_start: usize) -> Option<i32> {
             score += 3;
         }
     }
-    Some(score - text.len() as i32 / 16)
+    Some(score)
 }
 
 /// A command's score for its category typed before a space: "git st" is Git's commands with
@@ -769,7 +778,7 @@ fn in_category(typed: &str, category: &str, name: &str) -> Option<i32> {
         return Some(100);
     }
     let run = 5 * head.chars().count() as i32 + 6;
-    fuzzy_score(rest, name).map(|score| score + run)
+    matched(rest, name, 0).map(|score| score + run)
 }
 
 /// Whether a word starts at byte `at` of `text`: at its beginning, after anything that
@@ -2319,6 +2328,46 @@ mod tests {
         let pop = names.iter().position(|l| l.starts_with("Pop Stash"));
         assert!(pop.is_some_and(|pop| last_open < pop), "{labels:?}");
         assert_eq!(names.iter().filter(|l| l.starts_with("Open")).count(), 8);
+    }
+
+    /// "op" listed Open Codex, Open Gemini CLI, Open in Browser, Open Recent and Open
+    /// Settings, and then Open Agent Transcript and Open Claude Code: a name of sixteen
+    /// letters lost a point, which split a category in two for a reason nobody could see.
+    #[test]
+    fn commands_that_match_alike_stay_in_the_lists_order() {
+        // As the palette lists them: by title.
+        let mut listed: Vec<&(&str, Command)> = COMMANDS.iter().collect();
+        listed.sort_by_key(|(title, _)| title.to_lowercase());
+        let items = listed
+            .iter()
+            .map(|(title, command)| Item::Command(title, *command))
+            .collect();
+        let mut palette = Palette::new(items);
+        for (query, begins, count) in [
+            ("op", "Open", 8),
+            ("stash", "Stash", 3),
+            ("go to", "Go to", 5),
+        ] {
+            palette.query = query.to_string();
+            palette.filter();
+            let titles: Vec<&str> = palette
+                .matches
+                .iter()
+                .map(|index| palette.items[*index].label())
+                .collect();
+            // The ones whose names begin with it lead, and among themselves keep the
+            // list's order, a category's together.
+            let leading = &titles[..count];
+            assert!(
+                leading.iter().all(|title| bare(title).starts_with(begins)),
+                "{titles:?}"
+            );
+            let mut sorted = leading.to_vec();
+            sorted.sort_by_key(|title| title.to_lowercase());
+            assert_eq!(leading, &sorted[..], "{query}");
+        }
+        // A file still loses a point for the length of its path.
+        assert!(fuzzy_score("app", "app.rs") > fuzzy_score("app", "application_settings.rs"));
         // A later word that starts with it counts too: "stash" finds Pop Stash before a
         // command with those letters scattered through it.
         assert!(fuzzy_score("stash", "Pop Stash…") > fuzzy_score("stash", "Stage All and Push"));

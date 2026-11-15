@@ -18510,8 +18510,8 @@ mod tests {
         // any, and comes before a command that only holds the letters.
         for (query, first) in [
             ("save", "File: Save"),
-            ("toggle side", "View: Toggle Sidebar"),
-            ("op", "Agent: Open Codex"),
+            ("toggle sideb", "View: Toggle Sidebar"),
+            ("op", "Agent: Open Claude Code"),
             ("stash", "Git: Stash Changes"),
             // A category first, then what's wanted in it: not Show Git History, whose
             // name holds every letter.

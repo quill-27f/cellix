@@ -543,7 +543,8 @@ them the same way. What's typed is looked for in the name first and scored as it
 there were categories, so the letters a category happens to share don't rank a command. A
 category typed before a space narrows to it: `git st` is Git's commands with "st" in their
 names and `git ` is all of them, in the list's order. Failing both, the letters anywhere in the
-title. The name alone is what settings and a folder's state
+title. A command loses nothing for a long name, as a file does for a long path, so commands
+that match alike stay in the list's order and a category's stay together. The name alone is what settings and a folder's state
 knew a command by, and still means it (`palette::goes_by`); keys set on the Keyboard page are
 written under the title and the old entry goes. The list holds the commands that have something to act on now (`App::can_run`, in
 `app/available.rs`), as VS Code's does by its `when` clauses: each is the test the command's own

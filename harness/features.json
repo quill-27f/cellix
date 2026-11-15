@@ -5087,5 +5087,12 @@
     "title": "While a name or a path is typed in the folder finder, the end of its field says what the keys do with the folder picked: Tab goes into it, Enter opens it",
     "test": "the_folder_finder_says_what_tab_and_enter_do_while_a_name_is_typed",
     "passes": true
+  },
+  {
+    "id": "palette-ties-in-order",
+    "milestone": 14,
+    "title": "Commands that match what's typed equally well stay in the palette's order, so a category's stay together; a long name no longer drops below shorter ones",
+    "test": "commands_that_match_alike_stay_in_the_lists_order",
+    "passes": true
   }
 ]
