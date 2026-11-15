@@ -2,6 +2,14 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
+## [Unreleased]
+
+### Changed
+- Quick Open (Ctrl+P), the command palette (Ctrl+Shift+P) and every list like them have a box around what you type, as the Find bar has. The words stood nearer the panel's top than the line under them. The box is in the middle of its space now: the air above it, between it and the list, and under the last row is the same. The picked row's band is the one menus have, and a list with nothing in it says "No matches" in place of closing up.
+
+### Fixed
+- On a terminal without pictures the picked row of Quick Open or the command palette looked like every other row. It has the picked colour behind it there too.
+
 ## [0.7.1] - 2026-11-14
 
 ### Changed

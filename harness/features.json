@@ -4989,5 +4989,12 @@
     "title": "The order and the resolved comments each have a button with a chevron, and the resolved ones unfold under theirs, which stays where it is",
     "test": "the_resolved_comments_unfold_under_their_button_which_stays_where_it_is",
     "passes": true
+  },
+  {
+    "id": "palette-field-box",
+    "milestone": 14,
+    "title": "A palette's field is a box, and the air above it, between it and the list, and under the list is one measure; the picked row shows on the cell tier, and a list with nothing in it says so",
+    "test": "a_palettes_field_and_list_keep_the_same_air_above_between_and_below",
+    "passes": true
   }
 ]

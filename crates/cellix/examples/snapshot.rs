@@ -14,6 +14,8 @@
 //! Claude Code. `CELLIX_HOVER=<column>,<row>` rests the pointer there before the picture.
 //! `draft:<file>:<words>` opens a file and types a comment on it without sending it, and
 //! `emoji:<file>:<name>` then opens the list of every emoji and types a name to look for.
+//! `quick:<typed>` is Quick Open and `palette:<typed>` the command palette with that typed,
+//! and `CELLIX_DOWN=<n>` then presses Down that many times.
 
 use std::fs::File;
 use std::io::BufWriter;
@@ -102,6 +104,24 @@ fn main() {
         Some("review") => app.run(Command::OpenDiff),
         Some("welcome") => {}
         Some("palette") => app.run(Command::CommandPalette),
+        // The command palette or Quick Open with something typed, the walk of the folder done.
+        Some(view) if view.starts_with("palette:") || view.starts_with("quick:") => {
+            let (kind, typed) = view.split_once(':').expect("<kind>:<typed>");
+            if kind == "quick" {
+                app.run(Command::QuickOpen);
+                std::thread::sleep(std::time::Duration::from_millis(600));
+                app.poll();
+            } else {
+                app.run(Command::CommandPalette);
+            }
+            type_text(&mut app, typed);
+            let down = std::env::var("CELLIX_DOWN")
+                .ok()
+                .and_then(|n| n.parse().ok());
+            for _ in 0..down.unwrap_or(0) {
+                app.handle(Event::Key(KeyEvent::plain(Key::Down)));
+            }
+        }
         // The Comments pane with no file in view, where it lists every file's.
         Some("comments") => app.run(Command::ShowComments),
         // Quick Open a moment after it opens, while a big tree is still being walked.

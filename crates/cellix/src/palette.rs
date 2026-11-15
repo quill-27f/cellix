@@ -17,10 +17,27 @@ const TEXT_INSET: f32 = 2.0;
 /// never cuts through the text rows above and below it. A row's own air keeps its text off
 /// the edge.
 const PANEL_PADDING: f32 = 0.0;
-/// Rows above the list: the search field, and a row holding the line under it.
+/// Rows above the list: the field's, and one of air, shared out above the field, between it
+/// and the list, and under the list.
 const HEADER_ROWS: u16 = 2;
-/// Where that line falls, as far below the field's text as the panel's edge is above it.
-const HEADER_LINE: f32 = 1.3;
+/// How far the field's box stands inside its row, above and below, as every text box does.
+const BOX_AIR: f32 = 0.11;
+/// The band behind the picked row, as a menu's is: 26 px of a 32 px row, and a column in
+/// from each side, where the field's box stands too.
+const BAND_HEIGHT: f32 = 26.0 / 32.0;
+const BAND_INSET: f32 = 1.0;
+const BAND_AIR: f32 = (1.0 - BAND_HEIGHT) / 2.0;
+/// The air above the field's box, between the box and the first row's band, and under the
+/// last row's band: the header's spare row and what the box and the bands leave of their
+/// own rows, in three equal parts. The panel still starts and ends on a row line.
+const AIR: f32 = (1.0 + 2.0 * BOX_AIR + 2.0 * BAND_AIR) / 3.0;
+/// How far down its row the field is painted, and how far up theirs the rows of the list
+/// are, to stand that far apart. Only paint can show it: in cells the field has the first
+/// row, the list starts on the third, and the row between them is the air.
+const FIELD_DROP: f32 = AIR - BOX_AIR;
+const LIST_LIFT: f32 = AIR - BAND_AIR;
+/// How tall the caret is, in rows.
+const CARET: f32 = 0.56;
 /// Air between what's typed and the status at the field's right end, in cells.
 const STATUS_GAP: f32 = 1.5;
 /// Space between the caret and the hint in an empty field.
@@ -726,34 +743,106 @@ impl Palette {
         )
     }
 
-    pub fn row_at(&self, screen: Rect, y: u16) -> Option<usize> {
-        let row = y.checked_sub(Self::area(screen).y + HEADER_ROWS)? as usize;
-        (row < self.matches.len().min(ROWS as usize)).then_some(row)
+    /// How many rows of the list are drawn: at least one, which says so when there's
+    /// nothing to list, so the field never moves as the list empties and fills.
+    fn rows(&self) -> u16 {
+        self.matches.len().clamp(1, ROWS as usize) as u16
     }
 
+    /// What it covers now, with the rows it has.
+    pub fn shown(&self, screen: Rect) -> Rect {
+        let area = Self::area(screen);
+        Rect::new(area.x, area.y, area.w, self.rows() + HEADER_ROWS)
+    }
+
+    /// The row of the list at `(x, y)`, `y` with its fraction of a row. The rows are painted
+    /// a little above the cells that hold their words, and a press lands on what's painted.
+    pub fn row_at(&self, screen: Rect, (x, y): (u16, f32), measure: &dyn Measure) -> Option<usize> {
+        let area = Self::area(screen);
+        if x < area.x || x >= area.right() {
+            return None;
+        }
+        let lift = if measure.in_cells() { 0.0 } else { LIST_LIFT };
+        let row = (y - (f32::from(area.y + HEADER_ROWS) - lift)).floor();
+        let shown = self.matches.len().min(ROWS as usize);
+        (row >= 0.0 && (row as usize) < shown).then_some(row as usize)
+    }
+
+    /// `hover` is where the pointer is, its row with the fraction.
     pub fn draw(
         &self,
         grid: &mut Grid,
-        hover: Option<(u16, u16)>,
+        hover: Option<(u16, f32)>,
         measure: &dyn Measure,
         theme: &Theme,
     ) {
-        let area = Self::area(grid.area());
-        let rows = self.matches.len().min(ROWS as usize) as u16;
-        let area = Rect::new(area.x, area.y, area.w, rows + HEADER_ROWS);
+        let screen = grid.area();
+        let area = self.shown(screen);
         raised(grid, area, theme);
+        let fine = !measure.in_cells();
+        let from = grid.painted_so_far();
+        let caret = self.draw_field(grid, area, measure, theme);
+        let drop = if fine { FIELD_DROP } else { 0.0 };
+        grid.lift_since(from, -drop);
+        // The caret in the middle of the box, wherever that's painted.
+        grid.cursor = Some((caret as u16, area.y));
+        let top = f32::from(area.y) + drop + (1.0 - CARET) / 2.0;
+        grid.caret = Some(Bounds::cells(caret, top, 0.0, CARET));
+        let from = grid.painted_so_far();
+        let pointed = hover.and_then(|at| self.row_at(screen, at, measure));
+        if self.matches.is_empty() {
+            let quiet = Style {
+                fg: theme.popup_dim,
+                bg: theme.popup,
+                ..theme.bar
+            };
+            let inset = area.x as f32 + TEXT_INSET;
+            let end = area.right().saturating_sub(2);
+            let y = area.y + HEADER_ROWS;
+            grid.label_at(inset, area.x + 2, y, self.nothing(), quiet, end, 100);
+        }
+        for (row, index) in self.matches.iter().take(ROWS as usize).enumerate() {
+            let y = area.y + HEADER_ROWS + row as u16;
+            let lit = (row == self.selected, pointed == Some(row));
+            self.draw_row(grid, (area, y), (row, *index), lit, measure, theme);
+        }
+        if fine {
+            grid.lift_since(from, LIST_LIFT);
+        }
+    }
+
+    /// What the list's one row says when there's nothing in it.
+    fn nothing(&self) -> &'static str {
+        let working = self.status.as_deref().is_some_and(|s| s.ends_with('…'));
+        match (self.typed().is_empty(), working) {
+            (false, _) => "No matches",
+            (true, true) => "Nothing yet",
+            (true, false) => "Nothing to list",
+        }
+    }
+
+    /// The field: its box a column in from the panel's edges, where the picked row's band
+    /// stands too, the search icon and what's typed where a row's icon and words are, and
+    /// what's still happening at its far end. Returns where the caret stands.
+    fn draw_field(&self, grid: &mut Grid, area: Rect, measure: &dyn Measure, theme: &Theme) -> f32 {
         let base = Style {
             fg: theme.text.fg,
-            bg: theme.popup,
+            bg: theme.input,
             ..theme.bar
         };
         let dim = Style {
             fg: theme.popup_dim,
             ..base
         };
+        let y = area.y;
+        let inside = Rect::new(area.x + 1, y, area.w.saturating_sub(2), 1);
+        // In cells the box is a band of the field's colour.
+        grid.fill(inside, base);
+        let boxed = Bounds::inset(inside, 0.0, BOX_AIR);
+        grid.panel(boxed, 22, Some(theme.input), Some(theme.focus));
         grid.glyph(
             area.x as f32 + TEXT_INSET,
-            area.y,
+            y,
             Icon::Search,
             theme.popup_dim,
             "⌕",
@@ -766,10 +855,11 @@ impl Palette {
             size: INTERFACE_SIZE_PERCENT,
             ..Font::default()
         };
+        // A column inside the box's far edge, as the icon is inside its near one.
+        let right = area.right().saturating_sub(2);
         let caret = x - 0.1 + measure.width(&self.query, font);
         // The status keeps clear of what's typed, and gives way to it when both don't fit:
         // the query is what the person is working on.
-        let status_right = area.right().saturating_sub(2);
         let status = self.status.as_deref().map(|text| {
             let width = measure.width(
                 text,
@@ -778,113 +868,131 @@ impl Palette {
                     ..Font::default()
                 },
             );
-            (text, status_right as f32 - width)
+            (text, right as f32 - width)
         });
         let status = status.filter(|(_, left)| caret + STATUS_GAP <= *left);
-        let end = status.map_or(area.right(), |(_, left)| (left - STATUS_GAP / 2.0) as u16);
+        let end = status.map_or(right, |(_, left)| (left - STATUS_GAP / 2.0) as u16);
         if self.query.is_empty() {
-            grid.label_at(x + HINT_GAP, cell, area.y, self.hint, dim, end, 100);
+            grid.label_at(x + HINT_GAP, cell, y, self.hint, dim, end, 100);
         } else {
-            grid.label_at(x, cell, area.y, &self.query, base, end, 100);
+            grid.label_at(x, cell, y, &self.query, base, end, 100);
         }
         if let Some((text, _)) = status {
-            grid.label_right(status_right, area.y, text, dim, 85);
+            grid.label_right(right, y, text, dim, 85);
         }
-        grid.set_caret(caret, area.y, 0.56);
-        let line_y = area.y as f32 + HEADER_LINE;
-        let edge = Bounds::cells(area.x as f32, line_y, area.w as f32, 0.0);
-        grid.hairline(edge, theme.popup_border);
-        for (row, index) in self.matches.iter().take(ROWS as usize).enumerate() {
-            let y = area.y + HEADER_ROWS + row as u16;
-            let line = Rect::new(area.x, y, area.w, 1);
-            if self.items[*index] == Item::Gap {
-                let across = area.w as f32 - TEXT_INSET * 2.0;
-                let rule = Bounds::cells(area.x as f32 + TEXT_INSET, y as f32 + 0.5, across, 0.0);
-                grid.hairline(rule, theme.popup_border);
-                continue;
-            }
-            if let Item::Header(name) = &self.items[*index] {
-                let small = Style {
-                    fg: theme.popup_dim,
-                    bold: true,
-                    ..base
-                };
-                let inset = area.x as f32 + TEXT_INSET;
-                grid.label_at(inset, area.x + 2, y, name, small, area.right(), 80);
-                let font = Font {
-                    size: 80,
-                    ..Font::default()
-                };
-                let from = inset + measure.width(name, font) + 1.0;
-                let across = (area.x as f32 + area.w as f32 - TEXT_INSET - from).max(0.0);
-                let rule = Bounds::cells(from, y as f32 + 0.5, across, 0.0);
-                grid.hairline(rule, theme.popup_border);
-                continue;
-            }
-            let hovered = hover.is_some_and(|h| line.contains(h.0, h.1));
-            if row == self.selected || hovered {
-                let fill = if row == self.selected {
-                    theme.pick
-                } else {
-                    theme.popup_hover
-                };
-                grid.panel(Bounds::inset(line, 0.5, 0.055), 18, Some(fill), None);
-            }
-            if let Item::Symbol(symbol) = &self.items[*index] {
-                let group = self.group_label(row);
-                let right = group.as_deref().or(Some(symbol.place.as_str()));
-                let right = right.filter(|r| !r.is_empty());
-                let picked = row == self.selected;
-                self.draw_symbol(grid, (area, y), symbol, right, picked, measure, theme);
-                continue;
-            }
-            let text = self.items[*index].label();
-            let end = area.right().saturating_sub(16);
+        caret.min(right as f32)
+    }
+
+    /// One row of the list: a rule, a group's name, or something to pick.
+    fn draw_row(
+        &self,
+        grid: &mut Grid,
+        (area, y): (Rect, u16),
+        (row, index): (usize, usize),
+        (picked, pointed): (bool, bool),
+        measure: &dyn Measure,
+        theme: &Theme,
+    ) {
+        let base = Style {
+            fg: theme.text.fg,
+            bg: theme.popup,
+            ..theme.bar
+        };
+        if self.items[index] == Item::Gap {
+            let across = area.w as f32 - TEXT_INSET * 2.0;
+            let rule = Bounds::cells(area.x as f32 + TEXT_INSET, y as f32 + 0.5, across, 0.0);
+            grid.hairline(rule, theme.popup_border);
+            return;
+        }
+        if let Item::Header(name) = &self.items[index] {
+            let small = Style {
+                fg: theme.popup_dim,
+                bold: true,
+                ..base
+            };
             let inset = area.x as f32 + TEXT_INSET;
-            // A file or folder from Open Recent: its name, then where it is.
-            let away = match &self.items[*index] {
-                // Either separator: a Windows path outside home keeps its own.
-                Item::Recent(_, label, _) => label.rsplit_once(['/', '\\']),
-                _ => None,
+            grid.label_at(inset, area.x + 2, y, name, small, area.right(), 80);
+            let font = Font {
+                size: 80,
+                ..Font::default()
             };
-            // A long path keeps its end, which names the folder, and loses its middle.
-            let shown = match &self.items[*index] {
-                Item::Folder(..) => middle_out(text, f32::from(end) - inset, measure),
-                _ => away.map_or(text, |(_, name)| name).to_string(),
+            let from = inset + measure.width(name, font) + 1.0;
+            let across = (area.x as f32 + area.w as f32 - TEXT_INSET - from).max(0.0);
+            let rule = Bounds::cells(from, y as f32 + 0.5, across, 0.0);
+            grid.hairline(rule, theme.popup_border);
+            return;
+        }
+        // The picked row's colour is in its cells too, which is all a terminal without
+        // pictures has to show it by.
+        let base = Style {
+            bg: if picked { theme.pick } else { theme.popup },
+            ..base
+        };
+        if picked || pointed {
+            let fill = if picked {
+                theme.pick
+            } else {
+                theme.popup_hover
             };
-            grid.label_at(inset, area.x + 2, y, &shown, base, end, 100);
-            if let Some((folder, _)) = away {
-                let quiet = Style {
-                    fg: theme.popup_dim,
-                    ..base
-                };
-                // A cell after the name as it's drawn, and on to the row's end: no keys here.
-                let from = inset + measure.width(&shown, Font::default()) + 1.0;
-                let right = area.right().saturating_sub(2);
-                let folder = middle_out(folder, f32::from(right) - from, measure);
-                grid.label_at(from, from as u16, y, &folder, quiet, right, 100);
+            if picked {
+                let cells = Rect::new(area.x + 1, y, area.w.saturating_sub(2), 1);
+                grid.fill(cells, base);
             }
-            // A task shows what it runs, quietly, when its name doesn't already say.
-            if let Item::Task(task) = &self.items[*index]
-                && task.command != task.label
-            {
-                let quiet = Style {
-                    fg: theme.popup_dim,
-                    ..base
-                };
-                let from = inset + measure.width(&shown, Font::default()) + 1.0;
-                grid.label_at(from, from as u16, y, &task.command, quiet, end, 100);
-            }
-            if let Some(keys) = self.keys_at(*index) {
-                // The picked row's wash is lighter, so its keys need to be too.
-                let fg = if row == self.selected {
-                    theme.text.fg
-                } else {
-                    theme.popup_dim
-                };
-                let quiet = Style { fg, ..base };
-                grid.label_right(area.right().saturating_sub(2), y, keys, quiet, 85);
-            }
+            let band = Bounds::cells(
+                area.x as f32 + BAND_INSET,
+                y as f32 + BAND_AIR,
+                area.w as f32 - BAND_INSET * 2.0,
+                BAND_HEIGHT,
+            );
+            grid.panel(band, 18, Some(fill), None);
+        }
+        if let Item::Symbol(symbol) = &self.items[index] {
+            let group = self.group_label(row);
+            let right = group.as_deref().or(Some(symbol.place.as_str()));
+            let right = right.filter(|r| !r.is_empty());
+            self.draw_symbol(grid, (area, y), symbol, right, picked, measure, theme);
+            return;
+        }
+        let text = self.items[index].label();
+        let end = area.right().saturating_sub(16);
+        let inset = area.x as f32 + TEXT_INSET;
+        // A file or folder from Open Recent: its name, then where it is.
+        let away = match &self.items[index] {
+            // Either separator: a Windows path outside home keeps its own.
+            Item::Recent(_, label, _) => label.rsplit_once(['/', '\\']),
+            _ => None,
+        };
+        // A long path keeps its end, which names the folder, and loses its middle.
+        let shown = match &self.items[index] {
+            Item::Folder(..) => middle_out(text, f32::from(end) - inset, measure),
+            _ => away.map_or(text, |(_, name)| name).to_string(),
+        };
+        grid.label_at(inset, area.x + 2, y, &shown, base, end, 100);
+        // The picked row's band is lighter, so what's quiet on it needs to be lighter too.
+        let quiet = Style {
+            fg: if picked {
+                theme.text.fg
+            } else {
+                theme.popup_dim
+            },
+            ..base
+        };
+        if let Some((folder, _)) = away {
+            // A cell after the name as it's drawn, and on to the row's end: no keys here.
+            let from = inset + measure.width(&shown, Font::default()) + 1.0;
+            let right = area.right().saturating_sub(2);
+            let folder = middle_out(folder, f32::from(right) - from, measure);
+            grid.label_at(from, from as u16, y, &folder, quiet, right, 100);
+        }
+        // A task shows what it runs, quietly, when its name doesn't already say.
+        if let Item::Task(task) = &self.items[index]
+            && task.command != task.label
+        {
+            let from = inset + measure.width(&shown, Font::default()) + 1.0;
+            grid.label_at(from, from as u16, y, &task.command, quiet, end, 100);
+        }
+        if let Some(keys) = self.keys_at(index) {
+            grid.label_right(area.right().saturating_sub(2), y, keys, quiet, 85);
         }
     }
 }
@@ -905,7 +1013,7 @@ impl Palette {
     ) {
         let base = Style {
             fg: theme.text.fg,
-            bg: theme.popup,
+            bg: if picked { theme.pick } else { theme.popup },
             ..theme.bar
         };
         // The picked row's wash is lighter, so what's quiet on it needs to be lighter too.

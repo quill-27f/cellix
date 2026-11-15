@@ -478,7 +478,19 @@ tab in front takes the colour of what's under it, the sheet or the pane, with th
 line along its top. One behind is its name, brighter under the pointer. Overlays sit on row lines: a menu
 is whole rows, padded 8 px above and below, with half a row for each rule and its hover band
 clear of them, and it drops from the bottom edge of what opened it; a tooltip is one row, on
-the row under its icon. Nothing covers part of a row.
+the row under its icon. Nothing covers part of a row. A palette (Quick Open, the commands, and
+every list that asks with a field) is whole rows too: the field's row, one row of air, and its
+list. The field is a box, as the Find bar's and a prompt's are, a column in from the panel's
+edges where the picked row's band stands too, with the search icon and what's typed where a
+row's icon and words are. The row of air is shared out so that the box stands as far under the
+panel's top as the first row's band stands under the box and the panel's foot under the last
+row's band, 0.47 of a row each: the field is painted a third of a row down its own row and the
+list as much up theirs, which only paint can show, and a press lands on the row painted there.
+In cells the field has the first row, the list starts on the third, and the picked row's colour
+is in its cells. It was a field with no box and a line under it, 18 px from the panel's top and
+30 from the line, which read as off-centre (the user, 2026-11-14), with the list hanging from
+the line and nothing under its last row. The list keeps a row when nothing matches, which says
+so, so the field never moves as the list empties.
 
 Git has two places. Source Control in the sidebar decides what goes in: a message, staged and
 unstaged files, Commit, and Push or Pull, as in VS Code. Review reads what changed, hunk by hunk,

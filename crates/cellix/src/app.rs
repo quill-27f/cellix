@@ -12635,7 +12635,8 @@ impl App {
                 }
             }
             Overlay::Palette(mut palette) => {
-                if let Some(row) = palette.row_at(screen, mouse.y) {
+                let at = (mouse.x, mouse.fine_y);
+                if let Some(row) = palette.row_at(screen, at, &*self.measure) {
                     palette.selected = row;
                     self.pick(palette.current().cloned());
                 } else {
@@ -14568,7 +14569,10 @@ impl App {
             grid.cursor = None;
         }
         match &self.overlay {
-            Overlay::Palette(palette) => palette.draw(grid, self.hover, &*self.measure, theme),
+            Overlay::Palette(palette) => {
+                let hover = self.hover.map(|(x, _)| (x, self.pointer.1));
+                palette.draw(grid, hover, &*self.measure, theme);
+            }
             Overlay::Menu(menu) => {
                 let hover = self.hover.map(|(x, _)| (x, self.pointer.1));
                 menu.draw(grid, hover, theme);
@@ -17328,6 +17332,120 @@ mod tests {
         let (x, y) = find(&screen(&app), "Toggle Sidebar");
         app.handle(mouse(MouseKind::Left, x, y));
         assert!(!screen(&app).text().contains("alpha.txt"));
+    }
+
+    /// The field stood nearer the panel's top than the line under it, and the list hung from
+    /// that line with nothing under its last row. A box holds the field now, and the air above
+    /// it, between it and the list, and under the list is one measure.
+    #[test]
+    fn a_palettes_field_and_list_keep_the_same_air_above_between_and_below() {
+        let (_dir, mut app) = project();
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        app.run(Command::CommandPalette);
+        typed(&mut app, "open");
+        let unit = cellix_render::UNIT;
+        let (focus, pick) = (app.theme.focus, app.theme.pick);
+        // The panel, the field's box and the picked row's band, as (top, bottom).
+        let parts = |app: &App| {
+            let grid = screen(app);
+            let span = |found: &dyn Fn(&Paint) -> bool| {
+                let paint = grid.paint.iter().find(|p| found(p)).expect("painted");
+                match paint {
+                    Paint::Panel { bounds, .. } => (bounds.y, bounds.y + bounds.h),
+                    _ => unreachable!(),
+                }
+            };
+            let panel = span(&|p| matches!(p, Paint::Panel { shadow: true, .. }));
+            let boxed = span(&|p| matches!(p, Paint::Panel { border: Some(b), .. } if *b == focus));
+            let band = span(&|p| matches!(p, Paint::Panel { fill: Some(f), .. } if *f == pick));
+            let typed = grid.paint.iter().find_map(|p| match p {
+                Paint::Text { text, y, .. } if text == "open" => Some(*y),
+                _ => None,
+            });
+            (panel, boxed, band, typed.expect("the query is painted"))
+        };
+        let (panel, boxed, band, typed_at) = parts(&app);
+        assert_eq!((panel.0 % unit, panel.1 % unit), (0, 0), "on row lines");
+        let above = boxed.0 - panel.0;
+        let between = band.0 - boxed.1;
+        // What's typed stands in the middle of its box.
+        assert_eq!(typed_at + unit / 2, (boxed.0 + boxed.1) / 2, "{boxed:?}");
+        // The last row picked, to see what's under it.
+        for _ in 0..40 {
+            key(&mut app, Key::Down);
+        }
+        let (panel, _, band, _) = parts(&app);
+        let below = panel.1 - band.1;
+        let even = |a: i32, b: i32| (a - b).abs() <= 1;
+        assert!(
+            even(above, between) && even(between, below),
+            "above {above}, between {between}, below {below}"
+        );
+        // 8 px of a 20 px row at the least, which is what stands clear of a line.
+        assert!(above * 20 >= unit * 8, "{above}");
+
+        // A press lands on the row painted there, not on the cells that hold its words. The
+        // rows are painted a little above their cells: the top of a row's band is over the
+        // cells above it, and the foot of its cells is under the next row's band.
+        let press = |app: &mut App, x: u16, at: f32| {
+            app.handle(Event::Mouse(MouseEvent {
+                kind: MouseKind::Left,
+                x,
+                y: at as u16,
+                fine_x: f32::from(x) + 0.5,
+                fine_y: at,
+                mods: Mods::default(),
+            }));
+        };
+        key(&mut app, Key::Esc);
+        app.run(Command::CommandPalette);
+        typed(&mut app, "sidebar");
+        let grid = screen(&app);
+        let (x, y) = find(&grid, "Toggle Sidebar");
+        assert_eq!(grid.cell(x, y).style.bg, pick, "its cells say it's picked");
+        assert!(grid.text().contains("alpha.txt"));
+        press(&mut app, x + 1, f32::from(y) - 0.2);
+        assert!(
+            !screen(&app).text().contains("alpha.txt"),
+            "the top of its band, over the cells above, is the row"
+        );
+        app.run(Command::CommandPalette);
+        typed(&mut app, "sidebar");
+        press(&mut app, x + 1, f32::from(y) + 0.9);
+        assert!(matches!(app.overlay, Overlay::None), "a press off the list");
+        assert!(
+            !screen(&app).text().contains("alpha.txt"),
+            "the foot of its cells is under its band, and isn't the row"
+        );
+        app.run(Command::ToggleSidebar);
+
+        // With nothing to list the panel keeps a row, which says so, and the field stays put.
+        app.run(Command::CommandPalette);
+        typed(&mut app, "open");
+        let (_, with_rows, ..) = parts(&app);
+        typed(&mut app, "zzzz");
+        let grid = screen(&app);
+        assert!(grid.text().contains("No matches"), "{}", grid.text());
+        let boxed = grid.paint.iter().find_map(|p| match p {
+            Paint::Panel {
+                bounds,
+                border: Some(b),
+                ..
+            } if *b == focus => Some((bounds.y, bounds.y + bounds.h)),
+            _ => None,
+        });
+        assert_eq!(boxed, Some(with_rows), "the field doesn't move");
+
+        // In cells the field has its row, the list starts two under it, and nothing is lifted.
+        let (_dir, mut app) = project();
+        app.run(Command::CommandPalette);
+        typed(&mut app, "sidebar");
+        let grid = screen(&app);
+        let (_, field) = find(&grid, "sidebar");
+        let (x, y) = find(&grid, "Toggle Sidebar");
+        assert_eq!(y, field + 2);
+        assert_eq!(grid.cell(x, y).style.bg, app.theme.pick);
+        assert_eq!(grid.cell(x, field).style.bg, app.theme.input);
     }
 
     #[test]
