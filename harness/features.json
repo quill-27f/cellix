@@ -5143,5 +5143,12 @@
     "title": "Words painted under the row a corner card's panel starts part way into, a page's or a pane's, don't show their tops over the card: the ground is painted over that row before the panel",
     "test": "words_under_a_cards_first_row_dont_show_over_it",
     "passes": true
+  },
+  {
+    "id": "quiet-button-hover-on-cards",
+    "milestone": 14,
+    "title": "A quiet button on a corner card or in a dialog stands a second step off what's behind it under the pointer, lighter in the dark theme and deeper in the light one, where it took a colour a level or two from the one it rests in",
+    "test": "a_quiet_button_on_a_card_or_a_dialog_stands_out_under_the_pointer",
+    "passes": true
   }
 ]

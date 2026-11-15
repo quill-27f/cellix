@@ -454,7 +454,9 @@ One set of parts, everywhere. A button is one chip, nearly nine tenths of its ro
 (four fifths left its words 7 px under its top, which read as cramped): the
 primary one filled with the accent, the rest a quiet fill, the least of them plain words (Edit and
 Delete on a comment), and each takes a click anywhere it's painted, from one rectangle the painter
-and the hit test share. One measure sizes them all (`measures.rs`): a button's words keep a column
+and the hit test share. Under the pointer a quiet one stands a second step off what's behind it,
+lighter in the dark theme and deeper in the light one, on a card and in a dialog as in a pane. One
+measure sizes them all (`measures.rs`): a button's words keep a column
 and a half either side inside its chip, whatever they are, and buttons side by side stand two
 columns apart. In cells a button is its words between brackets. Text stands two columns inside
 whatever holds it, a panel, a card, a menu, a prompt; a card starts one column from its pane's

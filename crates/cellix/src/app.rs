@@ -5820,10 +5820,13 @@ impl App {
             let on = i == confirm.selected;
             let width = cells.chars().count() as u16;
             let hovered = self.over_button((*x, y), width);
+            // A quiet button stands a step further off what's behind it when pointed at, as
+            // every one that isn't the main one does.
+            let quiet = theme.quiet_button(theme.popup);
             let fill = match (on, hovered) {
                 (true, _) => theme.button,
-                (false, true) => theme.popup_hover,
-                (false, false) => theme.quiet_button(theme.popup),
+                (false, true) => theme.quiet_button(quiet),
+                (false, false) => quiet,
             };
             let style = Style {
                 fg: if on { theme.button_text } else { theme.text.fg },
@@ -8562,10 +8565,13 @@ impl App {
             let first = i == 0 && filled;
             let width = cells.chars().count() as u16;
             let hovered = self.over_button((*x, y), width);
+            // A quiet button stands a step further off what's behind it when pointed at, as
+            // every one that isn't the main one does.
+            let quiet = theme.quiet_button(theme.popup);
             let fill = match (first, hovered) {
                 (true, _) => theme.button,
-                (false, true) => theme.popup_hover,
-                (false, false) => theme.quiet_button(theme.popup),
+                (false, true) => theme.quiet_button(quiet),
+                (false, false) => quiet,
             };
             let style = Style {
                 fg: if first {
@@ -20644,6 +20650,101 @@ mod tests {
         // A short name's card is a row shorter.
         let (_dir, java) = java_project();
         assert_eq!(java.offer_area().h, 6);
+    }
+
+    /// The fill painted under the button labelled `label`.
+    fn button_fill(app: &App, label: &str) -> Rgb {
+        let (left, top, right, bottom) = painted_button(app, label);
+        let unit = cellix_render::UNIT as f32;
+        screen(app)
+            .paint
+            .iter()
+            .find_map(|p| match p {
+                Paint::Panel {
+                    bounds,
+                    fill: Some(fill),
+                    radius: 22,
+                    ..
+                } if (bounds.x as f32 / unit, bounds.y as f32 / unit) == (left, top)
+                    && (
+                        (bounds.x + bounds.w) as f32 / unit,
+                        (bounds.y + bounds.h) as f32 / unit,
+                    ) == (right, bottom) =>
+                {
+                    Some(*fill)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no fill under {label}"))
+    }
+
+    /// How far apart two colours are: the largest step between them in any channel.
+    fn apart(a: Rgb, b: Rgb) -> u8 {
+        a.0.abs_diff(b.0)
+            .max(a.1.abs_diff(b.1))
+            .max(a.2.abs_diff(b.2))
+    }
+
+    /// The design review of the install card measured Not Now under the pointer at 1.02 to 1
+    /// against Never beside it: a hovered quiet button took the popup's hover colour, which
+    /// is the colour it rests in, near enough. On a card and in a dialog it's a step further
+    /// from what's behind it now, as far from resting as resting is from the card: lighter in
+    /// the dark theme and deeper in the light one.
+    #[test]
+    fn a_quiet_button_on_a_card_or_a_dialog_stands_out_under_the_pointer() {
+        for light in [false, true] {
+            let themed = |app: &mut App| {
+                app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+                if light {
+                    app.match_terminal_background(Some((0xEF, 0xF1, 0xF5)));
+                }
+            };
+            // The install card.
+            let (_dir, mut app) = java_project();
+            themed(&mut app);
+            let popup = app.theme.popup;
+            let row = app.offer_button_row();
+            let (rest, beside) = (button_fill(&app, "Not Now"), button_fill(&app, "Never"));
+            assert_eq!(rest, beside, "at rest they're alike");
+            let (left, ..) = painted_button(&app, "Not Now");
+            app.handle(mouse(MouseKind::Move, left as u16 + 1, row));
+            let over = button_fill(&app, "Not Now");
+            assert_eq!(button_fill(&app, "Never"), rest, "the one beside it rests");
+            assert!(
+                apart(over, rest) >= apart(rest, popup) && apart(rest, popup) >= 10,
+                "light {light}: {over:?} over {rest:?} on {popup:?}"
+            );
+            assert!(
+                apart(over, popup) > apart(rest, popup),
+                "further from the card"
+            );
+            // The main button doesn't change: it's the answer either way.
+            let install = button_fill(&app, "Install");
+            let (left, ..) = painted_button(&app, "Install");
+            app.handle(mouse(MouseKind::Move, left as u16 + 1, row));
+            assert_eq!(button_fill(&app, "Install"), install);
+
+            // A dialog: Save changes?
+            let (dir, mut app) = project();
+            themed(&mut app);
+            let popup = app.theme.popup;
+            dirty(&dir, &mut app);
+            app.run(Command::CloseTab);
+            let rest = button_fill(&app, "Cancel");
+            assert_eq!(button_fill(&app, "Don't Save"), rest);
+            let (left, top, ..) = painted_button(&app, "Cancel");
+            app.handle(mouse(MouseKind::Move, left as u16 + 1, top as u16));
+            let over = button_fill(&app, "Cancel");
+            assert_eq!(
+                button_fill(&app, "Don't Save"),
+                rest,
+                "the one beside it rests"
+            );
+            assert!(
+                apart(over, rest) >= apart(rest, popup) && apart(over, popup) > apart(rest, popup),
+                "light {light}: {over:?} over {rest:?} on {popup:?}"
+            );
+        }
     }
 
     /// A page's words and a pane's are painted, not cells, and paint isn't cleared by writing
