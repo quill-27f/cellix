@@ -369,6 +369,18 @@ impl Theme {
         mix(self.scrollbar, self.popup_dim, 0.35)
     }
 
+    /// What a text box in a floating panel is filled with. A box is sunk into what holds
+    /// it. Where a text box is the panel's own colour, as both are white in the light
+    /// theme, it's a step from the panel toward the words' colour. It was the sheet's
+    /// colour, which a light terminal's background moves to white as well.
+    pub fn popup_input(&self) -> Rgb {
+        if self.input == self.popup {
+            mix(self.popup, self.text.fg, 0.09)
+        } else {
+            self.input
+        }
+    }
+
     /// A button that isn't the main one, as a wash over whatever's behind it.
     pub fn quiet_button(&self, behind: Rgb) -> Rgb {
         // Light grounds need a deeper wash to read as a button at all: Latte's base and a

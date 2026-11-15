@@ -5059,5 +5059,12 @@
     "title": "A > typed first in Quick Open lists the commands, the palette's own list, and taking it away lists the files again",
     "test": "a_greater_than_sign_in_quick_open_lists_commands_and_deleting_it_lists_files",
     "passes": true
+  },
+  {
+    "id": "palette-second-review",
+    "milestone": 14,
+    "title": "After the second design review: a palette's box is a step darker than its panel on a light terminal too, where the sheet is white as well, and Quick Open's hint names > with :line, @ and #",
+    "test": "a_palettes_box_shows_on_a_light_terminal_and_quick_opens_hint_names_every_sign",
+    "passes": true
   }
 ]

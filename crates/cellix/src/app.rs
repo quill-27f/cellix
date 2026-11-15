@@ -15508,7 +15508,8 @@ impl App {
     /// Opens Quick Open at once and fills it from a walk of the folder on another thread: a
     /// big tree takes seconds, and everything used to wait for the whole walk.
     fn quick_open(&mut self) {
-        let hint = "Search files, path:line, @ for symbols, # for all symbols";
+        // Every sign it takes, in the cells the field has: 58 beside the icon.
+        let hint = "Search files, :line, @ symbols, # all symbols, > commands";
         let root = self.workspace.root().to_path_buf();
         let home = self.home.clone();
         // A file as the list writes it: from the folder, or from home when it's outside.
@@ -18513,6 +18514,53 @@ mod tests {
         });
         assert_eq!(app.theme.input, app.theme.popup, "both white");
         assert!(fill.is_some_and(|fill| fill != app.theme.popup), "{fill:?}");
+    }
+
+    /// What the second design review found in the pictures. A light terminal's background
+    /// moves the sheet to white, the panel's colour, and the box had taken the sheet's to
+    /// stand out from the panel: a white box in a white panel. And Quick Open's hint named
+    /// `@` and `#` and not `>`.
+    #[test]
+    fn a_palettes_box_shows_on_a_light_terminal_and_quick_opens_hint_names_every_sign() {
+        let (_dir, mut app) = project();
+        app.follow_terminal_theme(Some(true));
+        // Latte's own background, which the tour's light terminal has.
+        app.match_terminal_background(Some((0xEF, 0xF1, 0xF5)));
+        let white = app.theme.popup;
+        assert_eq!((app.theme.text.bg, app.theme.input), (white, white));
+        app.run(Command::QuickOpen);
+
+        // In cells: the field's band is darker than the panel, by enough to see, and the
+        // hint is whole.
+        let grid = screen(&app);
+        let area = Palette::area(grid.area());
+        let band = grid.cell(area.x + 2, area.y).style.bg;
+        assert_eq!(band, app.theme.popup_input());
+        let light = |c: cellix_render::Rgb| u16::from(c.0) + u16::from(c.1) + u16::from(c.2);
+        assert!(light(white) >= light(band) + 36, "{band:?} in {white:?}");
+        let field: String = (area.x..area.right())
+            .map(|x| grid.cell(x, area.y).symbol.as_str())
+            .collect();
+        let hint = "Search files, :line, @ symbols, # all symbols, > commands";
+        assert!(field.contains(hint), "{field}");
+
+        // Painted: the box is filled with the same.
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        let grid = screen(&app);
+        let fill = grid.paint.iter().find_map(|p| match p {
+            Paint::Panel {
+                fill: Some(fill),
+                border: Some(b),
+                ..
+            } if *b == app.theme.focus => Some(*fill),
+            _ => None,
+        });
+        assert_eq!(fill, Some(band));
+
+        // The dark theme's box is the text box's own colour, as it was.
+        app.follow_terminal_theme(Some(false));
+        assert_eq!(app.theme.popup_input(), app.theme.input);
+        assert_ne!(app.theme.input, app.theme.popup);
     }
 
     /// `@` and `#` turned Quick Open to symbols, and `>`, which VS Code's users type for
@@ -30515,7 +30563,7 @@ while True:
         assert!(
             screen(&app)
                 .text()
-                .contains("@ for symbols, # for all symbols")
+                .contains("@ symbols, # all symbols, > commands")
         );
         typed(&mut app, "@");
         wait(&mut app, |a| screen(a).text().contains("structs (1)"));

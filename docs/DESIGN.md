@@ -487,8 +487,9 @@ symbols, folders) the field has the search icon over theirs and its words after 
 list of plain rows (the commands, branches, tasks) it has no icon and its words stand over
 theirs, as VS Code's do. The hint starts where typing will, with the caret just before it,
 and the caret stands just after the last letter typed. A box is sunk into what holds it: where
-the text box's colour is the panel's own, as both are white in the light theme, the box takes
-the sheet's. The row of air is shared out so that the box stands as far under the
+the text box's colour is the panel's own, as both are white in the light theme, the box is a
+step from the panel toward the words' colour (`Theme::popup_input`). It took the sheet's colour
+until a light terminal's pictures showed the sheet moved to white as well. The row of air is shared out so that the box stands as far under the
 panel's top as the first row's band stands under the box and the panel's foot under the last
 row's band, 0.43 of a row each: the field is painted a third of a row down its own row and the
 list as much up theirs, which only paint can show, and a press lands on the row painted there.
@@ -536,7 +537,7 @@ Only a command picked in the palette counts, since one with keys that are used n
 the list. They're kept in the folder's `state.json` with the tabs. With none run yet the list is
 every command by name, with no groups. `>` typed first in Quick Open is the same list, the
 sign staying in the field as `@` and `#` do for symbols, and taking it away lists the files
-again.
+again. The hint names all three and `:line`, in as few words as the field's cells need.
 
 Quick Open reads a path the way it's copied, since the file a person wants is most often one
 an agent or a compiler has just named. What's pasted is cleaned of what it was copied with

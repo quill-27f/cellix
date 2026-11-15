@@ -1363,16 +1363,9 @@ impl Palette {
     /// stands too, the search icon and what's typed where a row's icon and words are, and
     /// what's still happening at its far end. Returns where the caret stands.
     fn draw_field(&self, grid: &mut Grid, area: Rect, measure: &dyn Measure, theme: &Theme) -> f32 {
-        // A box is sunk into what holds it. Where a text box is the panel's own colour, as
-        // both are white in the light theme, it takes the sheet's, a step down.
-        let sunk = if theme.input == theme.popup {
-            theme.text.bg
-        } else {
-            theme.input
-        };
         let base = Style {
             fg: theme.text.fg,
-            bg: sunk,
+            bg: theme.popup_input(),
             ..theme.bar
         };
         let dim = Style {
