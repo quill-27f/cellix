@@ -5101,5 +5101,12 @@
     "title": "The Keyboard page gives a command's title half the page, and one that still doesn't fit ends in an ellipsis in place of being cut where the column ends",
     "test": "a_commands_title_has_room_on_the_keyboard_page_or_ends_in_an_ellipsis",
     "passes": true
+  },
+  {
+    "id": "show-agents-dropped",
+    "milestone": 14,
+    "title": "Show Agents is in neither the palette nor the Keyboard page, where it read like List Agents and did what Toggle Side Pane does; keys set for it in settings still run it",
+    "test": "a_command_dropped_from_the_lists_keeps_the_keys_set_for_it",
+    "passes": true
   }
 ]

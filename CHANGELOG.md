@@ -2,6 +2,11 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
+## [Unreleased]
+
+### Removed
+- "Agent: Show Agents" is gone from the command palette and the Keyboard page. It opened or closed the side pane, which "View: Toggle Side Pane" does, and stood beside "Agent: List Agents" with nothing to tell the two apart. Keys set for it in settings still run it.
+
 ## [0.9.0] - 2026-11-15
 
 ### Changed

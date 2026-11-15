@@ -2210,3 +2210,13 @@ The user said: "release it as 0.9.0", and then "ok run targeted from now on and 
 - Open with the user: Agent: List Agents and Agent: Show Agents read alike (the first is the list of agents in the pane, the second opens or closes the side pane); and the Keyboard page's rows under category headings, so names fit a narrow page in cells.
 - 0.9.0 was released from `93d13cb`, the release commit, CI passing first time and crates.io with it this time: the same four binaries, 14:03 UTC, the Apple Silicon download 29.1 MB, and the Homebrew tap has it.
 - `target` is 22 GB, which is the project folder's size, up 3 GB since 0.8.0. Nothing was cleared. The disk has 290 GB free where it had 415 GB this morning: not this project's doing, and another program had the machine's load at twenty through the afternoon.
+
+
+## Show Agents leaves the lists (2026-11-15)
+
+The user's answers to the two things 0.9.0 left open: "drop Show Agents and yes to category headings".
+
+- **Show Agents** is out of `COMMANDS`, so it's in neither the palette nor the Keyboard page. It ran `toggle_dock`, which opens or closes the side pane as Toggle Side Pane does, and the third review found it on one screen with List Agents and nothing to tell them apart. The command itself stays: the welcome screen's Start an Agent and the menu a notebook without Jupyter shows both run it, and keys someone set for it in settings still do, by its old name or its title (`keys::DROPPED`).
+- Test: `a_command_dropped_from_the_lists_keeps_the_keys_set_for_it`.
+- **Category headings on the Keyboard page** are a new layout, so they're drawn first: a board on the end-to-end canvas, for the user to see before anything is built.
+

@@ -32,6 +32,11 @@ const KEYS_ONLY: [(&str, Command); 17] = [
     ("Edit: Outdent Line", Command::Outdent),
 ];
 
+/// Commands the palette once listed and no longer does. Keys set for one in settings still
+/// run it, and it's on no list. Show Agents opened or closed the side pane, as Toggle Side
+/// Pane does, and read like List Agents beside it.
+const DROPPED: [(&str, Command); 1] = [("Agent: Show Agents", Command::ShowAgents)];
+
 /// Every command the page lists, by name.
 fn named() -> impl Iterator<Item = &'static (&'static str, Command)> {
     COMMANDS.iter().chain(KEYS_ONLY.iter())
@@ -247,7 +252,9 @@ impl Bindings {
     pub fn new(set: &HashMap<String, Vec<String>>) -> Self {
         let mut bindings = Self::default();
         for (name, keys) in set {
-            let Some((_, command)) = named().find(|(title, _)| goes_by(title, name)) else {
+            let known = named().chain(DROPPED.iter());
+            let Some((_, command)) = known.into_iter().find(|(title, _)| goes_by(title, name))
+            else {
                 continue;
             };
             bindings.replaced.push(*command);
@@ -349,6 +356,30 @@ mod tests {
         assert!(found[&Command::CommandPalette].contains(&"F1".to_string()));
         assert!(found[&Command::RunBuildTask].contains(&"Ctrl+Shift+B".to_string()));
         assert_eq!(found[&Command::SplitPane], vec!["Ctrl+\\".to_string()]);
+    }
+
+    /// Show Agents left the palette and the Keyboard page: it did what Toggle Side Pane
+    /// does, and stood beside List Agents with nothing to tell them apart. Keys someone
+    /// set for it in settings still run it.
+    #[test]
+    fn a_command_dropped_from_the_lists_keeps_the_keys_set_for_it() {
+        let listed = |set: &HashMap<String, Vec<String>>| {
+            let list = shortcuts(set);
+            list.iter().any(|s| s.command == Command::ShowAgents)
+        };
+        assert!(!COMMANDS.iter().any(|(_, c)| *c == Command::ShowAgents));
+        assert!(!listed(&HashMap::new()));
+        // By the name it had before categories, and by its title.
+        for name in ["Show Agents", "Agent: Show Agents"] {
+            let mut set = HashMap::new();
+            set.insert(name.to_string(), vec!["Ctrl+Alt+G".to_string()]);
+            let bindings = Bindings::new(&set);
+            let keys = parse("Ctrl+Alt+G").unwrap();
+            assert_eq!(bindings.command(keys), Some(Command::ShowAgents), "{name}");
+            assert!(!listed(&set), "and it's still on no list");
+        }
+        // List Agents, which it read like, is where it was.
+        assert!(COMMANDS.iter().any(|(_, c)| *c == Command::ListAgents));
     }
 
     #[test]
