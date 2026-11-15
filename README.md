@@ -188,7 +188,9 @@ is listed even when `.gitignore` leaves it out of the list or it's outside the f
 goes to a line of the file in view, `@` lists its symbols, `#` the project's and `>` the
 commands. Before you
 type, the files you last looked at are at the top, so Ctrl+P and Enter goes back to the one
-before this. Ctrl+Shift+P lists every command by name, with the ones you last ran from it first.
+before this. Ctrl+Shift+P lists the commands by category and name (`Git: Stash Changes`,
+`View: Toggle Sidebar`), with the ones you last ran from it first: type a name, or a category
+to see what it holds.
 Both lists scroll with the arrows, Page Up and Page Down and the wheel, their field takes the
 caret keys and Ctrl+V, and the letters you typed are picked out in each row.
 

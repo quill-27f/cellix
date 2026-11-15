@@ -491,9 +491,9 @@ fn pty_ctrl_shift_p_and_cmd_p_work_as_in_vs_code() {
     let mut screen = Screen::start(dir.path(), &[]);
     screen.wait_for("other.txt");
     screen.send(b"\x1b[112;6u"); // Ctrl+Shift+P, Kitty keyboard protocol
-    // The palette's own hint, and the first command by name.
+    // The palette's own hint, and a command under its category.
     screen.wait_for("Type to search");
-    screen.wait_for("Abort Merge");
+    screen.wait_for("Agent: List Agents");
     screen.send(b"\x1b");
     std::thread::sleep(Duration::from_millis(200));
     screen.send(b"\x1b[112;9u"); // Cmd+P

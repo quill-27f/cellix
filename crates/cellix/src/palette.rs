@@ -203,6 +203,25 @@ impl Item {
         }
     }
 
+    /// How well it fits what's typed, if it does. A command's name starts after its
+    /// category, so "save" is File: Save before it's anything that only holds the letters.
+    fn score(&self, typed: &str) -> Option<i32> {
+        let label = self.label();
+        match self {
+            // In its name by choice: the letters of "op" are in Workspace too, and
+            // found there first they'd put Open Folder under every other Open. Then its
+            // category typed first, and last the letters anywhere in its title.
+            Self::Command(..) => {
+                let name = bare(label);
+                let category = &label[..label.len() - name.len()];
+                let whole = fuzzy_score_from(typed, label, category.len());
+                let named = fuzzy_score(typed, name);
+                named.max(whole).max(in_category(typed, category, name))
+            }
+            _ => fuzzy_score(typed, label),
+        }
+    }
+
     /// What sits at the right of the row.
     fn keys(&self) -> Option<&str> {
         match self {
@@ -263,49 +282,63 @@ pub fn keys_of(command: Command) -> Option<&'static str> {
     })
 }
 
+/// A command's name without its category: "Toggle Sidebar" of "View: Toggle Sidebar".
+pub fn bare(title: &str) -> &str {
+    title.split_once(": ").map_or(title, |(_, name)| name)
+}
+
+/// Whether `name` is what the command titled `title` goes by: its title, or its name
+/// without the category, which is how settings and a folder's state written before
+/// commands had categories know it.
+pub fn goes_by(title: &str, name: &str) -> bool {
+    title == name || bare(title) == name
+}
+
+/// Every command the palette can list, as its category and its name. The list is shown by
+/// title, so a category's commands stand together.
 pub const COMMANDS: [(&str, Command); 122] = [
-    ("Save", Command::Save),
-    ("Undo", Command::Undo),
-    ("Redo", Command::Redo),
-    ("Select All", Command::SelectAll),
-    ("Close Tab", Command::CloseTab),
-    ("Next Tab", Command::NextTab),
-    ("Previous Tab", Command::PreviousTab),
-    ("Split Pane", Command::SplitPane),
-    ("Focus Next Pane", Command::FocusNextPane),
-    ("Toggle Sidebar", Command::ToggleSidebar),
-    ("Find in Project", Command::FindInProject),
-    ("Review Changes", Command::OpenDiff),
-    ("Add Comment", Command::AddComment),
-    ("Ask Agent", Command::AskAgent),
-    ("Blame Line", Command::BlameLine),
-    ("Replace in Project", Command::ReplaceInProject),
-    ("Toggle Markdown Source", Command::MarkdownPreview),
-    ("Open in Browser", Command::OpenInBrowser),
-    ("Focus Agent Pane", Command::FocusAgent),
-    ("Build PDF", Command::BuildPdf),
-    ("Export to PDF", Command::ExportPdf),
-    ("Compare Plan Versions", Command::ComparePlanVersions),
-    ("Show Line in PDF", Command::ShowInPdf),
-    ("Toggle Maximized Side Pane", Command::MaximizePane),
-    ("Toggle Maximized Editor", Command::MaximizeEditor),
-    ("Find in File", Command::FindInFile),
-    ("Go Back", Command::GoBack),
-    ("Next Change", Command::NextChange),
-    ("Previous Change", Command::PreviousChange),
-    ("Show Hover", Command::ShowHover),
-    ("Quick Fix…", Command::QuickFix),
-    ("Go Forward", Command::GoForward),
-    ("Replace in File", Command::ReplaceInFile),
-    ("Toggle Comment", Command::ToggleComment),
+    ("File: Save", Command::Save),
+    ("Edit: Undo", Command::Undo),
+    ("Edit: Redo", Command::Redo),
+    ("Edit: Select All", Command::SelectAll),
+    ("View: Close Tab", Command::CloseTab),
+    ("View: Next Tab", Command::NextTab),
+    ("View: Previous Tab", Command::PreviousTab),
+    ("View: Split Pane", Command::SplitPane),
+    ("View: Focus Next Pane", Command::FocusNextPane),
+    ("View: Toggle Sidebar", Command::ToggleSidebar),
+    ("Search: Find in Project", Command::FindInProject),
+    ("Git: Review Changes", Command::OpenDiff),
+    ("Comments: Add Comment", Command::AddComment),
+    ("Agent: Ask Agent", Command::AskAgent),
+    ("Git: Blame Line", Command::BlameLine),
+    ("Search: Replace in Project", Command::ReplaceInProject),
+    ("Document: Toggle Markdown Source", Command::MarkdownPreview),
+    ("File: Open in Browser", Command::OpenInBrowser),
+    ("View: Focus Agent Pane", Command::FocusAgent),
+    ("Document: Build PDF", Command::BuildPdf),
+    ("Document: Export to PDF", Command::ExportPdf),
+    ("Agent: Compare Plan Versions", Command::ComparePlanVersions),
+    ("Document: Show Line in PDF", Command::ShowInPdf),
+    ("View: Toggle Maximized Side Pane", Command::MaximizePane),
+    ("View: Toggle Maximized Editor", Command::MaximizeEditor),
+    ("Edit: Find in File", Command::FindInFile),
+    ("Navigate: Go Back", Command::GoBack),
+    ("Track Changes: Next Change", Command::NextChange),
+    ("Track Changes: Previous Change", Command::PreviousChange),
+    ("Edit: Show Hover", Command::ShowHover),
+    ("Edit: Quick Fix…", Command::QuickFix),
+    ("Navigate: Go Forward", Command::GoForward),
+    ("Edit: Replace in File", Command::ReplaceInFile),
+    ("Edit: Toggle Comment", Command::ToggleComment),
     ("View: Toggle Word Wrap", Command::ToggleWordWrap),
-    ("Fold", Command::Fold),
-    ("Unfold", Command::Unfold),
-    ("Fold All", Command::FoldAll),
-    ("Unfold All", Command::UnfoldAll),
-    ("Duplicate Line", Command::DuplicateLine),
-    ("Move Line Up", Command::MoveLineUp),
-    ("Go to Line", Command::GoToLine),
+    ("View: Fold", Command::Fold),
+    ("View: Unfold", Command::Unfold),
+    ("View: Fold All", Command::FoldAll),
+    ("View: Unfold All", Command::UnfoldAll),
+    ("Edit: Duplicate Line", Command::DuplicateLine),
+    ("Edit: Move Line Up", Command::MoveLineUp),
+    ("Navigate: Go to Line", Command::GoToLine),
     ("Format: Bold", Command::Format(Format::Bold)),
     ("Format: Italic", Command::Format(Format::Italic)),
     ("Format: Inline Code", Command::Format(Format::Code)),
@@ -313,80 +346,110 @@ pub const COMMANDS: [(&str, Command); 122] = [
     ("Format: Bulleted List", Command::Format(Format::Bullet)),
     ("Format: Task List", Command::Format(Format::Task)),
     ("Format: Quote", Command::Format(Format::Quote)),
-    ("Send Comments to Agent", Command::SendToAgent),
-    ("Send Selection to Agent", Command::MentionSelection),
-    ("Accept Proposed Change", Command::AcceptProposal),
-    ("Reject Proposed Change", Command::RejectProposal),
-    ("Approve Plan", Command::ApprovePlan),
-    ("Send Plan Back", Command::SendBackPlan),
-    ("Show Agents", Command::ShowAgents),
-    ("Close Side Pane", Command::CloseDock),
-    ("Toggle Side Pane", Command::TogglePanel),
-    ("Show Outline", Command::ShowOutline),
-    ("Show Source Control", Command::ShowSourceControl),
-    ("Show Agent Context", Command::ShowAgentContext),
-    ("Toggle Terminal", Command::ToggleTerminal),
-    ("New Terminal", Command::NewTerminal),
-    ("Show Comments", Command::ShowComments),
-    ("Show Inbox", Command::ShowInbox),
-    ("Show Browser", Command::ShowBrowser),
-    ("List Agents", Command::ListAgents),
-    ("Run Cell", Command::RunCell),
-    ("Run All Cells", Command::RunAllCells),
-    ("Clear All Outputs", Command::ClearOutputs),
-    ("Interrupt Kernel", Command::InterruptKernel),
-    ("Restart Kernel", Command::RestartKernel),
-    ("Getting Started", Command::ShowGuide),
-    ("New Document", Command::NewDocument),
-    ("Toggle Track Changes", Command::ToggleTracking),
-    ("Toggle Spell Check", Command::ToggleSpelling),
-    ("Accept Change", Command::AcceptChange),
-    ("Reject Change", Command::RejectChange),
-    ("Accept All Changes", Command::AcceptAllChanges),
-    ("Reject All Changes", Command::RejectAllChanges),
-    ("Review Previous Agent Turn", Command::ReviewPreviousTurn),
-    ("Undo Agent Turn", Command::UndoTurn),
-    ("Show Agent Task", Command::ShowAgentTask),
-    ("Commit Staged Changes", Command::Commit),
-    ("Open Claude Code", Command::OpenClaude),
-    ("Open Codex", Command::OpenCodex),
-    ("Open Folder as a Workspace", Command::OpenWorkspace),
-    ("Open Recent…", Command::OpenRecent),
-    ("Run Task…", Command::RunTask),
-    ("Run Build Task", Command::RunBuildTask),
-    ("Rerun Last Task", Command::RerunLastTask),
-    ("Next Workspace", Command::NextWorkspace),
-    ("Previous Workspace", Command::PreviousWorkspace),
-    ("Open Settings", Command::OpenSettings),
-    ("Switch Branch", Command::SwitchBranch),
-    ("Open Gemini CLI", Command::OpenGemini),
-    ("Open Agent Transcript", Command::OpenTranscript),
-    ("Go to Definition", Command::GoToDefinition),
-    ("Go to Symbol in Editor", Command::GoToSymbol),
-    ("Go to Symbol in Workspace", Command::GoToWorkspaceSymbol),
-    ("Go to References", Command::GoToReferences),
-    ("Format Document", Command::FormatDocument),
-    ("Complete", Command::Complete),
-    ("Rename Symbol", Command::RenameSymbol),
+    ("Comments: Send Comments to Agent", Command::SendToAgent),
+    ("Agent: Send Selection to Agent", Command::MentionSelection),
+    ("Agent: Accept Proposed Change", Command::AcceptProposal),
+    ("Agent: Reject Proposed Change", Command::RejectProposal),
+    ("Agent: Approve Plan", Command::ApprovePlan),
+    ("Agent: Send Plan Back", Command::SendBackPlan),
+    ("Agent: Show Agents", Command::ShowAgents),
+    ("View: Close Side Pane", Command::CloseDock),
+    ("View: Toggle Side Pane", Command::TogglePanel),
+    ("View: Show Outline", Command::ShowOutline),
+    ("View: Show Source Control", Command::ShowSourceControl),
+    ("Agent: Show Agent Context", Command::ShowAgentContext),
+    ("View: Toggle Terminal", Command::ToggleTerminal),
+    ("Terminal: New Terminal", Command::NewTerminal),
+    ("Comments: Show Comments", Command::ShowComments),
+    ("View: Show Inbox", Command::ShowInbox),
+    ("View: Show Browser", Command::ShowBrowser),
+    ("Agent: List Agents", Command::ListAgents),
+    ("Notebook: Run Cell", Command::RunCell),
+    ("Notebook: Run All Cells", Command::RunAllCells),
+    ("Notebook: Clear All Outputs", Command::ClearOutputs),
+    ("Notebook: Interrupt Kernel", Command::InterruptKernel),
+    ("Notebook: Restart Kernel", Command::RestartKernel),
+    ("Help: Getting Started", Command::ShowGuide),
+    ("File: New Document", Command::NewDocument),
+    (
+        "Track Changes: Toggle Track Changes",
+        Command::ToggleTracking,
+    ),
+    ("Document: Toggle Spell Check", Command::ToggleSpelling),
+    ("Track Changes: Accept Change", Command::AcceptChange),
+    ("Track Changes: Reject Change", Command::RejectChange),
+    (
+        "Track Changes: Accept All Changes",
+        Command::AcceptAllChanges,
+    ),
+    (
+        "Track Changes: Reject All Changes",
+        Command::RejectAllChanges,
+    ),
+    (
+        "Agent: Review Previous Agent Turn",
+        Command::ReviewPreviousTurn,
+    ),
+    ("Agent: Undo Agent Turn", Command::UndoTurn),
+    ("Agent: Show Agent Task", Command::ShowAgentTask),
+    ("Git: Commit Staged Changes", Command::Commit),
+    ("Agent: Open Claude Code", Command::OpenClaude),
+    ("Agent: Open Codex", Command::OpenCodex),
+    (
+        "Workspace: Open Folder as a Workspace",
+        Command::OpenWorkspace,
+    ),
+    ("File: Open Recent…", Command::OpenRecent),
+    ("Tasks: Run Task…", Command::RunTask),
+    ("Tasks: Run Build Task", Command::RunBuildTask),
+    ("Tasks: Rerun Last Task", Command::RerunLastTask),
+    ("Workspace: Next Workspace", Command::NextWorkspace),
+    ("Workspace: Previous Workspace", Command::PreviousWorkspace),
+    ("Preferences: Open Settings", Command::OpenSettings),
+    ("Git: Switch Branch", Command::SwitchBranch),
+    ("Agent: Open Gemini CLI", Command::OpenGemini),
+    ("Agent: Open Agent Transcript", Command::OpenTranscript),
+    ("Navigate: Go to Definition", Command::GoToDefinition),
+    ("Navigate: Go to Symbol in Editor", Command::GoToSymbol),
+    (
+        "Navigate: Go to Symbol in Workspace",
+        Command::GoToWorkspaceSymbol,
+    ),
+    ("Navigate: Go to References", Command::GoToReferences),
+    ("Edit: Format Document", Command::FormatDocument),
+    ("Edit: Complete", Command::Complete),
+    ("Edit: Rename Symbol", Command::RenameSymbol),
     // Git
-    ("Stash Changes", Command::Stash),
-    ("Stash Including Untracked", Command::StashUntracked),
-    ("Stash Staged Changes", Command::StashStaged),
-    ("Pop Latest Stash", Command::PopStash),
-    ("Apply Stash…", Command::ApplyStash),
-    ("Pop Stash…", Command::PickStashToPop),
-    ("Drop Stash…", Command::DropStash),
-    ("Compare With…", Command::CompareWith),
-    ("Show Git History", Command::ShowHistory),
-    ("Show File History", Command::FileHistory),
-    ("Accept Current Change", Command::AcceptCurrent),
-    ("Accept Incoming Change", Command::AcceptIncoming),
-    ("Accept Both Changes", Command::AcceptBoth),
-    ("Compare Current and Incoming", Command::CompareConflict),
-    ("Next Conflict", Command::NextConflict),
-    ("Previous Conflict", Command::PreviousConflict),
-    ("Abort Merge", Command::AbortMerge),
-    ("Quit", Command::Quit),
+    ("Git: Stash Changes", Command::Stash),
+    ("Git: Stash Including Untracked", Command::StashUntracked),
+    ("Git: Stash Staged Changes", Command::StashStaged),
+    ("Git: Pop Latest Stash", Command::PopStash),
+    ("Git: Apply Stash…", Command::ApplyStash),
+    ("Git: Pop Stash…", Command::PickStashToPop),
+    ("Git: Drop Stash…", Command::DropStash),
+    ("Git: Compare With…", Command::CompareWith),
+    ("Git: Show Git History", Command::ShowHistory),
+    ("Git: Show File History", Command::FileHistory),
+    (
+        "Merge Conflict: Accept Current Change",
+        Command::AcceptCurrent,
+    ),
+    (
+        "Merge Conflict: Accept Incoming Change",
+        Command::AcceptIncoming,
+    ),
+    ("Merge Conflict: Accept Both Changes", Command::AcceptBoth),
+    (
+        "Merge Conflict: Compare Current and Incoming",
+        Command::CompareConflict,
+    ),
+    ("Merge Conflict: Next Conflict", Command::NextConflict),
+    (
+        "Merge Conflict: Previous Conflict",
+        Command::PreviousConflict,
+    ),
+    ("Git: Abort Merge", Command::AbortMerge),
+    ("File: Quit", Command::Quit),
 ];
 
 /// Quick open and the command palette: a filtered list with a text box.
@@ -651,7 +714,12 @@ pub fn picked_out(query: &str, text: &str, from_end: bool) -> Vec<usize> {
 /// higher, and most of all a word that begins with the whole query: "op" is Open Folder
 /// before it's Pop Stash.
 pub fn fuzzy_score(query: &str, text: &str) -> Option<i32> {
-    let name_start = text.rfind('/').map_or(0, |i| i + 1);
+    fuzzy_score_from(query, text, text.rfind('/').map_or(0, |i| i + 1))
+}
+
+/// `fuzzy_score` with the name starting at byte `name_start` of `text`: after a path's last
+/// folder, or after a command's category.
+fn fuzzy_score_from(query: &str, text: &str, name_start: usize) -> Option<i32> {
     let mut score = 0;
     // Where the last match ended, to see a run.
     let mut last = None;
@@ -673,12 +741,30 @@ pub fn fuzzy_score(query: &str, text: &str) -> Option<i32> {
     }
     if let Some(at) = word_beginning_with(query, text) {
         score += 6;
-        // The first word of a command, or of a file's name, is what people type.
-        if at == name_start {
+        // The first word of a command, or of a file's name, is what people type. A word
+        // before it may begin the same way, as a command's category can: Agent: Ask Agent.
+        if at == name_start || begins_with(&text[name_start..], query) {
             score += 3;
         }
     }
     Some(score - text.len() as i32 / 16)
+}
+
+/// A command's score for its category typed before a space: "git st" is Git's commands with
+/// "st" in their names, the ones that start with it first, and "git " is every one of them
+/// in the order they're listed. The category's letters count as a run at a word's start.
+fn in_category(typed: &str, category: &str, name: &str) -> Option<i32> {
+    let (head, rest) = typed.split_once(' ')?;
+    let head = head.trim_end_matches(':');
+    if head.is_empty() || !begins_with(category, head) {
+        return None;
+    }
+    let rest = rest.trim_start();
+    if rest.is_empty() {
+        return Some(100);
+    }
+    let run = 5 * head.chars().count() as i32 + 6;
+    fuzzy_score(rest, name).map(|score| score + run)
 }
 
 /// Whether a word starts at byte `at` of `text`: at its beginning, after anything that
@@ -696,14 +782,16 @@ fn word_beginning_with(query: &str, text: &str) -> Option<usize> {
     if query.is_empty() {
         return None;
     }
-    let begins = |at: usize| {
-        let mut letters = text[at..].chars();
-        let mut typed = query.chars().flat_map(char::to_lowercase);
-        typed.all(|q| letters.next().is_some_and(|c| same_letter(c, q)))
-    };
     text.char_indices()
         .map(|(at, _)| at)
-        .find(|at| word_start(text, *at) && begins(*at))
+        .find(|at| word_start(text, *at) && begins_with(&text[*at..], query))
+}
+
+/// Whether `text` begins with all of `query`, whatever the case.
+fn begins_with(text: &str, query: &str) -> bool {
+    let mut letters = text.chars();
+    let mut typed = query.chars().flat_map(char::to_lowercase);
+    typed.all(|q| letters.next().is_some_and(|c| same_letter(c, q)))
 }
 
 /// Whether `c` is `lower`, whatever its case.
@@ -1166,7 +1254,7 @@ impl Palette {
         let mut scored: Vec<(i32, usize)> = candidates
             .into_iter()
             .filter(|&i| !self.items[i].divider() && Some(i) != slot)
-            .filter_map(|i| Some((fuzzy_score(&typed, self.items[i].label())?, i)))
+            .filter_map(|i| Some((self.items[i].score(&typed)?, i)))
             .collect();
         scored.sort_by_key(|(score, i)| (-score, *i));
         (self.scores, self.matches) = scored.into_iter().unzip();
@@ -1653,6 +1741,16 @@ impl Palette {
                 if task.command != task.label {
                     parts.aside = task.command.clone();
                 }
+            }
+            // In a command's name by choice, as it's scored.
+            Item::Command(label, _) => {
+                let name = bare(label);
+                let before = label.chars().count() - name.chars().count();
+                let in_name = picked_out(self.typed(), name, false);
+                parts.hits = match in_name.is_empty() {
+                    true => picked_out(self.typed(), label, false),
+                    false => in_name.into_iter().map(|at| at + before).collect(),
+                };
             }
             _ => parts.hits = picked_out(self.typed(), &parts.words, false),
         }
@@ -2192,11 +2290,14 @@ mod tests {
             .iter()
             .map(|index| palette.items[*index].label())
             .collect();
-        assert!(labels[0].starts_with("Open"), "{labels:?}");
+        // By their names, whatever category each is in: Workspace has an o and a p too.
+        let names: Vec<&str> = labels.iter().map(|title| bare(title)).collect();
+        assert!(names[0].starts_with("Open"), "{labels:?}");
         // Every Open… stands above the commands that only hold the letters, like Pop Stash.
-        let last_open = labels.iter().rposition(|l| l.starts_with("Open")).unwrap();
-        let pop = labels.iter().position(|l| l.starts_with("Pop Stash"));
+        let last_open = names.iter().rposition(|l| l.starts_with("Open")).unwrap();
+        let pop = names.iter().position(|l| l.starts_with("Pop Stash"));
         assert!(pop.is_some_and(|pop| last_open < pop), "{labels:?}");
+        assert_eq!(names.iter().filter(|l| l.starts_with("Open")).count(), 8);
         // A later word that starts with it counts too: "stash" finds Pop Stash before a
         // command with those letters scattered through it.
         assert!(fuzzy_score("stash", "Pop Stash…") > fuzzy_score("stash", "Stage All and Push"));

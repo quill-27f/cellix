@@ -52,7 +52,7 @@ use crate::measures::{self, BUTTON_GAP};
 use crate::menu::{Action as MenuAction, Item as MenuItem, Menu, Outcome as MenuOutcome};
 use crate::neovim::{self, Neovim};
 use crate::outline::Outline;
-use crate::palette::{COMMANDS, Input, Item, Palette, SymbolRow, input, popup};
+use crate::palette::{COMMANDS, Input, Item, Palette, SymbolRow, goes_by, input, popup};
 use crate::panels::{MathPanel, SYMBOLS, TablePicker};
 use crate::pdfview::{Hit as PdfHit, PdfView};
 use crate::rendered::{self, Dialect, Target};
@@ -11812,7 +11812,7 @@ impl App {
         self.commands_used = state
             .commands
             .iter()
-            .filter_map(|name| COMMANDS.iter().find(|(label, _)| label == name))
+            .filter_map(|name| COMMANDS.iter().find(|(label, _)| goes_by(label, name)))
             .map(|(_, command)| *command)
             .collect();
         let root = self.workspace.root().to_path_buf();
@@ -18371,7 +18371,9 @@ mod tests {
         };
         app.run(Command::CommandPalette);
         let listed = rows(&app);
-        assert_eq!(listed[0], "Abort Merge", "{listed:?}");
+        // The first of them by name, whichever that is with the file in view.
+        let first = listed[0].clone();
+        assert!(first.starts_with("Agent: "), "{listed:?}");
         let mut sorted = listed.clone();
         sorted.sort_by_key(|name| name.to_lowercase());
         assert_eq!(listed, sorted, "by name");
@@ -18390,9 +18392,9 @@ mod tests {
             listed[..4],
             [
                 RECENTLY_USED,
-                "Toggle Sidebar",
+                "View: Toggle Sidebar",
                 OTHER_COMMANDS,
-                "Abort Merge"
+                first.as_str()
             ],
             "{listed:?}"
         );
@@ -18404,10 +18406,13 @@ mod tests {
         enter(&mut app);
         app.run(Command::CommandPalette);
         let listed = rows(&app);
-        assert_eq!(listed[..3], [RECENTLY_USED, "Fold All", "Toggle Sidebar"]);
+        assert_eq!(
+            listed[..3],
+            [RECENTLY_USED, "View: Fold All", "View: Toggle Sidebar"]
+        );
         typed(&mut app, "toggle sidebar");
         let found = rows(&app);
-        assert_eq!(found, ["Toggle Sidebar"], "once");
+        assert_eq!(found, ["View: Toggle Sidebar"], "once");
         key(&mut app, Key::Esc);
 
         // A command run by its keys or a menu isn't one the palette was used for.
@@ -18418,15 +18423,149 @@ mod tests {
         );
 
         // They're kept for the next run of Cellix in this folder.
-        assert_eq!(app.state().commands, ["Fold All", "Toggle Sidebar"]);
+        assert_eq!(
+            app.state().commands,
+            ["View: Fold All", "View: Toggle Sidebar"]
+        );
         app.keep_state();
         let mut next = App::new(dir.path().to_path_buf(), (100, 30));
         next.restore_state();
         next.run(Command::CommandPalette);
         assert_eq!(
             rows(&next)[..3],
-            [RECENTLY_USED, "Fold All", "Toggle Sidebar"]
+            [RECENTLY_USED, "View: Fold All", "View: Toggle Sidebar"]
         );
+    }
+
+    /// The commands were a hundred and twenty names in one run, Git's stashes among the
+    /// editor's folds. Each has its category before its name, as VS Code's have, so a
+    /// category's commands stand together in the list; and the name alone, which settings
+    /// and a folder's state were written with until now, still means the command.
+    #[test]
+    fn every_command_has_a_category_and_its_name_alone_still_means_it() {
+        // Every one, those with only keys too: a category, a name, and no name twice.
+        let all = crate::keys::shortcuts(&Default::default());
+        assert!(all.len() > COMMANDS.len());
+        let mut names: Vec<&str> = Vec::new();
+        for shortcut in &all {
+            let title = shortcut.name;
+            let (category, name) = title.split_once(": ").expect(title);
+            assert!(!category.is_empty() && !name.contains(": "), "{title}");
+            assert_eq!(crate::palette::bare(title), name);
+            assert!(!names.contains(&name), "{name} is two commands' name");
+            names.push(name);
+        }
+
+        let (dir, mut app) = project();
+        // The rows of the list, as they're shown inside the panel, without their keys.
+        let rows = |app: &App| -> Vec<String> {
+            let grid = screen(app);
+            let Overlay::Palette(palette) = &app.overlay else {
+                panic!("the palette isn't open");
+            };
+            let area = palette.shown(grid.area());
+            let row = |y: u16| -> String {
+                let cells = (area.x + 2..area.right() - 16).map(|x| grid.cell(x, y));
+                let text: String = cells.map(|cell| cell.symbol.as_str()).collect();
+                text.trim().to_string()
+            };
+            (area.y + 2..area.bottom()).map(row).collect()
+        };
+        // A name finds its command whatever category it's in, as it did before there were
+        // any, and comes before a command that only holds the letters.
+        for (query, first) in [
+            ("save", "File: Save"),
+            ("toggle side", "View: Toggle Sidebar"),
+            ("op", "Agent: Open Codex"),
+            ("stash", "Git: Stash Changes"),
+            // A category first, then what's wanted in it: not Show Git History, whose
+            // name holds every letter.
+            ("git st", "Git: Stash Changes"),
+            ("format doc", "Edit: Format Document"),
+        ] {
+            app.run(Command::CommandPalette);
+            typed(&mut app, query);
+            assert_eq!(rows(&app)[0], first, "{query}: {:?}", rows(&app));
+            key(&mut app, Key::Esc);
+        }
+        // A category finds its commands, and with more typed, one of them.
+        app.run(Command::CommandPalette);
+        typed(&mut app, "git ");
+        let listed = rows(&app);
+        assert!(
+            listed[..5].iter().all(|row| row.starts_with("Git: ")),
+            "{listed:?}"
+        );
+        let mut sorted = listed[..5].to_vec();
+        sorted.sort();
+        assert_eq!(listed[..5], sorted[..], "as they're listed, by name");
+        typed(&mut app, "hist");
+        let listed = rows(&app);
+        assert_eq!(
+            listed[..2],
+            ["Git: Show Git History", "Git: Show File History"]
+        );
+        // What's typed is picked out in the name, not in the letters the category shares.
+        key(&mut app, Key::Esc);
+        app.run(Command::CommandPalette);
+        typed(&mut app, "ask");
+        let Overlay::Palette(palette) = &app.overlay else {
+            panic!("the palette isn't open");
+        };
+        let grid = screen(&app);
+        let (x, y) = find(&grid, "Agent: Ask Agent");
+        let bold = |x: u16| grid.cell(x, y).style.bold;
+        assert!(palette.current().is_some());
+        assert!(
+            !bold(x) && bold(x + 7) && bold(x + 9),
+            "Ask, not the A of Agent"
+        );
+        key(&mut app, Key::Esc);
+
+        // Settings written before know a command by its name alone: its keys still work.
+        let hidden = |app: &App| !screen(app).text().contains("alpha.txt");
+        let own = vec!["Ctrl+Alt+Y".to_string()];
+        app.settings
+            .keybindings
+            .insert("Toggle Sidebar".to_string(), own);
+        app.workflow.keys = crate::keys::Bindings::new(&app.settings.keybindings);
+        let ctrl_alt = |c: char| {
+            Event::Key(KeyEvent {
+                key: Key::Char(c),
+                mods: Mods {
+                    ctrl: true,
+                    alt: true,
+                    shift: false,
+                },
+            })
+        };
+        app.handle(ctrl_alt('y'));
+        assert!(hidden(&app), "the keys set under the old name run it");
+        app.handle(Event::Key(KeyEvent::ctrl('b')));
+        assert!(hidden(&app), "and its own keys are replaced");
+        // New keys go under its title, and the old entry goes rather than keep its keys.
+        let _ = app.set_keys("View: Toggle Sidebar", Some("Ctrl+Alt+U".into()));
+        assert!(!app.settings.keybindings.contains_key("Toggle Sidebar"));
+        assert_eq!(
+            app.settings.keybindings["View: Toggle Sidebar"],
+            ["Ctrl+Alt+U"]
+        );
+        app.handle(ctrl_alt('y'));
+        assert!(hidden(&app));
+        app.handle(ctrl_alt('u'));
+        assert!(!hidden(&app));
+
+        // And a folder's state names what was last run the old way.
+        app.commands_used = vec![Command::ToggleSidebar];
+        app.keep_state();
+        let file = app.state_file();
+        let kept = fs::read_to_string(&file).unwrap();
+        assert!(kept.contains("\"View: Toggle Sidebar\""), "{kept}");
+        let before = kept.replace("\"View: Toggle Sidebar\"", "\"Toggle Sidebar\"");
+        fs::write(&file, before).unwrap();
+        let mut next = App::new(dir.path().to_path_buf(), (100, 30));
+        next.restore_state();
+        assert_eq!(next.commands_used, [Command::ToggleSidebar]);
     }
 
     /// What the design review found in the palettes once they were built: a list of plain
@@ -18453,7 +18592,7 @@ mod tests {
         typed(&mut app, "toggle side");
         let grid = screen(&app);
         let (typed_at, field) = find(&grid, "toggle side");
-        let (row_at, _) = find(&grid, "Toggle Sidebar");
+        let (row_at, _) = find(&grid, "View: Toggle Sidebar");
         assert_eq!((typed_at, field), (row_at, area.y));
         assert_eq!(hint, typed_at, "the hint starts where typing does");
         key(&mut app, Key::Esc);
@@ -18587,7 +18726,7 @@ mod tests {
         typed(&mut app, ">");
         let shown = panel(&app);
         assert!(
-            shown.contains("Abort Merge") && !shown.contains("alpha.txt"),
+            shown.contains("Agent: Ask Agent") && !shown.contains("alpha.txt"),
             "{shown}"
         );
         // What follows it finds a command, and Enter runs it.
@@ -28292,7 +28431,8 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
     fn the_palette_reaches_the_terminal() {
         let names = crate::palette::COMMANDS.iter().map(|(name, _)| *name);
         let names: Vec<&str> = names.collect();
-        assert!(names.contains(&"Toggle Terminal") && names.contains(&"New Terminal"));
+        assert!(names.contains(&"View: Toggle Terminal"));
+        assert!(names.contains(&"Terminal: New Terminal"));
     }
 
     #[test]

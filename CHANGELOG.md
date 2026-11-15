@@ -2,6 +2,11 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
+## [Unreleased]
+
+### Changed
+- Every command has its category before its name, as VS Code's have: `Git: Stash Changes`, `View: Toggle Sidebar`, `Agent: Ask Agent`. The command palette lists them by that, so a category's commands stand together, and the Keyboard page in Settings names them the same way. Type a name as before, or a category to see what it holds: `git` lists Git's commands and `git hist` finds Show Git History. Keys set in `settings.json` under a command's name alone still work.
+
 ## [0.8.0] - 2026-11-15
 
 ### Added

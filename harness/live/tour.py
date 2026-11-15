@@ -54,7 +54,7 @@ EXPECT = {
     "08-open-file-recent": "RECENTLY OPENED",
     "09-commands": "Open Settings",
     "09-commands-recent": "RECENTLY USED",
-    "09-commands-scrolled": "Close Side Pane",
+    "09-commands-scrolled": "Show Agent Task",
     "10-branches": "Switch branch",
     "100-workspaces": "Resume",
     "101-workspace-hover": "Resume",

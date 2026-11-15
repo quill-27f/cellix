@@ -240,6 +240,9 @@ impl App {
 
     /// Gives a command the keys pressed, or with `None` its own back, and saves that.
     pub(super) fn set_keys(&mut self, name: &str, keys: Option<String>) -> String {
+        // Settings from before commands had categories know it by its name alone: that
+        // entry goes, or it would keep its keys beside the new ones.
+        self.settings.keybindings.remove(crate::palette::bare(name));
         match keys {
             Some(keys) => {
                 self.settings
@@ -798,12 +801,15 @@ mod tests {
             text.contains("Ctrl+Alt+R") && text.contains("User"),
             "{text}"
         );
-        assert_eq!(app.settings.keybindings["Rerun Last Task"], ["Ctrl+Alt+R"]);
+        assert_eq!(
+            app.settings.keybindings["Tasks: Rerun Last Task"],
+            ["Ctrl+Alt+R"]
+        );
         // A key two commands share is flagged.
         for _ in 0.."rerun".len() {
             app.handle(Event::Key(KeyEvent::plain(Key::Backspace)));
         }
-        let _ = app.set_keys("Open Recent…", Some("Ctrl+R".into()));
+        let _ = app.set_keys("File: Open Recent…", Some("Ctrl+R".into()));
         typed(&mut app, "ctrl+r");
         assert!(screen(&app).text().contains("2 settings"));
         // Out of Settings, the new keys run the command. Escape empties the filter first.

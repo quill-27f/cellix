@@ -5066,5 +5066,12 @@
     "title": "After the second design review: a palette's box is a step darker than its panel on a light terminal too, where the sheet is white as well, and Quick Open's hint names > with :line, @ and #",
     "test": "a_palettes_box_shows_on_a_light_terminal_and_quick_opens_hint_names_every_sign",
     "passes": true
+  },
+  {
+    "id": "command-categories",
+    "milestone": 14,
+    "title": "Every command has its category before its name, so the palette lists a category's commands together; a name is found as before and a category finds its commands; settings and state that name a command without its category still mean it",
+    "test": "every_command_has_a_category_and_its_name_alone_still_means_it",
+    "passes": true
   }
 ]

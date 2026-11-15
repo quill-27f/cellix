@@ -535,7 +535,17 @@ The command palette does the same with commands: the six last run from it under 
 the last at the top, and every other command under OTHER COMMANDS by name, as VS Code has them.
 Only a command picked in the palette counts, since one with keys that are used never needs
 the list. They're kept in the folder's `state.json` with the tabs. With none run yet the list is
-every command by name, with no groups. `>` typed first in Quick Open is the same list, the
+every command by name, with no groups. A command's title is its category and its name, `Git:
+Stash Changes`, as VS Code's are, so by name a category's commands stand together: Agent,
+Comments, Document, Edit, File, Format, Git, Help, Merge Conflict, Navigate, Notebook,
+Preferences, Search, Tasks, Terminal, Track Changes, View, Workspace. The Keyboard page names
+them the same way. What's typed is looked for in the name first and scored as it was before
+there were categories, so the letters a category happens to share don't rank a command. A
+category typed before a space narrows to it: `git st` is Git's commands with "st" in their
+names and `git ` is all of them, in the list's order. Failing both, the letters anywhere in the
+title. The name alone is what settings and a folder's state
+knew a command by, and still means it (`palette::goes_by`); keys set on the Keyboard page are
+written under the title and the old entry goes. `>` typed first in Quick Open is the same list, the
 sign staying in the field as `@` and `#` do for symbols, and taking it away lists the files
 again. The hint names all three and `:line`, in as few words as the field's cells need.
 

@@ -6,27 +6,30 @@ use std::sync::OnceLock;
 
 use cellix_input::{Command, Key, KeyEvent, Mods, simple_keymap};
 
-use crate::palette::{COMMANDS, keys_of};
+use crate::palette::{COMMANDS, bare, goes_by, keys_of};
 
 /// Commands that have keys but no row in the palette, which the page lists too.
 const KEYS_ONLY: [(&str, Command); 17] = [
-    ("Show All Commands", Command::CommandPalette),
-    ("Go to File", Command::QuickOpen),
-    ("Copy", Command::Copy),
-    ("Cut", Command::Cut),
-    ("Paste", Command::Paste),
-    ("Add Selection to Next Find Match", Command::SelectNextMatch),
-    ("Select All Occurrences", Command::SelectAllMatches),
-    ("Add Cursor Above", Command::AddCursorAbove),
-    ("Add Cursor Below", Command::AddCursorBelow),
-    ("Move Line Down", Command::MoveLineDown),
-    ("Delete Line", Command::DeleteLine),
-    ("Insert Line Below", Command::InsertLineBelow),
-    ("Insert Line Above", Command::InsertLineAbove),
-    ("Next Problem", Command::NextProblem),
-    ("Previous Problem", Command::PreviousProblem),
-    ("Indent Line", Command::Indent),
-    ("Outdent Line", Command::Outdent),
+    ("View: Show All Commands", Command::CommandPalette),
+    ("Navigate: Go to File", Command::QuickOpen),
+    ("Edit: Copy", Command::Copy),
+    ("Edit: Cut", Command::Cut),
+    ("Edit: Paste", Command::Paste),
+    (
+        "Edit: Add Selection to Next Find Match",
+        Command::SelectNextMatch,
+    ),
+    ("Edit: Select All Occurrences", Command::SelectAllMatches),
+    ("Edit: Add Cursor Above", Command::AddCursorAbove),
+    ("Edit: Add Cursor Below", Command::AddCursorBelow),
+    ("Edit: Move Line Down", Command::MoveLineDown),
+    ("Edit: Delete Line", Command::DeleteLine),
+    ("Edit: Insert Line Below", Command::InsertLineBelow),
+    ("Edit: Insert Line Above", Command::InsertLineAbove),
+    ("Navigate: Next Problem", Command::NextProblem),
+    ("Navigate: Previous Problem", Command::PreviousProblem),
+    ("Edit: Indent Line", Command::Indent),
+    ("Edit: Outdent Line", Command::Outdent),
 ];
 
 /// Every command the page lists, by name.
@@ -230,7 +233,8 @@ pub struct Shortcut {
 }
 
 /// The person's keys, by the palette's name for each command, in place of its defaults. An
-/// empty list takes a command's keys away.
+/// empty list takes a command's keys away. A name without its category is read too, as
+/// settings written before commands had categories have it.
 #[derive(Default)]
 pub struct Bindings {
     /// Each key the person set, and its command.
@@ -243,7 +247,7 @@ impl Bindings {
     pub fn new(set: &HashMap<String, Vec<String>>) -> Self {
         let mut bindings = Self::default();
         for (name, keys) in set {
-            let Some((_, command)) = named().find(|(n, _)| n == name) else {
+            let Some((_, command)) = named().find(|(title, _)| goes_by(title, name)) else {
                 continue;
             };
             bindings.replaced.push(*command);
@@ -269,20 +273,22 @@ impl Bindings {
 pub fn shortcuts(set: &HashMap<String, Vec<String>>) -> Vec<Shortcut> {
     let defaults = defaults();
     let mut list: Vec<Shortcut> = named()
-        .map(|(name, command)| match set.get(*name) {
-            Some(keys) => Shortcut {
-                name,
-                command: *command,
-                keys: keys.iter().filter_map(|k| parse(k)).map(name_of).collect(),
-                user: true,
+        .map(
+            |(name, command)| match set.get(*name).or_else(|| set.get(bare(name))) {
+                Some(keys) => Shortcut {
+                    name,
+                    command: *command,
+                    keys: keys.iter().filter_map(|k| parse(k)).map(name_of).collect(),
+                    user: true,
+                },
+                None => Shortcut {
+                    name,
+                    command: *command,
+                    keys: defaults.get(command).cloned().unwrap_or_default(),
+                    user: false,
+                },
             },
-            None => Shortcut {
-                name,
-                command: *command,
-                keys: defaults.get(command).cloned().unwrap_or_default(),
-                user: false,
-            },
-        })
+        )
         .collect();
     list.sort_by_key(|s| s.name.to_lowercase());
     list
