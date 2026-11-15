@@ -492,6 +492,20 @@ is in its cells. It was a field with no box and a line under it, 18 px from the 
 the line and nothing under its last row. The list keeps a row when nothing matches, which says
 so, so the field never moves as the list empties.
 
+Quick Open reads a path the way it's copied, since the file a person wants is most often one
+an agent or a compiler has just named. What's pasted is cleaned of what it was copied with
+(`palette::pasted_path`: quotes, backticks, brackets, a `file://`, an agent's `@`, a full stop, a
+compiler's message after the place, and the words round it when it's a sentence that names a
+file). What's typed or pasted is then split into a path and a place (`path_and_place`: `:120`,
+`:120:8`, `:120-140`, `#L120`, `(120,8)`), and the app reads the path from the workspace's
+folder, from the top of the disk, from `~` or after a diff's `a/` and `b/` (`App::file_named`). The
+list is matched against the path as the list writes paths, and a path that names a file that's
+there puts that file first, whether the walk found it or not: the walk leaves out what
+`.gitignore` names, can't reach outside the folder, and in a big tree may not have got there.
+Enter opens the picked file at the place. VS Code does the same with `file:line` and with whole
+paths. A list or box that's open has the keyboard, so it takes what's pasted, by the terminal
+or by Ctrl+V, before anything written under it does.
+
 Git has two places. Source Control in the sidebar decides what goes in: a message, staged and
 unstaged files, Commit, and Push or Pull, as in VS Code. Review reads what changed, hunk by hunk,
 and takes over the explorer's width unless Source Control is showing, in which case it stands

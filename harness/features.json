@@ -4996,5 +4996,12 @@
     "title": "A palette's field is a box, and the air above it, between it and the list, and under the list is one measure; the picked row shows on the cell tier, and a list with nothing in it says so",
     "test": "a_palettes_field_and_list_keep_the_same_air_above_between_and_below",
     "passes": true
+  },
+  {
+    "id": "quick-open-pasted-path",
+    "milestone": 14,
+    "title": "Quick Open goes where a pasted path says: a path with a line after it, from the top of the disk or home, in quotes or a sentence, pasted by the terminal or Ctrl+V, lists its file first even when .gitignore or the folder leaves it out, and Enter opens it at the line; :120 alone is a line of the file in view",
+    "test": "quick_open_goes_where_a_pasted_path_says",
+    "passes": true
   }
 ]

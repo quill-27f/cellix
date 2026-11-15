@@ -70,6 +70,16 @@ pub enum Item {
     Recent(PathBuf, String, bool),
     /// A choice in one of git's lists: what it says, what stands at its right, and what it does.
     Git(String, String, GitPick),
+    /// A line of the file in view to go to, as Quick Open's `:120` asks, and how it's said.
+    Line(String, Place),
+}
+
+/// A place in a file, as a compiler, a search or a chat names one after its path. Both
+/// count from one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Place {
+    pub line: usize,
+    pub column: Option<usize>,
 }
 
 /// What picking a row of one of git's lists does.
@@ -163,7 +173,10 @@ impl Item {
             Self::Command(label, _) => label,
             Self::Task(task) => &task.label,
             Self::Header(name) => name,
-            Self::Branch(name, _) | Self::Citation(name, _) | Self::Git(name, _, _) => name,
+            Self::Branch(name, _)
+            | Self::Citation(name, _)
+            | Self::Git(name, _, _)
+            | Self::Line(name, _) => name,
             Self::Symbol(symbol) => &symbol.name,
             Self::NewBranch => "New branch…",
             Self::Gap => "",
@@ -178,6 +191,7 @@ impl Item {
             | Self::Attach(..)
             | Self::NewBranch
             | Self::Gap
+            | Self::Line(..)
             | Self::Recent(..) => None,
             Self::Command(_, command) => keys_of(*command),
             Self::Branch(_, when) | Self::Citation(_, when) | Self::Git(_, when, _) => Some(when),
@@ -382,6 +396,171 @@ pub struct Palette {
     /// The keys each command has now, the person's own among them, to show beside it in
     /// place of its usual ones. Kept apart, so a palette stays the size it was.
     keys: Option<std::rc::Rc<HashMap<Command, String>>>,
+    /// What Quick Open looks for in place of what's typed, when that names a path its own
+    /// way: with a line after it, or from the top of the disk.
+    needle: Option<String>,
+    /// The place what's typed ends with, to go to in the file that's picked.
+    pub place: Option<Place>,
+    /// The item kept for the file or line that what's typed names outright, and whether
+    /// what's typed now names one. It's listed first, whether or not the walk found it.
+    direct: Option<(usize, bool)>,
+    /// Whether that item is all there is to list, as a line of the file in view is.
+    alone: bool,
+}
+
+/// What Quick Open is asked for when what's typed is more than letters to match: a path
+/// with a place after it, a path from somewhere else, or only a place.
+#[derive(Default)]
+pub struct Sought {
+    /// The path as the list writes paths, from the workspace's folder and without its place.
+    pub needle: String,
+    pub place: Option<Place>,
+    /// The file itself when the path names one that's there, to list first: the walk leaves
+    /// out what `.gitignore` names and can't reach outside the folder.
+    pub direct: Option<Item>,
+    /// Nothing else is listed.
+    pub alone: bool,
+}
+
+/// A number at the start of `text`, and what follows it.
+fn leading_number(text: &str) -> Option<(usize, &str)> {
+    let digits = text.len() - text.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    let number = text[..digits].parse().ok()?;
+    Some((number, &text[digits..]))
+}
+
+/// What's typed as the path to look for and the place it ends with, in the ways a place is
+/// written after a path: `app.rs:120`, `app.rs:120:8`, `app.rs:120-140`, a compiler's
+/// `app.rs:120:8:`, GitHub's `app.rs#L120` and MSBuild's `app.rs(120,8)`. A colon with
+/// nothing after it yet is on its way to being one, and isn't part of the path.
+pub fn path_and_place(typed: &str) -> (&str, Option<Place>) {
+    let typed = typed.trim();
+    if let Some((path, tail)) = typed.rsplit_once("#L")
+        && let Some((line, rest)) = leading_number(tail)
+        && (rest.is_empty() || rest.starts_with(['-', 'C']))
+    {
+        let column = rest.strip_prefix('C').and_then(leading_number);
+        let column = column.map(|(column, _)| column);
+        return (path, Some(Place { line, column }));
+    }
+    if let Some(inner) = typed.strip_suffix(')')
+        && let Some((path, inner)) = inner.rsplit_once('(')
+        && !path.is_empty()
+        && let Some((line, rest)) = leading_number(inner)
+    {
+        let column = rest.strip_prefix(',').map(str::trim_start);
+        let column = column.and_then(leading_number);
+        if rest.is_empty() || column.is_some_and(|(_, after)| after.is_empty()) {
+            let column = column.map(|(column, _)| column);
+            return (path, Some(Place { line, column }));
+        }
+    }
+    for (at, _) in typed.match_indices(':') {
+        let tail = &typed[at + 1..];
+        if tail.is_empty() {
+            return (&typed[..at], None);
+        }
+        let numbers = tail
+            .chars()
+            .all(|c| c.is_ascii_digit() || c == ':' || c == '-');
+        if let (true, Some((line, rest))) = (numbers, leading_number(tail)) {
+            let column = rest.strip_prefix(':').and_then(leading_number);
+            let column = column.map(|(column, _)| column);
+            return (&typed[..at], Some(Place { line, column }));
+        }
+    }
+    (typed, None)
+}
+
+/// What was pasted, as the path it names: its first line, without the quotes, brackets,
+/// `file://`, `@` or full stop it was copied with, and without the message a compiler or a
+/// search printed after it.
+pub fn pasted_path(text: &str) -> String {
+    let line = text.lines().map(str::trim).find(|line| !line.is_empty());
+    let mut path = line.unwrap_or("");
+    // rustc's arrow before a place, and Python's `File "app.py", line 12, in main`.
+    path = path.strip_prefix("--> ").unwrap_or(path).trim_start();
+    if let Some(rest) = path.strip_prefix("File \"")
+        && let Some((file, after)) = rest.split_once('"')
+    {
+        let line = after.strip_prefix(", line ").and_then(leading_number);
+        return match line {
+            Some((line, _)) => format!("{file}:{line}"),
+            None => file.to_string(),
+        };
+    }
+    // A Markdown link is where it leads.
+    if path.starts_with('[')
+        && let Some(inner) = path.strip_suffix(')')
+        && let Some((_, target)) = inner.split_once("](")
+    {
+        path = target;
+    }
+    // `app.rs:120:8: error…` and `app.rs:120:    let x` are the place before the space.
+    if let Some((first, _)) = path.split_once(char::is_whitespace)
+        && let Some(place) = first.strip_suffix(':')
+        && path_and_place(place).1.is_some()
+    {
+        path = place;
+    }
+    const PAIRS: [(char, char); 6] = [
+        ('"', '"'),
+        ('\'', '\''),
+        ('`', '`'),
+        ('<', '>'),
+        ('(', ')'),
+        ('[', ']'),
+    ];
+    loop {
+        let before = path;
+        for (open, close) in PAIRS {
+            if path.len() >= 2 && path.starts_with(open) && path.ends_with(close) {
+                path = path[1..path.len() - 1].trim();
+            }
+            // Half a pair, as a path at the end of a sentence in brackets keeps.
+            if path.ends_with(close) && !path[..path.len() - 1].contains(open) {
+                path = &path[..path.len() - 1];
+            }
+            if path.starts_with(open) && !path[1..].contains(close) {
+                path = &path[1..];
+            }
+        }
+        // What a sentence leaves after a path.
+        path = path.trim_end_matches(['.', ',', ';']);
+        if path == before {
+            break;
+        }
+    }
+    if let Some(local) = path.strip_prefix("file://") {
+        let local = local.strip_prefix("localhost").unwrap_or(local);
+        return unescaped(local);
+    }
+    // An agent's mention of a file, which Quick Open would take for a symbol.
+    match path.strip_prefix('@') {
+        Some(file) if file.contains(['/', '\\', '.']) => file.to_string(),
+        _ => path.to_string(),
+    }
+}
+
+/// A URL's path with its `%20`s read.
+fn unescaped(path: &str) -> String {
+    let mut bytes = Vec::with_capacity(path.len());
+    let mut rest = path.as_bytes();
+    while let Some((&byte, after)) = rest.split_first() {
+        let code = after.get(..2).and_then(|hex| std::str::from_utf8(hex).ok());
+        let code = code.and_then(|hex| u8::from_str_radix(hex, 16).ok());
+        match (byte, code) {
+            (b'%', Some(code)) => {
+                bytes.push(code);
+                rest = &after[2..];
+            }
+            _ => {
+                bytes.push(byte);
+                rest = after;
+            }
+        }
+    }
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 /// Where the letters of `query` fall in `text`, as `fuzzy_score` finds them.
@@ -478,9 +657,77 @@ impl Palette {
             grouped: false,
             quick: false,
             keys: None,
+            needle: None,
+            place: None,
+            direct: None,
+            alone: false,
         };
         palette.filter();
         palette
+    }
+
+    /// Takes what Quick Open is asked for, to list by at the next `filter`.
+    pub fn seek(&mut self, sought: Sought) {
+        self.needle = Some(sought.needle);
+        self.place = sought.place;
+        self.alone = sought.alone;
+        let slot = self.direct.map(|(slot, _)| slot);
+        self.direct = match (sought.direct, slot) {
+            (Some(item), Some(slot)) => {
+                self.items[slot] = item;
+                Some((slot, true))
+            }
+            (Some(item), None) => {
+                self.items.push(item);
+                Some((self.items.len() - 1, true))
+            }
+            (None, slot) => slot.map(|slot| (slot, false)),
+        };
+        // A different file may stand in the slot now, so what matched before isn't what to
+        // look among.
+        self.matched.clear();
+    }
+
+    /// What the rows are matched against: what Quick Open made of a path, or what's typed.
+    fn sought(&self) -> &str {
+        match &self.needle {
+            Some(needle) => needle,
+            None => self.typed(),
+        }
+    }
+
+    /// The file the query names outright, where it names one.
+    fn direct_path(&self) -> Option<&PathBuf> {
+        match self.direct {
+            Some((slot, true)) => match &self.items[slot] {
+                Item::File(path, _) => Some(path),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Puts the file or line the query names first, in place of that file as the walk
+    /// found it.
+    fn pin(&mut self) {
+        let Some((slot, true)) = self.direct else {
+            return;
+        };
+        if let Some(path) = self.direct_path().cloned() {
+            let same = |item: &Item| matches!(item, Item::File(found, _) if *found == path);
+            let kept: Vec<bool> = self
+                .matches
+                .iter()
+                .map(|&i| !same(&self.items[i]))
+                .collect();
+            let mut keep = kept.iter();
+            self.matches.retain(|_| *keep.next().unwrap_or(&true));
+            let mut keep = kept.iter();
+            self.scores.retain(|_| *keep.next().unwrap_or(&true));
+        }
+        self.matches.insert(0, slot);
+        self.scores.insert(0, i32::MAX);
+        self.selected = 0;
     }
 
     /// Shows beside each command the keys it has now, as the Keyboard page lists them:
@@ -518,6 +765,7 @@ impl Palette {
     pub fn set_items(&mut self, items: Vec<Item>) {
         let picked = self.current().cloned();
         self.items = items;
+        self.direct = None;
         self.matched.clear();
         self.filter();
         if let Some(picked) = picked {
@@ -626,7 +874,10 @@ impl Palette {
         let picked = self.matches.get(self.selected).copied();
         let from = self.items.len();
         self.items.extend(items);
-        let typed = self.typed().to_string();
+        if self.alone {
+            return;
+        }
+        let typed = self.sought().to_string();
         if typed.is_empty() {
             self.matches.extend(from..self.items.len());
             return;
@@ -637,8 +888,11 @@ impl Palette {
             .copied()
             .zip(self.matches.iter().copied())
             .collect();
+        // The file the query names is listed already, first.
+        let direct = self.direct_path();
+        let named = |item: &Item| matches!(item, Item::File(path, _) if Some(path) == direct);
         for (i, item) in self.items.iter().enumerate().skip(from) {
-            if let Some(score) = fuzzy_score(&typed, item.label()) {
+            if let Some(score) = fuzzy_score(&typed, item.label()).filter(|_| !named(item)) {
                 scored.push((score, i));
             }
         }
@@ -652,7 +906,7 @@ impl Palette {
     /// How many items it holds.
     #[cfg(test)]
     pub fn len(&self) -> usize {
-        self.items.len()
+        self.items.len() - usize::from(self.direct.is_some())
     }
 
     /// A palette whose empty field asks for something other than a search.
@@ -678,10 +932,19 @@ impl Palette {
     }
 
     pub fn filter(&mut self) {
-        let typed = self.typed().to_string();
+        let typed = self.sought().to_string();
+        let slot = self.direct.map(|(slot, _)| slot);
+        if self.alone {
+            self.matches.clear();
+            self.scores.clear();
+            self.matched.clear();
+            self.pin();
+            self.selected = 0;
+            return;
+        }
         // Nothing typed means no ranking: the list keeps the order it came in.
         if typed.is_empty() {
-            self.matches = (0..self.items.len()).collect();
+            self.matches = (0..self.items.len()).filter(|i| Some(*i) != slot).collect();
             self.scores.clear();
             self.matched.clear();
             self.selected = 0;
@@ -706,7 +969,7 @@ impl Palette {
         };
         let mut scored: Vec<(i32, usize)> = candidates
             .into_iter()
-            .filter(|&i| !self.items[i].divider())
+            .filter(|&i| !self.items[i].divider() && Some(i) != slot)
             .filter_map(|i| Some((fuzzy_score(&typed, self.items[i].label())?, i)))
             .collect();
         scored.sort_by_key(|(score, i)| (-score, *i));
@@ -714,6 +977,7 @@ impl Palette {
         self.matched = typed;
         self.selected = 0;
         self.group();
+        self.pin();
     }
 
     pub fn move_by(&mut self, delta: isize) {
@@ -815,6 +1079,7 @@ impl Palette {
     fn nothing(&self) -> &'static str {
         let working = self.status.as_deref().is_some_and(|s| s.ends_with('…'));
         match (self.typed().is_empty(), working) {
+            (false, _) if self.alone => "Type the number of a line to go to",
             (false, _) => "No matches",
             (true, true) => "Nothing yet",
             (true, false) => "Nothing to list",
@@ -954,7 +1219,11 @@ impl Palette {
             return;
         }
         let text = self.items[index].label();
-        let end = area.right().saturating_sub(16);
+        // A file has nothing at its right, so its path has the row.
+        let end = match &self.items[index] {
+            Item::File(..) => area.right().saturating_sub(2),
+            _ => area.right().saturating_sub(16),
+        };
         let inset = area.x as f32 + TEXT_INSET;
         // A file or folder from Open Recent: its name, then where it is.
         let away = match &self.items[index] {
@@ -962,9 +1231,10 @@ impl Palette {
             Item::Recent(_, label, _) => label.rsplit_once(['/', '\\']),
             _ => None,
         };
-        // A long path keeps its end, which names the folder, and loses its middle.
+        // A long path keeps its end, which names the folder or the file, and loses its
+        // middle.
         let shown = match &self.items[index] {
-            Item::Folder(..) => middle_out(text, f32::from(end) - inset, measure),
+            Item::Folder(..) | Item::File(..) => middle_out(text, f32::from(end) - inset, measure),
             _ => away.map_or(text, |(_, name)| name).to_string(),
         };
         grid.label_at(inset, area.x + 2, y, &shown, base, end, 100);
@@ -1307,6 +1577,139 @@ mod tests {
         let row = field(long);
         assert!(row.contains(long), "the query stays whole: {row}");
         assert!(!row.contains("files…"), "and the status gives way: {row}");
+    }
+
+    #[test]
+    fn a_place_after_a_path_is_read_however_its_written() {
+        let at = |line, column| Some(Place { line, column });
+        assert_eq!(path_and_place("src/app.rs"), ("src/app.rs", None));
+        assert_eq!(
+            path_and_place("src/app.rs:120"),
+            ("src/app.rs", at(120, None))
+        );
+        assert_eq!(
+            path_and_place("src/app.rs:120:8"),
+            ("src/app.rs", at(120, Some(8)))
+        );
+        // A compiler's, with the colon its message follows, and a range.
+        assert_eq!(
+            path_and_place("src/app.rs:120:8:"),
+            ("src/app.rs", at(120, Some(8)))
+        );
+        assert_eq!(
+            path_and_place("src/app.rs:120-140"),
+            ("src/app.rs", at(120, None))
+        );
+        assert_eq!(path_and_place("app.rs#L120"), ("app.rs", at(120, None)));
+        assert_eq!(
+            path_and_place("app.rs#L120-L140"),
+            ("app.rs", at(120, None))
+        );
+        assert_eq!(
+            path_and_place("app.rs#L120C8"),
+            ("app.rs", at(120, Some(8)))
+        );
+        assert_eq!(
+            path_and_place("app.rs(120,8)"),
+            ("app.rs", at(120, Some(8)))
+        );
+        assert_eq!(path_and_place("app.rs(120)"), ("app.rs", at(120, None)));
+        // A colon on its way to a line isn't part of the path, and a line alone has none.
+        assert_eq!(path_and_place("src/app.rs:"), ("src/app.rs", None));
+        assert_eq!(path_and_place(":42"), ("", at(42, None)));
+        assert_eq!(
+            path_and_place(" src/app.rs:7 "),
+            ("src/app.rs", at(7, None))
+        );
+        // What only looks like one is left in the path.
+        assert_eq!(path_and_place("C:\\src\\app.rs"), ("C:\\src\\app.rs", None));
+        assert_eq!(
+            path_and_place("C:\\src\\app.rs:9"),
+            ("C:\\src\\app.rs", at(9, None))
+        );
+        assert_eq!(path_and_place("notes (2).md"), ("notes (2).md", None));
+        assert_eq!(path_and_place("fn(x)"), ("fn(x)", None));
+        assert_eq!(path_and_place("a#Label"), ("a#Label", None));
+    }
+
+    #[test]
+    fn a_pasted_path_loses_what_it_was_copied_with() {
+        for (pasted, path) in [
+            ("src/app.rs\n", "src/app.rs"),
+            ("  src/app.rs:120  \n\n", "src/app.rs:120"),
+            ("`src/app.rs`", "src/app.rs"),
+            ("\"src/my app.rs\"", "src/my app.rs"),
+            ("'src/app.rs',", "src/app.rs"),
+            ("(src/app.rs:12).", "src/app.rs:12"),
+            ("src/app.rs).", "src/app.rs"),
+            ("<src/app.rs>", "src/app.rs"),
+            (
+                "[app.rs](crates/cellix/src/app.rs)",
+                "crates/cellix/src/app.rs",
+            ),
+            ("@src/app.rs", "src/app.rs"),
+            (
+                "file:///Users/me/my%20notes/a.md",
+                "/Users/me/my notes/a.md",
+            ),
+            ("--> src/app.rs:120:8", "src/app.rs:120:8"),
+            (
+                "src/app.rs:120:8: error[E0308]: mismatched types",
+                "src/app.rs:120:8",
+            ),
+            ("src/app.rs:120:    let x = 1;", "src/app.rs:120"),
+            (
+                "  File \"tools/run.py\", line 12, in main",
+                "tools/run.py:12",
+            ),
+            ("first.rs\nsecond.rs\n", "first.rs"),
+            // A symbol's `@` stays, and so does a name with a space or a dot in it.
+            ("@push", "@push"),
+            ("my notes.md", "my notes.md"),
+            ("", ""),
+        ] {
+            assert_eq!(pasted_path(pasted), path, "{pasted:?}");
+        }
+    }
+
+    /// A file the query names outright is listed first, once, found by the walk or not.
+    #[test]
+    fn the_file_a_query_names_is_listed_first_and_once() {
+        let file = |path: &str| Item::File(PathBuf::from("/w").join(path), path.to_string());
+        let mut palette = Palette::new(vec![file("src/app.rs"), file("vendor/src/app.rs")]);
+        palette.query = "src/app.rs:12".to_string();
+        palette.seek(Sought {
+            needle: "src/app.rs".to_string(),
+            place: Some(Place {
+                line: 12,
+                column: None,
+            }),
+            direct: Some(file("src/app.rs")),
+            alone: false,
+        });
+        palette.filter();
+        let labels = |palette: &Palette| -> Vec<String> {
+            let rows = palette.matches.iter();
+            rows.map(|i| palette.items[*i].label().to_string())
+                .collect()
+        };
+        assert_eq!(labels(&palette), ["src/app.rs", "vendor/src/app.rs"]);
+        assert_eq!(palette.len(), 2, "the row kept for it isn't another file");
+        // The walk finding it afterwards doesn't list it again.
+        palette.extend(vec![file("src/app.rs"), file("src/app.rs.orig")]);
+        assert_eq!(
+            labels(&palette),
+            ["src/app.rs", "src/app.rs.orig", "vendor/src/app.rs"]
+        );
+        // Something else typed, and the row kept for it is out of the list.
+        palette.query = "vendor".to_string();
+        palette.seek(Sought {
+            needle: "vendor".to_string(),
+            ..Sought::default()
+        });
+        palette.filter();
+        assert_eq!(labels(&palette), ["vendor/src/app.rs"]);
+        assert_eq!(palette.place, None);
     }
 
     #[test]

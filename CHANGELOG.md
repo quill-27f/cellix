@@ -4,10 +4,16 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 
 ## [Unreleased]
 
+### Added
+- Paste a path into Quick Open (Ctrl+P) and Enter goes there. It's read the way it was copied: with a line after it (`src/app.rs:120`, `src/app.rs:120:8`, `app.rs#L120`, `app.rs(120,8)`), from the top of the disk or from `~`, between quotes, backticks or brackets, as a `file://` link, as an agent's `@src/app.rs`, as a diff's `b/src/app.rs`, with the rest of a compiler's or a search's line after it, or in the middle of a sentence. A file the path names is the first row even when the list wouldn't have it: one `.gitignore` leaves out, one outside the folder, or one the walk of a big folder hasn't reached yet. Typing a place works the same, so `app:120` opens the file you'd have picked at line 120, and `:120` alone goes to that line of the file in view.
+- Ctrl+V pastes into Quick Open, the command palette, a prompt and the Find bar. It did nothing there.
+
 ### Changed
 - Quick Open (Ctrl+P), the command palette (Ctrl+Shift+P) and every list like them have a box around what you type, as the Find bar has. The words stood nearer the panel's top than the line under them. The box is in the middle of its space now: the air above it, between it and the list, and under the last row is the same. The picked row's band is the one menus have, and a list with nothing in it says "No matches" in place of closing up.
 
 ### Fixed
+- A paste while Quick Open or a prompt was open went into the commit message or the comment being written under it, when one of those had the keyboard before. The list or box on top takes it.
+- A long path in Quick Open was cut at its end, where the file's name is. It loses its middle.
 - On a terminal without pictures the picked row of Quick Open or the command palette looked like every other row. It has the picked colour behind it there too.
 
 ## [0.7.1] - 2026-11-14

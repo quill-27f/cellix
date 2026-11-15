@@ -4048,9 +4048,29 @@ impl App {
     }
 
     fn paste(&mut self, text: &str) {
-        if let Overlay::Emoji(picker) = &mut self.overlay {
-            picker.paste(text);
-            return;
+        // A list or a box over everything has the keyboard, so it has what's pasted too,
+        // whatever was being written under it.
+        match &mut self.overlay {
+            Overlay::Emoji(picker) => {
+                picker.paste(text);
+                return;
+            }
+            Overlay::Palette(_) => {
+                self.paste_into_palette(text);
+                return;
+            }
+            Overlay::Prompt(prompt) => {
+                prompt.input.push_str(text);
+                return;
+            }
+            Overlay::Find(find) => {
+                find.field_mut().push_str(text);
+                if !find.in_replace {
+                    self.search_file();
+                }
+                return;
+            }
+            _ => {}
         }
         if self.dock.draft.is_some() {
             // A picture's file dropped on the terminal arrives as its path.
@@ -4066,44 +4086,58 @@ impl App {
             return;
         }
         if self.dock.focused
-            && matches!(self.overlay, Overlay::None)
             && let Some(session) = self.dock.session_mut()
         {
             session.paste(text);
             return;
         }
-        match &mut self.overlay {
-            Overlay::Palette(palette) => {
-                palette.query.push_str(text);
-                palette.filter();
-            }
-            Overlay::Prompt(prompt) => prompt.input.push_str(text),
-            Overlay::Find(find) => {
-                find.field_mut().push_str(text);
-                if !find.in_replace {
-                    self.search_file();
-                }
-            }
-            _ => {
-                // A file dropped on a terminal arrives as its path.
-                if self.on_page()
-                    && let Some(path) = dropped_image(text)
-                {
-                    self.place_image(&path, false);
-                    return;
-                }
-                let area = self.focused_area();
-                if let Some(editor) = self.editor_mut() {
-                    editor.prepare_edit(area);
-                    if editor.tracking && editor.rendered {
-                        editor.tracked_paste(text);
-                    } else {
-                        editor.buffer.replace(&mut editor.selections, text);
-                    }
-                }
-                self.reveal();
+        // A file dropped on a terminal arrives as its path.
+        if self.on_page()
+            && let Some(path) = dropped_image(text)
+        {
+            self.place_image(&path, false);
+            return;
+        }
+        let area = self.focused_area();
+        if let Some(editor) = self.editor_mut() {
+            editor.prepare_edit(area);
+            if editor.tracking && editor.rendered {
+                editor.tracked_paste(text);
+            } else {
+                editor.buffer.replace(&mut editor.selections, text);
             }
         }
+        self.reveal();
+    }
+
+    /// Puts what was pasted into a palette's field: its first line, and where a path is
+    /// asked for, in Quick Open and the folder finder, the path that names without what it
+    /// was copied with.
+    fn paste_into_palette(&mut self, text: &str) {
+        let Overlay::Palette(mut palette) = std::mem::replace(&mut self.overlay, Overlay::None)
+        else {
+            return;
+        };
+        let path = palette.folders.is_some() || palette.quick && palette.prefix.is_none();
+        let pasted = if path {
+            use crate::palette::{pasted_path, path_and_place};
+            let names_a_file = |text: &str| self.file_named(path_and_place(text).0).is_some();
+            let whole = pasted_path(text);
+            // A sentence that names a file is that file: `see src/app.rs:120 for it`.
+            let within = || {
+                let words = whole.split_whitespace().map(pasted_path);
+                words.into_iter().find(|word| names_a_file(word))
+            };
+            match palette.quick && whole.contains(char::is_whitespace) && !names_a_file(&whole) {
+                true => within().unwrap_or(whole),
+                false => whole,
+            }
+        } else {
+            let line = text.lines().map(str::trim).find(|line| !line.is_empty());
+            line.unwrap_or("").to_string()
+        };
+        palette.query.push_str(&pasted);
+        self.palette_typed(palette);
     }
 
     /// Takes a picture pasted from the terminal's clipboard, which over SSH is the only way one
@@ -5736,6 +5770,16 @@ impl App {
     }
 
     fn overlay_key(&mut self, key: KeyEvent) {
+        // Ctrl+V pastes into a list's field or a box, as it does into a file.
+        let boxed = matches!(
+            self.overlay,
+            Overlay::Palette(_) | Overlay::Prompt(_) | Overlay::Find(_)
+        );
+        if boxed && self.workflow.keys.command(key) == Some(Command::Paste) {
+            let text = system_clipboard().unwrap_or_else(|| self.clipboard.clone());
+            self.paste(&text);
+            return;
+        }
         let overlay = std::mem::replace(&mut self.overlay, Overlay::None);
         match overlay {
             Overlay::Palette(mut palette) => match key.key {
@@ -5751,7 +5795,7 @@ impl App {
                         None => self.say(format!("There's no folder at {typed}")),
                     }
                 }
-                Key::Enter => self.pick(palette.current().cloned()),
+                Key::Enter => self.pick_at(palette.current().cloned(), palette.place),
                 // Tab goes into the picked folder, to pick one inside it.
                 Key::Tab if palette.folders.is_some() => {
                     if let Some(Item::Folder(_, label, note)) = palette.current().cloned()
@@ -6667,8 +6711,140 @@ impl App {
                 }
             }
             Some(Item::Git(_, _, pick)) => self.pick_git(pick),
+            Some(Item::Line(_, place)) => {
+                self.mark_jump();
+                self.go_to(place);
+            }
             Some(Item::Gap | Item::Header(_)) | None => {}
         }
+    }
+
+    /// Picks a row of Quick Open and, where a place was typed after the file's name, as in
+    /// `app.rs:120`, goes to it. The keyboard goes to the file, wherever it was.
+    fn pick_at(&mut self, item: Option<Item>, place: Option<crate::palette::Place>) {
+        let file = match &item {
+            Some(Item::File(path, _)) => Some(path.clone()),
+            _ => None,
+        };
+        if file.is_some() && place.is_some() {
+            self.mark_jump();
+        }
+        self.pick(item);
+        let Some(file) = file else {
+            return;
+        };
+        let opened = |e: &Editor| e.buffer.path() == Some(file.as_path());
+        if self.editors.get(self.active()).is_some_and(opened) {
+            self.dock.focused = false;
+            if let Some(place) = place {
+                self.go_to(place);
+            }
+        }
+    }
+
+    /// Puts the caret at a line and column of the file in view, both counted from one, with
+    /// the line in the middle of the pane.
+    fn go_to(&mut self, place: crate::palette::Place) {
+        let area = self.focused_area();
+        if let Some(editor) = self.editor_mut() {
+            let column = place.column.map_or(0, |column| column.saturating_sub(1));
+            let at = editor.buffer.position(place.line.saturating_sub(1), column);
+            editor.selections.set_single(Selection::cursor(at));
+            editor.reveal_centred(area);
+        }
+    }
+
+    /// The file a path names, where there is one, and the path to it from the workspace's
+    /// folder when it's inside. The path may be from the folder, from the top of the disk,
+    /// from home with `~`, or as a diff writes it, after `a/` or `b/`.
+    fn file_named(&self, typed: &str) -> Option<(PathBuf, Option<PathBuf>)> {
+        let root = self.workspace.root();
+        let typed = typed.strip_prefix("./").unwrap_or(typed);
+        if typed.is_empty() {
+            return None;
+        }
+        let from_home = typed
+            .strip_prefix('~')
+            .filter(|rest| rest.is_empty() || rest.starts_with(['/', std::path::MAIN_SEPARATOR]));
+        let named = match (from_home, &self.home) {
+            (Some(rest), Some(home)) => home.join(rest.trim_start_matches(['/', '\\'])),
+            _ => PathBuf::from(typed),
+        };
+        let mut full = root.join(&named);
+        if !full.is_file() {
+            let rest = typed
+                .strip_prefix("a/")
+                .or_else(|| typed.strip_prefix("b/"))?;
+            full = root.join(rest);
+            if !full.is_file() {
+                return None;
+            }
+        }
+        if let Ok(within) = full.strip_prefix(root) {
+            let within = within.to_path_buf();
+            return Some((full, Some(within)));
+        }
+        // The same folder may be written another way than the workspace writes it, as /tmp
+        // is /private/tmp on a Mac: the file is this workspace's all the same, and opens as
+        // the tree would open it.
+        if let (Ok(file), Ok(folder)) = (dunce::canonicalize(&full), dunce::canonicalize(root))
+            && let Ok(within) = file.strip_prefix(&folder)
+        {
+            return Some((root.join(within), Some(within.to_path_buf())));
+        }
+        Some((full, None))
+    }
+
+    /// What Quick Open makes of what's typed when it's more than letters to match: a place
+    /// after a path (`app.rs:120`) is taken off it, a path from the top of the disk or from
+    /// home is read from the workspace's folder when it's inside it, and a path that names a
+    /// file that's there is listed first, found by the walk or not. `:120` alone is a line
+    /// of the file in view.
+    fn seek(&self, palette: &mut Palette) {
+        use crate::palette::{Place, Sought, path_and_place};
+        let (typed, place) = path_and_place(&palette.query);
+        if palette.query.trim_start().starts_with(':') {
+            let said = |place: Place| match place.column {
+                Some(column) => format!("Go to line {}, column {column}", place.line),
+                None => format!("Go to line {}", place.line),
+            };
+            let here = self.editors.get(self.active()).is_some();
+            let direct = place.filter(|_| here).map(|at| Item::Line(said(at), at));
+            palette.seek(Sought {
+                direct,
+                alone: true,
+                ..Sought::default()
+            });
+            return;
+        }
+        let named = self.file_named(typed);
+        let there = named.is_some();
+        let typed = typed.strip_prefix("./").unwrap_or(typed);
+        let (full, inside) = named.unwrap_or_else(|| {
+            let root = self.workspace.root();
+            let full = root.join(typed);
+            let inside = full.strip_prefix(root).ok().map(Path::to_path_buf);
+            (full, inside)
+        });
+        let label = match &inside {
+            Some(within) => within.to_string_lossy().into_owned(),
+            None => crate::recent::written(&full, self.home.as_deref()),
+        };
+        let needle = match &inside {
+            Some(_) => label.clone(),
+            None => typed.to_string(),
+        };
+        // As the list writes its paths, so a `/` typed on Windows finds them.
+        let needle = match std::path::MAIN_SEPARATOR {
+            '/' => needle,
+            other => needle.replace('/', &other.to_string()),
+        };
+        palette.seek(Sought {
+            needle,
+            place,
+            direct: there.then_some(Item::File(full, label)),
+            alone: false,
+        });
     }
 
     /// Follows what's typed in a palette. In Quick Open an `@` at the start lists the file's
@@ -6679,9 +6855,13 @@ impl App {
                 self.restore_symbol_origin();
                 let query = palette.query.clone();
                 self.quick_open();
-                if let Overlay::Palette(files) = &mut self.overlay {
+                if let Overlay::Palette(mut files) =
+                    std::mem::replace(&mut self.overlay, Overlay::None)
+                {
                     files.query = query;
+                    self.seek(&mut files);
                     files.refresh();
+                    self.overlay = Overlay::Palette(files);
                 }
             }
             Some('#') => {
@@ -6704,6 +6884,9 @@ impl App {
                 self.workspace_symbol(&typed);
             }
             None => {
+                if palette.quick {
+                    self.seek(&mut palette);
+                }
                 palette.refresh();
                 self.overlay = Overlay::Palette(palette);
             }
@@ -9332,11 +9515,10 @@ impl App {
 
     /// Opens a file of the project at a line, as output names it.
     fn go_to_place(&mut self, file: &str, line: Option<usize>) {
-        let path = self.workspace.root().join(file);
-        if !path.is_file() {
+        let Some((path, _)) = self.file_named(file) else {
             self.say(format!("No file called {file} here"));
             return;
-        }
+        };
         if let Err(e) = self.open(&path) {
             self.say(format!("Could not open {file}: {e}"));
             return;
@@ -12638,7 +12820,7 @@ impl App {
                 let at = (mouse.x, mouse.fine_y);
                 if let Some(row) = palette.row_at(screen, at, &*self.measure) {
                     palette.selected = row;
-                    self.pick(palette.current().cloned());
+                    self.pick_at(palette.current().cloned(), palette.place);
                 } else {
                     self.restore_symbol_origin();
                 }
@@ -15192,7 +15374,7 @@ impl App {
     /// Opens Quick Open at once and fills it from a walk of the folder on another thread: a
     /// big tree takes seconds, and everything used to wait for the whole walk.
     fn quick_open(&mut self) {
-        let hint = "Search files, @ for symbols, # for all symbols";
+        let hint = "Search files, path:line, @ for symbols, # for all symbols";
         let mut palette = Palette::asking(Vec::new(), hint);
         palette.quick = true;
         palette.status = Some("0 files…".to_string());
@@ -17446,6 +17628,137 @@ mod tests {
         assert_eq!(y, field + 2);
         assert_eq!(grid.cell(x, y).style.bg, app.theme.pick);
         assert_eq!(grid.cell(x, field).style.bg, app.theme.input);
+    }
+
+    /// The user knew a file's name from the chat and couldn't get to it: Ctrl+V did nothing
+    /// in Quick Open, and a path pasted from the terminal found nothing unless it was written
+    /// exactly as the list writes it, with no line after it and no quotes round it.
+    #[test]
+    fn quick_open_goes_where_a_pasted_path_says() {
+        let (dir, mut app) = project();
+        let root = dir.path().to_path_buf();
+        let lines = "one\ntwo\nthree four\nfive\n";
+        fs::write(root.join("src/lib.rs"), lines).unwrap();
+        // One the walk leaves out, and one that isn't in the folder at all.
+        fs::write(root.join(".gitignore"), "out/\n").unwrap();
+        fs::create_dir(root.join("out")).unwrap();
+        fs::write(root.join("out/built.rs"), lines).unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let notes = elsewhere.path().join("notes.txt");
+        fs::write(&notes, lines).unwrap();
+        let ctrl_v = |app: &mut App| {
+            app.handle(Event::Key(KeyEvent {
+                key: Key::Char('v'),
+                mods: Mods {
+                    ctrl: true,
+                    ..Mods::default()
+                },
+            }));
+        };
+        // Where the caret is: the file, and its line and column from one.
+        let at = |app: &App| {
+            let editor = &app.editors[app.active()];
+            let rope = editor.buffer.rope();
+            let head = editor.selections.primary().head;
+            let line = rope.char_to_line(head);
+            let name = editor
+                .buffer
+                .path()
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_owned();
+            (
+                name.into_string().unwrap(),
+                line + 1,
+                head - rope.line_to_char(line) + 1,
+            )
+        };
+        let query = |app: &App| match &app.overlay {
+            Overlay::Palette(palette) => palette.query.clone(),
+            _ => panic!("Quick Open isn't open"),
+        };
+        // The first row of the list, under the field and the air.
+        let first = |app: &App| {
+            let grid = screen(app);
+            let (_, field) = find(&grid, "⌕");
+            grid.row_text(field + 2).trim().to_string()
+        };
+
+        // Pasted by the terminal, as a chat writes a place, with the line break it was
+        // copied with.
+        app.run(Command::QuickOpen);
+        app.handle(Event::Paste("`src/lib.rs:3:7`\n".into()));
+        assert_eq!(query(&app), "src/lib.rs:3:7");
+        assert!(first(&app).starts_with("src/lib.rs"), "{}", first(&app));
+        enter(&mut app);
+        assert_eq!(at(&app), ("lib.rs".to_string(), 3, 7));
+
+        // Ctrl+V, with what Cellix last copied: a line of a file that names a path.
+        fs::write(root.join("said.txt"), "see (src/lib.rs:2).\n").unwrap();
+        app.open(&root.join("said.txt")).unwrap();
+        app.run(Command::SelectAll);
+        app.run(Command::Copy);
+        app.run(Command::QuickOpen);
+        ctrl_v(&mut app);
+        assert_eq!(query(&app), "src/lib.rs:2");
+        enter(&mut app);
+        assert_eq!(at(&app), ("lib.rs".to_string(), 2, 1));
+
+        // From the top of the disk, and a file `.gitignore` keeps out of the list.
+        app.run(Command::QuickOpen);
+        let whole = root.join("out/built.rs");
+        app.handle(Event::Paste(format!("{}:4", whole.display())));
+        assert!(first(&app).starts_with("out/built.rs"), "{}", first(&app));
+        enter(&mut app);
+        assert_eq!(at(&app), ("built.rs".to_string(), 4, 1));
+        assert_eq!(
+            app.editors[app.active()].buffer.path(),
+            Some(whole.as_path()),
+            "as the tree would open it"
+        );
+
+        // A file outside the folder, by its whole path.
+        app.run(Command::QuickOpen);
+        app.handle(Event::Paste(format!("{}\n", notes.display())));
+        assert!(first(&app).contains("notes.txt"), "{}", first(&app));
+        enter(&mut app);
+        assert_eq!(at(&app).0, "notes.txt");
+
+        // A diff's `b/`, and a place typed rather than pasted.
+        app.run(Command::QuickOpen);
+        typed(&mut app, "b/src/lib.rs#L4");
+        assert!(first(&app).starts_with("src/lib.rs"), "{}", first(&app));
+        enter(&mut app);
+        assert_eq!(at(&app), ("lib.rs".to_string(), 4, 1));
+
+        // A name alone still finds its file, and the place after it is still gone to.
+        app.run(Command::QuickOpen);
+        typed(&mut app, "built");
+        assert_eq!(first(&app), "No matches", "ignored, and not named outright");
+        key(&mut app, Key::Esc);
+        app.run(Command::QuickOpen);
+        typed(&mut app, "alp:2");
+        assert!(first(&app).starts_with("alpha.txt"), "{}", first(&app));
+        enter(&mut app);
+        assert_eq!(at(&app), ("alpha.txt".to_string(), 2, 1));
+
+        // A line alone is a line of the file in view.
+        app.run(Command::QuickOpen);
+        typed(&mut app, ":");
+        assert!(first(&app).contains("number of a line"), "{}", first(&app));
+        typed(&mut app, "1");
+        assert_eq!(first(&app), "Go to line 1");
+        enter(&mut app);
+        assert_eq!(at(&app), ("alpha.txt".to_string(), 1, 1));
+
+        // What was being written under Quick Open doesn't take the paste: the list has
+        // the keyboard.
+        app.source.focused = true;
+        app.run(Command::QuickOpen);
+        app.handle(Event::Paste("beta.rs".into()));
+        assert_eq!(query(&app), "beta.rs");
+        assert!(app.source.message.is_empty());
     }
 
     #[test]
