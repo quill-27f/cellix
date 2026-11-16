@@ -2597,3 +2597,12 @@ The user, on a machine reached over SSH with several workspaces: after the conne
 - Test: `workspaces_open_when_cellix_dies_come_back` (ledger: `workspaces-survive-a-kill`), the real binary in a PTY: three workspaces with nothing running, SIGKILL, then `cellix ls` and a Cellix started at home, which offers all three. It failed first: "Nothing is running in Cellix on this machine."
 - Not known: whether this is all of what the user saw. A second cause would give the same list: a Cellix whose connection is dead while the server hasn't noticed is still running, its sockets still answer, and a new Cellix leaves out what another has open (by design, so two windows don't each take everything). Opening such a folder by hand says "Another Cellix has this folder open, so agents reach that one". Asked the user whether they saw that line. If so, the first screen should list those as well, and a Cellix whose terminal no longer answers should give way; neither is built.
 - Unverified: over a real SSH connection.
+
+## Release 0.10.1 (2026-11-16)
+
+The user's word on the workspaces fix: "Release it". The version is 0.10.1 everywhere it's written, and the CHANGELOG's entry for the fix is under it.
+
+- How 0.10.0 went: `01aacb3` failed CI's TeX job (the entry above on a long message); on `6d0e2ca` Linux and TeX passed and GitHub cancelled the macOS job after fifteen minutes with no runner. Re-running it wanted the repository owner's account, which the `gh` here isn't active as; the user re-ran it themselves. So 0.10.0 is released from `6d0e2ca`, by the workflow, if that run passes.
+- This commit is pushed only once 0.10.0's release has finished: the release workflow holds one version at a time, not one release at a time, and two at once could leave the Homebrew tap on the older.
+- It holds one fix: a workspace is marked open as it opens.
+- Still open with the user: whether they saw "Another Cellix has this folder open" when they opened those workspaces by hand, which would mean a second cause (a Cellix on a dead connection the server hasn't noticed). Nothing is built for that.
