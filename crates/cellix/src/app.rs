@@ -19,8 +19,8 @@ use cellix_lang::Registry;
 use cellix_lang::complete::{self, Candidate, Source};
 use cellix_lang::lsp::{Client, Diagnostic, LspEvent, Signature, Symbol, TextEdit};
 use cellix_render::{
-    ALL_CORNERS, Bounds, CellMeasure, Font, Grid, Icon, Measure, Paint, Rect, Rgb, Style, TOP_LEFT,
-    TOP_RIGHT, on_large_button,
+    ALL_CORNERS, Bounds, CellMeasure, Font, Grid, Icon, Measure, Paint, Rect, Rgb, Style,
+    on_large_button,
 };
 use cellix_review::{
     About, Comment, Reply, Thread, YOU, append_comments, blame_line, branches, changed_files,
@@ -177,8 +177,6 @@ const STOPPED_CARD_ROWS: u16 = 5;
 /// At most this many lines of detail.
 const STOPPED_DETAIL_LINES: usize = 3;
 const PLAN_BAR_WIDTH: u16 = 48;
-/// Corners as percentages of a row's height.
-const TAB_RADIUS: u8 = 22;
 /// How round a sheet's corners are, and the columns of the frame between two sheets.
 const SHEET_RADIUS: u8 = 28;
 const SHEET_GAP: u16 = 1;
@@ -241,6 +239,9 @@ const PANE_CLOSE_REACH: u16 = 3;
 /// A tooltip's height in rows, and the size of its text.
 /// A tooltip is one row, on a row of its own, so it never covers part of one.
 const TOOLTIP_HEIGHT: f32 = 1.0;
+/// How far a tip's box stops short of its row, over and under: nothing on the terminal's own
+/// line, and on a taller row what makes it a box in the row and not the row itself.
+pub(crate) const TIP_INSET: f32 = 0.01;
 const TOOLTIP_SIZE: u8 = 92;
 /// What each button is called, in order, since they're only icons and marks.
 const FIND_NAMES: [&str; 6] = [
@@ -1129,6 +1130,17 @@ pub(crate) fn draw_quit(grid: &mut Grid, cell: Rect, hovered: bool, theme: &Them
             QUIT_ICON,
         );
     }
+}
+
+/// A sheet's edge where there are pictures: its corners cut round in the frame's colour, and
+/// a line round it. Over what the sheet holds, so that can't break it.
+pub(crate) fn sheet_edge(grid: &mut Grid, bounds: Bounds, frame: Rgb, line: Rgb) {
+    let least = cellix_render::UNIT * 2;
+    if bounds.w < least || bounds.h < least {
+        return;
+    }
+    grid.corners(bounds, SHEET_RADIUS, frame, ALL_CORNERS);
+    grid.panel(bounds, SHEET_RADIUS, None, Some(line));
 }
 
 /// A list's place in the pane's screen with a row of air under the tabs.
@@ -9848,12 +9860,8 @@ impl App {
         let maximized = self.maximized == Some(Maximized::Pane);
         // A line under the pane's tabs and the icons after them, as the file's tabs and the
         // views have: beside the file the three are level, one line across the window's top.
-        // Before the tabs, so the line under the one in front lies on it. It starts where
-        // the pane's sheet does, half way across the frame's column.
-        let from = f32::from(area.x) + if self.dock_under() { 0.0 } else { SHEET_EDGE };
-        let under = f32::from(area.y) + 1.0;
-        let rule = Bounds::cells(from, under, f32::from(area.right()) - from, 0.0);
-        grid.hairline(rule, theme.border);
+        // Before the tabs, so the line under the one in front lies on it.
+        grid.hairline(self.pane_rule(area), theme.border);
         self.dock.draw_tabs(
             grid,
             self.title_of(area),
@@ -9873,13 +9881,49 @@ impl App {
 
     /// The file and the side pane as sheets on the frame. The pane's first column, which
     /// nothing of it stands in, is the frame's, so a column of the frame shows between the
-    /// two. With pictures each sheet's corners are round and a line runs round it. Under the
-    /// file, the pane is the lower part of the same sheet.
+    /// two. Under the file, the pane is the lower part of the same sheet. The line round
+    /// each, and its round corners, come last: see `draw_sheet_edges`.
     fn draw_sheets(&self, grid: &mut Grid) {
+        let frame = self.theme.activity;
+        let under = self.dock_under();
+        let pictures = !self.measure.in_cells();
+        let Some(area) = self.dock_area().filter(|a| !under && a.w > SHEET_GAP) else {
+            return;
+        };
+        grid.fill(Rect::new(area.x, area.y, SHEET_GAP, area.h), frame);
+        if pictures {
+            // The frame's half is painted too, over whatever of the pane was drawn into
+            // the column: the line under its first tab starts at the sheet's edge, and
+            // ran on to the file's.
+            let (x, y) = (f32::from(area.x) + SHEET_EDGE, f32::from(area.y));
+            let h = f32::from(area.h);
+            let frames = Bounds::cells(f32::from(area.x), y, SHEET_EDGE, h);
+            grid.panel(frames, 0, Some(frame.bg), None);
+            let own = Bounds::cells(x, y, f32::from(SHEET_GAP) - SHEET_EDGE, h);
+            grid.panel(own, 0, Some(self.theme.sidebar.bg), None);
+            // Which covered the start of the line under the pane's tabs.
+            grid.hairline(self.pane_rule(area), self.theme.border);
+        }
+    }
+
+    /// The line under the pane's tab row: from where its sheet starts, half way across the
+    /// frame's column beside the file, to the pane's end.
+    fn pane_rule(&self, area: Rect) -> Bounds {
+        let from = f32::from(area.x) + if self.dock_under() { 0.0 } else { SHEET_EDGE };
+        let under = f32::from(area.y) + 1.0;
+        Bounds::cells(from, under, f32::from(area.right()) - from, 0.0)
+    }
+
+    /// The line round each sheet and its round corners, where there are pictures. Painted
+    /// after what's on the sheets and before what floats over them, so nothing a sheet
+    /// holds breaks its edge: a tab, a band of a diff, a block of a page.
+    fn draw_sheet_edges(&self, grid: &mut Grid) {
+        if self.measure.in_cells() || (self.compact() && self.drawer) {
+            return;
+        }
         let frame = self.theme.activity;
         let main = self.main_area();
         let under = self.dock_under();
-        let pictures = !self.measure.in_cells();
         let sheet = |area: Rect| Bounds::inset(area, 0.0, 0.0);
         // The pane beside the file: its first column is the frame's. With pictures the sheet
         // starts half way across it, so what's in the pane keeps half a column from its edge.
@@ -9887,23 +9931,10 @@ impl App {
             if under || area.w <= SHEET_GAP {
                 return sheet(area);
             }
-            grid.fill(Rect::new(area.x, area.y, SHEET_GAP, area.h), frame);
             let (x, y) = (f32::from(area.x) + SHEET_EDGE, f32::from(area.y));
             let (w, h) = (f32::from(area.w) - SHEET_EDGE, f32::from(area.h));
-            if pictures {
-                // The frame's half is painted too, over whatever of the pane was drawn into
-                // the column: the line under its first tab starts at the sheet's edge, and
-                // ran on to the file's.
-                let frames = Bounds::cells(f32::from(area.x), y, SHEET_EDGE, h);
-                grid.panel(frames, 0, Some(frame.bg), None);
-                let own = Bounds::cells(x, y, f32::from(SHEET_GAP) - SHEET_EDGE, h);
-                grid.panel(own, 0, Some(self.theme.sidebar.bg), None);
-            }
             Bounds::cells(x, y, w, h)
         });
-        if !pictures {
-            return;
-        }
         let sheets = match pane {
             // Under the file, the pane is the lower part of the file's sheet.
             Some(_) if under => {
@@ -9914,13 +9945,8 @@ impl App {
             }
             pane => [Some(sheet(main)), pane],
         };
-        let least = cellix_render::UNIT * 2;
         for bounds in sheets.into_iter().flatten() {
-            if bounds.w < least || bounds.h < least {
-                continue;
-            }
-            grid.corners(bounds, SHEET_RADIUS, frame.bg, ALL_CORNERS);
-            grid.panel(bounds, SHEET_RADIUS, None, Some(self.theme.border));
+            sheet_edge(grid, bounds, frame.bg, self.theme.border);
         }
     }
 
@@ -14093,6 +14119,11 @@ impl App {
         }
     }
 
+    /// Whether the file in front is scrolled off its top, which gives its bar a line under it.
+    fn page_scrolled(&self) -> bool {
+        self.editors.get(self.active()).is_some_and(|e| e.top() > 0)
+    }
+
     /// The line under a strip of tabs, between them and what they're tabs of.
     fn rule_under_tabs(&self, grid: &mut Grid, main: Rect) {
         let (x, y, w) = (main.x as f32, main.y as f32 + 1.0, main.w as f32);
@@ -14126,8 +14157,6 @@ impl App {
             100,
         );
         grid.glyph(close as f32, area.y, Icon::Close, theme.tab.fg, "×", style);
-        let bounds = Bounds::inset(tab, 0.0, 0.0);
-        grid.corners(bounds, TAB_RADIUS, theme.tab.bg, TOP_LEFT | TOP_RIGHT);
     }
 
     fn click_explorer(&mut self, y: u16) {
@@ -14486,7 +14515,10 @@ impl App {
         if !drawer_over_main {
             self.draw_sheets(grid);
         }
+        // From here every way out draws the sheets' edges after what's on them, and then
+        // the bar, and what floats.
         if self.maximized == Some(Maximized::Pane) && self.dock.open {
+            self.draw_sheet_edges(grid);
             self.draw_status(grid);
             self.draw_tab_drag(grid);
             self.draw_pane_actions(grid);
@@ -14518,6 +14550,7 @@ impl App {
             };
             let area = self.sheet_area();
             page.draw(grid, area, &values, (self.hover, &*self.measure), theme);
+            self.draw_sheet_edges(grid);
             self.draw_status(grid);
             self.draw_pane_actions(grid);
             self.draw_overlay(grid);
@@ -14533,6 +14566,7 @@ impl App {
             // Beside Source Control, Review's list is on the file's sheet and Source Control
             // on the frame, so the sheet's own edge is what's between them.
             review.draw(grid, area, self.hover, theme, &comments);
+            self.draw_sheet_edges(grid);
             self.draw_status(grid);
             self.draw_pane_actions(grid);
             self.draw_overlay(grid);
@@ -14540,6 +14574,7 @@ impl App {
             return;
         }
         if self.draw_task_page(grid, theme) {
+            self.draw_sheet_edges(grid);
             self.draw_status(grid);
             self.draw_pane_actions(grid);
             self.draw_overlay(grid);
@@ -14587,10 +14622,15 @@ impl App {
                 }
             }
         }
+        if let Some(row) = self.toolbar_row().filter(|_| self.page_scrolled()) {
+            let line = Bounds::cells(row.x as f32, row.y as f32 + 1.0, row.w as f32, 0.0);
+            grid.hairline(line, self.theme.popup_border);
+        }
         if self.plan_in_view() {
             self.draw_plan_bar(grid);
         }
         self.draw_companion(grid);
+        self.draw_sheet_edges(grid);
         self.draw_status(grid);
         self.draw_suggest(grid);
         self.draw_hover(grid);
@@ -14732,7 +14772,14 @@ impl App {
         // On the row nearest where it was asked for: the one under its icon.
         let top = top.round();
         let theme = &self.theme;
-        let bounds = Bounds::cells(left, top, wide(name), TOOLTIP_HEIGHT);
+        // A hair short of its row, which is what lets it keep its own height on a taller
+        // row and stand in the middle of it, clear of a line over or under.
+        let bounds = Bounds::cells(
+            left,
+            top + TIP_INSET,
+            wide(name),
+            TOOLTIP_HEIGHT - TIP_INSET * 2.0,
+        );
         grid.popup(bounds, 24, theme.popup, theme.popup_border);
         let text_top = top + (TOOLTIP_HEIGHT - 1.0) / 2.0;
         if self.measure.in_cells() {
@@ -15327,7 +15374,10 @@ impl App {
                 fg,
                 theme.activity,
             );
-            if on {
+            // The line says which view the sidebar shows. Settings is a page of the file's
+            // sheet with a tab of its own, so open it's lit and has no line: two were
+            // underlined at once.
+            if on && *command != Command::OpenSettings {
                 let (inset, thick) = VIEW_LINE;
                 let wide = VIEW_STEP as f32 - 2.0 * inset;
                 let line = Bounds::cells(left + inset, top + 1.0 - thick, wide, thick);
@@ -15345,8 +15395,10 @@ impl App {
                 let text = self.measure.width(&count, font);
                 let width = (text + 0.6).max(least);
                 // At the icon's top right corner, ringed in the row's colour so it stands
-                // clear of the icon.
-                let (left, top) = (left + VIEW_STEP as f32 / 2.0 + 0.3, top + VIEW_BADGE);
+                // clear of the icon. Its right edge stays where one digit's is, so two grow
+                // over the icon and not into the next view's.
+                let right = left + VIEW_STEP as f32 / 2.0 + 0.3 + least;
+                let (left, top) = (right - width, top + VIEW_BADGE);
                 let ring = Bounds::cells(left - 0.12, top - 0.06, width + 0.24, tall + 0.12);
                 grid.panel(ring, PILL_RADIUS, Some(theme.activity.bg), None);
                 let chip = Bounds::cells(left, top, width, tall);
@@ -15559,10 +15611,6 @@ impl App {
                     grid.put_str(close_x, area.y, shown, quiet, area.right());
                 }
             }
-            if active {
-                let bounds = Bounds::inset(tab, 0.0, 0.0);
-                grid.corners(bounds, TAB_RADIUS, theme.tab.bg, TOP_LEFT | TOP_RIGHT);
-            }
         }
         let (_, before, after) = self.tab_strip();
         for (chip, side) in [(before, true), (after, false)] {
@@ -15742,7 +15790,7 @@ impl App {
             let bar = self.page_bar();
             let tracking = self.editors[self.active()].tracking;
             // Text scrolled under the bar needs a line to go under.
-            if self.editors[self.active()].top() > 0 {
+            if self.page_scrolled() {
                 let edge = row.y as f32 + 1.0;
                 let line = Bounds::cells(row.x as f32, edge, row.w as f32, 0.0);
                 grid.hairline(line, self.theme.popup_border);
@@ -28962,6 +29010,210 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         );
     }
 
+    /// A sheet's line and corners were painted before what the sheet holds, so a tab, a band
+    /// of a diff or a block of a page broke them. They come after all of it, and before the
+    /// bar and what floats. A tab paints no corners of its own.
+    #[test]
+    fn a_sheets_edge_is_drawn_over_what_it_holds() {
+        let (dir, _) = reviewed();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        app.run(Command::ListAgents);
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        let unit = cellix_render::UNIT;
+        let border = app.theme.border;
+        // Where each sheet's line is in what's painted, and where the bar's paint starts.
+        let edges = |app: &App| -> (Vec<usize>, usize, Grid) {
+            let grid = screen(app);
+            let lines = grid.paint.iter().enumerate().filter_map(|(at, p)| match p {
+                Paint::Panel {
+                    bounds,
+                    fill: None,
+                    border: Some(line),
+                    ..
+                } if *line == border && bounds.h >= 2 * unit && bounds.y == 0 => Some(at),
+                _ => None,
+            });
+            (lines.collect(), app.status_paint.get().0, grid)
+        };
+        let (lines, bar, grid) = edges(&app);
+        assert_eq!(lines.len(), 2, "the file's and the pane's");
+        // Right before the bar: after the tabs, the file, the pane and its line.
+        let first = *lines.first().unwrap();
+        assert!(
+            lines.iter().all(|at| *at < bar && bar - at <= 4),
+            "{lines:?} then {bar}"
+        );
+        let accents = grid.paint.iter().enumerate().filter(|(_, p)| {
+            matches!(p, Paint::Panel { bounds, fill: Some(fill), .. }
+                if *fill == app.theme.accent && bounds.y < unit)
+        });
+        let accents: Vec<usize> = accents.map(|(at, _)| at).collect();
+        assert!(accents.len() >= 2, "a line under each tab in front");
+        assert!(accents.iter().all(|at| *at < first), "all under the edges");
+        // The only corners cut are the sheets' own.
+        let corners: Vec<&Paint> = grid
+            .paint
+            .iter()
+            .filter(|p| matches!(p, Paint::Corners { .. }))
+            .collect();
+        assert!(
+            corners
+                .iter()
+                .all(|p| matches!(p, Paint::Corners { bounds, .. } if bounds.h >= 2 * unit)),
+            "no tab cuts corners of its own: {corners:?}"
+        );
+        // The line under the pane's tabs reaches its sheet's edge: it's painted again
+        // after the half of the frame's column the sheet has, which covered its start.
+        let pane = app.dock_area().unwrap();
+        let left = i32::from(pane.x) * unit + unit / 2;
+        let own = grid.paint.iter().rposition(|p| {
+            matches!(p, Paint::Panel { bounds, fill: Some(fill), .. }
+                if *fill == app.theme.sidebar.bg && bounds.x == left && bounds.w == unit / 2)
+        });
+        let rule = grid.paint.iter().rposition(|p| {
+            matches!(p, Paint::Hairline { bounds, .. }
+                if bounds.x == left && bounds.h == 0 && bounds.y == unit)
+        });
+        assert!(own.is_some() && rule > own, "{rule:?} after {own:?}");
+        // A review, Settings and a pane with the window to itself end the same way.
+        app.handle(Event::Key(KeyEvent::ctrl('g')));
+        assert!(app.review.is_some());
+        let (lines, bar, _) = edges(&app);
+        assert!(!lines.is_empty() && lines.iter().all(|at| *at < bar && bar - at <= 4));
+        app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
+        app.run(Command::OpenSettings);
+        let (lines, bar, _) = edges(&app);
+        assert!(!lines.is_empty() && lines.iter().all(|at| *at < bar && bar - at <= 4));
+    }
+
+    /// With Settings open two views were underlined, Explorer and Settings. The line says
+    /// which view the sidebar shows, and Settings is a page with a tab of its own.
+    #[test]
+    fn settings_is_lit_among_the_views_and_not_underlined() {
+        let (_dir, mut app) = project();
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        app.run(Command::OpenSettings);
+        let grid = screen(&app);
+        let unit = cellix_render::UNIT;
+        let row = app.activity_area();
+        let lines: Vec<Bounds> = grid
+            .paint
+            .iter()
+            .filter_map(|p| match p {
+                Paint::Panel {
+                    bounds,
+                    fill: Some(fill),
+                    ..
+                } if *fill == app.theme.accent
+                    && bounds.h <= unit / 8
+                    && bounds.x < i32::from(row.right()) * unit
+                    && (bounds.y + bounds.h - unit).abs() <= 1 =>
+                {
+                    Some(*bounds)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(lines.len(), 1, "one view underlined: {lines:?}");
+        assert!(lines[0].x < 4 * unit, "Explorer, which the sidebar shows");
+        // Settings' icon is in the words' colour while its page is open.
+        let last = app.view_x(ACTIVITY.len() - 1, row);
+        let lit = grid.paint.iter().any(|p| {
+            matches!(p, Paint::Icon { bounds, color, .. }
+                if *color == app.theme.text.fg
+                    && bounds.y < unit
+                    && bounds.x >= i32::from(last) * unit
+                    && bounds.x < i32::from(last + VIEW_STEP) * unit)
+        });
+        assert!(lit, "lit");
+    }
+
+    /// A count of two digits grew to the right, into the next view's icon. Its right edge
+    /// stays where one digit's is.
+    #[test]
+    fn the_count_of_changes_grows_towards_its_own_icon() {
+        let (dir, mut app) = project();
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        let unit = cellix_render::UNIT;
+        let row = app.activity_area();
+        let chip = |app: &App| -> Bounds {
+            let grid = screen(app);
+            let found = grid.paint.iter().find_map(|p| match p {
+                Paint::Panel {
+                    bounds,
+                    fill: Some(fill),
+                    ..
+                } if *fill == app.theme.accent
+                    && bounds.y < unit / 2
+                    && bounds.h > unit / 4
+                    && bounds.x < i32::from(row.right()) * unit =>
+                {
+                    Some(*bounds)
+                }
+                _ => None,
+            });
+            found.expect("the count's chip")
+        };
+        for n in 0..3 {
+            app.explorer
+                .status
+                .insert(dir.path().join(format!("f{n}")), 'M');
+        }
+        let one = chip(&app);
+        for n in 3..12 {
+            app.explorer
+                .status
+                .insert(dir.path().join(format!("f{n}")), 'M');
+        }
+        let two = chip(&app);
+        assert!(two.w > one.w, "wider for two digits");
+        assert_eq!(two.x + two.w, one.x + one.w, "from the same right edge");
+        // Clear of the next view's icon, which starts more than half a column into its three.
+        let next = i32::from(app.view_x(4, row)) * unit;
+        assert!(two.x + two.w <= next + unit / 2, "{two:?} before {next}");
+    }
+
+    /// A block of code at the top or the foot of a page lay over the line under the page's
+    /// bar and under the sheet's edge: its box reaches a little past its rows.
+    #[test]
+    fn a_blocks_box_stays_inside_its_page() {
+        let code: String = (0..60).map(|n| format!("let x{n} = {n};\n")).collect();
+        let (_dir, mut app) = page(&format!("```rust\n{code}```\n"));
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        let unit = cellix_render::UNIT;
+        let boxes = |app: &App| -> Vec<Bounds> {
+            let grid = screen(app);
+            let fill = app.theme.code_bg;
+            let found = grid.paint.iter().filter_map(|p| match p {
+                Paint::Panel {
+                    bounds,
+                    fill: Some(colour),
+                    border: Some(_),
+                    ..
+                } if *colour == fill && bounds.h > unit => Some(*bounds),
+                _ => None,
+            });
+            found.collect()
+        };
+        let area = app.pane_area(0);
+        let (over, under) = (i32::from(area.y) * unit, i32::from(area.bottom()) * unit);
+        // At the page's top the block runs past its foot, and scrolled into it, past both ends.
+        for scrolled in [0, 20] {
+            for _ in 0..scrolled {
+                app.handle(mouse(MouseKind::ScrollDown, area.x + 10, area.y + 5));
+            }
+            let found = boxes(&app);
+            assert!(!found.is_empty(), "the block's box");
+            for b in found {
+                assert!(
+                    b.y >= over && b.y + b.h <= under,
+                    "{b:?} in {over}..{under}"
+                );
+            }
+        }
+    }
+
     /// Appearance and Editor go on past a window's foot, more so on taller rows, and
     /// nothing said so: the last row in view looked like the last there was.
     #[test]
@@ -33530,7 +33782,10 @@ while True:
         );
     }
 
-    /// Every tooltip is one row, on a row of its own.
+    /// Every tooltip is one row, on a row of its own. It stops a hair short of the row's
+    /// edges: on the terminal's own line that's still the whole row, and on a taller row
+    /// it's what lets the tip keep its height and stand in the middle, clear of a line over
+    /// or under it. Exactly a row, it was the row, 50 px tall and on both lines.
     #[test]
     fn a_tooltip_is_one_whole_row() {
         let (_dir, mut app) = project();
@@ -33551,7 +33806,22 @@ while True:
             .collect();
         assert!(!tips.is_empty(), "a tip shows");
         for tip in tips {
-            assert_eq!((tip.y % 64, tip.h), (0, 64), "{tip:?}");
+            let (over, under) = (tip.y % 64, 64 - (tip.y % 64 + tip.h));
+            assert!(tip.h < 64, "shorter than its row, to stand in it: {tip:?}");
+            assert!(
+                over <= 1 && under <= 1,
+                "and a hair from its edges: {tip:?}"
+            );
+            // What a row of 50 px makes of that: its own 36 px, with 7 over and under.
+            let (top, tall) = cellix_render::stood(tip.y % 64, tip.h, 50.0, 36.0);
+            assert!(
+                (tall - 36.0).abs() < 1.5,
+                "its height on a taller row: {tall}"
+            );
+            assert!(
+                top >= 6.0 && top + tall <= 44.0,
+                "clear of the row's edges: {top}"
+            );
         }
     }
 

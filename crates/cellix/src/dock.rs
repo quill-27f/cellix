@@ -15,7 +15,7 @@ use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor, Rgb as TermRgb};
 use cellix_input::{Key, KeyEvent, MouseKind};
-use cellix_render::{Bitmap, Bounds, Grid, Icon, Paint, Rect, Rgb, Style, TOP_LEFT, TOP_RIGHT};
+use cellix_render::{Bitmap, Bounds, Grid, Icon, Paint, Rect, Rgb, Style};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use unicode_width::UnicodeWidthStr;
 
@@ -2450,8 +2450,6 @@ fn front_tab(grid: &mut Grid, tab: Rect, theme: &Theme, in_cells: bool) {
         Some(theme.accent),
         None,
     );
-    let whole = Bounds::inset(tab, 0.0, 0.0);
-    grid.corners(whole, TAB_CHIP_RADIUS, theme.tab.bg, TOP_LEFT | TOP_RIGHT);
 }
 
 /// How tall the accent's line on the tab in front is, in rows: the file tabs' own.

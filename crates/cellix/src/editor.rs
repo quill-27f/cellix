@@ -4495,7 +4495,11 @@ impl Editor {
             let whole = end < visible.end || end == rows.len() || !group(&rows[end]);
             let wide = (index..end).find_map(|at| Some((at, self.wide_block(area, at)?.1)));
             if row.shaded {
-                let bounds = Bounds::cells(left, top - 0.08, edge - left, height + 0.2);
+                // Its box reaches a little over and under its rows, and no further than
+                // the page's own: it lay over the line under the bar, and under the sheet.
+                let (over, under) = (area.y as f32, area.bottom() as f32);
+                let (from, to) = ((top - 0.08).max(over), (top + height + 0.12).min(under));
+                let bounds = Bounds::cells(left, from, edge - left, to - from);
                 grid.panel(bounds, 22, Some(theme.code_bg), Some(theme.border));
                 if let (Some((at, most)), true) = (wide, whole) {
                     let moved = self.row_shift(area, at);

@@ -498,6 +498,10 @@ def shoot(name, steps, *args, size="120x40", background="1e1e2e", cwd=None, env=
         "CELLIX_SCREEN_TEXT": said.name,
         # A stand-in, so no picture has the name of the machine it was taken on.
         "CELLIX_MACHINE": "dev-box",
+        # And a plain shell with a plain prompt, so none has a login or a host in a terminal.
+        "SHELL": "/bin/sh",
+        "PS1": "$ ",
+        "ENV": "",
         "HOME": HOME,
         "TERM_SIZE": size,
         # Rows are Cellix's own, 1.4 lines of 36 pixels, as Settings has them until it's told

@@ -928,9 +928,11 @@ impl Workspaces {
             };
             let wide = self.measure().width(NEW_WORKSPACE_TIP, font) + 2.0;
             let left = start.min(f32::from(self.size.0) - wide - 1.0).max(0.0);
-            // The whole row above the bar: a tip covers rows whole, never part of one.
+            // The row above the bar: a tip covers a row whole, never part of one, and on a
+            // taller row stands in the middle of it.
             let top = f32::from(y) - 1.0;
-            let bounds = Bounds::cells(left, top, wide, 1.0);
+            let inset = crate::app::TIP_INSET;
+            let bounds = Bounds::cells(left, top + inset, wide, 1.0 - inset * 2.0);
             grid.popup(bounds, CHIP_RADIUS, theme.popup, theme.popup_border);
             let colour = (theme.popup_dim, false);
             grid.text_run(
@@ -1036,17 +1038,20 @@ impl Workspaces {
         let base = theme.text;
         let (width, height) = self.size;
         grid.fill(Rect::new(0, 0, width, height), base);
-        // The rail, the tab row and the status bar, as around any page, so the terminal's
-        // window padding meets the same colours it does there.
+        // The frame round it, as round any page: the rail where there is one, and the bar at
+        // the foot. What's between is a sheet, as the file is, so the terminal's window
+        // padding meets the frame's colour here too.
         let rail = self.app().rail_width();
         grid.fill(Rect::new(0, 0, rail, height), theme.activity);
-        grid.fill(
-            Rect::new(rail, 0, width.saturating_sub(rail), 1),
-            theme.activity,
-        );
+        grid.edge = Some(theme.activity.bg);
         let bottom = height.saturating_sub(1);
         grid.fill(Rect::new(0, bottom, width, 1), theme.status);
         label(grid, (1.5, bottom), &self.machine, theme.status, width);
+        if !self.measure().in_cells() {
+            let sheet = Rect::new(rail, 0, width.saturating_sub(rail), bottom);
+            let bounds = Bounds::inset(sheet, 0.0, 0.0);
+            crate::app::sheet_edge(grid, bounds, theme.activity.bg, theme.border);
+        }
 
         let (left, column, top) = self.choice_rows();
         let right = left + column;

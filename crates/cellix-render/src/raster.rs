@@ -240,6 +240,19 @@ pub(crate) fn text_pixels(row_height: usize, font: Font) -> f32 {
     row_height as f32 * INTERFACE_SIZE * font.size as f32 / 100.0
 }
 
+/// Where something `h` paint units tall at `y` stands in rows `row` pixels tall whose words
+/// are set for a line of `line` pixels, as a top and a height in pixels. Anything shorter
+/// than a row keeps the height it has on that line, in the middle of where it stood.
+pub fn stood(y: i32, h: i32, row: f32, line: f32) -> (f32, f32) {
+    let (top, tall) = (y as f32 * row / UNIT as f32, h as f32 * row / UNIT as f32);
+    if h < UNIT && line < row {
+        let own = h as f32 * line / UNIT as f32;
+        (top + (tall - own) / 2.0, own)
+    } else {
+        (top, tall)
+    }
+}
+
 /// CPU rendering. Glyphs are rasterized once and blended into their cells, so text stays
 /// locked to the grid and a row costs little more than a copy.
 pub struct SoftwareRasterizer {
@@ -293,14 +306,7 @@ impl SoftwareRasterizer {
     /// shorter than a row is a control or a mark: it keeps the height it has on the
     /// terminal's own line, in the middle of where it stood.
     fn stand(&self, y: i32, h: i32) -> (f32, f32) {
-        let (ch, th) = (self.cell.1 as f32, self.type_row as f32);
-        let (top, tall) = (y as f32 * ch / UNIT as f32, h as f32 * ch / UNIT as f32);
-        if h < UNIT && th < ch {
-            let own = h as f32 * th / UNIT as f32;
-            (top + (tall - own) / 2.0, own)
-        } else {
-            (top, tall)
-        }
+        stood(y, h, self.cell.1 as f32, self.type_row as f32)
     }
 
     fn mask(&mut self, key: &GlyphKey) -> Mask {

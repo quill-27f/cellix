@@ -5290,5 +5290,33 @@
     "title": "A review beside Source Control is parted from it by the sheet's own edge alone: no second line stands beside the sheet",
     "test": "a_review_beside_source_control_has_the_sheets_edge_alone",
     "passes": true
+  },
+  {
+    "id": "sheet-edges-last",
+    "milestone": 14,
+    "title": "A sheet's line and round corners are painted over what the sheet holds and under what floats, so a tab, a diff's band or a page's block can't break them; a tab cuts no corners of its own; the first screen is a sheet too",
+    "test": "a_sheets_edge_is_drawn_over_what_it_holds",
+    "passes": true
+  },
+  {
+    "id": "views-settings-lit",
+    "milestone": 14,
+    "title": "With Settings open its icon among the views is lit and not underlined: the line is under the view the sidebar shows, and only that",
+    "test": "settings_is_lit_among_the_views_and_not_underlined",
+    "passes": true
+  },
+  {
+    "id": "badge-grows-left",
+    "milestone": 14,
+    "title": "The count of changed files keeps its right edge where one digit's is, so two digits grow over its own icon and not into the next view's",
+    "test": "the_count_of_changes_grows_towards_its_own_icon",
+    "passes": true
+  },
+  {
+    "id": "page-blocks-inside",
+    "milestone": 14,
+    "title": "A block of code cut by the top or the foot of a page keeps its box inside the page: nothing of it lies over the line under the bar or under the sheet",
+    "test": "a_blocks_box_stays_inside_its_page",
+    "passes": true
   }
 ]

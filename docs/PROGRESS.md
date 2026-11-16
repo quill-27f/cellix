@@ -2518,3 +2518,32 @@ Every pointer step in the tour was a column and a row, and the look moved nearly
 - README and CHANGELOG say what the look is, under Unreleased. The README's three pictures taken from the tour are still 0.9.2's.
 - `ui-expert` and AGENTS.md say what a tour's picture measures now and how a step names a place.
 - Next: what `ui-expert` finds in the 209 pictures.
+
+## What the reviewers found in the look's pictures (2026-11-16)
+
+Three `ui-expert` passes over the 206 pictures of the whole tour, against canvas 24. Their reports ran to some hundred findings. This entry is the ones the look itself caused, fixed together, and a list of the rest.
+
+Fixed:
+- A sheet's line and corners were painted before what the sheet holds, so the tab in front broke the top line and squared the corner, a review left holes in the left edge, and a page's blocks and pictures erased the foot. They're painted after the sheets' content and before the bar and what floats (`draw_sheet_edges`, on every way out of `draw`). A tab cuts no corners of its own: it's on its sheet with a line under it.
+- The first screen, which lists the workspaces, was a square block to the window's edge under a blank row of the frame. It's a sheet, with the frame's colour past its edge.
+- The line under the side pane's tabs started half a column short of its sheet's edge: the sheet's half of the frame's column is painted after the pane, over the line's start. The line is painted again after it.
+- A tip was a whole row, 50 px on a taller row and so on the lines over and under it. Its box stops a hair short of its row, which on the terminal's own line is still the row and on a taller one lets it keep its height and stand in the middle, 7 px clear.
+- With Settings open, Explorer and Settings were both underlined among the views. Settings is lit and has no line.
+- A count of two digits on Source Control's icon ran into the next view's. Its right edge stays put.
+- A block of code cut by the top or foot of a page lay over the line under the page's bar and under the sheet. Its box stops at the page's own edges. The line under the bar is painted again after the page, for a picture at its top.
+- The tour's shells are `/bin/sh` with a `$` prompt in every scene, not only the terminal ones: three pictures had the real login and host.
+
+Tests: `a_sheets_edge_is_drawn_over_what_it_holds`, `settings_is_lit_among_the_views_and_not_underlined`, `the_count_of_changes_grows_towards_its_own_icon` and `a_blocks_box_stays_inside_its_page` are new. Changed with a decision: `a_tooltip_is_one_whole_row` asked for a tip exactly a row tall and on a row's line, and asks for one a hair short of its row and for what a row of 50 px makes of that (36 px, clear of the edges).
+
+Looked at: `02-code`, `13-review`, `14-agents`, `13-strip-hover`, `13-quit-hover`, `15-settings-appearance`, `23-narrow-menu`, `82-paper-changes`, retaken.
+
+Checked and left as it is: the bar's chips read as 5 px low in their row because the bar's row takes the pixels left over under the sheets (16 to 32, as the terminal's lines divide) and stands in the middle of them. A notch of the wheel moves what it did; the sample page's scenes fell short of their names because the tour's notches arrived slowly on a loaded machine.
+
+Not done, in the reviewers' order of weight:
+- One size for a one-row control. Boxes are 32 px with their words 3 px high in them (for the tails, on a 36 px line); chips are 27 to 35 px; the bell and the power mark are 16 px beside a branch of 26. All three reviewers put this first. On taller rows there's room for 36 px boxes with words centred.
+- Menus, the dialog and cards are sized in whole rows, with the slack under their last line; popups have 3 to 9 px over their first.
+- Review of a turn and Compare (`153`, `85`) keep their list on the file's sheet with no views over it, and Review has no tab or cards as its board has.
+- What's in the side pane is measured from the cells and not from the sheet's line, half a column off: a terminal's words start 10 px from its left line and end 1 px from its right.
+- Find in the side pane lies over the line under its tabs.
+- Older than the look: Find lies over the minimap; a task box touches its label; stacked display equations are 4 px apart; Source Control and a merge spend nine rows before the first file; segments are stretched; the Keyboard page has no thumb; greyed menu words are under 3:1 and a selection on the caret's line 1.12:1; a palette's group separators cost a row each.
+- The tour: `54`, `80` and `81` hadn't finished building on a loaded machine; `37-hover-settings` and `108-terminal-ask-hover` are the same as their base scenes.
