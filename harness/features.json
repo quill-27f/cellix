@@ -5255,5 +5255,12 @@
     "title": "A file's icon says its kind where there are pictures: marks of their own for Rust, Python, Markdown, git, JSON, configs and other code, a page for the rest, and a filled folder; in the tree, Quick Open, Source Control and a comment's place",
     "test": "a_files_icon_says_what_kind_it_is",
     "passes": true
+  },
+  {
+    "id": "tree-columns",
+    "milestone": 14,
+    "title": "The tree has a column of chevrons before its icons, each folder's clear of its icon, and a line down from every folder a row is inside, under that folder's chevron; in cells a row starts where it did",
+    "test": "rows_inside_a_folder_have_a_line_down_from_it",
+    "passes": true
   }
 ]

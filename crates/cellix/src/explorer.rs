@@ -131,8 +131,18 @@ impl Explorer {
                 },
                 None => theme.sidebar,
             };
-            let x = area.x + entry.depth as u16 * 2 + 2;
+            // The column a row's icon starts in: after a column for the chevrons, which
+            // only pictures draw, and two more for each folder the row is inside.
+            let lead = if measure.in_cells() { 2 } else { ICONS_FROM };
+            let x = area.x + entry.depth as u16 * 2 + lead;
             let end = area.right().saturating_sub(2);
+            // A line down from each folder the row is inside, under that folder's chevron,
+            // so what's in a long folder is plainly its own.
+            for level in 0..entry.depth as u16 {
+                let under = f32::from(area.x + level * 2 + lead) + GUIDE;
+                let line = Bounds::cells(under, f32::from(y), 0.0, 1.0);
+                grid.hairline(line, theme.guide);
+            }
             // A folder's chevron says whether it's open, so its icon needn't. A file's icon
             // says what kind it is.
             let (fallback, chevron, icon) = match (entry.is_dir, entry.expanded) {
@@ -148,9 +158,10 @@ impl Explorer {
             // The name's colour, so the icon fades as much as the name does.
             let color = if entry.ignored { theme.ignored } else { color };
             if let Some(chevron) = chevron {
-                // Far enough before the icon that their strokes stay 8 px apart.
+                // Far enough before the icon that 7 px stay between them, the open
+                // chevron's too, which is the wider, and as far from the sidebar's edge.
                 grid.glyph(
-                    x as f32 - 1.45,
+                    x as f32 + CHEVRON,
                     y,
                     chevron,
                     if entry.ignored {
@@ -177,6 +188,14 @@ impl Explorer {
         }
     }
 }
+
+/// The column a row's icon starts in where there are pictures, from the sidebar's edge:
+/// one for air, and one and a half for the chevron.
+const ICONS_FROM: u16 = 3;
+/// Where a folder's chevron is drawn from the column its icon starts in, and where its
+/// guide stands: under the chevron's middle.
+const CHEVRON: f32 = -2.15;
+const GUIDE: f32 = -1.3;
 
 /// A folder's colour, for the names that mean something, as VS Code's icon themes do.
 pub fn folder_color(name: &str) -> Rgb {

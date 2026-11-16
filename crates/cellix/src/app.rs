@@ -28941,6 +28941,107 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         );
     }
 
+    /// Rows inside a folder were set in by two columns and nothing else said whose they
+    /// were. Each has a line down from every folder it's inside.
+    #[test]
+    fn rows_inside_a_folder_have_a_line_down_from_it() {
+        let (dir, _) = project();
+        fs::create_dir(dir.path().join("src/deep")).unwrap();
+        fs::write(dir.path().join("src/deep/inner.rs"), "fn y() {}\n").unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (120, 40));
+        for folder in ["src", "deep"] {
+            let (x, y) = find(&screen(&app), folder);
+            app.handle(mouse(MouseKind::Left, x, y));
+        }
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        let grid = screen(&app);
+        let unit = cellix_render::UNIT;
+        let side = app.sidebar_area().expect("the sidebar");
+        // The lines a row has, as columns from the sidebar's edge.
+        let guides = |name: &str| -> Vec<f32> {
+            let (_, y) = find(&grid, name);
+            let mut found: Vec<f32> = grid
+                .paint
+                .iter()
+                .filter_map(|p| match p {
+                    Paint::Hairline { bounds, color }
+                        if bounds.w == 0
+                            && bounds.h == unit
+                            && bounds.y == i32::from(y) * unit
+                            && *color == app.theme.guide =>
+                    {
+                        Some(bounds.x as f32 / unit as f32 - f32::from(side.x))
+                    }
+                    _ => None,
+                })
+                .collect();
+            found.sort_by(f32::total_cmp);
+            found
+        };
+        assert_eq!(guides("alpha.txt"), Vec::<f32>::new(), "none at the top");
+        assert_eq!(guides("src"), Vec::<f32>::new());
+        let one = guides("lib.rs");
+        assert_eq!(one.len(), 1, "one folder deep: {one:?}");
+        let two = guides("inner.rs");
+        assert_eq!(two.len(), 2, "two deep: {two:?}");
+        assert!((two[0] - one[0]).abs() < 0.01, "src's line runs on down");
+        assert!(
+            (two[1] - two[0] - 2.0).abs() < 0.01,
+            "a level is two columns"
+        );
+        // Under the folder's chevron: left of where its icon starts, two columns in.
+        assert!(one[0] > 1.0 && one[0] < 2.0, "{one:?}");
+        // The folder between them has its parent's line and not its own.
+        assert_eq!(guides("deep").len(), 1);
+        // The chevrons have a column of their own before the icons: a folder's stands with
+        // its middle over its guide, clear of its icon, and a file's icon is in the column
+        // the folders' are in.
+        let icons = |name: &str| -> Vec<(Icon, f32, f32)> {
+            let (_, y) = find(&grid, name);
+            let edge = i32::from(side.right()) * unit;
+            let row = grid.paint.iter().filter_map(|p| match p {
+                Paint::Icon { bounds, icon, .. }
+                    if bounds.y / unit == i32::from(y) && bounds.x < edge =>
+                {
+                    let left = bounds.x as f32 / unit as f32 - f32::from(side.x);
+                    Some((*icon, left, left + bounds.w as f32 / unit as f32))
+                }
+                _ => None,
+            });
+            row.collect()
+        };
+        let src = icons("src");
+        let (chevron, folder) = (src[0], src[1]);
+        assert_eq!(
+            (chevron.0, folder.0),
+            (Icon::ChevronDown, Icon::FolderFilled)
+        );
+        let middle = (chevron.1 + chevron.2) / 2.0;
+        assert!((middle - one[0]).abs() < 0.05, "over its guide: {src:?}");
+        assert!(
+            folder.1 - middle >= 1.0,
+            "a column clear of its icon: {src:?}"
+        );
+        let alpha = icons("alpha.txt");
+        assert_eq!(alpha.len(), 1, "a file has no chevron: {alpha:?}");
+        assert!(
+            (alpha[0].1 - folder.1).abs() < 0.01,
+            "in the folders' column"
+        );
+        let lib = icons("lib.rs");
+        assert!(
+            (lib[0].1 - folder.1 - 2.0).abs() < 0.01,
+            "two columns in: {lib:?}"
+        );
+        // In cells there are no chevrons, and a row starts where it did.
+        let mut cells = App::new(dir.path().to_path_buf(), (120, 40));
+        let (x, _) = find(&screen(&cells), "alpha.txt");
+        assert_eq!(x, cells.sidebar_area().unwrap().x + 4);
+        cells.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        let (x, _) = find(&screen(&cells), "alpha.txt");
+        assert_eq!(x, cells.sidebar_area().unwrap().x + 5, "a column later");
+    }
+
     /// Every file had the same page beside its name, told apart by colour alone. A file's
     /// icon says its kind, where there are pictures, and a folder's is filled.
     #[test]

@@ -208,6 +208,15 @@ fn main() {
                 }));
             }
         }
+        // tree:<file>:<folder,folder>: a file open, and those folders of the tree unfolded.
+        Some(view) if view.starts_with("tree:") => {
+            let (file, folders) = view[5..].rsplit_once(':').expect("<file>:<folders>");
+            app.open(&root.join(file)).unwrap();
+            for folder in folders.split(',') {
+                let at = find(&app, folder).expect("the folder in the tree");
+                click(&mut app, at);
+            }
+        }
         Some(view) if view.starts_with("pane:") => {
             let (file, columns) = view[5..].rsplit_once(':').expect("<file>:<columns>");
             app.open(&root.join(file)).unwrap();

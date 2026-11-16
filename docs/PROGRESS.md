@@ -2448,3 +2448,15 @@ The fifth step of the look, from the canvas the user picked: small filled icons 
 - Tests: `a_files_icon_says_what_kind_it_is` is new: ten names and a folder, each with its icon and colour in its row, the cell tier unchanged, and no two kinds the same shape. The two discs differ least, by 13 dots or more of 576.
 - Looked at: a snapshot of the tree with a file of each kind, light.
 - Next: indent guides in the tree, then a file's icon on its tab.
+
+## The tree's columns (2026-11-16)
+
+The sixth step of the look, from the canvas: a column of chevrons, a column of icons, and lines down from open folders.
+
+- With pictures a row's icon starts three columns from the sidebar's edge where it started two, and two more for each folder it's inside. The chevron has the column before it, its middle 1.3 columns left of the icon: an open folder's chevron, the wider, was a pixel from its icon. Names start a column later for it.
+- A hairline runs down every row inside a folder, under that folder's chevron, one for each folder the row is inside, in the colour the editor's indent guides have.
+- In cells nothing moved: no chevrons, no lines.
+- `harness/x snapshot` takes `tree:<file>:<folder,folder>`, a file open and those folders unfolded, to look at this.
+- Tests: `rows_inside_a_folder_have_a_line_down_from_it` is new: lines at one and two levels, none at the top, the chevron over its guide and a column clear of its icon, a file's icon in the folders' column, and cells as they were.
+- Looked at: snapshots of the tree unfolded two deep, light, and one deep, dark.
+- Next: a file's icon on its tab.
