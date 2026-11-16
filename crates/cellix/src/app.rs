@@ -134,16 +134,9 @@ const ACTION_MARGIN: u16 = 1;
 /// Columns the top row keeps clear at the window's right edge, so the last icon in it has
 /// as much room from the corner as the first view has from the other.
 const ACTION_END: u16 = 1;
-/// Rows tall a rail icon is on the pixel tiers: 24 pt where a row is 18.5 pt, the size of
-/// VS Code's activity bar. Text cells keep their block art.
-const RAIL_ICON: f32 = 1.30;
-/// The tile behind the rail icon that's showing, in columns and rows: about square, with 8 px
-/// or more between it and the icon on every side, and as much between it and the rail's
-/// edges. Taller than a row, so it reaches into the rows either side; the rail sits
-/// `RAIL_DROP` lower so the first stays inside the window, its icon a row from the top.
-/// Pixels only.
+/// The tile a rail icon had behind it while the rail was painted, in columns and rows. The
+/// count of changed files is still placed by its corner.
 const RAIL_PILL: (f32, f32) = (3.9, 1.78);
-const RAIL_DROP: f32 = 0.5;
 /// Where the pane's own close button stands, which they keep clear of.
 const PANE_CLOSE: u16 = 3;
 /// The button that quits Cellix: the power mark at the far end of the bar at the window's
@@ -15247,14 +15240,8 @@ impl App {
     /// Settings, which sits at the bottom given room.
     fn rail_top(&self, index: usize, area: Rect) -> f32 {
         let step = ACTIVITY_STEP;
-        // The first level with the sidebar's header, as the design has it, less the drop
-        // that keeps its tile inside the window.
-        let drop = if self.measure.in_cells() {
-            0.0
-        } else {
-            RAIL_DROP
-        };
-        let stacked = area.y as f32 + drop + index as f32 * step;
+        // The first level with the sidebar's header.
+        let stacked = area.y as f32 + index as f32 * step;
         if index + 1 == ACTIVITY.len() {
             stacked.max(area.bottom().saturating_sub(2) as f32)
         } else {
@@ -15394,25 +15381,11 @@ impl App {
             self.draw_views(grid, area);
             return;
         }
+        // From here on icons are cells: where there are pictures the views are drawn above.
         grid.fill(area, self.theme.activity);
-        if !self.measure.in_cells() {
-            // A hairline between the rail and the sidebar, half way to the border's colour.
-            let (a, b) = (self.theme.activity.bg, self.theme.border);
-            let mix = |x: u8, y: u8| ((u16::from(x) + u16::from(y)) / 2) as u8;
-            let line = Rgb(mix(a.0, b.0), mix(a.1, b.1), mix(a.2, b.2));
-            let edge = Bounds::cells(
-                area.right() as f32 - 0.08,
-                area.y as f32,
-                0.08,
-                area.h as f32,
-            );
-            grid.panel(edge, 0, Some(line), None);
-        }
         for (i, (icon, command)) in ACTIVITY.iter().enumerate() {
             let top = self.rail_top(i, area);
             let y = top.floor() as u16;
-            // How far below its cell the icon sits, for the paint that can.
-            let lift = top - y as f32;
             if y + 1 >= area.bottom() {
                 break;
             }
@@ -15432,8 +15405,8 @@ impl App {
             let wash = on.then_some(self.theme.tint);
             let wash = wash.or(hovered.then_some(self.theme.row_hover));
             let style = wash.map_or(style, |bg| Style { bg, ..style });
-            if on && self.measure.in_cells() {
-                // Only the cell tier needs the bar, since pixels have the pill.
+            if on {
+                // A bar down the edge beside the view in front.
                 let bar = Style {
                     fg: self.theme.accent,
                     painted: true,
@@ -15443,14 +15416,7 @@ impl App {
                     grid.put_str(area.x, y + row, "▌", bar, area.right());
                 }
             }
-            if let Some(fill) = wash.filter(|_| !self.measure.in_cells()) {
-                // With pixels, the pill is paint and sized to the icon.
-                let (wide, high) = RAIL_PILL;
-                let left = area.x as f32 + (area.w as f32 - wide) / 2.0;
-                let pill_top = top + (row.h as f32 - high) / 2.0;
-                let pill = Bounds::cells(left, pill_top, wide, high);
-                grid.panel(pill, PILL_RADIUS, Some(fill), None);
-            } else if wash.is_some() {
+            if wash.is_some() {
                 // Icons are cells, so the pill is too: the rail's full width, with paint
                 // bringing it in half a column at each side.
                 let across = Rect::new(area.x, y, area.w, row.h);
@@ -15470,19 +15436,7 @@ impl App {
                 let bounds = Bounds::cells(left, top, right - left, h);
                 grid.corners(bounds, PILL_RADIUS, ground, ALL_CORNERS);
             }
-            if self.measure.in_cells() {
-                grid.put_icon(area.x + 1, y, *icon, ACTIVITY_ICON, style);
-            } else {
-                let cell = Rect::new(area.x, y, area.w, row.h);
-                let shape = (*icon, RAIL_ICON);
-                // The pill is paint now, so the cells under it keep the rail's own colour.
-                let plain = Style {
-                    bg: self.theme.activity.bg,
-                    ..style
-                };
-                toolbar::draw_icon(grid, shape, cell, style.fg, plain);
-                grid.drop_last(lift);
-            }
+            grid.put_icon(area.x + 1, y, *icon, ACTIVITY_ICON, style);
             let changed = self.changed_count();
             if *command == Command::ShowSourceControl && changed > 0 {
                 let color = self.theme.button_text;

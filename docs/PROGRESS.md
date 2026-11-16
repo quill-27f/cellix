@@ -2481,3 +2481,10 @@ From the user, after the line under the views: "there should be similar separato
 - Tests: `a_line_runs_under_the_panes_tabs` is new (ledger: `pane-tabs-rule`).
 - Looked at: snapshots at 150 by 30 on airy rows, light and dark.
 - Next: the tour, re-aimed.
+
+## The rail's painted half, removed (2026-11-16)
+
+Where there are pictures the views are across the top of the sidebar, so the rail is drawn only where icons are cells. What it painted for the pixel tiers could no longer run: the hairline at its edge, the tile behind the icon in front, the 24 pt icons, and the half row it stood lower by. They're gone from `draw_activity` and `rail_top`, with `RAIL_ICON` and `RAIL_DROP`. Nothing a terminal shows changes.
+
+- Left: the count of changed files is still placed by the old tile's corner (`RAIL_PILL`) and painted, which cells don't show. Cells have never had the count on the rail.
+- Tests: none new; the rail's own pass as they did.
