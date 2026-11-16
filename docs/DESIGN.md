@@ -132,9 +132,9 @@ These decide whether pixels stay the default:
 5. Pixel mouse reporting (mode 1016) through Zellij.
 6. Rows of Cellix's own, taller than the terminal's line, which the look picked on 16 November
    2026 rests on: a row of about 26 pt for 13 pt words, whatever the terminal's line is, with
-   no setting of the terminal's touched. A trial behind `CELLIX_ROW_HEIGHT` (1.4 is a row of
-   1.4 lines), on the direct tier where the terminal reports the mouse in pixels, and nowhere
-   else: under tmux, in Claude Code's pane and on cells a row stays a line. The grid has as
+   no setting of the terminal's touched. Settings' Row height chooses it (see Row height),
+   on the direct tier where the terminal reports the mouse in pixels, and nowhere else: under
+   tmux, in Claude Code's pane and on cells a row stays a line. The grid has as
    many rows as fit the window's pixels. A row's tile is placed at its own size on the line
    its row starts in, `Y=` pixels into it, and the last row's runs on over what the lines
    leave under it. Words, icons, the caret and any shape shorter than a row keep the size
@@ -442,6 +442,23 @@ place in the list, since every worktree shares one list and agents push and pop 
 
 `theme` is `auto`, `dark` or `light`. `auto` is the default: Cellix asks the terminal for
 its background with OSC 11 and takes the matching theme, staying dark if nothing answers.
+
+## Row height
+
+`row_height` is `airy`, `comfortable` or `terminal`, chosen on Settings' Appearance page under
+the theme. Airy is the default: a row 1.4 of the terminal's lines tall, which for a terminal
+set to 14 pt is 26 pt for 13 pt words. Comfortable is 1.2, and `terminal` is the terminal's
+own line, as every row was up to 0.9.2. It changes as it's clicked: everything is measured and
+drawn again in a grid of as many rows as the window then holds. Where Cellix can't lay out
+rows of its own (see "Not yet proven", item 6) the choice changes nothing, and a row is a
+line. `CELLIX_ROW_HEIGHT` overrules the setting with a number of lines, 1 for the terminal's
+own, which is how the harness chooses: the tour's terminal counts its size and its steps in
+Cellix's rows (`TERM_ROW`), so a scene has the rows it always had.
+
+Appearance is taller than a short window, the more so on taller rows, so it scrolls: a part
+that doesn't fit whole isn't drawn, and nothing is drawn over the bars under the page. Every
+control keeps its turn under Tab, in view or not, and the page goes to the one the keyboard
+is on.
 
 ## Look
 

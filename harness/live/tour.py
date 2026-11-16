@@ -492,6 +492,9 @@ def shoot(name, steps, *args, size="120x40", background="1e1e2e", cwd=None, env=
         "CELLIX_SCREEN_TEXT": said.name,
         "HOME": HOME,
         "TERM_SIZE": size,
+        # Rows are Cellix's own, 1.4 lines of 36 pixels, as Settings has them until it's told
+        # otherwise. A scene on cells has the terminal's lines.
+        **({} if "CELLIX_TIER" in extra else {"TERM_ROW": "50"}),
         "TERM_BG": background,
         "TERM_PADDING": "10x24",
         **extra,

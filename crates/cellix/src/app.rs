@@ -1201,6 +1201,9 @@ pub struct App {
     terminal_look: (Option<bool>, Option<(u8, u8, u8)>),
     /// A change to smooth scrolling for the terminal loop to pick up.
     smooth_change: Option<bool>,
+    /// A row height just chosen in Settings, as how many of the terminal's lines a row is
+    /// tall, for the terminal's loop to act on.
+    row_height_change: Option<f32>,
     /// What the sidebar shows, as in VS Code's activity bar.
     sidebar_view: SidebarView,
     outline: Outline,
@@ -1534,6 +1537,7 @@ impl App {
             settings_page: None,
             terminal_look: (None, None),
             smooth_change: None,
+            row_height_change: None,
             sidebar_view: SidebarView::Explorer,
             outline: Outline::default(),
             source: SourceControl::default(),
@@ -13656,7 +13660,7 @@ impl App {
                 1
             };
             if let Some(page) = &mut self.settings_page {
-                page.scroll_by(delta);
+                page.scroll_by(delta, area);
             }
             return;
         }
@@ -13697,6 +13701,10 @@ impl App {
                         None => {
                             page.filter.clear();
                             page.found_top = 0;
+                            // A page opens at its top, however far the last one was scrolled.
+                            if page.section != section {
+                                page.top = 0;
+                            }
                             page.section = section;
                         }
                     }
@@ -13714,6 +13722,11 @@ impl App {
                 self.settings.theme = Some(name.to_string());
                 self.apply_theme();
                 note = store("theme", name.into());
+            }
+            Control::RowHeight(name) => {
+                self.settings.row_height = Some(name.to_string());
+                self.row_height_change = Some(crate::settings::row_height_times(Some(name)));
+                note = store("row_height", name.into());
             }
             Control::SmoothScroll => {
                 let on = self.settings.smooth_scroll == Some(false);
@@ -13904,6 +13917,12 @@ impl App {
         self.say(note);
         self.attach_open_files();
         true
+    }
+
+    /// A row height chosen in Settings, once, for the terminal loop to act on: how many of
+    /// the terminal's lines a row is to be tall.
+    pub fn take_row_height_change(&mut self) -> Option<f32> {
+        self.row_height_change.take()
     }
 
     /// The new smooth scrolling setting, once, for the terminal loop to act on.
@@ -14307,6 +14326,7 @@ impl App {
             };
             let values = Values {
                 theme: &chosen,
+                row_height: crate::settings::row_height_name(self.settings.row_height.as_deref()),
                 keymap: &keymap,
                 smooth_scroll,
                 minimap,
@@ -32664,6 +32684,99 @@ while True:
         app.handle(mouse(MouseKind::Middle, x + 1, y));
         assert!(app.settings_page.is_none(), "a middle click closes it");
         assert_eq!(app.editors.len(), 1);
+    }
+
+    /// Row height is a choice of three under the theme's cards: Airy, which a row is until
+    /// something else is chosen, Comfortable, and the terminal's own line. A click on one is
+    /// kept as the setting and handed to the terminal's loop, once, as how many of the
+    /// terminal's lines a row is to be tall.
+    #[test]
+    fn row_height_is_chosen_in_settings() {
+        let (_dir, mut app) = project();
+        app.run(Command::OpenSettings);
+        let text = screen(&app).text();
+        for word in ["Row height", "Airy", "Comfortable", "Terminal's"] {
+            assert!(text.contains(word), "{word} is on the page");
+        }
+        let area = app.sheet_area();
+        let (card, airy, smooth, comfortable, terminal) = {
+            let page = app.settings_page.as_ref().unwrap();
+            let spots = page.controls(area);
+            let at = |control: Control| spots.iter().find(|(_, c)| *c == control).unwrap().0;
+            (
+                at(Control::Theme("auto")),
+                at(Control::RowHeight("airy")),
+                at(Control::SmoothScroll),
+                at(Control::RowHeight("comfortable")),
+                at(Control::RowHeight("terminal")),
+            )
+        };
+        assert!(airy.y >= card.bottom(), "under the theme's cards");
+        assert!(smooth.y > airy.y, "and over the switches");
+        assert_eq!(
+            crate::settings::row_height_times(None),
+            1.4,
+            "airy unless set"
+        );
+        assert_eq!(app.take_row_height_change(), None, "nothing chosen yet");
+        app.handle(mouse(MouseKind::Left, comfortable.x + 2, comfortable.y));
+        assert_eq!(app.settings.row_height.as_deref(), Some("comfortable"));
+        assert_eq!(app.take_row_height_change(), Some(1.2));
+        assert_eq!(app.take_row_height_change(), None, "handed over once");
+        app.handle(mouse(MouseKind::Left, terminal.x + 2, terminal.y));
+        assert_eq!(app.settings.row_height.as_deref(), Some("terminal"));
+        assert_eq!(app.take_row_height_change(), Some(1.0), "a row is a line");
+        // A window too short for the page shows what fits and scrolls to the rest: nothing
+        // is drawn over the bars under it.
+        app.handle(Event::Resize(120, 24));
+        let area = app.sheet_area();
+        let has = |app: &App, control: Control| {
+            let page = app.settings_page.as_ref().unwrap();
+            let spots = page.controls(area);
+            let shown = |rect: &Rect| rect.h > 0 && rect.bottom() <= area.bottom();
+            spots.iter().any(|(rect, c)| *c == control && shown(rect))
+        };
+        assert!(has(&app, Control::Theme("auto")));
+        assert!(
+            !has(&app, Control::Notify),
+            "no room for the last switch yet"
+        );
+        assert!(
+            !screen(&app).text().contains("Notifications"),
+            "so it isn't drawn"
+        );
+        for _ in 0..40 {
+            app.handle(mouse(MouseKind::ScrollDown, area.x + 30, area.y + 10));
+        }
+        assert!(has(&app, Control::Notify), "scrolled to");
+        assert!(screen(&app).text().contains("Notifications"));
+        assert!(!has(&app, Control::Theme("auto")), "past the cards");
+        // The keyboard reaches everything, in view or not, and the page follows it: Tab
+        // past the four pages' names is on the first card, and the cards are back.
+        app.settings_page.as_mut().unwrap().focus = None;
+        for _ in 0..5 {
+            key(&mut app, Key::Tab);
+        }
+        let on = app.settings_page.as_ref().unwrap().focused(area);
+        assert_eq!(on, Some(Control::Theme("auto")));
+        assert!(has(&app, Control::Theme("auto")), "the page went to it");
+        assert!(!has(&app, Control::Notify));
+        for _ in 0..3 {
+            app.handle(Event::Key(KeyEvent::plain(Key::BackTab)));
+        }
+        assert!(
+            has(&app, Control::Theme("auto")),
+            "the pages' names are in view anyway"
+        );
+        app.settings_page.as_mut().unwrap().focus = None;
+        app.handle(Event::Key(KeyEvent::plain(Key::BackTab)));
+        let on = app.settings_page.as_ref().unwrap().focused(area);
+        let on = on.expect("something has the keyboard");
+        assert!(
+            has(&app, on),
+            "back from the top is at the page's end: it went there"
+        );
+        assert!(!has(&app, Control::Theme("auto")));
     }
 
     #[test]

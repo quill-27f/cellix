@@ -673,12 +673,18 @@ struct Display {
     own_rows: Option<f32>,
 }
 
-/// How tall a row of Cellix's own is, in lines of the terminal's, from `CELLIX_ROW_HEIGHT`.
-/// A trial for now, so it's off unless that's set, and only heights that leave a window
-/// some rows count.
-fn own_rows(asked: Option<&str>) -> Option<f32> {
-    let times: f32 = asked?.trim().parse().ok()?;
+/// How tall a row of Cellix's own is, in lines of the terminal's: what Settings' Row height
+/// says, unless `CELLIX_ROW_HEIGHT` says otherwise, which is how the harness chooses. A row
+/// no taller than a line is a line, and only heights that leave a window some rows count.
+fn own_rows(asked: Option<&str>, setting: f32) -> Option<f32> {
+    let asked = asked.and_then(|asked| asked.trim().parse().ok());
+    let times: f32 = asked.unwrap_or(setting);
     (1.05..=2.0).contains(&times).then_some(times)
+}
+
+/// What `CELLIX_ROW_HEIGHT` says, if it's set.
+fn asked_rows() -> Option<String> {
+    std::env::var("CELLIX_ROW_HEIGHT").ok()
 }
 
 /// How many rows `row` pixels tall fit in `lines` lines of `line` pixels.
@@ -687,7 +693,7 @@ fn rows_in(lines: u16, line: usize, row: usize) -> u16 {
 }
 
 impl Display {
-    fn detect(setting: Option<&str>, smooth: bool) -> io::Result<Self> {
+    fn detect(setting: Option<&str>, smooth: bool, rows: f32) -> io::Result<Self> {
         let forced = std::env::var("CELLIX_TIER")
             .ok()
             .as_deref()
@@ -705,7 +711,7 @@ impl Display {
         });
         Ok(Self {
             bleed,
-            own_rows: own_rows(std::env::var("CELLIX_ROW_HEIGHT").ok().as_deref()),
+            own_rows: own_rows(asked_rows().as_deref(), rows),
             placement,
             cell,
             told_cell: env.cell.is_some() && env.multiplexer == cellix_term::Multiplexer::Tmux,
@@ -837,7 +843,8 @@ pub fn run(options: Options) -> io::Result<()> {
     catch_stops(left.clone());
     let _session = Session::start()?;
     let smooth = settings.smooth_scroll != Some(false);
-    let mut display = Display::detect(settings.tier.as_deref(), smooth)?;
+    let rows = crate::settings::row_height_times(settings.row_height.as_deref());
+    let mut display = Display::detect(settings.tier.as_deref(), smooth, rows)?;
     let mut backend = display.backend();
     let mut out = io::stdout();
     let mut slow = crate::slow::Log::start();
@@ -979,6 +986,24 @@ pub fn run(options: Options) -> io::Result<()> {
             if let Some(on) = spaces.app_mut().take_smooth_change() {
                 display.set_smooth(on);
                 backend = display.backend();
+                redraw = true;
+            }
+            if let Some(times) = spaces.app_mut().take_row_height_change() {
+                // Rows of another height: everything is measured and drawn again, in a
+                // grid of as many of them as the window holds.
+                display.own_rows = own_rows(asked_rows().as_deref(), times);
+                backend = display.backend();
+                let measure = display.measure();
+                look.borrow_mut().measure = measure.clone();
+                for workspace in &mut spaces.list {
+                    workspace.app.set_measure(measure.clone());
+                }
+                let now = display.grid_size(lines);
+                if now != spaces.size() {
+                    spaces.handle(Event::Resize(now.0, now.1));
+                }
+                backend.invalidate();
+                shown = None;
                 redraw = true;
             }
             if redraw {
@@ -1234,20 +1259,26 @@ mod tests {
     use super::*;
     use crossterm::event::{KeyEvent as CtKey, KeyEventState};
 
-    /// A row of Cellix's own is asked for as so many of the terminal's lines. Nothing asked,
-    /// a height that isn't one, or one no taller than a line, leaves a row a line.
+    /// A row of Cellix's own is as many of the terminal's lines tall as Settings says, and
+    /// `CELLIX_ROW_HEIGHT` says otherwise for the harness. One no taller than a line is a
+    /// line, whichever said so.
     #[test]
-    fn a_row_of_cellixs_own_is_asked_for_in_lines() {
-        assert_eq!(own_rows(Some("1.4")), Some(1.4));
-        assert_eq!(own_rows(Some(" 1.25 ")), Some(1.25));
-        assert_eq!(own_rows(None), None);
-        assert_eq!(own_rows(Some("tall")), None);
+    fn a_row_of_cellixs_own_is_as_tall_as_settings_says() {
+        assert_eq!(own_rows(None, 1.4), Some(1.4), "airy");
+        assert_eq!(own_rows(None, 1.2), Some(1.2), "comfortable");
+        assert_eq!(own_rows(None, 1.0), None, "the terminal's own line");
+        assert_eq!(own_rows(Some("1"), 1.4), None, "the variable turns it off");
+        assert_eq!(own_rows(Some(" 1.25 "), 1.0), Some(1.25), "or on");
         assert_eq!(
-            own_rows(Some("1")),
-            None,
-            "a row as tall as a line is a line"
+            own_rows(Some("tall"), 1.2),
+            Some(1.2),
+            "nonsense is nothing said"
         );
-        assert_eq!(own_rows(Some("9")), None, "a window has to keep some rows");
+        assert_eq!(
+            own_rows(Some("9"), 1.4),
+            None,
+            "a window has to keep some rows"
+        );
     }
 
     /// Forty-five lines of 37 pixels hold thirty-two rows of 52, and a press 130 pixels down

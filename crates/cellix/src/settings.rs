@@ -17,6 +17,9 @@ pub struct Settings {
     pub tier: Option<String>,
     /// `false` makes the wheel jump by lines, for a slow link.
     pub smooth_scroll: Option<bool>,
+    /// How tall a row is where Cellix can set it: `airy` (the default), `comfortable`, or
+    /// `terminal` for the terminal's own line, which is what a row is everywhere else.
+    pub row_height: Option<String>,
     /// `false` hides the minimap, however wide the window.
     pub minimap: Option<bool>,
     /// `true` wraps long lines of code at the pane's width. Alt+Z changes one file.
@@ -60,6 +63,23 @@ pub struct Settings {
     pub auto_save_delay: Option<u64>,
 }
 
+/// The row heights `row_height` can name, with how many of the terminal's lines each is
+/// tall. The first is what an unset one means.
+pub const ROW_HEIGHTS: [(&str, f32); 3] = [("airy", 1.4), ("comfortable", 1.2), ("terminal", 1.0)];
+
+/// The row height a `row_height` setting names, whatever was written in it.
+pub fn row_height_name(setting: Option<&str>) -> &'static str {
+    let named = ROW_HEIGHTS.iter().find(|(name, _)| Some(*name) == setting);
+    named.unwrap_or(&ROW_HEIGHTS[0]).0
+}
+
+/// How many of the terminal's lines a row is tall under that setting.
+pub fn row_height_times(setting: Option<&str>) -> f32 {
+    let name = row_height_name(setting);
+    let named = ROW_HEIGHTS.iter().find(|(known, _)| *known == name);
+    named.map_or(1.0, |(_, times)| *times)
+}
+
 fn read(path: &Path) -> Option<Settings> {
     serde_json::from_str(&fs::read_to_string(path).ok()?).ok()
 }
@@ -68,6 +88,7 @@ impl Settings {
     fn merge(&mut self, other: Self) {
         self.theme = other.theme.or(self.theme.take());
         self.smooth_scroll = other.smooth_scroll.or(self.smooth_scroll.take());
+        self.row_height = other.row_height.or(self.row_height.take());
         self.minimap = other.minimap.or(self.minimap.take());
         self.inlay_hints = other.inlay_hints.or(self.inlay_hints.take());
         self.keymap = other.keymap.or(self.keymap.take());

@@ -874,7 +874,9 @@ mod tests {
             .collect()
         };
         let scroll = |app: &mut App, by: isize| {
-            app.settings_page.as_mut().expect("Settings").scroll_by(by);
+            let area = app.sheet_area();
+            let page = app.settings_page.as_mut().expect("Settings");
+            page.scroll_by(by, area);
         };
         // A heading, in capitals with a rule after it, then its commands by name alone.
         let rows = list(&app);

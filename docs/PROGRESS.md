@@ -2347,3 +2347,17 @@ After 0.9.2 the user said the app works but still looks ugly, and, shown two tid
 - Known and left, since this is the trial and not the look: the rail's highlight and anything a whole number of rows tall grow with the row; a text box is 32 px in a 52 px row, as the look draws it, but nobody has looked at each one-row rule again; the wheel doesn't glide under own rows; pictures and PDF pages weren't tried.
 - Next: the user tries it in their own Ghostty. Then, in order: Settings' Row height in place of the variable, the shell (views across the sidebar's top, sheets, one bar), icons and tabs.
 
+## Row height in Settings (2026-11-16)
+
+The user tried the trial in their own Ghostty: "It seems to be working well." So the variable gives way to a setting, the first step of the look they picked.
+
+- Settings, Appearance, under the theme's cards: Row height, with Airy, Comfortable and Terminal's. `row_height` in settings.json is `airy` (1.4 lines, and what an unset one means), `comfortable` (1.2) or `terminal`. A click is kept, and handed to the terminal's loop once (`take_row_height_change`), which builds the measure and the backend again and gives every workspace a grid of as many rows as the window then holds. `CELLIX_ROW_HEIGHT` still overrules it, 1 for the terminal's own line.
+- So a row is 1.4 lines by default now, where Cellix can lay out its own: everyone on Ghostty or kitty outside tmux sees taller rows from the next release, with the old shell round them until the rest of the look is built.
+- Appearance scrolls. With Row height it's 36 rows, and it was drawn whether or not they fit: in the tour's 40-row window the last switch landed on the bars under the page. A part that doesn't fit whole isn't drawn or clicked, the wheel scrolls to it, and a page opens at its top. Tab still reaches every control, in view or not, and the page goes to the one it's on (the first gate caught that: a test that tabs to Inlay hints found it gone). There's no scrollbar on it yet.
+- The tour runs on Cellix's rows: `tour.py` sets `TERM_ROW=50`, and the headless terminal takes its size and every step's row in those rows and has as many lines as hold them, so a scene's script is as it was and its picture is taller (a 46-row scene is 2348 px where it was 1704). A scene on cells keeps the terminal's lines.
+- Tests: `row_height_is_chosen_in_settings` (the ledger's: the choice stands under the cards and over the switches, a click is kept and handed over once as 1.2 or 1.0, and in a window of 24 rows the last switch isn't drawn until the page is scrolled to it), `a_row_of_cellixs_own_is_as_tall_as_settings_says`.
+- Looked at: `26-light-settings`, `02-code` and `13-source-diff` from the tour on the new default. Not the whole tour, and no ui-expert pass: the shell is about to change under every scene.
+- Unverified: changing the setting in a real terminal, which swaps the backend while it runs.
+- Known and left: the theme's cards are eight rows, 400 px on an airy row, and every page set out in blank rows is looser than it needs to be now that a row has air of its own. That's for the pass over each surface after the shell.
+- Next: the shell. The views across the top of the sidebar, the file and the side pane as sheets on the frame, one bar at the foot.
+

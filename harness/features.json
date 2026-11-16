@@ -5220,5 +5220,12 @@
     "title": "A row of Cellix's own, taller than the terminal's line, behind CELLIX_ROW_HEIGHT: on the direct tier a row's tile stands at its own size on the line its row starts in, so many pixels into it, and the last one covers what the lines leave under it, so 13 pt words have air round them with no setting of the terminal's",
     "test": "a_taller_row_stands_between_the_terminals_lines",
     "passes": true
+  },
+  {
+    "id": "row-height-setting",
+    "milestone": 14,
+    "title": "Row height is chosen in Settings, on Appearance under the theme: Airy, which a row is until something else is chosen, Comfortable, or the terminal's own line. It changes as it's clicked, and Appearance scrolls in a window too short for it, where it drew its last switches over the bars",
+    "test": "row_height_is_chosen_in_settings",
+    "passes": true
   }
 ]

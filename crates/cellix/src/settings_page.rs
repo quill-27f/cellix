@@ -65,6 +65,22 @@ const READING: (&str, &str) = (
     "Pages keep their text to 88 columns, in the middle of a wider pane.",
 );
 const KEYMAP: (&str, &str) = ("Keymap", "Standard works as in VS Code.");
+const ROW_HEIGHT: (&str, &str) = ("Row height", "How much air each row has.");
+/// The row heights as `row_height` names them and as the page shows them.
+const ROW_HEIGHTS: [(&str, &str); 3] = [
+    ("airy", "Airy"),
+    ("comfortable", "Comfortable"),
+    ("terminal", "Terminal's"),
+];
+/// Appearance's parts, in rows from the top of the page: the theme's cards under its
+/// heading, Row height two rows under those, and a switch every three rows after it.
+const CARDS_ROW: u16 = 3;
+const ROW_HEIGHT_ROW: u16 = CARDS_ROW + CARD_HEIGHT + 2;
+const SWITCHES_ROW: u16 = ROW_HEIGHT_ROW + 3;
+/// Smooth scrolling, the minimap, the view's four and notifications.
+const APPEARANCE_SWITCHES: u16 = 7;
+/// The rows all of that takes, which a short window scrolls through.
+const APPEARANCE_ROWS: u16 = SWITCHES_ROW + 3 * APPEARANCE_SWITCHES - 1;
 /// The theme cards' names as a row of choices has room for them.
 const THEME_SHORT: [(&str, &str); 3] = [("auto", "Auto"), ("dark", "Dark"), ("light", "Light")];
 /// The Source column's width, and the reset button's at the end of a row.
@@ -108,6 +124,7 @@ pub enum Section {
 pub enum Control {
     Section(Section),
     Theme(&'static str),
+    RowHeight(&'static str),
     SmoothScroll,
     Minimap,
     BracketPairs,
@@ -140,6 +157,7 @@ pub enum Control {
 /// The settings as they stand, passed in so the page holds no second copy.
 pub struct Values<'a> {
     pub theme: &'a str,
+    pub row_height: &'a str,
     pub keymap: &'a str,
     pub smooth_scroll: bool,
     pub minimap: bool,
@@ -159,25 +177,7 @@ pub struct EditorView {
     pub sticky_scroll: bool,
 }
 
-/// The switches under the theme cards, in order, with their words.
-fn view_switches(values: &Values) -> [(Control, (&'static str, &'static str), bool); 4] {
-    [
-        (Control::WordWrap, WORD_WRAP, values.view.word_wrap),
-        (
-            Control::StickyScroll,
-            STICKY_SCROLL,
-            values.view.sticky_scroll,
-        ),
-        (
-            Control::BracketPairs,
-            BRACKET_PAIRS,
-            values.view.bracket_pairs,
-        ),
-        (Control::InlayHints, INLAY_HINTS, values.inlay_hints),
-    ]
-}
-
-/// How many switches `view_switches` holds.
+/// The view's switches on Appearance, between the minimap's and notifications'.
 const VIEW_SWITCHES: [Control; 4] = [
     Control::WordWrap,
     Control::StickyScroll,
@@ -189,6 +189,8 @@ const VIEW_SWITCHES: [Control; 4] = [
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Row {
     Theme,
+    /// How tall a row is.
+    Height,
     /// A switch, by what it does.
     Switch(Control),
     AutoSave,
@@ -261,7 +263,7 @@ fn draw_category(
 impl Row {
     fn section(self) -> Section {
         match self {
-            Row::Theme => Section::Appearance,
+            Row::Theme | Row::Height => Section::Appearance,
             Row::Switch(Control::FormatOnSave | Control::ReadingWidth) => Section::Editor,
             Row::Switch(_) => Section::Appearance,
             Row::AutoSave | Row::Server(_) => Section::Editor,
@@ -454,6 +456,9 @@ impl SettingsPage {
         if pair(THEME) || fits(&["dark", "light"]) {
             rows.push(Row::Theme);
         }
+        if pair(ROW_HEIGHT) || ROW_HEIGHTS.iter().any(|r| fits(&[r.1])) {
+            rows.push(Row::Height);
+        }
         let switches = |section: Section, rows: &mut Vec<Row>| {
             for (control, words) in SWITCHES {
                 if Row::Switch(control).section() == section && pair(words) {
@@ -601,7 +606,24 @@ impl SettingsPage {
         crate::context::elide(name, room, measure)
     }
 
-    pub fn scroll_by(&mut self, delta: isize) {
+    /// Appearance's switches, in the order the page has them.
+    fn appearance_switches() -> Vec<Control> {
+        let mut all = vec![Control::SmoothScroll, Control::Minimap];
+        all.extend(VIEW_SWITCHES);
+        all.push(Control::Notify);
+        debug_assert_eq!(all.len(), APPEARANCE_SWITCHES as usize);
+        all
+    }
+
+    /// Where a part of Appearance stands on screen, `y` rows down the page and `rows` tall,
+    /// with the page scrolled as it is. Nowhere, if any of it is past either end: half a
+    /// switch isn't drawn, and nothing is drawn over the bars under the page.
+    fn appearance_row(&self, page: Rect, y: u16, rows: u16) -> Option<u16> {
+        let top = (self.top as u16).min(APPEARANCE_ROWS.saturating_sub(page.h));
+        (y >= top && y + rows - top <= page.h).then(|| page.y + y - top)
+    }
+
+    pub fn scroll_by(&mut self, delta: isize, area: Rect) {
         if self.filtering() {
             let last = self.found_rows().len().saturating_sub(1) as isize;
             self.found_top = (self.found_top as isize + delta).clamp(0, last) as usize;
@@ -610,6 +632,11 @@ impl SettingsPage {
         if self.section == Section::Keyboard {
             let last = self.key_lines().len().saturating_sub(1) as isize;
             self.keys_top = (self.keys_top as isize + delta).clamp(0, last) as usize;
+            return;
+        }
+        if self.section == Section::Appearance {
+            let most = APPEARANCE_ROWS.saturating_sub(Self::content(area).h) as isize;
+            self.top = (self.top as isize + delta).clamp(0, most) as usize;
             return;
         }
         let last = SERVERS.len().saturating_sub(1) as isize;
@@ -770,21 +797,29 @@ impl SettingsPage {
         }
         match self.section {
             Section::Appearance => {
+                // Everything has its turn under Tab, in view or not. What isn't in view has a
+                // place with no height at the page's end, which nothing is drawn in and no
+                // click lands on.
+                let place = |y: Option<u16>, x: u16, (w, h): (u16, u16)| match y {
+                    Some(y) => Rect::new(x, y, w, h),
+                    None => Rect::new(x, page.bottom(), w, 0),
+                };
                 let card = CARD_WIDTH.min(page.w.saturating_sub(4) / 3);
+                let y = self.appearance_row(page, CARDS_ROW, CARD_HEIGHT);
                 for (i, (name, _, _)) in THEMES.iter().enumerate() {
                     let x = page.x + i as u16 * (card + 2);
-                    let rect = Rect::new(x, page.y + 3, card, CARD_HEIGHT);
-                    spots.push((rect, Control::Theme(name)));
+                    spots.push((place(y, x, (card, CARD_HEIGHT)), Control::Theme(name)));
                 }
-                let below = page.y + 3 + CARD_HEIGHT + 2;
-                spots.push((Rect::new(page.x, below, page.w, 2), Control::SmoothScroll));
-                spots.push((Rect::new(page.x, below + 3, page.w, 2), Control::Minimap));
-                for (i, control) in VIEW_SWITCHES.iter().enumerate() {
-                    let y = below + 6 + 3 * i as u16;
-                    spots.push((Rect::new(page.x, y, page.w, 2), *control));
+                let y = self.appearance_row(page, ROW_HEIGHT_ROW, 2);
+                let start = page.right().saturating_sub(SEGMENT_WIDTH * 3);
+                for (i, (name, _)) in ROW_HEIGHTS.iter().enumerate() {
+                    let x = start + i as u16 * SEGMENT_WIDTH;
+                    spots.push((place(y, x, (SEGMENT_WIDTH, 1)), Control::RowHeight(name)));
                 }
-                let notify = below + 6 + 3 * VIEW_SWITCHES.len() as u16;
-                spots.push((Rect::new(page.x, notify, page.w, 2), Control::Notify));
+                for (i, control) in Self::appearance_switches().into_iter().enumerate() {
+                    let y = self.appearance_row(page, SWITCHES_ROW + 3 * i as u16, 2);
+                    spots.push((place(y, page.x, (page.w, 2)), control));
+                }
             }
             Section::Editor => {
                 let format = Rect::new(page.x, page.y + FORMAT_ROW, page.w, 2);
@@ -853,6 +888,10 @@ impl SettingsPage {
                     let of = THEMES.map(|t| Control::Theme(t.0));
                     segments(y, SEGMENT_WIDTH, spots, of);
                 }
+                Row::Height => {
+                    let of = ROW_HEIGHTS.map(|r| Control::RowHeight(r.0));
+                    segments(y, SEGMENT_WIDTH, spots, of);
+                }
                 Row::Switch(control) => spots.push((Rect::new(page.x, y, page.w, 2), control)),
                 Row::AutoSave => {
                     let of = AUTO_SAVES.map(|a| Control::AutoSave(a.0));
@@ -911,6 +950,44 @@ impl SettingsPage {
         let count = self.controls(area).len() as isize;
         let at = self.focus.map_or(-1, |f| f as isize);
         self.focus = Some((at + delta).rem_euclid(count.max(1)) as usize);
+        self.reveal_focus(area);
+    }
+
+    /// Scrolls Appearance until the control the keyboard is on is in view.
+    fn reveal_focus(&mut self, area: Rect) {
+        if self.section != Section::Appearance || self.filtering() {
+            return;
+        }
+        let page = Self::content(area);
+        let Some((y, rows)) = self.focused(area).and_then(Self::appearance_place) else {
+            return;
+        };
+        let most = APPEARANCE_ROWS.saturating_sub(page.h);
+        let top = (self.top as u16).min(most);
+        let top = if y <= CARDS_ROW {
+            // The cards come with the heading over them.
+            0
+        } else if y < top {
+            y
+        } else if y + rows > top + page.h {
+            y + rows - page.h
+        } else {
+            top
+        };
+        self.top = top.min(most) as usize;
+    }
+
+    /// How far down Appearance a control is, and how many rows it takes.
+    fn appearance_place(control: Control) -> Option<(u16, u16)> {
+        match control {
+            Control::Theme(_) => Some((CARDS_ROW, CARD_HEIGHT)),
+            Control::RowHeight(_) => Some((ROW_HEIGHT_ROW, 2)),
+            other => {
+                let switches = Self::appearance_switches();
+                let at = switches.iter().position(|switch| *switch == other)?;
+                Some((SWITCHES_ROW + 3 * at as u16, 2))
+            }
+        }
     }
 
     pub fn focused(&self, area: Rect) -> Option<Control> {
@@ -946,27 +1023,37 @@ impl SettingsPage {
         }
         match self.section {
             Section::Appearance => {
-                heading(
-                    grid,
-                    page,
-                    "Appearance",
-                    "Changes apply as you click.",
-                    theme,
-                );
-                for (rect, control) in &spots {
-                    if let Control::Theme(name) = control {
-                        let on = values.theme == *name;
-                        draw_card(grid, *rect, name, (on, hovered(*control)), theme);
+                if let Some(y) = self.appearance_row(page, 0, 2) {
+                    let at = Rect::new(page.x, y, page.w, 2);
+                    let note = "Changes apply as you click.";
+                    heading(grid, at, "Appearance", note, theme);
+                }
+                if let Some(y) = self.appearance_row(page, ROW_HEIGHT_ROW, 2) {
+                    let room = page.right().saturating_sub(SEGMENT_WIDTH * 3 + 1);
+                    draw_text(grid, page, (y, room), ROW_HEIGHT, theme);
+                }
+                // What's drawn is what has a place in view: a part the window has no room
+                // for has none, and comes into view as the page scrolls.
+                for (rect, control) in spots.iter().filter(|(rect, _)| rect.h > 0) {
+                    match control {
+                        Control::Theme(name) => {
+                            let on = values.theme == *name;
+                            draw_card(grid, *rect, name, (on, hovered(*control)), theme);
+                        }
+                        Control::RowHeight(name) => {
+                            let label = ROW_HEIGHTS.iter().find(|r| r.0 == *name);
+                            let label = label.map_or("", |r| r.1);
+                            draw_segment(grid, *rect, label, values.row_height == *name, theme);
+                        }
+                        _ => {
+                            let words = SWITCHES.iter().find(|(switch, _)| switch == control);
+                            if let Some((_, words)) = words {
+                                let on = switch_on(*control, values);
+                                draw_toggle(grid, page, rect.y, *words, on, theme);
+                            }
+                        }
                     }
                 }
-                let below = page.y + 3 + CARD_HEIGHT + 2;
-                draw_toggle(grid, page, below, SMOOTH, values.smooth_scroll, theme);
-                draw_toggle(grid, page, below + 3, MINIMAP, values.minimap, theme);
-                for (i, (_, text, on)) in view_switches(values).into_iter().enumerate() {
-                    draw_toggle(grid, page, below + 6 + 3 * i as u16, text, on, theme);
-                }
-                let y = below + 6 + 3 * VIEW_SWITCHES.len() as u16;
-                draw_toggle(grid, page, y, NOTIFY, values.notify, theme);
             }
             Section::Editor => {
                 self.draw_editor(grid, page, &spots, values, (hover, measure), theme)
@@ -984,7 +1071,7 @@ impl SettingsPage {
     fn draw_focus(&self, grid: &mut Grid, spots: &[(Rect, Control)], theme: &Theme) {
         // A row taking new keys has its own outline: a second ring would only blur it.
         let ringed = self.focus.and_then(|f| spots.get(f));
-        let ringed = ringed.filter(|_| self.recording.is_none());
+        let ringed = ringed.filter(|(rect, _)| self.recording.is_none() && rect.h > 0);
         if let Some((rect, _)) = ringed {
             let ring = Bounds::inset(*rect, -0.15, -0.1);
             grid.panel(ring, RADIUS, None, Some(theme.focus));
@@ -1144,6 +1231,19 @@ impl SettingsPage {
                         Control::AutoSave(name) => {
                             let word = AUTO_SAVES.iter().find(|a| a.0 == name)?.1;
                             Some((word, values.auto_save == name))
+                        }
+                        _ => None,
+                    });
+                }
+                Row::Height => {
+                    rule(grid, y);
+                    let room = page.right().saturating_sub(SEGMENT_WIDTH * 3 + 1);
+                    draw_text(grid, page, (y, room), ROW_HEIGHT, theme);
+                    tag(grid, (ROW_HEIGHT.0, bold), (y, room), row);
+                    segments(grid, y, &|control| match control {
+                        Control::RowHeight(name) => {
+                            let word = ROW_HEIGHTS.iter().find(|r| r.0 == name)?.1;
+                            Some((word, values.row_height == name))
                         }
                         _ => None,
                     });
