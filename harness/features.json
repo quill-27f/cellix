@@ -5199,5 +5199,19 @@
     "title": "A check in Agent Context takes three rows at most and ends in an ellipsis past that, where two rows cut the endings off the checks a project most often has once words were 13 pt",
     "test": "a_long_check_takes_three_rows_at_most_and_ends_in_an_ellipsis",
     "passes": true
+  },
+  {
+    "id": "pane-maximize-in-narrow-window",
+    "milestone": 14,
+    "title": "The side pane can be given the whole window where Cellix has little room, as inside Claude Code's pane: the button that maximizes it keeps its place after the tabs at every width from 84 columns, a click on it gives the pane the window and another gives it back",
+    "test": "the_side_pane_can_be_maximized_in_a_window_as_narrow_as_claude_codes_pane",
+    "passes": true
+  },
+  {
+    "id": "pane-edge-drags-in-narrow-window",
+    "milestone": 14,
+    "title": "The line between the file and the side pane, dragged, goes on until either side has 24 columns, where it was held to the widths the pane opens at and in a window of 92 columns had 8 to move in",
+    "test": "the_panes_edge_can_be_dragged_in_a_window_as_narrow_as_claude_codes_pane",
+    "passes": true
   }
 ]

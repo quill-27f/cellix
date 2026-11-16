@@ -25,9 +25,13 @@ use crate::pdfview::PdfView;
 use crate::theme::Theme;
 use crate::threads::Draft;
 
-/// Columns the file beside the pane always keeps.
+/// Columns the file beside the pane keeps, and the pane's own least, at the width it opens.
 const MIN_MAIN: u16 = 44;
 const MIN_WIDTH: u16 = 40;
+/// Columns each side keeps however far the line between them is dragged. Less than what the
+/// pane opens with: in a window of 90 columns, as inside Claude Code, those two leave the
+/// line 6 columns to move in, which is no resize at all.
+const DRAGGED_LEAST: u16 = 24;
 /// Share of the room right of the sidebar, in percent.
 const SHARE: u16 = 46;
 /// Lines a wheel notch moves through scrollback.
@@ -47,6 +51,12 @@ const MAXIMIZE_WIDTH: u16 = 3;
 const MAXIMIZE_GAP: u16 = 1;
 /// Columns it keeps clear of the icons at the top right, so it isn't read as one of them.
 const MAXIMIZE_CLEAR: u16 = 2;
+/// Columns kept for it at the end of the pane's own part of its row, whatever the tabs do:
+/// after the +, and in a row too short for the +, where it stands right at the row's end.
+/// The column the icons keep clear before them and the air in its own cell and theirs put
+/// 46 px between its strokes and the first icon's, where the icons are 28 px apart.
+const MAXIMIZE_ROOM: u16 = MAXIMIZE_GAP + MAXIMIZE_WIDTH + MAXIMIZE_CLEAR;
+const MAXIMIZE_SHORT: u16 = MAXIMIZE_WIDTH;
 const AGENTS_WIDTH: u16 = 11;
 const PREVIEW_WIDTH: u16 = 12;
 const LOG_WIDTH: u16 = 8;
@@ -1362,7 +1372,8 @@ pub struct Dock {
     /// The column tabs stop at, for what stands past them.
     pub tabs_end: Cell<u16>,
     /// Columns kept clear between that and the icons past it, which names with no chip
-    /// around them may use when the row is short: an icon has air of its own inside its cell.
+    /// around them may use when the row is too short even for the button that maximizes the
+    /// pane: an icon has air of its own inside its cell.
     pub tabs_slack: Cell<u16>,
     /// Whether the tabs start flush, under the file's, with no line beside them.
     pub tabs_flush: Cell<bool>,
@@ -1405,8 +1416,11 @@ impl Dock {
         if !self.open || room < MIN_MAIN + MIN_WIDTH {
             return if self.open { room } else { 0 };
         }
-        let wanted = self.width.unwrap_or(room * SHARE / 100);
-        wanted.clamp(MIN_WIDTH, room - MIN_MAIN)
+        match self.width {
+            // Dragged there: both sides keep enough to be read, and no more is asked.
+            Some(dragged) => dragged.clamp(DRAGGED_LEAST, room - DRAGGED_LEAST),
+            None => (room * SHARE / 100).clamp(MIN_WIDTH, room - MIN_MAIN),
+        }
     }
 
     /// Whether there's too little room for the pane to stand beside the file.
@@ -1741,16 +1755,28 @@ impl Dock {
     fn fitted(&self, area: Rect) -> (Vec<u16>, Fit) {
         let mut widths = self.wanted_widths();
         let end = self.tabs_end.get();
-        let room = end.saturating_sub(self.tabs_start(area));
+        // The button that maximizes the pane keeps its columns at the row's end: the tabs
+        // and the + have what's before them. It used to go when the row was short, which is
+        // every row of a pane 40 columns wide, as Cellix's is inside Claude Code.
+        let start = self.tabs_start(area);
+        let room = end.saturating_sub(start + MAXIMIZE_ROOM);
         if end == 0 || widths.iter().sum::<u16>() + NEW_WIDTH <= room {
             return (widths, Fit::Whole);
         }
+        // Without the +, the button stands right at that end, with no column before it, and
+        // the names run up to it. Every tab staying in sight comes before the button, though:
+        // where the tabs fit at their least only without it, they have the row as they had,
+        // up to the icons' own cells, and it goes.
         let front = self.front_index().unwrap_or(0);
         let behind = widths.len().saturating_sub(1) as u16;
         let texts = self.tab_texts();
         let kept = texts.get(front).map_or(0, |text| self.hugging(text));
-        // Short of room, the row runs up to the icons' own cells.
-        let short = room + self.tabs_slack.get();
+        let room = end.saturating_sub(start + MAXIMIZE_SHORT);
+        let short = if self.cut_tabs_leave_the_button(area) {
+            room
+        } else {
+            end.saturating_sub(start) + self.tabs_slack.get()
+        };
         if kept + behind * CUT_LEAST > short {
             for (index, width) in widths.iter_mut().enumerate() {
                 *width = if index == front {
@@ -1790,6 +1816,17 @@ impl Dock {
             }
         }
         (widths, Fit::Cut)
+    }
+
+    /// Whether the tabs, each cut to its least, leave the button that maximizes the pane its
+    /// columns at the row's end.
+    fn cut_tabs_leave_the_button(&self, area: Rect) -> bool {
+        let front = self.front_index().unwrap_or(0);
+        let texts = self.tab_texts();
+        let kept = texts.get(front).map_or(0, |text| self.hugging(text));
+        let behind = texts.len().saturating_sub(1) as u16;
+        let room = (self.tabs_end.get()).saturating_sub(self.tabs_start(area) + MAXIMIZE_SHORT);
+        kept + behind * CUT_LEAST <= room
     }
 
     /// Whether the tab in front stands in a chip that hugs its name, with its × two columns
@@ -1908,9 +1945,31 @@ impl Dock {
         tabs.collect()
     }
 
-    /// Where the button that maximizes the pane starts.
+    /// Where the button that maximizes the pane starts: after the +, or where the row is
+    /// too short for every tab and the +, at the end of the pane's own part of it.
     pub fn maximize_button(&self, area: Rect) -> u16 {
-        self.tabs(area).last().map_or(self.first_tab(area), |t| t.1) + NEW_WIDTH + MAXIMIZE_GAP
+        let end = self.tabs_end.get();
+        if end == 0 || self.fit(area) == Fit::Whole {
+            let plus = self.tabs(area).last().map_or(self.first_tab(area), |t| t.1);
+            return plus + NEW_WIDTH + MAXIMIZE_GAP;
+        }
+        end.saturating_sub(MAXIMIZE_SHORT)
+    }
+
+    /// Whether that button shows. It does but in one case: a row whose tabs, each cut to its
+    /// least, fit only without it. There a double click on a tab still maximizes the pane,
+    /// and dragging the pane a little wider brings the button back.
+    pub fn maximize_shows(&self, area: Rect) -> bool {
+        let end = self.tabs_end.get();
+        if end == 0 {
+            return true;
+        }
+        match self.fit(area) {
+            Fit::Whole => true,
+            // One tab and its chevron: the rest of the row is free.
+            Fit::Front => end >= self.tabs_start(area) + MAXIMIZE_SHORT,
+            Fit::Cut => self.cut_tabs_leave_the_button(area),
+        }
     }
 
     #[cfg(test)]
@@ -2073,22 +2132,12 @@ impl Dock {
         }
         let end = tabs.last().map_or(self.first_tab(area), |t| t.1);
         // Out of room, the + gives way: the icons at the top right start the same things.
-        if fit != Fit::Whole {
-            return None;
-        }
-        if x >= end && x < end + NEW_WIDTH {
+        if fit == Fit::Whole && x >= end && x < end + NEW_WIDTH {
             return Some(TabHit::New);
         }
-        let maximize = end + NEW_WIDTH + MAXIMIZE_GAP;
+        let maximize = self.maximize_button(area);
         let on_it = x >= maximize && x < maximize + MAXIMIZE_WIDTH;
-        (on_it && self.maximize_fits(end)).then_some(TabHit::Maximize)
-    }
-
-    /// Whether the maximize button fits before the icons at the top right, after a + that
-    /// ends at `plus`. In a narrow pane it goes: a double click on a tab does the same.
-    fn maximize_fits(&self, plus: u16) -> bool {
-        let end = self.tabs_end.get();
-        end == 0 || plus + NEW_WIDTH + MAXIMIZE_GAP + MAXIMIZE_WIDTH + MAXIMIZE_CLEAR <= end
+        (on_it && self.maximize_shows(area)).then_some(TabHit::Maximize)
     }
 
     /// The title row, in the frame's colour, with tabs like the editor's.
@@ -2310,8 +2359,10 @@ impl Dock {
             grid.label(plus + 1, area.y, "+", style, area.right());
         }
         // Maximized, it stands on the chip a selected icon has, so it's plain how to get back.
-        let button = Rect::new(plus + NEW_WIDTH + MAXIMIZE_GAP, area.y, MAXIMIZE_WIDTH, 1);
-        if maximized || (whole && self.maximize_fits(plus)) {
+        // In a short row it keeps its place at the end of the pane's part of it, where it
+        // gave way with the +: a pane that can't be maximized is stuck at its width.
+        let button = Rect::new(self.maximize_button(area), area.y, MAXIMIZE_WIDTH, 1);
+        if maximized || self.maximize_shows(area) {
             let on_it = hover.is_some_and(|h| button.contains(h.0, h.1));
             if maximized || on_it {
                 let fill = if maximized {
@@ -2546,6 +2597,9 @@ mod tests {
         assert_eq!(key_bytes(plain(Key::F(1)), false), b"\x1bOP");
     }
 
+    /// The pane opens at its share, the file keeping its 44 columns and the pane its 40.
+    /// Dragged, the line goes further: each side keeps 24, where it was held to the widths
+    /// the pane opens at and so, in a window of 90 columns, hardly moved.
     #[test]
     fn the_file_beside_the_pane_keeps_its_room() {
         let mut dock = Dock {
@@ -2553,10 +2607,16 @@ mod tests {
             ..Dock::default()
         };
         assert_eq!(dock.width_in(120), 55);
+        assert_eq!(
+            dock.width_in(86),
+            MIN_WIDTH,
+            "at its share it has its least"
+        );
+        assert_eq!(dock.width_in(84), 84 - MIN_MAIN);
         dock.width = Some(200);
-        assert_eq!(dock.width_in(120), 120 - MIN_MAIN);
+        assert_eq!(dock.width_in(120), 120 - DRAGGED_LEAST);
         dock.width = Some(1);
-        assert_eq!(dock.width_in(120), MIN_WIDTH);
+        assert_eq!(dock.width_in(120), DRAGGED_LEAST);
         assert_eq!(dock.width_in(60), 60, "too narrow to share");
         dock.open = false;
         assert_eq!(dock.width_in(120), 0);

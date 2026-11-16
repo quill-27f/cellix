@@ -489,7 +489,9 @@ the command.
 Then `/cellix` opens the pane, and `/cellix <file>` opens a file in it. It also opens
 by itself when Claude proposes an edit or a plan. Comments go to Claude with your next
 prompt, or straight away with `/cellix-send` or the pane's Send to Agent. Click the pane to type there, and press
-Esc to go back to Claude. Under 110 columns the pane drops the sidebar, and under 90 the
+Esc to go back to Claude. Claude Code gives a pane at most 45% of its window. Inside that,
+Cellix's own side pane (a terminal, the browser, comments) takes all of it with the ⤢ after its
+tabs, and the line between it and the file drags. Under 110 columns the pane drops the sidebar, and under 90 the
 minimap, so the code keeps the room. Under 80, beside the chat, the panel icons lead the pane's
 header, tabs that don't fit fold into "N more" chips, and the page menu folds into Format and Insert.
 
@@ -517,7 +519,9 @@ Running Cellix on its own works just as well: the Agents icon at the top right o
 Claude Code, Codex, Gemini CLI or a shell runs there as the real program. When a narrow pane's tabs
 don't all fit, the one in front stays whole and the others are cut short with a …: hover one for its
 name, or click it to bring it forward. A pane too narrow even for that shows the tab in front with a ⌄
-beside it that lists every tab and starts a new agent or terminal.
+beside it that lists every tab and starts a new agent or terminal. The ⤢ after the tabs gives the pane
+the whole window and gives it back, and so does a double-click on a tab; drag the line between the file
+and the pane to size them, down to 24 columns for either.
 
 Set `VISUAL="cellix --wait"` so Ctrl+G in Claude Code opens plans in Cellix. Comments are
 written back into the file when you quit. Any other agent can run `cellix comments --take`

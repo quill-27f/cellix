@@ -28597,6 +28597,100 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert_eq!(app.pointer(), "ns-resize");
     }
 
+    /// Cellix inside Claude Code has the 45% of the window Claude Code allows, some 90 to
+    /// 110 columns, and its own side pane there is 40. That pane had no way to take the whole
+    /// of it: its row was too short for the button that maximizes it, which gave way. The
+    /// button keeps its place at every width, a click on it gives the pane the window, and
+    /// another gives the file its side back.
+    #[test]
+    fn the_side_pane_can_be_maximized_in_a_window_as_narrow_as_claude_codes_pane() {
+        for width in [84, 92, 100, 106, 118, 130] {
+            let (dir, _) = project();
+            let mut app = App::new(dir.path().to_path_buf(), (width, 40));
+            app.in_pane = true;
+            app.compact_width = 110;
+            app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+            app.open(&dir.path().join("alpha.txt")).unwrap();
+            app.run(Command::ShowComments);
+            with_a_shell(&mut app);
+            let grid = screen(&app);
+            let area = app.dock_area().unwrap();
+            assert!(area.x > 0 && !app.dock_under(), "{width}: beside the file");
+            let title = app.title_of(area);
+            let first_icon = app.pane_actions()[0].0.x;
+            let at = app.dock.maximize_button(title);
+            assert!(
+                at + 3 < first_icon,
+                "{width}: before the icons, a column clear"
+            );
+            assert_eq!(
+                app.dock.hit(title, at + 1),
+                Some(TabHit::Maximize),
+                "{width}"
+            );
+            let unit = cellix_render::UNIT;
+            let painted = grid.paint.iter().any(|p| {
+                matches!(p, Paint::Icon { icon: Icon::Maximize, bounds, .. }
+                    if bounds.x >= i32::from(at) * unit && bounds.x < i32::from(at + 3) * unit)
+            });
+            assert!(painted, "{width}: its icon is drawn where it's clicked");
+            click(&mut app, at + 1, area.y);
+            assert!(app.maximized == Some(Maximized::Pane), "{width}");
+            // All of the window but the rail, where the window is wide enough to have one.
+            let whole = app.dock_area().unwrap();
+            let rail = app.rail_width();
+            assert_eq!(
+                (whole.x, whole.right()),
+                (rail, width),
+                "{width}: the window"
+            );
+            // Maximized, the same button gives the window back.
+            let _ = screen(&app);
+            let title = app.title_of(whole);
+            let back = app.dock.maximize_button(title);
+            assert_eq!(
+                app.dock.hit(title, back + 1),
+                Some(TabHit::Maximize),
+                "{width}"
+            );
+            click(&mut app, back + 1, whole.y);
+            assert!(app.maximized.is_none(), "{width}");
+            assert_eq!(app.dock_area().unwrap(), area, "{width}: as it was");
+        }
+    }
+
+    /// The line between the file and the pane, dragged: each side keeps 24 columns and the
+    /// line goes anywhere between. It was held to the widths the pane opens at, 40 for it
+    /// and 44 for the file, which in a window of 92 columns left it 8 to move in.
+    #[test]
+    fn the_panes_edge_can_be_dragged_in_a_window_as_narrow_as_claude_codes_pane() {
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (92, 40));
+        app.in_pane = true;
+        app.compact_width = 110;
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        with_a_shell(&mut app);
+        let area = app.dock_area().unwrap();
+        assert_eq!(area.w, 42, "it opens at its share of the window");
+        let drag = |app: &mut App, to: u16| {
+            let edge = app.dock_area().unwrap().x;
+            app.handle(mouse(MouseKind::Left, edge, 12));
+            app.handle(mouse(MouseKind::Drag, to, 12));
+            app.handle(mouse(MouseKind::Up, to, 12));
+            app.dock_area().unwrap()
+        };
+        // Wider, to two thirds of the window.
+        let wide = drag(&mut app, 30);
+        assert_eq!((wide.x, wide.w), (30, 62));
+        // As far as it goes: the file keeps 24 columns.
+        let widest = drag(&mut app, 3);
+        assert_eq!((widest.x, widest.w), (24, 68));
+        // And narrow: the pane keeps 24.
+        let narrow = drag(&mut app, 88);
+        assert_eq!((narrow.x, narrow.w), (68, 24));
+        assert_eq!(app.main_area().w, 68, "the file has the rest");
+    }
+
     #[test]
     fn a_stacked_pane_leaves_both_sides_some_room() {
         let (dir, _) = project();
@@ -28646,12 +28740,24 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let before = (first_icon - area.x) as usize;
         let strip: String = row.chars().skip(area.x as usize).take(before).collect();
         // The first tab starts flush with the pane, so the row has a column more to give.
-        assert_eq!(strip.trim_end(), " Commen… Agents ×  Termin…", "{row}");
+        // The button that maximizes the pane keeps its place after them: it gave way with
+        // the +, and a pane this narrow, as Cellix's is inside Claude Code, couldn't be
+        // maximized by anything in sight.
+        assert_eq!(strip.trim_end(), " Comm… Agents ×  Term… ⤢", "{row}");
         for x in area.x..first_icon {
             let hit = app.dock.hit(title, x);
-            let gone = [TabHit::New, TabHit::Pick, TabHit::Maximize];
+            let gone = [TabHit::New, TabHit::Pick];
             assert!(hit.is_none_or(|hit| !gone.contains(&hit)), "{hit:?} at {x}");
         }
+        let maximize: Vec<u16> = (area.x..first_icon)
+            .filter(|x| app.dock.hit(title, *x) == Some(TabHit::Maximize))
+            .collect();
+        assert_eq!(
+            maximize.len(),
+            3,
+            "three columns take the click: {maximize:?}"
+        );
+        assert!(maximize[2] + 1 < first_icon, "a column clear of the icons");
         // A cut tab has no × to hit by mistake: its last column brings it forward too, whole,
         // and the one that was in front is cut in its turn.
         click(&mut app, comments.right() - 1, area.y);
@@ -28724,11 +28830,15 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         );
         let tabs = app.dock.view_tabs_for_test(area);
         let comments = tabs.iter().find(|tab| tab.0 == Front::Comments).unwrap().2;
-        assert_eq!(
-            app.dock.cut_name(area, comments.x + 1),
-            None,
-            "Comments shows whole behind it"
+        // Comments behind it keeps all but a letter or two: the button that maximizes the
+        // pane has its four columns at the row's end now, which Comments had the last of.
+        assert!(
+            comments.w >= 7,
+            "Comments keeps most of its name: {comments:?}"
         );
+        let maximize = app.dock.maximize_button(title);
+        assert_eq!(app.dock.hit(title, maximize), Some(TabHit::Maximize));
+        assert!(maximize >= comments.right() && maximize + 3 < first_icon);
         // With a third tab, each one behind keeps room for three letters and the "…".
         app.run(Command::ListAgents);
         let _ = screen(&app);

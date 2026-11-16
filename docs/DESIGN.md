@@ -641,7 +641,13 @@ the row. The one in front, a tab in the shape every tab has, hugs its measured n
 of the slack a tab has when there's room, since that slack is what would cut its neighbours.
 Those behind it stand as names alone, half a column of air either side, whole while they
 fit and then cut short with a "…", the longest giving way first. The + gives way too, since
-the icons beside it start the same things. A tab behind has no ×, so a click anywhere on it
+the icons beside it start the same things. The button that maximizes the pane doesn't: it
+keeps three columns at the end of the pane's part of the row, and the names are cut that much
+sooner (decided on 2026-11-16: it gave way with the +, and inside Claude Code, where Cellix has
+at most 45% of the window and its side pane opens 40 columns wide, the user had no way in
+sight to give the pane the window). It goes in one case only, a row whose tabs fit at their
+least without it and not with it, since every tab staying in sight comes first; a double click
+on a tab maximizes there as anywhere. A tab behind has no ×, so a click anywhere on it
 brings it forward, and a cut name is a hover away. Only when that would leave them under
 three letters and the "…" each (five columns) does the row show the tab in front alone, with
 a chevron that lists every tab and what + would start: two letters don't tell Comments from
@@ -658,7 +664,9 @@ icons at the top right never move for it. Whatever asks for a
 hidden part, such as one of those icons or opening a file, restores first, so nothing opens
 out of sight. A pane hidden while it has the window gives the window to the file, and takes
 it again when it's shown, by its button in the corner or any other way: it comes back as it
-was, as VS Code's maximized panel does. The side pane stands under the file when it's dragged there, as well as when the
+was, as VS Code's maximized panel does. The pane opens at its share of the window, 46%, the
+file keeping 44 columns and the pane 40; dragged, the line between them goes on until either
+side has 24, which is what makes a drag worth anything in a window of 90 columns. The side pane stands under the file when it's dragged there, as well as when the
 window is too narrow. Its width or height, whether it was dragged under the file, and whether it
 had the window are kept in `state.json` with the tabs, so the next run puts it back as it was; it
 takes the window again only once something is back in it. The session in front is kept too, by

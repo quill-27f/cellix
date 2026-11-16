@@ -13,6 +13,7 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 - A check in Agent Context has three rows where it had two, which holds "never in AGENTS.md" and "nothing is loaded there" at the larger words.
 
 ### Fixed
+- The side pane couldn't be given the whole window, or sized by dragging, where Cellix has little room: inside Claude Code, which gives it at most 45% of the window, or in any window under about 110 columns. The ⤢ after the pane's tabs gave way when the row was short, which a pane 40 columns wide always is; it keeps its place now, and the tabs' names are cut a little sooner for it. The line between the file and the pane was held to the widths the pane opens at, which left it a few columns to move in; dragged, it goes on until either side has 24 columns.
 - A formula in a line of a page that stands taller than the line, a fraction of sums, lay over the words of the line under it. The line keeps an empty row under it now.
 - A name in Agent Context that fitted its row lost the end of its last letter, "docs/STYLE.mc".
 - The Timeline's heading was cut with "…" though the whole name fitted.
