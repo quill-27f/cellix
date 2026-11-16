@@ -40,6 +40,13 @@ pub const BAR_LIFT: f32 = 0.12;
 const WORD_LIFT: f32 = 0.045;
 /// As a percentage of a row, about 9 pixels.
 const CHIP_RADIUS: u8 = 26;
+/// Columns the status bar keeps for its own words where the workspaces lead its row: what
+/// it gives a message, and a branch before it. With fewer than that left between the
+/// workspaces and the machine's name, the bar has a row to itself under the status bar.
+const STATUS_ROOM: f32 = 72.0;
+/// Between the button that opens a workspace and what the status bar says after it, where
+/// the two share a row. A rule stands in the middle of it.
+const AFTER: f32 = 2.0;
 /// The button that opens another folder beside this one, and what its tip says.
 const NEW_WORKSPACE: &str = "New Workspace";
 /// The first screen's way out, beside Open: its word, how far it stands from the column's
@@ -144,20 +151,69 @@ impl Workspaces {
         self.bar && !self.list.is_empty() && !self.choosing
     }
 
+    /// How wide the button that opens a workspace is: with its words where the bar has a
+    /// row to itself, and its mark alone where the workspaces lead the status bar's.
+    fn new_width(&self, words: bool) -> f32 {
+        let said = if words {
+            self.room(GAP) + self.text_width(NEW_WORKSPACE)
+        } else {
+            0.0
+        };
+        self.room(PAD) + self.room(MARK) + said + self.room(PAD)
+    }
+
     /// Where the New Workspace button goes, and where it ends.
     fn new_button(&self) -> (f32, f32) {
         let start = self.spans().1;
-        let width = self.room(PAD)
-            + self.room(MARK)
-            + self.room(GAP)
-            + self.text_width(NEW_WORKSPACE)
-            + self.room(PAD);
-        (start, start + width)
+        (start, start + self.new_width(!self.one_bar()))
     }
 
-    /// The size each app has: the window, less the bar's row when it shows.
+    /// Whether there's one bar at the foot: the workspaces lead the status bar's own row, the
+    /// branch and what was last done follow them, and the machine's name stands before the
+    /// bell. That's wherever both fit. A window too narrow, or with too many workspaces,
+    /// keeps the bar a row of its own under the status bar.
+    fn one_bar(&self) -> bool {
+        if !self.shows_bar() {
+            return false;
+        }
+        let lead = self.spans().1 + self.new_width(false) + AFTER;
+        let tail = self.text_width(&self.machine) + 2.0;
+        f32::from(self.size.0) - lead - tail >= STATUS_ROOM
+    }
+
+    /// The columns of the status bar's row the bar has, where they share one: at its start,
+    /// and before the bell.
+    fn shared(&self) -> (u16, u16) {
+        if !self.one_bar() {
+            return (0, 0);
+        }
+        let lead = (self.new_button().1 + AFTER).ceil() as u16;
+        let machine = self
+            .machine_x()
+            .map_or(0.0, |_| self.text_width(&self.machine) + 2.0);
+        let resume = self
+            .resume_label()
+            .map_or(0.0, |label| self.resume_width(&label) + 1.5);
+        (lead, (machine + resume).ceil() as u16)
+    }
+
+    /// Tells each app what of its status bar's row the bar has.
+    fn share_row(&self) {
+        let room = self.shared();
+        for workspace in &self.list {
+            workspace.app.status_room.set(room);
+        }
+    }
+
+    /// Whether a place on the bar's row is the bar's: all of it where the bar has the row,
+    /// and where it shares the status bar's, the workspaces at its start and Resume.
+    fn bar_owns(&self, mouse: &MouseEvent) -> bool {
+        !self.one_bar() || mouse.x < self.shared().0 || self.bar_hit(mouse).is_some()
+    }
+
+    /// The size each app has: the window, less the bar's row when it has one of its own.
     fn app_size(&self) -> (u16, u16) {
-        let bar = u16::from(self.shows_bar());
+        let bar = u16::from(self.shows_bar() && !self.one_bar());
         (self.size.0, self.size.1.saturating_sub(bar))
     }
 
@@ -178,15 +234,13 @@ impl Workspaces {
         {
             return index;
         }
-        let had_bar = self.shows_bar();
-        // Made to the size it has once it's in the list, with the bar if the bar shows.
+        // Made to about the size it has once it's in the list, and fitted to it after: with
+        // one more workspace the bar may need a row of its own.
         let bar = u16::from(self.bar && !self.choosing);
         let size = (self.size.0, self.size.1.saturating_sub(bar));
         let workspace = (self.start)(root, size);
         self.list.push(workspace);
-        if had_bar != self.shows_bar() {
-            self.fit();
-        }
+        self.fit();
         self.list.len() - 1
     }
 
@@ -230,6 +284,10 @@ impl Workspaces {
         if let Some(front) = self.list.get_mut(self.active) {
             front.app.workspaces = count;
         }
+        // What a workspace says in the bar changes its width, and with it whether the bar
+        // fits in the status bar's row.
+        self.fit();
+        self.share_row();
         // The last row is drawn down into the window's bottom padding, and a click there
         // counts rows past the grid. It's on that row all the same.
         let event = match event {
@@ -243,6 +301,7 @@ impl Workspaces {
             Event::Resize(width, height) => {
                 self.size = (width, height);
                 self.fit();
+                self.share_row();
             }
             Event::Tick => {
                 for workspace in &mut self.list {
@@ -250,7 +309,9 @@ impl Workspaces {
                 }
             }
             Event::Mouse(mouse) if self.choosing => self.choose_mouse(mouse),
-            Event::Mouse(mouse) if self.on_bar(mouse.y) => self.bar_mouse(mouse),
+            Event::Mouse(mouse) if self.on_bar(mouse.y) && self.bar_owns(&mouse) => {
+                self.bar_mouse(mouse)
+            }
             Event::Mouse(mouse) => {
                 // Leaving the bar, nothing there stays lit.
                 self.hover = None;
@@ -525,7 +586,13 @@ impl Workspaces {
     /// when it would reach the tiles, New Workspace or Resume: a long name, as some machines
     /// have, gives way rather than covering them.
     fn machine_x(&self) -> Option<f32> {
-        let x = f32::from(self.size.0) - 1.0 - self.text_width(&self.machine);
+        // In the status bar's row it stands before the bell.
+        let edge = f32::from(self.size.0) - 1.0;
+        let end = match self.app().status_bell() {
+            Some((bell, _)) if self.one_bar() => f32::from(bell) - 1.0,
+            _ => edge,
+        };
+        let x = end - self.text_width(&self.machine);
         let resume = self
             .resume_label()
             .map_or(0.0, |l| self.resume_width(&l) + 1.5);
@@ -652,18 +719,29 @@ impl Workspaces {
             self.draw_choice(grid);
             return;
         }
+        self.share_row();
         self.app().draw(grid);
         if self.shows_bar() {
             // Lifted within its row, for air between the bar and the window's edge, where
             // the pixel tiers can place it.
             let from = grid.painted_so_far();
             self.draw_bar(grid);
-            grid.lift_since(from, BAR_LIFT);
-            for paint in grid.paint.iter_mut().skip(from) {
+            let raise = |grid: &mut Grid, (from, to): (usize, usize)| {
                 use cellix_render::Paint;
-                if matches!(paint, Paint::Text { .. } | Paint::Icon { .. }) {
-                    paint.lift(cellix_render::units(WORD_LIFT));
+                let to = to.min(grid.paint.len());
+                for paint in grid.paint.iter_mut().take(to).skip(from) {
+                    paint.lift(cellix_render::units(BAR_LIFT));
+                    if matches!(paint, Paint::Text { .. } | Paint::Icon { .. }) {
+                        paint.lift(cellix_render::units(WORD_LIFT));
+                    }
                 }
+            };
+            let to = grid.painted_so_far();
+            raise(grid, (from, to));
+            if self.one_bar() {
+                // The status bar's own words are in the row too, and stand level with the
+                // workspaces' beside them.
+                raise(grid, self.app().status_paint.get());
             }
         }
     }
@@ -672,7 +750,11 @@ impl Workspaces {
         let theme = self.theme();
         let y = self.size.1.saturating_sub(1);
         let base = theme.workspaces;
-        grid.fill(Rect::new(0, y, self.size.0, 1), base);
+        let shared = self.one_bar();
+        let pictures = !self.measure().in_cells();
+        if !shared {
+            grid.fill(Rect::new(0, y, self.size.0, 1), base);
+        }
         let (spans, _) = self.spans();
         let right = self.size.0.saturating_sub(1);
         for (index, (workspace, span)) in self.list.iter().zip(&spans).enumerate() {
@@ -684,36 +766,68 @@ impl Workspaces {
                 span.end - span.start,
                 1.0 - 2.0 * CHIP_INSET,
             );
+            // The workspace in front is in the accent, with everything on it in the colour
+            // that reads there. Without pictures there's no chip, and its name is brighter.
+            let ink = (active && pictures).then_some(theme.button_text);
             if active {
-                grid.panel(chip, CHIP_RADIUS, Some(theme.tint), None);
+                let fill = if pictures { theme.accent } else { theme.tint };
+                grid.panel(chip, CHIP_RADIUS, Some(fill), None);
             } else if hovered {
                 grid.panel(chip, CHIP_RADIUS, Some(theme.row_hover), None);
             }
             let (mark, word, color) = self.word(&workspace.app);
             let mut x = span.start + self.room(PAD);
-            draw_mark(grid, (x, y), mark, theme, base);
+            match ink {
+                Some(ink) => {
+                    let inked = Theme {
+                        gutter: Style {
+                            fg: ink,
+                            ..theme.gutter
+                        },
+                        git_added: ink,
+                        ..*theme
+                    };
+                    let mark = match mark {
+                        Mark::Dot(_) => Mark::Dot(ink),
+                        other => other,
+                    };
+                    draw_mark(grid, (x, y), mark, &inked, base);
+                }
+                None => draw_mark(grid, (x, y), mark, theme, base),
+            }
             x += self.room(MARK) + self.room(GAP);
             let name = name_of(&workspace.app);
+            let bright = if active { theme.text.fg } else { base.fg };
             let name_style = Style {
-                fg: if active { theme.text.fg } else { base.fg },
+                fg: ink.unwrap_or(bright),
                 ..base
             };
             label(grid, (x, y), &name, name_style, right);
             x += self.text_width(&name);
             if !word.is_empty() {
                 x += self.room(WORD_GAP);
-                label(grid, (x, y), &word, Style { fg: color, ..base }, right);
+                let said = Style {
+                    fg: ink.unwrap_or(color),
+                    ..base
+                };
+                label(grid, (x, y), &word, said, right);
             }
             if active {
                 let close = span.end - self.room(CLOSE) + 0.3;
                 let quiet = Style {
-                    fg: theme.gutter.fg,
+                    fg: ink.unwrap_or(theme.gutter.fg),
                     ..base
                 };
                 grid.glyph(close, y, Icon::Close, quiet.fg, "×", quiet);
             }
         }
         self.draw_new_button(grid, y, base);
+        if shared {
+            // A rule between the workspaces and what the status bar says after them.
+            let x = self.new_button().1 + AFTER / 2.0;
+            let rule = Bounds::cells(x, f32::from(y) + 0.28, 0.0, 0.44);
+            grid.hairline(rule, theme.border);
+        }
         // The machine's name at the right, so it's plain which one this is.
         let machine_style = Style {
             fg: theme.gutter.fg,
@@ -801,7 +915,10 @@ impl Workspaces {
             ..base
         };
         let x = mark + self.room(MARK) + self.room(GAP);
-        label(grid, (x, y), NEW_WORKSPACE, text, right);
+        // Its mark alone where the workspaces lead the status bar's row: the tip names it.
+        if !self.one_bar() {
+            label(grid, (x, y), NEW_WORKSPACE, text, right);
+        }
         // The tip stays out of the way of what the button opened.
         if on_it && !self.measure().in_cells() && !self.app().overlay_is_open() {
             let font = Font {
@@ -1316,6 +1433,82 @@ mod tests {
         }
     }
 
+    /// One bar at the foot, where both fit. The workspaces lead the status bar's own row, what
+    /// the status bar says follows them, and the machine's name stands before the bell. A
+    /// press on a workspace is the bar's and one on the rest of the row is the status bar's.
+    /// With pictures the workspace in front is in the accent. A window too narrow for both
+    /// gives the bar a row of its own again.
+    #[test]
+    fn the_workspaces_lead_the_status_bars_own_row() {
+        let (_dir, first, second) = projects();
+        let mut spaces = spaces();
+        spaces.open(first);
+        spaces.open(second);
+        spaces.handle(Event::Resize(140, 30));
+        assert!(spaces.one_bar());
+        let (lead, tail) = spaces.shared();
+        assert!(lead > 0 && tail > 0, "{lead} {tail}");
+        assert_eq!(
+            spaces.app().status_room.get(),
+            (lead, tail),
+            "the app is told"
+        );
+        let row = bar(&spaces);
+        let at = |text: &str| {
+            let found = row
+                .find(text)
+                .unwrap_or_else(|| panic!("no {text} in {row}"));
+            row[..found].chars().count() as u16
+        };
+        let (bell, _) = spaces.app().status_bell().expect("a bell");
+        assert!(
+            at("api-server") < at("infra") && at("infra") < lead,
+            "{row}"
+        );
+        assert!(
+            at("Ctrl+P") >= lead,
+            "the status bar's words start after them: {row}"
+        );
+        assert!(
+            at("dev-box") + 7 <= bell,
+            "the machine's name, before the bell: {row}"
+        );
+        assert!(
+            at("dev-box") >= bell - tail - 1,
+            "in the room kept for it: {row}"
+        );
+        // A press on the bell is the status bar's, and one on a workspace is the bar's.
+        assert_eq!(spaces.active, 0);
+        click(&mut spaces, MouseKind::Left, (bell + 1, 29));
+        assert!(spaces.hover.is_none(), "the bar didn't take it");
+        assert_eq!(spaces.active, 0);
+        click(&mut spaces, MouseKind::Left, (at("infra"), 29));
+        assert_eq!(spaces.active, 1, "a press on a workspace switches to it");
+        assert!(spaces.hover.is_some());
+        // With pictures the one in front is in the accent, as a chip in the last row.
+        let measure: Rc<dyn Measure> = Rc::new(cellix_render::FontMeasure::new(17, 37));
+        for workspace in &mut spaces.list {
+            workspace.app.set_measure(measure.clone());
+        }
+        spaces.handle(Event::Tick);
+        assert!(spaces.one_bar(), "still, with words measured");
+        let grid = screen(&spaces);
+        let accent = spaces.theme().accent;
+        let last = 29 * cellix_render::UNIT;
+        let chips = grid.paint.iter().filter(|p| {
+            matches!(p, cellix_render::Paint::Panel { bounds, fill: Some(fill), .. }
+                if *fill == accent && bounds.y >= last - cellix_render::UNIT / 2 && bounds.w > 4 * cellix_render::UNIT)
+        });
+        assert_eq!(chips.count(), 1, "one workspace is in front");
+        // Too narrow for both, the bar has a row of its own and the status bar all of its.
+        spaces.handle(Event::Resize(90, 30));
+        assert!(!spaces.one_bar());
+        assert_eq!(spaces.shared(), (0, 0));
+        assert_eq!(spaces.app().size(), (90, 29));
+        let _ = screen(&spaces);
+        assert_eq!(spaces.app().status_room.get(), (0, 0));
+    }
+
     #[test]
     fn the_bar_shows_every_workspace_and_a_click_switches() {
         let (_dir, first, second) = projects();
@@ -1323,7 +1516,11 @@ mod tests {
         spaces.open(first.clone());
         // Even with one, the bar is there, with a button that says what it does.
         assert!(spaces.shows_bar());
-        assert_eq!(spaces.app().size(), (100, 29), "the bar takes a row");
+        assert_eq!(
+            spaces.app().size(),
+            (100, 29),
+            "in a window this narrow the bar takes a row"
+        );
         let row = bar(&spaces);
         assert!(
             row.contains("api-server") && row.contains("+ New Workspace"),
@@ -1342,9 +1539,24 @@ mod tests {
         let row = bar(&spaces);
         assert!(row.contains("api-server") && row.contains("infra"), "{row}");
         assert!(row.contains("dev-box"), "the machine is named: {row}");
-        assert!(row.contains("+ New Workspace"), "{row}");
-        // The status bar is still there, above it.
+        assert!(row.contains("+ New Workspace"), "its button says so: {row}");
+        assert!(!row.contains("Ctrl+P"), "{row}");
+        // The status bar is above it.
         assert!(screen(&spaces).row_text(28).contains("Ctrl+P"));
+        // A wider window has room for both in one row: the workspaces lead the status bar's,
+        // their button its mark alone. Narrowed again, the bar has its own row back.
+        spaces.handle(Event::Resize(140, 30));
+        assert_eq!(spaces.app().size(), (140, 30));
+        let row = bar(&spaces);
+        assert!(
+            !row.contains("New Workspace") && row.contains(" + "),
+            "{row}"
+        );
+        let (names, machine) = (row.find("infra").unwrap(), row.find("dev-box").unwrap());
+        let hint = row.find("Ctrl+P").expect("the status bar's words");
+        assert!(names < hint && hint < machine, "in that order: {row}");
+        spaces.handle(Event::Resize(100, 30));
+        assert_eq!(spaces.app().size(), (100, 29));
 
         assert_eq!(spaces.active, 0);
         let grid = screen(&spaces);
@@ -1518,7 +1730,8 @@ mod tests {
         spaces.handle(Event::Resize(140, 36));
         // The bell at the right end of the status bar opens it. Empty, it says what would
         // fill it, and what to do meanwhile.
-        let status = spaces.size().1 - 2;
+        // The workspaces lead the status bar's row, and the bell still ends it.
+        let status = spaces.size().1 - 1;
         assert!(screen(&spaces).row_text(status).trim_end().ends_with('◬'));
         let bell = (spaces.size().0 - 3, status);
         click(&mut spaces, MouseKind::Left, bell);
@@ -1827,8 +2040,11 @@ mod tests {
             spot(&grid, 29, "Resume 1 Session"),
         );
         assert_eq!(spaces.list[1].app.stopped_count(), 0);
-        assert!(!bar(&spaces).contains("Resume"), "{}", bar(&spaces));
-        assert!(!bar(&spaces).contains("stopped"));
+        // The button and the tile's word are gone. The status bar's own words are in the
+        // row now, and may say what was resumed.
+        let row = bar(&spaces);
+        assert!(!row.contains("Resume 1 Session"), "{row}");
+        assert!(!row.contains("infra stopped"), "{row}");
         let _ = fs::remove_dir_all(crate::hold::folder_of(&second));
     }
 

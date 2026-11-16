@@ -2400,3 +2400,16 @@ The user tried the sheets and sent a picture: "There some unnecessary blue line 
 - What this says about the sheets' own check: I looked at snapshots with the second tab in front, and at the dark theme, where the line was there and hard to see. The first tab in front, light, is what the user had.
 - Next: one bar at the foot, as before.
 
+## One bar at the foot (2026-11-16)
+
+The fourth step of the look. The user said to finish the rest end to end, so from here on nothing waits for an answer but a push or a release.
+
+- Where both fit, the workspaces lead the status bar's own row: tiles, the button for a new one as its mark alone, a rule, the status bar's words, and at the far end the file's details, the machine's name and the bell. A window gets its row back. `one_bar`, `shared`, `share_row` and `bar_owns` in `workspaces.rs`; `status_room`, `status_start` and `status_paint` in `app.rs`.
+- Where fewer than 72 columns would be left between the workspaces and the machine's name, the bar keeps a row of its own with its labelled button, as before. That's a message's 64 columns and a branch. The first try asked for 40, and the gate's real-binary tests failed on it: in a window of 100 columns a message of 48 letters was cut by the workspace and the machine's name beside it. So a window of 100 columns is as it was, and one of 140 with two workspaces has one bar. It changes over as workspaces come and go and as the window is resized: `fit` runs with every event.
+- With pictures the workspace in front is a chip in the accent, its mark, name, words and × in the colour that reads on it. It was a tint, hard to tell from a hovered one.
+- The status bar's own paint is raised with the bar's, so the words stand level and the chips keep 8 px from the window's edge (`workspace-bar-air` caught the first try, which raised neither).
+- Tests: `the_workspaces_lead_the_status_bars_own_row` is new, at 140 columns. `the_bar_shows_every_workspace_and_a_click_switches` goes on to 140 columns and back. `the_inbox_lists_what_waits_everywhere_and_a_click_goes_there`, at 140, finds the status bar on the last row. `what_stopped_anywhere_resumes_from_the_bar` asks that the button and the tile's word are gone, not that the row never says "Resume". The real-binary test that opens three workspaces looks for the button's mark, which both forms have.
+- Looked at: `02-code` and `25-light-open-file` from the tour, the bar's row in each.
+- Unverified in a real terminal.
+- Next, from the user while this was building: the quit button, which stands in the pane's tab row and reads as closing the workspace; a rule under the views; more room at the top right's end. Then the icons and the tree.
+

@@ -454,6 +454,26 @@ place in the list, since every worktree shares one list and agents push and pop 
 `theme` is `auto`, `dark` or `light`. `auto` is the default: Cellix asks the terminal for
 its background with OSC 11 and takes the matching theme, staying dark if nothing answers.
 
+## One bar at the foot
+
+The workspaces lead the status bar's own row (the user's choice of 16 November 2026: two bars
+with chips of two kinds were the first thing they called clutter). From the left: a tile for
+each workspace, the one in front in the accent with its words in the colour that reads on
+it, the button that opens another as its mark alone, a rule, then what the status bar says:
+the branch, the count of problems, what was last done. At the far end the file's details,
+the machine's name, and the bell. `Workspaces` tells each `App` the columns it has taken
+(`status_room`: the lead, and the room before the bell), and the status bar starts and stops
+short by them. A press on a workspace or Resume is the bar's; anywhere else in the row it's
+the status bar's. What the status bar painted is raised with the bar's own, so the two stand
+level and keep their air at the window's edge.
+
+The bar has a row of its own under the status bar, as it had until then, where fewer than 72
+columns would be left between the workspaces and the machine's name: a narrow window, or
+many workspaces. That's what the status bar gives a message, 64 columns, and a branch before
+it; with less, a message was cut short (the real-binary tests caught one). There its button
+says New Workspace. Without pictures there's no chip, and the workspace in front
+has the brighter name.
+
 ## Row height
 
 `row_height` is `airy`, `comfortable` or `terminal`, chosen on Settings' Appearance page under

@@ -1187,15 +1187,14 @@ fn every_open_workspace_comes_back_next_time() {
     for (index, name) in ["beta", "gamma"].iter().enumerate() {
         // The bar is drawn with the rest of the frame, which a busy machine can be late with.
         let deadline = Instant::now() + WAIT;
-        while !bar(&screen).contains("New Workspace") {
+        // The button that opens a workspace: its mark, with its words after it where the
+        // bar has a row of its own and alone where it leads the status bar's.
+        while !bar(&screen).contains(" + ") {
             assert!(Instant::now() < deadline, "no bar: {}", screen.contents());
             std::thread::sleep(Duration::from_millis(50));
         }
         let line = bar(&screen);
-        let column = line[..line.find("New Workspace").expect("the bar")]
-            .chars()
-            .count()
-            + 2;
+        let column = line[..line.find(" + ").expect("the bar")].chars().count() + 2;
         let row = screen.contents().lines().count();
         screen.send(format!("\x1b[<0;{column};{row}M\x1b[<0;{column};{row}m").as_bytes());
         screen.wait_for("Folder to open");

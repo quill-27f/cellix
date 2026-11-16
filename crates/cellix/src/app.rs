@@ -1215,6 +1215,13 @@ pub struct App {
     settings_page: Option<SettingsPage>,
     /// What the terminal said of itself, kept for when the theme changes.
     terminal_look: (Option<bool>, Option<(u8, u8, u8)>),
+    /// Columns of the status bar's row that the bar of workspaces has, where the two share
+    /// one: at the row's start, for the workspaces, and before the bell, for the machine's
+    /// name. Nothing of either where that bar has a row of its own.
+    pub(crate) status_room: std::cell::Cell<(u16, u16)>,
+    /// What the status bar painted, as a run of the grid's paint: the bar of workspaces
+    /// raises it with its own where the two share a row.
+    pub(crate) status_paint: std::cell::Cell<(usize, usize)>,
     /// A change to smooth scrolling for the terminal loop to pick up.
     smooth_change: Option<bool>,
     /// A row height just chosen in Settings, as how many of the terminal's lines a row is
@@ -1552,6 +1559,8 @@ impl App {
             tab_drag: None,
             settings_page: None,
             terminal_look: (None, None),
+            status_room: std::cell::Cell::new((0, 0)),
+            status_paint: std::cell::Cell::new((0, 0)),
             smooth_change: None,
             row_height_change: None,
             sidebar_view: SidebarView::Explorer,
@@ -16989,6 +16998,12 @@ impl App {
     }
 
     fn draw_status(&self, grid: &mut Grid) {
+        let painted = grid.painted_so_far();
+        self.draw_status_row(grid);
+        self.status_paint.set((painted, grid.painted_so_far()));
+    }
+
+    fn draw_status_row(&self, grid: &mut Grid) {
         let y = self.size.1.saturating_sub(1);
         let width = self.size.0;
         let bar = self.theme.status;
@@ -17120,12 +17135,17 @@ impl App {
         }
         // A message outranks the details, and a hint gives way to them.
         let kept = if message.is_empty() { 24 } else { 64 };
-        let start = self.status_branch().map_or(1, |(_, end)| end + 1);
+        let start = self
+            .status_branch()
+            .map_or(self.status_start(), |(_, end)| end + 1);
         let problems: usize = self.all_problems().values().map(Vec::len).sum();
         let problems = (problems > 0 && !self.compact()).then(|| format!("⊗ {problems}  "));
         let flagged = problems.as_ref().map_or(0, |p| p.chars().count() as u16);
         let bell = self.status_bell();
-        let end = bell.map_or(width, |(at, _)| at.saturating_sub(1));
+        // Short of the machine's name, where the bar of workspaces has put it before the bell.
+        let end = bell
+            .map_or(width, |(at, _)| at.saturating_sub(1))
+            .saturating_sub(self.status_room.get().1);
         let used = left.chars().count().min(kept) as u16 + start + flagged + 3 + (width - end);
         let room = width.saturating_sub(used) as usize;
         let mut shown = right.clone();
@@ -17254,7 +17274,7 @@ impl App {
 
     /// Where the bell sits in the status bar, as (start, end) columns: at the far right, wide
     /// enough for its count.
-    fn status_bell(&self) -> Option<(u16, u16)> {
+    pub(crate) fn status_bell(&self) -> Option<(u16, u16)> {
         if self.in_pane {
             return None;
         }
@@ -17275,7 +17295,9 @@ impl App {
         if count == 0 || self.compact() {
             return None;
         }
-        let at = self.status_branch().map_or(1, |(_, end)| end + 1);
+        let at = self
+            .status_branch()
+            .map_or(self.status_start(), |(_, end)| end + 1);
         Some((at, at + format!("⊗ {count}  ").chars().count() as u16))
     }
 
@@ -17360,7 +17382,14 @@ impl App {
     /// Where the branch sits in the status bar, as (start, end) columns.
     fn status_branch(&self) -> Option<(u16, u16)> {
         let name = self.branch.as_ref()?.chars().count() as u16;
-        Some((1, 1 + 2 + name.min(STATUS_BRANCH_WIDTH) + 1))
+        let at = self.status_start();
+        Some((at, at + 2 + name.min(STATUS_BRANCH_WIDTH) + 1))
+    }
+
+    /// Where the status bar's own words start: a column in, or after the workspaces where
+    /// they lead its row.
+    fn status_start(&self) -> u16 {
+        1 + self.status_room.get().0
     }
 
     /// Whether something in the side pane may write at any moment.
