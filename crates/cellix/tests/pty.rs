@@ -1276,6 +1276,100 @@ fn every_open_workspace_comes_back_next_time() {
     assert!(listed.contains("beta"), "{listed}");
 }
 
+/// The screen's last row, where the workspaces are.
+#[cfg(unix)]
+fn foot(screen: &Screen) -> String {
+    screen.contents().lines().last().unwrap_or("").to_string()
+}
+
+/// Opens `root` beside the workspaces a Cellix has, from the button in its bar, and waits for
+/// its tile.
+#[cfg(unix)]
+fn open_beside(screen: &mut Screen, root: &Path) {
+    let name = root.file_name().unwrap().to_string_lossy().into_owned();
+    // The bar is drawn with the rest of the frame, which a busy machine can be late with.
+    let deadline = Instant::now() + WAIT;
+    while !foot(screen).contains(" + ") {
+        assert!(Instant::now() < deadline, "no bar: {}", screen.contents());
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let line = foot(screen);
+    let column = line[..line.find(" + ").expect("the bar")].chars().count() + 2;
+    let row = screen.contents().lines().count();
+    screen.send(format!("\x1b[<0;{column};{row}M\x1b[<0;{column};{row}m").as_bytes());
+    screen.wait_for("Folder to open");
+    screen.send(root.display().to_string().as_bytes());
+    std::thread::sleep(Duration::from_millis(500));
+    screen.send(b"\r");
+    let deadline = Instant::now() + WAIT;
+    while !foot(screen).contains(&name) {
+        assert!(
+            Instant::now() < deadline,
+            "no tile for {name}: {}",
+            foot(screen)
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// A Cellix that's killed, or cut off with its connection, never gets to say what it had
+/// open. A workspace is noted as open while it's open, so the next Cellix has every one of
+/// them and `cellix ls` lists them. Only what had something running used to come back: after
+/// a dropped SSH connection the first screen offered one workspace of several.
+#[test]
+#[cfg(unix)]
+fn workspaces_open_when_cellix_dies_come_back() {
+    let parent = tempfile::tempdir_in("/tmp").unwrap();
+    let roots: Vec<_> = ["alpha", "beta", "gamma"]
+        .iter()
+        .map(|n| parent.path().join(n))
+        .collect();
+    for root in &roots {
+        std::fs::create_dir(root).unwrap();
+        std::fs::write(root.join("notes.txt"), "notes\n").unwrap();
+    }
+    // Short, since a socket's path has to fit in about a hundred bytes.
+    let cache = tempfile::tempdir_in("/tmp").unwrap();
+    let home = tempfile::tempdir_in("/tmp").unwrap();
+    let env = [
+        ("XDG_CACHE_HOME", cache.path()),
+        ("SHELL", Path::new("/bin/sh")),
+        ("HOME", home.path()),
+    ];
+    let cellix_ls = || {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_cellix"))
+            .arg("ls")
+            .env("XDG_CACHE_HOME", cache.path())
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+    // Nothing runs in any of the three: they're only open.
+    let mut screen = Screen::start_with(&roots[0], &[], &env);
+    screen.wait_for("notes.txt");
+    for root in &roots[1..] {
+        open_beside(&mut screen, root);
+    }
+    let pid = screen.child.process_id().unwrap() as i32;
+    // SAFETY: kill only sends a signal to the child this test started.
+    assert_eq!(unsafe { libc::kill(pid, libc::SIGKILL) }, 0);
+    screen.wait_exit();
+    drop(screen);
+    let listed = cellix_ls();
+    for name in ["alpha", "beta", "gamma"] {
+        assert!(listed.contains(name), "{name} missing: {listed}");
+    }
+
+    // Started at home, the next Cellix offers all three to pick from.
+    let mut again = Screen::start_with(home.path(), &[], &env);
+    again.wait_for("3 workspaces are open");
+    for name in ["alpha", "beta", "gamma"] {
+        again.wait_for(name);
+    }
+    again.send(b"\x11");
+    again.wait_exit();
+}
+
 /// Work left running in one project is a tile in the next Cellix's bar, as a tmux window
 /// would be, and `cellix ls` lists it.
 #[test]

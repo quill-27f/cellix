@@ -2,6 +2,11 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
+## [Unreleased]
+
+### Fixed
+- After a dropped SSH connection, `cellix` at home offered one workspace of several, though each of the others carried on as it was once its folder was opened by hand. A workspace was only noted as open while Cellix was leaving, and a Cellix cut off before it finished, or killed, never got that far: the next one found only the workspaces with something still running in them. A workspace is noted as open from the moment it's opened, until its tile is closed. `cellix ls` lists the workspaces a running Cellix has open as well.
+
 ## [0.10.0] - 2026-11-16
 
 A new look: more air, sheets on the terminal's own colour, and less chrome. Nothing about how Cellix is used changes but where three things are: the views, the workspaces, and Quit.

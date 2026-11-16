@@ -973,9 +973,12 @@ a folder, Resume for everything that stopped, and the machine's name. Each folde
 names its project, so a new Cellix opens every folder on the machine with something running or
 stopped that no other Cellix has open, and Cellix started at home with nothing named offers them
 first. That first screen can be left as any other: Quit beside Open, the button at the end of its foot, or the key
-that quits, and every folder stays as it is for next time, with nothing asked. Every folder open when Cellix quits or hangs up is marked `open` there too, so it comes
-back with nothing running in it, as an editor brings back its windows; closing its tile lets it
-go. Closing a tile asks as Quit does; Quit asks each folder in turn. The bar is drawn on the
+that quits, and every folder stays as it is for next time, with nothing asked. Every folder is marked `open` there too from when it's opened as a workspace, so it comes
+back with nothing running in it, as an editor brings back its windows, however the Cellix that
+had it ended; closing its tile lets it go. Until 0.10.1 the mark was made as Cellix quit or
+hung up, and a Cellix that never got that far (killed, or cut off with its connection before
+it had finished leaving) left the next one only what had something running: the first screen
+offered one workspace of several. Closing a tile asks as Quit does; Quit asks each folder in turn. The bar is drawn on the
 same grid as everything else, so it works on the cell tier too.
 
 What waits for the person, in any workspace, is kept as it happens: an agent asking leave to

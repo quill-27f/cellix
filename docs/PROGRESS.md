@@ -2587,3 +2587,13 @@ CI failed on the release commit, in the TeX job, which the local gate can't run 
 - Tests: `a_message_too_long_for_its_room_has_the_cursors` (ledger: `status-message-room`) and `a_long_message_in_the_shared_bar_keeps_its_end`, which is CI's window: 140 columns, one workspace, that machine's name. Both failed before the change as CI did. The TeX test is unchanged.
 - Unverified here: the TeX job itself, which only CI runs.
 - Any test under `--ignored` that reads the status bar's words is one the local gate doesn't see: `harness/x tex` needs TeX Live.
+
+## Workspaces that were open come back however Cellix ended (2026-11-16)
+
+The user, on a machine reached over SSH with several workspaces: after the connection dropped, `cellix` showed one of them in its first list, and each of the others carried on properly once opened by hand.
+
+- Found by reading: a workspace's `open` mark was written only on the way out, as each workspace quit or after a hang-up ended the loop. A Cellix that's killed never writes it, and after a hang-up a watch ends the process two seconds later whether or not the loop got to its workspaces (on macOS, where a closed terminal is read for ever, it never does). Tabs and unsaved edits are written on the tick, which is why each workspace was whole when opened by hand. So the next Cellix listed only what had a session still running.
+- A workspace is marked `open` as it's opened (`Workspaces::open`), and unmarked as before when its tile is closed. `cellix ls` therefore lists a running Cellix's workspaces too, as "open, nothing running" where nothing is.
+- Test: `workspaces_open_when_cellix_dies_come_back` (ledger: `workspaces-survive-a-kill`), the real binary in a PTY: three workspaces with nothing running, SIGKILL, then `cellix ls` and a Cellix started at home, which offers all three. It failed first: "Nothing is running in Cellix on this machine."
+- Not known: whether this is all of what the user saw. A second cause would give the same list: a Cellix whose connection is dead while the server hasn't noticed is still running, its sockets still answer, and a new Cellix leaves out what another has open (by design, so two windows don't each take everything). Opening such a folder by hand says "Another Cellix has this folder open, so agents reach that one". Asked the user whether they saw that line. If so, the first screen should list those as well, and a Cellix whose terminal no longer answers should give way; neither is built.
+- Unverified: over a real SSH connection.

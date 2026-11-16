@@ -5332,5 +5332,12 @@
     "title": "A message in the status bar that doesn't fit beside the file's details has their room, and the cursor's place too if it needs it, so what it ends with is read; they're back when the message goes",
     "test": "a_message_too_long_for_its_room_has_the_cursors",
     "passes": true
+  },
+  {
+    "id": "workspaces-survive-a-kill",
+    "milestone": 14,
+    "title": "A workspace is noted as open from when it's opened, so the next Cellix offers every workspace the last one had, with something running or not, however that one ended: quit, a dropped connection or a kill",
+    "test": "workspaces_open_when_cellix_dies_come_back",
+    "passes": true
   }
 ]

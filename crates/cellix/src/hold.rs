@@ -122,11 +122,12 @@ pub fn mark_project(project: &Path) {
 
 /// The file in a sessions folder that names its project.
 const PROJECT: &str = "project";
-/// Beside it while the project was a workspace when Cellix last quit, so it opens again with
-/// nothing running in it, as an editor brings back the windows it had.
+/// Beside it from when the project is opened as a workspace until it's closed from its tile,
+/// so it opens again with nothing running in it, as an editor brings back the windows it had,
+/// however the Cellix that had it open came to an end.
 const OPEN: &str = "open";
 
-/// Notes that a project was an open workspace when Cellix quit, so the next one opens it.
+/// Notes that a project is an open workspace, so the next Cellix opens it.
 pub fn remember_open(project: &Path) {
     mark_project(project);
     let _ = std::fs::write(folder_of(project).join(OPEN), "");
@@ -138,7 +139,7 @@ pub fn forget_open(project: &Path) {
 }
 
 /// What's running for a project, or stopped without finishing and waiting to be resumed, and
-/// whether it was open when Cellix last quit.
+/// whether it's an open workspace, now or when the Cellix that had it ended.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Activity {
     pub running: Vec<String>,
@@ -169,7 +170,7 @@ pub fn activity(project: &Path) -> Activity {
 }
 
 /// The projects on this machine with something running, stopped and waiting to be resumed,
-/// or left open when Cellix last quit, by their folders, sorted.
+/// or open as a workspace, by their folders, sorted.
 pub fn projects_with_activity() -> Vec<(PathBuf, Activity)> {
     let mut found = Vec::new();
     for entry in std::fs::read_dir(sessions_base())

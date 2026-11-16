@@ -58,8 +58,8 @@ Usage: cellix [--wait] [files]
 ";
 
 /// `cellix ls`: each folder with something running in Cellix, stopped with the machine and
-/// waiting to be resumed, or open when Cellix last quit. Cellix started at home offers the
-/// same list.
+/// waiting to be resumed, or open as a workspace, in a Cellix that's running or the last one
+/// that was. Cellix started at home offers the same list, less what another Cellix has open.
 fn list() -> ExitCode {
     let found = cellix::hold::projects_with_activity();
     if found.is_empty() {

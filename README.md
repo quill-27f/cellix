@@ -417,7 +417,9 @@ saying whether its agent is working, needs you, or is done, a click to switch to
 with many of them) to find another folder and open it beside this one (type a name or a path
 and press Tab to go into the folder picked, as the field says while you type) (Ctrl+Alt+PageUp
 and PageDown move between
-them). A new `cellix` anywhere picks up every workspace left running on the machine, and `cellix`
+them). A new `cellix` anywhere picks up every workspace that was open on the machine, with
+something running in it or not, however the last one ended (quit, a dropped connection, a
+kill), and `cellix`
 in your home folder lists them to choose from, with Quit beside Open (or Ctrl+Q) to leave them as
 they are. `cellix ls` prints the same list. Two computers can
 show the same workspace at once; whichever typed into an agent last sets its size.

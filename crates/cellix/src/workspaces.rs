@@ -239,6 +239,13 @@ impl Workspaces {
         // one more workspace the bar may need a row of its own.
         let bar = u16::from(self.bar && !self.choosing);
         let size = (self.size.0, self.size.1.saturating_sub(bar));
+        // Noted as open from now, and not only as Cellix leaves: a dropped connection, a
+        // kill or a power cut never gets that far, and the next Cellix then offered only what
+        // had something running. Tests run on whatever machine they're on, whose own list
+        // this is.
+        if self.bar && !cfg!(test) {
+            crate::hold::remember_open(&root);
+        }
         let workspace = (self.start)(root, size);
         self.list.push(workspace);
         self.fit();
