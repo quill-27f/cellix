@@ -2292,3 +2292,15 @@ Words of 13 pt nearly fill a row of 18.5, so what's one row tall had to grow wit
 - README's five pictures show the old sizes. They're photographs of a real terminal and weren't retaken.
 - Unverified in a real terminal: everything here. Pictures are the tour's, 17 by 36 px a cell.
 - Next: the Context panel and a tall formula on a page, found by the same reviews, in the next commit.
+
+## What larger words pushed out of view (2026-11-16)
+
+Three things the reviews of the sizes found that weren't sizes: each is something that only just fitted at 11 pt.
+
+- A formula in a line of a page that's taller than the line, `$\frac{\sum …}{\sum …}$`, hung 10 px into the row under it and lay over that row's words once a paragraph wrapped under it. A line keeps an empty row under a formula that reaches more than a tail's depth below it (`hangs_under`, `HANG`); the row isn't a stop for the caret. Test: `a_line_keeps_a_row_under_a_formula_that_hangs_out_of_it`.
+- Agent Context: a check took two rows and lost "never in AGENTS.md" and "nothing is loaded there"; it takes three (`CHECK_ROWS`). A name that fitted its room was cut by the cell before the one its room ended in, "docs/STYLE.mc"; the label's edge is that cell now. The session's box raises its words as every text box does. Test: `a_long_check_takes_three_rows_at_most_and_ends_in_an_ellipsis`, which was `a_long_check_takes_two_rows_and_ends_in_an_ellipsis`: its number changed with the decision, and it gained a check that's whole in three rows.
+- The Timeline's heading was measured at the words' full size and cut though it fitted in its small bold capitals: `clip_as` measures in the font it's drawn in.
+- Looked at: `81-context`, `66-sample-class`, `67-sample-charts` and the transcript scenes in the third whole tour; the confirming review measured the fraction 33 px clear of the next line and all three checks whole.
+- Not done: the other names cut by cells where pixels are left (a merge's branch, a stash, a skill's description, a commit's summary in the graph).
+- Unverified in a real terminal.
+- Next, when the user says: push or release; bars two rows tall for 16 pt icons in chips; what to do about the pane inside Claude Code, whose width is Claude Code's (45% of the window at most, read from its code).

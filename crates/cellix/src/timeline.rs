@@ -138,7 +138,13 @@ impl Timeline {
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
         // The chevron in the margin, the name on the inset every sidebar heading has.
         let heading = format!("TIMELINE · {name}");
-        let heading = crate::source::clip(&heading, (right - left - 1) as f32, measure);
+        let font = cellix_render::Font {
+            bold: true,
+            size: crate::palette::SECTION_SIZE,
+            ..Default::default()
+        };
+        let room = (right - left - 1) as f32;
+        let heading = crate::source::clip_as(&heading, room, font, measure);
         let place = (left + 1, right, area.y);
         crate::palette::section_heading(grid, place, (&heading, None), Some(self.folded), theme);
         if self.folded {

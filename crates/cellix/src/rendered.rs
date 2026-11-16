@@ -1844,6 +1844,23 @@ fn note_row(text: &str, line: usize, at: usize, context: &Context) -> Row {
 /// Sizes of headings one to six, in percent of body text.
 const HEADINGS: [u8; 6] = [190, 150, 122, 110, 100, 100];
 
+/// How far under its row a formula in a line may reach before the line takes a row more: a
+/// tail's depth, which the row under has clear at its top anyway.
+const HANG: f32 = 0.14;
+
+/// Whether a formula in this row reaches further under it than `HANG`. It stands on the
+/// words' baseline, as `Editor` draws it.
+fn hangs_under(row: &Row, extras: &Extras) -> bool {
+    let figures = extras.figures.borrow();
+    let baseline = 0.5 + 0.35 * INTERFACE_SIZE;
+    row.glyphs.iter().any(|g| match g.tone {
+        Tone::Formula { index, .. } => figures
+            .get(index as usize)
+            .is_some_and(|f| baseline - f.baseline + f.height - 1.0 > HANG),
+        _ => false,
+    })
+}
+
 fn spacer(line: usize, end: usize) -> Row {
     Row {
         stop: false,
@@ -2328,6 +2345,23 @@ pub fn layout_with(
         let tall = template.tall;
         let first = rows.len();
         wrap(template, glyphs, lead, width, &mut rows);
+        // A formula in a line can stand taller than its row, as a fraction of sums does. A
+        // row is left empty under a line one hangs out of, where it lay over the words below.
+        let mut at = first;
+        while at < rows.len() {
+            if hangs_under(&rows[at], extras) {
+                let under = Row {
+                    stop: false,
+                    last: false,
+                    quote: rows[at].quote,
+                    callout: rows[at].callout,
+                    ..Row::new(rows[at].line, rows[at].end)
+                };
+                rows.insert(at + 1, under);
+                at += 1;
+            }
+            at += 1;
+        }
         // Each row belongs to the source line it starts in, for comments and change marks.
         for row in &mut rows[first..] {
             if let Some(at) = row.glyphs.iter().find_map(|g| g.at) {
@@ -3238,6 +3272,46 @@ body",
         let shown: String = rows.iter().map(text).collect();
         assert!(!shown.contains("mc^2"), "{shown}");
         assert!(shown.contains("here."));
+    }
+
+    /// A fraction of sums in a line stands taller than the line, and at words of 13 pt it
+    /// hung 10 px into the row under it, over that row's words. The line takes a row more,
+    /// empty and no place for the caret, and a line whose formula keeps to its row doesn't.
+    #[test]
+    fn a_line_keeps_a_row_under_a_formula_that_hangs_out_of_it() {
+        let has_formula = |r: &Row| {
+            r.glyphs
+                .iter()
+                .any(|g| matches!(g.tone, Tone::Formula { .. }))
+        };
+        let tall = "The share is $\\frac{\\sum_k a_k}{\\sum_k b_k}$ of the whole.\n\nNext.\n";
+        let (rows, figures, _) = typeset(tall, None);
+        assert_eq!(figures.len(), 1);
+        assert!(figures[0].height > 1.2, "{} rows tall", figures[0].height);
+        let at = rows
+            .iter()
+            .position(has_formula)
+            .expect("the formula's row");
+        let under = &rows[at + 1];
+        assert!(
+            under.glyphs.is_empty() && !under.stop,
+            "a row left empty under it"
+        );
+        assert_eq!(under.line, rows[at].line, "which belongs to the same line");
+        // The paragraph's own gap still follows, and then the next paragraph.
+        let after: String = rows[at + 2..].iter().map(text).collect();
+        assert!(after.contains("Next."), "{after}");
+
+        let (rows, figures, _) = typeset("Energy is $E = mc^2$ here.\n\nNext.\n", None);
+        assert!(figures[0].height < 1.2, "{} rows tall", figures[0].height);
+        let at = rows
+            .iter()
+            .position(has_formula)
+            .expect("the formula's row");
+        assert!(
+            rows.len() == at + 1 || rows[at + 1].stop || !rows[at + 1].glyphs.is_empty(),
+            "no row is added under a formula that keeps to its line"
+        );
     }
 
     #[test]

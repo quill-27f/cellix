@@ -5185,5 +5185,19 @@
     "title": "The row of emoji offered for a name keeps room at its end for Tab, the key that takes the first of them: in a narrow pane the last names give way, where the key did",
     "test": "the_emoji_offered_for_a_name_leave_room_for_the_key_that_takes_one",
     "passes": true
+  },
+  {
+    "id": "formula-keeps-row-under",
+    "milestone": 14,
+    "title": "A line of a page whose formula hangs under it, a fraction of sums, keeps an empty row under it that the caret doesn't stop on, where the formula lay over the next line's words; a formula that keeps to its line adds none",
+    "test": "a_line_keeps_a_row_under_a_formula_that_hangs_out_of_it",
+    "passes": true
+  },
+  {
+    "id": "context-check-three-rows",
+    "milestone": 14,
+    "title": "A check in Agent Context takes three rows at most and ends in an ellipsis past that, where two rows cut the endings off the checks a project most often has once words were 13 pt",
+    "test": "a_long_check_takes_three_rows_at_most_and_ends_in_an_ellipsis",
+    "passes": true
   }
 ]

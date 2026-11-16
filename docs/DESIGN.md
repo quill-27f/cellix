@@ -478,7 +478,11 @@ arrow or a × in the Find bar the size of the ones beside names. A panel with a 
 is drawn on whole pixels wherever it stands in its rows, so the line is one pixel of its own
 colour on every side: between pixels it was two rows at half strength on one side and one at
 full on the other. On a page, a heading two rows tall stands high enough in them to keep 7 px
-over the line that follows, a paper's title over its subtitle.
+over the line that follows, a paper's title over its subtitle. A line whose formula hangs under
+it by more than a tail's depth, a fraction of sums, keeps an empty row under it, which the caret
+doesn't stop on: it lay over the next line's words. In Agent Context a check has three rows
+before it's cut, and a name is cut by what it measures, at the cell its room ends in; the
+Timeline's heading is measured in its own small bold capitals before it's cut.
 
 One set of parts, everywhere. A button is one chip, nearly nine tenths of its row and inside it
 (four fifths left its words 7 px under its top, which read as cramped): the

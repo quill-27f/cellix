@@ -10,8 +10,12 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 - A box, a pill or a card with a line round it is drawn on whole pixels, so its line is as sharp on top as at its sides.
 - What explains a setting is in small words, as the design has it, which lets the longest of them fit a window of 120 columns.
 - The row of emoji offered for a name keeps "Tab" at its end, the key that takes the first of them, and gives up its last name when the pane is narrow. It gave up the key.
+- A check in Agent Context has three rows where it had two, which holds "never in AGENTS.md" and "nothing is loaded there" at the larger words.
 
 ### Fixed
+- A formula in a line of a page that stands taller than the line, a fraction of sums, lay over the words of the line under it. The line keeps an empty row under it now.
+- A name in Agent Context that fitted its row lost the end of its last letter, "docs/STYLE.mc".
+- The Timeline's heading was cut with "…" though the whole name fitted.
 - The card that offers to install a language's server, "Install Terraform support?", had its title on its top edge and its buttons on its bottom one. It's the same kind of card as the logout notice now: half a row clear over the title and under the buttons, and a row between its words and its buttons. A tool with a long name gets a second line, where its sentence was cut at the card's edge on a terminal without pictures. While it installs the card keeps its size. Its middle button reads Not Now, as the logout notice's does.
 - A button that isn't the main one, on one of those cards or in a dialog, changes under the pointer: lighter in the dark theme, deeper in the light one. It took a colour a level or two from the one it rests in, so nothing seemed to happen.
 - A card in the window's corner that lay over the side pane had a strip of the file's colour above it and below it. Its round corners show what's under them.

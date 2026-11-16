@@ -955,7 +955,13 @@ impl Source {
 
 /// Text cut to `room` cells as it's drawn, ending in an ellipsis when it doesn't fit.
 pub fn clip(text: &str, room: f32, measure: &dyn Measure) -> String {
-    let wide = |t: &str| measure.width(t, Font::default());
+    clip_as(text, room, Font::default(), measure)
+}
+
+/// The same for words set in `font`: measured at the full size, a heading's small bold
+/// capitals were cut though they'd have fitted.
+pub fn clip_as(text: &str, room: f32, font: Font, measure: &dyn Measure) -> String {
+    let wide = |t: &str| measure.width(t, font);
     if wide(text) <= room {
         return text.to_string();
     }

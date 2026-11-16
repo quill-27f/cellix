@@ -27,8 +27,9 @@ const SIDE: u16 = 2;
 const SHORT_LIST: usize = 8;
 /// Checks wrap over several rows each, so fewer show before "Show N more".
 const SHORT_CHECKS: usize = 3;
-/// Rows a check's words take at most; the rest ends in "…".
-const CHECK_ROWS: usize = 2;
+/// Rows a check's words take at most; the rest ends in "…". Three, which holds the longest
+/// of them in a sidebar at words of 13 pt; two held them at 11.
+const CHECK_ROWS: usize = 3;
 /// Cells a quiet detail needs free beside a name before any of it is shown.
 const ROOM: f32 = 3.0;
 /// The space between a name and its quiet detail, as Source Control sets it.
@@ -741,6 +742,7 @@ impl ContextPanel {
         };
         let edge = right.saturating_sub(2);
         let name = (self.agent.name(), inside);
+        let words = grid.painted_so_far();
         row_of(
             grid,
             self.measure.as_ref(),
@@ -750,6 +752,8 @@ impl ContextPanel {
             ("", quiet),
             theme,
         );
+        // Raised in the box, as every text box's words are: "just now" has a tail.
+        grid.lift_since(words, crate::measures::FIELD_LIFT);
         let chevron = (right - 2) as f32 + 0.2;
         grid.glyph(chevron, y, Icon::ChevronDown, theme.gutter.fg, "⌄", inside);
     }
@@ -918,8 +922,10 @@ fn row_of(
         measure.width(tail, font) + 1.0
     };
     let edge = right as f32 - tail_width;
+    // Cut to the room by what it measures, so the label's own edge is the cell that room
+    // ends in: at the cell before, a name that fit lost the end of its last letter.
     let name = elide(name, edge - x as f32, measure);
-    grid.label(x, y, &name, look, edge.floor() as u16);
+    grid.label(x, y, &name, look, edge.ceil() as u16);
     let at = x as f32 + measure.width(&name, font) + GAP;
     if !detail.is_empty() && edge - at >= ROOM {
         let quiet = Style {
@@ -933,7 +939,7 @@ fn row_of(
             y,
             &detail,
             quiet,
-            edge.floor() as u16,
+            edge.ceil() as u16,
             100,
         );
     }
@@ -1096,22 +1102,29 @@ mod tests {
 
     use super::*;
 
+    /// A check has three rows at most, where it had two: at words of 13 pt two rows of a
+    /// sidebar cut "never in AGENTS.md" and "nothing is loaded there" off the two checks a
+    /// project most often has. One too long for three still ends in "…".
     #[test]
-    fn a_long_check_takes_two_rows_and_ends_in_an_ellipsis() {
+    fn a_long_check_takes_three_rows_at_most_and_ends_in_an_ellipsis() {
         let panel = ContextPanel::new(Homes::default());
         panel.width.set(24);
-        let check = Check {
+        let check = |message: &str| Check {
             kind: cellix_agent::context::CheckKind::Large,
-            message: "CLAUDE.md is 61,000 characters, which the agent reads in full every turn"
-                .into(),
+            message: message.into(),
             path: PathBuf::from("CLAUDE.md"),
             line: None,
             other: None,
         };
-        let rows = panel.check_text(&check);
-        assert_eq!(rows.len(), 2, "{rows:?}");
-        assert!(rows[1].ends_with('…'), "{rows:?}");
+        let long = "CLAUDE.md is 61,000 characters, which the agent reads in full every turn";
+        let rows = panel.check_text(&check(long));
+        assert_eq!(rows.len(), 3, "{rows:?}");
+        assert!(rows[2].ends_with('…'), "{rows:?}");
         assert!(rows.iter().all(|r| r.chars().count() <= 24 - 7), "{rows:?}");
+        // One that three rows hold is whole.
+        let rows = panel.check_text(&check("CLAUDE.md is 61,000 characters long"));
+        assert_eq!(rows.len(), 3, "{rows:?}");
+        assert_eq!(rows.join(" "), "CLAUDE.md is 61,000 characters long");
     }
 
     #[test]
