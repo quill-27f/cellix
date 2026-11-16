@@ -9853,6 +9853,14 @@ impl App {
         self.dock.inbox_count.set(self.inbox_listed().len());
         self.dock.tabs_flush.set(self.dock_under());
         let maximized = self.maximized == Some(Maximized::Pane);
+        // A line under the pane's tabs and the icons after them, as the file's tabs and the
+        // views have: beside the file the three are level, one line across the window's top.
+        // Before the tabs, so the line under the one in front lies on it. It starts where
+        // the pane's sheet does, half way across the frame's column.
+        let from = f32::from(area.x) + if self.dock_under() { 0.0 } else { SHEET_EDGE };
+        let under = f32::from(area.y) + 1.0;
+        let rule = Bounds::cells(from, under, f32::from(area.right()) - from, 0.0);
+        grid.hairline(rule, theme.border);
         self.dock.draw_tabs(
             grid,
             self.title_of(area),
@@ -28955,6 +28963,67 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             grid.cell(dock.x, dock.y + 1).style.bg,
             sheet,
             "and none of the frame in it"
+        );
+    }
+
+    /// The file's tabs had a line under them, and so had the views. The side pane's tabs,
+    /// and the icons at the top right after them, had none.
+    #[test]
+    fn a_line_runs_under_the_panes_tabs() {
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        app.run(Command::ListAgents);
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        let unit = cellix_render::UNIT;
+        let border = app.theme.border;
+        // The lines on the edge under a row, as (left, width), with where each is painted.
+        let rules = |app: &App, row: u16| -> Vec<(usize, i32, i32)> {
+            let grid = screen(app);
+            let under = i32::from(row + 1) * unit;
+            let found = grid.paint.iter().enumerate().filter_map(|(at, p)| match p {
+                Paint::Hairline { bounds, color }
+                    if *color == border && bounds.h == 0 && bounds.y == under =>
+                {
+                    Some((at, bounds.x, bounds.w))
+                }
+                _ => None,
+            });
+            found.collect()
+        };
+        let pane = app.dock_area().expect("the side pane");
+        assert_eq!(pane.y, 0, "beside the file");
+        // From the sheet's edge, half way across the frame's column, to the window's.
+        let left = i32::from(pane.x) * unit + unit / 2;
+        let top = rules(&app, 0);
+        let (at, _, width) = *top
+            .iter()
+            .find(|(_, x, _)| *x == left)
+            .unwrap_or_else(|| panic!("no line under the pane's tabs: {top:?}"));
+        assert_eq!(left + width, i32::from(app.size.0) * unit, "to the edge");
+        // Level with the file's own and the views', so one line runs across the top.
+        let main = i32::from(app.main_area().x) * unit;
+        assert!(
+            top.iter().any(|(_, x, _)| *x == main),
+            "the file's: {top:?}"
+        );
+        assert!(top.iter().any(|(_, x, _)| *x == 0), "the views': {top:?}");
+        // The line under the tab in front lies on it, as a file's does.
+        let grid = screen(&app);
+        let accent = grid.paint.iter().position(|p| {
+            matches!(p, Paint::Panel { bounds, fill: Some(fill), .. }
+                if *fill == app.theme.accent && bounds.x >= left && bounds.y < unit)
+        });
+        assert!(accent.is_some_and(|after| after > at), "painted after it");
+        // Under the file the pane's tabs are a row of the file's sheet, and have theirs.
+        app.handle(Event::Resize(72, 44));
+        let pane = app.dock_area().expect("the side pane");
+        assert!(pane.y > 0 && app.dock_under(), "under the file");
+        let low = rules(&app, pane.y);
+        let whole = (i32::from(pane.x) * unit, i32::from(pane.w) * unit);
+        assert!(
+            low.iter().any(|(_, x, w)| (*x, *w) == whole),
+            "the pane's width: {low:?}"
         );
     }
 

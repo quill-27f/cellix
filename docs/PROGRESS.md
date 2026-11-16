@@ -2471,3 +2471,13 @@ The seventh step of the look, the last of the three the canvas drew for files.
 - Tests: `a_files_tab_has_its_kinds_icon` is new: the icon on each of two tabs, its colour and size, the air before the name, the tab's width, and no mark in cells.
 - Looked at: snapshots of a Rust file's tab, light, and a Markdown file's, dark.
 - Next: the tour, re-aimed for where everything is now, then the review of its pictures.
+
+## A line under the side pane's tabs (2026-11-16)
+
+From the user, after the line under the views: "there should be similar separator under the right pane's tabs/buttons."
+
+- A hairline under the side pane's tab row, from its sheet's edge to the window's, under the tabs and the icons at the top right alike. Beside the file it's level with the file's and the views', so one line runs across the top of the window, broken by the frame's columns. Under the file it's the pane's width. It's painted before the tabs, so the line under the tab in front lies on it, as a file's does.
+- The canvas had it (`.tabs` has the line for both strips) and the build of the sheets didn't.
+- Tests: `a_line_runs_under_the_panes_tabs` is new (ledger: `pane-tabs-rule`).
+- Looked at: snapshots at 150 by 30 on airy rows, light and dark.
+- Next: the tour, re-aimed.

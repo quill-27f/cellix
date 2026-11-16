@@ -511,7 +511,7 @@ fluently: views, explorer, tabs, breadcrumbs, current-line highlight, indent gui
 The views (Explorer, Search, Outline, Source Control, Agent Context, and Settings at the end)
 run across the top of the sidebar, level with the tabs, an icon every three columns, the one
 in front with a line under it in the accent (the user's choice of 16 November 2026, after a
-picture of Lapce; a rail down the left edge took five columns for them until then). A hairline runs under the row, the sidebar's width and level with the one under the tabs, between the views and what the one in front shows (asked for the same day).
+picture of Lapce; a rail down the left edge took five columns for them until then). A hairline runs under the row, the sidebar's width and level with the one under the tabs, between the views and what the one in front shows (asked for the same day). The side pane's tabs, and the icons at the top right after them, have the same line under them, so one line runs across the top of the window, broken by the frame's columns.
 
 A file's icon says its kind, as an icon theme's does: a disc with the letter cut out for Rust
 and Python, Markdown's mark, git's diamond, braces for JSON, brackets for a config, angle
