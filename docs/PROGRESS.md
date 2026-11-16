@@ -2568,3 +2568,12 @@ The whole tour over the last commit of the look: 209 scenes, every one reached, 
 - `54-paper-pdf`, `80-paper-drawn` and `81-paper-tables` still show a build that hadn't finished when the picture was taken, on a loaded machine.
 - Not released: nothing is pushed. The CHANGELOG's entry is under Unreleased, and a release would be 0.10.0.
 - Next, with the user: try it in Ghostty; then the reviewers' open list above, words centred in their boxes first.
+
+## Release 0.10.0 (2026-11-16)
+
+The user's word, after the wrap-up of the look: "release and push". The version is 0.10.0 everywhere it's written, and the CHANGELOG's entry for the look is under it.
+
+- What it holds: the nineteen commits of the look, from rows of Cellix's own to the README's pictures. Nothing else.
+- The user ran this build once before saying so, in the Claude app's terminal panel, which has no pictures: they saw the cell tier, with the rail and the word Quit at the foot. So the look itself has still not been seen in a real terminal by anyone since the trial of taller rows. What's unverified is as the entry above lists it.
+- None of these commits had been through CI. The release is made from the commit CI passes on.
+- Left for after: the reviewers' open list, words centred in their boxes first; the power mark or the word, and where it stands in a two-row foot, which the user hasn't answered; the README's two pictures inside Claude Code.

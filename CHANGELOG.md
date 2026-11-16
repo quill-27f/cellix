@@ -2,7 +2,7 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
-## [Unreleased]
+## [0.10.0] - 2026-11-16
 
 A new look: more air, sheets on the terminal's own colour, and less chrome. Nothing about how Cellix is used changes but where three things are: the views, the workspaces, and Quit.
 
