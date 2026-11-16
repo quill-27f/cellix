@@ -74,7 +74,16 @@ use gitops::GitChoice;
 
 /// Columns the rail takes. Five where icons are painted, which is the room a 24 pt icon and
 /// its tile need, and four where they're cells.
-const ACTIVITY_WIDTH: u16 = 5;
+/// With pictures the views run across the top of the sidebar: an icon every three columns
+/// from one column in, with Settings a column from the row's end.
+const VIEW_STEP: u16 = 3;
+const VIEW_INSET: u16 = 1;
+/// What's behind an icon there under the pointer, in columns and rows, and the line under
+/// the view in front: how far in from its three columns' ends, and how thick, in rows.
+const VIEW_PILL: (f32, f32) = (2.5, 0.89);
+const VIEW_LINE: (f32, f32) = (0.3, 0.06);
+/// How far down the row the count of changed files starts, at its icon's top right corner.
+const VIEW_BADGE: f32 = 0.02;
 const ACTIVITY_WIDTH_CELLS: u16 = 4;
 /// The buttons that stand by a selection, and the one on a picture.
 const COMMENT_WIDTH: u16 = 10;
@@ -3563,22 +3572,60 @@ impl App {
         self.size.0 < DOCK_WIDTH
     }
 
-    fn activity_area(&self) -> Rect {
-        let width = if self.compact() {
+    /// Whether the views run across the top of the sidebar, level with the tabs. They do
+    /// wherever there are pictures. Without them an icon is block art two rows tall, so the
+    /// views stay down the left edge.
+    fn views_on_top(&self) -> bool {
+        !self.measure.in_cells()
+    }
+
+    /// The rail down the left edge, where the views are on a terminal without pictures.
+    fn rail(&self) -> Rect {
+        let width = if self.compact() || self.views_on_top() {
             0
-        } else if self.measure.in_cells() {
-            ACTIVITY_WIDTH_CELLS
         } else {
-            ACTIVITY_WIDTH
+            ACTIVITY_WIDTH_CELLS
         };
         Rect::new(0, 0, width, self.size.1.saturating_sub(1))
     }
 
+    /// Where the views are: the rail, or the top row of the sidebar. With the sidebar closed
+    /// that row goes with it, and a button at the start of the tabs brings both back.
+    fn activity_area(&self) -> Rect {
+        if !self.views_on_top() {
+            return self.rail();
+        }
+        match self.sidebar_frame() {
+            Some(frame) => Rect::new(frame.x, frame.y, frame.w, 1),
+            None => Rect::new(0, 0, 0, 0),
+        }
+    }
+
+    /// What a view shows in: the sidebar, under the views' row where that's at its top.
     fn sidebar_area(&self) -> Option<Rect> {
+        let frame = self.sidebar_frame()?;
+        let views = u16::from(self.views_on_top()).min(frame.h);
+        Some(Rect::new(
+            frame.x,
+            frame.y + views,
+            frame.w,
+            frame.h - views,
+        ))
+    }
+
+    /// Whether a button at the start of the tabs opens the sidebar: where it's a drawer, and
+    /// where the views went with a sidebar that's closed.
+    fn sidebar_button(&self) -> bool {
+        let closed = self.views_on_top() && self.sidebar_frame().is_none();
+        self.compact() || (closed && self.maximized.is_none())
+    }
+
+    /// The sidebar's whole column, the views' row included where it's at its top.
+    fn sidebar_frame(&self) -> Option<Rect> {
         if self.maximized.is_some() {
             return None;
         }
-        let activity = self.activity_area();
+        let activity = self.rail();
         if self.compact() {
             return self
                 .drawer
@@ -3602,9 +3649,9 @@ impl App {
 
     /// Where the main area starts.
     fn main_left(&self) -> u16 {
-        match self.sidebar_area() {
+        match self.sidebar_frame() {
             Some(area) if !self.compact() => area.right(),
-            _ => self.activity_area().right(),
+            _ => self.rail().right(),
         }
     }
 
@@ -3641,7 +3688,11 @@ impl App {
 
     fn tabs_area(&self) -> Rect {
         let main = self.main_area();
-        let inset = if self.compact() { MENU_BUTTON } else { 0 };
+        let inset = if self.sidebar_button() {
+            MENU_BUTTON
+        } else {
+            0
+        };
         let actions = self.pane_actions();
         let shared = actions
             .iter()
@@ -7483,7 +7534,7 @@ impl App {
                 self.review = match self.review {
                     Some(_) => None,
                     None => {
-                        let left = self.activity_area().right() + self.sidebar_width();
+                        let left = self.rail().right() + self.sidebar_width();
                         let room = self.size.0.saturating_sub(left);
                         if !self.compact() && room >= crate::review::MIN_SIDE_BY_SIDE {
                             self.search.focus = None;
@@ -9063,7 +9114,7 @@ impl App {
 
     /// How many columns the activity rail takes.
     pub fn rail_width(&self) -> u16 {
-        self.activity_area().w
+        self.rail().w
     }
 
     /// Opens the folder finder: suggestions first, and the folders inside a path as it's
@@ -12667,13 +12718,14 @@ impl App {
             return;
         }
         let (x, y, fine_x) = (mouse.x, mouse.y, mouse.fine_x);
-        if self.compact() && self.drawer && !self.sidebar_area().is_some_and(|a| a.contains(x, y)) {
+        if self.compact() && self.drawer && !self.sidebar_frame().is_some_and(|a| a.contains(x, y))
+        {
             self.drawer = false;
             return;
         }
         if self.activity_area().contains(x, y) {
             if mouse.kind == MouseKind::Left {
-                self.click_activity(y);
+                self.click_activity(x, y);
             }
             return;
         }
@@ -12840,8 +12892,13 @@ impl App {
             MouseKind::Left if y == self.plan_bar().y + 1 && self.plan_in_view() && !in_sidebar => {
                 self.click_plan_bar(x)
             }
-            MouseKind::Left if self.compact() && y == 0 && x < MENU_BUTTON => {
-                self.toggle_sidebar();
+            MouseKind::Left if self.sidebar_button() && y == 0 && x < MENU_BUTTON => {
+                // Review stands where the sidebar does, with its own list a view of it.
+                if !self.compact() && self.review.is_some() {
+                    self.run(Command::ShowSourceControl);
+                } else {
+                    self.toggle_sidebar();
+                }
             }
             MouseKind::Left
                 if self
@@ -13988,9 +14045,8 @@ impl App {
         }
     }
 
-    fn click_activity(&mut self, y: u16) {
-        let area = self.activity_area();
-        let index = self.rail_at(y, area);
+    fn click_activity(&mut self, x: u16, y: u16) {
+        let index = self.view_at(x, y);
         if let Some((_, command)) = index.and_then(|i| ACTIVITY.get(i)) {
             let settings = *command == Command::OpenSettings;
             let lit = !settings && self.settings_page.is_none() && self.rail_on(*command);
@@ -14260,6 +14316,8 @@ impl App {
         let drawer_over_main = self.compact() && self.drawer;
         if drawer_over_main {
             self.draw_tabs(grid);
+            // The views are the drawer's top row, over the tabs it covers.
+            self.draw_activity(grid);
         }
         if let Some(area) = self.sidebar_area() {
             let name = self
@@ -14521,7 +14579,13 @@ impl App {
                 Some((name, self.size.0 as f32 - wide(name) - 0.5, 1.2))
             }
             Overlay::None if rail.w > 0 && rail.contains(x, y) => {
-                self.rail_at(y, rail).map(|i| {
+                self.view_at(x, y).map(|i| {
+                    if self.views_on_top() {
+                        // Under its icon, clear of the window's edge.
+                        let middle = self.view_x(i, rail) as f32 + VIEW_STEP as f32 / 2.0;
+                        let left = (middle - wide(RAIL_NAMES[i]) / 2.0).max(0.5);
+                        return (RAIL_NAMES[i], left, rail.bottom() as f32 + 0.2);
+                    }
                     let top = self.rail_top(i, rail);
                     // Level with the icon's middle.
                     (
@@ -15083,6 +15147,101 @@ impl App {
             .filter(|i| (self.rail_top(*i, area) + 0.5 - middle).abs() < 1.0)
     }
 
+    /// The view under a place in the views' row or on the rail.
+    fn view_at(&self, x: u16, y: u16) -> Option<usize> {
+        let area = self.activity_area();
+        if !area.contains(x, y) {
+            return None;
+        }
+        if !self.views_on_top() {
+            return self.rail_at(y, area);
+        }
+        (0..ACTIVITY.len()).find(|i| {
+            let at = self.view_x(*i, area);
+            x >= at && x < at + VIEW_STEP
+        })
+    }
+
+    /// The column a view's icon starts at across the top of the sidebar: one after another
+    /// from a column in, and Settings, the last, at the row's end.
+    fn view_x(&self, index: usize, area: Rect) -> u16 {
+        if index + 1 == ACTIVITY.len() {
+            area.right().saturating_sub(VIEW_STEP + VIEW_INSET)
+        } else {
+            area.x + VIEW_INSET + index as u16 * VIEW_STEP
+        }
+    }
+
+    /// The views across the top of the sidebar: an icon each, the one in front underlined,
+    /// and how many files have changed at the corner of Source Control's.
+    fn draw_views(&self, grid: &mut Grid, area: Rect) {
+        let theme = &self.theme;
+        grid.fill(area, theme.activity);
+        for (i, (icon, command)) in ACTIVITY.iter().enumerate() {
+            let x = self.view_x(i, area);
+            let on = self.rail_on(*command);
+            let hovered = self
+                .hover
+                .is_some_and(|h| self.view_at(h.0, h.1) == Some(i));
+            let fg = if on || hovered {
+                theme.text.fg
+            } else {
+                theme.activity.fg
+            };
+            let (left, top) = (x as f32, area.y as f32);
+            if hovered {
+                let (wide, high) = VIEW_PILL;
+                let pill = Bounds::cells(
+                    left + (VIEW_STEP as f32 - wide) / 2.0,
+                    top + (1.0 - high) / 2.0,
+                    wide,
+                    high,
+                );
+                grid.panel(pill, PILL_RADIUS, Some(theme.row_hover), None);
+            }
+            let cell = Rect::new(x, area.y, VIEW_STEP, 1);
+            toolbar::draw_icon(
+                grid,
+                (*icon, cellix_render::GLYPH),
+                cell,
+                fg,
+                theme.activity,
+            );
+            if on {
+                let (inset, thick) = VIEW_LINE;
+                let wide = VIEW_STEP as f32 - 2.0 * inset;
+                let line = Bounds::cells(left + inset, top + 1.0 - thick, wide, thick);
+                grid.panel(line, 0, Some(theme.accent), None);
+            }
+            let changed = self.changed_count();
+            if *command == Command::ShowSourceControl && changed > 0 {
+                let font = Font {
+                    bold: true,
+                    size: BADGE_SIZE,
+                    ..Font::default()
+                };
+                let count = changed.min(99).to_string();
+                let (least, tall) = BADGE_CHIP;
+                let text = self.measure.width(&count, font);
+                let width = (text + 0.6).max(least);
+                // At the icon's top right corner, ringed in the row's colour so it stands
+                // clear of the icon.
+                let (left, top) = (left + VIEW_STEP as f32 / 2.0 + 0.3, top + VIEW_BADGE);
+                let ring = Bounds::cells(left - 0.12, top - 0.06, width + 0.24, tall + 0.12);
+                grid.panel(ring, PILL_RADIUS, Some(theme.activity.bg), None);
+                let chip = Bounds::cells(left, top, width, tall);
+                grid.panel(chip, PILL_RADIUS, Some(theme.accent), None);
+                grid.text_run(
+                    (left + (width - text) / 2.0, top + tall / 2.0 - 0.5),
+                    area.right() as f32,
+                    &count,
+                    (theme.button_text, false),
+                    font,
+                );
+            }
+        }
+    }
+
     /// How many files differ from HEAD, for the badge on the rail.
     fn changed_count(&self) -> usize {
         let files = self.explorer.status.values();
@@ -15092,6 +15251,10 @@ impl App {
     fn draw_activity(&self, grid: &mut Grid) {
         let area = self.activity_area();
         if area.w == 0 {
+            return;
+        }
+        if self.views_on_top() {
+            self.draw_views(grid, area);
             return;
         }
         grid.fill(area, self.theme.activity);
@@ -15120,7 +15283,7 @@ impl App {
             let row = Rect::new(area.x, y, area.w, ACTIVITY_ICON.1 as u16);
             let hovered = self
                 .hover
-                .is_some_and(|h| area.contains(h.0, h.1) && self.rail_at(h.1, area) == Some(i));
+                .is_some_and(|h| self.view_at(h.0, h.1) == Some(i));
             let style = Style {
                 fg: if on || hovered {
                     self.theme.text.fg
@@ -15230,7 +15393,7 @@ impl App {
         let main = self.main_area();
         let theme = &self.theme;
         grid.fill(Rect::new(main.x, main.y, main.w, 1), theme.tab);
-        if self.compact() {
+        if self.sidebar_button() {
             grid.glyph(
                 main.x as f32 + 0.5,
                 main.y,
@@ -23505,6 +23668,8 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         // and lines least of all, starts in the page and ends in the pane.
         app.set_measure(Rc::new(cellix_render::FontMeasure::new(10, 20)));
         let grid = screen(&app);
+        // With pictures there's no rail, so the pane has moved with what's left of the window.
+        let pane = app.dock_area().expect("the side pane is open");
         let edge = i32::from(pane.x) * 64;
         let mut boxes = 0;
         for paint in &grid.paint {
@@ -27452,9 +27617,31 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
                     && b.y + b.h >= inner.y + inner.h
             })
         };
-        // The explorer's icon on the rail, and Agents at the top right, both showing.
+        // The explorer's icon among the views, and Agents at the top right, both showing.
         for which in [Icon::Files, Icon::Agents] {
             let inner = icon(which).unwrap_or_else(|| panic!("no {which:?}"));
+            if which == Icon::Files {
+                // The view in front is marked as a tab in front is, by a line under it in
+                // the accent, and has no tile behind it.
+                assert!(around(inner).is_none(), "no tile behind the view in front");
+                let middle = inner.x + inner.w / 2;
+                let lined = grid.paint.iter().any(|p| match p {
+                    Paint::Panel {
+                        bounds,
+                        fill: Some(fill),
+                        ..
+                    } => {
+                        *fill == app.theme.accent
+                            && bounds.x <= middle
+                            && bounds.x + bounds.w >= middle
+                            && bounds.y >= inner.y + inner.h / 2
+                            && bounds.y + bounds.h <= 65
+                    }
+                    _ => false,
+                });
+                assert!(lined, "a line under the view in front");
+                continue;
+            }
             let chip = around(inner).unwrap_or_else(|| panic!("{which:?} has no chip"));
             let air = [
                 (inner.x - chip.x) * 17 / 64,
@@ -27463,14 +27650,10 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
                 (chip.y + chip.h - inner.y - inner.h) * 36 / 64,
             ];
             // The icon's box, rounded down: its strokes stand two or three pixels further in
-            // still. The rail's tile keeps 8 px clear of the box on every side. At the top
-            // right the bar is one row, and an icon of 13 pt in it has what VS Code leaves
-            // inside its own hover chips: 3 px over and under the box, and 8 at the sides.
-            let least = if which == Icon::Files {
-                [8, 8, 8, 8]
-            } else {
-                [8, 8, 3, 3]
-            };
+            // still. At the top right the bar is one row, and an icon of 13 pt in it has
+            // what VS Code leaves inside its own hover chips: 3 px over and under the box,
+            // and 8 at the sides.
+            let least = [8, 8, 3, 3];
             assert!(
                 air.iter().zip(least).all(|(a, least)| *a >= least),
                 "{which:?}: {air:?} px"
@@ -28424,12 +28607,19 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert!(drawn_icons(&app).contains(&Icon::Terminal), "in Settings");
     }
 
-    /// How tall the first `which` painted on the rail, or off it, is, in points where a row
-    /// is 18.5 pt: a terminal set to 14 pt.
-    fn icon_points(app: &App, which: Icon, on_rail: bool) -> f32 {
-        let rail = i32::from(app.activity_area().right()) * cellix_render::UNIT;
+    /// How tall the first `which` painted among the views, or anywhere else, is, in points
+    /// where a row is 18.5 pt: a terminal set to 14 pt.
+    fn icon_points(app: &App, which: Icon, a_view: bool) -> f32 {
+        let unit = cellix_render::UNIT;
+        let views = app.activity_area();
+        let (right, bottom) = (
+            i32::from(views.right()) * unit,
+            i32::from(views.bottom()) * unit,
+        );
         let tall = screen(app).paint.iter().find_map(|p| match p {
-            Paint::Icon { bounds, icon, .. } if *icon == which && (bounds.x < rail) == on_rail => {
+            Paint::Icon { bounds, icon, .. }
+                if *icon == which && (bounds.x < right && bounds.y < bottom) == a_view =>
+            {
                 Some(bounds.h)
             }
             _ => None,
@@ -28438,8 +28628,10 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         tall as f32 / cellix_render::UNIT as f32 * 18.5
     }
 
-    /// Icons are the sizes VS Code's are: 16 pt beside a name, 24 pt on the rail, and 13 pt
-    /// at the top right, which is what a bar one row tall holds. They were 13, 15 and 10.
+    /// Icons are the sizes VS Code's are: 16 pt beside a name and among the views, which
+    /// run across the top of the sidebar in a row of their own, and 13 pt at the top right,
+    /// which is what a bar one row tall holds with a chip round each. The rail's were 24 pt
+    /// while there was one where icons are painted.
     #[test]
     fn icons_are_the_sizes_vs_code_has() {
         let (dir, _) = project();
@@ -28451,8 +28643,8 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             near(beside_a_name, 16.0),
             "a file's icon: {beside_a_name} pt"
         );
-        let on_the_rail = icon_points(&app, Icon::Search, true);
-        assert!(near(on_the_rail, 24.0), "the rail's: {on_the_rail} pt");
+        let a_view = icon_points(&app, Icon::Search, true);
+        assert!(near(a_view, 16.0), "a view's: {a_view} pt");
         for (icon, ..) in PANE_ACTIONS {
             let at_the_top_right = icon_points(&app, icon, false);
             assert!(
@@ -28465,57 +28657,87 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert!(near(close, 16.0), "a ×'s box: {close} pt");
     }
 
-    /// The rail where icons are painted: five columns, the room an icon of 24 pt and its
-    /// tile need, with an icon every two rows and either row pressing it. The tile behind
-    /// the one showing keeps 8 px from the rail's edges and stays inside the window. Where
-    /// icons are cells the rail is the four columns it was.
+    /// With pictures the views run across the top of the sidebar, level with the tabs: an icon
+    /// every three columns from one column in, any of its three pressing it, Settings at the
+    /// row's end, and the view itself a row down. The one in front has a line under it. With
+    /// the sidebar closed they go with it, and a button at the start of the tabs brings both
+    /// back. Where icons are cells the rail stays, four columns down the left edge.
     #[test]
-    fn the_rail_has_room_for_icons_of_vs_codes_size() {
-        let (_dir, mut app) = project();
-        assert_eq!(app.rail_width(), 4, "in cells");
+    fn the_views_run_across_the_top_of_the_sidebar() {
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        assert_eq!(app.rail_width(), 4, "in cells, a rail");
+        let beside = app.main_area().x;
         app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
-        assert_eq!(app.rail_width(), 5, "in pixels");
-        let area = app.activity_area();
+        assert_eq!(app.rail_width(), 0, "with pictures, none");
+        assert_eq!(
+            app.main_area().x + 4,
+            beside,
+            "and the file has its columns"
+        );
+        let row = app.activity_area();
+        let side = app.sidebar_area().expect("the sidebar is open");
+        assert_eq!((row.x, row.y, row.h), (0, 0, 1), "the top row");
+        assert_eq!((side.x, side.y, side.w), (0, 1, row.w), "over the view");
         for index in 0..ACTIVITY.len() - 1 {
-            let first = 2 * index as u16;
-            assert_eq!(app.rail_at(first, area), Some(index), "row {first}");
-            assert_eq!(
-                app.rail_at(first + 1, area),
-                Some(index),
-                "row {}",
-                first + 1
-            );
+            let first = 1 + 3 * index as u16;
+            for x in first..first + 3 {
+                assert_eq!(app.view_at(x, 0), Some(index), "column {x}");
+            }
         }
-        // The second row of Search's two, and then the first of Outline's.
-        app.handle(mouse(MouseKind::Left, 2, 3));
+        assert_eq!(app.view_at(0, 0), None, "the column before the first");
+        let settings = app.view_at(row.right() - 2, 0);
+        assert_eq!(settings, Some(ACTIVITY.len() - 1), "Settings, at the end");
+        assert_eq!(app.view_at(2, 1), None, "the row under them is the view's");
+        // A press on an icon shows its view.
+        click(&mut app, 5, 0);
         assert!(app.sidebar_view == SidebarView::Search);
-        app.handle(mouse(MouseKind::Left, 2, 4));
+        click(&mut app, 8, 0);
         assert!(app.sidebar_view == SidebarView::Outline);
-        // Settings stays at the foot of the rail, its tile over the status bar.
-        let settings = app.rail_row(ACTIVITY.len() - 1, area);
-        assert!(settings + 2 >= area.bottom(), "row {settings} of {area:?}");
-
-        let grid = screen(&app);
+        // The one in front has a line under it, in the accent.
         let unit = cellix_render::UNIT;
-        let rail = i32::from(area.right()) * unit;
-        let tile = grid.paint.iter().find_map(|p| match p {
+        let line = screen(&app).paint.iter().find_map(|p| match p {
             Paint::Panel {
                 bounds,
                 fill: Some(fill),
                 ..
-            } if *fill == app.theme.tint && bounds.x < rail => Some(*bounds),
+            } if *fill == app.theme.accent
+                && bounds.h <= unit / 8
+                && (bounds.y + bounds.h - unit).abs() <= 1 =>
+            {
+                Some(*bounds)
+            }
             _ => None,
         });
-        let tile = tile.expect("the icon that's showing has a tile");
-        let (left, right) = (tile.x * 17 / unit, (rail - tile.x - tile.w) * 17 / unit);
+        let line = line.expect("a line under the view in front");
         assert!(
-            left >= 8 && right >= 8,
-            "{left} px and {right} px to the rail's edges"
+            line.x >= 7 * unit && line.x + line.w <= 10 * unit,
+            "under Outline's three columns: {line:?}"
         );
-        assert!(tile.y >= 0 && tile.y + tile.h <= i32::from(area.bottom()) * unit);
-        // About square on screen, as a tile is.
-        let (wide, tall) = (tile.w * 17 / unit, tile.h * 37 / unit);
-        assert!(wide.abs_diff(tall) <= 4, "{wide} by {tall} px");
+        // Pressed again, the view in front closes the sidebar and the views go with it.
+        click(&mut app, 8, 0);
+        assert!(app.sidebar_area().is_none());
+        assert_eq!(app.activity_area().w, 0, "no views without a sidebar");
+        assert_eq!(
+            app.main_area().x,
+            0,
+            "the file has the window's whole width"
+        );
+        assert_eq!(
+            app.tabs_area().x,
+            MENU_BUTTON,
+            "its tabs start after a button"
+        );
+        click(&mut app, 1, 0);
+        assert!(
+            app.sidebar_area().is_some(),
+            "which brings the sidebar back"
+        );
+        assert_eq!(app.activity_area().w, row.w, "and the views with it");
+        assert!(
+            app.sidebar_view == SidebarView::Outline,
+            "on the view it had"
+        );
     }
 
     #[test]
@@ -32558,8 +32780,8 @@ while True:
     fn a_tooltip_is_one_whole_row() {
         let (_dir, mut app) = project();
         app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
-        let rail = app.activity_area();
-        app.handle(mouse(MouseKind::Move, rail.x + 1, rail.y + 1));
+        let views = app.activity_area();
+        app.handle(mouse(MouseKind::Move, views.x + 2, views.y));
         let tips: Vec<_> = screen(&app)
             .paint
             .iter()

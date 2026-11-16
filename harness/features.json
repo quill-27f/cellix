@@ -4629,7 +4629,7 @@
   {
     "id": "icon-highlight-air",
     "milestone": 12,
-    "title": "A selected or hovered icon on the activity rail and at the top right has 8 px or more between it and its highlight on every side",
+    "title": "An icon at the top right that's showing or under the pointer has 8 px between it and its highlight at the sides and 3 over and under, which is what a bar one row tall leaves; the view in front, among the views across the top of the sidebar, has a line under it in the accent and no highlight behind it",
     "test": "a_selected_icon_has_air_inside_its_highlight",
     "passes": true
   },
@@ -5161,15 +5161,15 @@
   {
     "id": "sizes-icons-vscode",
     "milestone": 14,
-    "title": "Icons are the sizes VS Code's are where a row is 18.5 pt: 16 pt beside a name and for every ×, 24 pt on the rail, and 13 pt at the top right, which is what a bar one row tall holds",
+    "title": "Icons are the sizes VS Code's are where a row is 18.5 pt: 16 pt beside a name, for every × and among the views across the top of the sidebar, and 13 pt at the top right, which is what a bar one row tall holds with a chip round each",
     "test": "icons_are_the_sizes_vs_code_has",
     "passes": true
   },
   {
     "id": "sizes-rail-five-columns",
     "milestone": 14,
-    "title": "The rail is five columns where icons are painted, with an icon every two rows and either row pressing it, and the tile behind the one showing 8 px inside the rail's edges; in cells it keeps its four columns",
-    "test": "the_rail_has_room_for_icons_of_vs_codes_size",
+    "title": "With pictures the views run across the top of the sidebar, level with the tabs: an icon every three columns, any of its three pressing it, Settings at the row's end, the view a row down and a line under the one in front. With the sidebar closed they go with it and a button at the start of the tabs brings both back. In cells the rail keeps its four columns",
+    "test": "the_views_run_across_the_top_of_the_sidebar",
     "passes": true
   },
   {

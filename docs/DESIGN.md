@@ -463,7 +463,15 @@ is on.
 ## Look
 
 The interface follows VS Code's layout, because that is what the target users already read
-fluently: activity bar, explorer, tabs, breadcrumbs, current-line highlight, indent guides.
+fluently: views, explorer, tabs, breadcrumbs, current-line highlight, indent guides.
+The views (Explorer, Search, Outline, Source Control, Agent Context, and Settings at the end)
+run across the top of the sidebar, level with the tabs, an icon every three columns, the one
+in front with a line under it in the accent (the user's choice of 16 November 2026, after a
+picture of Lapce; a rail down the left edge took five columns for them until then). The view
+itself starts a row down. With the sidebar closed the views go with it, and a button at the
+start of the tabs brings both back; in Review it shows Source Control, which stands beside a
+review. On a terminal without pictures an icon is block art two rows tall, so there the views
+stay on a rail four columns wide down the left edge.
 Both themes are three surfaces a step apart: the frame (the rail, the tab strips, the status
 bar), the panels (the sidebar and the side pane, whatever it shows, a terminal too) and the
 sheet (the file). Cards, menus and dialogs are raised over those, and a text box is sunk. Text

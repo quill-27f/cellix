@@ -2361,3 +2361,17 @@ The user tried the trial in their own Ghostty: "It seems to be working well." So
 - Known and left: the theme's cards are eight rows, 400 px on an airy row, and every page set out in blank rows is looser than it needs to be now that a row has air of its own. That's for the pass over each surface after the shell.
 - Next: the shell. The views across the top of the sidebar, the file and the side pane as sheets on the frame, one bar at the foot.
 
+## The views across the top of the sidebar (2026-11-16)
+
+The second step of the look. Shown the rail kept and Lapce's row of views, the user said: "Top icons are better in my opinion."
+
+- With pictures the rail is gone. The views are the top row of the sidebar, level with the tabs: an icon every three columns from one column in, 16 pt, Settings at the row's end, the count of changed files at the corner of Source Control's. The one in front has a line under it in the accent; the one under the pointer a chip. The view starts a row down. The file has the rail's five columns.
+- With the sidebar closed the views go with it. A button at the start of the tabs, the one a narrow window's drawer had, brings both back, and in Review it shows Source Control. A narrow window's drawer has the views across its top now, where it had no way to change view but the palette.
+- Without pictures nothing changes: block art needs two rows an icon, so the rail stays.
+- Where it is: `views_on_top`, `rail`, `sidebar_frame` (the sidebar's whole column), `activity_area` (the rail or the views' row), `sidebar_area` (what a view draws in), `sidebar_button`, `view_at`, `view_x` and `draw_views` in `app.rs`.
+- Tests: `the_views_run_across_the_top_of_the_sidebar` is new and stands in the ledger where `the_rail_has_room_for_icons_of_vs_codes_size` did, since the rail it measured is gone where icons are painted. Changed with the decision: `a_selected_icon_has_air_inside_its_highlight` (the view in front has a line and no tile; the top right's chips are as they were), `icons_are_the_sizes_vs_code_has` (a view's icon is 16 pt where the rail's was 24), `a_tooltip_is_one_whole_row` (it hovered the rail's second row) and `a_wide_table_wraps_inside_the_page_and_stops_at_the_panes_edge` (it kept the pane's place from before pictures, and the pane moves with the rail gone). Their ledger entries say what's true now.
+- Looked at: a snapshot at 150 by 30 on airy rows. Not the tour: its scenes aim at rows and columns, and every one has moved (the tree a row down, the file five columns left). The clicks on the views and on Settings are re-aimed in `tour.py`; the rest waits for the sheets and the single bar, which move things again, and is then one job.
+- Left in the code: the rail's painted branch in `draw_activity` (its tile, its 24 pt icon, its badge) can't be reached any more and should go.
+- Unverified in a real terminal.
+- Next: the file and the side pane as sheets on the frame.
+

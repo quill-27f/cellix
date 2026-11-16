@@ -22,9 +22,8 @@ binary, out = sys.argv[1], os.path.abspath(sys.argv[2])
 here = os.path.dirname(os.path.abspath(__file__))
 os.makedirs(out, exist_ok=True)
 CTRL = lambda c: chr(ord(c) - 96)
-RAIL_X = 1
-# Two rows each, Files on the first two: the second row of each icon's pair.
-SEARCH, OUTLINE, REVIEW = 3, 5, 7
+# Where each view's icon is, across the top of the sidebar: three columns each from one in.
+SEARCH, OUTLINE, REVIEW = (5, 0), (8, 0), (11, 0)
 # The command palette, opened with Ctrl+Shift+P or F1 and waited for, then a command typed
 # and run, and the palette gone with what was typed into it. Each step waits for the screen to
 # say the one before it landed: keys sent before the palette is up are typed into the file.
@@ -761,7 +760,7 @@ def git_scenes(scratch):
     # Then a merge that stops on a conflict.
     subprocess.run(["git", "-c", "user.name=tour", "-c", "user.email=tour@example.com", "merge", "-q",
                     "agent/queue-bound"], cwd=root, capture_output=True)
-    source = [["wait", 1.0], ["click", RAIL_X, REVIEW], ["wait", 3.0]]
+    source = [["wait", 1.0], ["click", *REVIEW], ["wait", 3.0]]
     shoot("86-git-merge-panel", source, "src/queue.rs", size="120x40", cwd=root)
     shoot("87-git-conflict", [["wait", 0.8]], "src/queue.rs", size="120x40", cwd=root)
     shoot("88-git-conflict-hover", [["wait", 1.0], ["move", 100, 16], ["wait", 0.6]],
@@ -936,7 +935,7 @@ with tempfile.TemporaryDirectory() as scratch:
     # Where the terminal's output and the Problems tab are, at 150x44 and 170x44.
     OUTPUT_FROM, OUTPUT_TO, OUTPUT_ASK = (98, 7), (126, 10), (144, 6)
     PROBLEM_COUNT, PROBLEM_ROW = (9, 42), (150, 3)
-    GEAR = (RAIL_X, 36)
+    GEAR = (25, 0)  # Settings, at the end of the views' row over a sidebar 28 columns wide
     settings = [["click", *GEAR], ["until", "Changes apply"]]
 
     workspaces(scratch)
@@ -968,22 +967,22 @@ with tempfile.TemporaryDirectory() as scratch:
           CODE_FILE)
     shoot("10-branches", [["wait", 1.5], ["click", 3, 38], ["wait", 0.5]], CODE_FILE)
     shoot("11-find", [["keys", CTRL("f")], ["keys", "item"]], CODE_FILE)
-    shoot("12-search", [["click", RAIL_X, SEARCH]], CODE_FILE)
+    shoot("12-search", [["click", *SEARCH]], CODE_FILE)
     replacing = [["keys", CTRL("r")], ["keys", "item"], ["keys", "\t"], ["keys", "entry"]]
     shoot("11-replace", replacing, CODE_FILE)
-    shoot("12-search-switches", [["click", RAIL_X, SEARCH], ["keys", "item"], ["keys", "\x1bw"], ["wait", 0.6]], CODE_FILE)
+    shoot("12-search-switches", [["click", *SEARCH], ["keys", "item"], ["keys", "\x1bw"], ["wait", 0.6]], CODE_FILE)
     shoot("13-review", [["keys", "\u0007"], ["wait", 1.2]], CODE_FILE)
     shoot("13-strip-hover", [["wait", 0.8], ["move", 100, 0], ["wait", 0.4]], CODE_FILE)
     shoot("13-agents-click", [["wait", 1.5], ["click", 111, 0], ["wait", 1.5]], CODE_FILE)
     shoot("13-quit-hover", [["wait", 6], ["move", 119, 0], ["wait", 1.2]], CODE_FILE)
     shoot("13-quit-beside-pane", [["wait", 6], ["click", 111, 0], ["wait", 3.5], ["move", 116, 0], ["wait", 1.2]], CODE_FILE)
-    git_tab = [["click", RAIL_X, REVIEW], ["wait", 0.8]]
+    git_tab = [["click", *REVIEW], ["wait", 0.8]]
     shoot("13-source-hover", [*git_tab, ["move", 14, 11], ["wait", 0.3]], CODE_FILE)
     shoot("13-source-diff", [*git_tab, ["click", 14, 11], ["wait", 1.2]], CODE_FILE)
     shoot("13-source-staged", [*git_tab, ["click", 28, 11], ["wait", 0.8], ["move", 14, 11]], CODE_FILE)
     shoot("13-stacked-pane", [*LIST_AGENTS, ["wait", 0.6]], CODE_FILE, size="72x44")
-    shoot("13-source-control", [["click", RAIL_X, REVIEW], ["wait", 0.8]], CODE_FILE)
-    shoot("13-source-message", [["click", RAIL_X, REVIEW], ["wait", 0.8], ["click", 14, 3],
+    shoot("13-source-control", [["click", *REVIEW], ["wait", 0.8]], CODE_FILE)
+    shoot("13-source-message", [["click", *REVIEW], ["wait", 0.8], ["click", 14, 3],
                                 ["keys", "Say what changed and why"], ["move", 14, 15], ["wait", 0.3]], CODE_FILE)
     shoot("14-agents", [*LIST_AGENTS, ["wait", 0.5]], CODE_FILE)
     shoot("15-settings-appearance", settings, CODE_FILE)
@@ -1033,7 +1032,7 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("25-light-open-file", [["keys", CTRL("p")], ["until", "Search files"], ["keys", "que"]], PAGE_FILE,
           background="eff1f5")
     shoot("26-light-settings", settings, CODE_FILE, background="eff1f5")
-    shoot("27-hover-rail", [["move", RAIL_X, REVIEW]], CODE_FILE)
+    shoot("27-hover-rail", [["move", *REVIEW]], CODE_FILE)
     shoot("28-hover-tree", [["move", 12, 3]], CODE_FILE)
     shoot("29-hover-tab", [["move", 38, 0]], CODE_FILE)
     shoot("30-hover-menu", [["right", 60, 12], ["move", 64, 13]], CODE_FILE)
@@ -1244,7 +1243,7 @@ with tempfile.TemporaryDirectory() as scratch:
         shoot(f"{60 + number}-sample-{name}", steps, WRITING, **light)
     shoot("72-sample-dark", [["wheel", 90, 20, 22], ["wait", 1.0]], WRITING, size="150x44")
     shoot("73-selection-bar", [["double", 60, 7], ["wait", 0.5]], WRITING, **light)
-    shoot("74-outline", [["click", RAIL_X, OUTLINE], ["wait", 0.8]], WRITING, **light)
+    shoot("74-outline", [["click", *OUTLINE], ["wait", 0.8]], WRITING, **light)
     shoot("75-data", [], os.path.join(samples, "data.csv"), **light)
     shoot("76-notebook", [], os.path.join(samples, "notebook.ipynb"), **light)
     shoot("77-paper-top", [["wait", 1.0]], PAPER, **light)
@@ -1328,7 +1327,7 @@ with tempfile.TemporaryDirectory() as scratch:
     git_scenes(scratch)
     # Agent Context: a project with instructions that disagree and an import, a user's own
     # instructions and skill, and a session's transcript, all in the throwaway home.
-    CONTEXT = 9  # the fifth rail icon's second row
+    CONTEXT = (14, 0)  # the fifth view's icon
     ctx = os.path.realpath(f"{scratch}/service")
     os.makedirs(f"{ctx}/src")
     claude_home = f"{HOME}/.claude"
@@ -1368,7 +1367,7 @@ with tempfile.TemporaryDirectory() as scratch:
     ]
     with open(f"{sessions}/s1.jsonl", "w") as f:
         f.write("".join(json.dumps(line) + "\n" for line in transcript))
-    show_context = [["click", RAIL_X, CONTEXT], ["wait", 1.2]]
+    show_context = [["click", *CONTEXT], ["wait", 1.2]]
     shoot("81-context", show_context, cwd=ctx, size="150x44")
     shoot("81-context-hover", [*show_context, ["move", 14, 9], ["wait", 0.3]], cwd=ctx, size="150x44")
     # Checks wrap to however many rows their words take, so fold them to find AGENTS.md's row.
