@@ -87,7 +87,8 @@ The pane needs what only Claude Code offers. With Codex and Gemini CLI, run Cell
 them, or let it run them, as under [On its own](#on-its-own).
 
 It looks its best in a terminal with Kitty graphics, such as Ghostty, Kitty or WezTerm, where it
-draws real pixels. Anywhere else it falls back to text cells.
+draws real pixels. Anywhere else it falls back to text cells. Words and icons are the sizes VS Code's
+are: in a terminal set to 14 pt, words are 13 pt and icons 16, beside code at the terminal's own 14.
 
 ## Write documents with your agent
 

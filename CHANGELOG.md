@@ -2,7 +2,7 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
-## [Unreleased]
+## [0.9.2] - 2026-11-16
 
 ### Changed
 - Words and icons are larger: the sizes VS Code has. In a terminal set to 14 pt, words are 13 pt where they were 11, beside code at 14. An icon beside a name is 16 pt where it was 13, the icons at the top right are 13 pt where they were 10, and the rail's are 24 pt where they were 15, on a rail one column wider with two rows to an icon. A page's words grew with the rest. Code keeps the terminal's own size. Words a sixth wider mean a long name in the sidebar is cut a few letters sooner.

@@ -457,7 +457,12 @@ code. Small words, a button's, a chip's and both bars', are nine tenths of that,
 heading four fifths. A page's words are the interface's, so they grew with it. An icon beside a
 name is 16 pt (`GLYPH`). An icon in a chip at the top right is 13 pt: VS Code's are 16 in a bar
 35 pt tall, this bar is one row, and a larger icon would stand against its chip, which keeps 3 px
-over and under the icon's box as VS Code's hover chips do. A rail icon is 24 pt, on a rail five
+over and under the icon's box as VS Code's hover chips do. Making the two tab rows two rows
+tall, which would hold 16 pt, was weighed and left (2026-11-16, the user asking for the choice
+to be made): it costs a row of the file in each pane for 3 pt, in a window that has forty rows
+and inside Claude Code often fewer; at 13 pt the icons are the words' own size and read at a
+glance; and a terminal without pictures would spend the row on nothing or be laid out
+differently from one with them. A rail icon is 24 pt, on a rail five
 columns wide with two rows from one icon to the next, either of which presses it; in cells the
 rail keeps its four columns. Code is the terminal's own size and didn't change. Words a sixth
 wider leave a name in the sidebar about five letters fewer before it's cut.

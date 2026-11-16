@@ -2320,3 +2320,11 @@ Inside Claude Code Cellix is some 85 to 110 columns wide, and its side pane open
 - Left from that review: with a view's tab in front (`167-pane-tabs-cut-light`) the button stands between a cut name and the icons with no tab's body beside it, and reads as a fifth icon; a hairline before the icons would settle it. A cut name's chip under the pointer ends 2 px from the tab in front. A hugging tab's width depends on a few pixels of its name, so "Comments" behind "Terminal" is "Comm…" at 36 px rows and "Com…" at 37. Not pictured: either side at 24 columns, three tabs cut, the button under the pointer in a cut row.
 - Not tried inside a live Claude Code: the click and the drag arrive there as pointer events the mod forwards (`pane-input.tsx`), and `pane::translate` turns a move with a button held into a drag, which its own test covers; whether Claude Code delivers them as its types say wasn't watched.
 - Next: the user's answers on a push or release and on two-row tab rows.
+
+## Release 0.9.2 (2026-11-16)
+
+The user said: "You decide for me the best approach and then push/release changes." It holds the five commits since 0.9.1: the install card's room, a quiet button under the pointer, VS Code's sizes, what larger words pushed out of view, and the side pane taking the window and being dragged where Cellix is narrow.
+
+- The choice left to make was whether the two tab rows should be two rows tall so the icons in them could be 16 pt where they're 13. They stay one row: it would cost a row of the file in each pane for 3 pt, at 13 pt the icons are the words' own size, and a terminal without pictures would spend the row on nothing. DESIGN.md's Look has it.
+- README says the sizes where it says what Cellix draws with, and the side pane's ⤢ and edge under "Beside an agent" and "Inside Claude Code". Its three pictures of Cellix on its own are this version's, from the tour's `14-agents`, `50-comments` and `13-source-diff`, with the machine's name at the end of the workspaces bar painted out in the bar's colour: it's the user's, and the README is public. The two pictures of Cellix inside Claude Code are still of the old sizes; they need a live Claude Code to retake.
+- Unverified in a real terminal: all five commits. The side pane's fix wasn't tried inside a live Claude Code.
