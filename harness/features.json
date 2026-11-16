@@ -5283,5 +5283,12 @@
     "title": "A Settings page with more than its window holds has a thumb in the margin after it: Appearance whole, and Editor beside its list of servers; none when it all fits",
     "test": "a_settings_page_longer_than_its_window_has_a_thumb",
     "passes": true
+  },
+  {
+    "id": "review-sheet-edge",
+    "milestone": 14,
+    "title": "A review beside Source Control is parted from it by the sheet's own edge alone: no second line stands beside the sheet",
+    "test": "a_review_beside_source_control_has_the_sheets_edge_alone",
+    "passes": true
   }
 ]

@@ -14530,13 +14530,9 @@ impl App {
             // The list and the column after it make one sidebar's width.
             review.list_width.set(self.sidebar_width() - 1);
             let area = self.main_area();
+            // Beside Source Control, Review's list is on the file's sheet and Source Control
+            // on the frame, so the sheet's own edge is what's between them.
             review.draw(grid, area, self.hover, theme, &comments);
-            // Beside Source Control, Review's list is on the same ground: an edge between.
-            if self.source_showing() && !review.beside_panel {
-                // Half a column into Source Control's side, clear of Review's selected row.
-                let x = f32::from(area.x) - 0.5;
-                grid.hairline(Bounds::cells(x, 0.0, 0.0, f32::from(area.h)), theme.border);
-            }
             self.draw_status(grid);
             self.draw_pane_actions(grid);
             self.draw_overlay(grid);
@@ -28440,6 +28436,44 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert!(app.review.is_none());
         assert!(app.source_showing());
         assert!(screen(&app).text().contains("SOURCE CONTROL"));
+    }
+
+    /// Review's list and Source Control were on one ground, with a line down between them.
+    /// The list is on the file's sheet now and Source Control on the frame, so the sheet's
+    /// own edge parts them, and the line was a second one beside it.
+    #[test]
+    fn a_review_beside_source_control_has_the_sheets_edge_alone() {
+        let (dir, _) = reviewed();
+        let mut app = App::new(dir.path().to_path_buf(), (200, 40));
+        app.handle(Event::Key(KeyEvent::ctrl('g')));
+        assert!(app.source_showing() && app.review.is_some());
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        let grid = screen(&app);
+        let unit = cellix_render::UNIT;
+        let main = app.main_area();
+        let edge = i32::from(main.x) * unit;
+        // No line stands up beside the sheet, in the frame or on the sheet's own edge.
+        let lines: Vec<&Paint> = grid
+            .paint
+            .iter()
+            .filter(|p| {
+                matches!(p, Paint::Hairline { bounds, .. }
+                    if bounds.w == 0 && bounds.h > unit && (bounds.x - edge).abs() <= unit)
+            })
+            .collect();
+        assert!(lines.is_empty(), "{lines:?}");
+        // The sheet has its outline, and the two stand on different grounds.
+        let outlined = grid.paint.iter().any(|p| {
+            matches!(p, Paint::Panel { bounds, fill: None, border: Some(line), .. }
+                if *line == app.theme.border && bounds.x == edge)
+        });
+        assert!(outlined, "the sheet's own edge");
+        let side = app.sidebar_area().expect("Source Control");
+        assert_ne!(
+            grid.cell(side.x + 1, side.y + 1).style.bg,
+            grid.cell(main.x + 1, main.y + 1).style.bg,
+            "the frame and the sheet"
+        );
     }
 
     /// With room for both, Review opens beside Source Control, which stays, keeps its own

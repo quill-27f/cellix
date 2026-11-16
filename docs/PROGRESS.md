@@ -2497,3 +2497,11 @@ Seen in the tour's pictures of the look: Appearance and Editor run past the foot
 - Not Keyboard or the filter's list, which scroll by their own counts.
 - Tests: `a_settings_page_longer_than_its_window_has_a_thumb` is new (ledger: `settings-thumb`): there when a page is longer, in the margin, painted, moving with the page and stopping at its foot, beside Editor's list, and gone when everything fits.
 - Not yet looked at in a picture: the tour that's next takes it.
+
+## One edge between Source Control and a review (2026-11-16)
+
+Seen in the tour's picture of Review: two lines down the sidebar's edge, a column's half apart. One was the file's sheet's own. The other was drawn for a review standing beside Source Control, from when the two were on one ground and nothing else parted them.
+
+- That line is gone. The review's list is on the sheet and Source Control on the frame, and the sheet's edge is between them.
+- Tests: `a_review_beside_source_control_has_the_sheets_edge_alone` is new (ledger: `review-sheet-edge`). It fails with the line back.
+- Looked at: the tour's `13-review` before. After, in the tour that's next.
