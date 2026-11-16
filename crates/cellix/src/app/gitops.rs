@@ -222,8 +222,9 @@ impl App {
 
     pub(super) fn draw_timeline(&self, grid: &mut Grid, area: Rect) {
         let look = (now(), &*self.measure);
-        self.timeline
-            .draw(grid, area, self.hover, look, &self.theme);
+        // In the sidebar, so on the frame as the tree over it is.
+        let theme = self.theme.on_frame();
+        self.timeline.draw(grid, area, self.hover, look, &theme);
     }
 
     /// A click in the timeline. Returns true if it was in it.

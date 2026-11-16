@@ -136,6 +136,10 @@ fn band_key(grid: &Grid, y: u16, (from, to): (u16, u16)) -> u64 {
     let mut hasher = DefaultHasher::new();
     (from, to).hash(&mut hasher);
     grid.row(y)[from as usize..to as usize].hash(&mut hasher);
+    // The band at the row's end runs on past it in this colour.
+    if to == grid.width() {
+        grid.edge.hash(&mut hasher);
+    }
     let inside = |x: u16| x >= from && x < to;
     let cursor = grid.cursor.filter(|c| c.1 == y && inside(c.0));
     cursor.map(|c| c.0).hash(&mut hasher);
@@ -339,10 +343,13 @@ impl<R: Rasterizer> PixelBackend<R> {
             }
         };
         let mut rgb = Vec::new();
+        // Past the row's end: the frame's colour where the grid says what that is, so a sheet
+        // that ends at the grid's edge ends there and the window's padding stays the frame's.
+        let beyond = grid.edge.unwrap_or(last.style.bg);
         if y + 1 != grid.height() {
             for line in image.rgb.chunks_exact(image.width * 3) {
                 rgb.extend_from_slice(line);
-                paint(&mut rgb, image.width, width, last.style.bg);
+                paint(&mut rgb, image.width, width, beyond);
             }
             return Image {
                 width,

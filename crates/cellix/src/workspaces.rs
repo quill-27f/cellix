@@ -922,7 +922,10 @@ impl Workspaces {
         // window padding meets the same colours it does there.
         let rail = self.app().rail_width();
         grid.fill(Rect::new(0, 0, rail, height), theme.activity);
-        grid.fill(Rect::new(rail, 0, width.saturating_sub(rail), 1), theme.tab);
+        grid.fill(
+            Rect::new(rail, 0, width.saturating_sub(rail), 1),
+            theme.activity,
+        );
         let bottom = height.saturating_sub(1);
         grid.fill(Rect::new(0, bottom, width, 1), theme.status);
         label(grid, (1.5, bottom), &self.machine, theme.status, width);
@@ -1022,7 +1025,7 @@ impl Workspaces {
         grid.label(quit.x, quit.y, QUIT, style, right);
         let corner = self.quit_corner();
         let middle = f32::from(corner.x) + f32::from(corner.w) / 2.0;
-        grid.fill(corner, theme.tab);
+        grid.fill(corner, theme.activity);
         if self.hover.is_some_and(|(x, y)| corner.contains(x, y)) {
             let (wide, high) = crate::dock::BESIDE_LINE_PILL;
             let chip = Bounds::cells(middle - wide / 2.0, (1.0 - high) / 2.0, wide, high);
@@ -1032,7 +1035,7 @@ impl Workspaces {
         let cross = Style {
             fg: color,
             painted: true,
-            ..theme.tab
+            ..theme.activity
         };
         grid.put_str(corner.x, 0, "×", cross, corner.right());
         let side = crate::dock::CLOSE_MARK;

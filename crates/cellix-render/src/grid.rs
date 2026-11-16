@@ -134,6 +134,9 @@ pub struct Grid {
     /// Columns where a new band starts, in order. Each band of a row is its own tile, so text
     /// that scrolls isn't tied to whatever the sidebar or minimap shows at that height.
     pub bands: Vec<u16>,
+    /// The colour past the grid's right edge, where a terminal lets a row's picture run on
+    /// over the window's padding. Unset, it's the colour of the row's last cell.
+    pub edge: Option<Rgb>,
     /// Runs of `paint` kept to a band of rows: as (from, to) in `paint` and (top, bottom) in
     /// rows. A list scrolled in a pane paints its cards whole, and the part of one that's
     /// past the pane's edge mustn't land on the bar beside it.
@@ -190,6 +193,7 @@ impl Grid {
             caret: None,
             paint: Vec::new(),
             bands: Vec::new(),
+            edge: None,
             kept: Vec::new(),
         }
     }

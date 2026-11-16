@@ -403,10 +403,20 @@ and kept with the approved copy in `.cellix/plans`, and the hook puts that plan'
 
 ## Surfaces
 
-The rail and the status bar are the frame, in the terminal's own colour, so window padding
-can't show as a seam around them. The sidebar is raised from the frame, and the sheet the
-work sits on is raised again. Every surface moves together when the terminal's background
-does, so the steps between them hold on any colour.
+There are two surfaces: the frame, and the sheets on it (the user's choice of 16 November
+2026, after a picture of Lapce; until then there were three, the sidebar and the side pane a
+step between the frame and the file). The frame is the views, the sidebar and the bar at the
+foot, in the terminal's own colour, so window padding can't show as a seam round them, and
+nothing is ruled off on it. The file and the side pane are sheets: one colour, their tabs on
+it with the accent's line under the one in front, a column between them that is the frame's.
+With pictures a sheet has a line round it and round corners, and its edge stands half way
+across that column, so what's in the pane keeps half a column from it; past the grid's right
+edge a row runs on in the frame's colour (`Grid::edge`), so a sheet ends where the grid does.
+Under the file, the pane is the lower part of the file's sheet, with a line between them.
+Without pictures the sheets are square and there's no line round them, and a tab in front
+has its cells underlined. Every surface moves together when the terminal's background does,
+so the step between them holds on any colour. The sidebar is drawn in `Theme::on_frame`: the
+panels' colours on the frame's ground, with what washes a row moved as far.
 
 Paint can't go under text, so a rounded surface is coloured cells with its corners painted
 back in the colour behind. Icon pills work the same way. Floating panels reach past their
@@ -472,9 +482,9 @@ itself starts a row down. With the sidebar closed the views go with it, and a bu
 start of the tabs brings both back; in Review it shows Source Control, which stands beside a
 review. On a terminal without pictures an icon is block art two rows tall, so there the views
 stay on a rail four columns wide down the left edge.
-Both themes are three surfaces a step apart: the frame (the rail, the tab strips, the status
-bar), the panels (the sidebar and the side pane, whatever it shows, a terminal too) and the
-sheet (the file). Cards, menus and dialogs are raised over those, and a text box is sunk. Text
+Both themes are two surfaces: the frame (the views, the sidebar, the status bar) and the
+sheets on it (the file and the side pane, whatever it shows, a terminal too, each with its
+tabs). Cards, menus and dialogs are raised over those, and a text box is sunk. Text
 has three weights of colour and there is one blue. The dark theme has deep blue-grey surfaces
 of its own with Catppuccin Mocha's colours for code and for meaning (green added, peach
 changed or waiting, red removed or failed). The light one is Catppuccin Latte's surfaces, the

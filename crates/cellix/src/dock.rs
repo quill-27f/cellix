@@ -2433,8 +2433,11 @@ impl Dock {
 /// accent's line along its top, and its top corners rounded into the strip. In cells the
 /// colour alone says it.
 fn front_tab(grid: &mut Grid, tab: Rect, theme: &Theme, in_cells: bool) {
+    // Tabs stand on their sheet, so it's a line under the one in front that says which it
+    // is: the accent's, or where there's no paint for that, an underline on its cells.
     let style = Style {
         bg: theme.sidebar.bg,
+        underline: in_cells,
         ..theme.tab
     };
     grid.fill(tab, style);
@@ -2443,7 +2446,7 @@ fn front_tab(grid: &mut Grid, tab: Rect, theme: &Theme, in_cells: bool) {
     }
     let (x, y, w) = (f32::from(tab.x), f32::from(tab.y), f32::from(tab.w));
     grid.panel(
-        Bounds::cells(x, y, w, FRONT_LINE),
+        Bounds::cells(x, y + 1.0 - FRONT_LINE, w, FRONT_LINE),
         0,
         Some(theme.accent),
         None,

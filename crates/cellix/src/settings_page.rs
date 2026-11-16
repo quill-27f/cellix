@@ -1486,7 +1486,7 @@ impl SettingsPage {
                 for key in &shortcut.keys {
                     let width = measure.width(key, Font::default());
                     let cap = Bounds::cells(x as f32 - 0.6, y as f32 + 0.12, width + 1.2, 0.76);
-                    grid.panel(cap, 24, Some(theme.tab.bg), Some(theme.popup_border));
+                    grid.panel(cap, 24, Some(theme.activity.bg), Some(theme.popup_border));
                     x = grid.label(x, y, key, theme.text, keys_end) + 2;
                     if x >= keys_end {
                         break;
@@ -1775,7 +1775,7 @@ type Shown<'a> = (
 
 /// One choice of a row of them, filled when it's the one chosen.
 fn draw_segment(grid: &mut Grid, rect: Rect, label: &str, on: bool, theme: &Theme) {
-    let fill = if on { theme.button } else { theme.tab.bg };
+    let fill = if on { theme.button } else { theme.activity.bg };
     let style = Style {
         fg: if on { theme.button_text } else { theme.text.fg },
         ..theme.text

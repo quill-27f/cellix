@@ -82,6 +82,8 @@ const VIEW_INSET: u16 = 1;
 /// the view in front: how far in from its three columns' ends, and how thick, in rows.
 const VIEW_PILL: (f32, f32) = (2.5, 0.89);
 const VIEW_LINE: (f32, f32) = (0.3, 0.06);
+/// How thick the accent's line under the tab in front is, in rows.
+const TAB_LINE: f32 = 0.06;
 /// How far down the row the count of changed files starts, at its icon's top right corner.
 const VIEW_BADGE: f32 = 0.02;
 const ACTIVITY_WIDTH_CELLS: u16 = 4;
@@ -169,6 +171,11 @@ const STOPPED_DETAIL_LINES: usize = 3;
 const PLAN_BAR_WIDTH: u16 = 48;
 /// Corners as percentages of a row's height.
 const TAB_RADIUS: u8 = 22;
+/// How round a sheet's corners are, and the columns of the frame between two sheets.
+const SHEET_RADIUS: u8 = 28;
+const SHEET_GAP: u16 = 1;
+/// How far into that column a sheet's own edge is, where there are pictures to draw it.
+const SHEET_EDGE: f32 = 0.5;
 /// Columns of a tab that aren't its name: margins, the gap and the close button.
 const TAB_PADDING: u16 = 5;
 /// Columns the Task page's tab keeps for its mark, before its name, and how tall the mark
@@ -9822,14 +9829,62 @@ impl App {
             theme,
             &*self.measure,
         );
-        let line = if self.dock_under() {
-            Bounds::cells(area.x as f32, area.y as f32, area.w as f32, 0.0)
-        } else {
-            Bounds::cells(area.x as f32, area.y as f32, 0.0, area.h as f32)
-        };
-        grid.hairline(line, theme.border);
+        // Under the file the pane shares its sheet, with a line between the two. Beside it,
+        // it's a sheet of its own: see `draw_sheets`.
+        if self.dock_under() {
+            let line = Bounds::cells(area.x as f32, area.y as f32, area.w as f32, 0.0);
+            grid.hairline(line, theme.border);
+        }
         let panel = self.dock_panel().unwrap_or(screen);
         self.draw_pane_view(grid, (area, screen, panel));
+    }
+
+    /// The file and the side pane as sheets on the frame. The pane's first column, which
+    /// nothing of it stands in, is the frame's, so a column of the frame shows between the
+    /// two. With pictures each sheet's corners are round and a line runs round it. Under the
+    /// file, the pane is the lower part of the same sheet.
+    fn draw_sheets(&self, grid: &mut Grid) {
+        let frame = self.theme.activity;
+        let main = self.main_area();
+        let under = self.dock_under();
+        let pictures = !self.measure.in_cells();
+        let sheet = |area: Rect| Bounds::inset(area, 0.0, 0.0);
+        // The pane beside the file: its first column is the frame's. With pictures the sheet
+        // starts half way across it, so what's in the pane keeps half a column from its edge.
+        let pane = self.dock_area().map(|area| {
+            if under || area.w <= SHEET_GAP {
+                return sheet(area);
+            }
+            grid.fill(Rect::new(area.x, area.y, SHEET_GAP, area.h), frame);
+            let (x, y) = (f32::from(area.x) + SHEET_EDGE, f32::from(area.y));
+            let (w, h) = (f32::from(area.w) - SHEET_EDGE, f32::from(area.h));
+            if pictures {
+                let own = Bounds::cells(x, y, f32::from(SHEET_GAP) - SHEET_EDGE, h);
+                grid.panel(own, 0, Some(self.theme.sidebar.bg), None);
+            }
+            Bounds::cells(x, y, w, h)
+        });
+        if !pictures {
+            return;
+        }
+        let sheets = match pane {
+            // Under the file, the pane is the lower part of the file's sheet.
+            Some(_) if under => {
+                let rows = self
+                    .dock_area()
+                    .map_or(main.h, |pane| pane.bottom() - main.y);
+                [Some(sheet(Rect::new(main.x, main.y, main.w, rows))), None]
+            }
+            pane => [Some(sheet(main)), pane],
+        };
+        let least = cellix_render::UNIT * 2;
+        for bounds in sheets.into_iter().flatten() {
+            if bounds.w < least || bounds.h < least {
+                continue;
+            }
+            grid.corners(bounds, SHEET_RADIUS, frame.bg, ALL_CORNERS);
+            grid.panel(bounds, SHEET_RADIUS, None, Some(self.theme.border));
+        }
     }
 
     /// What's in front of the pane, under its tabs: a list on `panel`, or a session, the
@@ -13987,18 +14042,36 @@ impl App {
         self.smooth_change.take()
     }
 
+    /// The tab in front's own style. Tabs stand on their sheet, so it isn't a colour that
+    /// says which is in front but the accent's line under it; where there's no paint for
+    /// that, its cells are underlined.
+    fn front_tab(&self) -> Style {
+        Style {
+            underline: self.measure.in_cells(),
+            ..self.theme.tab_active
+        }
+    }
+
+    /// The line under a strip of tabs, between them and what they're tabs of.
+    fn rule_under_tabs(&self, grid: &mut Grid, main: Rect) {
+        let (x, y, w) = (main.x as f32, main.y as f32 + 1.0, main.w as f32);
+        grid.hairline(Bounds::cells(x, y, w, 0.0), self.theme.border);
+    }
+
     fn draw_settings_tab(&self, grid: &mut Grid) {
         let main = self.main_area();
         let theme = &self.theme;
         grid.fill(Rect::new(main.x, main.y, main.w, 1), theme.tab);
+        self.rule_under_tabs(grid, main);
         let area = self.tabs_area();
         let width = self.measure.width("Settings", Font::default()).ceil() as u16 + TAB_PADDING;
         let tab = Rect::new(area.x, area.y, width, 1);
-        let style = theme.tab_active;
+        let style = self.front_tab();
         grid.fill(tab, style);
-        // The accent's line on top, as on every tab in front.
+        // The accent's line under it, as under every tab in front.
         if !self.measure.in_cells() {
-            let edge = Bounds::cells(tab.x as f32, tab.y as f32, tab.w as f32, 0.06);
+            let top = tab.y as f32 + 1.0 - TAB_LINE;
+            let edge = Bounds::cells(tab.x as f32, top, tab.w as f32, TAB_LINE);
             grid.panel(edge, 0, Some(theme.accent), None);
         }
         let close = tab.right().saturating_sub(2);
@@ -14309,7 +14382,9 @@ impl App {
         grid.bands = self.tile_bands();
         grid.cursor = None;
         let theme = &self.theme;
-        grid.fill(grid.area(), theme.tab);
+        // The frame, which the views, the sidebar and the bar are and the sheets stand on.
+        grid.fill(grid.area(), theme.activity);
+        grid.edge = Some(theme.activity.bg);
         let sheet = self.sheet_area();
         grid.fill(sheet, theme.text);
         self.draw_activity(grid);
@@ -14326,6 +14401,9 @@ impl App {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default();
+            // The sidebar is the frame: the panels' colours, on its ground.
+            let side = theme.on_frame();
+            let theme = &side;
             match self.sidebar_view {
                 SidebarView::Explorer => {
                     let header = (name.as_str(), self.branch.as_deref());
@@ -14356,15 +14434,11 @@ impl App {
                     source.draw(grid, area, branch, self.hover, measure.as_ref(), theme);
                 }
             }
-            // Light, the sidebar and the sheet are a step apart that's hard to see (1.04 to
-            // 1 on a white terminal), so a line says where one ends.
-            if theme.is_light() {
-                let (x, y) = (f32::from(area.right()), f32::from(area.y));
-                let edge = Bounds::cells(x, y, 0.0, f32::from(area.h));
-                grid.hairline(edge, theme.border);
-            }
         }
         self.draw_dock(grid);
+        if !drawer_over_main {
+            self.draw_sheets(grid);
+        }
         if self.maximized == Some(Maximized::Pane) && self.dock.open {
             self.draw_status(grid);
             self.draw_tab_drag(grid);
@@ -15393,6 +15467,7 @@ impl App {
         let main = self.main_area();
         let theme = &self.theme;
         grid.fill(Rect::new(main.x, main.y, main.w, 1), theme.tab);
+        self.rule_under_tabs(grid, main);
         if self.sidebar_button() {
             grid.glyph(
                 main.x as f32 + 0.5,
@@ -15414,11 +15489,12 @@ impl App {
             let hovered = self
                 .hover
                 .is_some_and(|h| h.1 == area.y && h.0 >= x && h.0 < x + width);
-            let style = if active { theme.tab_active } else { theme.tab };
+            let style = if active { self.front_tab() } else { theme.tab };
             let tab = Rect::new(x, area.y, width.min(area.right().saturating_sub(x)), 1);
             grid.fill(tab, style);
             if active && !self.measure.in_cells() {
-                let edge = Bounds::cells(x as f32, area.y as f32, tab.w as f32, 0.06);
+                let top = area.y as f32 + 1.0 - TAB_LINE;
+                let edge = Bounds::cells(x as f32, top, tab.w as f32, TAB_LINE);
                 grid.panel(edge, 0, Some(theme.accent), None);
             }
             let name = self.tab_title(i);
@@ -27377,7 +27453,11 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
                 bounds,
                 border: Some(color),
                 ..
-            } => *color == app.theme.border && bounds.x < dock_x,
+            } => {
+                // The file's own sheet has a line round it too, and ends where the pane starts.
+                let across = bounds.x < dock_x && bounds.x + bounds.w > dock_x;
+                *color == app.theme.border && across
+            }
             _ => false,
         });
         assert!(!spills, "nothing of the page beside the pane");
@@ -28655,6 +28735,103 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         // Every × in the title row is the size of the icons beside names.
         let close = icon_points(&app, Icon::Close, false);
         assert!(near(close, 16.0), "a ×'s box: {close} pt");
+    }
+
+    /// The file and the side pane are sheets on the frame. The sidebar, the views over it and
+    /// the bar under everything are the frame itself. The sheets are one colour, tabs and all,
+    /// with a column of the frame's between them, and where there are pictures each has a
+    /// line round it, round corners, and its edge half way across that column. Under the
+    /// file, the pane is the lower part of the file's sheet.
+    #[test]
+    fn the_file_and_the_side_pane_are_sheets_on_the_frame() {
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        app.run(Command::ListAgents);
+        let theme = app.theme;
+        let (frame, sheet) = (theme.activity.bg, theme.text.bg);
+        assert_ne!(frame, sheet);
+        let outline = |grid: &Grid, tall: i32| -> Vec<Bounds> {
+            let lined = |p: &Paint| match p {
+                Paint::Panel {
+                    bounds,
+                    fill: None,
+                    border: Some(line),
+                    ..
+                } if *line == theme.border && bounds.h == tall => Some(*bounds),
+                _ => None,
+            };
+            grid.paint.iter().filter_map(lined).collect()
+        };
+        for pictures in [false, true] {
+            if pictures {
+                app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+            }
+            let grid = screen(&app);
+            let side = app.sidebar_area().expect("the sidebar");
+            let main = app.main_area();
+            let dock = app.dock_area().expect("the side pane");
+            let ground = |x: u16, y: u16| grid.cell(x, y).style.bg;
+            let last = main.bottom() - 1;
+            assert_eq!(ground(side.x + 1, last), frame, "the sidebar is the frame");
+            assert_eq!(
+                ground(main.right() - 2, main.y),
+                sheet,
+                "the file's tabs' row"
+            );
+            assert_eq!(ground(main.x + 1, last), sheet, "the file");
+            assert_eq!(ground(dock.x + 2, last), sheet, "the pane is a sheet too");
+            assert_eq!(ground(dock.x + 2, dock.y), sheet, "with its tabs on it");
+            assert_eq!(main.right(), dock.x, "the pane starts where the file ends");
+            for y in dock.y..dock.bottom() {
+                assert_eq!(ground(dock.x, y), frame, "the frame between them, row {y}");
+            }
+            let lines = outline(&grid, i32::from(main.h) * 64);
+            let cut = |bounds: &Bounds| {
+                grid.paint.iter().any(|p| match p {
+                    Paint::Corners {
+                        bounds: at, color, ..
+                    } => {
+                        *color == frame
+                            && (at.x, at.y, at.w, at.h) == (bounds.x, bounds.y, bounds.w, bounds.h)
+                    }
+                    _ => false,
+                })
+            };
+            if !pictures {
+                assert!(lines.is_empty(), "cells have no line to draw round a sheet");
+                continue;
+            }
+            assert_eq!(lines.len(), 2, "a line round each sheet: {lines:?}");
+            assert!(
+                lines.iter().all(cut),
+                "and its corners cut back to the frame"
+            );
+            let (file, pane) = (lines[0], lines[1]);
+            let cells = |x: u16| i32::from(x) * 64;
+            assert_eq!(
+                (file.x, file.x + file.w),
+                (cells(main.x), cells(main.right()))
+            );
+            assert_eq!(
+                pane.x,
+                cells(dock.x) + 32,
+                "half way across the column between"
+            );
+            assert_eq!(pane.x + pane.w, cells(dock.right()), "to the window's edge");
+        }
+        // Too narrow for the two side by side, the pane stands under the file in its sheet.
+        app.handle(Event::Resize(80, 40));
+        assert!(app.dock_under(), "the pane is under the file");
+        let grid = screen(&app);
+        let (main, dock) = (app.main_area(), app.dock_area().expect("the side pane"));
+        let lines = outline(&grid, i32::from(dock.bottom() - main.y) * 64);
+        assert_eq!(lines.len(), 1, "one sheet for the two: {lines:?}");
+        assert_eq!(
+            grid.cell(dock.x, dock.y + 1).style.bg,
+            sheet,
+            "and none of the frame in it"
+        );
     }
 
     /// With pictures the views run across the top of the sidebar, level with the tabs: an icon
@@ -32721,10 +32898,12 @@ while True:
         // A tab's cells hold as much of its name as its width in cells has room for.
         let (file_x, file_y) = find(&grid, "alpha");
         assert_eq!((name_y, file_y), (0, 0), "both in the strip");
+        // Under the tab, in its row's last sixteenth.
         let over = |x: u16, y: u16| {
             lines.iter().any(|(left, top, width)| {
                 let at = i32::from(x) * 64;
-                *top == i32::from(y) * 64 && *left <= at && at < left + width
+                let last = (i32::from(y) + 1) * 64;
+                (last - 8..last).contains(top) && *left <= at && at < left + width
             })
         };
         assert!(over(file_x, file_y), "a file's tab has the line: {lines:?}");
@@ -32732,7 +32911,7 @@ while True:
         // Each stands on the colour of what's under it, and the strip on the frame's.
         assert_eq!(grid.cell(name_x, name_y).style.bg, theme.sidebar.bg);
         assert_eq!(grid.cell(file_x, file_y).style.bg, theme.text.bg);
-        assert_eq!(theme.tab.bg, theme.activity.bg, "the strip is the frame's");
+        assert_eq!(theme.tab.bg, theme.text.bg, "the strip is its sheet's");
         // No chip is left inside the row.
         let top = i32::from(name_y) * 64;
         let chip = grid.paint.iter().any(|p| {

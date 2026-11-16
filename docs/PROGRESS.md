@@ -2375,3 +2375,16 @@ The second step of the look. Shown the rail kept and Lapce's row of views, the u
 - Unverified in a real terminal.
 - Next: the file and the side pane as sheets on the frame.
 
+## The file and the side pane as sheets (2026-11-16)
+
+The third step of the look, and the one the user was surest of: "Definitely Sheets."
+
+- Two surfaces where there were three. The frame is the views, the sidebar and the bar; the file and the side pane are sheets on it, one colour, with their tabs on them. The sidebar's own colours are the panels' on the frame's ground (`Theme::on_frame`), and a row under the pointer there keeps the step it had.
+- A tab in front has the accent's line under it, where it had it over it and a colour of its own: a file's, the Settings tab, the pane's. A hairline runs under each strip. Without pictures the tab in front is underlined.
+- A column of the frame's stands between the file and the pane: the pane's first column, which nothing of it stood in. With pictures each sheet has a line round it and round corners (`draw_sheets`), and the pane's edge is half way across that column, so a terminal in the pane keeps half a column from it. The line between the file and the pane, and the light theme's between the sidebar and the file, are gone: the sheets' own say it. Under the file, the pane is the lower part of the file's sheet.
+- Past the grid's right edge a row runs on in the frame's colour, not its last cell's (`Grid::edge`, read by the pixel backend), so on Ghostty a sheet ends at the grid and the padding stays the frame's.
+- Tests: `the_file_and_the_side_pane_are_sheets_on_the_frame` is new (the grounds on both tiers, the frame's column, a line and cut corners round each sheet with pictures, one sheet with the pane under the file). Changed with the decision: the theme's four that counted three surfaces (`the_frame_is_the_terminal_background`, `a_light_theme_meets_a_light_terminal_without_a_seam`, `the_surfaces_keep_their_order_on_any_terminal`, `the_dark_theme_is_three_surfaces_and_text_that_reads_on_them`) and `the_light_theme_is_catppuccin_latte` say two; `the_panes_tab_in_front_is_the_shape_a_files_is` looks for the line under the tab and the strip on the sheet's colour; `a_zoomed_preview_pans_by_dragging_and_a_click_still_clicks` took the file's sheet's outline for the page's spilling out of the pane, and now asks for one that crosses the pane's edge. `a_cards_end_rows_keep_the_colour_of_what_they_lie_on` is unchanged: the colour under a card that isn't the file's is the frame's column now.
+- Looked at: snapshots at 150 by 30 on airy rows, dark with a terminal in the pane and light with Comments. Not the tour, for the reason in the last entry.
+- Known and left: the gap between the sheets is half a column, 8 px, where the canvas drew a whole one; segments that are off, in Settings, are the frame's colour on a sheet; Review's own list stands inside the file's sheet; the right bleed wasn't looked at in a real Ghostty.
+- Unverified in a real terminal.
+- Next: one bar at the foot, the workspaces leading it.

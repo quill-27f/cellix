@@ -186,6 +186,24 @@ impl Theme {
         )
     }
 
+    /// The theme the sidebar is drawn in. The file and the side pane are sheets; the sidebar,
+    /// with the views over it and the bar under it, is the frame they stand on. So it has the
+    /// panels' colours on the frame's ground, and what washes a row moved as far as the
+    /// ground did.
+    pub fn on_frame(&self) -> Self {
+        let (was, now) = (self.sidebar.bg, self.activity.bg);
+        let by = (
+            i16::from(now.0) - i16::from(was.0),
+            i16::from(now.1) - i16::from(was.1),
+            i16::from(now.2) - i16::from(was.2),
+        );
+        let mut side = *self;
+        side.sidebar.bg = now;
+        side.row_hover = shifted(self.row_hover, by);
+        side.row_active = shifted(self.row_active, by);
+        side
+    }
+
     pub fn is_light(&self) -> bool {
         let Rgb(r, g, b) = self.text.bg;
         u16::from(r) + u16::from(g) + u16::from(b) > 3 * 128
@@ -301,14 +319,16 @@ impl Theme {
         let chosen = Rgb(0xC8, 0xD6, 0xF8);
         Self {
             text: style(text, base),
-            sidebar: style(text, mantle),
+            // The side pane is a sheet as the file is, and so is the ground of every tab.
+            // The sidebar itself stands on the frame: see `on_frame`.
+            sidebar: style(text, base),
             bar: style(text, mantle),
-            tab: style(second, crust),
+            tab: style(second, base),
             tab_active: style(text, base),
             gutter: style(third, base),
             selection: chosen,
             found: mix(base, wash_yellow, 0.3),
-            row_hover: crust,
+            row_hover: mantle,
             page_hover: mantle,
             popup_hover: mantle,
             row_active: chosen,
@@ -429,14 +449,16 @@ impl Default for Theme {
         let hover = |ground: Rgb| mix(ground, text, 0.08);
         Self {
             text: style(text, sheet),
-            sidebar: style(text, panel),
+            // The side pane is a sheet as the file is, and so is the ground of every tab.
+            // The sidebar itself stands on the frame: see `on_frame`.
+            sidebar: style(text, sheet),
             bar: style(text, panel),
-            tab: style(second, frame),
+            tab: style(second, sheet),
             tab_active: style(text, sheet),
             gutter: style(third, sheet),
             selection: chosen,
             found: mix(sheet, yellow, 0.28),
-            row_hover: hover(panel),
+            row_hover: hover(sheet),
             page_hover: hover(sheet),
             popup_hover: hover(raised),
             row_active: chosen,
@@ -508,7 +530,15 @@ mod tests {
     fn the_light_theme_is_catppuccin_latte() {
         let latte = Theme::named(Some("light"));
         assert_eq!(latte.text.bg, Rgb(0xEF, 0xF1, 0xF5), "base");
-        assert_eq!(latte.sidebar.bg, Rgb(0xE6, 0xE9, 0xEF), "mantle");
+        assert_eq!(
+            latte.sidebar.bg, latte.text.bg,
+            "the side pane is a sheet too"
+        );
+        assert_eq!(
+            latte.on_frame().sidebar.bg,
+            latte.activity.bg,
+            "the sidebar is the frame"
+        );
         assert_eq!(latte.activity.bg, Rgb(0xDC, 0xE0, 0xE8), "crust");
         assert_eq!(latte.popup, Rgb(0xFF, 0xFF, 0xFF), "menus");
         assert_eq!(latte.text.fg, Rgb(0x4C, 0x4F, 0x69), "Latte's text");
@@ -535,13 +565,15 @@ mod tests {
             "so no seam shows at the window's edge"
         );
         assert_eq!(theme.status.bg, blue);
-        assert_ne!(
-            theme.sidebar.bg, blue,
-            "the rail stands apart from the sidebar"
+        assert_ne!(theme.text.bg, blue, "the sheets stand apart from the frame");
+        assert_eq!(
+            theme.sidebar.bg, theme.text.bg,
+            "the side pane is a sheet as the file is"
         );
-        assert_ne!(
-            theme.text.bg, theme.sidebar.bg,
-            "and the sidebar from the text"
+        assert_eq!(
+            theme.on_frame().sidebar.bg,
+            blue,
+            "and the sidebar is the frame"
         );
     }
 
@@ -555,8 +587,13 @@ mod tests {
             "the window's padding meets the rail"
         );
         assert_eq!(theme.status.bg, base);
-        assert!(brightness(theme.sidebar.bg) > brightness(theme.activity.bg));
-        assert!(brightness(theme.text.bg) > brightness(theme.sidebar.bg));
+        assert!(brightness(theme.text.bg) > brightness(theme.activity.bg));
+        assert_eq!(theme.sidebar.bg, theme.text.bg, "the side pane is a sheet");
+        assert_eq!(
+            theme.on_frame().sidebar.bg,
+            base,
+            "the sidebar is the frame"
+        );
         // Surfaces stop at white; what's drawn on them keeps its step from them.
         let latte = Theme::named(Some("light"));
         assert_eq!(theme.popup, latte.popup, "menus were white already");
@@ -580,8 +617,17 @@ mod tests {
     fn the_surfaces_keep_their_order_on_any_terminal() {
         let brown = Rgb(60, 40, 30);
         let theme = Theme::default().on_background(brown);
-        assert!(brightness(theme.sidebar.bg) > brightness(theme.activity.bg));
-        assert!(brightness(theme.text.bg) > brightness(theme.sidebar.bg));
+        assert!(brightness(theme.text.bg) > brightness(theme.activity.bg));
+        assert_eq!(
+            theme.on_frame().sidebar.bg,
+            brown,
+            "the sidebar is the frame"
+        );
+        let side = theme.on_frame();
+        assert!(
+            brightness(side.row_hover) > brightness(side.sidebar.bg),
+            "and a row under the pointer stands out of it"
+        );
     }
 
     /// How far apart two colours are to the eye, as WCAG counts it: 1 to 21.
@@ -605,9 +651,17 @@ mod tests {
     fn the_dark_theme_is_three_surfaces_and_text_that_reads_on_them() {
         let dark = Theme::default();
         assert_eq!(dark.activity.bg, Rgb(30, 30, 46), "the frame");
-        assert_eq!(dark.sidebar.bg, Rgb(36, 36, 56), "the panels");
         assert_eq!(dark.text.bg, Rgb(43, 43, 66), "the sheet");
-        assert_eq!(dark.tab.bg, dark.activity.bg, "tabs stand on the frame");
+        assert_eq!(
+            dark.sidebar.bg, dark.text.bg,
+            "the side pane is a sheet too"
+        );
+        assert_eq!(
+            dark.on_frame().sidebar.bg,
+            dark.activity.bg,
+            "the sidebar is the frame"
+        );
+        assert_eq!(dark.tab.bg, dark.text.bg, "tabs stand on their sheet");
         assert_eq!(
             dark.tab_active.bg, dark.text.bg,
             "the one in front on its sheet"

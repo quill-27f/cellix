@@ -578,7 +578,7 @@
     "milestone": 7,
     "passes": true,
     "test": "the_surfaces_keep_their_order_on_any_terminal",
-    "title": "The rail and status bar stand apart from the sidebar and sheet"
+    "title": "The frame, which is the views, the sidebar and the bar, stands apart from the sheets on any terminal's background, and a row under the pointer stands out of the sidebar"
   },
   {
     "id": "menu-page",
@@ -4286,7 +4286,7 @@
   {
     "id": "pane-tab-shape",
     "milestone": 12,
-    "title": "The pane's tab in front is the shape a file's is: the pane's colour under the accent's line",
+    "title": "The pane's tab in front is the shape a file's is: on its sheet's colour, with the accent's line under it",
     "test": "the_panes_tab_in_front_is_the_shape_a_files_is",
     "passes": true
   },
@@ -4300,7 +4300,7 @@
   {
     "id": "light-latte",
     "milestone": 12,
-    "title": "The light theme is Catppuccin Latte",
+    "title": "The light theme is Catppuccin Latte: its sheets on base, its frame on crust",
     "test": "the_light_theme_is_catppuccin_latte",
     "passes": true
   },
@@ -4832,7 +4832,7 @@
   {
     "id": "dark-theme-surfaces",
     "milestone": 14,
-    "title": "The dark theme is the design's three surfaces, with text and code that read at 4.5 to 1 on them",
+    "title": "The dark theme is two surfaces, the frame and the sheets on it (the file and the side pane, tabs and all), with text and code that read at 4.5 to 1 on them",
     "test": "the_dark_theme_is_three_surfaces_and_text_that_reads_on_them",
     "passes": true
   },
@@ -5226,6 +5226,13 @@
     "milestone": 14,
     "title": "Row height is chosen in Settings, on Appearance under the theme: Airy, which a row is until something else is chosen, Comfortable, or the terminal's own line. It changes as it's clicked, and Appearance scrolls in a window too short for it, where it drew its last switches over the bars",
     "test": "row_height_is_chosen_in_settings",
+    "passes": true
+  },
+  {
+    "id": "sheets-on-the-frame",
+    "milestone": 14,
+    "title": "The file and the side pane are sheets on the frame: one colour, tabs and all, with a column of the frame's between them, and with pictures a line round each, round corners, and the pane's edge half way across that column. The sidebar, the views and the bar are the frame itself. Under the file, the pane is the lower part of the file's sheet",
+    "test": "the_file_and_the_side_pane_are_sheets_on_the_frame",
     "passes": true
   }
 ]
