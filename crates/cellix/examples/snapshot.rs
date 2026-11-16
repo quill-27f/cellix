@@ -30,6 +30,16 @@ const DEFAULT_SIZE: (u16, u16) = (120, 36);
 // The cell size of a Retina terminal, so the picture matches what people see.
 const CELL: (usize, usize) = (17, 37);
 
+/// A row's height: the terminal's line, or so many times it with `CELLIX_ROW_HEIGHT` set, as
+/// Cellix lays rows out where a terminal lets it.
+fn row() -> usize {
+    let times = std::env::var("CELLIX_ROW_HEIGHT")
+        .ok()
+        .and_then(|asked| asked.trim().parse::<f32>().ok())
+        .filter(|times| (1.05..=2.0).contains(times));
+    times.map_or(CELL.1, |times| (CELL.1 as f32 * times).round() as usize)
+}
+
 fn type_text(app: &mut App, text: &str) {
     for c in text.chars() {
         app.handle(Event::Key(KeyEvent::plain(Key::Char(c))));
@@ -87,7 +97,8 @@ fn main() {
     let size = (number(1, DEFAULT_SIZE.0), number(2, DEFAULT_SIZE.1));
     let mut app = App::new(root.clone(), size);
     if std::env::var("CELLIX_TIER").as_deref() != Ok("cells") {
-        app.set_measure(std::rc::Rc::new(FontMeasure::new(CELL.0, CELL.1)));
+        let measure = FontMeasure::new(CELL.0, row()).with_type_row(CELL.1);
+        app.set_measure(std::rc::Rc::new(measure));
     }
     if std::env::var_os("CELLIX_PANE").is_some() {
         app.in_pane = true;
@@ -260,13 +271,15 @@ fn main() {
     let mut grid = Grid::new(size.0, size.1, app.background());
     app.draw(&mut grid);
 
-    let mut rasterizer = SoftwareRasterizer::new(CELL.0, CELL.1).expect("no fonts on this host");
+    let mut rasterizer = SoftwareRasterizer::new(CELL.0, row())
+        .expect("no fonts on this host")
+        .with_type_row(CELL.1);
     let mut rgb = Vec::new();
     for y in 0..grid.height() {
         rgb.extend(rasterizer.row(&grid, y).rgb);
     }
     let width = size.0 as u32 * CELL.0 as u32;
-    let height = size.1 as u32 * CELL.1 as u32;
+    let height = size.1 as u32 * row() as u32;
     let mut encoder = png::Encoder::new(BufWriter::new(File::create(out).unwrap()), width, height);
     encoder.set_color(png::ColorType::Rgb);
     let mut writer = encoder.write_header().unwrap();

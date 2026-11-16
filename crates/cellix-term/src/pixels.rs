@@ -55,6 +55,17 @@ pub struct Bleed {
     pub drop: usize,
 }
 
+/// Rows of Cellix's own, taller than the terminal's lines. Direct placement only: a tile
+/// stands wherever its row begins, which is between two of the terminal's lines as often as
+/// on one, and the terminal has to say where the mouse is in pixels for a press to find it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OwnRows {
+    /// A row's height in pixels.
+    pub row: usize,
+    /// The height of a line of the terminal's, in pixels.
+    pub line: usize,
+}
+
 struct Tile {
     id: u32,
     bytes: usize,
@@ -109,6 +120,9 @@ pub struct PixelBackend<R> {
     glide: Option<Glide>,
     /// A cell's size in pixels, from the tiles.
     cell: Option<(i32, i32)>,
+    own: Option<OwnRows>,
+    /// The terminal's lines, to know what's left under the last of Cellix's own rows.
+    lines: u16,
 }
 
 /// What a row looks like, as a key: rows with the same key draw the same pixels.
@@ -185,7 +199,32 @@ impl<R: Rasterizer> PixelBackend<R> {
             bleed: Bleed::default(),
             glide: None,
             cell: None,
+            own: None,
+            lines: 0,
         }
+    }
+
+    /// Lays rows out at a height of Cellix's own. Nothing glides: a glide counts in lines.
+    pub fn with_own_rows(mut self, own: OwnRows) -> Self {
+        if self.placement == Placement::Direct && own.row > own.line && own.line > 0 {
+            self.own = Some(own);
+            self.smooth = None;
+        }
+        self
+    }
+
+    /// Pixels under the last row of `rows`, down to the end of what a tile can cover: what
+    /// the terminal's lines leave over, and the padding below them.
+    fn spare(&self, rows: u16) -> usize {
+        self.own.map_or(0, |own| {
+            let lines = (self.lines as usize + self.bleed.rows as usize) * own.line;
+            lines.saturating_sub(rows as usize * own.row)
+        })
+    }
+
+    /// Whether the last row's tile is taller than the same row anywhere else.
+    fn runs_on(&self, rows: u16) -> bool {
+        self.bleed.rows > 0 || self.spare(rows) > 0
     }
 
     /// Only direct placement can leave the text area: placeholders are cells.
@@ -197,7 +236,8 @@ impl<R: Rasterizer> PixelBackend<R> {
     }
 
     pub fn with_smooth(mut self, smooth: Smooth) -> Self {
-        self.smooth = (self.placement == Placement::Direct).then_some(smooth);
+        let can = self.placement == Placement::Direct && self.own.is_none();
+        self.smooth = can.then_some(smooth);
         self
     }
 
@@ -245,12 +285,25 @@ impl<R: Rasterizer> PixelBackend<R> {
         last: bool,
     ) {
         let cols = to - from;
-        let _ = write!(out, "\x1b[{};{}H", y + 1, from + 1);
+        // A row of Cellix's own starts so many pixels down, which is on one of the
+        // terminal's lines and some way into it.
+        let (line, into) = match self.own {
+            Some(own) => {
+                let top = y as usize * own.row;
+                (top / own.line, top % own.line)
+            }
+            None => (y as usize, 0),
+        };
+        let _ = write!(out, "\x1b[{};{}H", line + 1, from + 1);
         match self.placement {
             Placement::Direct => {
                 let cols = cols + if last { self.bleed.cols } else { 0 };
                 let number = place_number(y, band);
-                let control = format!("a=p,i={id},p={number},c={cols},r={rows},C=1,q=2");
+                let control = match self.own {
+                    // At its own size: the tile is a row tall, which no count of lines is.
+                    Some(_) => format!("a=p,i={id},p={number},Y={into},C=1,q=2"),
+                    None => format!("a=p,i={id},p={number},c={cols},r={rows},C=1,q=2"),
+                };
                 self.apc(out, &control, b"");
             }
             Placement::Placeholder => {
@@ -270,7 +323,12 @@ impl<R: Rasterizer> PixelBackend<R> {
     fn bled(&self, image: Image, grid: &Grid, y: u16) -> Image {
         let Bleed { cols, rows, drop } = self.bleed;
         let cells = grid.row(y);
-        let (Some(last), true) = (cells.last(), cols > 0 || rows > 0) else {
+        let spare = if y + 1 == grid.height() {
+            self.spare(grid.height())
+        } else {
+            0
+        };
+        let (Some(last), true) = (cells.last(), cols > 0 || rows > 0 || spare > 0) else {
             return image;
         };
         let cell = image.width / cells.len();
@@ -293,7 +351,10 @@ impl<R: Rasterizer> PixelBackend<R> {
             };
         }
         // The bar's own colours run on below it, column by column.
-        let height = image.height * (1 + rows as usize);
+        let height = match self.own {
+            Some(_) => image.height + spare,
+            None => image.height * (1 + rows as usize),
+        };
         let drop = drop.min(height - image.height);
         let mut plain = Vec::with_capacity(width * 3);
         for c in cells {
@@ -329,7 +390,7 @@ impl<R: Rasterizer> PixelBackend<R> {
     fn band_tiles(&mut self, out: &mut Vec<u8>, grid: &Grid, y: u16) -> Vec<u32> {
         let spans = self.spans(grid, y);
         // The last row's tile is taller than the same row anywhere else.
-        let bottom = y + 1 == grid.height() && self.bleed.rows > 0;
+        let bottom = y + 1 == grid.height() && self.runs_on(grid.height());
         let keys: Vec<u64> = spans
             .iter()
             .map(|span| band_key(grid, y, *span).rotate_left(u32::from(bottom)))
@@ -597,6 +658,14 @@ impl<R: Rasterizer> Backend for PixelBackend<R> {
         self.size = (0, 0);
         self.glide = None;
     }
+
+    fn set_lines(&mut self, lines: u16) {
+        if self.own.is_some() && lines != self.lines {
+            // The last row's tile is as tall as what's left under it, which just changed.
+            self.size = (0, 0);
+        }
+        self.lines = lines;
+    }
 }
 
 #[cfg(test)]
@@ -686,6 +755,76 @@ mod tests {
         let mut out = Vec::new();
         b.present(grid, &mut out).unwrap();
         String::from_utf8(out).unwrap()
+    }
+
+    /// Rows of Cellix's own, 22 pixels on lines of 16: each tile is placed at its own size
+    /// on the line its row starts in, so many pixels into it, and the last one runs on over
+    /// what the lines leave under it. Nothing is stretched to a count of lines.
+    #[test]
+    fn a_taller_row_stands_between_the_terminals_lines() {
+        struct Tall;
+        impl Rasterizer for Tall {
+            fn row(&mut self, grid: &Grid, _y: u16) -> Image {
+                let (width, height) = (grid.width() as usize * 8, 22);
+                Image {
+                    width,
+                    height,
+                    rgb: vec![7; width * height * 3],
+                }
+            }
+        }
+        let own = OwnRows { row: 22, line: 16 };
+        let mut b = PixelBackend::new(Tall, Placement::Direct, DEFAULT_QUOTA).with_own_rows(own);
+        // Six lines are 96 pixels: four rows of 22, and 8 pixels over.
+        b.set_lines(6);
+        let grid = Grid::new(12, 4, Style::default());
+        let mut out = Vec::new();
+        b.present(&grid, &mut out).unwrap();
+        let output = String::from_utf8(out).unwrap();
+        let placed: Vec<(String, String)> = output
+            .split("\x1b[")
+            .filter_map(|part| {
+                let (at, rest) = part.split_once("H\x1b_Ga=p,")?;
+                let into = rest.split(",Y=").nth(1)?.split(',').next()?;
+                Some((at.to_string(), into.to_string()))
+            })
+            .collect();
+        let want = [("1;1", "0"), ("2;1", "6"), ("3;1", "12"), ("5;1", "2")];
+        let want: Vec<(String, String)> = want
+            .iter()
+            .map(|(at, into)| (at.to_string(), into.to_string()))
+            .collect();
+        assert_eq!(
+            placed, want,
+            "the line each row starts in, and how far into it"
+        );
+        assert!(!output.contains(",r="), "a tile isn't stretched over lines");
+        let heights: Vec<&str> = output
+            .split("a=t,")
+            .skip(1)
+            .filter_map(|part| part.split(",v=").nth(1)?.split(',').next())
+            .collect();
+        assert_eq!(
+            heights.last(),
+            Some(&"30"),
+            "the last row covers the 8 pixels left"
+        );
+        assert!(heights[..heights.len() - 1].iter().all(|h| *h == "22"));
+        // With another line under it there's more to cover, so the last row is drawn again.
+        b.set_lines(7);
+        let mut out = Vec::new();
+        b.present(&grid, &mut out).unwrap();
+        let output = String::from_utf8(out).unwrap();
+        assert!(
+            output.contains(",v=46,"),
+            "8 pixels and a line of 16: {output:?}"
+        );
+        // Under tmux a tile is cells, which only a line can be.
+        let mut held =
+            PixelBackend::new(Tall, Placement::Placeholder, DEFAULT_QUOTA).with_own_rows(own);
+        let mut out = Vec::new();
+        held.present(&grid, &mut out).unwrap();
+        assert!(!String::from_utf8(out).unwrap().contains(",Y="));
     }
 
     #[test]

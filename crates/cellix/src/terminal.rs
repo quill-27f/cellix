@@ -668,6 +668,22 @@ struct Display {
     passthrough: bool,
     smooth: Option<Smooth>,
     bleed: Bleed,
+    /// How many times the terminal's line a row of Cellix's own is tall, where it's asked
+    /// for. See `row`.
+    own_rows: Option<f32>,
+}
+
+/// How tall a row of Cellix's own is, in lines of the terminal's, from `CELLIX_ROW_HEIGHT`.
+/// A trial for now, so it's off unless that's set, and only heights that leave a window
+/// some rows count.
+fn own_rows(asked: Option<&str>) -> Option<f32> {
+    let times: f32 = asked?.trim().parse().ok()?;
+    (1.05..=2.0).contains(&times).then_some(times)
+}
+
+/// How many rows `row` pixels tall fit in `lines` lines of `line` pixels.
+fn rows_in(lines: u16, line: usize, row: usize) -> u16 {
+    (lines as usize * line / row.max(1)).clamp(1, u16::MAX as usize) as u16
 }
 
 impl Display {
@@ -689,6 +705,7 @@ impl Display {
         });
         Ok(Self {
             bleed,
+            own_rows: own_rows(std::env::var("CELLIX_ROW_HEIGHT").ok().as_deref()),
             placement,
             cell,
             told_cell: env.cell.is_some() && env.multiplexer == cellix_term::Multiplexer::Tmux,
@@ -722,10 +739,34 @@ impl Display {
         });
     }
 
+    /// A row's height in pixels where Cellix lays out rows of its own, taller than the
+    /// terminal's line, so 13 pt words have air round them whatever the terminal's line
+    /// height. Only where a tile can stand between two lines and the terminal says where the
+    /// mouse is in pixels: direct placement, with a known cell. Everywhere else a row is a
+    /// line.
+    fn row(&self) -> Option<usize> {
+        let (_, line) = self.cell?;
+        let times = self.own_rows?;
+        let can = self.placement == Some(Placement::Direct) && self.pixel_mouse;
+        let row = (line as f32 * times).round() as usize;
+        (can && row > line).then_some(row)
+    }
+
+    /// The grid's size in a terminal of so many columns and lines.
+    fn grid_size(&self, (cols, lines): (u16, u16)) -> (u16, u16) {
+        match (self.row(), self.cell) {
+            (Some(row), Some((_, line))) => (cols, rows_in(lines, line, row)),
+            _ => (cols, lines),
+        }
+    }
+
     /// How to measure text for this display.
     fn measure(&self) -> Rc<dyn Measure> {
         match self.placement.zip(self.cell) {
-            Some((_, cell)) => Rc::new(FontMeasure::new(cell.0, cell.1)),
+            Some((_, cell)) => {
+                let row = self.row().unwrap_or(cell.1);
+                Rc::new(FontMeasure::new(cell.0, row).with_type_row(cell.1))
+            }
             None => Rc::new(CellMeasure),
         }
     }
@@ -733,9 +774,15 @@ impl Display {
     /// Any failure on the way to pixels lands on cells, which always work.
     fn backend(&self) -> Box<dyn Backend> {
         let pixels = self.placement.zip(self.cell).and_then(|(placement, cell)| {
-            let rasterizer = SoftwareRasterizer::new(cell.0, cell.1)?;
+            let row = self.row();
+            let rasterizer =
+                SoftwareRasterizer::new(cell.0, row.unwrap_or(cell.1))?.with_type_row(cell.1);
             let backend =
                 PixelBackend::new(rasterizer, placement, DEFAULT_QUOTA).with_bleed(self.bleed);
+            let backend = match row {
+                Some(row) => backend.with_own_rows(cellix_term::OwnRows { row, line: cell.1 }),
+                None => backend,
+            };
             Some(match self.smooth {
                 Some(smooth) => backend.with_smooth(smooth),
                 None => backend,
@@ -812,7 +859,11 @@ pub fn run(options: Options) -> io::Result<()> {
     let start = Box::new(move |root: PathBuf, size: (u16, u16)| {
         start_workspace(root, size, (&starting.0.borrow(), &starting.1), wait)
     });
-    let mut spaces = Workspaces::new(size()?, crate::app::machine_name(), start);
+    let mut spaces = Workspaces::new(
+        display.grid_size(size()?),
+        crate::app::machine_name(),
+        start,
+    );
     spaces.bar = !wait;
     if away {
         spaces.open_running();
@@ -839,7 +890,11 @@ pub fn run(options: Options) -> io::Result<()> {
     if pixel_mouse {
         write!(out, "\x1b[?1016h")?;
     }
-    let mouse_cell = |display: &Display| display.cell.filter(|_| pixel_mouse);
+    // Under rows of Cellix's own a press is so many of those down, not so many lines.
+    let mouse_cell = |display: &Display| {
+        let cell = display.cell.filter(|_| pixel_mouse)?;
+        Some((cell.0, display.row().unwrap_or(cell.1)))
+    };
     // A paste then says what the clipboard holds, so a picture can come over SSH as well as
     // text: OSC 52 carries only text.
     if display.paste_events {
@@ -872,7 +927,8 @@ pub fn run(options: Options) -> io::Result<()> {
     let ended = (|| -> io::Result<()> {
         loop {
             // Polled as well as signalled: a resize during slow startup is otherwise lost.
-            let now = size()?;
+            let lines = size()?;
+            let now = display.grid_size(lines);
             if now != spaces.size() {
                 spaces.handle(Event::Resize(now.0, now.1));
                 // The cell's size is asked of the terminal once the window has settled. The
@@ -937,6 +993,7 @@ pub fn run(options: Options) -> io::Result<()> {
                 }
                 // Under a scroll the page can wait, so the time goes on moving it.
                 if backend.gliding().is_none() || last_present.elapsed() >= SCROLL_PRESENT {
+                    backend.set_lines(lines.1);
                     backend.present(&grid, &mut out)?;
                     last_present = Instant::now();
                 }
@@ -1176,6 +1233,44 @@ pub fn run(options: Options) -> io::Result<()> {
 mod tests {
     use super::*;
     use crossterm::event::{KeyEvent as CtKey, KeyEventState};
+
+    /// A row of Cellix's own is asked for as so many of the terminal's lines. Nothing asked,
+    /// a height that isn't one, or one no taller than a line, leaves a row a line.
+    #[test]
+    fn a_row_of_cellixs_own_is_asked_for_in_lines() {
+        assert_eq!(own_rows(Some("1.4")), Some(1.4));
+        assert_eq!(own_rows(Some(" 1.25 ")), Some(1.25));
+        assert_eq!(own_rows(None), None);
+        assert_eq!(own_rows(Some("tall")), None);
+        assert_eq!(
+            own_rows(Some("1")),
+            None,
+            "a row as tall as a line is a line"
+        );
+        assert_eq!(own_rows(Some("9")), None, "a window has to keep some rows");
+    }
+
+    /// Forty-five lines of 37 pixels hold thirty-two rows of 52, and a press 130 pixels down
+    /// is on the third of those, which is the fourth of the terminal's lines.
+    #[test]
+    fn a_press_under_taller_rows_lands_on_the_row_it_is_on() {
+        assert_eq!(rows_in(45, 37, 52), 32);
+        assert_eq!(rows_in(1, 37, 52), 1, "a window always has a row");
+        let press = |pixels| {
+            let event = ct::Event::Mouse(crossterm::event::MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 40,
+                row: 130,
+                modifiers: KeyModifiers::NONE,
+            });
+            match translate(event, Some(pixels)) {
+                Some(Event::Mouse(mouse)) => (mouse.x, mouse.y),
+                _ => panic!("a press is a mouse event"),
+            }
+        };
+        assert_eq!(press((17, 37)), (2, 3), "on the terminal's own lines");
+        assert_eq!(press((17, 52)), (2, 2), "on rows of 52 pixels");
+    }
 
     fn key(code: KeyCode, kind: KeyEventKind) -> ct::Event {
         ct::Event::Key(CtKey {

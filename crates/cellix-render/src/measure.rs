@@ -169,6 +169,8 @@ pub struct FontMeasure {
     /// in it. Made when such text first turns up.
     with_emoji: RefCell<Option<(FontSystem, Option<String>)>>,
     cell: (usize, usize),
+    /// The row height words take their size from, as the rasterizer's is.
+    type_row: usize,
     cache: RefCell<HashMap<(String, Font), Advances>>,
 }
 
@@ -191,8 +193,16 @@ impl FontMeasure {
             )),
             with_emoji: RefCell::new(None),
             cell: (cell_width, cell_height),
+            type_row: cell_height,
             cache: RefCell::new(HashMap::new()),
         }
+    }
+
+    /// Measures words at the size they have on a row of `rows` pixels, as the rasterizer
+    /// draws them where Cellix's rows are taller than the terminal's line.
+    pub fn with_type_row(mut self, rows: usize) -> Self {
+        self.type_row = rows.clamp(1, self.cell.1);
+        self
     }
 
     /// Each byte's advance in pixels, set in `fonts` with its emoji in the `emoji` font.
@@ -203,7 +213,7 @@ impl FontMeasure {
         text: &str,
         font: Font,
     ) -> Vec<f32> {
-        let px = text_pixels(self.cell.1, font);
+        let px = text_pixels(self.type_row, font);
         let mut buffer = Buffer::new(fonts, Metrics::new(px, px * 1.4));
         buffer.set_size(None, None);
         buffer.set_rich_text(

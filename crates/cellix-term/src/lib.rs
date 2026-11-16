@@ -10,7 +10,7 @@ mod probe;
 pub use cells::CellBackend;
 pub use detect::{background, cell_size, detect};
 pub use notify::{Notice, sequence as notification, terminal_names};
-pub use pixels::{Bleed, DEFAULT_QUOTA, PixelBackend, Placement, Smooth, row_key};
+pub use pixels::{Bleed, DEFAULT_QUOTA, OwnRows, PixelBackend, Placement, Smooth, row_key};
 pub use probe::{Env, Multiplexer, Tier, select_tier};
 
 use std::io::{self, Write};
@@ -52,4 +52,8 @@ pub trait Backend {
 
     /// Forgets what the terminal shows, so the next present redraws everything.
     fn invalidate(&mut self);
+
+    /// How many lines the terminal has. Only a backend whose rows aren't the terminal's
+    /// lines needs telling: it fills what's left under its last row.
+    fn set_lines(&mut self, _lines: u16) {}
 }

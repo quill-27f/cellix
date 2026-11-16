@@ -130,6 +130,21 @@ These decide whether pixels stay the default:
 3. A real SSH session on a slow link.
 4. Other terminals: Kitty, WezTerm, iTerm2, and whether Zellij behaves the same on them.
 5. Pixel mouse reporting (mode 1016) through Zellij.
+6. Rows of Cellix's own, taller than the terminal's line, which the look picked on 16 November
+   2026 rests on: a row of about 26 pt for 13 pt words, whatever the terminal's line is, with
+   no setting of the terminal's touched. A trial behind `CELLIX_ROW_HEIGHT` (1.4 is a row of
+   1.4 lines), on the direct tier where the terminal reports the mouse in pixels, and nowhere
+   else: under tmux, in Claude Code's pane and on cells a row stays a line. The grid has as
+   many rows as fit the window's pixels. A row's tile is placed at its own size on the line
+   its row starts in, `Y=` pixels into it, and the last row's runs on over what the lines
+   leave under it. Words, icons, the caret and any shape shorter than a row keep the size
+   they have on the terminal's own line and stand in the middle of the taller row, so the row
+   is air round them; a terminal's box-drawing is drawn to the row's whole height, so its
+   lines still meet. A press is so many rows down by its pixels. Nothing glides: the glide
+   counts in lines. Proven by tests, by the real binary in the headless terminal (presses,
+   typing, the wheel) and by one capture of a real Ghostty. Not yet: a person's hand on it in
+   Ghostty and kitty, and over SSH; the glide; pictures and PDF pages on a taller row; and
+   every one-row rule in `measures.rs` looked at again on one.
 
 If 1 or 2 fail, cells become the default in that environment.
 

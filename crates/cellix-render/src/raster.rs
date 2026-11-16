@@ -249,6 +249,9 @@ pub struct SoftwareRasterizer {
     swash: SwashCache,
     metrics: Metrics,
     cell: (usize, usize),
+    /// The row height that words, icons and controls take their size from. It's the row's
+    /// own, unless Cellix lays out rows taller than the terminal's line: then it's that line.
+    type_row: usize,
     masks: HashMap<GlyphKey, Mask>,
     /// Glyphs with colours of their own, such as emoji, as pixels with those colours.
     painted: HashMap<GlyphKey, Painted>,
@@ -271,10 +274,33 @@ impl SoftwareRasterizer {
             swash: SwashCache::new(),
             metrics,
             cell: (cell_width, cell_height),
+            type_row: cell_height,
             masks: HashMap::new(),
             painted: HashMap::new(),
             text: HashMap::new(),
         })
+    }
+
+    /// Takes the size of words, icons and controls from a row of `rows` pixels instead of
+    /// this one's own height. Where Cellix lays out rows taller than the terminal's line,
+    /// what stands in a row stays the size it is and the row gives it air.
+    pub fn with_type_row(mut self, rows: usize) -> Self {
+        self.type_row = rows.clamp(1, self.cell.1);
+        self
+    }
+
+    /// Where something `h` tall at `y` stands, as a top and a height in pixels. Anything
+    /// shorter than a row is a control or a mark: it keeps the height it has on the
+    /// terminal's own line, in the middle of where it stood.
+    fn stand(&self, y: i32, h: i32) -> (f32, f32) {
+        let (ch, th) = (self.cell.1 as f32, self.type_row as f32);
+        let (top, tall) = (y as f32 * ch / UNIT as f32, h as f32 * ch / UNIT as f32);
+        if h < UNIT && th < ch {
+            let own = h as f32 * th / UNIT as f32;
+            (top + (tall - own) / 2.0, own)
+        } else {
+            (top, tall)
+        }
     }
 
     fn mask(&mut self, key: &GlyphKey) -> Mask {
@@ -327,6 +353,12 @@ impl SoftwareRasterizer {
                 }
             },
         );
+        // A terminal's box-drawing is made to meet the next line's. On a taller row it's
+        // drawn to the row's whole height, or the sides of a box would stop short of each other.
+        if self.type_row < height && boxes(&key.symbol) {
+            pixels = stretched(&pixels, self.type_row, height);
+            coloured.clear();
+        }
         // Text comes out white, ready to take any colour. Anything else is the glyph's own.
         if coloured
             .iter()
@@ -351,7 +383,7 @@ impl SoftwareRasterizer {
         if self.text.len() >= MAX_TEXT_MASKS {
             self.text.clear();
         }
-        let px = text_pixels(self.cell.1, font);
+        let px = text_pixels(self.type_row, font);
         let height = self.cell.1.max((px * 1.45).ceil() as usize);
         let mut buffer = Buffer::new(&mut self.fonts, Metrics::new(px, height as f32));
         buffer.set_size(None, Some(height as f32));
@@ -418,6 +450,9 @@ impl SoftwareRasterizer {
 
     fn draw_paint(&mut self, target: &mut Target, paint: &Paint) {
         let (cw, ch) = (self.cell.0 as f32, self.cell.1 as f32);
+        // What sizes are taken from: the row's own height, or the terminal's line under a
+        // taller row.
+        let th = self.type_row as f32;
         let scale = |v: i32, cell: f32| v as f32 * cell / UNIT as f32;
         match paint {
             Paint::Panel {
@@ -428,12 +463,13 @@ impl SoftwareRasterizer {
                 shadow,
                 dashed,
             } => {
+                let (y, h) = self.stand(bounds.y, bounds.h);
                 let mut shape = Shape {
                     x: scale(bounds.x, cw),
-                    y: scale(bounds.y, ch),
+                    y,
                     w: scale(bounds.w, cw),
-                    h: scale(bounds.h, ch),
-                    radius: *radius as f32 * ch / 100.0,
+                    h,
+                    radius: *radius as f32 * th / 100.0,
                 };
                 // A panel with a line round it stands on whole pixels, so the line is one
                 // pixel of its own colour on every side. Between pixels it was two rows at
@@ -446,7 +482,7 @@ impl SoftwareRasterizer {
                     shape.w = right - shape.x;
                     shape.h = bottom - shape.y;
                 }
-                target.panel(shape, (*fill, *border), *shadow, *dashed, ch);
+                target.panel(shape, (*fill, *border), *shadow, *dashed, th);
             }
             Paint::Wash {
                 bounds,
@@ -455,17 +491,18 @@ impl SoftwareRasterizer {
                 alpha,
                 border,
             } => {
+                let (y, h) = self.stand(bounds.y, bounds.h);
                 let shape = Shape {
                     x: scale(bounds.x, cw),
-                    y: scale(bounds.y, ch),
+                    y,
                     w: scale(bounds.w, cw),
-                    h: scale(bounds.h, ch),
-                    radius: *radius as f32 * ch / 100.0,
+                    h,
+                    radius: *radius as f32 * th / 100.0,
                 };
-                target.wash(shape, (*color, *alpha), *border, ch);
+                target.wash(shape, (*color, *alpha), *border, th);
             }
             Paint::Hairline { bounds, color } => {
-                let thickness = (ch / 24.0).ceil().max(1.0);
+                let thickness = (th / 24.0).ceil().max(1.0);
                 let shape = Shape {
                     x: scale(bounds.x, cw),
                     y: scale(bounds.y, ch),
@@ -473,7 +510,7 @@ impl SoftwareRasterizer {
                     h: scale(bounds.h, ch).max(thickness),
                     radius: 0.0,
                 };
-                target.panel(shape, (Some(*color), None), false, false, ch);
+                target.panel(shape, (Some(*color), None), false, false, th);
             }
             Paint::Text {
                 x,
@@ -499,15 +536,16 @@ impl SoftwareRasterizer {
                 let limit = scale(*max_width, cw).max(0.0) as usize;
                 target.blit(&mask, left, top, limit, *color);
                 if *underline {
-                    let thickness = (ch / 24.0).ceil().max(1.0);
+                    let thickness = (th / 24.0).ceil().max(1.0);
                     let shape = Shape {
                         x: left as f32,
-                        y: scale(*y, ch) + ch * 0.78,
+                        // Under the words, which stand in the middle of the row.
+                        y: scale(*y, ch) + (ch - th) / 2.0 + th * 0.78,
                         w: mask.width.saturating_sub(2).min(limit) as f32,
                         h: thickness,
                         radius: 0.0,
                     };
-                    target.panel(shape, (Some(*color), None), false, false, ch);
+                    target.panel(shape, (Some(*color), None), false, false, th);
                 }
             }
             Paint::Icon {
@@ -515,9 +553,11 @@ impl SoftwareRasterizer {
                 icon,
                 color,
             } => {
-                let side = scale(bounds.h, ch);
+                // An icon is the size it is on the terminal's own line, in the middle of
+                // where a taller row puts it.
+                let side = scale(bounds.h, th);
                 let left = scale(bounds.x, cw);
-                let top = scale(bounds.y, ch);
+                let top = scale(bounds.y, ch) + (scale(bounds.h, ch) - side) / 2.0;
                 target.icon(*icon, left, top, side, *color);
             }
             Paint::Corners {
@@ -531,7 +571,7 @@ impl SoftwareRasterizer {
                     y: scale(bounds.y, ch),
                     w: scale(bounds.w, cw),
                     h: scale(bounds.h, ch),
-                    radius: *radius as f32 * ch / 100.0,
+                    radius: *radius as f32 * th / 100.0,
                 };
                 target.corners(&shape, *color, *which);
             }
@@ -561,7 +601,7 @@ impl SoftwareRasterizer {
             Paint::Strips { bounds, strips } => {
                 let (left, top) = (scale(bounds.x, cw), scale(bounds.y, ch));
                 let (width, height) = (scale(bounds.w, cw), scale(bounds.h, ch));
-                let thickness = (ch / 24.0).ceil().max(1.0);
+                let thickness = (th / 24.0).ceil().max(1.0);
                 for strip in strips {
                     let shape = Shape {
                         x: left + strip.x as f32 * width / 256.0,
@@ -843,6 +883,29 @@ impl Target<'_> {
     }
 }
 
+/// Whether a cell holds box-drawing or a block element, which join across rows.
+fn boxes(symbol: &str) -> bool {
+    let mut chars = symbol.chars();
+    matches!(
+        (chars.next(), chars.next()),
+        (Some('\u{2500}'..='\u{259f}'), None)
+    )
+}
+
+/// A glyph drawn in the middle `from` rows of `to`, pulled out to fill all of them.
+fn stretched(pixels: &[(u16, u16, u8)], from: usize, to: usize) -> Vec<(u16, u16, u8)> {
+    let first = (to - from) / 2;
+    let mut out = Vec::with_capacity(pixels.len() * to / from.max(1) + 1);
+    for &(x, y, alpha) in pixels {
+        let line = (y as usize).checked_sub(first).filter(|line| *line < from);
+        let Some(line) = line else { continue };
+        for row in line * to / from..(line + 1) * to / from {
+            out.push((x, row as u16, alpha));
+        }
+    }
+    out
+}
+
 /// Picks the largest font whose advance fits the cell and whose height fits the row.
 fn fit_font(fonts: &mut FontSystem, cell_width: usize, cell_height: usize) -> Option<Metrics> {
     const PROBE: f32 = 100.0;
@@ -992,11 +1055,18 @@ impl Rasterizer for SoftwareRasterizer {
         if let Some(bounds) = caret_bounds(grid) {
             let row = (y as i32 * UNIT, (y as i32 + 1) * UNIT);
             if bounds.y < row.1 && bounds.y + bounds.h > row.0 {
+                // As tall as the words it stands among, whatever the row's height.
+                let tall = bounds.h as f32 * ch as f32 / UNIT as f32;
+                let own = if bounds.h <= UNIT {
+                    bounds.h as f32 * self.type_row as f32 / UNIT as f32
+                } else {
+                    tall
+                };
                 let shape = Shape {
                     x: bounds.x as f32 * cw as f32 / UNIT as f32,
-                    y: bounds.y as f32 * ch as f32 / UNIT as f32,
+                    y: bounds.y as f32 * ch as f32 / UNIT as f32 + (tall - own) / 2.0,
                     w: (cw as f32 / 9.0).max(2.0),
-                    h: bounds.h as f32 * ch as f32 / UNIT as f32,
+                    h: own,
                     radius: 0.0,
                 };
                 let mut target = Target {
@@ -1010,7 +1080,7 @@ impl Rasterizer for SoftwareRasterizer {
                     (Some(caret_color(grid)), None),
                     false,
                     false,
-                    ch as f32,
+                    self.type_row as f32,
                 );
             }
         }
@@ -1159,6 +1229,69 @@ mod tests {
         assert!((17.0..21.0).contains(&wide), "an H is {wide} px wide");
     }
 
+    /// Where Cellix's rows are taller than the terminal's line, words stay the size they are
+    /// on that line and stand in the middle of the taller row, which is air round them. So
+    /// does a chip, being shorter than a row. And the side of a terminal's box is drawn the
+    /// whole height of the row, so it meets the one in the next.
+    #[test]
+    fn a_taller_row_is_air_round_what_stands_in_it() {
+        use crate::measure::Measure as _;
+        let Some(r) = SoftwareRasterizer::new(17, 52) else {
+            return;
+        };
+        let mut r = r.with_type_row(37);
+        let mut grid = Grid::new(8, 1, style());
+        grid.label(1, 0, "H", style(), 8);
+        let image = r.row(&grid, 0);
+        assert_eq!(image.height, 52);
+        let inked: Vec<usize> = (0..image.height)
+            .filter(|y| (0..image.width).any(|x| image.rgb[(y * image.width + x) * 3] > 128))
+            .collect();
+        let (top, bottom) = (inked[0], inked[inked.len() - 1]);
+        let tall = bottom - top + 1;
+        assert!(
+            (18..=20).contains(&tall),
+            "a capital is still {tall} px tall"
+        );
+        let (over, under) = (top, image.height - 1 - bottom);
+        assert!(
+            over.abs_diff(under) <= 2,
+            "{over} px over it, {under} under"
+        );
+        let measure = crate::measure::FontMeasure::new(17, 52).with_type_row(37);
+        let wide = measure.width("H", Font::default()) * 17.0;
+        assert!((17.0..21.0).contains(&wide), "and as wide: {wide} px");
+        // A chip three quarters of a row tall is three quarters of the line's 37 pixels.
+        let mut grid = Grid::new(8, 1, style());
+        let chip = crate::paint::Bounds::cells(1.0, 0.125, 4.0, 0.75);
+        grid.panel(chip, 20, Some(Rgb(255, 0, 0)), None);
+        let image = r.row(&grid, 0);
+        let red: Vec<usize> = (0..image.height)
+            .filter(|y| {
+                let at = (y * image.width + 51) * 3;
+                image.rgb[at] > 200 && image.rgb[at + 1] < 60
+            })
+            .collect();
+        assert!(
+            (26..=29).contains(&red.len()),
+            "the chip is {} px tall",
+            red.len()
+        );
+        let (over, under) = (red[0], 51 - red[red.len() - 1]);
+        assert!(
+            over.abs_diff(under) <= 2,
+            "{over} px over it, {under} under"
+        );
+        // The side of a box, from a terminal in the side pane.
+        let mut grid = Grid::new(4, 1, style());
+        grid.put_str(1, 0, "│", style(), 4);
+        let image = r.row(&grid, 0);
+        let inked = (0..image.height)
+            .filter(|y| (17..34).any(|x| image.rgb[(y * image.width + x) * 3] > 100))
+            .count();
+        assert!(inked >= 50, "the side is {inked} px of the row's 52");
+    }
+
     /// An emoji in a line of painted text keeps its own colours, where the machine has a
     /// font that holds them: the letters beside it take the text's.
     #[test]
@@ -1279,6 +1412,7 @@ mod tests {
             swash: SwashCache::new(),
             metrics,
             cell: (10, 20),
+            type_row: 20,
             masks: HashMap::new(),
             painted: HashMap::new(),
             text: HashMap::new(),

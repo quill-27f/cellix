@@ -21,7 +21,8 @@ The script is a list of steps:
     ["timed", "label", <step>]   Runs a step, and logs how long until the screen answered.
 
 Settings come from the environment: TERM_SIZE=170x46, TERM_CELL=17x36, TERM_PADDING=10x8,
-TERM_BG=1e1e2e. Clipboard writes and timings are printed. Stop when the script ends.
+TERM_BG=1e1e2e. TERM_ROW is the height in pixels of a row of Cellix's own, where it's run with
+CELLIX_ROW_HEIGHT: a step's row is then one of those, not a line of this terminal's. Clipboard writes and timings are printed. Stop when the script ends.
 
 The terminal is sent pictures, so it can't read the screen. With CELLIX_SCREEN_TEXT set to a
 path, Cellix writes the screen's text there on every frame: "until" reads it, and each shot
@@ -38,6 +39,7 @@ def pair(name, default):
 COLS, ROWS = pair("TERM_SIZE", "170x46")
 CW, CH = pair("TERM_CELL", "17x36")
 PAD_X, PAD_Y = pair("TERM_PADDING", "10x8")
+ROW = int(os.environ.get("TERM_ROW", CH))
 BG = bytes.fromhex(os.environ.get("TERM_BG", "1e1e2e"))
 TEXT = os.environ.get("CELLIX_SCREEN_TEXT")
 
@@ -207,7 +209,7 @@ def png(path, width, height, rgb):
 
 def mouse(button, col, row, press=True):
     # Mode 1016: pixels, in the middle of the cell.
-    x, y = int((col + 0.5) * CW) + 1, int((row + 0.5) * CH) + 1
+    x, y = int((col + 0.5) * CW) + 1, int((row + 0.5) * ROW) + 1
     return f"\x1b[<{button};{x};{y}{'M' if press else 'm'}".encode()
 
 
