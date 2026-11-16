@@ -28920,6 +28920,70 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         );
     }
 
+    /// Appearance and Editor go on past a window's foot, more so on taller rows, and
+    /// nothing said so: the last row in view looked like the last there was.
+    #[test]
+    fn a_settings_page_longer_than_its_window_has_a_thumb() {
+        let (_dir, mut app) = project();
+        app.run(Command::OpenSettings);
+        app.handle(Event::Resize(120, 24));
+        let area = app.sheet_area();
+        // The thumb's cells, as (column, first row, rows).
+        let thumb = |app: &App| -> Option<(u16, u16, u16)> {
+            let grid = screen(app);
+            let cells: Vec<(u16, u16)> = (area.y..area.bottom())
+                .flat_map(|y| (area.x..area.right()).map(move |x| (x, y)))
+                .filter(|(x, y)| grid.cell(*x, *y).symbol == "▐")
+                .collect();
+            let first = *cells.first()?;
+            assert!(cells.iter().all(|(x, _)| *x == first.0), "one column");
+            Some((first.0, first.1, cells.len() as u16))
+        };
+        let scrolled = |app: &App| app.settings_page.as_ref().unwrap().scrolled(area);
+        let (all, shown, top, from) = scrolled(&app).expect("Appearance is longer than this");
+        assert!(all > shown && top == 0);
+        let (x, y, tall) = thumb(&app).expect("so it has a thumb");
+        assert_eq!(y, from, "at the top of the page while it's at its top");
+        assert!(tall < shown, "and shorter than the page: {tall} of {shown}");
+        // Past the page's last column, in its margin, clear of the switches' own ends.
+        let spots = app.settings_page.as_ref().unwrap().controls(area);
+        let end = spots.iter().map(|(rect, _)| rect.right()).max().unwrap();
+        assert!(x > end && x < area.right(), "{x} after {end}");
+        // Painted where there are pictures, as a palette's is.
+        let painted = screen(&app).paint.iter().any(|p| {
+            matches!(p, Paint::Panel { bounds, fill: Some(fill), .. }
+                if *fill == app.theme.scrollbar && bounds.x / cellix_render::UNIT == i32::from(x))
+        });
+        assert!(painted);
+        // It goes down as the page does, and stops at the foot.
+        for _ in 0..60 {
+            app.handle(mouse(MouseKind::ScrollDown, area.x + 40, area.y + 10));
+        }
+        let (_, low, tall_low) = thumb(&app).expect("still there");
+        assert!(low > y, "further down: {low}");
+        assert_eq!(low + tall_low, from + shown, "its foot at the page's");
+        // Editor's is beside its list of servers, which is the part that scrolls.
+        use crate::settings_page::Section;
+        let editor = spots
+            .iter()
+            .find(|(_, c)| *c == Control::Section(Section::Editor));
+        let (tab, _) = *editor.expect("Editor, in the list of pages");
+        app.handle(mouse(MouseKind::Left, tab.x + 1, tab.y));
+        let (_, _, _, list) = scrolled(&app).expect("more servers than fit");
+        let (_, first, _) = thumb(&app).expect("a thumb beside them");
+        assert_eq!(first, list);
+        // A window with room for all of a page has none.
+        app.handle(Event::Resize(120, 70));
+        let tall_area = app.sheet_area();
+        let page = app.settings_page.as_mut().unwrap();
+        page.section = Section::Appearance;
+        assert_eq!(page.scrolled(tall_area), None);
+        let grid = screen(&app);
+        let any = (0..grid.height())
+            .any(|y| (tall_area.x..tall_area.right()).any(|x| grid.cell(x, y).symbol == "▐"));
+        assert!(!any, "no thumb when it all fits");
+    }
+
     /// The file's tabs had a line under them, and so had the views. The side pane's tabs,
     /// and the icons at the top right after them, had none.
     #[test]

@@ -107,6 +107,10 @@ const HEADING_SIZE: u8 = 80;
 const RADIUS: u8 = 30;
 /// Where the servers' rows start, from the top of the page.
 const SERVERS_ROW: u16 = 13;
+/// The thumb at a page's edge when there's more of it than is in view: the least it's tall,
+/// in rows, and how wide it is, in columns, as a palette's is.
+const THUMB: f32 = 1.2;
+const THUMB_WIDE: f32 = 0.25;
 const INSTALL_WIDTH: u16 = 9;
 /// Columns from an integration's name to its state.
 const STATUS_GAP: f32 = 1.1;
@@ -928,6 +932,50 @@ impl SettingsPage {
         }
     }
 
+    /// What of a page is out of view, for the thumb at its edge: how many rows it has, how
+    /// many are in view, how far down it's scrolled, and the row its scrolling part starts
+    /// on. Appearance scrolls whole, and Editor's list of servers under what's over it.
+    pub fn scrolled(&self, area: Rect) -> Option<(u16, u16, u16, u16)> {
+        let page = Self::content(area);
+        let (all, shown, from) = match self.section {
+            _ if self.filtering() => return None,
+            Section::Appearance => (APPEARANCE_ROWS, page.h, page.y),
+            Section::Editor => {
+                let room = page.h.saturating_sub(SERVERS_ROW);
+                (SERVERS.len() as u16, room, page.y + SERVERS_ROW)
+            }
+            _ => return None,
+        };
+        (shown > 0 && all > shown).then(|| (all, shown, (self.top as u16).min(all - shown), from))
+    }
+
+    /// A thumb in the margin after the page when there's more of it than is in view: as
+    /// much of what's in view as that is of the whole, and as far down. Without it nothing
+    /// said a page went on, and on taller rows more pages do.
+    fn draw_thumb(&self, grid: &mut Grid, area: Rect, theme: &Theme) {
+        let Some((all, shown, top, from)) = self.scrolled(area) else {
+            return;
+        };
+        let (all, shown, top) = (f32::from(all), f32::from(shown), f32::from(top));
+        let tall = (shown * shown / all).max(THUMB);
+        let down = (shown - tall) * top / (all - shown);
+        let y = f32::from(from) + down;
+        let x = Self::content(area).right() + 1;
+        // In cells, half blocks down that column.
+        let style = Style {
+            fg: theme.scrollbar,
+            painted: true,
+            ..theme.text
+        };
+        let cells = y.round() as u16..(y + tall).round().max(y.round() + 1.0) as u16;
+        for row in cells {
+            grid.put_str(x, row, "▐", style, x + 1);
+        }
+        let left = f32::from(x) + 0.5 - THUMB_WIDE / 2.0;
+        let thumb = Bounds::cells(left, y + 0.1, THUMB_WIDE, tall - 0.2);
+        grid.panel(thumb, 12, Some(theme.scrollbar), None);
+    }
+
     /// The servers that fit on the page, by their place in `SERVERS`.
     fn server_rows(&self, page: Rect) -> Vec<usize> {
         let room = page.h.saturating_sub(SERVERS_ROW) as usize;
@@ -1021,6 +1069,7 @@ impl SettingsPage {
             self.draw_focus(grid, &spots, theme);
             return;
         }
+        self.draw_thumb(grid, area, theme);
         match self.section {
             Section::Appearance => {
                 if let Some(y) = self.appearance_row(page, 0, 2) {

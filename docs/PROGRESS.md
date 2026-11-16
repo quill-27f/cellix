@@ -2488,3 +2488,12 @@ Where there are pictures the views are across the top of the sidebar, so the rai
 
 - Left: the count of changed files is still placed by the old tile's corner (`RAIL_PILL`) and painted, which cells don't show. Cells have never had the count on the rail.
 - Tests: none new; the rail's own pass as they did.
+
+## A thumb on a Settings page that goes on (2026-11-16)
+
+Seen in the tour's pictures of the look: Appearance and Editor run past the foot of a window of 40 rows on airy rows, and nothing said so. The last row in view read as the last there was.
+
+- A thumb in the margin after the page, as tall as what's in view is of the whole and as far down: half blocks in cells, a slim painted one where there are pictures, in the scrollbar's colour. Appearance scrolls whole, so its thumb runs the page's height. Editor's is beside its list of servers, the part that scrolls. `SettingsPage::scrolled` and `draw_thumb`.
+- Not Keyboard or the filter's list, which scroll by their own counts.
+- Tests: `a_settings_page_longer_than_its_window_has_a_thumb` is new (ledger: `settings-thumb`): there when a page is longer, in the margin, painted, moving with the page and stopping at its foot, beside Editor's list, and gone when everything fits.
+- Not yet looked at in a picture: the tour that's next takes it.
