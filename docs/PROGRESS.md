@@ -2619,3 +2619,16 @@ The user's word on the workspaces fix: "Release it". The version is 0.10.1 every
 - Tests, new: `words_are_raised_only_where_a_box_is_too_short_for_their_tails`, `a_text_boxs_words_stand_in_its_middle_on_a_tall_row`, `on_a_tall_row_nothing_in_the_bar_is_raised`, `the_bars_marks_stand_in_the_middle_of_their_chips_on_a_tall_row`, `a_button_on_a_pointed_row_has_nothing_taller_than_the_wash_behind_it`, `a_card_has_no_empty_row_where_a_row_has_room`. Changed with the decision: `a_control_is_one_height_on_a_taller_row` and `a_taller_row_is_air_round_what_stands_in_it` said a chip three quarters of a row keeps the line's height; it's 0.714 of the taller row now, and a badge of five eighths is what keeps its height.
 - Looked at in the tour's pictures: `02-code`, `10-branches`, `11-find`, `15-settings-appearance`, `108-install-card`, `109-problem-ask`, `13-quit-hover`, `33-hover-branch`, and six scenes at the terminal's row height.
 - Not done: the Outline keeps an empty row under its heading; Comfortable rows (1.2 lines) keep every lift, since their boxes are a pixel taller than the line's; a design review of these pictures.
+
+## Nine points, second part: the foot (2026-11-17)
+
+**1: "bottom there is too much space".** Measured in the user's screenshot and in the tour's: under the sheets the frame is a band of the bar's row, what the lines leave over under Cellix's last row (30 to 48 px in their window, 16 in the tour's) and the terminal's padding, and the bar stood at the band's top. The move down that was made for Ghostty's padding didn't count what was left over, which is most of it.
+
+- The bar stands in the band's middle: `Bleed::drop` is `Bleed::padding` now (what's under the lines, as near as it's known), and `bled` moves the last row's content down by half of that and of what's left over, which it knows exactly.
+- A row's height is fitted to the window (`fitted`, `Display::fit_to`): the height within a twentieth of what's asked that leaves least. 12 px at most up to 63 lines, where a fixed 50 left up to 49. Each resize fits again, and a change of height measures and draws everything again as a change of Row height does.
+- A press under the last row is on it (`on_the_grid`): the bar's chips are drawn down into what's left.
+- The tour sets `CELLIX_ROW_FIT=0`: it counts its presses in rows of 50 px. `TOUR_ROW=52` takes scenes fitted, in a window where 52 is the height that fits.
+- Tests: `the_last_row_stands_in_the_middle_of_what_is_under_the_sheets` (the pixel backend), `a_rows_height_is_fitted_to_the_window`. `ghostty's padding` test reads `padding` where it read `drop`: the same number doubled.
+- Looked at: `02-code` and `13-quit-hover` with rows fixed and `02-code` fitted. The bar is level in its band in both.
+- Limits, as they are: where a window holds about as many rows as a row has pixels (46 to 54 rows of 50 px, or most windows on Comfortable rows), no near height leaves less, and up to 34 px stay, shared over and under the bar. Ghostty's own padding under its lines isn't reported; it's guessed at what the config says and half a line.
+- Unverified: in a real Ghostty, and a resize there.

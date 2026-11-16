@@ -5381,5 +5381,19 @@
     "title": "Words are raised in a box only where a row is too short for their tails: the terminal's line and Comfortable rows, not Airy",
     "test": "words_are_raised_only_where_a_box_is_too_short_for_their_tails",
     "passes": true
+  },
+  {
+    "id": "bar-mid-band",
+    "milestone": 14,
+    "title": "The bar at the foot stands in the middle of the band the frame fills under the sheets: its row, what the terminal's lines leave over under the last row, and the terminal's padding",
+    "test": "the_last_row_stands_in_the_middle_of_what_is_under_the_sheets",
+    "passes": true
+  },
+  {
+    "id": "rows-fitted",
+    "milestone": 14,
+    "title": "A row's height is fitted to the window, a twentieth either side of what Row height asks, so little is left over under the last row; a press in what's left is on the bar",
+    "test": "a_rows_height_is_fitted_to_the_window",
+    "passes": true
   }
 ]

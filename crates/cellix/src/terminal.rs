@@ -671,6 +671,40 @@ struct Display {
     /// How many times the terminal's line a row of Cellix's own is tall, where it's asked
     /// for. See `row`.
     own_rows: Option<f32>,
+    /// The terminal's lines, which a row's height is fitted to. See `fitted`.
+    lines: u16,
+    /// Whether it's fitted: not where `CELLIX_ROW_FIT` is 0, which is how the harness keeps
+    /// rows the height it was told they are.
+    fit: bool,
+}
+
+/// The height of a row, near `nominal` pixels, that leaves the least of a window of `lines`
+/// lines of `line` pixels over under its last row. Rows of one fixed height left up to a
+/// whole row over, all of it under the bar at the foot, where it read as a window with too
+/// much space at its bottom. A row a twentieth taller or shorter isn't seen, and leaves a
+/// few pixels in a window of up to some 45 rows. (One that holds about as many rows as a row
+/// has pixels gains nothing from a pixel more or less on each, and keeps what it leaves.)
+/// The nearest to `nominal` wins among heights that leave as little.
+fn fitted(nominal: usize, line: usize, lines: u16) -> usize {
+    let tall = lines as usize * line;
+    let reach = ((nominal as f32 * 0.05).round() as usize).max(1);
+    let from = nominal.saturating_sub(reach).max(line + 1);
+    (from..=nominal + reach)
+        .min_by_key(|row| (tall % row, row.abs_diff(nominal)))
+        .unwrap_or(nominal)
+}
+
+/// A press under the last row is on it. The bar at the foot is drawn down into what the
+/// window has left under its rows, and into the terminal's padding where that's reached.
+fn on_the_grid(event: Event, rows: u16) -> Event {
+    match event {
+        Event::Mouse(mut mouse) if rows > 0 && mouse.y >= rows => {
+            mouse.y = rows - 1;
+            mouse.fine_y = f32::from(rows) - 0.01;
+            Event::Mouse(mouse)
+        }
+        event => event,
+    }
 }
 
 /// How tall a row of Cellix's own is, in lines of the terminal's: what Settings' Row height
@@ -712,6 +746,8 @@ impl Display {
         Ok(Self {
             bleed,
             own_rows: own_rows(asked_rows().as_deref(), rows),
+            lines: 0,
+            fit: std::env::var("CELLIX_ROW_FIT").map_or(true, |fit| fit.trim() != "0"),
             placement,
             cell,
             told_cell: env.cell.is_some() && env.multiplexer == cellix_term::Multiplexer::Tmux,
@@ -754,8 +790,24 @@ impl Display {
         let (_, line) = self.cell?;
         let times = self.own_rows?;
         let can = self.placement == Some(Placement::Direct) && self.pixel_mouse;
-        let row = (line as f32 * times).round() as usize;
-        (can && row > line).then_some(row)
+        let nominal = (line as f32 * times).round() as usize;
+        if !can || nominal <= line {
+            return None;
+        }
+        let fits = self.fit && self.lines > 0;
+        Some(if fits {
+            fitted(nominal, line, self.lines)
+        } else {
+            nominal
+        })
+    }
+
+    /// Takes the terminal's lines as they are now, and says whether a row's height changed
+    /// with them: everything is then measured and drawn again.
+    fn fit_to(&mut self, lines: u16) -> bool {
+        let before = self.row();
+        self.lines = lines;
+        self.row() != before
     }
 
     /// The grid's size in a terminal of so many columns and lines.
@@ -845,6 +897,7 @@ pub fn run(options: Options) -> io::Result<()> {
     let smooth = settings.smooth_scroll != Some(false);
     let rows = crate::settings::row_height_times(settings.row_height.as_deref());
     let mut display = Display::detect(settings.tier.as_deref(), smooth, rows)?;
+    display.fit_to(size()?.1);
     let mut backend = display.backend();
     let mut out = io::stdout();
     let mut slow = crate::slow::Log::start();
@@ -935,6 +988,18 @@ pub fn run(options: Options) -> io::Result<()> {
         loop {
             // Polled as well as signalled: a resize during slow startup is otherwise lost.
             let lines = size()?;
+            if display.fit_to(lines.1) {
+                // Rows of another height hold these lines with less left over.
+                backend = display.backend();
+                let measure = display.measure();
+                look.borrow_mut().measure = measure.clone();
+                for workspace in &mut spaces.list {
+                    workspace.app.set_measure(measure.clone());
+                }
+                backend.invalidate();
+                shown = None;
+                redraw = true;
+            }
             let now = display.grid_size(lines);
             if now != spaces.size() {
                 spaces.handle(Event::Resize(now.0, now.1));
@@ -1172,7 +1237,7 @@ pub fn run(options: Options) -> io::Result<()> {
                     match translate(event, mouse_cell(&display)).map(|e| cmd_left(e, ghostty)) {
                         // The size check above handles it, and compares against the old size.
                         Some(Event::Resize(..)) | None => {}
-                        Some(event) => spaces.handle(event),
+                        Some(event) => spaces.handle(on_the_grid(event, spaces.size().1)),
                     }
                 }
                 // Saving on focus change saves as the window is left, as VS Code does.
@@ -1258,6 +1323,54 @@ pub fn run(options: Options) -> io::Result<()> {
 mod tests {
     use super::*;
     use crossterm::event::{KeyEvent as CtKey, KeyEventState};
+
+    /// A row's height is fitted to the window, a twentieth either side of what Settings
+    /// asks, so little is left over under the last row: all of what was left stood under the
+    /// bar at the foot, up to a whole row of it. A press in what's left, where the bar is
+    /// drawn down to stand in its middle, is a press on the bar.
+    #[test]
+    fn a_rows_height_is_fitted_to_the_window() {
+        // A row's height is fitted to the window: of the heights near 50 px, the one that
+        // leaves least of 57 lines of 36 px over, which 50 itself does, with 2.
+        assert_eq!(fitted(50, 36, 57), 50);
+        // 56 lines are 42 rows of 48 exactly, where rows of 50 left 16 px under the bar.
+        assert_eq!(fitted(50, 36, 56), 48);
+        // In a window of up to 63 lines, 45 rows, a quarter of a row is left at most, where
+        // it was up to a whole one. A taller window can hold about as many rows as a row
+        // has pixels, and then no near height leaves less: the bar stands in the middle of
+        // what's left.
+        for lines in 12..64u16 {
+            let row = fitted(50, 36, lines);
+            assert!((47..=53).contains(&row), "{lines} lines: {row}");
+            assert!(
+                lines as usize * 36 % row <= 12,
+                "{lines} lines leave too much"
+            );
+        }
+        // Never a row no taller than the line.
+        assert!(fitted(37, 36, 40) > 36);
+        // A press under the last row, where the bar is drawn down into what the window has
+        // left, is a press on the bar's row. One anywhere else is where it was.
+        let press = |y: u16| {
+            Event::Mouse(MouseEvent {
+                kind: MouseKind::Left,
+                x: 3,
+                y,
+                fine_x: 3.5,
+                fine_y: f32::from(y) + 0.2,
+                mods: Mods::default(),
+            })
+        };
+        let Event::Mouse(under) = on_the_grid(press(40), 40) else {
+            panic!("a press stays a press");
+        };
+        assert_eq!((under.x, under.y), (3, 39));
+        assert!(under.fine_y > 39.0 && under.fine_y < 40.0);
+        let Event::Mouse(inside) = on_the_grid(press(12), 40) else {
+            panic!("a press stays a press");
+        };
+        assert_eq!((inside.y, inside.fine_y), (12, 12.2));
+    }
 
     /// A row of Cellix's own is as many of the terminal's lines tall as Settings says, and
     /// `CELLIX_ROW_HEIGHT` says otherwise for the harness. One no taller than a line is a

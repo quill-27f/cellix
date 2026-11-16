@@ -505,8 +505,18 @@ def shoot(name, steps, *args, size="120x40", background="1e1e2e", cwd=None, env=
         "HOME": HOME,
         "TERM_SIZE": size,
         # Rows are Cellix's own, 1.4 lines of 36 pixels, as Settings has them until it's told
-        # otherwise. A scene on cells has the terminal's lines.
-        **({} if "CELLIX_TIER" in extra else {"TERM_ROW": "50"}),
+        # otherwise. A scene on cells has the terminal's lines. A press here counts in rows
+        # of that height, so Cellix is told not to fit a row's height to the window, as it
+        # does for a person. TOUR_ROW=52 takes scenes with rows fitted, for a window where
+        # 52 is the height that fits (40 rows are 58 lines, and 52 px leaves 8 of them).
+        **(
+            {}
+            if "CELLIX_TIER" in extra
+            else {
+                "TERM_ROW": os.environ.get("TOUR_ROW", "50"),
+                "CELLIX_ROW_FIT": "1" if "TOUR_ROW" in os.environ else "0",
+            }
+        ),
         "TERM_BG": background,
         "TERM_PADDING": "10x24",
         **extra,

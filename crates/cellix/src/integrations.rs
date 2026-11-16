@@ -360,8 +360,8 @@ pub fn ghostty_keeps_cmd_d(var: impl Fn(&str) -> Option<String>) -> Option<bool>
 }
 
 /// How far tiles should reach past the text area. Only Ghostty is known to draw images over
-/// its padding. The bottom padding isn't reported, so the band is taken as the row, the
-/// configured padding, and half a row of what's left over, which is the average.
+/// its padding. The bottom padding isn't reported, so it's taken as the configured padding
+/// and half a line of what the window has left over, which is the average.
 pub fn window_bleed(var: impl Fn(&str) -> Option<String>, cell_height: usize) -> Bleed {
     if !var("TERM").is_some_and(|t| t.contains("ghostty")) {
         return Bleed::default();
@@ -381,7 +381,7 @@ pub fn window_bleed(var: impl Fn(&str) -> Option<String>, cell_height: usize) ->
     Bleed {
         cols: 8,
         rows: 3,
-        drop: (padding * scale + cell_height / 2) / 2,
+        padding: padding * scale + cell_height / 2,
     }
 }
 
@@ -577,7 +577,8 @@ mod tests {
         .unwrap();
         let bleed = window_bleed(&var, 36);
         assert!(bleed.cols > 0 && bleed.rows > 0);
-        assert_eq!(bleed.drop, (16 + 18) / 2);
+        // The padding it's set to, in pixels, and half a line of what a window leaves over.
+        assert_eq!(bleed.padding, 16 + 18);
         let other = |name: &str| (name == "TERM").then(|| "xterm-kitty".to_string());
         assert_eq!(window_bleed(other, 36), Bleed::default());
     }

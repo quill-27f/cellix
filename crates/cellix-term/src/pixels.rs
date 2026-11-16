@@ -51,8 +51,10 @@ pub struct Bleed {
     pub cols: u16,
     /// Rows past the bottom edge.
     pub rows: u16,
-    /// Pixels the last row's content moves down, to centre it in the band it now fills.
-    pub drop: usize,
+    /// Pixels of the terminal's own padding under its last line, as near as it's known. The
+    /// last row's content stands in the middle of the band the frame fills under the sheets:
+    /// its row, what the lines leave over under it, and this.
+    pub padding: usize,
 }
 
 /// Rows of Cellix's own, taller than the terminal's lines. Direct placement only: a tile
@@ -325,7 +327,11 @@ impl<R: Rasterizer> PixelBackend<R> {
 
     /// A row's image, grown to cover the padding beyond it in the colours at the edge.
     fn bled(&self, image: Image, grid: &Grid, y: u16) -> Image {
-        let Bleed { cols, rows, drop } = self.bleed;
+        let Bleed {
+            cols,
+            rows,
+            padding,
+        } = self.bleed;
         let cells = grid.row(y);
         let spare = if y + 1 == grid.height() {
             self.spare(grid.height())
@@ -362,7 +368,12 @@ impl<R: Rasterizer> PixelBackend<R> {
             Some(_) => image.height + spare,
             None => image.height * (1 + rows as usize),
         };
-        let drop = drop.min(height - image.height);
+        // What the terminal's lines leave over under the last of Cellix's rows is part of
+        // the band too, and known to the pixel.
+        let over = self.own.map_or(0, |own| {
+            (self.lines as usize * own.line).saturating_sub(grid.height() as usize * own.row)
+        });
+        let drop = ((over + padding) / 2).min(height - image.height);
         let mut plain = Vec::with_capacity(width * 3);
         for c in cells {
             paint(&mut plain, 0, cell, c.style.bg);
@@ -834,12 +845,64 @@ mod tests {
         assert!(!String::from_utf8(out).unwrap().contains(",Y="));
     }
 
+    /// The bar at the foot stands in the middle of the band the frame fills under the
+    /// sheets: its own row, what the terminal's lines leave over under the last of Cellix's
+    /// rows, and the padding the terminal has under its lines. It stood at the top of that
+    /// band, with all of what was left over under it.
+    #[test]
+    fn the_last_row_stands_in_the_middle_of_what_is_under_the_sheets() {
+        struct Blank;
+        impl Rasterizer for Blank {
+            fn row(&mut self, grid: &Grid, _y: u16) -> Image {
+                let (width, height) = (grid.width() as usize * 8, 22);
+                Image {
+                    width,
+                    height,
+                    rgb: vec![0; width * height * 3],
+                }
+            }
+        }
+        let own = OwnRows { row: 22, line: 16 };
+        let grid = Grid::new(12, 4, Style::default());
+        let lit = |width: usize| Image {
+            width,
+            height: 22,
+            rgb: vec![255; width * 22 * 3],
+        };
+        let starts = |image: &Image| {
+            (0..image.height)
+                .position(|y| image.rgb[y * image.width * 3] == 255)
+                .unwrap()
+        };
+        // Six lines are 96 pixels: four rows of 22, and 8 over. With no padding known, the
+        // row's content is 4 px down, in the middle of its row and those 8.
+        let mut plain =
+            PixelBackend::new(Blank, Placement::Direct, DEFAULT_QUOTA).with_own_rows(own);
+        plain.set_lines(6);
+        let tile = plain.bled(lit(96), &grid, 3);
+        assert_eq!((tile.height, starts(&tile)), (30, 4));
+        // With 6 px of padding under the lines, and a line's reach into it, 3 more.
+        let mut padded = PixelBackend::new(Blank, Placement::Direct, DEFAULT_QUOTA)
+            .with_own_rows(own)
+            .with_bleed(Bleed {
+                cols: 0,
+                rows: 1,
+                padding: 6,
+            });
+        padded.set_lines(6);
+        let tile = padded.bled(lit(96), &grid, 3);
+        assert_eq!((tile.height, starts(&tile)), (46, 7));
+        // No other row moves.
+        let tile = padded.bled(lit(96), &grid, 2);
+        assert_eq!((tile.height, starts(&tile)), (22, 0));
+    }
+
     #[test]
     fn the_window_fills_to_its_edges() {
         let mut b = PixelBackend::new(Sized, Placement::Direct, DEFAULT_QUOTA).with_bleed(Bleed {
             cols: 2,
             rows: 1,
-            drop: 3,
+            padding: 6,
         });
         let grid = Grid::new(12, 2, Style::default());
         let output = present_sized(&mut b, &grid);
@@ -870,7 +933,7 @@ mod tests {
             .with_bleed(Bleed {
                 cols: 2,
                 rows: 1,
-                drop: 3,
+                padding: 6,
             });
         assert_eq!(
             placeholders.bleed,

@@ -487,6 +487,23 @@ it; with less, a message was cut short (the real-binary tests caught one). There
 says New Workspace. Without pictures there's no chip, and the workspace in front
 has the brighter name.
 
+Under the sheets the frame fills a band: the bar's own row, what the terminal's lines leave
+over under the last of Cellix's rows, and the terminal's padding under its lines, which
+Ghostty lets a picture run over (`Bleed`). The bar stands in the middle of that band
+(`PixelBackend::bled`: half of what's left over, known to the pixel, and of the padding,
+which isn't reported and is taken as what Ghostty is set to and half a line). Until then it
+stood at the band's top with all of what was left over under it: the user's first point on
+trying 0.10.0, "bottom there is too much space". A press under the last row is a press on it
+(`on_the_grid`).
+
+So that little is left over, a row's height is fitted to the window (`fitted`): of the
+heights within a twentieth of what Settings asks, 47 to 53 px for 50, the one that leaves
+least of the window's lines, and the nearest to what's asked among equals. Up to some 45 rows
+that leaves 12 px at most where a fixed 50 left up to 49. A taller window can hold about as
+many rows as a row has pixels, and then a pixel more or less on each changes nothing; so can
+Comfortable rows in an ordinary window. What's left there is shared over and under the bar.
+`CELLIX_ROW_FIT=0` keeps rows the height asked, which the tour needs to count its presses.
+
 A message has the room of every detail it needs. The details give way from the far end, and a
 message that still doesn't fit has the cursor's place too, which is back when the message
 goes, at the next key. Until 0.10.0 a message kept 64 columns and no more: sharing the row,
