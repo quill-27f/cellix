@@ -335,13 +335,16 @@ mod tests {
         assert!((advances[0] - letter).abs() < 0.01, "{advances:?}");
         // About as wide as it is tall, which is more than a letter and less than three.
         assert!(advances[1] > letter && advances[1] < 3.0, "{advances:?}");
-        // A heart the built-in font has a plain form of is still measured as the emoji. It's
-        // two characters, the heart and what makes it an emoji, and each carries the air kept
-        // after an emoji, so it's wider than the thumb by that air and by nothing else.
+        // A heart the built-in font has a plain form of is still measured as the emoji: as
+        // wide as the thumb, or wider by the air kept after an emoji and no more. It's two
+        // characters, the heart and what makes it an emoji, and a font that shapes the second
+        // apart gives it that air again, as Apple's does; Twemoji and Noto shape them as one.
+        // A plain heart would be half a column narrower than the thumb.
         let heart = m.width("❤\u{fe0f}", font);
         let air = EMOJI_AIR * crate::raster::INTERFACE_SIZE * 37.0 / 17.0;
+        let wider = heart - advances[1];
         assert!(
-            (heart - advances[1] - air).abs() < 0.02,
+            (-0.02..air + 0.02).contains(&wider),
             "{heart} beside {advances:?} and {air} of air"
         );
     }
