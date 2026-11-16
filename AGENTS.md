@@ -42,7 +42,9 @@ drives the real binary through a headless terminal and writes a PNG of each surf
 `target/tour`, going through the tile cache and smooth scrolling as a real terminal does.
 Beside each PNG is the screen's text, and `manifest.json` says which commit each picture is
 of. A scene waits for words its surface shows, and one that never gets there fails rather
-than leave a picture of the wrong screen: read the failures before the pictures. Take the
+than leave a picture of the wrong screen: read the failures before the pictures. A step
+names the place it presses by the words the screen has there (`["click", ["Words"]]`, in
+`harness/live/term.py`), so it still lands when the layout moves. Take the
 scenes the change can reach, with `TOUR_ONLY=a,b`. The whole tour is over two hundred scenes
 and most of an hour: it's for a change to what every surface shares, such as the theme, the
 measures, the grid or the fonts. Then have the `ui-expert` agent review those pictures, and

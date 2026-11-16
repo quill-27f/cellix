@@ -28,15 +28,22 @@ SEARCH, OUTLINE, REVIEW = (5, 0), (8, 0), (11, 0)
 # and run, and the palette gone with what was typed into it. Each step waits for the screen to
 # say the one before it landed: keys sent before the palette is up are typed into the file.
 PALETTE_UP = "Type to search"
-# The face under a comment being written in a 150-column window, after the eight emoji.
-EMOJI_BUTTON = (126, 5)
+# A place named by what the screen says there: term.py finds it, so a step still lands when
+# the layout moves. [words, columns right of their first letter, rows down, which row].
+ON = lambda words, right=1, down=0, which=0: [[words, right, down, which]]
+# In the bar at the foot, where words can be on a row over it too: the last row that says them.
+FOOT = lambda words, right=1: ON(words, right, 0, -1)
+# The face under a comment being written in a 150-column window, after the eight emoji. By
+# its column: an emoji is one letter of the screen's text and two cells of the screen, so
+# words after one aren't where the text has them.
+EMOJI_BUTTON = (122, 5)
 # The button that shows the resolved comments, when none is open: under the two lines that
 # say so, in that window. And where it stands under the review's two cards, and the order's
 # button over them.
-SHOW_RESOLVED = (104, 5)
-# Not Now, on the card that offers a language's server, in a 120-column window of 40 rows.
-INSTALL_NOT_NOW = (86, 35)
-REVIEW_RESOLVED, REVIEW_ORDER = (104, 20), (104, 5)
+SHOW_RESOLVED = ON("Show 2")
+# Not Now, on the card that offers a language's server.
+INSTALL_NOT_NOW = ON("Not Now")
+REVIEW_RESOLVED, REVIEW_ORDER = ON("Show 1"), ON("Document", 2)
 def command(words, opened="\x1b[112;6u"):
     return [["keys", opened], ["until", PALETTE_UP], ["keys", words], ["until", words], ["keys", "\r"],
             ["gone", words]]
@@ -489,6 +496,8 @@ def shoot(name, steps, *args, size="120x40", background="1e1e2e", cwd=None, env=
     env = {
         **os.environ,
         "CELLIX_SCREEN_TEXT": said.name,
+        # A stand-in, so no picture has the name of the machine it was taken on.
+        "CELLIX_MACHINE": "dev-box",
         "HOME": HOME,
         "TERM_SIZE": size,
         # Rows are Cellix's own, 1.4 lines of 36 pixels, as Settings has them until it's told
@@ -566,19 +575,21 @@ def workspaces(scratch):
     ]
     shoot("100-workspaces", told, CODE_FILE, size="150x44", **space)
     # New Workspace stands after the four tiles, which keep more room than they did.
-    shoot("105-new-workspace-hover", [*told, ["move", 74, 43], ["wait", 0.4]], CODE_FILE, size="150x44", **space)
-    shoot("106-folder-finder", [*told, ["click", 74, 43], ["wait", 0.6]], CODE_FILE, size="150x44", **space)
-    shoot("107-folder-path", [*told, ["click", 74, 43], ["keys", "../in"], ["wait", 0.6]], CODE_FILE,
+    new_workspace = FOOT("New Workspace")
+    shoot("105-new-workspace-hover", [*told, ["move", *new_workspace], ["wait", 0.4]], CODE_FILE, size="150x44", **space)
+    shoot("106-folder-finder", [*told, ["click", *new_workspace], ["wait", 0.6]], CODE_FILE, size="150x44", **space)
+    shoot("107-folder-path", [*told, ["click", *new_workspace], ["keys", "../in"], ["wait", 0.6]], CODE_FILE,
           size="150x44", **space)
-    shoot("101-workspace-hover", [*told, ["move", 40, 43], ["wait", 0.4]], CODE_FILE, size="150x44", **space)
+    # A tile's name is cut short in the screen's text by the words after it, so less is asked for.
+    shoot("101-workspace-hover", [*told, ["move", *FOOT("infr")], ["wait", 0.4]], CODE_FILE, size="150x44", **space)
     # What waits everywhere, in the side pane: an agent asking, a finished turn, a failed run.
     failed = hook("tool-failed", others["api-server"], tool_input={"command": "cargo test orders"},
                   tool_response={"stdout": "test refunds::rejects_twice ... FAILED\ntest result: FAILED. 13 passed; 1 failed"})
     inbox = [*told, failed, ["wait", 0.6], *SHOW_INBOX, ["wait", 0.8]]
     shoot("140-inbox", inbox, CODE_FILE, size="150x44", **space)
-    shoot("141-inbox-hover", [*inbox, ["move", 120, 7], ["wait", 0.4]], CODE_FILE, size="150x44", **space)
+    shoot("141-inbox-hover", [*inbox, ["move", *ON("finished its turn")], ["wait", 0.4]], CODE_FILE, size="150x44", **space)
     # Find, after a press on the pane, looks through the list in front of it.
-    find = [*inbox, ["click", 100, 1], ["wait", 0.3], ["keys", CTRL("f")], ["wait", 0.4],
+    find = [*inbox, ["click", *ON("waiting in", 1, 1)], ["wait", 0.3], ["keys", CTRL("f")], ["wait", 0.4],
             ["keys", "server"], ["wait", 0.6]]
     shoot("142-inbox-find", find, CODE_FILE, size="150x44", **space)
     # Its tile brings back what stopped, with what it last showed.
@@ -705,7 +716,7 @@ def install_card(scratch):
     bare = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"}
     shoot("108-install-card", [["wait", 1.0]], "main.tf", cwd=root, env=bare)
     # Not Now, under the pointer.
-    shoot("108-install-card-hover", [["until", "Not Now"], ["move", *INSTALL_NOT_NOW], ["wait", 0.4]],
+    shoot("108-install-card-hover", [["move", *INSTALL_NOT_NOW], ["wait", 0.4]],
           "main.tf", cwd=root, env=bare)
     shoot("108-install-card-light", [["wait", 1.0]], "main.tf", cwd=root, env=bare, background="eff1f5")
     # Over the side pane, which isn't the file's colour: the card's corners show the pane's.
@@ -750,7 +761,7 @@ def git_scenes(scratch):
     shoot("81-git-graph", graph, "README.md", size="120x40", cwd=root)
     # The newest commit's row, opened to its files.
     # The newest commit's row, opened to its files: the graph's heading is the panel's top row.
-    shoot("82-git-commit-open", [*graph, ["wait", 3.0], ["click", 14, 2], ["wait", 2.0]], "README.md", size="120x40", cwd=root)
+    shoot("82-git-commit-open", [*graph, ["wait", 3.0], ["click", *ON("Bound the")], ["wait", 2.0]], "README.md", size="120x40", cwd=root)
     shoot("83-git-timeline", [["wait", 1.5]], "src/queue.rs", size="120x40", cwd=root)
     compare = [["wait", 1.0], ["keys", "\x1b[112;6u"], ["until", PALETTE_UP], ["keys", "Compare With"],
                ["until", "Compare With"], ["keys", "\r"], ["until", "Compare the file"]]
@@ -763,7 +774,7 @@ def git_scenes(scratch):
     source = [["wait", 1.0], ["click", *REVIEW], ["wait", 3.0]]
     shoot("86-git-merge-panel", source, "src/queue.rs", size="120x40", cwd=root)
     shoot("87-git-conflict", [["wait", 0.8]], "src/queue.rs", size="120x40", cwd=root)
-    shoot("88-git-conflict-hover", [["wait", 1.0], ["move", 100, 16], ["wait", 0.6]],
+    shoot("88-git-conflict-hover", [["wait", 1.0], ["move", *ON("Incoming")], ["wait", 0.6]],
           "src/queue.rs", size="120x40", cwd=root)
     shoot("89-git-stashes", [*source, ["wheel", 14, 20, 3], ["wait", 0.4]], "src/queue.rs", size="120x40", cwd=root)
 
@@ -841,8 +852,8 @@ def transcripts(scratch):
     opened = [*start, *command("Agent Transcript", F1), ["until", "Show Source"], ["wait", 1.0]]
     scenes = [
         ("64-transcript-tab", start, [CODE_FILE], {}),
-        ("64-transcript-tab-hover", [*start, ["move", 104, 0], ["wait", 0.6]], [CODE_FILE], {}),
-        ("64-transcript-tab-menu", [*start, ["right", 104, 0], ["wait", 0.4]], [CODE_FILE], {}),
+        ("64-transcript-tab-hover", [*start, ["move", *ON("Claude Cod")], ["wait", 0.6]], [CODE_FILE], {}),
+        ("64-transcript-tab-menu", [*start, ["right", *ON("Claude Cod")], ["wait", 0.4]], [CODE_FILE], {}),
         ("64-transcript-tab-full", start, [CODE_FILE], {"TRANSCRIPT": full}),
         ("64-transcript-tab-light", start, [CODE_FILE], {"background": "eff1f5"}),
         ("65-transcript-page", opened, [], {}),
@@ -934,7 +945,7 @@ with tempfile.TemporaryDirectory() as scratch:
         os.symlink(real, f"{HOME}/Library/Caches/Tectonic")
     # Where the terminal's output and the Problems tab are, at 150x44 and 170x44.
     OUTPUT_FROM, OUTPUT_TO, OUTPUT_ASK = (98, 7), (126, 10), (144, 6)
-    PROBLEM_COUNT, PROBLEM_ROW = (9, 42), (150, 3)
+    PROBLEM_COUNT, PROBLEM_ROW = FOOT("⊗", 0), (150, 3)
     GEAR = (25, 0)  # Settings, at the end of the views' row over a sidebar 28 columns wide
     settings = [["click", *GEAR], ["until", "Changes apply"]]
 
@@ -965,30 +976,35 @@ with tempfile.TemporaryDirectory() as scratch:
     # Past the twelfth row, the list follows the pick and a thumb says where it is.
     shoot("09-commands-scrolled", [["keys", F1], ["until", PALETTE_UP], *[["keys", "\x1b[6~"]] * 12, ["wait", 0.4]],
           CODE_FILE)
-    shoot("10-branches", [["wait", 1.5], ["click", 3, 38], ["wait", 0.5]], CODE_FILE)
+    shoot("10-branches", [["wait", 1.5], ["click", *FOOT("⎇", 2)], ["wait", 0.5]], CODE_FILE)
     shoot("11-find", [["keys", CTRL("f")], ["keys", "item"]], CODE_FILE)
     shoot("12-search", [["click", *SEARCH]], CODE_FILE)
     replacing = [["keys", CTRL("r")], ["keys", "item"], ["keys", "\t"], ["keys", "entry"]]
     shoot("11-replace", replacing, CODE_FILE)
     shoot("12-search-switches", [["click", *SEARCH], ["keys", "item"], ["keys", "\x1bw"], ["wait", 0.6]], CODE_FILE)
     shoot("13-review", [["keys", "\u0007"], ["wait", 1.2]], CODE_FILE)
-    shoot("13-strip-hover", [["wait", 0.8], ["move", 100, 0], ["wait", 0.4]], CODE_FILE)
-    shoot("13-agents-click", [["wait", 1.5], ["click", 111, 0], ["wait", 1.5]], CODE_FILE)
-    shoot("13-quit-hover", [["wait", 6], ["move", 119, 0], ["wait", 1.2]], CODE_FILE)
-    shoot("13-quit-beside-pane", [["wait", 6], ["click", 111, 0], ["wait", 3.5], ["move", 116, 0], ["wait", 1.2]], CODE_FILE)
+    AGENTS_ICON, QUIT = ON("◎", 0), FOOT("Quit")
+    shoot("13-strip-hover", [["wait", 0.8], ["move", *ON("◍", 0)], ["wait", 0.4]], CODE_FILE)
+    shoot("13-agents-click", [["wait", 1.5], ["click", *AGENTS_ICON], ["wait", 1.5]], CODE_FILE)
+    # Quit is at the far end of the bar at the foot, named on the row over it.
+    shoot("13-quit-hover", [["wait", 6], ["move", *QUIT], ["wait", 1.2]], CODE_FILE)
+    shoot("13-quit-beside-pane", [["wait", 6], ["click", *AGENTS_ICON], ["wait", 3.5], ["move", *QUIT], ["wait", 1.2]], CODE_FILE)
     git_tab = [["click", *REVIEW], ["wait", 0.8]]
-    shoot("13-source-hover", [*git_tab, ["move", 14, 11], ["wait", 0.3]], CODE_FILE)
-    shoot("13-source-diff", [*git_tab, ["click", 14, 11], ["wait", 1.2]], CODE_FILE)
-    shoot("13-source-staged", [*git_tab, ["click", 28, 11], ["wait", 0.8], ["move", 14, 11]], CODE_FILE)
+    shoot("13-source-hover", [*git_tab, ["move", *ON("PLAN.md")], ["wait", 0.3]], CODE_FILE)
+    shoot("13-source-diff", [*git_tab, ["click", *ON("PLAN.md")], ["wait", 1.2]], CODE_FILE)
+    shoot("13-source-staged", [*git_tab, ["move", *ON("PLAN.md")], ["wait", 0.4], ["click", *ON("+", 0)],
+                               ["wait", 0.8], ["move", *ON("STAGED CHANGES", 2, 1)]], CODE_FILE)
     shoot("13-stacked-pane", [*LIST_AGENTS, ["wait", 0.6]], CODE_FILE, size="72x44")
     shoot("13-source-control", [["click", *REVIEW], ["wait", 0.8]], CODE_FILE)
-    shoot("13-source-message", [["click", *REVIEW], ["wait", 0.8], ["click", 14, 3],
-                                ["keys", "Say what changed and why"], ["move", 14, 15], ["wait", 0.3]], CODE_FILE)
+    shoot("13-source-message", [["click", *REVIEW], ["wait", 0.8], ["click", *ON("Message")],
+                                ["keys", "Say what changed and why"], ["move", *ON("Commit")], ["wait", 0.3]], CODE_FILE)
     shoot("14-agents", [*LIST_AGENTS, ["wait", 0.5]], CODE_FILE)
     shoot("15-settings-appearance", settings, CODE_FILE)
-    shoot("16-settings-editor", [*settings, ["click", 45, 4]], CODE_FILE)
-    shoot("17-settings-integrations", [*settings, ["click", 45, 5]], CODE_FILE)
-    shoot("18-settings-keyboard", [*settings, ["click", 45, 6]], CODE_FILE)
+    # Settings' pages, by their names in the list at its left.
+    EDITOR_PAGE = ["click", *ON("Editor")]
+    shoot("16-settings-editor", [*settings, EDITOR_PAGE], CODE_FILE)
+    shoot("17-settings-integrations", [*settings, ["click", *ON("Integrations")]], CODE_FILE)
+    shoot("18-settings-keyboard", [*settings, ["click", *ON("Keyboard")]], CODE_FILE)
     shoot("19-dialog", [["keys", "x"], ["keys", CTRL("q")]], CODE_FILE)
     # Workflow: tasks, Open Recent, and Settings' Editor and Keyboard sections, reached through
     # the palette so they don't hang on where the gear is.
@@ -1004,7 +1020,7 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("131-task-failed", [*palette("run task"), ["wait", 1.0], ["keys", "\r"], ["wait", 4.0]], "src/main.c",
           cwd=tasks)
     shoot("132-task-problems", [*palette("run task"), ["keys", "\r"], ["wait", 2.5],
-                                ["click", 3, 38], ["wait", 0.6]], "src/main.c", cwd=tasks)
+                                ["click", *FOOT("⊗", 0)], ["wait", 0.6]], "src/main.c", cwd=tasks)
     shoot("133-open-recent", palette("open recent"), CODE_FILE)
     to_section = lambda tabs: [*palette("open settings"), ["until", "Changes apply"],
                                *[["keys", "\t"]] * tabs, ["keys", "\r"], ["wait", 0.5]]
@@ -1023,8 +1039,8 @@ with tempfile.TemporaryDirectory() as scratch:
     with open(f"{recent_cache}/cellix/recent.json", "w") as f:
         json.dump({"folders": [tasks, ROOT], "files": [f"{tasks}/src/main.c", f"{ROOT}/{CODE_FILE}"]}, f)
     shoot("138-welcome-recent", [], size="150x44", cwd=fresh, env={"XDG_CACHE_HOME": recent_cache})
-    shoot("20-prompt", [["right", 12, 2], ["click", 14, 2]])
-    shoot("21-selection", [["double", 49, 13], ["keys", CTRL("d")]], CODE_FILE)
+    shoot("20-prompt", [["right", 12, 2], ["click", *ON("New File")]])
+    shoot("21-selection", [["double", *ON("Self {")], ["keys", CTRL("d")]], CODE_FILE)
     shoot("22-narrow", [], CODE_FILE, size="64x30")
     shoot("23-narrow-menu", [["right", 20, 10]], PAGE_FILE, size="64x30")
     shoot("24-light-page", [], PAGE_FILE, background="eff1f5")
@@ -1037,25 +1053,28 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("29-hover-tab", [["move", 38, 0]], CODE_FILE)
     shoot("30-hover-menu", [["right", 60, 12], ["move", 64, 13]], CODE_FILE)
     shoot("31-hover-palette", [["keys", CTRL("p")], ["move", 60, 7]], CODE_FILE)
-    shoot("32-hover-toolbar", [["move", 100, 1]], PAGE_FILE)
-    shoot("33-hover-branch", [["move", 3, 38]], CODE_FILE)
-    shoot("34-hover-header", [["move", 18, 0]], CODE_FILE)
-    shoot("35-hover-review", [["keys", "\u0007"], ["wait", 0.6], ["move", 12, 2]], CODE_FILE)
-    shoot("36-hover-accept", [["keys", "\u0007"], ["wait", 0.6], ["move", 114, 2]], CODE_FILE)
-    shoot("37-hover-settings", [*settings, ["click", 45, 4], ["move", 80, 21]], CODE_FILE)
+    shoot("32-hover-toolbar", [["move", *ON("▦", 0)]], PAGE_FILE)
+    shoot("33-hover-branch", [["move", *FOOT("⎇", 2)]], CODE_FILE)
+    # The branch beside the folder's name, in the row under the views.
+    shoot("34-hover-header", [["move", *ON("QUEUE main", 7)]], CODE_FILE)
+    shoot("35-hover-review", [["keys", "\u0007"], ["wait", 0.6], ["move", *ON("docs/PLAN.md")]], CODE_FILE)
+    shoot("36-hover-accept", [["keys", "\u0007"], ["wait", 0.6], ["move", *ON("Accept")]], CODE_FILE)
+    shoot("37-hover-settings", [*settings, EDITOR_PAGE, ["move", *ON("After a pause")]], CODE_FILE)
     shoot("38-hover-dialog", [["keys", "x"], ["keys", CTRL("q")], ["move", 70, 17]], CODE_FILE)
-    shoot("39-hover-agents", [*LIST_AGENTS, ["wait", 0.5], ["move", 90, 8]], CODE_FILE)
-    shoot("41-hover-tab-close", [["move", 43, 0]], CODE_FILE)
-    shoot("42-hover-install", [*settings, ["click", 45, 4], ["move", 113, 26]], CODE_FILE)
+    shoot("39-hover-agents", [*LIST_AGENTS, ["wait", 0.5], ["move", *ON("+ Claude Code", 3)]], CODE_FILE)
+    shoot("41-hover-tab-close", [["move", *ON("×", 0)]], CODE_FILE)
+    # A language's Install, under the pointer and never pressed.
+    shoot("42-hover-install", [*settings, EDITOR_PAGE, ["move", *ON("Install")]], CODE_FILE)
     shoot("43-light-hover-menu", [["right", 60, 12], ["move", 64, 13]], CODE_FILE, background="eff1f5")
-    shoot("40-hover-find", [["keys", CTRL("f")], ["keys", "item"], ["move", 112, 3]], CODE_FILE)
+    shoot("40-hover-find", [["keys", CTRL("f")], ["keys", "item"], ["move", *ON("↑", 0)]], CODE_FILE)
 
-    FORMULA, TABLE = (77, 1), (80, 1)
+    FORMULA, TABLE = ON("Σ", 0), ON("▦", 0)
     shoot("44-note", [], NOTE_FILE, size="150x44", background="eff1f5")
     shoot("45-note-dark", [], NOTE_FILE, size="150x44")
-    shoot("46-formula-open", [["click", 90, 13], ["wait", 0.5]], NOTE_FILE, size="150x44")
+    shoot("46-formula-open", [["click", 88, 14], ["wait", 0.5]], NOTE_FILE, size="150x44")
     shoot("47-math-panel", [["click", *FORMULA]], NOTE_FILE, size="150x44", background="eff1f5")
-    shoot("48-table-picker", [["click", *TABLE], ["move", 100, 7]], NOTE_FILE, size="150x44")
+    # A size in the picker under it: twenty columns right of the button and six rows down.
+    shoot("48-table-picker", [["click", *TABLE], ["move", *ON("▦", 20, 6)]], NOTE_FILE, size="150x44")
     # In a window this wide the page stands eight columns in from where its pane's margin is.
     shoot("49-table-menu", [["right", 49, 29]], NOTE_FILE, size="150x44", background="eff1f5")
     # A debug build presents a page of math slowly, so each step is given time to land.
@@ -1160,9 +1179,11 @@ with tempfile.TemporaryDirectory() as scratch:
     shell = [*LIST_AGENTS, ["wait", 0.6]]
     shoot("52-paper", [], PAPER_FILE, size="150x44", background="eff1f5")
     shoot("53-paper-dark", [], PAPER_FILE, size="150x44")
-    build = [["click", 164, 1], ["wait", 45]]
+    # Build, the toolbar's last button.
+    BUILD = ["click", *ON("▶", 0)]
+    build = [BUILD, ["wait", 45]]
     shoot("54-paper-pdf", build, PAPER_FILE, size="170x44", background="eff1f5")
-    shoot("55-paper-cite", [["click", 69, 1]], PAPER_FILE, size="150x44", background="eff1f5")
+    shoot("55-paper-cite", [["click", *ON("[", 0)]], PAPER_FILE, size="150x44", background="eff1f5")
     shoot("55-paper-menu", [["right", 70, 14]], PAPER_FILE, size="150x44", background="eff1f5")
     shoot("56-narrow-note", [*LIST_AGENTS, ["wait", 0.6]], NOTE_FILE, size="100x34")
     # About the size Claude Code docks Cellix at: at most 45% of a window, beside the chat.
@@ -1186,16 +1207,16 @@ with tempfile.TemporaryDirectory() as scratch:
         f.write("# Training loss\n\nThe loss settles after 40k steps.\n\n![Loss by step](../figures/loss.png)\n")
     shoot("90-preview-image", [["wait", 1.0]], RESULTS, LOSS, size="150x44")
     # Zoomed past the pane's width: the thumb under it, and the hint on moving around.
-    ZOOM_IN = (142, 1)
+    ZOOM_IN = ON("Fit", -3)
     # A debug build reads the picture slowly, and each zoom reads it again.
     zoomed = [["wait", 2.0]] + [["click", *ZOOM_IN], ["wait", 1.0]] * 4 + [["wait", 1.0]]
     shoot("91-preview-zoomed", zoomed, RESULTS, LOSS, size="150x44")
     # The pane's maximize button, at the end of its own tabs, and the window it takes.
-    MAXIMIZE = (114, 0)
+    MAXIMIZE = ON("⤢", 0)
     shoot("93-pane-maximized", [["wait", 1.0], ["click", *MAXIMIZE], ["wait", 0.6], ["move", 80, 20]],
           RESULTS, LOSS, size="150x44")
     shoot("94-pane-restore-hover", [["wait", 1.0], ["click", *MAXIMIZE], ["wait", 0.6], ["move", 80, 20],
-                                    ["wait", 0.3], ["move", 22, 0]], RESULTS, LOSS, size="150x44")
+                                    ["wait", 0.3], ["move", *ON("⤡", 0)]], RESULTS, LOSS, size="150x44")
     shoot("95-editor-maximized", [["wait", 4.0], ["double", 36, 0], ["wait", 0.6]], CODE_FILE, LOSS,
           size="150x44")
     # A tab dragged: held over the right half of the file, and the pane dragged under it.
@@ -1204,7 +1225,7 @@ with tempfile.TemporaryDirectory() as scratch:
           CODE_FILE, RESULTS, size="150x44")
     shoot("97-tab-drag-reorder", [["wait", 1.0], ["press", 50, 0], ["hold", 40, 0], ["hold", 34, 0]],
           CODE_FILE, RESULTS, size="150x44")
-    PREVIEW_TAB = (100, 0)
+    PREVIEW_TAB = ON("Preview")
     shoot("98-pane-drag-under", [["wait", 1.0], ["press", *PREVIEW_TAB], ["hold", 80, 20],
                                  ["hold", 60, 34]], RESULTS, LOSS, size="150x44")
     # A debug build takes a while over the frame that moves the whole layout.
@@ -1270,30 +1291,30 @@ with tempfile.TemporaryDirectory() as scratch:
     three_tabs = [*LIST_AGENTS, *command("show comments", F1), ["until", "No comments"],
                   *command("New Terminal"), ["wait", 1.5]]
     shoot("165-pane-tabs-cut", three_tabs, CODE_FILE)
-    shoot("166-pane-tabs-cut-hover", [*three_tabs, ["move", 83, 0], ["wait", 1.2]], CODE_FILE)
-    shoot("167-pane-tabs-cut-light", [*three_tabs, ["click", 83, 0], ["wait", 0.6]], CODE_FILE,
+    shoot("166-pane-tabs-cut-hover", [*three_tabs, ["move", *ON("Comm")], ["wait", 1.2]], CODE_FILE)
+    shoot("167-pane-tabs-cut-light", [*three_tabs, ["click", *ON("Comm")], ["wait", 0.6]], CODE_FILE,
           background="eff1f5")
 
     # The code view: fold chevrons and chips, sticky scroll, word wrap, bracket pairs. The
-    # file opens with the gutter's chevrons in columns 37 and 38, its line n on row n + 1.
+    # file opens with the gutter's chevrons in columns 32 and 33, its line n on row n + 1.
     VIEW_FILE = "src/scheduler.rs"
     with open(f"{ROOT}/{VIEW_FILE}", "w") as f:
         f.write(SCHEDULER)
     FOLD_KEYS = "\x1b[91;6u"
     at_line = lambda n: n + 1
-    shoot("110-view-fold-hover", [["move", 37, at_line(16)], ["wait", 0.4]], VIEW_FILE)
+    shoot("110-view-fold-hover", [["move", 32, at_line(16)], ["wait", 0.4]], VIEW_FILE)
     # run_due folded first, then new above it, which leaves run_due's row where it was.
     folding = [["click", 60, at_line(16)], ["keys", FOLD_KEYS], ["click", 60, at_line(12)],
                ["keys", FOLD_KEYS], ["wait", 0.3]]
     shoot("111-view-folded", folding, VIEW_FILE)
-    shoot("111-view-folded-hover", [*folding, ["move", 37, at_line(11)], ["wait", 0.4]], VIEW_FILE)
+    shoot("111-view-folded-hover", [*folding, ["move", 32, at_line(11)], ["wait", 0.4]], VIEW_FILE)
     short = {"size": "120x24"}
     shoot("112-view-sticky", [["wheel", 70, 12, 16], ["wait", 0.8]], VIEW_FILE, **short)
     # Each scene opens the file where the last one left it, so these go to the top first.
     home = ["keys", "\x1b[1;5H"]
     shoot("113-view-wrap", [home, ["click", 60, at_line(5)], ["keys", "\x1bz"], ["wait", 0.4]], VIEW_FILE)
-    shoot("114-view-brackets", [home, ["click", 59, at_line(16)], ["wait", 0.3]], VIEW_FILE)
-    shoot("115-view-light", [["wheel", 70, 12, 16], ["wait", 0.8], ["move", 37, 14], ["wait", 0.4]],
+    shoot("114-view-brackets", [home, ["click", 54, at_line(16)], ["wait", 0.3]], VIEW_FILE)
+    shoot("115-view-light", [["wheel", 70, 12, 16], ["wait", 0.8], ["move", 32, 14], ["wait", 0.4]],
           VIEW_FILE, background="eff1f5", **short)
     # The cell tier isn't shot here: term.py keeps only Kitty graphics, so it would draw
     # nothing. The view tests in app/view_tests.rs check the cells.
@@ -1321,7 +1342,7 @@ with tempfile.TemporaryDirectory() as scratch:
     with open(f"{ROOT}/docs/broken.tex", "w") as f:
         f.write("\\documentclass{article}\n\\begin{document}\nHello \\wrongmacro{} world.\n\\end{document}\n")
     # A loaded machine can take over a minute to build, so this one gets longer.
-    problems = [["wait", 2.0], ["click", 164, 1], ["wait", 100], ["click", *PROBLEM_COUNT], ["wait", 0.6],
+    problems = [["wait", 2.0], BUILD, ["wait", 100], ["click", *PROBLEM_COUNT], ["wait", 0.6],
                 ["move", *PROBLEM_ROW], ["wait", 0.4]]
     shoot("109-problem-ask", problems, "docs/broken.tex", size="170x44", timeout=130)
     git_scenes(scratch)
@@ -1369,11 +1390,12 @@ with tempfile.TemporaryDirectory() as scratch:
         f.write("".join(json.dumps(line) + "\n" for line in transcript))
     show_context = [["click", *CONTEXT], ["wait", 1.2]]
     shoot("81-context", show_context, cwd=ctx, size="150x44")
-    shoot("81-context-hover", [*show_context, ["move", 14, 9], ["wait", 0.3]], cwd=ctx, size="150x44")
-    # Checks wrap to however many rows their words take, so fold them to find AGENTS.md's row.
-    fold_checks = [["click", 14, 6], ["wait", 0.3]]
-    shoot("81-context-open", [*show_context, *fold_checks, ["click", 14, 11], ["wait", 1.0]], cwd=ctx, size="150x44")
-    shoot("81-context-codex", [*show_context, ["click", 14, 1], ["wait", 1.2]], cwd=ctx, size="150x44")
+    shoot("81-context-hover", [*show_context, ["move", *ON("1 CLAUDE.md", 3)], ["wait", 0.3]], cwd=ctx, size="150x44")
+    # Checks wrap to however many rows their words take, so they're folded out of the way.
+    fold_checks = [["click", *ON("CHECKS")], ["wait", 0.3]]
+    shoot("81-context-open", [*show_context, *fold_checks, ["click", *ON("↳ AGENTS.md", 3)], ["wait", 1.0]], cwd=ctx, size="150x44")
+    # The agent's name at the head of the view, which lists the others.
+    shoot("81-context-codex", [*show_context, ["click", *ON("Claude Cod")], ["wait", 1.2]], cwd=ctx, size="150x44")
 
 if FAILED:
     print(f"{len(FAILED)} of {len(SHOT) + len(FAILED)} scenes failed: {', '.join(FAILED)}", flush=True)

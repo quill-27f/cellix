@@ -20,6 +20,12 @@ The script is a list of steps:
     ["until", "text", seconds]   Either, giving up after that long rather than 20 seconds.
     ["timed", "label", <step>]   Runs a step, and logs how long until the screen answered.
 
+A place can be named by what the screen says there rather than by column and row, so a step
+still finds it when the layout moves: ["click", ["Words"]] in place of ["click", col, row].
+The list is [words, columns right, rows down, which]: the place is that far from the first
+letter of the words, one column right and no rows down unless said, on the first row that
+says them, or the last with which as -1. It waits for the words as "until" does.
+
 Settings come from the environment: TERM_SIZE=170x46, TERM_CELL=17x36, TERM_PADDING=10x8,
 TERM_BG=1e1e2e. TERM_ROW is the height in pixels of a row of Cellix's own, where its rows are
 taller than a line: TERM_SIZE and every step's row are then in those rows, and this terminal
@@ -269,7 +275,40 @@ def main():
     def has_content(_):
         return True
 
+    def find(words, right=1, down=0, which=0):
+        """The column and row of a place named by what the screen says there."""
+        deadline = time.time() + 20
+        while alive[0]:
+            rows = said().split("\n")
+            hits = [(line.index(words), y) for y, line in enumerate(rows) if words in line]
+            if hits:
+                col, row = hits[which]
+                return [col + right, row + down]
+            if time.time() > deadline or not TEXT:
+                missed.append("never showed " + repr(words))
+                return None
+            pump(0.05)
+        return None
+
+    def placed(step):
+        """A step with each place named by words turned into its column and row."""
+        if step[0] == "timed":
+            return step
+        out = [step[0]]
+        for part in step[1:]:
+            if isinstance(part, list):
+                at = find(*part)
+                if at is None:
+                    return None
+                out += at
+            else:
+                out.append(part)
+        return out
+
     def run(step):
+        step = placed(step)
+        if step is None:
+            return
         kind = step[0]
         if kind == "wait":
             pump(step[1])

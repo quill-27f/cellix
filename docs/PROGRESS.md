@@ -2505,3 +2505,16 @@ Seen in the tour's picture of Review: two lines down the sidebar's edge, a colum
 - That line is gone. The review's list is on the sheet and Source Control on the frame, and the sheet's edge is between them.
 - Tests: `a_review_beside_source_control_has_the_sheets_edge_alone` is new (ledger: `review-sheet-edge`). It fails with the line back.
 - Looked at: the tour's `13-review` before. After, in the tour that's next.
+
+## The tour, re-aimed, and its places named by words (2026-11-16)
+
+Every pointer step in the tour was a column and a row, and the look moved nearly all of them: the tree a row down, the file five columns left, the pane's tabs a column right, the foot a row shorter, Quit to the other corner.
+
+- `harness/live/term.py`: a step can name the place it presses by what the screen says there, `["click", ["Words", columns right, rows down, which]]`, waiting for the words as `until` does. `which` as -1 takes the last row that says them, for the bar at the foot.
+- `harness/live/tour.py`: 46 places re-aimed, most by words (`ON`, `FOOT`), so the next change of layout doesn't lose them. Left as columns: places inside the file or a page, which are the window's own, and the face that opens the emoji picker, since an emoji is one letter of the screen's text and two cells of the screen.
+- The tour names the machine `dev-box` (`CELLIX_MACHINE`, read by `machine_name`), so no picture has the name of the machine it was taken on. It had the real one in the bar.
+- The whole tour: 209 scenes, all reached. Six in the comments pane missed on the first whole run (a button's words are cut short in the screen's text by the mark before them) and were retaken.
+- A tip is painted and not in the cells, so `13-quit-hover` can't wait for its words. Looked at instead: the tip stands over the bar, the mark in its chip.
+- README and CHANGELOG say what the look is, under Unreleased. The README's three pictures taken from the tour are still 0.9.2's.
+- `ui-expert` and AGENTS.md say what a tour's picture measures now and how a step names a place.
+- Next: what `ui-expert` finds in the 209 pictures.

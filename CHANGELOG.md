@@ -2,6 +2,26 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
+## [Unreleased]
+
+A new look: more air, sheets on the terminal's own colour, and less chrome. Nothing about how Cellix is used changes but where three things are: the views, the workspaces, and Quit.
+
+### Added
+- Row height, under Settings › Appearance: Airy, Comfortable, or the Terminal's. In Ghostty and kitty a row of Cellix is no longer a line of your terminal. Cellix lays out rows of its own, 1.4 times the line unless you choose otherwise, so everything has room round it while words and icons stay the sizes they were. Your terminal's settings aren't touched, and it holds over SSH. Under tmux or Zellij, inside Claude Code's pane and on a terminal without pictures a row stays the terminal's line. `row_height` in settings is `airy`, `comfortable` or `terminal`. On rows of its own the wheel moves a row at a time.
+- A file's icon says what kind it is: marks of their own for Rust, Python, Markdown, git's files, JSON, configs and other code, and a page for the rest, each in its kind's colour. Folders are filled. They're in the tree, Quick Open, Source Control and on a comment's place.
+- A file's tab has that icon before its name.
+- The tree has a line down from each open folder, so what's inside a long one is plainly its own.
+- A page of Settings with more on it than the window holds has a thumb at its edge, Appearance and Editor's list of language servers.
+
+### Changed
+- The file and the side pane are sheets on the frame, with round corners and a column of the frame between them. The frame is your terminal's own colour: the sidebar, the views and the bar at the foot. There were three surfaces, each ruled off from the next.
+- The views (Explorer, Search, Outline, Source Control, Agent Context, and Settings at the end) run across the top of the sidebar, level with the tabs, with a line under the one in front. The rail down the left edge is gone, and the file has its five columns. With the sidebar closed the views go with it, and a button at the start of the tabs brings both back. On a terminal without pictures the rail stays.
+- One bar at the foot. The workspaces lead the status bar's own row, the one in front in the accent, then the branch and what was last done, and at the far end the file's details, the machine's name and the bell. A window gets a row back. Where the two don't fit, in a narrow window or with many workspaces, the workspaces keep a row of their own under the status bar, as before.
+- Quit is the power button at the far end of the bar at the foot, after the bell. It was an × at the top right, in the side pane's tab row, where it read as closing the pane or the workspace. Ctrl+Q quits as it did, and the first screen has the button in the same place.
+- The tab in front, a file's or the side pane's, is marked by a line under it, and a line runs under the views, the file's tabs and the side pane's tabs alike.
+- The tree has a column for its chevrons, so an open folder's no longer touches its icon, and names start a column later.
+- The icons at the top right end a column short of the window's edge.
+
 ## [0.9.2] - 2026-11-16
 
 ### Changed

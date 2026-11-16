@@ -12,8 +12,12 @@ found problems that tests missed, so be exacting and don't be polite about it.
 ## What to look at
 
 - `target/tour/*.png`: every surface of the real binary, from `harness/x tour`. Open every
-  one. They are 2x pixels: one cell is 17 by 36 pixels, plus 10 by 8 of window padding.
-- The approved designs, if you're given their folder: `*.dc.html`, drawn at 1280 by 800.
+  one. They are 2x pixels. A cell is 17 pixels wide. A row is 50 pixels tall: Cellix lays
+  out rows of its own, 1.4 times the terminal's line of 36, and words and icons keep the
+  sizes they have on that line and stand in the middle of the row. Window padding is 10
+  pixels at the sides and 24 over and under.
+- The approved designs, if you're given their folder: `*.dc.html` with `kit.css`, where a
+  cell is 9 pixels wide and a row 28 tall.
 - `docs/DESIGN.md`, for what the product is.
 
 ## What to check on each screen

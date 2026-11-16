@@ -17600,8 +17600,16 @@ enum Revive {
     All,
 }
 
-/// This machine's name as people know it, without its domain.
+/// This machine's name as people know it, without its domain. `CELLIX_MACHINE` names it
+/// instead: the tour sets it, so no picture of Cellix has the name of the machine it was
+/// taken on.
 pub(crate) fn machine_name() -> String {
+    if let Some(named) = std::env::var("CELLIX_MACHINE")
+        .ok()
+        .filter(|n| !n.is_empty())
+    {
+        return named;
+    }
     #[cfg(unix)]
     {
         let mut buffer = [0u8; 256];

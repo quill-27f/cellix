@@ -154,6 +154,14 @@ file. It has highlighting and suggestions in every file type, language servers, 
 and Neovim modes. The icons at the top right put a real agent, a terminal or a browser in a pane
 beside your file.
 
+The window is your terminal's own colour, and the file and the side pane are sheets on it. The
+views (files, search, outline, source control, agent context, and Settings at the end) run across
+the top of the sidebar. Every file has an icon of its kind, in the tree and on its tab. One bar at
+the foot holds your workspaces, the branch, the file's details, the bell, and the button that
+quits. In Ghostty and kitty a row has more air than a line of your terminal, and your terminal's
+own settings aren't touched: Row height in Settings is Airy unless you choose Comfortable or the
+terminal's own line.
+
 ![Cellix on its own, with agents to start in the side pane](docs/images/agents.png)
 
 Cellix is young. Everything here is built and tested, and it's in daily use on macOS, over SSH and
@@ -319,8 +327,8 @@ The icons at the top right start a real agent, a terminal or a browser in the si
 move the keyboard between the two (Ctrl+P and Ctrl+Shift+P open their lists from either, and a
 file picked there takes the keyboard), and the hide-pane icon at the top right, or Ctrl+Shift+`, to hide
 the pane. Hidden, it leaves a button in the same place that shows it again as it was, filling the
-window if it did. The only × there
-quits Cellix.
+window if it did. Nothing at the top right quits Cellix: the power button at the far end of the bar
+at the foot does, as Ctrl+Q does.
 The button after the pane's own tabs, or a double-click on one of them, lets the pane take the
 window; a double-click on a file's tab does the same for the file. Do it again to restore. A pane
 that takes the window takes the keyboard too, and the pane's size and full screen come back next
@@ -405,7 +413,8 @@ cellix
 Close the laptop or lose the connection, and the next `cellix` in that folder has everything as you
 left it. Each folder you work in is a workspace, shown in the bar along the bottom: a tile for each,
 saying whether its agent is working, needs you, or is done, a click to switch to it, and
-**+ New Workspace** to find another folder and open it beside this one (type a name or a path
+**+** (**+ New Workspace** where the workspaces have a row to themselves, in a narrow window or
+with many of them) to find another folder and open it beside this one (type a name or a path
 and press Tab to go into the folder picked, as the field says while you type) (Ctrl+Alt+PageUp
 and PageDown move between
 them). A new `cellix` anywhere picks up every workspace left running on the machine, and `cellix`
@@ -549,7 +558,7 @@ Antigravity CLI in place of Gemini CLI, and that isn't covered here yet.
 
 ## Settings
 
-The gear opens Settings: theme, smooth scrolling, the minimap, the keymap, language servers
+The sliders at the end of the views open Settings: theme, row height, smooth scrolling, the minimap, the keymap, language servers
 with a one-click install for each, and the installs for your agents. Changes apply as you click, and are
 saved to `~/.config/cellix/settings.json`. You can also edit that file, or
 `.cellix/settings.json` in a workspace:
@@ -561,7 +570,9 @@ saved to `~/.config/cellix/settings.json`. You can also edit that file, or
 `keymap` is `simple`, `vim` or `neovim`, which runs your own `nvim` and config behind the
 editor. `theme` is `auto`, `dark` or `light` (Catppuccin Latte's surfaces, with text and code deepened to read clearly), and `auto` also matches your
 terminal's background. Either theme sets its frame on your terminal's own background, so the window's
-padding shows no seam; on a light terminal that makes the light theme a shade paler than Latte. `tier` is `direct`, `placeholder` or `cells`. `smooth_scroll: false` makes the
+padding shows no seam; on a light terminal that makes the light theme a shade paler than Latte. `tier` is `direct`, `placeholder` or `cells`. `row_height` is `airy` (a row 1.4 times your terminal's line, which is what a new install has),
+`comfortable` (1.2 times) or `terminal`; it takes effect in Ghostty and kitty outside tmux, where Cellix can lay out rows of its own, and
+everywhere else a row is the terminal's line. On rows of its own the wheel moves a row at a time. `smooth_scroll: false` makes the
 wheel jump by lines, for a slow link, and `minimap: false` hides the minimap. `word_wrap`,
 `sticky_scroll` (with `sticky_scroll_lines`, 5 unless set), `bracket_pairs` and `inlay_hints` turn
 those on or off for code. `reading_width: false` lets a page's text run the whole width of its pane
