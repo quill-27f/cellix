@@ -2388,3 +2388,15 @@ The third step of the look, and the one the user was surest of: "Definitely Shee
 - Known and left: the gap between the sheets is half a column, 8 px, where the canvas drew a whole one; segments that are off, in Settings, are the frame's colour on a sheet; Review's own list stands inside the file's sheet; the right bleed wasn't looked at in a real Ghostty.
 - Unverified in a real terminal.
 - Next: one bar at the foot, the workspaces leading it.
+
+## The line that crossed between the sheets (2026-11-16)
+
+The user tried the sheets and sent a picture: "There some unnecessary blue line between sheets." The pane's tab row started in the pane's first column, which is the frame's now, so the accent's line under a first tab in front ran across the frame to the file's sheet, and a first tab's name stood against the sheet's edge with its first letter under it.
+
+- The pane's tabs start after that column (`title_of`), a column from the sheet's edge, as a file's first tab is from its own.
+- The frame's half of the column is painted as well as filled, over anything of the pane drawn into it.
+- Tests: `the_file_and_the_side_pane_are_sheets_on_the_frame` asks that the frame's half is painted after any line that reaches it, and that the tabs start past the column. Changed with it: `the_tab_in_front_keeps_its_name_and_those_behind_are_cut_short` expects `"  Comm… Agents ×  Ter… ⤢"` where it expected `" Comm… Agents ×  Term… ⤢"`: the row starts a column later and has a column less, at the width the pane has inside Claude Code. It and two more (`the_plus_lists_what_can_start_however_the_pane_opened`, `the_agents_list_is_a_tab_that_stays`) placed the tabs from the pane's whole area where the app places them from its tab row; the two were the same until now.
+- Looked at: a snapshot of the place, light, with the pane's first tab in front.
+- What this says about the sheets' own check: I looked at snapshots with the second tab in front, and at the dark theme, where the line was there and hard to see. The first tab in front, light, is what the user had.
+- Next: one bar at the foot, as before.
+

@@ -3821,7 +3821,10 @@ impl App {
         } else {
             area
         };
-        let lead = self.panel_lead(area);
+        // Beside the file the pane's first column is the frame's, between the two sheets, so
+        // its tabs start after it and the first one's name keeps a column from the sheet's edge.
+        let gap = if self.dock_under() { 0 } else { SHEET_GAP };
+        let lead = self.panel_lead(area) + gap.min(area.w);
         Rect::new(area.x + lead, area.y, area.w.saturating_sub(lead), area.h)
     }
 
@@ -9859,6 +9862,11 @@ impl App {
             let (x, y) = (f32::from(area.x) + SHEET_EDGE, f32::from(area.y));
             let (w, h) = (f32::from(area.w) - SHEET_EDGE, f32::from(area.h));
             if pictures {
+                // The frame's half is painted too, over whatever of the pane was drawn into
+                // the column: the line under its first tab starts at the sheet's edge, and
+                // ran on to the file's.
+                let frames = Bounds::cells(f32::from(area.x), y, SHEET_EDGE, h);
+                grid.panel(frames, 0, Some(frame.bg), None);
                 let own = Bounds::cells(x, y, f32::from(SHEET_GAP) - SHEET_EDGE, h);
                 grid.panel(own, 0, Some(self.theme.sidebar.bg), None);
             }
@@ -28819,6 +28827,36 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
                 "half way across the column between"
             );
             assert_eq!(pane.x + pane.w, cells(dock.right()), "to the window's edge");
+            // Nothing of the pane shows in the frame's half of that column: its tabs start
+            // past the column, and the frame's half is painted over anything drawn into it.
+            // The line under a first tab ran across it to the file's sheet.
+            let strip = (cells(dock.x), cells(dock.x) + 32);
+            let filled = |p: &Paint, with: Rgb| match p {
+                Paint::Panel {
+                    bounds,
+                    fill: Some(fill),
+                    ..
+                } if *fill == with => Some((bounds.x, bounds.x + bounds.w, bounds.h)),
+                _ => None,
+            };
+            let frames = grid
+                .paint
+                .iter()
+                .rposition(|p| filled(p, frame) == Some((strip.0, strip.1, cells(dock.h))));
+            let frames = frames.expect("the frame's half of the column is painted");
+            let line = grid.paint.iter().rposition(|p| {
+                filled(p, theme.accent)
+                    .is_some_and(|(left, right, _)| left < strip.1 && right > strip.0)
+            });
+            assert!(
+                line.is_none_or(|line| line < frames),
+                "a line under a tab stops at the sheet's edge"
+            );
+            assert_eq!(
+                app.title_of(dock).x,
+                dock.x + 1,
+                "and the tabs start past it"
+            );
         }
         // Too narrow for the two side by side, the pane stands under the file in its sheet.
         app.handle(Event::Resize(80, 40));
@@ -29133,14 +29171,14 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let title = app.title_of(area);
         assert_eq!(app.dock.fit(title), Fit::Cut, "not all whole, each there");
         let first_icon = app.pane_actions()[0].0.x;
-        let tabs = app.dock.view_tabs_for_test(area);
+        let tabs = app.dock.view_tabs_for_test(title);
         let agents = tabs.iter().find(|tab| tab.0 == Front::Agents).unwrap().2;
         assert_eq!(
             agents.w, 10,
             "it's in front, in a chip that hugs its name and its ×"
         );
         assert_eq!(
-            app.dock.cut_name(area, agents.x + 1),
+            app.dock.cut_name(title, agents.x + 1),
             None,
             "it shows in full"
         );
@@ -29150,7 +29188,7 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             "cut short, to no fewer than three letters: {comments:?}"
         );
         assert_eq!(
-            app.dock.cut_name(area, comments.x + 1).as_deref(),
+            app.dock.cut_name(title, comments.x + 1).as_deref(),
             Some("Comments"),
             "its whole name is a hover away"
         );
@@ -29158,11 +29196,12 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let row = grid.row_text(area.y);
         let before = (first_icon - area.x) as usize;
         let strip: String = row.chars().skip(area.x as usize).take(before).collect();
-        // The first tab starts flush with the pane, so the row has a column more to give.
+        // The pane's first column is the frame's, between the two sheets, and the tabs
+        // start after it, so the row has a column less to give than it had.
         // The button that maximizes the pane keeps its place after them: it gave way with
         // the +, and a pane this narrow, as Cellix's is inside Claude Code, couldn't be
         // maximized by anything in sight.
-        assert_eq!(strip.trim_end(), " Comm… Agents ×  Term… ⤢", "{row}");
+        assert_eq!(strip.trim_end(), "  Comm… Agents ×  Ter… ⤢", "{row}");
         for x in area.x..first_icon {
             let hit = app.dock.hit(title, x);
             let gone = [TabHit::New, TabHit::Pick];
@@ -29183,10 +29222,10 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert!(app.dock.showing(Front::Comments), "Comments came forward");
         let row = screen(&app).row_text(area.y);
         assert!(row.contains("Comments"), "whole in front: {row}");
-        let tabs = app.dock.view_tabs_for_test(area);
+        let tabs = app.dock.view_tabs_for_test(title);
         let place = |view: Front| tabs.iter().find(|tab| tab.0 == view).unwrap().2;
         assert_eq!(
-            app.dock.cut_name(area, place(Front::Comments).x + 1),
+            app.dock.cut_name(title, place(Front::Comments).x + 1),
             None,
             "it shows in full"
         );
@@ -29808,7 +29847,7 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let (_dir, mut app) = project();
         app.dock.open = true;
         app.dock.front = Front::Comments;
-        let area = app.dock_area().unwrap();
+        let area = app.title_of(app.dock_area().unwrap());
         let plus = app.dock.new_button_for_test(area);
         app.handle(mouse(MouseKind::Left, plus, area.y));
         assert!(app.dock.listing());
@@ -29858,7 +29897,7 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         // Wide enough for every tab: narrower, the one in front lists the rest.
         let mut app = App::new(dir.path().to_path_buf(), (220, 44));
         with_a_shell(&mut app);
-        let area = app.dock_area().unwrap();
+        let area = app.title_of(app.dock_area().unwrap());
         let plus = app.dock.new_button_for_test(area);
         app.handle(mouse(MouseKind::Left, plus, area.y));
         assert!(

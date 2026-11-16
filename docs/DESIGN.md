@@ -410,7 +410,8 @@ foot, in the terminal's own colour, so window padding can't show as a seam round
 nothing is ruled off on it. The file and the side pane are sheets: one colour, their tabs on
 it with the accent's line under the one in front, a column between them that is the frame's.
 With pictures a sheet has a line round it and round corners, and its edge stands half way
-across that column, so what's in the pane keeps half a column from it; past the grid's right
+across that column, so what's in the pane keeps half a column from it, and its tabs start
+past the column, a whole one from the sheet's edge; past the grid's right
 edge a row runs on in the frame's colour (`Grid::edge`), so a sheet ends where the grid does.
 Under the file, the pane is the lower part of the file's sheet, with a line between them.
 Without pictures the sheets are square and there's no line round them, and a tab in front
