@@ -2558,3 +2558,13 @@ All three reviewers put it first: a button or a text box was the 32 px it is on 
 - Tests: `a_control_is_one_height_on_a_taller_row` is new, in the rasterizer (ledger: `control-height-airy`). Changed with it: `a_tooltip_is_one_whole_row` expects a tip of 39 px in a row of 50 where it expected 36.
 - Looked at: `13-source-control`, `19-dialog`, `08-open-file`, `15-settings-appearance`, `11-find`, `05-menu-code`, `28-hover-tree`, retaken.
 - Not done from the reviewers' list on controls: words centred in their boxes; chips (27 to 29 px) and the bell and power marks (16 px) are as they were.
+
+## The look, as it stands (2026-11-16)
+
+The whole tour over the last commit of the look: 209 scenes, every one reached, none retaken.
+
+- The README's three pictures that come from the tour are from this run (`14-agents`, `50-comments`, `13-source-control`), with `dev-box` for the machine. The two of Cellix inside Claude Code are real screenshots of 3 November and still show the old look.
+- Proven by tests and the headless terminal. Unverified in a real terminal since the user tried the trial of taller rows: the sheets' right bleed, kitty, SSH, a resize, and everything built after that trial.
+- `54-paper-pdf`, `80-paper-drawn` and `81-paper-tables` still show a build that hadn't finished when the picture was taken, on a loaded machine.
+- Not released: nothing is pushed. The CHANGELOG's entry is under Unreleased, and a release would be 0.10.0.
+- Next, with the user: try it in Ghostty; then the reviewers' open list above, words centred in their boxes first.
