@@ -2460,3 +2460,14 @@ The sixth step of the look, from the canvas: a column of chevrons, a column of i
 - Tests: `rows_inside_a_folder_have_a_line_down_from_it` is new: lines at one and two levels, none at the top, the chevron over its guide and a column clear of its icon, a file's icon in the folders' column, and cells as they were.
 - Looked at: snapshots of the tree unfolded two deep, light, and one deep, dark.
 - Next: a file's icon on its tab.
+
+## A file's icon on its tab (2026-11-16)
+
+The seventh step of the look, the last of the three the canvas drew for files.
+
+- With pictures a file's tab has the icon the tree gives it, before its name, 13 pt and in its kind's colour, and the tab is two columns wider. The Task page's tab had a mark there already and keeps it.
+- In cells a tab is as it was: every file's mark is the same there, and a strip has no columns to spare for it.
+- The icons have a cell of their own to fall back on (`toolbar::fallback`), so the screen's text names a tab `▪ queue.rs` where pictures are drawn.
+- Tests: `a_files_tab_has_its_kinds_icon` is new: the icon on each of two tabs, its colour and size, the air before the name, the tab's width, and no mark in cells.
+- Looked at: snapshots of a Rust file's tab, light, and a Markdown file's, dark.
+- Next: the tour, re-aimed for where everything is now, then the review of its pictures.

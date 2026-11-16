@@ -511,7 +511,16 @@ fluently: views, explorer, tabs, breadcrumbs, current-line highlight, indent gui
 The views (Explorer, Search, Outline, Source Control, Agent Context, and Settings at the end)
 run across the top of the sidebar, level with the tabs, an icon every three columns, the one
 in front with a line under it in the accent (the user's choice of 16 November 2026, after a
-picture of Lapce; a rail down the left edge took five columns for them until then). A hairline runs under the row, the sidebar's width and level with the one under the tabs, between the views and what the one in front shows (asked for the same day). The view
+picture of Lapce; a rail down the left edge took five columns for them until then). A hairline runs under the row, the sidebar's width and level with the one under the tabs, between the views and what the one in front shows (asked for the same day).
+
+A file's icon says its kind, as an icon theme's does: a disc with the letter cut out for Rust
+and Python, Markdown's mark, git's diamond, braces for JSON, brackets for a config, angle
+brackets for other code, and a page for the rest, each in its kind's colour. Folders are
+filled, the same open or shut, since the chevron says which. The tree has a column for the
+chevrons before the icons and a line down from each open folder; a file's tab has its icon
+before its name. All of that is where there are pictures. In cells every file has the same
+mark, a row starts a column sooner, and a tab has no icon.
+ The view
 itself starts a row down. With the sidebar closed the views go with it, and a button at the
 start of the tabs brings both back; in Review it shows Source Control, which stands beside a
 review. On a terminal without pictures an icon is block art two rows tall, so there the views

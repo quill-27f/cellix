@@ -196,6 +196,10 @@ const TAB_PADDING: u16 = 5;
 /// Columns the Task page's tab keeps for its mark, before its name, and how tall the mark
 /// is, in rows.
 const TASK_TAB_ICON: u16 = 2;
+/// Columns a file's icon takes before its name on its tab, where there are pictures, and how
+/// tall it is in rows: 13 pt, smaller than the tree's, as a tab's × is quieter than a row's.
+const TAB_ICON: u16 = 2;
+const TAB_ICON_SIZE: f32 = 0.70;
 const TASK_TAB_MARK: f32 = 0.6;
 /// The most of a task's name its tab shows, in cells.
 const TASK_TAB_NAME: f32 = 18.0;
@@ -14184,7 +14188,13 @@ impl App {
     /// Columns a tab takes, which hug its name: proportional text is narrower than its cells.
     fn tab_width(&self, editor: &Editor) -> u16 {
         let name = self.measure.width(&editor.title(), Font::default());
-        name.ceil() as u16 + TAB_PADDING
+        name.ceil() as u16 + TAB_PADDING + self.tab_lead()
+    }
+
+    /// Columns a file's tab gives its icon. None in cells, where every file's is the same
+    /// mark and a strip has no columns to spare for it.
+    fn tab_lead(&self) -> u16 {
+        if self.measure.in_cells() { 0 } else { TAB_ICON }
     }
 
     /// Tabs that fit, as (index, x, width), starting late enough to show the active one.
@@ -15544,15 +15554,22 @@ impl App {
             }
             let name = self.tab_title(i);
             let close_x = x + width.saturating_sub(2);
-            // The Task page's tab has its mark before its name, in the accent colour.
-            let lead = if task { TASK_TAB_ICON } else { 0 };
+            // The Task page's tab has its mark before its name, in the accent colour, and
+            // a file's has its kind's icon in that kind's.
+            let lead = if task { TASK_TAB_ICON } else { self.tab_lead() };
+            let cell = Rect::new(x + 1, area.y, 2, 1);
             if task && x + 3 < close_x {
-                let cell = Rect::new(x + 1, area.y, 2, 1);
                 let mark = (Icon::ListTask, TASK_TAB_MARK);
                 crate::toolbar::draw_icon(grid, mark, cell, theme.accent, style);
+            } else if lead > 0 && x + 3 < close_x {
+                let kind = crate::explorer::file_icon(&name);
+                let color = crate::explorer::file_color(&name);
+                crate::toolbar::draw_icon(grid, (kind, TAB_ICON_SIZE), cell, color, style);
             }
             let at = x + lead + 2;
-            let from = f32::from(x + lead) + 1.5 - f32::from(lead) * 0.25;
+            // A file's icon is wider than the Task page's mark, so its name starts later.
+            let back = if task { 0.25 } else { 0.15 };
+            let from = f32::from(x + lead) + 1.5 - f32::from(lead) * back;
             grid.label_at(from, at, area.y, &name, style, close_x, 100);
             if close_x < area.right() {
                 let dirty = self.editors.get(i).is_some_and(|e| e.buffer.is_dirty());
@@ -28939,6 +28956,61 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             sheet,
             "and none of the frame in it"
         );
+    }
+
+    /// A tab had its file's name and nothing of its kind. With pictures it has the icon
+    /// the tree gives that file, before its name.
+    #[test]
+    fn a_files_tab_has_its_kinds_icon() {
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (120, 40));
+        app.open(&dir.path().join("beta.rs")).unwrap();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        let in_cells: Vec<(usize, u16, u16)> = app.visible_tabs();
+        let row = screen(&app).row_text(0);
+        assert!(!row.contains('▪'), "no mark in cells: {row}");
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        let tabs = app.visible_tabs();
+        let grid = screen(&app);
+        let unit = cellix_render::UNIT;
+        let kinds = [Icon::FileRust, Icon::File];
+        for ((index, x, width), kind) in tabs.iter().copied().zip(kinds) {
+            let name = app.tab_title(index);
+            let (from, to) = (i32::from(x) * unit, i32::from(x + width) * unit);
+            let icon = grid.paint.iter().find_map(|p| match p {
+                Paint::Icon {
+                    bounds,
+                    icon,
+                    color,
+                } if bounds.y < unit && bounds.x >= from && bounds.x < to && *icon == kind => {
+                    Some((*bounds, *color))
+                }
+                _ => None,
+            });
+            let (bounds, color) = icon.unwrap_or_else(|| panic!("no {kind:?} on {name}'s tab"));
+            assert_eq!(color, crate::explorer::file_color(&name), "{name}");
+            // Before its name, with air between them, and smaller than the tree's.
+            let text = grid.paint.iter().find_map(|p| match p {
+                Paint::Text { x, y, text, .. } if *y < unit && text == &name => Some(*x),
+                _ => None,
+            });
+            let text = text.unwrap_or_else(|| panic!("{name} isn't painted in the tab row"));
+            let gap = (text - (bounds.x + bounds.w)) as f32 / unit as f32;
+            assert!(
+                (0.3..1.2).contains(&gap),
+                "{name}: {gap} columns after its icon"
+            );
+            let points = bounds.h as f32 / unit as f32 * 18.5;
+            assert!((points - 13.0).abs() <= 0.5, "{name}'s icon: {points} pt");
+            // The tab is that much wider than its name and its × need.
+            let cells = in_cells.iter().find(|tab| tab.0 == index).unwrap().2;
+            let wide = app.measure.width(&name, Font::default()).ceil() as u16;
+            assert_eq!(width, wide + TAB_PADDING + TAB_ICON, "{name}");
+            assert!(
+                cells <= width,
+                "{name}: {cells} in cells, {width} with its icon"
+            );
+        }
     }
 
     /// Rows inside a folder were set in by two columns and nothing else said whose they

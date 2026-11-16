@@ -5262,5 +5262,12 @@
     "title": "The tree has a column of chevrons before its icons, each folder's clear of its icon, and a line down from every folder a row is inside, under that folder's chevron; in cells a row starts where it did",
     "test": "rows_inside_a_folder_have_a_line_down_from_it",
     "passes": true
+  },
+  {
+    "id": "tab-file-icons",
+    "milestone": 14,
+    "title": "A file's tab has its kind's icon before its name where there are pictures, 13 pt and in the kind's colour, the tab two columns wider for it; in cells a tab is as it was",
+    "test": "a_files_tab_has_its_kinds_icon",
+    "passes": true
   }
 ]

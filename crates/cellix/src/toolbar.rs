@@ -355,6 +355,15 @@ fn fallback(icon: Icon) -> &'static str {
         Icon::Question => "?",
         Icon::CircleCheck => "✓",
         Icon::CircleX => "✗",
+        Icon::FolderFilled => "▸",
+        Icon::File
+        | Icon::FileRust
+        | Icon::FilePython
+        | Icon::FileMarkdown
+        | Icon::FileGit
+        | Icon::FileJson
+        | Icon::FileConfig
+        | Icon::FileCode => "▪",
         _ => "?",
     }
 }
