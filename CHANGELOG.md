@@ -21,6 +21,7 @@ A new look: more air, sheets on the terminal's own colour, and less chrome. Noth
 - The tab in front, a file's or the side pane's, is marked by a line under it, and a line runs under the views, the file's tabs and the side pane's tabs alike.
 - The tree has a column for its chevrons, so an open folder's no longer touches its icon, and names start a column later.
 - The icons at the top right end a column short of the window's edge.
+- A message in the bar at the foot that's too long for its room takes the room of the file's details, and of the cursor's place if it needs that too, so its end isn't cut off where a shorter bar would have held it. They're back at the next key, when the message goes.
 
 ## [0.9.2] - 2026-11-16
 

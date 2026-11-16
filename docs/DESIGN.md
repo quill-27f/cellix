@@ -487,6 +487,12 @@ it; with less, a message was cut short (the real-binary tests caught one). There
 says New Workspace. Without pictures there's no chip, and the workspace in front
 has the brighter name.
 
+A message has the room of every detail it needs. The details give way from the far end, and a
+message that still doesn't fit has the cursor's place too, which is back when the message
+goes, at the next key. Until 0.10.0 a message kept 64 columns and no more: sharing the row,
+what BibTeX said lost its end, the name of the file it couldn't open, to the cursor's place in
+a window of 140 columns.
+
 ## Row height
 
 `row_height` is `airy`, `comfortable` or `terminal`, chosen on Settings' Appearance page under

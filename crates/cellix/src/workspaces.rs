@@ -1585,6 +1585,32 @@ mod tests {
         assert!(spaces_named("dev-box").contains("dev-box"));
     }
 
+    /// The window the TeX tests have on CI: 140 columns, one workspace, a machine with a
+    /// long name. What BibTeX said ends with the file it couldn't open, and the bar the
+    /// workspaces share cut that off to keep the cursor's place.
+    #[test]
+    fn a_long_message_in_the_shared_bar_keeps_its_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("paper");
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("notes.txt"), "As Knuth shows.\n").unwrap();
+        let start: Starter = Box::new(|root, size| Workspace {
+            app: App::new(root, size),
+            server: None,
+        });
+        let mut spaces = Workspaces::new((140, 30), "ip-10-0-129-183".to_string(), start);
+        spaces.open(root.clone());
+        spaces.app_mut().open(&root.join("notes.txt")).unwrap();
+        // Five letters longer than BibTeX's, for the count of problems the bar had there.
+        let said =
+            "Built in 0.3 s, but BibTeX failed: I couldn't open database file missing-refs.bib";
+        spaces.app().say(said);
+        let row = bar(&spaces);
+        assert!(row.contains("paper"), "{row}");
+        assert!(row.contains("missing-refs.bib"), "{row}");
+        assert!(row.contains("ip-10-0-129-183"), "{row}");
+    }
+
     fn spaces_named(machine: &str) -> String {
         let (_dir, first, _) = projects();
         let start: Starter = Box::new(|root, size| Workspace {

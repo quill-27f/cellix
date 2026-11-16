@@ -17123,7 +17123,8 @@ impl App {
         } else {
             reviewing.as_str()
         };
-        // The cursor always shows, and the rest stays only while it leaves `left` room.
+        // The rest stays only while it leaves `left` room, the cursor longest: only a message
+        // that still doesn't fit has its place too.
         let mut right = Vec::new();
         if let Some(editor) = self.editors.get(self.active()) {
             let head = editor.selections.primary().head;
@@ -17184,8 +17185,11 @@ impl App {
         if self.settings_page.is_some() {
             right.clear();
         }
-        // A message outranks the details, and a hint gives way to them.
-        let kept = if message.is_empty() { 24 } else { 64 };
+        // A message outranks the details, every one it needs the room of, and a hint gives
+        // way to them. The bar is shared with the workspaces, the machine's name and Quit, so
+        // a message has less of it than it had, and what it ends with is as often what
+        // matters: the name of the file that couldn't be opened.
+        let kept = if message.is_empty() { 24 } else { usize::MAX };
         let start = self
             .status_branch()
             .map_or(self.status_start(), |(_, end)| end + 1);
@@ -17208,8 +17212,18 @@ impl App {
         }
         // Dropped from the far end, and read from the other, with the cursor last.
         shown.reverse();
-        let right = shown.join("   ");
-        let right_x = end.saturating_sub(right.chars().count() as u16 + 1);
+        let mut right = shown.join("   ");
+        let mut right_x = end.saturating_sub(right.chars().count() as u16 + 1);
+        // The cursor's place is back when the message goes, at the next key.
+        let font = Font {
+            size: 90,
+            ..Font::default()
+        };
+        let wide = self.measure.width(left, font).ceil() as u16;
+        if !message.is_empty() && start + flagged + wide + 1 > right_x {
+            right.clear();
+            right_x = end.saturating_sub(1);
+        }
         if let (Some((at, end)), Some(branch)) = (self.status_branch(), &self.branch) {
             let hovered = self
                 .hover
@@ -32438,6 +32452,29 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let (x, y) = find(&screen(&app), "×");
         app.handle(mouse(MouseKind::Left, x, y));
         assert!(!screen(&app).text().contains("five-long-name"));
+    }
+
+    /// A message that doesn't fit beside the cursor's place has that room as well. What it
+    /// ends with is as often what matters, the name of the file that couldn't be opened, and
+    /// the cursor's place is back when the message goes, at the next key.
+    #[test]
+    fn a_message_too_long_for_its_room_has_the_cursors() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        app.say("Saved");
+        let status = status_line(&app);
+        let cursor = status.find("Ln 1, Col 1").expect("the cursor's place");
+        assert!(status.contains("Saved"), "{status}");
+        // Four letters more than there's room for before the cursor's place.
+        let room = status[..cursor].chars().count();
+        let said = format!("{} missing.bib", "x".repeat(room - 8));
+        app.say(said);
+        let status = status_line(&app);
+        assert!(status.contains("x missing.bib"), "{status}");
+        assert!(!status.contains("Ln 1"), "{status}");
+        app.handle(Event::Key(KeyEvent::plain(Key::Right)));
+        let status = status_line(&app);
+        assert!(status.contains("Ln 1, Col 2"), "{status}");
     }
 
     #[test]

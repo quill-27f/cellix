@@ -2577,3 +2577,13 @@ The user's word, after the wrap-up of the look: "release and push". The version 
 - The user ran this build once before saying so, in the Claude app's terminal panel, which has no pictures: they saw the cell tier, with the rail and the word Quit at the foot. So the look itself has still not been seen in a real terminal by anyone since the trial of taller rows. What's unverified is as the entry above lists it.
 - None of these commits had been through CI. The release is made from the commit CI passes on.
 - Left for after: the reviewers' open list, words centred in their boxes first; the power mark or the word, and where it stands in a two-row foot, which the user hasn't answered; the README's two pictures inside Claude Code.
+
+## A long message has the details' room (2026-11-16)
+
+CI failed on the release commit, in the TeX job, which the local gate can't run (no TeX Live here): `pdflatex_says_when_bibtex_finds_no_bib` waits for "missing.bib" at the end of what BibTeX said, and the bar showed "…couldn't open database file missing" and then the cursor's place. Nothing was released from that commit.
+
+- The cause is the look's one bar. A message kept 64 columns and the details had the rest, which was enough on a row the status bar had to itself. Sharing it with the workspaces, a machine's name of fifteen letters, the bell and Quit, a message of 73 letters in 140 columns lost its last four.
+- A message now has the room of every detail it needs, from the far end, and the cursor's place last. They're back when the message goes, at the next key or click.
+- Tests: `a_message_too_long_for_its_room_has_the_cursors` (ledger: `status-message-room`) and `a_long_message_in_the_shared_bar_keeps_its_end`, which is CI's window: 140 columns, one workspace, that machine's name. Both failed before the change as CI did. The TeX test is unchanged.
+- Unverified here: the TeX job itself, which only CI runs.
+- Any test under `--ignored` that reads the status bar's words is one the local gate doesn't see: `harness/x tex` needs TeX Live.
