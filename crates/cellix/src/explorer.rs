@@ -133,10 +133,12 @@ impl Explorer {
             };
             let x = area.x + entry.depth as u16 * 2 + 2;
             let end = area.right().saturating_sub(2);
+            // A folder's chevron says whether it's open, so its icon needn't. A file's icon
+            // says what kind it is.
             let (fallback, chevron, icon) = match (entry.is_dir, entry.expanded) {
-                (true, true) => ("▾", Some(Icon::ChevronDown), Icon::FolderOpen),
-                (true, false) => ("▸", Some(Icon::ChevronRight), Icon::Folder),
-                (false, _) => ("▪", None, Icon::File),
+                (true, true) => ("▾", Some(Icon::ChevronDown), Icon::FolderFilled),
+                (true, false) => ("▸", Some(Icon::ChevronRight), Icon::FolderFilled),
+                (false, _) => ("▪", None, file_icon(&entry.name)),
             };
             let color = if entry.is_dir {
                 folder_color(&entry.name)
@@ -192,9 +194,41 @@ pub fn folder_color(name: &str) -> Rgb {
     }
 }
 
+/// A file's icon: a mark of its own for the kinds met most, and a page for the rest.
+pub fn file_icon(name: &str) -> Icon {
+    let lower = name.to_lowercase();
+    if lower.starts_with(".git") {
+        return Icon::FileGit;
+    }
+    if lower.starts_with(".env") {
+        return Icon::FileConfig;
+    }
+    // Cargo's two are Rust's, as an icon theme has them.
+    if lower == "cargo.toml" || lower == "cargo.lock" {
+        return Icon::FileRust;
+    }
+    if !lower.contains('.') {
+        return Icon::File;
+    }
+    match lower.rsplit('.').next().unwrap_or("") {
+        "rs" => Icon::FileRust,
+        "py" | "pyi" => Icon::FilePython,
+        "md" | "markdown" | "mdx" => Icon::FileMarkdown,
+        "json" | "jsonc" => Icon::FileJson,
+        "toml" | "ini" | "cfg" | "conf" | "yml" | "yaml" | "lock" => Icon::FileConfig,
+        "ts" | "tsx" | "js" | "jsx" | "mjs" | "go" | "sh" | "bash" | "zsh" | "html" | "htm"
+        | "css" | "scss" | "c" | "h" | "cpp" | "cc" | "hpp" | "java" | "rb" | "sql" | "tf"
+        | "tfvars" | "hcl" | "swift" | "kt" | "lua" => Icon::FileCode,
+        _ => Icon::File,
+    }
+}
+
 /// A file's colour, standing in for the logo a full icon theme would draw.
 pub fn file_color(name: &str) -> Rgb {
     let lower = name.to_lowercase();
+    if lower == "cargo.toml" || lower == "cargo.lock" {
+        return Rgb(235, 140, 90);
+    }
     if lower.starts_with(".env") {
         return Rgb(235, 200, 90);
     }

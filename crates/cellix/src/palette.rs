@@ -1732,13 +1732,14 @@ impl Palette {
         };
         let file = |path: &Path| {
             let name = path.file_name().map(|name| name.to_string_lossy());
-            let colour = crate::explorer::file_color(&name.unwrap_or_default());
-            Some((Icon::File, "▪", colour))
+            let name = name.unwrap_or_default();
+            let colour = crate::explorer::file_color(&name);
+            Some((crate::explorer::file_icon(&name), "▪", colour))
         };
         let folder = |path: &Path| {
             let name = path.file_name().map(|name| name.to_string_lossy());
             let colour = crate::explorer::folder_color(&name.unwrap_or_default());
-            Some((Icon::Folder, "▸", colour))
+            Some((Icon::FolderFilled, "▸", colour))
         };
         match item {
             Item::File(path, label) => {

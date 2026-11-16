@@ -14977,7 +14977,10 @@ impl App {
         }
         // The tab itself, under the pointer.
         let (icon, name) = match drag.what {
-            Dragged::Editor(index) => (Icon::File, self.editors[index].title()),
+            Dragged::Editor(index) => {
+                let name = self.editors[index].title();
+                (crate::explorer::file_icon(&name), name)
+            }
             Dragged::View(view) => {
                 let icon = match view {
                     Front::Pdf => Icon::Picture,
@@ -28936,6 +28939,88 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             sheet,
             "and none of the frame in it"
         );
+    }
+
+    /// Every file had the same page beside its name, told apart by colour alone. A file's
+    /// icon says its kind, where there are pictures, and a folder's is filled.
+    #[test]
+    fn a_files_icon_says_what_kind_it_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let files = [
+            ("main.rs", Icon::FileRust),
+            ("Cargo.toml", Icon::FileRust),
+            ("tool.py", Icon::FilePython),
+            ("README.md", Icon::FileMarkdown),
+            (".gitignore", Icon::FileGit),
+            ("data.json", Icon::FileJson),
+            ("ci.yml", Icon::FileConfig),
+            ("app.ts", Icon::FileCode),
+            ("notes.txt", Icon::File),
+            ("Makefile", Icon::File),
+        ];
+        for (name, _) in files {
+            fs::write(dir.path().join(name), "x\n").unwrap();
+        }
+        fs::create_dir(dir.path().join("src")).unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (120, 40));
+        // In cells every one is the same mark, as it was.
+        let cells = screen(&app);
+        let (x, y) = find(&cells, "main.rs");
+        assert_eq!(cells.cell(x - 2, y).symbol, "▪");
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        let grid = screen(&app);
+        let unit = cellix_render::UNIT;
+        let side = app.sidebar_area().expect("the sidebar");
+        // The icon painted in a row of the sidebar, and its colour.
+        let beside = |name: &str| {
+            let (_, y) = find(&grid, name);
+            let found = grid.paint.iter().find_map(|p| match p {
+                Paint::Icon {
+                    bounds,
+                    icon,
+                    color,
+                } if bounds.y / unit == i32::from(y)
+                    && bounds.x < i32::from(side.right()) * unit
+                    && !matches!(icon, Icon::ChevronRight | Icon::ChevronDown) =>
+                {
+                    Some((*icon, *color))
+                }
+                _ => None,
+            });
+            found.unwrap_or_else(|| panic!("no icon beside {name}"))
+        };
+        for (name, icon) in files {
+            let (shown, color) = beside(name);
+            assert_eq!(shown, icon, "{name}");
+            assert_eq!(color, crate::explorer::file_color(name), "{name}'s colour");
+        }
+        assert_eq!(beside("src").0, Icon::FolderFilled);
+        // Each has ink of its own: no two kinds are the same shape. The two discs differ
+        // least, by a letter's leg and the size of its bowl, and by their colours.
+        let dots = |icon: Icon| -> Vec<bool> {
+            let at = |i: usize| (i % 24) as f32 / 24.0 + 0.02;
+            (0..24 * 24)
+                .map(|i| cellix_render::inked(icon, at(i), at(i / 24)))
+                .collect()
+        };
+        let kinds = [
+            Icon::File,
+            Icon::FolderFilled,
+            Icon::FileRust,
+            Icon::FilePython,
+            Icon::FileMarkdown,
+            Icon::FileGit,
+            Icon::FileJson,
+            Icon::FileConfig,
+            Icon::FileCode,
+        ];
+        for (i, a) in kinds.iter().enumerate() {
+            for b in &kinds[i + 1..] {
+                let (one, other) = (dots(*a), dots(*b));
+                let differ = one.iter().zip(&other).filter(|(x, y)| x != y).count();
+                assert!(differ > 12, "{a:?} and {b:?} look alike: {differ} dots");
+            }
+        }
     }
 
     /// The views had nothing between them and the view under them, where the tabs beside

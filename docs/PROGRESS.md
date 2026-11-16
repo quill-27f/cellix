@@ -2437,3 +2437,14 @@ From the same message: "between top left buttons and below part there should be 
 - Looked at: snapshots at 150 by 30 on airy rows, light and dark.
 - Cells have the rail, and no line.
 - Next: the tree's columns and the file icons, then the tour.
+
+## A file's icon says its kind (2026-11-16)
+
+The fifth step of the look, from the canvas the user picked: small filled icons in the tree.
+
+- Eight icons in `icon.rs`: a filled folder, a disc with R cut out for Rust and Cargo's two files, the same with P for Python, Markdown's M and arrow, git's diamond, braces for JSON, brackets round two lines for a config, angle brackets for other code. A page is every other kind. `explorer::file_icon` picks one by name, beside `file_color`, which it had already.
+- They're in the tree, Quick Open, Source Control's lists, a comment's place and a dragged tab. In cells every file is the same mark, as before.
+- A folder's icon is the same open or shut. Its chevron says which.
+- Tests: `a_files_icon_says_what_kind_it_is` is new: ten names and a folder, each with its icon and colour in its row, the cell tier unchanged, and no two kinds the same shape. The two discs differ least, by 13 dots or more of 576.
+- Looked at: a snapshot of the tree with a file of each kind, light.
+- Next: indent guides in the tree, then a file's icon on its tab.

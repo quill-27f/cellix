@@ -81,6 +81,19 @@ pub enum Icon {
     Smile = 57,
     /// Lucide's power: a ring open at its top with a bar down through the gap. Quits Cellix.
     Power = 58,
+    /// What a file is, beside its name, as an icon theme has it: a mark of its own for the
+    /// kinds met most, heavy or filled so it reads at a few pixels. A folder, filled. Rust
+    /// and Python as a disc with the letter cut out of it. Markdown's M and arrow. Git's
+    /// diamond. Braces for JSON, brackets round two lines for a config, and angle brackets
+    /// for other code. `File`, a page, is every other kind.
+    FolderFilled = 59,
+    FileRust = 60,
+    FilePython = 61,
+    FileMarkdown = 62,
+    FileGit = 63,
+    FileJson = 64,
+    FileConfig = 65,
+    FileCode = 66,
 }
 
 /// One cell of an icon that is `width` by `height` cells.
@@ -207,6 +220,17 @@ fn solid(p: Point, min: Point, max: Point, radius: f32) -> f32 {
     );
     let outside = (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt();
     (outside + qx.max(qy).min(0.0) - radius).max(0.0)
+}
+
+/// Distance to a disc, filled: nothing inside it.
+fn disc(p: Point, c: Point, radius: f32) -> f32 {
+    (circle(p, c) - radius).max(0.0)
+}
+
+/// A filled shape with a line cut out of it: `line` is how far the line is, and `half` half
+/// of how wide it's cut.
+fn cut(fill: f32, line: f32, half: f32) -> f32 {
+    if line < half { f32::MAX } else { fill }
 }
 
 /// A box at the bottom left, an arrow turning up from it, and the corners of the box it
@@ -716,6 +740,98 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
         Icon::CircleCheck => {
             ring(p, (12.0, 12.0), 9.5).min(path(p, &[(8.0, 12.3), (10.8, 15.0), (16.0, 9.5)]))
         }
+        // A folder's shape, filled: its tab at the top left, and the body under it.
+        Icon::FolderFilled => {
+            solid(p, (3.0, 4.2), (10.5, 9.0), 1.6).min(solid(p, (3.0, 7.2), (21.0, 19.4), 2.0))
+        }
+        // A disc with an R cut out of it: a stem, a bowl and a leg.
+        Icon::FileRust => {
+            let letter = segment(p, (9.0, 7.3), (9.0, 16.7))
+                .min(path(
+                    p,
+                    &[
+                        (9.0, 7.3),
+                        (12.6, 7.3),
+                        (14.3, 8.0),
+                        (15.0, 9.6),
+                        (14.3, 11.2),
+                        (12.6, 11.9),
+                        (9.0, 11.9),
+                    ],
+                ))
+                .min(segment(p, (12.4, 11.9), (15.3, 16.7)));
+            cut(disc(p, (12.0, 12.0), 9.2), letter, 0.95)
+        }
+        // The same disc with a P.
+        Icon::FilePython => {
+            let letter = segment(p, (9.4, 7.3), (9.4, 16.7)).min(path(
+                p,
+                &[
+                    (9.4, 7.3),
+                    (12.9, 7.3),
+                    (14.7, 8.1),
+                    (15.4, 9.9),
+                    (14.7, 11.7),
+                    (12.9, 12.5),
+                    (9.4, 12.5),
+                ],
+            ));
+            cut(disc(p, (12.0, 12.0), 9.2), letter, 0.95)
+        }
+        // Markdown's mark: an M, and an arrow down beside it.
+        Icon::FileMarkdown => path(
+            p,
+            &[
+                (2.5, 17.0),
+                (2.5, 7.0),
+                (7.0, 12.5),
+                (11.5, 7.0),
+                (11.5, 17.0),
+            ],
+        )
+        .min(segment(p, (18.0, 7.5), (18.0, 16.5)))
+        .min(path(p, &[(14.5, 13.0), (18.0, 16.5), (21.5, 13.0)])),
+        // Git's diamond, with a hole at its middle.
+        Icon::FileGit => {
+            let across = (p.0 - 12.0).abs() + (p.1 - 12.0).abs();
+            let diamond = ((across - 9.6) * std::f32::consts::FRAC_1_SQRT_2).max(0.0);
+            cut(diamond, circle(p, (12.0, 12.0)), 2.7)
+        }
+        // A pair of braces.
+        Icon::FileJson => {
+            let brace = |side: f32| {
+                let x = |from: f32| 12.0 + side * (from - 12.0);
+                path(
+                    p,
+                    &[
+                        (x(9.0), 4.0),
+                        (x(7.2), 4.5),
+                        (x(6.4), 6.2),
+                        (x(6.4), 9.6),
+                        (x(5.6), 11.3),
+                        (x(3.8), 12.0),
+                        (x(5.6), 12.7),
+                        (x(6.4), 14.4),
+                        (x(6.4), 17.8),
+                        (x(7.2), 19.5),
+                        (x(9.0), 20.0),
+                    ],
+                )
+            };
+            brace(1.0).min(brace(-1.0))
+        }
+        // Square brackets round two lines: a name and what it's set to.
+        Icon::FileConfig => path(p, &[(8.0, 4.0), (5.0, 4.0), (5.0, 20.0), (8.0, 20.0)])
+            .min(path(
+                p,
+                &[(16.0, 4.0), (19.0, 4.0), (19.0, 20.0), (16.0, 20.0)],
+            ))
+            .min(segment(p, (9.6, 9.8), (14.4, 9.8)))
+            .min(segment(p, (9.6, 14.2), (14.4, 14.2))),
+        // Angle brackets and a stroke between them.
+        Icon::FileCode => path(p, &[(8.0, 7.5), (3.5, 12.0), (8.0, 16.5)])
+            .min(path(p, &[(16.0, 7.5), (20.5, 12.0), (16.0, 16.5)]))
+            .min(segment(p, (13.6, 5.5), (10.4, 18.5))),
         // A ring open at its top, and a bar down through the gap to its middle.
         Icon::Power => {
             let open = if p.1 >= 6.4 {
@@ -805,6 +921,14 @@ mod tests {
             Icon::ShowPane,
             Icon::Smile,
             Icon::Power,
+            Icon::FolderFilled,
+            Icon::FileRust,
+            Icon::FilePython,
+            Icon::FileMarkdown,
+            Icon::FileGit,
+            Icon::FileJson,
+            Icon::FileConfig,
+            Icon::FileCode,
         ] {
             let dots = (0..50)
                 .flat_map(|y| (0..50).map(move |x| (x, y)))

@@ -746,7 +746,7 @@ impl Source {
         grid.glyph(
             left as f32,
             y,
-            Icon::File,
+            crate::explorer::file_icon(&name),
             file_color(&name),
             "▪",
             theme.sidebar,
@@ -899,7 +899,7 @@ impl Source {
         grid.glyph(
             icon as f32,
             y,
-            Icon::File,
+            crate::explorer::file_icon(&name),
             file_color(&name),
             "▪",
             theme.sidebar,

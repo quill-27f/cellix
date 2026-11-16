@@ -5248,5 +5248,12 @@
     "title": "A line parts the views across the top of the sidebar from what the one in front shows, the sidebar's width and level with the line under the tabs",
     "test": "a_line_parts_the_views_from_what_they_show",
     "passes": true
+  },
+  {
+    "id": "file-kind-icons",
+    "milestone": 14,
+    "title": "A file's icon says its kind where there are pictures: marks of their own for Rust, Python, Markdown, git, JSON, configs and other code, a page for the rest, and a filled folder; in the tree, Quick Open, Source Control and a comment's place",
+    "test": "a_files_icon_says_what_kind_it_is",
+    "passes": true
   }
 ]

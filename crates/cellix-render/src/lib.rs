@@ -8,7 +8,7 @@ mod paint;
 mod raster;
 
 pub use grid::{Cell, FIELD_AIR, GLYPH, Grid, Rect, Rgb, Run, SMALL_GLYPH, Style, on_large_button};
-pub use icon::{Icon, Piece};
+pub use icon::{Icon, Piece, inked};
 pub use measure::{CellMeasure, EMOJI_AIR, Font, FontMeasure, Measure};
 pub use paint::{
     ALL_CORNERS, BOTTOM_LEFT, BOTTOM_RIGHT, Bitmap, Bounds, Paint, Pixels, Strip, TOP_LEFT,

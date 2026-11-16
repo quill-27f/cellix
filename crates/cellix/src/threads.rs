@@ -2066,7 +2066,8 @@ pub fn draw(
                     _ => (String::new(), place.as_str()),
                 };
                 let (icon, colour, fallback) = if opens.is_some() {
-                    (Icon::File, crate::explorer::file_color(name), "▪")
+                    let icon = crate::explorer::file_icon(name);
+                    (icon, crate::explorer::file_color(name), "▪")
                 } else {
                     (Icon::Terminal, theme.gutter.fg, ">")
                 };
