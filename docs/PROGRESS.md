@@ -2413,3 +2413,17 @@ The fourth step of the look. The user said to finish the rest end to end, so fro
 - Unverified in a real terminal.
 - Next, from the user while this was building: the quit button, which stands in the pane's tab row and reads as closing the workspace; a rule under the views; more room at the top right's end. Then the icons and the tree.
 
+
+## Quit, at the foot (2026-11-16)
+
+From the user, with a picture of the build: "Close button is too close to the edge", and "in the workspace work that close button feel like you're closing the workstream rather than full app. Can we think something more intuitive?"
+
+- Quit left the top right. It's the power mark at the far end of the status bar, after the bell, with a line between them; the word Quit in cells; "Quit Cellix (Ctrl+Q)" on the row over the bar under the pointer. Every other × on screen closes what it's on, and this one stood in the pane's tab row. The frame's bar belongs to no tab, pane or workspace. `quit_cell`, `quit_room` and `draw_quit` in `app.rs`; the first screen draws the same button in the same place, where it had an × in its corner.
+- The top row ends a column short of the window's edge (`ACTION_END`), so the control that hides the pane has its middle three columns from the corner. The quit × had its middle one column from it.
+- The one bar counts the button's seven columns with the machine's name when it asks whether both fit, so the status bar's words keep the 72 columns they had.
+- A window under 40 columns has no button. Ctrl+Q quits.
+- Tests: `the_button_at_the_foot_quits_as_ctrl_q_does` replaces `the_button_at_the_top_right_quits_as_ctrl_q_does` (the ledger's `app-close-button` names it): the button's place, the word and the mark, the tip over the bar, the hand, asking about an unsaved file, quitting with nothing to ask, the old corner doing nothing, and no button in a narrow window. Changed with the decision: `the_icons_stand_clear_of_the_panes_close_button` asks for no × in the corner where it asked for one; `the_icons_at_the_top_right_are_there_with_the_pane_shut`, `a_review_keeps_its_buttons_clear_of_the_icons` and `a_hidden_pane_leaves_a_button_in_the_corner_that_brings_it_back` place the icons a column from the edge where they placed them two; `the_tab_in_front_keeps_its_name_and_those_behind_are_cut_short` expects `"  Comm… Agents ×  Term… ⤢"`, the tabs having the column the icons gave back; `icons_are_the_sizes_vs_code_has` opens a file to measure a tab's ×, the quit × having been the one it found; `the_first_screen_can_be_quit_and_leaves_every_workspace_as_it_is` presses the button at the foot; `the_inbox_lists_what_waits_everywhere_and_a_click_goes_there` finds the bell before Quit.
+- Looked at: snapshots at 150 by 30 on airy rows, light and dark, the foot's end and the top right.
+- Two rows at the foot (a narrow window with workspaces): the button is at the end of the status bar's row, over the machine's name, not on the last row. Left so.
+- Unverified in a real terminal.
+- Next: the rule under the views.

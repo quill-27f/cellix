@@ -131,6 +131,9 @@ const PANEL_TOGGLE: (Icon, Command, &str) = (Icon::Panel, Command::TogglePanel, 
 const ACTION_WIDTH: u16 = 3;
 /// Columns kept clear on each side of the whole bar.
 const ACTION_MARGIN: u16 = 1;
+/// Columns the top row keeps clear at the window's right edge, so the last icon in it has
+/// as much room from the corner as the first view has from the other.
+const ACTION_END: u16 = 1;
 /// Rows tall a rail icon is on the pixel tiers: 24 pt where a row is 18.5 pt, the size of
 /// VS Code's activity bar. Text cells keep their block art.
 const RAIL_ICON: f32 = 1.30;
@@ -143,10 +146,22 @@ const RAIL_PILL: (f32, f32) = (3.9, 1.78);
 const RAIL_DROP: f32 = 0.5;
 /// Where the pane's own close button stands, which they keep clear of.
 const PANE_CLOSE: u16 = 3;
-/// Columns for the button at the very top right that quits Cellix, as a window's close
-/// button does. It looks as the icons beside it do, set apart from the pane's × by a line.
-const APP_CLOSE: u16 = 2;
-const APP_CLOSE_TIP: &str = "Quit Cellix (Ctrl+Q)";
+/// The button that quits Cellix: the power mark at the far end of the bar at the window's
+/// foot, after the bell. It's on the frame, away from every tab and pane, so it reads as the
+/// way out of Cellix and not as closing what's beside it. These are the columns it takes,
+/// those left clear after it, and those before it, which a line stands in the middle of.
+const QUIT_WIDTH: u16 = 4;
+const QUIT_EDGE: u16 = 1;
+const QUIT_LEAD: u16 = 2;
+/// A window narrower than this goes without it. The key still quits.
+const QUIT_FROM: u16 = 40;
+/// What it says where there are no pictures, and what it's called under the pointer.
+const QUIT_WORD: &str = "Quit";
+const QUIT_TIP: &str = "Quit Cellix (Ctrl+Q)";
+/// Rows tall the mark is, which is the bell's size, and columns its chip reaches either side
+/// of its middle.
+const QUIT_ICON: f32 = BELL_ICON;
+const QUIT_SIDE: f32 = 1.3;
 /// What the corner's button says while the side pane is hidden.
 const SHOW_PANE_TIP: &str = "Show Side Pane";
 /// Columns kept for tabs beside them, in the pane and over the file. A window with less goes
@@ -1073,6 +1088,50 @@ fn quote_range(editor: &Editor, thread: &Thread) -> Option<(usize, usize)> {
     let at = text.find(thread.quote.as_str())?;
     let start = rope.line_to_char(index) + text[..at].chars().count();
     Some((start, start + thread.quote.chars().count()))
+}
+
+/// Where the button that quits Cellix stands in a window of `size`: at the far end of its
+/// last row, a column from the edge. Nowhere in a window too narrow for it.
+pub(crate) fn quit_cell(size: (u16, u16)) -> Option<Rect> {
+    let x = size.0.checked_sub(QUIT_WIDTH + QUIT_EDGE)?;
+    let y = size.1.checked_sub(1)?;
+    (size.0 >= QUIT_FROM).then(|| Rect::new(x, y, QUIT_WIDTH, 1))
+}
+
+/// The columns at the end of the last row that button has, with the air round it.
+pub(crate) fn quit_room(size: (u16, u16)) -> u16 {
+    quit_cell(size).map_or(0, |_| QUIT_LEAD + QUIT_WIDTH + QUIT_EDGE)
+}
+
+/// Draws the button that quits Cellix in its `cell` of the status bar: the power mark, or
+/// the word where there are no pictures, quiet until the pointer is on it, and a line before
+/// it that sets it apart from what the bar says.
+pub(crate) fn draw_quit(grid: &mut Grid, cell: Rect, hovered: bool, theme: &Theme) {
+    let bar = theme.status;
+    let (left, top) = (f32::from(cell.x), f32::from(cell.y));
+    let middle = left + f32::from(cell.w) / 2.0;
+    let (from, to) = BELL_CHIP;
+    if hovered {
+        // The bell's chip, round it.
+        let chip = Bounds::cells(middle - QUIT_SIDE, top + from, QUIT_SIDE * 2.0, to - from);
+        grid.panel(chip, 22, Some(theme.row_hover), None);
+    }
+    let lead = f32::from(QUIT_LEAD) / 2.0;
+    let line = Bounds::cells(left - lead, top + from + 0.08, 0.0, to - from - 0.16);
+    grid.hairline(line, theme.border);
+    let color = if hovered { theme.text.fg } else { bar.fg };
+    let style = Style { fg: color, ..bar };
+    grid.glyph(left, cell.y, Icon::Power, color, QUIT_WORD, style);
+    // The bell's size, and level with it.
+    let level = top + (from + to) / 2.0;
+    if let Some(Paint::Icon { bounds, .. }) = grid.paint.last_mut() {
+        *bounds = Bounds::cells(
+            middle - QUIT_ICON,
+            level - QUIT_ICON / 2.0,
+            QUIT_ICON * 2.0,
+            QUIT_ICON,
+        );
+    }
 }
 
 /// A list's place in the pane's screen with a row of air under the tabs.
@@ -3728,7 +3787,7 @@ impl App {
         }
         // The same place whatever's open, so a second click finds the same icon.
         let wide =
-            ACTION_WIDTH * PANE_ACTIONS.len() as u16 + PANE_CLOSE + ACTION_MARGIN + APP_CLOSE;
+            ACTION_WIDTH * PANE_ACTIONS.len() as u16 + PANE_CLOSE + ACTION_MARGIN + ACTION_END;
         let pane = self.dock_area().filter(|_| !self.dock_under());
         let least = pane.map_or(self.main_area().x + FILE_TABS_ROOM, |pane| {
             pane.x + PANE_TABS_ROOM
@@ -3756,7 +3815,7 @@ impl App {
 
     /// Docked beside a chat there's no room for five icons at the top right. They lead the
     /// pane's header, as VS Code's panel shows its views, the one showing named; the top right
-    /// keeps one icon that shows or hides the pane, beside quit.
+    /// keeps one icon that shows or hides the pane.
     fn docked_actions(&self) -> Vec<(Rect, Icon, Command, &'static str)> {
         let mut actions = Vec::new();
         if let Some(area) = self.dock_area() {
@@ -3772,7 +3831,7 @@ impl App {
                 x += width;
             }
         }
-        let toggle = APP_CLOSE + ACTION_MARGIN + ACTION_WIDTH;
+        let toggle = ACTION_MARGIN + ACTION_WIDTH;
         let least = self.main_left() + MENU_BUTTON + PANE_TABS_ROOM;
         if let Some(x) = self.size.0.checked_sub(toggle).filter(|x| *x >= least) {
             let (icon, command, name) = PANEL_TOGGLE;
@@ -3814,22 +3873,21 @@ impl App {
             .map_or(0, |end| (end + 1).saturating_sub(area.x))
     }
 
-    /// The button that quits Cellix, at the very top right, when the icons beside it fit.
-    fn app_close(&self) -> Option<Rect> {
-        let x = self.size.0.checked_sub(APP_CLOSE)?;
-        let beside = self.pane_actions().iter().any(|(cell, ..)| cell.y == 0);
-        beside.then(|| Rect::new(x, 0, APP_CLOSE, 1))
+    /// The button that quits Cellix, at the far end of the status bar.
+    fn quit_button(&self) -> Option<Rect> {
+        quit_cell(self.size)
     }
 
-    /// The pane's tab row, short of the quit button when it reaches the top right corner,
-    /// and after the panels' icons when docked.
+    /// The pane's tab row: after the frame's column between the sheets, and after the
+    /// panels' icons when docked. Where it reaches the window's right edge it ends a column
+    /// short of it, so the button that hides the pane keeps clear of the corner.
     fn title_of(&self, area: Rect) -> Rect {
-        let corner = area.y == 0 && area.right() >= self.size.0 && self.app_close().is_some();
-        let area = if corner {
-            Rect::new(area.x, area.y, area.w.saturating_sub(APP_CLOSE), area.h)
+        let end = if area.right() >= self.size.0 {
+            ACTION_END.min(area.w)
         } else {
-            area
+            0
         };
+        let area = Rect::new(area.x, area.y, area.w - end, area.h);
         // Beside the file the pane's first column is the frame's, between the two sheets, so
         // its tabs start after it and the first one's name keeps a column from the sheet's edge.
         let gap = if self.dock_under() { 0 } else { SHEET_GAP };
@@ -3838,9 +3896,6 @@ impl App {
     }
 
     fn action_at(&self, x: u16, y: u16) -> Option<Command> {
-        if self.app_close().is_some_and(|cell| cell.contains(x, y)) {
-            return Some(Command::Quit);
-        }
         if self.show_pane().is_some_and(|cell| cell.contains(x, y)) {
             return Some(Command::TogglePanel);
         }
@@ -3882,52 +3937,13 @@ impl App {
         }
     }
 
-    fn draw_app_close(&self, grid: &mut Grid, ground: Style) {
-        let Some(cell) = self.app_close() else {
-            return;
-        };
-        let theme = &self.theme;
-        grid.fill(cell, ground);
-        let hovered = self.hover.is_some_and(|h| cell.contains(h.0, h.1));
-        let middle = cell.x as f32 + cell.w as f32 / 2.0;
-        if hovered {
-            // The chip every icon at the top right has on hover, kept clear of the line.
-            let (wide, high) = crate::dock::BESIDE_LINE_PILL;
-            let chip = Bounds::cells(middle - wide / 2.0, (1.0 - high) / 2.0, wide, high);
-            grid.panel(chip, PILL_RADIUS, Some(theme.row_hover), None);
-        }
-        // Set apart from the pane's own buttons, as a group of its own, with air either side.
-        let line = Bounds::cells(cell.x as f32 - 0.5, 0.22, 0.0, 0.56);
-        grid.hairline(line, theme.border);
-        // Drawn as the icons beside it are: grey, and the text's colour on hover.
-        let color = if hovered {
-            theme.text.fg
-        } else {
-            theme.activity.fg
-        };
-        let style = Style {
-            fg: color,
-            painted: true,
-            ..ground
-        };
-        grid.put_str(cell.x, 0, "×", style, cell.right());
-        // The size of the pane's ×, so every × in the row is the same, centred on its chip.
-        let side = crate::dock::CLOSE_MARK;
-        grid.paint.push(Paint::Icon {
-            bounds: Bounds::cells(middle - side, (1.0 - side) / 2.0, side * 2.0, side),
-            icon: Icon::Close,
-            color,
-        });
-    }
-
     /// The ground the icons at the top right stand on: their row's own, read just left of
     /// them, so the cluster is one piece of whatever that row is, a tab bar or the Task page's
     /// header, with no box behind each icon.
     fn action_ground(&self, grid: &Grid) -> Style {
         let actions = self.pane_actions();
         let first = actions.iter().filter(|a| a.0.y == 0).map(|a| a.0.x).min();
-        let x = first.or_else(|| self.app_close().map(|c| c.x));
-        let bg = x
+        let bg = first
             .filter(|x| *x > 0 && *x <= grid.width())
             .map_or(self.theme.tab.bg, |x| grid.cell(x - 1, 0).style.bg);
         Style {
@@ -3938,7 +3954,6 @@ impl App {
 
     fn draw_pane_actions(&self, grid: &mut Grid) {
         let ground = self.action_ground(grid);
-        self.draw_app_close(grid, ground);
         let theme = &self.theme;
         // The button that shows a hidden pane stands just where the one that hides it does,
         // half a column left of its cell's middle, with that button's chip: the window with
@@ -12821,6 +12836,10 @@ impl App {
             if mouse.kind == MouseKind::Left && on_bell {
                 self.run(Command::ShowInbox);
             }
+            let on_quit = self.quit_button().is_some_and(|cell| cell.contains(x, y));
+            if mouse.kind == MouseKind::Left && on_quit {
+                self.run(Command::Quit);
+            }
             return;
         }
         let in_sidebar = self.sidebar_area().is_some_and(|a| a.contains(x, y));
@@ -14642,10 +14661,11 @@ impl App {
                     .max(0.5);
                 (name, left, self.dock_area().map_or(0, |a| a.y) as f32 + 1.2)
             }),
-            Overlay::None if self.app_close().is_some_and(|cell| cell.contains(x, y)) => Some((
-                APP_CLOSE_TIP,
-                self.size.0 as f32 - wide(APP_CLOSE_TIP) - 0.5,
-                1.2,
+            // On the row over the bar, since there's none under it.
+            Overlay::None if self.quit_button().is_some_and(|cell| cell.contains(x, y)) => Some((
+                QUIT_TIP,
+                self.size.0 as f32 - wide(QUIT_TIP) - 0.5,
+                f32::from(y) - TOOLTIP_HEIGHT,
             )),
             Overlay::None if self.show_pane().is_some_and(|cell| cell.contains(x, y)) => {
                 let left = self.size.0 as f32 - wide(SHOW_PANE_TIP) - 0.5;
@@ -17142,9 +17162,12 @@ impl App {
         let problems = (problems > 0 && !self.compact()).then(|| format!("⊗ {problems}  "));
         let flagged = problems.as_ref().map_or(0, |p| p.chars().count() as u16);
         let bell = self.status_bell();
-        // Short of the machine's name, where the bar of workspaces has put it before the bell.
+        let quit = self.quit_button();
+        // Short of the bell, or of the button that quits where there's no bell, and of the
+        // machine's name, where the bar of workspaces has put it before them.
+        let last = quit.map_or(width, |cell| cell.x.saturating_sub(QUIT_LEAD));
         let end = bell
-            .map_or(width, |(at, _)| at.saturating_sub(1))
+            .map_or(last, |(at, _)| at.saturating_sub(1))
             .saturating_sub(self.status_room.get().1);
         let used = left.chars().count().min(kept) as u16 + start + flagged + 3 + (width - end);
         let room = width.saturating_sub(used) as usize;
@@ -17210,6 +17233,10 @@ impl App {
         if let Some(spot) = bell {
             self.draw_status_bell(grid, spot, y);
         }
+        if let Some(cell) = quit {
+            let hovered = self.hover.is_some_and(|h| cell.contains(h.0, h.1));
+            draw_quit(grid, cell, hovered, &self.theme);
+        }
     }
 
     /// The bell at the right end of the status bar, as VS Code has it, with how much waits in
@@ -17224,7 +17251,6 @@ impl App {
             .is_some_and(|h| h.1 == y && h.0 >= at && h.0 < end);
         // The bell about as tall as the status text's capitals, centred in its chip, which
         // keeps 8 px clear of the edge above the status bar.
-        // Its chip ends where the workspaces bar's last word does, under it.
         let middle = at as f32 + 2.0 - BELL_SIDE;
         let level = y as f32 + (BELL_CHIP.0 + BELL_CHIP.1) / 2.0;
         let font = Font {
@@ -17272,8 +17298,8 @@ impl App {
         }
     }
 
-    /// Where the bell sits in the status bar, as (start, end) columns: at the far right, wide
-    /// enough for its count.
+    /// Where the bell sits in the status bar, as (start, end) columns: at the far right,
+    /// before the button that quits, wide enough for its count.
     pub(crate) fn status_bell(&self) -> Option<(u16, u16)> {
         if self.in_pane {
             return None;
@@ -17285,7 +17311,10 @@ impl App {
             0
         };
         let width = 2 + digits;
-        let end = self.size.0.saturating_sub(1);
+        let edge = self.size.0.saturating_sub(1);
+        let end = self
+            .quit_button()
+            .map_or(edge, |cell| cell.x.saturating_sub(QUIT_LEAD));
         Some((end.saturating_sub(width), end))
     }
 
@@ -17358,7 +17387,8 @@ impl App {
                     .is_some_and(|(at, end)| x >= at && x < end)
                 || self
                     .status_bell()
-                    .is_some_and(|(at, end)| x >= at && x < end));
+                    .is_some_and(|(at, end)| x >= at && x < end)
+                || self.quit_button().is_some_and(|cell| cell.contains(x, y)));
         let dock = self.dock_area().filter(|a| a.contains(x, y));
         let dock_title = dock.is_some_and(|a| y == a.y);
         let in_rail = self.activity_area().contains(x, y);
@@ -28645,7 +28675,7 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
     fn the_icons_at_the_top_right_are_there_with_the_pane_shut() {
         let (_dir, mut app) = project();
         assert!(!app.dock.open);
-        let right = app.size.0 - APP_CLOSE - PANE_CLOSE - ACTION_MARGIN;
+        let right = app.size.0 - ACTION_END - PANE_CLOSE - ACTION_MARGIN;
         assert_eq!(app.pane_actions().last().unwrap().0.right(), right);
         assert!(
             app.tabs_area().right() <= app.pane_actions()[0].0.x,
@@ -28769,7 +28799,9 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
                 "{icon:?}: {at_the_top_right} pt"
             );
         }
-        // Every × in the title row is the size of the icons beside names.
+        // Every × in the title row is the size of the icons beside names. A tab's is the
+        // one there is, now that the button that quits is the power mark at the foot.
+        app.open(&dir.path().join("alpha.txt")).unwrap();
         let close = icon_points(&app, Icon::Close, false);
         assert!(near(close, 16.0), "a ×'s box: {close} pt");
     }
@@ -29009,13 +29041,13 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         app.run(Command::OpenDiff);
         let _ = screen(&app);
         let strip =
-            ACTION_WIDTH * PANE_ACTIONS.len() as u16 + PANE_CLOSE + ACTION_MARGIN + APP_CLOSE;
+            ACTION_WIDTH * PANE_ACTIONS.len() as u16 + PANE_CLOSE + ACTION_MARGIN + ACTION_END;
         assert_eq!(app.actions_over_main(), strip);
     }
 
     #[test]
     fn tabs_in_the_pane_share_the_row_with_the_icons() {
-        // Four agents' tabs at their smallest, beside the icons and the quit button.
+        // Four agents' tabs at their smallest, beside the icons.
         let (dir, _) = project();
         let mut app = App::new(dir.path().to_path_buf(), (180, 40));
         let root = app.workspace.root().to_path_buf();
@@ -29230,7 +29262,9 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         // The button that maximizes the pane keeps its place after them: it gave way with
         // the +, and a pane this narrow, as Cellix's is inside Claude Code, couldn't be
         // maximized by anything in sight.
-        assert_eq!(strip.trim_end(), "  Comm… Agents ×  Ter… ⤢", "{row}");
+        // The icons end the row now that the button that quits is at the foot, a column
+        // from the window's edge, so the tabs have the other column it took.
+        assert_eq!(strip.trim_end(), "  Comm… Agents ×  Term… ⤢", "{row}");
         for x in area.x..first_icon {
             let hit = app.dock.hit(title, x);
             let gone = [TabHit::New, TabHit::Pick];
@@ -29517,7 +29551,7 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
     fn a_hidden_pane_leaves_a_button_in_the_corner_that_brings_it_back() {
         let (dir, _) = project();
         let mut app = App::new(dir.path().to_path_buf(), (170, 40));
-        let button = app.size.0 - APP_CLOSE - 2;
+        let button = app.size.0 - ACTION_END - 2;
         let shows = |app: &App| {
             let grid = screen(app);
             let drawn = grid.paint.iter().any(|p| {
@@ -29654,15 +29688,15 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let area = app.dock_area().unwrap();
         assert_eq!(
             app.pane_actions().last().unwrap().0.right(),
-            area.right() - APP_CLOSE - PANE_CLOSE - ACTION_MARGIN
+            area.right() - ACTION_END - PANE_CLOSE - ACTION_MARGIN
         );
-        // The pane's hide icon stands just left of the button that quits, and isn't an ×:
-        // the only × in the corner quits.
+        // The pane's hide icon ends the row, three columns from the window's edge, and isn't
+        // an ×: nothing in the corner is, so nothing there reads as closing more than a tab.
         let text = screen(&app).row_text(area.y);
-        let hide = text.chars().count() as u16 - APP_CLOSE - 2;
+        let hide = text.chars().count() as u16 - ACTION_END - 2;
         assert_eq!(text.chars().nth(hide as usize), Some('◨'), "{text}");
         let corner: String = text.chars().skip(hide as usize).collect();
-        assert_eq!(corner.matches('×').count(), 1, "only quit: {corner}");
+        assert_eq!(corner.matches('×').count(), 0, "no × there: {corner}");
         let icons = screen(&app).paint.iter().any(|p| {
             matches!(p, Paint::Icon { icon: Icon::HidePane, bounds, .. }
                 if bounds.x / 64 >= i32::from(hide) - 1 && bounds.y / 64 == i32::from(area.y))
@@ -29746,26 +29780,60 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         }
     }
 
+    /// Quit was an × at the top right, in the pane's tab row, where it read as closing the
+    /// pane or the workspace. It's the power mark at the far end of the bar at the foot.
     #[test]
-    fn the_button_at_the_top_right_quits_as_ctrl_q_does() {
+    fn the_button_at_the_foot_quits_as_ctrl_q_does() {
         let (_dir, mut app) = project();
         let grid = screen(&app);
-        let corner = app.size.0 - 2;
-        assert_eq!(grid.cell(corner, 0).symbol, "×");
+        let foot = app.size.1 - 1;
+        let cell = app.quit_button().expect("a window this wide has it");
+        assert_eq!((cell.y, cell.right()), (foot, app.size.0 - QUIT_EDGE));
+        // After the bell, with room between them, so a press meant for one can't land on
+        // the other.
+        let (_, bell_end) = app.status_bell().unwrap();
+        assert_eq!(bell_end + QUIT_LEAD, cell.x);
+        // The word where there are no pictures, and the power mark where there are.
+        let row = grid.row_text(foot);
+        assert!(row.trim_end().ends_with(QUIT_WORD), "{row}");
+        let mark = grid.paint.iter().find_map(|p| match p {
+            Paint::Icon {
+                icon: Icon::Power,
+                bounds,
+                color,
+            } => Some((*bounds, *color)),
+            _ => None,
+        });
+        let (bounds, color) = mark.expect("the power mark");
         assert_eq!(
-            grid.cell(corner, 0).style.fg,
-            app.theme.activity.fg,
-            "grey, as the icons beside it are"
+            color, app.theme.status.fg,
+            "quiet, as the bell beside it is"
         );
-        // Its name on hover says what it does and its key.
-        app.handle(mouse(MouseKind::Move, corner, 0));
-        assert!(screen(&app).text().contains(APP_CLOSE_TIP));
+        let unit = cellix_render::UNIT;
+        let middle = (bounds.x + bounds.w / 2) as f32 / unit as f32;
+        assert!(
+            f32::from(app.size.0) - middle >= 2.0,
+            "two columns or more from the window's edge: {middle}"
+        );
+        // Nothing in the top row is an × while no tab is open: the corner it was in has the
+        // button that shows the pane.
+        assert!(!grid.row_text(0).contains('×'), "{}", grid.row_text(0));
+
+        // Its name on hover says what it does and its key, on the row over the bar.
+        app.handle(mouse(MouseKind::Move, cell.x + 1, foot));
+        let named = screen(&app);
+        assert!(
+            named.row_text(foot - 1).contains(QUIT_TIP),
+            "{}",
+            named.text()
+        );
+        assert_eq!(app.pointer(), "pointer");
 
         // An unsaved file is asked about first, as Ctrl+Q asks.
         let (x, y) = find(&grid, "alpha.txt");
         app.handle(mouse(MouseKind::Left, x, y));
         typed(&mut app, "x");
-        app.handle(mouse(MouseKind::Left, corner, 0));
+        app.handle(mouse(MouseKind::Left, cell.x + 1, foot));
         assert!(!app.quit, "asks first");
         assert!(
             screen(&app).text().contains("Don't Save"),
@@ -29774,8 +29842,20 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         );
 
         let (_dir, mut app) = project();
-        app.handle(mouse(MouseKind::Left, app.size.0 - 1, 0));
+        app.handle(mouse(MouseKind::Left, cell.x + 1, foot));
         assert!(app.quit, "nothing to ask, so it quits");
+
+        // The corner it was in doesn't quit.
+        let (_dir, mut app) = project();
+        app.handle(mouse(MouseKind::Left, app.size.0 - 1, 0));
+        assert!(!app.quit);
+
+        // A window too narrow for it goes without, and its status bar ends as it did.
+        let (_dir, mut app) = project();
+        app.handle(Event::Resize(QUIT_FROM - 1, 30));
+        assert_eq!(app.quit_button(), None);
+        let (_, bell_end) = app.status_bell().unwrap();
+        assert_eq!(bell_end, app.size.0 - 1);
     }
 
     #[test]
@@ -33434,11 +33514,11 @@ while True:
         let pane = app.dock_area().unwrap();
         assert!(pane.y > 0, "the pane stands under the file");
         let actions = app.pane_actions();
-        // The top right keeps one icon, which shows or hides the pane, and quit.
+        // The top right keeps one icon, which shows or hides the pane.
         let top: Vec<_> = actions.iter().filter(|a| a.0.y == 0).collect();
         assert_eq!(top.len(), 1, "{top:?}");
         assert_eq!(top[0].2, Command::TogglePanel);
-        assert!(app.app_close().is_some());
+        assert!(app.quit_button().is_some(), "quit is at the foot");
         assert!(
             app.tabs_area().right() < top[0].0.x,
             "tabs stop short of it"

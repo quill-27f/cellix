@@ -454,6 +454,19 @@ place in the list, since every worktree shares one list and agents push and pop 
 `theme` is `auto`, `dark` or `light`. `auto` is the default: Cellix asks the terminal for
 its background with OSC 11 and takes the matching theme, staying dark if nothing answers.
 
+## Quit, at the foot
+
+The button that quits Cellix is the power mark at the far end of the status bar, after the
+bell, with a line and two columns between them so a press meant for one can't land on the
+other. In cells it's the word Quit. Its tip, on the row over the bar, says "Quit Cellix
+(Ctrl+Q)". The first screen has it in the same place.
+
+It was an × at the top right until 16 November 2026, in the pane's tab row beside the
+control that hides the pane. The user said it read as closing the workspace, not Cellix:
+every other × on screen closes the thing it's on, a tab or a workspace's tile. So it left
+the sheets for the frame, which belongs to no tab, pane or workspace, and took a mark no
+other control has. A window under 40 columns goes without it, and the key still quits.
+
 ## One bar at the foot
 
 The workspaces lead the status bar's own row (the user's choice of 16 November 2026: two bars
@@ -461,7 +474,7 @@ with chips of two kinds were the first thing they called clutter). From the left
 each workspace, the one in front in the accent with its words in the colour that reads on
 it, the button that opens another as its mark alone, a rule, then what the status bar says:
 the branch, the count of problems, what was last done. At the far end the file's details,
-the machine's name, and the bell. `Workspaces` tells each `App` the columns it has taken
+the machine's name, the bell, and the button that quits. `Workspaces` tells each `App` the columns it has taken
 (`status_room`: the lead, and the room before the bell), and the status bar starts and stops
 short by them. A press on a workspace or Resume is the bar's; anywhere else in the row it's
 the status bar's. What the status bar painted is raised with the bar's own, so the two stand
@@ -710,7 +723,7 @@ to the focused pane, the status bar keeps only what fits, and review stacks chan
 Under 80 columns, about what Claude Code leaves Cellix beside its chat, the layout is made
 for that width rather than squeezed. The five panel icons lead the side pane's header, as
 VS Code's panel shows its views, with the one showing named and no tab of its own. The top
-right keeps one icon that shows or hides the pane, beside quit. Tabs out of view are
+right keeps one icon that shows or hides the pane. Tabs out of view are
 counted at the ends of the strip ("‹ 2 more", "3 more ›"), and each count lists its tabs.
 A side pane whose tabs don't all fit before the icons at the top right keeps every tab in
 the row. The one in front, a tab in the shape every tab has, hugs its measured name and its ×, with none
@@ -937,7 +950,7 @@ per folder that says what its agent is doing, a labelled New Workspace button to
 a folder, Resume for everything that stopped, and the machine's name. Each folder's sessions folder
 names its project, so a new Cellix opens every folder on the machine with something running or
 stopped that no other Cellix has open, and Cellix started at home with nothing named offers them
-first. That first screen can be left as any other: Quit beside Open, the × in its corner, or the key
+first. That first screen can be left as any other: Quit beside Open, the button at the end of its foot, or the key
 that quits, and every folder stays as it is for next time, with nothing asked. Every folder open when Cellix quits or hangs up is marked `open` there too, so it comes
 back with nothing running in it, as an editor brings back its windows; closing its tile lets it
 go. Closing a tile asks as Quit does; Quit asks each folder in turn. The bar is drawn on the
@@ -1094,10 +1107,10 @@ the file.
   trust question isn't covered by `--consent`, and the user's click is the answer to it.
   `BeforeTool` on `exit_plan_mode` holds the plan, and Gemini still asks for its own approval.
 - The icons at the top right, as in a desktop app, reach the comments, a terminal, Review, the
-  browser and the agents. Past them, in the corner, a close button quits Cellix as Ctrl+Q
-  does. It's drawn as the icons are, grey with the same hover chip, and a thin line sets it
-  apart from the pane's own control, which hides the pane and is drawn as a window with its
-  right part filled, so the only × in the corner quits. A hidden pane leaves that control in
+  browser and the agents. The pane's own control ends the row, three columns from the
+  window's edge. It hides the pane and is drawn as a window with its right part filled, not
+  an ×, so nothing in the corner reads as closing more than a tab. Quit isn't there: see
+  "Quit, at the foot". A hidden pane leaves that control in
   its place, the window with its right part in outline, so something in view always brings
   the pane back as it was. The
   explorer lists gitignored files, as VS Code does, since agents work in them, but dims them,

@@ -1885,7 +1885,7 @@
   {
     "id": "strip-close",
     "milestone": 9,
-    "title": "The pane hides with an icon of its own beside quit, so the only × in the corner quits",
+    "title": "The pane hides with an icon of its own that ends the top row, three columns from the window's edge, and isn't an ×: nothing in the corner reads as closing more than a tab",
     "test": "the_icons_stand_clear_of_the_panes_close_button",
     "passes": true
   },
@@ -3852,8 +3852,8 @@
   {
     "id": "app-close-button",
     "milestone": 11,
-    "title": "A close button at the top right, drawn as the icons beside it are, quits Cellix as Ctrl+Q does, asking first about unsaved files",
-    "test": "the_button_at_the_top_right_quits_as_ctrl_q_does",
+    "title": "The power mark at the far end of the bar at the foot, after the bell and a line, quits Cellix as Ctrl+Q does, asking first about unsaved files; it's the word Quit in cells, and nothing in the top row quits",
+    "test": "the_button_at_the_foot_quits_as_ctrl_q_does",
     "passes": true
   },
   {
@@ -3943,7 +3943,7 @@
   {
     "id": "dock-panel-tabs",
     "milestone": 11,
-    "title": "Docked under 80 columns, as beside Claude Code's chat, the five panel icons lead the pane's header with the one showing named, and the top right keeps one Toggle Panel icon beside quit",
+    "title": "Docked under 80 columns, as beside Claude Code's chat, the five panel icons lead the pane's header with the one showing named, and the top right keeps one Toggle Panel icon",
     "test": "docked_the_panels_lead_the_pane_header",
     "passes": true
   },

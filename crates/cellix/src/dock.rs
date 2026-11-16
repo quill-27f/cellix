@@ -93,13 +93,12 @@ pub const ACTION_ICON: f32 = 0.70;
 /// The chip behind one of them that's showing or hovered, in columns and rows: as tall as a
 /// button, with the icon's box 8 px inside it at the sides.
 pub const ACTION_PILL: (f32, f32) = (2.5, 0.89);
-/// The hover chip of the hide and quit buttons, either side of the line between them: as
-/// tall and round as the icons' chips, narrower, so 8 px stay clear of the line.
+/// The hover chip of the button that hides the pane, and of the one that shows it: as tall
+/// and round as the icons' chips, narrower, so a column stays clear between it and the
+/// sheet's edge.
 pub const BESIDE_LINE_PILL: (f32, f32) = (1.95, 0.89);
 const HIDE_PILL: (f32, f32) = BESIDE_LINE_PILL;
 const HIDE_RADIUS: u8 = 30;
-/// The height in rows of every × in the title row: a tab's, the pane's, and the quit button's.
-pub const CLOSE_MARK: f32 = cellix_render::GLYPH;
 /// What the pane's browser tab is called.
 pub const BROWSER: &str = "Browser";
 /// Pictures kept per session, oldest going first.
@@ -2399,8 +2398,8 @@ impl Dock {
         );
         grid.fill(hide, theme.tab);
         let on_it = hover.is_some_and(|h| hide.contains(h.0, h.1));
-        // Half a column left of the button's middle, so a line can stand clear between its
-        // chip and the quit button's beside it.
+        // Two columns from the end of the pane's row, which is a column short of the
+        // window's edge, so its chip keeps two columns clear of that.
         let middle = hide.x as f32 + 1.0;
         if on_it {
             // The chip the icons beside it have on hover.
@@ -2414,8 +2413,8 @@ impl Dock {
         } else {
             theme.gutter.fg
         };
-        // A window with its right part filled, not an ×: the pane hides, and the only × in
-        // the corner quits. The size of the icons beside it.
+        // A window with its right part filled, not an ×: the pane hides, and nothing in the
+        // corner reads as closing more than that. The size of the icons beside it.
         let cell = Rect::new(hide.x, area.y, 2, 1);
         debug_assert_eq!(cell.x as f32 + cell.w as f32 / 2.0, middle);
         // Standing under the file, the window's foot is the part filled, as VS Code's panel

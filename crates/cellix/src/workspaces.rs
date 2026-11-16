@@ -49,11 +49,10 @@ const STATUS_ROOM: f32 = 72.0;
 const AFTER: f32 = 2.0;
 /// The button that opens another folder beside this one, and what its tip says.
 const NEW_WORKSPACE: &str = "New Workspace";
-/// The first screen's way out, beside Open: its word, how far it stands from the column's
-/// left edge, and the columns the × in the corner takes, as in the app.
+/// The first screen's way out, beside Open: its word, and how far it stands from the
+/// column's left edge.
 const QUIT: &str = "Quit";
 const QUIT_FROM: u16 = 8;
-const QUIT_CORNER: u16 = 2;
 const NEW_WORKSPACE_TIP: &str = "Open another folder beside this one";
 /// The tip's size, relative to the interface font.
 const TIP_SIZE: u8 = 85;
@@ -177,7 +176,9 @@ impl Workspaces {
             return false;
         }
         let lead = self.spans().1 + self.new_width(false) + AFTER;
-        let tail = self.text_width(&self.machine) + 2.0;
+        // The machine's name, and after the bell the button that quits.
+        let quit = f32::from(crate::app::quit_room(self.size));
+        let tail = self.text_width(&self.machine) + 2.0 + quit;
         f32::from(self.size.0) - lead - tail >= STATUS_ROOM
     }
 
@@ -998,10 +999,10 @@ impl Workspaces {
         Rect::new(left + QUIT_FROM, self.open_all_row(), width, 1)
     }
 
-    /// The × in the corner of the first screen, which quits as it does everywhere else.
-    fn quit_corner(&self) -> Rect {
-        let x = self.size.0.saturating_sub(QUIT_CORNER);
-        Rect::new(x, 0, QUIT_CORNER, 1)
+    /// The button at the end of the first screen's foot, which quits as it does on every
+    /// other screen, from the same place.
+    fn quit_button(&self) -> Option<Rect> {
+        crate::app::quit_cell(self.size)
     }
 
     /// Whether a place on the first screen is one of its ways out.
@@ -1009,7 +1010,7 @@ impl Workspaces {
         let link = self.quit_link();
         // A column either side of the word counts, so it isn't a pixel hunt.
         let near = y == link.y && x + 1 >= link.x && x <= link.right();
-        near || self.quit_corner().contains(x, y)
+        near || self.quit_button().is_some_and(|cell| cell.contains(x, y))
     }
 
     /// Up and Down pick a workspace on the first screen, and Enter opens it. The key that
@@ -1135,32 +1136,16 @@ impl Workspaces {
         };
         let y = self.open_all_row();
         grid.label(left, y, "Open", link, right);
-        // The way out, beside it and in the corner, where it is on every other screen.
+        // The way out, beside it and at the end of the foot, where it is on every other
+        // screen.
         let leaving = self.hover.is_some_and(|(x, y)| self.on_quit(x, y));
         let quit = self.quit_link();
         let style = if leaving { base } else { dim };
         grid.label(quit.x, quit.y, QUIT, style, right);
-        let corner = self.quit_corner();
-        let middle = f32::from(corner.x) + f32::from(corner.w) / 2.0;
-        grid.fill(corner, theme.activity);
-        if self.hover.is_some_and(|(x, y)| corner.contains(x, y)) {
-            let (wide, high) = crate::dock::BESIDE_LINE_PILL;
-            let chip = Bounds::cells(middle - wide / 2.0, (1.0 - high) / 2.0, wide, high);
-            grid.panel(chip, CHIP_RADIUS, Some(theme.row_hover), None);
+        if let Some(cell) = self.quit_button() {
+            let on_it = self.hover.is_some_and(|(x, y)| cell.contains(x, y));
+            crate::app::draw_quit(grid, cell, on_it || leaving, theme);
         }
-        let color = if leaving { base.fg } else { theme.activity.fg };
-        let cross = Style {
-            fg: color,
-            painted: true,
-            ..theme.activity
-        };
-        grid.put_str(corner.x, 0, "×", cross, corner.right());
-        let side = crate::dock::CLOSE_MARK;
-        grid.paint.push(cellix_render::Paint::Icon {
-            bounds: Bounds::cells(middle - side, (1.0 - side) / 2.0, side * 2.0, side),
-            icon: Icon::Close,
-            color,
-        });
         // What the pointer is on says what it does, where the keys are named otherwise.
         let hint = if leaving {
             "Quits Cellix. Every workspace stays as it is, for next time"
@@ -1730,10 +1715,16 @@ mod tests {
         spaces.handle(Event::Resize(140, 36));
         // The bell at the right end of the status bar opens it. Empty, it says what would
         // fill it, and what to do meanwhile.
-        // The workspaces lead the status bar's row, and the bell still ends it.
+        // The workspaces lead the status bar's row, and the bell still ends what it says,
+        // before the button that quits.
         let status = spaces.size().1 - 1;
-        assert!(screen(&spaces).row_text(status).trim_end().ends_with('◬'));
-        let bell = (spaces.size().0 - 3, status);
+        let row = screen(&spaces).row_text(status);
+        let said = row
+            .trim_end()
+            .strip_suffix("Quit")
+            .expect("quit ends the row");
+        assert!(said.trim_end().ends_with('◬'), "{row}");
+        let bell = (spaces.app().status_bell().unwrap().0, status);
         click(&mut spaces, MouseKind::Left, bell);
         spaces.poll();
         let text = screen(&spaces).text();
@@ -1758,7 +1749,8 @@ mod tests {
         let text = grid.text();
         assert!(text.contains("Inbox 2"), "the tab counts them: {text}");
         let bell = grid.row_text(status);
-        assert!(bell.trim_end().ends_with("◬ 2"), "and the bell: {bell}");
+        let said = bell.trim_end().strip_suffix("Quit").unwrap_or(&bell);
+        assert!(said.trim_end().ends_with("◬ 2"), "and the bell: {bell}");
         assert!(text.contains("2 waiting in 2 workspaces"), "{text}");
         let (_, failed) = find_text(&grid, "cargo test failed");
         let (x, asking) = find_text(&grid, "Allow sqlx migrate run?");
@@ -2062,10 +2054,12 @@ mod tests {
             .find(|&y| grid.row_text(y).contains("Open"))
             .expect("the row under the list");
         let quit = spot(&grid, row, "Quit");
+        let foot = spaces.size.1 - 1;
         assert!(
-            grid.row_text(0).trim_end().ends_with('×'),
-            "and in the corner"
+            grid.row_text(foot).trim_end().ends_with("Quit"),
+            "and at the end of the foot, where every other screen has it"
         );
+        assert!(!grid.row_text(0).contains('×'), "nothing in the corner");
         assert!(grid.text().contains("Ctrl+Q to quit"), "{}", grid.text());
 
         click(&mut spaces, MouseKind::Left, quit);
@@ -2074,11 +2068,13 @@ mod tests {
         assert!(spaces.choosing);
 
         spaces.quit = false;
-        let corner = (spaces.size.0 - 1, 0);
+        let button = spaces.quit_button().expect("a window this wide has it");
+        let corner = (button.x + 1, button.y);
+        assert_eq!(button.y, foot);
         click(&mut spaces, MouseKind::Move, corner);
         assert!(screen(&spaces).text().contains("stays as it is"));
         click(&mut spaces, MouseKind::Left, corner);
-        assert!(spaces.quit, "the × in the corner quits");
+        assert!(spaces.quit, "the button at the foot quits");
 
         spaces.quit = false;
         let ctrl = Mods {

@@ -69,7 +69,8 @@ pub enum Icon {
     CircleCheck = 51,
     CircleX = 52,
     /// A window with its right part filled, as VS Code's title bar has: the side pane
-    /// shown, and the button that hides it. Not an ×, so the only × in the corner quits.
+    /// shown, and the button that hides it. Not an ×: nothing in the corner is, so nothing
+    /// there reads as closing more than the pane.
     HidePane = 54,
     /// The same with its foot filled, Lucide's panel-bottom: the pane standing under the
     /// file, and the button that hides it.
@@ -78,6 +79,8 @@ pub enum Icon {
     ShowPane = 56,
     /// Lucide's smile: a face, for every emoji there is.
     Smile = 57,
+    /// Lucide's power: a ring open at its top with a bar down through the gap. Quits Cellix.
+    Power = 58,
 }
 
 /// One cell of an icon that is `width` by `height` cells.
@@ -713,6 +716,15 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
         Icon::CircleCheck => {
             ring(p, (12.0, 12.0), 9.5).min(path(p, &[(8.0, 12.3), (10.8, 15.0), (16.0, 9.5)]))
         }
+        // A ring open at its top, and a bar down through the gap to its middle.
+        Icon::Power => {
+            let open = if p.1 >= 6.4 {
+                ring(p, (12.0, 13.0), 9.0)
+            } else {
+                f32::MAX
+            };
+            open.min(segment(p, (12.0, 2.0), (12.0, 12.0)))
+        }
         Icon::Smile => ring(p, (12.0, 12.0), 9.5)
             .min(circle(p, (9.0, 9.6)) - 0.35)
             .min(circle(p, (15.0, 9.6)) - 0.35)
@@ -792,6 +804,7 @@ mod tests {
             Icon::HidePanel,
             Icon::ShowPane,
             Icon::Smile,
+            Icon::Power,
         ] {
             let dots = (0..50)
                 .flat_map(|y| (0..50).map(move |x| (x, y)))
