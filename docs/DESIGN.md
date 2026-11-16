@@ -569,6 +569,16 @@ run across the top of the sidebar, level with the tabs, an icon every three colu
 in front with a line under it in the accent (the user's choice of 16 November 2026, after a
 picture of Lapce; a rail down the left edge took five columns for them until then). A hairline runs under the row, the sidebar's width and level with the one under the tabs, between the views and what the one in front shows (asked for the same day). The side pane's tabs, and the icons at the top right after them, have the same line under them, so one line runs across the top of the window, broken by the frame's columns.
 
+Under the views there's a row of air, and the heading of what the one in front shows
+(the folder's name and its branch, OUTLINE, SOURCE CONTROL) is painted half way into it:
+half a row of air between the line and the heading, and as much between the heading and its
+list. On the row straight under the line the heading read as part of the views (the user's
+third point on trying 0.10.0). Only the heading's paint is raised
+(`raise_sidebar_heading`): its cells, and every row under it, are where a press finds them,
+and a press on the row of air counts as one on the heading (`on_sidebar_heading`). The
+sidebar has a row less for its list. What a view says when it has nothing to list wraps
+inside the sidebar, with two columns clear at its far edge.
+
 A file's icon says its kind, as an icon theme's does: a disc with the letter cut out for Rust
 and Python, Markdown's mark, git's diamond, braces for JSON, brackets for a config, angle
 brackets for other code, and a page for the rest, each in its kind's colour. Folders are

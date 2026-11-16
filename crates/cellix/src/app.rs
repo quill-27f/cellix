@@ -257,6 +257,11 @@ const LINGER_BUTTONS: [&str; 3] = ["Turn On", "Copy Command", "Not Now"];
 const LINGER_WIDTH: u16 = 52;
 /// How far into its first row a card's panel starts, and how far short of the end of its
 /// last row it stops, so there's the same air over the title as under the buttons.
+/// Rows left empty between the views and what the one in front shows, where the views are
+/// across the sidebar's top. Its heading is raised half a row into it, so it has half a row
+/// of air under the views' line and as much before its list: on the row straight under the
+/// line it read as part of the views.
+const SIDEBAR_AIR: u16 = 1;
 const CARD_TOP: f32 = 0.4;
 const CARD_BOTTOM: f32 = 0.1;
 /// The same on a row with room: the panel takes a quarter of its first row and of its last.
@@ -3724,13 +3729,56 @@ impl App {
     /// What a view shows in: the sidebar, under the views' row where that's at its top.
     fn sidebar_area(&self) -> Option<Rect> {
         let frame = self.sidebar_frame()?;
-        let views = u16::from(self.views_on_top()).min(frame.h);
+        // Under the views there's a row of air, which the heading of what they show stands
+        // half way into: see `raise_sidebar_heading`.
+        let views = if self.views_on_top() {
+            (1 + SIDEBAR_AIR).min(frame.h)
+        } else {
+            0
+        };
         Some(Rect::new(
             frame.x,
             frame.y + views,
             frame.w,
             frame.h - views,
         ))
+    }
+
+    /// Raises what a sidebar's view painted on its first row, its heading, half a row into
+    /// the air under the views, where the views are across the sidebar's top. Only paint
+    /// moves: its cells and where a press lands are its row, and a press on the row of air
+    /// counts as one on it too (`on_sidebar_heading`).
+    fn raise_sidebar_heading(&self, grid: &mut Grid, from: usize, area: Rect) {
+        if !self.views_on_top() || area.h == 0 {
+            return;
+        }
+        let unit = cellix_render::UNIT;
+        let row = i32::from(area.y) * unit;
+        // What's on the heading's row starts in it or a little over it, where its words
+        // are raised in a chip. What's on the next row starts no more than a quarter over
+        // that one.
+        let on_it = row - unit / 4..row + unit * 3 / 4;
+        for paint in grid.paint.iter_mut().skip(from) {
+            if on_it.contains(&paint.top()) {
+                paint.lift(unit * i32::from(SIDEBAR_AIR) / 2);
+            }
+        }
+    }
+
+    /// A press or the pointer on the row of air under the views is on the heading under it,
+    /// which is painted half way into that row.
+    fn on_sidebar_heading(&self, event: Event) -> Event {
+        let Event::Mouse(mut mouse) = event else {
+            return event;
+        };
+        if let Some(area) = self.sidebar_area().filter(|_| self.views_on_top()) {
+            let air = area.y.saturating_sub(SIDEBAR_AIR)..area.y;
+            if air.contains(&mouse.y) && mouse.x >= area.x && mouse.x < area.right() {
+                mouse.fine_y += f32::from(area.y - mouse.y);
+                mouse.y = area.y;
+            }
+        }
+        Event::Mouse(mouse)
     }
 
     /// Whether a button at the start of the tabs opens the sidebar: where it's a drawer, and
@@ -4188,6 +4236,7 @@ impl App {
         if !passive {
             self.message.borrow_mut().clear();
         }
+        let event = self.on_sidebar_heading(event);
         self.follow_rest(&event);
         let shown = self.maximized.map(|_| self.in_view());
         let was_open = self.dock.open;
@@ -14522,6 +14571,7 @@ impl App {
             self.draw_activity(grid);
         }
         if let Some(area) = self.sidebar_area() {
+            let painted = grid.painted_so_far();
             let name = self
                 .workspace
                 .root()
@@ -14548,7 +14598,9 @@ impl App {
                 }
                 SidebarView::Outline => {
                     let here = (self.outline_here(), !self.editors.is_empty());
-                    self.outline.draw(grid, area, here, self.hover, theme);
+                    let measure = self.measure.clone();
+                    let look = (theme, measure.as_ref());
+                    self.outline.draw(grid, area, here, self.hover, look);
                 }
                 SidebarView::Context => {
                     let root = self.workspace.root();
@@ -14561,6 +14613,7 @@ impl App {
                     source.draw(grid, area, branch, self.hover, measure.as_ref(), theme);
                 }
             }
+            self.raise_sidebar_heading(grid, painted, area);
         }
         self.draw_dock(grid);
         if !drawer_over_main {
@@ -29844,6 +29897,53 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
     /// row's end, and the view itself a row down. The one in front has a line under it. With
     /// the sidebar closed they go with it, and a button at the start of the tabs brings both
     /// back. Where icons are cells the rail stays, four columns down the left edge.
+    /// Straight under the views' line, a sidebar's heading read as part of the views. There's
+    /// a row of air under them, and the heading is painted half way into it: half a row of
+    /// air over it, and as much between it and its list. A press on the air is on the heading.
+    #[test]
+    fn a_sidebars_heading_has_air_under_the_views() {
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        app.run(Command::ShowOutline);
+        let side = app.sidebar_area().expect("the sidebar is open");
+        assert_eq!(side.y, 2, "the views' row, and one of air");
+        let unit = cellix_render::UNIT;
+        let grid = screen(&app);
+        let tops: Vec<i32> = grid
+            .paint
+            .iter()
+            .filter_map(|p| match p {
+                Paint::Text { text, y, .. } if text == "OUTLINE" => Some(*y),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tops, [unit + unit / 2], "half a row under the views' row");
+        // Its cells, and what's under it, are on their rows.
+        assert!(grid.row_text(2).contains("OUTLINE"), "{}", grid.row_text(2));
+        let note = grid.paint.iter().find_map(|p| match p {
+            Paint::Text { text, y, .. } if text.starts_with("Open a document") => Some(*y),
+            _ => None,
+        });
+        assert_eq!(note, Some(4 * unit), "the list isn't moved");
+        // A press on the row of air is one on the heading's row, in the sidebar's columns.
+        let on = |x: u16, y: u16| match app.on_sidebar_heading(mouse(MouseKind::Left, x, y)) {
+            Event::Mouse(mouse) => (mouse.y, mouse.fine_y),
+            _ => unreachable!(),
+        };
+        assert_eq!(on(3, 1), (2, 2.5));
+        assert_eq!(on(3, 2), (2, 2.5), "the heading's own row is itself");
+        assert_eq!(on(3, 0), (0, 0.5), "and the views' row");
+        assert_eq!(
+            on(side.right() + 2, 1),
+            (1, 1.5),
+            "the file's tabs aren't the sidebar"
+        );
+        // Without pictures the views are a rail, and nothing is moved.
+        let plain = App::new(dir.path().to_path_buf(), (150, 40));
+        assert_eq!(plain.sidebar_area().map(|a| a.y), Some(0));
+    }
+
     #[test]
     fn the_views_run_across_the_top_of_the_sidebar() {
         let (dir, _) = project();
@@ -29860,7 +29960,11 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let row = app.activity_area();
         let side = app.sidebar_area().expect("the sidebar is open");
         assert_eq!((row.x, row.y, row.h), (0, 0, 1), "the top row");
-        assert_eq!((side.x, side.y, side.w), (0, 1, row.w), "over the view");
+        assert_eq!(
+            (side.x, side.y, side.w),
+            (0, 2, row.w),
+            "over the view, and a row of air"
+        );
         for index in 0..ACTIVITY.len() - 1 {
             let first = 1 + 3 * index as u16;
             for x in first..first + 3 {

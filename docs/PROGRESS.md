@@ -2632,3 +2632,11 @@ The user's word on the workspaces fix: "Release it". The version is 0.10.1 every
 - Looked at: `02-code` and `13-quit-hover` with rows fixed and `02-code` fitted. The bar is level in its band in both.
 - Limits, as they are: where a window holds about as many rows as a row has pixels (46 to 54 rows of 50 px, or most windows on Comfortable rows), no near height leaves less, and up to 34 px stay, shared over and under the bar. Ghostty's own padding under its lines isn't reported; it's guessed at what the config says and half a line.
 - Unverified: in a real Ghostty, and a resize there.
+
+## Nine points, third part: the sidebar (2026-11-17)
+
+- **3: "some space between the top left icons and the CELLIX bar".** The sidebar's view starts a row lower (`SIDEBAR_AIR`), and what it paints on its first row, its heading, is raised half a row into that air. Raising everything by half a row would have put every row's picture half a row off where a press lands; raising the heading alone keeps the list exact, and a press on the row of air is taken as one on the heading (the branch's chip is there). The paint that counts as the heading's starts from a quarter row over its row to three quarters into it: the branch's name is drawn a little over its row, and was left behind its chip at first.
+- **8: "text should be wrapping down with a padding on right".** What the Outline says with nothing to list is wrapped to the sidebar less two columns at each side (`threads::wrap`).
+- Tests: `a_sidebars_heading_has_air_under_the_views`, `what_an_empty_outline_says_wraps_inside_the_sidebar`. Changed with the decision: `the_views_run_across_the_top_of_the_sidebar` expected the view on the row under the views, and expects it a row lower.
+- Looked at: `02-code`, `74-outline`, `13-source-control`, `28-hover-tree`.
+- Not done: the Outline keeps the empty row it already had under its heading, so its list starts a row and a half under it; Search and Agent Context weren't looked at after the change; the whole tour hasn't been run over the three commits (every scene with a sidebar moved a row), nor a design review made.

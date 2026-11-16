@@ -5395,5 +5395,19 @@
     "title": "A row's height is fitted to the window, a twentieth either side of what Row height asks, so little is left over under the last row; a press in what's left is on the bar",
     "test": "a_rows_height_is_fitted_to_the_window",
     "passes": true
+  },
+  {
+    "id": "sidebar-heading-air",
+    "milestone": 14,
+    "title": "Under the views there's a row of air and the sidebar's heading is painted half way into it; its cells and its list stay on their rows, and a press on the air is on the heading",
+    "test": "a_sidebars_heading_has_air_under_the_views",
+    "passes": true
+  },
+  {
+    "id": "outline-empty-wraps",
+    "milestone": 14,
+    "title": "What the Outline says with nothing to list wraps inside the sidebar, with two columns clear at its far edge",
+    "test": "what_an_empty_outline_says_wraps_inside_the_sidebar",
+    "passes": true
   }
 ]

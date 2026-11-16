@@ -178,6 +178,20 @@ fn beyond_the_row(bounds: Bounds, top: i32) -> Bounds {
 }
 
 impl Paint {
+    /// Where its top is, in paint units from the grid's first row.
+    pub fn top(&self) -> i32 {
+        match self {
+            Self::Text { y, .. } => *y,
+            Self::Panel { bounds, .. }
+            | Self::Wash { bounds, .. }
+            | Self::Hairline { bounds, .. }
+            | Self::Icon { bounds, .. }
+            | Self::Corners { bounds, .. }
+            | Self::Strips { bounds, .. }
+            | Self::Image { bounds, .. } => bounds.y,
+        }
+    }
+
     /// Moves it up by `by` paint units.
     pub fn lift(&mut self, by: i32) {
         match self {

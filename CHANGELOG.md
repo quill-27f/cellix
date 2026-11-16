@@ -11,8 +11,10 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 - The bell and the power button at the foot are the size of the branch's mark beside them on Airy rows. They were two thirds of it.
 
 - The bar at the foot stands in the middle of the space under the file, and there's less of that space. A row's height is fitted to your window, a pixel or two either side of what Row height asks, so the window's last pixels aren't all left under the bar: up to a whole row of them were.
+- There's air between the views at the top of the sidebar and the heading under them (the folder's name and branch, OUTLINE, SOURCE CONTROL): half a row over the heading and half under it. It stood straight under the views' line.
 
 ### Fixed
+- What the Outline says when there's nothing to list ran to the sidebar's edge and was cut there. It wraps, with room at the edge.
 - What's under the pointer in the bar at the foot has the same room each side of it. The count of problems had its chip start on the mark's own edge and run well past the number, and was the one thing in the bar set at full size.
 - Ask Agent on a row of the Problems tab stood in a box taller than the row's highlight.
 - On the terminal's own row height, a sliver of the branch's mark showed over the bar at the foot.

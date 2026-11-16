@@ -1,6 +1,6 @@
 //! A document's headings, to see its shape and move around it.
 
-use cellix_render::{Bounds, Grid, Rect, Style};
+use cellix_render::{Bounds, Grid, Measure, Rect, Style};
 
 use crate::rendered::Dialect;
 use crate::theme::Theme;
@@ -154,7 +154,7 @@ impl Outline {
         area: Rect,
         (here, opened): (Option<usize>, bool),
         hover: Option<(u16, u16)>,
-        theme: &Theme,
+        (theme, measure): (&Theme, &dyn Measure),
     ) {
         grid.fill(area, theme.sidebar);
         crate::palette::sidebar_title(grid, area, "Outline", theme);
@@ -169,7 +169,14 @@ impl Outline {
             } else {
                 "Open a document to see its headings"
             };
-            grid.label(area.x + LEFT, y, note, quiet, area.right());
+            // On as many lines as it takes, with the air at the sidebar's far edge that it
+            // has at the near one: on one line it ran to the edge and was cut there.
+            let right = area.right().saturating_sub(LEFT);
+            let room = f32::from(right.saturating_sub(area.x + LEFT));
+            let lines = crate::threads::wrap(note, room, measure);
+            for (line, y) in lines.iter().zip(y..area.bottom()) {
+                grid.label(area.x + LEFT, y, line, quiet, right);
+            }
             return;
         }
         let first = self.headings.iter().map(|h| h.level).min().unwrap_or(1);
@@ -207,6 +214,39 @@ impl Outline {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What the Outline says with nothing to list is on as many lines as it takes in a
+    /// narrow sidebar, with the air at the far edge it has at the near one. On one line it
+    /// ran to the sidebar's edge and was cut there: "Open a document to see its heading".
+    #[test]
+    fn what_an_empty_outline_says_wraps_inside_the_sidebar() {
+        let theme = Theme::default();
+        let measure = cellix_render::CellMeasure;
+        let area = Rect::new(0, 0, 26, 8);
+        let mut grid = Grid::new(40, 8, theme.sidebar);
+        Outline::default().draw(&mut grid, area, (None, false), None, (&theme, &measure));
+        let rows: Vec<String> = (0..8)
+            .map(|y| grid.row_text(y).trim_end().to_string())
+            .collect();
+        assert_eq!(rows[2].trim(), "Open a document to see");
+        assert_eq!(rows[3].trim(), "its headings");
+        for row in &rows {
+            assert!(
+                row.chars().count() <= 24,
+                "two columns clear at the far edge: {row:?}"
+            );
+        }
+        // In a sidebar wide enough it's one line, as it was.
+        let mut grid = Grid::new(60, 8, theme.sidebar);
+        let wide = Rect::new(0, 0, 50, 8);
+        Outline::default().draw(&mut grid, wide, (None, false), None, (&theme, &measure));
+        assert_eq!(
+            grid.row_text(2).trim(),
+            "Open a document to see its headings"
+        );
+        assert_eq!(grid.row_text(3).trim(), "");
+    }
+
     #[test]
     fn a_papers_outline_has_its_input_files_and_no_labels() {
         let dir = tempfile::tempdir().unwrap();
