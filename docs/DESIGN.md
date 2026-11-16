@@ -511,7 +511,7 @@ fluently: views, explorer, tabs, breadcrumbs, current-line highlight, indent gui
 The views (Explorer, Search, Outline, Source Control, Agent Context, and Settings at the end)
 run across the top of the sidebar, level with the tabs, an icon every three columns, the one
 in front with a line under it in the accent (the user's choice of 16 November 2026, after a
-picture of Lapce; a rail down the left edge took five columns for them until then). The view
+picture of Lapce; a rail down the left edge took five columns for them until then). A hairline runs under the row, the sidebar's width and level with the one under the tabs, between the views and what the one in front shows (asked for the same day). The view
 itself starts a row down. With the sidebar closed the views go with it, and a button at the
 start of the tabs brings both back; in Review it shows Source Control, which stands beside a
 review. On a terminal without pictures an icon is block art two rows tall, so there the views

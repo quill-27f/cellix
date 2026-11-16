@@ -5241,5 +5241,12 @@
     "title": "There's one bar at the foot where both fit: the workspaces lead the status bar's own row, the one in front in the accent, what the status bar says follows them, and the machine's name stands before the bell. A press on a workspace is the bar's and one elsewhere in the row the status bar's. Too narrow for both, the bar has a row of its own",
     "test": "the_workspaces_lead_the_status_bars_own_row",
     "passes": true
+  },
+  {
+    "id": "views-rule",
+    "milestone": 14,
+    "title": "A line parts the views across the top of the sidebar from what the one in front shows, the sidebar's width and level with the line under the tabs",
+    "test": "a_line_parts_the_views_from_what_they_show",
+    "passes": true
   }
 ]

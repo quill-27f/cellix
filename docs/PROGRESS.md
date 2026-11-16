@@ -2427,3 +2427,13 @@ From the user, with a picture of the build: "Close button is too close to the ed
 - Two rows at the foot (a narrow window with workspaces): the button is at the end of the status bar's row, over the machine's name, not on the last row. Left so.
 - Unverified in a real terminal.
 - Next: the rule under the views.
+
+## A line under the views (2026-11-16)
+
+From the same message: "between top left buttons and below part there should be a separator like in the example that I send." The example is the picture of Lapce.
+
+- A hairline under the views' row, the sidebar's width, on the edge between that row and the view under it. It's level with the line under the tabs, so one line runs across the window's top, broken by the frame's column. The line under the view in front sits on it, as a tab's does on its own.
+- Tests: `a_line_parts_the_views_from_what_they_show` is new (ledger: `views-rule`).
+- Looked at: snapshots at 150 by 30 on airy rows, light and dark.
+- Cells have the rail, and no line.
+- Next: the tree's columns and the file icons, then the tour.

@@ -15288,6 +15288,11 @@ impl App {
     fn draw_views(&self, grid: &mut Grid, area: Rect) {
         let theme = &self.theme;
         grid.fill(area, theme.activity);
+        // A line between them and what the one in front shows, level with the one under
+        // the tabs.
+        let (left, under) = (f32::from(area.x), f32::from(area.bottom()));
+        let rule = Bounds::cells(left, under, f32::from(area.w), 0.0);
+        grid.hairline(rule, theme.border);
         for (i, (icon, command)) in ACTIVITY.iter().enumerate() {
             let x = self.view_x(i, area);
             let on = self.rail_on(*command);
@@ -28930,6 +28935,42 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             grid.cell(dock.x, dock.y + 1).style.bg,
             sheet,
             "and none of the frame in it"
+        );
+    }
+
+    /// The views had nothing between them and the view under them, where the tabs beside
+    /// them have a line. The user asked for one, as Lapce has.
+    #[test]
+    fn a_line_parts_the_views_from_what_they_show() {
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        let unit = cellix_render::UNIT;
+        let row = app.activity_area();
+        // Across the sidebar, on the edge between their row and the next, level with the
+        // one under the tabs.
+        let rules: Vec<Bounds> = screen(&app)
+            .paint
+            .iter()
+            .filter_map(|p| match p {
+                Paint::Hairline { bounds, color }
+                    if *color == app.theme.border && bounds.h == 0 && bounds.y == unit =>
+                {
+                    Some(*bounds)
+                }
+                _ => None,
+            })
+            .collect();
+        let side = i32::from(row.w) * unit;
+        assert!(
+            rules.iter().any(|r| r.x == 0 && r.w == side),
+            "under the views, the sidebar's width: {rules:?}"
+        );
+        let main = i32::from(app.main_area().x) * unit;
+        assert!(
+            rules.iter().any(|r| r.x == main),
+            "and the tabs' own, from where the file starts: {rules:?}"
         );
     }
 
