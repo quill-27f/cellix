@@ -23,21 +23,21 @@ here = os.path.dirname(os.path.abspath(__file__))
 os.makedirs(out, exist_ok=True)
 CTRL = lambda c: chr(ord(c) - 96)
 RAIL_X = 1
-# One row each since the rail's redesign, Files on the first.
-SEARCH, OUTLINE, REVIEW = 2, 3, 5  # a row and a half apart, at their middles
+# Two rows each, Files on the first two: the second row of each icon's pair.
+SEARCH, OUTLINE, REVIEW = 3, 5, 7
 # The command palette, opened with Ctrl+Shift+P or F1 and waited for, then a command typed
 # and run, and the palette gone with what was typed into it. Each step waits for the screen to
 # say the one before it landed: keys sent before the palette is up are typed into the file.
 PALETTE_UP = "Type to search"
 # The face under a comment being written in a 150-column window, after the eight emoji.
-EMOJI_BUTTON = (124, 5)
+EMOJI_BUTTON = (126, 5)
 # The button that shows the resolved comments, when none is open: under the two lines that
 # say so, in that window. And where it stands under the review's two cards, and the order's
 # button over them.
-SHOW_RESOLVED = (103, 5)
+SHOW_RESOLVED = (104, 5)
 # Not Now, on the card that offers a language's server, in a 120-column window of 40 rows.
 INSTALL_NOT_NOW = (86, 35)
-REVIEW_RESOLVED, REVIEW_ORDER = (103, 18), (103, 4)
+REVIEW_RESOLVED, REVIEW_ORDER = (104, 20), (104, 5)
 def command(words, opened="\x1b[112;6u"):
     return [["keys", opened], ["until", PALETTE_UP], ["keys", words], ["until", words], ["keys", "\r"],
             ["gone", words]]
@@ -931,7 +931,7 @@ with tempfile.TemporaryDirectory() as scratch:
         os.makedirs(f"{HOME}/Library/Caches", exist_ok=True)
         os.symlink(real, f"{HOME}/Library/Caches/Tectonic")
     # Where the terminal's output and the Problems tab are, at 150x44 and 170x44.
-    OUTPUT_FROM, OUTPUT_TO, OUTPUT_ASK = (97, 7), (125, 10), (143, 6)
+    OUTPUT_FROM, OUTPUT_TO, OUTPUT_ASK = (98, 7), (126, 10), (144, 6)
     PROBLEM_COUNT, PROBLEM_ROW = (9, 42), (150, 3)
     GEAR = (RAIL_X, 36)
     settings = [["click", *GEAR], ["until", "Changes apply"]]
@@ -1043,7 +1043,7 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("37-hover-settings", [*settings, ["click", 45, 4], ["move", 80, 21]], CODE_FILE)
     shoot("38-hover-dialog", [["keys", "x"], ["keys", CTRL("q")], ["move", 70, 17]], CODE_FILE)
     shoot("39-hover-agents", [*LIST_AGENTS, ["wait", 0.5], ["move", 90, 8]], CODE_FILE)
-    shoot("41-hover-tab-close", [["move", 42, 0]], CODE_FILE)
+    shoot("41-hover-tab-close", [["move", 43, 0]], CODE_FILE)
     shoot("42-hover-install", [*settings, ["click", 45, 4], ["move", 113, 26]], CODE_FILE)
     shoot("43-light-hover-menu", [["right", 60, 12], ["move", 64, 13]], CODE_FILE, background="eff1f5")
     shoot("40-hover-find", [["keys", CTRL("f")], ["keys", "item"], ["move", 112, 3]], CODE_FILE)
@@ -1325,7 +1325,7 @@ with tempfile.TemporaryDirectory() as scratch:
     git_scenes(scratch)
     # Agent Context: a project with instructions that disagree and an import, a user's own
     # instructions and skill, and a session's transcript, all in the throwaway home.
-    CONTEXT = 6  # the fifth rail icon's middle
+    CONTEXT = 9  # the fifth rail icon's second row
     ctx = os.path.realpath(f"{scratch}/service")
     os.makedirs(f"{ctx}/src")
     claude_home = f"{HOME}/.claude"

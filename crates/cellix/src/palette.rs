@@ -5,6 +5,7 @@ use std::rc::Rc;
 use cellix_input::{Command, Format, KeyEvent};
 use cellix_render::{Bounds, Font, Grid, Icon, Measure, Rect, Rgb, Style};
 
+use crate::measures::FIELD_LIFT;
 use crate::theme::Theme;
 
 const WIDTH: u16 = 64;
@@ -22,12 +23,12 @@ const PANEL_PADDING: f32 = 0.0;
 /// and the list, and under the list.
 const HEADER_ROWS: u16 = 2;
 /// How far the field's box stands inside its row, above and below: the box is nine tenths of
-/// its row, as the design draws a field. At the four fifths the Find bar's box has, a
-/// descender stood 1.5 px over the box's bottom line.
+/// its row, as the design draws a field. A box with another under it is a little shorter
+/// (`FIELD_AIR`); this one has a row's air shared round it.
 const BOX_AIR: f32 = 0.055;
-/// The band behind the picked row, as a menu's is: 26 px of a 32 px row, and a column in
-/// from each side, where the field's box stands too.
-const BAND_HEIGHT: f32 = 26.0 / 32.0;
+/// The band behind the picked row, as a menu's is, and a column in from each side, where
+/// the field's box stands too.
+const BAND_HEIGHT: f32 = crate::measures::BAND_HEIGHT;
 const BAND_INSET: f32 = 1.0;
 const BAND_AIR: f32 = (1.0 - BAND_HEIGHT) / 2.0;
 /// The air above the field's box, between the box and the first row's band, and under the
@@ -39,8 +40,9 @@ const AIR: f32 = (1.0 + 2.0 * BOX_AIR + 2.0 * BAND_AIR) / 3.0;
 /// row, the list starts on the third, and the row between them is the air.
 const FIELD_DROP: f32 = AIR - BOX_AIR;
 const LIST_LIFT: f32 = AIR - BAND_AIR;
-/// How tall the caret is, in rows.
-const CARET: f32 = 0.56;
+/// How tall the caret is, in rows: from a tall letter's head to a tail's foot, about the
+/// box's middle, which is where the words stand once they're raised in it.
+const CARET: f32 = 0.62;
 /// How far a row's words stand after its icon, as the field's stand after its own.
 const AFTER_ICON: f32 = 2.3;
 /// Columns between a row's words and what's at its far end, at the least.
@@ -59,7 +61,7 @@ const CARET_BEFORE: f32 = 0.15;
 const CARET_AFTER: f32 = 0.05;
 /// How far what's set smaller on a row is dropped, in rows, to stand on the words' own
 /// baseline: centred in the row it stood a pixel high.
-const QUIET_DROP: f32 = 0.028;
+const QUIET_DROP: f32 = 0.035;
 /// The thumb's width, in columns: 4 px, in the middle of the column it has.
 const THUMB_WIDE: f32 = 0.25;
 
@@ -1501,7 +1503,7 @@ impl Palette {
         let boxed = Bounds::inset(inside, 0.0, BOX_AIR);
         grid.panel(boxed, 22, Some(base.bg), Some(theme.focus));
         if self.has_icons() {
-            grid.glyph(
+            grid.small_glyph(
                 area.x as f32 + TEXT_INSET,
                 y,
                 Icon::Search,
@@ -1510,6 +1512,7 @@ impl Palette {
                 base,
             );
         }
+        let words = grid.painted_so_far();
         let (x, advances, hidden) = self.typed_window(area, measure);
         let cell = self.first_cell(area);
         // A column inside the box's far edge, as the icon is inside its near one.
@@ -1551,6 +1554,7 @@ impl Palette {
             grid.label_right(right, y, text, dim, 85);
             grid.drop_last(QUIET_DROP);
         }
+        grid.lift_since(words, FIELD_LIFT);
         caret.min(right as f32)
     }
 
@@ -1909,6 +1913,7 @@ pub fn input(grid: &mut Grid, line: Rect, field: &Input, measure: &dyn Measure, 
     grid.field(line, field.behind, theme.input, border);
     let (x, y) = (line.x as f32 + PADDING, line.y);
     let first = line.x + 1;
+    let words = grid.painted_so_far();
     if field.text.is_empty() {
         let dim = Style {
             fg: theme.gutter.fg,
@@ -1918,6 +1923,7 @@ pub fn input(grid: &mut Grid, line: Rect, field: &Input, measure: &dyn Measure, 
     } else {
         grid.label_at(x, first, y, field.text, style, line.right(), 95);
     }
+    grid.lift_since(words, FIELD_LIFT);
     if field.focused {
         let font = Font {
             size: 95,
@@ -1926,7 +1932,8 @@ pub fn input(grid: &mut Grid, line: Rect, field: &Input, measure: &dyn Measure, 
         // Just clear of the first letter, when there's only a placeholder.
         let end = x + measure.width(field.text, font) - 0.1;
         let last = line.right() as f32 - PADDING;
-        grid.set_caret(end.min(last), y, 0.56);
+        // In the box's middle: raised, the words stand from head to tail about it.
+        grid.set_caret(end.min(last), y, 0.62);
     }
 }
 
@@ -1995,7 +2002,7 @@ pub fn sidebar_title(grid: &mut Grid, row: Rect, title: &str, theme: &Theme) -> 
 }
 
 /// The size of a section's heading, smaller than a sidebar's title.
-const SECTION_SIZE: u8 = 80;
+pub(crate) const SECTION_SIZE: u8 = 80;
 
 /// A section's heading in a sidebar or on a page: its name in capitals, small, bold and
 /// quiet, one column in from the panel's title, a chevron before it when it folds, and a

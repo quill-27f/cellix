@@ -75,7 +75,7 @@ impl Explorer {
             } else {
                 theme.row_hover
             };
-            let pill = Bounds::cells(x - 1.0, area.y as f32 + 0.14, wide, 0.72);
+            let pill = Bounds::cells(x - 1.0, area.y as f32 + 0.1, wide, 0.8);
             grid.panel(pill, 18, Some(fill), None);
             let dim = Style {
                 fg: if hovered {
@@ -86,8 +86,10 @@ impl Explorer {
                 ..theme.sidebar
             };
             grid.label_at(x, end + 1, area.y, branch, dim, area.right(), BRANCH_SIZE);
+            // A pixel higher in its chip, which a name with tails needs: "bugfix/typing".
+            grid.drop_last(-0.03);
             grid.paint.push(Paint::Icon {
-                bounds: Bounds::cells(x + wide - chevron - 1.9, area.y as f32 + 0.27, 0.8, 0.46),
+                bounds: Bounds::cells(x + wide - chevron - 1.95, area.y as f32 + 0.225, 0.8, 0.55),
                 icon: Icon::ChevronDown,
                 color: theme.status.fg,
             });
@@ -144,8 +146,9 @@ impl Explorer {
             // The name's colour, so the icon fades as much as the name does.
             let color = if entry.ignored { theme.ignored } else { color };
             if let Some(chevron) = chevron {
+                // Far enough before the icon that their strokes stay 8 px apart.
                 grid.glyph(
-                    x as f32 - 1.3,
+                    x as f32 - 1.45,
                     y,
                     chevron,
                     if entry.ignored {

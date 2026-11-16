@@ -16,6 +16,8 @@ const INSET: f32 = 2.0;
 /// Space between a label and its keys.
 const GAP: f32 = 3.0;
 const KEYS_SIZE: u8 = 85;
+/// How far the keys are dropped in their row, in rows, to share the words' baseline.
+const KEYS_DROP: f32 = 0.035;
 const MIN_WIDTH: u16 = 16;
 /// Air above the first row and below the last, in rows: 8 px of a 32 px row. Painted
 /// menus only; the cell tier has no fractions of a row.
@@ -24,7 +26,7 @@ const PADDING: f32 = 0.25;
 const RULE_ROOM: f32 = 0.5;
 /// The hover band inside its row: 26 px of 32 tall, and a column in from each side, as a
 /// wash is from a panel's edge.
-const BAND_HEIGHT: f32 = 26.0 / 32.0;
+const BAND_HEIGHT: f32 = crate::measures::BAND_HEIGHT;
 const BAND_INSET: f32 = 1.0;
 
 /// What a row of a menu does.
@@ -505,9 +507,10 @@ impl Menu {
                 // As far from the menu's far edge as its words are from the near one.
                 let right = area.right().saturating_sub(INSET as u16);
                 let shown = if usable { keys_style } else { greyed };
+                // Smaller than the words, so dropped a pixel to stand on their line.
                 words(
                     grid,
-                    (right as f32, top),
+                    (right as f32, top + KEYS_DROP),
                     keys,
                     shown,
                     (right, KEYS_SIZE, true),

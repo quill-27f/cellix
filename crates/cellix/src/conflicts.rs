@@ -116,7 +116,7 @@ fn buttons(text: Rect, measure: &dyn Measure) -> Vec<(Choice, u16, String, &'sta
 }
 
 /// Share of a row a chip's height takes: a button's, as every button has.
-const CHIP_HEIGHT: f32 = 0.8;
+const CHIP_HEIGHT: f32 = 0.88;
 
 /// A chip centred in its row. The cell tier shows `cells`.
 fn chip(
@@ -145,7 +145,14 @@ fn chip(
             None,
         );
     }
-    grid.centred_text(x as f32 + width as f32 / 2.0, y as f32, label, fg, 90);
+    // A pixel over the chip's middle, as a button's words are.
+    grid.centred_text(
+        x as f32 + width as f32 / 2.0,
+        y as f32 - 0.03,
+        label,
+        fg,
+        90,
+    );
 }
 
 /// The first screen row a line is drawn on, if it's in view.

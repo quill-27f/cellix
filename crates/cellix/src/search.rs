@@ -80,7 +80,15 @@ pub fn draw_switches(
         let hovered = hover.is_some_and(|h| cell.contains(h.0, h.1));
         // Off has no chip, hover a quiet one, and on the selection's colour with a focus edge,
         // so the three states never read alike.
-        let chip = Bounds::inset(cell, 0.15, 0.17);
+        // Inside the field's box, 3 px from its edges. Its letters are in its middle from
+        // side to side, where two letters of 13 pt stood against its right edge, and on the
+        // line of the words typed in the box, which are raised.
+        let lift = crate::measures::FIELD_LIFT;
+        let chip = Bounds::inset(cell, 0.15, 0.14);
+        let chip = Bounds {
+            y: chip.y - cellix_render::units(lift / 2.0),
+            ..chip
+        };
         if on {
             grid.panel(chip, 14, Some(theme.pick), Some(theme.focus));
         } else if hovered {
@@ -89,9 +97,12 @@ pub fn draw_switches(
         let style = Style {
             fg: if on { theme.text.fg } else { theme.gutter.fg },
             bg: if on { theme.pick } else { base.bg },
+            painted: true,
             ..base
         };
-        grid.label(left + 1, y, label, style, left + SWITCH);
+        grid.put_str(left + 1, y, label, style, left + SWITCH);
+        let middle = f32::from(left) + f32::from(SWITCH) / 2.0;
+        grid.centred_text(middle, f32::from(y) - lift, label, style.fg, 100);
     }
 }
 
@@ -272,8 +283,8 @@ impl Search {
             theme,
         );
         let button = area.right().saturating_sub(REPLACE_ALL.len() as u16 + 2);
-        grid.glyph(
-            button as f32 - 0.2,
+        grid.small_glyph(
+            button as f32,
             area.y + REPLACE_ROW,
             Icon::ReplaceAll,
             theme.sidebar.fg,

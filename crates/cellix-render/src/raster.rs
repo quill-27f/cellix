@@ -222,8 +222,9 @@ pub(crate) fn emoji_font() -> Option<&'static (String, fontdb::Source)> {
 /// How dark a floating panel's shadow is at its edge, out of 255.
 const DARK_SHADOW: f32 = 110.0;
 const LIGHT_SHADOW: f32 = 38.0;
-/// Interface text is drawn at this size relative to the row height.
-pub const INTERFACE_SIZE: f32 = 0.60;
+/// Interface text is drawn at this size relative to the row height: 13 pt in a terminal set
+/// to 14 pt, whose row is 18.5 pt, which is the size VS Code sets its own words at.
+pub const INTERFACE_SIZE: f32 = 0.70;
 /// Cached text lines before the cache is dropped, so a long session can't grow it forever.
 const MAX_TEXT_MASKS: usize = 4096;
 
@@ -427,13 +428,24 @@ impl SoftwareRasterizer {
                 shadow,
                 dashed,
             } => {
-                let shape = Shape {
+                let mut shape = Shape {
                     x: scale(bounds.x, cw),
                     y: scale(bounds.y, ch),
                     w: scale(bounds.w, cw),
                     h: scale(bounds.h, ch),
                     radius: *radius as f32 * ch / 100.0,
                 };
+                // A panel with a line round it stands on whole pixels, so the line is one
+                // pixel of its own colour on every side. Between pixels it was two rows at
+                // half strength on one side and one at full on the other.
+                if border.is_some() {
+                    let right = (shape.x + shape.w).round();
+                    let bottom = (shape.y + shape.h).round();
+                    shape.x = shape.x.round();
+                    shape.y = shape.y.round();
+                    shape.w = right - shape.x;
+                    shape.h = bottom - shape.y;
+                }
                 target.panel(shape, (*fill, *border), *shadow, *dashed, ch);
             }
             Paint::Wash {
@@ -1116,6 +1128,35 @@ mod tests {
             .flat_map(|y| (40..200).map(move |x| (x, y)))
             .any(|(x, y)| with_paint.rgb[(y * with_paint.width + x) * 3] > 128);
         assert!(!lit_right, "drew past the narrow label");
+    }
+
+    /// Words are set at the size VS Code sets its own: 13 pt. A terminal set to 14 pt has a
+    /// cell of 17 by 37 px at two pixels a point, and a capital of 13 pt Inter stands 19 px
+    /// tall there, with as much of the row over it as under it. At three fifths of a row,
+    /// as the words were, it stood 16.
+    #[test]
+    fn words_are_thirteen_points_in_a_terminal_set_to_fourteen() {
+        use crate::measure::Measure as _;
+        let Some(mut r) = SoftwareRasterizer::new(17, 37) else {
+            return;
+        };
+        let mut grid = Grid::new(8, 1, style());
+        grid.label(1, 0, "H", style(), 8);
+        let image = r.row(&grid, 0);
+        let inked: Vec<usize> = (0..image.height)
+            .filter(|y| (0..image.width).any(|x| image.rgb[(y * image.width + x) * 3] > 128))
+            .collect();
+        let (top, bottom) = (inked[0], inked[inked.len() - 1]);
+        let tall = bottom - top + 1;
+        assert!((18..=20).contains(&tall), "a capital is {tall} px tall");
+        let (over, under) = (top, image.height - 1 - bottom);
+        assert!(
+            over.abs_diff(under) <= 2,
+            "{over} px over it, {under} under"
+        );
+        // And as wide as 13 pt is: the measure and the picture agree on it.
+        let wide = crate::measure::FontMeasure::new(17, 37).width("H", Font::default()) * 17.0;
+        assert!((17.0..21.0).contains(&wide), "an H is {wide} px wide");
     }
 
     /// An emoji in a line of painted text keeps its own colours, where the machine has a

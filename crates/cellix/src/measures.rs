@@ -40,6 +40,15 @@ pub fn rows_to_columns(measure: &dyn Measure) -> f32 {
     let (wide, tall) = measure.cell_pixels().unwrap_or((1, 2));
     tall as f32 / wide.max(1) as f32
 }
+/// How far the words typed in a text box are raised in it, in rows: 2 px. Words stand with
+/// their capitals in the middle of their row, so their tails reach 4 px further down than
+/// their heads reach up, and in a box nine tenths of a row that put a "g" on its lower edge.
+/// Raised, a tail is as far from the box's foot as a tall letter is from its top.
+pub const FIELD_LIFT: f32 = 0.055;
+/// How tall the band behind a picked or pointed row of a list is, in rows: 33 px of 36,
+/// which holds an icon of 16 pt and a letter's tail. A menu's and a palette's are this.
+pub const BAND_HEIGHT: f32 = 0.92;
+
 /// Columns of air either side of a button's words inside its chip, where text is drawn in
 /// pixels: a cell and a half, about 13 px.
 pub const BUTTON_ROOM: f32 = 1.5;

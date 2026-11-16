@@ -47,7 +47,7 @@ const MIN_MINIMAP_PANE: u16 = 90;
 /// because a full reparse on each key starts to show.
 const MAX_INLINE_HIGHLIGHT: usize = 32 * 1024;
 /// How far a tall heading sits below its row: closer to its own text than to what's above.
-const TALL_DROP: f32 = 0.9;
+const TALL_DROP: f32 = 0.78;
 /// Columns left of a page's text: a comment's ◆ and a change's bar each have a cell of
 /// their own there at every width, clear of each other and of the text.
 const PAGE_MARGIN: u16 = 4;
@@ -4908,7 +4908,7 @@ impl Editor {
                 }
                 Tone::Check(checked) => {
                     // Square on screen: a row is about twice as tall as a column is wide.
-                    const SIDE: f32 = 0.56;
+                    const SIDE: f32 = 0.66;
                     let cell = self.measure.cell_pixels().unwrap_or((1, 2));
                     let across = SIDE * cell.1 as f32 / cell.0.max(1) as f32;
                     let left = x + ((width - across) / 2.0).max(0.0);
@@ -4930,11 +4930,12 @@ impl Editor {
                 }
                 _ => {
                     if matches!(g.tone, Tone::Code | Tone::Source) {
-                        let pill = Bounds::cells(x - 0.2, text_y + 0.14, width + 0.4, 0.72);
+                        let pill = Bounds::cells(x - 0.2, text_y + 0.05, width + 0.4, 0.9);
                         grid.panel(pill, 14, Some(theme.code_bg), None);
                     }
                     if g.tone == Tone::Marked {
-                        let pill = Bounds::cells(x - 0.1, text_y + 0.1, width + 0.2, 0.8);
+                        // Nine tenths of the row, which holds a tail of words of 13 pt.
+                        let pill = Bounds::cells(x - 0.1, text_y + 0.05, width + 0.2, 0.9);
                         grid.panel(pill, 8, Some(theme.highlighter()), None);
                     }
                     let shift = match g.tone {

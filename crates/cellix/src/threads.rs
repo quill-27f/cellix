@@ -353,6 +353,12 @@ fn pill_width(text: &str, measure: &dyn Measure) -> f32 {
 /// Columns either side of a pill's words, and between two pills.
 const PILL_ROOM: f32 = 1.0;
 const PILL_GAP: f32 = 1.0;
+/// Where a pill starts in its row and how tall it is, in rows: three quarters of a row,
+/// with a tail 2 px inside its foot and a capital 3 px under its top. At two thirds, words
+/// of 11 pt stood on its outline.
+const PILL: (f32, f32) = (0.12, 0.76);
+/// How far a verdict's word and the name after it are dropped in their row, with its chip.
+const VERDICT_DROP: f32 = 0.05;
 /// How far a card's buttons are dropped in their row, in rows, so they stand half a row
 /// under the words above them: 13 px was the tightest words-to-button gap left.
 const ACTIONS_DROP: f32 = 0.14;
@@ -367,7 +373,7 @@ fn draw_pill(
     measure: &dyn Measure,
 ) {
     let width = pill_width(text, measure);
-    let bounds = Bounds::cells(x, y as f32 + 0.16, width, 0.68);
+    let bounds = Bounds::cells(x, y as f32 + PILL.0, width, PILL.1);
     grid.panel(bounds, 34, None, Some(tone));
     let tag = Style { fg: tone, ..inner };
     let at = x + PILL_ROOM;
@@ -784,7 +790,7 @@ const TOOL: u16 = 3;
 /// The size the quick emoji are drawn at, as a percentage of the words'.
 const QUICK_SIZE: u8 = 115;
 /// How tall the icons after them are, in rows: the emoji's size.
-const TOOL_ICON: f32 = 0.6;
+const TOOL_ICON: f32 = 0.7;
 /// Columns between the emoji and the buttons after them.
 const TOOL_GAP: u16 = 1;
 
@@ -822,7 +828,9 @@ fn suggest_spots(
     found: &[(&'static str, &'static str)],
     measure: &dyn Measure,
 ) -> Vec<(f32, f32)> {
-    let right = f32::from(area.right().saturating_sub(SIDE + 1));
+    // Short of the row's end by the room "Tab" takes there: the key that takes the first of
+    // them stays in view, and it's the last of the names that gives way.
+    let right = f32::from(area.right().saturating_sub(SIDE + 1)) - SUGGEST_KEY;
     let mut x = f32::from(area.x + SIDE + 1);
     let mut out = Vec::new();
     for (emoji, code) in found {
@@ -849,6 +857,8 @@ fn suggest_emoji(emoji: &str, measure: &dyn Measure) -> f32 {
 
 /// Columns between one offered emoji's name and the next emoji.
 const SUGGEST_GAP: f32 = 2.0;
+/// Columns kept at the end of that row for the key's name, and the gap before it.
+const SUGGEST_KEY: f32 = SUGGEST_GAP + 3.0;
 
 /// Each web address in a run of words, as the bytes it takes: `http://` or `https://` to the
 /// next space, without the stop or bracket a sentence puts after it.
@@ -964,8 +974,8 @@ enum Chevron {
 const CONTROL_ROOM: f32 = 1.0;
 /// How tall the square a chevron is drawn in is, in rows: one that unfolds, as a folder's
 /// in the explorer, and the smaller one of a menu, as the branch's and the heading's are.
-const FOLD_CHEVRON: f32 = 0.72;
-const MENU_CHEVRON: f32 = 0.5;
+const FOLD_CHEVRON: f32 = cellix_render::GLYPH;
+const MENU_CHEVRON: f32 = 0.6;
 /// Columns between a chevron and the words: after one that unfolds, and before a menu's.
 const FOLD_GAP: f32 = 0.5;
 const MENU_GAP: f32 = 0.65;
@@ -1878,7 +1888,7 @@ pub fn draw(
                 let spots = suggest_spots(area, found, measure);
                 // And Tab is named at the row's end, where there's room for it.
                 let end = spots.last().map_or(0.0, |(x, wide)| x + wide);
-                if end + SUGGEST_GAP + 3.0 <= f32::from(right) {
+                if end + SUGGEST_KEY <= f32::from(right) {
                     grid.label_right(right, y, "Tab", inner_dim, SMALL);
                 }
                 for (index, ((emoji, code), (x, wide))) in found.iter().zip(spots).enumerate() {
@@ -1999,8 +2009,9 @@ pub fn draw(
                         theme.attention
                     };
                     let chip = measure.width(word, small()) + 0.8;
-                    // Low in the row, so it keeps air under the block's top edge.
-                    let bounds = Bounds::cells(x, y as f32 + 0.3, chip, 0.58);
+                    // Low in the row, so it keeps air under the block's top edge, and tall
+                    // enough for the tail of "Agrees", which stood under it.
+                    let bounds = Bounds::cells(x, y as f32 + 0.22, chip, 0.74);
                     grid.panel(bounds, 32, Some(mix(tone, block, 0.18)), None);
                     let style = Style {
                         fg: mix(tone, theme.text.fg, 0.6),
@@ -2008,12 +2019,12 @@ pub fn draw(
                         ..muted
                     };
                     grid.label_at(x + 0.4, x.floor() as u16, y, word, style, right, SMALL);
-                    grid.drop_last(0.09);
+                    grid.drop_last(VERDICT_DROP);
                     x += chip + 0.4;
                 }
                 let at = (x.ceil() as u16).max(text_x + 1);
                 grid.label_at(x, at, y, author, muted, right, SMALL);
-                grid.drop_last(0.09);
+                grid.drop_last(VERDICT_DROP);
             }
             Line::Reply(id, text) => {
                 let style = Style {
@@ -2043,7 +2054,7 @@ pub fn draw(
                 let wide = measure.width(&number, small());
                 let chip = (wide + 0.9).max(1.3);
                 let chip_x = right as f32 - chip;
-                let bounds = Bounds::cells(chip_x, y as f32 + 0.22, chip, 0.56);
+                let bounds = Bounds::cells(chip_x, y as f32 + 0.19, chip, 0.62);
                 grid.panel(bounds, 40, Some(theme.tint), None);
                 let at = chip_x + (chip - wide) / 2.0;
                 let cell = right.saturating_sub(number.chars().count() as u16 + 1);
@@ -2134,7 +2145,7 @@ pub fn draw(
                 for (kind, count) in kinds {
                     let text = format!("{kind} {count}");
                     let width = pill_width(&text, measure);
-                    let bounds = Bounds::cells(x, y as f32 + 0.16, width, 0.68);
+                    let bounds = Bounds::cells(x, y as f32 + PILL.0, width, PILL.1);
                     let missing = *count == 0;
                     if missing {
                         grid.panel(bounds, 34, None, Some(theme.popup_border));
@@ -2301,6 +2312,45 @@ pub fn draw(
 mod tests {
     use super::*;
     use cellix_render::CellMeasure;
+
+    /// The row of emoji offered for a name ends with "Tab", the key that takes the first of
+    /// them, and keeps room for it: in a pane too narrow for every name and the key, the
+    /// last names give way. The key gave way before, which words a sixth larger showed in a
+    /// window of 150 columns, where it had been in view.
+    #[test]
+    fn the_emoji_offered_for_a_name_leave_room_for_the_key_that_takes_one() {
+        let found = [
+            ("🚀", "rocket"),
+            ("🪨", "rock"),
+            ("🍀", "shamrock"),
+            ("🥦", "broccoli"),
+            ("🎸", "guitar"),
+        ];
+        let pixels = cellix_render::FontMeasure::new(17, 37);
+        let measures: [&dyn Measure; 2] = [&pixels, &CellMeasure];
+        for measure in measures {
+            let mut fewer = false;
+            for width in 24..=110 {
+                let area = Rect::new(0, 0, width, 10);
+                let right = f32::from(area.right() - SIDE - 1);
+                let spots = suggest_spots(area, &found, measure);
+                assert!(!spots.is_empty(), "the first is always offered");
+                let (x, wide) = spots[spots.len() - 1];
+                if spots.len() > 1 {
+                    assert!(
+                        x + wide + SUGGEST_KEY <= right,
+                        "{width} columns: {} names end at {} of {right}",
+                        spots.len(),
+                        x + wide
+                    );
+                }
+                fewer |= spots.len() > 1 && spots.len() < found.len();
+            }
+            assert!(fewer, "some width holds a few of them and the key");
+            let all = suggest_spots(Rect::new(0, 0, 110, 10), &found, measure);
+            assert_eq!(all.len(), found.len(), "a wide pane holds them all");
+        }
+    }
 
     #[test]
     fn a_verdict_reads_its_word_and_kind() {

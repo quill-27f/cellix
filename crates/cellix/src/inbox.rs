@@ -210,7 +210,7 @@ const CLEAR_FINISHED: &str = "Clear Finished";
 const SETTINGS: &str = "Notification Settings";
 const START: &str = "Start an Agent";
 /// How tall a row's mark is, in rows: the size of the icons at the top right.
-const MARK: f32 = 0.62;
+const MARK: f32 = crate::dock::ACTION_ICON;
 
 fn small() -> Font {
     Font {

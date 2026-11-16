@@ -15,7 +15,7 @@ const GAP: u16 = 1;
 /// How wide the paragraph style's button is.
 const STYLES_WIDTH: u16 = 12;
 /// Icons are drawn at this share of a row.
-const ICON_SIZE: f32 = 0.72;
+const ICON_SIZE: f32 = 0.78;
 const MARK_SIZE: u8 = 100;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -419,10 +419,10 @@ pub fn draw(
                 right,
                 90,
             );
-            let top = row.y as f32 + 0.25;
-            let left = cell.right() as f32 - 1.8;
+            let top = row.y as f32 + 0.2;
+            let left = cell.right() as f32 - 1.9;
             grid.paint.push(Paint::Icon {
-                bounds: Bounds::cells(left, top, 1.0, 0.5),
+                bounds: Bounds::cells(left, top, 1.0, 0.6),
                 icon: Icon::ChevronDown,
                 color,
             });

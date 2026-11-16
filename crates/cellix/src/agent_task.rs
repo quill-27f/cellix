@@ -1279,7 +1279,7 @@ impl TaskPage {
             grid.fill(rect, theme.sidebar);
             grid.panel(Bounds::inset(rect, 0.0, 0.0), 0, Some(theme.text.bg), None);
             grid.panel(
-                Bounds::inset(rect, 0.0, 0.1),
+                Bounds::inset(rect, 0.0, (1.0 - crate::measures::BAND_HEIGHT) / 2.0),
                 RADIUS,
                 Some(theme.sidebar.bg),
                 None,

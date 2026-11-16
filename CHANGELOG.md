@@ -4,6 +4,13 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 
 ## [Unreleased]
 
+### Changed
+- Words and icons are larger: the sizes VS Code has. In a terminal set to 14 pt, words are 13 pt where they were 11, beside code at 14. An icon beside a name is 16 pt where it was 13, the icons at the top right are 13 pt where they were 10, and the rail's are 24 pt where they were 15, on a rail one column wider with two rows to an icon. A page's words grew with the rest. Code keeps the terminal's own size. Words a sixth wider mean a long name in the sidebar is cut a few letters sooner.
+- What's one row tall grew to hold those words: text boxes, the band behind a picked row in a palette or a menu, the workspace chips, the pills in the comments pane. In a text box the words stand a little higher, so the tail of a "g" keeps off its lower edge.
+- A box, a pill or a card with a line round it is drawn on whole pixels, so its line is as sharp on top as at its sides.
+- What explains a setting is in small words, as the design has it, which lets the longest of them fit a window of 120 columns.
+- The row of emoji offered for a name keeps "Tab" at its end, the key that takes the first of them, and gives up its last name when the pane is narrow. It gave up the key.
+
 ### Fixed
 - The card that offers to install a language's server, "Install Terraform support?", had its title on its top edge and its buttons on its bottom one. It's the same kind of card as the logout notice now: half a row clear over the title and under the buttons, and a row between its words and its buttons. A tool with a long name gets a second line, where its sentence was cut at the card's edge on a terminal without pictures. While it installs the card keeps its size. Its middle button reads Not Now, as the logout notice's does.
 - A button that isn't the main one, on one of those cards or in a dialog, changes under the pointer: lighter in the dark theme, deeper in the light one. It took a colour a level or two from the one it rests in, so nothing seemed to happen.

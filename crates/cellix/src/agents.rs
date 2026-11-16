@@ -14,7 +14,7 @@ const DETAIL_SIZE: u8 = 85;
 /// What a worktree's row says a click on it opens, once the pointer is on it.
 const REVIEW: &str = "Review";
 /// How tall the icon before that word is, in rows, and the room between the two, in cells.
-const REVIEW_ICON: (f32, f32) = (0.5, 0.4);
+const REVIEW_ICON: (f32, f32) = (0.6, 0.4);
 /// Cells between that word and the count of changes after it.
 const REVIEW_GAP: f32 = 1.0;
 /// Agents that can be started from here, as what the panel calls them and their programs.

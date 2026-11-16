@@ -13,6 +13,22 @@ use crate::paint::{Bounds, Paint, UNIT, units};
 /// the applied design measured as the last of "buttons and text too close".
 const BUTTON_HEIGHT: f32 = 0.88;
 const LARGE_BUTTON_HEIGHT: f32 = BUTTON_HEIGHT;
+/// How far a button's words are raised in its chip, in rows: a pixel. Words stand with their
+/// capitals in the row's middle, which left the tail of a "g" 2 px over the chip's foot and
+/// 7 px over a capital; a pixel up, it's 4 and 6.
+const BUTTON_WORDS: f32 = 0.03;
+/// Rows tall an icon beside a name is: 16 pt where a row is 18.5 pt, VS Code's size.
+pub const GLYPH: f32 = 0.86;
+/// Rows tall an icon inside a text box or a chip is, where one of `GLYPH` would stand against
+/// the box's edges: 13 pt.
+pub const SMALL_GLYPH: f32 = 0.70;
+/// How far a text box stands inside its row, above and below: the box is seven eighths of
+/// its row, which holds words of 13 pt raised in it with their tails off its lower edge, and
+/// leaves 4 px between two boxes in rows one under the other.
+pub const FIELD_AIR: f32 = 0.0625;
+/// Columns such an icon starts before where it's asked for, which keeps its middle where an
+/// icon of 0.72 of a row had it, so it grew evenly to both sides.
+const GLYPH_LEAD: f32 = 0.15;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Rgb(pub u8, pub u8, pub u8);
@@ -329,7 +345,7 @@ impl Grid {
         // Inset a little from its row, so fields stacked in rows next to each other keep
         // their air.
         self.panel(
-            Bounds::inset(rect, 0.15, 0.11),
+            Bounds::inset(rect, 0.15, FIELD_AIR),
             22,
             Some(fill),
             Some(border),
@@ -414,7 +430,7 @@ impl Grid {
         let bounds = Bounds::cells(left, top, right - left, bottom - top);
         self.panel(bounds, 22, Some(fill), None);
         let middle = x as f32 + width as f32 / 2.0;
-        self.centred_text(middle, y as f32 + drop, label, style.fg, 90);
+        self.centred_text(middle, y as f32 + drop - BUTTON_WORDS, label, style.fg, 90);
     }
 
     /// Moves what was painted last down by part of a row.
@@ -500,8 +516,9 @@ impl Grid {
         self.paint.push(Paint::Hairline { bounds, color });
     }
 
-    /// A small icon, one row tall, with its left edge at `x`. `fallback` is what the cell
-    /// tier shows there.
+    /// A small icon in the row, 16 pt in a terminal set to 14 pt, as VS Code's are beside a
+    /// name. It stands about `x`: its middle is where it was when it was a sixth smaller, so
+    /// what's placed after it needn't move. `fallback` is what the cell tier shows there.
     pub fn glyph(&mut self, x: f32, y: u16, icon: Icon, color: Rgb, fallback: &str, style: Style) {
         let cell = x.floor() as u16;
         if cell < self.width && y < self.height {
@@ -517,10 +534,28 @@ impl Grid {
             );
         }
         self.paint.push(Paint::Icon {
-            bounds: Bounds::cells(x, y as f32 + 0.14, 2.0, 0.72),
+            bounds: Bounds::cells(x - GLYPH_LEAD, y as f32 + (1.0 - GLYPH) / 2.0, 2.0, GLYPH),
             icon,
             color,
         });
+    }
+
+    /// The same icon at `SMALL_GLYPH`, for inside a text box or a chip, its left edge at `x`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn small_glyph(
+        &mut self,
+        x: f32,
+        y: u16,
+        icon: Icon,
+        color: Rgb,
+        fallback: &str,
+        style: Style,
+    ) {
+        self.glyph(x, y, icon, color, fallback, style);
+        if let Some(Paint::Icon { bounds, .. }) = self.paint.last_mut() {
+            let top = y as f32 + (1.0 - SMALL_GLYPH) / 2.0;
+            *bounds = Bounds::cells(x, top, 2.0, SMALL_GLYPH);
+        }
     }
 
     /// Paint that touches row `y`, in drawing order.

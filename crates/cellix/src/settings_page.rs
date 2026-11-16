@@ -83,7 +83,8 @@ const PREVIEW_ROWS: u16 = 6;
 const SEGMENT_WIDTH: u16 = 11;
 const BUTTON_WIDTH: u16 = 12;
 const TOGGLE_WIDTH: f32 = 2.6;
-const TITLE_SIZE: u8 = 170;
+/// A page's title, a row tall: as large as its two rows hold with the note under it clear.
+const TITLE_SIZE: u8 = 145;
 const NOTE_SIZE: u8 = 90;
 /// The size of what heads a column or a category, as a section's heading is anywhere.
 const HEADING_SIZE: u8 = 80;
@@ -686,7 +687,7 @@ impl SettingsPage {
                 name: "Ghostty keys",
                 state: "Cmd+A and Cmd+D go to Ghostty",
                 tone: Tone::Quiet,
-                detail: "Ghostty keeps Cmd+A and Cmd+D for itself. Ctrl+A and Ctrl+D always work.",
+                detail: "Ghostty keeps them for itself. Ctrl+A and Ctrl+D always work.",
                 action: Some(("Free Them", false, Control::Ghostty)),
             }),
             Some(false) => blocks.push(Block {
@@ -1001,15 +1002,22 @@ impl SettingsPage {
     ) {
         let field = Self::filter_field(area);
         let y = field.y;
-        let bounds = Bounds::cells(field.x as f32, y as f32 + 0.06, field.w as f32, 0.88);
+        let air = cellix_render::FIELD_AIR;
+        let bounds = Bounds::cells(
+            field.x as f32,
+            y as f32 + air,
+            field.w as f32,
+            1.0 - 2.0 * air,
+        );
         grid.panel(bounds, 18, Some(theme.input), Some(theme.focus));
         let quiet = Style {
             fg: theme.gutter.fg,
             ..theme.text
         };
         let icon = field.x as f32 + 0.6;
-        grid.glyph(icon, y, Icon::Search, theme.gutter.fg, "⌕", theme.text);
+        grid.small_glyph(icon, y, Icon::Search, theme.gutter.fg, "⌕", theme.text);
         let (text, cell) = (icon + 2.3, field.x + 4);
+        let words = grid.painted_so_far();
         let mut end = field.right().saturating_sub(1);
         if self.filtering() {
             let count = match self.found_rows().len() {
@@ -1037,10 +1045,12 @@ impl SettingsPage {
         } else {
             grid.label_at(text, cell, y, &self.filter, theme.text, end, 100);
         }
+        // Raised in the box, as every text box's words are.
+        grid.lift_since(words, crate::measures::FIELD_LIFT);
         if self.recording.is_none() {
             // Where the text really ends, which proportional letters make short of its cells.
             let caret = text + measure.width(&self.filter, Font::default());
-            grid.set_caret(caret, y, 0.56);
+            grid.set_caret(caret, y, 0.62);
         }
     }
 
@@ -1629,7 +1639,7 @@ fn heading(grid: &mut Grid, page: Rect, title: &str, note: &str, theme: &Theme) 
         fg: theme.gutter.fg,
         ..theme.text
     };
-    grid.label(page.x, page.y + 1, note, quiet, page.right());
+    grid.label_at(x, page.x, page.y + 1, note, quiet, page.right(), NOTE_SIZE);
 }
 
 /// A title with a line under it, at the left of a row of two, stopping before `room`.
@@ -1649,7 +1659,10 @@ fn draw_text(
         ..theme.text
     };
     grid.label(page.x, y, title, name, room);
-    grid.label(page.x, y + 1, detail, quiet, room);
+    // Small words, as the design has what explains a setting: the longest of them fits a
+    // window of 120 columns that way.
+    let x = page.x;
+    grid.label_at(f32::from(x), x, y + 1, detail, quiet, room, NOTE_SIZE);
 }
 
 /// What a command's row is drawn with: the pointer, the text's measure, and how many
@@ -1816,11 +1829,13 @@ fn draw_block(
         bg: theme.popup,
         ..theme.text
     };
-    // Two columns short of the button, and cut with an ellipsis, not mid-word at its edge.
+    // Small words, as what explains a setting is. Short of the button's place, and cut with
+    // an ellipsis, not mid-word at its edge: `elide` measures words at their full size, so
+    // it's given the room these take at theirs.
     let room = page.right().saturating_sub(BUTTON_WIDTH + 3);
-    let wide = f32::from(room.saturating_sub(x + 2));
+    let wide = f32::from(room.saturating_sub(x)) * 100.0 / f32::from(NOTE_SIZE);
     let detail = crate::context::elide(detail, wide, measure);
-    grid.label(x, top + 1, &detail, quiet, room);
+    grid.label_at(f32::from(x), x, top + 1, &detail, quiet, room, NOTE_SIZE);
 }
 
 /// As many columns of `rect` as a button with these words takes, from its right end: the

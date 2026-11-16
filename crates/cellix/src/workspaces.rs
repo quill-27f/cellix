@@ -26,13 +26,18 @@ const BETWEEN: f32 = 2.0;
 /// Kept on every tile for its close button, so tiles don't move as it comes and goes.
 const CLOSE: f32 = 3.0;
 const MARK: f32 = 1.0;
-/// The chip behind a tile stands this far inside its row, above and below.
-/// How far a chip stands in from the top and bottom of its row: two thirds of a row tall.
-const CHIP_INSET: f32 = 0.17;
-/// How far the bar's chips and words are raised in their row on the pixel tiers, so a third
-/// of a row of air is left under them at the window's edge, and none crosses into the row
-/// above, whose picture is made apart from this one's.
-pub const BAR_LIFT: f32 = 0.14;
+/// How far a chip stands in from the top and bottom of its row: three quarters of a row
+/// tall. At two thirds, the tails of words of 12 pt stood on its lower edge.
+const CHIP_INSET: f32 = 0.12;
+/// How far the bar's chips and words are raised in their row on the pixel tiers, so 8 px of
+/// air are left under them at the window's edge, and none crosses into the row above, whose
+/// picture is made apart from this one's.
+pub const BAR_LIFT: f32 = 0.12;
+/// How much further the bar's words and icons are raised than its chips, in rows: a pixel
+/// and a half.
+/// Words stand with their capitals in the middle of their row, so their tails reach further
+/// down than their heads reach up; raised, a tail has 2 px inside its chip and a head 3.
+const WORD_LIFT: f32 = 0.045;
 /// As a percentage of a row, about 9 pixels.
 const CHIP_RADIUS: u8 = 26;
 /// The button that opens another folder beside this one, and what its tip says.
@@ -654,6 +659,12 @@ impl Workspaces {
             let from = grid.painted_so_far();
             self.draw_bar(grid);
             grid.lift_since(from, BAR_LIFT);
+            for paint in grid.paint.iter_mut().skip(from) {
+                use cellix_render::Paint;
+                if matches!(paint, Paint::Text { .. } | Paint::Icon { .. }) {
+                    paint.lift(cellix_render::units(WORD_LIFT));
+                }
+            }
         }
     }
 
@@ -736,7 +747,7 @@ impl Workspaces {
                 fg: theme.text.fg,
                 ..base
             };
-            grid.glyph(
+            grid.small_glyph(
                 start + self.room(PAD),
                 y,
                 Icon::Play,
@@ -1273,11 +1284,11 @@ mod tests {
             .expect("the open workspace's chip");
         let (top, bottom) = (chip.y as f32 / unit, (chip.y + chip.h) as f32 / unit);
         assert!(top >= row, "within its row: {top} {row}");
-        assert!(
-            row + 1.0 - bottom >= 0.3,
-            "air under it: {}",
-            row + 1.0 - bottom
-        );
+        // 8 px where a row is 36, which is the least anything keeps from an edge. It was a
+        // third of a row while the chips were two thirds of one; they're three quarters now,
+        // for words of 12 pt.
+        let air = (row + 1.0 - bottom) * 36.0;
+        assert!(air >= 8.0, "air under it: {air} px");
     }
 
     #[test]

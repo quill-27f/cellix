@@ -446,9 +446,39 @@ On a terminal, both themes move together so the frame sits on the terminal's own
 its window padding shows no seam; a Latte terminal therefore shows the light theme a step paler
 than Latte (decided with the user on 2026-11-09). It's all drawn to the grid, so it holds on the cell tier. Activity icons span several cells:
 shapes on the pixel tier and block art on cells, because a font glyph is too small beside a
-real IDE. The highlight behind a selected or hovered icon, on the rail and at the top right,
-keeps 8 px or more from the icon on every side; the rail's reaches into the rows either side,
-so the rail sits an eighth of a row lower to keep the first one inside the window.
+real IDE. The highlight behind a selected or hovered icon on the rail keeps 8 px or more from
+the icon on every side; it reaches into the rows either side, so the rail sits half a row lower,
+its first icon a row from the top, which keeps the first one inside the window.
+
+Sizes are VS Code's, measured in a terminal set to 14 pt, where a row is 18.5 pt (decided with
+the user on 2026-11-15, who found everything too small; the Sizes board of the end-to-end
+design). Words are seven tenths of a row, 13 pt, where they were three fifths, 11 pt beside 14 pt
+code. Small words, a button's, a chip's and both bars', are nine tenths of that, and a section's
+heading four fifths. A page's words are the interface's, so they grew with it. An icon beside a
+name is 16 pt (`GLYPH`). An icon in a chip at the top right is 13 pt: VS Code's are 16 in a bar
+35 pt tall, this bar is one row, and a larger icon would stand against its chip, which keeps 3 px
+over and under the icon's box as VS Code's hover chips do. A rail icon is 24 pt, on a rail five
+columns wide with two rows from one icon to the next, either of which presses it; in cells the
+rail keeps its four columns. Code is the terminal's own size and didn't change. Words a sixth
+wider leave a name in the sidebar about five letters fewer before it's cut.
+
+A row is 18.5 pt and words of 13 pt nearly fill it, so what's one row tall is sized for them,
+and for their tails: words stand with their capitals in the middle of their row, and a "g"
+reaches 4 px further down than an "h" reaches up. A text box is seven eighths of its row
+(`FIELD_AIR`), the palette's nine tenths, and what's typed in it is raised 2 px (`FIELD_LIFT`),
+which leaves a tail as far from the box's foot as a tall letter is from its top; the caret
+stands in the box's middle, and what shares the box's line, a search box's switches and the
+Find bar's count, is raised with the words. The band behind a picked or pointed row, a
+palette's and a menu's, is 33 px of 36 (`BAND_HEIGHT`). A button's words are raised a pixel
+in its chip. A workspace's chip is three quarters of the bar's row, keeps 8 px from the
+window's edge where the terminal has no padding of its own, and its words and icons are
+raised a pixel and a half in it; a pill in the comments pane is three quarters of a row too,
+its words in its middle. An icon inside a text box or a chip is 13 pt (`SMALL_GLYPH`), an
+arrow or a × in the Find bar the size of the ones beside names. A panel with a line round it
+is drawn on whole pixels wherever it stands in its rows, so the line is one pixel of its own
+colour on every side: between pixels it was two rows at half strength on one side and one at
+full on the other. On a page, a heading two rows tall stands high enough in them to keep 7 px
+over the line that follows, a paper's title over its subtitle.
 
 One set of parts, everywhere. A button is one chip, nearly nine tenths of its row and inside it
 (four fifths left its words 7 px under its top, which read as cramped): the

@@ -7,7 +7,7 @@ mod measure;
 mod paint;
 mod raster;
 
-pub use grid::{Cell, Grid, Rect, Rgb, Run, Style, on_large_button};
+pub use grid::{Cell, FIELD_AIR, GLYPH, Grid, Rect, Rgb, Run, SMALL_GLYPH, Style, on_large_button};
 pub use icon::{Icon, Piece};
 pub use measure::{CellMeasure, EMOJI_AIR, Font, FontMeasure, Measure};
 pub use paint::{

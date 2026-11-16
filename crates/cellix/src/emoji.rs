@@ -437,7 +437,7 @@ impl Picker {
         };
         let left = area.x + INSET;
         let right = area.right().saturating_sub(INSET);
-        grid.glyph(
+        grid.small_glyph(
             f32::from(left),
             area.y,
             Icon::Search,

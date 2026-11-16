@@ -72,7 +72,10 @@ use available::GitNow;
 use cellix_agent::context::Agent as ContextAgent;
 use gitops::GitChoice;
 
-const ACTIVITY_WIDTH: u16 = 4;
+/// Columns the rail takes. Five where icons are painted, which is the room a 24 pt icon and
+/// its tile need, and four where they're cells.
+const ACTIVITY_WIDTH: u16 = 5;
+const ACTIVITY_WIDTH_CELLS: u16 = 4;
 /// The buttons that stand by a selection, and the one on a picture.
 const COMMENT_WIDTH: u16 = 10;
 const RUN_WIDTH: u16 = 6;
@@ -82,7 +85,7 @@ const KERNEL_STATUS_END: u16 = 6;
 const VIEW_COMMENT_ROW: u16 = 2;
 const ASK_WIDTH: u16 = 11;
 /// How the buttons by a terminal's selection are drawn: not lifted, and this much of a row tall.
-const OUTPUT_CHIP: (f32, f32) = (0.0, 0.78);
+const OUTPUT_CHIP: (f32, f32) = (0.0, 0.88);
 /// The list an empty window shows, its width, the rows above it, and the height it needs.
 const WELCOME_WIDTH: u16 = 44;
 const WELCOME_LEAD_ROWS: u16 = 4;
@@ -98,10 +101,9 @@ const ACTIVITY: [(Icon, Command); 6] = [
 ];
 /// Cells each activity icon spans.
 const ACTIVITY_ICON: (u8, u8) = (2, 1);
-/// Rows from one activity icon to the next: room between them, in VS Code's proportions.
-/// Cells can't place half a row, so there it's two.
-const ACTIVITY_STEP: f32 = 1.5;
-const ACTIVITY_STEP_CELLS: f32 = 2.0;
+/// Rows from one activity icon to the next: two, which leaves 8 px between one icon's tile
+/// and the next.
+const ACTIVITY_STEP: f32 = 2.0;
 /// What's in reach at the top right, as in a desktop app, whatever the pane is showing.
 /// Each opens the side pane. Review Changes isn't here: it opens beside Source Control, on
 /// the left, as VS Code's does.
@@ -118,16 +120,16 @@ const PANEL_TOGGLE: (Icon, Command, &str) = (Icon::Panel, Command::TogglePanel, 
 const ACTION_WIDTH: u16 = 3;
 /// Columns kept clear on each side of the whole bar.
 const ACTION_MARGIN: u16 = 1;
-/// Rows tall a rail icon is on the pixel tiers. Text cells keep their block art.
-/// Larger than the top right icons' box, since line icons fill less of theirs, so the two
-/// sets look the same size.
-const RAIL_ICON: f32 = 0.84;
+/// Rows tall a rail icon is on the pixel tiers: 24 pt where a row is 18.5 pt, the size of
+/// VS Code's activity bar. Text cells keep their block art.
+const RAIL_ICON: f32 = 1.30;
 /// The tile behind the rail icon that's showing, in columns and rows: about square, with 8 px
-/// or more between it and the icon on every side. Taller than a row, so it reaches into the
-/// rows either side; the rail sits `RAIL_DROP` lower so the first stays inside the window.
+/// or more between it and the icon on every side, and as much between it and the rail's
+/// edges. Taller than a row, so it reaches into the rows either side; the rail sits
+/// `RAIL_DROP` lower so the first stays inside the window, its icon a row from the top.
 /// Pixels only.
-const RAIL_PILL: (f32, f32) = (2.5, 1.25);
-const RAIL_DROP: f32 = 0.125;
+const RAIL_PILL: (f32, f32) = (3.9, 1.78);
+const RAIL_DROP: f32 = 0.5;
 /// Where the pane's own close button stands, which they keep clear of.
 const PANE_CLOSE: u16 = 3;
 /// Columns for the button at the very top right that quits Cellix, as a window's close
@@ -163,21 +165,26 @@ const TAB_PADDING: u16 = 5;
 /// Columns the Task page's tab keeps for its mark, before its name, and how tall the mark
 /// is, in rows.
 const TASK_TAB_ICON: u16 = 2;
-const TASK_TAB_MARK: f32 = 0.5;
+const TASK_TAB_MARK: f32 = 0.6;
 /// The most of a task's name its tab shows, in cells.
 const TASK_TAB_NAME: f32 = 18.0;
 /// A sheet with more rows than this gives the Task page a row of air over its title.
 const TASK_AIR_FROM: u16 = 20;
 const PILL_RADIUS: u8 = 30;
 /// The bell's chip in the status bar, from and to as fractions of its row: 8 px under the
-/// edge above, so it doesn't sit against the editor.
-const BELL_CHIP: (f32, f32) = (0.23, 0.81);
-/// Rows tall the bell is, and columns its chip reaches either side of it.
-const BELL_ICON: f32 = 0.44;
-const BELL_SIDE: f32 = 0.85;
+/// edge above, so it doesn't sit against the editor, and 5 px over the bar's foot, where
+/// there's no edge. So the bell stands a pixel and a half under the row's middle.
+const BELL_CHIP: (f32, f32) = (0.23, 0.86);
+/// Rows tall the bell is, and columns its chip reaches either side of it: about as tall as
+/// the status words' capitals, with 2 px over and under its box inside the chip.
+const BELL_ICON: f32 = 0.50;
+const BELL_SIDE: f32 = 0.9;
 /// What the explorer's status holds for a folder with changes inside, not a file.
 const DIRECTORY_MARK: char = '•';
-const BADGE_SIZE: u8 = 56;
+/// The count on the rail's Source Control icon: the size of its digits, of the words', and
+/// its chip's least width in columns and its height in rows, about round for one digit.
+const BADGE_SIZE: u8 = 72;
+const BADGE_CHIP: (f32, f32) = (1.4, 0.6);
 const SUGGEST_WIDTH: u16 = 42;
 const FIND_BUTTON: u16 = 2;
 const FIND_BUTTONS: [Icon; 3] = [Icon::ArrowUp, Icon::ArrowDown, Icon::Close];
@@ -3553,7 +3560,13 @@ impl App {
     }
 
     fn activity_area(&self) -> Rect {
-        let width = if self.compact() { 0 } else { ACTIVITY_WIDTH };
+        let width = if self.compact() {
+            0
+        } else if self.measure.in_cells() {
+            ACTIVITY_WIDTH_CELLS
+        } else {
+            ACTIVITY_WIDTH
+        };
         Rect::new(0, 0, width, self.size.1.saturating_sub(1))
     }
 
@@ -4928,7 +4941,8 @@ impl App {
             let font = Font::default();
             let width = self.measure.width(name, font);
             let x = chip.x as f32 + (chip.w as f32 - width) / 2.0;
-            let top = chip.y as f32 - lift;
+            // A little over the chip's middle, so the tail of "Agent" keeps off its edge.
+            let top = chip.y as f32 - lift - 0.04;
             grid.text_run(
                 (x, top),
                 chip.right() as f32,
@@ -6617,7 +6631,7 @@ impl App {
     fn find_button(&self, grid: &mut Grid, cell: Rect, icon: Icon, lit: bool) {
         let theme = &self.theme;
         let hovered = self.hover.is_some_and(|h| cell.contains(h.0, h.1));
-        let chip = Bounds::inset(cell, 0.2, 0.15);
+        let chip = Bounds::inset(cell, 0.1, 0.1);
         if lit {
             grid.panel(chip, 14, Some(theme.pick), Some(theme.focus));
         } else if hovered {
@@ -6628,7 +6642,13 @@ impl App {
             bg: if lit { theme.pick } else { theme.popup },
             ..theme.bar
         };
-        toolbar::draw_icon(grid, (icon, 0.5), cell, theme.text.fg, base);
+        // An arrow, a chevron or a × fills half its box, so it takes the box of an icon
+        // beside a name; the two replace icons fill theirs, and take a chip icon's.
+        let tall = match icon {
+            Icon::Replace | Icon::ReplaceAll => ACTION_ICON,
+            _ => cellix_render::GLYPH,
+        };
+        toolbar::draw_icon(grid, (icon, tall), cell, theme.text.fg, base);
     }
 
     fn draw_find(&self, grid: &mut Grid, find: &Find) {
@@ -6671,6 +6691,8 @@ impl App {
             theme,
         );
         grid.label(count_x + 1, area.y, &find.count_label(), base, first);
+        // On the line of the words in the box beside it, which are raised.
+        grid.drop_last(-crate::measures::FIELD_LIFT);
         let mut x = first;
         for icon in FIND_BUTTONS {
             self.find_button(grid, Rect::new(x, area.y, FIND_BUTTON, 1), icon, false);
@@ -14795,7 +14817,7 @@ impl App {
         }
         let bounds = Bounds::cells(left, top, wide, 1.0);
         grid.popup(bounds, 26, theme.tint, theme.popup_border);
-        let icon_bounds = Bounds::cells(left + 0.9, top + 0.18, 2.0, 0.64);
+        let icon_bounds = Bounds::cells(left + 0.8, top + 0.13, 2.0, 0.74);
         grid.paint.push(cellix_render::Paint::Icon {
             bounds: icon_bounds,
             icon,
@@ -15008,11 +15030,7 @@ impl App {
     /// The top of an icon's row, which can fall half way down a cell. The last one is
     /// Settings, which sits at the bottom given room.
     fn rail_top(&self, index: usize, area: Rect) -> f32 {
-        let step = if self.measure.in_cells() {
-            ACTIVITY_STEP_CELLS
-        } else {
-            ACTIVITY_STEP
-        };
+        let step = ACTIVITY_STEP;
         // The first level with the sidebar's header, as the design has it, less the drop
         // that keeps its tile inside the window.
         let drop = if self.measure.in_cells() {
@@ -15154,24 +15172,25 @@ impl App {
                     ..Font::default()
                 };
                 let count = changed.min(99).to_string();
-                // On the chip's bottom right corner, ringed in the rail's colour so it stands
-                // clear of the icon.
+                // Over the icon's bottom right corner, as VS Code's is, and ending where the
+                // icon's tile does. Ringed in the rail's colour so it stands clear of the icon.
                 let (wide, high) = RAIL_PILL;
+                let (least, tall) = BADGE_CHIP;
                 let chip_right = area.x as f32 + (area.w as f32 + wide) / 2.0;
                 let chip_bottom = top + (1.0 + high) / 2.0;
-                let width = (self.measure.width(&count, font) + 0.5).max(1.0);
-                let (left, top) = (chip_right - width + 0.3, chip_bottom - 0.52);
-                let ring = Bounds::cells(left - 0.12, top - 0.06, width + 0.24, 0.58);
-                grid.panel(ring, 30, Some(self.theme.activity.bg), None);
+                let width = (self.measure.width(&count, font) + 0.6).max(least);
+                let (left, top) = (chip_right - width, chip_bottom - 0.12 - tall);
+                let ring = Bounds::cells(left - 0.12, top - 0.06, width + 0.24, tall + 0.12);
+                grid.panel(ring, PILL_RADIUS, Some(self.theme.activity.bg), None);
                 grid.panel(
-                    Bounds::cells(left, top, width, 0.46),
-                    30,
+                    Bounds::cells(left, top, width, tall),
+                    PILL_RADIUS,
                     Some(self.theme.accent),
                     None,
                 );
                 let text = self.measure.width(&count, font);
                 grid.text_run(
-                    (left + (width - text) / 2.0, top - 0.27),
+                    (left + (width - text) / 2.0, top + tall / 2.0 - 0.5),
                     area.right() as f32 + 1.0,
                     &count,
                     (color, false),
@@ -16857,7 +16876,7 @@ impl App {
             if hovered {
                 let chip = Rect::new(at, y, end.saturating_sub(at), 1);
                 grid.panel(
-                    Bounds::inset(chip, -0.3, 0.12),
+                    Bounds::inset(chip, -0.3, 0.06),
                     16,
                     Some(self.theme.row_hover),
                     None,
@@ -16866,7 +16885,7 @@ impl App {
             let color = if hovered { self.theme.text.fg } else { bar.fg };
             let shown = Style { fg: color, ..bar };
             grid.glyph(at as f32, y, Icon::Git, color, "⎇", bar);
-            grid.label_at(at as f32 + 1.8, at + 2, y, branch, shown, end, 90);
+            grid.label_at(at as f32 + 1.95, at + 2, y, branch, shown, end, 90);
         }
         let mut x = start;
         if let Some(problems) = &problems {
@@ -16876,7 +16895,7 @@ impl App {
                     .is_some_and(|h| h.1 == y && h.0 >= at && h.0 < end)
             {
                 let chip = Rect::new(at, y, end.saturating_sub(at + 1), 1);
-                let wash = Bounds::inset(chip, -0.3, 0.12);
+                let wash = Bounds::inset(chip, -0.3, 0.06);
                 grid.panel(wash, 16, Some(self.theme.row_hover), None);
             }
             x = grid.label(x, y, problems, bar, right_x);
@@ -17765,8 +17784,12 @@ mod tests {
         assert_eq!((panel.0 % unit, panel.1 % unit), (0, 0), "on row lines");
         let above = boxed.0 - panel.0;
         let between = band.0 - boxed.1;
-        // What's typed stands in the middle of its box.
-        assert_eq!(typed_at + unit / 2, (boxed.0 + boxed.1) / 2, "{boxed:?}");
+        // What's typed stands in its box raised by the measure every text box raises its
+        // words by, which puts a letter's tail as far from the box's foot as a tall letter
+        // is from its top: `a_text_boxs_words_keep_their_tails_off_its_edge` measures that.
+        let raised = cellix_render::units(crate::measures::FIELD_LIFT);
+        let middle = (boxed.0 + boxed.1) / 2;
+        assert_eq!(typed_at + unit / 2 + raised, middle, "{boxed:?}");
         // The last row picked, to see what's under it.
         for _ in 0..40 {
             key(&mut app, Key::Down);
@@ -20745,6 +20768,53 @@ mod tests {
                 "light {light}: {over:?} over {rest:?} on {popup:?}"
             );
         }
+    }
+
+    /// Words of 13 pt in a text box one row tall: at their old place, capitals in the row's
+    /// middle, a "g" stood on the box's lower edge. The box is nine tenths of its row and the
+    /// words are raised in it, so in the picture of that row a tail keeps 2 px from the
+    /// box's foot and a tall letter 2 px from its top, and the two are within 2 px of even.
+    #[test]
+    fn a_text_boxs_words_keep_their_tails_off_its_edge() {
+        use cellix_render::{Rasterizer, SoftwareRasterizer};
+        let theme = Theme::default();
+        let cell: (usize, usize) = (17, 37);
+        let measure = cellix_render::FontMeasure::new(cell.0, cell.1);
+        let mut grid = Grid::new(24, 1, theme.text);
+        let field = Input {
+            text: "hlgjpqy",
+            hint: "",
+            focused: false,
+            behind: theme.popup,
+        };
+        input(&mut grid, Rect::new(1, 0, 22, 1), &field, &measure, &theme);
+        let mut rasterizer =
+            SoftwareRasterizer::new(cell.0, cell.1).expect("fonts are in the binary");
+        let image = rasterizer.row(&grid, 0);
+        let at = |x: usize, y: usize| {
+            let i = (y * image.width + x) * 3;
+            Rgb(image.rgb[i], image.rgb[i + 1], image.rgb[i + 2])
+        };
+        // Inside the box, well past the words: the rows its fill covers.
+        let far = 18 * cell.0;
+        let inside: Vec<usize> = (0..image.height)
+            .filter(|y| at(far, *y) == theme.input)
+            .collect();
+        let (top, foot) = (inside[0], inside[inside.len() - 1]);
+        assert!(
+            foot - top + 1 >= 28,
+            "the box is {} px inside",
+            foot - top + 1
+        );
+        // The words: anything in their columns much lighter than the box.
+        let lit = |y: usize| (2 * cell.0..9 * cell.0).any(|x| at(x, y).0 > theme.input.0 + 70);
+        let inked: Vec<usize> = (top..=foot).filter(|y| lit(*y)).collect();
+        let (head, tail) = (inked[0] - top, foot - inked[inked.len() - 1]);
+        assert!(
+            head >= 2 && tail >= 2,
+            "{head} px over a tall letter, {tail} under a tail"
+        );
+        assert!(head.abs_diff(tail) <= 2, "{head} px over, {tail} px under");
     }
 
     /// A page's words and a pane's are painted, not cells, and paint isn't cleared by writing
@@ -27373,8 +27443,18 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
                 (chip.y + chip.h - inner.y - inner.h) * 36 / 64,
             ];
             // The icon's box, rounded down: its strokes stand two or three pixels further in
-            // still, which the tour's pictures measure at 8 or more.
-            assert!(air.iter().all(|a| *a >= 5), "{which:?}: {air:?} px");
+            // still. The rail's tile keeps 8 px clear of the box on every side. At the top
+            // right the bar is one row, and an icon of 13 pt in it has what VS Code leaves
+            // inside its own hover chips: 3 px over and under the box, and 8 at the sides.
+            let least = if which == Icon::Files {
+                [8, 8, 8, 8]
+            } else {
+                [8, 8, 3, 3]
+            };
+            assert!(
+                air.iter().zip(least).all(|(a, least)| *a >= least),
+                "{which:?}: {air:?} px"
+            );
             assert!(chip.y >= 0, "{which:?}'s chip starts inside the window");
         }
     }
@@ -28322,6 +28402,100 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         app.run(Command::OpenDiff);
         app.run(Command::OpenSettings);
         assert!(drawn_icons(&app).contains(&Icon::Terminal), "in Settings");
+    }
+
+    /// How tall the first `which` painted on the rail, or off it, is, in points where a row
+    /// is 18.5 pt: a terminal set to 14 pt.
+    fn icon_points(app: &App, which: Icon, on_rail: bool) -> f32 {
+        let rail = i32::from(app.activity_area().right()) * cellix_render::UNIT;
+        let tall = screen(app).paint.iter().find_map(|p| match p {
+            Paint::Icon { bounds, icon, .. } if *icon == which && (bounds.x < rail) == on_rail => {
+                Some(bounds.h)
+            }
+            _ => None,
+        });
+        let tall = tall.unwrap_or_else(|| panic!("no {which:?} is painted"));
+        tall as f32 / cellix_render::UNIT as f32 * 18.5
+    }
+
+    /// Icons are the sizes VS Code's are: 16 pt beside a name, 24 pt on the rail, and 13 pt
+    /// at the top right, which is what a bar one row tall holds. They were 13, 15 and 10.
+    #[test]
+    fn icons_are_the_sizes_vs_code_has() {
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        let near = |points: f32, wanted: f32| (points - wanted).abs() <= 0.5;
+        let beside_a_name = icon_points(&app, Icon::File, false);
+        assert!(
+            near(beside_a_name, 16.0),
+            "a file's icon: {beside_a_name} pt"
+        );
+        let on_the_rail = icon_points(&app, Icon::Search, true);
+        assert!(near(on_the_rail, 24.0), "the rail's: {on_the_rail} pt");
+        for (icon, ..) in PANE_ACTIONS {
+            let at_the_top_right = icon_points(&app, icon, false);
+            assert!(
+                near(at_the_top_right, 13.0),
+                "{icon:?}: {at_the_top_right} pt"
+            );
+        }
+        // Every × in the title row is the size of the icons beside names.
+        let close = icon_points(&app, Icon::Close, false);
+        assert!(near(close, 16.0), "a ×'s box: {close} pt");
+    }
+
+    /// The rail where icons are painted: five columns, the room an icon of 24 pt and its
+    /// tile need, with an icon every two rows and either row pressing it. The tile behind
+    /// the one showing keeps 8 px from the rail's edges and stays inside the window. Where
+    /// icons are cells the rail is the four columns it was.
+    #[test]
+    fn the_rail_has_room_for_icons_of_vs_codes_size() {
+        let (_dir, mut app) = project();
+        assert_eq!(app.rail_width(), 4, "in cells");
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        assert_eq!(app.rail_width(), 5, "in pixels");
+        let area = app.activity_area();
+        for index in 0..ACTIVITY.len() - 1 {
+            let first = 2 * index as u16;
+            assert_eq!(app.rail_at(first, area), Some(index), "row {first}");
+            assert_eq!(
+                app.rail_at(first + 1, area),
+                Some(index),
+                "row {}",
+                first + 1
+            );
+        }
+        // The second row of Search's two, and then the first of Outline's.
+        app.handle(mouse(MouseKind::Left, 2, 3));
+        assert!(app.sidebar_view == SidebarView::Search);
+        app.handle(mouse(MouseKind::Left, 2, 4));
+        assert!(app.sidebar_view == SidebarView::Outline);
+        // Settings stays at the foot of the rail, its tile over the status bar.
+        let settings = app.rail_row(ACTIVITY.len() - 1, area);
+        assert!(settings + 2 >= area.bottom(), "row {settings} of {area:?}");
+
+        let grid = screen(&app);
+        let unit = cellix_render::UNIT;
+        let rail = i32::from(area.right()) * unit;
+        let tile = grid.paint.iter().find_map(|p| match p {
+            Paint::Panel {
+                bounds,
+                fill: Some(fill),
+                ..
+            } if *fill == app.theme.tint && bounds.x < rail => Some(*bounds),
+            _ => None,
+        });
+        let tile = tile.expect("the icon that's showing has a tile");
+        let (left, right) = (tile.x * 17 / unit, (rail - tile.x - tile.w) * 17 / unit);
+        assert!(
+            left >= 8 && right >= 8,
+            "{left} px and {right} px to the rail's edges"
+        );
+        assert!(tile.y >= 0 && tile.y + tile.h <= i32::from(area.bottom()) * unit);
+        // About square on screen, as a tile is.
+        let (wide, tall) = (tile.w * 17 / unit, tile.h * 37 / unit);
+        assert!(wide.abs_diff(tall) <= 4, "{wide} by {tall} px");
     }
 
     #[test]
@@ -30856,7 +31030,7 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
     fn activity_icons_span_several_cells() {
         let (_dir, app) = project();
         let grid = screen(&app);
-        let pieces = (0..ACTIVITY_WIDTH)
+        let pieces = (0..ACTIVITY_WIDTH_CELLS)
             .flat_map(|x| (0..1).map(move |y| (x, y)))
             .filter(|(x, y)| cellix_render::Piece::decode(&grid.cell(*x, *y).symbol).is_some())
             .count();

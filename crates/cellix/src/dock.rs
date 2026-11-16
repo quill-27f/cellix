@@ -77,17 +77,19 @@ const HUG_CLOSE: f32 = 2.07;
 /// The button that closes the pane.
 const HIDE_WIDTH: u16 = 3;
 /// Rows tall each icon at the top right is: the pane's buttons and the icons beside them.
-pub const ACTION_ICON: f32 = 0.55;
-/// The chip behind one of them that's showing or hovered, in columns and rows: 8 px or more
-/// between it and the icon on every side.
-pub const ACTION_PILL: (f32, f32) = (2.25, 0.89);
+/// 13 pt where a row is 18.5 pt. VS Code's are 16 pt in a bar 35 pt tall; this bar is a row,
+/// and more than this would stand against its chip.
+pub const ACTION_ICON: f32 = 0.70;
+/// The chip behind one of them that's showing or hovered, in columns and rows: as tall as a
+/// button, with the icon's box 8 px inside it at the sides.
+pub const ACTION_PILL: (f32, f32) = (2.5, 0.89);
 /// The hover chip of the hide and quit buttons, either side of the line between them: as
 /// tall and round as the icons' chips, narrower, so 8 px stay clear of the line.
 pub const BESIDE_LINE_PILL: (f32, f32) = (1.95, 0.89);
 const HIDE_PILL: (f32, f32) = BESIDE_LINE_PILL;
 const HIDE_RADIUS: u8 = 30;
 /// The height in rows of every × in the title row: a tab's, the pane's, and the quit button's.
-pub const CLOSE_MARK: f32 = 0.72;
+pub const CLOSE_MARK: f32 = cellix_render::GLYPH;
 /// What the pane's browser tab is called.
 pub const BROWSER: &str = "Browser";
 /// Pictures kept per session, oldest going first.
