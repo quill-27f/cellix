@@ -45,6 +45,21 @@ pub fn rows_to_columns(measure: &dyn Measure) -> f32 {
 /// their heads reach up, and in a box nine tenths of a row that put a "g" on its lower edge.
 /// Raised, a tail is as far from the box's foot as a tall letter is from its top.
 pub const FIELD_LIFT: f32 = 0.055;
+/// A row this many times the terminal's line, or taller, has a box with room under a tail,
+/// and words stand in its middle as they do in the design: Airy rows. A Comfortable row's box
+/// is a pixel taller than the line's, and its words stay raised.
+const ROOMY: f32 = 1.3;
+
+/// How far a text box's words are raised in it on rows of this measure: `FIELD_LIFT` where
+/// the box is no taller than a tail needs, and nothing where it is.
+pub fn field_lift(measure: &dyn Measure) -> f32 {
+    if roomy(measure) { 0.0 } else { FIELD_LIFT }
+}
+
+/// Whether a row has room for a control to stand in it with its words in its middle.
+pub fn roomy(measure: &dyn Measure) -> bool {
+    measure.row_air() >= ROOMY
+}
 /// How tall the band behind a picked or pointed row of a list is, in rows: 33 px of 36,
 /// which holds an icon of 16 pt and a letter's tail. A menu's and a palette's are this.
 pub const BAND_HEIGHT: f32 = 0.92;
@@ -100,5 +115,20 @@ mod tests {
             );
         }
         assert_eq!(button_cells("Reply", &CellMeasure), "[Reply]");
+    }
+
+    /// A text box's words are raised for their tails where a row is the terminal's line, or
+    /// only a little taller. On an Airy row the box has the room, and they stand in its
+    /// middle.
+    #[test]
+    fn words_are_raised_only_where_a_box_is_too_short_for_their_tails() {
+        let line = FontMeasure::new(17, 36);
+        let comfortable = FontMeasure::new(17, 43).with_type_row(36);
+        let airy = FontMeasure::new(17, 50).with_type_row(36);
+        assert_eq!(field_lift(&line), FIELD_LIFT);
+        assert_eq!(field_lift(&comfortable), FIELD_LIFT);
+        assert_eq!(field_lift(&airy), 0.0);
+        assert_eq!(field_lift(&CellMeasure), FIELD_LIFT);
+        assert!(roomy(&airy) && !roomy(&comfortable) && !roomy(&line));
     }
 }

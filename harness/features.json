@@ -5339,5 +5339,47 @@
     "title": "A workspace is noted as open from when it's opened, so the next Cellix offers every workspace the last one had, with something running or not, however that one ended: quit, a dropped connection or a kill",
     "test": "workspaces_open_when_cellix_dies_come_back",
     "passes": true
+  },
+  {
+    "id": "words-centred-tall-row",
+    "milestone": 14,
+    "title": "On a row with room (1.3 lines or more) a text box's words stand in its middle: nothing raises them, as the terminal's line needs for their tails",
+    "test": "a_text_boxs_words_stand_in_its_middle_on_a_tall_row",
+    "passes": true
+  },
+  {
+    "id": "bar-not-raised-tall-row",
+    "milestone": 14,
+    "title": "On a row with room nothing in the bar at the foot is raised and a workspace's chip is 0.714 of the row; on the terminal's line the branch's mark is raised no further than the bar, so none of it is drawn in the row above",
+    "test": "on_a_tall_row_nothing_in_the_bar_is_raised",
+    "passes": true
+  },
+  {
+    "id": "status-chip-one",
+    "milestone": 14,
+    "title": "What's under the pointer in the status bar has one chip on a row with room, a workspace's height in the row's middle with its mark in the middle; the bell and the power mark are the design's size for an icon in the bar",
+    "test": "the_bars_marks_stand_in_the_middle_of_their_chips_on_a_tall_row",
+    "passes": true
+  },
+  {
+    "id": "row-button-on-wash",
+    "milestone": 14,
+    "title": "A button at the end of a pointed row leaves its cells the row's own ground, so nothing behind it is taller than the row's wash",
+    "test": "a_button_on_a_pointed_row_has_nothing_taller_than_the_wash_behind_it",
+    "passes": true
+  },
+  {
+    "id": "card-roomy",
+    "milestone": 14,
+    "title": "On a row with room a card has a quarter of a row over its first row and under its last and no empty row before its buttons",
+    "test": "a_card_has_no_empty_row_where_a_row_has_room",
+    "passes": true
+  },
+  {
+    "id": "field-lift-by-room",
+    "milestone": 14,
+    "title": "Words are raised in a box only where a row is too short for their tails: the terminal's line and Comfortable rows, not Airy",
+    "test": "words_are_raised_only_where_a_box_is_too_short_for_their_tails",
+    "passes": true
   }
 ]

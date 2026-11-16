@@ -5,7 +5,7 @@ use std::rc::Rc;
 use cellix_input::{Command, Format, KeyEvent};
 use cellix_render::{Bounds, Font, Grid, Icon, Measure, Rect, Rgb, Style};
 
-use crate::measures::FIELD_LIFT;
+use crate::measures::field_lift;
 use crate::theme::Theme;
 
 const WIDTH: u16 = 64;
@@ -1554,7 +1554,7 @@ impl Palette {
             grid.label_right(right, y, text, dim, 85);
             grid.drop_last(QUIET_DROP);
         }
-        grid.lift_since(words, FIELD_LIFT);
+        grid.lift_since(words, field_lift(measure));
         caret.min(right as f32)
     }
 
@@ -1924,7 +1924,7 @@ pub fn input(grid: &mut Grid, line: Rect, field: &Input, measure: &dyn Measure, 
     } else {
         grid.label_at(x, first, y, field.text, style, line.right(), 95);
     }
-    grid.lift_since(words, FIELD_LIFT);
+    grid.lift_since(words, field_lift(measure));
     if field.focused {
         let font = Font {
             size: 95,

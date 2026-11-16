@@ -151,9 +151,7 @@ const QUIT_FROM: u16 = 40;
 /// What it says where there are no pictures, and what it's called under the pointer.
 const QUIT_WORD: &str = "Quit";
 const QUIT_TIP: &str = "Quit Cellix (Ctrl+Q)";
-/// Rows tall the mark is, which is the bell's size, and columns its chip reaches either side
-/// of its middle.
-const QUIT_ICON: f32 = BELL_ICON;
+/// Columns its chip reaches either side of its middle. The mark is the bell's size.
 const QUIT_SIDE: f32 = 1.3;
 /// What the corner's button says while the side pane is hidden.
 const SHOW_PANE_TIP: &str = "Show Side Pane";
@@ -197,14 +195,43 @@ const TASK_TAB_NAME: f32 = 18.0;
 /// A sheet with more rows than this gives the Task page a row of air over its title.
 const TASK_AIR_FROM: u16 = 20;
 const PILL_RADIUS: u8 = 30;
-/// The bell's chip in the status bar, from and to as fractions of its row: 8 px under the
-/// edge above, so it doesn't sit against the editor, and 5 px over the bar's foot, where
-/// there's no edge. So the bell stands a pixel and a half under the row's middle.
+/// The chip behind anything in the status bar that's under the pointer, from and to as
+/// fractions of its row. The branch, the count of problems, the bell and the button that
+/// quits all have this one. On a row with room it's the height of a workspace's chip beside
+/// it, in the row's middle.
+const STATUS_CHIP: (f32, f32) = (0.12, 0.88);
+/// On the terminal's own line it's 8 px under the edge above, so it doesn't sit against the
+/// editor, and 5 px over the bar's foot, where there's no edge.
 const BELL_CHIP: (f32, f32) = (0.23, 0.86);
-/// Rows tall the bell is, and columns its chip reaches either side of it: about as tall as
-/// the status words' capitals, with 2 px over and under its box inside the chip.
+
+/// The status bar's chip on rows of this measure.
+fn status_chip(measure: &dyn Measure) -> (f32, f32) {
+    if crate::measures::roomy(measure) {
+        STATUS_CHIP
+    } else {
+        BELL_CHIP
+    }
+}
+/// Columns of air a status chip keeps either side of what it holds.
+const STATUS_PAD: f32 = 0.6;
+/// Rows tall the bell is on the terminal's own line, where its chip is short: about as tall
+/// as the status words' capitals.
 const BELL_ICON: f32 = 0.50;
-const BELL_SIDE: f32 = 0.9;
+/// And on a row with room: the size the design gives an icon in the bar, half a row of its
+/// 28, which is near the branch's beside it. At the line's size the bell and the power mark
+/// looked like footnotes to the branch.
+const STATUS_ICON: f32 = 0.70;
+
+/// How tall the bell and the power mark are on rows of this measure, in rows of its words.
+fn status_icon(measure: &dyn Measure) -> f32 {
+    if crate::measures::roomy(measure) {
+        STATUS_ICON
+    } else {
+        BELL_ICON
+    }
+}
+/// Columns the bell has in the bar before its count, which its chip fills.
+const BELL_WIDTH: u16 = 3;
 /// What the explorer's status holds for a folder with changes inside, not a file.
 const DIRECTORY_MARK: char = '•';
 /// The count on the rail's Source Control icon: the size of its digits, of the words', and
@@ -232,6 +259,8 @@ const LINGER_WIDTH: u16 = 52;
 /// last row it stops, so there's the same air over the title as under the buttons.
 const CARD_TOP: f32 = 0.4;
 const CARD_BOTTOM: f32 = 0.1;
+/// The same on a row with room: the panel takes a quarter of its first row and of its last.
+const CARD_EDGE: f32 = 0.75;
 /// As a percentage of a row, about 9 pixels.
 const CARD_RADIUS: u8 = 26;
 /// Columns at the end of the pane's title that close it.
@@ -1104,11 +1133,17 @@ pub(crate) fn quit_room(size: (u16, u16)) -> u16 {
 /// Draws the button that quits Cellix in its `cell` of the status bar: the power mark, or
 /// the word where there are no pictures, quiet until the pointer is on it, and a line before
 /// it that sets it apart from what the bar says.
-pub(crate) fn draw_quit(grid: &mut Grid, cell: Rect, hovered: bool, theme: &Theme) {
+pub(crate) fn draw_quit(
+    grid: &mut Grid,
+    cell: Rect,
+    hovered: bool,
+    (theme, measure): (&Theme, &dyn Measure),
+) {
     let bar = theme.status;
     let (left, top) = (f32::from(cell.x), f32::from(cell.y));
     let middle = left + f32::from(cell.w) / 2.0;
-    let (from, to) = BELL_CHIP;
+    let (from, to) = status_chip(measure);
+    let icon = status_icon(measure);
     if hovered {
         // The bell's chip, round it.
         let chip = Bounds::cells(middle - QUIT_SIDE, top + from, QUIT_SIDE * 2.0, to - from);
@@ -1123,12 +1158,7 @@ pub(crate) fn draw_quit(grid: &mut Grid, cell: Rect, hovered: bool, theme: &Them
     // The bell's size, and level with it.
     let level = top + (from + to) / 2.0;
     if let Some(Paint::Icon { bounds, .. }) = grid.paint.last_mut() {
-        *bounds = Bounds::cells(
-            middle - QUIT_ICON,
-            level - QUIT_ICON / 2.0,
-            QUIT_ICON * 2.0,
-            QUIT_ICON,
-        );
+        *bounds = Bounds::cells(middle - icon, level - icon / 2.0, icon * 2.0, icon);
     }
 }
 
@@ -1651,6 +1681,12 @@ impl App {
         app
     }
 
+    /// Says which branch the folder is on, for a test without a repository.
+    #[cfg(test)]
+    pub(crate) fn set_branch(&mut self, name: &str) {
+        self.branch = Some(name.to_string());
+    }
+
     /// Uses this measure for text from now on.
     pub fn set_measure(&mut self, measure: Rc<dyn Measure>) {
         for editor in &mut self.editors {
@@ -1913,7 +1949,7 @@ impl App {
         let detail = self
             .offer_words()
             .map_or(1, |(_, detail, ..)| self.offer_lines(&detail).len() as u16);
-        let height = detail.max(1) + 5;
+        let height = detail.max(1) + 4 + self.card_gap();
         // The window's corner, so opening the side pane doesn't move it over the writing.
         Rect::new(
             self.size.0.saturating_sub(OFFER_WIDTH + 2),
@@ -6787,10 +6823,11 @@ impl App {
                 ..base
             },
             theme,
+            self.measure.as_ref(),
         );
         grid.label(count_x + 1, area.y, &find.count_label(), base, first);
         // On the line of the words in the box beside it, which are raised.
-        grid.drop_last(-crate::measures::FIELD_LIFT);
+        grid.drop_last(-crate::measures::field_lift(self.measure.as_ref()));
         let mut x = first;
         for icon in FIND_BUTTONS {
             self.find_button(grid, Rect::new(x, area.y, FIND_BUTTON, 1), icon, false);
@@ -8578,7 +8615,7 @@ impl App {
     /// command, a gap, the buttons and an edge.
     fn linger_area(&self) -> Rect {
         let (x, width) = self.linger_frame();
-        let height = self.linger_detail().len() as u16 + 7;
+        let height = self.linger_detail().len() as u16 + 5 + 2 * self.card_gap();
         Rect::new(x, self.size.1.saturating_sub(height + 2), width, height)
     }
 
@@ -8654,16 +8691,27 @@ impl App {
     /// end it stops: `CARD_TOP` and `CARD_BOTTOM`, moved to the nearest whole pixel where the
     /// cell's size is known, so the lines along its top and bottom are as sharp as its sides'.
     fn card_ends(&self) -> (f32, f32) {
+        // On a row with room the words and the buttons bring their own air, and the card
+        // adds the design's quarter of a row over the first and under the last.
+        let (top, bottom) = if measures::roomy(self.measure.as_ref()) {
+            (CARD_EDGE, CARD_EDGE)
+        } else {
+            (CARD_TOP, CARD_BOTTOM)
+        };
         match self.measure.cell_pixels() {
             Some((_, tall)) if tall > 0 => {
                 let tall = tall as f32;
-                (
-                    (CARD_TOP * tall).round() / tall,
-                    (CARD_BOTTOM * tall).round() / tall,
-                )
+                ((top * tall).round() / tall, (bottom * tall).round() / tall)
             }
-            _ => (CARD_TOP, CARD_BOTTOM),
+            _ => (top, bottom),
         }
+    }
+
+    /// The rows a card leaves empty between its words and its buttons: one on the terminal's
+    /// line, where a button all but fills its row, and none on a row with room, where it
+    /// stands in air of its own. A whole empty row there was 50 px of nothing in a card.
+    fn card_gap(&self) -> u16 {
+        u16::from(!measures::roomy(self.measure.as_ref()))
     }
 
     /// A card's row of buttons, the first the one to press.
@@ -8732,7 +8780,7 @@ impl App {
         }
         // The command in a well of its own, in the code font, as it would be typed.
         let command = crate::linger::command(&user_name());
-        let row = area.y + 3 + detail.len() as u16;
+        let row = area.y + 2 + self.card_gap() + detail.len() as u16;
         let well = Style {
             fg: theme.text.fg,
             bg: theme.input,
@@ -8823,7 +8871,9 @@ impl App {
         // Buttons that don't fit beside each other take another row.
         let wide = Rect::new(screen.x + 1, 0, width, 0);
         let rows = self.stopped_button_rows(wide, &buttons);
-        let height = (STOPPED_CARD_ROWS + lines + rows - 1).min(screen.h);
+        // Without the gap where a row has room: see `card_gap`.
+        let fixed = STOPPED_CARD_ROWS - 1 + self.card_gap();
+        let height = (fixed + lines + rows - 1).min(screen.h);
         Some(Rect::new(
             screen.x + 1,
             screen.bottom().saturating_sub(height + 1),
@@ -14457,6 +14507,7 @@ impl App {
     pub fn draw(&self, grid: &mut Grid) {
         grid.bands = self.tile_bands();
         grid.cursor = None;
+        grid.roomy = measures::roomy(self.measure.as_ref());
         let theme = &self.theme;
         // The frame, which the views, the sidebar and the bar are and the sheets stand on.
         grid.fill(grid.area(), theme.activity);
@@ -16722,12 +16773,15 @@ impl App {
                 quiet
             };
             let cells = measures::button_cells("Ask Agent", &*self.measure);
+            // Painted, the cells keep the row's own ground and the chip alone is filled. Given
+            // the wash's colour, the button's cells stood a whole row tall behind it, taller
+            // than the wash they're on.
             let style = Style {
                 fg: theme.text.fg,
                 bg: if self.measure.in_cells() {
                     fill
                 } else {
-                    ground
+                    theme.sidebar.bg
                 },
                 ..theme.sidebar
             };
@@ -17215,11 +17269,11 @@ impl App {
         let mut right = shown.join("   ");
         let mut right_x = end.saturating_sub(right.chars().count() as u16 + 1);
         // The cursor's place is back when the message goes, at the next key.
-        let font = Font {
+        let status_font = Font {
             size: 90,
             ..Font::default()
         };
-        let wide = self.measure.width(left, font).ceil() as u16;
+        let wide = self.measure.width(left, status_font).ceil() as u16;
         if !message.is_empty() && start + flagged + wide + 1 > right_x {
             right.clear();
             right_x = end.saturating_sub(1);
@@ -17229,13 +17283,16 @@ impl App {
                 .hover
                 .is_some_and(|h| h.1 == y && h.0 >= at && h.0 < end);
             if hovered {
-                let chip = Rect::new(at, y, end.saturating_sub(at), 1);
-                grid.panel(
-                    Bounds::inset(chip, -0.3, 0.06),
-                    16,
-                    Some(self.theme.row_hover),
-                    None,
-                );
+                // Round the mark and the name as they're drawn, with the same air after the
+                // name as before the mark: by the cells, a short name left three times as
+                // much at its end.
+                let room = f32::from(end.saturating_sub(at + 2));
+                let name = self.measure.width(branch, status_font).min(room);
+                let (from, to) = status_chip(self.measure.as_ref());
+                let left = at as f32 - STATUS_PAD / 2.0;
+                let right = at as f32 + 1.95 + name + STATUS_PAD;
+                let chip = Bounds::cells(left, y as f32 + from, right - left, to - from);
+                grid.panel(chip, 22, Some(self.theme.row_hover), None);
             }
             let color = if hovered { self.theme.text.fg } else { bar.fg };
             let shown = Style { fg: color, ..bar };
@@ -17249,11 +17306,16 @@ impl App {
                     .hover
                     .is_some_and(|h| h.1 == y && h.0 >= at && h.0 < end)
             {
-                let chip = Rect::new(at, y, end.saturating_sub(at + 1), 1);
-                let wash = Bounds::inset(chip, -0.3, 0.06);
-                grid.panel(wash, 16, Some(self.theme.row_hover), None);
+                // Round the mark and the count as they're drawn. By the cells the chip
+                // began on the mark's own edge and ran well past the count.
+                let wide = self.measure.width(problems.trim_end(), status_font);
+                let (from, to) = status_chip(self.measure.as_ref());
+                let left = at as f32 - STATUS_PAD;
+                let chip = Bounds::cells(left, y as f32 + from, wide + STATUS_PAD * 2.0, to - from);
+                grid.panel(chip, 22, Some(self.theme.row_hover), None);
             }
-            x = grid.label(x, y, problems, bar, right_x);
+            // At the size of the bar's other words: it was the one thing in it at full size.
+            x = grid.label_at(x as f32, x, y, problems, bar, right_x, 90);
         }
         let needs_you = waiting > 0 && message.is_empty() && self.neovim_line.is_empty();
         let bar = if needs_you {
@@ -17280,7 +17342,7 @@ impl App {
         }
         if let Some(cell) = quit {
             let hovered = self.hover.is_some_and(|h| cell.contains(h.0, h.1));
-            draw_quit(grid, cell, hovered, &self.theme);
+            draw_quit(grid, cell, hovered, (&self.theme, self.measure.as_ref()));
         }
     }
 
@@ -17296,22 +17358,25 @@ impl App {
             .is_some_and(|h| h.1 == y && h.0 >= at && h.0 < end);
         // The bell about as tall as the status text's capitals, centred in its chip, which
         // keeps 8 px clear of the edge above the status bar.
-        let middle = at as f32 + 2.0 - BELL_SIDE;
-        let level = y as f32 + (BELL_CHIP.0 + BELL_CHIP.1) / 2.0;
+        // Columns its chip reaches either side of the bell's middle.
+        let icon = status_icon(self.measure.as_ref());
+        let side = icon + STATUS_PAD;
+        let middle = at as f32 + f32::from(BELL_WIDTH) - side;
+        let (top, bottom) = status_chip(self.measure.as_ref());
+        let level = y as f32 + (top + bottom) / 2.0;
         let font = Font {
             size: 90,
             ..Font::default()
         };
         let digits = (count > 0).then(|| count.to_string());
-        let count_at = middle + BELL_ICON * 0.5 + 0.3;
+        let count_at = middle + icon * 0.5 + 0.3;
         if hovered || showing {
             let fill = if showing { theme.tint } else { theme.row_hover };
             // Round the bell and its count, with air on every side of them.
-            let right = digits.as_ref().map_or(middle + BELL_SIDE, |d| {
-                count_at + self.measure.width(d, font) + BELL_SIDE - BELL_ICON * 0.5
+            let right = digits.as_ref().map_or(middle + side, |d| {
+                count_at + self.measure.width(d, font) + side - icon * 0.5
             });
-            let left = middle - BELL_SIDE;
-            let (top, bottom) = BELL_CHIP;
+            let left = middle - side;
             let chip = Bounds::cells(left, y as f32 + top, right - left, bottom - top);
             grid.panel(chip, 22, Some(fill), None);
         }
@@ -17326,12 +17391,7 @@ impl App {
         let style = Style { fg: color, ..bar };
         grid.glyph(at as f32, y, Icon::Bell, color, "◬", bar);
         if let Some(Paint::Icon { bounds, .. }) = grid.paint.last_mut() {
-            *bounds = Bounds::cells(
-                middle - BELL_ICON,
-                level - BELL_ICON / 2.0,
-                BELL_ICON * 2.0,
-                BELL_ICON,
-            );
+            *bounds = Bounds::cells(middle - icon, level - icon / 2.0, icon * 2.0, icon);
         }
         if let Some(digits) = digits {
             let painted = grid.paint.len();
@@ -17355,7 +17415,7 @@ impl App {
         } else {
             0
         };
-        let width = 2 + digits;
+        let width = BELL_WIDTH + digits;
         let edge = self.size.0.saturating_sub(1);
         let end = self
             .quit_button()
@@ -27860,6 +27920,158 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             );
             assert!(chip.y >= 0, "{which:?}'s chip starts inside the window");
         }
+    }
+
+    /// On a row with room the bell and the button that quits have one chip under the
+    /// pointer: as tall as a workspace's, in the row's middle, with the mark in its middle
+    /// from side to side as well, and the mark the size the design gives an icon in the bar.
+    /// The bell's stood low in its row with a mark two thirds that size.
+    #[test]
+    fn the_bars_marks_stand_in_the_middle_of_their_chips_on_a_tall_row() {
+        use cellix_render::units;
+        let (_dir, mut app) = project();
+        let tall = cellix_render::FontMeasure::new(17, 50).with_type_row(36);
+        app.set_measure(Rc::new(tall));
+        let y = app.size().1 - 1;
+        let row = i32::from(y) * cellix_render::UNIT;
+        let (bell, _) = app.status_bell().unwrap();
+        let quit = app.quit_button().unwrap();
+        for (x, bell_wanted) in [(bell + 1, true), (quit.x + 1, false)] {
+            app.handle(mouse(MouseKind::Move, x, y));
+            let grid = screen(&app);
+            let chip = grid
+                .paint
+                .iter()
+                .find_map(|p| match p {
+                    Paint::Panel {
+                        bounds,
+                        fill: Some(fill),
+                        ..
+                    } if *fill == app.theme.row_hover && bounds.y >= row => Some(*bounds),
+                    _ => None,
+                })
+                .expect("a chip under the pointer");
+            let mark = grid
+                .paint
+                .iter()
+                .find_map(|p| match p {
+                    Paint::Icon { bounds, icon, .. }
+                        if matches!(icon, Icon::Bell) == bell_wanted
+                            && matches!(icon, Icon::Bell | Icon::Power) =>
+                    {
+                        Some(*bounds)
+                    }
+                    _ => None,
+                })
+                .expect("its mark");
+            assert!((chip.y - row - units(0.12)).abs() <= 1, "{chip:?}");
+            assert!((chip.h - units(0.76)).abs() <= 1, "{chip:?}");
+            let level = (chip.y + chip.h / 2) - (mark.y + mark.h / 2);
+            let across = (chip.x + chip.w / 2) - (mark.x + mark.w / 2);
+            assert!(level.abs() <= 1, "{mark:?} in {chip:?}");
+            assert!(across.abs() <= 1, "{mark:?} in {chip:?}");
+            assert!((mark.h - units(0.70)).abs() <= 1, "{mark:?}");
+        }
+    }
+
+    /// A button on a pointed row is on the row's wash, and no taller than it. Its cells were
+    /// given the wash's colour, which stood a whole row tall behind the button: a box round
+    /// it taller than the wash.
+    #[test]
+    fn a_button_on_a_pointed_row_has_nothing_taller_than_the_wash_behind_it() {
+        let (dir, mut app) = project();
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        let file = dir.path().join("src/lib.rs");
+        let problem = Diagnostic {
+            line: 0,
+            column: 0,
+            message: "cannot find value".to_string(),
+            severity: 1,
+        };
+        app.diagnostics.insert(file, vec![problem]);
+        app.toggle_problems();
+        let (x, y) = find(&screen(&app), "cannot find");
+        app.handle(mouse(MouseKind::Move, x, y));
+        let (chip, ..) = app.problem_ask_at(y).expect("the button");
+        let grid = screen(&app);
+        for x in chip.x..chip.right() {
+            assert_eq!(
+                grid.cell(x, y).style.bg,
+                app.theme.sidebar.bg,
+                "column {x} keeps the row's own ground"
+            );
+        }
+        // The button itself is painted over them.
+        let painted = grid.paint.iter().any(|p| match p {
+            Paint::Text { text, .. } => text == "Ask Agent",
+            _ => false,
+        });
+        assert!(painted);
+    }
+
+    /// On a row with room a card has the design's quarter of a row over its first row and
+    /// under its last, and no empty row between its words and its buttons: on rows of 50 px
+    /// that row and the card's edges were 120 px of nothing in a card of five rows.
+    #[test]
+    fn a_card_has_no_empty_row_where_a_row_has_room() {
+        let (_dir, mut app) = java_project();
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 36)));
+        let line = app.offer_area();
+        assert_eq!(app.offer_button_row(), line.y + line.h - 2);
+        assert_eq!(app.card_gap(), 1);
+        let tall = cellix_render::FontMeasure::new(17, 50).with_type_row(36);
+        app.set_measure(Rc::new(tall));
+        let card = app.offer_area();
+        assert_eq!(card.h + 1, line.h, "a row shorter");
+        let lines = card.h - 4;
+        assert_eq!(
+            app.offer_button_row(),
+            card.y + 2 + lines,
+            "straight under the words"
+        );
+        let (top, foot) = app.card_ends();
+        assert!((top - 0.75).abs() < 0.02 && (foot - 0.75).abs() < 0.02);
+    }
+
+    /// On a row with room a text box's words aren't raised: a capital has as much of the box
+    /// over it as under it. Raised, as they are on the terminal's line for their tails, they
+    /// had 6 px over and 13 under in a box of 39.
+    #[test]
+    fn a_text_boxs_words_stand_in_its_middle_on_a_tall_row() {
+        use cellix_render::{Rasterizer, SoftwareRasterizer};
+        let theme = Theme::default();
+        let cell: (usize, usize) = (17, 50);
+        let measure = cellix_render::FontMeasure::new(cell.0, cell.1).with_type_row(36);
+        let mut grid = Grid::new(24, 1, theme.text);
+        let field = Input {
+            text: "HEIGHT",
+            hint: "",
+            focused: false,
+            behind: theme.popup,
+        };
+        input(&mut grid, Rect::new(1, 0, 22, 1), &field, &measure, &theme);
+        let rasterizer = SoftwareRasterizer::new(cell.0, cell.1).expect("fonts are in the binary");
+        let mut rasterizer = rasterizer.with_type_row(36);
+        let image = rasterizer.row(&grid, 0);
+        let at = |x: usize, y: usize| {
+            let i = (y * image.width + x) * 3;
+            Rgb(image.rgb[i], image.rgb[i + 1], image.rgb[i + 2])
+        };
+        let far = 18 * cell.0;
+        let inside: Vec<usize> = (0..image.height)
+            .filter(|y| at(far, *y) == theme.input)
+            .collect();
+        let (top, foot) = (inside[0], inside[inside.len() - 1]);
+        // 39 px with its line, which is a control's height on a row of 50.
+        assert!(
+            (34..=38).contains(&(foot - top + 1)),
+            "the box is {} px inside",
+            foot - top + 1
+        );
+        let lit = |y: usize| (2 * cell.0..9 * cell.0).any(|x| at(x, y).0 > theme.input.0 + 70);
+        let inked: Vec<usize> = (top..=foot).filter(|y| lit(*y)).collect();
+        let (over, under) = (inked[0] - top, foot - inked[inked.len() - 1]);
+        assert!(over.abs_diff(under) <= 2, "{over} px over, {under} under");
     }
 
     #[test]

@@ -243,16 +243,21 @@ pub(crate) fn text_pixels(row_height: usize, font: Font) -> f32 {
 /// Where something `h` paint units tall at `y` stands in rows `row` pixels tall whose words
 /// are set for a line of `line` pixels, as a top and a height in pixels. Anything shorter
 /// than a row keeps the height it has on that line, in the middle of where it stood: a
-/// mark, a chip, a rule. What all but fills its row on that line is a control with a row to
+/// mark, a badge, a rule. What all but fills its row on that line is a control with a row to
 /// itself, a button, a text box, the band behind a picked row, a tip. On a taller row
 /// those are one height, `CONTROL` of the row, about 20 pt where a row is 26: the air goes
-/// round them and inside them both.
+/// round them and inside them both. A chip, which holds words and is a little shorter than
+/// a control, is `CHIP` of a taller row, so its words stand in its middle with room under
+/// their tails: on the line it's too short for that, and its words are raised in it.
 pub fn stood(y: i32, h: i32, row: f32, line: f32) -> (f32, f32) {
     let (top, tall) = (y as f32 * row / UNIT as f32, h as f32 * row / UNIT as f32);
     if h < UNIT && line < row {
         let kept = h as f32 * line / UNIT as f32;
-        let own = if h as f32 >= UNIT as f32 * FILLS {
+        let share = h as f32 / UNIT as f32;
+        let own = if share >= FILLS {
             kept.max(row * CONTROL).min(tall)
+        } else if share >= HOLDS {
+            kept.max(row * CHIP).min(tall)
         } else {
             kept
         };
@@ -266,6 +271,9 @@ pub fn stood(y: i32, h: i32, row: f32, line: f32) -> (f32, f32) {
 /// row to itself, and how much of a taller row such a control is.
 const FILLS: f32 = 0.8;
 const CONTROL: f32 = 0.78;
+/// The same for a chip that holds words: the design's 20 px in a row of 28.
+const HOLDS: f32 = 0.7;
+const CHIP: f32 = 0.714;
 
 /// CPU rendering. Glyphs are rasterized once and blended into their cells, so text stays
 /// locked to the grid and a row costs little more than a copy.
@@ -1281,9 +1289,11 @@ mod tests {
         let measure = crate::measure::FontMeasure::new(17, 52).with_type_row(37);
         let wide = measure.width("H", Font::default()) * 17.0;
         assert!((17.0..21.0).contains(&wide), "and as wide: {wide} px");
-        // A chip three quarters of a row tall is three quarters of the line's 37 pixels.
+        // A badge five eighths of a row tall is five eighths of the line's 37 pixels. A chip
+        // that holds words is taller than that, and grows: see
+        // `a_control_is_one_height_on_a_taller_row`.
         let mut grid = Grid::new(8, 1, style());
-        let chip = crate::paint::Bounds::cells(1.0, 0.125, 4.0, 0.75);
+        let chip = crate::paint::Bounds::cells(1.0, 0.1875, 4.0, 0.625);
         grid.panel(chip, 20, Some(Rgb(255, 0, 0)), None);
         let image = r.row(&grid, 0);
         let red: Vec<usize> = (0..image.height)
@@ -1293,8 +1303,8 @@ mod tests {
             })
             .collect();
         assert!(
-            (26..=29).contains(&red.len()),
-            "the chip is {} px tall",
+            (22..=25).contains(&red.len()),
+            "the badge is {} px tall",
             red.len()
         );
         let (over, under) = (red[0], 51 - red[red.len() - 1]);
@@ -1345,9 +1355,17 @@ mod tests {
         }
         // On the terminal's own line it's what it was.
         assert_eq!(stood(4, 57, 36.0, 36.0), (2.25, 57.0 * 36.0 / 64.0));
-        // A chip or a mark, shorter than that, keeps the height it has on the line.
-        let (_, chip) = stood(8, 48, 52.0, 37.0);
-        assert!((chip - 48.0 * 37.0 / 64.0).abs() < 0.01, "{chip}");
+        // A chip that holds words, three quarters of the line, is 0.714 of the taller row,
+        // which leaves room under a tail with its words in its middle.
+        let (top, chip) = stood(8, 48, 52.0, 37.0);
+        assert!((chip - 52.0 * 0.714).abs() < 0.01, "{chip}");
+        assert!(
+            (top + chip / 2.0 - 26.0).abs() < 0.01,
+            "in the row's middle: {top}"
+        );
+        // A mark or a badge, shorter than that, keeps the height it has on the line.
+        let (_, mark) = stood(12, 40, 52.0, 37.0);
+        assert!((mark - 40.0 * 37.0 / 64.0).abs() < 0.01, "{mark}");
         // And a control never outgrows the room it was given.
         let (top, tall) = stood(0, 60, 40.0, 37.0);
         assert!(top >= 0.0 && tall <= 60.0 * 40.0 / 64.0, "{top} {tall}");

@@ -125,6 +125,12 @@ pub trait Measure {
     fn width(&self, text: &str, font: Font) -> f32 {
         self.advances(text, font).iter().sum()
     }
+
+    /// How many times as tall as the line words are sized for a row is: 1 where a row is the
+    /// terminal's line, and more where Cellix lays out taller rows of its own.
+    fn row_air(&self) -> f32 {
+        1.0
+    }
 }
 
 /// The text-cell tier, and tests.
@@ -281,6 +287,10 @@ impl Measure for FontMeasure {
 
     fn cell_pixels(&self) -> Option<(u32, u32)> {
         Some((self.cell.0 as u32, self.cell.1 as u32))
+    }
+
+    fn row_air(&self) -> f32 {
+        self.cell.1 as f32 / self.type_row.max(1) as f32
     }
 
     fn shows_emoji(&self) -> bool {

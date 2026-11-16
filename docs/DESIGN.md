@@ -512,6 +512,32 @@ the band behind a picked row, a tip), and on a taller row those are one height, 
 row: about 20 pt in a row of 26, as the look's seventh rule has it. The rule is the
 rasterizer's (`stood`), so no control sets its own height for it.
 
+A chip that holds words (a workspace's, a pill in the comments pane, what's under the pointer
+in the status bar) is the design's 20 px in a row of 28: 0.714 of a taller row, by the same
+rule, for anything drawn 0.7 to 0.8 of a row. What's shorter than that is a mark or a badge
+and keeps its height.
+
+Where a row has that room (`measures::roomy`: 1.3 lines or more, so Airy and not
+Comfortable), words stand in the middle of what holds them, as they do in the design. On the
+terminal's line a box or a chip is too short for a tail, and its words are raised a pixel or
+two: `FIELD_LIFT`, a button's `BUTTON_WORDS`, the bar's `BAR_LIFT` and `WORD_LIFT`. None of
+those apply on a roomy row, where they put a capital 6 px under a box's top and 13 over its
+foot (the user's second and fourth points on trying 0.10.0 in Ghostty). Three more follow
+from the same room:
+
+- A card (the offer to install a language's server, the notice about logout, a stopped
+  session's) has a quarter of a row over its first row and under its last, as the design's
+  has, and no empty row between its words and its buttons. On the terminal's line it keeps
+  the half row and the gap, where a button all but fills its row.
+- What's under the pointer in the status bar has one chip, a workspace's height, in the row's
+  middle, with 0.6 of a column either side of what it holds: the branch, the count of
+  problems, the bell, the button that quits. The bell and the power mark are 0.7 of the
+  line, the design's size for an icon in the bar. On the terminal's line they're as they
+  were, with the chip 8 px clear of the sheet over it.
+- A button at the end of a pointed row paints its chip on the row's wash and leaves its cells
+  the row's own ground. Given the wash's colour, they were a whole row of it behind a button
+  that's 0.78 of one.
+
 Appearance is taller than a short window, the more so on taller rows, so it scrolls: a part
 that doesn't fit whole isn't drawn, and nothing is drawn over the bars under the page. Every
 control keeps its turn under Tab, in view or not, and the page goes to the one the keyboard

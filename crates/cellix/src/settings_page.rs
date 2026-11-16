@@ -1182,7 +1182,7 @@ impl SettingsPage {
             grid.label_at(text, cell, y, &self.filter, theme.text, end, 100);
         }
         // Raised in the box, as every text box's words are.
-        grid.lift_since(words, crate::measures::FIELD_LIFT);
+        grid.lift_since(words, crate::measures::field_lift(measure));
         if self.recording.is_none() {
             // Where the text really ends, which proportional letters make short of its cells.
             let caret = text + measure.width(&self.filter, Font::default());

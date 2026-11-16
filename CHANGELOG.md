@@ -2,6 +2,19 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
+## [Unreleased]
+
+### Changed
+- On Airy rows, words stand in the middle of what holds them: a text box, a button, a workspace's chip. They were raised, as they have to be on the terminal's own line to keep a tail off a box's edge, and on a taller row that put them plainly high.
+- A workspace's chip, and a pill in the comments pane, is taller on Airy rows, with room under a tail.
+- A card (the offer to install a language's support, the notice about logout, a stopped session) is closer round its words on Airy rows: a quarter of a row over its title and under its buttons, and no empty row between its words and its buttons.
+- The bell and the power button at the foot are the size of the branch's mark beside them on Airy rows. They were two thirds of it.
+
+### Fixed
+- What's under the pointer in the bar at the foot has the same room each side of it. The count of problems had its chip start on the mark's own edge and run well past the number, and was the one thing in the bar set at full size.
+- Ask Agent on a row of the Problems tab stood in a box taller than the row's highlight.
+- On the terminal's own row height, a sliver of the branch's mark showed over the bar at the foot.
+
 ## [0.10.1] - 2026-11-16
 
 ### Fixed

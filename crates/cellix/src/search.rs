@@ -71,6 +71,7 @@ pub fn draw_switches(
     hover: Option<(u16, u16)>,
     base: Style,
     theme: &Theme,
+    measure: &dyn Measure,
 ) {
     let (x, y) = at;
     for (index, label) in SWITCHES.iter().enumerate() {
@@ -83,7 +84,7 @@ pub fn draw_switches(
         // Inside the field's box, 3 px from its edges. Its letters are in its middle from
         // side to side, where two letters of 13 pt stood against its right edge, and on the
         // line of the words typed in the box, which are raised.
-        let lift = crate::measures::FIELD_LIFT;
+        let lift = crate::measures::field_lift(measure);
         let chip = Bounds::inset(cell, 0.15, 0.14);
         let chip = Bounds {
             y: chip.y - cellix_render::units(lift / 2.0),
@@ -273,6 +274,7 @@ impl Search {
                 ..theme.sidebar
             },
             theme,
+            measure,
         );
         self.draw_box(
             grid,

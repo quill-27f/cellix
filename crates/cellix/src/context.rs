@@ -753,7 +753,7 @@ impl ContextPanel {
             theme,
         );
         // Raised in the box, as every text box's words are: "just now" has a tail.
-        grid.lift_since(words, crate::measures::FIELD_LIFT);
+        grid.lift_since(words, crate::measures::field_lift(self.measure.as_ref()));
         let chevron = (right - 2) as f32 + 0.2;
         grid.glyph(chevron, y, Icon::ChevronDown, theme.gutter.fg, "⌄", inside);
     }

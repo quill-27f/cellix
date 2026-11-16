@@ -137,6 +137,10 @@ pub struct Grid {
     /// The colour past the grid's right edge, where a terminal lets a row's picture run on
     /// over the window's padding. Unset, it's the colour of the row's last cell.
     pub edge: Option<Rgb>,
+    /// Whether a row here is tall enough for a control to stand in it with its words in its
+    /// middle: rows of Cellix's own, well taller than the terminal's line. What draws into
+    /// the grid says so. Where it's not, a button's words are raised a pixel for their tails.
+    pub roomy: bool,
     /// Runs of `paint` kept to a band of rows: as (from, to) in `paint` and (top, bottom) in
     /// rows. A list scrolled in a pane paints its cards whole, and the part of one that's
     /// past the pane's edge mustn't land on the bar beside it.
@@ -194,6 +198,7 @@ impl Grid {
             paint: Vec::new(),
             bands: Vec::new(),
             edge: None,
+            roomy: false,
             kept: Vec::new(),
         }
     }
@@ -434,7 +439,8 @@ impl Grid {
         let bounds = Bounds::cells(left, top, right - left, bottom - top);
         self.panel(bounds, 22, Some(fill), None);
         let middle = x as f32 + width as f32 / 2.0;
-        self.centred_text(middle, y as f32 + drop - BUTTON_WORDS, label, style.fg, 90);
+        let raised = if self.roomy { 0.0 } else { BUTTON_WORDS };
+        self.centred_text(middle, y as f32 + drop - raised, label, style.fg, 90);
     }
 
     /// Moves what was painted last down by part of a row.

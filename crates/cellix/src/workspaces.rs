@@ -731,15 +731,28 @@ impl Workspaces {
         self.app().draw(grid);
         if self.shows_bar() {
             // Lifted within its row, for air between the bar and the window's edge, where
-            // the pixel tiers can place it.
+            // the pixel tiers can place it. On a row with room, a chip is tall enough for its
+            // words to stand in its middle and the row has air under it: nothing is lifted.
             let from = grid.painted_so_far();
             self.draw_bar(grid);
+            if crate::measures::roomy(self.measure().as_ref()) {
+                return;
+            }
             let raise = |grid: &mut Grid, (from, to): (usize, usize)| {
                 use cellix_render::Paint;
                 let to = to.min(grid.paint.len());
                 for paint in grid.paint.iter_mut().take(to).skip(from) {
                     paint.lift(cellix_render::units(BAR_LIFT));
-                    if matches!(paint, Paint::Text { .. } | Paint::Icon { .. }) {
+                    // A mark a whole row tall, as the branch's is, has its ink at the row's
+                    // top once the bar is raised. Raised with the words as well, its tip
+                    // was in the row above, whose picture isn't moved down with the bar's:
+                    // a sliver of it showed over the bar.
+                    let with_words = match paint {
+                        Paint::Text { .. } => true,
+                        Paint::Icon { bounds, .. } => bounds.h < cellix_render::UNIT,
+                        _ => false,
+                    };
+                    if with_words {
                         paint.lift(cellix_render::units(WORD_LIFT));
                     }
                 }
@@ -1044,6 +1057,7 @@ impl Workspaces {
         let theme = self.theme();
         let base = theme.text;
         let (width, height) = self.size;
+        grid.roomy = crate::measures::roomy(self.measure().as_ref());
         grid.fill(Rect::new(0, 0, width, height), base);
         // The frame round it, as round any page: the rail where there is one, and the bar at
         // the foot. What's between is a sheet, as the file is, so the terminal's window
@@ -1156,7 +1170,8 @@ impl Workspaces {
         grid.label(quit.x, quit.y, QUIT, style, right);
         if let Some(cell) = self.quit_button() {
             let on_it = self.hover.is_some_and(|(x, y)| cell.contains(x, y));
-            crate::app::draw_quit(grid, cell, on_it || leaving, theme);
+            let measure = self.measure();
+            crate::app::draw_quit(grid, cell, on_it || leaving, (theme, measure.as_ref()));
         }
         // What the pointer is on says what it does, where the keys are named otherwise.
         let hint = if leaving {
@@ -1616,6 +1631,69 @@ mod tests {
         assert!(row.contains("paper"), "{row}");
         assert!(row.contains("missing-refs.bib"), "{row}");
         assert!(row.contains("ip-10-0-129-183"), "{row}");
+    }
+
+    /// On a row with room a workspace's chip is tall enough for its words to stand in its
+    /// middle, and nothing in the bar is raised: raised, as it is on the terminal's line for
+    /// air at the window's edge, the words stood high in their chips.
+    #[test]
+    fn on_a_tall_row_nothing_in_the_bar_is_raised() {
+        use cellix_render::{FontMeasure, Icon, Paint, UNIT, units};
+        let (_dir, first, _) = projects();
+        let mut spaces = spaces();
+        spaces.open(first);
+        spaces.handle(Event::Resize(140, 30));
+        spaces.app_mut().set_branch("main");
+        let row = i32::from(spaces.size().1 - 1) * UNIT;
+        // Anything of the bar's starts after this, raised or not.
+        let foot = row - UNIT / 2;
+        // The chip in front, the branch's mark and a word of the bar's, from the row's top.
+        let places = |spaces: &Workspaces| {
+            let grid = screen(spaces);
+            let accent = spaces.theme().accent;
+            let chip = grid.paint.iter().find_map(|p| match p {
+                Paint::Panel {
+                    bounds,
+                    fill: Some(fill),
+                    ..
+                } if *fill == accent && bounds.y > foot => Some(bounds.y - row),
+                _ => None,
+            });
+            let mark = grid.paint.iter().find_map(|p| match p {
+                Paint::Icon {
+                    bounds,
+                    icon: Icon::Git,
+                    ..
+                } if bounds.y > foot => Some(bounds.y - row),
+                _ => None,
+            });
+            let word = grid.paint.iter().find_map(|p| match p {
+                Paint::Text { text, y, .. } if text == "main" && *y > foot => Some(*y - row),
+                _ => None,
+            });
+            (
+                chip.expect("a chip"),
+                mark.expect("a mark"),
+                word.expect("a word"),
+            )
+        };
+        let tall = Rc::new(FontMeasure::new(17, 50).with_type_row(36));
+        spaces.app_mut().set_measure(tall);
+        let (chip, mark, word) = places(&spaces);
+        assert_eq!((chip, word), (units(CHIP_INSET), 0));
+        assert!(mark >= 0, "{mark}");
+        // On the terminal's own line the bar is raised, its words a little more. The
+        // branch's mark, a whole row tall, goes no further than the bar: further, a sliver of
+        // it was drawn in the row above.
+        let line = Rc::new(FontMeasure::new(17, 36));
+        spaces.app_mut().set_measure(line);
+        let (chip, mark, word) = places(&spaces);
+        assert_eq!(chip, units(CHIP_INSET) - units(BAR_LIFT));
+        assert!(
+            mark >= -units(BAR_LIFT),
+            "raised with the bar and no further: {mark}"
+        );
+        assert_eq!(word, -units(BAR_LIFT) - units(WORD_LIFT));
     }
 
     fn spaces_named(machine: &str) -> String {
