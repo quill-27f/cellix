@@ -499,6 +499,13 @@ line. `CELLIX_ROW_HEIGHT` overrules the setting with a number of lines, 1 for th
 own, which is how the harness chooses: the tour's terminal counts its size and its steps in
 Cellix's rows (`TERM_ROW`), so a scene has the rows it always had.
 
+On a taller row words and icons are the sizes they are on the terminal's line, in the middle
+of the row. So is anything shorter than a row: a chip, a mark, a rule. What all but fills
+its row on the terminal's line is a control with the row to itself (a button, a text box,
+the band behind a picked row, a tip), and on a taller row those are one height, 0.78 of the
+row: about 20 pt in a row of 26, as the look's seventh rule has it. The rule is the
+rasterizer's (`stood`), so no control sets its own height for it.
+
 Appearance is taller than a short window, the more so on taller rows, so it scrolls: a part
 that doesn't fit whole isn't drawn, and nothing is drawn over the bars under the page. Every
 control keeps its turn under Tab, in view or not, and the page goes to the one the keyboard

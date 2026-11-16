@@ -242,16 +242,30 @@ pub(crate) fn text_pixels(row_height: usize, font: Font) -> f32 {
 
 /// Where something `h` paint units tall at `y` stands in rows `row` pixels tall whose words
 /// are set for a line of `line` pixels, as a top and a height in pixels. Anything shorter
-/// than a row keeps the height it has on that line, in the middle of where it stood.
+/// than a row keeps the height it has on that line, in the middle of where it stood: a
+/// mark, a chip, a rule. What all but fills its row on that line is a control with a row to
+/// itself, a button, a text box, the band behind a picked row, a tip. On a taller row
+/// those are one height, `CONTROL` of the row, about 20 pt where a row is 26: the air goes
+/// round them and inside them both.
 pub fn stood(y: i32, h: i32, row: f32, line: f32) -> (f32, f32) {
     let (top, tall) = (y as f32 * row / UNIT as f32, h as f32 * row / UNIT as f32);
     if h < UNIT && line < row {
-        let own = h as f32 * line / UNIT as f32;
+        let kept = h as f32 * line / UNIT as f32;
+        let own = if h as f32 >= UNIT as f32 * FILLS {
+            kept.max(row * CONTROL).min(tall)
+        } else {
+            kept
+        };
         (top + (tall - own) / 2.0, own)
     } else {
         (top, tall)
     }
 }
+
+/// How much of the terminal's line something takes before it counts as a control with the
+/// row to itself, and how much of a taller row such a control is.
+const FILLS: f32 = 0.8;
+const CONTROL: f32 = 0.78;
 
 /// CPU rendering. Glyphs are rasterized once and blended into their cells, so text stays
 /// locked to the grid and a row costs little more than a copy.
@@ -1296,6 +1310,47 @@ mod tests {
             .filter(|y| (17..34).any(|x| image.rgb[(y * image.width + x) * 3] > 100))
             .count();
         assert!(inked >= 50, "the side is {inked} px of the row's 52");
+    }
+
+    /// On a taller row a control was the 32 px it is on the terminal's line, in 50 px of
+    /// row, with its words 3 px high in it. The design has one height for a button, a text
+    /// box, the band behind a picked row and a tip: about 20 pt in a row of 26.
+    #[test]
+    fn a_control_is_one_height_on_a_taller_row() {
+        let Some(r) = SoftwareRasterizer::new(17, 52) else {
+            return;
+        };
+        let mut r = r.with_type_row(37);
+        // A box that all but fills its row on the terminal's line is a control: on the
+        // taller row it's 0.78 of it, whichever of them it is, and stands in the middle.
+        for share in [0.89, 0.92, 0.98] {
+            let mut grid = Grid::new(8, 1, style());
+            let inset = (1.0 - share) / 2.0;
+            let field = crate::paint::Bounds::cells(1.0, inset, 4.0, share);
+            grid.panel(field, 20, Some(Rgb(255, 0, 0)), None);
+            let image = r.row(&grid, 0);
+            let red: Vec<usize> = (0..image.height)
+                .filter(|y| {
+                    let at = (y * image.width + 51) * 3;
+                    image.rgb[at] > 200 && image.rgb[at + 1] < 60
+                })
+                .collect();
+            assert!(
+                (39..=42).contains(&red.len()),
+                "a box of {share} is {} px tall",
+                red.len()
+            );
+            let (over, under) = (red[0], 51 - red[red.len() - 1]);
+            assert!(over.abs_diff(under) <= 2, "{over} over, {under} under");
+        }
+        // On the terminal's own line it's what it was.
+        assert_eq!(stood(4, 57, 36.0, 36.0), (2.25, 57.0 * 36.0 / 64.0));
+        // A chip or a mark, shorter than that, keeps the height it has on the line.
+        let (_, chip) = stood(8, 48, 52.0, 37.0);
+        assert!((chip - 48.0 * 37.0 / 64.0).abs() < 0.01, "{chip}");
+        // And a control never outgrows the room it was given.
+        let (top, tall) = stood(0, 60, 40.0, 37.0);
+        assert!(top >= 0.0 && tall <= 60.0 * 40.0 / 64.0, "{top} {tall}");
     }
 
     /// An emoji in a line of painted text keeps its own colours, where the machine has a

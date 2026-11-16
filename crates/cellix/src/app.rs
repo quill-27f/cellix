@@ -33812,14 +33812,14 @@ while True:
                 over <= 1 && under <= 1,
                 "and a hair from its edges: {tip:?}"
             );
-            // What a row of 50 px makes of that: its own 36 px, with 7 over and under.
+            // What a row of 50 px makes of that: a control's 39 px, with 5 over and under.
             let (top, tall) = cellix_render::stood(tip.y % 64, tip.h, 50.0, 36.0);
             assert!(
-                (tall - 36.0).abs() < 1.5,
+                (tall - 39.0).abs() < 1.0,
                 "its height on a taller row: {tall}"
             );
             assert!(
-                top >= 6.0 && top + tall <= 44.0,
+                top >= 5.0 && top + tall <= 45.0,
                 "clear of the row's edges: {top}"
             );
         }

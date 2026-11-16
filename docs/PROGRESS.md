@@ -2547,3 +2547,14 @@ Not done, in the reviewers' order of weight:
 - Find in the side pane lies over the line under its tabs.
 - Older than the look: Find lies over the minimap; a task box touches its label; stacked display equations are 4 px apart; Source Control and a merge spend nine rows before the first file; segments are stretched; the Keyboard page has no thumb; greyed menu words are under 3:1 and a selection on the caret's line 1.12:1; a palette's group separators cost a row each.
 - The tour: `54`, `80` and `81` hadn't finished building on a loaded machine; `37-hover-settings` and `108-terminal-ask-hover` are the same as their base scenes.
+
+## One height for a control on a taller row (2026-11-16)
+
+All three reviewers put it first: a button or a text box was the 32 px it is on the terminal's line, in a row of 50, with its words 3 px high in it, and controls were seven heights between 27 and 35 px. The look's seventh rule, which the user approved on the canvas, has a control about 20 pt tall standing in its row.
+
+- The rasterizer's rule for a taller row (`stood`) has a second case. What's shorter than four fifths of a row keeps its height, as before: chips, marks, rules. What all but fills its row is a control, and is 0.78 of the taller row: 39 px in 50, about 20 pt. So a button, a text box, a segment, the band behind a picked row, a hovered row's wash and a tip are one height, and no control was touched to make it so.
+- A control's words are where they were, so they have 8 px over their capitals and 14 under where they had 4 and 10. Not centred: they're raised for their tails on the terminal's line, and that's in each control's own drawing.
+- On the terminal's line, and on Comfortable rows, where 0.78 of the row is no more than a control already is, nothing changes.
+- Tests: `a_control_is_one_height_on_a_taller_row` is new, in the rasterizer (ledger: `control-height-airy`). Changed with it: `a_tooltip_is_one_whole_row` expects a tip of 39 px in a row of 50 where it expected 36.
+- Looked at: `13-source-control`, `19-dialog`, `08-open-file`, `15-settings-appearance`, `11-find`, `05-menu-code`, `28-hover-tree`, retaken.
+- Not done from the reviewers' list on controls: words centred in their boxes; chips (27 to 29 px) and the bell and power marks (16 px) are as they were.

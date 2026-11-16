@@ -5318,5 +5318,12 @@
     "title": "A block of code cut by the top or the foot of a page keeps its box inside the page: nothing of it lies over the line under the bar or under the sheet",
     "test": "a_blocks_box_stays_inside_its_page",
     "passes": true
+  },
+  {
+    "id": "control-height-airy",
+    "milestone": 14,
+    "title": "On a taller row a control with the row to itself (a button, a text box, a picked row's band, a tip) is one height, 0.78 of the row, standing in its middle; a chip or a mark keeps the height it has on the terminal's line",
+    "test": "a_control_is_one_height_on_a_taller_row",
+    "passes": true
   }
 ]
