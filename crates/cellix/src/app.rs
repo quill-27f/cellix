@@ -1501,6 +1501,8 @@ pub struct App {
     sync_result: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     /// What runs sessions so they can outlive Cellix: Cellix itself, away from tests.
     host_program: Option<PathBuf>,
+    /// Whether this workspace is the one on screen.
+    pub in_front: bool,
     /// The session on screen printed, and sessions out of sight did, since the loop asked.
     printed: bool,
     behind: bool,
@@ -1637,6 +1639,7 @@ impl App {
             kernel_command: None,
             pane_explained: false,
             host_program: std::env::current_exe().ok().filter(|_| !cfg!(test)),
+            in_front: true,
             printed: false,
             behind: false,
             meters: Arc::default(),
@@ -18152,6 +18155,9 @@ impl App {
     /// The session the side pane shows, if it shows one: what any other prints is out of
     /// sight until its tab is chosen.
     fn shown_session(&self) -> Option<usize> {
+        if !self.in_front {
+            return None;
+        }
         self.dock_area()?;
         let front = self.dock.front == Front::Session && !self.dock.listing();
         self.dock.active.filter(|_| front)

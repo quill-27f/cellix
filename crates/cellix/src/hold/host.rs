@@ -251,7 +251,7 @@ impl Held {
     }
 
     /// Passes what the program writes to `output`, and says on `done` when it's over.
-    pub fn listen(&self, output: Sender<Vec<u8>>, done: Sender<()>) -> io::Result<()> {
+    pub fn listen(&self, output: impl super::Sink, done: Sender<()>) -> io::Result<()> {
         let mut stream = self.stream.try_clone()?;
         let at_prompt = self.at_prompt.clone();
         let foreground = self.foreground.clone();
@@ -259,7 +259,7 @@ impl Held {
             while let Ok((kind, payload)) = read_frame(&mut stream) {
                 match kind {
                     OUTPUT => {
-                        if output.send(payload).is_err() {
+                        if !output.put(payload) {
                             return;
                         }
                     }

@@ -378,6 +378,7 @@ impl Workspaces {
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
         for (index, workspace) in self.list.iter_mut().enumerate() {
+            workspace.app.in_front = index == self.active;
             let mut here = workspace.app.poll();
             if let Some(server) = &workspace.server {
                 while let Ok(request) = server.requests.try_recv() {

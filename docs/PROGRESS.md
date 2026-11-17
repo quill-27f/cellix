@@ -2912,3 +2912,14 @@ Item 13 of the herdr round. Cellix listed worktrees and couldn't make one.
 - One `ui-expert` pass over the three. Fine: the dialog's sides even (34/33 px), the box, choices and buttons all 39 to 40 px and centred on their rows, the buttons ending where the box and the choices do, left edges level; the worktree menu's 28/27 px over and under. Fixed from it: a row of air before the agents left the inner gaps as wide as the edges (now title, box, where, agents, a row, buttons); the choices are as wide as the widest; "Start in it" in the words' colour, not as a hint; New Worktree's icon on cells (⎇, where it was ?).
 - Not done, from that review: the choices are Settings' segments, separate chips butted together, so the dialog shows through as a notch at each join (Settings has the same); the worktree menu drops from the row pressed and covers that row's second line, and the row isn't marked while it's open; the primary button has no hover step anywhere; the text box is 2 px inside the text edge and its descenders 6 px from its foot, as every box's are.
 - Unverified: a real agent started in a new worktree, and its trust question there (the agent asks it; Cellix types nothing); `git worktree add` on a repository with submodules; Windows.
+
+## Woken by output, at most a frame each 16 ms, the echo at once (2026-11-17)
+
+Item 2 of herdr's performance study.
+
+- The loop waits on the keyboard and on a pipe its sessions' readers poke (`wake.rs`), so output is seen as it comes rather than at the next look, 8 or 40 ms later. Output on screen draws at most once every 16 ms (`Pace::printed`), and the loop doesn't wake for more until that frame is due; within 32 ms of a key, output draws at once, as its echo, up to 16 frames. With nothing to do the loop wakes every 50 ms, where a lively session kept it at 8 ms.
+- A reader's queue holds 64 reads; a program printing faster than Cellix takes it in waits on it (`wake::Feed`), rather than Cellix's memory growing.
+- Windows keeps the old pace: its console isn't a descriptor to wait on beside a pipe.
+- Output out of sight, measured from the last entries' build (debug, counters, a second): four tabs printing behind the front one at 60 Hz now draw 1.9 frames (the tick's), where they drew 98 and then 60, and the loop wakes 33 times, where it woke 100.
+- Tests: `output_draws_once_a_frame_but_an_echo_at_once`, `a_poke_ends_the_loops_wait`, `output_out_of_sight_wakes_the_loop_only_when_it_piles_up`, `a_feed_keeps_order_and_holds_its_reader_when_full`.
+- Unverified: the echo's latency in a real terminal (the counters show frames per key, not milliseconds to the eye).

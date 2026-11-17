@@ -38,6 +38,25 @@ pub fn program_name(_pid: u32) -> Option<String> {
     None
 }
 
+/// Where a held program's output goes: a channel, or a session's feed, which wakes Cellix's
+/// loop as it comes (`wake.rs`).
+pub trait Sink: Send + 'static {
+    /// Passes a chunk on. Says whether anything is still there to take it.
+    fn put(&self, bytes: Vec<u8>) -> bool;
+}
+
+impl Sink for std::sync::mpsc::Sender<Vec<u8>> {
+    fn put(&self, bytes: Vec<u8>) -> bool {
+        self.send(bytes).is_ok()
+    }
+}
+
+impl Sink for crate::wake::Feed {
+    fn put(&self, bytes: Vec<u8>) -> bool {
+        self.send(bytes)
+    }
+}
+
 /// What a held program is told about where it's held: the host's socket.
 pub const HELD_VAR: &str = cellix_agent::hook::HELD_VAR;
 /// The folder, among a project's sessions, for those that stopped without finishing.
@@ -297,7 +316,7 @@ mod host {
             match *self {}
         }
 
-        pub fn listen(&self, _output: Sender<Vec<u8>>, _done: Sender<()>) -> io::Result<()> {
+        pub fn listen(&self, _output: impl super::Sink, _done: Sender<()>) -> io::Result<()> {
             match *self {}
         }
 

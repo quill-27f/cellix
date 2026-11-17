@@ -59,6 +59,27 @@ fn terminal_gone() -> bool {
     found > 0 && input.revents & (libc::POLLHUP | libc::POLLNVAL | libc::POLLERR) != 0
 }
 
+/// Waits up to `wait` for a key, or, where `woken`, for a session on screen to print
+/// (`wake.rs`). Says whether input is waiting. crossterm keeps what it has read and not yet
+/// handed over, so it's asked first; then the terminal and the pipe are waited on together.
+fn wait_for_input(wait: Duration, woken: bool) -> io::Result<bool> {
+    #[cfg(unix)]
+    if woken {
+        if ct::poll(Duration::ZERO)? {
+            return Ok(true);
+        }
+        let woke = crate::wake::wait(libc::STDIN_FILENO, wait)?;
+        return if woke.input {
+            ct::poll(Duration::ZERO)
+        } else {
+            Ok(false)
+        };
+    }
+    #[cfg(not(unix))]
+    let _ = woken;
+    ct::poll(wait)
+}
+
 /// Hangs up and stops end the loop, so they leave the way Quit does.
 ///
 /// A stop that lands while crossterm waits for input is retried inside crossterm, and if the
@@ -1097,6 +1118,16 @@ pub fn run(options: Options) -> io::Result<()> {
     // How far below its own place each row at the foot was last drawn. See `on_the_foot`.
     let mut foot: Vec<usize> = Vec::new();
     let ghostty = std::env::var("TERM").is_ok_and(|t| t.contains("ghostty"));
+    // A session on screen wakes the loop as it prints, where the keyboard is a descriptor to
+    // wait on beside a pipe: crossterm reads the terminal from standard input when that's
+    // one. Elsewhere, and on Windows, the loop looks at the sessions every few milliseconds.
+    #[cfg(unix)]
+    let woken = {
+        use std::io::IsTerminal;
+        io::stdin().is_terminal() && crate::wake::start().is_ok()
+    };
+    #[cfg(not(unix))]
+    let woken = false;
     // Where the screen is also written as text, for the harness: its terminal gets pictures,
     // and the tour has to know a scene reached its surface before taking one of it.
     let screen_text = std::env::var_os("CELLIX_SCREEN_TEXT").map(PathBuf::from);
@@ -1233,6 +1264,7 @@ pub fn run(options: Options) -> io::Result<()> {
                 }
                 causes = Causes::default();
                 pace.drew(spaces.tick_mark());
+                pace.framed(Instant::now());
                 let started = Instant::now();
                 if let (Some((area, rows)), Some(from)) = (spaces.app_mut().take_scroll(), &shown) {
                     backend.scroll(from, &grid, area, rows, &mut out)?;
@@ -1286,7 +1318,9 @@ pub fn run(options: Options) -> io::Result<()> {
                 break;
             }
             let has_session = spaces.list.iter().any(|w| w.app.has_session());
-            let rest = if has_session {
+            // Woken by what's on screen as it prints, the loop needn't look at the sessions
+            // any more often than at anything else.
+            let rest = if has_session && !woken {
                 session_wait(lively.elapsed())
             } else {
                 POLL
@@ -1299,14 +1333,22 @@ pub fn run(options: Options) -> io::Result<()> {
             if let Some(deadline) = spaces.update_deadline() {
                 wait = wait.min(deadline.saturating_duration_since(Instant::now()));
             }
+            // Output waiting for its frame is drawn when the frame's time comes.
+            if let Some(left) = pace.until_output(Instant::now()) {
+                wait = wait.min(left);
+            }
             // A signal interrupts the wait; the loop goes round and sees it.
-            let ready = match ct::poll(wait) {
+            // With output already waiting for its frame, more of it has nothing to wake the
+            // loop for: a program writing a thousand times a second would wake it as often.
+            let waking = woken && pace.until_output(Instant::now()).is_none();
+            let ready = match wait_for_input(wait, waking) {
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
                 ready => ready?,
             };
             if ready {
                 let started = Instant::now();
                 lively = started;
+                pace.typed(started);
                 // Drain everything queued, so a fast wheel doesn't redraw per event.
                 let mut batch = Vec::new();
                 let mut came_back = false;
@@ -1479,8 +1521,15 @@ pub fn run(options: Options) -> io::Result<()> {
             let (printed, behind) = spaces.take_printed();
             if changed {
                 lively = started;
+                // Output on screen is drawn at most once a frame, unless it's a key's echo.
+                if !printed || pace.printed(started) {
+                    redraw = true;
+                    causes.add(if printed { Cause::Output } else { Cause::Poll });
+                }
+            }
+            if pace.output_due(Instant::now()) {
                 redraw = true;
-                causes.add(if printed { Cause::Output } else { Cause::Poll });
+                causes.add(Cause::Output);
             }
             // Out of sight: nothing is drawn for it but at the tick, and the loop keeps the
             // slow pace it would have with nothing printing.

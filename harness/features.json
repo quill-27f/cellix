@@ -5619,5 +5619,12 @@
     "title": "Remove Worktree on a worktree's row asks first, again over uncommitted changes, and never deletes the branch",
     "test": "a_worktree_is_removed_after_asking_and_keeps_its_branch",
     "passes": true
+  },
+  {
+    "id": "woken-by-output",
+    "milestone": 15,
+    "title": "The loop waits on the keyboard and a pipe its sessions' readers poke, so output on screen is seen as it comes, drawn at most every 16 ms but a key's echo at once; a reader's queue is bounded",
+    "test": "output_draws_once_a_frame_but_an_echo_at_once",
+    "passes": true
   }
 ]

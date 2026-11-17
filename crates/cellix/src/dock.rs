@@ -256,7 +256,7 @@ pub struct Session {
     link: Link,
     /// Left running if Cellix goes without saying otherwise, as when a connection drops.
     keep: bool,
-    output: Receiver<Vec<u8>>,
+    output: crate::wake::Fed,
     finished: Receiver<()>,
     pub exited: bool,
     /// When it last wrote anything, which says when it's settled.
@@ -497,11 +497,11 @@ impl Session {
         // Written off the loop, so a program that isn't reading can't hold it up.
         let writer = pair.master.take_writer().map_err(failed)?;
         let writer: Box<dyn Write + Send> = Box::new(crate::outbox::Outbox::new(writer));
-        let (sender, output) = mpsc::channel();
+        let (feed, output) = crate::wake::feed();
         std::thread::spawn(move || {
             let mut buffer = [0; 8192];
             while let Ok(count) = reader.read(&mut buffer) {
-                if count == 0 || sender.send(buffer[..count].to_vec()).is_err() {
+                if count == 0 || !feed.send(buffer[..count].to_vec()) {
                     break;
                 }
             }
@@ -528,9 +528,9 @@ impl Session {
     /// Joins a program running under a host of its own.
     pub fn join(name: &str, held: Held, size: (u16, u16), cell: CellPixels) -> io::Result<Self> {
         let writer = Box::new(held.keys()?);
-        let (sender, output) = mpsc::channel();
+        let (feed, output) = crate::wake::feed();
         let (done, finished) = mpsc::channel();
-        held.listen(sender, done)?;
+        held.listen(feed, done)?;
         held.resize(
             size,
             (size.0.saturating_mul(cell.0), size.1.saturating_mul(cell.1)),
@@ -545,7 +545,7 @@ impl Session {
         name: &str,
         link: Link,
         writer: Box<dyn Write + Send>,
-        (output, finished): (Receiver<Vec<u8>>, Receiver<()>),
+        (output, finished): (crate::wake::Fed, Receiver<()>),
         (size, cell): ((u16, u16), CellPixels),
     ) -> Self {
         let events = Events::default();
@@ -714,7 +714,7 @@ impl Session {
     /// A program that stopped without finishing, showing what it last showed.
     pub fn stopped(stopped: crate::hold::Stopped, size: (u16, u16), cell: CellPixels) -> Self {
         // Nothing can arrive: both senders are gone.
-        let (_, output) = mpsc::channel();
+        let (_, output) = crate::wake::feed();
         let (_, finished) = mpsc::channel();
         let name = stopped.job.name.clone();
         let channels = (output, finished);
@@ -1019,7 +1019,7 @@ impl Session {
     pub fn poll(&mut self, theme: &Theme) -> bool {
         let mut changed = self.end_overdue_update(std::time::Instant::now());
         let mut came = false;
-        while let Ok(bytes) = self.output.try_recv() {
+        while let Some(bytes) = self.output.take() {
             changed |= self.take_in(&bytes);
             if let Some(kept) = &mut self.printed {
                 kept.extend_from_slice(&bytes);
@@ -1927,6 +1927,11 @@ impl Dock {
         let mut changed = self.pdf.as_mut().is_some_and(PdfView::poll);
         let mut behind = false;
         for (index, session) in self.sessions.iter_mut().enumerate() {
+            // What's on screen wakes the loop as it prints; what isn't waits for it.
+            session
+                .output
+                .shown
+                .store(Some(index) == shown, std::sync::atomic::Ordering::Relaxed);
             let ended = session.exited;
             let printed = session.poll(theme);
             if Some(index) == shown {
@@ -3216,8 +3221,8 @@ mod tests {
     }
 
     /// A session fed by the test, with nothing running.
-    fn fed() -> (mpsc::Sender<Vec<u8>>, Session) {
-        let (sender, output) = mpsc::channel();
+    fn fed() -> (crate::wake::Feed, Session) {
+        let (sender, output) = crate::wake::feed();
         let (_, finished) = mpsc::channel();
         let writer = Box::new(io::sink());
         let channels = (output, finished);
@@ -3232,12 +3237,12 @@ mod tests {
     fn an_update_left_open_shows_once_its_time_is_up() {
         let theme = Theme::named(Some("light"));
         let (program, mut session) = fed();
-        program.send(b"\x1b[?2026hheld back".to_vec()).unwrap();
+        assert!(program.send(b"\x1b[?2026hheld back".to_vec()));
         assert!(
             !session.poll(&theme),
             "only held, so the screen is as it was"
         );
-        program.send(b" and more".to_vec()).unwrap();
+        assert!(program.send(b" and more".to_vec()));
         assert!(!session.poll(&theme));
         assert!(!session.rows().concat().contains("held back"));
         let deadline = session.update_deadline().expect("an update is under way");
@@ -3247,12 +3252,12 @@ mod tests {
         assert!(session.rows().concat().contains("held back and more"));
         assert_eq!(session.update_deadline(), None);
         // One that ends on time shows when it ends, and text outside one shows at once.
-        program.send(b"\x1b[?2026h\r\nnext".to_vec()).unwrap();
+        assert!(program.send(b"\x1b[?2026h\r\nnext".to_vec()));
         assert!(!session.poll(&theme));
-        program.send(b" frame\x1b[?2026l".to_vec()).unwrap();
+        assert!(program.send(b" frame\x1b[?2026l".to_vec()));
         assert!(session.poll(&theme));
         assert!(session.rows().concat().contains("next frame"));
-        program.send(b" plain".to_vec()).unwrap();
+        assert!(program.send(b" plain".to_vec()));
         assert!(session.poll(&theme));
     }
 

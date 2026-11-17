@@ -207,6 +207,21 @@ What's drawn from it, its tab's mark and name and the workspace's tile, is broug
 at the next tick, so it's at most half a second behind; a session ending, which closes its tab,
 draws at once.
 
+### What wakes the loop
+
+The loop waited for keys only, so a session's output was seen at the wait's end: every 8 ms
+while anything was lively, 40 ms after that, which kept it waking a hundred times a second
+with a shell at its prompt, and a key's echo often came a frame after the key's own. Where
+the terminal is standard input (Unix), the loop waits on it and on a pipe of its own, which a
+session's reader pokes as output comes (`wake.rs`): output on screen is drawn as it comes,
+at most once every 16 ms, except a key's echo, which for 32 ms after the key draws at once (up
+to 16 frames). A session out of sight doesn't poke unless what it has printed is piling up.
+With nothing to do, the loop wakes every 50 ms for what has no way to wake it (language
+servers, threads). A reader's queue holds 64 reads, about half a megabyte; a program printing
+faster than that is taken in waits, rather than Cellix's memory growing. On Windows the
+console's input isn't a descriptor to wait on beside a pipe, so the loop there still looks at
+the sessions every 8 ms while they're lively and 40 ms after.
+
 ### No GPU renderer
 
 Output would have to be read back to the CPU before it could be sent to the terminal, one
