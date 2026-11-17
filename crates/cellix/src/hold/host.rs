@@ -25,6 +25,9 @@ const START_WAIT: Duration = Duration::from_secs(5);
 const OUTPUT: u8 = b'o';
 const EXITED: u8 = b'x';
 const AT_PROMPT: u8 = b'p';
+/// The name of the program in front of the one held, as a shell's command: empty when the
+/// held program is in front again. Sent when it changes; a Cellix from before ignores it.
+const FOREGROUND: u8 = b'f';
 const INPUT: u8 = b'i';
 const RESIZE: u8 = b'r';
 const KILL: u8 = b'k';
@@ -204,6 +207,7 @@ pub struct Held {
     stream: UnixStream,
     pub socket: PathBuf,
     at_prompt: Arc<Mutex<bool>>,
+    foreground: Arc<Mutex<String>>,
 }
 
 /// Writes keys to a host, for the session to use like any writer.
@@ -226,6 +230,7 @@ impl Held {
             stream: UnixStream::connect(socket)?,
             socket: socket.to_path_buf(),
             at_prompt: Arc::new(Mutex::new(true)),
+            foreground: Arc::default(),
         })
     }
 
@@ -237,6 +242,7 @@ impl Held {
     pub fn listen(&self, output: Sender<Vec<u8>>, done: Sender<()>) -> io::Result<()> {
         let mut stream = self.stream.try_clone()?;
         let at_prompt = self.at_prompt.clone();
+        let foreground = self.foreground.clone();
         std::thread::spawn(move || {
             while let Ok((kind, payload)) = read_frame(&mut stream) {
                 match kind {
@@ -254,6 +260,11 @@ impl Held {
                             *flag = payload == [1];
                         }
                     }
+                    FOREGROUND => {
+                        if let Ok(mut name) = foreground.lock() {
+                            *name = String::from_utf8_lossy(&payload).into_owned();
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -265,6 +276,15 @@ impl Held {
 
     pub fn at_prompt(&self) -> bool {
         self.at_prompt.lock().is_ok_and(|flag| *flag)
+    }
+
+    /// The program in front of the one held, by name, as a command run at a shell's prompt:
+    /// empty while the held program is in front, or from a host that doesn't say.
+    pub fn foreground(&self) -> String {
+        self.foreground
+            .lock()
+            .map(|name| name.clone())
+            .unwrap_or_default()
     }
 
     pub fn resize(&self, size: (u16, u16), pixels: (u16, u16)) {
@@ -290,6 +310,8 @@ struct Shared {
     visit: u64,
     exited: bool,
     at_prompt: bool,
+    /// The name of the program in front of the held one, empty while that's in front.
+    foreground: Vec<u8>,
     /// What it printed, on disk too, so it can be shown again after the machine restarts.
     log: Option<Log>,
     /// The size the program has, as `RESIZE` sends it.
@@ -515,11 +537,24 @@ pub fn serve(socket: &Path) -> io::Result<()> {
             }
             let leader = front.lock().ok().and_then(|m| m.process_group_leader());
             let at_prompt = leader.is_some() && leader.map(|p| p as u32) == pid;
-            if let Ok(mut shared) = looking.lock()
-                && shared.at_prompt != at_prompt
-            {
-                shared.at_prompt = at_prompt;
-                shared.tell(AT_PROMPT, &[u8::from(at_prompt)]);
+            // Read on each look while a command runs, not once per group: a group is in front
+            // from the moment the shell forks its leader, which is the shell's own name until
+            // it has started the command. One read is a system call, and clients are told
+            // only when the name changes.
+            let running = leader
+                .filter(|_| !at_prompt)
+                .and_then(|leader| super::program_name(leader as u32))
+                .unwrap_or_default()
+                .into_bytes();
+            if let Ok(mut shared) = looking.lock() {
+                if shared.at_prompt != at_prompt {
+                    shared.at_prompt = at_prompt;
+                    shared.tell(AT_PROMPT, &[u8::from(at_prompt)]);
+                }
+                if shared.foreground != running {
+                    shared.tell(FOREGROUND, &running);
+                    shared.foreground = running;
+                }
             }
         }
     });
@@ -549,7 +584,8 @@ pub fn serve(socket: &Path) -> io::Result<()> {
             let (front, back) = shared.kept.as_slices();
             let sent = send_frame(&mut outgoing, OUTPUT, front)
                 .and_then(|()| send_frame(&mut outgoing, OUTPUT, back))
-                .and_then(|()| send_frame(&mut outgoing, AT_PROMPT, &[u8::from(shared.at_prompt)]));
+                .and_then(|()| send_frame(&mut outgoing, AT_PROMPT, &[u8::from(shared.at_prompt)]))
+                .and_then(|()| send_frame(&mut outgoing, FOREGROUND, &shared.foreground));
             if sent.is_err() {
                 continue;
             }

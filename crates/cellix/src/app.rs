@@ -18377,6 +18377,8 @@ mod agent_tab_tests;
 #[cfg(test)]
 mod motion_tests;
 #[cfg(test)]
+mod shell_tab_tests;
+#[cfg(test)]
 mod view_tests;
 
 #[cfg(test)]

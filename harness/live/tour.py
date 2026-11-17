@@ -1516,6 +1516,12 @@ with tempfile.TemporaryDirectory() as scratch:
           size="150x44", env=in_shell(caches[3]), expect="Deploy to prod?")
     shoot("108-program-asks-inbox", [*program, *SHOW_INBOX, ["wait", 0.6]], CODE_FILE,
           size="150x44", env=in_shell(caches[4]), expect="Deploy to prod?")
+    # A command that runs on in a terminal: its tab is named after it, with a shell's mark, and
+    # turns. The host looks every half second, and the tab waits a second before it says so.
+    caches += [tempfile.mkdtemp(prefix="cx", dir="/tmp")]
+    running = [["keys", CTRL("j")], ["wait", 1.5], ["keys", "sleep 60\r"], ["wait", 2.5]]
+    shoot("108-terminal-running", running, CODE_FILE, size="150x44", env=in_shell(caches[5]),
+          expect="sleep 60")
     for cache in caches:
         subprocess.run(["pkill", "-9", "-f", cache])
         shutil.rmtree(cache, ignore_errors=True)

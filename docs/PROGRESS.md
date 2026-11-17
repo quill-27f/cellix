@@ -2842,3 +2842,14 @@ Item 12 of the herdr round. The + after the side pane's tabs showed the Agents l
 - Not done, from that review: in the light theme a menu's quiet colour (keys, descriptions, headings) is 1.1:1 from its words' colour; that's the theme's `popup_dim`, shared by every menu, and wants its own look.
 - Looked at: `14-start-menu`, `14-start-menu-light`, `04-menu-page`, `05-menu-code`, `06-menu-explorer`, `07-menu-tab`, `23-narrow-menu`, `30-hover-menu` (the shared padding).
 - Unverified: a real agent given a role's prompt (the tests use a stand-in that writes its arguments); Claude Code's `--` before a prompt, which its own help doesn't show.
+
+## A shell's tab names what runs in it (2026-11-17)
+
+Item 11 of the herdr work for 0.11.0: a shell's tab in the side pane shows what's running, as VS Code's terminal tabs do, on the board's panel 2 (`>_ cargo` and the spinner).
+
+- The session host already looked at the PTY's process group in front every half second to tell whether the shell is at its prompt. It now also reads that group's leader's name on that look while a command is in front (`hold::program_name`: `/proc/<pid>/comm` on Linux, `proc_name` on macOS) and tells every Cellix attached when the name changes, and one that joins as it joins, in a new `f` frame (`FOREGROUND`) that an older Cellix ignores. No faster polling. The name was first read once per group, which under load caught the forked shell before it had started the command and kept that (empty) name for the whole run: the test failed in the full suite and passed alone. A shell Cellix runs itself (tests, or where no host could start) is read from its own PTY the same way.
+- The tab (`Session::label`, `has_icon`, `mark`) is named after the program once it has run a second (`RUN_SHOWN_AFTER`), with the shell's mark before it and the motion track's spinner after it, in the accent; at the prompt it's the shell's own name again, still. A command over within a second never shows. An OSC 7501 report from what runs there outranks the spinner, as hooks would.
+- DESIGN.md says how, under Agent integration, and that Windows has no host (and ConPTY can't say what's in front), so there a shell's tab keeps its name.
+- Tests: `a_shells_tab_names_what_runs_in_it_and_turns_while_it_does` (a real interactive shell in the app: a 0.3 s command never touches the tab; a 5 s one names it `> sleep` with the spinner between the name and the ×, after about a second; back at the prompt, `Terminal` and still), `the_host_names_the_program_in_front_of_a_shell` (the real binary as host: the name as it changes, empty at the prompt, and told to a Cellix that joins later).
+- Tour: `108-terminal-running`.
+- Unverified: Linux's half of `program_name` runs only in CI. "The shell's name" is the tab's own name ("Terminal"), not the shell program's (`zsh`) as VS Code has it.

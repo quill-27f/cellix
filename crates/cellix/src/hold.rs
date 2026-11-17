@@ -15,6 +15,29 @@ use serde::{Deserialize, Serialize};
 mod host;
 pub use host::{Held, Keys, left_running, serve, start, stopped};
 
+/// The name of a running program, as the system has it (`cargo`, `node`, `vim`), for a tab
+/// to be called while it's in front of a shell. Linux and macOS say; elsewhere it's not known.
+#[cfg(target_os = "linux")]
+pub fn program_name(pid: u32) -> Option<String> {
+    let name = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
+    Some(name.trim_end().to_string()).filter(|name| !name.is_empty())
+}
+
+#[cfg(target_os = "macos")]
+pub fn program_name(pid: u32) -> Option<String> {
+    let mut buffer = [0u8; 256];
+    let pid = libc::c_int::try_from(pid).ok()?;
+    // SAFETY: proc_name writes at most the buffer's length into it, and says how much it did.
+    let length = unsafe { libc::proc_name(pid, buffer.as_mut_ptr().cast(), buffer.len() as u32) };
+    let length = usize::try_from(length).ok().filter(|length| *length > 0)?;
+    Some(String::from_utf8_lossy(&buffer[..length]).into_owned())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn program_name(_pid: u32) -> Option<String> {
+    None
+}
+
 /// What a held program is told about where it's held: the host's socket.
 pub const HELD_VAR: &str = cellix_agent::hook::HELD_VAR;
 /// The folder, among a project's sessions, for those that stopped without finishing.
@@ -279,6 +302,10 @@ mod host {
         }
 
         pub fn at_prompt(&self) -> bool {
+            match *self {}
+        }
+
+        pub fn foreground(&self) -> String {
             match *self {}
         }
 

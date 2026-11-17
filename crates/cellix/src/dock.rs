@@ -311,6 +311,14 @@ pub struct Session {
     pub typed: Typed,
     /// When Cellix last typed a message in and entered it, until the program says it took it.
     pub prompted: Option<std::time::Instant>,
+    /// For a shell, the program in front of it by name, and since when: what its tab is
+    /// called while it runs, once it has run a moment.
+    running: Option<(String, std::time::Instant)>,
+    /// What its tab last showed of that, so a poll can say the tab changed.
+    shown_running: Option<String>,
+    /// For a shell Cellix runs itself, the process group last in front of it, its name, and
+    /// when that was read.
+    own_front: Option<(i32, String, std::time::Instant)>,
 }
 
 /// A person's typing into a session, as it holds back what agents send it.
@@ -362,6 +370,12 @@ impl Typed {
         self.draft += text.chars().count();
     }
 }
+
+/// How often the name of what's in front of a shell Cellix runs itself is read again.
+const OWN_FRONT_EVERY: std::time::Duration = std::time::Duration::from_millis(250);
+/// How long a command runs before its shell's tab is named after it and turns: one that ends
+/// sooner doesn't make the tab flicker.
+const RUN_SHOWN_AFTER: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// What an agent in a tab is doing, as its hooks say.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -574,6 +588,9 @@ impl Session {
             member: None,
             typed: Typed::default(),
             prompted: None,
+            running: None,
+            shown_running: None,
+            own_front: None,
         }
     }
 
@@ -582,6 +599,10 @@ impl Session {
     pub fn label(&self) -> String {
         if let Some(name) = &self.renamed {
             return name.clone();
+        }
+        // A shell's is the program running in it, as VS Code names a terminal's tab.
+        if let Some(program) = self.running_program() {
+            return program.to_string();
         }
         let own = (!self.shell && !self.browser)
             .then(|| self.title.as_deref().and_then(own_name))
@@ -597,8 +618,73 @@ impl Session {
         match self.doing {
             Doing::Working => Some(TabMark::Working),
             Doing::NeedsYou => Some(TabMark::NeedsYou),
+            // A shell running a command turns, as an agent at work does.
+            Doing::Idle if self.running_program().is_some() => Some(TabMark::Working),
             Doing::Idle => self.done_unseen.then_some(TabMark::Done),
         }
+    }
+
+    /// The program a shell is running, by name, once it has run long enough to say so.
+    pub fn running_program(&self) -> Option<&str> {
+        let (name, since) = self.running.as_ref()?;
+        (since.elapsed() >= RUN_SHOWN_AFTER).then_some(name.as_str())
+    }
+
+    /// The name of the program in front of a shell, empty while the shell is: as its host
+    /// says, or for a shell Cellix runs itself, from the PTY. A console can't say, so on
+    /// Windows, which has no host, it's always empty.
+    fn foreground(&mut self) -> String {
+        match &self.link {
+            #[cfg(unix)]
+            Link::Held(held) => held.foreground(),
+            #[cfg(not(unix))]
+            Link::Held(held) => match *held {},
+            #[cfg(unix)]
+            Link::Own { master, pid, .. } => {
+                let leader = master.process_group_leader();
+                let Some(leader) = leader.filter(|l| Some(*l as u32) != *pid) else {
+                    self.own_front = None;
+                    return String::new();
+                };
+                // Read again a few times a second rather than once per group: the group is in
+                // front from the moment the shell forks its leader, which has the shell's own
+                // name until it has started the command.
+                let stale = self.own_front.as_ref().is_none_or(|(group, _, read)| {
+                    *group != leader || read.elapsed() >= OWN_FRONT_EVERY
+                });
+                if stale {
+                    let name = crate::hold::program_name(leader as u32).unwrap_or_default();
+                    self.own_front = Some((leader, name, std::time::Instant::now()));
+                }
+                self.own_front
+                    .as_ref()
+                    .map(|(_, name, _)| name.clone())
+                    .unwrap_or_default()
+            }
+            #[cfg(not(unix))]
+            Link::Own { .. } => String::new(),
+            Link::Gone => String::new(),
+        }
+    }
+
+    /// Notes what runs in front of a shell. Returns true when its tab should change.
+    fn follow_foreground(&mut self) -> bool {
+        if !self.shell || self.exited {
+            self.running = None;
+        } else {
+            let now = self.foreground();
+            if now.is_empty() {
+                self.running = None;
+            } else if self.running.as_ref().is_none_or(|(name, _)| *name != now) {
+                self.running = Some((now, std::time::Instant::now()));
+            }
+        }
+        let shown = self.running_program().map(str::to_string);
+        if shown == self.shown_running {
+            return false;
+        }
+        self.shown_running = shown;
+        true
     }
 
     /// Whether its tab keeps room for what it's doing: an agent's while it runs, whose state
@@ -608,9 +694,10 @@ impl Session {
     }
 
     /// Whether its tab has its program's mark before its name: an agent's or another
-    /// program's. A shell's and the browser's are names alone, as they were.
+    /// program's, and a shell's while a command runs in it. A shell at its prompt and the
+    /// browser are names alone, as they were.
     pub fn has_icon(&self) -> bool {
-        !self.shell && !self.browser
+        !self.browser && (!self.shell || self.running_program().is_some())
     }
 
     /// Cellix's own mark for its program, as its tab and the Agents list show it.
@@ -975,7 +1062,7 @@ impl Session {
             self.exited = true;
             changed = true;
         }
-        changed
+        changed | self.follow_foreground()
     }
 
     pub fn resize(&mut self, size: (u16, u16), cell: CellPixels) {

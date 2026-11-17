@@ -5556,5 +5556,19 @@
     "title": "A role starts its agent with the role's prompt as its first; Tester is built in",
     "test": "a_role_starts_its_agent_with_its_prompt",
     "passes": true
+  },
+  {
+    "id": "shell-tab-names-running-program",
+    "milestone": 15,
+    "title": "A shell's tab in the side pane is named after the program running in it, with a shell's mark and the spinner, after about a second, and back to its own name at the prompt; the session host says what's in front",
+    "test": "a_shells_tab_names_what_runs_in_it_and_turns_while_it_does",
+    "passes": true
+  },
+  {
+    "id": "host-names-foreground-program",
+    "milestone": 15,
+    "title": "The session host tells every Cellix attached the name of the program in front of a shell when it changes, and one that joins as it joins",
+    "test": "the_host_names_the_program_in_front_of_a_shell",
+    "passes": true
   }
 ]

@@ -246,3 +246,45 @@ fn two_cellix_windows_share_a_program_and_whoever_types_sets_its_size() {
     read_until(&first, "got three at 30 100");
     held.kill();
 }
+
+/// A shell's host says which program is in front of the shell, by its name, as that changes,
+/// and nothing once the shell is back at its prompt. An interactive shell gives each command a
+/// process group of its own, as a person's does.
+#[test]
+fn the_host_names_the_program_in_front_of_a_shell() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("held");
+    let mut shell = job("Terminal", "", dir.path());
+    shell.argv = vec!["sh".to_string(), "-i".to_string()];
+    shell
+        .env
+        .extend(["PS1=ready$ ".to_string(), "ENV=".to_string()]);
+    let held = start(&folder, &shell);
+    let (seen, _) = attach(&held);
+    read_until(&seen, "ready$");
+    assert_eq!(held.foreground(), "", "the shell itself is in front");
+    held.keys()
+        .unwrap()
+        .write_all(b"sleep 2; echo slept\n")
+        .unwrap();
+    let until = |wanted: &str, held: &Held| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while held.foreground() != wanted {
+            assert!(
+                Instant::now() < deadline,
+                "never {wanted:?}: {:?}",
+                held.foreground()
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+    until("sleep", &held);
+    read_until(&seen, "slept");
+    until("", &held);
+    // A Cellix that joins later is told what's in front as it joins.
+    held.keys().unwrap().write_all(b"sleep 3\n").unwrap();
+    until("sleep", &held);
+    let again = Held::connect(&held.socket).unwrap();
+    let _kept = attach(&again);
+    until("sleep", &again);
+}

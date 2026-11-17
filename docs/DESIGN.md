@@ -943,7 +943,8 @@ burst in a warm clay, Codex's a hexagon with a prompt inside it in the text's co
 CLI's a filled star of four points in a blue of its own, and any other program's a plain
 square in the quieter text colour; on cells one letter each, `✻ ⬡ ✦ ▫`. A shell's tab and the
 browser's are their names alone, as they were, and a shell's has room for a mark only while
-what runs in it says how it is (OSC 7501). An agent's tab keeps two columns before its × for what its agent is doing: the spinner in
+what runs in it says how it is (OSC 7501), or while a command runs in it, when it's named after
+the command with a shell's mark before it (below). An agent's tab keeps two columns before its × for what its agent is doing: the spinner in
 the accent while it works, a dot in the attention colour while it asks, a green dot when it
 finished a turn while its tab wasn't in front, until it is, and nothing while it's idle. The
 columns are kept either way while it runs, so the tab keeps its width as its agent starts
@@ -1492,6 +1493,21 @@ it again when the next run joins the session, and named nothing it takes its own
 What a tab's mark says comes from the agent's hooks, through the tab whose agent has that
 session's id, or else the one running tab of that agent, and from a program's own OSC 7501
 reports for its tab; hooks win there as everywhere.
+
+A shell's tab is named after the program running in it, as VS Code names a terminal's tab:
+`cargo` while `cargo test` runs, with a shell's mark (`>_`, `>` on cells) before the name and
+the spinner after it, and the shell's own name again, still, once it's back at its prompt. A
+command that ends within a second leaves the tab as it was, so a quick `ls` doesn't make it
+flicker. The session host owns the PTY, so it reads the process group in front of it
+(`tcgetpgrp`), on the half-second look it already took to tell whether the shell is at its
+prompt, and while a command is in front, the name of that group's leader (`/proc/<pid>/comm`
+on Linux, `proc_name` on macOS), a system call. It reads it on each look rather than once per
+group: a group is in front from the moment the shell forks its leader, which has the shell's
+own name, or none, until it has started the command, and a name read once in that moment
+stood for the whole command. It tells every Cellix attached when the name changes, and
+one that joins as it joins (the `f` frame, which a Cellix from before ignores). A shell Cellix
+runs itself, as in tests, is read the same way from its own PTY. Windows has no host, and
+ConPTY doesn't say what's in front, so there a shell's tab keeps its name.
 
 On Windows the socket is a port on 127.0.0.1, because Rust's standard library has no Unix
 sockets there and a named pipe could only be tested on Windows. A file where the socket would
