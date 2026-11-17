@@ -239,6 +239,8 @@ struct Picture {
 
 /// How much of what a task printed is kept.
 const PRINTED_MOST: usize = 8 << 20;
+/// What starts a synchronized update.
+const UPDATE_START: &[u8] = b"\x1b[?2026h";
 
 /// A program running on a PTY, and the screen it has drawn.
 pub struct Session {
@@ -687,14 +689,27 @@ impl Session {
     }
 
     /// Takes in what the program wrote, with its pictures lifted out in order, so a reply
-    /// goes back ahead of anything the terminal says about what came after.
-    fn take_in(&mut self, bytes: &[u8]) {
+    /// goes back ahead of anything the terminal says about what came after. Says whether
+    /// any of it reached the screen: text inside a synchronized update waits in the parser
+    /// until the update ends, and changes nothing until then.
+    fn take_in(&mut self, bytes: &[u8]) -> bool {
+        let mut shown = false;
         for piece in self.scanner.feed(bytes) {
             match piece {
                 Piece::Text(text) => {
                     self.answer_about_cells(&text);
                     self.forget_on_clear(&text);
+                    let (was, held) = (self.updating(), self.parser.sync_bytes_count());
                     self.parser.advance(&mut self.term, &text);
+                    let kept = self.parser.sync_bytes_count();
+                    shown |= match (was, self.updating()) {
+                        // Not holding now: whatever came is on the screen.
+                        (_, false) => true,
+                        // All of it held, unless an update ended and another began.
+                        (true, true) => kept < held + text.len(),
+                        // An update began: anything besides its start went to the screen.
+                        (false, true) => text.len() > kept + UPDATE_START.len(),
+                    };
                 }
                 Piece::Graphics(command) => {
                     // Text inside a synchronized update waits in the parser, cursor moves
@@ -702,6 +717,7 @@ impl Session {
                     self.parser.stop_sync(&mut self.term);
                     let outcome = self.protocol.command(&command);
                     self.follow(outcome);
+                    shown = true;
                 }
                 Piece::Status(payload) => {
                     if let Some(report) = crate::program::parse(&payload) {
@@ -710,6 +726,32 @@ impl Session {
                 }
             }
         }
+        shown
+    }
+
+    /// Whether a synchronized update is under way, its text held in the parser.
+    fn updating(&self) -> bool {
+        self.parser.sync_timeout().sync_timeout().is_some()
+    }
+
+    /// When a synchronized update under way runs out of time, if one is.
+    pub fn update_deadline(&self) -> Option<std::time::Instant> {
+        self.parser.sync_timeout().sync_timeout()
+    }
+
+    /// Ends a synchronized update its program never ended, once its time is up, as a
+    /// terminal does. The parser only checks the time when more comes, so a program killed
+    /// halfway through one left its pane as it was until two megabytes more arrived. Says
+    /// whether it ended one.
+    fn end_overdue_update(&mut self, now: std::time::Instant) -> bool {
+        if self
+            .update_deadline()
+            .is_some_and(|deadline| now >= deadline)
+        {
+            self.parser.stop_sync(&mut self.term);
+            return true;
+        }
+        false
     }
 
     /// The one size question the terminal emulator leaves unanswered.
@@ -875,9 +917,10 @@ impl Session {
 
     /// Takes in what the program wrote. Returns true if the screen changed.
     pub fn poll(&mut self, theme: &Theme) -> bool {
-        let mut changed = false;
+        let mut changed = self.end_overdue_update(std::time::Instant::now());
+        let mut came = false;
         while let Ok(bytes) = self.output.try_recv() {
-            self.take_in(&bytes);
+            changed |= self.take_in(&bytes);
             if let Some(kept) = &mut self.printed {
                 kept.extend_from_slice(&bytes);
                 // A task that prints without end keeps its last few megabytes.
@@ -886,10 +929,10 @@ impl Session {
                 }
             }
             self.wrote = Some(std::time::Instant::now());
-            changed = true;
+            came = true;
         }
         // What a joined host kept comes first, all at once.
-        self.replaying &= !changed;
+        self.replaying &= !came;
         let events = self.events.0.lock().map(|mut e| std::mem::take(&mut *e));
         for event in events.unwrap_or_default() {
             match event {
@@ -1793,6 +1836,15 @@ impl Dock {
     }
 
     /// Stops everything here, even what could have outlived Cellix.
+    /// The soonest a synchronized update a program here left open runs out of time, for
+    /// the loop to wake then and end it.
+    pub fn update_deadline(&self) -> Option<std::time::Instant> {
+        self.sessions
+            .iter()
+            .filter_map(Session::update_deadline)
+            .min()
+    }
+
     pub fn stop_all(&mut self) {
         for session in &mut self.sessions {
             session.stop();
@@ -3031,6 +3083,47 @@ mod tests {
             .map(|p| (p.image, p.placement))
             .collect();
         assert_eq!(left, [(1, 1), (2, 1), (3, 0)]);
+    }
+
+    /// A session fed by the test, with nothing running.
+    fn fed() -> (mpsc::Sender<Vec<u8>>, Session) {
+        let (sender, output) = mpsc::channel();
+        let (_, finished) = mpsc::channel();
+        let writer = Box::new(io::sink());
+        let channels = (output, finished);
+        let session = Session::around("Test", Link::Gone, writer, channels, ((40, 5), (10, 20)));
+        (sender, session)
+    }
+
+    /// A program that begins a synchronized update and never ends it, as one killed halfway
+    /// through does: what it wrote is held, which changes nothing on screen, until the
+    /// update's time is up. Then it shows, with nothing more coming.
+    #[test]
+    fn an_update_left_open_shows_once_its_time_is_up() {
+        let theme = Theme::named(Some("light"));
+        let (program, mut session) = fed();
+        program.send(b"\x1b[?2026hheld back".to_vec()).unwrap();
+        assert!(
+            !session.poll(&theme),
+            "only held, so the screen is as it was"
+        );
+        program.send(b" and more".to_vec()).unwrap();
+        assert!(!session.poll(&theme));
+        assert!(!session.rows().concat().contains("held back"));
+        let deadline = session.update_deadline().expect("an update is under way");
+        assert!(deadline <= std::time::Instant::now() + std::time::Duration::from_millis(150));
+        std::thread::sleep(deadline.saturating_duration_since(std::time::Instant::now()));
+        assert!(session.poll(&theme), "its time is up: it ends");
+        assert!(session.rows().concat().contains("held back and more"));
+        assert_eq!(session.update_deadline(), None);
+        // One that ends on time shows when it ends, and text outside one shows at once.
+        program.send(b"\x1b[?2026h\r\nnext".to_vec()).unwrap();
+        assert!(!session.poll(&theme));
+        program.send(b" frame\x1b[?2026l".to_vec()).unwrap();
+        assert!(session.poll(&theme));
+        assert!(session.rows().concat().contains("next frame"));
+        program.send(b" plain".to_vec()).unwrap();
+        assert!(session.poll(&theme));
     }
 
     #[test]

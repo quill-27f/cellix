@@ -5535,5 +5535,12 @@
     "title": "Agents start, message, read and wait for each other with cellix agent, asking the person first, holding for their draft and refusing to answer a question for them",
     "test": "agents_start_message_and_wait_for_each_other",
     "passes": true
+  },
+  {
+    "id": "update-left-open",
+    "milestone": 15,
+    "title": "A synchronized update a program leaves open ends 150 ms after it began, with the loop waking then, and bytes the parser only holds draw nothing",
+    "test": "an_update_left_open_shows_once_its_time_is_up",
+    "passes": true
   }
 ]

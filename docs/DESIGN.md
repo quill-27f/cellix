@@ -1288,7 +1288,10 @@ the server (`scp`) or save it in the project and paste its path.
 
 Cellix runs the real agent and never rebuilds its interface. The side pane is a terminal on a
 PTY, using `alacritty_terminal` for the screen, so agents update themselves and nothing here
-knows what they look like. When a program there ends, as an agent does on `/exit`, its tab
+knows what they look like. A program's synchronized update (`?2026`) is held in the parser
+until it ends, and changes nothing on screen meanwhile, so no frame is drawn for it; one its
+program never ends, as when it's killed halfway, is ended 150 ms after it began, as terminals
+do, with the loop waking then to end it (the parser only looks at the time when more comes). When a program there ends, as an agent does on `/exit`, its tab
 closes and the status bar says so; an agent that ends within five seconds of starting didn't
 start, so its tab stays with what it printed. Starting one in a host split left the file and the agent in two
 programs, and real use showed that isn't side by side. It connects to the real tool in three ways, each proven

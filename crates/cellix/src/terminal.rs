@@ -1266,7 +1266,12 @@ pub fn run(options: Options) -> io::Result<()> {
             };
             // And no longer than the tick, which runs on its time.
             let now = Instant::now();
-            let wait = wait_for(rest, backend.gliding(), turning, now).min(pace.until_tick(now));
+            let mut wait =
+                wait_for(rest, backend.gliding(), turning, now).min(pace.until_tick(now));
+            // A program's synchronized update left open is ended when its time is up.
+            if let Some(deadline) = spaces.update_deadline() {
+                wait = wait.min(deadline.saturating_duration_since(Instant::now()));
+            }
             // A signal interrupts the wait; the loop goes round and sees it.
             let ready = match ct::poll(wait) {
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,

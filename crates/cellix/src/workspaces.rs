@@ -349,6 +349,14 @@ impl Workspaces {
         mark.finish()
     }
 
+    /// The soonest a program's synchronized update runs out of time, in any workspace.
+    pub fn update_deadline(&self) -> Option<std::time::Instant> {
+        self.list
+            .iter()
+            .filter_map(|w| w.app.update_deadline())
+            .min()
+    }
+
     /// Lets every app take what came in, and answers the requests that brings. Returns
     /// whether anything changed.
     pub fn poll(&mut self) -> bool {

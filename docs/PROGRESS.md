@@ -2817,3 +2817,12 @@ Item 4 of the herdr work for the next version (the a2a track), on `next`, not re
 - Tour: `170-agent-asks` (and `-light`, `-narrow`), `171-agent-started`, with stand-in Claude Code and Codex on PATH.
 - Unverified: with the real Claude Code, Codex and Gemini CLI (whether each one's start hook comes before it can take a paste; Codex's needs its hooks trusted with `/hooks`, or `run` says the task wasn't typed).
 - Next: item 5, parents and children.
+## A synchronized update left open ends on time (2026-11-17)
+
+Item 7 of herdr's performance study.
+
+- vte holds a program's synchronized update in its parser, and ends one past its 150 ms only when more output comes; Cellix ended one only before a picture. A program killed halfway through an update (or one that forgot to end it) left its pane as it was until 2 MiB more arrived. Now each look at a session ends an overdue update (`Session::end_overdue_update`), and the loop wakes at the soonest deadline (`Workspaces::update_deadline`).
+- Bytes the parser only holds no longer count as a change on screen (`take_in` says whether anything reached the screen), so a program inside an update draws one frame when it ends, not one per write.
+- The last entry's change measured (debug build, the gate's own; one round of 6 s; counts per second): idle now sends 0 bytes (44 before) and lays out 0.5 frames, the heartbeat, which send nothing; hidden output still draws 60 frames but they send nothing (98 frames and 2,200 bytes before). Wakes are unchanged (20 idle, 60 with output): what wakes the loop comes later.
+- Test: `an_update_left_open_shows_once_its_time_is_up` (a session fed by the test: an update begun and never ended changes nothing until its time is up, then shows; one ended on time shows when it ends).
+

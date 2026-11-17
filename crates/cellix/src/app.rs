@@ -18097,6 +18097,11 @@ impl App {
         1 + self.status_room.get().0
     }
 
+    /// The soonest a program's synchronized update runs out of time here.
+    pub fn update_deadline(&self) -> Option<std::time::Instant> {
+        self.dock.update_deadline()
+    }
+
     /// Whether something in the side pane may write at any moment.
     pub fn has_session(&self) -> bool {
         self.dock.running()
