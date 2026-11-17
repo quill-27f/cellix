@@ -372,10 +372,14 @@ impl Typed {
 
     fn pasted(&mut self, text: &str) {
         self.last = Some(std::time::Instant::now());
-        self.draft += text.chars().count();
+        // Only whether there's a draft matters, and a paste can be megabytes: counted no
+        // further than a backspace could take it back.
+        self.draft += text.chars().take(PASTE_COUNTED).count();
     }
 }
 
+/// How many characters of a paste count toward a person's draft.
+const PASTE_COUNTED: usize = 4096;
 /// How often the name of what's in front of a shell Cellix runs itself is read again.
 const OWN_FRONT_EVERY: std::time::Duration = std::time::Duration::from_millis(250);
 /// How long a command runs before its shell's tab is named after it and turns: one that ends

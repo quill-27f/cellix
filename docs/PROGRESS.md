@@ -2955,3 +2955,7 @@ Item 5 of the herdr work (the a2a track): the backend. The nesting in the Agents
 - Test: `a_parent_hears_of_its_children_waits_for_them_and_takes_them_with_it` (any, then all; no note about a child waited on; a note when not; none while the parent asks; children stopped with it, the one that outlives it on its own).
 - Unverified: with real agents. Several notes at once go in as one paste of several lines; a program that doesn't ask for bracketed paste would take each line as its own message.
 - Next: item 8, the reviewer; then the nesting and peek once item 6 lands.
+
+## A paste counts toward a draft only as far as it matters (2026-11-17)
+
+- A person's paste into an agent counted every character of it toward their draft, which `cellix agent send` waits for: a megabyte's paste took a third of a second in a debug build, and `a_paste_into_a_program_not_reading_doesnt_wait_for_it` failed on a loaded machine. It counts the first 4096 (`PASTE_COUNTED`): only whether there's a draft matters.
