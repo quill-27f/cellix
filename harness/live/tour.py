@@ -1364,6 +1364,16 @@ with tempfile.TemporaryDirectory() as scratch:
     found = [["keys", CTRL("j")], ["wait", 1.5], ["keys", failing], ["wait", 1.0], ["keys", CTRL("f")],
              ["wait", 0.4], ["keys", "queue"], ["wait", 0.5]]
     shoot("108-terminal-find", found, CODE_FILE, size="150x44", env=in_shell(caches[2]))
+    # A script in a terminal says it's waiting for the person through OSC 7501, as any program
+    # can: the Agents list and the inbox say so as they would an agent's.
+    caches += [tempfile.mkdtemp(prefix="cx", dir="/tmp") for _ in range(2)]
+    asks = ("printf 'deploying\\n\\033]7501;state=blocked:app=deploy:kind=question:"
+            "msg=RGVwbG95IHRvIHByb2Q/\\033\\\\'\r")
+    program = [["keys", CTRL("j")], ["wait", 1.5], ["keys", asks], ["wait", 1.0]]
+    shoot("108-program-asks-agents", [*program, *LIST_AGENTS, ["wait", 0.5]], CODE_FILE,
+          size="150x44", env=in_shell(caches[3]), expect="Deploy to prod?")
+    shoot("108-program-asks-inbox", [*program, *SHOW_INBOX, ["wait", 0.6]], CODE_FILE,
+          size="150x44", env=in_shell(caches[4]), expect="Deploy to prod?")
     for cache in caches:
         subprocess.run(["pkill", "-9", "-f", cache])
         shutil.rmtree(cache, ignore_errors=True)

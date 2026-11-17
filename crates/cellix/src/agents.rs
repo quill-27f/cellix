@@ -208,7 +208,9 @@ impl Agents {
     /// The agent working on this project outside the pane, if there is one. It hears about
     /// comments through its hooks, with its next prompt.
     pub fn outside(&self) -> Option<String> {
-        let reporting = self.running.first().map(|a| a.agent.clone());
+        // A program that only says how it is has no hooks to hand it a comment.
+        let hooked = self.running.iter().find(|a| !crate::program::reported(a));
+        let reporting = hooked.map(|a| a.agent.clone());
         reporting.or_else(|| self.silent().into_iter().next())
     }
 
@@ -246,7 +248,8 @@ impl Agents {
     /// Agents found running that the plugin isn't already reporting.
     fn silent(&self) -> Vec<String> {
         let seen = self.seen.lock().map(|s| s.clone()).unwrap_or_default();
-        seen.into_iter().skip(self.running.len()).collect()
+        let hooked = self.running.iter().filter(|a| !crate::program::reported(a));
+        seen.into_iter().skip(hooked.count()).collect()
     }
 
     /// The panel, top to bottom. Drawing and clicking share this. With nothing running, it

@@ -266,7 +266,17 @@ pub struct Session {
     /// first column and how many it takes, and which of them Find is on.
     found: Vec<(usize, u16, u16)>,
     found_at: Option<usize>,
+    /// What the program said of itself (OSC 7501) since it was last asked, in order, each
+    /// with whether it was only said again as a joined host showed what it kept.
+    pub reports: Vec<(crate::program::Report, bool)>,
+    /// Joined again, so what comes first is what the host kept, said before.
+    pub replaying: bool,
+    /// Tells it from the others when nothing outside names it.
+    serial: u64,
 }
+
+/// Numbers sessions, for those with no host to name them.
+static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 fn pty_size((columns, rows): (u16, u16), (width, height): CellPixels) -> PtySize {
     PtySize {
@@ -393,6 +403,9 @@ impl Session {
             printed: None,
             transcript: None,
             usage: None,
+            reports: Vec::new(),
+            replaying: false,
+            serial: SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         }
     }
 
@@ -406,6 +419,8 @@ impl Session {
         let writer = Box::new(io::sink());
         let mut session = Self::around(&name, Link::Gone, writer, channels, (size, cell));
         session.take_in(&stopped.output);
+        // What it said of itself was said by a program that's gone.
+        session.reports.clear();
         session.exited = true;
         session.stopped = Some(stopped);
         session
@@ -438,6 +453,12 @@ impl Session {
             Some(stopped) => stopped.key(),
             None => Some(self.socket()?.file_stem()?.to_string_lossy().into_owned()),
         }
+    }
+
+    /// What names it while it runs: what it's kept as, or else its number here.
+    pub fn tab_key(&self) -> String {
+        self.kept_as()
+            .unwrap_or_else(|| format!("tab-{}", self.serial))
     }
 
     /// The socket of the host it runs under, beside which its agent's hooks leave word.
@@ -474,6 +495,11 @@ impl Session {
                     self.parser.stop_sync(&mut self.term);
                     let outcome = self.protocol.command(&command);
                     self.follow(outcome);
+                }
+                Piece::Status(payload) => {
+                    if let Some(report) = crate::program::parse(&payload) {
+                        self.reports.push((report, self.replaying));
+                    }
                 }
             }
         }
@@ -655,6 +681,8 @@ impl Session {
             self.wrote = Some(std::time::Instant::now());
             changed = true;
         }
+        // What a joined host kept comes first, all at once.
+        self.replaying &= !changed;
         let events = self.events.0.lock().map(|mut e| std::mem::take(&mut *e));
         for event in events.unwrap_or_default() {
             match event {

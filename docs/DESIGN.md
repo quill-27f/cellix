@@ -1179,6 +1179,38 @@ picks the new mod up. The mod also tells `cellix pane` the protocol it speaks
 (`CELLIX_MOD`); a pane that gets another refuses with a message the old mod shows, rather
 than sending lines it would ignore.
 
+### State from any program
+
+A program with no hooks can still say how it is, through the Program Status Protocol herdr made
+open: it prints `ESC ] 7501 ; key=value:key=value… ESC \` (or BEL) to its terminal. `state` is
+`idle`, `working`, `done`, `blocked`, `error` or `clear`; `app` names it; `kind` says why it's
+blocked (`permission`, `question`, `auth`); `progress` is 0 to 100; `title` and `msg` are base64;
+`id` names a part of it, empty for the program itself. A script reports itself in one line:
+
+```sh
+printf '\033]7501;state=working:app=deploy\033\\'
+printf '\033]7501;state=blocked:app=deploy:msg=%s\033\\' "$(printf 'Deploy to prod?' | base64)"
+printf '\033]7501;state=done:app=deploy\033\\'
+```
+
+(`\033` rather than `\e`, which `dash`'s `printf` doesn't know.)
+
+`alacritty_terminal` ignores an OSC it doesn't know, so the side pane's terminal lifts these out
+of what comes from the session host before its parser sees them, as it does Kitty's pictures,
+wherever the stream splits. What they say becomes the state Cellix keeps for agents, so it
+shows in the Agents list, the workspace's tile, the inbox and the notifications as hooks' news
+does: `blocked` is needing the person, with `msg` as what it asks (or a word from `kind`);
+`working` says `msg` or `title` and how far along it is; `done` is a finished turn, `msg` its
+detail; `error` is stopped, as a turn cut short is; `idle` is idle. `clear`, the program ending,
+or its tab closing ends it, and a part's `clear` ends that part and its own. A part is a row of
+its own, named after the program and the part. `app` naming Claude Code, Codex or Gemini CLI
+(`claude`, `claude-code`, `codex`, `gemini`…) is called by Cellix's name for it; any other is a
+plain program under the name it gave, and one that gave none goes by its tab's. A click on what
+it asks goes to its tab, a shell's too. Where an agent's hooks report for the tab (they left its
+session beside the host, or it's that agent's only tab, and the session is running), the hooks
+win: the program's word is let go. A Cellix that joins a running host sees what the host kept,
+so the last word is known again; a `done` heard that way isn't news.
+
 ### Inside Claude Code
 
 `cellix pane` runs the whole app with no terminal, started by the mod for the session's

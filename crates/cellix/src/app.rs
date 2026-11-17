@@ -2772,7 +2772,7 @@ impl App {
         self.keep_in_view(shown);
         self.bring_back_maximized(was_open);
         self.tell_selection();
-        let terminal = self.dock.poll(&self.theme);
+        let terminal = self.dock.poll(&self.theme) | self.hear_programs();
         // What a terminal prints while Find looks through it is looked through as it comes.
         if terminal && matches!(&self.overlay, Overlay::Find(find) if find.pane) {
             self.refresh_pane_find();
@@ -4500,6 +4500,7 @@ impl App {
         for session in self.agents.prune() {
             self.inbox.drop_key(&format!("ask:{session}"));
         }
+        self.yield_to_hooks();
         self.keep_state();
         // An agent's answer, or a picture it has only now made, arrives between events.
         self.refresh_comment_pictures();
@@ -8387,12 +8388,9 @@ impl App {
         if session.exited || alike.filter(|s| !s.exited).count() != 1 {
             return None;
         }
-        let event = self
-            .agents
-            .running
-            .iter()
-            .rev()
-            .find(|e| e.agent == session.name && !e.session.is_empty())?;
+        let event = self.agents.running.iter().rev().find(|e| {
+            e.agent == session.name && !e.session.is_empty() && !crate::program::reported(e)
+        })?;
         Some((
             event.agent.clone(),
             event.session.clone(),
@@ -8590,7 +8588,8 @@ impl App {
                 continue;
             };
             let size = self.dock_screen().map_or((80, 24), |a| (a.w, a.h));
-            if let Ok(session) = Session::join(&name, held, size, self.cell_size()) {
+            if let Ok(mut session) = Session::join(&name, held, size, self.cell_size()) {
+                session.replaying = true;
                 self.dock.sessions.push(session);
                 names.push(name);
             }
@@ -11916,6 +11915,137 @@ impl App {
         }
     }
 
+    /// What programs in the side pane said of themselves (OSC 7501), kept as an agent's hooks'
+    /// news is: in the Agents list, the workspace's tile, the inbox and so notifications. Where
+    /// hooks report for a tab, they win. A program's news ends when it says `clear`, and when
+    /// it ends or its tab closes.
+    fn hear_programs(&mut self) -> bool {
+        let mut changed = false;
+        let folder = self.workspace.root().display().to_string();
+        for index in 0..self.dock.sessions.len() {
+            let reports = std::mem::take(&mut self.dock.sessions[index].reports);
+            if reports.is_empty() {
+                continue;
+            }
+            changed = true;
+            let session = &self.dock.sessions[index];
+            let tab = format!("{}{}", crate::program::SESSION, session.tab_key());
+            let tab_name = session.name.clone();
+            if self.hooks_report(index) {
+                self.end_program(&tab);
+                continue;
+            }
+            for (report, replayed) in reports {
+                let part = if report.id.is_empty() {
+                    tab.clone()
+                } else {
+                    format!("{tab}/{}", report.id)
+                };
+                if report.word == crate::program::Word::Clear {
+                    self.end_program(&part);
+                    continue;
+                }
+                let mut name = crate::program::name_of(&report.app, &tab_name);
+                if !report.id.is_empty() {
+                    // A part goes by its program's name, as that's said, with its own after.
+                    if report.app.is_empty()
+                        && let Some(whole) = self.agents.running.iter().find(|a| a.session == tab)
+                    {
+                        name.clone_from(&whole.agent);
+                    }
+                    name = format!("{name} · {}", report.id);
+                }
+                let event = crate::program::event(&report, &part, &name, &folder);
+                // Said again as a host showed what it kept, a finished turn was seen before.
+                let seen = replayed && report.word == crate::program::Word::Done;
+                if !seen {
+                    self.note_agent(&event);
+                }
+                if report.word == crate::program::Word::Done && !report.message.is_empty() {
+                    let done = format!("done:{part}");
+                    if let Some(item) = self.inbox.items.iter_mut().find(|w| w.key == done) {
+                        item.detail.clone_from(&report.message);
+                    }
+                }
+                self.agents.update(event);
+            }
+        }
+        // A program that ended, or whose tab closed, says nothing more.
+        let live: Vec<String> = self
+            .dock
+            .sessions
+            .iter()
+            .filter(|s| !s.exited)
+            .map(Session::tab_key)
+            .collect();
+        let gone: Vec<String> = self
+            .agents
+            .running
+            .iter()
+            .filter_map(|a| crate::program::tab_of(&a.session))
+            .filter(|tab| !live.iter().any(|l| l == tab))
+            .map(|tab| format!("{}{tab}", crate::program::SESSION))
+            .collect();
+        for tab in gone {
+            self.end_program(&tab);
+            changed = true;
+        }
+        changed
+    }
+
+    /// Ends the news a program gave under `session`, and of its parts.
+    fn end_program(&mut self, session: &str) {
+        let within = format!("{session}/");
+        let ended: Vec<cellix_agent::AgentEvent> = self
+            .agents
+            .running
+            .iter()
+            .filter(|a| a.session == session || a.session.starts_with(&within))
+            .map(|a| cellix_agent::AgentEvent {
+                state: cellix_agent::AgentState::Ended,
+                detail: "Ended".to_string(),
+                ..a.clone()
+            })
+            .collect();
+        for event in ended {
+            self.note_agent(&event);
+            self.agents.update(event);
+        }
+    }
+
+    /// Whether an agent's hooks are reporting for the program in tab `index`: they left word
+    /// of their session beside its host, or it's the one tab of theirs, and that session is
+    /// still running.
+    fn hooks_report(&self, index: usize) -> bool {
+        let Some(session) = self.dock.sessions.get(index) else {
+            return false;
+        };
+        let beside = session
+            .socket()
+            .and_then(|socket| std::fs::read(socket.with_extension("agent")).ok())
+            .and_then(|bytes| serde_json::from_slice::<cellix_agent::hook::Resumable>(&bytes).ok())
+            .map(|word| word.session);
+        let id = beside.or_else(|| self.agent_word(index).map(|(_, id, _)| id));
+        id.is_some_and(|id| self.agents.running.iter().any(|a| a.session == id))
+    }
+
+    /// Lets go of what programs said where an agent's hooks have since begun to report.
+    fn yield_to_hooks(&mut self) {
+        for index in 0..self.dock.sessions.len() {
+            let tab = format!(
+                "{}{}",
+                crate::program::SESSION,
+                self.dock.sessions[index].tab_key()
+            );
+            let said = self.agents.running.iter().any(|a| {
+                crate::program::tab_of(&a.session) == tab.strip_prefix(crate::program::SESSION)
+            });
+            if said && self.hooks_report(index) {
+                self.end_program(&tab);
+            }
+        }
+    }
+
     fn note_plan(&mut self, path: &Path) {
         let author = self.agents.plan_author().unwrap_or("An agent").to_string();
         let name = path
@@ -12043,12 +12173,20 @@ impl App {
         match &item.target {
             WaitTarget::Session(agent) => {
                 let live = |s: &Session| s.agent() && !s.exited;
+                // A program that said it itself is in its own tab, a shell's too.
+                let reported = crate::program::tab_of(&item.key).and_then(|tab| {
+                    let mut found = self.dock.sessions.iter();
+                    found.position(|s| !s.exited && s.tab_key() == tab)
+                });
                 let named = self
                     .dock
                     .sessions
                     .iter()
                     .position(|s| live(s) && s.name == *agent);
-                match named.or_else(|| self.dock.sessions.iter().position(live)) {
+                match reported
+                    .or(named)
+                    .or_else(|| self.dock.sessions.iter().position(live))
+                {
                     Some(index) => {
                         self.dock.active = Some(index);
                         self.dock.open = true;
@@ -23763,6 +23901,130 @@ mod tests {
         assert_eq!(app.agents.needing_you(), 0);
         assert!(!app.inbox.has("ask:s2"));
         assert_eq!(app.tile_state(), TileState::Working);
+    }
+
+    /// Polls until `done` holds, or fails saying what the agents list had.
+    fn until(app: &mut App, what: &str, done: impl Fn(&App) -> bool) {
+        let deadline = std::time::Instant::now() + BACKGROUND;
+        while !done(app) {
+            let running = &app.agents.running;
+            assert!(
+                std::time::Instant::now() < deadline,
+                "never {what}: {running:?}"
+            );
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    /// A stand-in for a person's script, in a shell's tab: it reports itself as herdr's
+    /// Program Status Protocol says, one step for each line it's sent, ending some reports
+    /// with ST and some with BEL, and prints to show it really ran.
+    const DEPLOY: &str = "printf 'step one\\n'; read a; \
+        printf '\\033]7501;state=working:app=deploy:progress=40\\033\\\\'; read a; \
+        printf '\\033]7501;state=blocked:app=deploy:kind=question:msg=RGVwbG95IHRvIHByb2Q/\\007'; \
+        read a; \
+        printf 'step two\\033]7501;state=done:app=deploy:msg=VGVzdHMgcGFzc2Vk\\033\\\\\\n'; \
+        read a; printf '\\033]7501;state=clear\\007step three\\n'; read a";
+
+    #[test]
+    #[cfg(unix)]
+    fn a_program_in_a_terminal_tab_says_how_it_is_through_osc_7501() {
+        use cellix_agent::AgentState::{NeedsYou, Working};
+        let (_dir, mut app) = project();
+        let root = app.workspace.root().to_path_buf();
+        let argv = ["sh".to_string(), "-c".to_string(), DEPLOY.to_string()];
+        app.start_session(crate::agents::SHELL.0, &argv, &[], &root);
+        shows(&mut app, "step one");
+        assert!(app.agents.running.is_empty(), "nothing said yet");
+
+        app.dock.sessions[0].send_line("");
+        let working = |app: &App| app.agents.running.iter().any(|a| a.state == Working);
+        until(&mut app, "working", working);
+        let said = &app.agents.running[0];
+        assert_eq!(
+            (said.agent.as_str(), said.detail.as_str()),
+            ("deploy", "Working · 40%")
+        );
+        assert_eq!(app.tile_state(), TileState::Working);
+        app.dock.show_list();
+        let text = screen(&app).text();
+        assert!(
+            text.contains("deploy") && text.contains("Working · 40%"),
+            "{text}"
+        );
+        assert!(!text.contains("7501"), "the report isn't printed: {text}");
+
+        // Blocked is needing the person, with what it says, in the inbox, and a click there
+        // goes to the tab it came from, though that's a shell's.
+        app.dock.sessions[0].send_line("");
+        until(&mut app, "needing you", |app| app.agents.needing_you() == 1);
+        assert_eq!(app.agents.running[0].state, NeedsYou);
+        assert_eq!(app.tile_state(), TileState::NeedsYou);
+        let asked = app
+            .inbox
+            .items
+            .iter()
+            .find(|w| w.title == "Deploy to prod?");
+        assert_eq!(asked.map(|w| w.detail.as_str()), Some("deploy"));
+        app.run(Command::ShowInbox);
+        let (x, y) = find(&screen(&app), "Deploy to prod?");
+        click(&mut app, x, y);
+        assert_eq!((app.dock.front, app.dock.active), (Front::Session, Some(0)));
+
+        // Done is a finished turn, with its message, and no longer asking.
+        app.dock.sessions[0].send_line("");
+        shows(&mut app, "step two");
+        until(&mut app, "done", |app| app.agents.needing_you() == 0);
+        let done = app.inbox.items.iter().find(|w| w.kind == Waits::Finished);
+        let done = done.map(|w| (w.title.as_str(), w.detail.as_str()));
+        assert_eq!(done, Some(("deploy finished its turn", "Tests passed")));
+        assert!(matches!(app.tile_state(), TileState::Done(_)));
+
+        // Clear takes it all back.
+        app.dock.sessions[0].send_line("");
+        shows(&mut app, "step three");
+        until(&mut app, "cleared", |app| app.agents.running.is_empty());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_program_that_ends_says_nothing_more_and_hooks_win_where_they_report() {
+        use cellix_agent::AgentState::{Ended, Working};
+        let (_dir, mut app) = project();
+        let root = app.workspace.root().to_path_buf();
+        // A script that leaves while it still says it needs you.
+        let script = "printf 'asking\\033]7501;state=blocked:app=build\\033\\\\\\n'; read a";
+        let argv = ["sh".to_string(), "-c".to_string(), script.to_string()];
+        app.start_session(crate::agents::SHELL.0, &argv, &[], &root);
+        until(&mut app, "asking", |app| app.agents.needing_you() == 1);
+        app.dock.sessions[0].send_line("");
+        until(&mut app, "ended", |app| app.agents.running.is_empty());
+        assert!(app.inbox.items.is_empty(), "{:?}", app.inbox.items);
+
+        // An agent whose hooks report for its tab: what the program prints of itself doesn't
+        // count over them, and does once they've stopped.
+        let script = "printf 'one\\033]7501;state=working:app=claude\\007\\n'; read a; \
+            printf 'two\\033]7501;state=blocked:app=claude\\007\\n'; read a";
+        let argv = ["sh".to_string(), "-c".to_string(), script.to_string()];
+        app.start_session("Claude Code", &argv, &[], &root);
+        app.serve(Request::Agent(agent(Working, "Working")));
+        shows(&mut app, "one");
+        app.poll();
+        let sessions: Vec<&str> = app
+            .agents
+            .running
+            .iter()
+            .map(|a| a.session.as_str())
+            .collect();
+        assert_eq!(sessions, ["s1"], "only the hooks' word");
+        app.serve(Request::Agent(agent(Ended, "Ended")));
+        app.dock.sessions[0].send_line("");
+        until(&mut app, "heard", |app| app.agents.needing_you() == 1);
+        assert_eq!(
+            app.agents.running[0].agent, "Claude Code",
+            "named as Cellix names it"
+        );
     }
 
     #[test]

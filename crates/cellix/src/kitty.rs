@@ -22,6 +22,8 @@ pub enum Piece {
     Text(Vec<u8>),
     /// A graphics command, without its `ESC _ G` and terminator.
     Graphics(Vec<u8>),
+    /// What the program says of itself (OSC 7501), without its `ESC ] 7501 ;` and terminator.
+    Status(Vec<u8>),
 }
 
 #[derive(Clone, Copy, Default)]
@@ -32,13 +34,23 @@ enum State {
     Underscore,
     Graphics,
     GraphicsEscape,
+    /// After `ESC ]`, how much of `7501;` has come so far.
+    Osc(usize),
+    Status,
+    StatusEscape,
 }
 
-/// Finds graphics commands in a stream that can split anywhere.
+/// What starts a status report, after `ESC ]`.
+const STATUS_START: &[u8] = b"7501;";
+/// The longest status report kept: a message and a title, in base64, and a few words.
+const STATUS_MOST: usize = 8 * 1024;
+
+/// Finds graphics commands and status reports in a stream that can split anywhere.
 #[derive(Default)]
 pub struct Scanner {
     state: State,
     command: Vec<u8>,
+    status: Vec<u8>,
 }
 
 impl Scanner {
@@ -50,9 +62,63 @@ impl Scanner {
                 State::Text if byte == 0x1b => self.state = State::Escape,
                 State::Text => text.push(byte),
                 State::Escape if byte == b'_' => self.state = State::Underscore,
+                State::Escape if byte == b']' => self.state = State::Osc(0),
                 State::Escape => {
                     text.extend([0x1b, byte]);
                     self.state = State::Text;
+                }
+                State::Osc(matched) if byte == STATUS_START[matched] => {
+                    self.state = State::Osc(matched + 1);
+                    if matched + 1 == STATUS_START.len() {
+                        if !text.is_empty() {
+                            pieces.push(Piece::Text(std::mem::take(&mut text)));
+                        }
+                        self.status.clear();
+                        self.state = State::Status;
+                    }
+                }
+                // Any other OSC, as a title, goes on to the terminal emulator as it came.
+                State::Osc(matched) => {
+                    text.extend([0x1b, b']']);
+                    text.extend(&STATUS_START[..matched]);
+                    if byte == 0x1b {
+                        self.state = State::Escape;
+                    } else {
+                        text.push(byte);
+                        self.state = State::Text;
+                    }
+                }
+                State::Status if byte == 0x07 => {
+                    pieces.push(Piece::Status(std::mem::take(&mut self.status)));
+                    self.state = State::Text;
+                }
+                State::Status if byte == 0x1b => self.state = State::StatusEscape,
+                // CAN and SUB cancel a sequence.
+                State::Status if byte == 0x18 || byte == 0x1a => {
+                    self.status.clear();
+                    self.state = State::Text;
+                }
+                State::Status => {
+                    if self.status.len() < STATUS_MOST {
+                        self.status.push(byte);
+                    }
+                }
+                State::StatusEscape if byte == b'\\' => {
+                    pieces.push(Piece::Status(std::mem::take(&mut self.status)));
+                    self.state = State::Text;
+                }
+                // An escape that doesn't end it starts something else: the report was cut off.
+                State::StatusEscape => {
+                    self.status.clear();
+                    match byte {
+                        b'_' => self.state = State::Underscore,
+                        b']' => self.state = State::Osc(0),
+                        0x1b => self.state = State::Escape,
+                        _ => {
+                            text.extend([0x1b, byte]);
+                            self.state = State::Text;
+                        }
+                    }
                 }
                 State::Underscore if byte == b'G' => {
                     if !text.is_empty() {
@@ -413,7 +479,7 @@ mod tests {
                 .iter()
                 .flat_map(|p| match p {
                     Piece::Text(t) => t.clone(),
-                    Piece::Graphics(_) => Vec::new(),
+                    Piece::Graphics(_) | Piece::Status(_) => Vec::new(),
                 })
                 .collect();
             assert_eq!(text, b"one\x1b[1mtwo", "split at {split}");
@@ -431,6 +497,56 @@ mod tests {
         assert_eq!(
             pieces,
             [Piece::Text(b"\x1b_Xother\x1b\\\x1b]0;t\x07".to_vec())]
+        );
+        // Titles and links that start as a status report would are only titles and links.
+        for other in [
+            &b"\x1b]7;file://h/p\x07"[..],
+            b"\x1b]75;x\x1b\\",
+            b"\x1b]7500;x\x07",
+            b"\x1b]75010;x\x07",
+            b"\x1b]7\x1b[1m",
+        ] {
+            let mut scanner = Scanner::default();
+            let text: Vec<u8> = other
+                .iter()
+                .flat_map(|byte| scanner.feed(&[*byte]))
+                .flat_map(|piece| match piece {
+                    Piece::Text(text) => text,
+                    _ => panic!("{piece:?} from {other:?}"),
+                })
+                .collect();
+            assert_eq!(text, other);
+        }
+    }
+
+    #[test]
+    fn status_reports_come_out_of_the_stream_wherever_it_splits() {
+        let stream = b"a\x1b]7501;state=working:app=build\x1b\\b\x1b]7501;state=idle\x07c";
+        for split in 0..stream.len() {
+            let mut scanner = Scanner::default();
+            let mut pieces = scanner.feed(&stream[..split]);
+            pieces.extend(scanner.feed(&stream[split..]));
+            let mut text = Vec::new();
+            let mut reports = Vec::new();
+            for piece in pieces {
+                match piece {
+                    Piece::Text(t) => text.extend(t),
+                    Piece::Status(s) => reports.push(String::from_utf8(s).unwrap()),
+                    Piece::Graphics(_) => panic!(),
+                }
+            }
+            assert_eq!(text, b"abc", "split at {split}");
+            assert_eq!(reports, ["state=working:app=build", "state=idle"]);
+        }
+        // One cut off by another escape is dropped, and what follows it still counts.
+        let mut scanner = Scanner::default();
+        let pieces = scanner.feed(b"\x1b]7501;state=bl\x1b[1mx\x1b]7501;state=done\x07");
+        assert_eq!(
+            pieces,
+            [
+                Piece::Text(b"\x1b[1mx".to_vec()),
+                Piece::Status(b"state=done".to_vec())
+            ]
         );
     }
 
