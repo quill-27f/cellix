@@ -33,6 +33,7 @@ pub mod pane;
 mod panels;
 mod pdfview;
 pub mod plugin;
+mod prof;
 mod program;
 mod recent;
 mod rendered;

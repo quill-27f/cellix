@@ -961,6 +961,47 @@ fn the_screen_is_written_as_text_for_the_harness() {
     screen.wait_exit();
 }
 
+/// `CELLIX_PROF` asks for a line a second of what the loop did: the first frames, drawn for
+/// the window's size, what a key brings, and the bytes the terminal was sent.
+#[test]
+fn the_counters_say_what_the_loop_did() {
+    let dir = project();
+    let told = tempfile::tempdir().unwrap();
+    let file = told.path().join("prof.log");
+    let mut screen = Screen::start_with(dir.path(), &["hello.txt"], &[("CELLIX_PROF", &file)]);
+    screen.wait_for("hello from a file");
+    let sum = |key: &str| -> u64 {
+        let text = std::fs::read_to_string(&file).unwrap_or_default();
+        let words = text.lines().flat_map(|line| line.split(' '));
+        let values = words.filter_map(|word| word.strip_prefix(&format!("{key}=")));
+        values.filter_map(|value| value.parse::<u64>().ok()).sum()
+    };
+    let deadline = Instant::now() + WAIT;
+    while sum("draws") == 0 || sum("bytes") == 0 {
+        assert!(
+            Instant::now() < deadline,
+            "no counts: {:?}",
+            std::fs::read_to_string(&file)
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(sum("wakes") >= sum("draws"), "a frame takes a wake");
+    assert!(sum("resize") >= 1, "the first frame is the window's");
+    assert!(sum("presents") >= 1);
+    // A key that moves the caret is a frame drawn for input, and it's counted.
+    screen.send(b"\x1b[B");
+    while sum("input") == 0 {
+        assert!(
+            Instant::now() < deadline,
+            "no input: {:?}",
+            std::fs::read_to_string(&file)
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    screen.send(b"\x11");
+    screen.wait_exit();
+}
+
 /// Closing the window is how a session often ends. Cellix finishes as it does on Quit: an
 /// unsent comment is kept for next time, and the socket goes. On Windows that's a console
 /// handler; elsewhere the hang-up.

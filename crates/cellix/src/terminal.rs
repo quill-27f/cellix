@@ -28,6 +28,7 @@ use crossterm::terminal::{
 };
 
 use crate::App;
+use crate::prof::{Cause, Causes, Phase};
 use crate::workspaces::{Workspace, Workspaces};
 
 /// Set when the terminal hangs up or Cellix is asked to stop. Left to their default, those
@@ -989,9 +990,14 @@ pub fn run(options: Options) -> io::Result<()> {
     let mut display = Display::detect(settings.tier.as_deref(), smooth, rows)?;
     display.fit_to(size()?.1);
     let mut backend = display.backend();
-    let mut out = io::stdout();
+    // Counted, for `CELLIX_PROF`: an addition a write, whether or not it's on.
+    let mut out = crate::prof::Counted::new(io::stdout());
     let mut slow = crate::slow::Log::start();
     let mut phases = crate::slow::Phases::default();
+    let mut prof = crate::prof::Prof::start();
+    // Why the next frame is drawn, for the counters.
+    let mut causes = Causes::default();
+    causes.add(Cause::Resize);
     let mut last_present = Instant::now();
     let look = Rc::new(std::cell::RefCell::new(Look {
         measure: display.measure(),
@@ -1080,6 +1086,12 @@ pub fn run(options: Options) -> io::Result<()> {
     #[allow(clippy::redundant_closure_call)]
     let ended = (|| -> io::Result<()> {
         loop {
+            if let Some(prof) = &mut prof {
+                prof.wake();
+                prof.written(out.total());
+                prof.worked(backend.take_work());
+                prof.flush(Instant::now());
+            }
             // Polled as well as signalled: a resize during slow startup is otherwise lost.
             let lines = size()?;
             if display.fit_to(lines.1) {
@@ -1093,6 +1105,7 @@ pub fn run(options: Options) -> io::Result<()> {
                 backend.invalidate();
                 shown = None;
                 redraw = true;
+                causes.add(Cause::Resize);
             }
             let now = display.grid_size(lines);
             if now != spaces.size() {
@@ -1105,6 +1118,7 @@ pub fn run(options: Options) -> io::Result<()> {
                 cell_asked = Some(Instant::now() + CELL_SETTLE);
                 backend.invalidate();
                 redraw = true;
+                causes.add(Cause::Resize);
             }
             // Its pixels can change with its cells as they were: a font size that keeps the
             // grid, a move to a display of another density, a size passed on late over SSH.
@@ -1133,6 +1147,7 @@ pub fn run(options: Options) -> io::Result<()> {
                         backend.invalidate();
                         shown = None;
                         redraw = true;
+                        causes.add(Cause::Resize);
                     }
                 }
             }
@@ -1141,11 +1156,13 @@ pub fn run(options: Options) -> io::Result<()> {
                 backend.invalidate();
                 shown = None;
                 redraw = true;
+                causes.add(Cause::Resize);
             }
             if let Some(on) = spaces.app_mut().take_smooth_change() {
                 display.set_smooth(on);
                 backend = display.backend();
                 redraw = true;
+                causes.add(Cause::Resize);
             }
             if let Some(times) = spaces.app_mut().take_row_height_change() {
                 // Rows of another height: everything is measured and drawn again, in a
@@ -1164,6 +1181,7 @@ pub fn run(options: Options) -> io::Result<()> {
                 backend.invalidate();
                 shown = None;
                 redraw = true;
+                causes.add(Cause::Resize);
             }
             let frame = frame_now(redraw, turning, shown.is_some(), Instant::now());
             if let (Frame::Step, Some(grid)) = (frame, shown.as_mut()) {
@@ -1183,6 +1201,11 @@ pub fn run(options: Options) -> io::Result<()> {
                 let started = Instant::now();
                 spaces.draw(&mut grid);
                 phases.draw = started.elapsed();
+                if let Some(prof) = &mut prof {
+                    prof.drew(causes);
+                    prof.took(Phase::Draw, phases.draw);
+                }
+                causes = Causes::default();
                 let started = Instant::now();
                 if let (Some((area, rows)), Some(from)) = (spaces.app_mut().take_scroll(), &shown) {
                     backend.scroll(from, &grid, area, rows, &mut out)?;
@@ -1190,10 +1213,17 @@ pub fn run(options: Options) -> io::Result<()> {
                 // Under a scroll the page can wait, so the time goes on moving it.
                 if backend.gliding().is_none() || last_present.elapsed() >= SCROLL_PRESENT {
                     backend.set_lines(lines.1);
+                    let mark = out.total();
                     backend.present(&grid, &mut out)?;
+                    if let Some(prof) = &mut prof {
+                        prof.presented(out.total() - mark);
+                    }
                     last_present = Instant::now();
                 }
                 phases.present = started.elapsed();
+                if let Some(prof) = &mut prof {
+                    prof.took(Phase::Present, phases.present);
+                }
                 slow.note(&phases);
                 phases = crate::slow::Phases::default();
                 foot = backend.foot_drops(grid.height(), grid.foot);
@@ -1387,20 +1417,32 @@ pub fn run(options: Options) -> io::Result<()> {
                     shown = None;
                 }
                 phases.events += started.elapsed();
+                if let Some(prof) = &mut prof {
+                    prof.took(Phase::Events, started.elapsed());
+                }
                 redraw = true;
+                causes.add(Cause::Input);
             } else if last_tick.elapsed() >= TICK {
                 let started = Instant::now();
                 last_tick = started;
                 spaces.handle(Event::Tick);
                 phases.events += started.elapsed();
+                if let Some(prof) = &mut prof {
+                    prof.took(Phase::Events, started.elapsed());
+                }
                 redraw = true;
+                causes.add(Cause::Tick);
             }
             let started = Instant::now();
             if spaces.poll() {
                 lively = started;
                 redraw = true;
+                causes.add(Cause::Poll);
             }
             phases.poll += started.elapsed();
+            if let Some(prof) = &mut prof {
+                prof.took(Phase::Poll, started.elapsed());
+            }
             if !spaces.notifications.is_empty() {
                 for (title, body) in spaces.notifications.drain(..) {
                     let bytes = cellix_term::notification(notice, &title, &body, inside_tmux);
@@ -1411,7 +1453,10 @@ pub fn run(options: Options) -> io::Result<()> {
             if backend.gliding().is_some() {
                 backend.glide(Instant::now(), &mut out)?;
                 // Arrived, so the page underneath takes over.
-                redraw |= backend.gliding().is_none();
+                if backend.gliding().is_none() {
+                    redraw = true;
+                    causes.add(Cause::Scroll);
+                }
             }
         }
         Ok(())

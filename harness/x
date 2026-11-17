@@ -11,6 +11,10 @@
 #   harness/x mux              real tmux and Zellij tests (slower, ignored by check)
 #   harness/x tex              papers built by latexmk and pdflatex, with tectonic hidden
 #                              (needs TeX Live; ignored by check, run in CI)
+#   harness/x perf [baseline]  CPU, bytes and frames of a release build while idle, with a
+#                              side-pane shell printing and with tabs printing behind it,
+#                              against the last release (PERF_BASELINE, else Homebrew's);
+#                              PERF_BUILD=debug measures the debug build, for counts only
 #   harness/x verify           check, then prove every passing feature has its test
 #   harness/x next             the next unfinished feature
 #   harness/x status           machine state, feature counts, recent guarded jobs
@@ -53,6 +57,19 @@ case $task in
     fi ;;
   mux) guard mux cargo test -p cellix --test mux -- --ignored --test-threads=1 "$@" ;;
   tex) guard tex cargo test -p cellix --test tex -- --ignored --test-threads=1 "$@" ;;
+  perf)
+    # A release build, as people run, measured with nothing else of the guard's running. A
+    # debug build's CPU says little, but its counts of wakes, frames and bytes are the same.
+    if [ "${PERF_BUILD:-release}" = debug ]; then
+      guard build cargo build -q -p cellix || exit $?
+      binary=$root/target/debug/cellix
+    else
+      guard build cargo build -q --release -p cellix || exit $?
+      binary=$root/target/release/cellix
+    fi
+    baseline=${1:-${PERF_BASELINE:-}}
+    if [ -z "$baseline" ] && [ -x /opt/homebrew/bin/cellix ]; then baseline=/opt/homebrew/bin/cellix; fi
+    guard perf python3 -I harness/live/perf.py "$binary" "$baseline" ;;
   verify)
     # Results come from the gate's own log, and its exit from PIPESTATUS, so nothing that
     # reads this output can turn a failure into a pass.
@@ -100,5 +117,5 @@ case $task in
   notes) python3 -I harness/notes.py "$@" ;;
   reserve-name)
     cd harness/reserve-crate && exec ../guard.sh --label reserve -- cargo publish "$@" ;;
-  *) sed -n '2,17p' "$0" | sed 's/^# *//'; exit 2 ;;
+  *) sed -n '2,23p' "$0" | sed 's/^# *//'; exit 2 ;;
 esac

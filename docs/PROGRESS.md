@@ -2773,3 +2773,20 @@ Item 15 of the herdr work for 0.11.0: three more agents connected the way Claude
 - Tour: `51-agent-list-more` (stand-ins on the PATH put all three under START) and `51-agent-copilot-asks` (Copilot's stand-in, started from there, runs the hooks setup wrote and needs you). Looked at both.
 - Their marks (the coordinator's word: a plain rounded square in the quiet text colour) wait for the agent marks the motion track is adding; START has no marks yet.
 - Unverified: none of the three has been run with Cellix, and none is installed here. Whether OpenCode 2's plugin loader still takes a plugin of this shape (its docs say the old shape is supported), whether Copilot CLI sends Claude Code's field names to hooks named as Claude Code's (its reference says so), whether Cursor's CLI runs all of these hooks (its docs don't say which the CLI runs), and whether `--resume` takes Cursor's `conversation_id`. Settings has no Install for them yet: only `cellix setup`.
+## Counting what the loop does (2026-11-17)
+
+Item 6 of herdr's performance study, first, so what comes after is measured.
+
+- `CELLIX_PROF=1` (or a path) writes a line a second of what the main loop did (`prof.rs`): wakes, frames drawn and why (input, output on screen, tick, poll, resize, scroll, out of sight), presents and how many sent anything, tiles sent and rows rasterized (`Backend::take_work`), bytes written (the terminal's output is counted always, an addition a write), and average and longest time per phase. Off, it's a `None`.
+- `harness/x perf` runs a release build (or `PERF_BUILD=debug`) and the last release in a headless terminal, through the guard: `idle`, `visible` (a side-pane shell printing in place at 30 Hz) and `hidden` (four tabs behind the front one at 60 Hz each), warm-up then sample, rounds in swapped order, writers checked (`harness/live/perf.py`, `perf_producer.py`). Not part of `check`.
+- Before, the 0.10.2 code with these counters, release build, 170x46 on the pixel tier, one round of 6 s (the guard was busy, so run beside other work: CPU is rough, the counts aren't):
+
+  | case | wakes/s | draws/s | sent/s | tiles/s | bytes/s | CPU |
+  |---|---|---|---|---|---|---|
+  | idle | 19.6 | 2.0 (tick) | 2.0 | 0 | 44 | 0.5% |
+  | visible | 103 | 31.5 (30 poll, 2 tick) | 31.5 | 30 | 265,000 | 8% |
+  | hidden | 100 | 98 (poll) | 98 | 0 | 2,200 | 11.5% |
+
+  Idle draws and sends twice a second for nothing; output nobody can see draws 98 frames a second, each sending only an empty synchronized update; a lively session keeps the loop at 100 wakes a second.
+- Tests: `the_counters_say_what_the_loop_did` (the real binary: counts appear, the first frame is a resize, a key is input), `the_counters_write_a_line_a_second_of_what_the_loop_did`, `the_counters_are_off_unless_asked`.
+- Next: an idle window draws nothing.

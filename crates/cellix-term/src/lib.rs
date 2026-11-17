@@ -18,6 +18,15 @@ use std::time::{Duration, Instant};
 
 use cellix_render::{Grid, Rect};
 
+/// What a backend did since it was last asked, for the counters `CELLIX_PROF` keeps.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Work {
+    /// Tiles sent to the terminal.
+    pub tiles: u64,
+    /// Rows rasterized.
+    pub rows: u64,
+}
+
 /// Presents a grid. Implementations send only what changed since the last call.
 pub trait Backend {
     fn present(&mut self, grid: &Grid, out: &mut dyn Write) -> io::Result<()>;
@@ -63,5 +72,10 @@ pub trait Backend {
     /// it lands, which isn't the row that begins there.
     fn foot_drops(&self, _rows: u16, _foot: u16) -> Vec<usize> {
         Vec::new()
+    }
+
+    /// What it has done since it was last asked: tiles sent and rows rasterized.
+    fn take_work(&mut self) -> Work {
+        Work::default()
     }
 }

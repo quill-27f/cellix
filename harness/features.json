@@ -5514,5 +5514,12 @@
     "title": "OpenCode, Copilot CLI and Cursor's agent CLI report through Cellix's hooks (working, needs you where they can say it, done, their session for Resume), set up only by cellix setup, and are offered under START where installed",
     "test": "stand_ins_for_copilot_and_cursor_report_through_the_hooks_setup_installed",
     "passes": true
+  },
+  {
+    "id": "loop-counters",
+    "milestone": 15,
+    "title": "CELLIX_PROF writes a line a second of the main loop's wakes, frames by cause, presents, tiles, rows, bytes and time per phase; harness/x perf measures idle, visible and hidden output",
+    "test": "the_counters_say_what_the_loop_did",
+    "passes": true
   }
 ]

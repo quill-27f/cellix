@@ -8,6 +8,8 @@ use crate::Backend;
 #[derive(Default)]
 pub struct CellBackend {
     shown: Option<Grid>,
+    /// What it has done since the counters last asked: rows written count as rows.
+    work: crate::Work,
 }
 
 fn sgr(style: Style, out: &mut Vec<u8>) {
@@ -39,6 +41,9 @@ impl Backend for CellBackend {
             None => grid.diff(&Grid::new(0, 0, Style::default())),
         };
         let mut last = None;
+        let mut rows = runs.iter().map(|run| run.y).collect::<Vec<_>>();
+        rows.dedup();
+        self.work.rows += rows.len() as u64;
         for run in runs {
             let _ = write!(bytes, "\x1b[{};{}H", run.y + 1, run.x + 1);
             for x in run.x..run.x + run.len {
@@ -68,6 +73,10 @@ impl Backend for CellBackend {
 
     fn invalidate(&mut self) {
         self.shown = None;
+    }
+
+    fn take_work(&mut self) -> crate::Work {
+        std::mem::take(&mut self.work)
     }
 
     /// Has the terminal shift the band of rows the scrolled area spans, as vim and Claude

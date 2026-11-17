@@ -107,6 +107,25 @@ tile of about 14 KB. Inside Claude Code's pane a spinner is the still dot. The m
 the pictures on screen, so each step there would be its row's picture crossing again, and by
 file the whole pane's picture written again; Claude Code has a spinner of its own.
 
+### Counting what the loop does
+
+`slow-frames.log` notes frames slow enough to feel and nothing else, which is blind to a busy
+core made of many cheap frames. `CELLIX_PROF=1` (or a path) writes a line a second of what the
+main loop did: how often it woke, the frames it drew and why (input, a session on screen
+printing, the tick, something else coming back, a resize, a glide arriving, sessions out of
+sight), the presents and how many of them sent anything, tiles sent, rows rasterized, bytes
+written, and the average and longest time in each phase. It's off unless asked, and off it's
+an `Option` that's `None`; the bytes are counted always, since that's an addition a write.
+
+`harness/x perf` builds a release binary and runs it, and the last release (Homebrew's, or
+`PERF_BASELINE`), in a headless terminal answered as Ghostty answers, with a throwaway home
+and project. Three cases: `idle` (a file open, nothing happening), `visible` (a shell in the
+side pane printing a line in place 30 times a second) and `hidden` (four shells in tabs
+behind the one in front, 60 times a second each). Each warms up for 3 seconds and is measured
+for 10, in two rounds of swapped order; a writer that printed much less than it should fails
+the run, so back-pressure can't pass for a saving. It runs through the guard, so nothing else
+of the guard's runs meanwhile, and isn't part of `check`.
+
 ### No GPU renderer
 
 Output would have to be read back to the CPU before it could be sent to the terminal, one

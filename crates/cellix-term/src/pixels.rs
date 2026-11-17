@@ -136,6 +136,8 @@ pub struct PixelBackend<R> {
     lines: u16,
     /// How many rows the grid last shown had at its foot.
     foot: u16,
+    /// What it has done since the counters last asked.
+    work: crate::Work,
 }
 
 /// What a row looks like, as a key: rows with the same key draw the same pixels.
@@ -219,6 +221,7 @@ impl<R: Rasterizer> PixelBackend<R> {
             cell: None,
             own: None,
             lines: 0,
+            work: crate::Work::default(),
         }
     }
 
@@ -464,6 +467,7 @@ impl<R: Rasterizer> PixelBackend<R> {
             .collect();
         if keys.iter().any(|key| !self.tiles.contains_key(key)) {
             let image = self.rasterizer.row(grid, y);
+            self.work.rows += 1;
             let cols = grid.width();
             let cell = image.width / cols.max(1) as usize;
             self.cell = Some((cell as i32, image.height as i32));
@@ -480,6 +484,7 @@ impl<R: Rasterizer> PixelBackend<R> {
                 let part = crop(&image, from as usize * cell, right);
                 let id = self.new_id();
                 self.transmit(out, id, &part);
+                self.work.tiles += 1;
                 if self.placement == Placement::Placeholder {
                     let wide = to - from;
                     self.apc(out, &format!("a=p,U=1,i={id},c={wide},r=1,q=2"), b"");
@@ -737,6 +742,10 @@ impl<R: Rasterizer> Backend for PixelBackend<R> {
 
     fn foot_drops(&self, rows: u16, foot: u16) -> Vec<usize> {
         self.drops(rows, foot)
+    }
+
+    fn take_work(&mut self) -> crate::Work {
+        std::mem::take(&mut self.work)
     }
 }
 
