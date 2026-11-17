@@ -2801,7 +2801,6 @@ Item 3 of herdr's performance study.
 - Tests: `an_idle_window_draws_and_sends_nothing` (the real binary on a PTY: seconds five to seven of an idle window send no byte and draw at most the heartbeat), `an_idle_tick_leaves_the_marks_and_a_reload_moves_them`, `an_idle_tick_draws_only_its_heartbeat`, `an_unchanged_frame_sends_nothing`, `an_unchanged_frame_writes_nothing`.
 - Unverified: something drawn from state a tick changes that the marks don't name now shows at the heartbeat, up to two seconds late, where it showed within half a second. None is known.
 
-
 ## Agents start, message and wait for each other (2026-11-17)
 
 Item 4 of the herdr work for the next version (the a2a track), on `next`, not released.
@@ -2942,3 +2941,17 @@ Item 6 of the herdr round, on the reference board's panel 4.
 - Tests: `the_agents_list_puts_who_needs_you_first`, `how_long_ago_is_said_in_a_few_letters`, `a_helper_stands_under_the_agent_that_started_it`.
 - Changed with a decision: `stand_ins_for_copilot_and_cursor_report_through_the_hooks_setup_installed` (item 15's, landed just before) waited for the word "Finished" under Cursor CLI. The list no longer writes a state's own word under a row, as the board has it: a finished agent stands under Done, or under Idle when its tab was in front as it finished, which is the case there. It waits for "IDLE 1" and for nothing to be under Working. What a row says under it is what it asks while it needs you, or anything more than its state's own word, as a program's "Working · 40%" (item 9's test has that).
 - Tour: `m2-agents-urgency`, its hover, light and cells, from agents that report through Cellix's real hook from outside the pane.
+
+
+
+## Parents and children (2026-11-17)
+
+Item 5 of the herdr work (the a2a track): the backend. The nesting in the Agents list waits for the list by urgency (item 6), which hasn't landed.
+
+- The parent is the agent session the caller runs in. When a child needs the person, stops on an error or ends (its tab closed too), Cellix types a note into the parent, `<cellix>two needs you (permission). See: cellix agent read two</cellix>`, once each time (`team::alert_of`, `App::tell_parents`). Not about a child the parent is waiting on, not while the parent asks the person something, not into a command, and held while the person types there, as a message is. A read of the child counts as hearing of it.
+- `wait --children all|any`, which item 4 had, now has a test.
+- Children end with their parent, when it ends or its tab closes (`App::end_orphans`), unless started with `--outlive-parent`; those go on with no parent.
+- The guide says both, and DESIGN.md has them under "Agents starting agents".
+- Test: `a_parent_hears_of_its_children_waits_for_them_and_takes_them_with_it` (any, then all; no note about a child waited on; a note when not; none while the parent asks; children stopped with it, the one that outlives it on its own).
+- Unverified: with real agents. Several notes at once go in as one paste of several lines; a program that doesn't ask for bracketed paste would take each line as its own message.
+- Next: item 8, the reviewer; then the nesting and peek once item 6 lands.

@@ -1287,6 +1287,17 @@ own hooks; a program with none is working until it ends.
   session, at once if it isn't working, and checks in after 180 s with exit 124: still working,
   wait again. After `send --wait`, the agent's last word from before the message doesn't count.
 
+An agent started by another is that one's child; the parent is the session the caller runs in
+(an agent's, not a shell's: a person in a shell starts agents of their own). `wait --children
+all` lasts until none of the caller's children is working, and `--children any` until one has
+stopped since the caller last heard of it. When a child needs the person, stops on an error or
+ends, Cellix types a note into its parent, `<cellix>review needs you (permission). See: cellix
+agent read review</cellix>`, once for each time it happens: not about a child the parent is
+waiting on (the wait tells it), not while the parent itself is asking the person something, not
+into a command, and with the same hold as a message while the person types there. Reading the
+child counts as hearing of it. Children end with their parent, when it ends or its tab is
+closed, unless started with `--outlive-parent`, which then go on as agents of their own.
+
 `cellix agent --skill` prints a short guide for agents, and the same guide ships as a skill with
 the Claude Code plugin, the Codex plugin and the Gemini CLI extension, which all read
 `skills/<name>/SKILL.md`; Gemini's GEMINI.md also points to it.

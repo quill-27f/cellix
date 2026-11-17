@@ -121,6 +121,33 @@ pub(super) struct Pending {
     reply: Sender<String>,
     until: Instant,
     pub(super) step: Step,
+    /// A note Cellix types into a parent of its own accord, which nobody waits on.
+    note: bool,
+}
+
+impl Pending {
+    /// The agent a message is on its way to.
+    fn target(&self) -> Option<&str> {
+        match &self.step {
+            Step::Message { name, .. } => Some(name),
+            _ => None,
+        }
+    }
+
+    /// Whether this is the caller `parent` waiting on its child `child`, or on its children.
+    fn waits_on(&self, parent: &str, child: &str) -> bool {
+        self.caller.as_deref() == Some(parent)
+            && match &self.step {
+                Step::Wait {
+                    on: On::One(name), ..
+                } => name == child,
+                Step::Wait {
+                    on: On::Children(_),
+                    ..
+                } => true,
+                _ => false,
+            }
+    }
 }
 
 pub(super) enum Step {
@@ -180,6 +207,13 @@ pub(crate) struct Team {
     stops: HashMap<String, u64>,
     /// How many of a child's stops its parent has heard of, by (parent, child).
     heard_by: HashMap<(String, String), u64>,
+    /// What each member was doing at the last look, by its word, so a change is seen once.
+    was: HashMap<String, &'static str>,
+    /// What each member did that its parent should hear, counted, with the note that says so:
+    /// it needs the person, it stopped on an error, or it ended.
+    alerts: HashMap<String, (u64, String)>,
+    /// How many of a child's alerts its parent has been told of, or saw, by (parent, child).
+    told: HashMap<(String, String), u64>,
     /// Agents here may start others without asking, as the person said.
     pub(super) always: bool,
     /// How long a message waits after the person's last key, and for a prompt they've begun.
@@ -198,6 +232,9 @@ impl Default for Team {
             was_working: HashMap::new(),
             stops: HashMap::new(),
             heard_by: HashMap::new(),
+            was: HashMap::new(),
+            alerts: HashMap::new(),
+            told: HashMap::new(),
             always: false,
             quiet: QUIET,
             draft: DRAFT,
@@ -215,9 +252,51 @@ impl Team {
 
     /// `parent` has heard everything so far of `child`.
     fn heard_of(&mut self, parent: &str, child: &str) {
+        let key = (parent.to_string(), child.to_string());
         let stops = self.stops.get(child).copied().unwrap_or(0);
-        self.heard_by
-            .insert((parent.to_string(), child.to_string()), stops);
+        self.heard_by.insert(key.clone(), stops);
+        let alerts = self.alerts.get(child).map_or(0, |(count, _)| *count);
+        self.told.insert(key, alerts);
+    }
+
+    /// Notes what `child` did that its parent should hear.
+    fn alert(&mut self, child: &str, text: String) {
+        let alert = self.alerts.entry(child.to_string()).or_default();
+        *alert = (alert.0 + 1, text);
+    }
+}
+
+/// What kind of thing an agent asking the person wants, in a word or two, from what its hook
+/// said: leave to run something, a plan to look at, or a question.
+fn asked_for(detail: &str) -> &'static str {
+    let lower = detail.to_lowercase();
+    if detail == cellix_agent::hook::PLAN_WAITING {
+        "a plan to review"
+    } else if lower.contains("permission")
+        || lower.starts_with("allow")
+        || lower.contains("asks to run")
+    {
+        "permission"
+    } else {
+        "a question"
+    }
+}
+
+/// What a parent is told of a child that can't tell it itself: it needs the person, it
+/// stopped on an error, or it ended.
+fn alert_of(name: &str, doing: &Doing) -> Option<String> {
+    let read = format!("cellix agent read {name}");
+    match doing {
+        Doing::Asking(what) => Some(format!(
+            "{name} needs you ({}). See: {read}",
+            asked_for(what)
+        )),
+        Doing::Failed(why) => {
+            let why = why.trim_start_matches("Stopped: ");
+            Some(format!("{name} stopped on an error ({why}). See: {read}"))
+        }
+        Doing::Exited => Some(format!("{name} exited. Read: {read}")),
+        _ => None,
     }
 }
 
@@ -325,6 +404,7 @@ impl App {
         self.team
             .heard
             .insert(event.name.clone(), (event.clone(), Instant::now()));
+        self.look_at(index);
     }
 
     /// Takes in what the program in tab `index` said of itself (OSC 7501), as its hooks' word
@@ -342,6 +422,27 @@ impl App {
             ..event.clone()
         };
         self.team.heard.insert(name, (said, Instant::now()));
+        self.look_at(index);
+    }
+
+    /// Notes what has changed in what the member in tab `index` is doing since the last look:
+    /// a stop from working, and asking, failing or ending, each news for its parent once each
+    /// time it happens. Looked at as each report comes, so two in a row are both seen.
+    fn look_at(&mut self, index: usize) {
+        let Some(name) = self.dock.sessions[index].called().map(str::to_string) else {
+            return;
+        };
+        let doing = self.doing(index);
+        let working = doing.working();
+        if self.team.was_working.insert(name.clone(), working) == Some(true) && !working {
+            *self.team.stops.entry(name.clone()).or_default() += 1;
+        }
+        let word = doing.word();
+        if self.team.was.insert(name.clone(), word) != Some(word)
+            && let Some(text) = alert_of(&name, &doing)
+        {
+            self.team.alert(&name, text);
+        }
     }
 
     /// What the agent in tab `index` is doing.
@@ -394,6 +495,7 @@ impl App {
             reply: reply.clone(),
             until,
             step,
+            note: false,
         };
         match call {
             Call::Ls => answer(&reply, Answer::ok(self.team_list())),
@@ -1041,18 +1143,24 @@ impl App {
             self.team.heard.remove(&name);
             self.team.was_working.remove(&name);
             *self.team.stops.entry(name.clone()).or_default() += 1;
+            // One that had already ended was said to have when it did.
+            if self.team.was.remove(&name) != Some(Doing::Exited.word()) {
+                let read = format!("cellix agent read {name}");
+                let text = if gone.exited {
+                    format!("{name} exited. Read: {read}")
+                } else {
+                    format!("{name} was closed. Read: {read}")
+                };
+                self.team.alert(&name, text);
+            }
             self.team.gone.insert(name, gone);
         }
         // Each member that stopped working since the last look is news for its parent.
         for index in 0..self.dock.sessions.len() {
-            let Some(name) = self.dock.sessions[index].called().map(str::to_string) else {
-                continue;
-            };
-            let working = self.doing(index).working();
-            if self.team.was_working.insert(name.clone(), working) == Some(true) && !working {
-                *self.team.stops.entry(name).or_default() += 1;
-            }
+            self.look_at(index);
         }
+        self.end_orphans();
+        self.tell_parents();
         // A card that went unanswered says so, and the next one shows.
         let mut changed = false;
         while self
@@ -1082,6 +1190,105 @@ impl App {
         pending.append(&mut self.team.pending);
         self.team.pending = pending;
         changed
+    }
+
+    /// Types what each parent hasn't heard of its children into it, as one note: when it
+    /// isn't waiting on them already (the wait tells it), isn't asking the person something
+    /// itself, and the person isn't typing in it. A command takes no notes.
+    fn tell_parents(&mut self) {
+        let mut news: std::collections::BTreeMap<String, Vec<(String, u64, String)>> =
+            std::collections::BTreeMap::new();
+        let members = self.dock.sessions.iter().filter_map(|s| s.member.as_ref());
+        let gone = self.team.gone.values().map(|g| &g.member);
+        for member in members.chain(gone) {
+            let Some(parent) = &member.parent else {
+                continue;
+            };
+            let Some((count, text)) = self.team.alerts.get(&member.name) else {
+                continue;
+            };
+            let key = (parent.clone(), member.name.clone());
+            if *count > self.team.told.get(&key).copied().unwrap_or(0) {
+                let child = (member.name.clone(), *count, text.clone());
+                news.entry(parent.clone()).or_default().push(child);
+            }
+        }
+        for (parent, children) in news {
+            let waited = |child: &str| self.team.pending.iter().any(|p| p.waits_on(&parent, child));
+            let (waited, untold): (Vec<_>, Vec<_>) =
+                children.into_iter().partition(|(child, ..)| waited(child));
+            for (child, count, _) in waited {
+                self.team.told.insert((parent.clone(), child), count);
+            }
+            let Some(index) = self.member_index(&parent) else {
+                continue;
+            };
+            let session = &self.dock.sessions[index];
+            let takes_notes = session.member.as_ref().is_some_and(|m| m.kind != "command");
+            if untold.is_empty() || !takes_notes || session.exited {
+                for (child, count, _) in untold {
+                    self.team.told.insert((parent.clone(), child), count);
+                }
+                continue;
+            }
+            let typing = !session
+                .typed
+                .hold(self.team.quiet, self.team.draft)
+                .is_zero();
+            let noting = self
+                .team
+                .pending
+                .iter()
+                .any(|p| p.note && p.target() == Some(parent.as_str()));
+            if typing || noting || matches!(self.doing(index), Doing::Asking(_)) {
+                continue;
+            }
+            let notes: Vec<String> = untold.iter().map(|(_, _, t)| team::note(t)).collect();
+            for (child, count, _) in untold {
+                self.team.told.insert((parent.clone(), child), count);
+            }
+            let (reply, _) = std::sync::mpsc::channel();
+            self.team.pending.push(Pending {
+                caller: None,
+                reply,
+                until: Instant::now() + TAKING,
+                note: true,
+                step: Step::Message {
+                    name: parent,
+                    text: notes.join("\n"),
+                    force: false,
+                    typed: None,
+                    then: Then::Reply(Value::Null),
+                },
+            });
+        }
+    }
+
+    /// Ends the children of a parent that has ended or closed, but those started to outlive
+    /// it, which go on as agents of their own.
+    fn end_orphans(&mut self) {
+        for index in 0..self.dock.sessions.len() {
+            let session = &self.dock.sessions[index];
+            let Some(parent) = session.member.as_ref().and_then(|m| m.parent.clone()) else {
+                continue;
+            };
+            let alive = self
+                .member_index(&parent)
+                .is_some_and(|i| !self.dock.sessions[i].exited);
+            if alive {
+                continue;
+            }
+            let session = &mut self.dock.sessions[index];
+            match &mut session.member {
+                Some(member) if member.outlive => member.parent = None,
+                _ if !session.exited => {
+                    session.stop();
+                    let name = session.called().unwrap_or_default().to_string();
+                    self.say(format!("{name} ended with {parent}, which started it"));
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Whether the consent card shows.
@@ -1343,7 +1550,7 @@ mod tests {
             let mode = std::fs::Permissions::from_mode(0o755);
             std::fs::set_permissions(&fake, mode).unwrap();
         }
-        let mut app = App::new(dir.path().to_path_buf(), (160, 40));
+        let mut app = App::new(dir.path().to_path_buf(), (240, 40));
         let fake = fake.display().to_string();
         app.agent_program = Some(fake.clone());
         app.team.quiet = Duration::from_millis(100);
@@ -1412,9 +1619,10 @@ mod tests {
         }
     }
 
+    /// What the agent called `name` shows, its rows run together, as a long line wraps.
     fn lines_of(app: &App, name: &str) -> String {
         let index = app.member_index(name).expect("that agent");
-        app.dock.sessions[index].lines().join("\n")
+        app.dock.sessions[index].lines().concat()
     }
 
     /// Waits for `want` on the screen of the agent called `name`.
@@ -1651,7 +1859,7 @@ mod tests {
         assert_eq!(answered(&mut app, &allowed).code, code::OK);
 
         // Remembered with the folder, so the next Cellix here doesn't ask either.
-        let mut next = App::new(dir.path().to_path_buf(), (160, 40));
+        let mut next = App::new(dir.path().to_path_buf(), (240, 40));
         next.agent_program = Some(fake.clone());
         next.restore_state();
         let lead = super::tests::lead(&mut next, &fake);
@@ -1661,5 +1869,111 @@ mod tests {
         says(&mut next, "three", AgentState::Idle, "Ready");
         assert_eq!(answered(&mut next, &third).code, code::OK);
         let _ = std::fs::remove_dir_all(crate::hold::folder_of(dir.path()));
+    }
+
+    /// Polls for `time`, and says `name` never showed `unwanted`.
+    fn never_shows(app: &mut App, name: &str, unwanted: &str, time: Duration) {
+        let until = Instant::now() + time;
+        while Instant::now() < until {
+            app.poll();
+            let text = lines_of(app, name);
+            assert!(!text.contains(unwanted), "{unwanted:?} in {name}:\n{text}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_parent_hears_of_its_children_waits_for_them_and_takes_them_with_it() {
+        let (dir, mut app, fake) = project();
+        app.team.always = true;
+        let lead = lead(&mut app, &fake);
+        let start = |app: &mut App, name: &str, outlive_parent: bool| {
+            let child = Call::Run {
+                name: Some(name.into()),
+                cwd: dir.path().display().to_string(),
+                program: vec!["codex".into()],
+                task: None,
+                outlive_parent,
+            };
+            let started = call(app, &lead, child);
+            shows_in(app, name, "fake agent up");
+            says(app, name, AgentState::Idle, "Ready");
+            assert_eq!(answered(app, &started).code, code::OK);
+        };
+        start(&mut app, "one", false);
+        start(&mut app, "two", false);
+        start(&mut app, "kept", true);
+
+        // A wait on its children: the next to stop, then all of them.
+        for name in ["one", "two", "kept"] {
+            says(&mut app, name, AgentState::Working, "Working");
+        }
+        let children = |which| Call::Wait {
+            name: None,
+            children: Some(which),
+            timeout: 30,
+        };
+        let any = call(&mut app, &lead, children(Children::Any));
+        unanswered(&mut app, &any, Duration::from_millis(300));
+        says(&mut app, "one", AgentState::Idle, "Finished");
+        let news = answered(&mut app, &any);
+        let list = news.out["children"].as_array().unwrap().clone();
+        let one = list.iter().find(|c| c["name"] == "one").expect("one");
+        assert_eq!(one["state"], "done", "{news:?}");
+        let all = call(&mut app, &lead, children(Children::All));
+        unanswered(&mut app, &all, Duration::from_millis(300));
+        // Nothing is typed into a parent about a child it's waiting on: the wait tells it.
+        says(&mut app, "two", AgentState::NeedsYou, "Allow Bash?");
+        says(&mut app, "kept", AgentState::Idle, "Finished");
+        let over = answered(&mut app, &all);
+        assert_eq!(over.out["reason"], "children", "{over:?}");
+        never_shows(
+            &mut app,
+            "claude-1",
+            "needs you",
+            Duration::from_millis(500),
+        );
+
+        // Not waiting, it's told as a note when a child needs the person.
+        says(&mut app, "two", AgentState::Working, "Working");
+        says(&mut app, "two", AgentState::NeedsYou, "Allow Bash?");
+        let note = "got: <cellix>two needs you (permission). See: cellix agent read two</cellix>";
+        shows_in(&mut app, "claude-1", note);
+
+        // While the parent asks the person something itself, no note goes in, and once it's
+        // back at work the note it missed does.
+        says(&mut app, "claude-1", AgentState::NeedsYou, "Allow Edit?");
+        says(&mut app, "one", AgentState::Idle, "Stopped: rate limit");
+        never_shows(
+            &mut app,
+            "claude-1",
+            "one stopped",
+            Duration::from_millis(500),
+        );
+        says(&mut app, "claude-1", AgentState::Working, "Working");
+        let failed = "got: <cellix>one stopped on an error (rate limit). See: cellix agent read one</cellix>";
+        shows_in(&mut app, "claude-1", failed);
+
+        // Children end with their parent, but one started to outlive it, which is its own now.
+        let stop = Call::Stop {
+            name: "claude-1".into(),
+        };
+        let stopping = call(&mut app, &Caller::default(), stop);
+        assert_eq!(answered(&mut app, &stopping).code, code::OK);
+        let running = |app: &App, name: &str| {
+            let index = app.member_index(name);
+            index.is_some_and(|i| app.doing(i) != Doing::Exited)
+        };
+        let deadline = Instant::now() + BACKGROUND;
+        while running(&app, "one") || running(&app, "two") {
+            assert!(Instant::now() < deadline, "the children went on");
+            app.poll();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(running(&app, "kept"));
+        let index = app.member_index("kept").unwrap();
+        let member = app.dock.sessions[index].member.as_ref().unwrap();
+        assert_eq!(member.parent, None, "on its own now");
     }
 }

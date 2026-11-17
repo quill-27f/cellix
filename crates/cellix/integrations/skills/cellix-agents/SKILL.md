@@ -20,7 +20,8 @@ cellix agent run --name review codex "Review src/x.rs only. Read-only; start no 
   `task_sent` is false, the task wasn't typed: read the agent before sending it.
 - The first time an agent starts another in a folder, Cellix asks the person. If they say no
   (exit 5), don't try again; tell your user.
-- Don't let helpers start agents of their own unless you assign that.
+- A helper is your child: it ends when you do, unless started with `--outlive-parent`. Don't
+  let helpers start agents of their own unless you assign that.
 
 ## Wait and read
 
@@ -36,6 +37,9 @@ cellix agent ls                    # every agent here and what it's doing, as JS
   working, so wait again.
 - A wait also ends when a message comes for you (`"reason": "message"`): it's your next input.
 - Read the result before you report it; never assume a helper succeeded.
+- When a helper needs the person, stops on an error or exits, Cellix tells you with a note
+  such as `<cellix>review needs you (permission). See: cellix agent read review</cellix>`,
+  unless you were waiting on it already. Look, and tell your user; don't answer for them.
 
 ## Send
 
