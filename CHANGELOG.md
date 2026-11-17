@@ -9,8 +9,8 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 - A workspace's chip, and a pill in the comments pane, is taller on Airy rows, with room under a tail.
 - A card (the offer to install a language's support, the notice about logout, a stopped session) is closer round its words on Airy rows: a quarter of a row over its title and under its buttons, and no empty row between its words and its buttons.
 - The bell and the power button at the foot are the size of the branch's mark beside them on Airy rows. They were two thirds of it.
-
 - The bar at the foot stands in the middle of the space under the file, and there's less of that space. A row's height is fitted to your window, a pixel or two either side of what Row height asks, so the window's last pixels aren't all left under the bar: up to a whole row of them were.
+- Where the workspaces have a row of their own under the status bar (a narrow window, or many workspaces), the two rows stand evenly in the space under the file: as much over the status bar as between the two and under the workspaces. Only the lower row had been moved down, and all of the space lay between them.
 - There's air between the views at the top of the sidebar and the heading under them (the folder's name and branch, OUTLINE, SOURCE CONTROL): half a row over the heading and half under it. It stood straight under the views' line.
 
 ### Fixed
@@ -18,6 +18,7 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 - What's under the pointer in the bar at the foot has the same room each side of it. The count of problems had its chip start on the mark's own edge and run well past the number, and was the one thing in the bar set at full size.
 - Ask Agent on a row of the Problems tab stood in a box taller than the row's highlight.
 - On the terminal's own row height, a sliver of the branch's mark showed over the bar at the foot.
+- A tooltip over the bar at the foot had part of its shadow drawn apart from it, lower down. On Airy rows it stands at the top of its row, with all of its shadow under it.
 
 ## [0.10.1] - 2026-11-16
 

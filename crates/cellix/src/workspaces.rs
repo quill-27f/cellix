@@ -48,6 +48,11 @@ const STATUS_ROOM: f32 = 72.0;
 /// the two share a row. A rule stands in the middle of it.
 const AFTER: f32 = 2.0;
 /// The button that opens another folder beside this one, and what its tip says.
+/// How far the status bar's words are lowered in their row, and the workspaces raised in
+/// theirs, where the foot is the two of them on rows with room, in rows. The rows stand
+/// evenly apart, but what's drawn in the status bar is 30 px of its 50 and a chip is 37, so
+/// there were 7 to 9 px more between the two than over the first or under the second.
+const PAIR: (f32, f32) = (0.04, 0.06);
 const NEW_WORKSPACE: &str = "New Workspace";
 /// The first screen's way out, beside Open: its word, and how far it stands from the
 /// column's left edge.
@@ -730,14 +735,32 @@ impl Workspaces {
         self.share_row();
         self.app().draw(grid);
         if self.shows_bar() {
+            // With a row of its own under the status bar, the foot is those two rows, and
+            // what's left of the window under them is shared out round both.
+            grid.foot = if self.one_bar() { 1 } else { 2 };
             // Lifted within its row, for air between the bar and the window's edge, where
             // the pixel tiers can place it. On a row with room, a chip is tall enough for its
             // words to stand in its middle and the row has air under it: nothing is lifted.
             let from = grid.painted_so_far();
             self.draw_bar(grid);
             if crate::measures::roomy(self.measure().as_ref()) {
+                if !self.one_bar() {
+                    // Two rows at the foot read as a pair: as much between what's drawn in
+                    // them as over the first and under the second.
+                    let to = grid.painted_so_far();
+                    let lower = |grid: &mut Grid, (from, to): (usize, usize), by: f32| {
+                        let to = to.min(grid.paint.len());
+                        for paint in grid.paint.iter_mut().take(to).skip(from) {
+                            paint.lift(-cellix_render::units(by));
+                        }
+                    };
+                    lower(grid, self.app().status_paint.get(), PAIR.0);
+                    lower(grid, (from, to), -PAIR.1);
+                }
+                self.draw_new_tip(grid, self.size.1.saturating_sub(1));
                 return;
             }
+            self.draw_new_tip(grid, self.size.1.saturating_sub(1));
             let raise = |grid: &mut Grid, (from, to): (usize, usize)| {
                 use cellix_render::Paint;
                 let to = to.min(grid.paint.len());
@@ -940,32 +963,48 @@ impl Workspaces {
         if !self.one_bar() {
             label(grid, (x, y), NEW_WORKSPACE, text, right);
         }
+    }
+
+    /// The tip over the button that opens a workspace, while the pointer is on it. Drawn
+    /// after the bar, and over it.
+    fn draw_new_tip(&self, grid: &mut Grid, y: u16) {
+        let theme = self.theme();
+        let (start, end) = self.new_button();
+        let on_it = self.hover.is_some_and(|(x, hy)| {
+            let x = f32::from(x) + 0.5;
+            self.on_bar(hy) && x >= start && x < end
+        });
         // The tip stays out of the way of what the button opened.
-        if on_it && !self.measure().in_cells() && !self.app().overlay_is_open() {
-            let font = Font {
-                size: TIP_SIZE,
-                ..Font::default()
-            };
-            let wide = self.measure().width(NEW_WORKSPACE_TIP, font) + 2.0;
-            let left = start.min(f32::from(self.size.0) - wide - 1.0).max(0.0);
-            // The row above the bar: a tip covers a row whole, never part of one, and on a
-            // taller row stands in the middle of it.
-            let top = f32::from(y) - 1.0;
-            let inset = crate::app::TIP_INSET;
-            let bounds = Bounds::cells(left, top + inset, wide, 1.0 - inset * 2.0);
-            // Kept to the rows over the bar: see the tips the app draws there.
-            let painted = grid.painted_so_far();
-            grid.popup(bounds, CHIP_RADIUS, theme.popup, theme.popup_border);
-            grid.keep_to_rows(painted, 0, y);
-            let colour = (theme.popup_dim, false);
-            grid.text_run(
-                (left + 1.0, top),
-                left + wide,
-                NEW_WORKSPACE_TIP,
-                colour,
-                font,
-            );
+        if !on_it || self.measure().in_cells() || self.app().overlay_is_open() {
+            return;
         }
+        let font = Font {
+            size: TIP_SIZE,
+            ..Font::default()
+        };
+        let wide = self.measure().width(NEW_WORKSPACE_TIP, font) + 2.0;
+        let left = start.min(f32::from(self.size.0) - wide - 1.0).max(0.0);
+        // The row above the bar: a tip covers a row whole, never part of one. On a row with
+        // room it stands at the top of it, so its shadow ends inside the row: see `TIP_RAISE`.
+        let roomy = crate::measures::roomy(self.measure().as_ref());
+        let raise = if roomy { crate::app::TIP_RAISE } else { 0.0 };
+        let top = f32::from(y) - 1.0 - raise;
+        let inset = crate::app::TIP_INSET;
+        let bounds = Bounds::cells(left, top + inset, wide, 1.0 - inset * 2.0);
+        // Kept to the rows over the bar: see the tips the app draws there. Raised, it's kept
+        // to its own row: the row over that one may not be drawn where this one is.
+        let painted = grid.painted_so_far();
+        grid.popup(bounds, CHIP_RADIUS, theme.popup, theme.popup_border);
+        let first = if roomy { y.saturating_sub(1) } else { 0 };
+        grid.keep_to_rows(painted, first, y);
+        let colour = (theme.popup_dim, false);
+        grid.text_run(
+            (left + 1.0, top),
+            left + wide,
+            NEW_WORKSPACE_TIP,
+            colour,
+            font,
+        );
     }
 
     /// The first screen's column: its left edge, width and top row.
@@ -1522,6 +1561,125 @@ mod tests {
         assert_eq!(spaces.app().size(), (90, 29));
         let _ = screen(&spaces);
         assert_eq!(spaces.app().status_room.get(), (0, 0));
+    }
+
+    /// Where the bar has a row of its own under the status bar, the grid says its foot is two
+    /// rows, so a backend with pixels left under them stands both evenly in what's there.
+    /// Sharing the status bar's row it's one, and so is the first screen's.
+    #[test]
+    fn a_bar_with_a_row_of_its_own_makes_a_foot_of_two_rows() {
+        let (_dir, first, second) = projects();
+        let mut spaces = spaces();
+        spaces.open(first);
+        spaces.open(second);
+        spaces.handle(Event::Resize(140, 30));
+        assert!(spaces.one_bar());
+        assert_eq!(screen(&spaces).foot, 1, "one bar is one row");
+        spaces.handle(Event::Resize(90, 30));
+        assert!(!spaces.one_bar());
+        let grid = screen(&spaces);
+        assert_eq!(grid.foot, 2, "the status bar's row and the workspaces'");
+        assert!(
+            grid.row_text(29).contains("New Workspace"),
+            "{}",
+            grid.row_text(29)
+        );
+        spaces.choosing = true;
+        assert_eq!(
+            screen(&spaces).foot,
+            1,
+            "the first screen has one row there"
+        );
+    }
+
+    /// On rows with room, the two rows of a foot stand as a pair: the status bar's words a
+    /// little lower in their row and the workspaces a little higher in theirs. The rows are
+    /// evenly apart, but less of the status bar's row is drawn on than of a chip's, and with
+    /// both in the middle of their rows there was more between the two than round them. The
+    /// tip over New Workspace stands at the top of its row, with its shadow inside it.
+    #[test]
+    fn the_two_rows_of_a_foot_stand_as_a_pair() {
+        use cellix_render::{FontMeasure, Paint, UNIT, units};
+        let (_dir, first, second) = projects();
+        let mut spaces = spaces();
+        spaces.open(first);
+        spaces.open(second);
+        spaces.handle(Event::Resize(90, 30));
+        spaces.app_mut().set_branch("main");
+        let tall: Rc<dyn Measure> = Rc::new(FontMeasure::new(17, 50).with_type_row(36));
+        for workspace in &mut spaces.list {
+            workspace.app.set_measure(tall.clone());
+        }
+        spaces.handle(Event::Tick);
+        assert!(!spaces.one_bar());
+        let (status, bar) = (28 * UNIT, 29 * UNIT);
+        let near = |y: i32, row: i32| (y - row).abs() < UNIT / 2;
+        let places = |spaces: &Workspaces| {
+            let grid = screen(spaces);
+            let accent = spaces.theme().accent;
+            let chip = grid.paint.iter().find_map(|p| match p {
+                Paint::Panel {
+                    bounds,
+                    fill: Some(fill),
+                    ..
+                } if *fill == accent && near(bounds.y, bar) => Some(bounds.y - bar),
+                _ => None,
+            });
+            let word = grid.paint.iter().find_map(|p| match p {
+                Paint::Text { text, y, .. } if text == "main" && near(*y, status) => {
+                    Some(*y - status)
+                }
+                _ => None,
+            });
+            (chip.expect("a chip"), word.expect("the branch"))
+        };
+        let (chip, word) = places(&spaces);
+        assert_eq!(chip, units(CHIP_INSET) - units(PAIR.1), "the chips, higher");
+        assert_eq!(word, units(PAIR.0), "the status bar's words, lower");
+        // The tip over the button, on the status bar's row: at its top, and kept to it.
+        let (start, _) = spaces.new_button();
+        spaces.handle(Event::Mouse(MouseEvent {
+            kind: MouseKind::Move,
+            x: start as u16 + 1,
+            y: 29,
+            fine_x: start + 1.5,
+            fine_y: 29.5,
+            mods: Mods::default(),
+        }));
+        let grid = screen(&spaces);
+        let shadowed = |p: &Paint| matches!(p, Paint::Panel { shadow: true, .. });
+        let tip = grid.paint.iter().find_map(|p| match p {
+            Paint::Panel {
+                shadow: true,
+                bounds,
+                ..
+            } => Some(bounds.y - status),
+            _ => None,
+        });
+        let raised = units(crate::app::TIP_INSET - crate::app::TIP_RAISE);
+        assert_eq!(tip, Some(raised), "at the top of the status bar's row");
+        assert!(grid.paint_on_row(28).any(shadowed));
+        assert!(
+            !grid.paint_on_row(27).any(shadowed),
+            "not on the sheet's row"
+        );
+        assert!(!grid.paint_on_row(29).any(shadowed), "nor on the bar's");
+        // The tip isn't moved with the pair: the chips under it are where they were.
+        assert_eq!(places(&spaces).0, units(CHIP_INSET) - units(PAIR.1));
+        // Sharing the status bar's row there's one row and nothing to pair.
+        spaces.handle(Event::Resize(140, 30));
+        assert!(spaces.one_bar());
+        let grid = screen(&spaces);
+        let accent = spaces.theme().accent;
+        let chip = grid.paint.iter().find_map(|p| match p {
+            Paint::Panel {
+                bounds,
+                fill: Some(fill),
+                ..
+            } if *fill == accent && near(bounds.y, bar) => Some(bounds.y - bar),
+            _ => None,
+        });
+        assert_eq!(chip, Some(units(CHIP_INSET)));
     }
 
     #[test]

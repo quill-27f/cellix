@@ -538,7 +538,7 @@ def shoot(name, steps, *args, size="120x40", background="1e1e2e", cwd=None, env=
         if own_cache:
             subprocess.run(["pkill", "-9", "-f", own_cache])
     os.unlink(f.name)
-    for left in (said.name, said.name[:-4] + ".new"):
+    for left in (said.name, said.name[:-4] + ".new", said.name[:-4] + ".rows"):
         if os.path.exists(left):
             os.unlink(left)
     if own_cache:

@@ -707,6 +707,51 @@ fn on_the_grid(event: Event, rows: u16) -> Event {
     }
 }
 
+/// A press at the foot is on the row drawn where it lands. A foot of two rows stands them
+/// below their own places, evenly in what's under the sheets, so the row drawn at a place
+/// isn't always the one that begins there: `drops` is how far down each stands, in pixels,
+/// under rows `row` pixels tall. Between two of them a press is on the nearer. One row at
+/// the foot needs none of this: whatever is under the sheets is that row.
+fn on_the_foot(event: Event, rows: u16, row: usize, drops: &[usize]) -> Event {
+    let Event::Mouse(mut mouse) = event else {
+        return event;
+    };
+    let first = rows.saturating_sub(drops.len() as u16);
+    if drops.len() < 2 || row == 0 || mouse.fine_y < f32::from(first) {
+        return Event::Mouse(mouse);
+    }
+    let tall = row as f32;
+    // How far down the foot the press is, in pixels.
+    let at = (mouse.fine_y - f32::from(first)) * tall;
+    // The first row whose picture, with half of what's between it and the next, reaches it.
+    let reaches = |index: usize| {
+        let ends = (index + 1) as f32 * tall + drops[index] as f32;
+        let between = drops.get(index + 1).map_or(f32::INFINITY, |next| {
+            next.saturating_sub(drops[index]) as f32 / 2.0
+        });
+        at < ends + between
+    };
+    let on = (0..drops.len())
+        .find(|index| reaches(*index))
+        .unwrap_or(drops.len() - 1);
+    let into = (at - on as f32 * tall - drops[on] as f32) / tall;
+    mouse.y = first + on as u16;
+    mouse.fine_y = f32::from(mouse.y) + into.clamp(0.0, 0.99);
+    Event::Mouse(mouse)
+}
+
+/// How far down the window the middle of each row is, in pixels, for the harness to press
+/// on a row where it's drawn: the rows at the foot stand below where they begin.
+fn row_middles(rows: u16, row: usize, drops: &[usize]) -> String {
+    let first = rows.saturating_sub(drops.len() as u16);
+    let middle = |y: u16| {
+        let drop = y.checked_sub(first).map_or(0, |at| drops[at as usize]);
+        y as usize * row + row / 2 + drop
+    };
+    let middles: Vec<String> = (0..rows).map(|y| middle(y).to_string()).collect();
+    middles.join("\n")
+}
+
 /// How tall a row of Cellix's own is, in lines of the terminal's: what Settings' Row height
 /// says, unless `CELLIX_ROW_HEIGHT` says otherwise, which is how the harness chooses. A row
 /// no taller than a line is a line, and only heights that leave a window some rows count.
@@ -970,6 +1015,8 @@ pub fn run(options: Options) -> io::Result<()> {
     // When a key last came or anything last changed, which sets how often sessions are read.
     let mut lively = Instant::now();
     let mut shown: Option<Grid> = None;
+    // How far below its own place each row at the foot was last drawn. See `on_the_foot`.
+    let mut foot: Vec<usize> = Vec::new();
     let ghostty = std::env::var("TERM").is_ok_and(|t| t.contains("ghostty"));
     // Where the screen is also written as text, for the harness: its terminal gets pictures,
     // and the tour has to know a scene reached its surface before taking one of it.
@@ -1090,7 +1137,14 @@ pub fn run(options: Options) -> io::Result<()> {
                 phases.present = started.elapsed();
                 slow.note(&phases);
                 phases = crate::slow::Phases::default();
+                foot = backend.foot_drops(grid.height(), grid.foot);
                 if let Some(path) = &screen_text {
+                    // Where its rows stand first, so whoever reads the text can press on what
+                    // it says: only where rows are Cellix's own, and can stand off their places.
+                    if let Some(row) = display.row() {
+                        let middles = row_middles(grid.height(), row, &foot);
+                        let _ = std::fs::write(path.with_extension("rows"), middles);
+                    }
                     // Whole or not at all: it's read while Cellix writes.
                     let fresh = path.with_extension("new");
                     if std::fs::write(&fresh, grid.text()).is_ok() {
@@ -1237,7 +1291,14 @@ pub fn run(options: Options) -> io::Result<()> {
                     match translate(event, mouse_cell(&display)).map(|e| cmd_left(e, ghostty)) {
                         // The size check above handles it, and compares against the old size.
                         Some(Event::Resize(..)) | None => {}
-                        Some(event) => spaces.handle(on_the_grid(event, spaces.size().1)),
+                        Some(event) => {
+                            let rows = spaces.size().1;
+                            let event = match display.row() {
+                                Some(row) => on_the_foot(event, rows, row, &foot),
+                                None => event,
+                            };
+                            spaces.handle(on_the_grid(event, rows));
+                        }
                     }
                 }
                 // Saving on focus change saves as the window is left, as VS Code does.
@@ -1370,6 +1431,54 @@ mod tests {
             panic!("a press stays a press");
         };
         assert_eq!((inside.y, inside.fine_y), (12, 12.2));
+    }
+
+    /// A foot of two rows stands them evenly in what's under the sheets, so each is drawn
+    /// below where it begins, and a press is on the row drawn under it. Rows of 50 px, forty
+    /// of them: the status bar's picture is 20 px down and the workspaces' 40, so a press
+    /// 1955 px down the window is on the status bar, though the fortieth row begins at 1950.
+    #[test]
+    fn a_press_at_a_foot_of_two_rows_is_on_the_row_drawn_there() {
+        let press = |pixel: usize, drops: &[usize]| {
+            let event = Event::Mouse(MouseEvent {
+                kind: MouseKind::Left,
+                x: 3,
+                y: (pixel / 50) as u16,
+                fine_x: 3.5,
+                fine_y: pixel as f32 / 50.0,
+                mods: Mods::default(),
+            });
+            match on_the_grid(on_the_foot(event, 40, 50, drops), 40) {
+                Event::Mouse(mouse) => (mouse.y, (mouse.fine_y * 100.0).round() as u32),
+                _ => panic!("a press stays a press"),
+            }
+        };
+        let two = [20, 40];
+        assert_eq!(press(1899, &two), (37, 3798), "over the foot, as it was");
+        assert_eq!(
+            press(1905, &two),
+            (38, 3800),
+            "over the status bar's picture"
+        );
+        assert_eq!(
+            press(1955, &two),
+            (38, 3870),
+            "on it, past where its row ends"
+        );
+        assert_eq!(press(1975, &two), (38, 3899), "under it, and nearer to it");
+        assert_eq!(press(1985, &two), (39, 3900), "nearer to the workspaces");
+        assert_eq!(press(2010, &two), (39, 3940), "on them, under the last row");
+        assert_eq!(press(2070, &two), (39, 3999), "under them, in the padding");
+        // One row at the foot is whatever is under the sheets, as before.
+        assert_eq!(press(1955, &[30]), (39, 3910));
+        assert_eq!(press(2010, &[30]), (39, 3999));
+        // Each row's middle, where the harness presses: the foot's two are lower.
+        let middles = row_middles(40, 50, &two);
+        let middles: Vec<&str> = middles.lines().collect();
+        assert_eq!(middles.len(), 40);
+        assert_eq!(middles[37..], ["1875", "1945", "2015"]);
+        assert_eq!(press(1945, &two).0, 38);
+        assert_eq!(press(2015, &two).0, 39);
     }
 
     /// A row of Cellix's own is as many of the terminal's lines tall as Settings says, and

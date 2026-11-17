@@ -496,6 +496,29 @@ stood at the band's top with all of what was left over under it: the user's firs
 trying 0.10.0, "bottom there is too much space". A press under the last row is a press on it
 (`on_the_grid`).
 
+Where the workspaces have a row of their own under the status bar, the foot is two rows, and
+the grid says so (`Grid::foot`). They stand evenly in the band (`stood_apart`): a third of
+what's spare over the status bar, a third between the two and a third under the workspaces.
+With only the last row moved, all of it lay between them: 12 px under the sheet, 40 between
+the rows, 35 under. The status bar's tile is grown by the pixels it stands below its place,
+and the workspaces' is placed where that tile ends, so nothing is drawn twice and no tile
+lies over another. A row at the foot is then drawn below where it begins, and a press is on
+the row drawn under it (`on_the_foot`, from `Backend::foot_drops`): half of what's between
+the two belongs to each. Rows that are the terminal's own lines can't stand off them, and
+there only the last row is moved, into the padding.
+
+Evenly apart as rows, the two weren't as what's drawn: the status bar draws on 30 px of its
+50 and a chip is 37, so there were 28 px over the status bar, 35 between the two and 26 under
+the chips. On rows with room the status bar's paint is 0.04 of a row lower in its row and
+the workspaces' 0.06 higher (`PAIR`), which makes that 30, 29 and 29.
+
+A tip over the bar, the app's or the one over New Workspace, stands at the top of its row on
+rows with room (`TIP_RAISE`) and not in its middle. A tip is 39 px of a row of 50 and its
+shadow reaches 11 px under it, and the row under it is the bar's, drawn lower than it begins:
+the shadow can't run on into it, and stopped dead after 5 px. From the row's top all of it is
+in the row. The one over New Workspace is kept to its own row there, the status bar's where
+the foot is two rows, since the row over it is a sheet's and isn't drawn where it is.
+
 So that little is left over, a row's height is fitted to the window (`fitted`): of the
 heights within a twentieth of what Settings asks, 47 to 53 px for 50, the one that leaves
 least of the window's lines, and the nearest to what's asked among equals. Up to some 45 rows

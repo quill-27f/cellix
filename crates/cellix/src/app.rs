@@ -285,6 +285,12 @@ const TOOLTIP_HEIGHT: f32 = 1.0;
 /// How far a tip's box stops short of its row, over and under: nothing on the terminal's own
 /// line, and on a taller row what makes it a box in the row and not the row itself.
 pub(crate) const TIP_INSET: f32 = 0.01;
+/// How far up its row a tip over the bar at the foot stands on a row with room, in rows. A
+/// tip is a control, 39 px in the middle of a row of 50, and its shadow reaches 11 px under
+/// it: more than the row has left. The bar's row is drawn lower than it begins, so the
+/// shadow can't run on into it and was cut where the rows meet, a hard edge under the tip.
+/// Five pixels higher, at the top of its row, all of the shadow is in the row.
+pub(crate) const TIP_RAISE: f32 = 0.1;
 const TOOLTIP_SIZE: u8 = 92;
 /// What each button is called, in order, since they're only icons and marks.
 const FIND_NAMES: [&str; 6] = [
@@ -14913,6 +14919,14 @@ impl App {
             && rail.contains(x, y)
             && self.view_at(x, y).is_some();
         let top = if on_view { top } else { top.round() };
+        // Over the bar at the foot, at the top of its row where a row has room: `TIP_RAISE`.
+        let foot = self.size.1.saturating_sub(1);
+        let over_bar = top + TOOLTIP_HEIGHT >= f32::from(foot);
+        let top = if over_bar && measures::roomy(&*self.measure) {
+            top - TIP_RAISE
+        } else {
+            top
+        };
         let theme = &self.theme;
         // A hair short of its row, which is what lets it keep its own height on a taller
         // row and stand in the middle of it, clear of a line over or under.
@@ -14927,8 +14941,7 @@ impl App {
         // A tip over the bar at the foot keeps to the rows over it. The bar's row is moved
         // down to stand in what's under the sheets, and the part of a tip's shadow that
         // reached into it went down with it, away from its tip.
-        let foot = self.size.1.saturating_sub(1);
-        if top + TOOLTIP_HEIGHT >= f32::from(foot) {
+        if over_bar {
             grid.keep_to_rows(painted, 0, foot);
         }
         let text_top = top + (TOOLTIP_HEIGHT - 1.0) / 2.0;
@@ -28206,6 +28219,40 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert!(
             !grid.paint_on_row(quit.y).any(shadowed),
             "and none of it on the bar's"
+        );
+        // On a row with room it stands at the top of its row, so all of its shadow is in the
+        // row: in the middle, 5 px of the shadow's 11 were left, cut off where the rows meet.
+        let top = |app: &App| {
+            let grid = screen(app);
+            let tip = grid.paint.iter().find_map(|p| match p {
+                Paint::Panel {
+                    shadow: true,
+                    bounds,
+                    ..
+                } => Some(*bounds),
+                _ => None,
+            });
+            let tip = tip.expect("a tip");
+            let row = i32::from(quit.y - 1) * cellix_render::UNIT;
+            (tip.y - row, tip.h)
+        };
+        let (line, height) = top(&app);
+        assert_eq!(line, cellix_render::units(TIP_INSET));
+        let tall = cellix_render::FontMeasure::new(17, 50).with_type_row(36);
+        app.set_measure(Rc::new(tall));
+        let quit = app.quit_button().expect("the button at the foot");
+        app.handle(mouse(MouseKind::Move, quit.x + 1, quit.y));
+        let (raised, _) = top(&app);
+        // To the nearest paint unit, of which a row has 64.
+        let by = line - raised - cellix_render::units(TIP_RAISE);
+        assert!(by.abs() <= 1, "raised a tenth of a row: {line} to {raised}");
+        // Where it's drawn in a row of 50 px: from its top, with 11 px under it or all but.
+        let (y, h) = cellix_render::stood(raised, height, 50.0, 36.0);
+        assert!((0.0..1.0).contains(&y), "at the top of its row: {y}");
+        assert!(50.0 - (y + h) >= 10.0, "room for its shadow: {}", y + h);
+        assert!(
+            !screen(&app).paint_on_row(quit.y).any(shadowed),
+            "and still none of it on the bar's"
         );
     }
 

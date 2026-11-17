@@ -141,6 +141,11 @@ pub struct Grid {
     /// middle: rows of Cellix's own, well taller than the terminal's line. What draws into
     /// the grid says so. Where it's not, a button's words are raised a pixel for their tails.
     pub roomy: bool,
+    /// How many rows at the grid's foot are bars under the sheets: one, unless what draws
+    /// says there are two, as where the workspaces have a row of their own under the status
+    /// bar. A backend that fills the window under its last row stands them evenly in what's
+    /// there.
+    pub foot: u16,
     /// Runs of `paint` kept to a band of rows: as (from, to) in `paint` and (top, bottom) in
     /// rows. A list scrolled in a pane paints its cards whole, and the part of one that's
     /// past the pane's edge mustn't land on the bar beside it.
@@ -199,6 +204,7 @@ impl Grid {
             bands: Vec::new(),
             edge: None,
             roomy: false,
+            foot: 1,
             kept: Vec::new(),
         }
     }

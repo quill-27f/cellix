@@ -5423,5 +5423,33 @@
     "title": "A switch inside a text box stays under the height at which a chip grows with a taller row, so it's well inside its box",
     "test": "a_switch_in_a_text_box_stays_smaller_than_the_box",
     "passes": true
+  },
+  {
+    "id": "foot-two-rows-even",
+    "milestone": 14,
+    "title": "A foot of two rows, the status bar and the workspaces' own row, stands evenly in what's under the sheets: a third of what's spare over the first, a third between them and a third under the second",
+    "test": "a_foot_of_two_rows_stands_evenly_under_the_sheets",
+    "passes": true
+  },
+  {
+    "id": "foot-two-rows-press",
+    "milestone": 14,
+    "title": "A press at a foot of two rows is on the row drawn under it, which stands below where it begins, and between the two on the nearer",
+    "test": "a_press_at_a_foot_of_two_rows_is_on_the_row_drawn_there",
+    "passes": true
+  },
+  {
+    "id": "foot-two-rows-grid",
+    "milestone": 14,
+    "title": "Where the workspaces have a row of their own under the status bar the grid says its foot is two rows, and one where they share the status bar's",
+    "test": "a_bar_with_a_row_of_its_own_makes_a_foot_of_two_rows",
+    "passes": true
+  },
+  {
+    "id": "foot-two-rows-pair",
+    "milestone": 14,
+    "title": "On rows with room the two rows of a foot stand as a pair, the status bar's words a little lower in their row and the workspaces a little higher, and the tip over New Workspace stands at the top of the status bar's row with its shadow inside it",
+    "test": "the_two_rows_of_a_foot_stand_as_a_pair",
+    "passes": true
   }
 ]

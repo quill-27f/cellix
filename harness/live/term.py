@@ -33,7 +33,8 @@ has as many lines as hold them. Clipboard writes and timings are printed. Stop w
 
 The terminal is sent pictures, so it can't read the screen. With CELLIX_SCREEN_TEXT set to a
 path, Cellix writes the screen's text there on every frame: "until" reads it, and each shot
-leaves that text beside its PNG. A script whose "until" never comes takes no more shots and
+leaves that text beside its PNG. Beside it, with ".rows" for its ending, Cellix says how far
+down the middle of each row is, and a press on a row goes there. A script whose "until" never comes takes no more shots and
 exits with 3, so a picture of the wrong surface is never written."""
 import subprocess, base64, fcntl, json, os, pty, re, select, signal, struct, sys, termios, time, zlib
 
@@ -219,9 +220,22 @@ def png(path, width, height, rgb):
         f.write(chunk(b"IDAT", zlib.compress(raw, 3)) + chunk(b"IEND", b""))
 
 
+def middle(row):
+    """How far down the window the middle of a row is, in pixels. The rows at Cellix's foot
+    stand below where they begin, and it says where each row is beside the screen's text."""
+    try:
+        with open(os.path.splitext(TEXT)[0] + ".rows", encoding="utf8") as f:
+            middles = [int(n) for n in f.read().split()]
+        if 0 <= row < len(middles):
+            return middles[row]
+    except (OSError, TypeError, ValueError):
+        pass
+    return int((row + 0.5) * ROW)
+
+
 def mouse(button, col, row, press=True):
     # Mode 1016: pixels, in the middle of the cell.
-    x, y = int((col + 0.5) * CW) + 1, int((row + 0.5) * ROW) + 1
+    x, y = int((col + 0.5) * CW) + 1, middle(row) + 1
     return f"\x1b[<{button};{x};{y}{'M' if press else 'm'}".encode()
 
 

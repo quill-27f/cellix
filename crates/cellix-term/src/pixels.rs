@@ -52,9 +52,18 @@ pub struct Bleed {
     /// Rows past the bottom edge.
     pub rows: u16,
     /// Pixels of the terminal's own padding under its last line, as near as it's known. The
-    /// last row's content stands in the middle of the band the frame fills under the sheets:
-    /// its row, what the lines leave over under it, and this.
+    /// foot's rows stand evenly in the band the frame fills under the sheets: their own
+    /// height, what the lines leave over under the last of them, and this.
     pub padding: usize,
+}
+
+/// How far below its own place each of `rows` rows at the foot stands, the last of them
+/// last, with `band` pixels to share out under the sheets: as much over the first as between
+/// each two and under the last. One row is in the middle of what it has, and two have a third
+/// of it over them, a third between them and a third under.
+fn stood_apart(band: usize, rows: u16) -> Vec<usize> {
+    let parts = rows as usize + 1;
+    (1..parts).map(|row| band * row / parts).collect()
 }
 
 /// Rows of Cellix's own, taller than the terminal's lines. Direct placement only: a tile
@@ -125,6 +134,8 @@ pub struct PixelBackend<R> {
     own: Option<OwnRows>,
     /// The terminal's lines, to know what's left under the last of Cellix's own rows.
     lines: u16,
+    /// How many rows the grid last shown had at its foot.
+    foot: u16,
 }
 
 /// What a row looks like, as a key: rows with the same key draw the same pixels.
@@ -203,6 +214,7 @@ impl<R: Rasterizer> PixelBackend<R> {
             smooth: None,
             scrolling: false,
             bleed: Bleed::default(),
+            foot: 1,
             glide: None,
             cell: None,
             own: None,
@@ -231,6 +243,37 @@ impl<R: Rasterizer> PixelBackend<R> {
     /// Whether the last row's tile is taller than the same row anywhere else.
     fn runs_on(&self, rows: u16) -> bool {
         self.bleed.rows > 0 || self.spare(rows) > 0
+    }
+
+    /// How far below its own place each of the last `foot` rows of `rows` is drawn. Under
+    /// the sheets the frame has those rows, what the terminal's lines leave over under the
+    /// last of them, and the terminal's padding: the rows stand evenly in all of it. With
+    /// only the last row lowered, a foot of two rows had all of that between them. Nothing
+    /// where a row is one of the terminal's lines, which a tile can't stand off.
+    fn drops(&self, rows: u16, foot: u16) -> Vec<usize> {
+        let Some(own) = self.own else {
+            return Vec::new();
+        };
+        let over = (self.lines as usize * own.line).saturating_sub(rows as usize * own.row);
+        let reach = self.spare(rows);
+        let mut drops = stood_apart(over + self.bleed.padding, foot.clamp(1, rows.max(1)));
+        for drop in &mut drops {
+            *drop = (*drop).min(reach);
+        }
+        drops
+    }
+
+    /// How far below their own places the row over `y` and `y` itself are drawn, as (the
+    /// row over it, the row): nothing for a row that isn't at the foot, and nothing for the
+    /// row over the foot's first.
+    fn stand(&self, rows: u16, foot: u16, y: u16) -> (usize, usize) {
+        let drops = self.drops(rows, foot);
+        let first = rows.saturating_sub(drops.len() as u16);
+        if y < first || y >= rows {
+            return (0, 0);
+        }
+        let at = (y - first) as usize;
+        (at.checked_sub(1).map_or(0, |over| drops[over]), drops[at])
     }
 
     /// Only direct placement can leave the text area: placeholders are cells.
@@ -292,10 +335,11 @@ impl<R: Rasterizer> PixelBackend<R> {
     ) {
         let cols = to - from;
         // A row of Cellix's own starts so many pixels down, which is on one of the
-        // terminal's lines and some way into it.
+        // terminal's lines and some way into it. Under a row of the foot that stands
+        // lower than its place, the next begins where that one's picture ends.
         let (line, into) = match self.own {
             Some(own) => {
-                let top = y as usize * own.row;
+                let top = y as usize * own.row + self.stand(self.size.1, self.foot, y).0;
                 (top / own.line, top % own.line)
             }
             None => (y as usize, 0),
@@ -325,7 +369,9 @@ impl<R: Rasterizer> PixelBackend<R> {
         }
     }
 
-    /// A row's image, grown to cover the padding beyond it in the colours at the edge.
+    /// A row's image, grown to cover the padding beyond it in the colours at the edge. A row
+    /// at the foot is grown downwards as well: by what it stands below its own place, and
+    /// the last of them by all that's under it.
     fn bled(&self, image: Image, grid: &Grid, y: u16) -> Image {
         let Bleed {
             cols,
@@ -333,12 +379,11 @@ impl<R: Rasterizer> PixelBackend<R> {
             padding,
         } = self.bleed;
         let cells = grid.row(y);
-        let spare = if y + 1 == grid.height() {
-            self.spare(grid.height())
-        } else {
-            0
-        };
-        let (Some(last), true) = (cells.last(), cols > 0 || rows > 0 || spare > 0) else {
+        let bottom = y + 1 == grid.height();
+        let spare = if bottom { self.spare(grid.height()) } else { 0 };
+        let (above, drop) = self.stand(grid.height(), grid.foot, y);
+        let grows = cols > 0 || rows > 0 || spare > 0 || drop > 0;
+        let (Some(last), true) = (cells.last(), grows) else {
             return image;
         };
         let cell = image.width / cells.len();
@@ -352,7 +397,7 @@ impl<R: Rasterizer> PixelBackend<R> {
         // Past the row's end: the frame's colour where the grid says what that is, so a sheet
         // that ends at the grid's edge ends there and the window's padding stays the frame's.
         let beyond = grid.edge.unwrap_or(last.style.bg);
-        if y + 1 != grid.height() {
+        if !bottom && drop == 0 {
             for line in image.rgb.chunks_exact(image.width * 3) {
                 rgb.extend_from_slice(line);
                 paint(&mut rgb, image.width, width, beyond);
@@ -363,30 +408,31 @@ impl<R: Rasterizer> PixelBackend<R> {
                 ..image
             };
         }
-        // The bar's own colours run on below it, column by column.
-        let height = match self.own {
-            Some(_) => image.height + spare,
-            None => image.height * (1 + rows as usize),
+        // A row at the foot. The bar's own colours run on over and under it, column by
+        // column: over it for as far as it stands below the row before, which ends where
+        // this one's picture begins, and under the last for all that's left.
+        let (lead, height) = match (self.own, bottom) {
+            (Some(_), true) => (drop - above, image.height + spare - above),
+            (Some(_), false) => (drop, image.height + drop),
+            (None, _) => {
+                let height = image.height * (1 + rows as usize);
+                ((padding / 2).min(height - image.height), height)
+            }
         };
-        // What the terminal's lines leave over under the last of Cellix's rows is part of
-        // the band too, and known to the pixel.
-        let over = self.own.map_or(0, |own| {
-            (self.lines as usize * own.line).saturating_sub(grid.height() as usize * own.row)
-        });
-        let drop = ((over + padding) / 2).min(height - image.height);
+        let end = if bottom { last.style.bg } else { beyond };
         let mut plain = Vec::with_capacity(width * 3);
         for c in cells {
             paint(&mut plain, 0, cell, c.style.bg);
         }
-        paint(&mut plain, image.width, width, last.style.bg);
-        for _ in 0..drop {
+        paint(&mut plain, image.width, width, end);
+        for _ in 0..lead {
             rgb.extend_from_slice(&plain);
         }
         for line in image.rgb.chunks_exact(image.width * 3) {
             rgb.extend_from_slice(line);
-            paint(&mut rgb, image.width, width, last.style.bg);
+            paint(&mut rgb, image.width, width, end);
         }
-        for _ in drop + image.height..height {
+        for _ in lead + image.height..height {
             rgb.extend_from_slice(&plain);
         }
         Image { width, height, rgb }
@@ -407,11 +453,14 @@ impl<R: Rasterizer> PixelBackend<R> {
     /// The tile for each band of a row, rasterizing the row once if any of them is new.
     fn band_tiles(&mut self, out: &mut Vec<u8>, grid: &Grid, y: u16) -> Vec<u32> {
         let spans = self.spans(grid, y);
-        // The last row's tile is taller than the same row anywhere else.
+        // The last row's tile is taller than the same row anywhere else, and so is one that
+        // stands below its place at the foot: by how much is part of what it shows.
         let bottom = y + 1 == grid.height() && self.runs_on(grid.height());
+        let (above, drop) = self.stand(grid.height(), grid.foot, y);
+        let stood = ((above as u64) << 32 | drop as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
         let keys: Vec<u64> = spans
             .iter()
-            .map(|span| band_key(grid, y, *span).rotate_left(u32::from(bottom)))
+            .map(|span| band_key(grid, y, *span).rotate_left(u32::from(bottom)) ^ stood)
             .collect();
         if keys.iter().any(|key| !self.tiles.contains_key(key)) {
             let image = self.rasterizer.row(grid, y);
@@ -529,6 +578,7 @@ impl<R: Rasterizer> Backend for PixelBackend<R> {
             self.scrolling = false;
         }
         self.frame += 1;
+        self.foot = grid.foot;
         let mut on_screen = HashSet::new();
         for y in 0..grid.height() {
             let bottom = y + 1 == grid.height() && self.bleed.rows > 0;
@@ -683,6 +733,10 @@ impl<R: Rasterizer> Backend for PixelBackend<R> {
             self.size = (0, 0);
         }
         self.lines = lines;
+    }
+
+    fn foot_drops(&self, rows: u16, foot: u16) -> Vec<usize> {
+        self.drops(rows, foot)
     }
 }
 
@@ -895,6 +949,106 @@ mod tests {
         // No other row moves.
         let tile = padded.bled(lit(96), &grid, 2);
         assert_eq!((tile.height, starts(&tile)), (22, 0));
+    }
+
+    /// A foot of two rows, the status bar and the workspaces' own row under it, stands
+    /// evenly in what's under the sheets: as much over the first as between the two and
+    /// under the second. Only the last row was lowered, so all of what was left over lay
+    /// between them: 12 px over the status bar, 40 between the rows and 35 under.
+    #[test]
+    fn a_foot_of_two_rows_stands_evenly_under_the_sheets() {
+        struct Blank;
+        impl Rasterizer for Blank {
+            fn row(&mut self, grid: &Grid, _y: u16) -> Image {
+                let (width, height) = (grid.width() as usize * 8, 22);
+                Image {
+                    width,
+                    height,
+                    rgb: vec![255; width * height * 3],
+                }
+            }
+        }
+        let own = OwnRows { row: 22, line: 16 };
+        let mut grid = Grid::new(12, 4, Style::default());
+        grid.foot = 2;
+        let lit = || Image {
+            width: 96,
+            height: 22,
+            rgb: vec![255; 96 * 22 * 3],
+        };
+        // Where a row's picture begins in its tile, and where it ends.
+        let stands = |image: &Image| {
+            let lit = |y: &usize| image.rgb[y * image.width * 3] == 255;
+            let from = (0..image.height).position(|y| lit(&y)).unwrap();
+            let to = (0..image.height).rposition(|y| lit(&y)).unwrap() + 1;
+            (image.height, from, to)
+        };
+        // Seven lines are 112 pixels: four rows of 22, and 24 over. With 6 px of padding
+        // under the lines the two rows have 30 px to stand in, which is 10 over the first,
+        // 10 between them and 10 under the second.
+        let mut b = PixelBackend::new(Blank, Placement::Direct, DEFAULT_QUOTA)
+            .with_own_rows(own)
+            .with_bleed(Bleed {
+                cols: 0,
+                rows: 1,
+                padding: 6,
+            });
+        b.set_lines(7);
+        assert_eq!(b.foot_drops(4, 2), [10, 20]);
+        assert_eq!(
+            stands(&b.bled(lit(), &grid, 2)),
+            (32, 10, 32),
+            "the first is 10 px down, in a tile that ends where its picture does"
+        );
+        assert_eq!(
+            stands(&b.bled(lit(), &grid, 3)),
+            (52, 10, 32),
+            "the second begins there, 10 px further down, and runs on to the window's end"
+        );
+        assert_eq!(
+            stands(&b.bled(lit(), &grid, 1)),
+            (22, 0, 22),
+            "no row of a sheet moves"
+        );
+        let placed = |output: &str| -> Vec<(String, String)> {
+            output
+                .split("\x1b[")
+                .filter_map(|part| {
+                    let (at, rest) = part.split_once("H\x1b_Ga=p,")?;
+                    let into = rest.split(",Y=").nth(1)?.split(',').next()?;
+                    Some((at.to_string(), into.to_string()))
+                })
+                .collect()
+        };
+        let pairs = |want: &[(&str, &str)]| -> Vec<(String, String)> {
+            want.iter()
+                .map(|(at, into)| (at.to_string(), into.to_string()))
+                .collect()
+        };
+        let mut out = Vec::new();
+        b.present(&grid, &mut out).unwrap();
+        // The last row begins 76 px down, 10 under its own place: 12 px into the fifth line.
+        assert_eq!(
+            placed(&String::from_utf8(out).unwrap()),
+            pairs(&[("1;1", "0"), ("2;1", "6"), ("3;1", "12"), ("5;1", "12")]),
+            "the second row of the foot is placed under the first's picture"
+        );
+        // The bar back on the status bar's row: one row at the foot, in the middle of the
+        // same 30 px, and the row over it a sheet's again.
+        grid.foot = 1;
+        assert_eq!(b.foot_drops(4, 1), [15]);
+        assert_eq!(stands(&b.bled(lit(), &grid, 2)), (22, 0, 22));
+        assert_eq!(stands(&b.bled(lit(), &grid, 3)), (62, 15, 37));
+        let mut out = Vec::new();
+        b.present(&grid, &mut out).unwrap();
+        assert_eq!(
+            placed(&String::from_utf8(out).unwrap()),
+            pairs(&[("3;1", "12"), ("5;1", "2")]),
+            "both are drawn again, each at its own place"
+        );
+        // On the terminal's own lines a tile can't stand off them, and nothing is lowered.
+        let lines = PixelBackend::new(Blank, Placement::Direct, DEFAULT_QUOTA);
+        assert!(lines.foot_drops(4, 2).is_empty());
     }
 
     #[test]

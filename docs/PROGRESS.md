@@ -2665,3 +2665,19 @@ Not done, in the reviewer's order:
 - The dialog and the prompt keep their own measures (66/67/55 and 21/8 px): the Overlays board draws the dialog's empty rows.
 - Source Control keeps an empty row under its heading; its boxes and Agent Context's start at different columns.
 - Tips are 1 to 6 px from lines in four places; hover chips for icons are three heights (35, 39, 37); the two rules in the bar differ; "+" is 3 px off the middle of its chip; a row's wash has different air at its ends in Problems, Inbox, the sidebar and palettes; task checkboxes touch their labels (older).
+
+## A foot of two rows stands evenly (2026-11-17)
+
+The user's word, before going away for the day: "Fix the #2 and then autonomously release". #2 was the pair the last entry left not done, the foot of two rows and the button on a pointed row. This is the first.
+
+- Where the workspaces have a row of their own under the status bar, the grid says its foot is two rows (`Grid::foot`), and the pixel backend stands both evenly in what's under the sheets (`stood_apart`, `PixelBackend::drops`): a third of what's spare over the status bar, a third between the rows, a third under the workspaces. The status bar's tile is grown by what it stands below its place and the workspaces' is placed where that tile ends, so no tile lies over another. Only the last row had been moved, and all that was spare lay between them.
+- A press is on the row drawn under it (`on_the_foot`, fed by `Backend::foot_drops` after each frame): a row at the foot is drawn below where it begins, and between the two a press is on the nearer. One row at the foot is as it was.
+- For the tour, Cellix writes how far down each row's middle is beside the screen's text (`.rows`), and `term.py` presses a row there. It pressed the middle of where a row begins, which with enough spare is the row above's picture.
+- One `ui-expert` pass over nine pictures. Nothing cut, doubled or seamed: every pixel row between the sheet, the status bar, the chips and the window's edge is the frame's colour across the whole width. The hover in `101` lands on the workspace the step names. What it found, fixed here:
+  - Evenly apart as rows, the two weren't as what's drawn: 28 px over the status bar, 35 between and 26 under, since the status bar draws on 30 px of its row and a chip on 37. On rows with room the status bar's paint is lowered 0.04 of a row and the workspaces' raised 0.06 (`PAIR`).
+  - The tip over New Workspace had 5 px of its shadow's 11, ending in a hard edge 400 px wide where the status bar's tile ends. A tip over the bar stands at the top of its row on rows with room (`TIP_RAISE`), the app's tips there as well, and all of the shadow is in the row.
+- Measured after, sheet to status bar, status bar to chips, chips to the window's edge: 22/22/23 px in `22-narrow` (10/34/25 before this commit), 23/24/24 in `w0-api-server`, 30/29/29 in `100-workspaces` (10/44/35).
+- Tests: `a_foot_of_two_rows_stands_evenly_under_the_sheets` (the pixel backend: the tiles' heights, where each picture begins, where the second is placed, and back to one row), `a_press_at_a_foot_of_two_rows_is_on_the_row_drawn_there`, `a_bar_with_a_row_of_its_own_makes_a_foot_of_two_rows`, `the_two_rows_of_a_foot_stand_as_a_pair`; `a_tip_over_the_bar_paints_nothing_on_the_bars_row` has the raise.
+- Looked at: `22-narrow`, `23-narrow-menu`, `100` to `105`, `w0-*`, `02-code` and `13-quit-hover` (one row at the foot: not moved).
+- Not done: on rows that are the terminal's own lines a tile can't stand off its line, so there only the last row is moved, by half the padding. The right ends of the two rows aren't level (the power mark ends 22 px short of the machine's name). No scene has a menu that crosses the foot, or a tip over the status bar's words in a narrow window.
+- Unverified: in a real Ghostty, where the padding under the lines is a guess; a press there.

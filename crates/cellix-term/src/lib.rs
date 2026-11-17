@@ -56,4 +56,12 @@ pub trait Backend {
     /// How many lines the terminal has. Only a backend whose rows aren't the terminal's
     /// lines needs telling: it fills what's left under its last row.
     fn set_lines(&mut self, _lines: u16) {}
+
+    /// How far below its own place each of the last `foot` rows of `rows` is drawn, in
+    /// pixels, the last of them last. Only a backend that stands its foot's rows apart in
+    /// what's under the sheets says anything: a press there is then on the row drawn where
+    /// it lands, which isn't the row that begins there.
+    fn foot_drops(&self, _rows: u16, _foot: u16) -> Vec<usize> {
+        Vec::new()
+    }
 }
