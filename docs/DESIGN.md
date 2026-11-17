@@ -1603,6 +1603,19 @@ the file.
   and what's dimmed is exactly what Quick Open and search leave out. The pane stands under the file when the window is too narrow to have
   them side by side. The Agents icon opens the side pane. With nothing running, it lists what's running elsewhere,
   what can be started and the worktrees.
+
+The Agents list orders agents by how much they want the person: Needs you, Done, Working,
+Idle, each a section headed in small capitals with how many are in it, and a section with
+nobody in it left out. A row is the agent's mark, its name (its tab's, where it has one), how
+long since what it's doing changed (`<1m`, `5m`, `2h`, `3d`, which the half-second tick keeps
+up and nothing redraws faster for), and at its end what that is: the spinner, a small chip
+saying "needs you" in the attention colour with what it's asking on the row under it, a green
+dot, or nothing. Done is an agent that finished a turn nobody has looked at: it stays Done
+until its tab is in front, or for one with no tab here, until its row is pressed; a press on a
+row with a tab brings the tab forward. A row can stand under another, a step in with a line
+bent round from its parent's mark, in its parent's section whatever it is itself
+(`agents::ordered`, by each row's `parent`): what an agent starts will stand there.
+
 - Rebuilding an agent's interface: the side pane shows the real program, so its features arrive with its updates.
 
 An agent's tab is named by the agent: by the title it gives its terminal, as Claude Code sets

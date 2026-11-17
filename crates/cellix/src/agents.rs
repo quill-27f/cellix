@@ -3,6 +3,8 @@ use std::sync::{Arc, Mutex};
 
 use cellix_agent::hook::PLAN_WAITING;
 use cellix_agent::{AgentEvent, AgentState};
+use std::time::Instant;
+
 use cellix_render::{Bounds, Font, Grid, Icon, Measure, Paint, Rect, Rgb, Style};
 use cellix_review::Worktree;
 
@@ -11,6 +13,18 @@ use crate::theme::Theme;
 
 const SECTION_SIZE: u8 = 80;
 const DETAIL_SIZE: u8 = 85;
+/// Room between a section's heading and how many are in it, in cells.
+const COUNT_GAP: f32 = 0.6;
+/// Room at a row's end for what the agent is doing, and between that and how long ago.
+const STATE_WIDTH: f32 = 2.0;
+const AGO_GAP: f32 = 0.8;
+/// The chip that says an agent needs the person: its words, their size, its air either side
+/// of them, its height and how strong its wash is.
+const NEEDS_YOU: &str = "needs you";
+const CHIP_SIZE: u8 = 80;
+const CHIP_PAD: f32 = 0.7;
+const CHIP_HIGH: f32 = 0.66;
+const CHIP_WASH: f32 = 0.16;
 /// What a worktree's row says a click on it opens, once the pointer is on it.
 const REVIEW: &str = "Review";
 /// How tall the icon before that word is, in rows, and the room between the two, in cells.
@@ -134,18 +148,121 @@ pub enum Hit {
     /// The program of an agent to start.
     Start(&'static str),
     Worktree(PathBuf),
+    /// An agent's row, by its session's id.
+    Agent(String),
+}
+
+/// How much an agent wants the person, which is the order the list keeps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Urgency {
+    NeedsYou,
+    /// Finished while nobody was looking at it, until somebody does.
+    Done,
+    Working,
+    Idle,
+}
+
+impl Urgency {
+    const ALL: [Urgency; 4] = [Self::NeedsYou, Self::Done, Self::Working, Self::Idle];
+
+    fn heading(self) -> &'static str {
+        match self {
+            Self::NeedsYou => "NEEDS YOU",
+            Self::Done => "DONE",
+            Self::Working => "WORKING",
+            Self::Idle => "IDLE",
+        }
+    }
+}
+
+/// One agent in the list: its program's mark, its name, how long since what it's doing
+/// changed, and what that is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Row {
+    pub icon: Icon,
+    pub name: String,
+    pub urgency: Urgency,
+    /// When what it's doing last changed, if it ever said.
+    pub since: Option<Instant>,
+    /// What it's asking, on the row under it while it needs you.
+    pub detail: String,
+    /// Its own session's id, which a helper names as its parent.
+    pub session: String,
+    /// The agent that started it, by session id: its row stands under that one's, in that
+    /// one's section, however it is itself. None for one the person started.
+    pub parent: Option<String>,
+}
+
+/// What hooks say that's no more than the state a row's mark already shows.
+const PLAIN: [&str; 7] = [
+    "",
+    "Working",
+    "Finished",
+    "Ready",
+    "Idle",
+    "Waiting for you",
+    "Ended",
+];
+
+impl Row {
+    /// Whether it has something to say on the row under it: what it's asking, while it needs
+    /// you, and otherwise what it says that's more than its state's own word, as a program's
+    /// "Working · 40%".
+    pub fn tells(&self) -> bool {
+        self.urgency == Urgency::NeedsYou || !PLAIN.contains(&self.detail.as_str())
+    }
+}
+
+/// The rows in the list's order: by urgency, the most first, and in the order they came
+/// within that; each row's helpers straight under it, deeper by one, in the same order.
+/// Returns each row with how deep it stands.
+pub fn ordered(rows: &[Row]) -> Vec<(&Row, u8)> {
+    let known = |id: &str| rows.iter().any(|row| row.session == id);
+    let mut tops: Vec<&Row> = rows
+        .iter()
+        .filter(|row| row.parent.as_deref().is_none_or(|parent| !known(parent)))
+        .collect();
+    tops.sort_by_key(|row| row.urgency);
+    let mut out = Vec::new();
+    fn under<'a>(row: &'a Row, depth: u8, rows: &'a [Row], out: &mut Vec<(&'a Row, u8)>) {
+        out.push((row, depth));
+        if depth > 8 {
+            return;
+        }
+        for child in rows
+            .iter()
+            .filter(|c| c.parent.as_deref() == Some(&row.session))
+        {
+            under(child, depth + 1, rows, out);
+        }
+    }
+    for row in tops {
+        under(row, 0, rows, &mut out);
+    }
+    out
+}
+
+/// How long ago, as the list says it: under a minute, then minutes, hours and days.
+pub fn ago(at: Instant) -> String {
+    let seconds = at.elapsed().as_secs();
+    match seconds {
+        0..60 => "<1m".to_string(),
+        60..3600 => format!("{}m", seconds / 60),
+        3600..86_400 => format!("{}h", seconds / 3600),
+        _ => format!("{}d", seconds / 86_400),
+    }
 }
 
 /// A row or two of the panel.
 enum Line {
     Section(&'static str),
+    /// A section of agents, by how much they want the person, with how many are in it.
+    Group(Urgency, usize),
     Gap,
     /// The note that takes the running list's place.
     Step(usize),
-    /// An index into `running`.
-    Reporting(usize),
-    /// An agent found running, which reports nothing.
-    Silent(String),
+    /// An index into the rows in their order.
+    Agent(usize),
     /// An index into `worktrees`.
     Tree(usize),
     /// An index into `installed`.
@@ -168,6 +285,10 @@ pub struct Agents {
     pub finished: Option<std::time::Instant>,
     /// Docked beside a chat: short how-to, and one row for each agent.
     pub docked: bool,
+    /// When what each agent is doing last changed, by its session's id.
+    pub since: std::collections::HashMap<String, Instant>,
+    /// Agents that finished a turn nobody has looked at since, by their session's id.
+    pub unseen: std::collections::HashSet<String>,
 }
 
 /// Whether a process is still there.
@@ -218,6 +339,25 @@ impl Agents {
         let same = |a: &AgentEvent| {
             a.session == event.session || (event.pid.is_some() && a.pid == event.pid)
         };
+        // How long ago counts from when what it's doing last changed, not from each word.
+        let before = self.running.iter().find(|a| same(a));
+        let changed = before.is_none_or(|a| (a.state, &a.detail) != (event.state, &event.detail));
+        if changed {
+            self.since.insert(event.session.clone(), Instant::now());
+        }
+        match event.state {
+            AgentState::Idle if event.detail == "Finished" => {
+                self.unseen.insert(event.session.clone());
+            }
+            AgentState::Idle => {}
+            AgentState::Working | AgentState::NeedsYou => {
+                self.unseen.remove(&event.session);
+            }
+            AgentState::Ended => {
+                self.unseen.remove(&event.session);
+                self.since.remove(&event.session);
+            }
+        }
         self.running.retain(|a| !same(a));
         if event.state != AgentState::Ended {
             self.running.push(event);
@@ -289,6 +429,21 @@ impl Agents {
     }
 
     /// Agents found running that the plugin isn't already reporting.
+    /// Agents found running that the plugin isn't reporting, as rows of the list: idle, as
+    /// far as anyone can tell, with no time since anything.
+    pub fn silent_rows(&self) -> Vec<Row> {
+        let rows = self.silent().into_iter().map(|name| Row {
+            icon: crate::dock::program_icon(&name, false, false),
+            name: name.clone(),
+            urgency: Urgency::Idle,
+            since: None,
+            detail: String::new(),
+            session: name,
+            parent: None,
+        });
+        rows.collect()
+    }
+
     fn silent(&self) -> Vec<String> {
         let seen = self.seen.lock().map(|s| s.clone()).unwrap_or_default();
         let hooked = self.running.iter().filter(|a| !crate::program::reported(a));
@@ -297,21 +452,39 @@ impl Agents {
 
     /// The panel, top to bottom. Drawing and clicking share this. With nothing running, it
     /// says what this is for and how it goes; either way a way to start comes next.
-    fn lines(&self) -> Vec<Line> {
+    fn lines(&self, rows: &[Row]) -> Vec<Line> {
         // The pane's tab already says what this is.
         let mut lines = vec![Line::Gap];
-        let silent = self.silent();
-        let idle = self.running.is_empty() && silent.is_empty();
-        if idle && self.docked {
+        if rows.is_empty() && self.docked {
             lines.extend((0..DOCKED_STEPS.len()).map(Line::Step));
-        } else if idle {
+        } else if rows.is_empty() {
             lines.push(Line::Section("HOW IT WORKS"));
             lines.extend((0..STEPS.len()).map(Line::Step));
-        } else {
-            lines.push(Line::Section("RUNNING"));
         }
-        lines.extend((0..self.running.len()).map(Line::Reporting));
-        lines.extend(silent.into_iter().map(Line::Silent));
+        // Who wants the person most comes first, a section each with how many are in it, and
+        // a section with nobody in it isn't there. A helper stands in its agent's section.
+        let order = ordered(rows);
+        let mut sections = Vec::with_capacity(order.len());
+        let mut current = Urgency::Idle;
+        for (row, depth) in &order {
+            if *depth == 0 {
+                current = row.urgency;
+            }
+            sections.push(current);
+        }
+        for urgency in Urgency::ALL {
+            let section: Vec<usize> = (0..order.len())
+                .filter(|at| sections[*at] == urgency)
+                .collect();
+            if section.is_empty() {
+                continue;
+            }
+            if lines.len() > 1 {
+                lines.push(Line::Gap);
+            }
+            lines.push(Line::Group(urgency, section.len()));
+            lines.extend(section.into_iter().map(Line::Agent));
+        }
         // Starting one comes before the worktrees, which can be a long list to scroll past.
         // A terminal isn't an agent, so it stands apart from them, under a name that fits both.
         if !self.installed.is_empty() {
@@ -334,12 +507,13 @@ impl Agents {
 
     /// The furthest the panel scrolls, in lines of it: where the last of them just fits in
     /// `height` rows.
-    pub fn last_top(&self, height: u16) -> usize {
-        let lines = self.lines();
+    pub fn last_top(&self, height: u16, agents: &[Row]) -> usize {
+        let lines = self.lines(agents);
+        let order = ordered(agents);
         let mut room = height;
         let mut fit = 0;
         for line in lines.iter().rev() {
-            let rows = self.height(line);
+            let rows = self.height(line, &order);
             if rows > room {
                 break;
             }
@@ -350,15 +524,17 @@ impl Agents {
     }
 
     /// What's at row `y`, with the first `scrolled` lines of the panel above its top.
-    pub fn hit(&self, area: Rect, y: u16, scrolled: usize) -> Option<Hit> {
+    pub fn hit(&self, area: Rect, y: u16, scrolled: usize, agents: &[Row]) -> Option<Hit> {
         let mut top = area.y;
-        let scrolled = scrolled.min(self.last_top(area.h));
-        for line in self.lines().into_iter().skip(scrolled) {
-            let rows = self.height(&line);
+        let scrolled = scrolled.min(self.last_top(area.h, agents));
+        let order = ordered(agents);
+        for line in self.lines(agents).into_iter().skip(scrolled) {
+            let rows = self.height(&line, &order);
             if y >= top && y < top + rows {
                 return match line {
                     Line::Start(index) => Some(Hit::Start(self.installed[index].1)),
                     Line::Tree(index) => Some(Hit::Worktree(self.worktrees[index].path.clone())),
+                    Line::Agent(at) => Some(Hit::Agent(order[at].0.session.clone())),
                     _ => None,
                 };
             }
@@ -367,12 +543,16 @@ impl Agents {
         None
     }
 
-    fn height(&self, line: &Line) -> u16 {
+    fn height(&self, line: &Line, order: &[(&Row, u8)]) -> u16 {
         if self.docked {
             return 1;
         }
         match line {
-            Line::Reporting(_) | Line::Silent(_) | Line::Start(_) => 2,
+            // What one that needs you is asking is on the row under it, and so is anything
+            // else one says that's more than its state's own word.
+            Line::Agent(at) if order[*at].0.tells() => 2,
+            Line::Agent(_) => 1,
+            Line::Start(_) => 2,
             // One worktree is just this folder, so it needs no second line to tell them apart.
             Line::Tree(_) if self.worktrees.len() > 1 => 2,
             _ => 1,
@@ -384,20 +564,21 @@ impl Agents {
         &self,
         grid: &mut Grid,
         area: Rect,
-        scrolled: usize,
+        (scrolled, agents): (usize, &[Row]),
         hover: Option<(u16, u16)>,
         (measure, theme): (&dyn Measure, &Theme),
     ) {
         grid.fill(area, theme.sidebar);
-        let scrolled = scrolled.min(self.last_top(area.h));
+        let scrolled = scrolled.min(self.last_top(area.h, agents));
+        let order = ordered(agents);
         let dim = Style {
             fg: theme.gutter.fg,
             ..theme.sidebar
         };
         let side = area.x + 2;
         let mut y = area.y;
-        for line in self.lines().into_iter().skip(scrolled) {
-            let rows = self.height(&line);
+        for line in self.lines(agents).into_iter().skip(scrolled) {
+            let rows = self.height(&line, &order);
             if y + rows > area.bottom() {
                 break;
             }
@@ -426,35 +607,42 @@ impl Agents {
                     grid.label(side, y, &number, dim, side + 2);
                     grid.label(side + 2, y, STEPS[index], theme.sidebar, area.right());
                 }
-                Line::Reporting(index) => {
-                    let agent = &self.running[index];
-                    let (mark, color) = match agent.state {
-                        AgentState::NeedsYou => ("needs you", theme.attention),
-                        AgentState::Working => ("working", theme.git_added),
-                        AgentState::Idle | AgentState::Ended => ("idle", theme.gutter.fg),
-                    };
-                    let end = draw_agent(grid, (area, y), &agent.agent, (mark, color), theme);
-                    if self.docked {
-                        // On the agent's own row, between its name and how it is.
-                        let room = area.right().saturating_sub(mark.len() as u16 + 4);
-                        grid.label(end + 2, y, &agent.detail, dim, room);
-                    } else {
-                        grid.label(side + 2, y + 1, &agent.detail, dim, area.right());
-                    }
-                }
-                Line::Silent(agent) => {
-                    draw_agent(grid, (area, y), &agent, ("running", theme.git_added), theme);
-                    if self.docked {
-                        y += rows;
-                        continue;
-                    }
-                    grid.label(
-                        side + 2,
-                        y + 1,
-                        "No plugin, so no detail",
-                        dim,
+                Line::Group(urgency, count) => {
+                    // Small, bold and quiet, as a section's heading is in every panel, with
+                    // how many are in it after it, plain.
+                    let heading = Style { bold: true, ..dim };
+                    let text = urgency.heading();
+                    grid.label_at(
+                        side as f32,
+                        side,
+                        y,
+                        text,
+                        heading,
                         area.right(),
+                        SECTION_SIZE,
                     );
+                    let font = Font {
+                        bold: true,
+                        size: SECTION_SIZE,
+                        ..Font::default()
+                    };
+                    let after = side as f32 + measure.width(text, font) + COUNT_GAP;
+                    let cell = side + text.chars().count() as u16 + 1;
+                    let count = count.to_string();
+                    grid.label_at(after, cell, y, &count, dim, area.right(), SECTION_SIZE);
+                }
+                Line::Agent(at) => {
+                    let (row, depth) = order[at];
+                    if hovered {
+                        let wash = Bounds::inset(Rect::new(area.x, y, area.w, 1), 0.4, 0.055);
+                        grid.panel(wash, 18, Some(theme.row_hover), None);
+                    }
+                    draw_row(grid, (area, y), (row, depth), (measure, theme));
+                    if rows > 1 {
+                        let x = side + 2 + 2 * u16::from(depth);
+                        let at = x as f32;
+                        grid.label_at(at, x, y + 1, &row.detail, dim, area.right(), DETAIL_SIZE);
+                    }
                 }
                 Line::Tree(index) => {
                     if hovered {
@@ -611,26 +799,136 @@ impl Agents {
     }
 }
 
-fn draw_agent(
+/// One agent's row: its program's mark, its name, and at the row's end how long since what
+/// it's doing changed and what that is: turning while it works, a chip while it needs you, a
+/// green dot when it's done and nobody has looked, and nothing while it's idle. A helper
+/// stands two columns in for each agent over it, with a line bent round from that one's mark.
+fn draw_row(
     grid: &mut Grid,
     (area, y): (Rect, u16),
-    agent: &str,
-    (mark, color): (&str, Rgb),
-    theme: &Theme,
-) -> u16 {
-    let dot = Bounds::cells(area.x as f32 + 2.0, y as f32 + 0.32, 0.7, 0.36);
-    grid.panel(dot, 18, Some(color), None);
-    let name = Style {
+    (row, depth): (&Row, u8),
+    (measure, theme): (&dyn Measure, &Theme),
+) {
+    let side = area.x + 2 + 2 * u16::from(depth);
+    if depth > 0 {
+        let elbow = side.saturating_sub(2);
+        if measure.in_cells() {
+            let line = Style {
+                fg: theme.border,
+                ..theme.sidebar
+            };
+            grid.put_str(elbow, y, "└", line, elbow + 1);
+        } else {
+            let x = elbow as f32 + 0.9;
+            grid.hairline(Bounds::cells(x, y as f32 - 0.3, 0.0, 0.8), theme.border);
+            grid.hairline(Bounds::cells(x, y as f32 + 0.5, 0.8, 0.0), theme.border);
+        }
+    }
+    let color = crate::dock::icon_colour(row.icon, theme);
+    let fallback = crate::toolbar::fallback(row.icon);
+    grid.glyph(side as f32, y, row.icon, color, fallback, theme.sidebar);
+    let right = area.right().saturating_sub(2);
+    // The state at the very end, and how long ago before it.
+    let state = right as f32 - STATE_WIDTH;
+    match row.urgency {
+        Urgency::Working => {
+            let accent = theme.accent;
+            grid.spinner(
+                state + 0.3,
+                y,
+                crate::dock::MARK_SIZE,
+                accent,
+                theme.sidebar,
+            );
+        }
+        Urgency::Done => {
+            let green = theme.git_added;
+            grid.dot(state + 0.3, y, crate::dock::MARK_SIZE, green, theme.sidebar);
+        }
+        Urgency::NeedsYou | Urgency::Idle => {}
+    }
+    let mut end = state - AGO_GAP;
+    if row.urgency == Urgency::NeedsYou {
+        end = draw_needs_you(grid, (right, y), (measure, theme)) - AGO_GAP;
+    }
+    let dim = Style {
+        fg: theme.gutter.fg,
+        ..theme.sidebar
+    };
+    if let Some(since) = row.since {
+        let said = ago(since);
+        let font = Font {
+            size: DETAIL_SIZE,
+            ..Font::default()
+        };
+        let wide = measure.width(&said, font);
+        grid.label_right(end.floor() as u16, y, &said, dim, DETAIL_SIZE);
+        end -= wide + AGO_GAP;
+    }
+    // Whoever is doing nothing is quieter, and not bold.
+    let name = if row.urgency == Urgency::Idle {
+        Style {
+            fg: theme.tab.fg,
+            ..theme.sidebar
+        }
+    } else {
+        Style {
+            bold: true,
+            ..theme.sidebar
+        }
+    };
+    let stop = (end.floor() as u16).max(side + 3);
+    let text = crate::context::elide(&row.name, f32::from(stop - side - 2), measure);
+    grid.label(side + 2, y, &text, name, stop);
+}
+
+/// The chip that says an agent needs the person, at the end of its row, in the attention
+/// colour on a wash of it. Returns where it starts.
+fn draw_needs_you(
+    grid: &mut Grid,
+    (right, y): (u16, u16),
+    (measure, theme): (&dyn Measure, &Theme),
+) -> f32 {
+    let font = Font {
+        size: CHIP_SIZE,
+        bold: true,
+        ..Font::default()
+    };
+    let words = measure.width(NEEDS_YOU, font);
+    let wide = words + CHIP_PAD * 2.0;
+    let left = f32::from(right) - wide;
+    let wash = mix(theme.attention, theme.sidebar.bg, CHIP_WASH);
+    let top = y as f32 + (1.0 - CHIP_HIGH) / 2.0;
+    if !measure.in_cells() {
+        grid.panel(
+            Bounds::cells(left, top, wide, CHIP_HIGH),
+            22,
+            Some(wash),
+            None,
+        );
+    }
+    let style = Style {
+        fg: theme.attention,
         bold: true,
         ..theme.sidebar
     };
-    let end = grid.label(area.x + 4, y, agent, name, area.right());
-    let badge = Style {
-        fg: color,
-        ..theme.sidebar
-    };
-    grid.label_right(area.right().saturating_sub(2), y, mark, badge, DETAIL_SIZE);
-    end
+    let cell = right.saturating_sub(NEEDS_YOU.len() as u16);
+    grid.label_at(left + CHIP_PAD, cell, y, NEEDS_YOU, style, right, CHIP_SIZE);
+    if measure.in_cells() {
+        cell as f32
+    } else {
+        left
+    }
+}
+
+/// `color` over `ground` at `share` of its strength.
+fn mix(color: Rgb, ground: Rgb, share: f32) -> Rgb {
+    let one = |a: u8, b: u8| (f32::from(a) * share + f32::from(b) * (1.0 - share)).round() as u8;
+    Rgb(
+        one(color.0, ground.0),
+        one(color.1, ground.1),
+        one(color.2, ground.2),
+    )
 }
 
 #[cfg(test)]
@@ -659,14 +957,14 @@ p3\nccodex\nfcwd\nn/work/project/sub\n";
             ..Agents::default()
         };
         let area = Rect::new(0, 0, 30, 40);
-        let at = |hit: &Hit| (0..40).find(|y| agents.hit(area, *y, 0).as_ref() == Some(hit));
+        let at = |hit: &Hit| (0..40).find(|y| agents.hit(area, *y, 0, &[]).as_ref() == Some(hit));
         let start = at(&Hit::Start("codex")).unwrap();
         let tree = at(&Hit::Worktree(PathBuf::from("/work"))).unwrap();
         assert!(
             start < tree,
             "with nothing running, starting one comes first"
         );
-        assert_eq!(agents.hit(area, 0, 0), None, "the title does nothing");
+        assert_eq!(agents.hit(area, 0, 0, &[]), None, "the title does nothing");
     }
 
     #[test]
@@ -686,23 +984,25 @@ p3\nccodex\nfcwd\nn/work/project/sub\n";
         };
         // As tall as a side pane in a laptop's window: the worktrees don't all fit.
         let area = Rect::new(0, 0, 40, 36);
-        let found = (0..area.h).find(|y| agents.hit(area, *y, 0) == Some(Hit::Start("claude")));
+        let rows = agents.silent_rows();
+        let found =
+            (0..area.h).find(|y| agents.hit(area, *y, 0, &rows) == Some(Hit::Start("claude")));
         assert!(found.is_some(), "Claude Code can be started");
         let theme = Theme::default();
         let look: (&dyn Measure, &Theme) = (&cellix_render::CellMeasure, &theme);
         let mut grid = Grid::new(40, 36, Style::default());
-        agents.draw(&mut grid, area, 0, None, look);
+        agents.draw(&mut grid, area, (0, &rows), None, look);
         assert!(grid.text().contains("START"), "{}", grid.text());
 
         // The worktrees that don't fit are a scroll away, and it stops at the last of them.
         assert!(!grid.text().contains("claude/tree-10"), "{}", grid.text());
-        let last = agents.last_top(area.h);
+        let last = agents.last_top(area.h, &rows);
         assert!(last > 0);
         let mut grid = Grid::new(40, 36, Style::default());
-        agents.draw(&mut grid, area, usize::MAX, None, look);
+        agents.draw(&mut grid, area, (usize::MAX, &rows), None, look);
         assert!(grid.text().contains("claude/tree-10"), "{}", grid.text());
         let tree = Hit::Worktree(PathBuf::from("/work/tree-10"));
-        let found = (0..area.h).find(|y| agents.hit(area, *y, last) == Some(tree.clone()));
+        let found = (0..area.h).find(|y| agents.hit(area, *y, last, &rows) == Some(tree.clone()));
         assert!(found.is_some(), "and the last one can be clicked");
     }
 
@@ -716,7 +1016,7 @@ p3\nccodex\nfcwd\nn/work/project/sub\n";
         let rows = |program: &'static str| -> Vec<u16> {
             let hit = Some(Hit::Start(program));
             (0..area.h)
-                .filter(|y| agents.hit(area, *y, 0) == hit)
+                .filter(|y| agents.hit(area, *y, 0, &[]) == hit)
                 .collect()
         };
         let (claude, codex, shell) = (rows("claude"), rows("codex"), rows(SHELL.1));
@@ -726,7 +1026,7 @@ p3\nccodex\nfcwd\nn/work/project/sub\n";
             codex[1] + 2,
             "and a row of air before the terminal"
         );
-        assert_eq!(agents.hit(area, codex[1] + 1, 0), None);
+        assert_eq!(agents.hit(area, codex[1] + 1, 0, &[]), None);
 
         // With no agent installed there's nothing to stand apart from.
         let alone = Agents {
@@ -736,7 +1036,7 @@ p3\nccodex\nfcwd\nn/work/project/sub\n";
         let theme = Theme::default();
         let look: (&dyn Measure, &Theme) = (&cellix_render::CellMeasure, &theme);
         let mut grid = Grid::new(40, 30, Style::default());
-        alone.draw(&mut grid, area, 0, None, look);
+        alone.draw(&mut grid, area, (0, &[]), None, look);
         let text = grid.text();
         let lines: Vec<&str> = text.lines().collect();
         let start = lines.iter().position(|l| l.contains("START")).unwrap();

@@ -5633,5 +5633,19 @@
     "title": "The cell tier hides the cursor while it writes a frame and shows it where it belongs once the frame is whole",
     "test": "the_cursor_is_hidden_while_a_frame_is_written",
     "passes": true
+  },
+  {
+    "id": "agents-by-urgency",
+    "milestone": 15,
+    "title": "The Agents list stands agents by urgency: Needs you, Done, Working, Idle, each section with its count and none empty; a row is the agent's mark, its name, how long since it changed and its state, and Done stays until the agent is looked at",
+    "test": "the_agents_list_puts_who_needs_you_first",
+    "passes": true
+  },
+  {
+    "id": "agents-nested-rows",
+    "milestone": 15,
+    "title": "A row of the Agents list with a parent stands under it, a step in, in its parent's section",
+    "test": "a_helper_stands_under_the_agent_that_started_it",
+    "passes": true
   }
 ]

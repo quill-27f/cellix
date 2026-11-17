@@ -1827,10 +1827,12 @@ fn stand_ins_for_copilot_and_cursor_report_through_the_hooks_setup_installed() {
         screen.wait_gone("Type to search");
     };
     // The list stays in front after each agent's news, as List Agents again would close it.
+    // It stands agents by urgency: Copilot CLI asking, with what it asks under it, and Cursor
+    // CLI, its turn finished with its tab in front, idle, no longer under Working.
     list_agents(&mut screen);
     for (name, says) in [
         ("Copilot CLI", "Allow cargo publish?"),
-        ("Cursor CLI", "Finished"),
+        ("Cursor CLI", "IDLE 1"),
     ] {
         screen.wait_for(name);
         let contents = screen.contents();
@@ -1845,6 +1847,7 @@ fn stand_ins_for_copilot_and_cursor_report_through_the_hooks_setup_installed() {
         screen.wait_for("stand-in hooks ran");
         list_agents(&mut screen);
         screen.wait_for(says);
+        screen.wait_gone("WORKING");
     }
     // Each one's session is left beside its host, which is what Resume reads.
     let left: Vec<String> = walk(cache.path())

@@ -9800,18 +9800,21 @@ impl App {
             if mouse.kind == MouseKind::Left {
                 let screen = self.dock_screen().unwrap_or(area);
                 let top = self.dock.tops.of(Front::Agents);
-                match self.agents.hit(screen, y, top) {
+                let rows = self.agent_rows();
+                match self.agents.hit(screen, y, top, &rows) {
                     Some(AgentHit::Start(program)) => self.open_agent(program),
                     Some(AgentHit::Worktree(path)) => {
                         self.review = Some(self.new_review(path));
                     }
+                    Some(AgentHit::Agent(id)) => self.look_at_agent(&id),
                     None => {}
                 }
             }
             if mouse.kind == MouseKind::Right {
                 let screen = self.dock_screen().unwrap_or(area);
                 let top = self.dock.tops.of(Front::Agents);
-                if let Some(AgentHit::Worktree(path)) = self.agents.hit(screen, y, top) {
+                let rows = self.agent_rows();
+                if let Some(AgentHit::Worktree(path)) = self.agents.hit(screen, y, top, &rows) {
                     self.open_worktree_menu(path, (x, y + 1));
                 }
             }
@@ -10279,7 +10282,9 @@ impl App {
             None => {
                 let top = self.dock.tops.of(Front::Agents);
                 let look = (&*self.measure, theme);
-                self.agents.draw(grid, panel, top, self.hover, look);
+                let rows = self.agent_rows();
+                self.agents
+                    .draw(grid, panel, (top, &rows), self.hover, look);
             }
         }
     }
@@ -12032,6 +12037,7 @@ impl App {
         let front =
             self.dock.open && self.dock.front == Front::Session && self.dock.active == Some(index);
         let session = &mut self.dock.sessions[index];
+        session.agent_session = Some(event.session.clone());
         let doing = match event.state {
             AgentState::Working => crate::dock::Doing::Working,
             AgentState::NeedsYou => crate::dock::Doing::NeedsYou,
@@ -12046,6 +12052,67 @@ impl App {
         session.doing = doing;
     }
 
+    /// Every agent the Agents list shows, as its rows: those that report, with their tab's
+    /// name and mark where they have one, and those found running that don't.
+    fn agent_rows(&self) -> Vec<crate::agents::Row> {
+        use crate::agents::{Row, Urgency};
+        use cellix_agent::AgentState;
+        let tab_of = |id: &str| {
+            let sessions = self.dock.sessions.iter();
+            sessions
+                .filter(|s| !s.exited)
+                .find(|s| s.agent_session.as_deref() == Some(id))
+        };
+        let mut rows: Vec<Row> = (self.agents.running.iter())
+            .map(|event| {
+                let tab = tab_of(&event.session);
+                let done = match tab {
+                    Some(session) => session.done_unseen,
+                    None => self.agents.unseen.contains(&event.session),
+                };
+                let urgency = match event.state {
+                    AgentState::NeedsYou => Urgency::NeedsYou,
+                    AgentState::Working => Urgency::Working,
+                    _ if done => Urgency::Done,
+                    _ => Urgency::Idle,
+                };
+                let icon = crate::dock::program_icon(&event.agent, false, false);
+                // An agent goes by its tab's name; what runs in a shell, by its own.
+                let named = tab.filter(|s| !s.shell);
+                Row {
+                    icon: tab.map_or(icon, Session::icon),
+                    name: named.map_or_else(|| event.agent.clone(), Session::label),
+                    urgency,
+                    since: self.agents.since.get(&event.session).copied(),
+                    detail: event.detail.clone(),
+                    session: event.session.clone(),
+                    parent: None,
+                }
+            })
+            .collect();
+        rows.extend(self.agents.silent_rows());
+        rows
+    }
+
+    /// A press on an agent in the list: its tab comes to the front, or, for one with no tab
+    /// here, what it finished counts as seen.
+    fn look_at_agent(&mut self, id: &str) {
+        let tab = (self.dock.sessions.iter())
+            .position(|s| !s.exited && s.agent_session.as_deref() == Some(id));
+        match tab {
+            Some(index) => {
+                self.dock.active = Some(index);
+                self.dock.focused = true;
+                self.dock.front = Front::Session;
+                self.dock.agents_tab = false;
+                self.see_front_tab();
+            }
+            None => {
+                self.agents.unseen.remove(id);
+            }
+        }
+    }
+
     /// A tab in front has been looked at: what it finished meanwhile is seen.
     fn see_front_tab(&mut self) -> bool {
         let front = self.dock.active.filter(|_| {
@@ -12056,6 +12123,9 @@ impl App {
         let Some(session) = front.and_then(|index| self.dock.sessions.get_mut(index)) else {
             return false;
         };
+        if let Some(id) = &session.agent_session {
+            self.agents.unseen.remove(id);
+        }
         std::mem::take(&mut session.done_unseen)
     }
 
@@ -17292,7 +17362,8 @@ impl App {
                 (threads::last_top(panel, shown, &*self.measure), 3)
             }
             Front::Agents | Front::Session if self.dock.listing() => {
-                return Some((Front::Agents, (self.agents.last_top(panel.h), 2)));
+                let rows = self.agent_rows();
+                return Some((Front::Agents, (self.agents.last_top(panel.h, &rows), 2)));
             }
             Front::Agents | Front::Session | Front::Pdf => return None,
         };
@@ -18436,6 +18507,8 @@ pub(crate) fn machine_name() -> String {
 }
 #[cfg(test)]
 mod agent_tab_tests;
+#[cfg(test)]
+mod agents_list_tests;
 #[cfg(test)]
 mod motion_tests;
 #[cfg(test)]

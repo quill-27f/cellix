@@ -1003,6 +1003,44 @@ def team_scenes(scratch):
         subprocess.run(["pkill", "-9", "-f", cache])
         shutil.rmtree(cache, ignore_errors=True)
 
+def agents_by_urgency(scratch):
+    """The Agents list by urgency, from agents that report through Cellix's real hook from
+    outside the pane: one asking, one done and not yet looked at, one working, one idle."""
+    cache = tempfile.mkdtemp(prefix="cx", dir="/tmp")
+
+    # Each agent its own process, which stays: a hook's news is the latest of its process,
+    # and one whose process has gone is let go.
+    made = [0]
+
+    def hook(kind, session, agent="Claude Code", **fields):
+        made[0] += 1
+        script = f"{scratch}/hook-{made[0]}.py"
+        named = [] if agent == "Claude Code" else ["--agent", agent]
+        stdin = json.dumps({"session_id": session, "cwd": ROOT, **fields})
+        with open(script, "w") as f:
+            f.write(f"import subprocess, time\nsubprocess.run({[binary, 'hook', *named, kind]!r}, "
+                    f"input={stdin!r}, text=True, capture_output=True)\ntime.sleep(90)\n")
+        return ["run", f"python3 -I '{script}' >/dev/null 2>&1 &"]
+
+    told = [
+        ["wait", 1.0],
+        hook("tool-done", "s-work", tool_input={"command": "ls"}),
+        hook("tool-done", "s-done", "Gemini", tool_input={"command": "ls"}),
+        hook("stop", "s-done", "Gemini"),
+        hook("notify", "s-ask", "Codex", notification_type="permission_prompt",
+             message="Codex needs your permission to run cargo publish"),
+        hook("session-start", "s-idle"),
+        *LIST_AGENTS, ["wait", 0.8],
+    ]
+    env = {"XDG_CACHE_HOME": cache}
+    shoot("m2-agents-urgency", told, CODE_FILE, size="150x44", env=env)
+    shoot("m2-agents-urgency-hover", [*told, ["move", *ON("Gemini CLI")], ["wait", 0.4]], CODE_FILE,
+          size="150x44", env=env)
+    shoot("m2-agents-urgency-light", told, CODE_FILE, size="150x44", env=env, background="eff1f5")
+    shoot("m2-agents-urgency-cells", told, CODE_FILE, size="150x44", env={**env, "CELLIX_TIER": "cells"})
+    subprocess.run(["pkill", "-9", "-f", cache])
+    shutil.rmtree(cache, ignore_errors=True)
+
 
 def task_scenes(scratch):
     """The Task page on work an agent did: a plan sent back and approved, a turn with failing
@@ -1090,6 +1128,7 @@ with tempfile.TemporaryDirectory() as scratch:
     install_card(scratch)
     transcripts(scratch)
     agent_tabs(scratch)
+    agents_by_urgency(scratch)
     task_scenes(scratch)
     team_scenes(scratch)
     shoot("01-welcome", [])

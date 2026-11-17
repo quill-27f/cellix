@@ -322,6 +322,8 @@ pub struct Session {
     /// For a shell Cellix runs itself, the process group last in front of it, its name, and
     /// when that was read.
     own_front: Option<(i32, String, std::time::Instant)>,
+    /// The id its agent's hooks give the session in it, once they've said anything.
+    pub agent_session: Option<String>,
 }
 
 /// A person's typing into a session, as it holds back what agents send it.
@@ -597,6 +599,7 @@ impl Session {
             running: None,
             shown_running: None,
             own_front: None,
+            agent_session: None,
         }
     }
 
