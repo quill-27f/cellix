@@ -80,6 +80,11 @@ impl App {
                     .when(false)
             });
         }
+        let worktree = MenuItem::run("New Worktree…", Command::NewWorktree)
+            .icon(Icon::Git, theme.activity.fg)
+            .after_rule()
+            .when(self.can_run(Command::NewWorktree));
+        items.push(worktree);
         items
     }
 

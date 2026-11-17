@@ -1837,7 +1837,7 @@ type Shown<'a> = (
 );
 
 /// One choice of a row of them, filled when it's the one chosen.
-fn draw_segment(grid: &mut Grid, rect: Rect, label: &str, on: bool, theme: &Theme) {
+pub(crate) fn draw_segment(grid: &mut Grid, rect: Rect, label: &str, on: bool, theme: &Theme) {
     let fill = if on { theme.button } else { theme.activity.bg };
     let style = Style {
         fg: if on { theme.button_text } else { theme.text.fg },

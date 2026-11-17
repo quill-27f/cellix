@@ -349,6 +349,48 @@ pub fn worktrees(root: &Path) -> Vec<Worktree> {
     found
 }
 
+/// The repository's own checkout: the folder its common git directory is in. From a linked
+/// worktree, that's the main one's, and None outside a repository.
+pub fn main_checkout(root: &Path) -> Option<PathBuf> {
+    let args = ["rev-parse", "--path-format=absolute", "--git-common-dir"];
+    let common = PathBuf::from(git(root, &args)?.trim());
+    common.parent().map(Path::to_path_buf)
+}
+
+/// Whether `name` can be a branch's.
+pub fn valid_branch(root: &Path, name: &str) -> bool {
+    !name.is_empty() && git(root, &["check-ref-format", "--branch", name]).is_some()
+}
+
+/// Checks out `branch` in a new worktree at `path`: the branch where it's there, or a new one
+/// from HEAD. The branch is never moved.
+pub fn add_worktree(root: &Path, branch: &str, path: &Path) -> Result<(), String> {
+    let reference = format!("refs/heads/{branch}");
+    let there = git(root, &["rev-parse", "--verify", "-q", &reference]).is_some();
+    let target = path.to_string_lossy();
+    if there {
+        run_git(root, &["worktree", "add", &target, branch], &[])
+    } else {
+        run_git(
+            root,
+            &["worktree", "add", "-b", branch, &target, "HEAD"],
+            &[],
+        )
+    }
+}
+
+/// Takes away the worktree at `path`, leaving its branch. Git refuses one with changes not
+/// committed unless `force`.
+pub fn remove_worktree(root: &Path, path: &Path, force: bool) -> Result<(), String> {
+    let target = path.to_string_lossy();
+    let mut args = vec!["worktree", "remove"];
+    if force {
+        args.push("--force");
+    }
+    args.push(&target);
+    run_git(root, &args, &[])
+}
+
 /// How many files are staged.
 pub fn staged_count(root: &Path) -> usize {
     git(root, &["diff", "--cached", "--name-only"]).map_or(0, |o| o.lines().count())
@@ -575,6 +617,47 @@ pub(crate) mod tests {
         assert_eq!(found.len(), 2, "{found:?}");
         let agent = found.iter().find(|w| w.branch == "agent-a").unwrap();
         assert_eq!(agent.changes, 1);
+    }
+
+    #[test]
+    fn a_worktree_is_added_beside_and_removed_leaving_its_branch() {
+        let dir = repo();
+        let root = fs::canonicalize(dir.path()).unwrap();
+        let main = |at: &Path| main_checkout(at).map(|m| fs::canonicalize(m).unwrap());
+        assert_eq!(main(&root).as_deref(), Some(root.as_path()));
+        assert!(valid_branch(&root, "fix/pop-order"));
+        assert!(!valid_branch(&root, "two words"));
+        assert!(!valid_branch(&root, ""));
+        let other = tempfile::tempdir().unwrap();
+        let path = other.path().join("wt");
+        add_worktree(&root, "fix/pop-order", &path).unwrap();
+        assert_eq!(
+            main(&path).as_deref(),
+            Some(root.as_path()),
+            "from the worktree too"
+        );
+        let head = |at: &Path| git(at, &["rev-parse", "HEAD"]).unwrap();
+        assert_eq!(head(&path), head(&root), "from HEAD");
+        // Changes there: refused, then forced. The branch stays.
+        fs::write(path.join("kept.txt"), "changed\n").unwrap();
+        assert!(remove_worktree(&root, &path, false).is_err());
+        assert!(path.exists());
+        remove_worktree(&root, &path, true).unwrap();
+        assert!(!path.exists());
+        assert!(
+            git(
+                &root,
+                &["rev-parse", "--verify", "-q", "refs/heads/fix/pop-order"]
+            )
+            .is_some()
+        );
+        // A branch that's there is checked out, not made again.
+        let again = other.path().join("again");
+        add_worktree(&root, "fix/pop-order", &again).unwrap();
+        assert_eq!(
+            git(&again, &["branch", "--show-current"]).unwrap().trim(),
+            "fix/pop-order"
+        );
     }
 
     #[test]

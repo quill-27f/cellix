@@ -335,6 +335,7 @@ pub fn fallback(icon: Icon) -> &'static str {
         Icon::Cite => "[",
         Icon::Play => "▶",
         Icon::Terminal => ">",
+        Icon::Git => "⎇",
         Icon::AgentClaude => "✻",
         Icon::AgentCodex => "⬡",
         Icon::AgentGemini => "✦",

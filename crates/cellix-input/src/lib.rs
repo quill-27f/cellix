@@ -283,6 +283,8 @@ pub enum Command {
     /// Opens another folder beside this one, as a workspace of its own.
     OpenWorkspace,
     OpenGemini,
+    /// Makes a worktree beside the project for an agent, and opens it as a workspace.
+    NewWorktree,
     /// Opens the transcript of the agent in the side pane as a page.
     OpenTranscript,
     /// Names the side pane's tab in front, over what its program calls it.

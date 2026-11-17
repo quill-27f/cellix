@@ -5605,5 +5605,19 @@
     "title": "A session host gives each viewer a queue of its own: one far behind holds the program until it catches up, one that reads nothing for two seconds is let go, and a viewer's input goes through a queue so the host keeps reading frames",
     "test": "a_viewer_that_stops_reading_holds_up_neither_the_program_nor_the_others",
     "passes": true
+  },
+  {
+    "id": "new-worktree",
+    "milestone": 15,
+    "title": "New Worktree makes a branch's checkout beside the project from the HEAD in view and opens it as a workspace with the agent picked",
+    "test": "a_new_worktree_is_made_beside_the_project_and_opened_with_its_agent",
+    "passes": true
+  },
+  {
+    "id": "remove-worktree",
+    "milestone": 15,
+    "title": "Remove Worktree on a worktree's row asks first, again over uncommitted changes, and never deletes the branch",
+    "test": "a_worktree_is_removed_after_asking_and_keeps_its_branch",
+    "passes": true
   }
 ]

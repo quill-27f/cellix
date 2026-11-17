@@ -454,6 +454,11 @@ impl Workspaces {
                 let index = self.open(root);
                 self.switch(index);
             }
+            Some(WorkspaceRequest::OpenAndStart(root, program)) => {
+                let index = self.open(root);
+                self.switch(index);
+                self.list[index].app.open_agent(program);
+            }
             Some(WorkspaceRequest::Next) => {
                 let next = (self.active + 1) % self.list.len();
                 self.switch(next);
@@ -1725,6 +1730,36 @@ mod tests {
             _ => None,
         });
         assert_eq!(chip, Some(units(CHIP_INSET)));
+    }
+
+    /// A worktree made for an agent opens as a workspace of its own, in front, with the
+    /// agent picked started in its side pane.
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_opens_as_a_workspace_with_an_agent_started_in_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, first, second) = projects();
+        let fake = dir.path().join("fake-agent");
+        fs::write(&fake, "#!/bin/sh\nsleep 9\n").unwrap();
+        fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+        let program = fake.display().to_string();
+        let start: Starter = Box::new(move |root, size| {
+            let mut app = App::new(root, size);
+            app.stand_in_for_agents(&program);
+            Workspace { app, server: None }
+        });
+        let mut spaces = Workspaces::new((100, 30), "dev-box".to_string(), start);
+        spaces.open(first.clone());
+        let request = WorkspaceRequest::OpenAndStart(second.clone(), "codex");
+        spaces.app_mut().workspace_request = Some(request);
+        spaces.settle();
+        assert_eq!(spaces.list.len(), 2);
+        assert_eq!(spaces.app().workspace.root(), second, "in front");
+        assert!(spaces.app().has_session(), "with the agent started");
+        assert!(
+            !spaces.list[0].app.has_session(),
+            "and nothing in the first"
+        );
     }
 
     #[test]

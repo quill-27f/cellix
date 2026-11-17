@@ -1143,6 +1143,25 @@ with tempfile.TemporaryDirectory() as scratch:
     START_MENU = [*LIST_AGENTS, ["wait", 0.5], ["click", *ON("+", 0)], ["until", "ROLES"]]
     shoot("14-start-menu", [*START_MENU, ["move", *ON("Tester")], ["wait", 0.4]], CODE_FILE)
     shoot("14-start-menu-light", [*START_MENU, ["wait", 0.3]], CODE_FILE, background="eff1f5")
+    # New Worktree, with a branch's name typed and never created: it would start an agent.
+    # Not `command`: what it waits to be gone, the command's name, is the dialog's title.
+    new_worktree = [["keys", F1], ["until", PALETTE_UP], ["keys", "new worktree"], ["until", "New Worktree"],
+                    ["keys", "\r"], ["until", "Branch name"], ["keys", "fix/pop-order"],
+                    ["until", "fix-pop-order"], ["move", *ON("Create")], ["wait", 0.4]]
+    shoot("14-new-worktree", new_worktree, CODE_FILE)
+    # A project with a worktree beside it, whose row is right-clicked: Remove Worktree… is
+    # offered, and not pressed.
+    shop = f"{scratch}/shop"
+    os.makedirs(shop)
+    with open(f"{shop}/README.md", "w") as f:
+        f.write("# Shop\n")
+    git(shop, "init", "-q", "-b", "main")
+    git(shop, "add", "-A")
+    git(shop, "commit", "-qm", "First")
+    git(shop, "worktree", "add", "-q", "-b", "fix/pop-order", f"{scratch}/shop.worktrees/fix-pop-order")
+    shoot("14-worktree-menu", [*LIST_AGENTS, ["wait", 0.5], ["right", *ON("fix/pop-order")],
+                               ["until", "Remove Worktree"], ["move", *ON("Remove Worktree")], ["wait", 0.4]],
+          "README.md", cwd=shop)
     shoot("15-settings-appearance", settings, CODE_FILE)
     # Settings' pages, by their names in the list at its left.
     EDITOR_PAGE = ["click", *ON("Editor")]

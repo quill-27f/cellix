@@ -14,10 +14,10 @@ pub use diff::{
     rank_changes, reject_hunk, reject_line,
 };
 pub use git::{
-    Branch, Change, Entry, Worktree, ahead_behind, blame_line, branches, changed_files, commit,
-    create_branch, current_branch, discard, has_remote, head, head_text, index_text, numstat,
-    publish, pull, push, stage, stage_patch, staged_count, status_entries, switch_branch, unstage,
-    worktrees,
+    Branch, Change, Entry, Worktree, add_worktree, ahead_behind, blame_line, branches,
+    changed_files, commit, create_branch, current_branch, discard, has_remote, head, head_text,
+    index_text, main_checkout, numstat, publish, pull, push, remove_worktree, stage, stage_patch,
+    staged_count, status_entries, switch_branch, unstage, valid_branch, worktrees,
 };
 pub use history::{
     Turn, changed_between, changed_since, checkpoint, numstat_between, restore, text_at, turns,

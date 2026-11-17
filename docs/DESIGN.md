@@ -1339,6 +1339,32 @@ it had finished leaving) left the next one only what had something running: the 
 offered one workspace of several. Closing a tile asks as Quit does; Quit asks each folder in turn. The bar is drawn on the
 same grid as everything else, so it works on the cell tier too.
 
+A worktree gives an agent a checkout of its own, so two can work at once without writing over
+each other. Cellix listed them (the Agents list's WORKTREES) and from 0.11.0 makes them: New
+Worktree… on the + and in the palette (`Git: New Worktree…`) asks for a branch's name, says
+where the folder goes as it's typed, and offers the installed agents and Nothing to start in it,
+the first agent picked. Create runs `git worktree add` from the HEAD in view: a new branch, or the
+branch where one by that name is already there, checked out. The folder opens as a workspace of its
+own, beside this one in the bar, with the agent picked started in its side pane. What git
+refuses, a name that can't be a branch's or a folder that's there, is said under the box, which
+stays.
+
+Where it goes, decided 17 November 2026: `<project>.worktrees/<branch>`, a folder beside the
+project's own checkout, `queue.worktrees/fix-pop-order` beside `queue`, a `/` in the branch's name
+a `-` in the folder's. herdr keeps them under `~/.herdr/worktrees/<repo>/<branch>`, out of sight.
+Cellix puts them where the person keeps the project: a worktree is work to review and open
+again by its path, which is plainer beside the project than in a tool's folder in the home
+folder (Cellix has none there; its own files are a cache it may clear). Beside it rather than
+inside, so the project's explorer, search and `git status` never see a second copy of the tree.
+And one folder holds them all, which is one thing to look at or remove. From a worktree, a new
+one goes beside the project's own checkout, not beside that worktree.
+
+A worktree's row in the Agents list has Remove Worktree… on a right click (and Review Changes, as
+a left click does), greyed for the project's own checkout and for the folder open here. It asks
+first; a checkout with changes not committed is refused unless asked a second time, and then
+removed with `--force`. The branch is never deleted, whatever is answered: its commits are still
+there to merge or to check out again.
+
 What waits for the person, in any workspace, is kept as it happens: an agent asking leave to
 run something, a plan to review, a finished turn, an agent's answer to a comment, a failed test
 run. Each workspace keeps its own list and drops what's dealt with (answered, approved, resolved,

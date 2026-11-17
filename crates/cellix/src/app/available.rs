@@ -134,9 +134,12 @@ impl App {
             C::RenamePaneTab => self.dock.active.is_some(),
 
             // Git.
-            C::SwitchBranch | C::Stash | C::StashUntracked | C::StashStaged | C::ShowHistory => {
-                repo
-            }
+            C::SwitchBranch
+            | C::Stash
+            | C::StashUntracked
+            | C::StashStaged
+            | C::ShowHistory
+            | C::NewWorktree => repo,
             C::BlameLine => repo && path.is_some(),
             C::FileHistory => repo && self.in_workspace(path),
             // With the clipboard too, which needs no repository.

@@ -67,12 +67,14 @@ mod available;
 mod gitops;
 mod start;
 mod team;
+mod worktree;
 use crate::theme::Theme;
 use crate::threads::{self, Draft, Hit as ThreadHit};
 use crate::toolbar::{self, Bar, Tool};
 use available::GitNow;
 use cellix_agent::context::Agent as ContextAgent;
 use gitops::GitChoice;
+use worktree::{NewWorktree, WorktreeChoice};
 
 /// Columns the rail takes. Five where icons are painted, which is the room a 24 pt icon and
 /// its tile need, and four where they're cells.
@@ -518,6 +520,8 @@ enum Overlay {
     Math(MathPanel),
     /// Every emoji, for the comment being written.
     Emoji(crate::emoji::Picker),
+    /// A branch's name and the agent to start in it, for a worktree beside the project.
+    NewWorktree(NewWorktree),
 }
 
 /// What's left to do after a choice about unsaved changes.
@@ -557,6 +561,7 @@ enum Choice {
     /// Remove a comment and its replies.
     DeleteComment(u32),
     Git(GitChoice),
+    Worktree(WorktreeChoice),
 }
 
 /// The engines behind a keymap. `vim` runs the real Neovim when it's installed, since the
@@ -4401,6 +4406,10 @@ impl App {
                 self.paste_into_palette(text);
                 return;
             }
+            Overlay::NewWorktree(_) => {
+                self.new_worktree_paste(text);
+                return;
+            }
             Overlay::Prompt(prompt) => {
                 prompt.input.push_str(text);
                 return;
@@ -5965,6 +5974,7 @@ impl App {
             }
             Choice::ExportPdf(accepted) => self.export_pdf_with(accepted),
             Choice::Git(choice) => self.choose_git(choice),
+            Choice::Worktree(choice) => self.choose_worktree(choice),
             Choice::DiscardFile(path, untracked) => {
                 let root = self.workspace.root().to_path_buf();
                 if let Err(why) = cellix_review::discard(&root, &path, untracked) {
@@ -6199,6 +6209,7 @@ impl App {
             },
             Overlay::Find(find) => self.find_key(find, key),
             Overlay::Confirm(confirm) => self.confirm_key(confirm, key),
+            Overlay::NewWorktree(form) => self.new_worktree_key(form, key),
             Overlay::TablePicker(mut picker) => match key.key {
                 Key::Esc => {}
                 Key::Enter => self.insert_table(picker.size),
@@ -7991,6 +8002,7 @@ impl App {
                 self.dock.focused = wanted && self.dock.session().is_some();
             }
             Command::OpenGemini => self.open_agent("gemini"),
+            Command::NewWorktree => self.ask_new_worktree(),
             Command::OpenTranscript => self.open_transcript(None),
             Command::RenamePaneTab => match self.dock.active {
                 Some(index) => self.rename_session(index),
@@ -8348,7 +8360,7 @@ impl App {
 
     /// Runs the real program in the side pane, so it updates itself and works as it does
     /// anywhere else, with the file still in view.
-    fn open_agent(&mut self, agent: &str) {
+    pub(crate) fn open_agent(&mut self, agent: &str) {
         let root = self.workspace.root().to_path_buf();
         let shell = crate::agents::shell();
         let (name, env, launch) = if agent == crate::agents::SHELL.1 {
@@ -9791,6 +9803,13 @@ impl App {
                         self.review = Some(self.new_review(path));
                     }
                     None => {}
+                }
+            }
+            if mouse.kind == MouseKind::Right {
+                let screen = self.dock_screen().unwrap_or(area);
+                let top = self.dock.tops.of(Front::Agents);
+                if let Some(AgentHit::Worktree(path)) = self.agents.hit(screen, y, top) {
+                    self.open_worktree_menu(path, (x, y + 1));
                 }
             }
             return true;
@@ -13741,6 +13760,7 @@ impl App {
                     self.insert_math(index);
                 }
             }
+            Overlay::NewWorktree(form) => self.new_worktree_click(form, mouse.at()),
             Overlay::Confirm(confirm) => {
                 let y = self.confirm_area().y + 4;
                 let spots = self.confirm_buttons(&confirm);
@@ -14162,6 +14182,8 @@ impl App {
                 }
             }
             MenuAction::Start(program) => self.open_agent(program),
+            MenuAction::ReviewWorktree(path) => self.review = Some(self.new_review(path)),
+            MenuAction::RemoveWorktree(path) => self.ask_remove_worktree(path),
             MenuAction::StartRole(program, prompt) => self.start_role(program, &prompt),
             // The menu opens these itself.
             MenuAction::Submenu => {}
@@ -15821,6 +15843,7 @@ impl App {
             Overlay::TablePicker(picker) => picker.draw(grid, self.hover, theme),
             Overlay::Math(panel) => panel.draw(grid, self.hover, theme),
             Overlay::Emoji(picker) => picker.draw(grid, self.hover, &*self.measure, theme),
+            Overlay::NewWorktree(form) => self.draw_new_worktree(grid, form),
             Overlay::None => {}
         }
     }
@@ -18257,6 +18280,8 @@ fn test_summary(run: &TestRun) -> (String, String) {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WorkspaceRequest {
     Open(PathBuf),
+    /// Open the folder and start this agent in its side pane, by its program.
+    OpenAndStart(PathBuf, &'static str),
     Next,
     Previous,
     /// Go to the workspace at this folder and open what waits there under this key.
