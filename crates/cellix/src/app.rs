@@ -1503,6 +1503,9 @@ pub struct App {
     /// Stands in for an agent's program in tests, so none really starts.
     #[cfg(test)]
     agent_program: Option<String>,
+    /// The step spinners stand at, in place of the clock's, for a test to choose.
+    #[cfg(test)]
+    pub(crate) turn_at: Option<u8>,
     /// A kernel for each notebook that has run something, by its file.
     kernels: HashMap<PathBuf, Kernel>,
     /// Stands in for the kernel's runner in tests.
@@ -1621,6 +1624,8 @@ impl App {
             transcript_pages: HashMap::new(),
             #[cfg(test)]
             agent_program: None,
+            #[cfg(test)]
+            turn_at: None,
             spell: None,
             spell_on: cfg!(not(test)) && settings.spell_check != Some(false),
             last_edit: (0, std::time::Instant::now()),
@@ -14228,6 +14233,11 @@ impl App {
                 self.smooth_change = Some(on);
                 note = store("smooth_scroll", on.into());
             }
+            Control::Motion => {
+                let on = self.settings.motion == Some(false);
+                self.settings.motion = Some(on);
+                note = store("motion", on.into());
+            }
             Control::InlayHints => {
                 let on = self.settings.inlay_hints == Some(false);
                 self.settings.inlay_hints = Some(on);
@@ -14769,7 +14779,25 @@ impl App {
         bands
     }
 
+    /// The step every spinner stands at now, or none with motion turned off in Settings,
+    /// where a spinner is a still dot and nothing asks for frames. Inside Claude Code's pane
+    /// nothing turns: each step would be a new picture of its row crossing the connection,
+    /// or the whole pane's picture written again (see "Motion" in docs/DESIGN.md).
+    pub fn turn(&self) -> Option<u8> {
+        if self.settings.motion == Some(false) || self.in_pane {
+            return None;
+        }
+        #[cfg(test)]
+        if let Some(step) = self.turn_at {
+            return Some(step);
+        }
+        Some(cellix_render::spinner::step_at(
+            cellix_render::spinner::clock(),
+        ))
+    }
+
     pub fn draw(&self, grid: &mut Grid) {
+        grid.turn = self.turn();
         grid.bands = self.tile_bands();
         grid.cursor = None;
         grid.roomy = measures::roomy(self.measure.as_ref());
@@ -14860,6 +14888,7 @@ impl App {
                 row_height: crate::settings::row_height_name(self.settings.row_height.as_deref()),
                 keymap: &keymap,
                 smooth_scroll,
+                motion: self.settings.motion != Some(false),
                 minimap,
                 view: self.editor_view(),
                 inlay_hints,
@@ -18132,6 +18161,8 @@ pub(crate) fn machine_name() -> String {
     }
     std::env::var("COMPUTERNAME").unwrap_or_else(|_| "this machine".to_string())
 }
+#[cfg(test)]
+mod motion_tests;
 #[cfg(test)]
 mod view_tests;
 

@@ -604,6 +604,16 @@ impl SoftwareRasterizer {
                 let top = scale(bounds.y, ch) + (scale(bounds.h, ch) - side) / 2.0;
                 target.icon(*icon, left, top, side, *color);
             }
+            Paint::Spinner {
+                bounds,
+                color,
+                step,
+            } => {
+                let side = scale(bounds.h, th);
+                let left = scale(bounds.x, cw);
+                let top = scale(bounds.y, ch) + (scale(bounds.h, ch) - side) / 2.0;
+                target.spinner(*step, left, top, side, *color);
+            }
             Paint::Corners {
                 bounds,
                 radius,
@@ -900,6 +910,33 @@ impl Target<'_> {
                         self.blend(x, y, ink, sample(u, v, 3) as u8);
                     }
                 }
+            }
+        }
+    }
+
+    /// A spinner in a square box: its ring at a quarter of the colour's strength and its arc
+    /// over that at full, or with no step a still dot.
+    fn spinner(&mut self, step: Option<u8>, left: f32, top: f32, side: f32, color: Rgb) {
+        const SAMPLES: usize = 5;
+        let y0 = (top.floor() as i32).max(self.top);
+        let y1 = ((top + side).ceil() as i32).min(self.top + self.height as i32);
+        for y in y0..y1 {
+            for x in left.floor() as i32..(left + side).ceil() as i32 {
+                let (mut ring, mut arc) = (0, 0);
+                for sy in 0..SAMPLES {
+                    for sx in 0..SAMPLES {
+                        let u = (x as f32 + (sx as f32 + 0.5) / SAMPLES as f32 - left) / side;
+                        let v = (y as f32 + (sy as f32 + 0.5) / SAMPLES as f32 - top) / side;
+                        if (0.0..1.0).contains(&u) && (0.0..1.0).contains(&v) {
+                            let (r, a) = crate::spinner::inked(step, u, v);
+                            ring += usize::from(r);
+                            arc += usize::from(a);
+                        }
+                    }
+                }
+                let all = SAMPLES * SAMPLES;
+                self.blend(x, y, color, (ring * 64 / all) as u8);
+                self.blend(x, y, color, (arc * 255 / all) as u8);
             }
         }
     }
@@ -1390,6 +1427,57 @@ mod tests {
     /// A button on a pointed row's wash stands inside it where a row has room. Both were a
     /// control's height on a taller row, 39 px in one of 50, so the button's edges lay on the
     /// wash's. It keeps the 32 px it has on the terminal's line, in the middle of the wash.
+    #[test]
+    fn a_spinner_is_a_faint_ring_with_a_quarter_of_it_in_full_colour() {
+        let Some(r) = SoftwareRasterizer::new(17, 50) else {
+            return;
+        };
+        let mut r = r.with_type_row(37);
+        let black = Style {
+            bg: Rgb(0, 0, 0),
+            ..style()
+        };
+        let side = 0.86 * 37.0;
+        let (left, top) = (17.0, (50.0 - side) / 2.0);
+        let ring = 3.0 / 24.0;
+        // 0.86 of the line, 32 px across, in the middle of a row of 50: how blue it is at a
+        // place in its box.
+        let mut drawn = |turn: Option<u8>| {
+            let mut grid = Grid::new(6, 1, black);
+            grid.turn = turn;
+            grid.spinner(1.0, 0, 0.86, Rgb(0, 0, 200), black);
+            let image = r.row(&grid, 0);
+            assert!(image.rgb.chunks(3).all(|p| p[0] == 0), "only its colour");
+            move |u: f32, v: f32| {
+                let (x, y) = ((left + u * side) as usize, (top + v * side) as usize);
+                image.rgb[(y * image.width + x) * 3 + 2]
+            }
+        };
+        // On the ring at its middle height: at the first step the arc is at the right, and the
+        // left and the foot are only the faint ring, a quarter of the colour's strength.
+        let at = drawn(Some(0));
+        assert!(
+            at(1.0 - ring, 0.5) > 150,
+            "the arc: {}",
+            at(1.0 - ring, 0.5)
+        );
+        assert!(
+            (25..=70).contains(&at(ring, 0.5)),
+            "faint: {}",
+            at(ring, 0.5)
+        );
+        assert!((25..=70).contains(&at(0.5, 1.0 - ring)), "and at the foot");
+        assert_eq!(at(0.5, 0.5), 0, "nothing in its middle");
+        // Half a turn on, the arc is at the left.
+        let at = drawn(Some(5));
+        assert!(at(ring, 0.5) > 150);
+        assert!(at(1.0 - ring, 0.5) < 70);
+        // Still, it's a dot in its middle and no ring.
+        let at = drawn(None);
+        assert!(at(0.5, 0.5) > 150);
+        assert_eq!(at(ring, 0.5), 0);
+    }
+
     #[test]
     fn a_button_on_a_rows_wash_stands_inside_it() {
         let Some(r) = SoftwareRasterizer::new(17, 50) else {

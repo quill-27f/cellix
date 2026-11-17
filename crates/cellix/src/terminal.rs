@@ -244,6 +244,51 @@ fn session_wait(quiet: Duration) -> Duration {
 /// Background file checks run about twice a second.
 const TICK: Duration = Duration::from_millis(500);
 
+/// How long the loop waits for input: what it waits anyway, as little as a scroll under way
+/// asks, and no longer than until the next step of a spinner that's turning, which is the only
+/// time one asks anything. Nothing turning, it changes nothing.
+fn wait_for(
+    rest: Duration,
+    glide: Option<Duration>,
+    turning: Option<Instant>,
+    now: Instant,
+) -> Duration {
+    let wait = glide.unwrap_or(rest);
+    turning.map_or(wait, |at| wait.min(at.saturating_duration_since(now)))
+}
+
+/// What the loop shows this time round.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Frame {
+    /// Something changed: everything is drawn again.
+    Whole,
+    /// Only a spinner's step is due: the frame shown, with its spinners a step on.
+    Step,
+    /// Nothing.
+    Same,
+}
+
+/// Which, from whether anything asked for a frame, when a spinner's next step is due, and
+/// whether there's a frame shown to take it on.
+fn frame_now(redraw: bool, turning: Option<Instant>, shown: bool, now: Instant) -> Frame {
+    let due = turning.is_some_and(|at| now >= at);
+    if redraw || (due && !shown) {
+        Frame::Whole
+    } else if due {
+        Frame::Step
+    } else {
+        Frame::Same
+    }
+}
+
+/// When a grid just drawn wants drawing again: at the next step of its spinners' turn, if
+/// anything on it turns.
+fn next_turn(grid: &Grid, now: Instant) -> Option<Instant> {
+    use cellix_render::spinner;
+    grid.spinning
+        .then(|| now + spinner::until_next(spinner::clock()))
+}
+
 /// Restores the terminal however the loop ends, including on panic.
 struct Session;
 
@@ -1015,6 +1060,8 @@ pub fn run(options: Options) -> io::Result<()> {
     // When a key last came or anything last changed, which sets how often sessions are read.
     let mut lively = Instant::now();
     let mut shown: Option<Grid> = None;
+    // When something on screen turns, when its next step is due.
+    let mut turning: Option<Instant> = None;
     // How far below its own place each row at the foot was last drawn. See `on_the_foot`.
     let mut foot: Vec<usize> = Vec::new();
     let ghostty = std::env::var("TERM").is_ok_and(|t| t.contains("ghostty"));
@@ -1118,7 +1165,19 @@ pub fn run(options: Options) -> io::Result<()> {
                 shown = None;
                 redraw = true;
             }
-            if redraw {
+            let frame = frame_now(redraw, turning, shown.is_some(), Instant::now());
+            if let (Frame::Step, Some(grid)) = (frame, shown.as_mut()) {
+                // Nothing but a spinner's step: the frame shown, a step on, and nothing laid
+                // out or drawn again. Under a glide the step waits for the glide's frames.
+                if backend.gliding().is_none() {
+                    let now = cellix_render::spinner::clock();
+                    grid.turn_to(cellix_render::spinner::step_at(now));
+                    backend.present(grid, &mut out)?;
+                    out.flush()?;
+                }
+                turning = next_turn(grid, Instant::now());
+            }
+            if frame == Frame::Whole {
                 let (width, height) = spaces.size();
                 let mut grid = Grid::new(width, height, spaces.app().background());
                 let started = Instant::now();
@@ -1138,6 +1197,7 @@ pub fn run(options: Options) -> io::Result<()> {
                 slow.note(&phases);
                 phases = crate::slow::Phases::default();
                 foot = backend.foot_drops(grid.height(), grid.foot);
+                turning = next_turn(&grid, Instant::now());
                 if let Some(path) = &screen_text {
                     // Where its rows stand first, so whoever reads the text can press on what
                     // it says: only where rows are Cellix's own, and can stand off their places.
@@ -1174,7 +1234,7 @@ pub fn run(options: Options) -> io::Result<()> {
             } else {
                 POLL
             };
-            let wait = backend.gliding().unwrap_or(rest);
+            let wait = wait_for(rest, backend.gliding(), turning, Instant::now());
             // A signal interrupts the wait; the loop goes round and sees it.
             let ready = match ct::poll(wait) {
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
@@ -1564,6 +1624,127 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    /// The loop waits as long as it always did while nothing turns; with a spinner on screen,
+    /// no longer than its next step, and a step that's due is drawn at once.
+    #[test]
+    fn a_spinner_wakes_the_loop_only_for_its_next_step() {
+        let now = Instant::now();
+        let ms = Duration::from_millis;
+        assert_eq!(wait_for(POLL, None, None, now), POLL, "nothing turning");
+        assert_eq!(wait_for(POLL, Some(ms(8)), None, now), ms(8), "a glide");
+        assert_eq!(wait_for(POLL, None, Some(now + ms(20)), now), ms(20));
+        assert_eq!(wait_for(ms(8), None, Some(now + ms(20)), now), ms(8));
+        assert_eq!(wait_for(POLL, None, Some(now - ms(5)), now), Duration::ZERO);
+        // A grid with nothing turning on it asks for nothing; one with a spinner, its next
+        // step, which is never further off than a step.
+        let mut grid = Grid::new(20, 3, cellix_render::Style::default());
+        assert_eq!(next_turn(&grid, now), None);
+        grid.dot(
+            2.0,
+            1,
+            0.5,
+            cellix_render::Rgb(1, 2, 3),
+            cellix_render::Style::default(),
+        );
+        assert_eq!(next_turn(&grid, now), None, "a dot is still");
+        grid.turn = None;
+        grid.spinner(
+            2.0,
+            1,
+            0.5,
+            cellix_render::Rgb(1, 2, 3),
+            cellix_render::Style::default(),
+        );
+        assert_eq!(
+            next_turn(&grid, now),
+            None,
+            "nor does a spinner with motion off"
+        );
+        grid.turn = Some(3);
+        grid.spinner(
+            2.0,
+            1,
+            0.5,
+            cellix_render::Rgb(1, 2, 3),
+            cellix_render::Style::default(),
+        );
+        let due = next_turn(&grid, now).expect("turning");
+        assert!(due > now && due <= now + cellix_render::spinner::STEP);
+    }
+
+    /// A second of a spinner turning with nothing else changing draws the interface once, at
+    /// the start, and takes every step after on the frame shown; a change while it turns
+    /// draws everything again, and the steps go on from that frame.
+    #[test]
+    fn a_spinner_step_alone_draws_nothing_again() {
+        use cellix_render::spinner::{self, STEP};
+        let start = Instant::now();
+        // The interface: a spinner on its first row, and a count of what's changed on its
+        // second, which only a whole draw shows.
+        let draw = |step: u8, changes: usize| {
+            let mut grid = Grid::new(20, 2, cellix_render::Style::default());
+            grid.turn = Some(step);
+            grid.spinner(
+                1.0,
+                0,
+                0.65,
+                cellix_render::Rgb(1, 2, 3),
+                Default::default(),
+            );
+            grid.put_str(0, 1, &changes.to_string(), Default::default(), 20);
+            grid
+        };
+        let (mut whole, mut steps, mut changes) = (0, 0, 0);
+        let mut shown: Option<Grid> = None;
+        let mut turning = None;
+        let mut redraw = true;
+        let mut clock = Duration::ZERO;
+        while clock < Duration::from_secs(1) {
+            let now = start + clock;
+            // Half way, something else changes.
+            if clock == Duration::from_millis(500) {
+                changes += 1;
+                redraw = true;
+            }
+            let step = spinner::step_at(clock);
+            match frame_now(redraw, turning, shown.is_some(), now) {
+                Frame::Whole => {
+                    whole += 1;
+                    let grid = draw(step, changes);
+                    turning = grid.spinning.then(|| now + spinner::until_next(clock));
+                    shown = Some(grid);
+                    redraw = false;
+                }
+                Frame::Step => {
+                    steps += 1;
+                    let grid = shown.as_mut().unwrap();
+                    grid.turn_to(step);
+                    assert_eq!(*grid, draw(step, changes), "the frame a whole draw makes");
+                    turning = grid.spinning.then(|| now + spinner::until_next(clock));
+                }
+                Frame::Same => {}
+            }
+            clock += Duration::from_millis(5);
+        }
+        assert_eq!(whole, 2, "the first frame, and the change");
+        assert!(
+            (9..=11).contains(&steps),
+            "{steps} steps in a second of {STEP:?} each"
+        );
+        assert_eq!(
+            shown.unwrap().row_text(1).trim(),
+            "1",
+            "the change is on screen"
+        );
+        // Nothing turning, nothing is due.
+        assert_eq!(frame_now(false, None, true, start), Frame::Same);
+        assert_eq!(
+            frame_now(false, Some(start), false, start),
+            Frame::Whole,
+            "nothing to step"
+        );
     }
 
     #[test]

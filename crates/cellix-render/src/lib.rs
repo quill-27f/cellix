@@ -6,6 +6,7 @@ mod icon;
 mod measure;
 mod paint;
 mod raster;
+pub mod spinner;
 
 pub use grid::{Cell, FIELD_AIR, GLYPH, Grid, Rect, Rgb, Run, SMALL_GLYPH, Style, on_large_button};
 pub use icon::{Icon, Piece, inked};

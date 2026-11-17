@@ -143,6 +143,13 @@ pub enum Paint {
         icon: Icon,
         color: Rgb,
     },
+    /// Something under way: a faint ring with a quarter of it in full colour, at a step of its
+    /// turn, or with no step a still dot. Sized and placed as an icon is. See `spinner`.
+    Spinner {
+        bounds: Bounds,
+        color: Rgb,
+        step: Option<u8>,
+    },
     /// Fills the listed corners of `bounds` back in. Cells can't be rounded and paint
     /// can't go under text, so a rounded surface is cells with its corners painted out.
     Corners {
@@ -190,6 +197,7 @@ impl Paint {
             | Self::Wash { bounds, .. }
             | Self::Hairline { bounds, .. }
             | Self::Icon { bounds, .. }
+            | Self::Spinner { bounds, .. }
             | Self::Corners { bounds, .. }
             | Self::Strips { bounds, .. }
             | Self::Image { bounds, .. } => bounds.y,
@@ -204,6 +212,7 @@ impl Paint {
             | Self::Wash { bounds, .. }
             | Self::Hairline { bounds, .. }
             | Self::Icon { bounds, .. }
+            | Self::Spinner { bounds, .. }
             | Self::Corners { bounds, .. }
             | Self::Strips { bounds, .. } => bounds.y -= by,
             Self::Image { bounds, clip, .. } => {
@@ -224,6 +233,7 @@ impl Paint {
             Self::Hairline { bounds, .. }
             | Self::Wash { bounds, .. }
             | Self::Icon { bounds, .. }
+            | Self::Spinner { bounds, .. }
             | Self::Strips { bounds, .. }
             | Self::Corners { bounds, .. } => (bounds.x, bounds.x + bounds.w.max(1)),
             Self::Image { bounds, clip, .. } => (
@@ -272,6 +282,7 @@ impl Paint {
             }
             Self::Panel { bounds, .. }
             | Self::Icon { bounds, .. }
+            | Self::Spinner { bounds, .. }
             | Self::Strips { bounds, .. } => bounds.y -= top,
             Self::Image { bounds, clip, .. } => {
                 // A clip that doesn't reach into the row makes no difference to it.
@@ -296,6 +307,7 @@ impl Paint {
             Self::Hairline { bounds, .. }
             | Self::Wash { bounds, .. }
             | Self::Icon { bounds, .. }
+            | Self::Spinner { bounds, .. }
             | Self::Strips { bounds, .. }
             | Self::Corners { bounds, .. } => (bounds.y, bounds.y + bounds.h.max(1)),
             Self::Image { bounds, clip, .. } => (

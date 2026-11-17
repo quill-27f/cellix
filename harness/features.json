@@ -5486,5 +5486,12 @@
     "title": "A program in the side pane says how it is through OSC 7501 (herdr's Program Status Protocol), and Cellix keeps it as it keeps an agent's hooks' news: the Agents list, the tile, the inbox, notifications; hooks win",
     "test": "a_program_in_a_terminal_tab_says_how_it_is_through_osc_7501",
     "passes": true
+  },
+  {
+    "id": "spinner-turns",
+    "milestone": 15,
+    "title": "One spinner anything places on the grid: a faint ring with a turning quarter arc on pixels, braille on cells, a still dot with Motion off; a step on a row's tiles sends only placements once it has gone round, and a step alone draws nothing again",
+    "test": "a_spinner_step_alone_draws_nothing_again",
+    "passes": true
   }
 ]

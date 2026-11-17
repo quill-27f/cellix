@@ -411,6 +411,11 @@ fn halve(rgb: &[u8], width: usize, height: usize) -> Vec<u8> {
     out
 }
 
+/// A row's picture as the pane sends it by value, for measuring what that costs.
+pub fn row_png(rgb: &[u8], width: usize, height: usize) -> Vec<u8> {
+    encode_png(rgb, width, height)
+}
+
 fn encode_png(rgb: &[u8], width: usize, height: usize) -> Vec<u8> {
     let mut bytes = Vec::new();
     let mut encoder = png::Encoder::new(&mut bytes, width as u32, height as u32);

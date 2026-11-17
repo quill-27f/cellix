@@ -66,6 +66,47 @@ did, and the edge is drawn in the accent while it's held, as VS Code's sash is. 
 resize live over a link would take placing the tiles already sent with a different crop
 instead of sending new ones, which hasn't been built or measured.
 
+### Motion
+
+One mark says something is under way, wherever it stands (`Grid::spinner`): where there are
+pictures, a ring at a quarter of its colour's strength with a quarter of it in full colour,
+round at its ends, turning; on cells the braille frames `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`. Its colour says what
+it means: the accent for working. A turn is ten steps of 90 ms, 0.9 s, and every spinner on
+screen stands at the same step, from one clock (`spinner::clock`). A still dot in the same
+colour is the same shape with no step (`Grid::dot`), which is what a spinner becomes with
+Motion off on Settings' Appearance page (`motion: false`).
+
+The grid says when something on it turns (`Grid::spinning`), and the loop waits no longer
+than the next step for input. When that step is all there is to show, nothing is laid out or
+drawn again: the frame shown is taken a step on, each spinner's paint and letter
+(`Grid::turn_to`), and presented. Anything else that changes draws the whole interface as
+before, and the steps carry on from that frame. Nothing turning, the loop waits as it always
+has, so a still Cellix sends nothing and wakes for nothing new; a spinner out of view isn't
+drawn and asks for nothing. It keeps turning while the terminal says Cellix isn't the window
+in front: a window beside the one being typed in is still looked at, and a spinner that stops
+there reads as something that hung, for a kilobyte a second.
+
+Ten steps are ten pictures of the row a spinner is on, and they come round: once the row's
+ten tiles are in the terminal, a step sends no picture, only that row's placement moved from
+one tile to another. Measured with `cargo run -p cellix --example spin` on a window of 150 by
+44 at 17 by 37 px cells and rows of 50, a spinner in the side pane's tab row, a row of its
+list and the status bar, 11 steps a second:
+
+| Tier | First turn, a step | After, a step | After, a second |
+|---|---|---|---|
+| Pixels, direct (also over SSH) | 1.8 to 14.3 KB | 83 to 91 B | 1 KB |
+| Pixels, tmux's placeholders | 1.7 to 13.8 KB | 163 to 652 B | 2 to 7 KB |
+| Cells | 75 B | 75 B | 0.8 KB |
+| Inside Claude Code, by value | 11 to 15 KB | the same | 120 to 160 KB |
+| Inside Claude Code, by file | 11 MB written | the same | |
+
+So it turns at that rate everywhere but inside Claude Code: over SSH a step costs what a moved
+caret does. A row whose other content keeps changing pays a new tile a step until it stops,
+since each step is then a picture the terminal hasn't had: on the status bar, a full width
+tile of about 14 KB. Inside Claude Code's pane a spinner is the still dot. The mod keeps only
+the pictures on screen, so each step there would be its row's picture crossing again, and by
+file the whole pane's picture written again; Claude Code has a spinner of its own.
+
 ### No GPU renderer
 
 Output would have to be read back to the CPU before it could be sent to the terminal, one

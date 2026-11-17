@@ -51,6 +51,10 @@ const SMOOTH: (&str, &str) = (
     "The wheel moves by pixels. Turn this off on a slow link.",
 );
 const MINIMAP: (&str, &str) = ("Minimap", "The file at a glance, when the window has room.");
+const MOTION: (&str, &str) = (
+    "Motion",
+    "Spinners turn while something is under way. Off, each is a still dot.",
+);
 const NOTIFY: (&str, &str) = (
     "Notifications",
     "When something needs you and Cellix isn't the window in front, the terminal says so.",
@@ -77,8 +81,8 @@ const ROW_HEIGHTS: [(&str, &str); 3] = [
 const CARDS_ROW: u16 = 3;
 const ROW_HEIGHT_ROW: u16 = CARDS_ROW + CARD_HEIGHT + 2;
 const SWITCHES_ROW: u16 = ROW_HEIGHT_ROW + 3;
-/// Smooth scrolling, the minimap, the view's four and notifications.
-const APPEARANCE_SWITCHES: u16 = 7;
+/// Smooth scrolling, motion, the minimap, the view's four and notifications.
+const APPEARANCE_SWITCHES: u16 = 8;
 /// The rows all of that takes, which a short window scrolls through.
 const APPEARANCE_ROWS: u16 = SWITCHES_ROW + 3 * APPEARANCE_SWITCHES - 1;
 /// The theme cards' names as a row of choices has room for them.
@@ -135,6 +139,7 @@ pub enum Control {
     Theme(&'static str),
     RowHeight(&'static str),
     SmoothScroll,
+    Motion,
     Minimap,
     BracketPairs,
     WordWrap,
@@ -169,6 +174,7 @@ pub struct Values<'a> {
     pub row_height: &'a str,
     pub keymap: &'a str,
     pub smooth_scroll: bool,
+    pub motion: bool,
     pub minimap: bool,
     pub view: EditorView,
     pub inlay_hints: bool,
@@ -292,8 +298,9 @@ impl Row {
 }
 
 /// Every switch in Settings, in the order its pages have them, with its words.
-const SWITCHES: [(Control, (&str, &str)); 9] = [
+const SWITCHES: [(Control, (&str, &str)); 10] = [
     (Control::SmoothScroll, SMOOTH),
+    (Control::Motion, MOTION),
     (Control::Minimap, MINIMAP),
     (Control::WordWrap, WORD_WRAP),
     (Control::StickyScroll, STICKY_SCROLL),
@@ -324,6 +331,7 @@ const INLAY_HINTS: (&str, &str) = (
 fn switch_on(control: Control, values: &Values) -> bool {
     match control {
         Control::SmoothScroll => values.smooth_scroll,
+        Control::Motion => values.motion,
         Control::Minimap => values.minimap,
         Control::WordWrap => values.view.word_wrap,
         Control::StickyScroll => values.view.sticky_scroll,
@@ -617,7 +625,7 @@ impl SettingsPage {
 
     /// Appearance's switches, in the order the page has them.
     fn appearance_switches() -> Vec<Control> {
-        let mut all = vec![Control::SmoothScroll, Control::Minimap];
+        let mut all = vec![Control::SmoothScroll, Control::Motion, Control::Minimap];
         all.extend(VIEW_SWITCHES);
         all.push(Control::Notify);
         debug_assert_eq!(all.len(), APPEARANCE_SWITCHES as usize);
@@ -2052,18 +2060,22 @@ mod tests {
 
     #[test]
     fn every_control_can_be_reached_by_both_mouse_and_keys() {
+        // Tall enough for all of Appearance, whose last switch a short window scrolls to
+        // (`row_height_is_chosen_in_settings` has that): 41 rows since Motion joined it.
+        let area = Rect { h: 44, ..AREA };
         let mut settings = page(Section::Appearance);
-        let spots = settings.controls(AREA);
+        let spots = settings.controls(area);
         assert!(spots.contains(&(spots[4].0, Control::Theme("auto"))));
+        assert!(spots.iter().any(|(_, c)| *c == Control::Motion));
         for (rect, control) in &spots {
-            assert_eq!(settings.control_at(AREA, rect.x, rect.y), Some(*control));
+            assert_eq!(settings.control_at(area, rect.x, rect.y), Some(*control));
         }
         for _ in 0..spots.len() {
-            settings.step(AREA, 1);
+            settings.step(area, 1);
         }
-        assert_eq!(settings.focused(AREA), spots.last().map(|s| s.1));
-        settings.step(AREA, 1);
-        assert_eq!(settings.focused(AREA), Some(spots[0].1), "and it wraps");
+        assert_eq!(settings.focused(area), spots.last().map(|s| s.1));
+        settings.step(area, 1);
+        assert_eq!(settings.focused(area), Some(spots[0].1), "and it wraps");
     }
 
     #[test]

@@ -149,6 +149,14 @@ pub struct Grid {
     /// bar. A backend that fills the window under its last row stands them evenly in what's
     /// there.
     pub foot: u16,
+    /// The step of its turn every spinner drawn here stands at, from the clock in
+    /// `spinner`, or none where motion is off: a spinner is then a still dot.
+    pub turn: Option<u8>,
+    /// Whether anything drawn here is turning, so whatever shows the grid draws it again at
+    /// the next step. Nothing turning, nothing asks for a frame.
+    pub spinning: bool,
+    /// The cells turning spinners stand in, so a step can be taken on the grid as drawn.
+    turning: Vec<(u16, u16)>,
     /// Runs of `paint` kept to a band of rows: as (from, to) in `paint` and (top, bottom) in
     /// rows. A list scrolled in a pane paints its cards whole, and the part of one that's
     /// past the pane's edge mustn't land on the bar beside it.
@@ -208,8 +216,84 @@ impl Grid {
             edge: None,
             roomy: false,
             foot: 1,
+            turn: Some(0),
+            spinning: false,
+            turning: Vec::new(),
             kept: Vec::new(),
         }
+    }
+
+    /// Something under way, in the colour of what it means: a faint ring with a quarter of it
+    /// turning where there are pictures, a turning braille letter on cells, and with motion
+    /// off a still dot. Its box is `size` rows of the terminal's line square, as an icon's
+    /// is, starting at `x` and standing in the middle of row `y`; on cells it's the one
+    /// letter at `x`.
+    pub fn spinner(&mut self, x: f32, y: u16, size: f32, color: Rgb, style: Style) {
+        let step = self.turn;
+        self.spinning |= step.is_some();
+        let letter = step.map_or(crate::spinner::STILL, |s| {
+            crate::spinner::FRAMES[s as usize % crate::spinner::FRAMES.len()]
+        });
+        self.mark(x, y, size, color, style, (step, letter));
+    }
+
+    /// Takes every spinner on the grid to `step` of its turn, as drawing it again at that step
+    /// would: when nothing else has changed, a step is this and not the whole interface laid
+    /// out again. Still ones stay still.
+    pub fn turn_to(&mut self, step: u8) {
+        if self.turn.is_none() {
+            return;
+        }
+        self.turn = Some(step);
+        for paint in &mut self.paint {
+            if let Paint::Spinner { step: Some(at), .. } = paint {
+                *at = step;
+            }
+        }
+        let letter = crate::spinner::FRAMES[step as usize % crate::spinner::FRAMES.len()];
+        for &(x, y) in &self.turning {
+            let at = y as usize * self.width as usize + x as usize;
+            // Unless something drawn after it stands there now.
+            let cell = self.cells.get_mut(at).filter(|_| x < self.width);
+            if let Some(cell) = cell.filter(|c| crate::spinner::FRAMES.contains(&c.symbol.as_str()))
+            {
+                cell.symbol = letter.into();
+            }
+        }
+    }
+
+    /// A still dot in the colour of what it means, sized and placed as a spinner is: a
+    /// state that wants seeing, as an agent that needs you or one that's done.
+    pub fn dot(&mut self, x: f32, y: u16, size: f32, color: Rgb, style: Style) {
+        self.mark(x, y, size, color, style, (None, crate::spinner::STILL));
+    }
+
+    fn mark(
+        &mut self,
+        x: f32,
+        y: u16,
+        size: f32,
+        color: Rgb,
+        style: Style,
+        (step, letter): (Option<u8>, &str),
+    ) {
+        let cell = x.floor() as u16;
+        if step.is_some() {
+            self.turning.push((cell, y));
+        }
+        if cell < self.width && y < self.height {
+            let shown = Style {
+                fg: color,
+                painted: true,
+                ..style
+            };
+            self.put_str(cell, y, letter, shown, cell + 1);
+        }
+        self.paint.push(Paint::Spinner {
+            bounds: Bounds::cells(x, y as f32 + (1.0 - size) / 2.0, 2.0, size),
+            color,
+            step,
+        });
     }
 
     /// Text in the interface font on the pixel tiers, and ordinary cells on the cell tier.
@@ -929,5 +1013,42 @@ mod tests {
         only_right.cells[1].style.bold = true;
         assert_eq!(only_right.diff(&before)[0].x, 0);
         assert_eq!(after.diff(&before)[0].x, 0);
+    }
+
+    /// A step taken on the grid as drawn is the grid drawn at that step: the frame the loop
+    /// shows when nothing but a spinner changed is the one a whole draw would have made.
+    #[test]
+    fn a_step_on_the_drawn_grid_is_the_grid_drawn_at_that_step() {
+        let draw = |step: u8| {
+            let mut grid = Grid::new(30, 4, Style::default());
+            grid.turn = Some(step);
+            grid.put_str(0, 1, "working", Style::default(), 30);
+            grid.spinner(9.0, 1, 0.65, Rgb(1, 2, 3), Style::default());
+            grid.dot(12.0, 1, 0.65, Rgb(4, 5, 6), Style::default());
+            grid.spinner(3.0, 3, 0.65, Rgb(1, 2, 3), Style::default());
+            grid
+        };
+        let mut stepped = draw(0);
+        for step in [1, 7, 0, 9] {
+            stepped.turn_to(step);
+            assert_eq!(stepped, draw(step), "step {step}");
+        }
+        assert_eq!(
+            stepped.cell(12, 1).symbol,
+            crate::spinner::STILL,
+            "a dot stays"
+        );
+        // Over a spinner's cell, what's drawn after it is left as it is.
+        let mut covered = draw(0);
+        covered.put_str(8, 1, "menu", Style::default(), 30);
+        covered.turn_to(4);
+        assert_eq!(covered.row_text(1).trim_end(), "working menu●");
+        // Motion off, nothing turns.
+        let mut still = Grid::new(30, 4, Style::default());
+        still.turn = None;
+        still.spinner(9.0, 1, 0.65, Rgb(1, 2, 3), Style::default());
+        let before = still.clone();
+        still.turn_to(3);
+        assert_eq!(still, before);
     }
 }

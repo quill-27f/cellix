@@ -1492,6 +1492,53 @@ mod tests {
         assert_eq!(count(&again, "\x1b_G"), 0);
     }
 
+    /// A spinner turns through ten steps and comes round to the first: once each step's
+    /// tile is in the terminal, turning sends no picture, only the row's placement moved from
+    /// one tile it holds to another, and the rows round it send nothing at all.
+    #[test]
+    fn a_turning_spinner_sends_only_placements_once_it_has_gone_round() {
+        use cellix_render::spinner::STEPS;
+        let mut b = PixelBackend::new(Flat, Placement::Direct, DEFAULT_QUOTA);
+        let at = |step: u8| {
+            let mut grid = page(0);
+            grid.turn = Some(step);
+            grid.spinner(3.0, 2, 0.65, cellix_render::Rgb(1, 2, 3), Style::default());
+            assert!(grid.spinning);
+            grid
+        };
+        present(&mut b, &at(0));
+        let first: Vec<String> = (1..=STEPS)
+            .map(|n| present(&mut b, &at(n % STEPS)))
+            .collect();
+        for (n, frame) in first.iter().enumerate().take(STEPS as usize - 1) {
+            assert_eq!(
+                count(frame, "a=t,"),
+                1,
+                "step {} is new: its row's tile",
+                n + 1
+            );
+        }
+        assert_eq!(
+            count(&first[STEPS as usize - 1], "a=t,"),
+            0,
+            "the first step again"
+        );
+        for n in 1..=3 * STEPS {
+            let frame = present(&mut b, &at(n % STEPS));
+            assert_eq!(count(&frame, "a=t,"), 0, "round again: nothing new to send");
+            assert_eq!(count(&frame, "a=p,"), 1, "the one row's placement");
+            assert_eq!(count(&frame, "a=d,"), 1, "and the one it replaces");
+            assert!(frame.len() < 160, "{} bytes a step", frame.len());
+        }
+        // Still, with motion off, it's one picture and nothing turns.
+        let mut still = page(0);
+        still.turn = None;
+        still.spinner(3.0, 2, 0.65, cellix_render::Rgb(1, 2, 3), Style::default());
+        assert!(!still.spinning);
+        present(&mut b, &still);
+        assert_eq!(count(&present(&mut b, &still), "\x1b_G"), 0);
+    }
+
     #[test]
     fn identical_rows_share_a_tile() {
         let mut b = PixelBackend::new(Flat, Placement::Direct, DEFAULT_QUOTA);
