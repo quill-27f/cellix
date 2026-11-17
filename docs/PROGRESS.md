@@ -2959,3 +2959,6 @@ Item 5 of the herdr work (the a2a track): the backend. The nesting in the Agents
 ## A paste counts toward a draft only as far as it matters (2026-11-17)
 
 - A person's paste into an agent counted every character of it toward their draft, which `cellix agent send` waits for: a megabyte's paste took a third of a second in a debug build, and `a_paste_into_a_program_not_reading_doesnt_wait_for_it` failed on a loaded machine. It counts the first 4096 (`PASTE_COUNTED`): only whether there's a draft matters.
+## A host's last words reach its viewers before it ends (2026-11-17)
+
+A fix to the queues of "Writes never freeze the loop", found by `a_program_that_ends_while_nobody_is_attached_is_told_about_later` failing in a later gate: with what a host sends each viewer queued on a thread, a host whose program had ended told its viewer so and ended at once, taking the queue with it, so the viewer heard neither the program's last output nor that it was over. A host that's ending now waits up to two seconds for each viewer's queue to be written (`Outbox::delivered`), and counts as having been heard only by viewers it reached, as before the queues.

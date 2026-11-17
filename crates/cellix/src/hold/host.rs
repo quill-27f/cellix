@@ -28,6 +28,8 @@ const BEHIND: usize = 4 * 1024 * 1024;
 /// A viewer that reads nothing of that for this long has stopped, as a laptop asleep with
 /// Cellix open, and is let go, so the program and the other viewers carry on.
 const STALLED: Duration = Duration::from_secs(2);
+/// How long a host that's ending waits for its viewers to have what they were last sent.
+const LAST_WORDS: Duration = Duration::from_secs(2);
 
 const OUTPUT: u8 = b'o';
 const EXITED: u8 = b'x';
@@ -363,6 +365,15 @@ impl Shared {
         far.map(|c| (c.visit, c.out.clone())).collect()
     }
 
+    /// Whether anyone heard what was last told: each viewer's queue is waited on, and those
+    /// it couldn't reach are let go. The host is about to end, which would take with it
+    /// what its viewers' queues hold.
+    fn heard(&mut self) -> bool {
+        self.clients
+            .retain(|client| client.out.delivered(LAST_WORDS));
+        !self.clients.is_empty()
+    }
+
     /// Lets a viewer go: what it hasn't read is dropped, and its connection closed.
     fn let_go(&mut self, visit: u64) {
         self.clients.retain(|client| {
@@ -645,7 +656,7 @@ pub fn serve(socket: &Path) -> io::Result<()> {
             shared.exited = true;
             // Only someone who really heard it lets the host go. Otherwise it waits to say so.
             shared.tell(EXITED, &[]);
-            if !shared.clients.is_empty() {
+            if shared.heard() {
                 finish(&place);
             }
         }
@@ -676,7 +687,9 @@ pub fn serve(socket: &Path) -> io::Result<()> {
             });
             if shared.exited {
                 shared.tell(EXITED, &[]);
-                finish(socket);
+                if shared.heard() {
+                    finish(socket);
+                }
             }
         }
         let (writer, master, leaving) = (writer.clone(), master.clone(), shared.clone());
