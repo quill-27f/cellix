@@ -1601,3 +1601,151 @@ fn an_agent_asking_while_cellix_is_behind_becomes_a_terminal_notification() {
     screen.send(b"\x11");
     screen.wait_exit();
 }
+
+/// Copilot CLI and Cursor's agent aren't installed here, so stand-ins for them are: each runs
+/// the hooks `cellix setup` installed for it, as its own agent's docs say it runs them, with
+/// what they say it sends, and prints that it ran. Started from the Agents list as the real
+/// one would be, under its session host, what the hooks told Cellix shows in the list, and
+/// the session's id is left beside the host for Resume.
+#[test]
+#[cfg(unix)]
+fn stand_ins_for_copilot_and_cursor_report_through_the_hooks_setup_installed() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = project();
+    let home = tempfile::tempdir().unwrap();
+    let bin = home.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    for agent in ["copilot", "cursor"] {
+        let setup = std::process::Command::new(env!("CARGO_BIN_EXE_cellix"))
+            .args(["setup", agent])
+            .env("HOME", home.path())
+            .env_remove("COPILOT_HOME")
+            .output()
+            .unwrap();
+        assert!(setup.status.success(), "{setup:?}");
+    }
+    // Each stand-in finds its hook's command in the file setup wrote, by the event's name, and
+    // runs it in a shell with the event's input, as the agent does.
+    let stand_in = |name: &str, hooks: &str, key: &str, events: &[(&str, String)]| {
+        let mut script = format!(
+            "#!/bin/sh\nhooks=\"$HOME/{hooks}\"\n\
+             run() {{ cmd=$(sed -n \"/\\\"$1\\\"/,/\\\"{key}\\\"/p\" \"$hooks\" | \
+             sed -n 's/.*\"{key}\": \"\\(.*\\)\",$/\\1/p' | head -1 | sed 's/\\\\\"/\"/g'); \
+             printf '%s' \"$2\" | sh -c \"$cmd\"; }}\n\
+             echo 'stand-in {name} ran'\n"
+        );
+        for (event, input) in events {
+            script.push_str(&format!("run {event} '{input}'\n"));
+        }
+        script.push_str("echo 'stand-in hooks ran'\nsleep 60\n");
+        let path = bin.join(name);
+        std::fs::write(&path, script).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    let root = dir.path().canonicalize().unwrap().display().to_string();
+    stand_in(
+        "copilot",
+        ".copilot/hooks/cellix.json",
+        "bash",
+        &[
+            (
+                "SessionStart",
+                format!(r#"{{"session_id":"cp-1","cwd":"{root}","source":"startup"}}"#),
+            ),
+            (
+                "UserPromptSubmit",
+                format!(r#"{{"session_id":"cp-1","cwd":"{root}","prompt":"Fix it"}}"#),
+            ),
+            (
+                "Notification",
+                format!(
+                    r#"{{"session_id":"cp-1","cwd":"{root}","notification_type":"permission_prompt","message":"Allow cargo publish?"}}"#
+                ),
+            ),
+        ],
+    );
+    stand_in(
+        "cursor-agent",
+        ".cursor/hooks.json",
+        "command",
+        &[
+            (
+                "sessionStart",
+                format!(
+                    r#"{{"session_id":"cu-1","conversation_id":"cu-1","workspace_roots":["{root}"]}}"#
+                ),
+            ),
+            (
+                "beforeSubmitPrompt",
+                format!(
+                    r#"{{"conversation_id":"cu-1","workspace_roots":["{root}"],"prompt":"Fix it"}}"#
+                ),
+            ),
+            (
+                "stop",
+                format!(
+                    r#"{{"conversation_id":"cu-1","workspace_roots":["{root}"],"status":"completed"}}"#
+                ),
+            ),
+        ],
+    );
+    let cellix = Path::new(env!("CARGO_BIN_EXE_cellix")).parent().unwrap();
+    let path = std::env::join_paths([
+        bin.as_path(),
+        cellix,
+        Path::new("/usr/bin"),
+        Path::new("/bin"),
+    ])
+    .unwrap();
+    let path = std::path::PathBuf::from(path);
+    // A cache of the test's own, short enough for a socket's path, to find the hosts in.
+    let cache = tempfile::tempdir_in("/tmp").unwrap();
+    let env = [
+        ("HOME", home.path()),
+        ("PATH", path.as_path()),
+        ("XDG_CACHE_HOME", cache.path()),
+    ];
+    let mut screen = Screen::start_with(dir.path(), &[], &env);
+    screen.wait_for("other.txt");
+    // The Agents list, through the palette, waited for until the palette has gone.
+    let list_agents = |screen: &mut Screen| {
+        screen.send(b"\x1b[112;6u");
+        screen.wait_for("Type to search");
+        screen.send(b"List Agents");
+        screen.wait_for("Agent: List Agents");
+        std::thread::sleep(Duration::from_millis(200));
+        screen.send(b"\r");
+        screen.wait_gone("Type to search");
+    };
+    // The list stays in front after each agent's news, as List Agents again would close it.
+    list_agents(&mut screen);
+    for (name, says) in [
+        ("Copilot CLI", "Allow cargo publish?"),
+        ("Cursor CLI", "Finished"),
+    ] {
+        screen.wait_for(name);
+        let contents = screen.contents();
+        let (row, column) = contents
+            .lines()
+            .enumerate()
+            .filter_map(|(row, line)| Some((row, line[..line.find(name)?].chars().count())))
+            .last()
+            .unwrap_or_else(|| panic!("no {name} to start: {contents}"));
+        let (x, y) = (column + 2, row + 1);
+        screen.send(format!("\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m").as_bytes());
+        screen.wait_for("stand-in hooks ran");
+        list_agents(&mut screen);
+        screen.wait_for(says);
+    }
+    // Each one's session is left beside its host, which is what Resume reads.
+    let left: Vec<String> = walk(cache.path())
+        .into_iter()
+        .filter(|p| p.extension().is_some_and(|e| e == "agent"))
+        .map(|p| std::fs::read_to_string(p).unwrap())
+        .collect();
+    for (agent, session) in [("Copilot", "cp-1"), ("Cursor", "cu-1")] {
+        let word = format!(r#""agent":"{agent}","session":"{session}""#);
+        assert!(left.iter().any(|l| l.contains(&word)), "{word} in {left:?}");
+    }
+    screen.send(b"\x11");
+}

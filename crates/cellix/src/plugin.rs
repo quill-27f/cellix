@@ -61,6 +61,35 @@ const GEMINI_FILES: [(&str, &str); 3] = [
     ),
 ];
 
+/// OpenCode's plugin and Copilot CLI's hooks: one file each, in a folder of the agent's that
+/// it reads every file of.
+pub(crate) const OPENCODE_PLUGIN: &str = include_str!("../integrations/opencode/cellix.js");
+pub(crate) const COPILOT_HOOKS: &str = include_str!("../integrations/copilot/cellix.json");
+/// Cursor's hooks, which go into its one file beside the user's own.
+const CURSOR_HOOKS: &str = include_str!("../integrations/cursor/hooks.json");
+/// What the prompt hook says when Cellix isn't there, since Cursor waits on its word.
+const CURSOR_GO_ON: &str = " 2>/dev/null || echo '{\\\"continue\\\": true}'";
+
+/// Cursor's hooks as this platform runs them: PowerShell has no `/dev/null` and no `||`.
+pub(crate) fn cursor_hooks() -> String {
+    if cfg!(windows) {
+        CURSOR_HOOKS.replace(QUIET, "").replace(CURSOR_GO_ON, "")
+    } else {
+        CURSOR_HOOKS.to_string()
+    }
+}
+
+/// Writes one file, and its folder, leaving it alone when it already says that.
+pub(crate) fn write_file(path: &Path, text: &str) -> io::Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if fs::read_to_string(path).is_ok_and(|now| now == text) {
+        return Ok(());
+    }
+    fs::write(path, text)
+}
+
 fn data_dir(var: impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
     let data = var("XDG_DATA_HOME")
         .filter(|d| !d.is_empty())

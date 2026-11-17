@@ -30,15 +30,21 @@ const DOCKED_STEPS: [&str; 2] = [
     "An agent you start runs here, under the file.",
     "Select text in the file to comment or ask it.",
 ];
-const AGENTS: [(&str, &str); 3] = [
+const AGENTS: [(&str, &str); 6] = [
     ("Claude Code", "claude"),
     ("Codex", "codex"),
     ("Gemini CLI", "gemini"),
+    ("OpenCode", "opencode"),
+    ("Copilot CLI", "copilot"),
+    ("Cursor CLI", "cursor-agent"),
 ];
-/// The name of an agent's tab for the name its hooks give it: Gemini CLI's say "Gemini".
+/// The name of an agent's tab for the name its hooks give it: Gemini CLI's say "Gemini",
+/// Copilot CLI's "Copilot" and Cursor's "Cursor".
 pub fn tab_name(agent: &str) -> &str {
     match agent {
         "Gemini" => "Gemini CLI",
+        "Copilot" => "Copilot CLI",
+        "Cursor" => "Cursor CLI",
         other => other,
     }
 }
@@ -84,8 +90,9 @@ pub fn program_of(name: &str) -> Option<&'static str> {
 /// which session to pick up.
 pub fn resume_args(name: &str, session: &str) -> Option<Vec<String>> {
     let words: &[&str] = match name {
-        "Claude Code" => &["--resume"],
+        "Claude Code" | "Copilot CLI" | "Cursor CLI" => &["--resume"],
         "Codex" => &["resume"],
+        "OpenCode" => &["--session"],
         _ => return None,
     };
     let mut args: Vec<String> = words.iter().map(|w| w.to_string()).collect();
@@ -159,12 +166,8 @@ fn agents_in(output: &str, root: &Path) -> Vec<String> {
         } else if let Some(folder) = line.strip_prefix('n')
             && Path::new(folder).starts_with(root)
         {
-            found.push(match command {
-                "claude" => "Claude Code".to_string(),
-                "codex" => "Codex".to_string(),
-                "gemini" => "Gemini CLI".to_string(),
-                other => other.to_string(),
-            });
+            let named = AGENTS.iter().find(|(_, program)| *program == command);
+            found.push(named.map_or_else(|| command.to_string(), |(name, _)| name.to_string()));
         }
     }
     found
@@ -237,7 +240,8 @@ impl Agents {
         std::thread::spawn(move || {
             let output = std::process::Command::new("lsof")
                 .args(["-a", "-d", "cwd", "-c", "claude", "-c", "codex"])
-                .args(["-c", "gemini", "-Fcn"])
+                .args(["-c", "gemini", "-c", "opencode", "-c", "copilot"])
+                .args(["-c", "cursor-agent", "-Fcn"])
                 .output();
             if let (Ok(output), Ok(mut seen)) = (output, seen.lock()) {
                 *seen = agents_in(&String::from_utf8_lossy(&output.stdout), &root);

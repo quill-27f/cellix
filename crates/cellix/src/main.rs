@@ -53,8 +53,11 @@ Usage: cellix [--wait] [files]
   cellix plan <file>        Holds a plan for review, and prints the verdict
   cellix comments [--take]  Review comments, as JSON
   cellix open <file>        Opens a file in the running Cellix
-  cellix setup [claude|codex|gemini]  Connects an agent
+  cellix setup [claude|codex|gemini|opencode|copilot|cursor]
+                            Connects an agent
   cellix setup --remove     Disconnects Claude Code
+  cellix setup <opencode|copilot|cursor> --remove
+                            Disconnects that agent
 ";
 
 /// `cellix ls`: each folder with something running in Cellix, stopped with the machine and
@@ -166,19 +169,31 @@ fn setup(install: bool) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// `cellix setup codex` and `gemini` do what their Install buttons in Settings do.
+/// `cellix setup codex` and the others do what their Install buttons in Settings do.
 fn setup_agent(agent: &str) -> ExitCode {
+    use cellix::integrations;
     let var = |name: &str| std::env::var(name).ok();
-    let (done, next) = if agent == "codex" {
-        (
-            cellix::integrations::install_codex(var),
+    let (done, next) = match agent {
+        "codex" => (
+            integrations::install_codex(var),
             "Run /hooks once in Codex to trust its hooks.",
-        )
-    } else {
-        (
-            cellix::integrations::install_gemini(var),
+        ),
+        "opencode" => (
+            integrations::install_opencode(var),
+            "OpenCode loads it as it starts.",
+        ),
+        "copilot" => (
+            integrations::install_copilot(var),
+            "Copilot CLI loads it as it starts.",
+        ),
+        "cursor" => (
+            integrations::install_cursor(var),
+            "Cursor's agent loads it as it starts.",
+        ),
+        _ => (
+            integrations::install_gemini(var),
             "Restart Gemini CLI to load it.",
-        )
+        ),
     };
     match done {
         Ok(()) => {
@@ -187,6 +202,27 @@ fn setup_agent(agent: &str) -> ExitCode {
         }
         Err(e) => {
             eprintln!("cellix: could not install: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// `cellix setup opencode --remove` and the others take back exactly what setup added.
+fn remove_agent(agent: &str) -> ExitCode {
+    use cellix::integrations;
+    let var = |name: &str| std::env::var(name).ok();
+    let done = match agent {
+        "opencode" => integrations::remove_opencode(var),
+        "copilot" => integrations::remove_copilot(var),
+        _ => integrations::remove_cursor(var),
+    };
+    match done {
+        Ok(()) => {
+            println!("Removed.");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("cellix: could not remove: {e}");
             ExitCode::FAILURE
         }
     }
@@ -282,7 +318,19 @@ fn main() -> ExitCode {
         }
         ["setup"] => return setup(false),
         ["setup", "--install" | "claude"] => return setup(true),
-        ["setup", agent @ ("codex" | "gemini")] => return setup_agent(agent),
+        [
+            "setup",
+            agent @ ("codex" | "gemini" | "opencode" | "copilot" | "cursor"),
+        ] => {
+            return setup_agent(agent);
+        }
+        [
+            "setup",
+            agent @ ("opencode" | "copilot" | "cursor"),
+            "--remove",
+        ] => {
+            return remove_agent(agent);
+        }
         ["setup", "--remove"] => {
             return match cellix::integrations::remove_claude(|name| std::env::var(name).ok()) {
                 Ok(()) => {

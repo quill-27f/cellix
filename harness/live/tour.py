@@ -621,6 +621,28 @@ def workspaces(scratch):
     shutil.rmtree(cache, ignore_errors=True)
 
 
+# A stand-in for an agent that isn't installed: it says what it is and waits.
+PLAIN_STANDIN = """#!/bin/sh
+echo "A stand-in for $(basename "$0")"
+exec sleep 600
+"""
+# A stand-in for Copilot CLI: it runs the hooks Cellix set up for it, as Copilot CLI runs
+# them, with what Copilot CLI's docs say it sends, then asks as Copilot would.
+COPILOT_STANDIN = """#!/usr/bin/env python3
+import json, os, subprocess, time
+print("A stand-in for Copilot CLI, running the hooks Cellix set up", flush=True)
+with open(os.path.expanduser("~/.copilot/hooks/cellix.json")) as f:
+    hooks = json.load(f)["hooks"]
+def run(event, **fields):
+    said = json.dumps({"session_id": "cp-1", "cwd": os.getcwd(), **fields})
+    subprocess.run(["sh", "-c", hooks[event][0]["bash"]], input=said.encode())
+run("SessionStart", source="startup")
+run("UserPromptSubmit", prompt="Publish the crate")
+run("Notification", notification_type="permission_prompt", message="Allow cargo publish?")
+print("Allow cargo publish? (y/n)", flush=True)
+time.sleep(600)
+"""
+
 RUN = """use crate::queue::{Full, Queue};
 
 /// Loads the jobs and queues as many as fit.
@@ -1262,6 +1284,24 @@ with tempfile.TemporaryDirectory() as scratch:
         json.dump(review, f)
     shoot("51-agent-list", [*LIST_AGENTS, ["wait", 1.0]], NOTE_FILE, size="150x44")
     shoot("51-inbox-empty", [*SHOW_INBOX, ["wait", 0.6]], NOTE_FILE, size="150x44")
+    # More agents: stand-ins for OpenCode, Copilot CLI and Cursor's agent on the PATH put them
+    # under START. Copilot's, started, runs the hooks `cellix setup copilot` wrote into the
+    # tour's home, as Copilot CLI runs them, and asks to run something.
+    standins = tempfile.mkdtemp(prefix="cx-agents")
+    for program, script in [("opencode", PLAIN_STANDIN), ("cursor-agent", PLAIN_STANDIN),
+                            ("copilot", COPILOT_STANDIN)]:
+        with open(f"{standins}/{program}", "w") as f:
+            f.write(script)
+        os.chmod(f"{standins}/{program}", 0o755)
+    subprocess.run([binary, "setup", "copilot"], env={**os.environ, "HOME": HOME},
+                   capture_output=True, check=True)
+    more = {"PATH": f"{standins}:{os.environ['PATH']}"}
+    shoot("51-agent-list-more", [*LIST_AGENTS, ["wait", 1.0]], NOTE_FILE, size="150x44", env=more,
+          expect="Cursor CLI")
+    asks = [*LIST_AGENTS, ["click", *ON("Copilot CLI", 1, 0, -1)], ["until", "Allow cargo publish? (y/n)"],
+            *LIST_AGENTS, ["wait", 1.0]]
+    shoot("51-agent-copilot-asks", asks, NOTE_FILE, size="150x44", env=more, expect="needs you")
+    shutil.rmtree(standins, ignore_errors=True)
     shell = [*LIST_AGENTS, ["wait", 0.6]]
     shoot("52-paper", [], PAPER_FILE, size="150x44", background="eff1f5")
     shoot("53-paper-dark", [], PAPER_FILE, size="150x44")

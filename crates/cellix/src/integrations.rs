@@ -315,6 +315,152 @@ pub fn remove_gemini() -> io::Result<()> {
     run("gemini", &["extensions", "uninstall", "cellix"])
 }
 
+/// A folder under the user's config: `XDG_CONFIG_HOME`, or `~/.config`.
+fn config_home(var: &impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
+    let chosen = var("XDG_CONFIG_HOME").filter(|d| !d.is_empty());
+    chosen
+        .map(PathBuf::from)
+        .or_else(|| Some(PathBuf::from(var("HOME")?).join(".config")))
+}
+
+/// Where OpenCode loads Cellix's plugin from in every project: its global plugins folder,
+/// where a file of its own is all it takes.
+fn opencode_plugin(var: &impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
+    Some(config_home(var)?.join("opencode/plugins/cellix.js"))
+}
+
+pub fn opencode_installed(var: impl Fn(&str) -> Option<String>) -> bool {
+    opencode_plugin(&var).is_some_and(|file| file.exists())
+}
+
+/// Writes the plugin OpenCode loads as it starts.
+pub fn install_opencode(var: impl Fn(&str) -> Option<String>) -> io::Result<()> {
+    let missing = || io::Error::new(io::ErrorKind::NotFound, "no home folder");
+    let file = opencode_plugin(&var).ok_or_else(missing)?;
+    crate::plugin::write_file(&file, crate::plugin::OPENCODE_PLUGIN)
+}
+
+/// Takes the plugin away, and nothing else.
+pub fn remove_opencode(var: impl Fn(&str) -> Option<String>) -> io::Result<()> {
+    match opencode_plugin(&var).map(fs::remove_file) {
+        Some(Err(e)) if e.kind() != io::ErrorKind::NotFound => Err(e),
+        _ => Ok(()),
+    }
+}
+
+/// Where Copilot CLI reads the user's own hooks: a file of Cellix's in its hooks folder,
+/// under `COPILOT_HOME` when that's set.
+fn copilot_hooks(var: &impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
+    let chosen = var("COPILOT_HOME")
+        .filter(|d| !d.is_empty())
+        .map(PathBuf::from);
+    let home = chosen.or_else(|| Some(PathBuf::from(var("HOME")?).join(".copilot")))?;
+    Some(home.join("hooks/cellix.json"))
+}
+
+pub fn copilot_installed(var: impl Fn(&str) -> Option<String>) -> bool {
+    copilot_hooks(&var).is_some_and(|file| file.exists())
+}
+
+pub fn install_copilot(var: impl Fn(&str) -> Option<String>) -> io::Result<()> {
+    let missing = || io::Error::new(io::ErrorKind::NotFound, "no home folder");
+    let file = copilot_hooks(&var).ok_or_else(missing)?;
+    crate::plugin::write_file(&file, crate::plugin::COPILOT_HOOKS)
+}
+
+pub fn remove_copilot(var: impl Fn(&str) -> Option<String>) -> io::Result<()> {
+    match copilot_hooks(&var).map(fs::remove_file) {
+        Some(Err(e)) if e.kind() != io::ErrorKind::NotFound => Err(e),
+        _ => Ok(()),
+    }
+}
+
+/// Cursor's user hooks are one file, which may hold the user's own, so Cellix's go in beside
+/// them and come out again by what they run.
+fn cursor_hooks(var: &impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
+    Some(PathBuf::from(var("HOME")?).join(".cursor/hooks.json"))
+}
+
+/// What marks a hook as Cellix's in Cursor's file.
+const CURSOR_MARK: &str = "cellix hook --agent Cursor";
+
+fn ours(entry: &Value) -> bool {
+    entry["command"]
+        .as_str()
+        .is_some_and(|command| command.contains(CURSOR_MARK))
+}
+
+pub fn cursor_installed(var: impl Fn(&str) -> Option<String>) -> bool {
+    let file = cursor_hooks(&var).map(|file| read_settings(&file).unwrap_or_default());
+    let hooks = file
+        .as_ref()
+        .and_then(|f| f.get("hooks"))
+        .and_then(Value::as_object);
+    hooks.is_some_and(|hooks| {
+        let mut entries = hooks.values().filter_map(Value::as_array).flatten();
+        entries.any(ours)
+    })
+}
+
+/// Adds Cellix's hooks to Cursor's file, keeping everything else in it, and only once.
+pub fn install_cursor(var: impl Fn(&str) -> Option<String>) -> io::Result<()> {
+    let missing = || io::Error::new(io::ErrorKind::NotFound, "no home folder");
+    let file = cursor_hooks(&var).ok_or_else(missing)?;
+    let mut settings = read_settings(&file)?;
+    let wanted: Value =
+        serde_json::from_str(&crate::plugin::cursor_hooks()).map_err(io::Error::other)?;
+    settings.entry("version").or_insert(json!(1));
+    let hooks = settings.entry("hooks").or_insert_with(|| json!({}));
+    let Value::Object(hooks) = hooks else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "the hooks in Cursor's hooks.json aren't an object",
+        ));
+    };
+    for (event, entries) in wanted["hooks"].as_object().into_iter().flatten() {
+        let list = hooks.entry(event.clone()).or_insert_with(|| json!([]));
+        let Value::Array(list) = list else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("{event} in Cursor's hooks.json isn't a list"),
+            ));
+        };
+        list.retain(|entry| !ours(entry));
+        list.extend(entries.as_array().into_iter().flatten().cloned());
+    }
+    write_settings(&file, &settings)
+}
+
+/// Takes back exactly the hooks `install_cursor` added. A file left with nothing else in it
+/// goes too.
+pub fn remove_cursor(var: impl Fn(&str) -> Option<String>) -> io::Result<()> {
+    let missing = || io::Error::new(io::ErrorKind::NotFound, "no home folder");
+    let file = cursor_hooks(&var).ok_or_else(missing)?;
+    if !file.exists() {
+        return Ok(());
+    }
+    let mut settings = read_settings(&file)?;
+    if let Some(Value::Object(hooks)) = settings.get_mut("hooks") {
+        for list in hooks.values_mut() {
+            if let Value::Array(list) = list {
+                list.retain(|entry| !ours(entry));
+            }
+        }
+        hooks.retain(|_, list| list.as_array().is_none_or(|l| !l.is_empty()));
+    }
+    let empty = settings
+        .get("hooks")
+        .is_none_or(|h| h.as_object().is_some_and(Map::is_empty));
+    if empty
+        && settings
+            .keys()
+            .all(|key| key == "hooks" || key == "version")
+    {
+        return fs::remove_file(&file);
+    }
+    write_settings(&file, &settings)
+}
+
 /// Whether a program can be run by name.
 pub fn on_path(program: &str, var: impl Fn(&str) -> Option<String>) -> bool {
     let path = var("PATH").unwrap_or_default();
@@ -591,6 +737,75 @@ mod tests {
         let config = "[plugins.\"cellix@cellix\"]\nenabled = true\n";
         fs::write(dir.path().join(".codex/config.toml"), config).unwrap();
         assert!(codex_installed(&var));
+    }
+
+    /// OpenCode and Copilot CLI read every file in a folder of theirs, so each gets one of
+    /// Cellix's own; Cursor has one file, so its hooks go in beside the user's and come out
+    /// again by what they run.
+    #[test]
+    fn opencode_copilot_and_cursor_get_their_hooks_and_lose_only_them() {
+        let (dir, var) = home();
+        assert!(!opencode_installed(&var) && !copilot_installed(&var) && !cursor_installed(&var));
+        install_opencode(&var).unwrap();
+        let plugin = dir.path().join(".config/opencode/plugins/cellix.js");
+        assert!(
+            fs::read_to_string(&plugin)
+                .unwrap()
+                .contains("export const Cellix")
+        );
+        install_copilot(&var).unwrap();
+        let hooks: Value = serde_json::from_str(
+            &fs::read_to_string(dir.path().join(".copilot/hooks/cellix.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(hooks["version"], 1);
+        let notify = hooks["hooks"]["Notification"][0]["bash"].as_str().unwrap();
+        assert!(
+            notify.starts_with("cellix hook --agent Copilot notify"),
+            "{notify}"
+        );
+        assert!(opencode_installed(&var) && copilot_installed(&var));
+
+        let file = dir.path().join(".cursor/hooks.json");
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let theirs =
+            r#"{"version": 1, "hooks": {"stop": [{"command": "./audit.sh"}]}, "note": "mine"}"#;
+        fs::write(&file, theirs).unwrap();
+        install_cursor(&var).unwrap();
+        install_cursor(&var).unwrap();
+        let both: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        let stops = both["hooks"]["stop"].as_array().unwrap();
+        assert_eq!(stops.len(), 2, "theirs and Cellix's, once: {stops:?}");
+        assert_eq!(stops[0]["command"], "./audit.sh");
+        assert_eq!(both["note"], "mine");
+        let prompt = both["hooks"]["beforeSubmitPrompt"][0]["command"]
+            .as_str()
+            .unwrap();
+        assert!(
+            prompt.contains("cellix hook --agent Cursor prompt"),
+            "{prompt}"
+        );
+        assert!(cursor_installed(&var));
+        remove_cursor(&var).unwrap();
+        let left: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(
+            left,
+            json!({"version": 1, "hooks": {"stop": [{"command": "./audit.sh"}]}, "note": "mine"})
+        );
+        // Where Cellix's were all there was, the file goes with them.
+        fs::remove_file(&file).unwrap();
+        install_cursor(&var).unwrap();
+        remove_cursor(&var).unwrap();
+        assert!(!file.exists());
+        // One it can't read is never replaced.
+        fs::write(&file, "{ not json").unwrap();
+        assert!(install_cursor(&var).is_err());
+        assert_eq!(fs::read_to_string(&file).unwrap(), "{ not json");
+
+        remove_opencode(&var).unwrap();
+        remove_copilot(&var).unwrap();
+        assert!(!opencode_installed(&var) && !copilot_installed(&var));
+        remove_opencode(&var).unwrap();
     }
 
     #[test]

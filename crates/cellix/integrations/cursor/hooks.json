@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "cellix hook --agent Cursor session-start 2>/dev/null || true",
+        "timeout": 10
+      }
+    ],
+    "beforeSubmitPrompt": [
+      {
+        "command": "cellix hook --agent Cursor prompt 2>/dev/null || echo '{\"continue\": true}'",
+        "timeout": 10
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": "cellix hook --agent Cursor tool-done 2>/dev/null || true",
+        "timeout": 10
+      }
+    ],
+    "postToolUseFailure": [
+      {
+        "command": "cellix hook --agent Cursor tool-failed 2>/dev/null || true",
+        "timeout": 10
+      }
+    ],
+    "stop": [
+      {
+        "command": "cellix hook --agent Cursor stop 2>/dev/null || true",
+        "timeout": 10
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": "cellix hook --agent Cursor session-end 2>/dev/null || true",
+        "timeout": 3
+      }
+    ]
+  }
+}

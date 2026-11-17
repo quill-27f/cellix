@@ -259,12 +259,58 @@ fn asks(input: &Value) -> bool {
 }
 
 /// Whether a notification says the agent is waiting with nothing to do: after a turn, and
-/// after one was interrupted, when no Stop comes.
+/// after one was interrupted, when no Stop comes. Copilot CLI says `agent_idle`.
 fn idles(input: &Value) -> bool {
     matches!(
         input["notification_type"].as_str(),
-        Some("idle_prompt" | "agent_completed")
+        Some("idle_prompt" | "agent_completed" | "agent_idle")
     )
+}
+
+/// Agents whose prompt hook can hand the agent more to read, which is how comments reach an
+/// agent working outside the side pane. The others' comments wait for one that can.
+fn takes_context(agent: &str) -> bool {
+    matches!(agent, "Claude Code" | "Codex" | "Gemini")
+}
+
+/// Brings what other agents send to the names Claude Code gives: Cursor calls the session
+/// `conversation_id` past its start and gives its workspace's folders rather than the one it's
+/// in; Copilot CLI's own names are camelCase; what a tool said comes as `tool_result` or
+/// `tool_output`. What's there already is left as it is.
+fn as_claude_says(input: &mut Value) {
+    let first = |input: &Value, keys: &[&str]| {
+        keys.iter()
+            .find_map(|key| input[*key].as_str().filter(|v| !v.is_empty()))
+            .map(str::to_string)
+    };
+    if input["session_id"].as_str().is_none_or(str::is_empty)
+        && let Some(id) = first(input, &["conversation_id", "sessionId"])
+    {
+        input["session_id"] = json!(id);
+    }
+    if input["cwd"].as_str().is_none_or(str::is_empty)
+        && let Some(folder) = input["workspace_roots"][0].as_str().map(str::to_string)
+    {
+        input["cwd"] = json!(folder);
+    }
+    if input["transcript_path"].as_str().is_none_or(str::is_empty)
+        && let Some(path) = first(input, &["transcriptPath"])
+    {
+        input["transcript_path"] = json!(path);
+    }
+    if input["tool_response"].is_null() {
+        let said = ["tool_result", "toolResult", "tool_output"]
+            .iter()
+            .map(|key| &input[*key])
+            .find(|value| !value.is_null())
+            .cloned();
+        if let Some(said) = said {
+            input["tool_response"] = said;
+        }
+    }
+    if input["tool_input"].is_null() && !input["toolArgs"].is_null() {
+        input["tool_input"] = input["toolArgs"].clone();
+    }
 }
 
 /// Why a turn stopped on an error, in a word for the agent's tile.
@@ -332,6 +378,9 @@ fn on_prompt(roots: &[PathBuf], input: &Value) -> Option<String> {
         checkpoint_briefly(root, &label(prompt), event);
     }
     tell(roots, input, AgentState::Working, "Working");
+    if !takes_context(&agent_of(input)) {
+        return None;
+    }
     let comments: Vec<Comment> = ask(roots, "take")
         .and_then(|reply| serde_json::from_str(&reply).ok())
         .unwrap_or_default();
@@ -661,6 +710,8 @@ fn on_tool(roots: &[PathBuf], input: &Value, passed: bool) {
         .or_else(|| response["returnDisplay"].as_str())
         .or_else(|| response["output"].as_str())
         .or_else(|| response["llmContent"].as_str())
+        .or_else(|| response["text_result_for_llm"].as_str())
+        .or_else(|| response["textResultForLlm"].as_str())
         .or_else(|| response.as_str())
         .unwrap_or("");
     // Agents without a failure hook say so in the result: as a field, or in its words.
@@ -714,6 +765,7 @@ pub fn handle_for(agent: &str, kind: &str, stdin: &str) -> Option<String> {
     if !input.is_object() {
         return None;
     }
+    as_claude_says(&mut input);
     input[AGENT_KEY] = json!(agent);
     let roots = roots(&input);
     if matches!(kind, "session-start" | "prompt")
@@ -729,7 +781,14 @@ pub fn handle_for(agent: &str, kind: &str, stdin: &str) -> Option<String> {
     }
     match kind {
         "session-start" => tell(&roots, &input, AgentState::Idle, "Ready"),
+        // Cursor holds the prompt until its hook says it may go on.
+        "prompt" if agent == "Cursor" => {
+            on_prompt(&roots, &input);
+            return Some(json!({"continue": true}).to_string());
+        }
         "prompt" => return on_prompt(&roots, &input),
+        // OpenCode's plugin says so as it starts on something, and when a question is answered.
+        "working" => tell(&roots, &input, AgentState::Working, "Working"),
         "plan" if agent == "Gemini" => return on_gemini_plan(&roots, &input),
         "plan" => return on_plan(&roots, &input),
         "notify" if asks(&input) => {
@@ -742,6 +801,13 @@ pub fn handle_for(agent: &str, kind: &str, stdin: &str) -> Option<String> {
         "notify" => {}
         "tool-done" => on_tool(&roots, &input, true),
         "tool-failed" => on_tool(&roots, &input, false),
+        // Cursor's stop says how the turn ended: it failed, or was stopped, or it finished.
+        "stop" if input["status"] == "error" => {
+            tell(&roots, &input, AgentState::Idle, &failure_words(&input));
+        }
+        "stop" if input["status"] == "aborted" => {
+            tell(&roots, &input, AgentState::Idle, "Waiting for you");
+        }
         "stop" => {
             tell(&roots, &input, AgentState::Idle, "Finished");
             if agent == "Codex" {
@@ -1479,5 +1545,105 @@ mod tests {
         // The log stays out of the project's changes.
         let ignore = std::fs::read_to_string(root.join(".cellix/.gitignore")).unwrap();
         assert!(ignore.contains("tasks.jsonl"));
+    }
+
+    /// OpenCode's plugin, Copilot CLI's hooks and Cursor's, each sending what its own docs say
+    /// it sends: the same news reaches Cellix, under each one's own session.
+    #[test]
+    fn opencode_copilot_and_cursor_report_through_the_same_hooks() {
+        use AgentState::{Idle, NeedsYou, Working};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let shared: SharedComments = Arc::default();
+        let server = start(&root, shared.clone()).unwrap();
+        let news = || {
+            let event = next_event(&server, Duration::from_secs(5)).unwrap();
+            (event.agent, event.session, event.state, event.detail)
+        };
+        let with = |base: Value, extra: Value| {
+            let mut value = base;
+            let fields = extra.as_object().unwrap().clone();
+            value.as_object_mut().unwrap().extend(fields);
+            value.to_string()
+        };
+
+        // Copilot CLI, its hooks named as Claude Code's are, which gets it to send `session_id`.
+        let copilot = |extra| {
+            let base =
+                json!({"session_id": "cp-1", "timestamp": "2026-11-17T12:00:00Z", "cwd": root});
+            with(base, extra)
+        };
+        let asking = json!({"hook_event_name": "Notification", "notification_type": "permission_prompt",
+                            "message": "Allow cargo publish?"});
+        handle_for("Copilot", "notify", &copilot(asking));
+        let asked = (
+            "Copilot".into(),
+            "cp-1".into(),
+            NeedsYou,
+            "Allow cargo publish?".into(),
+        );
+        assert_eq!(news(), asked);
+        let idle = json!({"hook_event_name": "Notification", "notification_type": "agent_idle"});
+        handle_for("Copilot", "notify", &copilot(idle));
+        assert_eq!(news().2, Idle);
+        let tool = json!({"hook_event_name": "PostToolUse", "tool_name": "bash",
+                          "tool_input": {"command": "ls"}, "tool_result": {"result_type": "success"}});
+        handle_for("Copilot", "tool-done", &copilot(tool));
+        assert_eq!(news().2, Working);
+        handle_for(
+            "Copilot",
+            "stop",
+            &copilot(json!({"hook_event_name": "Stop", "stop_reason": "end_turn"})),
+        );
+        assert_eq!(news().3, "Finished");
+
+        // Cursor names the session `conversation_id`, gives its workspace's folders, and holds
+        // a prompt until its hook says go on. It can't be handed comments, so they wait.
+        let cursor = |extra| {
+            let base = json!({"conversation_id": "cu-1", "generation_id": "g-1", "model": "x",
+                              "cursor_version": "2.0", "workspace_roots": [root], "user_email": null});
+            with(base, extra)
+        };
+        shared.lock().unwrap().push(comment());
+        let said = handle_for(
+            "Cursor",
+            "prompt",
+            &cursor(json!({"prompt": "Fix it", "attachments": []})),
+        );
+        assert_eq!(said.as_deref(), Some(r#"{"continue":true}"#));
+        assert_eq!(
+            news(),
+            ("Cursor".into(), "cu-1".into(), Working, "Working".into())
+        );
+        assert_eq!(shared.lock().unwrap().len(), 1, "the comment waits");
+        handle_for(
+            "Cursor",
+            "stop",
+            &cursor(json!({"status": "error", "loop_count": 0})),
+        );
+        assert_eq!(news().3, "Stopped on an error");
+        handle_for(
+            "Cursor",
+            "stop",
+            &cursor(json!({"status": "aborted", "loop_count": 0})),
+        );
+        assert_eq!(news().3, "Waiting for you");
+        handle_for(
+            "Cursor",
+            "stop",
+            &cursor(json!({"status": "completed", "loop_count": 0})),
+        );
+        assert_eq!(news().3, "Finished");
+
+        // OpenCode's plugin says it's working as it starts on something.
+        handle_for(
+            "OpenCode",
+            "working",
+            &input(&root, json!({"session_id": "oc-1"})),
+        );
+        assert_eq!(
+            news(),
+            ("OpenCode".into(), "oc-1".into(), Working, "Working".into())
+        );
     }
 }

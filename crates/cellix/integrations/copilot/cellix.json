@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "hooks": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "bash": "cellix hook --agent Copilot session-start 2>/dev/null || true",
+        "powershell": "cellix hook --agent Copilot session-start",
+        "timeoutSec": 10
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "type": "command",
+        "bash": "cellix hook --agent Copilot prompt 2>/dev/null || true",
+        "powershell": "cellix hook --agent Copilot prompt",
+        "timeoutSec": 10
+      }
+    ],
+    "Notification": [
+      {
+        "type": "command",
+        "bash": "cellix hook --agent Copilot notify 2>/dev/null || true",
+        "powershell": "cellix hook --agent Copilot notify",
+        "timeoutSec": 10
+      }
+    ],
+    "PostToolUse": [
+      {
+        "type": "command",
+        "bash": "cellix hook --agent Copilot tool-done 2>/dev/null || true",
+        "powershell": "cellix hook --agent Copilot tool-done",
+        "timeoutSec": 10
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "type": "command",
+        "bash": "cellix hook --agent Copilot tool-failed 2>/dev/null || true",
+        "powershell": "cellix hook --agent Copilot tool-failed",
+        "timeoutSec": 10
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "bash": "cellix hook --agent Copilot stop 2>/dev/null || true",
+        "powershell": "cellix hook --agent Copilot stop",
+        "timeoutSec": 10
+      }
+    ],
+    "SessionEnd": [
+      {
+        "type": "command",
+        "bash": "cellix hook --agent Copilot session-end 2>/dev/null || true",
+        "powershell": "cellix hook --agent Copilot session-end",
+        "timeoutSec": 3
+      }
+    ]
+  }
+}

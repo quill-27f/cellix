@@ -122,6 +122,9 @@ pub fn agent_of(app: &str) -> Option<&'static str> {
         "claude" | "claude-code" | "claudecode" => "Claude Code",
         "codex" | "codex-cli" | "openai-codex" => "Codex",
         "gemini" | "gemini-cli" => "Gemini CLI",
+        "opencode" => "OpenCode",
+        "copilot" | "copilot-cli" | "github-copilot" => "Copilot CLI",
+        "cursor" | "cursor-agent" | "cursor-cli" => "Cursor CLI",
         _ => return None,
     })
 }
@@ -278,6 +281,7 @@ mod tests {
         assert_eq!(news("state=clear").1, AgentState::Ended);
         assert_eq!(agent_of("gemini"), Some("Gemini CLI"));
         assert_eq!(agent_of("Codex"), Some("Codex"));
+        assert_eq!(agent_of("cursor-agent"), Some("Cursor CLI"));
         assert_eq!(agent_of("my-agent"), None);
     }
 

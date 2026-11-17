@@ -1034,7 +1034,7 @@ leave its own session id beside it.
 
 A host that dies without finishing, as when the machine restarts, leaves its job, log and session
 id; the next Cellix puts them aside and shows the tab as it was, with Resume (Claude Code's
-`--resume`, Codex's `resume`), Start Fresh or Start Again, and Close, and with others stopped too,
+`--resume`, Codex's `resume`, and the others' as below), Start Fresh or Start Again, and Close, and with others stopped too,
 Resume All. It says "restarted" only when the machine booted after the log was last written.
 
 ### How the agent got there
@@ -1319,6 +1319,33 @@ the file.
 - Gemini CLI: an extension with the same hooks, installed with its own command. Its folder
   trust question isn't covered by `--consent`, and the user's click is the answer to it.
   `BeforeTool` on `exit_plan_mode` holds the plan, and Gemini still asks for its own approval.
+- OpenCode: a plugin of one file, `cellix.js` in its global plugins folder
+  (`~/.config/opencode/plugins`), which it loads as it starts. Its events become the same hook
+  calls (`cellix hook --agent OpenCode <kind>`), each a process the plugin doesn't wait for:
+  `session.status` busy is working, `permission.asked` and `question.asked` need the person,
+  `session.idle` is a finished turn, `session.error` a turn cut short, and a command's run
+  comes from `tool.execute.after` with the command `tool.execute.before` saw. Resume is
+  `opencode --session <id>`.
+- Copilot CLI: a hooks file of Cellix's own in `~/.copilot/hooks` (`COPILOT_HOME` if set),
+  its events named as Claude Code's are, which gets Claude Code's field names from it
+  (`session_id`, `notification_type`). A `permission_prompt` or `elicitation_dialog`
+  notification needs the person, `agent_idle` is waiting; `Stop` finishes a turn. Resume is
+  `copilot --resume <id>`.
+- Cursor's agent CLI (`cursor-agent`): its hooks go into `~/.cursor/hooks.json` beside the
+  user's own, and come out again by what they run. It names the session `conversation_id`
+  and gives its workspace's folders, which the hook takes as the session and the folder;
+  its prompt hook answers `{"continue": true}`, since Cursor waits for that word. Cursor has
+  no hook for asking the person anything, so Cellix can't say it needs you: only a program's
+  own OSC 7501 report could, and Cursor sends none. `stop` says how the turn ended. Resume is
+  `cursor-agent --resume <id>`, taking the conversation for the chat Cursor resumes.
+- None of the three can be handed review comments by a hook (Copilot's and Cursor's prompt
+  hooks can't add to the prompt; OpenCode's plugin can't from where it's told), so their
+  comments wait for Ask Agent in their tab, or an agent that can take them.
+- They're offered under START only where they're installed (`opencode`, `copilot`,
+  `cursor-agent` on the PATH), and `cellix setup opencode|copilot|cursor` (or Install in
+  Settings) is the only thing that writes their config; `--remove` takes back exactly that.
+  Written from each one's own docs, and proven with stand-ins only: none of the three has
+  been run with Cellix.
 - The icons at the top right, as in a desktop app, reach the comments, a terminal, Review, the
   browser and the agents. The pane's own control ends the row, three columns from the
   window's edge. It hides the pane and is drawn as a window with its right part filled, not

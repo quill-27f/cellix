@@ -5507,5 +5507,12 @@
     "title": "A tab renamed keeps that name over its agent's title, from the tab's menu or the palette, and has it again in the next run",
     "test": "a_tabs_name_is_kept_for_the_next_run",
     "passes": true
+  },
+  {
+    "id": "more-agents-opencode-copilot-cursor",
+    "milestone": 15,
+    "title": "OpenCode, Copilot CLI and Cursor's agent CLI report through Cellix's hooks (working, needs you where they can say it, done, their session for Resume), set up only by cellix setup, and are offered under START where installed",
+    "test": "stand_ins_for_copilot_and_cursor_report_through_the_hooks_setup_installed",
+    "passes": true
   }
 ]
