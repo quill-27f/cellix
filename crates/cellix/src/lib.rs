@@ -39,6 +39,7 @@ mod program;
 mod recent;
 mod rendered;
 mod review;
+mod roles;
 mod rows;
 mod search;
 mod settings;

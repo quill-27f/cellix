@@ -30,7 +30,7 @@ const DOCKED_STEPS: [&str; 2] = [
     "An agent you start runs here, under the file.",
     "Select text in the file to comment or ask it.",
 ];
-const AGENTS: [(&str, &str); 6] = [
+pub const AGENTS: [(&str, &str); 6] = [
     ("Claude Code", "claude"),
     ("Codex", "codex"),
     ("Gemini CLI", "gemini"),
@@ -93,6 +93,19 @@ pub fn program_of(name: &str) -> Option<&'static str> {
     AGENTS.iter().find(|(n, _)| *n == name).map(|(_, p)| *p)
 }
 
+/// What gives an agent its first prompt as it starts, put after its program. The agent takes
+/// it once it's ready: after what it asks first, such as whether to trust the folder, which
+/// is the person's to answer and never Cellix's. After `--`, so a prompt that starts with a
+/// `-`, as a list does, isn't read as an option. None for an agent Cellix doesn't know how to
+/// tell: one added to `AGENTS` says here how it takes a prompt.
+pub fn first_prompt(program: &str, prompt: &str) -> Option<Vec<String>> {
+    match program {
+        "claude" | "codex" => Some(vec!["--".to_string(), prompt.to_string()]),
+        "gemini" => Some(vec![format!("--prompt-interactive={prompt}")]),
+        _ => None,
+    }
+}
+
 /// What resumes an agent's own session, put after its program: the agents that can be told
 /// which session to pick up.
 pub fn resume_args(name: &str, session: &str) -> Option<Vec<String>> {
@@ -105,6 +118,14 @@ pub fn resume_args(name: &str, session: &str) -> Option<Vec<String>> {
     let mut args: Vec<String> = words.iter().map(|w| w.to_string()).collect();
     args.push(session.to_string());
     Some(args)
+}
+
+/// The mark an agent's rows carry, and its colour: the one its tab has in the side pane,
+/// Cellix's own and never a vendor's logo. A terminal is its prompt.
+pub fn mark(program: &str, theme: &Theme) -> (Icon, Rgb) {
+    let shell = program == SHELL.1;
+    let icon = crate::dock::program_icon(display_name(program), shell, false);
+    (icon, crate::dock::icon_colour(icon, theme))
 }
 
 /// What a click in the panel lands on.
@@ -140,6 +161,9 @@ pub struct Agents {
     seen: Arc<Mutex<Vec<String>>>,
     /// The agents installed here.
     installed: Vec<(&'static str, &'static str)>,
+    /// Tests say which agents are installed, rather than whatever this machine has.
+    #[cfg(test)]
+    pretend: Option<Vec<&'static str>>,
     /// When an agent here last finished its turn, until one starts working again.
     pub finished: Option<std::time::Instant>,
     /// Docked beside a chat: short how-to, and one row for each agent.
@@ -556,12 +580,34 @@ impl Agents {
     /// Finds which agents can be started, which only changes when the panel opens.
     pub fn look_for_agents(&mut self) {
         let var = |name: &str| std::env::var(name).ok();
+        #[cfg(test)]
+        let pretend = self.pretend.clone();
+        let found = |program: &'static str| {
+            #[cfg(test)]
+            if let Some(pretend) = &pretend {
+                return pretend.contains(&program);
+            }
+            integrations::on_path(program, var)
+        };
         self.installed = AGENTS
             .iter()
             .copied()
-            .filter(|(_, program)| integrations::on_path(program, var))
+            .filter(|(_, program)| found(program))
             .chain([SHELL])
             .collect();
+    }
+
+    /// The programs of the agents installed here, as last looked for; not a terminal's.
+    pub fn installed_programs(&self) -> Vec<&'static str> {
+        let agents = self.installed.iter().map(|(_, program)| *program);
+        agents.filter(|program| *program != SHELL.1).collect()
+    }
+
+    /// Says which agents count as installed from now on, whatever this machine has.
+    #[cfg(test)]
+    pub fn pretend_installed(&mut self, programs: &[&'static str]) {
+        self.pretend = Some(programs.to_vec());
+        self.look_for_agents();
     }
 }
 

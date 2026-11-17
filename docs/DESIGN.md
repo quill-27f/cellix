@@ -1194,6 +1194,46 @@ own hooks; a program with none is working until it ends.
 the Claude Code plugin, the Codex plugin and the Gemini CLI extension, which all read
 `skills/<name>/SKILL.md`; Gemini's GEMINI.md also points to it.
 
+### Starting things: the + and roles
+
+The + after the side pane's tabs opens a menu dropping from it, as every menu here drops from
+what opened it (decided 17 November 2026, after herdr: it showed the Agents list in the pane,
+which took the pane over to start one thing). Terminal comes first, then every agent Cellix
+starts in the order it knows them, each with its mark: one installed is picked by its digit
+while the menu is open, 1 to 9 down the list, and Terminal by T; one not installed is dimmed
+with "not installed" at its end and does nothing, since installing is the person's to choose
+(Settings' Integrations says how). Then ROLES, and then New Worktree…. The list in the pane
+stays, for what's running.
+
+A role is a small prompt file that starts an agent on one job: Markdown, its front matter
+saying which agent runs it and what it's for in a few words, its body the agent's first
+prompt.
+
+```markdown
+---
+agent: codex            # claude, codex, gemini, or the name Cellix gives one; left out, the first installed
+description: reads the changes, leaves comments
+name: Reviewer          # left out, the file's name: code-reviewer.md is "Code reviewer"
+---
+Review the changes on this branch…
+```
+
+They're read when the menu opens, from `.cellix/roles/*.md` in the project, then
+`~/.config/cellix/roles/*.md`, then Cellix's own, which ship in the binary (`crates/cellix/roles`,
+one line in `roles::BUILT_IN` each); a name found sooner hides the same name later, so a project
+can replace a built-in one. A role's row has its agent's mark, its name and its description,
+quieter; one whose agent isn't installed is dimmed. Cellix ships Tester, which runs the
+project's tests the way its files say to and reports what failed, changing nothing.
+
+Picked, a role starts its agent in the pane, as the agent's own row would, with the role's body
+as its first prompt. That's given the way each agent takes a first prompt when it starts
+(`claude -- <prompt>`, `codex -- <prompt>`, `gemini --prompt-interactive=<prompt>`;
+`agents::first_prompt`), not typed into its screen: the agent takes it once it's ready, after
+whatever it asks first, and a new folder's trust question is the first thing Claude Code asks
+in a worktree. A prompt typed when the screen went quiet would have answered that question
+with its Enter. An agent Cellix doesn't know how to give a prompt to gets it on the clipboard
+instead, with a word saying so.
+
 ### Workspaces, in place of tmux
 
 Cellix keeps the open tabs, cursors and unsaved edits of each folder in `state.json` beside its

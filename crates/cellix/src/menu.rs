@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use cellix_doc::table::Edit as TableEdit;
 use cellix_input::{Command, Key};
-use cellix_render::{Bounds, Font, Grid, Measure, Paint, Rect, Style, units};
+use cellix_render::{Bounds, Font, Grid, Icon, Measure, Paint, Rect, Rgb, Style, units};
 
 use crate::palette::{keys_of, popup, raised};
 use crate::theme::Theme;
@@ -28,6 +28,14 @@ const RULE_ROOM: f32 = 0.5;
 /// wash is from a panel's edge.
 const BAND_HEIGHT: f32 = crate::measures::BAND_HEIGHT;
 const BAND_INSET: f32 = 1.0;
+/// Columns a row's icon takes before its words, where any row of the menu has one: the
+/// icon's two and some air, about what the tree leaves between a file's icon and its name.
+const ICON_COLUMNS: f32 = 2.4;
+/// Space between a row's words and the quieter words after them, and their size.
+const DETAIL_GAP: f32 = 1.5;
+const DETAIL_SIZE: u8 = 90;
+/// A heading's size: a section's, small bold capitals.
+const HEADING_SIZE: u8 = 80;
 
 /// What a row of a menu does.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -89,6 +97,10 @@ pub enum Action {
     PaneTab(crate::dock::PaneTab),
     /// Lists what can be started in the side pane, as its + does.
     PaneNew,
+    /// Starts a program in the side pane: an agent, or a terminal (`agents::SHELL.1`).
+    Start(&'static str),
+    /// Starts an agent with a role's prompt as its first.
+    StartRole(&'static str, String),
 }
 
 /// What a click or a key on a menu came to.
@@ -112,6 +124,17 @@ pub struct Item {
     pub rule: bool,
     /// The rows a submenu holds.
     pub sub: Vec<Item>,
+    /// An icon before the words, in its own colour.
+    pub icon: Option<(Icon, Rgb)>,
+    /// Quieter words after the row's own, saying more of it.
+    pub detail: Option<Cow<'static, str>>,
+    /// A key that picks the row while the menu is open, shown at its end.
+    pub accel: Option<char>,
+    /// A heading over the rows after it, in small capitals: nothing to pick.
+    pub heading: bool,
+    /// What its end says is a note, quiet but readable whether the row can be picked or
+    /// not, rather than keys that go grey with it.
+    pub noted: bool,
 }
 
 impl Item {
@@ -126,6 +149,55 @@ impl Item {
             action: Some(action),
             rule: false,
             sub: Vec::new(),
+            icon: None,
+            detail: None,
+            accel: None,
+            heading: false,
+            noted: false,
+        }
+    }
+
+    /// A heading over the rows after it.
+    pub fn heading(label: &'static str) -> Self {
+        Self {
+            heading: true,
+            action: None,
+            ..Self::new(label, Action::Submenu)
+        }
+    }
+
+    /// The icon before its words.
+    pub fn icon(self, icon: Icon, color: Rgb) -> Self {
+        Self {
+            icon: Some((icon, color)),
+            ..self
+        }
+    }
+
+    /// Quieter words after its own.
+    pub fn detail(self, detail: impl Into<Cow<'static, str>>) -> Self {
+        let detail = detail.into();
+        Self {
+            detail: (!detail.is_empty()).then_some(detail),
+            ..self
+        }
+    }
+
+    /// The key that picks it while the menu's open, and what its end says of it.
+    pub fn key(self, (key, shown): (char, &'static str)) -> Self {
+        Self {
+            accel: Some(key),
+            keys: Some(shown),
+            ..self
+        }
+    }
+
+    /// What its end says, where keys would be, as an agent that isn't installed.
+    pub fn note(self, note: &'static str) -> Self {
+        Self {
+            keys: Some(note),
+            noted: true,
+            ..self
         }
     }
 
@@ -171,11 +243,17 @@ pub struct Menu {
     fine: bool,
     /// Rows from the menu's top to its first item's.
     pad: f32,
+    /// Columns from the text edge to a row's words: an icon's, where any row has one.
+    lead: f32,
+    /// How wide each row's words are, for what comes after them.
+    widths: Vec<f32>,
     /// The row the keyboard is on.
     pub selected: Option<usize>,
     /// Each row's submenu, placed beside it, and the one open.
     subs: Vec<Option<Menu>>,
     open: Option<usize>,
+    /// Where the button that opened it is, which stands lit while it's open.
+    pub from: Option<(u16, u16)>,
 }
 
 impl Menu {
@@ -195,9 +273,15 @@ impl Menu {
         } else {
             (items.len() as u16 + if spaced { rules } else { 0 }).min(room)
         };
-        // 8 px above the first row whatever the count; rounding to whole rows only adds air
-        // at the bottom.
-        let pad = if fine { PADDING } else { 0.0 };
+        // 8 px above the first row and below the last at least. What rounding to whole rows
+        // leaves over is shared between the two, so the rows stand in the menu's middle: all
+        // of it went under the last, half a row more there than over the first.
+        let pad = if fine {
+            let spare = f32::from(height) - rows - PADDING * 2.0;
+            PADDING + spare.max(0.0) / 2.0
+        } else {
+            0.0
+        };
         let x = x.min(screen.right().saturating_sub(width));
         let bottom = screen.bottom().saturating_sub(1);
         // A menu that won't fit below the pointer opens upward from it.
@@ -208,15 +292,23 @@ impl Menu {
         } else {
             y.max(1)
         };
+        let lead = Self::lead(&items);
+        let widths = items
+            .iter()
+            .map(|item| measure.width(&item.label, Font::default()))
+            .collect();
         let mut menu = Self {
             area: Rect::new(x, y, width, height),
             items,
             spaced,
             fine,
             pad,
+            lead,
+            widths,
             selected: None,
             subs: Vec::new(),
             open: None,
+            from: None,
         };
         menu.subs = (0..menu.items.len())
             .map(|row| menu.place_submenu(row, measure, screen))
@@ -258,6 +350,12 @@ impl Menu {
     #[cfg(test)]
     pub fn rows(&self) -> usize {
         self.items.len()
+    }
+
+    /// Where it stands.
+    #[cfg(test)]
+    pub fn area(&self) -> Rect {
+        self.area
     }
 
     /// The label of the row the keyboard is on in this menu.
@@ -357,9 +455,28 @@ impl Menu {
                 }
             }
             Key::Esc => return Outcome::Outside,
+            // A row's own key picks it.
+            Key::Char(typed) => {
+                let picked = self
+                    .items
+                    .iter()
+                    .find(|item| item.accel.is_some_and(|k| k.eq_ignore_ascii_case(&typed)));
+                if let Some(action) = picked.and_then(|item| item.action.clone()) {
+                    return Outcome::Chose(action);
+                }
+            }
             _ => {}
         }
         Outcome::Stay
+    }
+
+    /// Columns before a row's words: an icon's, where any row of `items` has one.
+    fn lead(items: &[Item]) -> f32 {
+        if items.iter().any(|item| item.icon.is_some()) {
+            ICON_COLUMNS
+        } else {
+            0.0
+        }
     }
 
     fn width(items: &[Item], measure: &dyn Measure) -> u16 {
@@ -368,13 +485,22 @@ impl Menu {
             size: KEYS_SIZE,
             ..Font::default()
         };
+        let quiet = Font {
+            size: DETAIL_SIZE,
+            ..Font::default()
+        };
+        let lead = Self::lead(items);
         let row = |item: &Item| {
             let mark = (!item.sub.is_empty()).then_some("›");
             let keys = item
                 .keys
                 .or(mark)
                 .map_or(0.0, |k| measure.width(k, small) + GAP);
-            measure.width(&item.label, plain) + keys
+            let detail = item
+                .detail
+                .as_deref()
+                .map_or(0.0, |d| DETAIL_GAP + measure.width(d, quiet));
+            lead + measure.width(&item.label, plain) + detail + keys
         };
         let widest = items.iter().map(row).fold(0.0, f32::max);
         ((widest + INSET * 2.0).ceil() as u16 + 1).max(MIN_WIDTH)
@@ -498,6 +624,28 @@ impl Menu {
             }
             let style = if usable { base } else { greyed };
             let x = area.x as f32 + INSET;
+            if item.heading {
+                // A section's heading: small, bold, quiet capitals, from the text edge.
+                let heading = Style {
+                    bold: true,
+                    fg: theme.popup_dim,
+                    ..base
+                };
+                let shown = item.label.to_uppercase();
+                words(
+                    grid,
+                    (x, top),
+                    &shown,
+                    heading,
+                    (area.right(), HEADING_SIZE, false),
+                );
+                continue;
+            }
+            if let Some((icon, color)) = item.icon {
+                let color = if usable { color } else { theme.disabled };
+                mark(grid, (x, top), icon, color, style);
+            }
+            let x = x + self.lead;
             words(
                 grid,
                 (x, top),
@@ -505,10 +653,34 @@ impl Menu {
                 style,
                 (area.right(), 100, false),
             );
+            if let Some(detail) = item.detail.as_deref() {
+                let after = x + self.widths[row] + DETAIL_GAP;
+                let quiet = Style {
+                    fg: if usable {
+                        theme.popup_dim
+                    } else {
+                        theme.disabled
+                    },
+                    ..base
+                };
+                // Smaller than the words, so dropped a pixel to stand on their line.
+                let end = area.right().saturating_sub(INSET as u16);
+                words(
+                    grid,
+                    (after, top + KEYS_DROP),
+                    detail,
+                    quiet,
+                    (end, DETAIL_SIZE, false),
+                );
+            }
             if let Some(keys) = item.keys {
                 // As far from the menu's far edge as its words are from the near one.
                 let right = area.right().saturating_sub(INSET as u16);
-                let shown = if usable { keys_style } else { greyed };
+                let shown = if usable || item.noted {
+                    keys_style
+                } else {
+                    greyed
+                };
                 // Smaller than the words, so dropped a pixel to stand on their line.
                 words(
                     grid,
@@ -529,6 +701,33 @@ impl Menu {
             child.draw(grid, hover, theme);
         }
     }
+}
+
+/// An icon at a row's start, as `words` places words: painted where the row is, and in cells
+/// a character for it on the nearest row.
+fn mark(grid: &mut Grid, (x, top): (f32, f32), icon: Icon, color: Rgb, style: Style) {
+    let side = cellix_render::GLYPH;
+    let row = (top + 0.499).floor() as u16;
+    let shown = Style {
+        fg: color,
+        painted: true,
+        ..style
+    };
+    grid.put_str(
+        x as u16,
+        row,
+        crate::toolbar::fallback(icon),
+        shown,
+        x as u16 + 2,
+    );
+    if row >= grid.area().bottom() {
+        return;
+    }
+    grid.paint.push(Paint::Icon {
+        bounds: Bounds::cells(x, top + (1.0 - side) / 2.0, side * 2.0, side),
+        icon,
+        color,
+    });
 }
 
 /// Words on a row that may sit between the terminal's: painted where they belong, and in
@@ -712,6 +911,74 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A row's own key picks it while the menu is open, wherever the keyboard is; a heading
+    /// and a dimmed row are passed over. A row's icon stands at the text edge and its words
+    /// after it, quieter words after those, and a note at the end.
+    #[test]
+    fn a_rows_own_key_picks_it_and_a_heading_is_passed_over() {
+        let color = Rgb(1, 2, 3);
+        let items = vec![
+            Item::new("Terminal", Action::PaneNew)
+                .icon(Icon::Terminal, color)
+                .key(('t', "T")),
+            Item::new("Codex", Action::Start("codex"))
+                .key(('1', "1"))
+                .after_rule(),
+            Item::new("Claude Code", Action::Start("claude"))
+                .note("not installed")
+                .when(false),
+            Item::heading("Roles").after_rule(),
+            Item::new("Tester", Action::Start("codex")).detail("runs the tests"),
+        ];
+        let measure = cellix_render::FontMeasure::new(17, 37);
+        let mut menu = Menu::new((1, 1), items, &measure, SCREEN);
+        assert_eq!(
+            menu.key(Key::Char('1')),
+            Outcome::Chose(Action::Start("codex"))
+        );
+        assert_eq!(menu.key(Key::Char('T')), Outcome::Chose(Action::PaneNew));
+        assert_eq!(menu.key(Key::Char('x')), Outcome::Stay);
+        let picked: Vec<usize> = (0..4)
+            .map(|_| {
+                menu.step(1);
+                menu.selected.unwrap()
+            })
+            .collect();
+        assert_eq!(picked, [0, 1, 4, 0], "past the dimmed row and the heading");
+        let mut grid = Grid::new(SCREEN.w, SCREEN.h, Style::default());
+        menu.draw(&mut grid, None, &Theme::default());
+        let texts: Vec<(String, i32)> = grid
+            .paint
+            .iter()
+            .filter_map(|p| match p {
+                Paint::Text { text, x, .. } => Some((text.clone(), *x)),
+                _ => None,
+            })
+            .collect();
+        let x_of = |words: &str| texts.iter().find(|(t, _)| t == words).map(|(_, x)| *x);
+        let edge = units(f32::from(menu.area.x) + INSET);
+        let icon = grid.paint.iter().find_map(|p| match p {
+            Paint::Icon {
+                bounds, color: c, ..
+            } if *c == color => Some(bounds.x),
+            _ => None,
+        });
+        assert_eq!(icon, Some(edge), "the icon at the text edge");
+        assert_eq!(
+            x_of("Terminal"),
+            Some(edge + units(ICON_COLUMNS)),
+            "its words after it"
+        );
+        assert_eq!(x_of("Codex"), x_of("Terminal"), "every row's words line up");
+        assert_eq!(
+            x_of("ROLES"),
+            Some(edge),
+            "a heading in capitals, from the edge"
+        );
+        assert!(x_of("runs the tests") > x_of("Tester"), "{texts:?}");
+        assert!(x_of("not installed").is_some(), "{texts:?}");
     }
 
     #[test]

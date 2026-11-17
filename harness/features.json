@@ -5542,5 +5542,19 @@
     "title": "A synchronized update a program leaves open ends 150 ms after it began, with the loop waking then, and bytes the parser only holds draw nothing",
     "test": "an_update_left_open_shows_once_its_time_is_up",
     "passes": true
+  },
+  {
+    "id": "start-menu",
+    "milestone": 15,
+    "title": "The + after the side pane's tabs drops a menu of what it starts: Terminal, the agents by key, the roles",
+    "test": "the_plus_drops_a_menu_of_what_it_starts",
+    "passes": true
+  },
+  {
+    "id": "roles",
+    "milestone": 15,
+    "title": "A role starts its agent with the role's prompt as its first; Tester is built in",
+    "test": "a_role_starts_its_agent_with_its_prompt",
+    "passes": true
   }
 ]

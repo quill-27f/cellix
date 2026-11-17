@@ -1134,6 +1134,12 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("13-source-message", [["click", *REVIEW], ["wait", 0.8], ["click", *ON("Message")],
                                 ["keys", "Say what changed and why"], ["move", *ON("Commit")], ["wait", 0.3]], CODE_FILE)
     shoot("14-agents", [*LIST_AGENTS, ["wait", 0.5]], CODE_FILE)
+    # The + after the pane's tabs drops a menu of what it starts: Terminal, the agents (one
+    # not installed dimmed), the roles, a new worktree. Pointed at, never pressed: a row
+    # starts a real agent.
+    START_MENU = [*LIST_AGENTS, ["wait", 0.5], ["click", *ON("+", 0)], ["until", "ROLES"]]
+    shoot("14-start-menu", [*START_MENU, ["move", *ON("Tester")], ["wait", 0.4]], CODE_FILE)
+    shoot("14-start-menu-light", [*START_MENU, ["wait", 0.3]], CODE_FILE, background="eff1f5")
     shoot("15-settings-appearance", settings, CODE_FILE)
     # Settings' pages, by their names in the list at its left.
     EDITOR_PAGE = ["click", *ON("Editor")]

@@ -65,6 +65,7 @@ use crate::source::{Hit as SourceHit, Source as SourceControl};
 
 mod available;
 mod gitops;
+mod start;
 mod team;
 use crate::theme::Theme;
 use crate::threads::{self, Draft, Hit as ThreadHit};
@@ -9685,7 +9686,11 @@ impl App {
                         self.dock.front = Front::Session;
                     }
                     Some(TabHit::Close(index)) => self.close_session_tab(index),
-                    Some(TabHit::New | TabHit::View(Front::Agents)) => {
+                    Some(TabHit::New) => {
+                        let title = self.title_of(area);
+                        self.show_start_menu((self.dock.plus_x(title), title.y + 1));
+                    }
+                    Some(TabHit::View(Front::Agents)) => {
                         self.refresh_agents();
                         self.dock.show_list();
                     }
@@ -10101,13 +10106,13 @@ impl App {
         // views have: beside the file the three are level, one line across the window's top.
         // Before the tabs, so the line under the one in front lies on it.
         grid.hairline(self.pane_rule(area), theme.border);
-        self.dock.draw_tabs(
-            grid,
-            self.title_of(area),
-            (self.hover, maximized),
-            theme,
-            &*self.measure,
-        );
+        // While the menu the + drops is open, the + stands lit as under the pointer.
+        let title = self.title_of(area);
+        let plus = (self.dock.plus_x(title) + 1, title.y);
+        let opened = matches!(&self.overlay, Overlay::Menu(menu) if menu.from == Some(plus));
+        let hover = if opened { Some(plus) } else { self.hover };
+        self.dock
+            .draw_tabs(grid, title, (hover, maximized), theme, &*self.measure);
         // Under the file the pane shares its sheet, with a line between the two. Beside it,
         // it's a sheet of its own: see `draw_sheets`.
         if self.dock_under() {
@@ -14136,9 +14141,14 @@ impl App {
             MenuAction::ShowTab(index) => self.show_tab(index),
             MenuAction::PaneTab(tab) => self.show_pane_tab(tab),
             MenuAction::PaneNew => {
-                self.refresh_agents();
-                self.dock.show_list();
+                // Where the list of every tab dropped from, as it would from the +.
+                if let Some(area) = self.dock_area() {
+                    let title = self.title_of(area);
+                    self.show_start_menu((self.dock.tabs_start(title), title.y + 1));
+                }
             }
+            MenuAction::Start(program) => self.open_agent(program),
+            MenuAction::StartRole(program, prompt) => self.start_role(program, &prompt),
             // The menu opens these itself.
             MenuAction::Submenu => {}
             MenuAction::ImageWidth(percent) => {
@@ -32015,6 +32025,8 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert_eq!((pane.y, main.right()), (0, pane.x));
     }
 
+    /// The + listed what can start in the pane, the Agents list, however the pane opened. It
+    /// drops a menu of the same now, and the pane stays as it was.
     #[test]
     fn the_plus_lists_what_can_start_however_the_pane_opened() {
         let (_dir, mut app) = project();
@@ -32023,8 +32035,15 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let area = app.title_of(app.dock_area().unwrap());
         let plus = app.dock.new_button_for_test(area);
         app.handle(mouse(MouseKind::Left, plus, area.y));
-        assert!(app.dock.listing());
-        assert!(screen(&app).text().contains("A plain terminal"));
+        assert!(
+            matches!(app.overlay, Overlay::Menu(_)),
+            "a menu drops from it"
+        );
+        assert!(!app.dock.listing(), "over the pane as it was");
+        let text = screen(&app).text();
+        for start in ["Terminal", "Claude Code", "Codex", "Gemini CLI", "Tester"] {
+            assert!(text.contains(start), "{start}: {text}");
+        }
     }
 
     #[test]
@@ -32071,8 +32090,8 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let mut app = App::new(dir.path().to_path_buf(), (220, 44));
         with_a_shell(&mut app);
         let area = app.title_of(app.dock_area().unwrap());
-        let plus = app.dock.new_button_for_test(area);
-        app.handle(mouse(MouseKind::Left, plus, area.y));
+        // Its icon at the top right opens it (the + drops a menu of what to start).
+        press_action(&mut app, Command::ListAgents);
         assert!(
             app.dock.session().is_some(),
             "the shell keeps running behind it"

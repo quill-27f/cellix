@@ -2051,6 +2051,11 @@ impl Dock {
         area.x
     }
 
+    /// The column the + after the tabs starts at, which its menu drops from.
+    pub fn plus_x(&self, area: Rect) -> u16 {
+        self.tabs(area).last().map_or(self.first_tab(area), |t| t.1)
+    }
+
     /// How wide each tab would like to be, views and then sessions.
     fn wanted_widths(&self) -> Vec<u16> {
         let views = self.views().into_iter().map(|view| view.2);
