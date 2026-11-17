@@ -249,6 +249,14 @@ impl Agents {
         });
     }
 
+    /// What the list shows that can change between events, as a number for the tick: those
+    /// running, those found by looking, the worktrees and the agents installed.
+    pub fn mark(&self) -> (usize, usize, usize, usize) {
+        let seen = self.seen.lock().map_or(0, |s| s.len());
+        let worktrees = self.worktrees.len();
+        (self.running.len(), seen, worktrees, self.installed.len())
+    }
+
     /// Agents found running that the plugin isn't already reporting.
     fn silent(&self) -> Vec<String> {
         let seen = self.seen.lock().map(|s| s.clone()).unwrap_or_default();

@@ -5521,5 +5521,12 @@
     "title": "CELLIX_PROF writes a line a second of the main loop's wakes, frames by cause, presents, tiles, rows, bytes and time per phase; harness/x perf measures idle, visible and hidden output",
     "test": "the_counters_say_what_the_loop_did",
     "passes": true
+  },
+  {
+    "id": "idle-draws-nothing",
+    "milestone": 15,
+    "title": "An idle window draws nothing and sends the terminal nothing: the tick draws only when what it can change on screen did, with a heartbeat that sends nothing unchanged, and a present with nothing different writes nothing on pixels or cells",
+    "test": "an_idle_window_draws_and_sends_nothing",
+    "passes": true
   }
 ]

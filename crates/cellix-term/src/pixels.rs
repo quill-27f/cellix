@@ -561,6 +561,8 @@ impl<R: Rasterizer> Backend for PixelBackend<R> {
     fn present(&mut self, grid: &Grid, out: &mut dyn Write) -> io::Result<()> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(b"\x1b[?2026h\x1b[?25l");
+        // Past this, only what changed; with nothing, nothing is sent at all.
+        let begun = bytes.len();
         let size = (grid.width(), grid.height());
         if size != self.size {
             // Tiles are as wide as the grid, so a new width makes all of them useless.
@@ -613,6 +615,9 @@ impl<R: Rasterizer> Backend for PixelBackend<R> {
         }
         on_screen.extend(self.glide.iter().flat_map(|g| g.rows.values().copied()));
         self.evict(&mut bytes, &on_screen);
+        if bytes.len() == begun {
+            return Ok(());
+        }
         bytes.extend_from_slice(b"\x1b[?2026l");
         out.write_all(&bytes)?;
         out.flush()
@@ -1493,12 +1498,15 @@ mod tests {
         assert_eq!(count(&present(&mut b, &moved), "a=t,"), 1, "only row 1");
     }
 
+    /// A frame with nothing different sends nothing at all, not even the synchronized
+    /// update around nothing: an idle window costs the terminal, tmux and a link nothing.
     #[test]
-    fn an_unchanged_frame_sends_no_graphics() {
+    fn an_unchanged_frame_sends_nothing() {
         let mut b = PixelBackend::new(Flat, Placement::Direct, DEFAULT_QUOTA);
         present(&mut b, &page(0));
-        let again = present(&mut b, &page(0));
-        assert_eq!(count(&again, "\x1b_G"), 0);
+        assert_eq!(present(&mut b, &page(0)), "");
+        let changed = present(&mut b, &page(1));
+        assert!(changed.starts_with("\x1b[?2026h") && changed.ends_with("\x1b[?2026l"));
     }
 
     /// A spinner turns through ten steps and comes round to the first: once each step's

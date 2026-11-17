@@ -2790,3 +2790,14 @@ Item 6 of herdr's performance study, first, so what comes after is measured.
   Idle draws and sends twice a second for nothing; output nobody can see draws 98 frames a second, each sending only an empty synchronized update; a lively session keeps the loop at 100 wakes a second.
 - Tests: `the_counters_say_what_the_loop_did` (the real binary: counts appear, the first frame is a resize, a key is input), `the_counters_write_a_line_a_second_of_what_the_loop_did`, `the_counters_are_off_unless_asked`.
 - Next: an idle window draws nothing.
+
+## An idle window draws nothing and sends nothing (2026-11-17)
+
+Item 3 of herdr's performance study.
+
+- The tick draws only what it changed: `App::tick_mark` hashes what a tick can change on screen with no event saying so, and `pace.rs` draws only when it differs from the frame last drawn's. A heartbeat lays the window out every two seconds anyway, for what tells the time and for what the marks miss; laid out unchanged, it sends nothing.
+- A present with nothing different writes nothing: the pixel backend no longer sends an empty synchronized update, and the cell backend skips a frame with no run and the cursor where it was (but not the one ending a scroll's update).
+- Measured once landed, from the debug build the gate leaves, in the next entry.
+- Tests: `an_idle_window_draws_and_sends_nothing` (the real binary on a PTY: seconds five to seven of an idle window send no byte and draw at most the heartbeat), `an_idle_tick_leaves_the_marks_and_a_reload_moves_them`, `an_idle_tick_draws_only_its_heartbeat`, `an_unchanged_frame_sends_nothing`, `an_unchanged_frame_writes_nothing`.
+- Unverified: something drawn from state a tick changes that the marks don't name now shows at the heartbeat, up to two seconds late, where it showed within half a second. None is known.
+

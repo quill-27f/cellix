@@ -28,6 +28,7 @@ mod measures;
 mod menu;
 mod neovim;
 mod outline;
+mod pace;
 mod palette;
 pub mod pane;
 mod panels;

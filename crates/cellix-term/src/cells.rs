@@ -8,6 +8,8 @@ use crate::Backend;
 #[derive(Default)]
 pub struct CellBackend {
     shown: Option<Grid>,
+    /// A scroll opened a synchronized update and moved the cursor, for this present to end.
+    scrolled: bool,
     /// What it has done since the counters last asked: rows written count as rows.
     work: crate::Work,
 }
@@ -40,6 +42,12 @@ impl Backend for CellBackend {
             Some(shown) => grid.diff(shown),
             None => grid.diff(&Grid::new(0, 0, Style::default())),
         };
+        // Nothing different, and the cursor where it was: nothing to send.
+        let cursor_kept = self.shown.as_ref().is_some_and(|s| s.cursor == grid.cursor);
+        if runs.is_empty() && cursor_kept && !std::mem::take(&mut self.scrolled) {
+            return Ok(());
+        }
+        self.scrolled = false;
         let mut last = None;
         let mut rows = runs.iter().map(|run| run.y).collect::<Vec<_>>();
         rows.dedup();
@@ -112,6 +120,7 @@ impl Backend for CellBackend {
         bytes.extend_from_slice(b"\x1b[r");
         out.write_all(&bytes)?;
         shown.scroll_rows(top, bottom, rows);
+        self.scrolled = true;
         Ok(())
     }
 }
@@ -166,6 +175,33 @@ mod tests {
         );
         // The sidebar the shift moved is put back.
         assert_eq!(backend.shown.as_ref().unwrap().cell(0, 11).symbol, "|");
+    }
+
+    /// Nothing different and the cursor where it was: nothing is written. A moved cursor
+    /// is, and so is what follows a scroll, which leaves an update open for it to end.
+    #[test]
+    fn an_unchanged_frame_writes_nothing() {
+        let mut backend = CellBackend::default();
+        let mut grid = Grid::new(20, 5, Style::default());
+        grid.cursor = Some((2, 2));
+        backend.present(&grid, &mut Vec::new()).unwrap();
+        let mut again = Vec::new();
+        backend.present(&grid, &mut again).unwrap();
+        assert!(again.is_empty(), "{:?}", String::from_utf8_lossy(&again));
+        grid.cursor = Some((3, 2));
+        let mut moved = Vec::new();
+        backend.present(&grid, &mut moved).unwrap();
+        assert!(moved.windows(6).any(|w| w == b"\x1b[3;4H"));
+        let area = Rect::new(0, 0, 20, 5);
+        backend
+            .scroll(&grid, &grid, area, 1, &mut Vec::new())
+            .unwrap();
+        let mut after = Vec::new();
+        backend.present(&grid, &mut after).unwrap();
+        assert!(
+            after.ends_with(b"\x1b[?2026l"),
+            "the scroll's update is ended"
+        );
     }
 
     #[test]

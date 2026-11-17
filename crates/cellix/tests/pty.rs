@@ -1002,6 +1002,41 @@ fn the_counters_say_what_the_loop_did() {
     screen.wait_exit();
 }
 
+/// A window where nothing happens draws nothing and sends the terminal nothing: the tick
+/// goes on looking at the disk, and draws only what it found changed.
+#[test]
+fn an_idle_window_draws_and_sends_nothing() {
+    let dir = project();
+    let told = tempfile::tempdir().unwrap();
+    let file = told.path().join("prof.log");
+    let mut screen = Screen::start_with(dir.path(), &["hello.txt"], &[("CELLIX_PROF", &file)]);
+    screen.wait_for("hello from a file");
+    let lines = || -> Vec<String> {
+        let text = std::fs::read_to_string(&file).unwrap_or_default();
+        text.lines().map(str::to_string).collect()
+    };
+    let field = |line: &str, key: &str| -> u64 {
+        let word = line
+            .split(' ')
+            .find_map(|w| w.strip_prefix(&format!("{key}=")));
+        word.and_then(|w| w.parse().ok()).unwrap_or(u64::MAX)
+    };
+    // The start, and the first looks at the disk, are past by the fifth second.
+    let deadline = Instant::now() + WAIT;
+    while lines().len() < 7 {
+        assert!(Instant::now() < deadline, "too few lines: {:?}", lines());
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    for line in &lines()[4..7] {
+        assert!(field(line, "wakes") > 0, "{line}");
+        assert_eq!(field(line, "bytes"), 0, "{line}");
+        assert_eq!(field(line, "sent"), 0, "{line}");
+        assert!(field(line, "draws") <= 1, "only the heartbeat: {line}");
+    }
+    screen.send(b"\x11");
+    screen.wait_exit();
+}
+
 /// Closing the window is how a session often ends. Cellix finishes as it does on Quit: an
 /// unsent comment is kept for next time, and the socket goes. On Windows that's a console
 /// handler; elsewhere the hang-up.

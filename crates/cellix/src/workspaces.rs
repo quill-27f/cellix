@@ -337,6 +337,18 @@ impl Workspaces {
         self.settle();
     }
 
+    /// What the tick can change on screen in every workspace, as one number: the bar shows
+    /// each of them. See `App::tick_mark`.
+    pub fn tick_mark(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut mark = std::collections::hash_map::DefaultHasher::new();
+        (self.active, self.list.len(), self.choosing).hash(&mut mark);
+        for workspace in &self.list {
+            workspace.app.tick_mark().hash(&mut mark);
+        }
+        mark.finish()
+    }
+
     /// Lets every app take what came in, and answers the requests that brings. Returns
     /// whether anything changed.
     pub fn poll(&mut self) -> bool {

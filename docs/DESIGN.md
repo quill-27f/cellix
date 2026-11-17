@@ -126,6 +126,18 @@ for 10, in two rounds of swapped order; a writer that printed much less than it 
 the run, so back-pressure can't pass for a saving. It runs through the guard, so nothing else
 of the guard's runs meanwhile, and isn't part of `check`.
 
+### An idle window
+
+An idle Cellix laid the window out and sent the terminal a synchronized update with nothing in
+it twice a second, at each tick: a packet each over SSH, waking tmux and the terminal. The
+tick now compares marks of what it can change on screen with no key, click or answer saying so
+(`App::tick_mark`: the message, files read again or saved, what waits in the inbox, agents found
+or gone, how full a session's context is, a picture read, a hover) with those of the frame last
+drawn, and draws only when they differ. What the marks can't name, and what tells the time
+("2 min ago"), the tick's heartbeat lays out every two seconds, as often as the disk is looked
+at (`pace.rs`). And a present with nothing different writes nothing at all, on pixels and on
+cells, so a heartbeat over an unchanged window sends no byte.
+
 ### No GPU renderer
 
 Output would have to be read back to the CPU before it could be sent to the terminal, one

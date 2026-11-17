@@ -242,8 +242,6 @@ fn session_wait(quiet: Duration) -> Duration {
         SESSION_REST
     }
 }
-/// Background file checks run about twice a second.
-const TICK: Duration = Duration::from_millis(500);
 
 /// How long the loop waits for input: what it waits anyway, as little as a scroll under way
 /// asks, and no longer than until the next step of a spinner that's turning, which is the only
@@ -1062,7 +1060,8 @@ pub fn run(options: Options) -> io::Result<()> {
     let mut shape = None;
     // A paste on Windows that the console handed over in parts.
     let mut pasting = Pasting::default();
-    let mut last_tick = std::time::Instant::now();
+    // When the tick is due, and whether it has anything to draw.
+    let mut pace = crate::pace::Pace::new(Instant::now());
     // When a key last came or anything last changed, which sets how often sessions are read.
     let mut lively = Instant::now();
     let mut shown: Option<Grid> = None;
@@ -1206,6 +1205,7 @@ pub fn run(options: Options) -> io::Result<()> {
                     prof.took(Phase::Draw, phases.draw);
                 }
                 causes = Causes::default();
+                pace.drew(spaces.tick_mark());
                 let started = Instant::now();
                 if let (Some((area, rows)), Some(from)) = (spaces.app_mut().take_scroll(), &shown) {
                     backend.scroll(from, &grid, area, rows, &mut out)?;
@@ -1264,7 +1264,9 @@ pub fn run(options: Options) -> io::Result<()> {
             } else {
                 POLL
             };
-            let wait = wait_for(rest, backend.gliding(), turning, Instant::now());
+            // And no longer than the tick, which runs on its time.
+            let now = Instant::now();
+            let wait = wait_for(rest, backend.gliding(), turning, now).min(pace.until_tick(now));
             // A signal interrupts the wait; the loop goes round and sees it.
             let ready = match ct::poll(wait) {
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
@@ -1422,16 +1424,19 @@ pub fn run(options: Options) -> io::Result<()> {
                 }
                 redraw = true;
                 causes.add(Cause::Input);
-            } else if last_tick.elapsed() >= TICK {
+            } else if pace.tick_due(Instant::now()) {
                 let started = Instant::now();
-                last_tick = started;
                 spaces.handle(Event::Tick);
+                // Only what it changed is drawn, and its heartbeat, which sends nothing
+                // unless something is different.
+                if pace.ticked(started, spaces.tick_mark()) {
+                    redraw = true;
+                    causes.add(Cause::Tick);
+                }
                 phases.events += started.elapsed();
                 if let Some(prof) = &mut prof {
                     prof.took(Phase::Events, started.elapsed());
                 }
-                redraw = true;
-                causes.add(Cause::Tick);
             }
             let started = Instant::now();
             if spaces.poll() {

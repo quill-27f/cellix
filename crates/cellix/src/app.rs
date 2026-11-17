@@ -18053,6 +18053,40 @@ impl App {
         self.dock.running()
     }
 
+    /// What the half-second tick can change on screen with no key, click or answer saying
+    /// so, as one number: a message, a file read again or saved, what waits in the inbox,
+    /// an agent found or gone, how full a session's context is, a picture read, a hover. A
+    /// tick that leaves it as it was when the screen was last drawn draws nothing.
+    /// Whatever it misses, and what tells the time, the tick's heartbeat draws (`pace.rs`).
+    pub fn tick_mark(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut mark = std::collections::hash_map::DefaultHasher::new();
+        self.message.borrow().hash(&mut mark);
+        for item in &self.inbox.items {
+            item.key.hash(&mut mark);
+        }
+        for editor in &self.editors {
+            editor.buffer.path().hash(&mut mark);
+            editor.buffer.revision().hash(&mut mark);
+            editor.buffer.is_dirty().hash(&mut mark);
+            editor.conflict.hash(&mut mark);
+            editor.agent_review.is_some().hash(&mut mark);
+        }
+        for session in &self.dock.sessions {
+            session.name.hash(&mut mark);
+            session.exited.hash(&mut mark);
+            session.context().hash(&mut mark);
+        }
+        self.agents.mark().hash(&mut mark);
+        self.comment_pictures.len().hash(&mut mark);
+        self.rest.map(|rest| rest.2).hash(&mut mark);
+        self.hover_info.is_some().hash(&mut mark);
+        std::mem::discriminant(&self.overlay).hash(&mut mark);
+        self.dock.pan_hint.is_some().hash(&mut mark);
+        (self.dock.problems, self.dock.log.len()).hash(&mut mark);
+        mark.finish()
+    }
+
     pub fn rename_running(&self) -> bool {
         self.pending_rename.is_some()
     }
@@ -20058,6 +20092,29 @@ mod tests {
         assert!(screen(&app).text().contains("Reloaded alpha.txt"));
         app.run(Command::Undo);
         assert!(screen(&app).text().contains("first line"));
+    }
+
+    /// The tick's marks stay as they are while nothing happens, so an idle window draws
+    /// nothing at each tick, and move when a tick reads a file an agent wrote, so that is
+    /// drawn at once.
+    #[test]
+    fn an_idle_tick_leaves_the_marks_and_a_reload_moves_them() {
+        let (dir, mut app) = project();
+        let path = dir.path().join("alpha.txt");
+        app.open(&path).unwrap();
+        app.handle(Event::Tick);
+        let _ = screen(&app);
+        let idle = app.tick_mark();
+        for _ in 0..3 {
+            app.handle(Event::Tick);
+            app.poll();
+        }
+        assert_eq!(app.tick_mark(), idle, "nothing changed");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        fs::write(&path, "written by an agent\n").unwrap();
+        app.handle(Event::Tick);
+        assert_ne!(app.tick_mark(), idle, "the file was read again");
+        assert!(screen(&app).text().contains("Reloaded alpha.txt"));
     }
 
     #[test]
