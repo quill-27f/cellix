@@ -105,6 +105,10 @@ pub enum Paint {
         shadow: bool,
         /// The border in dashes.
         dashed: bool,
+        /// A button on a row's wash. On a row taller than the terminal's line it keeps the
+        /// height it has on that line and isn't grown to a control's, which is the wash's
+        /// own: the wash shows over and under it. See `raster::inset`.
+        inset: bool,
     },
     /// A see-through wash with round corners over what's already drawn, text included, and
     /// a border twice a panel's weight: where something dragged would land.

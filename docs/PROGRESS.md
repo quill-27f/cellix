@@ -2681,3 +2681,17 @@ The user's word, before going away for the day: "Fix the #2 and then autonomousl
 - Looked at: `22-narrow`, `23-narrow-menu`, `100` to `105`, `w0-*`, `02-code` and `13-quit-hover` (one row at the foot: not moved).
 - Not done: on rows that are the terminal's own lines a tile can't stand off its line, so there only the last row is moved, by half the padding. The right ends of the two rows aren't level (the power mark ends 22 px short of the machine's name). No scene has a menu that crosses the foot, or a tip over the status bar's words in a narrow window.
 - Unverified: in a real Ghostty, where the padding under the lines is a guess; a press there.
+
+## A button on a pointed row stands inside the wash (2026-11-17)
+
+The second half of the user's #2. The last review wanted a button on a pointed row 8 px shorter than the row's wash; both were a control's height on a taller row, 39 px of 50.
+
+- A panel can say it's a button on a row's wash (`Paint::Panel`'s `inset`), and then keeps the height it has on the terminal's line, 32 px, where `stood` would grow it to a control's (`raster::inset`). `Grid::row_button` draws one, only on rows with room: on Comfortable rows the wash is under 2 px taller than the button, and they stay the same height. Ask Agent on a problem's row and Install on a pointed language server's in Settings are the two there are.
+- One `ui-expert` pass and a second look. The rim is 3.75 px over and under Ask Agent, its words in its middle, and the 27 px from the button to the wash's end mirrors the dot's at the row's start. What it found, fixed here:
+  - The button's corners, 8 px, beside the wash's 4 read as two kinds of shape once there was wash round them: 6 px (`ROW_BUTTON_RADIUS`).
+  - A problem's message was cut at a letter one column short of the button: "identifier 'c". It ends in an ellipsis two columns short (`context::elide`), on any row it doesn't fit.
+  - In Settings the wash stood 0.4 px under its row's middle (0.055 of a row rounds to 4 paint units over it and 3 under), so Install had 3 px of wash over it and 4 under. `ROW_WASH` is 4 units each end, for all three washes there.
+- Tests: `a_button_on_a_pointed_row_stands_inside_the_wash` (the app: the wash and the button as they stand in a row of 50 px, and the same height on the line), `a_button_on_a_rows_wash_stands_inside_it` (the rasterizer: the pixels down the button's middle), `a_problems_message_is_cut_with_an_ellipsis_short_of_its_button`.
+- The tour has a new scene, `132-task-problem-hover`: a pointed problem in the narrower pane.
+- Looked at: `109-problem-ask`, `42-hover-install`, `132-task-problems`, `132-task-problem-hover`, `16-settings-editor`, `37-hover-settings`.
+- Not done, from the same review: the wash in Problems is 12.5 px inside the sheet's left line and 4.5 px inside its right; Install stands 10 px from its wash's end where Ask Agent stands 27; the button under the pointer and the light theme weren't pictured.

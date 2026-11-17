@@ -11,6 +11,7 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 - The bell and the power button at the foot are the size of the branch's mark beside them on Airy rows. They were two thirds of it.
 - The bar at the foot stands in the middle of the space under the file, and there's less of that space. A row's height is fitted to your window, a pixel or two either side of what Row height asks, so the window's last pixels aren't all left under the bar: up to a whole row of them were.
 - Where the workspaces have a row of their own under the status bar (a narrow window, or many workspaces), the two rows stand evenly in the space under the file: as much over the status bar as between the two and under the workspaces. Only the lower row had been moved down, and all of the space lay between them.
+- A button at the end of a pointed row stands inside the row's highlight on Airy rows, with the highlight showing over and under it: Ask Agent on a problem, Install on a language server in Settings. It was exactly as tall as the highlight, and the two read as one shape.
 - There's air between the views at the top of the sidebar and the heading under them (the folder's name and branch, OUTLINE, SOURCE CONTROL): half a row over the heading and half under it. It stood straight under the views' line.
 
 ### Fixed
@@ -19,6 +20,7 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 - Ask Agent on a row of the Problems tab stood in a box taller than the row's highlight.
 - On the terminal's own row height, a sliver of the branch's mark showed over the bar at the foot.
 - A tooltip over the bar at the foot had part of its shadow drawn apart from it, lower down. On Airy rows it stands at the top of its row, with all of its shadow under it.
+- A problem's message too long for its row was cut at whatever letter came last. It ends in an ellipsis, clear of Ask Agent on a pointed row.
 
 ## [0.10.1] - 2026-11-16
 

@@ -15,5 +15,5 @@ pub use paint::{
     TOP_RIGHT, UNIT, units,
 };
 pub use raster::{
-    INTERFACE_SIZE, Image, Rasterizer, SoftwareRasterizer, built_in_emoji_holds, stood,
+    INTERFACE_SIZE, Image, Rasterizer, SoftwareRasterizer, built_in_emoji_holds, inset, stood,
 };

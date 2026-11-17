@@ -5451,5 +5451,26 @@
     "title": "On rows with room the two rows of a foot stand as a pair, the status bar's words a little lower in their row and the workspaces a little higher, and the tip over New Workspace stands at the top of the status bar's row with its shadow inside it",
     "test": "the_two_rows_of_a_foot_stand_as_a_pair",
     "passes": true
+  },
+  {
+    "id": "row-button-inset",
+    "milestone": 14,
+    "title": "A button at the end of a pointed row stands inside the row's wash where a row has room, with as much of the wash over it as under, and is as tall as the wash on the terminal's line",
+    "test": "a_button_on_a_pointed_row_stands_inside_the_wash",
+    "passes": true
+  },
+  {
+    "id": "row-button-drawn",
+    "milestone": 14,
+    "title": "A panel marked as a button on a row's wash keeps the height it has on the terminal's line on a taller row, drawn in the middle of the wash with tighter corners",
+    "test": "a_button_on_a_rows_wash_stands_inside_it",
+    "passes": true
+  },
+  {
+    "id": "problem-message-elided",
+    "milestone": 14,
+    "title": "A problem's message that doesn't fit its row ends in an ellipsis, two columns clear of the button on a pointed row",
+    "test": "a_problems_message_is_cut_with_an_ellipsis_short_of_its_button",
+    "passes": true
   }
 ]

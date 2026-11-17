@@ -6666,6 +6666,7 @@ impl App {
             border: None,
             shadow: false,
             dashed: false,
+            inset: false,
         };
         grid.insert_paint(index, mark);
     }
@@ -16836,10 +16837,10 @@ impl App {
         for (index, row) in shown.take(screen.h as usize).enumerate() {
             let y = screen.y + index as u16;
             let line = Rect::new(screen.x, y, screen.w, 1);
-            // The message stops short of the button on its row.
+            // The message stops two columns short of the button on its row.
             let end = ask
                 .filter(|chip| chip.y == y)
-                .map_or(screen.right(), |chip| chip.x.saturating_sub(1));
+                .map_or(screen.right(), |chip| chip.x.saturating_sub(2));
             if self.hover.is_some_and(|h| line.contains(h.0, h.1)) {
                 grid.panel(
                     Bounds::inset(line, 0.4, 0.06),
@@ -16869,13 +16870,17 @@ impl App {
                     grid.label(screen.x + 2, y, "●", mark, screen.x + 4);
                     let at = format!("{}  ", problem.line + 1);
                     let text = grid.label(screen.x + 4, y, &at, quiet, end);
-                    grid.label(text, y, &problem.message, theme.sidebar, end);
+                    // Cut with an ellipsis where it doesn't fit: cut at a letter, a column
+                    // from the button, what was left read as a word of its own.
+                    let room = f32::from(end.saturating_sub(text));
+                    let said = crate::context::elide(&problem.message, room, &*self.measure);
+                    grid.label(text, y, &said, theme.sidebar, end);
                 }
             }
         }
         if let Some(chip) = ask {
             // A quiet button on the row's wash, lighter under the pointer, as every button
-            // at the end of a row is.
+            // at the end of a row is, and shorter than the wash where a row has room.
             let ground = theme.row_hover;
             let quiet = theme.quiet_button(ground);
             let on_it = self.hover.is_some_and(|h| chip.contains(h.0, h.1));
@@ -16897,7 +16902,7 @@ impl App {
                 },
                 ..theme.sidebar
             };
-            grid.button(chip.x, chip.y, &cells, "Ask Agent", fill, style);
+            grid.row_button((chip.x, chip.y), &cells, "Ask Agent", fill, style);
         }
     }
 
@@ -28133,6 +28138,120 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             _ => false,
         });
         assert!(painted);
+    }
+
+    /// Where a row has room, the button on a pointed row is shorter than the wash behind it,
+    /// which shows over and under it. Both were a control's height, 39 px in a row of 50: the
+    /// button's edges lay on the wash's, and the two read as one shape with a step in it.
+    #[test]
+    fn a_button_on_a_pointed_row_stands_inside_the_wash() {
+        let (dir, mut app) = project();
+        let file = dir.path().join("src/lib.rs");
+        let problem = Diagnostic {
+            line: 0,
+            column: 0,
+            message: "cannot find value".to_string(),
+            severity: 1,
+        };
+        app.diagnostics.insert(file, vec![problem]);
+        app.toggle_problems();
+        // The wash behind the pointed row and the button on it, as (top, height) in pixels
+        // of a row `row` tall on a line of 36.
+        let shapes = |app: &mut App, row: usize| {
+            let measure = cellix_render::FontMeasure::new(17, row).with_type_row(36);
+            app.set_measure(Rc::new(measure));
+            let (x, y) = find(&screen(app), "cannot find");
+            app.handle(mouse(MouseKind::Move, x, y));
+            let (chip, ..) = app.problem_ask_at(y).expect("the button");
+            let grid = screen(app);
+            let quiet = app.theme.quiet_button(app.theme.row_hover);
+            let top = i32::from(y) * cellix_render::UNIT;
+            let stands = |fill: Rgb| {
+                let found = grid.paint.iter().find_map(|p| match p {
+                    Paint::Panel {
+                        bounds,
+                        fill: Some(colour),
+                        inset,
+                        ..
+                    } if *colour == fill && bounds.y >= top && bounds.y < top + 64 => {
+                        Some((*bounds, *inset))
+                    }
+                    _ => None,
+                });
+                let (bounds, inset) = found.expect("painted on the row");
+                let (y, h) = (bounds.y - top, bounds.h);
+                let stood = if inset {
+                    cellix_render::inset(y, h, row as f32, 36.0)
+                } else {
+                    cellix_render::stood(y, h, row as f32, 36.0)
+                };
+                (stood, bounds.x)
+            };
+            let (wash, _) = stands(app.theme.row_hover);
+            let (button, left) = stands(quiet);
+            assert_eq!(left, i32::from(chip.x) * cellix_render::UNIT);
+            (wash, button)
+        };
+        // Rows of 50 px, the airy height on a line of 36.
+        let ((wash_top, wash), (top, button)) = shapes(&mut app, 50);
+        assert!((wash - 39.0).abs() < 0.5, "the wash is a control: {wash}");
+        let (over, under) = (top - wash_top, wash_top + wash - top - button);
+        assert!(
+            over >= 3.0 && (over - under).abs() < 0.1,
+            "{over} px of the wash over the button and {under} under it"
+        );
+        assert!(
+            (button - 0.88 * 36.0).abs() < 0.5,
+            "as tall as on the line: {button}"
+        );
+        // On the terminal's own line there's no room for that: a button like any other.
+        let ((wash_top, wash), (top, button)) = shapes(&mut app, 36);
+        assert!((wash - button).abs() < 0.5 && (wash_top - top).abs() < 0.5);
+    }
+
+    /// A problem's message that doesn't fit its row ends in an ellipsis, two columns clear
+    /// of the button on a pointed row. It was cut at whatever letter came a column before
+    /// the button, and "identifier 'c" read as what the compiler had said.
+    #[test]
+    fn a_problems_message_is_cut_with_an_ellipsis_short_of_its_button() {
+        let (dir, mut app) = project();
+        let file = dir.path().join("src/lib.rs");
+        let problem = Diagnostic {
+            line: 0,
+            column: 0,
+            message: "cannot find value ".repeat(20),
+            severity: 1,
+        };
+        app.diagnostics.insert(file, vec![problem]);
+        app.toggle_problems();
+        let (x, y) = find(&screen(&app), "cannot find");
+        // Not pointed at, it runs to the pane's edge and says there's more.
+        let row = screen(&app).row_text(y);
+        assert!(row.trim_end().ends_with('…'), "{row}");
+        app.handle(mouse(MouseKind::Move, x, y));
+        let (chip, ..) = app.problem_ask_at(y).expect("the button");
+        let row: Vec<char> = screen(&app).row_text(y).chars().collect();
+        let cut = row.iter().position(|c| *c == '…').expect("an ellipsis");
+        assert!(cut < usize::from(chip.x), "before the button");
+        assert!(
+            usize::from(chip.x) - cut > 2,
+            "two columns between them: {} and {}",
+            cut,
+            chip.x
+        );
+        assert!(row[cut + 1..usize::from(chip.x)].iter().all(|c| *c == ' '));
+        // One that fits is as it was.
+        let short = Diagnostic {
+            line: 1,
+            column: 0,
+            message: "unused".to_string(),
+            severity: 2,
+        };
+        let file = dir.path().join("src/lib.rs");
+        app.diagnostics.insert(file, vec![short]);
+        let grid = screen(&app);
+        let (_, y) = find(&grid, "unused");
+        assert!(!grid.row_text(y).contains('…'), "{}", grid.row_text(y));
     }
 
     /// On a row with room a card has the design's quarter of a row over its first row and

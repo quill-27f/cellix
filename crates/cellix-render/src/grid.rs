@@ -13,6 +13,9 @@ use crate::paint::{Bounds, Paint, UNIT, units};
 /// the applied design measured as the last of "buttons and text too close".
 const BUTTON_HEIGHT: f32 = 0.88;
 const LARGE_BUTTON_HEIGHT: f32 = BUTTON_HEIGHT;
+/// The corners of a button that stands inside a row's wash, as a percentage of the line:
+/// 6 px where a button's are 8, in keeping with its 32 px against a control's 39.
+const ROW_BUTTON_RADIUS: u8 = 17;
 /// How far a button's words are raised in its chip, in rows: a pixel. Words stand with their
 /// capitals in the row's middle, which left the tail of a "g" 2 px over the chip's foot and
 /// 7 px over a capital; a pixel up, it's 4 and 6.
@@ -373,6 +376,34 @@ impl Grid {
         self.button_of((BUTTON_HEIGHT, 0.0), (x, y), cells, label, fill, style);
     }
 
+    /// A button at the end of a row that's washed under the pointer. Where a row has room,
+    /// it's shorter than the wash, which shows over and under it: as tall as the wash, the
+    /// two read as one shape with a step in it, and taller, as a button too big for its
+    /// row. On the terminal's line a button and the wash have the row between them and
+    /// nothing to spare, and it's a button like any other.
+    pub fn row_button(
+        &mut self,
+        (x, y): (u16, u16),
+        cells: &str,
+        label: &str,
+        fill: Rgb,
+        style: Style,
+    ) {
+        self.button(x, y, cells, label, fill, style);
+        if !self.roomy {
+            return;
+        }
+        // Its corners a little tighter with its height: a button's 8 px beside the wash's 4
+        // read as two kinds of shape once there was wash to see round it.
+        let chips = self.paint.iter_mut().rev();
+        for paint in chips.take(2) {
+            if let Paint::Panel { inset, radius, .. } = paint {
+                *inset = true;
+                *radius = ROW_BUTTON_RADIUS;
+            }
+        }
+    }
+
     /// A button's chip by itself, as wide as asked and not a whole number of cells, for one
     /// whose words and marks are placed by what draws it.
     pub fn chip(&mut self, x: f32, y: u16, wide: f32, fill: Rgb) {
@@ -484,6 +515,7 @@ impl Grid {
             border,
             shadow: false,
             dashed: false,
+            inset: false,
         });
     }
 
@@ -496,6 +528,7 @@ impl Grid {
             border: Some(border),
             shadow: false,
             dashed: true,
+            inset: false,
         });
     }
 
@@ -508,6 +541,7 @@ impl Grid {
             border: Some(border),
             shadow: true,
             dashed: false,
+            inset: false,
         });
     }
 

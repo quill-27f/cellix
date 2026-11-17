@@ -267,6 +267,17 @@ pub fn stood(y: i32, h: i32, row: f32, line: f32) -> (f32, f32) {
     }
 }
 
+/// Where a button on a row's wash stands, as a top and a height in pixels: at the height it
+/// has on the terminal's line, in the middle of where it stood. `stood` grows a button to a
+/// control's height on a taller row, which is the height of the wash behind a pointed row,
+/// so a button on one was exactly as tall as the wash. Kept at the line's height, a button
+/// of 32 px on a wash of 39 has the wash 4 px over it and under it.
+pub fn inset(y: i32, h: i32, row: f32, line: f32) -> (f32, f32) {
+    let (top, tall) = (y as f32 * row / UNIT as f32, h as f32 * row / UNIT as f32);
+    let kept = (h as f32 * line / UNIT as f32).min(tall);
+    (top + (tall - kept) / 2.0, kept)
+}
+
 /// How much of the terminal's line something takes before it counts as a control with the
 /// row to itself, and how much of a taller row such a control is.
 const FILLS: f32 = 0.8;
@@ -490,8 +501,13 @@ impl SoftwareRasterizer {
                 border,
                 shadow,
                 dashed,
+                inset: on_a_wash,
             } => {
-                let (y, h) = self.stand(bounds.y, bounds.h);
+                let (y, h) = if *on_a_wash {
+                    inset(bounds.y, bounds.h, ch, th)
+                } else {
+                    self.stand(bounds.y, bounds.h)
+                };
                 let mut shape = Shape {
                     x: scale(bounds.x, cw),
                     y,
@@ -1369,6 +1385,75 @@ mod tests {
         // And a control never outgrows the room it was given.
         let (top, tall) = stood(0, 60, 40.0, 37.0);
         assert!(top >= 0.0 && tall <= 60.0 * 40.0 / 64.0, "{top} {tall}");
+    }
+
+    /// A button on a pointed row's wash stands inside it where a row has room. Both were a
+    /// control's height on a taller row, 39 px in one of 50, so the button's edges lay on the
+    /// wash's. It keeps the 32 px it has on the terminal's line, in the middle of the wash.
+    #[test]
+    fn a_button_on_a_rows_wash_stands_inside_it() {
+        let Some(r) = SoftwareRasterizer::new(17, 50) else {
+            return;
+        };
+        let mut r = r.with_type_row(36);
+        let mut grid = Grid::new(12, 1, style());
+        grid.roomy = true;
+        // The wash behind the row, and the button at its end.
+        let wash = crate::paint::Bounds::cells(0.4, 0.06, 11.2, 0.88);
+        grid.panel(wash, 12, Some(Rgb(0, 0, 255)), None);
+        grid.row_button((6, 0), "    ", "", Rgb(255, 0, 0), style());
+        let image = r.row(&grid, 0);
+        let rows = |x: usize, red: bool| -> Vec<usize> {
+            (0..image.height)
+                .filter(|y| {
+                    let at = (y * image.width + x) * 3;
+                    let (r, b) = (image.rgb[at], image.rgb[at + 2]);
+                    if red {
+                        r > 200 && b < 60
+                    } else {
+                        b > 200 && r < 60
+                    }
+                })
+                .collect()
+        };
+        // Down the button's middle, eight cells along: wash, button, wash.
+        let (button, round) = (rows(136, true), rows(136, false));
+        // 31.7 px: thirty rows of it whole, and a blended one at each edge.
+        assert!(
+            (30..=33).contains(&button.len()),
+            "{} px of button",
+            button.len()
+        );
+        let over = round.iter().filter(|y| **y < button[0]).count();
+        let under = round.len() - over;
+        assert!(
+            (3..=5).contains(&over) && over.abs_diff(under) <= 1,
+            "{over} px of wash over the button, {under} under"
+        );
+        // Its corners are tighter than a button's, with its height.
+        let tight = grid.paint.iter().any(|p| {
+            matches!(
+                p,
+                Paint::Panel {
+                    inset: true,
+                    radius: 17,
+                    ..
+                }
+            )
+        });
+        assert!(tight, "17 per cent of the line, where a button's are 22");
+        // Beside it the wash is a control, all of 39 px.
+        assert!((38..=40).contains(&rows(40, false).len()));
+        // Where a row is the terminal's line, it's a button like any other: as it stood.
+        assert_eq!(inset(4, 56, 36.0, 36.0), stood(4, 56, 36.0, 36.0));
+        grid.paint.clear();
+        grid.roomy = false;
+        grid.row_button((6, 0), "    ", "", Rgb(255, 0, 0), style());
+        let plain = grid
+            .paint
+            .iter()
+            .any(|p| matches!(p, Paint::Panel { inset: true, .. }));
+        assert!(!plain, "not inset where a row has no room");
     }
 
     /// An emoji in a line of painted text keeps its own colours, where the machine has a

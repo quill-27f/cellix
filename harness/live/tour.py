@@ -101,6 +101,7 @@ EXPECT = {
     "130-run-task": "Select the task",
     "131-task-failed": "make build",
     "132-task-problems": "undeclared identifier",
+    "132-task-problem-hover": "Ask Agent",
     "133-open-recent": "recent folder",
     "134-settings-editor": "files save",
     "135-settings-keyboard": "command's keys",
@@ -1035,6 +1036,12 @@ with tempfile.TemporaryDirectory() as scratch:
           cwd=tasks)
     shoot("132-task-problems", [*palette("run task"), ["keys", "\r"], ["wait", 2.5],
                                 ["click", *FOOT("⊗", 0)], ["wait", 0.6]], "src/main.c", cwd=tasks)
+    # The pointer on a problem: its row washed, with the button at its end inside the wash
+    # and the message cut short of it.
+    shoot("132-task-problem-hover", [*palette("run task"), ["keys", "\r"], ["wait", 2.5],
+                                     ["click", *FOOT("⊗", 0)], ["wait", 0.6],
+                                     ["move", ["undeclared identifier"]], ["wait", 0.4]],
+          "src/main.c", cwd=tasks)
     shoot("133-open-recent", palette("open recent"), CODE_FILE)
     to_section = lambda tabs: [*palette("open settings"), ["until", "Changes apply"],
                                *[["keys", "\t"]] * tabs, ["keys", "\r"], ["wait", 0.5]]

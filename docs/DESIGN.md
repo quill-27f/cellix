@@ -579,6 +579,18 @@ from the same room:
 - A button at the end of a pointed row paints its chip on the row's wash and leaves its cells
   the row's own ground. Given the wash's colour, they were a whole row of it behind a button
   that's 0.78 of one.
+- That button stands inside the wash (`Grid::row_button`, `raster::inset`): it keeps the
+  32 px it has on the terminal's line, and the wash, a control of 39 px, shows 4 px over and
+  under it. As tall as the wash, its edges lay on the wash's and the two read as one shape
+  with a step in it. Its corners are 6 px where a button's are 8 (`ROW_BUTTON_RADIUS`),
+  nearer the wash's 4. Ask Agent on a problem's row and Install on a language server's are
+  the two. Only on Airy rows: on Comfortable ones the wash is under 2 px taller than the
+  button, which would be a rim of less than a pixel, and they stay the same height.
+- A problem's message that doesn't fit ends in an ellipsis, two columns short of the button
+  on a pointed row (`context::elide`): cut at whatever letter came a column before the
+  button, "identifier 'c" read as what was said. The wash behind a pointed row of Settings is
+  4 paint units inside its row at each end (`ROW_WASH`), so its middle is the row's: at
+  0.055 of a row it rounded 0.4 px low, which a button inside it shows.
 
 Appearance is taller than a short window, the more so on taller rows, so it scrolls: a part
 that doesn't fit whole isn't drawn, and nothing is drawn over the bars under the page. Every

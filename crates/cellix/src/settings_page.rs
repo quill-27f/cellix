@@ -97,6 +97,11 @@ const CARD_WIDTH: u16 = 24;
 const CARD_HEIGHT: u16 = 8;
 const PREVIEW_ROWS: u16 = 6;
 const SEGMENT_WIDTH: u16 = 11;
+/// How far inside its row the wash behind a pointed row starts and ends, in rows: 4 of a
+/// row's 64 paint units, so its middle is the row's. At 0.055 it rounded to 4 over and 3
+/// under, 0.4 px low, which a button standing inside the wash showed as 3 px of it over the
+/// button and 4 under.
+const ROW_WASH: f32 = 0.0625;
 const BUTTON_WIDTH: u16 = 12;
 const TOGGLE_WIDTH: f32 = 2.6;
 /// A page's title, a row tall: as large as its two rows hold with the note under it clear.
@@ -1371,7 +1376,7 @@ impl SettingsPage {
             hovered.then_some(theme.page_hover)
         };
         if let Some(fill) = wash {
-            grid.panel(Bounds::inset(rect, 0.0, 0.055), 18, Some(fill), None);
+            grid.panel(Bounds::inset(rect, 0.0, ROW_WASH), 18, Some(fill), None);
         }
         let fg = match (on, filtering && found == 0) {
             (true, _) => theme.accent,
@@ -1486,9 +1491,9 @@ impl SettingsPage {
         if hover.is_some_and(|h| row.contains(h.0, h.1)) {
             let wash = Bounds::cells(
                 page.x as f32 - 0.6,
-                y as f32 + 0.055,
+                y as f32 + ROW_WASH,
                 page.w as f32 + 1.2,
-                0.89,
+                1.0 - ROW_WASH * 2.0,
             );
             grid.panel(wash, 18, Some(theme.page_hover), None);
         }
@@ -1664,9 +1669,9 @@ impl SettingsPage {
         if hovered {
             let wash = Bounds::cells(
                 page.x as f32 - 0.6,
-                y as f32 + 0.055,
+                y as f32 + ROW_WASH,
                 page.w as f32 + 1.2,
-                0.89,
+                1.0 - ROW_WASH * 2.0,
             );
             grid.panel(wash, 18, Some(theme.page_hover), None);
         }
@@ -1705,7 +1710,8 @@ impl SettingsPage {
                     fg: theme.button_text,
                     ..theme.text
                 };
-                grid.button(x, rect.y, &cells, "Install", theme.button, style);
+                // On the row's wash, and inside it where a row has room.
+                grid.row_button((x, rect.y), &cells, "Install", theme.button, style);
             } else {
                 // Its word where Found stands on the rows beside it.
                 let word = Style {
