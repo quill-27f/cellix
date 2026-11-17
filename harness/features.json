@@ -5528,5 +5528,12 @@
     "title": "An idle window draws nothing and sends the terminal nothing: the tick draws only when what it can change on screen did, with a heartbeat that sends nothing unchanged, and a present with nothing different writes nothing on pixels or cells",
     "test": "an_idle_window_draws_and_sends_nothing",
     "passes": true
+  },
+  {
+    "id": "agent-to-agent",
+    "milestone": 15,
+    "title": "Agents start, message, read and wait for each other with cellix agent, asking the person first, holding for their draft and refusing to answer a question for them",
+    "test": "agents_start_message_and_wait_for_each_other",
+    "passes": true
   }
 ]

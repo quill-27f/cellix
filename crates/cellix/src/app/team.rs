@@ -1,0 +1,1665 @@
+//! Agents starting, messaging and waiting for each other, as `cellix agent` asks: the app's
+//! side of `cellix_agent::team`. A call is answered at once or kept until it can be: a start
+//! waits for the person's yes and for the agent to be ready, a message for the person to stop
+//! typing into that agent, and a wait for the agent to stop working. Each is looked at again
+//! on every poll, and each has a deadline, so a caller always hears back.
+
+use std::time::{Duration, Instant};
+
+use cellix_agent::team::{self, Answer, Asked, Call, Caller, Children, code};
+use cellix_agent::{AgentEvent, AgentState};
+
+use super::*;
+use crate::dock::Gone;
+use crate::hold::Member;
+
+/// How long after a person's last key in an agent a message to it waits.
+const QUIET: Duration = Duration::from_secs(3);
+/// How long a prompt the person has begun holds a message back, from their last key.
+const DRAFT: Duration = Duration::from_secs(60);
+/// Between a message's paste and its Enter, so the program sees them apart.
+const ENTER_GAP: Duration = Duration::from_millis(200);
+/// How long a program that says nothing of itself must have been quiet to be ready.
+const SETTLED: Duration = Duration::from_millis(800);
+/// How long a program has, once a message is entered, to say it took it before what it said
+/// last counts again.
+const TAKING: Duration = Duration::from_secs(5);
+/// How long a start waits for the person to say yes.
+const CONSENT_WAIT: Duration = Duration::from_secs(90);
+/// The consent card's buttons, the last the one to press.
+pub(super) const CONSENT_BUTTONS: [&str; 3] = ["Deny", "Always Allow Here", "Allow"];
+/// The widest the consent card stands.
+const CONSENT_WIDTH: u16 = 64;
+/// Lines of a screen `read` gives when not told how many.
+const SCREEN_LINES: usize = 60;
+
+/// What an agent is doing, as its hooks last said.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Doing {
+    /// Started, and hasn't said anything yet.
+    Starting,
+    Working,
+    /// Asking the person something: leave to run a command, a question, a plan.
+    Asking(String),
+    /// Its turn is over, or it hasn't had one.
+    Done(String),
+    /// Its turn stopped on an error.
+    Failed(String),
+    Exited,
+    /// A program that says nothing of itself, which is working until it ends.
+    Running,
+}
+
+impl Doing {
+    pub(crate) fn word(&self) -> &'static str {
+        match self {
+            Doing::Starting => "starting",
+            Doing::Working => "working",
+            Doing::Asking(_) => "asking",
+            Doing::Done(_) => "done",
+            Doing::Failed(_) => "error",
+            Doing::Exited => "exited",
+            Doing::Running => "running",
+        }
+    }
+
+    pub(crate) fn working(&self) -> bool {
+        matches!(self, Doing::Starting | Doing::Working | Doing::Running)
+    }
+
+    pub(crate) fn detail(&self) -> &str {
+        match self {
+            Doing::Asking(d) | Doing::Done(d) | Doing::Failed(d) => d,
+            _ => "",
+        }
+    }
+}
+
+/// An agent to start, as a run asked.
+#[derive(Clone, Debug)]
+pub(super) struct Start {
+    pub(super) name: String,
+    kind: String,
+    program: Vec<String>,
+    folder: PathBuf,
+    pub(super) task: Option<String>,
+    parent: Option<String>,
+    outlive: bool,
+    /// Who asked, as the card names them.
+    pub(super) by: String,
+}
+
+impl Start {
+    /// What the card calls what it starts: the agent's name, or the command.
+    pub(super) fn what(&self) -> String {
+        match self.kind.as_str() {
+            "command" => {
+                let mut words = self.program.iter();
+                let program = words.next().map(|p| {
+                    let name = Path::new(p).file_name().and_then(|n| n.to_str());
+                    name.unwrap_or(p).to_string()
+                });
+                program
+                    .into_iter()
+                    .chain(words.cloned())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            }
+            kind => crate::agents::display_name(kind).to_string(),
+        }
+    }
+
+    fn agent(&self) -> bool {
+        self.kind != "command"
+    }
+}
+
+/// A call still under way.
+pub(super) struct Pending {
+    /// The caller's own session, by name, when it has one.
+    caller: Option<String>,
+    reply: Sender<String>,
+    until: Instant,
+    pub(super) step: Step,
+}
+
+pub(super) enum Step {
+    /// Answered: nothing is left to do.
+    Answered,
+    /// Waiting for the person to say whether this may start.
+    Consent(Start),
+    /// Started, and waiting to be ready for its task.
+    Ready {
+        name: String,
+        kind: String,
+        task: Option<String>,
+    },
+    /// A message waiting for the person to stop typing, and then for its Enter.
+    Message {
+        name: String,
+        text: String,
+        force: bool,
+        typed: Option<Instant>,
+        then: Then,
+    },
+    /// Waiting for an agent, or the caller's children, to stop working.
+    Wait {
+        on: On,
+        /// How many messages the caller had had when it began, as one more ends it.
+        messages: u64,
+        /// When the message it waits on went in, after `send --wait`.
+        sent: Option<Instant>,
+    },
+}
+
+/// What a message does once it's in.
+pub(super) enum Then {
+    Reply(Value),
+    Wait,
+}
+
+pub(super) enum On {
+    One(String),
+    Children(Children),
+}
+
+/// The agents of this workspace as each other's, and the calls between them under way.
+pub(crate) struct Team {
+    pending: Vec<Pending>,
+    /// Starts waiting for the person's yes; the first one's card shows.
+    pub(super) asking: VecDeque<Pending>,
+    /// What each named session last said through its hooks, and when it came.
+    heard: HashMap<String, (AgentEvent, Instant)>,
+    /// Messages Cellix has typed into each named session, which end a wait it's in.
+    messages: HashMap<String, u64>,
+    /// What closed agents last showed, by name, for a read after their tabs are gone.
+    gone: HashMap<String, Gone>,
+    /// Whether each member was working at the last look, and how many times it has stopped
+    /// since it started, which is news for its parent.
+    was_working: HashMap<String, bool>,
+    stops: HashMap<String, u64>,
+    /// How many of a child's stops its parent has heard of, by (parent, child).
+    heard_by: HashMap<(String, String), u64>,
+    /// Agents here may start others without asking, as the person said.
+    pub(super) always: bool,
+    /// How long a message waits after the person's last key, and for a prompt they've begun.
+    pub(super) quiet: Duration,
+    pub(super) draft: Duration,
+}
+
+impl Default for Team {
+    fn default() -> Self {
+        Self {
+            pending: Vec::new(),
+            asking: VecDeque::new(),
+            heard: HashMap::new(),
+            messages: HashMap::new(),
+            gone: HashMap::new(),
+            was_working: HashMap::new(),
+            stops: HashMap::new(),
+            heard_by: HashMap::new(),
+            always: false,
+            quiet: QUIET,
+            draft: DRAFT,
+        }
+    }
+}
+
+impl Team {
+    /// Whether `parent` has news of `child` it hasn't heard: a stop since it last did.
+    fn unheard(&self, parent: &str, child: &str) -> bool {
+        let stops = self.stops.get(child).copied().unwrap_or(0);
+        let key = (parent.to_string(), child.to_string());
+        stops > self.heard_by.get(&key).copied().unwrap_or(0)
+    }
+
+    /// `parent` has heard everything so far of `child`.
+    fn heard_of(&mut self, parent: &str, child: &str) {
+        let stops = self.stops.get(child).copied().unwrap_or(0);
+        self.heard_by
+            .insert((parent.to_string(), child.to_string()), stops);
+    }
+}
+
+fn answer(reply: &Sender<String>, answer: Answer) {
+    let _ = reply.send(answer.line());
+}
+
+fn not_found(name: &str) -> Answer {
+    Answer::fail(
+        code::NOT_FOUND,
+        format!("no agent here is called {name}; cellix agent ls lists them"),
+    )
+}
+
+/// A program's name as it can stand in an agent's: lowercase, with what isn't a letter or
+/// digit made a dash.
+fn name_part(program: &str) -> String {
+    let base = Path::new(program)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("command");
+    let mut part: String = base
+        .chars()
+        .map(|c| {
+            let c = c.to_ascii_lowercase();
+            if c.is_ascii_lowercase() || c.is_ascii_digit() {
+                c
+            } else {
+                '-'
+            }
+        })
+        .take(24)
+        .collect();
+    if !part.starts_with(|c: char| c.is_ascii_lowercase()) {
+        part.insert(0, 'p');
+    }
+    part
+}
+
+impl App {
+    /// The session other agents call `name`.
+    pub(crate) fn member_index(&self, name: &str) -> Option<usize> {
+        self.dock
+            .sessions
+            .iter()
+            .position(|s| s.called() == Some(name))
+    }
+
+    /// The session a call came from, by where it's held or else by its name.
+    fn caller_index(&self, from: &Caller) -> Option<usize> {
+        let held = from.held.as_deref().and_then(|held| {
+            let mut sessions = self.dock.sessions.iter();
+            sessions.position(|s| s.socket().is_some_and(|socket| socket == Path::new(held)))
+        });
+        held.or_else(|| from.name.as_deref().and_then(|n| self.member_index(n)))
+    }
+
+    /// A name for a new member of `base`'s kind no session here has, nor any that closed.
+    fn free_name(&self, base: &str) -> String {
+        let taken =
+            |name: &str| self.member_index(name).is_some() || self.team.gone.contains_key(name);
+        (1..)
+            .map(|n| format!("{base}-{n}"))
+            .find(|name| !taken(name))
+            .expect("a free number")
+    }
+
+    /// What a session about to start is among the agents here: a name for others to reach it
+    /// by, and its kind. Shells and the browser are nobody's to message.
+    pub(super) fn member_for(&self, display: &str, argv: &[String]) -> Option<Member> {
+        if display == crate::agents::SHELL.0 || display == BROWSER {
+            return None;
+        }
+        let kind = match crate::agents::program_of(display) {
+            Some(program) => program.to_string(),
+            None => team::kind_of(argv.first().map_or("", String::as_str)).to_string(),
+        };
+        let base = match kind.as_str() {
+            "command" => name_part(argv.first().map_or("command", String::as_str)),
+            agent => agent.to_string(),
+        };
+        Some(Member {
+            name: self.free_name(&base),
+            kind,
+            parent: None,
+            outlive: false,
+        })
+    }
+
+    /// Takes in what an agent's hooks said, for the session it runs in: by the name Cellix
+    /// gave that session, and only from the session's own program, not another agent it ran.
+    pub(super) fn heard_from(&mut self, event: &AgentEvent) {
+        if event.name.is_empty() {
+            return;
+        }
+        let Some(index) = self.member_index(&event.name) else {
+            return;
+        };
+        let own = self.dock.sessions[index].program_pid();
+        if let (Some(said), Some(own)) = (event.pid, own)
+            && said != own
+        {
+            return;
+        }
+        self.team
+            .heard
+            .insert(event.name.clone(), (event.clone(), Instant::now()));
+    }
+
+    /// Takes in what the program in tab `index` said of itself (OSC 7501), as its hooks' word
+    /// would be: `clear` takes back what it said.
+    pub(super) fn heard_report(&mut self, index: usize, event: &AgentEvent, clear: bool) {
+        let Some(name) = self.dock.sessions[index].called().map(str::to_string) else {
+            return;
+        };
+        if clear {
+            self.team.heard.remove(&name);
+            return;
+        }
+        let said = AgentEvent {
+            name: name.clone(),
+            ..event.clone()
+        };
+        self.team.heard.insert(name, (said, Instant::now()));
+    }
+
+    /// What the agent in tab `index` is doing.
+    pub(crate) fn doing(&self, index: usize) -> Doing {
+        let Some(session) = self.dock.sessions.get(index) else {
+            return Doing::Exited;
+        };
+        if session.exited {
+            return Doing::Exited;
+        }
+        let Some(member) = &session.member else {
+            return Doing::Running;
+        };
+        let heard = self.team.heard.get(&member.name);
+        // A message just went in: it's taking it until it says otherwise.
+        if let Some(at) = session.prompted
+            && at.elapsed() < TAKING
+            && heard.is_none_or(|(_, when)| *when < at)
+        {
+            return Doing::Working;
+        }
+        match heard {
+            Some((event, _)) => match event.state {
+                AgentState::Working => Doing::Working,
+                AgentState::NeedsYou => Doing::Asking(event.detail.clone()),
+                AgentState::Idle if event.detail.starts_with("Stopped") => {
+                    Doing::Failed(event.detail.clone())
+                }
+                AgentState::Idle => Doing::Done(event.detail.clone()),
+                AgentState::Ended => Doing::Exited,
+            },
+            // An agent that hasn't said it's up after the longest a start waits for it has no
+            // hooks to say anything with.
+            None if member.kind == "command" => Doing::Running,
+            None if session.born.elapsed() > Duration::from_secs(team::READY_MOST) => {
+                Doing::Running
+            }
+            None => Doing::Starting,
+        }
+    }
+
+    /// Answers a call from `cellix agent`, at once or once it can.
+    pub(crate) fn team_call(&mut self, asked: Asked, reply: Sender<String>) {
+        let Asked { from, call } = asked;
+        let caller = self
+            .caller_index(&from)
+            .and_then(|i| self.dock.sessions[i].called().map(str::to_string));
+        let pending = |step, until| Pending {
+            caller: caller.clone(),
+            reply: reply.clone(),
+            until,
+            step,
+        };
+        match call {
+            Call::Ls => answer(&reply, Answer::ok(self.team_list())),
+            Call::Read { name, lines } => {
+                let read = self.team_read(&name, lines, &caller);
+                answer(&reply, read);
+            }
+            Call::Stop { name } => match self.member_index(&name) {
+                Some(index) => {
+                    self.dock.sessions[index].stop();
+                    let by = caller.as_deref().unwrap_or("an agent");
+                    self.say(format!("{name} was stopped by {by}"));
+                    answer(&reply, Answer::ok(json!({"stopped": name})));
+                }
+                None => answer(&reply, not_found(&name)),
+            },
+            Call::Send {
+                name,
+                text,
+                wait,
+                force,
+                timeout,
+            } => {
+                let Some(index) = self.member_index(&name) else {
+                    return answer(&reply, not_found(&name));
+                };
+                if self.dock.sessions[index].exited {
+                    let error = format!(
+                        "{name} has ended; read what it said with cellix agent read {name}"
+                    );
+                    return answer(&reply, Answer::fail(code::FAILED, error));
+                }
+                if caller.as_deref() == Some(name.as_str()) {
+                    let error = "an agent can't send to itself";
+                    return answer(&reply, Answer::fail(code::USAGE, error));
+                }
+                if let Some(refused) = self.refuse_asking(index, &name, force) {
+                    return answer(&reply, refused);
+                }
+                let text = self.as_sent(&caller, index, &text);
+                let then = if wait {
+                    Then::Wait
+                } else {
+                    Then::Reply(json!({"sent": name}))
+                };
+                let step = Step::Message {
+                    name,
+                    text,
+                    force,
+                    typed: None,
+                    then,
+                };
+                let until = Instant::now() + Duration::from_secs(timeout);
+                let mut sending = pending(step, until);
+                if !self.progress(&mut sending) {
+                    self.team.pending.push(sending);
+                }
+            }
+            Call::Wait {
+                name,
+                children,
+                timeout,
+            } => {
+                let on = match (name, children) {
+                    (Some(name), _) => {
+                        let known = self.member_index(&name).is_some()
+                            || self.team.gone.contains_key(&name);
+                        if !known {
+                            return answer(&reply, not_found(&name));
+                        }
+                        On::One(name)
+                    }
+                    (None, Some(children)) => {
+                        if caller.is_none() {
+                            let error = "only an agent Cellix started has children to wait for";
+                            return answer(&reply, Answer::fail(code::USAGE, error));
+                        }
+                        On::Children(children)
+                    }
+                    (None, None) => {
+                        return answer(&reply, Answer::fail(code::USAGE, team::usage()));
+                    }
+                };
+                let step = Step::Wait {
+                    on,
+                    messages: self.messages_of(&caller),
+                    sent: None,
+                };
+                let until = Instant::now() + Duration::from_secs(timeout);
+                let mut waiting = pending(step, until);
+                // Already not working: that's the answer.
+                if !self.progress(&mut waiting) {
+                    self.team.pending.push(waiting);
+                }
+            }
+            Call::Run {
+                name,
+                cwd,
+                program,
+                task,
+                outlive_parent,
+            } => {
+                let planned = self.plan_start(name, &cwd, program, task, outlive_parent, &from);
+                let start = match planned {
+                    Ok(start) => start,
+                    Err(refused) => return answer(&reply, refused),
+                };
+                // The person is asked the first time an agent starts another here.
+                let agent_asks = match self.caller_index(&from) {
+                    Some(index) => self.dock.sessions[index].member.is_some(),
+                    None => from.agent,
+                };
+                if agent_asks && !self.team.always {
+                    // It waits with what else waits for the person, so it reaches them as a
+                    // notification when Cellix isn't in front, or this workspace isn't.
+                    let parent = self
+                        .caller_index(&from)
+                        .map(|i| self.dock.sessions[i].name.clone());
+                    self.inbox.note(Waiting {
+                        kind: Waits::Permission,
+                        key: format!("start:{}", start.name),
+                        title: format!("{} wants to start {}", start.by, start.what()),
+                        detail: "Allow or deny it in the card".to_string(),
+                        since: Instant::now(),
+                        target: WaitTarget::Session(parent.unwrap_or_default()),
+                    });
+                    let until = Instant::now() + CONSENT_WAIT;
+                    self.team
+                        .asking
+                        .push_back(pending(Step::Consent(start), until));
+                    return;
+                }
+                let mut started = pending(Step::Consent(start), Instant::now());
+                self.begin(&mut started);
+                if !self.progress(&mut started) {
+                    self.team.pending.push(started);
+                }
+            }
+        }
+    }
+
+    /// The text of a message as it arrives: from an agent to an agent, marked with who sent it.
+    fn as_sent(&self, caller: &Option<String>, to: usize, text: &str) -> String {
+        let to_agent = self.dock.sessions[to]
+            .member
+            .as_ref()
+            .is_some_and(|m| m.kind != "command");
+        match caller {
+            Some(sender) if to_agent => team::tagged(sender, text),
+            _ => text.to_string(),
+        }
+    }
+
+    /// Refuses to type into an agent that's asking the person something, since what's typed
+    /// would answer it, unless forced.
+    fn refuse_asking(&self, index: usize, name: &str, force: bool) -> Option<Answer> {
+        let Doing::Asking(what) = self.doing(index) else {
+            return None;
+        };
+        if force {
+            return None;
+        }
+        let what = if what.is_empty() {
+            "something".to_string()
+        } else {
+            what
+        };
+        let error = format!(
+            "{name} is asking the person: {what}. Nothing was typed, since it would answer \
+             that. Leave the answer to them; read it with cellix agent read {name}"
+        );
+        let out = json!({"name": name, "state": "asking", "detail": what});
+        Some(Answer::fail(code::ASKING, error).with(out))
+    }
+
+    /// Checks a run and works out what it starts, without starting anything.
+    fn plan_start(
+        &self,
+        name: Option<String>,
+        cwd: &str,
+        program: Vec<String>,
+        task: Option<String>,
+        outlive: bool,
+        from: &Caller,
+    ) -> Result<Start, Answer> {
+        let Ok(folder) = dunce::canonicalize(cwd)
+            .map_err(|_| ())
+            .and_then(|f| if f.is_dir() { Ok(f) } else { Err(()) })
+        else {
+            return Err(Answer::fail(code::USAGE, format!("{cwd} isn't a folder")));
+        };
+        let Some(first) = program.first() else {
+            return Err(Answer::fail(code::USAGE, "run needs a program"));
+        };
+        let kind = team::kind_of(first).to_string();
+        let name = match name {
+            Some(name) if self.member_index(&name).is_some() => {
+                let error = format!("an agent here is already called {name}: give another --name");
+                return Err(Answer::fail(code::USAGE, error));
+            }
+            Some(name) => name,
+            None if kind == "command" => self.free_name(&name_part(first)),
+            None => self.free_name(&kind),
+        };
+        let caller = self.caller_index(from);
+        let parent = caller.and_then(|i| self.dock.sessions[i].called().map(str::to_string));
+        let someone = if from.agent { "An agent" } else { "You" };
+        // The person knows an agent by its tab, as it's called there.
+        let tab = caller.filter(|_| parent.is_some());
+        let by = tab.map_or_else(|| someone.to_string(), |i| self.dock.sessions[i].label());
+        Ok(Start {
+            name,
+            kind,
+            program,
+            folder,
+            task,
+            by,
+            parent,
+            outlive,
+        })
+    }
+
+    /// Starts what `pending` holds, now the person has said yes or needn't, and turns it into
+    /// a wait for it to be ready.
+    fn begin(&mut self, pending: &mut Pending) {
+        let Step::Consent(start) = &pending.step else {
+            return;
+        };
+        let start = start.clone();
+        match self.start_member(&start) {
+            Ok(()) => {
+                pending.until = Instant::now() + Duration::from_secs(team::READY_MOST);
+                pending.step = Step::Ready {
+                    name: start.name.clone(),
+                    kind: start.kind.clone(),
+                    task: start.task.clone(),
+                };
+                let what = start.what();
+                self.say(format!("{} started {} ({what})", start.by, start.name));
+            }
+            Err(e) => {
+                pending.step = Step::Answered;
+                let error = format!("could not start {}: {e}", start.what());
+                answer(&pending.reply, Answer::fail(code::FAILED, error));
+            }
+        }
+    }
+
+    /// Starts an agent or command in a session of its own, without taking the keyboard or the
+    /// pane from what the person is doing.
+    fn start_member(&mut self, start: &Start) -> io::Result<()> {
+        let (display, mut env, argv) = if start.agent() {
+            let (env, launch) = self.agent_launch(&start.kind);
+            let display = crate::agents::display_name(&start.kind).to_string();
+            (display, env, launch)
+        } else {
+            let mut env = Vec::new();
+            if let Some(path) = cellix_on_path() {
+                env.push(format!("PATH={path}"));
+            }
+            (start.name.clone(), env, start.program.clone())
+        };
+        env.push(format!("{}={}", team::NAME_VAR, start.name));
+        let member = Member {
+            name: start.name.clone(),
+            kind: start.kind.clone(),
+            parent: start.parent.clone(),
+            outlive: start.outlive,
+        };
+        self.team.gone.remove(&start.name);
+        self.spawn_session(&display, &argv, &env, &start.folder, Some(member))
+            .map(|_| ())
+    }
+
+    /// Moves `pending` on as far as it can go now. Returns whether it's answered.
+    fn progress(&mut self, pending: &mut Pending) -> bool {
+        let step = std::mem::replace(&mut pending.step, Step::Answered);
+        match self.advance(pending, step) {
+            Some(next) => {
+                pending.step = next;
+                false
+            }
+            None => true,
+        }
+    }
+
+    /// One step of a call: what it waits on next, or None once it's answered.
+    fn advance(&mut self, pending: &mut Pending, step: Step) -> Option<Step> {
+        match step {
+            Step::Answered => None,
+            Step::Consent(start) => Some(Step::Consent(start)),
+            Step::Ready { name, kind, task } => self.ready(pending, name, kind, task),
+            Step::Message {
+                name,
+                text,
+                force,
+                typed,
+                then,
+            } => self.type_message(pending, (name, text, force, typed), then),
+            Step::Wait { on, messages, sent } => {
+                if self.messages_of(&pending.caller) > messages {
+                    let note = "a message came for you: it's your next input";
+                    let out = json!({"reason": "message", "note": note});
+                    answer(&pending.reply, Answer::ok(out));
+                    return None;
+                }
+                let result = match &on {
+                    On::One(name) => self.stopped_one(name, sent),
+                    On::Children(children) => {
+                        let caller = pending.caller.clone();
+                        self.stopped_children(caller.as_deref(), *children)
+                    }
+                };
+                if let Some(result) = result {
+                    answer(&pending.reply, result);
+                    return None;
+                }
+                if Instant::now() >= pending.until {
+                    let what = match &on {
+                        On::One(name) => format!("cellix agent wait {name}"),
+                        On::Children(Children::All) => "cellix agent wait --children all".into(),
+                        On::Children(Children::Any) => "cellix agent wait --children any".into(),
+                    };
+                    let error = format!("still working; wait again: {what}");
+                    let out = json!({"reason": "timeout", "state": "working"});
+                    answer(
+                        &pending.reply,
+                        Answer::fail(code::STILL_WORKING, error).with(out),
+                    );
+                    return None;
+                }
+                Some(Step::Wait { on, messages, sent })
+            }
+        }
+    }
+
+    /// A message on its way in: held while the person types there, refused while the agent
+    /// asks them something, pasted, and entered a moment later.
+    fn type_message(
+        &mut self,
+        pending: &mut Pending,
+        (name, text, force, typed): (String, String, bool, Option<Instant>),
+        then: Then,
+    ) -> Option<Step> {
+        let Some(index) = self.member_index(&name) else {
+            let error = format!("{name} closed before the message went in");
+            answer(&pending.reply, Answer::fail(code::FAILED, error));
+            return None;
+        };
+        let (quiet, draft) = (self.team.quiet, self.team.draft);
+        let Some(at) = typed else {
+            if let Some(refused) = self.refuse_asking(index, &name, force) {
+                answer(&pending.reply, refused);
+                return None;
+            }
+            let session = &mut self.dock.sessions[index];
+            let typed = if session.typed.hold(quiet, draft).is_zero() {
+                session.deliver(&text);
+                Some(Instant::now())
+            } else if Instant::now() >= pending.until {
+                let error = format!(
+                    "the person kept typing in {name}, so nothing was typed; try again later"
+                );
+                answer(&pending.reply, Answer::fail(code::FAILED, error));
+                return None;
+            } else {
+                None
+            };
+            let step = Step::Message {
+                name,
+                text,
+                force,
+                typed,
+                then,
+            };
+            return Some(step);
+        };
+        if at.elapsed() < ENTER_GAP {
+            let step = Step::Message {
+                name,
+                text,
+                force,
+                typed,
+                then,
+            };
+            return Some(step);
+        }
+        self.dock.sessions[index].submit();
+        *self.team.messages.entry(name.clone()).or_default() += 1;
+        match then {
+            Then::Reply(out) => {
+                answer(&pending.reply, Answer::ok(out));
+                None
+            }
+            Then::Wait => {
+                let wait = Step::Wait {
+                    on: On::One(name),
+                    messages: self.messages_of(&pending.caller),
+                    sent: Some(Instant::now()),
+                };
+                self.advance(pending, wait)
+            }
+        }
+    }
+
+    /// How many messages Cellix has typed into the caller's own session.
+    fn messages_of(&self, caller: &Option<String>) -> u64 {
+        let count = caller.as_ref().and_then(|c| self.team.messages.get(c));
+        count.copied().unwrap_or(0)
+    }
+
+    /// A started agent waiting to be ready for its task.
+    fn ready(
+        &mut self,
+        pending: &mut Pending,
+        name: String,
+        kind: String,
+        task: Option<String>,
+    ) -> Option<Step> {
+        let Some(index) = self.member_index(&name) else {
+            let error = format!("{name} closed as it started");
+            answer(&pending.reply, Answer::fail(code::FAILED, error));
+            return None;
+        };
+        let started = json!({"name": name, "kind": kind, "started": true});
+        let not_sent = || {
+            let mut out = started.clone();
+            out["task_sent"] = json!(false);
+            out
+        };
+        let session = &self.dock.sessions[index];
+        if session.exited {
+            let said = session
+                .lines()
+                .into_iter()
+                .rev()
+                .find(|l| !l.trim().is_empty());
+            let said = said.map(|l| format!(": {}", l.trim())).unwrap_or_default();
+            let error = format!("{name} ended as it started{said}");
+            answer(
+                &pending.reply,
+                Answer::fail(code::FAILED, error).with(started),
+            );
+            return None;
+        }
+        let ready = match self.doing(index) {
+            Doing::Asking(what) => {
+                let error = format!(
+                    "{name} started and is asking the person something first ({what}). Its task \
+                     wasn't typed in; once they've answered, cellix agent send {name} <task>"
+                );
+                let out = if task.is_some() { not_sent() } else { started };
+                answer(&pending.reply, Answer::fail(code::ASKING, error).with(out));
+                return None;
+            }
+            // An agent says when it's ready; anything else is, once its output has stopped a
+            // moment.
+            Doing::Starting => false,
+            Doing::Running => kind == "command" && session.settled(SETTLED),
+            _ => true,
+        };
+        if !ready {
+            if Instant::now() < pending.until {
+                return Some(Step::Ready { name, kind, task });
+            }
+            let display = crate::agents::display_name(&kind);
+            let note = format!(
+                "{name} hasn't said it's ready after {} seconds, so its task wasn't typed in. It \
+                 may be asking the person something, such as whether to trust this folder, or \
+                 {display}'s Cellix hooks aren't on. Read it with cellix agent read {name} \
+                 before sending the task",
+                team::READY_MOST
+            );
+            let out = if task.is_some() { not_sent() } else { started };
+            answer(&pending.reply, Answer::ok(out).noting(note));
+            return None;
+        }
+        let Some(task) = task else {
+            answer(&pending.reply, Answer::ok(started));
+            return None;
+        };
+        let mut out = started;
+        out["task_sent"] = json!(true);
+        let text = match &pending.caller {
+            Some(sender) if kind != "command" => team::tagged(sender, &task),
+            _ => task,
+        };
+        pending.until = Instant::now() + self.team.draft + TAKING;
+        let message = (name, text, false, None);
+        self.type_message(pending, message, Then::Reply(out))
+    }
+
+    /// The answer to a wait on one agent, once it has stopped working.
+    fn stopped_one(&self, name: &str, sent: Option<Instant>) -> Option<Answer> {
+        let Some(index) = self.member_index(name) else {
+            // Its tab closed: it ended, or the person closed it.
+            let closed = self.team.gone.get(name).is_some_and(|g| !g.exited);
+            let state = if closed { "closed" } else { "exited" };
+            let out = json!({"name": name, "state": state, "reason": "exit"});
+            return Some(Answer::ok(out));
+        };
+        let doing = self.doing(index);
+        if let Some(sent) = sent {
+            // After a send, its last word is from before it. One that says nothing of
+            // itself is working until it ends.
+            let heard = self.team.heard.get(name).map(|(_, when)| *when);
+            let since = heard.is_some_and(|when| when > sent);
+            if !since && doing != Doing::Exited {
+                if doing == Doing::Running || sent.elapsed() < TAKING {
+                    return None;
+                }
+                return Some(Answer::ok(json!({
+                    "name": name,
+                    "state": doing.word(),
+                    "reason": "not_started",
+                    "note": "it didn't start working on the message; read it before sending again",
+                })));
+            }
+        }
+        (!doing.working()).then(|| {
+            Answer::ok(json!({
+                "name": name,
+                "state": doing.word(),
+                "detail": doing.detail(),
+                "reason": if doing == Doing::Exited { "exit" } else { "status" },
+            }))
+        })
+    }
+
+    /// The caller's children: each one's name and what it's doing.
+    pub(crate) fn children_of(&self, parent: &str) -> Vec<(String, Doing)> {
+        let mine = self.dock.sessions.iter().enumerate().filter(|(_, s)| {
+            s.member
+                .as_ref()
+                .is_some_and(|m| m.parent.as_deref() == Some(parent))
+        });
+        mine.filter_map(|(i, s)| Some((s.called()?.to_string(), self.doing(i))))
+            .collect()
+    }
+
+    /// The answer to a wait on the caller's children, once it's over: with `all`, when none
+    /// is working; with `any`, when one has stopped since the caller last heard of it.
+    fn stopped_children(&mut self, caller: Option<&str>, children: Children) -> Option<Answer> {
+        let caller = caller?;
+        let mine = self.children_of(caller);
+        let news = mine
+            .iter()
+            .any(|(name, doing)| !doing.working() && self.team.unheard(caller, name));
+        let none_working = mine.iter().all(|(_, d)| !d.working());
+        let over = match children {
+            Children::All => none_working,
+            Children::Any => news || none_working,
+        };
+        if !over {
+            return None;
+        }
+        for (name, _) in &mine {
+            self.team.heard_of(caller, name);
+        }
+        let each: Value = mine
+            .iter()
+            .map(|(name, doing)| {
+                json!({"name": name, "state": doing.word(), "detail": doing.detail()})
+            })
+            .collect();
+        Some(Answer::ok(json!({"reason": "children", "children": each})))
+    }
+
+    /// `cellix agent ls`: every agent here, with what it's doing.
+    fn team_list(&self) -> Value {
+        let list = self
+            .dock
+            .sessions
+            .iter()
+            .enumerate()
+            .filter_map(|(index, session)| {
+                let member = session.member.as_ref()?;
+                let doing = self.doing(index);
+                Some(json!({
+                    "name": member.name,
+                    "kind": member.kind,
+                    "state": doing.word(),
+                    "detail": doing.detail(),
+                    "parent": member.parent,
+                }))
+            });
+        list.collect()
+    }
+
+    /// `cellix agent read`: what it last said, from its transcript, or else its screen.
+    fn team_read(&mut self, name: &str, lines: Option<usize>, caller: &Option<String>) -> Answer {
+        // What it says now is all its parent needs to hear of it.
+        if let Some(caller) = caller {
+            self.team.heard_of(caller, name);
+        }
+        let last = |text: String| -> Value {
+            let all: Vec<&str> = text.lines().collect();
+            let keep = lines.unwrap_or(all.len());
+            Value::String(all[all.len().saturating_sub(keep)..].join("\n"))
+        };
+        let keep = lines.unwrap_or(SCREEN_LINES);
+        let Some(index) = self.member_index(name) else {
+            let Some(gone) = self.team.gone.get(name) else {
+                return not_found(name);
+            };
+            let reply = gone
+                .transcript
+                .as_deref()
+                .and_then(|path| crate::transcript::read(path).ok())
+                .and_then(|t| t.last_reply());
+            return Answer::ok(match reply {
+                Some(reply) => last(reply),
+                None => {
+                    let shown = &gone.lines[gone.lines.len().saturating_sub(keep)..];
+                    Value::String(shown.join("\n"))
+                }
+            });
+        };
+        let said = self
+            .team
+            .heard
+            .get(name)
+            .map(|(e, _)| PathBuf::from(&e.transcript))
+            .filter(|p| p.is_file())
+            .or_else(|| self.resolve_transcript(index));
+        let reply = said
+            .and_then(|path| crate::transcript::read(&path).ok())
+            .and_then(|t| t.last_reply());
+        if let Some(reply) = reply {
+            return Answer::ok(last(reply));
+        }
+        let mut screen = self.dock.sessions[index].lines();
+        while screen.last().is_some_and(|l| l.trim().is_empty()) {
+            screen.pop();
+        }
+        let shown = &screen[screen.len().saturating_sub(keep)..];
+        Answer::ok(Value::String(shown.join("\n")))
+    }
+
+    /// Moves every call under way on, and answers those that are done. Returns whether the
+    /// screen may have changed.
+    pub(super) fn poll_team(&mut self) -> bool {
+        for gone in std::mem::take(&mut self.dock.gone) {
+            let name = gone.member.name.clone();
+            self.team.heard.remove(&name);
+            self.team.was_working.remove(&name);
+            *self.team.stops.entry(name.clone()).or_default() += 1;
+            self.team.gone.insert(name, gone);
+        }
+        // Each member that stopped working since the last look is news for its parent.
+        for index in 0..self.dock.sessions.len() {
+            let Some(name) = self.dock.sessions[index].called().map(str::to_string) else {
+                continue;
+            };
+            let working = self.doing(index).working();
+            if self.team.was_working.insert(name.clone(), working) == Some(true) && !working {
+                *self.team.stops.entry(name).or_default() += 1;
+            }
+        }
+        // A card that went unanswered says so, and the next one shows.
+        let mut changed = false;
+        while self
+            .team
+            .asking
+            .front()
+            .is_some_and(|p| Instant::now() >= p.until)
+        {
+            let late = self.team.asking.pop_front().expect("one at the front");
+            if let Step::Consent(start) = &late.step {
+                self.inbox.drop_key(&format!("start:{}", start.name));
+            }
+            let error = format!(
+                "the person didn't answer whether it may start in {} seconds, so nothing was \
+                 started; ask them",
+                CONSENT_WAIT.as_secs()
+            );
+            answer(&late.reply, Answer::fail(code::DENIED, error));
+            changed = true;
+        }
+        if self.team.pending.is_empty() {
+            return changed;
+        }
+        let mut pending = std::mem::take(&mut self.team.pending);
+        pending.retain_mut(|call| !self.progress(call));
+        // Calls made meanwhile are kept with them.
+        pending.append(&mut self.team.pending);
+        self.team.pending = pending;
+        changed
+    }
+
+    /// Whether the consent card shows.
+    pub(super) fn asking_consent(&self) -> bool {
+        !self.team.asking.is_empty() && matches!(self.overlay, Overlay::None)
+    }
+
+    /// The consent card's place: in the side pane a row under its tabs, a column in from
+    /// each side, or in the window's corner with no pane.
+    pub(super) fn consent_area(&self) -> Option<Rect> {
+        let Step::Consent(start) = &self.team.asking.front()?.step else {
+            return None;
+        };
+        let (x, width, top) = match self.dock_area().filter(|a| a.w >= 30) {
+            Some(pane) => {
+                let width = pane.w.saturating_sub(2).min(CONSENT_WIDTH);
+                (pane.x + 1, width, Some(pane.y + 2))
+            }
+            None => {
+                let width = CONSENT_WIDTH.min(self.size.0.saturating_sub(4));
+                (self.size.0.saturating_sub(width + 2), width, None)
+            }
+        };
+        let height = self.consent_lines(start, width).len() as u16 + 4 + self.card_gap();
+        let y = top.unwrap_or_else(|| self.size.1.saturating_sub(height + 2));
+        Some(Rect::new(x, y, width, height))
+    }
+
+    /// The card's words under its title: the task quoted, then what starting it means.
+    fn consent_lines(&self, start: &Start, width: u16) -> Vec<(String, bool)> {
+        // From after the bar to two columns short of the card's edge.
+        let room = f32::from(width.saturating_sub(6));
+        let mut lines = Vec::new();
+        let quoted = match &start.task {
+            Some(task) => {
+                let task = task.split_whitespace().collect::<Vec<_>>().join(" ");
+                cut_to(
+                    &format!("as {}: \"{task}\"", start.name),
+                    room,
+                    &*self.measure,
+                )
+            }
+            None => format!("as {}", start.name),
+        };
+        lines.push((quoted, true));
+        let cost = if start.agent() {
+            "It runs as you do, in this folder, and costs its own tokens."
+        } else {
+            "It runs as you do, in this folder."
+        };
+        let root = self.workspace.root();
+        let here = dunce::canonicalize(root).is_ok_and(|root| root == start.folder);
+        let note = if here || start.folder == root {
+            cost.to_string()
+        } else {
+            let place = format!("in {}", self.relative(&start.folder));
+            cost.replace("in this folder", &place)
+        };
+        for line in self.wrap(&note, f32::from(width.saturating_sub(4))) {
+            lines.push((line, false));
+        }
+        lines
+    }
+
+    /// The buttons along the card's foot, at its right end, as (cells, x).
+    fn consent_buttons(&self, area: Rect) -> Vec<(String, u16)> {
+        let placed = self.card_buttons(0, &CONSENT_BUTTONS);
+        let end = placed
+            .last()
+            .map_or(0, |(cells, x)| x + cells.chars().count() as u16);
+        let start = area.right().saturating_sub(2 + end).max(area.x + 2);
+        placed
+            .into_iter()
+            .map(|(cells, x)| (cells, x + start))
+            .collect()
+    }
+
+    pub(super) fn draw_consent(&self, grid: &mut Grid) {
+        if !self.asking_consent() {
+            return;
+        }
+        let (Some(area), Some(Step::Consent(start))) = (
+            self.consent_area(),
+            self.team.asking.front().map(|p| &p.step),
+        ) else {
+            return;
+        };
+        let theme = &self.theme;
+        self.draw_card(grid, area);
+        let base = Style {
+            fg: theme.text.fg,
+            bg: theme.popup,
+            ..theme.bar
+        };
+        let strong = Style { bold: true, ..base };
+        let dim = Style {
+            fg: theme.popup_dim,
+            ..base
+        };
+        let right = area.right().saturating_sub(2);
+        let kind = start
+            .parent
+            .as_deref()
+            .and_then(|p| self.member_index(p))
+            .and_then(|i| self.dock.sessions[i].member.as_ref())
+            .map_or("command", |m| m.kind.as_str());
+        let (icon, fallback) = crate::agents::mark_of(kind);
+        let colour = crate::dock::icon_colour(icon, theme);
+        grid.glyph(
+            f32::from(area.x + 2),
+            area.y + 1,
+            icon,
+            colour,
+            fallback,
+            base,
+        );
+        let title = format!("{} wants to start {}", start.by, start.what());
+        grid.label(area.x + 4, area.y + 1, &title, strong, right);
+        for (i, (line, quoted)) in self.consent_lines(start, area.w).iter().enumerate() {
+            let y = area.y + 2 + i as u16;
+            if *quoted {
+                // A quote, with the accent's bar before it.
+                let bar = Style {
+                    fg: theme.accent,
+                    painted: true,
+                    ..base
+                };
+                grid.put_str(area.x + 2, y, "▎", bar, right);
+                let bounds =
+                    Bounds::cells(f32::from(area.x) + 2.3, f32::from(y) + 0.12, 0.14, 0.76);
+                grid.panel(bounds, 0, Some(theme.accent), None);
+                grid.label(area.x + 4, y, line, base, right);
+            } else {
+                grid.label(area.x + 2, y, line, dim, right);
+            }
+        }
+        let y = area.bottom().saturating_sub(2);
+        for (i, (cells, x)) in self.consent_buttons(area).iter().enumerate() {
+            let label = CONSENT_BUTTONS[i];
+            let hovered = self.over_button((*x, y), cells.chars().count() as u16);
+            let quiet = theme.quiet_button(theme.popup);
+            // Allow is the answer, Always Allow Here a quiet one, and Deny only its words.
+            let fill = match (label, hovered) {
+                ("Allow", _) => theme.button,
+                (_, true) => theme.quiet_button(quiet),
+                ("Deny", false) => theme.popup,
+                _ => quiet,
+            };
+            let fg = if label == "Allow" {
+                theme.button_text
+            } else {
+                theme.text.fg
+            };
+            let style = Style {
+                fg,
+                bg: fill,
+                ..base
+            };
+            grid.large_button(*x, y, cells, label, fill, style);
+        }
+    }
+
+    /// A press on the consent card. Returns whether the card took it.
+    pub(super) fn click_consent(&mut self, mouse: MouseEvent) -> bool {
+        if !self.asking_consent() {
+            return false;
+        }
+        let Some(area) = self.consent_area() else {
+            return false;
+        };
+        if !area.contains(mouse.x, mouse.y) {
+            return false;
+        }
+        let y = area.bottom().saturating_sub(2);
+        let hit = self
+            .consent_buttons(area)
+            .into_iter()
+            .position(|(cells, x)| {
+                on_large_button((x, y), cells.chars().count() as u16, mouse.at())
+            });
+        if let Some(index) = hit {
+            self.answer_consent(CONSENT_BUTTONS[index]);
+        }
+        true
+    }
+
+    /// The person's answer to the card in front.
+    pub(super) fn answer_consent(&mut self, choice: &str) {
+        let Some(mut asked) = self.team.asking.pop_front() else {
+            return;
+        };
+        let Step::Consent(start) = &asked.step else {
+            return;
+        };
+        self.inbox.drop_key(&format!("start:{}", start.name));
+        if choice == "Deny" {
+            let error = format!(
+                "the person said no to starting {}; nothing was started",
+                start.what()
+            );
+            answer(&asked.reply, Answer::fail(code::DENIED, error));
+            self.say(format!("{} wasn't started", start.name));
+            return;
+        }
+        if choice == "Always Allow Here" {
+            self.team.always = true;
+            self.keep_state();
+        }
+        self.begin(&mut asked);
+        if !self.progress(&mut asked) {
+            self.team.pending.push(asked);
+        }
+    }
+}
+
+/// `text` cut with an ellipsis to fit `room` cells, its closing quote kept.
+fn cut_to(text: &str, room: f32, measure: &dyn Measure) -> String {
+    let font = Font::default();
+    if measure.width(text, font) <= room {
+        return text.to_string();
+    }
+    let mut cut: String = text.to_string();
+    while !cut.is_empty() && measure.width(&format!("{cut}…\""), font) > room {
+        cut.pop();
+    }
+    let cut = cut.trim_end().trim_end_matches(['.', ',', ';', ':']);
+    format!("{cut}…\"")
+}
+
+/// PATH with the folder Cellix runs from in front, so what it starts finds `cellix`.
+fn cellix_on_path() -> Option<String> {
+    let folder = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    path_with(&folder, &std::env::var_os("PATH")?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cellix_input::Mods;
+    use std::sync::mpsc::{Receiver, channel};
+
+    /// How long a test waits on a program in a terminal, on a machine that may be busy.
+    const BACKGROUND: Duration = Duration::from_secs(30);
+
+    /// A stand-in for an agent: says it's up, then answers each line it's given, as an agent
+    /// takes a prompt. It never reports through hooks itself; the tests say what its hooks
+    /// would, and a real run of them is proved with the real binary in `tests/pty.rs`.
+    const FAKE: &str = "#!/bin/sh\nprintf 'fake agent up\\n'\n\
+        while IFS= read -r line; do printf 'got: %s\\n' \"$line\"; done\n";
+
+    fn project() -> (tempfile::TempDir, App, String) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("alpha.txt"), "first line\n").unwrap();
+        let fake = dir.path().join("fake-agent");
+        std::fs::write(&fake, FAKE).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::Permissions::from_mode(0o755);
+            std::fs::set_permissions(&fake, mode).unwrap();
+        }
+        let mut app = App::new(dir.path().to_path_buf(), (160, 40));
+        let fake = fake.display().to_string();
+        app.agent_program = Some(fake.clone());
+        app.team.quiet = Duration::from_millis(100);
+        (dir, app, fake)
+    }
+
+    fn screen(app: &App) -> Grid {
+        let mut grid = Grid::new(app.size().0, app.size().1, app.background());
+        app.draw(&mut grid);
+        grid
+    }
+
+    fn find(grid: &Grid, text: &str) -> (u16, u16) {
+        for y in 0..grid.height() {
+            if let Some(i) = grid.row_text(y).find(text) {
+                return (grid.row_text(y)[..i].chars().count() as u16, y);
+            }
+        }
+        panic!("{text:?} not on screen:\n{}", grid.text());
+    }
+
+    fn click(app: &mut App, (x, y): (u16, u16)) {
+        for kind in [MouseKind::Left, MouseKind::Up] {
+            app.handle(Event::Mouse(MouseEvent {
+                kind,
+                x: x + 1,
+                y,
+                fine_x: f32::from(x + 1),
+                fine_y: f32::from(y) + 0.5,
+                mods: Mods::default(),
+            }));
+        }
+    }
+
+    fn call(app: &mut App, from: &Caller, call: Call) -> Receiver<String> {
+        let (reply, answered) = channel();
+        let asked = Asked {
+            from: from.clone(),
+            call,
+        };
+        app.serve(Request::Team { asked, reply });
+        answered
+    }
+
+    fn answered(app: &mut App, said: &Receiver<String>) -> Answer {
+        let deadline = Instant::now() + BACKGROUND;
+        loop {
+            if let Ok(line) = said.try_recv() {
+                return serde_json::from_str(&line).unwrap();
+            }
+            assert!(Instant::now() < deadline, "no answer came");
+            app.poll();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Polls for `time`, and says the call is still unanswered.
+    fn unanswered(app: &mut App, said: &Receiver<String>, time: Duration) {
+        let until = Instant::now() + time;
+        while Instant::now() < until {
+            app.poll();
+            if let Ok(line) = said.try_recv() {
+                panic!("answered too soon: {line}");
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    fn lines_of(app: &App, name: &str) -> String {
+        let index = app.member_index(name).expect("that agent");
+        app.dock.sessions[index].lines().join("\n")
+    }
+
+    /// Waits for `want` on the screen of the agent called `name`.
+    fn shows_in(app: &mut App, name: &str, want: &str) {
+        let deadline = Instant::now() + BACKGROUND;
+        loop {
+            app.poll();
+            let text = lines_of(app, name);
+            if text.contains(want) {
+                return;
+            }
+            assert!(Instant::now() < deadline, "no {want:?} in {name}:\n{text}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// What `name`'s hooks would say.
+    fn says(app: &mut App, name: &str, state: AgentState, detail: &str) {
+        app.serve(Request::Agent(AgentEvent {
+            session: format!("s-{name}"),
+            agent: "Codex".into(),
+            state,
+            detail: detail.into(),
+            folder: String::new(),
+            pid: None,
+            transcript: String::new(),
+            name: name.into(),
+        }));
+    }
+
+    fn run(root: &Path, name: &str, program: &str, task: Option<&str>) -> Call {
+        Call::Run {
+            name: Some(name.into()),
+            cwd: root.display().to_string(),
+            program: vec![program.into()],
+            task: task.map(str::to_string),
+            outlive_parent: false,
+        }
+    }
+
+    fn send(name: &str, text: &str) -> Call {
+        Call::Send {
+            name: name.into(),
+            text: text.into(),
+            wait: false,
+            force: false,
+            timeout: 30,
+        }
+    }
+
+    /// An agent the person started, which then starts another.
+    fn lead(app: &mut App, fake: &str) -> Caller {
+        let root = app.workspace.root().to_path_buf();
+        app.start_session("Claude Code", &[fake.to_string()], &[], &root);
+        shows_in(app, "claude-1", "fake agent up");
+        Caller {
+            name: Some("claude-1".into()),
+            held: None,
+            agent: true,
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn agents_start_message_and_wait_for_each_other() {
+        let (dir, mut app, fake) = project();
+        // The stand-in runs, before anything relies on it.
+        let lead = lead(&mut app, &fake);
+
+        // An agent starting another asks the person first, in a card that says who, what and
+        // what it costs. Nothing starts before they answer.
+        let task = "Review alpha.txt";
+        let reviewer = run(dir.path(), "reviewer", "codex", Some(task));
+        let started = call(&mut app, &lead, reviewer);
+        let text = screen(&app).text();
+        assert!(text.contains("Claude Code wants to start Codex"), "{text}");
+        assert!(text.contains("as reviewer: \"Review alpha.txt\""), "{text}");
+        assert!(text.contains("and costs its own"), "{text}");
+        for button in ["[Deny]", "[Always Allow Here]", "[Allow]"] {
+            assert!(text.contains(button), "no {button}: {text}");
+        }
+        assert!(app.member_index("reviewer").is_none());
+        // It waits with the rest of what waits for the person, to reach them from anywhere.
+        assert!(app.inbox.has("start:reviewer"));
+        let at = find(&screen(&app), "[Allow]");
+        click(&mut app, at);
+        assert!(!screen(&app).text().contains("wants to start"));
+        assert!(!app.inbox.has("start:reviewer"));
+
+        // It starts in a tab of its own without taking the keyboard, and its task waits for
+        // it to say it's ready.
+        assert_eq!(app.dock.active, Some(0), "the lead stays in front");
+        shows_in(&mut app, "reviewer", "fake agent up");
+        unanswered(&mut app, &started, Duration::from_millis(300));
+        assert!(!lines_of(&app, "reviewer").contains("got:"));
+        says(&mut app, "reviewer", AgentState::Idle, "Ready");
+        let answer = answered(&mut app, &started);
+        assert_eq!(answer.code, code::OK, "{answer:?}");
+        let out = json!({"name": "reviewer", "kind": "codex", "started": true, "task_sent": true});
+        assert_eq!(answer.out, out);
+        // Between agents, a message says who sent it.
+        let tagged = "got: <cellix from=\"claude-1\">Review alpha.txt</cellix>";
+        shows_in(&mut app, "reviewer", tagged);
+        let listed = call(&mut app, &lead, Call::Ls);
+        let list = answered(&mut app, &listed).out;
+        let entries = list.as_array().unwrap();
+        let reviewer = entries.iter().find(|a| a["name"] == "reviewer");
+        let reviewer = reviewer.expect("listed");
+        assert_eq!(reviewer["kind"], "codex");
+        assert_eq!(reviewer["parent"], "claude-1");
+
+        // A wait lasts until it stops working, and is over at once when it isn't.
+        says(&mut app, "reviewer", AgentState::Working, "Working");
+        let wait = Call::Wait {
+            name: Some("reviewer".into()),
+            children: None,
+            timeout: 30,
+        };
+        let waiting = call(&mut app, &lead, wait.clone());
+        unanswered(&mut app, &waiting, Duration::from_millis(300));
+        says(&mut app, "reviewer", AgentState::Idle, "Finished");
+        let done = answered(&mut app, &waiting);
+        assert_eq!(done.out["state"], "done", "{done:?}");
+        let again = call(&mut app, &lead, wait.clone());
+        assert!(again.try_recv().is_ok(), "already done: no wait");
+
+        // While it asks the person something, a message would answer it, so it's refused and
+        // nothing is typed.
+        says(&mut app, "reviewer", AgentState::NeedsYou, "Allow Bash?");
+        let refusing = call(&mut app, &lead, send("reviewer", "carry on"));
+        let refused = answered(&mut app, &refusing);
+        assert_eq!(refused.code, code::ASKING, "{refused:?}");
+        assert!(refused.error.contains("Allow Bash?"), "{refused:?}");
+        let waited = call(&mut app, &lead, wait);
+        let waited = answered(&mut app, &waited);
+        assert_eq!(waited.out["state"], "asking", "a wait ends on a question");
+        std::thread::sleep(Duration::from_millis(300));
+        app.poll();
+        assert!(!lines_of(&app, "reviewer").contains("carry on"));
+
+        // The person has begun a prompt in it: the next message waits until they clear it.
+        says(&mut app, "reviewer", AgentState::Working, "Working");
+        app.dock.active = app.member_index("reviewer");
+        app.dock.focused = true;
+        app.dock.front = Front::Session;
+        for c in "half".chars() {
+            app.handle(Event::Key(KeyEvent::plain(Key::Char(c))));
+        }
+        let sending = call(&mut app, &lead, send("reviewer", "next please"));
+        unanswered(&mut app, &sending, Duration::from_millis(500));
+        assert!(!lines_of(&app, "reviewer").contains("next please"));
+        let clear = KeyEvent {
+            key: Key::Char('u'),
+            mods: Mods {
+                ctrl: true,
+                ..Mods::default()
+            },
+        };
+        app.handle(Event::Key(clear));
+        let sent = answered(&mut app, &sending);
+        assert_eq!(sent.out, json!({"sent": "reviewer"}));
+        let next = "got: <cellix from=\"claude-1\">next please</cellix>";
+        shows_in(&mut app, "reviewer", next);
+
+        // With no transcript, its screen is what it said.
+        let read = Call::Read {
+            name: "reviewer".into(),
+            lines: Some(3),
+        };
+        let reading = call(&mut app, &lead, read);
+        let said = answered(&mut app, &reading).out;
+        assert!(said.as_str().unwrap().contains("got:"), "{said}");
+
+        // And it can be stopped.
+        let stop = Call::Stop {
+            name: "reviewer".into(),
+        };
+        let stopping = call(&mut app, &lead, stop);
+        assert_eq!(answered(&mut app, &stopping).code, code::OK);
+        let deadline = Instant::now() + BACKGROUND;
+        let going = |app: &App| {
+            let index = app.member_index("reviewer");
+            index.is_some_and(|i| app.doing(i) != Doing::Exited)
+        };
+        while going(&app) {
+            assert!(Instant::now() < deadline, "it went on");
+            app.poll();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let missing = call(&mut app, &lead, send("nobody", "hi"));
+        assert_eq!(answered(&mut app, &missing).code, code::NOT_FOUND);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_person_starts_and_messages_without_being_asked_or_tagged() {
+        let (dir, mut app, fake) = project();
+        let person = Caller::default();
+        // A command, which says nothing of itself, is ready once its output stops.
+        let helper = run(dir.path(), "helper", &fake, Some("hello"));
+        let started = call(&mut app, &person, helper);
+        assert!(!app.asking_consent(), "the person needn't ask themselves");
+        let answer = answered(&mut app, &started);
+        assert_eq!(answer.out["task_sent"], true, "{answer:?}");
+        shows_in(&mut app, "helper", "fake agent up");
+        shows_in(&mut app, "helper", "got: hello");
+        let sending = call(&mut app, &person, send("helper", "more"));
+        assert_eq!(answered(&mut app, &sending).code, code::OK);
+        shows_in(&mut app, "helper", "got: more");
+        assert!(!lines_of(&app, "helper").contains("<cellix"));
+        // A name is a name of one.
+        let twice = call(&mut app, &person, run(dir.path(), "helper", &fake, None));
+        let twice = answered(&mut app, &twice);
+        assert_eq!(twice.code, code::USAGE, "{twice:?}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn the_person_can_deny_an_agent_starting_another_or_always_allow_it_here() {
+        let (dir, mut app, fake) = project();
+        let lead = lead(&mut app, &fake);
+        let denied = call(&mut app, &lead, run(dir.path(), "one", "codex", None));
+        let at = find(&screen(&app), "[Deny]");
+        click(&mut app, at);
+        let answer = answered(&mut app, &denied);
+        assert_eq!(answer.code, code::DENIED, "{answer:?}");
+        assert!(app.member_index("one").is_none(), "nothing started");
+
+        let allowed = call(&mut app, &lead, run(dir.path(), "two", "codex", None));
+        let at = find(&screen(&app), "[Always Allow Here]");
+        click(&mut app, at);
+        assert!(app.member_index("two").is_some());
+        says(&mut app, "two", AgentState::Idle, "Ready");
+        assert_eq!(answered(&mut app, &allowed).code, code::OK);
+
+        // Remembered with the folder, so the next Cellix here doesn't ask either.
+        let mut next = App::new(dir.path().to_path_buf(), (160, 40));
+        next.agent_program = Some(fake.clone());
+        next.restore_state();
+        let lead = super::tests::lead(&mut next, &fake);
+        let third = call(&mut next, &lead, run(dir.path(), "three", "codex", None));
+        assert!(!next.asking_consent(), "asked again");
+        assert!(next.member_index("three").is_some());
+        says(&mut next, "three", AgentState::Idle, "Ready");
+        assert_eq!(answered(&mut next, &third).code, code::OK);
+        let _ = std::fs::remove_dir_all(crate::hold::folder_of(dir.path()));
+    }
+}

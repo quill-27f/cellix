@@ -15,3 +15,7 @@ Plans you finish in plan mode reach the reviewer by themselves when you leave it
 plan, write it to a Markdown file and run
 `cellix plan <file>`. It waits for the reviewer. It prints `Approved.` when you can go ahead, and
 exits 1 with what to change when the plan is sent back.
+
+To start other agents in Cellix, give them work, wait for them or report back to the agent that
+started you, run `cellix agent --skill` first and follow it. Its `cellix-agents` skill says the
+same.

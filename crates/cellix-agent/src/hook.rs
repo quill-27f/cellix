@@ -164,6 +164,9 @@ fn tell(roots: &[PathBuf], input: &Value, state: AgentState, detail: &str) {
             .unwrap_or_default(),
         pid: agent_pid(),
         transcript: input["transcript_path"].as_str().unwrap_or("").to_string(),
+        // The session Cellix started it in, so its news is told from another agent's of the
+        // same kind. Cellix checks it against the session's own process.
+        name: std::env::var(crate::team::NAME_VAR).unwrap_or_default(),
     };
     if let Ok(json) = serde_json::to_string(&event) {
         ask(roots, &format!("event {json}"));

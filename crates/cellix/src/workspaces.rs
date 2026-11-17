@@ -1442,6 +1442,7 @@ mod tests {
             folder: String::new(),
             pid: None,
             transcript: String::new(),
+            name: String::new(),
         })
     }
 
@@ -2302,6 +2303,7 @@ mod tests {
             folder: second.clone(),
             size: (80, 24),
             pixels: (0, 0),
+            member: None,
         };
         fs::write(aside.join("1-1.json"), serde_json::to_vec(&job).unwrap()).unwrap();
         fs::write(aside.join("1-1.log"), "$ cargo watch\r\n").unwrap();

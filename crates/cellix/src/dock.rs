@@ -302,6 +302,63 @@ pub struct Session {
     pub doing: Doing,
     /// Its agent finished a turn while its tab wasn't in front: a dot until it's looked at.
     pub done_unseen: bool,
+    /// How it stands among the agents here: the name they reach it by, and who started it.
+    /// None for a shell or a browser.
+    pub member: Option<crate::hold::Member>,
+    /// What the person has typed into it, so a message from an agent waits for them.
+    pub typed: Typed,
+    /// When Cellix last typed a message in and entered it, until the program says it took it.
+    pub prompted: Option<std::time::Instant>,
+}
+
+/// A person's typing into a session, as it holds back what agents send it.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Typed {
+    /// Their last key or paste.
+    pub last: Option<std::time::Instant>,
+    /// Characters of a prompt they've begun and not yet sent or cleared.
+    pub draft: usize,
+}
+
+impl Typed {
+    /// How much longer a message must wait: until `quiet` after their last key, or with a
+    /// prompt half typed, until they send or clear it, but no more than `draft` after their
+    /// last key.
+    pub fn hold(
+        &self,
+        quiet: std::time::Duration,
+        draft: std::time::Duration,
+    ) -> std::time::Duration {
+        let Some(last) = self.last else {
+            return std::time::Duration::ZERO;
+        };
+        let hold = if self.draft > 0 {
+            quiet.max(draft)
+        } else {
+            quiet
+        };
+        hold.saturating_sub(last.elapsed())
+    }
+
+    fn key(&mut self, key: KeyEvent) {
+        self.last = Some(std::time::Instant::now());
+        let plain = !key.mods.ctrl && !key.mods.alt;
+        match key.key {
+            // Sent. Shift or Alt with Enter is a new line in most agents' prompts.
+            Key::Enter if plain && !key.mods.shift => self.draft = 0,
+            // Thrown away, as Ctrl+C and Ctrl+U clear a prompt.
+            Key::Char('c' | 'C' | 'u' | 'U') if key.mods.ctrl => self.draft = 0,
+            Key::Esc => {}
+            Key::Backspace => self.draft = self.draft.saturating_sub(1),
+            Key::Char(_) if plain => self.draft += 1,
+            _ => {}
+        }
+    }
+
+    fn pasted(&mut self, text: &str) {
+        self.last = Some(std::time::Instant::now());
+        self.draft += text.chars().count();
+    }
 }
 
 /// What an agent in a tab is doing, as its hooks say.
@@ -512,6 +569,9 @@ impl Session {
             renamed: None,
             doing: Doing::Idle,
             done_unseen: false,
+            member: None,
+            typed: Typed::default(),
+            prompted: None,
         }
     }
 
@@ -899,6 +959,7 @@ impl Session {
     }
 
     pub fn key(&mut self, key: KeyEvent) {
+        self.typed.key(key);
         let application = self.term.mode().contains(TermMode::APP_CURSOR);
         let bytes = key_bytes(key, application);
         self.term.scroll_display(Scroll::Bottom);
@@ -912,7 +973,14 @@ impl Session {
         self.write(&bytes);
     }
 
+    /// What the person pasted.
     pub fn paste(&mut self, text: &str) {
+        self.typed.pasted(text);
+        self.put(text);
+    }
+
+    /// Text as a paste: bracketed where the program asked for that.
+    fn put(&mut self, text: &str) {
         self.note_typing();
         self.term.scroll_display(Scroll::Bottom);
         let text = &pasteable(text);
@@ -927,9 +995,41 @@ impl Session {
 
     /// Sends a whole message, as if typed and entered.
     pub fn send_line(&mut self, text: &str) {
-        self.paste(text);
+        self.put(text);
         self.note_entered();
         self.write(b"\r");
+    }
+
+    /// Types a message from an agent in, as a paste, for `submit` to enter a moment later, so
+    /// the program sees the two apart.
+    pub fn deliver(&mut self, text: &str) {
+        self.put(text);
+    }
+
+    /// Enters what `deliver` typed, and whatever the person had begun with it.
+    pub fn submit(&mut self) {
+        self.note_entered();
+        self.write(b"\r");
+        self.typed.draft = 0;
+        self.prompted = Some(std::time::Instant::now());
+    }
+
+    /// The process its program runs as, where that can be known: what a hook's report names
+    /// to say which session it's about.
+    pub fn program_pid(&self) -> Option<u32> {
+        match &self.link {
+            Link::Own { pid, .. } => *pid,
+            Link::Held(_) => {
+                let text = std::fs::read_to_string(self.socket()?.with_extension("pid")).ok()?;
+                text.trim().parse().ok()
+            }
+            Link::Gone => None,
+        }
+    }
+
+    /// The name other agents reach it by.
+    pub fn called(&self) -> Option<&str> {
+        self.member.as_ref().map(|m| m.name.as_str())
     }
 
     fn wants_mouse(&self) -> bool {
@@ -1576,6 +1676,21 @@ pub struct Dock {
     /// How the interface's text is measured, so a tab can be as wide as its name. Without
     /// one, a name is as many columns as it has letters, as on the cell tier.
     pub measure: Option<std::rc::Rc<dyn cellix_render::Measure>>,
+    /// Agents whose tabs closed, with what they last showed, for the app to take.
+    pub gone: Vec<Gone>,
+}
+
+/// Lines of what a closed agent showed that are kept for others to read.
+const GONE_LINES: usize = 400;
+
+/// An agent whose tab closed: who it was and what it last showed.
+#[derive(Clone, Debug)]
+pub struct Gone {
+    pub member: crate::hold::Member,
+    pub lines: Vec<String>,
+    pub transcript: Option<std::path::PathBuf>,
+    /// Whether its program had ended, rather than being closed.
+    pub exited: bool,
 }
 
 /// An agent that ends this soon after starting didn't start: its tab stays, with what it said.
@@ -1688,7 +1803,22 @@ impl Dock {
         if index >= self.sessions.len() {
             return;
         }
-        self.sessions.remove(index).stop();
+        let mut session = self.sessions.remove(index);
+        // Other agents may still ask what it said, and its children end with it.
+        if let Some(member) = session.member.clone() {
+            let mut lines = session.lines();
+            while lines.last().is_some_and(|l| l.trim().is_empty()) {
+                lines.pop();
+            }
+            lines.drain(..lines.len().saturating_sub(GONE_LINES));
+            self.gone.push(Gone {
+                member,
+                lines,
+                transcript: session.transcript.as_ref().map(|(_, path)| path.clone()),
+                exited: session.exited,
+            });
+        }
+        session.stop();
         self.active = match self.active {
             _ if self.sessions.is_empty() => None,
             Some(active) if active >= index => Some(active.saturating_sub(1)),

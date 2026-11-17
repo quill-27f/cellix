@@ -1145,6 +1145,55 @@ checkpoint, itself undoable). A waiting plan has Approve, Send Back and Compare.
 opens the session's transcript as the transcript page does, and each turn shows how full the
 agent's context grew over it, from that transcript.
 
+### Agents starting agents
+
+An agent can start others in the side pane, give them work, wait for them and read what they
+said, with `cellix agent run|send|read|wait|ls|stop` (herdr's idea, built on what Cellix already
+has). Each call is one line over the workspace socket of the Cellix that has the folder open,
+`agent <json>`, and one line of JSON back; the app keeps a call that takes a while, a start or a
+wait, and answers it on a later tick, each by a deadline of its own, so a caller always hears.
+With no Cellix there the command says so and how to open one.
+
+Every session Cellix starts for an agent or a command has a name, unique in the workspace,
+`[a-z][a-z0-9_-]{0,31}`, the kind and a number unless `--name` gives one (`claude-1`), and is
+told it in `CELLIX_NAME` beside `CELLIX_HELD`. Shells and the browser have none: they're nobody's
+to message. The name goes into the host's job, so the next Cellix knows it again. A hook's report
+carries the name from its environment, and Cellix takes it for that session only from the
+session's own program (its process), not from another agent that program ran. So what each
+agent is doing, working, asking the person, done, stopped on an error or exited, comes from its
+own hooks; a program with none is working until it ends.
+
+- `run` starts the agent in a tab of its own without taking the keyboard or the front, waits
+  until it's ready, and types the task in. An agent Cellix knows is ready when its start hook
+  says so, for at most 60 s; anything else when its output has been still for 800 ms. Quiet
+  output alone never counts for an agent, since a question such as whether to trust the folder
+  is quiet too and a typed task would answer it. It prints `name`, `kind`, `started` and whether
+  the task went in.
+- The first time an agent (a session with a name, or a caller with no terminal or an agent's
+  mark) starts another, the person is asked in a card: the asking agent, what it would start
+  and as whom, the task, and that it runs as they do and costs its own tokens; Deny, Always
+  Allow Here and Allow. The card stands in the side pane a row under its tabs, a column in from
+  each side, or in the window's corner with no pane. Its buttons stand at the end of its foot
+  with Allow the accent and Deny only words, as the reference board for this release drew them;
+  the board's 18 px inset is one column here, the rule for every card. Always is kept in the
+  folder's `state.json`. `run` waits 90 s for an answer and says what happened.
+- `send` pastes, bracketed where the program asked for that, and enters 200 ms later. It waits
+  while the person types in that agent: 3 s after their last key, and with a prompt they've
+  begun, until they send or clear it, at most 60 s after their last key. It refuses, typing
+  nothing (exit 4), while the agent is asking the person something, since the text would answer
+  it; `--force` types anyway. From one agent to another the text arrives as
+  `<cellix from="NAME">…</cellix>`, which can't be closed early by what's inside it; from a person
+  or a shell it's as typed.
+- `read` gives the agent's last reply from its transcript, or the end of its screen; an agent
+  whose tab has closed is still read from what it last showed.
+- `wait` returns when the agent stops working or when a message is typed into the caller's own
+  session, at once if it isn't working, and checks in after 180 s with exit 124: still working,
+  wait again. After `send --wait`, the agent's last word from before the message doesn't count.
+
+`cellix agent --skill` prints a short guide for agents, and the same guide ships as a skill with
+the Claude Code plugin, the Codex plugin and the Gemini CLI extension, which all read
+`skills/<name>/SKILL.md`; Gemini's GEMINI.md also points to it.
+
 ### Workspaces, in place of tmux
 
 Cellix keeps the open tabs, cursors and unsaved edits of each folder in `state.json` beside its

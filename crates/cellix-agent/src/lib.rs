@@ -25,6 +25,7 @@ pub mod context;
 pub mod hook;
 pub mod ide;
 mod loopback;
+pub mod team;
 
 /// How long a request waits on the app, which may be busy or gone. An agent's hook must never
 /// hang on it.
@@ -61,6 +62,9 @@ pub struct AgentEvent {
     /// Where the agent keeps this session's transcript, when its hook says.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub transcript: String,
+    /// The name Cellix gave the session it runs in, which other agents reach it by.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
 }
 
 /// A test command an agent ran.
@@ -115,6 +119,12 @@ pub enum Request {
     Plan {
         path: PathBuf,
         reply: Sender<Decision>,
+    },
+    /// An agent starting, messaging or waiting for another. The connection stays open until
+    /// `reply` has the answer's line, which may be a while for a wait.
+    Team {
+        asked: team::Asked,
+        reply: Sender<String>,
     },
 }
 
@@ -317,6 +327,15 @@ fn answer(line: &str, comments: &SharedComments, requests: &Sender<Request>) -> 
             let _ = requests.send(Request::Test(serde_json::from_str(json)?));
             Ok("ok".into())
         }
+        (Some("agent"), Some(json)) => {
+            let asked: team::Asked = serde_json::from_str(json)?;
+            let (reply, answered) = channel();
+            let _ = requests.send(Request::Team { asked, reply });
+            // The app answers every call by its own deadline; a Cellix that quits drops it.
+            Ok(answered.recv().unwrap_or_else(|_| {
+                team::Answer::fail(team::code::FAILED, "Cellix closed before it answered").line()
+            }))
+        }
         (Some("plan"), Some(path)) => {
             let (reply, decision) = channel();
             let path = PathBuf::from(path);
@@ -505,9 +524,10 @@ pub fn request(root: &Path, line: &str) -> io::Result<String> {
 }
 
 /// How long to wait for the reply to `line`. A plan waits for the reviewer, however long they
-/// take; anything else is answered at once or not at all, and a hook mustn't hang on it.
+/// take, and an agent's call for its own deadline, which the app keeps; anything else is
+/// answered at once or not at all, and a hook mustn't hang on it.
 fn patience(line: &str) -> Option<Duration> {
-    (!line.starts_with("plan ")).then_some(REPLY_TIME)
+    (!line.starts_with("plan ") && !line.starts_with("agent ")).then_some(REPLY_TIME)
 }
 
 /// `request`, over the transport given.

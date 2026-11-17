@@ -185,7 +185,7 @@ EXPECT = {
     "98-pane-drag-under": "loss.png",
 }
 # About how many scenes there are, to cut the tour into parts of a size.
-SCENES_IN_ALL = 209
+SCENES_IN_ALL = 213
 # Scenes come to, shot, and those that never reached their surface.
 SEEN, SHOT, FAILED = [0], [], []
 # Which commit the binary is, as far as git can say: the pictures are of that.
@@ -963,6 +963,44 @@ def agent_tabs(scratch):
         shutil.rmtree(cache, ignore_errors=True)
 
 
+def team_scenes(scratch):
+    """An agent starting another: the card that asks the person first, and the helper once
+    it's allowed. Both agents are stand-ins on PATH. Claude Code's starts Codex's through the
+    real `cellix agent run`; Codex's says it's ready through Cellix's real hook, takes its task
+    and prints what it was given."""
+    tools = f"{scratch}/team-bin"
+    os.makedirs(tools)
+    task = "Review the changes in src/queue.rs. Leave each finding with cellix suggest."
+    with open(f"{tools}/claude", "w") as f:
+        f.write("#!/bin/sh\nprintf 'Claude Code (stand-in)\\n'\n"
+                "printf 'I will hand the review to a helper.\\n'\n"
+                f"'{binary}' agent run --name reviewer codex '{task}' >/dev/null 2>&1\n"
+                "exec sleep 300\n")
+    said = json.dumps({"session_id": "rev-1", "cwd": ROOT})
+    with open(f"{tools}/codex", "w") as f:
+        f.write("#!/bin/sh\nprintf 'Codex (stand-in)\\n'\n"
+                f"printf '%s' '{said}' | '{binary}' hook --agent Codex session-start\n"
+                "while IFS= read -r line; do printf 'got: %s\\n' \"$line\"; done\n")
+    for name in ("claude", "codex"):
+        os.chmod(f"{tools}/{name}", 0o755)
+    asks = [*command("Open Claude Code", F1), ["until", "stand-in"], ["until", "wants to start"],
+            ["wait", 0.6]]
+    allowed = [*asks, ["click", *ON("Deny", 27)], ["gone", "wants to start"], ["until", "Codex"],
+               ["wait", 1.5]]
+    scenes = [
+        ("170-agent-asks", asks, {}),
+        ("170-agent-asks-light", asks, {"background": "eff1f5"}),
+        ("170-agent-asks-narrow", asks, {"size": "100x40"}),
+        ("171-agent-started", allowed, {}),
+    ]
+    for name, steps, extra in scenes:
+        cache = tempfile.mkdtemp(prefix="cx", dir="/tmp")
+        env = {"XDG_CACHE_HOME": cache, "PATH": f"{tools}:{os.environ['PATH']}"}
+        shoot(name, steps, CODE_FILE, **{"size": "150x44", **extra}, env=env)
+        subprocess.run(["pkill", "-9", "-f", cache])
+        shutil.rmtree(cache, ignore_errors=True)
+
+
 def task_scenes(scratch):
     """The Task page on work an agent did: a plan sent back and approved, a turn with failing
     then passing tests, and a later turn, logged as the hooks log them."""
@@ -1050,6 +1088,7 @@ with tempfile.TemporaryDirectory() as scratch:
     transcripts(scratch)
     agent_tabs(scratch)
     task_scenes(scratch)
+    team_scenes(scratch)
     shoot("01-welcome", [])
     shoot("02-code", [], CODE_FILE)
     shoot("03-page", [], PAGE_FILE)

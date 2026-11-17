@@ -64,6 +64,28 @@ pub struct Job {
     pub folder: PathBuf,
     pub size: (u16, u16),
     pub pixels: (u16, u16),
+    /// What other agents know it by, so it's known again by the next Cellix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member: Option<Member>,
+}
+
+/// How a session stands among the agents of its workspace: the name they reach it by, what
+/// kind of program it is, and which agent started it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Member {
+    pub name: String,
+    /// `claude`, `codex`, `gemini`, or `command` for anything else.
+    pub kind: String,
+    /// The agent that started it, by name. Its children end with it unless `outlive`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    #[serde(default)]
+    pub outlive: bool,
+}
+
+/// The job kept beside a host's socket, which says what it runs and how it stands.
+pub fn job_beside(socket: &Path) -> Option<Job> {
+    serde_json::from_slice(&std::fs::read(socket.with_extension("json")).ok()?).ok()
 }
 
 /// When this machine last started.

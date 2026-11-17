@@ -126,6 +126,37 @@ pub struct Transcript {
     pub usage: Usage,
 }
 
+impl Transcript {
+    /// What the agent last said: the words of the last turn that has any, after its last
+    /// tool call, which is its answer rather than what it said on the way.
+    pub fn last_reply(&self) -> Option<String> {
+        let turn = self
+            .turns
+            .iter()
+            .rev()
+            .find(|t| t.items.iter().any(|i| matches!(i, Item::Text(_))))?;
+        let after = turn
+            .items
+            .iter()
+            .rposition(|i| matches!(i, Item::Tool(_)))
+            .map_or(0, |at| at + 1);
+        let words = |items: &[Item]| -> Vec<String> {
+            let text = items.iter().filter_map(|i| match i {
+                Item::Text(text) if !text.trim().is_empty() => Some(text.trim().to_string()),
+                _ => None,
+            });
+            text.collect()
+        };
+        let answer = words(&turn.items[after..]);
+        let answer = if answer.is_empty() {
+            words(&turn.items)
+        } else {
+            answer
+        };
+        (!answer.is_empty()).then(|| answer.join("\n\n"))
+    }
+}
+
 /// Reads a transcript, as Claude Code or Codex writes one, telling them apart by its lines.
 pub fn read(path: &Path) -> std::io::Result<Transcript> {
     let text = std::fs::read_to_string(path)?;

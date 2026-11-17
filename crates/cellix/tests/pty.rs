@@ -1825,3 +1825,136 @@ fn stand_ins_for_copilot_and_cursor_report_through_the_hooks_setup_installed() {
     }
     screen.send(b"\x11");
 }
+
+/// A stand-in agent for `cellix agent`: it says it's up and answers each line it's given, and
+/// told `ask` it says through Cellix's real hook, as Codex's would, that it's asking the person
+/// leave to run something. It runs the hook through a shell, as agents do.
+#[cfg(unix)]
+const FAKE_AGENT: &str = r#"#!/bin/sh
+printf 'fake agent up\n'
+while IFS= read -r line; do
+  printf 'got: %s\n' "$line"
+  if [ "$line" = ask ]; then
+    sh -c 'printf "{\"session_id\":\"f1\",\"cwd\":\"%s\",\"notification_type\":\"permission_prompt\",\"message\":\"Allow Bash?\"}" "$PWD" | cellix hook --agent Codex notify'
+    printf 'asked\n'
+  fi
+done
+"#;
+
+/// `cellix agent` with the real binary on both ends: it finds the Cellix that has the folder
+/// open, the person says yes in a card first, what's sent and read crosses the socket, and a
+/// program's real hook saying it's asking keeps a message from answering for the person.
+#[test]
+#[cfg(unix)]
+fn pty_agents_start_and_message_each_other_through_the_socket() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::{Command, Stdio};
+    let dir = project();
+    let root = dir.path().canonicalize().unwrap();
+    let fake = root.join("fake-agent");
+    std::fs::write(&fake, FAKE_AGENT).unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // Short, since a socket's path has to fit in about a hundred bytes.
+    let cache = tempfile::tempdir_in("/tmp").unwrap();
+    let agent = |args: &[&str], folder: &Path| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cellix"));
+        command
+            .arg("agent")
+            .args(args)
+            .current_dir(folder)
+            .env("XDG_CACHE_HOME", cache.path())
+            .stdin(Stdio::null());
+        // Run as an agent outside Cellix would be: no terminal, no session of its own.
+        for name in ["CELLIX_NAME", "CELLIX_HELD", "CLAUDECODE", "GEMINI_CLI"] {
+            command.env_remove(name);
+        }
+        command.output().unwrap()
+    };
+    let text = |out: &std::process::Output| {
+        let said = String::from_utf8_lossy(&out.stdout).into_owned();
+        said + &String::from_utf8_lossy(&out.stderr)
+    };
+
+    // With no Cellix here, it says so and what to do.
+    let nobody = agent(&["ls"], &root);
+    assert_eq!(nobody.status.code(), Some(1));
+    assert!(
+        text(&nobody).contains("no Cellix has this folder open"),
+        "{}",
+        text(&nobody)
+    );
+
+    let mut screen = Screen::start_with(&root, &[], &[("XDG_CACHE_HOME", cache.path())]);
+    screen.wait_for("hello.txt");
+    let fake_path = fake.display().to_string();
+    let args = [
+        "run",
+        "--name",
+        "helper",
+        "--task",
+        "hi",
+        fake_path.as_str(),
+    ];
+    let started = std::thread::scope(|scope| {
+        let starting = scope.spawn(|| agent(&args, &root));
+        // Asked first, in a card.
+        screen.wait_for("An agent wants to start fake-agent");
+        // Allow is the last of the card's buttons, after Always Allow Here.
+        screen.wait_for("Always Allow Here");
+        let contents = screen.contents();
+        let row = contents
+            .lines()
+            .position(|l| l.contains("Always Allow Here"))
+            .unwrap();
+        let line = contents.lines().nth(row).unwrap();
+        let column = line[..line.rfind("Allow").unwrap()].chars().count() + 1;
+        let (row, column) = (row + 1, column + 1);
+        screen.send(format!("\x1b[<0;{column};{row}M\x1b[<0;{column};{row}m").as_bytes());
+        screen.wait_gone("wants to start");
+        starting.join().unwrap()
+    });
+    assert_eq!(started.status.code(), Some(0), "{}", text(&started));
+    let json: serde_json::Value = serde_json::from_slice(&started.stdout).unwrap();
+    assert_eq!(json["name"], "helper");
+    assert_eq!(json["task_sent"], true);
+
+    // What it was given reached it, and what it said comes back.
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let read = agent(&["read", "helper"], &root);
+        if text(&read).contains("got: hi") {
+            break;
+        }
+        assert!(Instant::now() < deadline, "never read: {}", text(&read));
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let listed = agent(&["ls"], &root);
+    let list: serde_json::Value = serde_json::from_slice(&listed.stdout).unwrap();
+    assert_eq!(list[0]["name"], "helper", "{list}");
+
+    // Told to ask, it reports through the real hook that it's asking the person, and then a
+    // message to it is refused with nothing typed.
+    let sent = agent(&["send", "helper", "ask"], &root);
+    assert_eq!(sent.status.code(), Some(0), "{}", text(&sent));
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let listed = agent(&["ls"], &root);
+        if text(&listed).contains("\"asking\"") {
+            break;
+        }
+        assert!(Instant::now() < deadline, "never asking: {}", text(&listed));
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let refused = agent(&["send", "helper", "rm everything"], &root);
+    assert_eq!(refused.status.code(), Some(4), "{}", text(&refused));
+    assert!(text(&refused).contains("Allow Bash?"), "{}", text(&refused));
+    let read = agent(&["read", "helper"], &root);
+    assert!(!text(&read).contains("rm everything"), "{}", text(&read));
+
+    let stopped = agent(&["stop", "helper"], &root);
+    assert_eq!(stopped.status.code(), Some(0), "{}", text(&stopped));
+    drop(screen);
+    let _ = Command::new("pkill")
+        .args(["-f", &cache.path().display().to_string()])
+        .status();
+}

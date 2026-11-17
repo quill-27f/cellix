@@ -2,8 +2,20 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+/// How agents start, message and wait for each other in Cellix: the same guide for every
+/// agent, as a skill each reads, and what `cellix agent --skill` prints.
+pub const AGENT_SKILL: &str = include_str!("../integrations/skills/cellix-agents/SKILL.md");
+
+/// The guide without the lines that make it a skill, as an agent reads it on its own.
+pub fn agent_guide() -> &'static str {
+    let body = AGENT_SKILL
+        .strip_prefix("---\n")
+        .and_then(|rest| rest.split_once("\n---\n"));
+    body.map_or(AGENT_SKILL, |(_, body)| body.trim_start())
+}
+
 /// Carried in the binary, so a fresh server needs nothing but Cellix.
-const FILES: [(&str, &str); 5] = [
+const FILES: [(&str, &str); 6] = [
     (
         ".claude-plugin/plugin.json",
         include_str!("../integrations/claude-code/.claude-plugin/plugin.json"),
@@ -24,10 +36,11 @@ const FILES: [(&str, &str); 5] = [
         "skills/cellix-review/SKILL.md",
         include_str!("../integrations/claude-code/skills/cellix-review/SKILL.md"),
     ),
+    ("skills/cellix-agents/SKILL.md", AGENT_SKILL),
 ];
 
 /// The Codex plugin, under the marketplace folder Codex reads it from.
-const CODEX_FILES: [(&str, &str); 4] = [
+const CODEX_FILES: [(&str, &str); 5] = [
     (
         "plugins/cellix/plugin.json",
         include_str!("../integrations/codex/plugin.json"),
@@ -40,13 +53,16 @@ const CODEX_FILES: [(&str, &str); 4] = [
         "plugins/cellix/skills/cellix-review/SKILL.md",
         include_str!("../integrations/codex/skills/cellix-review/SKILL.md"),
     ),
+    ("plugins/cellix/skills/cellix-agents/SKILL.md", AGENT_SKILL),
     (
         ".agents/plugins/marketplace.json",
         include_str!("../integrations/codex/marketplace.json"),
     ),
 ];
 
-const GEMINI_FILES: [(&str, &str); 3] = [
+/// Gemini CLI reads an extension's skills from its `skills` folder, and its GEMINI.md in every
+/// session.
+const GEMINI_FILES: [(&str, &str); 4] = [
     (
         "gemini-extension.json",
         include_str!("../integrations/gemini/gemini-extension.json"),
@@ -59,6 +75,7 @@ const GEMINI_FILES: [(&str, &str); 3] = [
         "GEMINI.md",
         include_str!("../integrations/gemini/GEMINI.md"),
     ),
+    ("skills/cellix-agents/SKILL.md", AGENT_SKILL),
 ];
 
 /// OpenCode's plugin and Copilot CLI's hooks: one file each, in a folder of the agent's that
@@ -292,6 +309,32 @@ mod tests {
         write_to(dir.path()).unwrap();
         assert_eq!(fs::read_to_string(&module).unwrap(), FILES[2].1);
         assert_eq!(fs::metadata(&skill).unwrap().modified().unwrap(), before);
+    }
+
+    /// Every agent gets the same guide to starting and messaging others, each in the form it
+    /// reads, and the guide names only commands `cellix agent` has.
+    #[test]
+    fn every_agent_has_the_guide_to_other_agents() {
+        for files in [&FILES[..], &CODEX_FILES[..], &GEMINI_FILES[..]] {
+            let dir = tempfile::tempdir().unwrap();
+            write_files_for(dir.path(), files, false).unwrap();
+            let skill = files
+                .iter()
+                .find(|(name, _)| name.ends_with("cellix-agents/SKILL.md"))
+                .expect("the guide is shipped");
+            let written = fs::read_to_string(dir.path().join(skill.0)).unwrap();
+            assert!(written.starts_with("---\nname: cellix-agents\ndescription: "));
+        }
+        let guide = agent_guide();
+        assert!(guide.starts_with("# Working with other agents"), "{guide}");
+        for command in ["run", "send", "read", "wait", "ls", "stop"] {
+            assert!(
+                guide.contains(&format!("cellix agent {command}")),
+                "{command}"
+            );
+        }
+        let gemini = include_str!("../integrations/gemini/GEMINI.md");
+        assert!(gemini.contains("cellix agent --skill"));
     }
 
     #[test]

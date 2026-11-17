@@ -17,6 +17,7 @@ fn job(name: &str, script: &str, folder: &Path) -> Job {
         folder: folder.to_path_buf(),
         size: (80, 24),
         pixels: (0, 0),
+        member: None,
     }
 }
 

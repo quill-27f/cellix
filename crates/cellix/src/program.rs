@@ -187,6 +187,7 @@ pub fn event(report: &Report, session: &str, name: &str, folder: &str) -> AgentE
         folder: folder.to_string(),
         pid: None,
         transcript: String::new(),
+        name: String::new(),
     }
 }
 

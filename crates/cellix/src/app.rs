@@ -65,6 +65,7 @@ use crate::source::{Hit as SourceHit, Source as SourceControl};
 
 mod available;
 mod gitops;
+mod team;
 use crate::theme::Theme;
 use crate::threads::{self, Draft, Hit as ThreadHit};
 use crate::toolbar::{self, Bar, Tool};
@@ -1513,6 +1514,8 @@ pub struct App {
     pub(crate) turn_at: Option<u8>,
     /// A kernel for each notebook that has run something, by its file.
     kernels: HashMap<PathBuf, Kernel>,
+    /// The agents here as each other's, and their calls to each other under way.
+    team: team::Team,
     /// Stands in for the kernel's runner in tests.
     kernel_command: Option<Vec<String>>,
     /// Checks spelling and grammar, started when a page first needs it.
@@ -1621,6 +1624,7 @@ impl App {
             comment_rows: threads::Laid::default(),
             kept_session: None,
             kernels: HashMap::new(),
+            team: team::Team::default(),
             kernel_command: None,
             pane_explained: false,
             host_program: std::env::current_exe().ok().filter(|_| !cfg!(test)),
@@ -2811,7 +2815,8 @@ impl App {
             | self.poll_pending_ask()
             | self.poll_pan_hint()
             | self.poll_finding()
-            | self.see_front_tab();
+            | self.see_front_tab()
+            | self.poll_team();
         let mut events = Vec::new();
         for client in self.servers.values() {
             events.extend(client.events.try_iter());
@@ -8351,6 +8356,38 @@ impl App {
 
     fn start_session(&mut self, name: &str, argv: &[String], env: &[String], folder: &Path) {
         self.dock.open = true;
+        let member = self.member_for(name, argv);
+        match self.spawn_session(name, argv, env, folder, member) {
+            Ok(index) => {
+                self.dock.active = Some(index);
+                self.dock.focused = true;
+                self.dock.front = Front::Session;
+                self.dock.agents_tab = false;
+                if name != BROWSER {
+                    self.explain_pane(name);
+                }
+            }
+            Err(e) => self.say(format!("Could not start {name}: {e}")),
+        }
+    }
+
+    /// Starts a program in a tab of the side pane, without bringing it to the front, and
+    /// returns its tab. A member of the agents here is told its name.
+    fn spawn_session(
+        &mut self,
+        name: &str,
+        argv: &[String],
+        env: &[String],
+        folder: &Path,
+        member: Option<crate::hold::Member>,
+    ) -> io::Result<usize> {
+        let mut env = env.to_vec();
+        if let Some(member) = &member {
+            let var = cellix_agent::team::NAME_VAR;
+            env.retain(|pair| !pair.starts_with(&format!("{var}=")));
+            env.push(format!("{var}={}", member.name));
+        }
+        let env = env.as_slice();
         let size = self.dock_screen().map_or((80, 24), |a| (a.w, a.h));
         // A browser has nothing worth keeping, and nothing else should end with Cellix.
         let held = self
@@ -8366,29 +8403,20 @@ impl App {
                     folder: folder.to_path_buf(),
                     size,
                     pixels: (size.0.saturating_mul(cell.0), size.1.saturating_mul(cell.1)),
+                    member: member.clone(),
                 };
                 let sessions = crate::hold::folder_of(self.workspace.root());
                 crate::hold::mark_project(self.workspace.root());
                 crate::hold::start(&program, &sessions, &job).ok()
             });
-        let started = match held {
+        let mut session = match held {
             Some(held) => Session::join(name, held, size, self.cell_size()),
             None => Session::start(name, argv, env, folder, size, self.cell_size()),
-        };
-        match started {
-            Ok(session) => {
-                self.dock.sessions.push(session);
-                self.ask_about_logout();
-                self.dock.active = Some(self.dock.sessions.len() - 1);
-                self.dock.focused = true;
-                self.dock.front = Front::Session;
-                self.dock.agents_tab = false;
-                if name != BROWSER {
-                    self.explain_pane(name);
-                }
-            }
-            Err(e) => self.say(format!("Could not start {name}: {e}")),
-        }
+        }?;
+        session.member = member;
+        self.dock.sessions.push(session);
+        self.ask_about_logout();
+        Ok(self.dock.sessions.len() - 1)
     }
 
     /// What an agent in the side pane has said of itself: its name, its own session's id, and
@@ -8614,6 +8642,8 @@ impl App {
             let size = self.dock_screen().map_or((80, 24), |a| (a.w, a.h));
             if let Ok(mut session) = Session::join(&name, held, size, self.cell_size()) {
                 session.replaying = true;
+                // Known again by the name other agents reach it by.
+                session.member = crate::hold::job_beside(&socket).and_then(|job| job.member);
                 self.dock.sessions.push(session);
                 names.push(name);
             }
@@ -11836,9 +11866,11 @@ impl App {
             }
             // Only the pane loop reads these, and it handles them before they get here.
             Request::Pane(_) => {}
+            Request::Team { asked, reply } => self.team_call(asked, reply),
             Request::Agent(mut event) => {
                 // Hooks name an agent as its tab is named.
                 event.agent = crate::agents::tab_name(&event.agent).to_string();
+                self.heard_from(&event);
                 // A new session in the same process ends the old one, and what it asked.
                 let replaced = self.agents.running.iter().filter(|a| {
                     a.session != event.session && event.pid.is_some() && a.pid == event.pid
@@ -11928,6 +11960,13 @@ impl App {
             let key =
                 crate::program::tab_of(&event.session).filter(|_| !event.session.contains('/'))?;
             return sessions.iter().position(|s| s.tab_key() == key);
+        }
+        // The hooks say which session they run in, by the name Cellix gave it.
+        if let Some(index) = (!event.name.is_empty())
+            .then(|| self.member_index(&event.name))
+            .flatten()
+        {
+            return Some(index);
         }
         let by_id = (0..sessions.len()).find(|&index| {
             self.agent_word(index)
@@ -12063,6 +12102,10 @@ impl App {
                     name = format!("{name} · {}", report.id);
                 }
                 let event = crate::program::event(&report, &part, &name, &folder);
+                // What the program says of itself is what other agents go by too.
+                if report.id.is_empty() {
+                    self.heard_report(index, &event, report.word == crate::program::Word::Clear);
+                }
                 self.mark_tab(&event);
                 // Said again as a host showed what it kept, a finished turn was seen before.
                 let seen = replayed && report.word == crate::program::Word::Done;
@@ -12410,6 +12453,7 @@ impl App {
                 .filter_map(|used| COMMANDS.iter().find(|(_, command)| command == used))
                 .map(|(label, _)| label.to_string())
                 .collect(),
+            agents_may_start: self.team.always,
         }
     }
 
@@ -12444,7 +12488,7 @@ impl App {
             let place = (editor.selections.primary().head, editor.top);
             (path, place, text).hash(&mut mark);
         }
-        (self.editors.len(), self.active()).hash(&mut mark);
+        (self.editors.len(), self.active(), self.team.always).hash(&mut mark);
         self.emoji_used.hash(&mut mark);
         serde_json::to_vec(&self.kept_pane())
             .unwrap_or_default()
@@ -12490,6 +12534,7 @@ impl App {
         self.kept_maximized = state.pane.maximized;
         self.kept_session = state.pane.session;
         self.kept_names = state.pane.names;
+        self.team.always = state.agents_may_start;
         self.emoji_used = state
             .emoji
             .iter()
@@ -13222,6 +13267,9 @@ impl App {
             return;
         }
         if mouse.kind == MouseKind::Left && self.click_companion(mouse.x, mouse.y) {
+            return;
+        }
+        if mouse.kind == MouseKind::Left && self.click_consent(mouse) {
             return;
         }
         if mouse.kind == MouseKind::Left && self.click_linger(mouse) {
@@ -15100,6 +15148,7 @@ impl App {
         } else {
             self.draw_offer(grid);
         }
+        self.draw_consent(grid);
         self.draw_pane_actions(grid);
         self.draw_tab_drag(grid);
         self.draw_overlay(grid);
@@ -18201,6 +18250,9 @@ struct Kept {
     /// The commands last run from the palette, by name, the last first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     commands: Vec<String>,
+    /// The person said agents here may start others without asking.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    agents_may_start: bool,
 }
 
 /// The side pane's size and place as they were left, so it comes back the same.
@@ -22489,6 +22541,7 @@ mod tests {
             folder: root.to_path_buf(),
             size: (80, 24),
             pixels: (0, 0),
+            member: None,
         };
         let notes = aside.join(format!("1-{}.json", name.len()));
         fs::write(&notes, serde_json::to_vec(&job).unwrap()).unwrap();
@@ -22870,6 +22923,7 @@ mod tests {
             folder: "/w".into(),
             pid: None,
             transcript: String::new(),
+            name: String::new(),
         }
     }
 

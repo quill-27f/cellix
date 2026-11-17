@@ -75,6 +75,13 @@ pub fn opener() -> Vec<String> {
     argv.iter().map(|word| word.to_string()).collect()
 }
 
+/// The mark that stands for a kind of agent beside its name, as its tab has it, and the one
+/// character the cell tier shows for it.
+pub fn mark_of(kind: &str) -> (Icon, &'static str) {
+    let icon = crate::dock::program_icon(display_name(kind), false, false);
+    (icon, crate::toolbar::fallback(icon))
+}
+
 /// What the panel calls a program.
 pub fn display_name(program: &str) -> &'static str {
     let named = AGENTS.iter().find(|(_, p)| *p == program);

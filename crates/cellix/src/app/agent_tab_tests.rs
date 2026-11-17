@@ -74,6 +74,7 @@ fn said(state: AgentState, detail: &str) -> Request {
         folder: "/w".into(),
         pid: None,
         transcript: String::new(),
+        name: String::new(),
     })
 }
 
@@ -202,6 +203,7 @@ fn a_tabs_name_is_kept_for_the_next_run() {
         folder: dir.path().to_path_buf(),
         size: (80, 24),
         pixels: (0, 0),
+        member: None,
     };
     fs::write(aside.join("1-5.json"), serde_json::to_vec(&job).unwrap()).unwrap();
     fs::write(aside.join("1-5.log"), "said\r\n").unwrap();

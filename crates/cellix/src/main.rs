@@ -39,10 +39,90 @@ fn ask(request: &str, dir: Option<&str>) -> std::io::Result<String> {
     })
 }
 
+/// `cellix agent …`: agents starting, messaging and waiting for each other, through the
+/// Cellix that has this folder open. Prints what it's told, and ends with its code.
+fn agent(args: &[&str]) -> ExitCode {
+    use cellix_agent::team::{self, Answer, Asked, Caller, code};
+    use std::io::IsTerminal;
+    match args {
+        ["--skill"] => {
+            print!("{}", cellix::plugin::agent_guide());
+            return ExitCode::SUCCESS;
+        }
+        [] | ["--help" | "-h" | "help"] => {
+            print!("{}", team::usage());
+            return ExitCode::SUCCESS;
+        }
+        _ => {}
+    }
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let stdin = || {
+        let mut text = String::new();
+        let _ = std::io::stdin().read_to_string(&mut text);
+        text
+    };
+    let call = match team::parse(args, &cwd, stdin) {
+        Ok(call) => call,
+        Err(e) => {
+            eprintln!("cellix agent: {e}");
+            return ExitCode::from(code::USAGE);
+        }
+    };
+    let from = Caller::here(
+        |name| std::env::var(name).ok(),
+        std::io::stdin().is_terminal(),
+    );
+    let asked = Asked { from, call };
+    let line = format!(
+        "agent {}",
+        serde_json::to_string(&asked).unwrap_or_default()
+    );
+    let reply = match ask(&line, None) {
+        Ok(reply) => reply,
+        Err(_) => {
+            eprintln!(
+                "cellix agent: no Cellix has this folder open. Open it in Cellix (run cellix \
+                 here), then try again."
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+    let answer: Answer = match serde_json::from_str(&reply) {
+        Ok(answer) => answer,
+        Err(_) => {
+            // A Cellix from before `cellix agent` says it doesn't know the request.
+            eprintln!(
+                "cellix agent: the Cellix that has this folder open doesn't know this command; \
+                 quit and start it again to update it"
+            );
+            return ExitCode::FAILURE;
+        }
+    };
+    match &answer.out {
+        serde_json::Value::Null => {}
+        serde_json::Value::String(text) => println!("{text}"),
+        out => println!("{out}"),
+    }
+    if !answer.error.is_empty() {
+        eprintln!("cellix agent: {}", answer.error);
+    }
+    ExitCode::from(answer.code)
+}
+
 const USAGE: &str = "\
 Usage: cellix [--wait] [files]
 
   cellix ls                 What's running in Cellix on this machine, by folder
+
+  cellix agent run [--name N] [--cwd D] <claude|codex|gemini|command> [task]
+                            Starts an agent in the side pane and types its task in
+  cellix agent send <name> <text> [--wait] [--force]
+                            Messages an agent, once the person isn't typing there
+  cellix agent read <name>  What an agent last said
+  cellix agent wait <name>  Until it stops working; --children all|any for your own
+  cellix agent ls           The agents here, as JSON
+  cellix agent stop <name>  Ends an agent
+  cellix agent --skill      How agents use these, for an agent to read
 
   cellix threads            The comments on this project, as JSON
   cellix reply <id> <text>  Answers a comment, beside the document
@@ -302,6 +382,7 @@ fn main() -> ExitCode {
             };
         }
         ["checkpoint", label @ ..] => return checkpoint(&label.join(" ")),
+        ["agent", rest @ ..] => return agent(rest),
         ["ls"] => return list(),
         ["hook", kind] => return hook("Claude Code", kind),
         ["hook", "--agent", agent, kind] => return hook(agent, kind),
