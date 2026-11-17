@@ -5409,5 +5409,19 @@
     "title": "What the Outline says with nothing to list wraps inside the sidebar, with two columns clear at its far edge",
     "test": "what_an_empty_outline_says_wraps_inside_the_sidebar",
     "passes": true
+  },
+  {
+    "id": "tip-clear-of-bar",
+    "milestone": 14,
+    "title": "A tip over the bar at the foot paints nothing on the bar's row, which is moved down with what's under the sheets",
+    "test": "a_tip_over_the_bar_paints_nothing_on_the_bars_row",
+    "passes": true
+  },
+  {
+    "id": "switch-in-box",
+    "milestone": 14,
+    "title": "A switch inside a text box stays under the height at which a chip grows with a taller row, so it's well inside its box",
+    "test": "a_switch_in_a_text_box_stays_smaller_than_the_box",
+    "passes": true
   }
 ]

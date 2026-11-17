@@ -2640,3 +2640,28 @@ The user's word on the workspaces fix: "Release it". The version is 0.10.1 every
 - Tests: `a_sidebars_heading_has_air_under_the_views`, `what_an_empty_outline_says_wraps_inside_the_sidebar`. Changed with the decision: `the_views_run_across_the_top_of_the_sidebar` expected the view on the row under the views, and expects it a row lower.
 - Looked at: `02-code`, `74-outline`, `13-source-control`, `28-hover-tree`.
 - Not done: the Outline keeps the empty row it already had under its heading, so its list starts a row and a half under it; Search and Agent Context weren't looked at after the change; the whole tour hasn't been run over the three commits (every scene with a sidebar moved a row), nor a design review made.
+
+## What the review of the nine points' pictures found (2026-11-17)
+
+The whole tour over the three commits: 209 scenes, every one reached. One `ui-expert` pass over 52 of them, measured against the user's points. Its verdicts: 2, 3, 4 and 7 answered; 1 answered where the foot is one row; 5 and 6 partly; 8 not pictured (no scene has an empty Outline); 9 not in the pictures.
+
+Fixed here, all of it from this round's own changes:
+- A switch that's on in Search's box stood on the box's line: at 0.72 of a row it had become a chip and grown. It's 0.69, under where a chip grows.
+- The logout card's command well, 1.2 rows tall, stood on the buttons once the card's empty rows went. On a row with room it's a control in its own row.
+- The bell was a pixel from its count. The count starts a third of a column clear of the bell, and the chip has its own air after the count.
+- A card across both sheets left a notch in their edges over and under itself, 38 px where it had been 20 and 5: the ground it paints on the rows it partly covers lay over them. They're drawn again under it.
+- A view's tip sliced the top of the raised heading. It stands on the heading and covers it.
+- A tip over the bar had its shadow in two pieces, the lower one 20 px down with the bar's row. A tip there paints nothing on the bar's row.
+- A card had 27 px over its title's capitals and 18 under its buttons. `CARD_EDGE` is (0.86, 0.67): about 22 each.
+- The heading was 39 px under the views' line and 58 over its list. Raised 0.34 of a row, not half: 48 each.
+- The Outline's list starts straight under its heading where the heading has air (`Outline::aired`).
+- The mark before the count of problems was 31 px beside a branch of 25. It's set at 74 per cent.
+
+Tests: `a_tip_over_the_bar_paints_nothing_on_the_bars_row`, `a_switch_in_a_text_box_stays_smaller_than_the_box`; `a_sidebars_heading_has_air_under_the_views` has the raise and the tip; `a_card_has_no_empty_row_where_a_row_has_room` has the edges. Changed with a decision: `a_tooltip_is_one_whole_row` took a view's tip as its example and takes Quit's, since a view's is no longer on a row. Looked at, retaken: `12-search-switches`, `104-logout-card`, `141-inbox-hover`, `108-install-card-pane`, `13-quit-hover`, `27-hover-rail`, `74-outline`. No test has the notch or the bell's count: pictures only.
+
+Not done, in the reviewer's order:
+- **The foot with two rows** (a narrow window, or many workspaces): only the workspaces' row is moved down, so it's 12 px under the sheet, 40 between the rows, 35 under. Moving the status row needs the backend to place two rows off their lines and the mouse to follow; not built. The user's own window has one row.
+- A button on a pointed row is exactly as tall as the row's wash (Ask Agent, Install in Settings): the reviewer wants it 8 px shorter. A panel can only be the line's height, a chip's or a control's on a tall row, so that needs a height of its own.
+- The dialog and the prompt keep their own measures (66/67/55 and 21/8 px): the Overlays board draws the dialog's empty rows.
+- Source Control keeps an empty row under its heading; its boxes and Agent Context's start at different columns.
+- Tips are 1 to 6 px from lines in four places; hover chips for icons are three heights (35, 39, 37); the two rules in the bar differ; "+" is 3 px off the middle of its chip; a row's wash has different air at its ends in Problems, Inbox, the sidebar and palettes; task checkboxes touch their labels (older).

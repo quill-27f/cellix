@@ -953,7 +953,10 @@ impl Workspaces {
             let top = f32::from(y) - 1.0;
             let inset = crate::app::TIP_INSET;
             let bounds = Bounds::cells(left, top + inset, wide, 1.0 - inset * 2.0);
+            // Kept to the rows over the bar: see the tips the app draws there.
+            let painted = grid.painted_so_far();
             grid.popup(bounds, CHIP_RADIUS, theme.popup, theme.popup_border);
+            grid.keep_to_rows(painted, 0, y);
             let colour = (theme.popup_dim, false);
             grid.text_run(
                 (left + 1.0, top),

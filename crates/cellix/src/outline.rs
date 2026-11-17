@@ -134,9 +134,18 @@ pub fn current(headings: &[Heading], line: usize) -> Option<usize> {
 pub struct Outline {
     pub headings: Vec<Heading>,
     top: usize,
+    /// Whether the heading has air round it already, where the views are across the
+    /// sidebar's top: the list is then straight under it, with no empty row between.
+    pub aired: bool,
 }
 
 impl Outline {
+    /// The rows the heading takes before the list: itself, and an empty row where it has no
+    /// air of its own.
+    fn header_rows(&self) -> u16 {
+        if self.aired { 1 } else { HEADER_ROWS }
+    }
+
     pub fn scroll_by(&mut self, delta: isize) {
         let last = self.headings.len().saturating_sub(1);
         self.top = self.top.saturating_add_signed(delta).min(last);
@@ -144,7 +153,7 @@ impl Outline {
 
     /// The heading at a row of the panel.
     pub fn at(&self, area: Rect, y: u16) -> Option<&Heading> {
-        let row = y.checked_sub(area.y + HEADER_ROWS)? as usize;
+        let row = y.checked_sub(area.y + self.header_rows())? as usize;
         self.headings.get(self.top + row)
     }
 
@@ -163,7 +172,7 @@ impl Outline {
             ..theme.sidebar
         };
         if self.headings.is_empty() {
-            let y = area.y + HEADER_ROWS;
+            let y = area.y + self.header_rows();
             let note = if opened {
                 "No headings here yet"
             } else {
@@ -180,7 +189,7 @@ impl Outline {
             return;
         }
         let first = self.headings.iter().map(|h| h.level).min().unwrap_or(1);
-        let rows = area.h.saturating_sub(HEADER_ROWS) as usize;
+        let rows = area.h.saturating_sub(self.header_rows()) as usize;
         for (row, (index, heading)) in self
             .headings
             .iter()
@@ -189,7 +198,7 @@ impl Outline {
             .take(rows)
             .enumerate()
         {
-            let y = area.y + HEADER_ROWS + row as u16;
+            let y = area.y + self.header_rows() + row as u16;
             let line = Rect::new(area.x, y, area.w, 1);
             let hovered = hover.is_some_and(|h| line.contains(h.0, h.1));
             let chosen = here == Some(index);

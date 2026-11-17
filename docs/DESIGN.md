@@ -543,8 +543,10 @@ foot (the user's second and fourth points on trying 0.10.0 in Ghostty). Three mo
 from the same room:
 
 - A card (the offer to install a language's server, the notice about logout, a stopped
-  session's) has a quarter of a row over its first row and under its last, as the design's
-  has, and no empty row between its words and its buttons. On the terminal's line it keeps
+  session's) has about a quarter of a row over its first row and under its last, as the
+  design's has, set so its title's capitals are as far from its top as its buttons are from
+  its foot (`CARD_EDGE`), and no empty row between its words and its buttons. The sheets'
+  edges are drawn again under the two rows it only partly covers. On the terminal's line it keeps
   the half row and the gap, where a button all but fills its row.
 - What's under the pointer in the status bar has one chip, a workspace's height, in the row's
   middle, with 0.6 of a column either side of what it holds: the branch, the count of
@@ -570,9 +572,10 @@ in front with a line under it in the accent (the user's choice of 16 November 20
 picture of Lapce; a rail down the left edge took five columns for them until then). A hairline runs under the row, the sidebar's width and level with the one under the tabs, between the views and what the one in front shows (asked for the same day). The side pane's tabs, and the icons at the top right after them, have the same line under them, so one line runs across the top of the window, broken by the frame's columns.
 
 Under the views there's a row of air, and the heading of what the one in front shows
-(the folder's name and its branch, OUTLINE, SOURCE CONTROL) is painted half way into it:
-half a row of air between the line and the heading, and as much between the heading and its
-list. On the row straight under the line the heading read as part of the views (the user's
+(the folder's name and its branch, OUTLINE, SOURCE CONTROL) is painted a third of a row up
+into it (`SIDEBAR_RAISE`, 0.34): the same air between the line and its capitals as between it
+and the capitals of the first row of its list. A view's tip stands on that heading and covers
+it whole, the one tip that isn't on a row. On the row straight under the line the heading read as part of the views (the user's
 third point on trying 0.10.0). Only the heading's paint is raised
 (`raise_sidebar_heading`): its cells, and every row under it, are where a press finds them,
 and a press on the row of air counts as one on the heading (`on_sidebar_heading`). The

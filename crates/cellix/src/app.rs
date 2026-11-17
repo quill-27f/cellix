@@ -212,6 +212,9 @@ fn status_chip(measure: &dyn Measure) -> (f32, f32) {
         BELL_CHIP
     }
 }
+/// The size the mark before the count of problems is set at, of the interface font's: about
+/// the height of the branch's mark. At the words' size it was a quarter taller than that.
+const PROBLEM_MARK: u8 = 74;
 /// Columns of air a status chip keeps either side of what it holds.
 const STATUS_PAD: f32 = 0.6;
 /// Rows tall the bell is on the terminal's own line, where its chip is short: about as tall
@@ -262,10 +265,16 @@ const LINGER_WIDTH: u16 = 52;
 /// of air under the views' line and as much before its list: on the row straight under the
 /// line it read as part of the views.
 const SIDEBAR_AIR: u16 = 1;
+/// How far the heading is raised into it, in rows: a little over a third, which leaves the
+/// same air between the views' line and its capitals as between it and the capitals of the
+/// first row of its list. At half a row it was 39 px to 58.
+pub(crate) const SIDEBAR_RAISE: f32 = 0.34;
 const CARD_TOP: f32 = 0.4;
 const CARD_BOTTOM: f32 = 0.1;
-/// The same on a row with room: the panel takes a quarter of its first row and of its last.
-const CARD_EDGE: f32 = 0.75;
+/// The same on a row with room. A title's capitals stand 15 px into their row and a button
+/// 5 px short of its row's end, so the panel takes less of its first row than of its last
+/// and the two have the same air to its edge, about 22 px in a row of 50.
+const CARD_EDGE: (f32, f32) = (0.86, 0.67);
 /// As a percentage of a row, about 9 pixels.
 const CARD_RADIUS: u8 = 26;
 /// Columns at the end of the pane's title that close it.
@@ -1694,6 +1703,8 @@ impl App {
 
     /// Uses this measure for text from now on.
     pub fn set_measure(&mut self, measure: Rc<dyn Measure>) {
+        // Where the views are across the sidebar's top, a heading has air of its own.
+        self.outline.aired = !measure.in_cells();
         for editor in &mut self.editors {
             editor.set_measure(measure.clone());
         }
@@ -3760,7 +3771,7 @@ impl App {
         let on_it = row - unit / 4..row + unit * 3 / 4;
         for paint in grid.paint.iter_mut().skip(from) {
             if on_it.contains(&paint.top()) {
-                paint.lift(unit * i32::from(SIDEBAR_AIR) / 2);
+                paint.lift(cellix_render::units(SIDEBAR_RAISE));
             }
         }
     }
@@ -8726,6 +8737,17 @@ impl App {
                 x = end;
             }
         }
+        // That ground lies over the sheets' edges, and the frame's column between them, on
+        // the two rows the card covers only part of. They're drawn again there, under it:
+        // a card across both sheets left a notch in them over and under itself.
+        if !plain {
+            for y in [area.y, area.bottom().saturating_sub(1)] {
+                let from = grid.painted_so_far();
+                self.draw_sheets(grid);
+                self.draw_sheet_edges(grid);
+                grid.keep_to_rows(from, y, y + 1);
+            }
+        }
         let (top, foot) = self.card_ends();
         let bounds = Bounds::cells(
             f32::from(area.x),
@@ -8743,7 +8765,7 @@ impl App {
         // On a row with room the words and the buttons bring their own air, and the card
         // adds the design's quarter of a row over the first and under the last.
         let (top, bottom) = if measures::roomy(self.measure.as_ref()) {
-            (CARD_EDGE, CARD_EDGE)
+            CARD_EDGE
         } else {
             (CARD_TOP, CARD_BOTTOM)
         };
@@ -8842,11 +8864,19 @@ impl App {
             );
             grid.label(area.x + 3, row, &command, well, right);
         } else {
+            // Taller than its row on the terminal's line, with an empty row either side of
+            // it. Where rows have room there are none, and it's a control in its own row:
+            // taller, it stood on the buttons under it.
+            let (over, tall) = if measures::roomy(self.measure.as_ref()) {
+                (-0.06, 0.88)
+            } else {
+                (0.1, 1.2)
+            };
             let bounds = Bounds::cells(
                 f32::from(area.x) + 2.0,
-                f32::from(row) - 0.1,
+                f32::from(row) - over,
                 f32::from(area.w.saturating_sub(4)),
-                1.2,
+                tall,
             );
             grid.panel(bounds, 17, Some(theme.input), None);
             let font = Font {
@@ -14846,7 +14876,10 @@ impl App {
                         // Under its icon, clear of the window's edge.
                         let middle = self.view_x(i, rail) as f32 + VIEW_STEP as f32 / 2.0;
                         let left = (middle - wide(RAIL_NAMES[i]) / 2.0).max(0.5);
-                        return (RAIL_NAMES[i], left, rail.bottom() as f32 + 0.2);
+                        // On the heading under the views, which it covers whole: on the
+                        // row of air it lay over the top few pixels of the heading.
+                        let top = rail.bottom() as f32 + f32::from(SIDEBAR_AIR) - SIDEBAR_RAISE;
+                        return (RAIL_NAMES[i], left, top);
                     }
                     let top = self.rail_top(i, rail);
                     // Level with the icon's middle.
@@ -14873,8 +14906,13 @@ impl App {
         let Some((name, left, top)) = spot else {
             return;
         };
-        // On the row nearest where it was asked for: the one under its icon.
-        let top = top.round();
+        // On the row nearest where it was asked for: the one under its icon. A view's is on
+        // its heading, which isn't on a row.
+        let on_view = matches!(self.overlay, Overlay::None)
+            && self.views_on_top()
+            && rail.contains(x, y)
+            && self.view_at(x, y).is_some();
+        let top = if on_view { top } else { top.round() };
         let theme = &self.theme;
         // A hair short of its row, which is what lets it keep its own height on a taller
         // row and stand in the middle of it, clear of a line over or under.
@@ -14884,7 +14922,15 @@ impl App {
             wide(name),
             TOOLTIP_HEIGHT - TIP_INSET * 2.0,
         );
+        let painted = grid.painted_so_far();
         grid.popup(bounds, 24, theme.popup, theme.popup_border);
+        // A tip over the bar at the foot keeps to the rows over it. The bar's row is moved
+        // down to stand in what's under the sheets, and the part of a tip's shadow that
+        // reached into it went down with it, away from its tip.
+        let foot = self.size.1.saturating_sub(1);
+        if top + TOOLTIP_HEIGHT >= f32::from(foot) {
+            grid.keep_to_rows(painted, 0, foot);
+        }
         let text_top = top + (TOOLTIP_HEIGHT - 1.0) / 2.0;
         if self.measure.in_cells() {
             let style = Style {
@@ -17353,6 +17399,10 @@ impl App {
             grid.label_at(at as f32 + 1.95, at + 2, y, branch, shown, end, 90);
         }
         let mut x = start;
+        let problem_font = Font {
+            size: PROBLEM_MARK,
+            ..Font::default()
+        };
         if let Some(problems) = &problems {
             if let Some((at, end)) = self.status_problems()
                 && self
@@ -17361,14 +17411,22 @@ impl App {
             {
                 // Round the mark and the count as they're drawn. By the cells the chip
                 // began on the mark's own edge and ran well past the count.
-                let wide = self.measure.width(problems.trim_end(), status_font);
+                let count = problems.trim().trim_start_matches('⊗').trim();
+                let wide = self.measure.width("⊗", problem_font)
+                    + 0.4
+                    + self.measure.width(count, status_font);
                 let (from, to) = status_chip(self.measure.as_ref());
                 let left = at as f32 - STATUS_PAD;
                 let chip = Bounds::cells(left, y as f32 + from, wide + STATUS_PAD * 2.0, to - from);
                 grid.panel(chip, 22, Some(self.theme.row_hover), None);
             }
-            // At the size of the bar's other words: it was the one thing in it at full size.
-            x = grid.label_at(x as f32, x, y, problems, bar, right_x, 90);
+            // The mark at the size of the bar's other marks, and the count at its words'.
+            // Both were at full size, the one thing in the bar that was.
+            let count = problems.trim().trim_start_matches('⊗').trim();
+            let mark = self.measure.width("⊗", problem_font);
+            grid.label_at(x as f32, x, y, "⊗", bar, right_x, PROBLEM_MARK);
+            let after = format!("{count}  ");
+            x = grid.label_at(x as f32 + mark + 0.4, x + 2, y, &after, bar, right_x, 90);
         }
         let needs_you = waiting > 0 && message.is_empty() && self.neovim_line.is_empty();
         let bar = if needs_you {
@@ -17422,12 +17480,14 @@ impl App {
             ..Font::default()
         };
         let digits = (count > 0).then(|| count.to_string());
-        let count_at = middle + icon * 0.5 + 0.3;
+        // A third of a column clear of the bell's own edge, which is most of the way to
+        // the edge of its square.
+        let count_at = middle + icon * 0.85 + 0.35;
         if hovered || showing {
             let fill = if showing { theme.tint } else { theme.row_hover };
             // Round the bell and its count, with air on every side of them.
             let right = digits.as_ref().map_or(middle + side, |d| {
-                count_at + self.measure.width(d, font) + side - icon * 0.5
+                count_at + self.measure.width(d, font) + STATUS_PAD
             });
             let left = middle - side;
             let chip = Bounds::cells(left, y as f32 + top, right - left, bottom - top);
@@ -28082,8 +28142,9 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             card.y + 2 + lines,
             "straight under the words"
         );
+        // The same air over the title's capitals as under the buttons: see `CARD_EDGE`.
         let (top, foot) = app.card_ends();
-        assert!((top - 0.75).abs() < 0.02 && (foot - 0.75).abs() < 0.02);
+        assert!((top - 0.86).abs() < 0.02 && (foot - 0.67).abs() < 0.02);
     }
 
     /// On a row with room a text box's words aren't raised: a capital has as much of the box
@@ -28125,6 +28186,27 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let inked: Vec<usize> = (top..=foot).filter(|y| lit(*y)).collect();
         let (over, under) = (inked[0] - top, foot - inked[inked.len() - 1]);
         assert!(over.abs_diff(under) <= 2, "{over} px over, {under} under");
+    }
+
+    /// A tip over the bar at the foot paints nothing on the bar's row. The bar's row is
+    /// moved down to stand in what's under the sheets, and the part of a tip's shadow that
+    /// reached into it went down too: a strip of shadow 20 px under its tip.
+    #[test]
+    fn a_tip_over_the_bar_paints_nothing_on_the_bars_row() {
+        let (_dir, mut app) = project();
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        let quit = app.quit_button().expect("the button at the foot");
+        app.handle(mouse(MouseKind::Move, quit.x + 1, quit.y));
+        let grid = screen(&app);
+        let shadowed = |p: &Paint| matches!(p, Paint::Panel { shadow: true, .. });
+        assert!(
+            grid.paint_on_row(quit.y - 1).any(shadowed),
+            "the tip is on the row over the bar"
+        );
+        assert!(
+            !grid.paint_on_row(quit.y).any(shadowed),
+            "and none of it on the bar's"
+        );
     }
 
     #[test]
@@ -29918,14 +30000,19 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
                 _ => None,
             })
             .collect();
-        assert_eq!(tops, [unit + unit / 2], "half a row under the views' row");
+        let raised = cellix_render::units(SIDEBAR_RAISE);
+        assert_eq!(tops, [2 * unit - raised], "a third of a row into the air");
         // Its cells, and what's under it, are on their rows.
         assert!(grid.row_text(2).contains("OUTLINE"), "{}", grid.row_text(2));
         let note = grid.paint.iter().find_map(|p| match p {
             Paint::Text { text, y, .. } if text.starts_with("Open a document") => Some(*y),
             _ => None,
         });
-        assert_eq!(note, Some(4 * unit), "the list isn't moved");
+        assert_eq!(
+            note,
+            Some(3 * unit),
+            "the list isn't moved, and is straight under"
+        );
         // A press on the row of air is one on the heading's row, in the sidebar's columns.
         let on = |x: u16, y: u16| match app.on_sidebar_heading(mouse(MouseKind::Left, x, y)) {
             Event::Mouse(mouse) => (mouse.y, mouse.fine_y),
@@ -29939,6 +30026,21 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             (1, 1.5),
             "the file's tabs aren't the sidebar"
         );
+        // A view's tip is on the heading, which it covers whole: on the row of air it lay
+        // over the heading's top.
+        let views = app.activity_area();
+        app.handle(mouse(MouseKind::Move, views.x + 2, views.y));
+        let tip = screen(&app).paint.iter().find_map(|p| match p {
+            Paint::Panel {
+                bounds,
+                shadow: true,
+                ..
+            } => Some(*bounds),
+            _ => None,
+        });
+        let tip = tip.expect("a tip under the view");
+        let heading = 2 * unit - raised;
+        assert!((tip.y - heading).abs() <= 2, "{tip:?} on {heading}");
         // Without pictures the views are a rail, and nothing is moved.
         let plain = App::new(dir.path().to_path_buf(), (150, 40));
         assert_eq!(plain.sidebar_area().map(|a| a.y), Some(0));
@@ -34138,13 +34240,15 @@ while True:
     /// Every tooltip is one row, on a row of its own. It stops a hair short of the row's
     /// edges: on the terminal's own line that's still the whole row, and on a taller row
     /// it's what lets the tip keep its height and stand in the middle, clear of a line over
-    /// or under it. Exactly a row, it was the row, 50 px tall and on both lines.
+    /// or under it. Exactly a row, it was the row, 50 px tall and on both lines. (A view's
+    /// tip is the one that isn't on a row: it's on the view's heading, which is raised into
+    /// the air under the views. `a_sidebars_heading_has_air_under_the_views` has that.)
     #[test]
     fn a_tooltip_is_one_whole_row() {
         let (_dir, mut app) = project();
         app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
-        let views = app.activity_area();
-        app.handle(mouse(MouseKind::Move, views.x + 2, views.y));
+        let quit = app.quit_button().expect("the button at the foot");
+        app.handle(mouse(MouseKind::Move, quit.x + 1, quit.y));
         let tips: Vec<_> = screen(&app)
             .paint
             .iter()

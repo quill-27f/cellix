@@ -85,7 +85,9 @@ pub fn draw_switches(
         // side to side, where two letters of 13 pt stood against its right edge, and on the
         // line of the words typed in the box, which are raised.
         let lift = crate::measures::field_lift(measure);
-        let chip = Bounds::inset(cell, 0.15, 0.14);
+        // Under the 0.7 of a row at which a chip grows with the row: grown, on a taller row,
+        // it stood on the box's own line top and bottom.
+        let chip = Bounds::inset(cell, 0.15, 0.155);
         let chip = Bounds {
             y: chip.y - cellix_render::units(lift / 2.0),
             ..chip
@@ -476,5 +478,45 @@ impl Search {
         grid.text_run((at, y as f32), limit, &hit, plain, font);
         at += span;
         grid.text_run((at, y as f32), limit, &after, plain, font);
+    }
+}
+
+#[cfg(test)]
+mod switch_tests {
+    use super::*;
+
+    /// A switch inside a text box is well inside it: under the 0.7 of a row at which a chip
+    /// that holds words grows with a taller row. Grown, it stood on the box's own line.
+    #[test]
+    fn a_switch_in_a_text_box_stays_smaller_than_the_box() {
+        use cellix_render::{CellMeasure, Paint, units};
+        let theme = Theme::default();
+        let mut grid = Grid::new(30, 1, theme.sidebar);
+        let on = Options {
+            case: true,
+            whole: true,
+            regex: true,
+        };
+        draw_switches(
+            &mut grid,
+            (2, 0),
+            on,
+            None,
+            theme.sidebar,
+            &theme,
+            &CellMeasure,
+        );
+        let chips: Vec<i32> = grid
+            .paint
+            .iter()
+            .filter_map(|p| match p {
+                Paint::Panel { bounds, .. } => Some(bounds.h),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(chips.len(), SWITCHES.len(), "one chip a switch that's on");
+        for tall in chips {
+            assert!(tall < units(0.7) && tall > units(0.6), "{tall}");
+        }
     }
 }
