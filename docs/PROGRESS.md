@@ -2923,3 +2923,11 @@ Item 2 of herdr's performance study.
 - Output out of sight, measured from the last entries' build (debug, counters, a second): four tabs printing behind the front one at 60 Hz now draw 1.9 frames (the tick's), where they drew 98 and then 60, and the loop wakes 33 times, where it woke 100.
 - Tests: `output_draws_once_a_frame_but_an_echo_at_once`, `a_poke_ends_the_loops_wait`, `output_out_of_sight_wakes_the_loop_only_when_it_piles_up`, `a_feed_keeps_order_and_holds_its_reader_when_full`.
 - Unverified: the echo's latency in a real terminal (the counters show frames per key, not milliseconds to the eye).
+
+## The cell tier hides the cursor while it writes a frame (2026-11-17)
+
+Item 10 of herdr's performance study.
+
+- `CellBackend::present` now hides the cursor before writing anything and shows it where it belongs once the frame is whole; a scroll's shift hides it too. In a terminal without synchronized output the cursor visibly ran over the screen with each run.
+- The scroll shift for side-pane output (sending a pane's output as a shifted region, as the editor's wheel does) isn't built. Measured on cells: a side-pane shell printing 30 lines a second rewrites every row of the pane a frame, 27 rows and 3.5 KB a frame (90 KB a second) for lines of varied text, 465 B a frame for lines that differ only in a number. A shift would send about a row a frame, but a scroll region spans the window's whole width, so beside a file the file's side of those rows would have to be sent again: about half saved there, nearly all with the pane maximized or under the file. Only tmux without passthrough and Windows draw cells, so it waits.
+- Test: `the_cursor_is_hidden_while_a_frame_is_written`.

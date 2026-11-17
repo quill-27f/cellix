@@ -36,8 +36,10 @@ fn sgr(style: Style, out: &mut Vec<u8>) {
 impl Backend for CellBackend {
     fn present(&mut self, grid: &Grid, out: &mut dyn Write) -> io::Result<()> {
         let mut bytes = Vec::new();
-        // Synchronized output stops terminals showing half a frame.
-        bytes.extend_from_slice(b"\x1b[?2026h");
+        // Synchronized output stops terminals showing half a frame. One that doesn't know it
+        // shows each run as it comes, so the cursor is hidden while they're written, or it
+        // runs over the screen with them, and shown again where it belongs at the end.
+        bytes.extend_from_slice(b"\x1b[?2026h\x1b[?25l");
         let runs = match &self.shown {
             Some(shown) => grid.diff(shown),
             None => grid.diff(&Grid::new(0, 0, Style::default())),
@@ -66,11 +68,8 @@ impl Backend for CellBackend {
                 }
             }
         }
-        match grid.cursor {
-            Some((x, y)) => {
-                let _ = write!(bytes, "\x1b[{};{}H\x1b[?25h", y + 1, x + 1);
-            }
-            None => bytes.extend_from_slice(b"\x1b[?25l"),
+        if let Some((x, y)) = grid.cursor {
+            let _ = write!(bytes, "\x1b[{};{}H\x1b[?25h", y + 1, x + 1);
         }
         bytes.extend_from_slice(b"\x1b[?2026l");
         out.write_all(&bytes)?;
@@ -109,7 +108,7 @@ impl Backend for CellBackend {
             return Ok(());
         }
         let (top, bottom) = (area.y, area.bottom() - 1);
-        let mut bytes = b"\x1b[?2026h".to_vec();
+        let mut bytes = b"\x1b[?2026h\x1b[?25l".to_vec();
         let _ = write!(bytes, "\x1b[{};{}r", top + 1, bottom + 1);
         let n = rows.unsigned_abs();
         let _ = if rows > 0 {
@@ -202,6 +201,32 @@ mod tests {
             after.ends_with(b"\x1b[?2026l"),
             "the scroll's update is ended"
         );
+    }
+
+    /// The cursor is hidden before anything is written and shown only once the frame is
+    /// whole, where it belongs: a terminal without synchronized output shows every run as it
+    /// comes, and the cursor ran over the screen with them.
+    #[test]
+    fn the_cursor_is_hidden_while_a_frame_is_written() {
+        let mut backend = CellBackend::default();
+        let mut grid = Grid::new(20, 5, Style::default());
+        grid.put_str(0, 0, "first", Style::default(), 20);
+        grid.put_str(0, 4, "last", Style::default(), 20);
+        grid.cursor = Some((2, 1));
+        let mut out = Vec::new();
+        backend.present(&grid, &mut out).unwrap();
+        let text = String::from_utf8_lossy(&out).into_owned();
+        assert!(text.starts_with("\x1b[?2026h\x1b[?25l"), "{text:?}");
+        let shown = text.find("\x1b[?25h").expect("the cursor comes back");
+        assert!(shown > text.find("last").unwrap(), "after the last run");
+        assert!(text[shown..].starts_with("\x1b[?25h\x1b[?2026l"));
+        assert!(text.contains("\x1b[2;3H\x1b[?25h"), "where it belongs");
+        // Without a cursor, it stays hidden.
+        grid.cursor = None;
+        grid.put_str(0, 2, "more", Style::default(), 20);
+        let mut out = Vec::new();
+        backend.present(&grid, &mut out).unwrap();
+        assert!(!String::from_utf8_lossy(&out).contains("\x1b[?25h"));
     }
 
     #[test]

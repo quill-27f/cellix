@@ -5626,5 +5626,12 @@
     "title": "The loop waits on the keyboard and a pipe its sessions' readers poke, so output on screen is seen as it comes, drawn at most every 16 ms but a key's echo at once; a reader's queue is bounded",
     "test": "output_draws_once_a_frame_but_an_echo_at_once",
     "passes": true
+  },
+  {
+    "id": "cells-cursor-hidden",
+    "milestone": 15,
+    "title": "The cell tier hides the cursor while it writes a frame and shows it where it belongs once the frame is whole",
+    "test": "the_cursor_is_hidden_while_a_frame_is_written",
+    "passes": true
   }
 ]
