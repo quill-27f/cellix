@@ -807,7 +807,7 @@ struct Confirm {
 /// What the system's clipboard holds, where a local tool can read it. Over SSH that would
 /// be the server's clipboard, so there Cellix keeps to its own.
 fn system_clipboard() -> Option<String> {
-    if cfg!(test) || std::env::var_os("SSH_CONNECTION").is_some() {
+    if cfg!(test) || crate::pane::over_ssh() {
         return None;
     }
     let tools: [&[&str]; 3] = [
@@ -8723,7 +8723,7 @@ impl App {
             };
             return;
         }
-        let remote = std::env::var_os("SSH_CONNECTION").is_some();
+        let remote = crate::pane::over_ssh();
         if !cfg!(target_os = "linux") || !remote {
             self.linger = Linger::Settled;
             return;

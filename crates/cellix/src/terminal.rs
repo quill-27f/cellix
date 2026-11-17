@@ -222,6 +222,19 @@ const SCROLL_EASE: Duration = Duration::from_millis(14);
 const INPUT_SLICE: Duration = Duration::from_millis(4);
 /// How often the page under a scroll is brought up to date while it moves.
 const SCROLL_PRESENT: Duration = Duration::from_millis(120);
+/// How the wheel's glide moves, if it's on: less often at the far end of SSH, where each step
+/// is a round of placements over the link.
+fn scrolling(on: bool, remote: bool) -> Option<Smooth> {
+    on.then_some(Smooth {
+        frame: if remote {
+            REMOTE_SCROLL_FRAME
+        } else {
+            SCROLL_FRAME
+        },
+        ease: SCROLL_EASE,
+    })
+}
+
 /// How long to wait for input before checking on language servers.
 const POLL: Duration = Duration::from_millis(50);
 /// How long to wait with a session in the side pane, whose output should feel typed.
@@ -711,6 +724,8 @@ struct Display {
     multiplexer: cellix_term::Multiplexer,
     passthrough: bool,
     smooth: Option<Smooth>,
+    /// At the far end of SSH.
+    remote: bool,
     bleed: Bleed,
     /// How many times the terminal's line a row of Cellix's own is tall, where it's asked
     /// for. See `row`.
@@ -860,23 +875,15 @@ impl Display {
             background: env.background,
             multiplexer: env.multiplexer,
             passthrough: env.tmux_passthrough,
-            smooth: smooth.then(|| Smooth {
-                frame: if std::env::var_os("SSH_CONNECTION").is_some() {
-                    REMOTE_SCROLL_FRAME
-                } else {
-                    SCROLL_FRAME
-                },
-                ease: SCROLL_EASE,
-            }),
+            smooth: scrolling(smooth, crate::pane::over_ssh()),
+            remote: crate::pane::over_ssh(),
         })
     }
 
-    /// Turns the wheel's animation on or off.
+    /// Turns the wheel's animation on or off, at the pace it had: turned back on over SSH,
+    /// it kept the local pace and sent a round of placements every 8 ms over the link.
     fn set_smooth(&mut self, on: bool) {
-        self.smooth = on.then_some(Smooth {
-            frame: SCROLL_FRAME,
-            ease: SCROLL_EASE,
-        });
+        self.smooth = scrolling(on, self.remote);
     }
 
     /// A row's height in pixels where Cellix lays out rows of its own, taller than the
@@ -1449,7 +1456,10 @@ pub fn run(options: Options) -> io::Result<()> {
                 }
                 redraw = true;
                 causes.add(Cause::Input);
-            } else if pace.tick_due(Instant::now()) {
+            }
+            // On its time whatever comes in: with every pointer move reported, a hand on the
+            // mouse used to hold the tick off, and with it the look at the disk.
+            if pace.tick_due(Instant::now()) {
                 let started = Instant::now();
                 spaces.handle(Event::Tick);
                 // Only what it changed is drawn, and its heartbeat, which sends nothing
@@ -1824,6 +1834,18 @@ mod tests {
             Frame::Whole,
             "nothing to step"
         );
+    }
+
+    /// The wheel's glide keeps the pace it had at the far end of SSH when it's turned off and
+    /// on again in Settings, where it fell back to the local pace.
+    #[test]
+    fn the_glide_keeps_its_pace_over_ssh_when_turned_back_on() {
+        assert_eq!(
+            scrolling(true, true).map(|s| s.frame),
+            Some(REMOTE_SCROLL_FRAME)
+        );
+        assert_eq!(scrolling(true, false).map(|s| s.frame), Some(SCROLL_FRAME));
+        assert_eq!(scrolling(false, true), None);
     }
 
     #[test]

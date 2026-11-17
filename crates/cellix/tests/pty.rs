@@ -1037,6 +1037,39 @@ fn an_idle_window_draws_and_sends_nothing() {
     screen.wait_exit();
 }
 
+/// The tick looks at the disk on time however much input comes. With every pointer move
+/// reported, a hand on the mouse held it off, and a file an agent wrote wasn't read again
+/// until the hand was still.
+#[test]
+fn a_pointer_moving_all_the_while_doesnt_hold_off_the_tick() {
+    let dir = project();
+    let mut screen = Screen::start(dir.path(), &["hello.txt"]);
+    screen.wait_for("hello from a file");
+    std::thread::sleep(Duration::from_millis(50));
+    std::fs::write(
+        dir.path().join("hello.txt"),
+        "written while the pointer moved\n",
+    )
+    .unwrap();
+    let deadline = Instant::now() + WAIT;
+    let mut column = 10;
+    while !screen
+        .contents()
+        .contains("written while the pointer moved")
+    {
+        assert!(
+            Instant::now() < deadline,
+            "not read again while the pointer moved:\n{}",
+            screen.contents()
+        );
+        column = if column == 10 { 11 } else { 10 };
+        screen.send(format!("\x1b[<35;{column};5M").as_bytes());
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    screen.send(b"\x11");
+    screen.wait_exit();
+}
+
 /// Closing the window is how a session often ends. Cellix finishes as it does on Quit: an
 /// unsent comment is kept for next time, and the socket goes. On Windows that's a console
 /// handler; elsewhere the hang-up.

@@ -5577,5 +5577,12 @@
     "title": "In Ghostty on this machine, once a probe at start shows the terminal takes them, tiles go as private temporary files it reads and deletes: the picture is the same as inline for a small part of the bytes, nothing is left behind, and anywhere else or after any failure tiles go inline",
     "test": "tiles_go_as_files_to_ghostty_here_and_look_the_same_for_fewer_bytes",
     "passes": true
+  },
+  {
+    "id": "tick-on-time",
+    "milestone": 15,
+    "title": "The tick runs on its time however much input comes, the glide keeps its pace over SSH when turned back on, and one check says whether Cellix is at the far end of SSH",
+    "test": "a_pointer_moving_all_the_while_doesnt_hold_off_the_tick",
+    "passes": true
   }
 ]

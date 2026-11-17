@@ -601,7 +601,14 @@ fn parent() -> u32 {
 
 /// Whether Cellix runs at the far end of an SSH connection, so all it draws crosses a link.
 pub fn over_ssh() -> bool {
-    let set = |name: &str| std::env::var_os(name).is_some_and(|value| !value.is_empty());
+    over_ssh_in(|name| std::env::var(name).ok())
+}
+
+/// The same, from variables given: either of the two an SSH server sets. A session's
+/// `SSH_CONNECTION` can be cleared by a multiplexer or a login script and its `SSH_TTY`
+/// not, or the other way round, so either is enough.
+pub fn over_ssh_in(var: impl Fn(&str) -> Option<String>) -> bool {
+    let set = |name: &str| var(name).is_some_and(|value| !value.is_empty());
     set("SSH_CONNECTION") || set("SSH_TTY")
 }
 
@@ -615,7 +622,7 @@ pub fn pictures_show(var: impl Fn(&str) -> Option<String>) -> bool {
         Some("pixels") => return true,
         _ => {}
     }
-    if set("SSH_CONNECTION") || set("SSH_TTY") || set("TMUX") || var("ZELLIJ").is_some() {
+    if over_ssh_in(&var) || set("TMUX") || var("ZELLIJ").is_some() {
         return false;
     }
     let program = var("TERM_PROGRAM").unwrap_or_default().to_lowercase();
@@ -870,6 +877,22 @@ enum Output {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Either variable an SSH server sets says Cellix is at the far end of a link; one left
+    /// empty doesn't.
+    #[test]
+    fn either_ssh_variable_says_a_link() {
+        let with = |pairs: &'static [(&'static str, &'static str)]| {
+            over_ssh_in(move |name| {
+                let found = pairs.iter().find(|(key, _)| *key == name);
+                found.map(|(_, value)| value.to_string())
+            })
+        };
+        assert!(with(&[("SSH_CONNECTION", "10.0.0.1 50000 10.0.0.2 22")]));
+        assert!(with(&[("SSH_TTY", "/dev/ttys004")]));
+        assert!(!with(&[("SSH_TTY", "")]));
+        assert!(!with(&[("TERM", "xterm-ghostty")]));
+    }
 
     #[test]
     fn keys_cross_from_the_mod() {
