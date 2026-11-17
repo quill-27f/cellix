@@ -6,6 +6,9 @@ use cellix_render::{Font, Measure};
 
 /// Columns between buttons side by side, and between a button and the words beside it.
 pub const BUTTON_GAP: u16 = 2;
+/// How tall a spinner beside words is, in the terminal's lines: in the status bar, a view's
+/// heading or a button, 11 pt beside words of 13 or a little less.
+pub const WAIT_SPIN: f32 = 0.6;
 
 /// The chip behind a glyph that takes a click, an emoji or a small icon, while it's pointed
 /// at or picked: square on screen, nearly a row tall, with the glyph in its middle.

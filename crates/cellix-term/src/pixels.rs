@@ -120,6 +120,8 @@ pub struct PixelBackend<R> {
     shown: Vec<Vec<Option<u32>>>,
     /// The bands those are.
     bands: Vec<u16>,
+    /// The row with bands of its own, as the grid last shown had it.
+    row_bands: Option<(u16, Vec<u16>)>,
     size: (u16, u16),
     next_id: u32,
     used: usize,
@@ -211,6 +213,7 @@ impl<R: Rasterizer> PixelBackend<R> {
             tiles: HashMap::new(),
             shown: Vec::new(),
             bands: Vec::new(),
+            row_bands: None,
             size: (0, 0),
             next_id: 1,
             used: 0,
@@ -472,10 +475,13 @@ impl<R: Rasterizer> PixelBackend<R> {
     /// status bar, which nothing scrolls in, and its tile can reach below the text area.
     fn spans(&self, grid: &Grid, y: u16) -> Vec<(u16, u16)> {
         let width = grid.width();
-        if y + 1 == grid.height() {
-            return vec![(0, width)];
-        }
-        let inside = grid.bands.iter().copied().filter(|x| *x > 0 && *x < width);
+        let own = grid.row_bands.as_ref().filter(|(row, _)| *row == y);
+        let bands = match own {
+            Some((_, bands)) => bands,
+            None if y + 1 == grid.height() => return vec![(0, width)],
+            None => &grid.bands,
+        };
+        let inside = bands.iter().copied().filter(|x| *x > 0 && *x < width);
         let edges: Vec<u16> = [0].into_iter().chain(inside).chain([width]).collect();
         edges.windows(2).map(|edge| (edge[0], edge[1])).collect()
     }
@@ -610,6 +616,27 @@ impl<R: Rasterizer> Backend for PixelBackend<R> {
             self.bands.clone_from(&grid.bands);
             self.glide = None;
             self.scrolling = false;
+        }
+        if grid.row_bands != self.row_bands {
+            // The rows cut differently are shown afresh: what was placed in them goes.
+            let rows = [&self.row_bands, &grid.row_bands].map(|own| own.as_ref().map(|o| o.0));
+            for y in rows.into_iter().flatten() {
+                let Some(shown) = self.shown.get_mut(y as usize) else {
+                    continue;
+                };
+                let old: Vec<(usize, u32)> = std::mem::take(shown)
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(|(band, id)| Some((band, id?)))
+                    .collect();
+                if self.placement == Placement::Direct {
+                    for (band, id) in old {
+                        let number = place_number(y, band);
+                        self.apc(&mut bytes, &format!("a=d,d=i,i={id},p={number},q=2"), b"");
+                    }
+                }
+            }
+            self.row_bands.clone_from(&grid.row_bands);
         }
         self.frame += 1;
         self.foot = grid.foot;
@@ -1581,6 +1608,40 @@ mod tests {
         assert!(!still.spinning);
         present(&mut b, &still);
         assert_eq!(count(&present(&mut b, &still), "\x1b_G"), 0);
+    }
+
+    /// The status bar cut round its spinner: a step sends that band and nothing else of the
+    /// bar, and a change elsewhere in the bar sends only where it changed.
+    #[test]
+    fn a_row_with_bands_of_its_own_sends_only_the_band_that_changed() {
+        let mut b = PixelBackend::new(Flat, Placement::Direct, DEFAULT_QUOTA);
+        let bar = |step: u8, said: &str| {
+            let mut grid = page(0);
+            grid.row_bands = Some((4, vec![6, 9]));
+            grid.turn = Some(step);
+            grid.put_str(0, 4, "main", Style::default(), 6);
+            grid.spinner(6.5, 4, 0.65, cellix_render::Rgb(1, 2, 3), Style::default());
+            grid.put_str(10, 4, said, Style::default(), 20);
+            grid
+        };
+        let first = present(&mut b, &bar(0, "Ln 1"));
+        assert_eq!(count(&first, "a=p,"), 5 + 2, "the bar's three bands");
+        assert_eq!(
+            count(&present(&mut b, &bar(1, "Ln 1")), "a=t,"),
+            1,
+            "a step: its band"
+        );
+        assert_eq!(
+            count(&present(&mut b, &bar(1, "Ln 2")), "a=t,"),
+            1,
+            "the cursor's"
+        );
+        // Cut no longer, the bar is one tile again, and what was placed in it goes.
+        let mut whole = bar(1, "Ln 2");
+        whole.row_bands = None;
+        let out = present(&mut b, &whole);
+        assert_eq!(count(&out, "a=d,d=i"), 3, "{out:?}");
+        assert_eq!(count(&out, "a=p,"), 1);
     }
 
     #[test]

@@ -101,6 +101,8 @@ pub enum LspEvent {
     InlayHints(PathBuf, u64, Vec<InlayHint>),
     /// The server refused a request, in its own words.
     Failed(String),
+    /// What it says it's doing changed: starting, loading, indexing, or nothing.
+    Activity,
 }
 
 #[derive(Clone)]
@@ -129,6 +131,12 @@ struct Writer {
     opened: Vec<String>,
     /// Whether the server last said it was still loading.
     busy: bool,
+    /// Whether it says when it's loading at all, and if so whether it's done: rust-analyzer's
+    /// `experimental/serverStatus`.
+    quiet: Option<bool>,
+    /// Work it has said it's doing and not yet said is done, as (its token, its title), the
+    /// last begun last: `$/progress`.
+    progress: Vec<(String, String)>,
 }
 
 impl Writer {
@@ -155,6 +163,31 @@ pub struct Client {
     next_id: u64,
     versions: HashMap<PathBuf, i64>,
     pub events: Receiver<LspEvent>,
+    /// What it's called where Cellix says what it's doing: its program's name, or the
+    /// script's an interpreter runs.
+    pub name: String,
+}
+
+/// A server's name from the command that starts it: `rust-analyzer`, and for `python3 -I
+/// server.py`, `server`.
+fn server_name(command: &[String]) -> String {
+    const RUNNERS: [&str; 9] = [
+        "python", "python3", "node", "sh", "bash", "npx", "uv", "uvx", "bun",
+    ];
+    let stem = |word: &String| {
+        Path::new(word)
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+    };
+    let words = command.iter().filter(|word| !word.starts_with('-'));
+    let mut named = words.filter_map(|word| Some((word, stem(word)?)));
+    let first = named.next();
+    let script = named.next();
+    match (first, script) {
+        (Some((_, runner)), Some((_, script))) if RUNNERS.contains(&runner.as_str()) => script,
+        (Some((_, name)), _) => name,
+        _ => "language server".to_string(),
+    }
 }
 
 impl Drop for Client {
@@ -514,6 +547,36 @@ fn workspace_edit(result: &Value) -> Vec<(PathBuf, Vec<TextEdit>)> {
     files
 }
 
+/// What a server is doing that's worth waiting on: see `Client::activity`.
+fn doing(writer: &Writer) -> Option<String> {
+    if !writer.ready {
+        return Some("starting".to_string());
+    }
+    if let Some((_, title)) = writer.progress.last() {
+        return Some(title.to_lowercase());
+    }
+    (writer.quiet == Some(false)).then(|| "loading".to_string())
+}
+
+/// Work a server says it's begun or finished, as `$/progress` says it: its title is kept
+/// from when it begins until it ends.
+fn take_progress(writer: &mut Writer, params: &Value) {
+    let token = match &params["token"] {
+        Value::String(token) => token.clone(),
+        other => other.to_string(),
+    };
+    let value = &params["value"];
+    match value["kind"].as_str() {
+        Some("begin") => {
+            let title = value["title"].as_str().unwrap_or("working").to_string();
+            writer.progress.retain(|(known, _)| *known != token);
+            writer.progress.push((token, title));
+        }
+        Some("end") => writer.progress.retain(|(known, _)| *known != token),
+        _ => {}
+    }
+}
+
 /// rust-analyzer ignores a save that arrives while it's loading, and then a file with
 /// errors looks clean until the next save. So every open file gets its check when loading
 /// ends.
@@ -563,8 +626,17 @@ fn read_loop(
         if message["method"] == "experimental/serverStatus" {
             let quiet = message["params"]["quiescent"].as_bool().unwrap_or(false);
             if let Ok(mut writer) = writer.lock() {
+                writer.quiet = Some(quiet);
                 recheck_when_loaded(&mut writer, quiet);
             }
+            let _ = events.send(LspEvent::Activity);
+            continue;
+        }
+        if message["method"] == "$/progress" {
+            if let Ok(mut writer) = writer.lock() {
+                take_progress(&mut writer, &message["params"]);
+            }
+            let _ = events.send(LspEvent::Activity);
             continue;
         }
         if !message["method"].is_null() {
@@ -659,6 +731,8 @@ impl Client {
             queue: Vec::new(),
             opened: Vec::new(),
             busy: true,
+            quiet: None,
+            progress: Vec::new(),
         }));
         let pending = Arc::new(Mutex::new(HashMap::new()));
         let (sender, events) = channel();
@@ -671,6 +745,7 @@ impl Client {
             next_id: 1,
             versions: HashMap::new(),
             events,
+            name: server_name(command),
         };
         client.initialize(root)?;
         Ok(client)
@@ -685,6 +760,7 @@ impl Client {
                 "capabilities": {
                     "general": {"positionEncodings": ["utf-32", "utf-16"]},
                     "experimental": {"serverStatusNotification": true},
+                    "window": {"workDoneProgress": true},
                     "workspace": {"symbol": {}, "inlayHint": {"refreshSupport": false}},
                     "textDocument": {
                         "publishDiagnostics": {},
@@ -735,6 +811,13 @@ impl Client {
         if let Ok(mut writer) = self.writer.lock() {
             writer.send(json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
         }
+    }
+
+    /// What it's doing that's worth waiting on, in a word or two: starting until it has
+    /// answered `initialize`, then the title of the work it last said it began and hasn't
+    /// finished, or loading while it says it isn't settled. Nothing once it's ready.
+    pub fn activity(&self) -> Option<String> {
+        doing(&*self.writer.lock().ok()?)
     }
 
     pub fn open(&mut self, path: &Path, language: &str, text: &str) {
@@ -908,8 +991,56 @@ mod tests {
             queue: Vec::new(),
             opened: vec!["file:///a.rs".to_string()],
             busy: true,
+            quiet: None,
+            progress: Vec::new(),
         };
         (writer, child)
+    }
+
+    /// A server's work is told from when it says it began to when it says it ended, by its
+    /// token, and the last begun is what's said; rust-analyzer's own word says loading.
+    #[test]
+    fn a_server_says_what_it_is_doing_until_it_is_done() {
+        let (writer, _child) = writer_over_cat();
+        let writer = Arc::new(Mutex::new(writer));
+        let (sender, events) = channel();
+        let said = |messages: &[Value]| {
+            let mut bytes = Vec::new();
+            for message in messages {
+                let body = message.to_string();
+                bytes.extend(format!("Content-Length: {}\r\n\r\n{body}", body.len()).bytes());
+            }
+            read_loop(&bytes[..], &writer, &Mutex::new(HashMap::new()), &sender);
+        };
+        let doing = |writer: &Arc<Mutex<Writer>>| doing(&writer.lock().unwrap());
+        let progress = |token: Value, value: Value| json!({"jsonrpc": "2.0", "method": "$/progress", "params": {"token": token, "value": value}});
+        said(&[progress(
+            json!("rustAnalyzer/Indexing"),
+            json!({"kind": "begin", "title": "Indexing"}),
+        )]);
+        assert_eq!(doing(&writer).as_deref(), Some("indexing"));
+        said(&[progress(
+            json!(7),
+            json!({"kind": "begin", "title": "Building"}),
+        )]);
+        said(&[progress(
+            json!("rustAnalyzer/Indexing"),
+            json!({"kind": "report", "percentage": 40}),
+        )]);
+        assert_eq!(doing(&writer).as_deref(), Some("building"));
+        said(&[progress(json!(7), json!({"kind": "end"}))]);
+        assert_eq!(doing(&writer).as_deref(), Some("indexing"));
+        said(&[progress(
+            json!("rustAnalyzer/Indexing"),
+            json!({"kind": "end"}),
+        )]);
+        assert_eq!(doing(&writer), None);
+        let status = |quiet: bool| json!({"jsonrpc": "2.0", "method": "experimental/serverStatus", "params": {"quiescent": quiet}});
+        said(&[status(false)]);
+        assert_eq!(doing(&writer).as_deref(), Some("loading"));
+        said(&[status(true)]);
+        assert_eq!(doing(&writer), None);
+        assert!(events.try_iter().all(|e| matches!(e, LspEvent::Activity)));
     }
 
     #[test]
@@ -936,6 +1067,19 @@ mod tests {
         };
         assert_eq!(found[1], (PathBuf::from("/b.rs"), 3, 4));
         assert!(matches!(parse_references(&Value::Null), LspEvent::References(f) if f.is_empty()));
+    }
+
+    #[test]
+    fn a_server_is_named_by_its_program_or_its_script() {
+        let name =
+            |words: &[&str]| server_name(&words.iter().map(|w| w.to_string()).collect::<Vec<_>>());
+        assert_eq!(name(&["rust-analyzer"]), "rust-analyzer");
+        assert_eq!(name(&["/usr/local/bin/gopls", "serve"]), "gopls");
+        assert_eq!(name(&["python3", "-I", "/tmp/x/fake_lsp.py"]), "fake_lsp");
+        assert_eq!(
+            name(&["typescript-language-server", "--stdio"]),
+            "typescript-language-server"
+        );
     }
 
     #[test]

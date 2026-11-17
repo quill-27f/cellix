@@ -118,6 +118,11 @@ while True:
     params = message.get("params", {})
     if method == "initialize":
         send({"jsonrpc": "2.0", "id": ident, "result": {"capabilities": {}}})
+        # Told to, it says it has begun indexing and never says it's done, for the status
+        # bar's spinner to be pictured.
+        if os.environ.get("FAKE_LSP_INDEXING"):
+            send({"jsonrpc": "2.0", "method": "$/progress",
+                  "params": {"token": "index", "value": {"kind": "begin", "title": "Indexing"}}})
     elif method == "textDocument/didOpen":
         texts[params["textDocument"]["uri"]] = params["textDocument"]["text"]
     elif method == "textDocument/didChange":

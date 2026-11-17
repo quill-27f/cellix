@@ -184,6 +184,9 @@ const SHEET_RADIUS: u8 = 28;
 const SHEET_GAP: u16 = 1;
 /// How far into that column a sheet's own edge is, where there are pictures to draw it.
 const SHEET_EDGE: f32 = 0.5;
+/// Columns the status bar's item for what Cellix waits on takes besides its words: the
+/// spinner, the gap after it and the gap after the words.
+const WAIT_ROOM: u16 = 4;
 /// Columns of a tab that aren't its name: margins, the gap and the close button.
 const TAB_PADDING: u16 = 5;
 /// Columns the Task page's tab keeps for its mark, before its name, and how tall the mark
@@ -3287,6 +3290,8 @@ impl App {
                 }
                 self.formatted(&path);
             }
+            // What a server says it's doing shows in the status bar, which this frame draws.
+            LspEvent::Activity => {}
             LspEvent::Failed(message) => {
                 self.format_failed();
                 self.pending_rename = None;
@@ -12052,6 +12057,43 @@ impl App {
         session.doing = doing;
     }
 
+    /// What Cellix itself is waiting on, in the words its status bar item says, the one most
+    /// likely wanted first: a push or pull, a build or an export, an install, a search, a
+    /// task running in the side pane, and a language server starting, loading or indexing.
+    pub fn waiting(&self) -> Option<String> {
+        if let Some(busy) = self.source.busy {
+            return Some(busy.trim_end_matches('…').to_string());
+        }
+        if self.build.is_some() {
+            let what = if self.export_to.is_some() {
+                "Exporting PDF"
+            } else {
+                "Building PDF"
+            };
+            return Some(what.to_string());
+        }
+        if self
+            .settings_page
+            .as_ref()
+            .is_some_and(|page| page.installing.is_some())
+        {
+            return Some("Installing".to_string());
+        }
+        if self.search.searching() {
+            return Some("Searching".to_string());
+        }
+        let task = self.dock.sessions.iter().find(|s| s.task() && !s.exited);
+        if let Some(task) = task {
+            return Some(format!("Running {}", task.name));
+        }
+        let mut servers: Vec<_> = self.servers.iter().collect();
+        servers.sort_by_key(|(language, _)| **language);
+        servers.into_iter().find_map(|(_, client)| {
+            let doing = client.activity()?;
+            Some(format!("{}: {doing}", client.name))
+        })
+    }
+
     /// Every agent the Agents list shows, as its rows: those that report, with their tab's
     /// name and mark where they have one, and those found running that don't.
     fn agent_rows(&self) -> Vec<crate::agents::Row> {
@@ -14654,6 +14696,7 @@ impl App {
         let (sender, receiver) = std::sync::mpsc::channel();
         page.note = "Working…".to_string();
         page.installing = Some(receiver);
+        page.installing_what = Some(control);
         self.say("Working…");
         std::thread::spawn(move || {
             let var = |name: &str| std::env::var(name).ok();
@@ -14694,6 +14737,7 @@ impl App {
             return false;
         };
         page.installing = None;
+        page.installing_what = None;
         page.note.clone_from(&note);
         page.found = Found::look();
         self.say(note);
@@ -17935,7 +17979,17 @@ impl App {
         let end = bell
             .map_or(last, |(at, _)| at.saturating_sub(1))
             .saturating_sub(self.status_room.get().1);
-        let used = left.chars().count().min(kept) as u16 + start + flagged + 3 + (width - end);
+        // What Cellix itself waits on stands before the message, and gives way to one that
+        // wouldn't fit beside it.
+        let left_wide = left.chars().count().min(kept) as u16;
+        let waits = self.waiting().filter(|_| !self.compact()).filter(|words| {
+            let wide = words.chars().count() as u16 + WAIT_ROOM;
+            message.is_empty() || start + flagged + wide + left_wide < end
+        });
+        let wait_wide = waits
+            .as_ref()
+            .map_or(0, |words| words.chars().count() as u16 + WAIT_ROOM);
+        let used = left_wide + start + flagged + wait_wide + 3 + (width - end);
         let room = width.saturating_sub(used) as usize;
         let mut shown = right.clone();
         while shown.len() > 1 && shown.join("   ").chars().count() > room {
@@ -18005,6 +18059,16 @@ impl App {
             grid.label_at(x as f32, x, y, "⊗", bar, right_x, PROBLEM_MARK);
             let after = format!("{count}  ");
             x = grid.label_at(x as f32 + mark + 0.4, x + 2, y, &after, bar, right_x, 90);
+        }
+        // What Cellix itself is waiting on, with a spinner: a band of the bar to itself, so a
+        // step sends that and not the bar, and the cursor moving sends the bar and not it.
+        if let Some(words) = waits {
+            let from = x;
+            let spin = crate::measures::WAIT_SPIN;
+            grid.spinner(x as f32 + 0.2, y, spin, self.theme.accent, bar);
+            let end = grid.label_at(x as f32 + 1.8, x + 2, y, &words, bar, right_x, 90);
+            x = end + 2;
+            grid.row_bands = Some((y, vec![from, x.saturating_sub(1)]));
         }
         let needs_you = waiting > 0 && message.is_empty() && self.neovim_line.is_empty();
         let bar = if needs_you {
@@ -18515,6 +18579,8 @@ mod motion_tests;
 mod shell_tab_tests;
 #[cfg(test)]
 mod view_tests;
+#[cfg(test)]
+mod waits_tests;
 
 #[cfg(test)]
 mod tests {

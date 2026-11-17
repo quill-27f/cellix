@@ -823,6 +823,7 @@ impl Workspaces {
                     let with_words = match paint {
                         Paint::Text { .. } => true,
                         Paint::Icon { bounds, .. } => bounds.h < cellix_render::UNIT,
+                        Paint::Spinner { .. } => true,
                         _ => false,
                     };
                     if with_words {

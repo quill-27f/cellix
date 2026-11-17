@@ -160,6 +160,11 @@ impl Search {
         self.results = results;
     }
 
+    /// Whether a search is under way.
+    pub fn searching(&self) -> bool {
+        self.incoming.is_some()
+    }
+
     /// Takes finished results. Returns true if the panel changed.
     pub fn poll(&mut self) -> bool {
         let Some(receiver) = &self.incoming else {
@@ -312,8 +317,9 @@ impl Search {
             .filter(|r| matches!(r, Row::File(..)))
             .count();
         let found = self.results.len();
-        let summary = if self.incoming.is_some() {
-            "Searching…".to_string()
+        let searching = self.incoming.is_some();
+        let summary = if searching {
+            "Searching".to_string()
         } else if let Err(why) = self.options.matcher(&self.query)
             && self.options.regex
             && !self.query.is_empty()
@@ -332,15 +338,17 @@ impl Search {
             fg: theme.gutter.fg,
             ..theme.sidebar
         };
-        grid.label_at(
-            area.x as f32 + 2.0,
-            area.x + 2,
-            area.y + REPLACE_ROW + 2,
-            &summary,
-            dim,
-            area.right(),
-            85,
-        );
+        // While it looks, a spinner before the words, where VS Code's view shows its bar.
+        let y = area.y + REPLACE_ROW + 2;
+        let words = if searching {
+            let spin = crate::measures::WAIT_SPIN;
+            grid.spinner(area.x as f32 + 2.0, y, spin, theme.accent, theme.sidebar);
+            2
+        } else {
+            0
+        };
+        let at = area.x + 2 + words;
+        grid.label_at(at as f32, at, y, &summary, dim, area.right(), 85);
 
         let rows = self.rows();
         for (index, row) in rows.iter().skip(self.top).enumerate() {
@@ -518,5 +526,32 @@ mod switch_tests {
         for tall in chips {
             assert!(tall < units(0.7) && tall > units(0.6), "{tall}");
         }
+    }
+
+    /// While a search runs, its view says so with a spinner before the words, under its
+    /// boxes, where VS Code's view shows its bar; done, the count of what it found.
+    #[test]
+    fn a_search_under_way_turns_in_its_view() {
+        let theme = Theme::default();
+        let mut search = Search::new(PathBuf::from("/nowhere"));
+        let (_send, incoming) = channel();
+        search.incoming = Some(incoming);
+        let mut grid = Grid::new(40, 12, theme.sidebar);
+        grid.turn = Some(6);
+        let area = Rect::new(0, 0, 40, 12);
+        search.draw(&mut grid, area, None, &cellix_render::CellMeasure, &theme);
+        let y = area.y + REPLACE_ROW + 2;
+        let frame = cellix_render::spinner::FRAMES[6];
+        assert!(
+            grid.row_text(y).contains(&format!("{frame} Searching")),
+            "{}",
+            grid.text()
+        );
+        assert!(grid.spinning);
+        assert!(search.searching());
+        search.incoming = None;
+        let mut grid = Grid::new(40, 12, theme.sidebar);
+        search.draw(&mut grid, area, None, &cellix_render::CellMeasure, &theme);
+        assert!(!grid.spinning && !grid.text().contains("Searching"));
     }
 }

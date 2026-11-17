@@ -113,6 +113,18 @@ tile of about 14 KB. Inside Claude Code's pane a spinner is the still dot. The m
 the pictures on screen, so each step there would be its row's picture crossing again, and by
 file the whole pane's picture written again; Claude Code has a spinner of its own.
 
+Cellix's own waits turn where VS Code shows progress. The status bar has one item, after the
+count of problems: a spinner and what's waited on, the one most likely wanted first: a push or
+pull, a PDF building or exporting, an install, a search, a task running, a language server
+starting, loading, or doing what it said it began (`$/progress`, and rust-analyzer's own
+`serverStatus`), named by its program, "rust-analyzer: indexing". That item is a band of the
+bar to itself (`Grid::row_bands`): a step sends its tile, and the cursor moving sends the rest
+of the bar and not it, where a step was a new tile of the whole bar while anything else in it
+changed. The Search view says "Searching" with a spinner before it under its boxes; Source
+Control's button that pushed or pulled turns with its words; a language server being installed
+from Settings turns in its row where its button was; a task's tab turns until it ends. A PDF
+building or exporting has the status bar's item alone, as VS Code's tasks do.
+
 ### Counting what the loop does
 
 `slow-frames.log` notes frames slow enough to feel and nothing else, which is blind to a busy

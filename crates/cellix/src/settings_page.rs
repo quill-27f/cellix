@@ -416,6 +416,8 @@ pub struct SettingsPage {
     pub top: usize,
     /// An install under way, which says how it went.
     pub installing: Option<Receiver<String>>,
+    /// What that install is of, whose button turns while it runs.
+    pub installing_what: Option<Control>,
     /// Every command and its keys, as the Keyboard section lists them.
     pub shortcuts: Vec<Shortcut>,
     /// What's typed in the filter, which narrows the rows of every page to those that fit.
@@ -437,6 +439,7 @@ impl SettingsPage {
             note: String::new(),
             top: 0,
             installing: None,
+            installing_what: None,
             shortcuts: Vec::new(),
             filter: String::new(),
             found_top: 0,
@@ -1703,6 +1706,24 @@ impl SettingsPage {
                 ..theme.text
             };
             grid.label_right(page.right(), y, "Found", state, NOTE_SIZE);
+            return;
+        }
+        // Being installed, where its button was: a spinner and what it's doing.
+        let installing = self.installing.is_some()
+            && self.installing_what == Some(Control::InstallServer(index));
+        if installing {
+            let quiet = Style {
+                fg: theme.gutter.fg,
+                ..theme.text
+            };
+            let font = Font {
+                size: NOTE_SIZE,
+                ..Font::default()
+            };
+            let words = measure.width("Installing", font);
+            let at = f32::from(page.right()) - words - 1.6;
+            grid.spinner(at, y, crate::measures::WAIT_SPIN, theme.accent, theme.text);
+            grid.label_right(page.right(), y, "Installing", quiet, NOTE_SIZE);
             return;
         }
         let spot = spots

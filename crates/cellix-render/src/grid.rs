@@ -149,6 +149,10 @@ pub struct Grid {
     /// bar. A backend that fills the window under its last row stands them evenly in what's
     /// there.
     pub foot: u16,
+    /// A row cut into bands of its own, in place of `bands`, as (the row, where each band
+    /// after the first starts): the status bar, where a spinner is a tile by itself, so its
+    /// steps don't send the rest of the bar again, nor the bar's other changes the spinner.
+    pub row_bands: Option<(u16, Vec<u16>)>,
     /// The step of its turn every spinner drawn here stands at, from the clock in
     /// `spinner`, or none where motion is off: a spinner is then a still dot.
     pub turn: Option<u8>,
@@ -216,6 +220,7 @@ impl Grid {
             edge: None,
             roomy: false,
             foot: 1,
+            row_bands: None,
             turn: Some(0),
             spinning: false,
             turning: Vec::new(),

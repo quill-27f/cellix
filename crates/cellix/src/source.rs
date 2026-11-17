@@ -129,6 +129,9 @@ pub struct Remote {
     pub can_publish: bool,
 }
 
+/// Room a spinner takes before a button's words, with the air after it, in cells.
+const SPIN_ROOM: f32 = 1.6;
+
 #[derive(Default)]
 pub struct Source {
     pub entries: Vec<Entry>,
@@ -342,7 +345,8 @@ impl Source {
         let commit = Rect::new(left, y, wide(self.commit_label()), 1);
         let sync = self.sync_label().and_then(|label| {
             let x = commit.right() + crate::measures::BUTTON_GAP;
-            let w = wide(&label);
+            // Room for the spinner beside its words while it pushes or pulls.
+            let w = wide(&label) + if self.busy.is_some() { 2 } else { 0 };
             (x + w <= left + width).then(|| Rect::new(x, y, w, 1))
         });
         (commit, sync)
@@ -364,6 +368,8 @@ impl Source {
     }
 
     /// What the button beside Commit says, if there's anything to do with the remote.
+    /// While it pushes or pulls, a spinner stands before these words, in the room that
+    /// `SPIN_ROOM` keeps.
     pub fn sync_label(&self) -> Option<String> {
         if let Some(busy) = self.busy {
             return Some(busy.to_string());
@@ -726,8 +732,37 @@ impl Source {
                 bg: ground(fill),
                 ..theme.sidebar
             };
-            let cells = crate::measures::button_cells(&name, measure);
-            grid.large_button(button.x, y, &cells, &name, fill, label);
+            if self.busy.is_some() {
+                // What it's doing, with a spinner before its words, the two in its middle.
+                let cells = crate::measures::button_cells(&format!("  {name}"), measure);
+                grid.large_button(button.x, y, &cells, "", fill, label);
+                let font = cellix_render::Font {
+                    size: crate::measures::BUTTON_TEXT,
+                    ..cellix_render::Font::default()
+                };
+                let spin = crate::measures::WAIT_SPIN;
+                let words = measure.width(&name, font);
+                let middle = f32::from(button.x) + f32::from(button.w) / 2.0;
+                let start = middle - (words + SPIN_ROOM) / 2.0;
+                // On cells, the column after its bracket.
+                let spin_at = if measure.in_cells() {
+                    f32::from(button.x + 1)
+                } else {
+                    start
+                };
+                grid.spinner(spin_at, y, spin, theme.accent, label);
+                let at = start + SPIN_ROOM;
+                grid.centred_text(
+                    at + words / 2.0,
+                    y as f32,
+                    &name,
+                    label.fg,
+                    crate::measures::BUTTON_TEXT,
+                );
+            } else {
+                let cells = crate::measures::button_cells(&name, measure);
+                grid.large_button(button.x, y, &cells, &name, fill, label);
+            }
         }
     }
 

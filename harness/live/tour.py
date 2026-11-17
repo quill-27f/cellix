@@ -1042,6 +1042,26 @@ def agents_by_urgency(scratch):
     shutil.rmtree(cache, ignore_errors=True)
 
 
+def waits(scratch):
+    """Cellix's own waits: a language server indexing, in the status bar; a search under way,
+    in its view."""
+    root = f"{scratch}/indexing"
+    os.makedirs(f"{root}/src")
+    os.makedirs(f"{root}/.cellix")
+    with open(f"{root}/src/main.rs", "w") as f:
+        f.write("fn main() {\n    println!(\"hello\");\n}\n")
+    # The scripted server, under the name a real one has, told to say it's indexing and stay.
+    server = f"{scratch}/rust-analyzer"
+    shutil.copy(f"{here}/fake_lsp.py", server)
+    os.chmod(server, 0o755)
+    with open(f"{root}/.cellix/settings.json", "w") as f:
+        json.dump({"language_servers": {"Rust": [server]}}, f)
+    env = {"FAKE_LSP_INDEXING": "1"}
+    shoot("m3-waits-indexing", [["until", "indexing"], ["wait", 0.4]], "src/main.rs", cwd=root, env=env)
+    shoot("m3-waits-indexing-cells", [["until", "indexing"], ["wait", 0.4]], "src/main.rs", cwd=root,
+          env={**env, "CELLIX_TIER": "cells"})
+
+
 def task_scenes(scratch):
     """The Task page on work an agent did: a plan sent back and approved, a turn with failing
     then passing tests, and a later turn, logged as the hooks log them."""
@@ -1129,6 +1149,7 @@ with tempfile.TemporaryDirectory() as scratch:
     transcripts(scratch)
     agent_tabs(scratch)
     agents_by_urgency(scratch)
+    waits(scratch)
     task_scenes(scratch)
     team_scenes(scratch)
     shoot("01-welcome", [])

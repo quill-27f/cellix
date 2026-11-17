@@ -628,6 +628,10 @@ impl Session {
         if self.exited {
             return None;
         }
+        // A task turns until it ends, as VS Code's terminal tab does.
+        if self.task() {
+            return Some(TabMark::Working);
+        }
         match self.doing {
             Doing::Working => Some(TabMark::Working),
             Doing::NeedsYou => Some(TabMark::NeedsYou),

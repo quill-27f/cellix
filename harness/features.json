@@ -5661,5 +5661,40 @@
     "title": "A test reads every drawing function in cellix and cellix-render and fails on a call that reaches the disk or another process, or starts a thread",
     "test": "drawing_never_reaches_the_disk_or_another_process",
     "passes": true
+  },
+  {
+    "id": "waits-status-spinner",
+    "milestone": 15,
+    "title": "What Cellix itself waits on turns in the status bar with its words, in a band of the bar to itself: a push or pull, a PDF build or export, an install, a search, a task, a language server starting, loading or indexing",
+    "test": "a_push_turns_in_the_status_bar_and_on_its_button",
+    "passes": true
+  },
+  {
+    "id": "waits-server-indexing",
+    "milestone": 15,
+    "title": "A language server's own progress ($/progress, serverStatus) shows as its name and what it's doing beside the status bar's spinner",
+    "test": "a_language_server_indexing_turns_in_the_status_bar",
+    "passes": true
+  },
+  {
+    "id": "waits-search-spinner",
+    "milestone": 15,
+    "title": "A search under way turns in the Search view under its boxes",
+    "test": "a_search_under_way_turns_in_its_view",
+    "passes": true
+  },
+  {
+    "id": "waits-task-tab",
+    "milestone": 15,
+    "title": "A task running in the side pane turns in its tab until it ends",
+    "test": "a_running_task_turns_in_its_tab",
+    "passes": true
+  },
+  {
+    "id": "status-bar-own-band",
+    "milestone": 15,
+    "title": "The status bar's spinner is a band of its own, so a step sends only it and a moved cursor only the rest",
+    "test": "a_row_with_bands_of_its_own_sends_only_the_band_that_changed",
+    "passes": true
   }
 ]
