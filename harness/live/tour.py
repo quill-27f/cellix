@@ -885,6 +885,62 @@ def transcripts(scratch):
         subprocess.run(["pkill", "-9", "-f", cache])
         shutil.rmtree(cache, ignore_errors=True)
         shutil.rmtree(f"{ROOT}/.cellix/transcripts", ignore_errors=True)
+def agent_tabs(scratch):
+    """Agents in the side pane, each tab with its program's mark, the name its own title gives
+    it, and what it's doing: working, asking, done while behind another tab, or nothing. The
+    agents are stand-ins that name themselves in their terminal's title as Claude Code does;
+    what they're doing comes through Cellix's real hook."""
+    tools = f"{scratch}/agent-bin"
+    os.makedirs(tools)
+    for program, title in (("claude", "✳ pricing page"), ("codex", "og tags"), ("gemini", "docs nav")):
+        with open(f"{tools}/{program}", "w") as f:
+            f.write(f"#!/bin/sh\nprintf '\\033]0;{title}\\007'\nprintf '{program} (stand-in)\\n'\n"
+                    "exec sleep 300\n")
+        os.chmod(f"{tools}/{program}", 0o755)
+
+    def hook(kind, agent="Claude Code", **fields):
+        stdin = json.dumps({"session_id": f"s-{agent}", "cwd": ROOT, **fields})
+        named = "" if agent == "Claude Code" else f"--agent {agent} "
+        return ["run", f"'{binary}' hook {named}{kind}", stdin]
+
+    working = lambda agent="Claude Code": hook("tool-done", agent, tool_input={"command": "ls"})
+    asking = lambda agent="Claude Code": hook("notify", agent, notification_type="permission_prompt",
+                                              message="Claude needs your permission to use Bash")
+    # A narrow pane cuts the name in front short too, so only its first word is waited for.
+    start = [*command("Open Claude Code", F1), ["until", "pricing"], ["wait", 0.4]]
+    # Codex last, so it's in front and Gemini CLI finishes behind it.
+    others = [*command("Open Gemini CLI", F1), ["until", "docs nav"], *command("Open Codex", F1),
+              ["until", "og tags"], ["wait", 0.4]]
+    behind = [*start, *command("New Terminal", F1), ["wait", 0.8]]
+    scenes = [
+        ("m1-agent-tab", start, {}),
+        ("m1-agent-tab-working", [*start, working(), ["wait", 0.8]], {}),
+        ("m1-agent-tab-asking", [*start, asking(), ["wait", 0.8]], {}),
+        ("m1-agent-tab-done", [*behind, working(), hook("stop"), ["wait", 0.8]], {}),
+        ("m1-agent-tab-menu", [*start, ["right", *ON("pricing page")], ["wait", 0.4]], {}),
+        ("m1-agent-tab-renamed", [*start, ["right", *ON("pricing page")], ["wait", 0.4],
+                                   ["click", *ON("Rename")], ["wait", 0.3], ["keys", "\x7f" * 12],
+                                   ["keys", "billing\r"], ["until", "billing"], ["wait", 0.3]], {}),
+        ("m1-agent-tabs", [*start, working(), *others, asking("Codex"), working("Gemini"),
+                            hook("stop", "Gemini"), ["wait", 0.8]], {}),
+        ("m1-agent-tabs-narrow", [*start, working(), *others, asking("Codex"), working("Gemini"),
+                                   hook("stop", "Gemini"), ["wait", 0.8]], {"size": "96x40"}),
+        ("m1-agent-tabs-cells", [*start, working(), *others, asking("Codex"), working("Gemini"),
+                                  hook("stop", "Gemini"), ["wait", 0.8]], {"CELLIX_TIER": "cells"}),
+        ("m1-agent-tabs-light", [*start, working(), *others, asking("Codex"), ["wait", 0.8]],
+         {"background": "eff1f5"}),
+    ]
+    for name, steps, extra in scenes:
+        cache = tempfile.mkdtemp(prefix="cx", dir="/tmp")
+        env = {"XDG_CACHE_HOME": cache, "PATH": f"{tools}:{os.environ['PATH']}"}
+        size = extra.pop("size", "150x44")
+        background = extra.pop("background", "1e1e2e")
+        env.update(extra)
+        shoot(name, steps, CODE_FILE, size=size, env=env, background=background)
+        subprocess.run(["pkill", "-9", "-f", cache])
+        shutil.rmtree(cache, ignore_errors=True)
+
+
 def task_scenes(scratch):
     """The Task page on work an agent did: a plan sent back and approved, a turn with failing
     then passing tests, and a later turn, logged as the hooks log them."""
@@ -970,6 +1026,7 @@ with tempfile.TemporaryDirectory() as scratch:
     code_intelligence(scratch)
     install_card(scratch)
     transcripts(scratch)
+    agent_tabs(scratch)
     task_scenes(scratch)
     shoot("01-welcome", [])
     shoot("02-code", [], CODE_FILE)

@@ -84,6 +84,27 @@ const CUT_AIR: f32 = 0.5;
 const HUG: f32 = 3.92;
 /// How far before a hugging tab's right edge its × is drawn, so 10 px stay past its ink.
 const HUG_CLOSE: f32 = 2.07;
+/// Columns a program's mark takes before its name on its tab, as a file's icon does on its
+/// own, and how tall it is in rows: 13 pt. On cells it's one letter and a space.
+const ICON_ROOM: u16 = 2;
+const ICON_SIZE: f32 = 0.70;
+/// How far the mark's middle stands past where a tab's name would start without it, and how
+/// far the name moves for it, in cells: where a file's tab has them.
+const ICON_MIDDLE: f32 = 0.5;
+const ICON_SHIFT: f32 = 1.7;
+/// Columns an agent's tab keeps before its × for what it's doing, whether it shows anything
+/// or not, so a tab keeps its width as its agent starts and stops.
+const MARK_ROOM: u16 = 2;
+/// How tall that mark is, in the terminal's lines: a spinner of 12 pt, and a dot half that.
+pub const MARK_SIZE: f32 = 0.65;
+/// How far before the × the mark starts, in cells: its 24 px and about 9 px of air.
+const MARK_SHIFT: f32 = 1.6;
+/// A tab cut short behind the one in front: from its edge to its mark's middle, and from its
+/// state's start to its other edge, in cells.
+const CUT_ICON: f32 = 1.2;
+const CUT_MARK: f32 = 1.9;
+/// How wide that mark is, in cells, where a cell is 17 px and a line 37.
+const MARK_WIDE: f32 = 1.4;
 /// The button that closes the pane.
 const HIDE_WIDTH: u16 = 3;
 /// Rows tall each icon at the top right is: the pane's buttons and the icons beside them.
@@ -273,6 +294,87 @@ pub struct Session {
     pub replaying: bool,
     /// Tells it from the others when nothing outside names it.
     serial: u64,
+    /// The title the program last gave its terminal: an agent's names what it's working on.
+    pub title: Option<String>,
+    /// What the person named its tab, which outranks anything the program says.
+    pub renamed: Option<String>,
+    /// What its agent is doing, as its hooks last said: its tab's mark.
+    pub doing: Doing,
+    /// Its agent finished a turn while its tab wasn't in front: a dot until it's looked at.
+    pub done_unseen: bool,
+}
+
+/// What an agent in a tab is doing, as its hooks say.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Doing {
+    #[default]
+    Idle,
+    Working,
+    NeedsYou,
+}
+
+/// The mark at the end of a tab's name, and before its ×: what the agent in it is doing, as
+/// far as it wants anyone to know.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TabMark {
+    /// Turning, in the accent.
+    Working,
+    /// A dot in the attention colour: it's asking.
+    NeedsYou,
+    /// A dot in green: it finished while its tab wasn't in front.
+    Done,
+}
+
+/// Glyphs an agent puts before its title to show it's busy, as Claude Code's turning star
+/// and Codex's braille do: one of them, and the spaces after it, aren't part of its name.
+const TITLE_MARKS: [char; 10] = ['·', '✢', '✳', '✶', '✻', '✽', '◐', '◓', '◑', '◒'];
+
+/// The name an agent's own title gives it, with the glyph that says it's busy taken off the
+/// front: one braille letter or one of `TITLE_MARKS`, and the spaces after it.
+pub fn own_name(title: &str) -> Option<String> {
+    let title = title.trim();
+    let mut chars = title.chars();
+    let rest = match chars.next() {
+        Some(c) if ('\u{2800}'..='\u{28ff}').contains(&c) || TITLE_MARKS.contains(&c) => {
+            chars.as_str()
+        }
+        _ => title,
+    };
+    let name = rest.trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// Cellix's own mark for a program in the side pane, by what the pane calls it.
+pub fn program_icon(name: &str, shell: bool, browser: bool) -> Icon {
+    match name {
+        _ if shell => Icon::Terminal,
+        _ if browser => Icon::Globe,
+        "Claude Code" => Icon::AgentClaude,
+        "Codex" => Icon::AgentCodex,
+        "Gemini CLI" | "Gemini" => Icon::AgentGemini,
+        _ => Icon::Program,
+    }
+}
+
+/// The colour a program's mark is drawn in: Claude Code's warm clay, Gemini CLI's blue, a
+/// shell's and any other program's in the quieter text colour, Codex's in the text's own.
+pub fn icon_colour(icon: Icon, theme: &Theme) -> Rgb {
+    match icon {
+        Icon::AgentClaude => theme.claude_mark(),
+        Icon::AgentGemini => theme.gemini_mark(),
+        Icon::AgentCodex => theme.text.fg,
+        _ => theme.tab.fg,
+    }
+}
+
+/// The colour of a tab's mark: the accent while it works, the attention colour when it asks,
+/// and green when it's done.
+pub fn mark_colour(mark: TabMark, theme: &Theme) -> Rgb {
+    match mark {
+        TabMark::Working => theme.accent,
+        TabMark::NeedsYou => theme.attention,
+        TabMark::Done => theme.git_added,
+    }
 }
 
 /// Numbers sessions, for those with no host to name them.
@@ -406,7 +508,52 @@ impl Session {
             reports: Vec::new(),
             replaying: false,
             serial: SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            title: None,
+            renamed: None,
+            doing: Doing::Idle,
+            done_unseen: false,
         }
+    }
+
+    /// What its tab is called: what the person named it, or for an agent the name its own
+    /// title gives it, or else the program's name.
+    pub fn label(&self) -> String {
+        if let Some(name) = &self.renamed {
+            return name.clone();
+        }
+        let own = (!self.shell && !self.browser)
+            .then(|| self.title.as_deref().and_then(own_name))
+            .flatten();
+        own.unwrap_or_else(|| self.name.clone())
+    }
+
+    /// The mark its tab shows after its name, if any: nothing while idle or once it's ended.
+    pub fn mark(&self) -> Option<TabMark> {
+        if self.exited {
+            return None;
+        }
+        match self.doing {
+            Doing::Working => Some(TabMark::Working),
+            Doing::NeedsYou => Some(TabMark::NeedsYou),
+            Doing::Idle => self.done_unseen.then_some(TabMark::Done),
+        }
+    }
+
+    /// Whether its tab keeps room for what it's doing: an agent's while it runs, whose state
+    /// its hooks report, and a shell's while what runs in it says how it is (OSC 7501).
+    pub fn marked(&self) -> bool {
+        !self.browser && !self.exited && (!self.shell || self.mark().is_some())
+    }
+
+    /// Whether its tab has its program's mark before its name: an agent's or another
+    /// program's. A shell's and the browser's are names alone, as they were.
+    pub fn has_icon(&self) -> bool {
+        !self.shell && !self.browser
+    }
+
+    /// Cellix's own mark for its program, as its tab and the Agents list show it.
+    pub fn icon(&self) -> Icon {
+        program_icon(&self.name, self.shell, self.browser)
     }
 
     /// A program that stopped without finishing, showing what it last showed.
@@ -701,6 +848,13 @@ impl Session {
                         b: color.2,
                     });
                     self.write(reply.as_bytes());
+                }
+                TermEvent::Title(title) => {
+                    changed |= self.title.as_deref() != Some(title.as_str());
+                    self.title = Some(title);
+                }
+                TermEvent::ResetTitle => {
+                    changed |= self.title.take().is_some();
                 }
                 TermEvent::TextAreaSizeRequest(format) => {
                     let reply = format(WindowSize {
@@ -1684,12 +1838,30 @@ impl Dock {
         views.iter().find(|v| v.0 == view).map_or("", |v| v.1)
     }
 
-    /// How wide a session's tab would like to be.
+    /// How wide a session's tab would like to be: its mark, its name, how full its context
+    /// is, room for what it's doing, and its ×.
     fn session_width(session: &Session) -> u16 {
         let context = session
             .context()
             .map_or(0, |c| c.chars().count() as u16 + CONTEXT_GAP);
-        session.name.chars().count() as u16 + TAB_PADDING * 2 + CLOSE_WIDTH + context
+        let label = session.label().chars().count() as u16;
+        label + TAB_PADDING * 2 + CLOSE_WIDTH + context + Self::session_extra(session)
+    }
+
+    /// Columns a session's tab has besides its name: its mark, and room for what its agent is
+    /// doing.
+    fn session_extra(session: &Session) -> u16 {
+        let icon = if session.has_icon() { ICON_ROOM } else { 0 };
+        icon + if session.marked() { MARK_ROOM } else { 0 }
+    }
+
+    /// The same for any tab, views and then sessions: a view's tab has neither.
+    fn extra(&self, index: usize) -> u16 {
+        let views = self.views().len();
+        index
+            .checked_sub(views)
+            .and_then(|at| self.sessions.get(at))
+            .map_or(0, Self::session_extra)
     }
 
     pub fn tabs_start(&self, area: Rect) -> u16 {
@@ -1752,25 +1924,25 @@ impl Dock {
                 name.to_string()
             }
         });
-        let sessions = self.sessions.iter().map(|session| session.name.clone());
+        let sessions = self.sessions.iter().map(Session::label);
         views.chain(sessions).collect()
     }
 
-    /// Columns the tab in front takes when the row is short: its name and its ×, with the
-    /// air a chip has around them and none to spare.
-    fn hugging(&self, text: &str) -> u16 {
+    /// Columns the tab in front takes when the row is short: its mark, its name, what its
+    /// agent is doing and its ×, with the air a chip has around them and none to spare.
+    fn hugging(&self, text: &str, extra: u16) -> u16 {
         if self.in_cells() {
             // A column either side, and one between the name and the ×.
-            text.chars().count() as u16 + 4
+            text.chars().count() as u16 + 4 + extra
         } else {
-            (self.text_width(text) + HUG).ceil() as u16
+            (self.text_width(text) + HUG + f32::from(extra)).ceil() as u16
         }
     }
 
     /// Columns a tab behind the one in front takes to show its whole name, with no × and
-    /// half a column of air either side.
-    fn stub(&self, text: &str) -> u16 {
-        (self.text_width(text) + CUT_AIR * 2.0).ceil() as u16
+    /// half a column of air either side, and an agent's mark and state either end of it.
+    fn stub(&self, text: &str, extra: u16) -> u16 {
+        (self.text_width(text) + CUT_AIR * 2.0 + f32::from(extra)).ceil() as u16
     }
 
     /// What each tab gets, views and then sessions, and how they stand. When they don't all
@@ -1797,7 +1969,7 @@ impl Dock {
         let front = self.front_index().unwrap_or(0);
         let behind = widths.len().saturating_sub(1) as u16;
         let texts = self.tab_texts();
-        let kept = texts.get(front).map_or(0, |text| self.hugging(text));
+        let kept = (texts.get(front)).map_or(0, |text| self.hugging(text, self.extra(front)));
         let room = end.saturating_sub(start + MAXIMIZE_SHORT);
         let short = if self.cut_tabs_leave_the_button(area) {
             room
@@ -1818,7 +1990,7 @@ impl Dock {
             *width = if index == front {
                 kept
             } else {
-                self.stub(text)
+                self.stub(text, self.extra(index))
             };
         }
         let rest = short - kept;
@@ -1850,7 +2022,7 @@ impl Dock {
     fn cut_tabs_leave_the_button(&self, area: Rect) -> bool {
         let front = self.front_index().unwrap_or(0);
         let texts = self.tab_texts();
-        let kept = texts.get(front).map_or(0, |text| self.hugging(text));
+        let kept = (texts.get(front)).map_or(0, |text| self.hugging(text, self.extra(front)));
         let behind = texts.len().saturating_sub(1) as u16;
         let room = (self.tabs_end.get()).saturating_sub(self.tabs_start(area) + MAXIMIZE_SHORT);
         kept + behind * CUT_LEAST <= room
@@ -1909,7 +2081,7 @@ impl Dock {
             (PaneTab::View(view), name)
         });
         let sessions = (self.sessions.iter().enumerate())
-            .map(|(index, session)| (PaneTab::Session(index), session.name.clone()));
+            .map(|(index, session)| (PaneTab::Session(index), session.label()));
         let all = views.chain(sessions).enumerate();
         all.map(|(index, (tab, name))| (tab, name, Some(index) == front))
             .collect()
@@ -1940,19 +2112,24 @@ impl Dock {
         let views = self.views();
         let names = views
             .iter()
-            .map(|view| view.1)
-            .chain(self.sessions.iter().map(|s| s.name.as_str()));
+            .map(|view| view.1.to_string())
+            .chain(self.sessions.iter().map(Session::label));
         let mut at = self.tabs_start(area);
         let pick = if self.picking(area) { PICK_WIDTH } else { 0 };
         let cuts = self.cut_short(area);
         let texts = self.tab_texts();
-        let tabs = names.zip(widths).zip(wanted).zip(cuts).zip(texts);
-        for ((((name, width), full), cut), text) in tabs {
+        let tabs = names
+            .zip(widths)
+            .zip(wanted)
+            .zip(cuts)
+            .zip(texts)
+            .enumerate();
+        for (index, ((((name, width), full), cut), text)) in tabs {
             if x >= at && x < at + width {
                 // Standing as a name alone, it's cut when that name has no room.
-                let short = cut && self.stub(&text) > width;
+                let short = cut && self.stub(&text, self.extra(index)) > width;
                 let stub = pick > 0 && width < full + pick;
-                return (short || stub).then(|| name.to_string());
+                return (short || stub).then_some(name);
             }
             at += width;
         }
@@ -2283,6 +2460,7 @@ impl Dock {
                 continue;
             }
             let session = &self.sessions[index];
+            let label = session.label();
             let active = self.active == Some(index) && self.front == Front::Session;
             let tab = Rect::new(start, area.y, end - start, 1);
             let hovered = hover.is_some_and(|h| tab.contains(h.0, h.1));
@@ -2309,28 +2487,49 @@ impl Dock {
                 style
             };
             if cuts[sessions_from + index] {
-                cut_name(grid, tab, &session.name, (shown, hovered));
+                if session.has_icon() || session.marked() {
+                    cut_session(grid, tab, session, (shown, hovered), (measure, theme));
+                } else {
+                    cut_name(grid, tab, &label, (shown, hovered));
+                }
                 continue;
             }
             if active {
                 front_tab(grid, tab, theme, measure.in_cells());
             }
+            // Its program's mark, where a file's tab has its icon, and its name after it.
+            let lead = start as f32 + TAB_TEXT;
+            let (at, first) = if session.has_icon() {
+                let mark_at = (lead + ICON_MIDDLE, name_cell(tab));
+                tab_icon(grid, session.icon(), mark_at, area.y, style, theme);
+                (lead + ICON_SHIFT, name_cell(tab) + ICON_ROOM)
+            } else {
+                (lead, name_cell(tab))
+            };
             let (close_at, close) = close_of(tab);
             let pick = self.pick_at(area, close);
             if let Some(x) = pick {
                 chevron(grid, x, style);
             }
-            // Where its name and context stop: the chevron, or the ×.
-            let stop = pick.unwrap_or(close);
-            let at = start as f32 + TAB_TEXT;
-            // How full its context is, before the ×, when the tab has its whole width.
+            // What stands at its end, the chevron or the ×, and what its agent is doing before
+            // that: its name and context stop short of both.
+            let (end_at, end_cell) = pick.map_or((close_at, close), |x| (f32::from(x), x));
+            let stop = if session.marked() {
+                end_cell.saturating_sub(MARK_ROOM)
+            } else {
+                end_cell
+            };
+            if let Some(mark) = session.mark() {
+                draw_mark(grid, (end_at - MARK_SHIFT, area.y), mark, style, theme);
+            }
+            // How full its context is, when the tab has its whole width.
             let pick_room = if pick.is_some() { PICK_WIDTH } else { 0 };
             let whole = end - start >= Self::session_width(session) + pick_room;
             let context = session.context().filter(|_| whole);
             let name_end = match &context {
                 Some(text) => {
                     // Right after the name, as the workspace's tile has it, not at the ×.
-                    let after = at + measure.width(&session.name, font) + CONTEXT_AIR;
+                    let after = at + measure.width(&label, font) + CONTEXT_AIR;
                     let x = after.ceil().min(stop.saturating_sub(1) as f32) as u16;
                     let percent = session.usage.as_ref().and_then(|u| u.percent());
                     let fg = match percent {
@@ -2345,15 +2544,7 @@ impl Dock {
                 }
                 None => stop,
             };
-            grid.label_at(
-                at,
-                name_cell(tab),
-                area.y,
-                &session.name,
-                shown,
-                name_end,
-                100,
-            );
+            grid.label_at(at, first, area.y, &label, shown, name_end, 100);
             if hovered || active {
                 let quiet = Style {
                     fg: theme.gutter.fg,
@@ -2480,6 +2671,107 @@ fn front_tab(grid: &mut Grid, tab: Rect, theme: &Theme, in_cells: bool) {
     );
 }
 
+/// A program's mark on its tab: a shape whose middle is at `middle` where there are pictures,
+/// and its letter in `cell` on cells.
+fn tab_icon(
+    grid: &mut Grid,
+    icon: Icon,
+    (middle, cell): (f32, u16),
+    y: u16,
+    style: Style,
+    theme: &Theme,
+) {
+    let color = icon_colour(icon, theme);
+    let across = ICON_SIZE * 2.0;
+    let top = y as f32 + (1.0 - ICON_SIZE) / 2.0;
+    grid.paint.push(Paint::Icon {
+        bounds: Bounds::cells(middle - across / 2.0, top, across, ICON_SIZE),
+        icon,
+        color,
+    });
+    let shown = Style {
+        fg: color,
+        painted: true,
+        ..style
+    };
+    grid.put_str(cell, y, crate::toolbar::fallback(icon), shown, cell + 1);
+}
+
+/// What an agent is doing, at `x`: turning while it works, a dot when it asks or is done.
+pub fn draw_mark(grid: &mut Grid, (x, y): (f32, u16), mark: TabMark, style: Style, theme: &Theme) {
+    let color = mark_colour(mark, theme);
+    match mark {
+        TabMark::Working => grid.spinner(x, y, MARK_SIZE, color, style),
+        TabMark::NeedsYou | TabMark::Done => grid.dot(x, y, MARK_SIZE, color, style),
+    }
+}
+
+/// A session's tab behind the one in front, in a row too short for every tab whole: its mark
+/// and what its agent is doing, either end of it, and as much of its name between as fits.
+/// Under the pointer its chip is the tab's width.
+fn cut_session(
+    grid: &mut Grid,
+    tab: Rect,
+    session: &Session,
+    (style, hovered): (Style, bool),
+    (measure, theme): (&dyn cellix_render::Measure, &Theme),
+) {
+    let (x, right) = (f32::from(tab.x), f32::from(tab.right()));
+    if hovered {
+        let high = 0.8;
+        let top = f32::from(tab.y) + (1.0 - high) / 2.0;
+        let chip = Bounds::cells(x, top, f32::from(tab.w), high);
+        grid.panel(chip, TAB_CHIP_RADIUS, Some(theme.row_hover), None);
+    }
+    let icon = session.has_icon();
+    let marked = session.marked();
+    // The name, between the mark and the state, where three letters and a "…" have room.
+    let from = if icon {
+        x + CUT_ICON + ICON_SIZE + CUT_AIR
+    } else {
+        x + CUT_AIR
+    };
+    let to = if marked {
+        right - CUT_MARK - CUT_AIR
+    } else {
+        right - CUT_AIR
+    };
+    let first = tab.x + if icon { 3 } else { 1 };
+    let last = tab.right().saturating_sub(if marked { 3 } else { 1 });
+    let room = if measure.in_cells() {
+        f32::from(last.saturating_sub(first))
+    } else {
+        to - from
+    };
+    let label = session.label();
+    let text = crate::context::elide(&label, room, measure);
+    let named = text == label || text.chars().count() >= 4;
+    if named {
+        grid.label_at(from, first, tab.y, &text, style, last, 100);
+    }
+    // Either end of the name; with none, the two side by side in the tab's middle.
+    let (icon_at, mark_at) = if named || !icon || measure.in_cells() {
+        (x + CUT_ICON, right - CUT_MARK)
+    } else {
+        let pair = ICON_SIZE * 2.0 + CUT_AIR + MARK_WIDE;
+        let start = x + (f32::from(tab.w) - pair) / 2.0;
+        (start + ICON_SIZE, start + ICON_SIZE * 2.0 + CUT_AIR)
+    };
+    if icon {
+        tab_icon(
+            grid,
+            session.icon(),
+            (icon_at, tab.x + 1),
+            tab.y,
+            style,
+            theme,
+        );
+    }
+    if let Some(mark) = session.mark() {
+        draw_mark(grid, (mark_at, tab.y), mark, style, theme);
+    }
+}
+
 /// How tall the accent's line on the tab in front is, in rows: the file tabs' own.
 const FRONT_LINE: f32 = 0.06;
 
@@ -2500,6 +2792,23 @@ pub fn pasteable(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An agent's title, as Claude Code and Codex set it, is its name once the glyph that
+    /// says it's busy is off the front: one of them, and the spaces after it, and no more.
+    #[test]
+    fn an_agents_title_is_its_name_without_its_busy_glyph() {
+        assert_eq!(own_name("✳ pricing page").as_deref(), Some("pricing page"));
+        assert_eq!(own_name("⠙  og tags").as_deref(), Some("og tags"));
+        assert_eq!(own_name("· docs nav ").as_deref(), Some("docs nav"));
+        assert_eq!(
+            own_name("◐ ✳ both").as_deref(),
+            Some("✳ both"),
+            "one glyph only"
+        );
+        assert_eq!(own_name("refunds").as_deref(), Some("refunds"));
+        assert_eq!(own_name("✶ ").as_deref(), None, "nothing left is no name");
+        assert_eq!(own_name("").as_deref(), None);
+    }
     use cellix_input::Mods;
     #[cfg(unix)]
     use cellix_render::UNIT;

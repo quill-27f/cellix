@@ -131,6 +131,7 @@ impl App {
                 .as_ref()
                 .is_none_or(|r| r.undo_target().is_some()),
             C::OpenTranscript => self.dock.sessions.iter().any(|s| !s.shell && !s.browser),
+            C::RenamePaneTab => self.dock.active.is_some(),
 
             // Git.
             C::SwitchBranch | C::Stash | C::StashUntracked | C::StashStaged | C::ShowHistory => {

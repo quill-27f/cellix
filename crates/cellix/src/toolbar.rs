@@ -317,7 +317,7 @@ fn draw_face(grid: &mut Grid, face: Face, cell: Rect, color: Rgb, style: Style) 
     }
 }
 
-fn fallback(icon: Icon) -> &'static str {
+pub fn fallback(icon: Icon) -> &'static str {
     match icon {
         Icon::Code => "`",
         Icon::Link => "@",
@@ -335,6 +335,10 @@ fn fallback(icon: Icon) -> &'static str {
         Icon::Cite => "[",
         Icon::Play => "▶",
         Icon::Terminal => ">",
+        Icon::AgentClaude => "✻",
+        Icon::AgentCodex => "⬡",
+        Icon::AgentGemini => "✦",
+        Icon::Program => "▫",
         Icon::Diff => "±",
         Icon::Replace => "⇄",
         Icon::ArrowUp => "↑",

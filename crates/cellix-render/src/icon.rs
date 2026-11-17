@@ -100,6 +100,13 @@ pub enum Icon {
     /// The same with its left part in outline: the sidebar hidden, and the button at the
     /// start of the tabs that brings it back.
     ShowSidebar = 91,
+    /// Cellix's own marks for the programs in the side pane, never a vendor's logo: Claude
+    /// Code an eight-line burst, Codex a hexagon with a prompt inside, Gemini CLI a filled
+    /// star of four points, and any other program a plain square. A shell is `Terminal`.
+    AgentClaude = 67,
+    AgentCodex = 68,
+    AgentGemini = 69,
+    Program = 70,
 }
 
 /// One cell of an icon that is `width` by `height` cells.
@@ -286,6 +293,9 @@ fn half_stroke(icon: Icon) -> f32 {
         | Icon::ShowSidebar
         | Icon::ReplaceAll => 0.9,
         Icon::Agents => 0.8,
+        Icon::AgentClaude => 1.3,
+        Icon::AgentCodex | Icon::Program => 1.0,
+        Icon::AgentGemini => 0.5,
         Icon::Check => 1.7,
         _ => 1.15,
     }
@@ -856,6 +866,36 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
             };
             open.min(segment(p, (12.0, 2.0), (12.0, 12.0)))
         }
+        // Four strokes through the middle, a point every eighth of a turn.
+        Icon::AgentClaude => segment(p, (12.0, 3.5), (12.0, 20.5))
+            .min(segment(p, (3.5, 12.0), (20.5, 12.0)))
+            .min(segment(p, (6.0, 6.0), (18.0, 18.0)))
+            .min(segment(p, (18.0, 6.0), (6.0, 18.0))),
+        // A hexagon standing on a point, and a prompt inside it.
+        Icon::AgentCodex => path(
+            p,
+            &[
+                (12.0, 2.5),
+                (20.3, 7.25),
+                (20.3, 16.75),
+                (12.0, 21.5),
+                (3.7, 16.75),
+                (3.7, 7.25),
+                (12.0, 2.5),
+            ],
+        )
+        .min(path(p, &[(9.2, 9.6), (11.8, 12.0), (9.2, 14.4)]))
+        .min(segment(p, (13.4, 14.4), (15.4, 14.4))),
+        // A star of four points with sides curving in, filled.
+        Icon::AgentGemini => {
+            let (x, y) = (((p.0 - 12.0) / 10.0).abs(), ((p.1 - 12.0) / 10.0).abs());
+            if x.powf(0.75) + y.powf(0.75) <= 1.0 {
+                0.0
+            } else {
+                f32::MAX
+            }
+        }
+        Icon::Program => rounded(p, (5.0, 5.0), (19.0, 19.0), 3.0),
         Icon::Smile => ring(p, (12.0, 12.0), 9.5)
             .min(circle(p, (9.0, 9.6)) - 0.35)
             .min(circle(p, (15.0, 9.6)) - 0.35)
@@ -946,6 +986,10 @@ mod tests {
             Icon::FileJson,
             Icon::FileConfig,
             Icon::FileCode,
+            Icon::AgentClaude,
+            Icon::AgentCodex,
+            Icon::AgentGemini,
+            Icon::Program,
         ] {
             let dots = (0..50)
                 .flat_map(|y| (0..50).map(move |x| (x, y)))

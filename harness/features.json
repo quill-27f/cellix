@@ -5493,5 +5493,19 @@
     "title": "One spinner anything places on the grid: a faint ring with a turning quarter arc on pixels, braille on cells, a still dot with Motion off; a step on a row's tiles sends only placements once it has gone round, and a step alone draws nothing again",
     "test": "a_spinner_step_alone_draws_nothing_again",
     "passes": true
+  },
+  {
+    "id": "agent-tab-state",
+    "milestone": 15,
+    "title": "An agent's tab in the side pane has its program's mark, the name its own title gives it (or the one the person gave it with Rename, kept for the next run), its context, and what it's doing: turning while it works, a dot while it asks, a green dot when it finished unseen; cut short, it keeps its mark and state",
+    "test": "an_agents_tab_shows_its_mark_its_own_name_and_what_it_is_doing",
+    "passes": true
+  },
+  {
+    "id": "agent-tab-rename",
+    "milestone": 15,
+    "title": "A tab renamed keeps that name over its agent's title, from the tab's menu or the palette, and has it again in the next run",
+    "test": "a_tabs_name_is_kept_for_the_next_run",
+    "passes": true
   }
 ]

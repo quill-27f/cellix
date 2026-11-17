@@ -906,6 +906,20 @@ three letters and the "…" each (five columns) does the row show the tab in fro
 a chevron that lists every tab and what + would start: two letters don't tell Comments from
 Codex. The icons stand three columns
 apart on their row's own ground, and nothing runs under them.
+A program's tab in the side pane has its mark before its name, where a file's tab has its icon
+and at its size: Cellix's own marks, never a vendor's logo. Claude Code's is an eight-line
+burst in a warm clay, Codex's a hexagon with a prompt inside it in the text's colour, Gemini
+CLI's a filled star of four points in a blue of its own, and any other program's a plain
+square in the quieter text colour; on cells one letter each, `✻ ⬡ ✦ ▫`. A shell's tab and the
+browser's are their names alone, as they were, and a shell's has room for a mark only while
+what runs in it says how it is (OSC 7501). An agent's tab keeps two columns before its × for what its agent is doing: the spinner in
+the accent while it works, a dot in the attention colour while it asks, a green dot when it
+finished a turn while its tab wasn't in front, until it is, and nothing while it's idle. The
+columns are kept either way while it runs, so the tab keeps its width as its agent starts
+and stops. Behind the tab in front, in a row too short for every tab
+whole, a program's tab keeps its mark and what it's doing at either end, and its name between
+them only where three letters and the "…" have room: three letters didn't tell Comments from
+Codex, and the marks do.
 The page's menu folds formatting and inserting into Format › and Insert ›, and the agents
 panel gives each agent one row under two lines of how-to. At every width a page keeps a
 cell for a comment's ◆ and one for a change's bar, and a long page scrolls past its end
@@ -1317,6 +1331,17 @@ the file.
   them side by side. The Agents icon opens the side pane. With nothing running, it lists what's running elsewhere,
   what can be started and the worktrees.
 - Rebuilding an agent's interface: the side pane shows the real program, so its features arrive with its updates.
+
+An agent's tab is named by the agent: by the title it gives its terminal, as Claude Code sets
+it to what it's working on, with the glyph it puts first while busy taken off (one braille
+letter, or one of `· ✢ ✳ ✶ ✻ ✽ ◐ ◓ ◑ ◒`, and the spaces after it; `dock::own_name`), and until it
+gives one, by the program's name. A shell's title isn't used: it names the machine and the
+folder. Rename… on the tab's menu, or Agent: Rename Pane Tab, names it over that; the name is
+kept with the pane in the folder's `state.json`, by the session's host's socket, so the tab has
+it again when the next run joins the session, and named nothing it takes its own name again.
+What a tab's mark says comes from the agent's hooks, through the tab whose agent has that
+session's id, or else the one running tab of that agent, and from a program's own OSC 7501
+reports for its tab; hooks win there as everywhere.
 
 On Windows the socket is a port on 127.0.0.1, because Rust's standard library has no Unix
 sockets there and a named pipe could only be tested on Windows. A file where the socket would

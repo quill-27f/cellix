@@ -204,6 +204,24 @@ impl Theme {
         side
     }
 
+    /// Claude Code's mark: a warm clay, deeper on a light ground so it reads there.
+    pub fn claude_mark(&self) -> Rgb {
+        if self.is_light() {
+            Rgb(0xb0, 0x55, 0x2e)
+        } else {
+            Rgb(0xde, 0x8a, 0x66)
+        }
+    }
+
+    /// Gemini CLI's mark: a blue of its own, deeper on a light ground.
+    pub fn gemini_mark(&self) -> Rgb {
+        if self.is_light() {
+            Rgb(0x2c, 0x5e, 0xd0)
+        } else {
+            Rgb(0x7a, 0xa2, 0xf7)
+        }
+    }
+
     pub fn is_light(&self) -> bool {
         let Rgb(r, g, b) = self.text.bg;
         u16::from(r) + u16::from(g) + u16::from(b) > 3 * 128

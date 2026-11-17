@@ -388,6 +388,8 @@ enum PromptAction {
     GoToLine,
     SendBackPlan,
     RenameTask,
+    /// Names a tab of the side pane, by its place there.
+    RenameSession(usize),
     /// Turn down a hunk in Review, with the reason going to the agent.
     RejectHunk(usize),
     /// Turn down the change Claude Code proposed, with the reason going to it.
@@ -1503,6 +1505,9 @@ pub struct App {
     /// Stands in for an agent's program in tests, so none really starts.
     #[cfg(test)]
     agent_program: Option<String>,
+    /// What the person named tabs of the side pane, as the last run left them, until the
+    /// sessions they name are joined again.
+    kept_names: std::collections::BTreeMap<String, String>,
     /// The step spinners stand at, in place of the clock's, for a test to choose.
     #[cfg(test)]
     pub(crate) turn_at: Option<u8>,
@@ -1626,6 +1631,7 @@ impl App {
             agent_program: None,
             #[cfg(test)]
             turn_at: None,
+            kept_names: std::collections::BTreeMap::new(),
             spell: None,
             spell_on: cfg!(not(test)) && settings.spell_check != Some(false),
             last_edit: (0, std::time::Instant::now()),
@@ -2804,7 +2810,8 @@ impl App {
             | self.poll_disk()
             | self.poll_pending_ask()
             | self.poll_pan_hint()
-            | self.poll_finding();
+            | self.poll_finding()
+            | self.see_front_tab();
         let mut events = Vec::new();
         for client in self.servers.values() {
             events.extend(client.events.try_iter());
@@ -7579,6 +7586,14 @@ impl App {
                 self.rename_task(name);
                 Ok(())
             }
+            PromptAction::RenameSession(index) => {
+                if let Some(session) = self.dock.sessions.get_mut(*index) {
+                    // Nothing typed gives it back the name its program gives it.
+                    let name = name.trim();
+                    session.renamed = (!name.is_empty()).then(|| name.to_string());
+                }
+                Ok(())
+            }
             PromptAction::SendBackPlan => {
                 if let Some(path) = self.plan.as_ref().map(|p| p.path.clone()) {
                     let feedback = self.plan_feedback(&path, name);
@@ -7957,6 +7972,10 @@ impl App {
             }
             Command::OpenGemini => self.open_agent("gemini"),
             Command::OpenTranscript => self.open_transcript(None),
+            Command::RenamePaneTab => match self.dock.active {
+                Some(index) => self.rename_session(index),
+                None => self.say("Start an agent or a terminal in the side pane first"),
+            },
             Command::MaximizePane => self.toggle_maximized(Maximized::Pane),
             Command::MaximizeEditor => self.toggle_maximized(Maximized::Editor),
             Command::OpenSettings => {
@@ -8607,6 +8626,14 @@ impl App {
             self.dock
                 .sessions
                 .push(Session::stopped(record, size, self.cell_size()));
+        }
+        // Tabs the person named have those names again.
+        let kept = std::mem::take(&mut self.kept_names);
+        for session in &mut self.dock.sessions {
+            let key = session.kept_as();
+            if let Some(name) = key.and_then(|key| kept.get(&key)) {
+                session.renamed = Some(name.clone());
+            }
         }
         if names.is_empty() && self.dock.sessions.len() > first_stopped {
             self.dock.active = Some(first_stopped);
@@ -9588,6 +9615,7 @@ impl App {
                 let agent = self.agent_word(index).is_some();
                 let items = vec![
                     MenuItem::new("Open Transcript", MenuAction::Transcript(index)).when(agent),
+                    MenuItem::new("Rename…", MenuAction::RenameSession(index)),
                     MenuItem::new("Close", MenuAction::CloseSession(index)),
                 ];
                 // Under the row of tabs, clear of the one it's about.
@@ -11821,6 +11849,7 @@ impl App {
                     self.inbox.drop_key(&key);
                 }
                 self.note_agent(&event);
+                self.mark_tab(&event);
                 self.agents.update(event);
             }
             Request::Test(run) => {
@@ -11875,6 +11904,79 @@ impl App {
                 }
             }
         }
+    }
+
+    /// Asks for a name for a tab of the side pane, starting from the one it has.
+    fn rename_session(&mut self, index: usize) {
+        let Some(session) = self.dock.sessions.get(index) else {
+            return;
+        };
+        self.overlay = Overlay::Prompt(Prompt {
+            label: "Rename tab".to_string(),
+            input: session.label(),
+            action: PromptAction::RenameSession(index),
+        });
+    }
+
+    /// The tab of the side pane an agent's news is about: the one whose agent has that
+    /// session's id, or else the one running tab of that agent.
+    fn tab_of(&self, event: &cellix_agent::AgentEvent) -> Option<usize> {
+        let sessions = &self.dock.sessions;
+        // What a program said of itself names its tab; a part of it (`/id`) is a row of the
+        // Agents list and not the tab's mark.
+        if crate::program::reported(event) {
+            let key =
+                crate::program::tab_of(&event.session).filter(|_| !event.session.contains('/'))?;
+            return sessions.iter().position(|s| s.tab_key() == key);
+        }
+        let by_id = (0..sessions.len()).find(|&index| {
+            self.agent_word(index)
+                .is_some_and(|(_, id, _)| !id.is_empty() && id == event.session)
+        });
+        by_id.or_else(|| {
+            let alike = |s: &&Session| s.name == event.agent && !s.exited;
+            let mut found = sessions.iter().enumerate().filter(|(_, s)| alike(s));
+            let first = found.next()?.0;
+            found.next().is_none().then_some(first)
+        })
+    }
+
+    /// What an agent's news means for its tab's mark: turning while it works, a dot while it
+    /// asks, and a green dot when it finishes with its tab behind another, until it's looked
+    /// at.
+    fn mark_tab(&mut self, event: &cellix_agent::AgentEvent) {
+        use cellix_agent::AgentState;
+        let Some(index) = self.tab_of(event) else {
+            return;
+        };
+        let front =
+            self.dock.open && self.dock.front == Front::Session && self.dock.active == Some(index);
+        let session = &mut self.dock.sessions[index];
+        let doing = match event.state {
+            AgentState::Working => crate::dock::Doing::Working,
+            AgentState::NeedsYou => crate::dock::Doing::NeedsYou,
+            AgentState::Idle | AgentState::Ended => crate::dock::Doing::Idle,
+        };
+        let finished = event.state == AgentState::Idle && event.detail == "Finished";
+        match event.state {
+            AgentState::Working | AgentState::NeedsYou => session.done_unseen = false,
+            AgentState::Idle if finished => session.done_unseen = !front,
+            _ => {}
+        }
+        session.doing = doing;
+    }
+
+    /// A tab in front has been looked at: what it finished meanwhile is seen.
+    fn see_front_tab(&mut self) -> bool {
+        let front = self.dock.active.filter(|_| {
+            self.dock.open
+                && self.dock.front == Front::Session
+                && self.maximized != Some(Maximized::Editor)
+        });
+        let Some(session) = front.and_then(|index| self.dock.sessions.get_mut(index)) else {
+            return false;
+        };
+        std::mem::take(&mut session.done_unseen)
     }
 
     /// What an agent's news means for what waits here: asking puts it in, and anything else
@@ -11961,6 +12063,7 @@ impl App {
                     name = format!("{name} · {}", report.id);
                 }
                 let event = crate::program::event(&report, &part, &name, &folder);
+                self.mark_tab(&event);
                 // Said again as a host showed what it kept, a finished turn was seen before.
                 let seen = replayed && report.word == crate::program::Word::Done;
                 if !seen {
@@ -12317,6 +12420,12 @@ impl App {
             under: self.dock.under,
             maximized: self.maximized == Some(Maximized::Pane) && self.dock.open,
             session: self.dock.session().and_then(Session::kept_as),
+            names: self
+                .dock
+                .sessions
+                .iter()
+                .filter_map(|s| Some((s.kept_as()?, s.renamed.clone()?)))
+                .collect(),
         }
     }
 
@@ -12380,6 +12489,7 @@ impl App {
         self.dock.under = state.pane.under;
         self.kept_maximized = state.pane.maximized;
         self.kept_session = state.pane.session;
+        self.kept_names = state.pane.names;
         self.emoji_used = state
             .emoji
             .iter()
@@ -14082,6 +14192,7 @@ impl App {
                 }
             }
             MenuAction::CloseSession(index) => self.close_session_tab(index),
+            MenuAction::RenameSession(index) => self.rename_session(index),
             MenuAction::CloseAllTabs => {
                 self.close_task_page();
                 self.close_tabs_except(None);
@@ -15448,12 +15559,8 @@ impl App {
             }
             Dragged::Session(index) => {
                 let session = self.dock.sessions.get(index);
-                let icon = match session {
-                    Some(s) if s.browser => Icon::Globe,
-                    Some(s) if s.shell => Icon::Terminal,
-                    _ => Icon::Agents,
-                };
-                (icon, session.map(|s| s.name.clone()).unwrap_or_default())
+                let icon = session.map_or(Icon::Agents, Session::icon);
+                (icon, session.map(Session::label).unwrap_or_default())
             }
         };
         let font = Font::default();
@@ -18080,6 +18187,9 @@ struct KeptPane {
     /// front.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session: Option<String>,
+    /// What the person named tabs, by each session's host's socket.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    names: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -18161,6 +18271,8 @@ pub(crate) fn machine_name() -> String {
     }
     std::env::var("COMPUTERNAME").unwrap_or_else(|_| "this machine".to_string())
 }
+#[cfg(test)]
+mod agent_tab_tests;
 #[cfg(test)]
 mod motion_tests;
 #[cfg(test)]
@@ -22288,10 +22400,16 @@ mod tests {
         assert_eq!(app.dock.sessions.len(), 1);
         let text = screen(&app).text();
         assert!(text.contains("Not logged in"), "{text}");
-        assert!(
-            text.contains("Stand-in ended. Press + for another."),
-            "{text}"
+        // Pointing at what starts another as the row stands: the + where it's drawn, and
+        // above where its mark and name leave the + no room.
+        let title = app.title_of(app.dock_area().unwrap());
+        let another = app.dock.another(title);
+        let said = format!(
+            "Stand-in ended. {}{}.",
+            another[..1].to_uppercase(),
+            &another[1..]
         );
+        assert!(text.contains(&said), "{said}: {text}");
     }
 
     #[test]
@@ -22544,8 +22662,11 @@ mod tests {
     fn a_pane_tab_closes_and_stops_its_program() {
         let (_dir, mut app) = project();
         session(&mut app, "echo ready; sleep 9");
-        let (x, _) = find(&screen(&app), "Stand-in");
-        app.handle(mouse(MouseKind::Left, x + 9, 0));
+        // Its ×, after its name and the room for what it's doing.
+        let grid = screen(&app);
+        let (x, _) = find(&grid, "Stand-in");
+        let close = (x..grid.width()).find(|c| grid.cell(*c, 0).symbol == "×");
+        app.handle(mouse(MouseKind::Left, close.expect("its ×"), 0));
         assert_eq!(app.dock.sessions.len(), 1, "it asks first");
         let (x, y) = find(&screen(&app), "Stop");
         app.handle(mouse(MouseKind::Left, x + 1, y + 1));

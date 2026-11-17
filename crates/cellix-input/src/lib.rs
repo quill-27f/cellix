@@ -285,6 +285,8 @@ pub enum Command {
     OpenGemini,
     /// Opens the transcript of the agent in the side pane as a page.
     OpenTranscript,
+    /// Names the side pane's tab in front, over what its program calls it.
+    RenamePaneTab,
     OpenSettings,
     SwitchBranch,
     /// Folders and files opened lately, to open again.
