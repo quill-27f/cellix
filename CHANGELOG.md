@@ -2,7 +2,9 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
-## [Unreleased]
+## [0.10.2] - 2026-11-17
+
+The new look, tightened after a first day in a real window: words in the middle of what holds them, less left over at the foot, and one measure for cards and buttons on Airy rows.
 
 ### Changed
 - On Airy rows, words stand in the middle of what holds them: a text box, a button, a workspace's chip. They were raised, as they have to be on the terminal's own line to keep a tail off a box's edge, and on a taller row that put them plainly high.
@@ -12,7 +14,7 @@ All notable changes to Cellix. Versions follow semver; each one is on the [relea
 - The bar at the foot stands in the middle of the space under the file, and there's less of that space. A row's height is fitted to your window, a pixel or two either side of what Row height asks, so the window's last pixels aren't all left under the bar: up to a whole row of them were.
 - Where the workspaces have a row of their own under the status bar (a narrow window, or many workspaces), the two rows stand evenly in the space under the file: as much over the status bar as between the two and under the workspaces. Only the lower row had been moved down, and all of the space lay between them.
 - A button at the end of a pointed row stands inside the row's highlight on Airy rows, with the highlight showing over and under it: Ask Agent on a problem, Install on a language server in Settings. It was exactly as tall as the highlight, and the two read as one shape.
-- There's air between the views at the top of the sidebar and the heading under them (the folder's name and branch, OUTLINE, SOURCE CONTROL): half a row over the heading and half under it. It stood straight under the views' line.
+- There's air between the views at the top of the sidebar and the heading under them (the folder's name and branch, OUTLINE, SOURCE CONTROL): as much over the heading as under it. It stood straight under the views' line.
 
 ### Fixed
 - What the Outline says when there's nothing to list ran to the sidebar's edge and was cut there. It wraps, with room at the edge.

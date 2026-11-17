@@ -160,7 +160,9 @@ the top of the sidebar. Every file has an icon of its kind, in the tree and on i
 the foot holds your workspaces, the branch, the file's details, the bell, and the button that
 quits. In Ghostty and kitty a row has more air than a line of your terminal, and your terminal's
 own settings aren't touched: Row height in Settings is Airy unless you choose Comfortable or the
-terminal's own line.
+terminal's own line. A row's height is fitted to your window, a pixel or two either way, so the
+bar at the foot stands level in what's left under the file; where the workspaces have a row of
+their own, the two rows share that space evenly.
 
 ![Cellix on its own, with agents to start in the side pane](docs/images/agents.png)
 

@@ -2695,3 +2695,12 @@ The second half of the user's #2. The last review wanted a button on a pointed r
 - The tour has a new scene, `132-task-problem-hover`: a pointed problem in the narrower pane.
 - Looked at: `109-problem-ask`, `42-hover-install`, `132-task-problems`, `132-task-problem-hover`, `16-settings-editor`, `37-hover-settings`.
 - Not done, from the same review: the wash in Problems is 12.5 px inside the sheet's left line and 4.5 px inside its right; Install stands 10 px from its wash's end where Ask Agent stands 27; the button under the pointer and the light theme weren't pictured.
+
+## Release 0.10.2 (2026-11-17)
+
+- On the user's word, given before a day away from the computer: "Fix the #2 and then autonomously release". 0.10.2 is the nine points from their first look at 0.10.0 in Ghostty (four commits), the foot of two rows and the button on a pointed row.
+- The whole tour over `91ae92a`: 210 scenes, every one reached, none retaken. Each picture compared with the last whole tour's (`0f24c82`). What differs is the sidebar's heading and the foot (meant), the two row buttons, the washes in Settings, words that tell the time, and how far a page had scrolled.
+- Seen in that comparison, not from these changes: a page scrolled by the wheel lands a few rows apart from one whole tour to the next, in all three there are (`61-sample-callouts`, `63-sample-math`, `79-paper-theorems` and the scenes like them). The machine was loaded each time. Whether that's the tour's timing or the wheel's own counting under load isn't known.
+- README says a row's height is fitted to the window and that two rows at the foot share what's under the file. The changelog's entry is under 0.10.2.
+- Unverified: none of this has been looked at in a real Ghostty since the user's own screenshots of 0.10.0. The padding under Ghostty's lines is still a guess, and the foot's evenness there depends on it.
+- Next: the user's look at 0.10.2; the open questions (the second cause of the workspaces missing after a dropped connection; the reviewer's list in the two entries above).
