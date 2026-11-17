@@ -2962,3 +2962,25 @@ Item 5 of the herdr work (the a2a track): the backend. The nesting in the Agents
 ## A host's last words reach its viewers before it ends (2026-11-17)
 
 A fix to the queues of "Writes never freeze the loop", found by `a_program_that_ends_while_nobody_is_attached_is_told_about_later` failing in a later gate: with what a host sends each viewer queued on a thread, a host whose program had ended told its viewer so and ended at once, taking the queue with it, so the viewer heard neither the program's last output nor that it was over. A host that's ending now waits up to two seconds for each viewer's queue to be written (`Outbox::delivered`), and counts as having been heard only by viewers it reached, as before the queues.
+
+## Drawing never reaches the disk or another process (2026-11-17)
+
+Item 11 of herdr's performance study.
+
+- `crates/cellix/tests/hot_path.rs` reads every `fn draw…` and `fn paint…` in `cellix` and `cellix-render`, with comments, strings and test modules blanked out, and fails on a call that reaches the disk (`std::fs`, `File::`, `metadata`, `read_dir`, `read_to_string`, `canonicalize`) or another process (`Command::new`, `process_group_leader`), or starts a thread. None does today; this keeps it so.
+- Tests: `drawing_never_reaches_the_disk_or_another_process`, `the_scan_finds_a_call_in_a_body_and_nowhere_else`.
+- Not covered: what a drawing function calls through other functions; the scan reads bodies, not a call graph.
+
+## The loop's cost, before and after, and drags left as they are (2026-11-17)
+
+The end of herdr's performance study for 0.11.0.
+
+- Measured with `CELLIX_PROF` in the headless terminal (`harness/live/perf.py`, 170x46, pixel tier, a round of 6 s; before: the 0.10.2 code in a release build, after: the debug build of the work above, so CPU isn't compared). Per second:
+  - Idle: 20 wakes, 2 frames, 2 sent, 44 bytes, before; 20 wakes, 0.5 frames (the heartbeat), nothing sent, after.
+  - A shell on screen printing at 30 Hz: 103 wakes and 31.5 frames, before; 34 wakes and 27 frames, after, the same bytes.
+  - Four tabs behind printing at 60 Hz each: 100 wakes, 98 frames, 98 sent, before; 35 wakes, 2 frames, 0.2 sent, after (the 1 KB a second left is their tabs' spinners turning).
+  - 40 keys typed into a shell, a key each 150 ms: 2.3 frames sent a key and 96 wakes a second, before; 1 frame sent a key (the key's own sends nothing, the echo draws as it comes) and 26 wakes, after.
+- Drags (item 9 of the study): measured, and left. 30 steps of the side pane's edge in 0.6 s drew 4 frames, each a whole layout (94 rows rasterized, 190 tiles, 1 MB, about 250 ms a present on a loaded machine). The loop already skips to the latest place when steps come faster than frames and lands the last one, so a 33 ms cap changes nothing; laying out only on release, as over SSH, would change what the person sees. DESIGN.md says so under the wire cost.
+- Not done: the release builds' CPU against 0.10.2 (`harness/x perf`, for when nothing else is building); the scroll shift on cells (measured, see the cursor's entry); report items 4 and 8, which the motion track and the tile files have.
+- Looked at: a targeted tour of the build with all of it but the host's last-words fix (`02-code`, `112-view-sticky`, `72-sample-dark`, `67-transcript-scrolled`, `57-dock-end`, `58-welcome-with-shell`, `108-terminal-ask`, `108-terminal-find`, `w0-*`, `100-workspaces`, `108-program-asks-agents`, `108-program-asks-inbox`), every scene reached. Scrolled pages, a shell's output with its selection and buttons, the workspaces' tiles saying needs you and done, and a terminal tab behind the Agents list marked as asking all show as before: what's out of sight still reaches the tabs and tiles.
+- Next: the user's look at a real Ghostty, typing and an agent working, with `CELLIX_PROF=1` running.

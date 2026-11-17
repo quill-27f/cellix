@@ -5654,5 +5654,12 @@
     "title": "A child agent's parent is told when it needs the person, fails or ends, unless waiting on it, asking itself or being typed in; it can wait for its children; children end with it unless started to outlive it",
     "test": "a_parent_hears_of_its_children_waits_for_them_and_takes_them_with_it",
     "passes": true
+  },
+  {
+    "id": "hot-path-guard",
+    "milestone": 15,
+    "title": "A test reads every drawing function in cellix and cellix-render and fails on a call that reaches the disk or another process, or starts a thread",
+    "test": "drawing_never_reaches_the_disk_or_another_process",
+    "passes": true
   }
 ]

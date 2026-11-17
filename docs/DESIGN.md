@@ -64,7 +64,13 @@ accent follows the pointer, stopping where the edge could really go, and the two
 laid out once, when it's let go. With no link between, the sides follow the pointer as they
 did, and the edge is drawn in the accent while it's held, as VS Code's sash is. Keeping the
 resize live over a link would take placing the tiles already sent with a different crop
-instead of sending new ones, which hasn't been built or measured.
+instead of sending new ones, which hasn't been built or measured. Measured locally with the
+counters (release build, a loaded machine): 30 steps of the edge in 0.6 s drew 4 frames,
+each a whole layout, 94 rows rasterized and 190 tiles, 1 MB, about 250 ms a present. The
+loop already draws only the latest place when frames take longer than steps come, and the
+release lands the last one, so herdr's cap of a frame each 33 ms would change nothing here;
+what would is not laying the sides out while the edge is held, as over SSH, which changes
+what the person sees, so it's left as it is.
 
 ### Motion
 
@@ -125,6 +131,25 @@ behind the one in front, 60 times a second each). Each warms up for 3 seconds an
 for 10, in two rounds of swapped order; a writer that printed much less than it should fails
 the run, so back-pressure can't pass for a saving. It runs through the guard, so nothing else
 of the guard's runs meanwhile, and isn't part of `check`.
+
+Measured with these counters, in the headless terminal at 170 by 46 on the pixel tier, a
+second each (before: the 0.10.2 code, release build; after: the debug build of this work, so
+its CPU isn't comparable and isn't given; one round of 6 s each):
+
+| Case | Wakes | Frames drawn | Frames that sent anything | Bytes sent |
+|---|---|---|---|---|
+| Idle, before | 20 | 2 | 2 | 44 |
+| Idle, after | 20 | 0.5, the heartbeat | 0 | 0 |
+| Shell on screen at 30 Hz, before | 103 | 31.5 | 31.5 | 265,000 |
+| Shell on screen at 30 Hz, after | 34 | 27 | 27 | 268,000 |
+| Four tabs behind at 60 Hz, before | 100 | 98 | 98 | 2,200 |
+| Four tabs behind at 60 Hz, after | 35 | 2 | 0.2 | 1,000, the tabs' spinners |
+| 40 keys typed into a shell, before | 96 | 2.3 a key | 2.3 a key | |
+| 40 keys typed into a shell, after | 26 | 2 a key | 1 a key | |
+
+The key's own frame now sends nothing, since nothing on screen changed until the echo, which
+draws as soon as it comes. The release builds' CPU against the last release is for
+`harness/x perf` when nothing else is building.
 
 ### An idle window
 
