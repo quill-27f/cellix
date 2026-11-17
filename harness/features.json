@@ -5570,5 +5570,12 @@
     "title": "The session host tells every Cellix attached the name of the program in front of a shell when it changes, and one that joins as it joins",
     "test": "the_host_names_the_program_in_front_of_a_shell",
     "passes": true
+  },
+  {
+    "id": "tile-files",
+    "milestone": 15,
+    "title": "In Ghostty on this machine, once a probe at start shows the terminal takes them, tiles go as private temporary files it reads and deletes: the picture is the same as inline for a small part of the bytes, nothing is left behind, and anywhere else or after any failure tiles go inline",
+    "test": "tiles_go_as_files_to_ghostty_here_and_look_the_same_for_fewer_bytes",
+    "passes": true
   }
 ]

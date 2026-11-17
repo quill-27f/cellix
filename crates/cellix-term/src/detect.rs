@@ -3,9 +3,12 @@ use std::process::Command;
 #[cfg(unix)]
 use std::time::{Duration, Instant};
 
+use crate::files::TileFiles;
 use crate::probe::{Env, Multiplexer};
 
 const QUERY_ID: u32 = 31;
+/// The answer to whether the terminal takes a tile as a file.
+const FILE_QUERY_ID: u32 = 32;
 #[cfg(unix)]
 const REPLY_TIMEOUT: Duration = Duration::from_millis(250);
 /// Terminals known to speak Kitty graphics, for when tmux hides the terminal from us.
@@ -26,6 +29,8 @@ struct Reply {
     paste_events: bool,
     light: Option<bool>,
     background: Option<(u8, u8, u8)>,
+    /// It said it took the file it was asked about.
+    files: bool,
 }
 
 /// Where the questions go.
@@ -43,15 +48,16 @@ enum Asking {
 /// itself: tmux takes that kind of sequence as a window title and shows it in its status bar.
 /// tmux makes up a cell size when its own terminal gives none (16 by 32, over a console), and
 /// images sized for that are letterboxed, so with passthrough the cell size goes past it.
+/// `files` is the question whether it takes a tile as a file, asked of the terminal itself.
 #[cfg(any(unix, test))]
-fn questions(asking: Asking) -> String {
+fn questions(asking: Asking, files: &str) -> String {
     let (cell, graphics) = match asking {
         // Whether it has paste events is asked with the graphics: only the terminal itself
         // can say, and only it would send them.
         Asking::Terminal => (
             "\x1b[16t".to_string(),
             format!(
-                "\x1b_Gi={QUERY_ID},s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\{}",
+                "\x1b_Gi={QUERY_ID},s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\{files}{}",
                 crate::clipboard::ASK_PASTE_EVENTS
             ),
         ),
@@ -136,9 +142,9 @@ pub fn cell_size(multiplexer: Multiplexer, passthrough: bool) -> Option<(usize, 
 
 /// Asks for the cell size and for Kitty graphics, then device attributes, which every
 /// terminal answers, so a terminal without graphics doesn't cost the full timeout.
-/// Expects raw mode. Returns (kitty graphics, cell size).
-fn query_terminal(out: &mut impl Write, asking: Asking) -> io::Result<Reply> {
-    let mut reply = ask(out, asking)?;
+/// Expects raw mode. `files` is asked as well, where it isn't empty.
+fn query_terminal(out: &mut impl Write, asking: Asking, files: &str) -> io::Result<Reply> {
+    let mut reply = ask(out, asking, files)?;
     if asking == Asking::TmuxPassthrough {
         // The terminal told tmux its colour; now tmux's answer is current.
         reply.extend(ask_for(out, ASK_TMUX_BACKGROUND, Asking::Tmux, |_| true)?);
@@ -153,6 +159,7 @@ fn query_terminal(out: &mut impl Write, asking: Asking) -> io::Result<Reply> {
             let byte = |channel: f32| (channel * 255.0).round() as u8;
             (byte(r), byte(g), byte(b))
         }),
+        files: reply_has(&reply, format!("_Gi={FILE_QUERY_ID};OK").as_bytes()),
     })
 }
 
@@ -160,7 +167,7 @@ fn query_terminal(out: &mut impl Write, asking: Asking) -> io::Result<Reply> {
 /// asked there: Cellix starts on the cell tier with its own colours, and nothing the terminal
 /// would answer is left to arrive as keys.
 #[cfg(not(unix))]
-fn ask(_out: &mut impl Write, _asking: Asking) -> io::Result<Vec<u8>> {
+fn ask(_out: &mut impl Write, _asking: Asking, _files: &str) -> io::Result<Vec<u8>> {
     Ok(Vec::new())
 }
 
@@ -176,9 +183,9 @@ fn ask_for(
 
 /// Writes the questions and reads the replies until device attributes, or the timeout.
 #[cfg(unix)]
-fn ask(out: &mut impl Write, asking: Asking) -> io::Result<Vec<u8>> {
+fn ask(out: &mut impl Write, asking: Asking, files: &str) -> io::Result<Vec<u8>> {
     let outside = asking == Asking::TmuxPassthrough;
-    ask_for(out, &questions(asking), asking, |reply| {
+    ask_for(out, &questions(asking, files), asking, |reply| {
         !outside || parse_cell_size(reply).is_some()
     })
 }
@@ -271,10 +278,16 @@ fn ends_device_attributes(reply: &[u8]) -> bool {
     reply[start..].contains(&b'c')
 }
 
-/// Works out what this terminal can do. Must run in raw mode, before input is read.
-pub fn detect(var: impl Fn(&str) -> Option<String>) -> io::Result<Env> {
+/// Works out what this terminal can do. Must run in raw mode, before input is read. Where
+/// `files` is given, the terminal itself is asked whether it takes a tile as a file, with the
+/// other questions, and `files` is told what it said.
+pub fn detect(var: impl Fn(&str) -> Option<String>, files: Option<&TileFiles>) -> io::Result<Env> {
     let multiplexer = Multiplexer::detect(var);
     if multiplexer == Multiplexer::Tmux {
+        // Never past tmux: the terminal there may be on another machine.
+        if let Some(files) = files {
+            files.answered(false);
+        }
         // tmux swallows replies from the terminal outside it, so ask tmux instead.
         // The terminal's own name where tmux heard it, as well as its TERM: over SSH, TERM is
         // often a stand-in like xterm-256color when the server lacks the terminal's terminfo.
@@ -291,7 +304,7 @@ pub fn detect(var: impl Fn(&str) -> Option<String>) -> io::Result<Env> {
         } else {
             Asking::Tmux
         };
-        let reply = query_terminal(&mut io::stdout(), asking)?;
+        let reply = query_terminal(&mut io::stdout(), asking, "")?;
         return Ok(Env {
             multiplexer,
             kitty_graphics,
@@ -303,7 +316,15 @@ pub fn detect(var: impl Fn(&str) -> Option<String>) -> io::Result<Env> {
             background: reply.background,
         });
     }
-    let reply = query_terminal(&mut io::stdout(), Asking::Terminal)?;
+    let question = files.and_then(|files| files.question(FILE_QUERY_ID));
+    let reply = query_terminal(
+        &mut io::stdout(),
+        Asking::Terminal,
+        question.as_deref().unwrap_or(""),
+    )?;
+    if let Some(files) = files {
+        files.answered(question.is_some() && reply.files);
+    }
     Ok(Env {
         multiplexer,
         kitty_graphics: reply.kitty,
@@ -323,28 +344,28 @@ mod tests {
     #[test]
     fn inside_tmux_with_passthrough_the_terminal_itself_is_asked_its_colour() {
         // tmux's own answer is what it knew when the client attached, and goes stale.
-        let asked = questions(Asking::TmuxPassthrough);
+        let asked = questions(Asking::TmuxPassthrough, "");
         assert!(asked.starts_with("\x1bPtmux;\x1b\x1b]11;?"), "{asked:?}");
         assert!(
             !asked.contains("\x1b]11;?\x1b\\\x1b["),
             "tmux isn't asked as well: {asked:?}"
         );
-        assert!(questions(Asking::Terminal).starts_with("\x1b]11;?"));
-        assert!(questions(Asking::Tmux).starts_with("\x1b]11;?"));
+        assert!(questions(Asking::Terminal, "").starts_with("\x1b]11;?"));
+        assert!(questions(Asking::Tmux, "").starts_with("\x1b]11;?"));
     }
 
     #[test]
     fn tmux_is_not_asked_about_graphics() {
-        assert!(!questions(Asking::Tmux).contains("\x1b_G"));
-        assert!(questions(Asking::Terminal).contains("\x1b_Gi=31"));
-        assert!(questions(Asking::Tmux).ends_with("\x1b[c"));
+        assert!(!questions(Asking::Tmux, "").contains("\x1b_G"));
+        assert!(questions(Asking::Terminal, "").contains("\x1b_Gi=31"));
+        assert!(questions(Asking::Tmux, "").ends_with("\x1b[c"));
     }
 
     #[test]
     fn the_cell_size_is_asked_past_tmux() {
         // tmux would answer a plain question with a size it made up.
-        assert!(!questions(Asking::Tmux).contains("[16t"));
-        let past = questions(Asking::TmuxPassthrough);
+        assert!(!questions(Asking::Tmux, "").contains("[16t"));
+        let past = questions(Asking::TmuxPassthrough, "");
         assert!(past.contains("\x1bPtmux;\x1b\x1b[16t\x1b\\"), "{past:?}");
         assert!(!past.contains("\x1b_G"));
         // As tmux hands the outer terminal's answer back.
@@ -379,6 +400,19 @@ mod tests {
             Some(true)
         );
         assert_eq!(parse_background_is_light(b"\x1b[?62c"), None);
+    }
+
+    #[test]
+    fn the_file_question_goes_to_the_terminal_before_device_attributes() {
+        let probe = "\x1b_Gi=32,s=1,v=1,a=q,t=t,f=24;L3RtcA==\x1b\\";
+        let asked = questions(Asking::Terminal, probe);
+        let at = asked.find(probe).expect("asked");
+        assert!(at > asked.find("\x1b_Gi=31").unwrap());
+        assert!(
+            at < asked.rfind("\x1b[c").unwrap(),
+            "answered before the reply that ends it"
+        );
+        assert!(!questions(Asking::Tmux, "").contains("t=t"));
     }
 
     #[test]

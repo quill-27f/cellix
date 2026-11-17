@@ -3,12 +3,14 @@
 mod cells;
 pub mod clipboard;
 mod detect;
+mod files;
 mod notify;
 mod pixels;
 mod probe;
 
 pub use cells::CellBackend;
 pub use detect::{background, cell_size, detect};
+pub use files::TileFiles;
 pub use notify::{Notice, sequence as notification, terminal_names};
 pub use pixels::{Bleed, DEFAULT_QUOTA, OwnRows, PixelBackend, Placement, Smooth, row_key};
 pub use probe::{Env, Multiplexer, Tier, select_tier};

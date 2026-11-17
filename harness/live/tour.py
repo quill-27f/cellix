@@ -523,6 +523,9 @@ def shoot(name, steps, *args, size="120x40", background="1e1e2e", cwd=None, env=
         **extra,
     }
     env.pop("CLAUDE_CONFIG_DIR", None)
+    # term.py stands for a person's Ghostty, so the tiles go as files it reads, as they do
+    # there, even when an agent runs the tour from inside Claude Code.
+    env.pop("CLAUDECODE", None)
     # By its own path, so a scene can have a PATH of its own.
     run = [sys.executable, "-I", f"{here}/term.py", f.name, binary, *args]
     # Taken once more if it misses: a loaded machine can lose a scene its place, and one

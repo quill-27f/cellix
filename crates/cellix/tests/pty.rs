@@ -1958,3 +1958,147 @@ fn pty_agents_start_and_message_each_other_through_the_socket() {
         .args(["-f", &cache.path().display().to_string()])
         .status();
 }
+
+/// What `harness/live/term.py`, a headless terminal that takes Kitty graphics as Ghostty does,
+/// printed while it ran the real binary on `hello.txt` in `dir` through `steps`, each a JSON
+/// list. Nothing in the environment says there's a connection, a multiplexer or Claude Code
+/// between, as for a person's Ghostty, whatever runs the tests; `env` comes on top.
+#[cfg(unix)]
+fn headless(dir: &Path, steps: &[String], env: &[(&str, &Path)]) -> String {
+    let scratch = tempfile::tempdir().unwrap();
+    let script = scratch.path().join("script.json");
+    std::fs::write(&script, format!("[{}]", steps.join(", "))).unwrap();
+    let term = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../harness/live/term.py");
+    let mut command = std::process::Command::new("python3");
+    command
+        .arg("-I")
+        .arg(term)
+        .arg(&script)
+        .arg(env!("CARGO_BIN_EXE_cellix"))
+        .arg("hello.txt")
+        .current_dir(dir);
+    for name in [
+        "SSH_CONNECTION",
+        "SSH_CLIENT",
+        "SSH_TTY",
+        "TMUX",
+        "STY",
+        "ZELLIJ",
+        "CLAUDECODE",
+        "CELLIX_MOD",
+        "CELLIX_TILE_FILES",
+        "CELLIX_TIER",
+    ] {
+        command.env_remove(name);
+    }
+    command
+        .env("CELLIX_MACHINE", "dev-box")
+        .env("SHELL", "/bin/sh")
+        .env("TERM_SIZE", "100x26")
+        .env("TERM_ROW", "50")
+        .env("CELLIX_ROW_FIT", "0");
+    for (name, value) in env {
+        command.env(name, value);
+    }
+    let output = command
+        .output()
+        .expect("python3 runs the headless terminal");
+    let printed = String::from_utf8_lossy(&output.stdout).into_owned();
+    assert!(
+        output.status.success(),
+        "{printed}{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    printed
+}
+
+/// What a `["bytes", label]` step said: (bytes written, files taken, the files' bytes).
+#[cfg(unix)]
+fn counted(printed: &str, label: &str) -> (usize, usize, usize) {
+    let line = printed
+        .lines()
+        .find_map(|line| line.strip_prefix(&format!("{label}: ")))
+        .unwrap_or_else(|| panic!("no {label:?} in {printed}"));
+    let numbers: Vec<usize> = line
+        .split(' ')
+        .filter_map(|word| word.parse().ok())
+        .collect();
+    (numbers[0], numbers[1], numbers[2])
+}
+
+/// In Ghostty on this machine, tiles are temporary files the terminal reads and deletes, so a
+/// frame of new tiles writes their names rather than their pixels. The headless terminal takes
+/// them as Ghostty does: the first paint and a resize look exactly as they do inline, for a
+/// fraction of the bytes, and nothing is left in the temp folder once Cellix has gone.
+#[test]
+#[cfg(unix)]
+fn tiles_go_as_files_to_ghostty_here_and_look_the_same_for_fewer_bytes() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = project();
+    let temp = tempfile::Builder::new()
+        .prefix("cxf")
+        .tempdir_in("/tmp")
+        .unwrap();
+    // The user's own temp folder, as macOS gives each user one: private.
+    let own = temp.path().join("tmp");
+    std::fs::create_dir(&own).unwrap();
+    std::fs::set_permissions(&own, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let mut seen = Vec::new();
+    for (run, switch) in [("files", None), ("inline", Some("0"))] {
+        let shot = |name: &str| temp.path().join(format!("{run}-{name}.png"));
+        let steps = [
+            r#"["until", "hello from a file"]"#.to_string(),
+            format!(r#"["shot", {:?}]"#, shot("first")),
+            r#"["bytes", "first paint"]"#.to_string(),
+            r#"["resize", 80, 22]"#.to_string(),
+            r#"["until", "hello from a file"]"#.to_string(),
+            format!(r#"["shot", {:?}]"#, shot("resized")),
+            r#"["bytes", "resize"]"#.to_string(),
+        ];
+        let cache = temp.path().join(format!("{run}-cache"));
+        let text = temp.path().join(format!("{run}-screen.txt"));
+        let mut env = vec![
+            ("TMPDIR", own.as_path()),
+            ("XDG_CACHE_HOME", cache.as_path()),
+            ("CELLIX_SCREEN_TEXT", text.as_path()),
+        ];
+        if let Some(switch) = switch {
+            env.push(("CELLIX_TILE_FILES", Path::new(switch)));
+        }
+        let printed = headless(dir.path(), &steps, &env);
+        let pictures = [
+            std::fs::read(shot("first")).unwrap(),
+            std::fs::read(shot("resized")).unwrap(),
+        ];
+        seen.push((
+            counted(&printed, "first paint"),
+            counted(&printed, "resize"),
+            pictures,
+        ));
+    }
+    let (filed, inline) = (&seen[0], &seen[1]);
+    eprintln!(
+        "first paint: {} bytes written with files ({} files of {} bytes), {} inline; \
+         resize: {} with files ({} files of {} bytes), {} inline",
+        filed.0.0, filed.0.1, filed.0.2, inline.0.0, filed.1.0, filed.1.1, filed.1.2, inline.1.0
+    );
+    assert!(filed.0.1 > 0 && filed.1.1 > 0, "tiles went as files");
+    assert_eq!(
+        (inline.0.1, inline.1.1),
+        (0, 0),
+        "and not with the switch off"
+    );
+    assert!(filed.0.0 * 3 < inline.0.0, "first paint");
+    assert!(filed.1.0 * 3 < inline.1.0, "resize");
+    assert!(filed.2 == inline.2, "the same pictures either way");
+    // The terminal took every file, and Cellix cleared its own folder as it ended: what's
+    // left is the user's folder, empty.
+    let ours: Vec<_> = std::fs::read_dir(&own)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.to_string_lossy().contains("cellix-tiles-"))
+        .collect();
+    assert_eq!(ours.len(), 1, "{ours:?}");
+    let left: Vec<_> = std::fs::read_dir(&ours[0]).unwrap().collect();
+    assert!(left.is_empty(), "left in {:?}: {left:?}", ours[0]);
+}

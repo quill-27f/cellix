@@ -138,6 +138,63 @@ drawn, and draws only when they differ. What the marks can't name, and what tell
 at (`pace.rs`). And a present with nothing different writes nothing at all, on pixels and on
 cells, so a heartbeat over an unchanged window sends no byte.
 
+### Tiles as files, where Ghostty is on this machine
+
+Inline, each new tile is compressed, base64-encoded and written in 4096-byte pieces, and the
+terminal undoes all three. Where Cellix and Ghostty are on the same machine, a tile goes as a
+temporary file instead (the Kitty protocol's `t=t`, as herdr does for local Ghostty): Cellix
+writes the tile's raw pixels to a file and writes only its name, and Ghostty reads the file
+and deletes it. A tile costs a couple of hundred bytes on the wire whatever its size, and
+neither side compresses anything, since the file is read from memory. That's what makes the
+frames full of new tiles cheap: the first paint, a resize, dragging the side pane's edge here,
+a theme change. In the headless terminal a first paint was 233 KB inline and 13 KB as files
+at 1080p, and 710 KB and 25 KB at 4K, the pictures the same byte for byte; PROGRESS's entry
+has the rest.
+
+**When.** Only where `TERM_PROGRAM` is `ghostty`, on Unix, with none of `SSH_CONNECTION`,
+`SSH_CLIENT`, `SSH_TTY`, `TMUX`, `STY`, `ZELLIJ`, `CLAUDECODE` or `CELLIX_MOD` set (set at
+all, even empty), and only on the direct tier: never over SSH, inside tmux or Zellij, in
+Claude Code's pane, on placeholders or on cells. Then one more question goes with the start-up
+ones, before device attributes: a 1 by 1 picture in a file, queried (`a=q,t=t`). Tiles go as
+files only if the terminal answers OK and the file is gone (within 100 ms of the answer, which
+Ghostty doesn't need). Otherwise they go inline for the run. Later, a file that can't be
+written, or one the terminal hasn't taken within 10 seconds, turns files off for the rest of
+the run; a tile past a cap goes inline. `CELLIX_TILE_FILES=0` turns it off.
+
+**Where, and why it's safe.** The files hold the screen's pixels, the code under review, so
+nobody but the user may read them, and nothing may be tricked into writing somewhere else.
+
+- The temp folder is the user's own: `TMPDIR` where that's a folder of theirs that nobody
+  else can write to, as macOS gives each user under `/var/folders`, or else `/tmp`. Ghostty
+  takes a temporary file only from `/tmp`, `/dev/shm`, `/private/tmp` on macOS and its own
+  `TMPDIR`, judged by the path of the file it opened, and only with `tty-graphics-protocol` in
+  that path. Started inside Ghostty, Cellix has its `TMPDIR`. One that differs fails the probe,
+  and tiles stay inline.
+- In it, `cellix-tiles-<uid>` is made 0700 if it isn't there, then opened with `O_NOFOLLOW`
+  and `O_DIRECTORY`, and used only if it is a folder of the effective user's with mode exactly
+  0700. A link planted in its place, or a folder someone else made, means tiles go inline,
+  never a write elsewhere. In `/tmp` its sticky bit stops anyone else renaming or removing it.
+- Each run makes a folder of its own in that, `session-` and 128 random bits, freshly (making
+  one fails where the name is taken, and another name is tried), 0700, checked the same way,
+  and holds an `flock` on it while it runs.
+- Each tile is `tty-graphics-protocol-` and 64 random bits, created with `O_EXCL` and
+  `O_NOFOLLOW`, 0600, and written whole and closed before the frame that names it is written.
+  Nothing is overwritten, and nothing is written outside the run's folder. Cellix never reads
+  one back.
+- Caps: at most 1,024 files and 64 MiB waiting for the terminal, and 16 MiB a tile. herdr's
+  are 8 files, 64 MiB and 16 MiB for whole images; Cellix sends a tile a row, a few hundred
+  for a first paint at 4K, which is about 25 MB of raw pixels. Past a cap, a tile goes inline.
+  At most 16 runs' folders, live or left behind, or tiles go inline, so runs that crash one
+  after another can't fill the disk.
+- A file counts as taken only when it isn't there (an I/O or permission error doesn't count),
+  and they're looked at oldest first, since the terminal reads them in the order it's told.
+- Ghostty deletes each file it reads. At the end of a run Cellix removes what's left and its
+  folder, never recursively; a stop the loop can't see to clears the folder as it clears a
+  workspace's socket. At the next start, the folders of runs that ended without clearing up
+  are cleared: those no run holds the lock of and that are a minute old (a terminal may still
+  be reading what a run that just ended left), and only if all they hold are the user's plain
+  files with a tile's name and one link. Anything else, and the folder is left as it is.
+
 ### No GPU renderer
 
 Output would have to be read back to the CPU before it could be sent to the terminal, one
@@ -168,7 +225,8 @@ rendered nothing under Zellij, which is why the method is chosen per environment
 Cells are a full tier, not an error state: every feature must work there. This is
 what guarantees tmux and Zellij always work. Pixels are the upgrade.
 
-Detection sends `CSI 16t`, `a=q` and device attributes, and checks `$TMUX` and `$ZELLIJ`. The background colour
+Detection sends `CSI 16t`, `a=q` and device attributes, and checks `$TMUX` and `$ZELLIJ`. In
+Ghostty on this machine it also asks whether a tile can go as a file (see Tiles as files). The background colour
 (`OSC 11`) decides light or dark, and is asked again each time the window regains focus, since a
 terminal follows the system's appearance. tmux answers that question from what it learned when
 the client attached and keeps the terminal's own answer to a passthrough question to itself, but

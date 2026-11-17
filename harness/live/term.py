@@ -19,6 +19,8 @@ The script is a list of steps:
     ["gone", "text"]             Waits until the screen no longer says it.
     ["until", "text", seconds]   Either, giving up after that long rather than 20 seconds.
     ["timed", "label", <step>]   Runs a step, and logs how long until the screen answered.
+    ["bytes", "label"]           Logs the bytes written to the terminal since the last of these,
+                                 and how many of the pictures came as files, and their bytes.
 
 A place can be named by what the screen says there rather than by column and row, so a step
 still finds it when the layout moves: ["click", ["Words"]] in place of ["click", col, row].
@@ -27,7 +29,9 @@ letter of the words, one column right and no rows down unless said, on the first
 says them, or the last with which as -1. It waits for the words as "until" does.
 
 Settings come from the environment: TERM_SIZE=170x46, TERM_CELL=17x36, TERM_PADDING=10x8,
-TERM_BG=1e1e2e. TERM_ROW is the height in pixels of a row of Cellix's own, where its rows are
+TERM_BG=1e1e2e. As Ghostty does, it takes a picture as a temporary file (`t=t`) from /tmp,
+/dev/shm or its own TMPDIR, reads it and deletes it; TERM_FILES=0 makes it a terminal that
+doesn't. TERM_ROW is the height in pixels of a row of Cellix's own, where its rows are
 taller than a line: TERM_SIZE and every step's row are then in those rows, and this terminal
 has as many lines as hold them. Clipboard writes and timings are printed. Stop when the script ends.
 
@@ -82,6 +86,8 @@ class Screen:
         self.replies = []
         self.buffer = b""
         self.frames = 0
+        self.files = 0  # pictures taken from files, and their bytes
+        self.filed = 0
 
     def feed(self, data):
         self.buffer += data
@@ -150,7 +156,13 @@ class Screen:
         if self.pending is not None and "a" not in keys:
             keys, action = {**self.pending, "m": keys.get("m", "0")}, "t"
         if action == "q":
-            self.replies.append(f"\x1b_Gi={keys['i']};OK\x1b\\")
+            taken = keys.get("t", "d") != "t" or self.take(payload) is not None
+            self.replies.append(f"\x1b_Gi={keys['i']};{'OK' if taken else 'EINVAL:refused'}\x1b\\")
+        elif action == "t" and keys.get("t") == "t":
+            data = self.take(payload)
+            if data is not None:
+                data = zlib.decompress(data) if keys.get("o") == "z" else data
+                self.images[int(keys["i"])] = (int(keys["s"]), int(keys["v"]), data)
         elif action == "t":
             image = int(keys["i"])
             self.partial[image] = self.partial.get(image, b"") + payload
@@ -181,6 +193,26 @@ class Screen:
                 self.drop(lambda k, p: k[0] == image and (not number or k[1] == number))
             elif what == "z":
                 self.drop(lambda k, p: p["z"] == int(keys["z"]))
+
+    def take(self, payload):
+        """A temporary file's bytes, read and the file deleted, as Ghostty does: only from a
+        temp folder, and only with tty-graphics-protocol in its name. None where it's refused,
+        and then the file is left."""
+        if os.environ.get("TERM_FILES") == "0":
+            return None
+        path = base64.b64decode(payload).decode()
+        real = os.path.realpath(path)
+        own = os.environ.get("TMPDIR", "/tmp").rstrip("/") or "/"
+        temp = ["/tmp", "/private/tmp", "/dev/shm", own, os.path.realpath(own)]
+        inside = any(real == d or real.startswith(d.rstrip("/") + "/") for d in temp)
+        if not inside or "tty-graphics-protocol" not in real or not os.path.isfile(real):
+            return None
+        with open(real, "rb") as f:
+            data = f.read()
+        os.unlink(real)
+        self.files += 1
+        self.filed += len(data)
+        return data
 
     def drop(self, test):
         for key in [k for k, p in self.placements.items() if test(k, p)]:
@@ -239,7 +271,21 @@ def mouse(button, col, row, press=True):
     return f"\x1b[<{button};{x};{y}{'M' if press else 'm'}".encode()
 
 
+def close_inherited():
+    """Closes what whatever started this left open, so neither this nor the program holds it.
+    A test that opens a terminal of its own with forkpty leaves it open to anything started
+    meanwhile, and a copy held here kept that terminal open after its test closed it: the
+    program in it never heard it go."""
+    for name in os.listdir("/dev/fd"):
+        if int(name) > 2:
+            try:
+                os.close(int(name))
+            except OSError:
+                pass
+
+
 def main():
+    close_inherited()
     script = json.load(open(sys.argv[1]))
     pid, master = pty.fork()
     if pid == 0:
@@ -256,6 +302,7 @@ def main():
     alive = [True]
     received = [0]
     missed = []
+    counted = [0, 0, 0]  # bytes, files and their bytes at the last "bytes" step
 
     def pump(seconds):
         """Runs the terminal for a while. Returns seconds until the first frame, if any."""
@@ -391,9 +438,9 @@ def main():
             quiet = time.time()
             start = time.time()
             while time.time() - quiet < 1.2 and time.time() - start < 10 and alive[0]:
-                before = received[0]
+                before = received[0] + screen.filed
                 pump(0.02)
-                if received[0] - before > 256:
+                if received[0] + screen.filed - before > 256:
                     quiet = time.time()
             png(step[1], *screen.picture())
             if TEXT:
@@ -401,6 +448,11 @@ def main():
                     f.write(said())
         elif kind == "log":
             print(step[1], flush=True)
+        elif kind == "bytes":
+            now = [received[0], screen.files, screen.filed]
+            wire, files, filed = (a - b for a, b in zip(now, counted))
+            counted[:] = now
+            print(f"{step[1]}: {wire} bytes written, {files} files of {filed} bytes", flush=True)
         elif kind == "bg":
             # The terminal turns light or dark, as a Mac does at sunset, and the window comes
             # back into focus.

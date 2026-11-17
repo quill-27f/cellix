@@ -10,6 +10,7 @@ use cellix_render::{Grid, Image, Paint, Rasterizer, Rect, Rgb, UNIT};
 use flate2::{Compression, write::ZlibEncoder};
 
 use crate::Backend;
+use crate::files::{TileFiles, payload};
 
 /// Decoded image memory Cellix keeps in the terminal. Kitty's default limit is 320 MB and
 /// other terminals' are lower, so this stays well inside them.
@@ -138,6 +139,8 @@ pub struct PixelBackend<R> {
     foot: u16,
     /// What it has done since the counters last asked.
     work: crate::Work,
+    /// Where tiles go as files the terminal reads, rather than in the output.
+    files: Option<TileFiles>,
 }
 
 /// What a row looks like, as a key: rows with the same key draw the same pixels.
@@ -222,7 +225,17 @@ impl<R: Rasterizer> PixelBackend<R> {
             own: None,
             lines: 0,
             work: crate::Work::default(),
+            files: None,
         }
+    }
+
+    /// Hands tiles over as files the terminal reads, wherever `files` takes them. Direct
+    /// placement only: placeholders are for tmux, which has the terminal somewhere else.
+    pub fn with_files(mut self, files: TileFiles) -> Self {
+        if self.placement == Placement::Direct {
+            self.files = Some(files);
+        }
+        self
     }
 
     /// Lays rows out at a height of Cellix's own. Nothing glides: a glide counts in lines.
@@ -310,6 +323,20 @@ impl<R: Rasterizer> PixelBackend<R> {
     }
 
     fn transmit(&self, out: &mut Vec<u8>, id: u32, image: &Image) {
+        // A terminal on this machine reads the pixels from a file and deletes it, so only the
+        // file's name is written, and nothing is compressed: it reads them from memory.
+        if let Some(path) = self
+            .files
+            .as_ref()
+            .and_then(|files| files.write(&image.rgb))
+        {
+            let control = format!(
+                "a=t,f=24,t=t,q=2,i={id},s={},v={}",
+                image.width, image.height
+            );
+            self.apc(out, &control, payload(&path).as_bytes());
+            return;
+        }
         let b64 = base64::engine::general_purpose::STANDARD.encode(zlib(&image.rgb));
         let chunks: Vec<&[u8]> = b64.as_bytes().chunks(CHUNK).collect();
         for (i, chunk) in chunks.iter().enumerate() {
@@ -1612,6 +1639,95 @@ mod tests {
         present(&mut b, &page(0));
         let out = present(&mut b, &page(5));
         assert_eq!(count(&out, "a=d,d=I"), 5);
+    }
+
+    /// The pictures a frame sends, by image id, as a terminal would keep them: read from the
+    /// file and the file deleted where one is named, or put together from the pieces.
+    #[cfg(unix)]
+    fn sent(output: &str) -> BTreeMap<u32, (String, String, Vec<u8>)> {
+        use std::io::Read;
+        let mut images = BTreeMap::new();
+        let mut pending: Option<(u32, String, String, String)> = None;
+        for command in output.split("\x1b_G").skip(1) {
+            let command = &command[..command.find("\x1b\\").unwrap()];
+            let (control, data) = command.split_once(';').unwrap_or((command, ""));
+            let start = field(control, "a").as_deref() == Some("t");
+            if start && field(control, "t").as_deref() == Some("t") {
+                let name = base64::engine::general_purpose::STANDARD
+                    .decode(data)
+                    .unwrap();
+                let path = std::path::PathBuf::from(String::from_utf8(name).unwrap());
+                let pixels = std::fs::read(&path).unwrap();
+                std::fs::remove_file(&path).unwrap();
+                let size = (field(control, "s").unwrap(), field(control, "v").unwrap());
+                let id = field(control, "i").unwrap().parse().unwrap();
+                images.insert(id, (size.0, size.1, pixels));
+                continue;
+            }
+            if start {
+                let id = field(control, "i").unwrap().parse().unwrap();
+                let (w, h) = (field(control, "s").unwrap(), field(control, "v").unwrap());
+                pending = Some((id, w, h, String::new()));
+            } else if field(control, "a").is_some() {
+                continue;
+            }
+            let (id, w, h, mut b64) = pending.take().unwrap();
+            b64.push_str(data);
+            if field(control, "m").as_deref() == Some("1") {
+                pending = Some((id, w, h, b64));
+                continue;
+            }
+            let packed = base64::engine::general_purpose::STANDARD
+                .decode(b64)
+                .unwrap();
+            let mut pixels = Vec::new();
+            flate2::read::ZlibDecoder::new(packed.as_slice())
+                .read_to_end(&mut pixels)
+                .unwrap();
+            images.insert(id, (w, h, pixels));
+        }
+        images
+    }
+
+    /// Where tiles go as files, a frame names them and the terminal ends up with the same
+    /// pictures, placed the same way. Placeholders, which are for tmux, never do. What that
+    /// saves is measured on real rows, in the headless terminal.
+    #[cfg(unix)]
+    #[test]
+    fn tiles_go_as_files_the_terminal_reads_and_end_up_the_same() {
+        let root = std::env::temp_dir().join(format!("cellix-pixels-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir(&root).unwrap();
+        let files = TileFiles::for_test(root.clone());
+        let mut filed =
+            PixelBackend::new(Sized, Placement::Direct, DEFAULT_QUOTA).with_files(files.clone());
+        let mut inline = PixelBackend::new(Sized, Placement::Direct, DEFAULT_QUOTA);
+        for top in [0, 3, 1] {
+            let (mut a, mut b) = (Vec::new(), Vec::new());
+            filed.present(&pane(top), &mut a).unwrap();
+            inline.present(&pane(top), &mut b).unwrap();
+            let (a, b) = (String::from_utf8(a).unwrap(), String::from_utf8(b).unwrap());
+            assert_eq!(
+                count(&a, "t=t,"),
+                count(&b, "a=t,"),
+                "every new tile as a file"
+            );
+            assert_eq!(count(&a, "o=z"), 0, "nothing inline");
+            assert_eq!(sent(&a), sent(&b), "the same pictures");
+            let placed = |out: &str| {
+                out.split("\x1b_G")
+                    .skip(1)
+                    .filter(|command| !command.starts_with("a=t") && !command.starts_with("m="))
+                    .map(|command| command[..command.find("\x1b\\").unwrap()].to_string())
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(placed(&a), placed(&b), "placed the same way");
+        }
+        let tmux = PixelBackend::new(Sized, Placement::Placeholder, DEFAULT_QUOTA)
+            .with_files(files.clone());
+        assert!(tmux.files.is_none());
+        files.clear();
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

@@ -8,8 +8,8 @@ use base64::Engine;
 use cellix_input::{Event, Key, KeyEvent, Mods, MouseEvent, MouseKind};
 use cellix_render::{CellMeasure, FontMeasure, Grid, Measure, SoftwareRasterizer};
 use cellix_term::{
-    Backend, Bleed, CellBackend, DEFAULT_QUOTA, PixelBackend, Placement, Smooth, Tier, detect,
-    select_tier,
+    Backend, Bleed, CellBackend, DEFAULT_QUOTA, PixelBackend, Placement, Smooth, Tier, TileFiles,
+    detect, select_tier,
 };
 use crossterm::event::{
     self as ct, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture,
@@ -720,6 +720,9 @@ struct Display {
     /// Whether it's fitted: not where `CELLIX_ROW_FIT` is 0, which is how the harness keeps
     /// rows the height it was told they are.
     fit: bool,
+    /// Where tiles go to the terminal as files: Ghostty on this machine, once it has shown it
+    /// takes them. One ledger for the run, whatever backends it makes.
+    files: Option<TileFiles>,
 }
 
 /// The height of a row, near `nominal` pixels, that leaves the least of a window of `lines`
@@ -822,7 +825,12 @@ impl Display {
             .as_deref()
             .or(setting)
             .and_then(|v| v.parse().ok());
-        let env = detect(|k| std::env::var(k).ok())?;
+        // Files only go with direct placement: no use asking where another tier is forced.
+        let pixels = !matches!(forced, Some(Tier::Cells | Tier::PixelsPlaceholder));
+        let files = pixels
+            .then(|| TileFiles::for_terminal(|k| std::env::var(k).ok()))
+            .flatten();
+        let env = detect(|k| std::env::var(k).ok(), files.as_ref())?;
         let placement = match select_tier(env, forced) {
             Tier::PixelsDirect => Some(Placement::Direct),
             Tier::PixelsPlaceholder => Some(Placement::Placeholder),
@@ -837,6 +845,7 @@ impl Display {
             own_rows: own_rows(asked_rows().as_deref(), rows),
             lines: 0,
             fit: std::env::var("CELLIX_ROW_FIT").map_or(true, |fit| fit.trim() != "0"),
+            files: files.filter(|files| files.on() && placement == Some(Placement::Direct)),
             placement,
             cell,
             told_cell: env.cell.is_some() && env.multiplexer == cellix_term::Multiplexer::Tmux,
@@ -926,6 +935,10 @@ impl Display {
                 SoftwareRasterizer::new(cell.0, row.unwrap_or(cell.1))?.with_type_row(cell.1);
             let backend =
                 PixelBackend::new(rasterizer, placement, DEFAULT_QUOTA).with_bleed(self.bleed);
+            let backend = match &self.files {
+                Some(files) => backend.with_files(files.clone()),
+                None => backend,
+            };
             let backend = match row {
                 Some(row) => backend.with_own_rows(cellix_term::OwnRows { row, line: cell.1 }),
                 None => backend,
@@ -986,6 +999,13 @@ pub fn run(options: Options) -> io::Result<()> {
     let smooth = settings.smooth_scroll != Some(false);
     let rows = crate::settings::row_height_times(settings.row_height.as_deref());
     let mut display = Display::detect(settings.tier.as_deref(), smooth, rows)?;
+    // A stop the loop can't see to clears the tiles the terminal hasn't taken as well.
+    if let (Some(folder), Ok(mut left)) = (
+        display.files.as_ref().and_then(TileFiles::folder),
+        left.lock(),
+    ) {
+        left.push(folder);
+    }
     display.fit_to(size()?.1);
     let mut backend = display.backend();
     // Counted, for `CELLIX_PROF`: an addition a write, whether or not it's on.
@@ -1475,6 +1495,10 @@ pub fn run(options: Options) -> io::Result<()> {
     let _ = write!(out, "\x1b]22;default\x1b\\");
     let _ = out.flush();
     drop(_session);
+    // What the terminal hasn't taken, and the folder. Nothing's drawn after this.
+    if let Some(files) = &display.files {
+        files.clear();
+    }
     // Each workspace keeps what it must: comments, tabs and unsaved edits.
     let mut finished = Ok(());
     for mut workspace in spaces.list.drain(..) {
