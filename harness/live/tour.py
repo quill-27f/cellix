@@ -961,7 +961,9 @@ with tempfile.TemporaryDirectory() as scratch:
     # Where the terminal's output and the Problems tab are, at 150x44 and 170x44.
     OUTPUT_FROM, OUTPUT_TO, OUTPUT_ASK = (98, 7), (126, 10), (144, 6)
     PROBLEM_COUNT, PROBLEM_ROW = FOOT("⊗", 0), (150, 3)
-    GEAR = (25, 0)  # Settings, at the end of the views' row over a sidebar 28 columns wide
+    # Settings, at the end of the views' row over a sidebar 28 columns wide, before the button
+    # that hides the sidebar.
+    GEAR, HIDE_SIDEBAR = (22, 0), (25, 0)
     settings = [["click", *GEAR], ["until", "Changes apply"]]
 
     workspaces(scratch)
@@ -1070,6 +1072,12 @@ with tempfile.TemporaryDirectory() as scratch:
           background="eff1f5")
     shoot("26-light-settings", settings, CODE_FILE, background="eff1f5")
     shoot("27-hover-rail", [["move", *REVIEW]], CODE_FILE)
+    # The sidebar's own button, at the end of the views: pointed at, and pressed, after which
+    # the same window in outline starts the tabs, pointed at too. The rail it ends without
+    # pictures is the cells' alone, which this terminal doesn't draw: the tests read it.
+    shoot("27-sidebar-hide-hover", [["move", *HIDE_SIDEBAR], ["wait", 0.4]], CODE_FILE, expect="QUEUE")
+    shoot("27-sidebar-hidden", [["until", "QUEUE"], ["click", *HIDE_SIDEBAR], ["gone", "QUEUE"], ["move", 1, 0],
+                                ["wait", 0.4]], CODE_FILE)
     shoot("28-hover-tree", [["move", 12, 3]], CODE_FILE)
     shoot("29-hover-tab", [["move", 38, 0]], CODE_FILE)
     shoot("30-hover-menu", [["right", 60, 12], ["move", 64, 13]], CODE_FILE)

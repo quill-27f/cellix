@@ -344,6 +344,8 @@ fn fallback(icon: Icon) -> &'static str {
         Icon::Close => "×",
         Icon::HidePane => "◨",
         Icon::ShowPane => "◫",
+        Icon::HideSidebar => "◧",
+        Icon::ShowSidebar => "◫",
         Icon::HidePanel => "⬓",
         Icon::ReplaceAll => "⇉",
         Icon::ChevronRight => "›",

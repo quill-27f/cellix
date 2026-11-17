@@ -312,7 +312,16 @@ const RAIL_NAMES: [&str; 6] = [
 /// Below this width, opening the side pane puts the sidebar away.
 const CROWDED_WIDTH: u16 = 120;
 const SIDEBAR_WIDTH: u16 = 28;
-const SIDEBAR_MIN_WIDTH: u16 = 20;
+/// The narrowest sidebar: what holds every view's icon and the button that hides it, with a
+/// column clear at each end. Twenty held the views alone.
+const SIDEBAR_MIN_WIDTH: u16 = VIEW_INSET * 2 + VIEW_STEP * ACTIVITY.len() as u16 + SIDEBAR_HIDE;
+/// The sidebar's own button, the side pane's mirrored: the window with its left part filled
+/// ends the views' row and hides it, and in outline it starts the tabs and brings it back.
+/// Its columns, as many as a view's.
+const SIDEBAR_HIDE: u16 = VIEW_STEP;
+/// What each is called under the pointer: what it does, and then, quieter, its key.
+const HIDE_SIDEBAR_TIP: &str = "Hide Sidebar  Ctrl+B";
+const SHOW_SIDEBAR_TIP: &str = "Show Sidebar  Ctrl+B";
 /// Below this width the window is a side pane, as beside an agent: chrome gives way to
 /// the code, and the sidebar becomes a drawer that opens over it.
 const COMPACT_WIDTH: u16 = 70;
@@ -3803,6 +3812,38 @@ impl App {
     fn sidebar_button(&self) -> bool {
         let closed = self.views_on_top() && self.sidebar_frame().is_none();
         self.compact() || (closed && self.maximized.is_none())
+    }
+
+    /// The button that hides the sidebar: after Settings at the end of the views' row, or
+    /// where icons are cells, at the foot of the rail, where it stays to bring the sidebar
+    /// back.
+    fn sidebar_hide(&self) -> Option<Rect> {
+        let area = self.activity_area();
+        if area.w == 0 {
+            return None;
+        }
+        if self.views_on_top() {
+            let x = area.right().checked_sub(VIEW_INSET + SIDEBAR_HIDE)?;
+            return Some(Rect::new(x, area.y, SIDEBAR_HIDE, 1));
+        }
+        let y = self.rail_top(ACTIVITY.len(), area).floor() as u16;
+        (y + 1 < area.bottom()).then(|| Rect::new(area.x, y, area.w, 1))
+    }
+
+    /// Hides the sidebar when it shows, and brings it back when it doesn't, as its button
+    /// and the one at the start of the tabs do: Review's list is Source Control's, and
+    /// whatever has the window gives it back first.
+    fn press_sidebar_button(&mut self) {
+        if self.sidebar_area().is_some() {
+            self.hide_sidebar();
+        } else if self.maximized.take().is_some() {
+            self.fit_dock();
+            self.show_sidebar = true;
+        } else if !self.compact() && self.review.is_some() {
+            self.run(Command::ShowSourceControl);
+        } else {
+            self.toggle_sidebar();
+        }
     }
 
     /// The sidebar's whole column, the views' row included where it's at its top.
@@ -12979,7 +13020,11 @@ impl App {
         }
         if self.activity_area().contains(x, y) {
             if mouse.kind == MouseKind::Left {
-                self.click_activity(x, y);
+                if self.sidebar_hide().is_some_and(|cell| cell.contains(x, y)) {
+                    self.press_sidebar_button();
+                } else {
+                    self.click_activity(x, y);
+                }
             }
             return;
         }
@@ -13152,11 +13197,7 @@ impl App {
             }
             MouseKind::Left if self.sidebar_button() && y == 0 && x < MENU_BUTTON => {
                 // Review stands where the sidebar does, with its own list a view of it.
-                if !self.compact() && self.review.is_some() {
-                    self.run(Command::ShowSourceControl);
-                } else {
-                    self.toggle_sidebar();
-                }
+                self.press_sidebar_button();
             }
             MouseKind::Left
                 if self
@@ -14877,6 +14918,32 @@ impl App {
                 let name = "Hide pane. What runs here keeps running.";
                 Some((name, self.size.0 as f32 - wide(name) - 0.5, 1.2))
             }
+            Overlay::None if self.sidebar_hide().is_some_and(|cell| cell.contains(x, y)) => {
+                let cell = self.sidebar_hide().unwrap_or_default();
+                let name = if self.sidebar_area().is_some() {
+                    HIDE_SIDEBAR_TIP
+                } else {
+                    SHOW_SIDEBAR_TIP
+                };
+                if self.views_on_top() {
+                    // On the heading under the views, as theirs are, ending where its chip
+                    // does: centred, it reached over the file's first line.
+                    let middle = f32::from(cell.x) + f32::from(cell.w) / 2.0;
+                    let chip_end = middle + crate::dock::BESIDE_LINE_PILL.0 / 2.0;
+                    let left = (chip_end - wide(name)).max(0.5);
+                    let top = rail.bottom() as f32 + f32::from(SIDEBAR_AIR) - SIDEBAR_RAISE;
+                    Some((name, left, top))
+                } else {
+                    let top = f32::from(cell.y) + 0.5 - TOOLTIP_HEIGHT / 2.0;
+                    Some((name, rail.right() as f32 + 1.0, top))
+                }
+            }
+            // The button at the start of the tabs, on the row under it.
+            Overlay::None
+                if self.sidebar_button() && y == 0 && x < MENU_BUTTON && !rail.contains(x, y) =>
+            {
+                Some((SHOW_SIDEBAR_TIP, 0.5, 1.2))
+            }
             Overlay::None if rail.w > 0 && rail.contains(x, y) => {
                 self.view_at(x, y).map(|i| {
                     if self.views_on_top() {
@@ -14915,10 +14982,11 @@ impl App {
         };
         // On the row nearest where it was asked for: the one under its icon. A view's is on
         // its heading, which isn't on a row.
+        let on_hide = self.sidebar_hide().is_some_and(|cell| cell.contains(x, y));
         let on_view = matches!(self.overlay, Overlay::None)
             && self.views_on_top()
             && rail.contains(x, y)
-            && self.view_at(x, y).is_some();
+            && (self.view_at(x, y).is_some() || on_hide);
         let top = if on_view { top } else { top.round() };
         // Over the bar at the foot, at the top of its row where a row has room: `TIP_RAISE`.
         let foot = self.size.1.saturating_sub(1);
@@ -14961,9 +15029,11 @@ impl App {
             );
         } else {
             let end = left + wide(name);
-            // What it does, and then, quieter, the other way to do it.
+            // What it does, and then, quieter, the other way to do it, or its key after
+            // two spaces.
             let (head, tail) = name
                 .split_once(" or ")
+                .or_else(|| name.split_once("  "))
                 .map_or((name, ""), |(head, _)| (head, &name[head.len()..]));
             let start = (left + 1.5, text_top);
             grid.text_run(start, end, head, (theme.text.fg, false), font);
@@ -15443,14 +15513,16 @@ impl App {
         input(grid, line, &field, &*self.measure, &self.theme);
     }
 
-    /// The top of an icon's row, which can fall half way down a cell. The last one is
-    /// Settings, which sits at the bottom given room.
+    /// The top of an icon's row, which can fall half way down a cell. The last view is
+    /// Settings, which sits at the bottom given room, over the button that hides the sidebar
+    /// (`ACTIVITY.len()`), which ends the rail.
     fn rail_top(&self, index: usize, area: Rect) -> f32 {
         let step = ACTIVITY_STEP;
         // The first level with the sidebar's header.
         let stacked = area.y as f32 + index as f32 * step;
-        if index + 1 == ACTIVITY.len() {
-            stacked.max(area.bottom().saturating_sub(2) as f32)
+        let from_foot = (ACTIVITY.len() + 1).saturating_sub(index) as f32 * step;
+        if index + 1 >= ACTIVITY.len() {
+            stacked.max(area.bottom() as f32 - from_foot)
         } else {
             stacked
         }
@@ -15489,10 +15561,12 @@ impl App {
     }
 
     /// The column a view's icon starts at across the top of the sidebar: one after another
-    /// from a column in, and Settings, the last, at the row's end.
+    /// from a column in, and Settings, the last, at the row's end before the button that
+    /// hides the sidebar.
     fn view_x(&self, index: usize, area: Rect) -> u16 {
         if index + 1 == ACTIVITY.len() {
-            area.right().saturating_sub(VIEW_STEP + VIEW_INSET)
+            area.right()
+                .saturating_sub(VIEW_STEP + SIDEBAR_HIDE + VIEW_INSET)
         } else {
             area.x + VIEW_INSET + index as u16 * VIEW_STEP
         }
@@ -15576,6 +15650,30 @@ impl App {
                 );
             }
         }
+        if let Some(cell) = self.sidebar_hide() {
+            self.draw_sidebar_button(grid, cell, Icon::HideSidebar, theme.activity);
+        }
+    }
+
+    /// The sidebar's button, drawn as the side pane's is: the size of the icons at the top
+    /// right, quiet until pointed at, and then on their chip. `cell` is the columns it
+    /// takes, which it stands in the middle of.
+    fn draw_sidebar_button(&self, grid: &mut Grid, cell: Rect, icon: Icon, ground: Style) {
+        let theme = &self.theme;
+        let hovered = self.hover.is_some_and(|h| cell.contains(h.0, h.1));
+        let middle = f32::from(cell.x) + f32::from(cell.w) / 2.0;
+        if hovered {
+            let (wide, high) = crate::dock::BESIDE_LINE_PILL;
+            let top = f32::from(cell.y) + (1.0 - high) / 2.0;
+            let chip = Bounds::cells(middle - wide / 2.0, top, wide, high);
+            grid.panel(chip, PILL_RADIUS, Some(theme.row_hover), None);
+        }
+        let color = if hovered {
+            theme.text.fg
+        } else {
+            theme.activity.fg
+        };
+        toolbar::draw_icon(grid, (icon, ACTION_ICON), cell, color, ground);
     }
 
     /// How many files differ from HEAD, for the badge on the rail.
@@ -15684,6 +15782,29 @@ impl App {
                 );
             }
         }
+        // The rail ends with the sidebar's button, which stays with it while the sidebar's
+        // hidden: the window with its left part filled, and in outline to bring it back.
+        if let Some(cell) = self.sidebar_hide() {
+            let shown = self.sidebar_area().is_some();
+            let hovered = self.hover.is_some_and(|h| cell.contains(h.0, h.1));
+            let style = Style {
+                fg: if hovered {
+                    self.theme.text.fg
+                } else {
+                    self.theme.activity.fg
+                },
+                bg: if hovered {
+                    self.theme.row_hover
+                } else {
+                    self.theme.activity.bg
+                },
+                ..self.theme.activity
+            };
+            let inside = Rect::new(cell.x + 1, cell.y, cell.w.saturating_sub(2), 1);
+            grid.fill(inside, style);
+            let mark = if shown { "◧" } else { "◫" };
+            grid.put_str(cell.x + 1, cell.y, mark, style, cell.right());
+        }
     }
 
     /// The raised surface the work sits on, under the tabs.
@@ -15698,14 +15819,9 @@ impl App {
         grid.fill(Rect::new(main.x, main.y, main.w, 1), theme.tab);
         self.rule_under_tabs(grid, main);
         if self.sidebar_button() {
-            grid.glyph(
-                main.x as f32 + 0.5,
-                main.y,
-                Icon::Files,
-                theme.tab.fg,
-                "☰",
-                theme.tab,
-            );
+            // The window with its left part in outline, where the sidebar would be.
+            let cell = Rect::new(main.x, main.y, MENU_BUTTON, 1);
+            self.draw_sidebar_button(grid, cell, Icon::ShowSidebar, theme.tab);
         }
         if self.plan_in_view() {
             self.draw_plan_banner(grid);
@@ -30240,8 +30356,12 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             }
         }
         assert_eq!(app.view_at(0, 0), None, "the column before the first");
-        let settings = app.view_at(row.right() - 2, 0);
-        assert_eq!(settings, Some(ACTIVITY.len() - 1), "Settings, at the end");
+        let settings = app.view_at(row.right() - 2 - SIDEBAR_HIDE, 0);
+        assert_eq!(
+            settings,
+            Some(ACTIVITY.len() - 1),
+            "Settings, at the end before the sidebar's button"
+        );
         assert_eq!(app.view_at(2, 1), None, "the row under them is the view's");
         // A press on an icon shows its view.
         click(&mut app, 5, 0);
@@ -30292,6 +30412,142 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             app.sidebar_view == SidebarView::Outline,
             "on the view it had"
         );
+    }
+
+    /// The sidebar hid only by Ctrl+B or a second press on the view in front, and nothing on
+    /// it said so. Its own button ends the views' row, the side pane's mirrored: a window with
+    /// its left part filled, which hides it, and the same in outline starting the tabs, which
+    /// brings it back. Without pictures the rail ends with it, and keeps it while the sidebar
+    /// is hidden.
+    #[test]
+    fn the_sidebar_has_a_button_that_hides_it_and_one_that_brings_it_back() {
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        let unit = cellix_render::UNIT;
+        let row = app.activity_area();
+        let icon_at = |app: &App, icon: Icon| {
+            screen(app).paint.iter().find_map(|p| match p {
+                Paint::Icon {
+                    icon: drawn,
+                    bounds,
+                    ..
+                } if *drawn == icon => Some(*bounds),
+                _ => None,
+            })
+        };
+        // After Settings, at the end of the views' row, a column from the sidebar's edge.
+        let hide = app.sidebar_hide().expect("the button ends the views");
+        assert_eq!((hide.right(), hide.y), (row.right() - VIEW_INSET, 0));
+        let settings = app.view_x(ACTIVITY.len() - 1, row);
+        assert_eq!(settings + VIEW_STEP, hide.x, "straight after Settings");
+        let mark = icon_at(&app, Icon::HideSidebar).expect("drawn with its left part filled");
+        assert!(mark.y >= 0 && mark.y + mark.h <= unit, "on the views' row");
+        assert!(
+            mark.x >= i32::from(hide.x) * unit && mark.x + mark.w <= i32::from(hide.right()) * unit,
+            "inside its columns: {mark:?}"
+        );
+        // Pointed at, it's named with its key, and stands on a chip.
+        let said = |grid: &Grid| -> String {
+            let texts = grid.paint.iter().filter_map(|p| match p {
+                Paint::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            });
+            texts.collect()
+        };
+        let x = hide.x + 1;
+        app.handle(mouse(MouseKind::Move, x, 0));
+        let grid = screen(&app);
+        let said_here = said(&grid);
+        assert!(said_here.contains("Hide Sidebar"), "{said_here}");
+        assert!(said_here.contains("Ctrl+B"), "and its key: {said_here}");
+        let chip = grid.paint.iter().any(|p| {
+            matches!(p, Paint::Panel { bounds, fill: Some(fill), .. }
+                if *fill == app.theme.row_hover && bounds.y >= 0 && bounds.y + bounds.h <= unit
+                    && bounds.x >= i32::from(hide.x) * unit)
+        });
+        assert!(chip, "a chip behind it under the pointer");
+        assert_eq!(app.view_at(x, 0), None, "it isn't a view");
+        // Pressed, the sidebar goes and the views with it; the tabs start with the same
+        // window, its left part in outline.
+        click(&mut app, x, 0);
+        assert!(app.sidebar_area().is_none(), "hidden");
+        assert_eq!(app.main_area().x, 0);
+        let show = icon_at(&app, Icon::ShowSidebar).expect("the tabs start with a button");
+        assert!(show.x >= 0 && show.x + show.w <= i32::from(MENU_BUTTON) * unit);
+        assert!(icon_at(&app, Icon::HideSidebar).is_none());
+        app.handle(mouse(MouseKind::Move, 1, 0));
+        assert!(said(&screen(&app)).contains("Show Sidebar"), "named");
+        click(&mut app, 1, 0);
+        assert!(app.sidebar_area().is_some(), "and brings it back");
+        // Ctrl+B still does both.
+        app.handle(Event::Key(KeyEvent::ctrl('b')));
+        assert!(app.sidebar_area().is_none());
+        app.handle(Event::Key(KeyEvent::ctrl('b')));
+        assert!(app.sidebar_area().is_some());
+
+        // Without pictures the views are a rail down the left edge, and it ends with the
+        // same button, which stays there to bring the sidebar back.
+        let mut cells = App::new(dir.path().to_path_buf(), (150, 40));
+        let rail = cells.activity_area();
+        let button = cells.sidebar_hide().expect("on the rail");
+        assert_eq!(button.y, rail.bottom() - 2, "at its foot");
+        let settings = cells.rail_top(ACTIVITY.len() - 1, rail) as u16;
+        assert!(settings + 2 <= button.y, "under Settings");
+        let mark = |app: &App| screen(app).row_text(button.y).chars().nth(1);
+        assert_eq!(mark(&cells), Some('◧'));
+        click(&mut cells, 1, button.y);
+        assert!(cells.sidebar_area().is_none(), "a press hides it");
+        assert_eq!(mark(&cells), Some('◫'), "and the rail keeps the way back");
+        click(&mut cells, 1, button.y);
+        assert!(cells.sidebar_area().is_some(), "which brings it back");
+    }
+
+    /// The narrowest sidebar holds every view and the button that hides it, three columns
+    /// each, none over another and a column clear at each end.
+    #[test]
+    fn the_narrowest_sidebar_holds_every_view_and_its_button() {
+        let (dir, _) = project();
+        let mut app = App::new(dir.path().to_path_buf(), (COMPACT_WIDTH + 2, 30));
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        let row = app.activity_area();
+        assert_eq!(row.w, SIDEBAR_MIN_WIDTH, "the narrowest");
+        let mut starts: Vec<u16> = (0..ACTIVITY.len()).map(|i| app.view_x(i, row)).collect();
+        starts.push(app.sidebar_hide().expect("it fits").x);
+        assert_eq!(starts[0], row.x + VIEW_INSET);
+        for pair in starts.windows(2) {
+            assert!(pair[0] + VIEW_STEP <= pair[1], "apart: {starts:?}");
+        }
+        let last = *starts.last().unwrap();
+        assert!(
+            last + SIDEBAR_HIDE + VIEW_INSET <= row.right(),
+            "{starts:?}"
+        );
+        // And every icon is drawn, each in its own columns.
+        let unit = cellix_render::UNIT;
+        let grid = screen(&app);
+        let icons: Vec<Bounds> = grid
+            .paint
+            .iter()
+            .filter_map(|p| match p {
+                Paint::Icon { bounds, .. }
+                    if bounds.y < unit && bounds.x < i32::from(row.right()) * unit =>
+                {
+                    Some(*bounds)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(icons.len(), ACTIVITY.len() + 1, "{icons:?}");
+        let mut icons = icons;
+        icons.sort_by_key(|b| b.x);
+        // 8 px of a 17 px column, at least, between one icon and the next.
+        let air = 8 * unit / 17;
+        for pair in icons.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            assert!(a.x + a.w + air <= b.x, "{a:?} too near {b:?}");
+        }
     }
 
     #[test]

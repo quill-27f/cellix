@@ -2704,3 +2704,18 @@ The second half of the user's #2. The last review wanted a button on a pointed r
 - README says a row's height is fitted to the window and that two rows at the foot share what's under the file. The changelog's entry is under 0.10.2.
 - Unverified: none of this has been looked at in a real Ghostty since the user's own screenshots of 0.10.0. The padding under Ghostty's lines is still a guess, and the foot's evenness there depends on it.
 - Next: the user's look at 0.10.2; the open questions (the second cause of the workspaces missing after a dropped connection; the reviewer's list in the two entries above).
+
+## The sidebar's own button (2026-11-17)
+
+Item 1 of the herdr round (0.11.0). The sidebar hid only by Ctrl+B or a second press on the view in front, and nothing on it said so.
+
+- A button ends the views' row, after Settings: the side pane's own control mirrored, a window with its left part filled (`Icon::HideSidebar`), 13 pt as the top right's are, on their hover chip, named "Hide Sidebar" with "Ctrl+B" quieter after it (a tip's two spaces now part its words from a quieter tail, as " or " did). Hidden, the button at the start of the tabs is the same window with its left part in outline (`Icon::ShowSidebar`, "Show Sidebar"), where it was a ☰. Both go through `press_sidebar_button`, which restores a maximized pane first and in Review shows Source Control, as that button did.
+- The narrowest sidebar is now what holds every view and the button with a column clear at each end: 23 columns, where 20 held the views alone (`SIDEBAR_MIN_WIDTH`, from the views' measures). Windows from 70 to 91 columns have a sidebar up to three columns wider.
+- Without pictures the rail ends with it: ◧ two rows under Settings at the rail's foot (Settings moved up two rows), and ◫ while the sidebar is hidden, since there the tabs have no button. Ctrl+B unchanged.
+- Against the board: its tip says the key quietly, as here; its cells row draws ◧ in the accent, here it's the rail's quiet colour like the views' marks, lit under the pointer.
+- Tests: `the_sidebar_has_a_button_that_hides_it_and_one_that_brings_it_back` (pictures: where it stands, its tip and chip, hiding, the tabs' button, Ctrl+B; cells: the rail's mark both ways), `the_narrowest_sidebar_holds_every_view_and_its_button` (seven icons, 8 px apart at least); `the_views_run_across_the_top_of_the_sidebar` finds Settings three columns sooner.
+- Tour: Settings is pressed at (22, 0) now; new scenes `27-sidebar-hide-hover` and `27-sidebar-hidden`. A scene on cells came out blank, since the tour's terminal draws only pictures, so the rail's ◧ is read by the test alone (and was in that scene's text).
+- Looked at: `02-code`, `22-narrow` (the drawer's button), `13-review`, `15-settings-appearance` (reached at the new place), `27-hover-rail` and the two new scenes.
+- One `ui-expert` pass over five pictures: the icon is the size of the side pane's control to the pixel, centred in its row, 51 px from Settings as the views are from each other, and 31 px from the sheet's edge as Explorer is from the window's. What it found: the tip, centred on the button, reached 94 px over the file and covered the first line's number; it now ends where the button's chip does, as the board has it.
+- Not done, from that review, all shared with the controls the button mirrors: the hover chip is 6 px from the icon at its sides and 9 px over and under (the side pane's control has the same chip); a tip on the row under the tabs stands 4 px under the line beneath them, as every tip at the top right does; a view's tip leaves the end of a long heading showing; with Settings open, Explorer keeps its line.
+- Unverified: a real terminal; the rail's mark on a cells-only terminal by eye.

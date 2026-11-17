@@ -629,6 +629,16 @@ itself starts a row down. With the sidebar closed the views go with it, and a bu
 start of the tabs brings both back; in Review it shows Source Control, which stands beside a
 review. On a terminal without pictures an icon is block art two rows tall, so there the views
 stay on a rail four columns wide down the left edge.
+
+The sidebar has a button of its own, the side pane's mirrored (17 November 2026: it hid only by
+Ctrl+B or a second press on the view in front, and nothing said so). It ends the views' row, after
+Settings, in three columns as a view has: a window with its left part filled, the size of the
+icons at the top right and on their chip when pointed at, named "Hide Sidebar" with Ctrl+B
+quieter after it. Hidden, the button at the start of the tabs is the same window with its left
+part in outline, "Show Sidebar". The narrowest sidebar is what holds every view and that button
+with a column clear at each end, 23 columns (`SIDEBAR_MIN_WIDTH`; it was 20, which held the views
+alone). Without pictures the rail ends with it, ◧ under Settings at the rail's foot, and keeps it
+as ◫ while the sidebar is hidden, since there the tabs have no button. Ctrl+B does the same.
 Both themes are two surfaces: the frame (the views, the sidebar, the status bar) and the
 sheets on it (the file and the side pane, whatever it shows, a terminal too, each with its
 tabs). Cards, menus and dialogs are raised over those, and a text box is sunk. Text

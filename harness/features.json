@@ -5472,5 +5472,12 @@
     "title": "A problem's message that doesn't fit its row ends in an ellipsis, two columns clear of the button on a pointed row",
     "test": "a_problems_message_is_cut_with_an_ellipsis_short_of_its_button",
     "passes": true
+  },
+  {
+    "id": "sidebar-hide-button",
+    "milestone": 15,
+    "title": "The sidebar has its own button that hides it, and one at the tabs' start that brings it back",
+    "test": "the_sidebar_has_a_button_that_hides_it_and_one_that_brings_it_back",
+    "passes": true
   }
 ]

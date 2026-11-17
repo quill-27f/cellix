@@ -94,6 +94,12 @@ pub enum Icon {
     FileJson = 64,
     FileConfig = 65,
     FileCode = 66,
+    /// The sidebar's own button, the side pane's mirrored: a window with its left part
+    /// filled, the sidebar shown, and the button at the end of the views that hides it.
+    HideSidebar = 90,
+    /// The same with its left part in outline: the sidebar hidden, and the button at the
+    /// start of the tabs that brings it back.
+    ShowSidebar = 91,
 }
 
 /// One cell of an icon that is `width` by `height` cells.
@@ -276,6 +282,8 @@ fn half_stroke(icon: Icon) -> f32 {
         | Icon::HidePane
         | Icon::HidePanel
         | Icon::ShowPane
+        | Icon::HideSidebar
+        | Icon::ShowSidebar
         | Icon::ReplaceAll => 0.9,
         Icon::Agents => 0.8,
         Icon::Check => 1.7,
@@ -635,6 +643,13 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
         Icon::ShowPane => {
             rounded(p, (3.0, 3.0), (21.0, 21.0), 2.0).min(segment(p, (15.0, 3.0), (15.0, 21.0)))
         }
+        // Lucide's panel-left, its left part filled, and in outline.
+        Icon::HideSidebar => rounded(p, (3.0, 3.0), (21.0, 21.0), 2.0)
+            .min(segment(p, (9.0, 3.0), (9.0, 21.0)))
+            .min(solid(p, (3.0, 3.0), (9.0, 21.0), 2.0)),
+        Icon::ShowSidebar => {
+            rounded(p, (3.0, 3.0), (21.0, 21.0), 2.0).min(segment(p, (9.0, 3.0), (9.0, 21.0)))
+        }
         Icon::Maximize => path(p, &[(15.0, 3.0), (21.0, 3.0), (21.0, 9.0)])
             .min(path(p, &[(9.0, 21.0), (3.0, 21.0), (3.0, 15.0)]))
             .min(segment(p, (21.0, 3.0), (14.0, 10.0)))
@@ -919,6 +934,8 @@ mod tests {
             Icon::HidePane,
             Icon::HidePanel,
             Icon::ShowPane,
+            Icon::HideSidebar,
+            Icon::ShowSidebar,
             Icon::Smile,
             Icon::Power,
             Icon::FolderFilled,
