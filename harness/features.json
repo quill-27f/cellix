@@ -5584,5 +5584,12 @@
     "title": "The tick runs on its time however much input comes, the glide keeps its pace over SSH when turned back on, and one check says whether Cellix is at the far end of SSH",
     "test": "a_pointer_moving_all_the_while_doesnt_hold_off_the_tick",
     "passes": true
+  },
+  {
+    "id": "output-out-of-sight",
+    "milestone": 15,
+    "title": "Output from a session behind another tab or in a workspace not in front is parsed but draws nothing and keeps the loop at its slow pace; what's drawn from it catches up at the next tick",
+    "test": "output_behind_another_tab_draws_nothing",
+    "passes": true
   }
 ]

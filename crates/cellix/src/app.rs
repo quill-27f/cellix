@@ -1496,6 +1496,9 @@ pub struct App {
     sync_result: Option<std::sync::mpsc::Receiver<Result<String, String>>>,
     /// What runs sessions so they can outlive Cellix: Cellix itself, away from tests.
     host_program: Option<PathBuf>,
+    /// The session on screen printed, and sessions out of sight did, since the loop asked.
+    printed: bool,
+    behind: bool,
     /// What each agent's transcript has said of its tokens, by the transcript's path. They're
     /// read away from the screen.
     meters: Arc<std::sync::Mutex<HashMap<PathBuf, crate::transcript::Meter>>>,
@@ -1629,6 +1632,8 @@ impl App {
             kernel_command: None,
             pane_explained: false,
             host_program: std::env::current_exe().ok().filter(|_| !cfg!(test)),
+            printed: false,
+            behind: false,
             meters: Arc::default(),
             metering: Arc::default(),
             transcript_pages: HashMap::new(),
@@ -2788,7 +2793,10 @@ impl App {
         self.keep_in_view(shown);
         self.bring_back_maximized(was_open);
         self.tell_selection();
-        let terminal = self.dock.poll(&self.theme) | self.hear_programs();
+        let polled = self.dock.poll(&self.theme, self.shown_session());
+        self.printed |= polled.shown;
+        self.behind |= polled.behind;
+        let terminal = polled.shown | self.hear_programs();
         // What a terminal prints while Find looks through it is looked through as it comes.
         if terminal && matches!(&self.overlay, Overlay::Find(find) if find.pane) {
             self.refresh_pane_find();
@@ -18112,6 +18120,23 @@ impl App {
         self.dock.update_deadline()
     }
 
+    /// The session the side pane shows, if it shows one: what any other prints is out of
+    /// sight until its tab is chosen.
+    fn shown_session(&self) -> Option<usize> {
+        self.dock_area()?;
+        let front = self.dock.front == Front::Session && !self.dock.listing();
+        self.dock.active.filter(|_| front)
+    }
+
+    /// Whether the session on screen printed since this was last asked, and whether any out
+    /// of sight did.
+    pub fn take_printed(&mut self) -> (bool, bool) {
+        (
+            std::mem::take(&mut self.printed),
+            std::mem::take(&mut self.behind),
+        )
+    }
+
     /// Whether something in the side pane may write at any moment.
     pub fn has_session(&self) -> bool {
         self.dock.running()
@@ -22058,6 +22083,41 @@ mod tests {
             app.clipboard, "from the agent",
             "Ctrl+V in Cellix has it too"
         );
+    }
+
+    /// What a session in a tab behind another prints is taken in, but it changes nothing on
+    /// screen until its tab is chosen: the loop draws it only at the tick, for its tab. The
+    /// one in front draws at once, and so does the one behind once it's in front.
+    #[test]
+    fn output_behind_another_tab_draws_nothing() {
+        let (_dir, mut app) = project();
+        let root = app.workspace.root().to_path_buf();
+        let behind = "printf 'ready\\n'; read go; printf 'printed behind\\n'; sleep 5";
+        let argv = |script: &str| ["sh".to_string(), "-c".to_string(), script.to_string()];
+        app.start_session("Behind", &argv(behind), &[], &root);
+        shows(&mut app, "ready");
+        app.start_session("Front", &argv("printf 'front\\n'; sleep 5"), &[], &root);
+        shows(&mut app, "front");
+        let _ = app.take_printed();
+        app.dock.sessions[0].write(b"go\n");
+        let deadline = std::time::Instant::now() + BACKGROUND;
+        loop {
+            assert!(!app.poll(), "nothing on screen changed");
+            let (printed, out_of_sight) = app.take_printed();
+            assert!(!printed);
+            if out_of_sight {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the one behind never printed"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(!screen(&app).text().contains("printed behind"));
+        // Once in front, it's what's shown.
+        app.dock.active = Some(0);
+        assert!(screen(&app).text().contains("printed behind"));
     }
 
     fn session(app: &mut App, script: &str) {

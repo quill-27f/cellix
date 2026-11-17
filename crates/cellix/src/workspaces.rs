@@ -113,6 +113,9 @@ pub struct Workspaces {
     notifier: Notifier,
     /// Notifications for the terminal to show, as title and body, waiting to be written.
     pub notifications: Vec<(String, String)>,
+    /// A session on screen printed, and something out of sight changed, since the loop asked.
+    printed: bool,
+    behind: bool,
 }
 
 impl Workspaces {
@@ -133,6 +136,8 @@ impl Workspaces {
             focused: true,
             notifier: Notifier::default(),
             notifications: Vec::new(),
+            printed: false,
+            behind: false,
         }
     }
 
@@ -349,6 +354,15 @@ impl Workspaces {
         mark.finish()
     }
 
+    /// Whether a session on screen printed since this was last asked, and whether anything
+    /// out of sight changed: sessions behind others, and workspaces not in front.
+    pub fn take_printed(&mut self) -> (bool, bool) {
+        (
+            std::mem::take(&mut self.printed),
+            std::mem::take(&mut self.behind),
+        )
+    }
+
     /// The soonest a program's synchronized update runs out of time, in any workspace.
     pub fn update_deadline(&self) -> Option<std::time::Instant> {
         self.list
@@ -359,15 +373,25 @@ impl Workspaces {
 
     /// Lets every app take what came in, and answers the requests that brings. Returns
     /// whether anything changed.
+    /// What changes in a workspace not in front is out of sight but for its tile in the bar,
+    /// which the tick brings up to date.
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
-        for workspace in &mut self.list {
-            changed |= workspace.app.poll();
+        for (index, workspace) in self.list.iter_mut().enumerate() {
+            let mut here = workspace.app.poll();
             if let Some(server) = &workspace.server {
                 while let Ok(request) = server.requests.try_recv() {
                     workspace.app.serve(request);
-                    changed = true;
+                    here = true;
                 }
+            }
+            let (printed, behind) = workspace.app.take_printed();
+            if index == self.active {
+                changed |= here;
+                self.printed |= printed;
+                self.behind |= behind;
+            } else {
+                self.behind |= here || printed || behind;
             }
         }
         changed |= self.notify();

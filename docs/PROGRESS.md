@@ -2881,3 +2881,12 @@ From herdr's performance study, bugs found while reading Cellix's loop.
 - Turning smooth scrolling off and on in Settings over SSH set the glide's frame to the local 8 ms, where it had been the 33 ms kept for a link. One function picks it (`scrolling`), from whether Cellix is at the far end of SSH, kept with the display.
 - Whether Cellix is at the far end of SSH was asked three ways: the glide and the logout card and the system clipboard looked only at `SSH_CONNECTION`, where the pane looked at `SSH_TTY` too. `pane::over_ssh` is the one check, and `over_ssh_in` says it from variables given.
 - Tests: `a_pointer_moving_all_the_while_doesnt_hold_off_the_tick` (the real binary on a PTY: a file rewritten while the pointer moves every 10 ms is read again), `the_glide_keeps_its_pace_over_ssh_when_turned_back_on`, `either_ssh_variable_says_a_link`.
+
+## Output out of sight draws nothing (2026-11-17)
+
+Item 1 of herdr's performance study.
+
+- What a session behind another tab, or in a workspace not in front, prints is parsed as it comes and draws nothing; it doesn't keep the loop at its quick pace either. The tick draws once for all of it (`Pace::out_of_sight`), so a tab's mark and name and a workspace's tile are at most half a second behind. A session that ends, closing its tab, and one that copies, draw at once.
+- Measured with the rest, in the last entry of this work.
+- Tests: `output_behind_another_tab_draws_nothing` (two shells in the pane: what the one behind prints is taken in, changes nothing on screen, and shows once its tab is chosen), `output_out_of_sight_draws_once_a_tick`.
+- Unverified: a tab's state mark from output that changes faster than the tick (a title that says what an agent does) now lags it by up to half a second while its tab is behind.

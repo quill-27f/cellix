@@ -20,6 +20,10 @@ pub struct Pace {
     quiet: u32,
     /// What the screen's marks were when it was last drawn.
     drawn: Option<u64>,
+    /// Something out of sight changed since: a session behind another printed, or another
+    /// workspace changed. What's drawn from it, a tab's mark or a workspace's tile, waits
+    /// for the tick.
+    behind: bool,
 }
 
 impl Pace {
@@ -28,6 +32,7 @@ impl Pace {
             last_tick: now,
             quiet: 0,
             drawn: None,
+            behind: false,
         }
     }
 
@@ -42,23 +47,60 @@ impl Pace {
     }
 
     /// The tick ran, and the screen's marks are now `mark`. Says whether to draw: only if
-    /// they differ from what was drawn, or the heartbeat is due.
+    /// they differ from what was drawn, something out of sight changed, or the heartbeat is
+    /// due.
     pub fn ticked(&mut self, now: Instant, mark: u64) -> bool {
         self.last_tick = now;
         self.quiet += 1;
-        self.drawn != Some(mark) || self.quiet >= HEARTBEAT
+        self.drawn != Some(mark) || self.behind || self.quiet >= HEARTBEAT
+    }
+
+    /// Something out of sight changed, for the tick to draw.
+    pub fn out_of_sight(&mut self) {
+        self.behind = true;
+    }
+
+    /// Whether something out of sight waits for the tick.
+    pub fn behind(&self) -> bool {
+        self.behind
     }
 
     /// A frame was drawn, showing what has these marks.
     pub fn drew(&mut self, mark: u64) {
         self.quiet = 0;
         self.drawn = Some(mark);
+        self.behind = false;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Output out of sight draws once at the next tick however much of it there is, and
+    /// nothing after that until there's more.
+    #[test]
+    fn output_out_of_sight_draws_once_a_tick() {
+        let start = Instant::now();
+        let mut pace = Pace::new(start);
+        pace.drew(1);
+        let mut drawn = 0;
+        for step in 1..=8u32 {
+            // Four tabs at 60 lines a second each: a hundred and twenty a tick.
+            for _ in 0..120 {
+                pace.out_of_sight();
+            }
+            if pace.ticked(start + TICK * step, 1) {
+                drawn += 1;
+                pace.drew(1);
+            }
+        }
+        assert_eq!(drawn, 8, "one frame a tick");
+        assert!(
+            !pace.ticked(start + TICK * 9, 1),
+            "and none with nothing new"
+        );
+    }
 
     /// Left alone, the tick draws nothing but the heartbeat, every two seconds; a change in
     /// what it marks draws at the next tick.

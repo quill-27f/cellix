@@ -195,6 +195,18 @@ nobody but the user may read them, and nothing may be tricked into writing somew
   be reading what a run that just ended left), and only if all they hold are the user's plain
   files with a tile's name and one link. Anything else, and the folder is left as it is.
 
+### Output out of sight
+
+A session in a tab behind another, or in a workspace not in front, prints as much as the one
+on screen, and every look at the sessions that found any of it drew a whole frame and kept the
+loop at its quick pace: four tabs printing behind the one in front drew a hundred frames a
+second that showed nothing new. What a session out of sight prints is still parsed as it comes,
+but it draws nothing then (`Dock::poll` says what changed on screen apart from what changed
+behind it, and `Workspaces::poll` counts everything in a workspace not in front as behind).
+What's drawn from it, its tab's mark and name and the workspace's tile, is brought up to date
+at the next tick, so it's at most half a second behind; a session ending, which closes its tab,
+draws at once.
+
 ### No GPU renderer
 
 Output would have to be read back to the CPU before it could be sent to the terminal, one

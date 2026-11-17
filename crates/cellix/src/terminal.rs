@@ -1464,9 +1464,10 @@ pub fn run(options: Options) -> io::Result<()> {
                 spaces.handle(Event::Tick);
                 // Only what it changed is drawn, and its heartbeat, which sends nothing
                 // unless something is different.
+                let behind = pace.behind();
                 if pace.ticked(started, spaces.tick_mark()) {
                     redraw = true;
-                    causes.add(Cause::Tick);
+                    causes.add(if behind { Cause::Hidden } else { Cause::Tick });
                 }
                 phases.events += started.elapsed();
                 if let Some(prof) = &mut prof {
@@ -1474,10 +1475,17 @@ pub fn run(options: Options) -> io::Result<()> {
                 }
             }
             let started = Instant::now();
-            if spaces.poll() {
+            let changed = spaces.poll();
+            let (printed, behind) = spaces.take_printed();
+            if changed {
                 lively = started;
                 redraw = true;
-                causes.add(Cause::Poll);
+                causes.add(if printed { Cause::Output } else { Cause::Poll });
+            }
+            // Out of sight: nothing is drawn for it but at the tick, and the loop keeps the
+            // slow pace it would have with nothing printing.
+            if behind {
+                pace.out_of_sight();
             }
             phases.poll += started.elapsed();
             if let Some(prof) = &mut prof {

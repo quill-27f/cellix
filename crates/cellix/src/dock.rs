@@ -1746,6 +1746,15 @@ impl Tops {
     }
 }
 
+/// What a look at the sessions found.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Polled {
+    /// Something on screen changed.
+    pub shown: bool,
+    /// Sessions out of sight printed.
+    pub behind: bool,
+}
+
 /// The side pane: its tabs, and whether it's open and has the keyboard.
 #[derive(Default)]
 pub struct Dock {
@@ -1896,10 +1905,23 @@ impl Dock {
         busy.map(|s| s.name.clone()).collect()
     }
 
-    pub fn poll(&mut self, theme: &Theme) -> bool {
+    /// Takes in what every session wrote. Says whether anything on screen changed, and
+    /// whether only sessions out of sight did: `shown` is the one the pane shows, if any.
+    /// What a session behind another prints is parsed as it comes, but draws nothing until
+    /// the tick, which brings what's drawn from it (its tab, the workspaces' tiles) up to
+    /// date; its ending closes its tab, which is seen at once.
+    pub fn poll(&mut self, theme: &Theme, shown: Option<usize>) -> Polled {
         let mut changed = self.pdf.as_mut().is_some_and(PdfView::poll);
-        for session in &mut self.sessions {
-            changed |= session.poll(theme);
+        let mut behind = false;
+        for (index, session) in self.sessions.iter_mut().enumerate() {
+            let ended = session.exited;
+            let printed = session.poll(theme);
+            if Some(index) == shown {
+                changed |= printed;
+            } else {
+                behind |= printed;
+                changed |= session.exited != ended || session.copied.is_some();
+            }
         }
         // A session that's finished has nothing left to show, so its tab closes, as when an
         // agent is told /exit. One that ended as it started failed to, and what it printed
@@ -1919,7 +1941,10 @@ impl Dock {
             self.close(index);
             changed = true;
         }
-        changed
+        Polled {
+            shown: changed,
+            behind,
+        }
     }
 
     /// Stops everything here, even what could have outlived Cellix.
