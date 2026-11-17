@@ -5591,5 +5591,19 @@
     "title": "Output from a session behind another tab or in a workspace not in front is parsed but draws nothing and keeps the loop at its slow pace; what's drawn from it catches up at the next tick",
     "test": "output_behind_another_tab_draws_nothing",
     "passes": true
+  },
+  {
+    "id": "writes-never-freeze",
+    "milestone": 15,
+    "title": "Writes to a program go through a queue a thread of its own sends from, in order, so a paste into a program not reading never freezes the loop; in the session host a viewer not reading holds up neither the program nor other viewers",
+    "test": "a_paste_into_a_program_not_reading_doesnt_wait_for_it",
+    "passes": true
+  },
+  {
+    "id": "host-viewer-stalls",
+    "milestone": 15,
+    "title": "A session host gives each viewer a queue of its own: one far behind holds the program until it catches up, one that reads nothing for two seconds is let go, and a viewer's input goes through a queue so the host keeps reading frames",
+    "test": "a_viewer_that_stops_reading_holds_up_neither_the_program_nor_the_others",
+    "passes": true
   }
 ]

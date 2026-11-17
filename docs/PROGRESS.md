@@ -2890,3 +2890,12 @@ Item 1 of herdr's performance study.
 - Measured with the rest, in the last entry of this work.
 - Tests: `output_behind_another_tab_draws_nothing` (two shells in the pane: what the one behind prints is taken in, changes nothing on screen, and shows once its tab is chosen), `output_out_of_sight_draws_once_a_tick`.
 - Unverified: a tab's state mark from output that changes faster than the tick (a title that says what an agent does) now lags it by up to half a second while its tab is behind.
+
+## Writes never freeze the loop (2026-11-17)
+
+Item 5 of herdr's performance study.
+
+- `Session::write` wrote and flushed on the main thread: a paste larger than a PTY's buffer into a program that wasn't reading froze every frame and key until it read. Writes go into a queue a thread sends from, in order (`outbox.rs`), keys and replies with them; past 16 MB unread a write is refused whole, and a refused paste says so on the status bar.
+- In the session host, `Shared::tell` wrote each chunk to every viewer under the shared lock, on the thread that reads the program: one viewer not reading stopped the program and every other viewer. Each viewer has its own queue. One 4 MB behind holds the program until it catches up, outside the lock (`take_output`), so a fast program still slows to its viewers' pace; one that reads nothing for two seconds is let go (it can join again and is sent what's kept). A viewer's input goes to the program through one queue, so a program not reading its input no longer stops the host reading a resize or the word to stop. Cellix's side sends keys, sizes and stop through one queue too, so they keep their order.
+- Tests: `a_paste_into_a_program_not_reading_doesnt_wait_for_it` (a megabyte pasted into `sleep 30` comes back within 100 ms, and a key after it), `a_viewer_that_stops_reading_holds_up_neither_the_program_nor_the_others` (32 MB through a host with one viewer asleep: the other hears all of it, the program is held two seconds at most, the sleeper is let go).
+- Unverified: a refused paste has no picture; it needs a program that leaves 16 MB unread.

@@ -261,6 +261,9 @@ pub struct Session {
     pub exited: bool,
     /// When it last wrote anything, which says when it's settled.
     wrote: Option<std::time::Instant>,
+    /// Something sent to it was refused: it has left megabytes unread, and more would only
+    /// pile up. Taken by whoever sent it, to say so.
+    refused: bool,
     size: (u16, u16),
     cell: CellPixels,
     selection: Option<(Spot, Spot)>,
@@ -491,7 +494,9 @@ impl Session {
         let killer = child.clone_killer();
         let pid = child.process_id();
         let mut reader = pair.master.try_clone_reader().map_err(failed)?;
+        // Written off the loop, so a program that isn't reading can't hold it up.
         let writer = pair.master.take_writer().map_err(failed)?;
+        let writer: Box<dyn Write + Send> = Box::new(crate::outbox::Outbox::new(writer));
         let (sender, output) = mpsc::channel();
         std::thread::spawn(move || {
             let mut buffer = [0; 8192];
@@ -565,6 +570,7 @@ impl Session {
             found: Vec::new(),
             found_at: None,
             wrote: None,
+            refused: false,
             size,
             cell,
             selection: None,
@@ -997,9 +1003,16 @@ impl Session {
         }
     }
 
+    /// Sends the program `bytes`, in order with all else sent it, without waiting on it:
+    /// what it hasn't read yet waits on a thread of its own (`outbox.rs`).
     pub fn write(&mut self, bytes: &[u8]) {
-        let _ = self.writer.write_all(bytes);
+        self.refused |= self.writer.write_all(bytes).is_err();
         let _ = self.writer.flush();
+    }
+
+    /// Whether something sent since this was last asked was refused, unread.
+    pub fn take_refused(&mut self) -> bool {
+        std::mem::take(&mut self.refused)
     }
 
     /// Takes in what the program wrote. Returns true if the screen changed.
@@ -3241,6 +3254,25 @@ mod tests {
         assert!(session.rows().concat().contains("next frame"));
         program.send(b" plain".to_vec()).unwrap();
         assert!(session.poll(&theme));
+    }
+
+    /// A paste far larger than a terminal's buffer into a program that isn't reading, as one
+    /// busy or paused: it's queued, and the paste comes back at once, where it waited for the
+    /// program and held up every frame and key meanwhile.
+    #[test]
+    #[cfg(unix)]
+    fn a_paste_into_a_program_not_reading_doesnt_wait_for_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let argv = ["sh".to_string(), "-c".to_string(), "sleep 30".to_string()];
+        let mut session =
+            Session::start("Test", &argv, &[], dir.path(), (80, 24), (10, 20)).unwrap();
+        let started = std::time::Instant::now();
+        session.paste(&"pasted text\n".repeat(90_000));
+        session.key(KeyEvent::plain(Key::Char('x')));
+        let took = started.elapsed();
+        assert!(took < std::time::Duration::from_millis(100), "{took:?}");
+        assert!(!session.take_refused(), "a megabyte is queued");
+        session.stop();
     }
 
     #[test]

@@ -14,6 +14,7 @@ use std::time::Duration;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 use super::{Job, Stopped};
+use crate::outbox::Outbox;
 
 /// How much output is kept for the next Cellix to show.
 const KEPT: usize = 4 * 1024 * 1024;
@@ -21,6 +22,12 @@ const KEPT: usize = 4 * 1024 * 1024;
 const LOOK: Duration = Duration::from_millis(500);
 /// How long Cellix waits for a new host's socket.
 const START_WAIT: Duration = Duration::from_secs(5);
+/// A viewer this far behind holds the program until it catches up, as a terminal holds a
+/// program printing faster than it shows: what the program prints isn't let pile up.
+const BEHIND: usize = 4 * 1024 * 1024;
+/// A viewer that reads nothing of that for this long has stopped, as a laptop asleep with
+/// Cellix open, and is let go, so the program and the other viewers carry on.
+const STALLED: Duration = Duration::from_secs(2);
 
 const OUTPUT: u8 = b'o';
 const EXITED: u8 = b'x';
@@ -202,16 +209,18 @@ pub fn stopped(folder: &Path) -> Vec<Stopped> {
     found.into_iter().map(|(_, stopped)| stopped).collect()
 }
 
-/// A connection to a host, from Cellix's side.
+/// A connection to a host, from Cellix's side. Everything sent to it goes through one queue,
+/// in order and off the loop: keys, sizes, the word to stop.
 pub struct Held {
     stream: UnixStream,
     pub socket: PathBuf,
     at_prompt: Arc<Mutex<bool>>,
     foreground: Arc<Mutex<String>>,
+    out: Outbox,
 }
 
 /// Writes keys to a host, for the session to use like any writer.
-pub struct Keys(UnixStream);
+pub struct Keys(Outbox);
 
 impl Write for Keys {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
@@ -226,16 +235,19 @@ impl Write for Keys {
 
 impl Held {
     pub fn connect(socket: &Path) -> io::Result<Self> {
+        let stream = UnixStream::connect(socket)?;
+        let out = Outbox::new(Box::new(stream.try_clone()?));
         Ok(Self {
-            stream: UnixStream::connect(socket)?,
+            stream,
             socket: socket.to_path_buf(),
             at_prompt: Arc::new(Mutex::new(true)),
             foreground: Arc::default(),
+            out,
         })
     }
 
     pub fn keys(&self) -> io::Result<Keys> {
-        Ok(Keys(self.stream.try_clone()?))
+        Ok(Keys(self.out.clone()))
     }
 
     /// Passes what the program writes to `output`, and says on `done` when it's over.
@@ -292,11 +304,11 @@ impl Held {
         for number in [size.0, size.1, pixels.0, pixels.1] {
             payload.extend(number.to_be_bytes());
         }
-        let _ = send_frame(&mut &self.stream, RESIZE, &payload);
+        let _ = send_frame(&mut self.out.clone(), RESIZE, &payload);
     }
 
     pub fn kill(&self) {
-        let _ = send_frame(&mut &self.stream, KILL, &[]);
+        let _ = send_frame(&mut self.out.clone(), KILL, &[]);
     }
 }
 
@@ -320,16 +332,46 @@ struct Shared {
 
 struct Client {
     visit: u64,
+    /// What it's sent waits here, so a viewer that stops reading holds up nothing else.
+    out: Outbox,
+    /// To end it with, when it has left too much unread.
     stream: UnixStream,
     /// The size this client wants, which it gets once it types.
     size: Option<Vec<u8>>,
 }
 
 impl Shared {
-    /// Tells every client, forgetting any that have gone.
+    /// Tells every client, forgetting any that have gone. Nothing here waits on a client:
+    /// it runs under the lock every thread shares, on the thread that reads the program, and
+    /// writing to each in turn here let one viewer not reading stop the program and every
+    /// other viewer (`take_output` holds the program back, outside the lock, for one that's
+    /// behind). One whose queue is refused is let go; it can join again, and is sent what's
+    /// kept.
     fn tell(&mut self, kind: u8, payload: &[u8]) {
-        self.clients
-            .retain_mut(|client| send_frame(&mut client.stream, kind, payload).is_ok());
+        self.clients.retain_mut(|client| {
+            let told = send_frame(&mut client.out, kind, payload).is_ok();
+            if !told {
+                let _ = client.stream.shutdown(std::net::Shutdown::Both);
+            }
+            told
+        });
+    }
+
+    /// The viewers far behind, by visit, with their queues.
+    fn behind(&self) -> Vec<(u64, Outbox)> {
+        let far = self.clients.iter().filter(|c| c.out.waiting() > BEHIND);
+        far.map(|c| (c.visit, c.out.clone())).collect()
+    }
+
+    /// Lets a viewer go: what it hasn't read is dropped, and its connection closed.
+    fn let_go(&mut self, visit: u64) {
+        self.clients.retain(|client| {
+            let keep = client.visit != visit;
+            if !keep {
+                let _ = client.stream.shutdown(std::net::Shutdown::Both);
+            }
+            keep
+        });
     }
 
     fn output(&mut self, bytes: &[u8]) {
@@ -412,6 +454,44 @@ impl Log {
     }
 }
 
+/// What the program printed, kept and sent to every viewer. A viewer far behind holds the
+/// program here, outside the lock, until it catches up; one that has stopped reading is let
+/// go after `STALLED`, and the program carries on.
+fn take_output(shared: &Arc<Mutex<Shared>>, bytes: &[u8]) {
+    let behind = match shared.lock() {
+        Ok(mut shared) => {
+            shared.output(bytes);
+            shared.behind()
+        }
+        Err(_) => return,
+    };
+    for (visit, out) in behind {
+        if !catches_up(&out)
+            && let Ok(mut shared) = shared.lock()
+        {
+            shared.let_go(visit);
+        }
+    }
+}
+
+/// Waits while a viewer's queue is far behind. Says whether it caught up, or false once it
+/// has read nothing for `STALLED`.
+fn catches_up(out: &Outbox) -> bool {
+    let mut left = out.waiting();
+    let mut moved = std::time::Instant::now();
+    while left > BEHIND {
+        std::thread::sleep(Duration::from_millis(2));
+        let now = out.waiting();
+        if now < left {
+            moved = std::time::Instant::now();
+        } else if moved.elapsed() >= STALLED {
+            return false;
+        }
+        left = now;
+    }
+    true
+}
+
 fn resize(master: &Arc<Mutex<Box<dyn MasterPty + Send>>>, payload: &[u8]) {
     if payload.len() != 8 {
         return;
@@ -426,7 +506,7 @@ fn resize(master: &Arc<Mutex<Box<dyn MasterPty + Send>>>, payload: &[u8]) {
 fn serve_client(
     mut stream: UnixStream,
     (shared, visit): (&Arc<Mutex<Shared>>, u64),
-    writer: &Arc<Mutex<Box<dyn Write + Send>>>,
+    writer: &Outbox,
     master: &Arc<Mutex<Box<dyn MasterPty + Send>>>,
     pid: Option<u32>,
 ) {
@@ -437,10 +517,9 @@ fn serve_client(
                 if let Some(size) = size {
                     resize(master, &size);
                 }
-                if let Ok(mut writer) = writer.lock() {
-                    let _ = writer.write_all(&payload);
-                    let _ = writer.flush();
-                }
+                // Queued, so a program not reading its input can't stop this reading what
+                // comes next, such as the word to stop.
+                let _ = writer.clone().write_all(&payload);
             }
             RESIZE if payload.len() == 8 => {
                 let size = shared
@@ -495,8 +574,7 @@ pub fn serve(socket: &Path) -> io::Result<()> {
         let _ = std::fs::write(socket.with_extension("pid"), pid.to_string());
     }
     let mut reader = pair.master.try_clone_reader().map_err(io::Error::other)?;
-    let writer = pair.master.take_writer().map_err(io::Error::other)?;
-    let writer = Arc::new(Mutex::new(writer));
+    let writer = Outbox::new(pair.master.take_writer().map_err(io::Error::other)?);
     let master = Arc::new(Mutex::new(pair.master));
     // With the job read, its environment needn't sit on disk.
     let quiet = Job {
@@ -517,9 +595,7 @@ pub fn serve(socket: &Path) -> io::Result<()> {
             if count == 0 {
                 break;
             }
-            if let Ok(mut shared) = from_program.lock() {
-                shared.output(&buffer[..count]);
-            }
+            take_output(&from_program, &buffer[..count]);
         }
     });
 
@@ -576,16 +652,17 @@ pub fn serve(socket: &Path) -> io::Result<()> {
     });
 
     for stream in listener.incoming().flatten() {
-        let Ok(mut outgoing) = stream.try_clone() else {
+        let (Ok(outgoing), Ok(ending)) = (stream.try_clone(), stream.try_clone()) else {
             continue;
         };
         let mut visit = 0;
         if let Ok(mut shared) = shared.lock() {
+            let mut out = Outbox::new(Box::new(outgoing));
             let (front, back) = shared.kept.as_slices();
-            let sent = send_frame(&mut outgoing, OUTPUT, front)
-                .and_then(|()| send_frame(&mut outgoing, OUTPUT, back))
-                .and_then(|()| send_frame(&mut outgoing, AT_PROMPT, &[u8::from(shared.at_prompt)]))
-                .and_then(|()| send_frame(&mut outgoing, FOREGROUND, &shared.foreground));
+            let sent = send_frame(&mut out, OUTPUT, front)
+                .and_then(|()| send_frame(&mut out, OUTPUT, back))
+                .and_then(|()| send_frame(&mut out, AT_PROMPT, &[u8::from(shared.at_prompt)]))
+                .and_then(|()| send_frame(&mut out, FOREGROUND, &shared.foreground));
             if sent.is_err() {
                 continue;
             }
@@ -593,7 +670,8 @@ pub fn serve(socket: &Path) -> io::Result<()> {
             visit = shared.visit;
             shared.clients.push(Client {
                 visit,
-                stream: outgoing,
+                out,
+                stream: ending,
                 size: None,
             });
             if shared.exited {
@@ -619,4 +697,61 @@ fn finish(socket: &Path) -> ! {
         let _ = std::fs::remove_file(socket.with_extension(extension));
     }
     std::process::exit(0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Instant;
+
+    fn client(visit: u64, stream: UnixStream) -> Client {
+        Client {
+            visit,
+            out: Outbox::new(Box::new(stream.try_clone().unwrap())),
+            stream,
+            size: None,
+        }
+    }
+
+    /// One viewer stops reading, as a laptop asleep with Cellix open: the program's output
+    /// still goes to the other at once, the program isn't held up, and the one not reading
+    /// is let go once it has left too much unread.
+    #[test]
+    fn a_viewer_that_stops_reading_holds_up_neither_the_program_nor_the_others() {
+        let (asleep, _never_read) = UnixStream::pair().unwrap();
+        let (awake, mut reader) = UnixStream::pair().unwrap();
+        let mut shared = Shared::default();
+        shared.clients.push(client(1, asleep));
+        shared.clients.push(client(2, awake));
+        let shared = Arc::new(Mutex::new(shared));
+        let total = 32 * 1024 * 1024;
+        let heard = std::thread::spawn(move || {
+            let mut got = 0;
+            while got < total {
+                let Ok((kind, payload)) = read_frame(&mut reader) else {
+                    break;
+                };
+                if kind == OUTPUT {
+                    got += payload.len();
+                }
+            }
+            got
+        });
+        let chunk = vec![b'x'; 8192];
+        let started = Instant::now();
+        for _ in 0..total / chunk.len() {
+            take_output(&shared, &chunk);
+        }
+        // Held while the one asleep might still read, and not for ever.
+        let took = started.elapsed();
+        assert!(took < STALLED * 4, "the program waited: {took:?}");
+        assert_eq!(
+            heard.join().unwrap(),
+            total,
+            "the one awake heard all of it"
+        );
+        let shared = shared.lock().unwrap();
+        let left: Vec<u64> = shared.clients.iter().map(|c| c.visit).collect();
+        assert_eq!(left, [2], "the one asleep was let go");
+    }
 }

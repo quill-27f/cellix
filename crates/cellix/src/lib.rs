@@ -27,6 +27,7 @@ mod linger;
 mod measures;
 mod menu;
 mod neovim;
+mod outbox;
 mod outline;
 mod pace;
 mod palette;

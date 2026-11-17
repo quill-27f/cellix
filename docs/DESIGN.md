@@ -1134,6 +1134,17 @@ computers on one machine; all see its output, and the program takes the size of 
 into it last, as tmux does. The program is told its socket (`CELLIX_HELD`), and an agent's hooks
 leave its own session id beside it.
 
+Nothing written to a program waits for it. Keys, pastes and a terminal's replies go into a
+queue a thread of its own sends from, in order (`outbox.rs`), so a paste larger than the
+terminal's buffer into a program that isn't reading no longer freezes every frame and key
+until it reads; past 16 MB unread, a write is refused and the status bar says so. A host
+does the same both ways. What a program prints goes to each viewer through a queue of its
+own; a viewer 4 MB behind holds the program until it catches up, as a terminal holds a
+program printing faster than it shows, but one that reads nothing for two seconds (a laptop
+asleep with Cellix open) is let go, and the program and the other viewers carry on; it can
+join again. What a viewer types goes to the program through one queue, so the host keeps
+reading frames, a resize or the word to stop, while the program doesn't read.
+
 A host that dies without finishing, as when the machine restarts, leaves its job, log and session
 id; the next Cellix puts them aside and shows the tab as it was, with Resume (Claude Code's
 `--resume`, Codex's `resume`, and the others' as below), Start Fresh or Start Again, and Close, and with others stopped too,

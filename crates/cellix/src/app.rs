@@ -4431,6 +4431,12 @@ impl App {
             && let Some(session) = self.dock.session_mut()
         {
             session.paste(text);
+            if session.take_refused() {
+                let name = session.name.clone();
+                self.say(format!(
+                    "{name} hasn't read what was sent to it, so the paste wasn't sent"
+                ));
+            }
             return;
         }
         // A file dropped on a terminal arrives as its path.
