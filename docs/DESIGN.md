@@ -702,6 +702,14 @@ pointer goes up to its chips across the row's other words. A press settles it as
 and says how many are left. Until 18 November 2026 Accept and Reject were only in the right-click
 menu and the palette, where they still are, with no key: the user asked for them at the change.
 
+A document with suggestions opens the Comments pane's list with them, as Google Docs and Overleaf
+keep suggestions with comments: "3 suggestions", or "Suggestion 2 of 3" while the caret is in the
+second, then Accept All, Reject All and Next, quiet as every button there but Check my review, on a
+row of their own under the count where the pane is too narrow for one. Next goes to the next one
+round the document and leaves the keyboard in the file, where the chips then stand by it. The row
+is the document's in view, so the list of every file's comments has none. The suggestions are found
+once for each revision of the text, since every frame asks for them.
+
 The Outline in the sidebar lists a document's headings, or a paper's sections, and a click goes
 there. The side pane keeps what the last build said in a Log tab, and a line that names a place
 goes to it. Wide glyphs are looked up as sans-serif rather than monospace in the cells: asked for a

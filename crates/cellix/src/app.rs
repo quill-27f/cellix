@@ -11639,8 +11639,10 @@ impl App {
     /// what order.
     fn comments_view(&self) -> threads::View<'_> {
         self.comment_unsent.set(self.unsent_threads());
+        let grouped = self.comments_grouped();
         threads::View {
-            grouped: self.comments_grouped(),
+            suggestions: self.suggestions_counted().filter(|_| !grouped),
+            grouped,
             lit: self.lit_thread,
             sort: self.comment_sort,
             goes: self.comment_agent().1,
@@ -11707,6 +11709,15 @@ impl App {
         if !ids.is_empty() {
             self.save_threads();
         }
+    }
+
+    /// How many suggestions the document in front holds, and which of them the caret is in.
+    fn suggestions_counted(&self) -> Option<(usize, Option<usize>)> {
+        let editor = self.editors.get(self.active())?;
+        let found = editor.suggestions();
+        let head = editor.selections.primary().head;
+        let at = found.iter().position(|c| c.start <= head && head <= c.end);
+        Some((found.len(), at))
     }
 
     /// How far into its first column a card over the side pane starts: `PANE_CARD_LEAD`
@@ -12252,6 +12263,19 @@ impl App {
                 self.take_suggestion(which);
             }
             ThreadHit::Apply(id) => self.apply_rewrite(id),
+            // The keyboard stays in the file, where the suggestions are.
+            ThreadHit::AcceptAll => {
+                self.run(Command::AcceptAllChanges);
+                self.dock.focused = false;
+            }
+            ThreadHit::RejectAll => {
+                self.run(Command::RejectAllChanges);
+                self.dock.focused = false;
+            }
+            ThreadHit::NextSuggestion => {
+                self.step_change(true);
+                self.dock.focused = false;
+            }
             ThreadHit::Decline(id) => {
                 if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
                     thread.replies.push(Reply::new(

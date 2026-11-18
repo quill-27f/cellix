@@ -208,3 +208,75 @@ fn the_right_click_menu_and_the_commands_still_settle_one() {
     app.run(Command::AcceptChange);
     assert_eq!(app.active_text().unwrap(), "# Notes\n\nKeep added end.\n");
 }
+
+#[test]
+fn the_comments_pane_counts_the_suggestions_and_next_steps_through_them() {
+    let (_dir, mut app) = page(
+        "note.md",
+        "# Notes\n\nOne {++alpha++} two {--beta--} three {~~gamma~>delta~~} four.\n",
+    );
+    app.run(Command::ShowComments);
+    let text = screen(&app).text();
+    assert!(text.contains("3 suggestions"), "{text}");
+    assert!(
+        text.contains("Accept All") && text.contains("Reject All"),
+        "{text}"
+    );
+    let next = spot(&app, "Next");
+    click(&mut app, (next.0 + 1, next.1));
+    assert_eq!(said(&app), "Suggestion 1 of 3");
+    assert!(screen(&app).text().contains("Suggestion 1 of 3"));
+    assert!(chips(&app).is_some(), "Accept and Reject stand by it");
+    assert!(!app.dock.focused, "the keyboard stays in the file");
+    for says in ["Suggestion 2 of 3", "Suggestion 3 of 3"] {
+        let next = spot(&app, "Next");
+        click(&mut app, (next.0 + 1, next.1));
+        assert_eq!(said(&app), says);
+        assert!(screen(&app).text().contains(says), "{says}");
+    }
+    let next = spot(&app, "Next");
+    click(&mut app, (next.0 + 1, next.1));
+    assert_eq!(said(&app), "Suggestion 1 of 3", "round again");
+    // Settled at the caret by its chips, the count goes down.
+    let (_, accept) = chips(&app).expect("chips");
+    click(&mut app, accept);
+    assert!(screen(&app).text().contains("2 suggestions"));
+}
+
+#[test]
+fn accept_all_and_reject_all_in_the_comments_pane_settle_every_suggestion() {
+    let (_dir, mut app) = page(
+        "note.md",
+        "# Notes\n\nOne {++alpha++} two {--beta--} three {~~gamma~>delta~~} four.\n",
+    );
+    app.run(Command::ShowComments);
+    let all = spot(&app, "Accept All");
+    click(&mut app, (all.0 + 2, all.1));
+    assert_eq!(
+        app.active_text().unwrap(),
+        "# Notes\n\nOne alpha two  three delta four.\n"
+    );
+    assert_eq!(said(&app), "Accepted 3 changes");
+    let text = screen(&app).text();
+    assert!(
+        !text.contains("Accept All"),
+        "no row once none are left: {text}"
+    );
+
+    let (_dir, mut app) = page(
+        "paper.tex",
+        &paper(
+            "This sentence \\added{gains words}, \\deleted{loses these}, and \\replaced{a new word}{an old word}.",
+        ),
+    );
+    app.run(Command::ShowComments);
+    assert!(screen(&app).text().contains("3 suggestions"));
+    let all = spot(&app, "Reject All");
+    click(&mut app, (all.0 + 2, all.1));
+    let text = app.active_text().unwrap();
+    assert!(
+        text.contains("This sentence , loses these, and an old word."),
+        "{text}"
+    );
+    assert_eq!(said(&app), "Rejected 3 changes");
+}

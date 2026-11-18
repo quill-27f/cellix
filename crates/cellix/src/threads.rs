@@ -34,6 +34,8 @@ const CHOICES: [&str; 3] = ["Keep", "Reply", "Dismiss"];
 const REWRITE: [&str; 2] = ["Apply", "Not this"];
 const REOPEN: [&str; 1] = ["Reopen"];
 const CHECK: &str = "Check my review";
+/// What the row over the comments offers for the document's suggestions.
+const SETTLE: [&str; 3] = ["Accept All", "Reject All", "Next"];
 /// Under the words that say no comment is open: how one is made.
 /// It named only Alt+C, not the button a selection shows, which names the keys as they're set.
 const EMPTY_HINT: &str = "Select text, then press Comment.";
@@ -106,6 +108,10 @@ pub enum Hit {
     NotDone(u32),
     /// Resolves every comment an agent says it addressed.
     ResolveAddressed,
+    /// Settles every suggestion in the document, or goes to the next one.
+    AcceptAll,
+    RejectAll,
+    NextSuggestion,
 }
 
 /// An agent's verdict on a comment, from how its reply starts: `Agree (Evidence): …` or
@@ -140,6 +146,11 @@ enum Line {
     /// narrow pane breaks it into: the button that shows the resolved comments comes next,
     /// or their cards.
     EmptyHint(String),
+    /// How many suggestions the document holds, which of them the caret is in, and whether
+    /// Accept All, Reject All and Next fit beside the words; when they don't they come next.
+    Suggestions(usize, Option<usize>, bool),
+    /// Those three on a row of their own.
+    Settle,
     /// The button that asks the agent to check the review, after how many comments are the
     /// reviewer's and how many the agent's, and how many files they're on when the list
     /// covers every file.
@@ -797,6 +808,9 @@ pub struct View<'a> {
     /// where the pane's sheet starts half way into the pane's first column, so a card is a
     /// column from the sheet's edge on both sides. None under the file or on cells.
     pub lead: f32,
+    /// The suggestions in the document in view: how many, and which the caret is in. None
+    /// when the list covers every file, or the file in view isn't a document.
+    pub suggestions: Option<(usize, Option<usize>)>,
 }
 
 /// A list's rows as they were last laid out, with a mark of all they were laid out from.
@@ -850,6 +864,7 @@ fn mark((threads, draft, agent, resolved, view): Shown, width: f32, measure: &dy
     view.unsent
         .map(|unsent| unsent.0.borrow().clone())
         .hash(&mut hasher);
+    view.suggestions.hash(&mut hasher);
     // A picture takes rows by its size. They're summed, since a map has no order.
     let pictures = view.pictures.map(|pictures| {
         let sum = pictures.iter().fold(0u64, |sum, (name, figure)| {
@@ -896,6 +911,7 @@ impl Default for View<'_> {
             laid: None,
             edge: 0.0,
             lead: 0.0,
+            suggestions: None,
         }
     }
 }
@@ -1348,6 +1364,21 @@ fn lay_out(
 ) -> Vec<Line> {
     let grouped = view.grouped;
     let mut out = vec![Line::Gap];
+    // The document's suggestions come before its comments, as Google Docs and Overleaf keep
+    // the two together, with what settles them all.
+    if let Some((count, at)) = view.suggestions.filter(|(count, _)| *count > 0) {
+        let words = suggestions_said(count, at);
+        let buttons: f32 = settle_buttons(Rect::new(0, 0, 200, 1), measure)
+            .iter()
+            .map(|(_, cells, _)| cells.chars().count() as f32 + f32::from(BUTTON_GAP))
+            .sum();
+        let fits = measure.width(&words, small()) + 1.0 + buttons <= width + 2.0;
+        out.push(Line::Suggestions(count, at, fits));
+        if !fits {
+            out.push(Line::Settle);
+        }
+        out.push(Line::Gap);
+    }
     // The counts are of what's still open, whether or not the resolved ones show.
     let open: Vec<&Thread> = threads.iter().copied().filter(|t| !t.resolved).collect();
     if !open.is_empty() {
@@ -1670,6 +1701,48 @@ fn all_fit(width: f32, measure: &dyn Measure) -> bool {
     (chips + words) as f32 <= width + f32::from(PLAIN_GAP)
 }
 
+/// What the row over the comments says of the document's suggestions: how many, or which
+/// of them the caret is in.
+fn suggestions_said(count: usize, at: Option<usize>) -> String {
+    match (count, at) {
+        (_, Some(at)) => format!("Suggestion {} of {count}", at + 1),
+        (1, None) => "1 suggestion".to_string(),
+        (_, None) => format!("{count} suggestions"),
+    }
+}
+
+/// Accept All, Reject All and Next as (label, cells, start column): at the right of the
+/// row, as Check my review is under them.
+fn settle_buttons(area: Rect, measure: &dyn Measure) -> Vec<(&'static str, String, u16)> {
+    let mut end = area.right().saturating_sub(SIDE);
+    let mut placed: Vec<_> = SETTLE
+        .iter()
+        .rev()
+        .map(|label| {
+            let cells = button_cells(label, measure);
+            let x = end.saturating_sub(cells.chars().count() as u16);
+            end = x.saturating_sub(BUTTON_GAP);
+            (*label, cells, x)
+        })
+        .collect();
+    placed.reverse();
+    placed
+}
+
+/// The same three on a row of their own, from the pane's text edge.
+fn settle_row(area: Rect, measure: &dyn Measure) -> Vec<(&'static str, String, u16)> {
+    let mut x = area.x + SIDE;
+    SETTLE
+        .iter()
+        .map(|label| {
+            let cells = button_cells(label, measure);
+            let at = x;
+            x += cells.chars().count() as u16 + BUTTON_GAP;
+            (*label, cells, at)
+        })
+        .collect()
+}
+
 /// Check my review, at the right of its row, as (padded cells, start column). In pixels it
 /// has room for the agent's icon before its words.
 fn check_button(area: Rect, measure: &dyn Measure) -> (String, u16) {
@@ -1804,6 +1877,21 @@ pub fn hit(
         Line::Check(..) => {
             let (cells, at) = check_button(area, measure);
             (x >= at && x < at + cells.chars().count() as u16).then_some(Hit::Check)
+        }
+        line @ (Line::Suggestions(_, _, true) | Line::Settle) => {
+            let placed = if matches!(line, Line::Settle) {
+                settle_row(area, measure)
+            } else {
+                settle_buttons(area, measure)
+            };
+            let pressed = placed
+                .into_iter()
+                .find(|(_, cells, at)| x >= *at && x < at + cells.chars().count() as u16);
+            match pressed?.0 {
+                "Accept All" => Some(Hit::AcceptAll),
+                "Reject All" => Some(Hit::RejectAll),
+                _ => Some(Hit::NextSuggestion),
+            }
         }
         Line::Sort(addressed) => {
             if let Some((cells, at)) = resolve_all(area, *addressed, measure)
@@ -2428,6 +2516,41 @@ pub fn draw(
                 grid.label_at(at, start, y, &note, dim, end, SMALL);
                 // Half a row clear over the pills under it.
                 grid.lift_since(from, CHECK_LIFT);
+            }
+            line @ (Line::Suggestions(..) | Line::Settle) => {
+                let placed = match line {
+                    Line::Suggestions(count, at, beside) => {
+                        let words = suggestions_said(*count, *at);
+                        let placed = if *beside {
+                            settle_buttons(area, measure)
+                        } else {
+                            Vec::new()
+                        };
+                        let end = placed
+                            .first()
+                            .map_or(right, |(_, _, x)| x.saturating_sub(1));
+                        grid.label_at(side as f32, side, y, &words, dim, end, SMALL);
+                        placed
+                    }
+                    _ => settle_row(area, measure),
+                };
+                // Quiet, as every button on the pane is but Check my review, and a control's
+                // height in its row, as Check my review is.
+                for (label, cells, x) in placed {
+                    let width = cells.chars().count() as u16;
+                    let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
+                    let fill = theme.secondary(body.bg, on_it);
+                    // Nothing is painted under the pane, so the chip's corners need a ground,
+                    // and its cells keep the pane's colour round it.
+                    let ground = Bounds::cells(f32::from(x), f32::from(y), f32::from(width), 1.0);
+                    grid.panel(ground, 0, Some(body.bg), None);
+                    let style = Style {
+                        bg: if measure.in_cells() { fill } else { body.bg },
+                        fg: theme.text.fg,
+                        ..body
+                    };
+                    grid.button(x, y, &cells, label, fill, style);
+                }
             }
             Line::Coverage(kinds) => {
                 // A pill for each kind: filled where there are comments of it, and only

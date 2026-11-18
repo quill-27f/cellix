@@ -6340,5 +6340,12 @@
     "title": "Accept and Reject stand by the suggestion at the caret or under the pointer on a page, Markdown and LaTeX",
     "test": "a_suggestion_at_the_caret_is_accepted_or_rejected_by_its_chips",
     "passes": true
+  },
+  {
+    "id": "suggestions-row",
+    "milestone": 15,
+    "title": "The Comments pane counts a document's suggestions, with Accept All, Reject All and Next, which says which of how many",
+    "test": "the_comments_pane_counts_the_suggestions_and_next_steps_through_them",
+    "passes": true
   }
 ]
