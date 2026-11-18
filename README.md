@@ -327,7 +327,10 @@ agent answers with `cellix reply <id> "text"`, and the answer lands under your q
 not sent yet says on its card how it gets there: with your next prompt to Claude Code, Codex or
 Gemini CLI, whose hooks hand it over, or now with Ask agent. **Send Comments to Agent** sends
 everything waiting, on code and on pages, in one message. Each comment and answer says how long ago
-it was written, and a suggestion can be answered with **Reply** without keeping it. With a file
+it was written, and a suggestion can be answered with **Reply** without keeping it. A comment is
+about all you selected, across lines; when an agent rewords those words the card keeps what you
+commented on and says *Changed since your comment*, and a click on that shows the change word by
+word. With a file
 open the Comments tab lists that file's; with none it lists every file's, each under its file's name,
 and a click on a name or a comment opens the file. Click words a comment is about and its card is
 lit in the Comments tab, which scrolls to it, and comes forward if the pane was open on another tab; click a card and its words are selected in the file. **Next Comment** and **Previous Comment** in the palette go through a file's comments in order, and a click on a line's ◆ opens its comment. Under the kinds a button says what order the tab lists in:

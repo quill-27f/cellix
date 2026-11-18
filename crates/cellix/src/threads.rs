@@ -110,6 +110,8 @@ pub enum Hit {
     File(u32),
     /// Lists only the comments of a kind, from its pill, or all of them again.
     Kind(&'static str),
+    /// Shows on a comment's card how its words changed since it was made, or hides it.
+    Changes(u32),
     /// Answers an agent that says it addressed a comment, that it isn't done.
     NotDone(u32),
     /// Resolves every comment an agent says it addressed.
@@ -184,6 +186,9 @@ enum Line {
     Rewrite(u32, usize),
     /// What a comment is about, and what became of those words in a plan's next version.
     Quote(u32, String, Words),
+    /// A row of how those words changed since: each word or space, with whether it went (-1),
+    /// stayed (0) or came (1).
+    Diff(u32, Vec<(i8, String)>),
     Text(u32, String),
     /// Opens an answer: its verdict if it gives one, and who wrote it.
     Answer(u32, Option<String>, String),
@@ -260,9 +265,41 @@ fn words_of(thread: &Thread) -> (Words, Option<String>) {
             Some(format!("Removed in version {version} \u{203a}")),
         ),
         None if thread.gone => (Words::Removed, Some(WORDS_GONE.to_string())),
-        None if !thread.now.is_empty() => (Words::Changed, Some(CHANGED_SINCE.to_string())),
+        None if !thread.now.is_empty() => {
+            (Words::Changed, Some(format!("{CHANGED_SINCE} \u{203a}")))
+        }
         None => (Words::Here, None),
     }
+}
+
+/// How far a quote's words stand in from a card's text, past its bar.
+const QUOTE_IN: f32 = 0.8;
+
+/// Breaks a word diff into rows no wider than `width`, at its spaces, measured as the
+/// quote's small words are.
+fn diff_rows(
+    changes: Vec<(i8, String)>,
+    width: f32,
+    measure: &dyn Measure,
+) -> Vec<Vec<(i8, String)>> {
+    let mut rows = vec![Vec::new()];
+    let mut wide = 0.0;
+    for (kind, piece) in changes {
+        let blank = piece.trim().is_empty();
+        let piece_wide = measure.width(&piece, small());
+        let row = rows.last_mut().expect("a row");
+        if blank && row.is_empty() {
+            continue;
+        }
+        if !blank && !row.is_empty() && wide + piece_wide > width {
+            rows.push(Vec::new());
+            wide = 0.0;
+        }
+        rows.last_mut().expect("a row").push((kind, piece));
+        wide += piece_wide;
+    }
+    rows.retain(|row| !row.is_empty());
+    rows
 }
 
 /// What a card's pill says when the words it was made on read differently now, or went.
@@ -800,6 +837,8 @@ pub struct View<'a> {
     pub goes: Goes,
     /// The only kind listed, from a press on its pill.
     pub kind: Option<&'static str>,
+    /// The comment whose card shows how its words changed since it was made.
+    pub changes: Option<u32>,
     /// Now, in seconds since 1970, for how long ago each comment and reply was written.
     pub now: u64,
     pub unsent: Option<&'a Unsent>,
@@ -867,6 +906,7 @@ fn mark((threads, draft, agent, resolved, view): Shown, width: f32, measure: &dy
         view.kind,
     )
         .hash(&mut hasher);
+    view.changes.hash(&mut hasher);
     // How long ago says something new each minute, where any comment says when it was made.
     let dated = threads
         .iter()
@@ -916,6 +956,7 @@ impl Default for View<'_> {
             goes: Goes::default(),
             unsent: None,
             kind: None,
+            changes: None,
             now: 0,
             quick: Some(crate::emoji::QUICK),
             pictures: None,
@@ -1504,6 +1545,13 @@ fn lay_out(
         }
         let quote = shown_quote(&thread.quote, thread.line, thread.about.as_ref());
         out.push(Line::Quote(id, quote, words));
+        // Opened from its pill: the words as they were, struck where they went, with what
+        // came in their place, under the quote they were.
+        if view.changes == Some(id) && !thread.now.is_empty() && thread.earlier.is_none() {
+            let changes = cellix_review::threads::word_changes(&thread.quote, &thread.now);
+            let rows = diff_rows(changes, width - QUOTE_IN, measure);
+            out.extend(rows.into_iter().map(|row| Line::Diff(id, row)));
+        }
         let editing = draft.filter(|d| d.thread == Some(id) && d.editing);
         // Its pictures are counted through its words and then its answers.
         let mut which = 0;
@@ -2029,9 +2077,31 @@ pub fn hit(
                 .sum();
             Some(Hit::Link(*id, before + here))
         }
-        Line::Quote(id, ..) | Line::Answer(id, ..) | Line::Pill(id, ..) | Line::Header(id, ..) => {
-            Some(Hit::Open(*id))
+        Line::Pill(id, text, _) if text.starts_with(CHANGED_SINCE) => {
+            let from = f32::from(area.x + SIDE + 1);
+            let at = f32::from(x) + 0.5;
+            let on = at >= from && at < from + pill_width(text, measure);
+            Some(if on {
+                Hit::Changes(*id)
+            } else {
+                Hit::Open(*id)
+            })
         }
+        Line::Header(id, _, _, Some((text, _))) if text.starts_with(CHANGED_SINCE) => {
+            let right = f32::from(area.right().saturating_sub(SIDE));
+            let from = right - 1.0 - pill_width(text, measure);
+            let at = f32::from(x) + 0.5;
+            Some(if at >= from {
+                Hit::Changes(*id)
+            } else {
+                Hit::Open(*id)
+            })
+        }
+        Line::Quote(id, ..)
+        | Line::Diff(id, _)
+        | Line::Answer(id, ..)
+        | Line::Pill(id, ..)
+        | Line::Header(id, ..) => Some(Hit::Open(*id)),
         _ => None,
     }
 }
@@ -2398,6 +2468,26 @@ pub fn draw(
                         let through = Bounds::cells(x, y as f32 + 0.5, width, 0.0);
                         grid.hairline(through, theme.gutter.fg);
                     }
+                }
+            }
+            Line::Diff(_, row) => {
+                // What went in the attention colour, struck through; what came in green; what
+                // stayed as the quote's words are.
+                let mut x = text_x as f32 + QUOTE_IN;
+                for (kind, piece) in row {
+                    let fg = match kind {
+                        -1 => theme.attention,
+                        1 => theme.git_added,
+                        _ => theme.gutter.fg,
+                    };
+                    let style = Style { fg, ..inner };
+                    grid.label_at(x, x.floor() as u16, y, piece, style, right, SMALL);
+                    let wide = measure.width(piece, small());
+                    if *kind == -1 && !piece.trim().is_empty() {
+                        let through = Bounds::cells(x, y as f32 + 0.5, wide, 0.0);
+                        grid.hairline(through, theme.attention);
+                    }
+                    x += wide;
                 }
             }
             Line::Text(_, text) => {

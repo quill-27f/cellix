@@ -6368,5 +6368,12 @@
     "title": "A rewrite's two quiet buttons stay together under Accept Rewrite on a narrow card",
     "test": "a_rewrites_buttons_wrap_with_the_quiet_ones_together",
     "passes": true
+  },
+  {
+    "id": "comment-word-changes",
+    "milestone": 15,
+    "title": "A card's Changed since pill shows what changed since the comment, a word at a time",
+    "test": "a_cards_pill_shows_what_changed_since_the_comment",
+    "passes": true
   }
 ]

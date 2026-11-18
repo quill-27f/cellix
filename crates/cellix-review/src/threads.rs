@@ -422,6 +422,28 @@ pub fn next_id(threads: &[Thread]) -> u32 {
     threads.iter().map(|t| t.id).max().unwrap_or(0) + 1
 }
 
+/// How the words a comment was made on became the words there now, a word at a time: each
+/// word, or the space between two, with whether it went (-1), stayed (0) or came (1). Line
+/// breaks and runs of spaces count as one space, as the page shows them.
+pub fn word_changes(was: &str, now: &str) -> Vec<(i8, String)> {
+    let flat = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let (was, now) = (flat(was), flat(now));
+    let mut out: Vec<(i8, String)> = Vec::new();
+    for change in similar::TextDiff::from_words(&was, &now).iter_all_changes() {
+        let kind = match change.tag() {
+            similar::ChangeTag::Delete => -1,
+            similar::ChangeTag::Equal => 0,
+            similar::ChangeTag::Insert => 1,
+        };
+        // What came right after what went stands a space from it, so the two read apart.
+        if kind == 1 && out.last().is_some_and(|(last, _)| *last == -1) {
+            out.push((0, " ".to_string()));
+        }
+        out.push((kind, change.value().to_string()));
+    }
+    out
+}
+
 /// The lines where the quote starts when line breaks and runs of spaces don't count.
 fn rewrapped(text: &str, quote: &str) -> Vec<usize> {
     let quote = quote.split_whitespace().collect::<Vec<_>>().join(" ");

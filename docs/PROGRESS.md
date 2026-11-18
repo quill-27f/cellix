@@ -3404,3 +3404,11 @@ The changes track, from the user's asks for reviewing documents (the docflow aud
 ## A rewrite's quiet buttons wrap together (2026-11-18)
 
 - On a card too narrow for Accept Rewrite, Apply as Suggestion and Not this on one row, Accept Rewrite now stands alone and the other two stay together under it; Not this was left on a row of its own, which the docflow track's test, pressing Apply beside Not this, caught once both had landed. Test: `a_rewrites_buttons_wrap_with_the_quiet_ones_together`.
+
+
+## What changed since a comment (2026-11-18)
+
+The docflow track, the first of the bigger items the user asked for.
+
+- A press on "Changed since your comment ›" opens, under the card's quote, the words it was made on and the words there now as one run, a word at a time: what went in the attention colour and struck through, what came in green, what stayed in the quote's grey (`threads::word_changes`, `similar`'s word diff, as Track Changes uses). It wraps at the card's width. Another press on the pill closes it, and a press anywhere else on the card goes to the words as before. A plan's "Changed in version N ›" still opens the versions side by side.
+- Test: `a_cards_pill_shows_what_changed_since_the_comment`.

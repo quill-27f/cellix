@@ -661,3 +661,63 @@ fn an_agent_says_it_addressed_a_comment_and_the_reviewer_settles_it() {
     assert!(app.threads[1].resolved, "the addressed one settled");
     assert!(!app.threads[0].resolved, "the one not done stays");
 }
+
+/// A press on "Changed since your comment" shows on the card what changed, a word at a
+/// time: what went struck through in the attention colour, what came in green. Another press
+/// hides it.
+#[test]
+fn a_cards_pill_shows_what_changed_since_the_comment() {
+    let (dir, mut app) = page("The cache goes first.\n\nThe tests stay fast on every run.\n");
+    drag_over(&mut app, "tests", "every");
+    app.run(Command::AddComment);
+    typed(&mut app, "Even on CI?");
+    enter(&mut app);
+    agent_writes(
+        &mut app,
+        &dir,
+        "The cache goes first.\n\nThe tests stay quick on every run.\n",
+    );
+    let (x, y) = on_page(&app, &screen(&app), "cache");
+    click(&mut app, x + 1, y);
+    // A row with what went and what came is the change, which the page never has.
+    let in_pane = |app: &App, grid: &Grid, y: u16| -> String {
+        let pane = app.dock_area().map_or(0, |pane| usize::from(pane.x));
+        grid.row_text(y).chars().skip(pane).collect()
+    };
+    let changes_shown = |app: &App| {
+        let grid = screen(app);
+        (0..grid.height()).any(|y| {
+            let row = in_pane(app, &grid, y);
+            row.contains("fast") && row.contains("quick")
+        })
+    };
+    assert!(!changes_shown(&app), "no change shown yet");
+    press(&mut app, crate::threads::CHANGED_SINCE);
+    let grid = screen(&app);
+    // The row under the quote: the words as they were, and what came.
+    let row = (0..grid.height())
+        .find(|y| {
+            let row = in_pane(&app, &grid, *y);
+            row.contains("fast") && row.contains("quick")
+        })
+        .unwrap_or_else(|| panic!("no change row:\n{}", grid.text()));
+    let pane = app.dock_area().map_or(0, |pane| pane.x);
+    let text = in_pane(&app, &grid, row);
+    let at = |word: &str| pane + text[..text.find(word).unwrap()].chars().count() as u16;
+    assert_eq!(
+        grid.cell(at("fast"), row).style.fg,
+        app.theme.attention,
+        "went"
+    );
+    assert_eq!(
+        grid.cell(at("quick"), row).style.fg,
+        app.theme.git_added,
+        "came"
+    );
+    press(&mut app, crate::threads::CHANGED_SINCE);
+    assert!(
+        !changes_shown(&app),
+        "hidden again:\n{}",
+        screen(&app).text()
+    );
+}

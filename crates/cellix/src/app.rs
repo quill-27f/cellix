@@ -1586,6 +1586,8 @@ pub struct App {
     comment_unsent: threads::Unsent,
     /// The only kind of comment the pane lists, from a press on its pill.
     comment_kind: Option<&'static str>,
+    /// The comment whose card shows how its words changed since it was made.
+    comment_changes: Option<u32>,
     /// The session that was in front when the last run here ended.
     kept_session: Option<String>,
     /// Whether how the two sides work together has been said yet.
@@ -1788,6 +1790,7 @@ impl App {
             comment_rows: threads::Laid::default(),
             comment_unsent: threads::Unsent::default(),
             comment_kind: None,
+            comment_changes: None,
             kept_session: None,
             kernels: HashMap::new(),
             team: team::Team::default(),
@@ -11648,6 +11651,7 @@ impl App {
             goes: self.comment_agent().1,
             unsent: Some(&self.comment_unsent),
             kind: self.comment_kind,
+            changes: self.comment_changes,
             now: cellix_review::threads::now(),
             quick: self.quick_emoji(),
             pictures: self.measure.cell_pixels().map(|_| &self.comment_pictures),
@@ -12337,6 +12341,9 @@ impl App {
                 }
                 self.save_threads();
                 self.say(format!("Resolved {} addressed", comments_counted(count)));
+            }
+            ThreadHit::Changes(id) => {
+                self.comment_changes = (self.comment_changes != Some(id)).then_some(id);
             }
             ThreadHit::Kind(kind) => {
                 self.comment_kind = (self.comment_kind != Some(kind)).then_some(kind);

@@ -540,6 +540,13 @@ to the agent as any reply does. "Resolve N addressed", a quiet button at the end
 row, settles every one of those listed. The agents' skills, and how every comment is put to an
 agent, say so.
 
+The pill on a comment whose words were reworded since, "Changed since your comment ›", opens
+what changed on its card, under the quote: the words commented on and the words there now as one
+run, a word at a time, what went in the attention colour and struck through, what came in green,
+what stayed as the quote's words are (`threads::word_changes`, from `similar`'s word diff). Another
+press on the pill closes it. A plan's "Changed in version N ›" goes on opening the plan's versions
+side by side, since a plan has each version whole; a document has only the words commented on.
+
 A web address in a comment's words or a reply's (`http://` or `https://`, up to the next space,
 without the full stop or bracket that ends its sentence) is drawn in the accent and underlined,
 on every row it wraps onto, and a click on it opens it the way Open in Browser opens a page: the
