@@ -27,14 +27,26 @@ cd "$root" || exit 1
 features=harness/features.json
 guard() { label=$1; shift; harness/guard.sh --label "$label" -- "$@"; }
 
+# Tests never use the person's own cache. A Cellix a test starts keeps its sessions there, and
+# what it leaves behind (workspaces it had open, programs still held by their hosts) would reach
+# the person's own Cellix: 25,000 such folders had built up by 0.11.0. Each run gets a folder
+# of its own under /tmp (a socket's path has to fit in about a hundred bytes), and when the run
+# ends, any host a test left running there is stopped and the folder removed.
+own_cache() {
+  cache=$(mktemp -d /tmp/cxc.XXXXXX) || exit 2
+  export XDG_CACHE_HOME=$cache
+  trap 'pkill -f "session-host $cache/" 2>/dev/null; rm -rf "$cache"' EXIT
+}
+
 task=${1:-status}
 [ $# -eq 0 ] || shift
 case $task in
   check)
+    own_cache
     guard check sh -c 'cargo fmt --all --check &&
       cargo clippy --workspace --all-targets -- -D warnings &&
       cargo test --workspace' ;;
-  test) guard test cargo test --workspace "$@" ;;
+  test) own_cache; guard test cargo test --workspace "$@" ;;
   build) guard build cargo build --workspace "$@" ;;
   run)
     guard build cargo build -p cellix || exit $?

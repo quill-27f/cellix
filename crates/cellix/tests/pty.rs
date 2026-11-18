@@ -159,7 +159,13 @@ impl Screen {
             use std::hash::{Hash, Hasher};
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
             dir.hash(&mut hasher);
-            command.env("XDG_CACHE_HOME", format!("/tmp/cxt-{:x}", hasher.finish()));
+            // Under the run's own cache when harness/x gave it one, so what's left there goes
+            // when the run ends.
+            let base = std::env::var("XDG_CACHE_HOME").unwrap_or_else(|_| "/tmp".to_string());
+            command.env(
+                "XDG_CACHE_HOME",
+                format!("{base}/cxt-{:x}", hasher.finish()),
+            );
         }
         let child = pty.slave.spawn_command(command).unwrap();
         let reader = pty.master.try_clone_reader().unwrap();
