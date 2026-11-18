@@ -70,7 +70,8 @@ fn find(grid: &Grid, text: &str) -> (u16, u16) {
 
 /// Selects a word on the page with a double click, as a person picks one to comment on.
 fn select_word(app: &mut App, word: &str) {
-    let (x, y) = find(&screen(app), word);
+    let grid = screen(app);
+    let (x, y) = on_page(app, &grid, word);
     click(app, x + 1, y);
     click(app, x + 1, y);
 }
@@ -272,4 +273,224 @@ fn a_waiting_comment_says_how_it_reaches_the_agent() {
     let text = screen(&app).text();
     assert!(text.contains("OpenCode isn't"), "{text}");
     assert!(text.contains("sends it"), "{text}");
+}
+
+/// Presses `words` on the first row that also says `beside`, as a card's buttons do.
+fn press_beside(app: &mut App, words: &str, beside: &str) {
+    let grid = screen(app);
+    let y = (0..grid.height())
+        .find(|y| {
+            let row = grid.row_text(*y);
+            row.contains(words) && row.contains(beside)
+        })
+        .unwrap_or_else(|| panic!("no {words:?} beside {beside:?}:\n{}", grid.text()));
+    let row = grid.row_text(y);
+    let x = row[..row.find(words).unwrap()].chars().count() as u16;
+    click(app, x + 1, y);
+}
+
+/// Where `text` first shows on the page, left of the side pane where it's open.
+fn on_page(app: &App, grid: &Grid, text: &str) -> (u16, u16) {
+    let pane = app.dock_area().map_or(grid.width(), |pane| pane.x);
+    for y in 0..grid.height() {
+        let row = grid.row_text(y);
+        if let Some(i) = row.find(text) {
+            let x = row[..i].chars().count() as u16;
+            if x < pane {
+                return (x, y);
+            }
+        }
+    }
+    panic!("{text:?} not on the page:\n{}", grid.text());
+}
+
+/// Drags over the page from where `from` starts to the end of `to`.
+fn drag_over(app: &mut App, from: &str, to: &str) {
+    let grid = screen(app);
+    let (x, y) = on_page(app, &grid, from);
+    let (end, end_y) = on_page(app, &grid, to);
+    let end = end + to.chars().count() as u16;
+    app.handle(mouse(MouseKind::Left, x, y));
+    app.handle(mouse(MouseKind::Drag, end, end_y));
+    app.handle(mouse(MouseKind::Up, end, end_y));
+}
+
+/// Whether the page marks `word` as words a comment is about.
+fn marked(app: &App, word: &str) -> bool {
+    let grid = screen(app);
+    let (x, y) = on_page(app, &grid, word);
+    grid.cell(x, y).style.bg == app.theme.tint
+}
+
+/// An agent changes the file on disk, and Cellix sees it on its next tick.
+fn agent_writes(app: &mut App, dir: &TempDir, text: &str) {
+    std::thread::sleep(Duration::from_millis(20));
+    fs::write(dir.path().join("note.md"), text).unwrap();
+    app.handle(Event::Tick);
+}
+
+/// Words selected over a hard-wrapped paragraph are the comment's, all of them: marked on
+/// the page wherever they stand, quoted whole to an agent asked to check the review, and
+/// replaced whole by a rewrite applied. The quote was their first line alone, so Apply put
+/// the whole rewrite in place of that line and left the rest behind.
+#[test]
+fn a_comment_on_words_over_a_line_break_is_about_all_of_them() {
+    let text =
+        "# Plan\n\nThe cache goes first so that every read\nafter the start is warm and fast.\n";
+    let (_dir, mut app) = page(text);
+    // The page shows the line break as a space, so the words stand in one row.
+    drag_over(&mut app, "every read", "warm");
+    let selected = app.selected_text();
+    assert_eq!(
+        selected.as_deref(),
+        Some("every read\nafter the start is warm")
+    );
+    app.run(Command::AddComment);
+    typed(&mut app, "Warm how?");
+    enter(&mut app);
+    assert_eq!(app.threads[0].quote, "every read\nafter the start is warm");
+    assert_eq!(app.threads[0].line, 3);
+    // A click on the heading takes the selection off, so the mark shows.
+    let (x, y) = on_page(&app, &screen(&app), "Plan");
+    click(&mut app, x + 1, y);
+    for word in ["every", "after the", "warm"] {
+        assert!(marked(&app, word), "{word} isn't marked");
+    }
+    assert!(!marked(&app, "first"), "only what the comment is about");
+    // The card quotes them as the page reads them.
+    let text = screen(&app).text();
+    assert!(text.contains("every read after"), "{text}");
+    // Asked to check the review, the agent hears all of them.
+    app.in_pane = true;
+    press(&mut app, "Check my review");
+    let prompt = app.take_outgoing_prompt().expect("the check's prompt");
+    assert!(
+        prompt.contains("\"every read after the start is warm\""),
+        "{prompt}"
+    );
+    // A rewrite applied takes the place of all of them.
+    let id = app.threads[0].id;
+    let (found, _) = std::sync::mpsc::channel();
+    app.serve(Request::Reply {
+        id,
+        author: "Claude".into(),
+        text: "Rewrite: every later read is warm".into(),
+        found,
+    });
+    press_beside(&mut app, "Apply", "Not this");
+    assert_eq!(
+        app.active_text().unwrap(),
+        "# Plan\n\nThe cache goes first so that {~~every read\nafter the start is warm~>every later read is warm~~} and fast.\n"
+    );
+}
+
+/// When an agent rewords what a comment is about, the card still quotes the words it was
+/// made on and says they changed, and the page marks the words as they read now. Gone, the
+/// card says so and nothing is marked; put back, it's as it was. The quote took the new
+/// words, so the card showed words nobody had commented on, and when they went the card
+/// said nothing and the page lost its mark.
+#[test]
+fn a_card_keeps_the_words_it_was_made_on_and_says_when_they_change() {
+    let (dir, mut app) = page("The cache goes first.\n\nThe tests stay fast on every run.\n");
+    drag_over(&mut app, "tests", "every");
+    app.run(Command::AddComment);
+    typed(&mut app, "Even on CI?");
+    enter(&mut app);
+    assert_eq!(app.threads[0].quote, "tests stay fast on every");
+    agent_writes(
+        &mut app,
+        &dir,
+        "The cache goes first.\n\nThe tests stay quick on every run.\n",
+    );
+    let (x, y) = on_page(&app, &screen(&app), "cache");
+    click(&mut app, x + 1, y);
+    let thread = &app.threads[0];
+    assert_eq!(thread.quote, "tests stay fast on every", "as it was made");
+    assert_eq!(thread.now, "tests stay quick on every");
+    let text = screen(&app).text();
+    assert!(text.contains(crate::threads::CHANGED_SINCE), "{text}");
+    assert!(text.contains("tests stay fast on every"), "{text}");
+    assert!(marked(&app, "quick"), "marked as they read now");
+    // A click on the card goes to the words as they read now.
+    press_beside(&mut app, "tests stay fast", "tests stay fast");
+    assert_eq!(
+        app.selected_text().as_deref(),
+        Some("tests stay quick on every")
+    );
+
+    agent_writes(
+        &mut app,
+        &dir,
+        "The cache goes first.\n\nNothing about that now.\n",
+    );
+    let (x, y) = on_page(&app, &screen(&app), "cache");
+    click(&mut app, x + 1, y);
+    let text = screen(&app).text();
+    assert!(text.contains(crate::threads::WORDS_GONE), "{text}");
+    assert!(app.threads[0].gone);
+    assert!(!marked(&app, "Nothing"), "nothing to mark");
+
+    agent_writes(
+        &mut app,
+        &dir,
+        "The cache goes first.\n\nThe tests stay fast on every run.\n",
+    );
+    let text = screen(&app).text();
+    assert!(!text.contains(crate::threads::WORDS_GONE), "{text}");
+    assert!(!text.contains(crate::threads::CHANGED_SINCE), "{text}");
+    assert!(marked(&app, "fast"));
+}
+
+/// Next Comment and Previous Comment go through the file's comments in the order their words
+/// stand in, round at the ends: each selects its words, lights its card in the Comments pane,
+/// which opens on it, and the status bar says which of how many. A press on a line's ◆ in
+/// the page's margin opens the Comments on that line's comment; presses there did nothing.
+/// Check My Review is in the palette too.
+#[test]
+fn next_comment_goes_through_the_files_comments_and_the_mark_opens_one() {
+    let (_dir, mut app) = page("Alpha one here.\n\nBeta two here.\n\nGamma three here.\n");
+    // Made out of the document's order, which is the order they're gone through in.
+    comment(&mut app, "Gamma", "Third");
+    comment(&mut app, "Alpha", "First");
+    comment(&mut app, "Beta", "Second");
+    let id = |app: &App, text: &str| app.threads.iter().find(|t| t.text == text).unwrap().id;
+    let (x, y) = on_page(&app, &screen(&app), "Alpha");
+    click(&mut app, x, y);
+    app.dock.open = false;
+    app.run(Command::NextComment);
+    assert!(app.dock.open, "the pane opens on it");
+    assert_eq!(app.lit_thread, Some(id(&app, "Second")));
+    assert_eq!(app.selected_text().as_deref(), Some("Beta"));
+    assert!(screen(&app).text().contains("Comment 2 of 3"));
+    app.run(Command::NextComment);
+    assert_eq!(app.selected_text().as_deref(), Some("Gamma"));
+    assert!(screen(&app).text().contains("Comment 3 of 3"));
+    app.run(Command::NextComment);
+    assert_eq!(
+        app.lit_thread,
+        Some(id(&app, "First")),
+        "round to the first"
+    );
+    assert!(screen(&app).text().contains("Comment 1 of 3"));
+    app.run(Command::PreviousComment);
+    assert_eq!(app.lit_thread, Some(id(&app, "Third")), "and back round");
+    // The ◆ beside Beta's line, with the pane shut.
+    app.dock.open = false;
+    app.lit_thread = None;
+    let grid = screen(&app);
+    let (_, row) = on_page(&app, &grid, "Beta two");
+    let line = grid.row_text(row);
+    let mark = line[..line.find('◆').expect("a mark beside the line")]
+        .chars()
+        .count() as u16;
+    click(&mut app, mark, row);
+    assert!(app.dock.open);
+    assert_eq!(app.dock.front, super::Front::Comments);
+    assert_eq!(app.lit_thread, Some(id(&app, "Second")));
+    assert_eq!(app.selected_text().as_deref(), Some("Beta"));
+    // Check My Review from the palette asks the agent, as the pane's button does.
+    app.in_pane = true;
+    app.run(Command::CheckReview);
+    let prompt = app.take_outgoing_prompt().expect("the check's prompt");
+    assert!(prompt.contains("Second"), "{prompt}");
 }

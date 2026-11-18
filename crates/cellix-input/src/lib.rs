@@ -208,6 +208,12 @@ pub enum Command {
     /// The next suggestion in the document, or the one before: Alt+F5, Shift+Alt+F5.
     NextChange,
     PreviousChange,
+    /// The next comment on the file in view, or the one before, its words selected and its
+    /// card lit: no key of its own, as VS Code's Next Comment Thread has none.
+    NextComment,
+    PreviousComment,
+    /// The Comments pane's Check my review, from the palette.
+    CheckReview,
     /// The next problem in the file, or the one before: F8, Shift+F8.
     NextProblem,
     PreviousProblem,

@@ -734,6 +734,9 @@ const PROBLEM_AROUND: usize = 3;
 /// What Cellix says once Ask Agent has put the selection in Claude Code's prompt.
 fn asked_in_prompt(quote: &str, line: usize) -> String {
     const LONGEST: usize = 24;
+    // Words over several lines are said as one run, as the page shows them.
+    let quote = quote.split_whitespace().collect::<Vec<_>>().join(" ");
+    let quote = quote.as_str();
     let what = if quote.is_empty() {
         format!("Line {line}")
     } else if quote.chars().count() > LONGEST {
@@ -764,10 +767,20 @@ fn review_prompt(file: &str, mine: &[&Thread]) -> String {
         text.push_str("I haven't commented yet.\n");
     } else {
         text.push_str("For each of my comments, answer with `cellix reply <id> \"Agree (<kind>): <why>\"` or `cellix reply <id> \"Disagree (<kind>): <why>\"`, where <kind> is Clarity, Correctness, Evidence, Structure or Reproducibility:\n");
+        // All of what each is about, over every line it took: the first line alone left the
+        // agent judging part of a sentence.
         for thread in mine {
+            let about = if thread.selection.is_empty() {
+                &thread.quote
+            } else {
+                &thread.selection
+            };
             text.push_str(&format!(
-                "- {} line {}, on \"{}\": {}\n",
-                thread.id, thread.line, thread.quote, thread.text
+                "- {} line {}, on {}: {}\n",
+                thread.id,
+                thread.line,
+                cellix_review::quoted(about),
+                thread.text
             ));
         }
     }
@@ -1253,15 +1266,11 @@ const MARK_AIR: f32 = 0.1;
 
 /// Where a comment's words are in the file an editor holds, as chars from its start.
 fn quote_range(editor: &Editor, thread: &Thread) -> Option<(usize, usize)> {
-    let rope = editor.buffer.rope();
-    let index = thread.line.checked_sub(1)?;
-    if thread.quote.is_empty() || index >= rope.len_lines() {
+    // Words that went have no place; words reworded are where they read now.
+    if thread.gone {
         return None;
     }
-    let text = editor.line_text(index);
-    let at = text.find(thread.quote.as_str())?;
-    let start = rope.line_to_char(index) + text[..at].chars().count();
-    Some((start, start + thread.quote.chars().count()))
+    editor.quote_span(thread.line, thread.anchor())
 }
 
 /// Where the button that quits Cellix stands in a window of `size`: at the far end of its
@@ -5080,6 +5089,7 @@ impl App {
                     selection: draft.selection,
                     about: draft.about,
                     step,
+                    ..Thread::default()
                 });
                 asked = draft.ask.then_some(id);
             }
@@ -8075,6 +8085,9 @@ impl App {
             Command::AskAgent => self.prompt_comment_at_cursor(true),
             Command::FindInFile => self.open_find(),
             Command::NextChange => self.step_change(true),
+            Command::NextComment => self.step_comment(true),
+            Command::PreviousComment => self.step_comment(false),
+            Command::CheckReview => self.check_review(),
             Command::PreviousChange => self.step_change(false),
             Command::NextProblem => self.step_problem(true),
             Command::PreviousProblem => self.step_problem(false),
@@ -11263,6 +11276,7 @@ impl App {
                 selection: String::new(),
                 about: None,
                 step: String::new(),
+                ..Thread::default()
             });
             self.save_threads();
         }
@@ -11298,6 +11312,7 @@ impl App {
             selection: String::new(),
             about: None,
             step,
+            ..Thread::default()
         });
         self.save_threads();
         if page {
@@ -11324,8 +11339,8 @@ impl App {
                 let quotes: Vec<(usize, String)> = self
                     .threads
                     .iter()
-                    .filter(|t| t.file == file && !t.resolved && t.earlier.is_none())
-                    .map(|t| (t.line, t.quote.clone()))
+                    .filter(|t| t.file == file && !t.resolved && t.earlier.is_none() && !t.gone)
+                    .map(|t| (t.line, t.anchor().to_string()))
                     .collect();
                 editor.set_quotes(&quotes);
             }
@@ -11347,8 +11362,10 @@ impl App {
             .iter_mut()
             .filter(|t| t.file == file && !t.resolved && t.earlier.is_none())
         {
-            thread.follow(&text);
-            quotes.push((thread.line, thread.quote.clone()));
+            // Words that went mark nothing; words reworded are marked as they read now.
+            if thread.follow(&text) {
+                quotes.push((thread.line, thread.anchor().to_string()));
+            }
         }
         editor.set_quotes(&quotes);
         self.threads_seen = Some((self.active(), revision));
@@ -12163,25 +12180,22 @@ impl App {
         let Some(editor) = self.editor_mut() else {
             return;
         };
-        let text = editor.buffer.text();
-        // The quote nearest the line it was on.
-        let near = editor
-            .buffer
-            .rope()
-            .line_to_char(thread.line.saturating_sub(1));
-        let chars: Vec<char> = text.chars().collect();
-        let wanted: Vec<char> = thread.quote.chars().collect();
-        let found = (0..chars.len().saturating_sub(wanted.len().saturating_sub(1)))
-            .filter(|at| !wanted.is_empty() && chars[*at..].starts_with(&wanted))
-            .min_by_key(|at| at.abs_diff(near));
-        let Some(start) = found else {
+        // The words as they read now, all of them, over every line they take: on its line,
+        // else wherever they're nearest it. Only the quote's first line was replaced, with
+        // the whole rewrite, which left the rest of a hard-wrapped selection behind.
+        let anchor = thread.anchor().to_string();
+        let found = editor.quote_span(thread.line, &anchor).or_else(|| {
+            cellix_review::threads::span_in(&editor.buffer.text(), &anchor, thread.line)
+        });
+        let Some((start, end)) = found.filter(|_| !thread.gone) else {
             self.say("The words it's about aren't in the document any more");
             return;
         };
-        let marked = cellix_doc::changes::mark(&thread.quote, &words, editor.change_syntax());
+        let old = editor.buffer.rope().slice(start..end).to_string();
+        let marked = cellix_doc::changes::mark(&old, &words, editor.change_syntax());
         editor
             .buffer
-            .replace_range(&mut editor.selections, start, start + wanted.len(), &marked);
+            .replace_range(&mut editor.selections, start, end, &marked);
         if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
             thread.replies.push(Reply {
                 author: YOU.to_string(),
@@ -12288,9 +12302,10 @@ impl App {
                     .unwrap_or_else(|| editor.line_text(line.saturating_sub(1)))
                     .trim()
                     .to_string();
-                // The quote is one line, which the page marks and follows; the agent hears
-                // all of what was selected.
-                let quote = whole.lines().next().unwrap_or_default().trim().to_string();
+                // The quote is all of what was selected, over as many lines as it takes, which
+                // the page marks and follows across line breaks. It was the first line alone,
+                // so an Apply replaced that line with the whole rewrite.
+                let quote = whole.clone();
                 let selection = if whole.contains('\n') {
                     whole.clone()
                 } else {
@@ -12384,6 +12399,7 @@ impl App {
                     selection: String::new(),
                     about: None,
                     step: String::new(),
+                    ..Thread::default()
                 });
                 self.save_threads();
                 let _ = made.send(id);
@@ -13589,6 +13605,90 @@ impl App {
         self.say(format!("Suggestion {} of {}", index + 1, changes.len()));
     }
 
+    /// Goes to the next comment on the file in view, or the one before, going round, in the
+    /// order its words stand in: they're selected, its card is lit in the Comments pane, which
+    /// opens on it, and the status bar says which of how many it is. From the lit one, else
+    /// from the caret.
+    fn step_comment(&mut self, forward: bool) {
+        let Some(editor) = self.editors.get(self.active()) else {
+            self.say("Open a file to go through its comments");
+            return;
+        };
+        let Some(file) = editor.buffer.path().map(|p| self.relative(p)) else {
+            return;
+        };
+        let rope = editor.buffer.rope();
+        let mut placed: Vec<(usize, u32)> = self
+            .threads
+            .iter()
+            .filter(|t| t.file == file && !t.resolved && !on_output(t))
+            .map(|t| {
+                let line = rope.line_to_char(t.line.saturating_sub(1).min(rope.len_lines() - 1));
+                let at = quote_range(editor, t).map_or(line, |(start, _)| start);
+                (at, t.id)
+            })
+            .collect();
+        if placed.is_empty() {
+            self.say("No comments on this file");
+            return;
+        }
+        placed.sort_unstable();
+        let head = editor.selections.primary().start();
+        let count = placed.len();
+        let lit = self
+            .lit_thread
+            .and_then(|id| placed.iter().position(|(_, of)| *of == id));
+        let index = match (lit, forward) {
+            (Some(at), true) => (at + 1) % count,
+            (Some(at), false) => (at + count - 1) % count,
+            (None, true) => placed.iter().position(|(at, _)| *at > head).unwrap_or(0),
+            (None, false) => placed
+                .iter()
+                .rposition(|(at, _)| *at < head)
+                .unwrap_or(count - 1),
+        };
+        let id = placed[index].1;
+        self.show_thread(id);
+        self.say(format!("Comment {} of {count}", index + 1));
+    }
+
+    /// Opens the Comments pane on a comment, its card lit and in view, and selects its words.
+    fn show_thread(&mut self, id: u32) {
+        self.dock.open = true;
+        self.dock.show_comments();
+        self.thread_hit(ThreadHit::Open(id));
+        self.show_lit_comment(id);
+        self.dock.focused = false;
+    }
+
+    /// A press on the ◆ of a commented line, in the gutter or a page's margin: the Comments
+    /// open on that line's comment. Presses there only folded.
+    fn press_comment_mark(&mut self, area: Rect, x: u16, y: u16) -> bool {
+        let Some(editor) = self.editors.get(self.active()) else {
+            return false;
+        };
+        let Some(file) = editor.buffer.path().map(|p| self.relative(p)) else {
+            return false;
+        };
+        let lines = self.comment_lines(&file);
+        let Some(line) = editor.comment_mark_at(area, x, y, &lines) else {
+            return false;
+        };
+        let thread = self
+            .threads
+            .iter()
+            .find(|t| t.file == file && t.line == line && !t.resolved && !on_output(t))
+            .map(|t| t.id);
+        match thread {
+            Some(id) => self.show_thread(id),
+            None => {
+                self.dock.open = true;
+                self.dock.show_comments();
+            }
+        }
+        true
+    }
+
     /// Moves to the next problem the language server reported in this file, or the one
     /// before, going round at the ends, and says what it is.
     fn step_problem(&mut self, forward: bool) {
@@ -14310,6 +14410,9 @@ impl App {
                 } else {
                     self.count_click(x, y)
                 };
+                if clicks == 1 && !shift && self.press_comment_mark(area, x, y) {
+                    return;
+                }
                 if let Some(editor) = self.editor_mut() {
                     if editor.on_scrollbar(area, x) {
                         editor.scroll_to_row(area, y);
@@ -19427,9 +19530,9 @@ mod agents_list_tests;
 #[cfg(test)]
 mod glance_tests;
 #[cfg(test)]
-mod link_tests;
-#[cfg(test)]
 mod docflow_tests;
+#[cfg(test)]
+mod link_tests;
 #[cfg(test)]
 mod motion_tests;
 #[cfg(test)]

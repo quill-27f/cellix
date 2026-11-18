@@ -66,6 +66,18 @@ pub struct Thread {
     /// which is how the agent is told where it is.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub step: String,
+    /// The words it's about as they read now, once a word or two of them has changed since it
+    /// was made: `quote` keeps the words it was made on, which its card shows.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub now: String,
+    /// The words it was made on are no longer in the file, so nothing is marked for it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub gone: bool,
+    /// Its words have been found in the file, so their going is news. A picture's, a
+    /// formula's or a diagram's comment quotes what it's about in words of Cellix's own, which
+    /// the file never has, and isn't gone for that.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub placed: bool,
 }
 
 /// What a thread is about besides a file's words.
@@ -113,7 +125,8 @@ impl Thread {
 
     /// Moves the thread to where its quoted text is now, the nearest place if it appears
     /// more than once. A quote rewrapped across lines is still found, and so is one with a
-    /// word or two changed. Text that's gone leaves it where it was. Says whether it was found.
+    /// word or two changed, whose words as they read now it keeps beside the quote. Text that's
+    /// gone leaves it where it was, marked gone. Says whether it was found.
     pub fn follow(&mut self, text: &str) -> bool {
         match self.place(text) {
             Place::Same(line, copy) => {
@@ -121,56 +134,90 @@ impl Thread {
                 if let Some(copy) = copy {
                     self.copy = copy;
                 }
+                self.now.clear();
+                self.gone = false;
+                self.placed = true;
                 true
             }
-            // Reworded: the quote takes the words it reads as now, so the card shows them.
+            // Reworded: the quote keeps the words the comment was made on, which its card
+            // shows, and the words as they read now are what's marked and followed. The quote
+            // used to take them, so a card showed words nobody had commented on.
             Place::Reworded(line, now) => {
                 self.line = line;
                 if let Some(now) = now {
-                    self.quote = now;
+                    self.now = now;
                 }
                 self.copy = (0, 0);
+                self.gone = false;
+                self.placed = true;
                 true
             }
-            Place::Gone => false,
+            Place::Gone => {
+                self.gone = self.placed;
+                false
+            }
         }
+    }
+
+    /// The words that mark where it is now: as they read since a word changed, else the quote.
+    pub fn anchor(&self) -> &str {
+        if self.now.is_empty() {
+            &self.quote
+        } else {
+            &self.now
+        }
+    }
+
+    /// Whether the words it was made on read differently now, or are gone.
+    pub fn changed(&self) -> bool {
+        self.gone || !self.now.is_empty()
     }
 
     fn place(&self, text: &str) -> Place {
         if self.quote.trim().is_empty() {
             return Place::Same(self.line, None);
         }
+        if let Some(found) = self.found(text, &self.quote) {
+            return found;
+        }
+        // The words as they last read, still there as they were.
+        if !self.now.is_empty()
+            && let Some(Place::Same(line, _)) = self.found(text, &self.now)
+        {
+            return Place::Reworded(line, None);
+        }
+        // A word or two changed again, from how they last read; but never onto words that
+        // turn what was commented on around.
+        match reworded(text, self.anchor(), &self.quote, self.line) {
+            Some((line, now)) => Place::Reworded(line, Some(now)),
+            None => Place::Gone,
+        }
+    }
+
+    /// Where `words` stand in `text` as they are, or only rewrapped: the copy it was on while
+    /// the copies stay as many, else the nearest.
+    fn found(&self, text: &str, words: &str) -> Option<Place> {
         let distance = |line: &usize| line.abs_diff(self.line);
-        let copies: Vec<usize> = text
-            .lines()
-            .enumerate()
-            .filter(|(_, line)| line.contains(&self.quote))
-            .map(|(index, _)| index + 1)
-            .collect();
+        // Words over several lines are never all on one.
+        let copies: Vec<usize> = if words.contains('\n') {
+            Vec::new()
+        } else {
+            text.lines()
+                .enumerate()
+                .filter(|(_, line)| line.contains(words))
+                .map(|(index, _)| index + 1)
+                .collect()
+        };
         // While the copies stay as many, the same one: lines added above can bring another
         // copy nearer than this one's new place.
         let (copy, count) = self.copy;
         let same = (count == copies.len() && copy < count).then(|| copies[copy]);
         if let Some(line) = same.or_else(|| copies.iter().copied().min_by_key(distance)) {
             let copy = copies.iter().position(|l| *l == line).unwrap_or(0);
-            return Place::Same(line, Some((copy, copies.len())));
+            return Some(Place::Same(line, Some((copy, copies.len()))));
         }
-        let found = rewrapped(text, &self.quote)
-            .into_iter()
-            .min_by_key(distance);
-        if let Some(line) = found {
-            return Place::Same(line, None);
-        }
-        match reworded(text, &self.quote, self.line) {
-            Some(line) => {
-                let now = text
-                    .lines()
-                    .nth(line - 1)
-                    .and_then(|l| span_of(l, &self.quote));
-                Place::Reworded(line, now)
-            }
-            None => Place::Gone,
-        }
+        let found = rewrapped(text, words).into_iter().min_by_key(distance);
+        found.map(|line| Place::Same(line, None))
     }
 
     /// Moves the thread onto a plan's next version, `version` being the one just replaced.
@@ -184,6 +231,8 @@ impl Thread {
                 self.copy = copy.unwrap_or((0, 0));
                 self.earlier = None;
                 self.reworded = false;
+                self.now.clear();
+                self.gone = false;
             }
             Place::Reworded(line, _) => {
                 self.earlier.get_or_insert(version);
@@ -219,21 +268,29 @@ impl Thread {
         } else {
             &self.selection
         };
+        // Words that changed since, or went, are said as they were and as they are.
+        let about = if self.gone && self.earlier.is_none() {
+            format!("{}, which is no longer in the file", crate::quoted(about))
+        } else if !self.now.is_empty() && self.earlier.is_none() {
+            format!(
+                "{}, which now reads {}",
+                crate::quoted(about),
+                crate::quoted(&self.now)
+            )
+        } else {
+            crate::quoted(about)
+        };
         let id = self.id;
         let mut text = match &self.about {
             // The page is Cellix's copy of the agent's own transcript, so the step says more
             // to the agent than a line of that copy would.
             None if !self.step.is_empty() => format!(
-                "Comment {id} on your transcript of this session, at {}, about {}: {}",
-                self.step,
-                crate::quoted(about),
-                self.text
+                "Comment {id} on your transcript of this session, at {}, about {about}: {}",
+                self.step, self.text
             ),
             None => format!(
-                "Comment {id} on {}{at}, about {}{earlier}: {}",
-                self.file,
-                crate::quoted(about),
-                self.text
+                "Comment {id} on {}{at}, about {about}{earlier}: {}",
+                self.file, self.text
             ),
             Some(About::Output {
                 tab,
@@ -251,16 +308,14 @@ impl Thread {
                     format!(", which names {}", places.join(", "))
                 };
                 format!(
-                    "Comment {id} on output in {tab}{command}{places}, about {}: {}",
-                    crate::quoted(about),
+                    "Comment {id} on output in {tab}{command}{places}, about {about}: {}",
                     self.text
                 )
             }
             Some(About::Problem { message }) => format!(
-                "Comment {id} on the problem {} at {}{at}, in the code {}: {}",
+                "Comment {id} on the problem {} at {}{at}, in the code {about}: {}",
                 crate::quoted(message),
                 self.file,
-                crate::quoted(about),
                 self.text
             ),
         };
@@ -334,28 +389,87 @@ fn rewrapped(text: &str, quote: &str) -> Vec<usize> {
         .collect()
 }
 
-/// The line that shares most of the quote's words, if it shares most of them: a quote a word or
-/// two was changed in. Ties go to the nearest.
-fn reworded(text: &str, quote: &str, near: usize) -> Option<usize> {
-    let words: Vec<&str> = quote.split_whitespace().collect();
+/// Where most of `anchor`'s words are, if most of them are anywhere: words a word or two was
+/// changed in. Words over several lines are looked for over as many lines together. Gives the
+/// line it starts on, ties going to the nearest, and the stretch of the words as they read
+/// there. A "not" or a number in or out of them, against `said`, the words first commented on,
+/// turns what's said around, so those aren't taken as the same.
+fn reworded(text: &str, anchor: &str, said: &str, near: usize) -> Option<(usize, String)> {
+    let words: Vec<&str> = anchor.split_whitespace().collect();
     // A word or two is too little to tell one line from another.
     if words.len() < 4 {
         return None;
     }
-    let score = |line: &str| {
-        let theirs: Vec<&str> = line.split_whitespace().collect();
+    let score = |stretch: &str| {
+        let theirs: Vec<&str> = stretch.split_whitespace().collect();
         words.iter().filter(|w| theirs.contains(w)).count()
     };
-    // A "not" or a number in or out turns what's said around, so the line must say the same.
-    let turns = guards(quote);
-    let says_same = |line: &str| span_of(line, quote).is_some_and(|span| guards(&span) == turns);
-    text.lines()
-        .enumerate()
-        .map(|(index, line)| (score(line), index + 1, line))
-        .filter(|(shared, _, line)| shared * 3 >= words.len() * 2 && says_same(line))
-        .map(|(shared, index, _)| (shared, index))
-        .max_by_key(|(shared, line)| (*shared, std::cmp::Reverse(line.abs_diff(near))))
-        .map(|(_, line)| line)
+    let turns = guards(said);
+    let lines: Vec<&str> = text.lines().collect();
+    let tall = anchor.lines().count().max(1);
+    let best = (0..lines.len())
+        .map(|index| {
+            let stretch = lines[index..(index + tall).min(lines.len())].join(" ");
+            (score(&stretch), index + 1, stretch)
+        })
+        .filter(|(shared, _, _)| shared * 3 >= words.len() * 2)
+        .filter_map(|(shared, line, stretch)| {
+            let span = span_of(&stretch, anchor)?;
+            (guards(&span) == turns).then_some((shared, line, span))
+        })
+        .max_by_key(|(shared, line, _)| (*shared, std::cmp::Reverse(line.abs_diff(near))))?;
+    Some((best.1, best.2))
+}
+
+/// Where `quote` stands in `slice` with any run of spaces and line breaks in either matching any
+/// other, starting on the slice's first line: as the chars it takes, from the slice's start. So
+/// words selected over a hard-wrapped paragraph are found where they're written.
+pub fn span_from(slice: &str, quote: &str) -> Option<(usize, usize)> {
+    let words: Vec<&str> = quote.split_whitespace().collect();
+    let first = *words.first()?;
+    let first_line = slice.find('\n').unwrap_or(slice.len());
+    let mut from = 0;
+    while let Some(found) = slice[from..first_line].find(first) {
+        let start = from + found;
+        let mut at = start + first.len();
+        let mut whole = true;
+        for word in &words[1..] {
+            let rest = &slice[at..];
+            let spaced = rest.trim_start();
+            if spaced.len() == rest.len() || !spaced.starts_with(word) {
+                whole = false;
+                break;
+            }
+            at += rest.len() - spaced.len() + word.len();
+        }
+        if whole {
+            let count = |end: usize| slice[..end].chars().count();
+            return Some((count(start), count(at)));
+        }
+        from = start + slice[start..].chars().next().map_or(1, char::len_utf8);
+    }
+    None
+}
+
+/// Where `quote` stands in `text`, as `span_from` finds it, starting on the line nearest
+/// `near` (counting from one): as chars from the start of `text`.
+pub fn span_in(text: &str, quote: &str, near: usize) -> Option<(usize, usize)> {
+    let mut starts = vec![0];
+    starts.extend(text.match_indices('\n').map(|(at, _)| at + 1));
+    let mut found: Option<(usize, (usize, usize))> = None;
+    let mut chars = 0;
+    let mut last = 0;
+    for (index, start) in starts.iter().enumerate() {
+        chars += text[last..*start].chars().count();
+        last = *start;
+        if let Some((from, to)) = span_from(&text[*start..], quote) {
+            let distance = (index + 1).abs_diff(near);
+            if found.is_none_or(|(best, _)| distance < best) {
+                found = Some((distance, (chars + from, chars + to)));
+            }
+        }
+    }
+    found.map(|(_, span)| span)
 }
 
 /// Words that turn what a sentence says around: negations and numbers, sorted, so two
@@ -425,14 +539,91 @@ mod tests {
         assert_eq!(on.line, 24);
     }
 
+    /// Reworded, a comment keeps the words it was made on, which its card quotes, and follows
+    /// the words as they read now: the quote took them, so a card quoted words nobody had
+    /// commented on. Reworded again it follows on; put back, it's as it was; gone, it says so.
     #[test]
-    fn a_reworded_quote_shows_its_new_words() {
+    fn a_reworded_quote_keeps_its_words_and_follows_the_new_ones() {
         let mut on = thread();
         on.quote = "the weights always sum to one here".into();
         on.line = 1;
-        on.follow("Note that the weights always add to one here as said.\n");
+        assert!(on.follow("Note that the weights always add to one here as said.\n"));
         assert_eq!(on.line, 1);
-        assert_eq!(on.quote, "the weights always add to one here");
+        assert_eq!(on.quote, "the weights always sum to one here");
+        assert_eq!(on.now, "the weights always add to one here");
+        assert_eq!(on.anchor(), on.now);
+        assert!(on.changed());
+        // Moved down and reworded again: found from how it read last.
+        let again = "Intro.\n\nNote that the weights always add up to one here as said.\n";
+        assert!(on.follow(again));
+        assert_eq!(
+            (on.line, on.now.as_str()),
+            (3, "the weights always add up to one here")
+        );
+        let message = on.message();
+        assert!(
+            message.contains("about \"the weights always sum to one here\", which now reads \"the weights always add up to one here\""),
+            "{message}"
+        );
+        // Put back as it was.
+        assert!(on.follow("Intro.\n\nNote that the weights always sum to one here as said.\n"));
+        assert!(on.now.is_empty() && !on.changed());
+        // Gone: it stays where it was, and says so.
+        assert!(!on.follow("Intro.\n\nSomething else entirely.\n"));
+        assert!(on.gone && on.changed());
+        assert_eq!(on.line, 3);
+        assert!(on.message().contains("which is no longer in the file"));
+        // A picture's comment quotes it in words the file never has: not gone for that.
+        let mut described = Thread {
+            quote: "Image plot.png".into(),
+            ..thread()
+        };
+        assert!(!described.follow("![](plot.png)\n"));
+        assert!(!described.gone);
+    }
+
+    /// Words selected over a line break are found where they stand, across it, and again once
+    /// rewrapped; a thread on them follows them, and one with a word changed in them is
+    /// followed over as many lines as they take.
+    #[test]
+    fn words_over_a_line_break_are_found_whole() {
+        let text = "# Plan\n\nThe cache goes first so that every read\nafter the start is warm.\n";
+        let quote = "every read\nafter the start";
+        let line = &text[text.find("The cache").unwrap()..];
+        let (from, to) = span_from(line, quote).unwrap();
+        let found: String = line.chars().skip(from).take(to - from).collect();
+        assert_eq!(found, quote);
+        assert!(
+            span_from("nothing here\nevery read", quote).is_none(),
+            "from its first line"
+        );
+        let rewrapped =
+            "# Plan\n\nThe cache goes first so that every\nread after the start is warm.\n";
+        let (from, to) = span_in(rewrapped, quote, 3).unwrap();
+        let found: String = rewrapped.chars().skip(from).take(to - from).collect();
+        assert_eq!(found, "every\nread after the start");
+        let mut on = Thread {
+            quote: quote.into(),
+            line: 3,
+            ..thread()
+        };
+        assert!(on.follow(rewrapped));
+        assert_eq!((on.line, on.now.as_str(), on.gone), (3, "", false));
+        // A word changed over the two lines: reworded, not gone.
+        let mut on = Thread {
+            quote: "so that every read\nafter the start is warm".into(),
+            line: 3,
+            ..thread()
+        };
+        assert!(on.follow(
+            "# Plan\n\nThe cache goes first so that every read\nafter the start is hot.\n"
+        ));
+        assert_eq!(on.line, 3);
+        assert!(
+            on.now.starts_with("so that every read after the start"),
+            "{}",
+            on.now
+        );
     }
 
     #[test]
@@ -486,6 +677,7 @@ mod tests {
             selection: String::new(),
             about: None,
             step: String::new(),
+            ..Thread::default()
         }
     }
 

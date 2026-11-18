@@ -472,7 +472,12 @@ next row's air over its words, up to 8 px, clear of the words' tint, and what wh
 goes to the room round its rule, as a menu's goes to its rules. It goes
 when the pointer leaves the words and the card, and at a press anywhere else, the wheel or a key.
 It's for words a comment tints, which pages show; code marks a commented line in its gutter
-instead, and has no card (`app/glance.rs`). It goes the other way too: a click on a card goes to its
+instead, and has no card (`app/glance.rs`). Next Comment
+and Previous Comment, in the palette with no key of their own as VS Code's Next Comment Thread
+has none, go through the file's comments in the order their words stand in, round at the ends:
+each opens the pane on its comment, selects its words and lights its card, and the status bar
+says "Comment 2 of 7". A press on a line's ◆, in the gutter or a page's margin, does the same
+for that line's comment (presses there only folded). Check My Review is in the palette too. It goes the other way too: a click on a card goes to its
 words, selects them so they're plain to see, lights the card, and leaves the keyboard in the
 file; the buttons that offer to comment on a selection stay away from those words. The pane lists in the document's order, or by which comment was made last or first
 (a comment's number counts up as they're made, which is the only record of when), chosen from a
@@ -718,6 +723,19 @@ the next one's prompt. Once it has gone, "Waiting for Claude Code…" names the 
 the one in front of the pane, which is the one sent to, where it named the first agent there.
 Check my review asks for a verdict on each comment, so each counts as told and the hook doesn't
 add them to that prompt again. A suggestion kept is the person's comment, and goes as theirs do.
+
+A comment is about all of what was selected, over as many lines as it took: its quote is the
+whole selection, found again across line breaks and runs of spaces (`threads::span_from`), so
+words selected over a hard-wrapped paragraph are marked on every row they stand on, quoted whole
+to an agent asked to check the review, and replaced whole by a rewrite applied. Until 18 November
+2026 the quote was the selection's first line, and Apply replaced that line with the whole
+rewrite, leaving the rest behind. A comment keeps the words it was made on, which its card
+quotes. When an agent rewords them, the words as they read now are kept beside them (`now`) and
+are what the page marks and a click selects, and the card says "Changed since your comment";
+when they're gone, it says "Words gone", strikes the quote through and marks nothing. It used to
+take the new words as its quote, so a card showed words nobody had commented on. An agent told
+of it hears both, the words commented on and what they read now. A word or two changed is
+followed over as many lines as the words take, and never onto a "not" or a number in or out.
 
 ## Surfaces
 

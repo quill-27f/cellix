@@ -2956,8 +2956,8 @@
   {
     "id": "thread-quote-follows",
     "milestone": 10,
-    "title": "A reworded quote shows its new words",
-    "test": "a_reworded_quote_shows_its_new_words",
+    "title": "A reworded quote keeps the words it was made on, and follows the words as they read now",
+    "test": "a_reworded_quote_keeps_its_words_and_follows_the_new_ones",
     "passes": true
   },
   {
@@ -6269,6 +6269,34 @@
     "milestone": 15,
     "title": "A waiting card says how it reaches the agent: with the next prompt, by Ask agent, or the next agent's",
     "test": "a_waiting_comment_says_how_it_reaches_the_agent",
+    "passes": true
+  },
+  {
+    "id": "comment-whole-selection",
+    "milestone": 15,
+    "title": "A comment is about all of what was selected, over line breaks: marked, quoted and rewritten whole",
+    "test": "a_comment_on_words_over_a_line_break_is_about_all_of_them",
+    "passes": true
+  },
+  {
+    "id": "comment-changed-since",
+    "milestone": 15,
+    "title": "A card keeps the words it was made on and says when they changed or went",
+    "test": "a_card_keeps_the_words_it_was_made_on_and_says_when_they_change",
+    "passes": true
+  },
+  {
+    "id": "quote-across-lines",
+    "milestone": 15,
+    "title": "Words over a line break are found whole, and followed when rewrapped or reworded",
+    "test": "words_over_a_line_break_are_found_whole",
+    "passes": true
+  },
+  {
+    "id": "next-comment",
+    "milestone": 15,
+    "title": "Next and Previous Comment go through a file's comments; a press on a line's mark opens its comment",
+    "test": "next_comment_goes_through_the_files_comments_and_the_mark_opens_one",
     "passes": true
   }
 ]

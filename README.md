@@ -315,7 +315,7 @@ kept in `.cellix/threads.json`. Ask Agent sends yours to the agent with its file
 agent answers with `cellix reply <id> "text"`, and the answer lands under your question. With a file
 open the Comments tab lists that file's; with none it lists every file's, each under its file's name,
 and a click on a name or a comment opens the file. Click words a comment is about and its card is
-lit in the Comments tab, which scrolls to it, and comes forward if the pane was open on another tab; click a card and its words are selected in the file. Under the kinds a button says what order the tab lists in:
+lit in the Comments tab, which scrolls to it, and comes forward if the pane was open on another tab; click a card and its words are selected in the file. **Next Comment** and **Previous Comment** in the palette go through a file's comments in order, and a click on a line's ◆ opens its comment. Under the kinds a button says what order the tab lists in:
 click it for the document's order, newest first or oldest first. Resolved comments are folded away under a **Show resolved** button after the open ones: click it and they unfold under it, click it again and they fold away. A link in a comment or a reply is
 underlined, and a click opens it, in the side pane's browser where there is one. Right-click it for
 **Open Link** and **Copy Link**, which puts its address on your clipboard to share, over SSH too.

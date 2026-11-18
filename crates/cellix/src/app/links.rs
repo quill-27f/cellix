@@ -105,7 +105,7 @@ impl App {
     pub(super) fn comment_link_menu(&mut self, screen: Rect, at: (u16, u16, f32)) {
         let hit = {
             let (shown, resolved) = self.shown_threads();
-            let agent = self.dock.agent_name();
+            let agent = self.comment_agent().0;
             let draft = self.dock.draft.as_ref();
             let view = self.comments_view();
             let shown = (shown.as_slice(), draft, agent.as_str(), resolved, view);

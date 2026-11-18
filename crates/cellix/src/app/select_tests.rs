@@ -318,7 +318,13 @@ fn a_shift_click_selection_gets_the_comment_bar_and_its_comment_holds_all_of_it(
     let thread = &app.threads[0];
     assert_eq!(thread.text, "Why so long");
     assert_eq!(thread.line, 3, "on the line it starts on");
-    assert_eq!(thread.quote, "first paragraph begins the scan.");
+    // The quote is all of what was selected, which the page marks and an agent hears.
+    assert!(
+        thread.quote.starts_with("first paragraph begins the scan.")
+            && thread.quote.ends_with("ends the scan here"),
+        "{}",
+        thread.quote
+    );
     for words in ["| cell | 42 |", "x^2 + y^2 = z^2", "ends the scan here"] {
         assert!(
             thread.selection.contains(words),

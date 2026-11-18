@@ -202,7 +202,8 @@ enum Words {
     Removed,
 }
 
-/// The pill on a plan comment whose words a later version changed or dropped, and how.
+/// The pill on a comment whose words changed or went: in a plan's later version, or in the
+/// file since it was made. The card still quotes the words it was made on.
 fn words_of(thread: &Thread) -> (Words, Option<String>) {
     match thread.earlier.map(|v| v + 1) {
         Some(version) if thread.reworded => (
@@ -213,9 +214,15 @@ fn words_of(thread: &Thread) -> (Words, Option<String>) {
             Words::Removed,
             Some(format!("Removed in version {version} \u{203a}")),
         ),
+        None if thread.gone => (Words::Removed, Some(WORDS_GONE.to_string())),
+        None if !thread.now.is_empty() => (Words::Changed, Some(CHANGED_SINCE.to_string())),
         None => (Words::Here, None),
     }
 }
+
+/// What a card's pill says when the words it was made on read differently now, or went.
+pub const CHANGED_SINCE: &str = "Changed since your comment";
+pub const WORDS_GONE: &str = "Words gone";
 
 /// A pill's colour: the warning colour for words that are gone, a quiet one for words
 /// only reworded.
@@ -319,7 +326,9 @@ fn quote_of(quote: &str, line: usize) -> String {
     if quote.is_empty() {
         format!("Line {line}")
     } else {
-        quote.replace('$', "")
+        // Words over several lines read as one run, as the page shows them.
+        let flat: Vec<&str> = quote.split_whitespace().collect();
+        flat.join(" ").replace('$', "")
     }
 }
 

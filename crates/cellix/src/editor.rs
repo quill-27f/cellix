@@ -1709,6 +1709,32 @@ impl Editor {
         }
     }
 
+    /// The line, counting from one, whose comment mark (◆) is at column `x`, row `y`, where
+    /// `lines` are those with one: in code the gutter's first column, on a page the margin's
+    /// column it's drawn in.
+    pub fn comment_mark_at(&self, full: Rect, x: u16, y: u16, lines: &[usize]) -> Option<usize> {
+        let area = self.text_area(full);
+        let offset = y.checked_sub(area.y)? as usize;
+        if y >= area.bottom() {
+            return None;
+        }
+        let line = if self.rendered {
+            let left = area.x + self.page_margin(area);
+            if x != (left + 1).saturating_sub(PAGE_MARGIN) {
+                return None;
+            }
+            self.page(area).get(self.top + offset)?.line
+        } else {
+            let rows = self.code_rows(area.w);
+            // A header pinned over the top rows has no mark there.
+            if x != area.x || offset < self.sticky(&rows, area).len() {
+                return None;
+            }
+            rows.get(self.top + offset)?.line
+        };
+        lines.contains(&(line + 1)).then_some(line + 1)
+    }
+
     /// Where a click in the gutter or on a fold's chip opens or closes a fold. True when it
     /// did.
     pub fn click_fold(&mut self, area: Rect, x: f32, y: u16) -> bool {
@@ -3367,20 +3393,28 @@ impl Editor {
 
     /// Finds where each comment's quote is, for tinting it.
     pub fn set_quotes(&self, quotes: &[(usize, String)]) {
-        let rope = self.buffer.rope();
-        let mut ranges = Vec::new();
-        for (line, quote) in quotes {
-            let index = line.saturating_sub(1);
-            if quote.is_empty() || index >= rope.len_lines() {
-                continue;
-            }
-            let text = self.line_text(index);
-            if let Some(at) = text.find(quote.as_str()) {
-                let start = rope.line_to_char(index) + text[..at].chars().count();
-                ranges.push((start, start + quote.chars().count()));
-            }
-        }
+        let ranges = quotes
+            .iter()
+            .filter_map(|(line, quote)| self.quote_span(*line, quote))
+            .collect();
         *self.quoted.borrow_mut() = ranges;
+    }
+
+    /// Where a comment's words are, starting on its line (counting from one), as chars of
+    /// the file: across line breaks and runs of spaces as written, so words selected over a
+    /// hard-wrapped paragraph are found whole. Only their first line was looked for.
+    pub fn quote_span(&self, line: usize, quote: &str) -> Option<(usize, usize)> {
+        let rope = self.buffer.rope();
+        let index = line.checked_sub(1)?;
+        if quote.trim().is_empty() || index >= rope.len_lines() {
+            return None;
+        }
+        // As many lines as the words take, and two more for a rewrap.
+        let last = (index + quote.lines().count() + 2).min(rope.len_lines());
+        let start = rope.line_to_char(index);
+        let slice = rope.slice(start..rope.line_to_char(last)).to_string();
+        let (from, to) = cellix_review::threads::span_from(&slice, quote)?;
+        Some((start + from, start + to))
     }
 
     /// Puts text in a block of its own below this line, with the caret `caret` chars in.
