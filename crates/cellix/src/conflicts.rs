@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use cellix_render::{
-    BOTTOM_LEFT, BOTTOM_RIGHT, Bounds, Grid, Measure, Rect, Rgb, Style, TOP_LEFT, TOP_RIGHT,
+    BOTTOM_LEFT, BOTTOM_RIGHT, Bounds, Grid, Measure, Paint, Rect, Rgb, Style, TOP_LEFT, TOP_RIGHT,
 };
 use cellix_review::conflict::{Conflict, conflicts};
 
@@ -138,12 +138,17 @@ fn chip(
     grid.put_str(x, y, cells, style, x + width);
     if let Some(fill) = fill {
         let top = y as f32 + (1.0 - CHIP_HEIGHT) / 2.0;
-        grid.panel(
-            Bounds::cells(x as f32, top, width as f32, CHIP_HEIGHT),
-            22,
-            Some(fill),
-            None,
-        );
+        // At the height it has on the terminal's line, where a row is taller: grown to a
+        // control's height it stood 5 px from the header's edges, which are the band's.
+        grid.paint.push(Paint::Panel {
+            bounds: Bounds::cells(x as f32, top, width as f32, CHIP_HEIGHT),
+            radius: 22,
+            fill: Some(fill),
+            border: None,
+            shadow: false,
+            dashed: false,
+            inset: true,
+        });
     }
     // A pixel over the chip's middle, as a button's words are.
     grid.centred_text(

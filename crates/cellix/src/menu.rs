@@ -254,6 +254,8 @@ pub struct Menu {
     pad: f32,
     /// Rows each rule takes: `RULE_ROOM`, and a share of what whole rows leave over.
     rule_room: f32,
+    /// How far down its first row its panel starts, where it opens under a line (`hang`).
+    drop: f32,
     /// Columns from the text edge to a row's words: an icon's, where any row has one.
     lead: f32,
     /// How wide each row's words are, for what comes after them.
@@ -318,6 +320,7 @@ impl Menu {
             fine,
             pad,
             rule_room,
+            drop: 0.0,
             lead,
             widths,
             selected: None,
@@ -533,6 +536,42 @@ impl Menu {
         }
     }
 
+    /// Opened on the row under a line, as a tab's menu is under the tab row: its panel starts
+    /// `LINE_AIR` down its first row, rather than on the line, and its rows keep their air
+    /// under that. It takes another row where it has to and there's room below.
+    pub fn hang(&mut self, measure: &dyn Measure, screen: Rect) {
+        let Some((_, row)) = measure.cell_pixels().filter(|_| self.fine) else {
+            return;
+        };
+        // The air and a pixel for the line, in whole sixty-fourths of a row, rounded up, as
+        // paint places it.
+        let unit = cellix_render::UNIT as f32;
+        let air = crate::measures::LINE_AIR + 1.0;
+        let drop = (air / row.max(1) as f32 * unit).ceil() / unit;
+        let rules = self.items.iter().filter(|i| i.rule).count();
+        let rows = self.items.len() as f32 + rules as f32 * RULE_ROOM;
+        let height = (rows + PADDING * 2.0 + drop).ceil() as u16;
+        if self.area.y + height > screen.bottom().saturating_sub(1) {
+            return;
+        }
+        // What the drop leaves over of its whole rows goes over its first row and under its
+        // last alike, so its rules keep the room they have in every menu.
+        let spare = (f32::from(height) - rows - PADDING * 2.0 - drop).max(0.0);
+        self.area.h = height;
+        self.drop = drop;
+        self.pad = drop + PADDING + spare / 2.0;
+        self.rule_room = RULE_ROOM;
+        // Its rows moved down, and their submenus with them.
+        self.subs = (0..self.items.len())
+            .map(|row| self.place_submenu(row, measure, screen))
+            .collect();
+    }
+
+    /// The row its top is on.
+    pub fn top(&self) -> u16 {
+        self.area.y
+    }
+
     /// The item under the pointer, `y` with its fraction of a row.
     pub fn row_at(&self, x: u16, y: f32) -> Option<usize> {
         let area = self.area;
@@ -590,7 +629,15 @@ impl Menu {
             theme
         };
         let area = self.area;
-        if self.fine {
+        // Hung under a line, its first row's cells keep their ground, which shows over its
+        // panel's top: the words its first row holds would have lit them in its colour.
+        let behind: Vec<Rgb> = (area.x..area.right())
+            .filter(|_| self.drop > 0.0)
+            .map(|x| grid.cell(x, area.y).style.bg)
+            .collect();
+        if self.fine && self.drop > 0.0 {
+            hung(grid, area, self.drop, theme);
+        } else if self.fine {
             // On its rows, covering each it touches whole: nothing reaches past its edges.
             popup(grid, area, theme);
         } else {
@@ -731,10 +778,39 @@ impl Menu {
                 words(grid, (right as f32, top), "›", shown, (right, 100, true));
             }
         }
+        for (x, bg) in (area.x..).zip(behind) {
+            grid.set_style(Rect::new(x, area.y, 1, 1), |style| Style { bg, ..style });
+        }
         if let Some(child) = self.child() {
             child.draw(grid, hover, theme);
         }
     }
+}
+
+/// A menu's panel that starts `drop` down its first row, under a line: the rows under that
+/// are its own, and the first keeps what's behind it over the panel's top.
+fn hung(grid: &mut Grid, area: Rect, drop: f32, theme: &Theme) {
+    let base = Style {
+        fg: theme.text.fg,
+        bg: theme.popup,
+        ..theme.bar
+    };
+    for y in area.y + 1..area.bottom() {
+        // The last row's corner cells keep what's behind them, under the round corners.
+        let (x, w) = if y + 1 == area.bottom() {
+            (area.x + 1, area.w.saturating_sub(2))
+        } else {
+            (area.x, area.w)
+        };
+        grid.fill(Rect::new(x, y, w, 1), base);
+    }
+    let bounds = Bounds::cells(
+        f32::from(area.x),
+        f32::from(area.y) + drop,
+        f32::from(area.w),
+        f32::from(area.h) - drop,
+    );
+    grid.popup(bounds, 28, theme.popup, theme.popup_border);
 }
 
 /// An icon at a row's start, as `words` places words: painted where the row is, and in cells

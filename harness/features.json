@@ -5843,5 +5843,33 @@
     "title": "An idle window wakes only when something is due: every answer pokes the loop, and nothing wakes it on a timer of its own",
     "test": "an_idle_window_wakes_only_when_something_is_due",
     "passes": true
+  },
+  {
+    "id": "air-from-lines",
+    "milestone": 15,
+    "title": "Nothing under a tab row stands within 8 px of its line: tooltips, a tab's menu, Show Source, the Find bar over the pane",
+    "test": "nothing_under_a_tab_row_stands_within_8_px_of_its_line",
+    "passes": true
+  },
+  {
+    "id": "pane-program-right-air",
+    "milestone": 15,
+    "title": "A program in the side pane keeps the window's last column as air, clear of the sheet's edge",
+    "test": "a_program_in_the_pane_keeps_a_column_of_air_by_the_windows_edge",
+    "passes": true
+  },
+  {
+    "id": "bands-even-in-the-sheet",
+    "milestone": 15,
+    "title": "A pointed row's band and a comment's card stand as far in from both sides of the sheet",
+    "test": "bands_and_cards_stand_as_far_in_from_both_sides_of_the_sheet",
+    "passes": true
+  },
+  {
+    "id": "panel-grid-top-air",
+    "milestone": 15,
+    "title": "The table picker's and the math panel's grids stand as far from the panel's top as from its sides",
+    "test": "a_panels_grid_is_as_far_from_its_top_as_its_sides",
+    "passes": true
   }
 ]

@@ -11,19 +11,39 @@ const PICK_COLUMNS: usize = 10;
 const PICK_ROWS: usize = 8;
 /// A picker square is this many cells wide: about square on screen.
 const PICK_CELL: u16 = 3;
+/// Columns from a panel's edge to what it holds: a column, and the fifth of one a square or
+/// a button is inset in its own.
+const SIDE_INSET: f32 = 1.2;
+
+/// How far a panel's grid stands below its top row's top, in rows, so it's as far from the
+/// panel's top as from its sides: on its first row it was 7 px from the top and 20 from the
+/// sides. `inset` is the rows a square or button already keeps from its row's top.
+fn grid_drop(inset: f32, measure: &dyn Measure) -> f32 {
+    let Some((wide, row)) = measure.cell_pixels() else {
+        return 0.0;
+    };
+    let side = SIDE_INSET * wide as f32;
+    ((side / row.max(1) as f32) - inset).clamp(0.0, 0.5)
+}
 
 /// Hover over a grid to choose a table's size, as in a word processor.
 pub struct TablePicker {
     origin: (u16, u16),
     /// The size chosen so far, as (rows, columns).
     pub size: (usize, usize),
+    /// Rows its squares stand below its top row's top (`grid_drop`).
+    drop: f32,
 }
 
+/// Rows a picker square keeps from its row's top and foot.
+const SQUARE_INSET: f32 = 0.1;
+
 impl TablePicker {
-    pub fn new(origin: (u16, u16)) -> Self {
+    pub fn new(origin: (u16, u16), measure: &dyn Measure) -> Self {
         Self {
             origin,
             size: (3, 3),
+            drop: grid_drop(SQUARE_INSET, measure),
         }
     }
 
@@ -36,13 +56,13 @@ impl TablePicker {
         )
     }
 
-    /// The size a place on screen stands for.
-    pub fn size_at(&self, x: u16, y: u16) -> Option<(usize, usize)> {
+    /// The size a place on screen stands for, `y` with its fraction of a row.
+    pub fn size_at(&self, x: u16, y: f32) -> Option<(usize, usize)> {
         let area = self.area();
-        let (left, top) = (area.x + 1, area.y);
+        let (left, top) = (area.x + 1, f32::from(area.y) + self.drop);
         let column = x.checked_sub(left)? / PICK_CELL;
-        let row = y.checked_sub(top)?;
-        ((column as usize) < PICK_COLUMNS && (row as usize) < PICK_ROWS)
+        let row = y - top;
+        (row >= 0.0 && (column as usize) < PICK_COLUMNS && (row as usize) < PICK_ROWS)
             .then_some((row as usize + 1, column as usize + 1))
     }
 
@@ -57,7 +77,7 @@ impl TablePicker {
         };
     }
 
-    pub fn draw(&self, grid: &mut Grid, hover: Option<(u16, u16)>, theme: &Theme) {
+    pub fn draw(&self, grid: &mut Grid, hover: Option<(u16, f32)>, theme: &Theme) {
         let area = self.area();
         raised(grid, area, theme);
         let (rows, columns) = hover
@@ -78,7 +98,8 @@ impl TablePicker {
                     theme.popup_hover
                 };
                 let border = if on { theme.accent } else { theme.popup_border };
-                let bounds = Bounds::inset(square, 0.2, 0.1);
+                let mut bounds = Bounds::inset(square, 0.2, SQUARE_INSET);
+                bounds.y += cellix_render::units(self.drop);
                 grid.panel(bounds, 8, Some(fill), Some(border));
             }
         }
@@ -249,7 +270,12 @@ pub struct MathPanel {
     /// What each button shows, on the tiers that have pictures.
     previews: Vec<Option<(Bitmap, f32, f32)>>,
     pub selected: usize,
+    /// Rows its buttons stand below its top row's top (`grid_drop`).
+    drop: f32,
 }
+
+/// Rows the chip of the button picked keeps from the button's top and foot.
+const CHIP_INSET: f32 = 0.08;
 
 impl MathPanel {
     pub fn new(origin: (u16, u16), measure: &dyn Measure) -> Self {
@@ -281,6 +307,7 @@ impl MathPanel {
             origin,
             previews,
             selected: 0,
+            drop: grid_drop(CHIP_INSET, measure),
         }
     }
 
@@ -297,10 +324,15 @@ impl MathPanel {
         )
     }
 
-    pub fn symbol_at(&self, x: u16, y: u16) -> Option<usize> {
+    /// The symbol at a place on screen, `y` with its fraction of a row.
+    pub fn symbol_at(&self, x: u16, y: f32) -> Option<usize> {
         let area = self.area();
         let column = x.checked_sub(area.x + 1)? / BUTTON.0;
-        let row = y.checked_sub(area.y)? / BUTTON.1;
+        let down = y - f32::from(area.y) - self.drop;
+        if down < 0.0 {
+            return None;
+        }
+        let row = down as u16 / BUTTON.1;
         let index = row as usize * COLUMNS as usize + column as usize;
         (column < COLUMNS && index < SYMBOLS.len()).then_some(index)
     }
@@ -317,7 +349,7 @@ impl MathPanel {
         };
     }
 
-    pub fn draw(&self, grid: &mut Grid, hover: Option<(u16, u16)>, theme: &Theme) {
+    pub fn draw(&self, grid: &mut Grid, hover: Option<(u16, f32)>, theme: &Theme) {
         let area = self.area();
         raised(grid, area, theme);
         let hovered = hover.and_then(|h| self.symbol_at(h.0, h.1));
@@ -337,13 +369,14 @@ impl MathPanel {
                 BUTTON.1,
             );
             if index == shown {
-                let bounds = Bounds::inset(button, 0.2, 0.08);
+                let mut bounds = Bounds::inset(button, 0.2, CHIP_INSET);
+                bounds.y += cellix_render::units(self.drop);
                 grid.panel(bounds, 14, Some(theme.popup_hover), Some(theme.accent));
             }
             match &self.previews[index] {
                 Some((bitmap, width, height)) => {
                     let left = button.x as f32 + (BUTTON.0 as f32 - width) / 2.0;
-                    let top = button.y as f32 + (BUTTON.1 as f32 - height) / 2.0;
+                    let top = button.y as f32 + self.drop + (BUTTON.1 as f32 - height) / 2.0;
                     grid.paint.push(Paint::Image {
                         bounds: Bounds::cells(left, top, *width, *height),
                         clip,
@@ -398,10 +431,10 @@ mod tests {
 
     #[test]
     fn the_picker_reads_a_size_from_the_grid() {
-        let picker = TablePicker::new((10, 2));
-        assert_eq!(picker.size_at(11, 2), Some((1, 1)));
-        assert_eq!(picker.size_at(11 + 3 * 4, 4), Some((3, 5)));
-        assert_eq!(picker.size_at(5, 2), None);
+        let picker = TablePicker::new((10, 2), &CellMeasure);
+        assert_eq!(picker.size_at(11, 2.0), Some((1, 1)));
+        assert_eq!(picker.size_at(11 + 3 * 4, 4.5), Some((3, 5)));
+        assert_eq!(picker.size_at(5, 2.0), None);
     }
 
     #[test]
@@ -412,7 +445,7 @@ mod tests {
         panel.key(Key::Left);
         panel.key(Key::Up);
         assert_eq!(panel.selected, 0);
-        assert_eq!(panel.symbol_at(1, 2), Some(0));
-        assert_eq!(panel.symbol_at(6, 4), Some(COLUMNS as usize + 1));
+        assert_eq!(panel.symbol_at(1, 2.0), Some(0));
+        assert_eq!(panel.symbol_at(6, 4.0), Some(COLUMNS as usize + 1));
     }
 }

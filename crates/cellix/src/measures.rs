@@ -6,6 +6,11 @@ use cellix_render::{Font, Measure};
 
 /// Columns between buttons side by side, and between a button and the words beside it.
 pub const BUTTON_GAP: u16 = 2;
+/// The least air between a line, or a sheet's edge, and anything drawn beside it, in the
+/// screen's pixels: 8 px of a Retina screen, 4 pt. A control, a floating bar, a tooltip or a
+/// menu that opens under a tab row stands at least this far from its line, and a band
+/// behind a row stands this far in from both edges of its sheet. See DESIGN.md, Look.
+pub const LINE_AIR: f32 = 8.0;
 /// How tall a spinner beside words is, in the terminal's lines: in the status bar, a view's
 /// heading or a button, 11 pt beside words of 13 or a little less.
 pub const WAIT_SPIN: f32 = 0.6;
@@ -63,6 +68,27 @@ pub fn field_lift(measure: &dyn Measure) -> f32 {
 pub fn roomy(measure: &dyn Measure) -> bool {
     measure.row_air() >= ROOMY
 }
+/// The band behind a pointed or picked row of a list, `row` from its first column to its
+/// last and `inset` rows short of its top and foot: `LINE_AIR` in from the line round the
+/// sheet it's on, on both sides. `edge` is how far into the row's first column the sheet
+/// starts: half the frame's column for the side pane beside the file, where a band 0.4 of a
+/// column in from the row stood 15 px from the sheet's line on its left and 6 on its right.
+pub fn band(
+    row: cellix_render::Rect,
+    edge: f32,
+    inset: f32,
+    measure: &dyn Measure,
+) -> cellix_render::Bounds {
+    // A pixel for the sheet's line, and the air from it.
+    let air = measure
+        .cell_pixels()
+        .map_or(0.4, |(wide, _)| (LINE_AIR + 1.0) / wide.max(1) as f32);
+    let left = f32::from(row.x) + edge + air;
+    let right = f32::from(row.right()) - air;
+    let top = f32::from(row.y) + inset;
+    cellix_render::Bounds::cells(left, top, right - left, f32::from(row.h) - inset * 2.0)
+}
+
 /// How tall the band behind a picked or pointed row of a list is, in rows: 33 px of 36,
 /// which holds an icon of 16 pt and a letter's tail. A menu's and a palette's are this.
 pub const BAND_HEIGHT: f32 = 0.92;

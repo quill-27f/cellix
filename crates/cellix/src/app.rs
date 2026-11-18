@@ -173,6 +173,9 @@ const STACK_LEAST: u16 = 6;
 #[cfg(test)]
 const APPROVE: &str = "[Approve]";
 const FIND_WIDTH: u16 = 58;
+/// Columns beside the Find bar over the pane narrow enough to be cleared rather than show
+/// the ends of what's under it.
+const FIND_SLIVER: u16 = 4;
 const CONFIRM_WIDTH: u16 = 56;
 const CONFIRM_HEIGHT: u16 = 6;
 /// Rows of the card on a session that stopped without finishing, besides its detail: an
@@ -4071,8 +4074,10 @@ impl App {
     fn docked_actions(&self) -> Vec<(Rect, Icon, Command, &'static str)> {
         let mut actions = Vec::new();
         if let Some(area) = self.dock_area() {
-            // Where the pane's first tab would start, so a stacked pane's icons line up with the files.
-            let mut x = self.dock.tabs_start(area);
+            // Where the pane's first tab would start, so a stacked pane's icons line up with the
+            // files; with pictures a column in, or the chip of the view showing stood 2 px from
+            // the sheet's edge.
+            let mut x = self.dock.tabs_start(area) + u16::from(!self.measure.in_cells());
             for (icon, command, name) in PANE_ACTIONS {
                 let label = self.panel_label(command);
                 let width = ACTION_WIDTH
@@ -4242,10 +4247,20 @@ impl App {
             let label = self.docked().then(|| self.panel_label(command)).flatten();
             if let Some(label) = label {
                 // Lit with the chip an open panel's icon gets, so it reads as the one showing.
+                // At its height on the terminal's line: grown to a taller row's control it
+                // stood 4 px under the line over the header and 5 over the one under it.
                 let (_, high) = ACTION_PILL;
                 let top = cell.y as f32 + (1.0 - high) / 2.0;
                 let bounds = Bounds::cells(cell.x as f32 + 0.15, top, cell.w as f32 - 0.3, high);
-                grid.panel(bounds, PILL_RADIUS, Some(theme.tint), None);
+                grid.paint.push(Paint::Panel {
+                    bounds,
+                    radius: PILL_RADIUS,
+                    fill: Some(theme.tint),
+                    border: None,
+                    shadow: false,
+                    dashed: false,
+                    inset: true,
+                });
                 // Painted, the cells keep the tab's ground: the chip shows through, shorter than its row.
                 let icon_cell = Rect::new(cell.x, cell.y, ACTION_WIDTH, 1);
                 toolbar::draw_icon(grid, (icon, ACTION_ICON), icon_cell, theme.text.fg, ground);
@@ -6977,13 +6992,19 @@ impl App {
         self.find_bar_for(replacing)
     }
 
-    /// The Find bar, a row taller with the replace row. Over a terminal it stands on the
-    /// terminal's first row, at its right, as it does over a file.
+    /// Whether Find looks through what's in the pane.
+    fn find_on_pane(&self) -> bool {
+        matches!(&self.overlay, Overlay::Find(find)
+            if find.pane || (find.listed && find.looked == Looked::Pane))
+    }
+
+    /// The Find bar, a row taller with the replace row. Over the pane it stands a row under
+    /// the tab line, at its right, as it does over a file: on the row right under the line
+    /// its panel, which reaches a tenth of a row past its own, lay over the line.
     fn find_bar_for(&self, replacing: bool) -> Rect {
-        let on_pane = matches!(&self.overlay, Overlay::Find(find)
-            if find.pane || (find.listed && find.looked == Looked::Pane));
+        let on_pane = self.find_on_pane();
         let pane = match self.dock_screen().filter(|_| on_pane) {
-            Some(screen) => Rect::new(screen.x, screen.y.saturating_sub(1), screen.w, screen.h),
+            Some(screen) => screen,
             None => self.focused_area(),
         };
         let width = FIND_WIDTH.min(pane.w.saturating_sub(2));
@@ -7031,6 +7052,20 @@ impl App {
     fn draw_find(&self, grid: &mut Grid, find: &Find) {
         let theme = &self.theme;
         let area = self.find_bar_for(find.replace.is_some());
+        // A pane narrower than the bar leaves a column or two of what's under it either
+        // side, and the ends of a terminal's line stuck out of it: those are cleared.
+        if let Some(screen) = self.dock_screen().filter(|_| self.find_on_pane()) {
+            let left = area.x.saturating_sub(screen.x);
+            let right = screen.right().saturating_sub(area.right());
+            for y in area.y..area.bottom() {
+                if left > 0 && left < FIND_SLIVER {
+                    grid.fill(Rect::new(screen.x, y, left, 1), theme.sidebar);
+                }
+                if right > 0 && right < FIND_SLIVER {
+                    grid.fill(Rect::new(area.right(), y, right, 1), theme.sidebar);
+                }
+            }
+        }
         crate::palette::raised_bar(grid, area, theme);
         let (line, switches, count_x, first) = Self::find_layout(area);
         let chevron = if find.replace.is_some() {
@@ -8438,6 +8473,16 @@ impl App {
         (width > 0).then(|| Rect::new(self.size.0 - width, 0, width, height))
     }
 
+    /// How far into the pane's first column its sheet starts, where there are pictures:
+    /// half the frame's column beside the file, none under it, where it shares the file's.
+    fn pane_edge(&self) -> f32 {
+        if self.measure.in_cells() || self.dock_under() {
+            0.0
+        } else {
+            SHEET_EDGE
+        }
+    }
+
     /// Where a session's screen goes.
     fn dock_screen(&self) -> Option<Rect> {
         self.dock_area().map(|a| {
@@ -8507,7 +8552,7 @@ impl App {
             env.push(format!("{var}={}", member.name));
         }
         let env = env.as_slice();
-        let size = self.dock_screen().map_or((80, 24), |a| (a.w, a.h));
+        let size = self.session_size().unwrap_or((80, 24));
         // A browser has nothing worth keeping, and nothing else should end with Cellix.
         let held = self
             .host_program
@@ -8758,7 +8803,7 @@ impl App {
             let Ok(held) = crate::hold::Held::connect(&socket) else {
                 continue;
             };
-            let size = self.dock_screen().map_or((80, 24), |a| (a.w, a.h));
+            let size = self.session_size().unwrap_or((80, 24));
             if let Ok(mut session) = Session::join(&name, held, size, self.cell_size()) {
                 session.replaying = true;
                 // Known again by the name other agents reach it by, and a helper without a
@@ -8773,7 +8818,7 @@ impl App {
         let stopped = crate::hold::stopped(&folder);
         let first_stopped = self.dock.sessions.len();
         for record in stopped {
-            let size = self.dock_screen().map_or((80, 24), |a| (a.w, a.h));
+            let size = self.session_size().unwrap_or((80, 24));
             self.dock
                 .sessions
                 .push(Session::stopped(record, size, self.cell_size()));
@@ -9555,13 +9600,22 @@ impl App {
         (cell.0 as u16, cell.1 as u16)
     }
 
+    /// The columns and rows a program in the pane has. With pictures the sheet's edge
+    /// stands in the window's last column, so a program's last column touched it: that
+    /// column is kept as air, as the half column before the sheet's other edge is.
+    fn session_size(&self) -> Option<(u16, u16)> {
+        let screen = self.dock_screen()?;
+        let air = u16::from(!self.measure.in_cells() && screen.right() >= self.size.0);
+        Some((screen.w.saturating_sub(air).max(1), screen.h))
+    }
+
     /// Keeps each session as big as the pane it's in.
     fn fit_dock(&mut self) {
-        if let Some(screen) = self.dock_screen() {
+        if let (Some(screen), Some(size)) = (self.dock_screen(), self.session_size()) {
             let cell = self.cell_size();
             // A helper with no tab has the size peek gives it, not the pane's.
             for session in self.dock.sessions.iter_mut().filter(|s| s.tabbed) {
-                session.resize((screen.w, screen.h), cell);
+                session.resize(size, cell);
             }
             if let (Some(view), Some(cell)) = (&mut self.dock.pdf, self.measure.cell_pixels()) {
                 view.fit((screen.w, screen.h), cell);
@@ -10414,8 +10468,8 @@ impl App {
                 let top = self.dock.tops.of(Front::Agents);
                 let look = (&*self.measure, theme);
                 let rows = self.agent_rows();
-                self.agents
-                    .draw(grid, panel, (top, &rows), self.hover, look);
+                let shown = (top, rows.as_slice(), self.pane_edge());
+                self.agents.draw(grid, panel, shown, self.hover, look);
             }
         }
     }
@@ -11138,6 +11192,7 @@ impl App {
             quick: self.quick_emoji(),
             pictures: self.measure.cell_pixels().map(|_| &self.comment_pictures),
             laid: Some(&self.comment_rows),
+            edge: self.pane_edge(),
         }
     }
 
@@ -14028,12 +14083,12 @@ impl App {
             }
             Overlay::Find(find) => self.click_find(find, mouse.x, mouse.y),
             Overlay::TablePicker(picker) => {
-                if let Some(size) = picker.size_at(mouse.x, mouse.y) {
+                if let Some(size) = picker.size_at(mouse.x, mouse.fine_y) {
                     self.insert_table(size);
                 }
             }
             Overlay::Math(panel) => {
-                if let Some(index) = panel.symbol_at(mouse.x, mouse.y) {
+                if let Some(index) = panel.symbol_at(mouse.x, mouse.fine_y) {
                     self.insert_math(index);
                 }
             }
@@ -14056,7 +14111,14 @@ impl App {
 
     fn show_menu(&mut self, at: (u16, u16), items: Vec<MenuItem>) {
         let screen = Rect::new(0, 0, self.size.0, self.size.1);
-        self.overlay = Overlay::Menu(Menu::new(at, items, &*self.measure, screen));
+        let mut menu = Menu::new(at, items, &*self.measure, screen);
+        // Opened on the row under a tab row, it would stand on the tab row's line.
+        let top = menu.top();
+        let under = self.dock_area().filter(|_| self.dock_under()).map(|a| a.y);
+        if top == 1 || under.is_some_and(|row| top == row + 1) {
+            menu.hang(&*self.measure, screen);
+        }
+        self.overlay = Overlay::Menu(menu);
     }
 
     fn open_explorer_menu(&mut self, x: u16, y: u16) {
@@ -15683,8 +15745,11 @@ impl App {
         let over_bar = top + TOOLTIP_HEIGHT >= f32::from(foot);
         let top = if over_bar && measures::roomy(&*self.measure) {
             top - TIP_RAISE
-        } else {
+        } else if over_bar || on_view {
             top
+        } else {
+            // Its row's top is where the line over it is, under a tab row or a bar.
+            top + self.tip_drop()
         };
         let theme = &self.theme;
         // A hair short of its row, which is what lets it keep its own height on a taller
@@ -15733,6 +15798,29 @@ impl App {
                 grid.text_run((after, text_top), end, tail, quiet, font);
             }
         }
+    }
+
+    /// How far a tooltip stands below the top of its row, in rows, so it's `LINE_AIR` from
+    /// the line there: in the middle of a row of 50 px it was 5 px under a tab's line. Where
+    /// a row is the terminal's line there's no room for that without covering the words of
+    /// the row under it, and it stays.
+    fn tip_drop(&self) -> f32 {
+        let Some((_, row)) = self.measure.cell_pixels() else {
+            return 0.0;
+        };
+        let row = row as f32;
+        let line = row / self.measure.row_air().max(1.0);
+        let unit = cellix_render::UNIT as f32;
+        let tall = TOOLTIP_HEIGHT - TIP_INSET * 2.0;
+        let (top, drawn) =
+            cellix_render::stood((TIP_INSET * unit) as i32, (tall * unit) as i32, row, line);
+        // The air, and a pixel for the line, in whole sixty-fourths of a row as paint places
+        // them.
+        let air = measures::LINE_AIR + 1.0;
+        let drop = ((air - top) / row * unit).ceil() / unit;
+        // Into the row under it only as far as that row's air over its words.
+        let fits = air + drawn <= row + (row - line) / 2.0;
+        if drop > 0.0 && fits { drop } else { 0.0 }
     }
 
     fn press_tab(&mut self, what: Dragged, x: u16, y: u16) {
@@ -16157,8 +16245,14 @@ impl App {
                 self.draw_find(grid, find);
             }
             Overlay::Confirm(confirm) => self.draw_confirm(grid, confirm),
-            Overlay::TablePicker(picker) => picker.draw(grid, self.hover, theme),
-            Overlay::Math(panel) => panel.draw(grid, self.hover, theme),
+            Overlay::TablePicker(picker) => {
+                let hover = self.hover.map(|(x, _)| (x, self.pointer.1));
+                picker.draw(grid, hover, theme);
+            }
+            Overlay::Math(panel) => {
+                let hover = self.hover.map(|(x, _)| (x, self.pointer.1));
+                panel.draw(grid, hover, theme);
+            }
             // It drops from under the card the comment is written on, onto the pane, so it's a
             // menu's colour as any other.
             Overlay::Emoji(picker) => picker.draw(grid, self.hover, &*self.measure, theme),
@@ -16812,7 +16906,9 @@ impl App {
                 },
                 ..style
             };
-            grid.button(cell.x, cell.y, &cells, name, fill, label);
+            // At the line's height where a row has room: as tall as the row's control, it
+            // stood 4 px under the tab line over it.
+            grid.row_button((cell.x, cell.y), &cells, name, fill, label);
         }
     }
 
@@ -17648,12 +17744,11 @@ impl App {
                 .filter(|chip| chip.y == y)
                 .map_or(screen.right(), |chip| chip.x.saturating_sub(2));
             if self.hover.is_some_and(|h| line.contains(h.0, h.1)) {
-                grid.panel(
-                    Bounds::inset(line, 0.4, 0.06),
-                    12,
-                    Some(theme.row_hover),
-                    None,
-                );
+                // From the pane's first column, where its sheet starts, to its last.
+                let pane = self.dock_area().unwrap_or(screen);
+                let whole = Rect::new(pane.x, y, pane.right().saturating_sub(pane.x), 1);
+                let band = measures::band(whole, self.pane_edge(), 0.06, &*self.measure);
+                grid.panel(band, 12, Some(theme.row_hover), None);
             }
             match row {
                 ProblemRow::File(name) => {
@@ -17807,7 +17902,10 @@ impl App {
                 ];
                 self.show_menu(below, items);
             }
-            Tool::Table => self.overlay = Overlay::TablePicker(TablePicker::new((x, 3))),
+            Tool::Table => {
+                let picker = TablePicker::new((x, 3), &*self.measure);
+                self.overlay = Overlay::TablePicker(picker);
+            }
             Tool::Math => {
                 self.overlay = Overlay::Math(MathPanel::new((x, 3), &*self.measure));
             }
@@ -18785,6 +18883,8 @@ mod agents_list_tests;
 mod motion_tests;
 #[cfg(test)]
 mod shell_tab_tests;
+#[cfg(test)]
+mod spacing_tests;
 #[cfg(test)]
 mod strip_tests;
 #[cfg(test)]

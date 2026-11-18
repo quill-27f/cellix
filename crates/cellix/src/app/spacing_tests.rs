@@ -1,0 +1,342 @@
+//! The spacing the reviews of 0.11.0's tour measured, in the pixels the tour's terminal has
+//! (17 px columns, rows of 50 with words sized for 36): a task's box square with air before
+//! its words, a status message using the room it has, a program in the pane clear of the
+//! sheet's edge, bands and cards as far in from both sides of their sheet, nothing within
+//! 8 px of a line, and panels as far from their top as from their sides.
+
+use std::fs;
+use std::path::PathBuf;
+use std::rc::Rc;
+
+use cellix_input::{Event, Mods, MouseEvent, MouseKind};
+use cellix_render::{Bounds, FontMeasure, Grid, Paint, UNIT, stood};
+use tempfile::TempDir;
+
+use super::*;
+use crate::find::{Find, Looked};
+
+/// The tour's terminal: columns of 17 px, rows of 50, words sized for a line of 36.
+const CELL: f32 = 17.0;
+const ROW: f32 = 50.0;
+const LINE: f32 = 36.0;
+
+fn airy(app: &mut App) {
+    app.set_measure(Rc::new(FontMeasure::new(17, 50).with_type_row(36)));
+}
+
+fn project(size: (u16, u16)) -> (TempDir, App) {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join("src")).unwrap();
+    fs::write(dir.path().join("src/lib.rs"), "fn main() {}\n").unwrap();
+    fs::write(dir.path().join("alpha.txt"), "first line\n").unwrap();
+    let mut app = App::new(dir.path().to_path_buf(), size);
+    airy(&mut app);
+    (dir, app)
+}
+
+fn screen(app: &App) -> Grid {
+    let mut grid = Grid::new(app.size().0, app.size().1, app.background());
+    app.draw(&mut grid);
+    grid
+}
+
+fn mouse(kind: MouseKind, x: u16, y: u16) -> Event {
+    Event::Mouse(MouseEvent {
+        kind,
+        x,
+        y,
+        fine_x: f32::from(x),
+        fine_y: f32::from(y) + 0.5,
+        mods: Mods::default(),
+    })
+}
+
+/// Columns in units, as pixels.
+fn px(units: i32) -> f32 {
+    units as f32 * CELL / UNIT as f32
+}
+
+/// A shape's top and height in pixels, as the rasterizer stands it on a row of 50.
+fn tall(bounds: Bounds) -> (f32, f32) {
+    stood(bounds.y, bounds.h, ROW, LINE)
+}
+
+/// The pixel a row starts at.
+fn row_top(row: u16) -> f32 {
+    f32::from(row) * ROW
+}
+
+/// Every panel painted, with its fill and border.
+fn panels(grid: &Grid) -> Vec<(Bounds, Option<Rgb>, Option<Rgb>, bool)> {
+    grid.paint
+        .iter()
+        .filter_map(|p| match p {
+            Paint::Panel {
+                bounds,
+                fill,
+                border,
+                inset,
+                ..
+            } => Some((*bounds, *fill, *border, *inset)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// With pictures, a program in the pane has a column fewer than the pane, so its last
+/// column doesn't stand on the sheet's edge at the window's side; on cells it has them all.
+#[test]
+fn a_program_in_the_pane_keeps_a_column_of_air_by_the_windows_edge() {
+    let (_dir, mut app) = project((150, 40));
+    app.run(Command::ListAgents);
+    let screen_area = app.dock_screen().unwrap();
+    assert_eq!(app.session_size(), Some((screen_area.w - 1, screen_area.h)));
+    app.set_measure(Rc::new(CellMeasure));
+    let screen_area = app.dock_screen().unwrap();
+    assert_eq!(app.session_size(), Some((screen_area.w, screen_area.h)));
+}
+
+/// The sheet beside the file starts half way across the pane's first column and ends at
+/// the window's side; its line is a pixel inside each edge. Returns the gaps between those
+/// lines and a band.
+fn gaps(app: &App, band: Bounds) -> (f32, f32) {
+    let pane = app.dock_area().unwrap();
+    let left_line = (f32::from(pane.x) + SHEET_EDGE) * CELL + 1.0;
+    let right_line = f32::from(pane.right()) * CELL - 1.0;
+    (px(band.x) - left_line, right_line - px(band.x + band.w))
+}
+
+/// A pointed row's band in the pane is 8 px in from the sheet's line on both sides: the
+/// Problems list's stood 15 px from it on the left and 6 on the right, the Agents list's 8
+/// and 5. A comment's card is as far from the line on its right as on its left.
+#[test]
+fn bands_and_cards_stand_as_far_in_from_both_sides_of_the_sheet() {
+    let (dir, mut app) = project((150, 40));
+    let file = dir.path().join("src/lib.rs");
+    let problem = Diagnostic {
+        line: 0,
+        column: 0,
+        message: "cannot find value `count`".to_string(),
+        severity: 1,
+    };
+    app.diagnostics.insert(file, vec![problem]);
+    app.toggle_problems();
+    let grid = screen(&app);
+    let y = (0..grid.height())
+        .find(|y| grid.row_text(*y).contains("cannot find"))
+        .expect("the problem's row");
+    app.handle(mouse(MouseKind::Move, app.dock_area().unwrap().x + 6, y));
+    let grid = screen(&app);
+    let hover = app.theme.row_hover;
+    let band = panels(&grid)
+        .into_iter()
+        .find(|(_, fill, ..)| *fill == Some(hover))
+        .expect("a band under the pointer")
+        .0;
+    let (left, right) = gaps(&app, band);
+    assert!(
+        (7.5..=9.5).contains(&left),
+        "Problems: {left} px on the left"
+    );
+    assert!(
+        (7.5..=9.5).contains(&right),
+        "Problems: {right} px on the right"
+    );
+    // The Agents list's rows.
+    app.run(Command::ListAgents);
+    let grid = screen(&app);
+    let y = (0..grid.height())
+        .find(|y| grid.row_text(*y).contains("Terminal"))
+        .expect("the Terminal row");
+    app.handle(mouse(MouseKind::Move, app.dock_area().unwrap().x + 6, y));
+    let grid = screen(&app);
+    let band = panels(&grid)
+        .into_iter()
+        .find(|(_, fill, ..)| *fill == Some(hover))
+        .expect("a band under the pointer")
+        .0;
+    let (left, right) = gaps(&app, band);
+    // Its left starts under the frame's half column, which the sheet's edge covers.
+    assert!(left <= 9.5, "Agents: {left} px on the left");
+    assert!(
+        (7.5..=9.5).contains(&right),
+        "Agents: {right} px on the right"
+    );
+}
+
+/// A comment's card stands as far from the sheet's line on its right as on its left. It was
+/// 8 px on the left and 17 on the right beside the file.
+#[test]
+fn a_comments_card_is_as_far_from_both_sides_of_the_sheet() {
+    let (dir, mut app) = project((150, 40));
+    app.open(&dir.path().join("alpha.txt")).unwrap();
+    app.add_comment("alpha.txt".to_string(), 0, "worth a look".to_string());
+    app.run(Command::ShowComments);
+    let grid = screen(&app);
+    let card = app.theme.popup;
+    let found = panels(&grid)
+        .into_iter()
+        .find(|(_, fill, ..)| *fill == Some(card))
+        .expect("a card")
+        .0;
+    let (left, right) = gaps(&app, found);
+    assert!(
+        (left - right).abs() <= 1.0,
+        "{left} px on the left, {right} on the right"
+    );
+    assert!(left >= 7.0, "{left}");
+}
+
+/// The top of a floating thing under a tab row is at least 8 px from the tab row's line:
+/// a tooltip under the pane's ⤢ (4 px before), the menu a tab drops (on the line before),
+/// Show Source (4 px under it), and the Find bar over the pane (5 px over it).
+#[test]
+fn nothing_under_a_tab_row_stands_within_8_px_of_its_line() {
+    let (dir, mut app) = project((150, 40));
+    app.open(&dir.path().join("alpha.txt")).unwrap();
+    app.run(Command::ListAgents);
+    let line = row_top(1);
+    // The tooltip under the button that maximizes the pane.
+    let area = app.title_of(app.dock_area().unwrap());
+    let button = app.dock.maximize_button(area);
+    let on = (button..button + 3).find(|x| app.on_maximize_button(*x, area.y));
+    app.handle(mouse(MouseKind::Move, on.expect("the button"), area.y));
+    let grid = screen(&app);
+    let tip = grid.paint.iter().find_map(|p| match p {
+        Paint::Panel {
+            bounds,
+            shadow: true,
+            ..
+        } => Some(*bounds),
+        _ => None,
+    });
+    let (top, _) = tall(tip.expect("a tip"));
+    assert!(
+        top - line >= 8.0,
+        "the tip: {} px under the line",
+        top - line
+    );
+    // The menu a tab drops.
+    app.handle(mouse(MouseKind::Move, 0, 20));
+    let (_, x, _) = app
+        .visible_tabs()
+        .into_iter()
+        .next()
+        .expect("the file's tab");
+    app.handle(mouse(MouseKind::Right, x + 1, 0));
+    assert!(matches!(app.overlay, Overlay::Menu(_)), "a menu");
+    let grid = screen(&app);
+    let menu = grid.paint.iter().find_map(|p| match p {
+        Paint::Panel {
+            bounds,
+            shadow: true,
+            ..
+        } => Some(*bounds),
+        _ => None,
+    });
+    let (top, _) = tall(menu.expect("its panel"));
+    assert!(
+        top - line >= 8.0,
+        "the menu: {} px under the line",
+        top - line
+    );
+    app.overlay = Overlay::None;
+    // Find over a list in the pane.
+    app.overlay = Overlay::Find(Find {
+        listed: true,
+        looked: Looked::Pane,
+        ..Find::default()
+    });
+    let bar = app.find_bar();
+    assert_eq!(
+        bar.y,
+        app.dock_screen().unwrap().y + 1,
+        "a row under the tab row"
+    );
+    let grid = screen(&app);
+    let raised = grid.paint.iter().find_map(|p| match p {
+        Paint::Panel {
+            bounds,
+            shadow: true,
+            ..
+        } if bounds.y >= i32::from(bar.y - 1) * UNIT => Some(*bounds),
+        _ => None,
+    });
+    let (top, _) = tall(raised.expect("the bar's panel"));
+    assert!(
+        top - line >= 8.0,
+        "the Find bar: {} px under the line",
+        top - line
+    );
+}
+
+/// Show Source stands on the row under the tab row at the line's height, 8 px or more from
+/// the tab row's line, where as tall as the row's control it stood 4 px under it.
+#[test]
+fn show_source_keeps_clear_of_the_tab_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let path: PathBuf = dir.path().join("data.csv");
+    fs::write(&path, "a,b\n1,2\n").unwrap();
+    let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+    airy(&mut app);
+    app.open(&path).unwrap();
+    let Some((cell, _)) = app.page_switch() else {
+        panic!("a page with a switch");
+    };
+    let grid = screen(&app);
+    let chip = panels(&grid)
+        .into_iter()
+        .find(|(bounds, fill, ..)| {
+            fill.is_some()
+                && bounds.y < 2 * UNIT
+                && bounds.y >= UNIT
+                && bounds.x >= i32::from(cell.x) * UNIT
+                && bounds.x < i32::from(cell.right()) * UNIT
+        })
+        .expect("its chip");
+    assert!(chip.3, "kept at the line's height");
+    let (top, _) = cellix_render::inset(chip.0.y, chip.0.h, ROW, LINE);
+    assert!(
+        top - row_top(1) >= 8.0,
+        "{} px under the line",
+        top - row_top(1)
+    );
+}
+
+/// The table picker's squares stand as far from its top as from its sides: on its first row
+/// they were 7 px from its top and 20 from its sides.
+#[test]
+fn a_panels_grid_is_as_far_from_its_top_as_its_sides() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("note.md");
+    fs::write(&path, "# Title\n\nSome words.\n").unwrap();
+    let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+    airy(&mut app);
+    app.open(&path).unwrap();
+    let picker = TablePicker::new((40, 3), &*app.measure);
+    let area = picker.area();
+    app.overlay = Overlay::TablePicker(picker);
+    let grid = screen(&app);
+    let squares: Vec<Bounds> = panels(&grid)
+        .into_iter()
+        .filter(|(bounds, _, border, _)| {
+            border.is_some() && bounds.y >= i32::from(area.y) * UNIT && bounds.h < UNIT
+        })
+        .map(|(bounds, ..)| bounds)
+        .collect();
+    let first = squares.first().expect("the squares");
+    let side = px(first.x) - f32::from(area.x) * CELL;
+    let (top, _) = tall(*first);
+    let above = top - row_top(area.y);
+    assert!(
+        (above - side).abs() <= 3.0,
+        "{above} px over, {side} beside"
+    );
+    // A press on the first square still picks one by one.
+    app.handle(mouse(MouseKind::Move, area.x + 2, area.y));
+    let Overlay::TablePicker(picker) = &app.overlay else {
+        panic!("still open");
+    };
+    let fine = (top + 4.0) / ROW;
+    assert_eq!(picker.size_at(area.x + 2, fine), Some((1, 1)));
+}

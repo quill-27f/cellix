@@ -982,6 +982,24 @@ doesn't stop on: it lay over the next line's words. In Agent Context a check has
 before it's cut, and a name is cut by what it measures, at the cell its room ends in; the
 Timeline's heading is measured in its own small bold capitals before it's cut.
 
+Air from lines (0.11.0's review). Nothing stands within 8 px of a line or a sheet's edge
+(`measures::LINE_AIR`: 8 px of a Retina screen, 4 pt), measured from the line and not from a
+row: on a row of 50 px a control 39 px tall has 5 px over it, and on the row under a tab row
+that was 5 px from the tab row's line. So, where a row has room: a control on a row between
+lines keeps the height it has on the terminal's line (a button at a pointed row's end, Show
+Source under the tab row, the conflict header's buttons, the chip of the view showing in a
+docked pane's header: a panel's `inset`); a tooltip stands 8 px under its row's top, where the
+line it hangs from is; a menu that opens on the row under a tab row starts 8 px down it and
+takes another row where it needs one (`Menu::hang`); the Find bar over the side pane stands a
+row under the tab line, as it does over a file, and a sliver of what's under it either side is
+cleared. A band behind a pointed or picked row stands 8 px in from the sheet's line on both
+sides (`measures::band`), counting the half of the frame's column the side pane's sheet starts
+in; a comment's card is as far from that line on its right as on its left; a program in the
+side pane keeps the window's last column as air, as its first keeps the half column before the
+sheet's edge. A floating panel's grid, the table picker's squares and the math panel's
+buttons, stands as far from the panel's top as from its sides. Where a row is the terminal's own line there's no room for this air, and things
+stand as they did.
+
 One set of parts, everywhere. A button is one chip, nearly nine tenths of its row and inside it
 (four fifths left its words 7 px under its top, which read as cramped): the
 primary one filled with the accent, the rest a quiet fill, the least of them plain words (Edit and

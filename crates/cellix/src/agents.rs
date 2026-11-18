@@ -564,11 +564,13 @@ impl Agents {
         &self,
         grid: &mut Grid,
         area: Rect,
-        (scrolled, agents): (usize, &[Row]),
+        (scrolled, agents, edge): (usize, &[Row], f32),
         hover: Option<(u16, u16)>,
         (measure, theme): (&dyn Measure, &Theme),
     ) {
         grid.fill(area, theme.sidebar);
+        // The band behind a pointed row, as far in from the sheet's line on both sides.
+        let band = |row: Rect| crate::measures::band(row, edge, 0.055, measure);
         let scrolled = scrolled.min(self.last_top(area.h, agents));
         let order = ordered(agents);
         let dim = Style {
@@ -634,7 +636,7 @@ impl Agents {
                 Line::Agent(at) => {
                     let (row, depth) = order[at];
                     if hovered {
-                        let wash = Bounds::inset(Rect::new(area.x, y, area.w, 1), 0.4, 0.055);
+                        let wash = band(Rect::new(area.x, y, area.w, 1));
                         grid.panel(wash, 18, Some(theme.row_hover), None);
                     }
                     draw_row(grid, (area, y), (row, depth), (measure, theme));
@@ -646,7 +648,7 @@ impl Agents {
                 }
                 Line::Tree(index) => {
                     if hovered {
-                        let wash = Bounds::inset(row, 0.4, 0.055);
+                        let wash = band(row);
                         grid.panel(wash, 18, Some(theme.row_hover), None);
                     }
                     let row = (y, rows, hovered);
@@ -654,7 +656,7 @@ impl Agents {
                 }
                 Line::Start(index) => {
                     if hovered {
-                        let wash = Bounds::inset(row, 0.4, 0.055);
+                        let wash = band(row);
                         grid.panel(wash, 18, Some(theme.row_hover), None);
                     }
                     let plus = Style {
@@ -1014,7 +1016,7 @@ p3\nccodex\nfcwd\nn/work/project/sub\n";
         let theme = Theme::default();
         let look: (&dyn Measure, &Theme) = (&cellix_render::CellMeasure, &theme);
         let mut grid = Grid::new(40, 36, Style::default());
-        agents.draw(&mut grid, area, (0, &rows), None, look);
+        agents.draw(&mut grid, area, (0, &rows, 0.0), None, look);
         assert!(grid.text().contains("START"), "{}", grid.text());
 
         // The worktrees that don't fit are a scroll away, and it stops at the last of them.
@@ -1022,7 +1024,7 @@ p3\nccodex\nfcwd\nn/work/project/sub\n";
         let last = agents.last_top(area.h, &rows);
         assert!(last > 0);
         let mut grid = Grid::new(40, 36, Style::default());
-        agents.draw(&mut grid, area, (usize::MAX, &rows), None, look);
+        agents.draw(&mut grid, area, (usize::MAX, &rows, 0.0), None, look);
         assert!(grid.text().contains("claude/tree-10"), "{}", grid.text());
         let tree = Hit::Worktree(PathBuf::from("/work/tree-10"));
         let found = (0..area.h).find(|y| agents.hit(area, *y, last, &rows) == Some(tree.clone()));
@@ -1059,7 +1061,7 @@ p3\nccodex\nfcwd\nn/work/project/sub\n";
         let theme = Theme::default();
         let look: (&dyn Measure, &Theme) = (&cellix_render::CellMeasure, &theme);
         let mut grid = Grid::new(40, 30, Style::default());
-        alone.draw(&mut grid, area, (0, &[]), None, look);
+        alone.draw(&mut grid, area, (0, &[], 0.0), None, look);
         let text = grid.text();
         let lines: Vec<&str> = text.lines().collect();
         let start = lines.iter().position(|l| l.contains("START")).unwrap();
