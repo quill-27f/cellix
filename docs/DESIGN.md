@@ -705,6 +705,20 @@ number in or out never counts as a reword. Approving a plan settles its threads:
 and kept with the approved copy in `.cellix/plans`, and the hook puts that plan's versions away in
 `Approved N`, so the next plan the session sends starts at version 1 with no threads.
 
+A comment reaches an agent one of three ways, and its card says which until it has. One on code
+goes with the review's comments; one on a document is a thread no agent has had until it's told.
+The prompt hook of Claude Code, Codex or Gemini CLI hands over everything waiting with the agent's
+next prompt; Ask agent sends one now; and Send Comments to Agent sends all of it, the review's
+comments and the threads, in one message to the agent the side pane sends to (inside Claude Code it
+starts a turn, which the hook fills). Until 18 November 2026 it sent only the review's, so on a
+page it said there was nothing to send. A waiting card says "Goes to Claude Code with your next
+prompt, or now with Ask Agent"; for an agent whose hooks can't hand comments over (OpenCode,
+Copilot CLI, Cursor's agent) that only Ask Agent sends it; with no agent here, that it goes with
+the next one's prompt. Once it has gone, "Waiting for Claude Code…" names the agent it went to:
+the one in front of the pane, which is the one sent to, where it named the first agent there.
+Check my review asks for a verdict on each comment, so each counts as told and the hook doesn't
+add them to that prompt again. A suggestion kept is the person's comment, and goes as theirs do.
+
 ## Surfaces
 
 There are two surfaces: the frame, and the sheets on it (the user's choice of 16 November
@@ -1780,7 +1794,8 @@ words cut with an ellipsis, and Keep and Dismiss at the row's end: quiet buttons
 terminal's line (`Grid::row_button`), which on a one-row note keep 9 px from its edges, and the same two
 quiet buttons on the suggestion's card in the Comments list, where Keep had been filled and
 Dismiss words, and under the line both had been words in the accent.
-Kept, it's the person's comment, and one on code goes with the review as theirs do; dismissed,
+Kept, it's the person's comment, and goes to the agent as theirs do, one on code with the review
+and one on a document as a thread (a kept one on a document was left as told, so it never went); dismissed,
 it's resolved and gone. The Comments list's Keep and Dismiss do the same.
 
 ### Workspaces, in place of tmux

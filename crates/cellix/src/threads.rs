@@ -660,6 +660,47 @@ impl Sort {
     }
 }
 
+/// How a comment no agent has yet reaches one, which each waiting card says.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Goes {
+    /// No agent is here to hear it: it waits for one's next prompt.
+    #[default]
+    Nobody,
+    /// The agent's hooks hand it over with its next prompt, and Ask agent sends it now.
+    Prompt,
+    /// An agent outside the pane takes it with its next prompt, and nothing here can send it
+    /// sooner.
+    Later,
+    /// The agent here has no hook that hands it comments, so only Ask agent sends it.
+    Ask,
+}
+
+/// What a waiting card says of how it reaches `agent`.
+fn goes_note(goes: Goes, agent: &str) -> String {
+    match goes {
+        Goes::Prompt => format!("Goes to {agent} with your next prompt, or now with Ask Agent."),
+        Goes::Later => format!("{agent} sees this with its next prompt."),
+        Goes::Ask => format!("{agent} isn't handed comments with its prompts: Ask Agent sends it."),
+        Goes::Nobody => "Goes to an agent with its next prompt. Ask Agent starts one.".to_string(),
+    }
+}
+
+/// Comments on code no agent has had yet: each is also one of the review's comments, which
+/// go together, so it's waiting though its thread says it was told. The app says which,
+/// each time the pane is shown.
+#[derive(Debug, Default)]
+pub struct Unsent(RefCell<Vec<u32>>);
+
+impl Unsent {
+    pub fn set(&self, ids: Vec<u32>) {
+        *self.0.borrow_mut() = ids;
+    }
+
+    fn has(&self, id: u32) -> bool {
+        self.0.borrow().contains(&id)
+    }
+}
+
 /// How the pane shows what it lists: whether each file's stand under a heading, the comment
 /// lit because its text was pressed in the document, and the order they're in.
 #[derive(Clone, Copy, Debug)]
@@ -667,6 +708,9 @@ pub struct View<'a> {
     pub grouped: bool,
     pub lit: Option<u32>,
     pub sort: Sort,
+    /// How what waits reaches the agent, and the comments on code that wait with the review.
+    pub goes: Goes,
+    pub unsent: Option<&'a Unsent>,
     /// The emoji that stand under a comment being written. None where the screen can't
     /// draw them, and then names between colons stay as they're typed too.
     pub quick: Option<[&'static str; 8]>,
@@ -719,7 +763,10 @@ fn mark((threads, draft, agent, resolved, view): Shown, width: f32, measure: &dy
     draft.hash(&mut hasher);
     agent.hash(&mut hasher);
     resolved.hash(&mut hasher);
-    (view.grouped, view.lit, view.sort, view.quick).hash(&mut hasher);
+    (view.grouped, view.lit, view.sort, view.quick, view.goes).hash(&mut hasher);
+    view.unsent
+        .map(|unsent| unsent.0.borrow().clone())
+        .hash(&mut hasher);
     // A picture takes rows by its size. They're summed, since a map has no order.
     let pictures = view.pictures.map(|pictures| {
         let sum = pictures.iter().fold(0u64, |sum, (name, figure)| {
@@ -757,6 +804,8 @@ impl Default for View<'_> {
             grouped: false,
             lit: None,
             sort: Sort::default(),
+            goes: Goes::default(),
+            unsent: None,
             quick: Some(crate::emoji::QUICK),
             pictures: None,
             laid: None,
@@ -1337,14 +1386,17 @@ fn lay_out(
             out.extend(text.into_iter().map(|row| Line::Reply(id, row)));
             picture_lines((id, true), &pictures, &mut which, (view, room), &mut out);
         }
-        // A suggestion is the agent's own, so there's nothing to wait for.
+        // A suggestion is the agent's own, so there's nothing to wait for. What no agent has
+        // yet says how it gets to one, so nobody wonders whether it went.
         let waiting = !suggested && !thread.resolved && thread.waiting_answer();
-        if waiting && thread.told == Some(thread.replies.len()) && !agent.is_empty() {
+        let unsent = view.unsent.is_some_and(|unsent| unsent.has(id));
+        if waiting && (thread.waiting() || unsent) {
+            // Asked of an agent outside the pane, it goes with that one's next prompt.
+            let goes = if thread.asked { Goes::Later } else { view.goes };
+            let note = wrap(&goes_note(goes, agent), width, measure);
+            out.extend(note.into_iter().map(Line::Status));
+        } else if waiting && thread.told == Some(thread.replies.len()) && !agent.is_empty() {
             out.push(Line::Status(format!("Waiting for {agent}…")));
-        } else if waiting && thread.asked {
-            out.push(Line::Status(format!(
-                "{agent} sees this with its next prompt"
-            )));
         }
         if let Some(reply) = draft.filter(|d| d.thread == Some(id) && !d.editing) {
             draft_lines(reply, view, width, measure, &mut out);

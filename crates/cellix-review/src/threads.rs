@@ -16,7 +16,7 @@ pub struct Reply {
     pub text: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Thread {
     pub id: u32,
     pub file: String,

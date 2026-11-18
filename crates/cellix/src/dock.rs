@@ -2128,15 +2128,19 @@ impl Dock {
     /// The agent comments go to: the one in front, or the first still running. A shell would
     /// run a comment's words as commands, so it never counts.
     pub fn agent_mut(&mut self) -> Option<&mut Session> {
-        let front = self.active.filter(|i| self.sessions[*i].agent());
-        let index = front.or_else(|| self.sessions.iter().position(Session::agent))?;
+        let index = self.agent_index()?;
         self.sessions.get_mut(index)
     }
 
-    /// What to call the agent an answer will come from.
-    pub fn agent_name(&self) -> String {
-        let agent = self.sessions.iter().find(|s| s.agent());
-        agent.map_or_else(|| "the agent".to_string(), |s| s.name.clone())
+    /// The agent what's sent goes to, and so the one an answer is waited on from: the one in
+    /// front, or else the first. Cards named the first while the one in front was sent to.
+    pub fn agent_session(&self) -> Option<&Session> {
+        self.sessions.get(self.agent_index()?)
+    }
+
+    fn agent_index(&self) -> Option<usize> {
+        let front = self.active.filter(|i| self.sessions[*i].agent());
+        front.or_else(|| self.sessions.iter().position(Session::agent))
     }
 
     pub fn running(&self) -> bool {

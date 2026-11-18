@@ -745,6 +745,18 @@ fn asked_in_prompt(quote: &str, line: usize) -> String {
     format!("{what} is in Claude Code's prompt. Press Esc to ask there.")
 }
 
+/// What starts a turn inside Claude Code for what waits to go to it: the prompt hook adds the
+/// comments themselves, as it does to any prompt.
+const SEND_PROMPT: &str = "Address the review comments I left in Cellix.";
+
+/// How many comments, as said: "1 comment", "3 comments".
+fn comments_counted(count: usize) -> String {
+    match count {
+        1 => "1 comment".to_string(),
+        n => format!("{n} comments"),
+    }
+}
+
 /// What an agent is asked when the reviewer presses Check my review.
 fn review_prompt(file: &str, mine: &[&Thread]) -> String {
     let mut text = format!("I'm reviewing {file} in Cellix. Read it, then help with my review.\n");
@@ -1547,6 +1559,8 @@ pub struct App {
     /// The Comments pane's rows as they were last laid out, kept until what they're laid
     /// out from changes.
     comment_rows: threads::Laid,
+    /// The comments on code still waiting to go with the review, as the pane was last shown.
+    comment_unsent: threads::Unsent,
     /// The session that was in front when the last run here ended.
     kept_session: Option<String>,
     /// Whether how the two sides work together has been said yet.
@@ -1556,7 +1570,7 @@ pub struct App {
     /// A `Z` typed in Neovim's normal mode, waiting to see if it's `ZZ` or `ZQ`.
     neovim_z: bool,
     /// A review check waiting for an agent to be started.
-    pending_review: Option<String>,
+    pending_review: Option<(String, Vec<u32>)>,
     /// A prompt for the agent this Cellix is a pane in, for the mod to submit.
     outgoing_prompt: Option<String>,
     /// Words for the mod to put in Claude Code's prompt box, unsent, once.
@@ -1746,6 +1760,7 @@ impl App {
             comment_pictures: threads::Pictures::new(),
             picture_stamps: HashMap::new(),
             comment_rows: threads::Laid::default(),
+            comment_unsent: threads::Unsent::default(),
             kept_session: None,
             kernels: HashMap::new(),
             team: team::Team::default(),
@@ -2335,9 +2350,10 @@ impl App {
         const QUIET: std::time::Duration = std::time::Duration::from_millis(1200);
         if self.pending_review.is_some() && self.dock.agent_mut().is_some_and(|s| s.settled(QUIET))
         {
-            let text = self.pending_review.take().unwrap_or_default();
+            let (text, ids) = self.pending_review.take().unwrap_or_default();
             if let Some(session) = self.dock.agent_mut() {
                 session.send_line(&text.replace('\n', " "));
+                self.mark_told(&ids);
             }
             return true;
         }
@@ -10168,7 +10184,7 @@ impl App {
             let screen = self.dock_panel().unwrap_or(area);
             if mouse.kind == MouseKind::Left {
                 let (threads, resolved) = self.shown_threads();
-                let agent = self.dock.agent_name();
+                let agent = self.comment_agent().0;
                 let draft = self.dock.draft.as_ref();
                 let view = self.comments_view();
                 let threads = (threads.as_slice(), draft, agent.as_str(), resolved, view);
@@ -10681,7 +10697,7 @@ impl App {
         if self.dock.front == Front::Comments {
             let look = (&*self.measure, theme);
             let top = self.dock.tops.of(Front::Comments);
-            let agent = self.dock.agent_name();
+            let agent = self.comment_agent().0;
             let (listed, resolved) = self.shown_threads();
             let draft = self.dock.draft.as_ref();
             let view = self.comments_view();
@@ -10824,36 +10840,56 @@ impl App {
         }
     }
 
-    /// Delivers comments now if Cellix knows the agent's pane. Otherwise they wait, and the
+    /// Delivers everything no agent has had yet, in one message: the review's comments on
+    /// code, and the comments on documents, which are threads. Each thread is then told, so
+    /// the prompt hook doesn't hand it over again. With no agent here they wait, and the
     /// hook adds them to the next prompt.
     fn send_to_agent(&mut self) {
         let comments = self
             .comments
             .lock()
             .map_or_else(|_| Vec::new(), |c| c.clone());
-        if comments.is_empty() {
+        let waiting: Vec<u32> = self
+            .threads
+            .iter()
+            .filter(|t| t.waiting())
+            .map(|t| t.id)
+            .collect();
+        let count = comments.len() + waiting.len();
+        if count == 0 {
             self.say("No comments to send");
             return;
         }
-        // Inside Claude Code the mod starts a turn, and the prompt hook takes the comments.
+        // Inside Claude Code the mod submits a turn, and the prompt hook adds them to it.
         if self.in_pane {
-            self.attention = Some("send");
+            self.outgoing_prompt = Some(SEND_PROMPT.to_string());
             self.say(format!(
-                "Sending {} comments to Claude Code",
-                comments.len()
+                "Sending {} to Claude Code",
+                comments_counted(count)
             ));
             return;
+        }
+        let mut text = if comments.is_empty() {
+            String::new()
+        } else {
+            comments_message(&comments)
+        };
+        for thread in self.threads.iter().filter(|t| waiting.contains(&t.id)) {
+            text.push_str(&thread.message());
+            text.push('\n');
         }
         let Some(session) = self.dock.agent_mut() else {
             self.say("Comments will go with your next prompt to the agent");
             return;
         };
+        let name = session.name.clone();
         // Sent as one line, because a newline in a prompt box would submit it early.
-        session.send_line(&comments_message(&comments).replace('\n', " "));
+        session.send_line(&text.replace('\n', " "));
         if let Ok(mut pending) = self.comments.lock() {
             pending.clear();
         }
-        self.say(format!("Sent {} comments to the agent", comments.len()));
+        self.mark_told(&waiting);
+        self.say(format!("Sent {} to {name}", comments_counted(count)));
     }
 
     fn new_review(&self, root: PathBuf) -> Review {
@@ -11420,15 +11456,72 @@ impl App {
     /// How the Comments pane shows its list: under headings or not, which is lit, and in
     /// what order.
     fn comments_view(&self) -> threads::View<'_> {
+        self.comment_unsent.set(self.unsent_threads());
         threads::View {
             grouped: self.comments_grouped(),
             lit: self.lit_thread,
             sort: self.comment_sort,
+            goes: self.comment_agent().1,
+            unsent: Some(&self.comment_unsent),
             quick: self.quick_emoji(),
             pictures: self.measure.cell_pixels().map(|_| &self.comment_pictures),
             laid: Some(&self.comment_rows),
             edge: self.pane_edge(),
             lead: self.pane_card_lead(),
+        }
+    }
+
+    /// The agent a comment goes to, as its card names it, and how what waits gets there: the
+    /// one Ask agent sends to, in the pane or inside Claude Code, else one at work outside.
+    /// Only Claude Code's, Codex's and Gemini CLI's hooks hand comments over with a prompt.
+    fn comment_agent(&self) -> (String, threads::Goes) {
+        let takes = |name: &str| matches!(name, "Claude Code" | "Codex" | "Gemini CLI" | "Gemini");
+        if let Some(session) = self.dock.agent_session() {
+            let goes = if takes(&session.name) {
+                threads::Goes::Prompt
+            } else {
+                threads::Goes::Ask
+            };
+            return (session.name.clone(), goes);
+        }
+        if self.in_pane {
+            return ("Claude Code".to_string(), threads::Goes::Prompt);
+        }
+        match self.agents.outside() {
+            Some(name) if takes(&name) => (name, threads::Goes::Later),
+            Some(name) => (name, threads::Goes::Ask),
+            None => ("the agent".to_string(), threads::Goes::Nobody),
+        }
+    }
+
+    /// The comments on code whose words wait among the review's, so no agent has had them.
+    fn unsent_threads(&self) -> Vec<u32> {
+        let Ok(comments) = self.comments.lock() else {
+            return Vec::new();
+        };
+        if comments.is_empty() {
+            return Vec::new();
+        }
+        let waiting: std::collections::HashSet<(&str, &str)> = comments
+            .iter()
+            .map(|c| (c.file.as_str(), c.text.as_str()))
+            .collect();
+        self.threads
+            .iter()
+            .filter(|t| !t.resolved && t.replies.is_empty() && t.told == Some(0))
+            .filter(|t| waiting.contains(&(t.file.as_str(), t.text.as_str())))
+            .map(|t| t.id)
+            .collect()
+    }
+
+    /// Says these threads have been told to an agent, as they are now.
+    fn mark_told(&mut self, ids: &[u32]) {
+        for thread in self.threads.iter_mut().filter(|t| ids.contains(&t.id)) {
+            thread.told = Some(thread.replies.len());
+            thread.asked = false;
+        }
+        if !ids.is_empty() {
+            self.save_threads();
         }
     }
 
@@ -11718,7 +11811,7 @@ impl App {
         };
         let top = {
             let (listed, resolved) = self.shown_threads();
-            let agent = self.dock.agent_name();
+            let agent = self.comment_agent().0;
             let draft = self.dock.draft.as_ref();
             let view = self.comments_view();
             let shown = (listed.as_slice(), draft, agent.as_str(), resolved, view);
@@ -11892,6 +11985,12 @@ impl App {
                     .find(|t| t.id == id)
                     .map(Thread::message);
                 match (message, self.dock.agent_mut()) {
+                    // Inside Claude Code the mod starts a turn now, and the prompt hook hands
+                    // it over, with whatever else waits.
+                    (Some(_), None) if self.in_pane => {
+                        self.outgoing_prompt = Some(SEND_PROMPT.to_string());
+                        self.say("Sending it to Claude Code. Its answer lands here");
+                    }
                     (Some(message), Some(session)) => {
                         session.send_line(&message);
                         if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
@@ -12112,15 +12211,20 @@ impl App {
             .filter(|t| t.file == file && !t.resolved && t.suggested_by.is_empty())
             .collect();
         let text = review_prompt(&file, &mine);
+        // The prompt has each of them, asking for a verdict, so they're told: else the prompt
+        // hook added them to it again, asking for a plain answer.
+        let ids: Vec<u32> = mine.iter().map(|t| t.id).collect();
         // Inside Claude Code, the mod submits it; with an agent in the pane, it's typed there.
         if self.in_pane {
             self.outgoing_prompt = Some(text);
+            self.mark_told(&ids);
             self.say("Asked the agent to check your review");
         } else if let Some(session) = self.dock.agent_mut() {
             session.send_line(&text.replace('\n', " "));
+            self.mark_told(&ids);
             self.say("Asked the agent to check your review");
         } else {
-            self.pending_review = Some(text);
+            self.pending_review = Some((text, ids));
             self.refresh_agents();
             self.dock.show_list();
             self.say("Pick an agent, and it checks your review when it's ready");
@@ -18111,7 +18215,7 @@ impl App {
             Front::Log => (self.dock.log_last(panel.h), 3),
             Front::Comments => {
                 let (listed, resolved) = self.shown_threads();
-                let agent = self.dock.agent_name();
+                let agent = self.comment_agent().0;
                 let draft = self.dock.draft.as_ref();
                 let view = self.comments_view();
                 let shown = (listed.as_slice(), draft, agent.as_str(), resolved, view);
@@ -19324,6 +19428,8 @@ mod agents_list_tests;
 mod glance_tests;
 #[cfg(test)]
 mod link_tests;
+#[cfg(test)]
+mod docflow_tests;
 #[cfg(test)]
 mod motion_tests;
 #[cfg(test)]
@@ -24943,7 +25049,10 @@ mod tests {
         typed(&mut app, "Now please");
         enter(&mut app);
         app.run(Command::SendToAgent);
-        assert_eq!(app.take_attention(), Some("send"));
+        // The mod submits the turn, whose prompt hook adds what waits. It asked the mod to
+        // count the review's comments first, which a document's comments aren't among.
+        assert_eq!(app.take_outgoing_prompt().as_deref(), Some(SEND_PROMPT));
+        assert_ne!(app.take_attention(), Some("send"));
         assert_eq!(
             app.comments.lock().unwrap().len(),
             1,

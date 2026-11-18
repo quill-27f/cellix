@@ -98,14 +98,18 @@ impl App {
             .collect()
     }
 
-    /// An agent's suggestion kept: it's the person's comment now, and one on code goes with
-    /// the review, as the person's own do.
+    /// An agent's suggestion kept: it's the person's comment now, and goes to the agent as
+    /// theirs do: one on code with the review, one on a document as a thread no agent has had.
+    /// A kept one on a document was left as told, so it never went.
     pub(super) fn keep_suggestion(&mut self, id: u32) {
         let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) else {
             return;
         };
         thread.suggested_by.clear();
         let code = Dialect::of(Path::new(&thread.file)).is_none();
+        if !code {
+            thread.told = None;
+        }
         let comment = Comment {
             file: thread.file.clone(),
             line: thread.line,
