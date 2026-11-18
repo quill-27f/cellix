@@ -2995,3 +2995,13 @@ Item 7 of the herdr round, the board's "Where Cellix waits".
 - Tests: `a_server_says_what_it_is_doing_until_it_is_done`, `a_server_is_named_by_its_program_or_its_script`, `a_row_with_bands_of_its_own_sends_only_the_band_that_changed`, `a_search_under_way_turns_in_its_view`, `a_push_turns_in_the_status_bar_and_on_its_button`, `a_build_and_an_install_say_so_while_they_run`, `a_running_task_turns_in_its_tab`, `a_language_server_indexing_turns_in_the_status_bar` (a stand-in server that says it's indexing).
 - Tour: `m3-waits-indexing` and its cells, the scripted server told to say it's indexing (`FAKE_LSP_INDEXING`), under the name rust-analyzer. A push, a search and an install aren't pictured: the tour has no remote, a search there ends at once, and a tour never presses Install.
 - Unverified: a real rust-analyzer's progress titles in the status bar over a whole indexing; how one item reads when several waits overlap (the first wins).
+
+
+## Helpers stand under their agent in the Agents list (2026-11-17)
+
+Item 5's list part, on the list by urgency (item 6), as the reference board's panel 4 has it.
+
+- A helper's row stands under the agent that started it, a step in, with the list's bent line from its agent's mark, by the name it was given and the quiet word "helper", in its agent's section (`App::parent_row`). One whose hooks haven't said anything yet, or a command that never will, has a row all the same, and so has an agent with helpers that hasn't (`App::helper_rows`, keyed `member:<name>` until its hooks name its session); a press on such a row finds its tab by that name.
+- The tour's stand-ins run their hooks through a shell, as agents do, so Cellix takes the reports for their sessions; the stand-in Codex now says it's ready and takes its task.
+- Test: `a_helper_stands_under_the_agent_that_started_it_in_the_agents_list`. Tour: `172-agents-helper`. The cell tier's list is in the test; the tour can't aim at the card's buttons on cells, where the rail's wide glyphs shift the row's columns.
+- Helpers still have tabs of their own; taking them away comes with peek (item 10), which is how a helper is looked at without one.

@@ -879,8 +879,31 @@ fn draw_row(
     };
     let stop = (end.floor() as u16).max(side + 3);
     let text = crate::context::elide(&row.name, f32::from(stop - side - 2), measure);
-    grid.label(side + 2, y, &text, name, stop);
+    let after = grid.label(side + 2, y, &text, name, stop);
+    // A helper says it is one, quietly, after its name, where there's room.
+    if depth > 0 && text == row.name {
+        let font = Font {
+            size: DETAIL_SIZE,
+            ..Font::default()
+        };
+        let named = (side + 2) as f32
+            + measure.width(
+                &text,
+                Font {
+                    bold: name.bold,
+                    ..Font::default()
+                },
+            );
+        let x = named + HELPER_GAP;
+        if x + measure.width(HELPER, font) < f32::from(stop) {
+            grid.label_at(x, after + 1, y, HELPER, dim, stop, DETAIL_SIZE);
+        }
+    }
 }
+
+/// The word after a helper's name, and the room before it, in cells.
+const HELPER: &str = "helper";
+const HELPER_GAP: f32 = 1.0;
 
 /// The chip that says an agent needs the person, at the end of its row, in the attention
 /// colour on a wash of it. Returns where it starts.

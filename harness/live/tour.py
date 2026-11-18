@@ -185,7 +185,7 @@ EXPECT = {
     "98-pane-drag-under": "loss.png",
 }
 # About how many scenes there are, to cut the tour into parts of a size.
-SCENES_IN_ALL = 213
+SCENES_IN_ALL = 214
 # Scenes come to, shot, and those that never reached their surface.
 SEEN, SHOT, FAILED = [0], [], []
 # Which commit the binary is, as far as git can say: the pictures are of that.
@@ -974,15 +974,24 @@ def team_scenes(scratch):
     tools = f"{scratch}/team-bin"
     os.makedirs(tools)
     task = "Review the changes in src/queue.rs. Leave each finding with cellix suggest."
+    # Each runs its hook through a shell, as an agent does, so the hook's report is the
+    # stand-in's own and Cellix takes it for its session.
+    def hook(kind, said, agent=""):
+        named = f" --agent {agent}" if agent else ""
+        said_file = f"{tools}/{kind}-{agent or 'claude'}.json"
+        with open(said_file, "w") as f:
+            f.write(json.dumps(said))
+        return f"sh -c \"'{binary}' hook{named} {kind} < '{said_file}'\"\n"
+    lead = {"session_id": "lead-1", "cwd": ROOT}
     with open(f"{tools}/claude", "w") as f:
         f.write("#!/bin/sh\nprintf 'Claude Code (stand-in)\\n'\n"
                 "printf 'I will hand the review to a helper.\\n'\n"
+                + hook("prompt", {**lead, "prompt": "Review the queue"}) +
                 f"'{binary}' agent run --name reviewer codex '{task}' >/dev/null 2>&1\n"
                 "exec sleep 300\n")
-    said = json.dumps({"session_id": "rev-1", "cwd": ROOT})
     with open(f"{tools}/codex", "w") as f:
         f.write("#!/bin/sh\nprintf 'Codex (stand-in)\\n'\n"
-                f"printf '%s' '{said}' | '{binary}' hook --agent Codex session-start\n"
+                + hook("session-start", {"session_id": "rev-1", "cwd": ROOT}, "Codex") +
                 "while IFS= read -r line; do printf 'got: %s\\n' \"$line\"; done\n")
     for name in ("claude", "codex"):
         os.chmod(f"{tools}/{name}", 0o755)
@@ -995,13 +1004,17 @@ def team_scenes(scratch):
         ("170-agent-asks-light", asks, {"background": "eff1f5"}),
         ("170-agent-asks-narrow", asks, {"size": "100x40"}),
         ("171-agent-started", allowed, {}),
+        ("172-agents-helper", [*allowed, *LIST_AGENTS, ["until", "helper"], ["wait", 0.6]], {}),
     ]
     for name, steps, extra in scenes:
         cache = tempfile.mkdtemp(prefix="cx", dir="/tmp")
         env = {"XDG_CACHE_HOME": cache, "PATH": f"{tools}:{os.environ['PATH']}"}
+        if "CELLIX_TIER" in extra:
+            env["CELLIX_TIER"] = extra.pop("CELLIX_TIER")
         shoot(name, steps, CODE_FILE, **{"size": "150x44", **extra}, env=env)
         subprocess.run(["pkill", "-9", "-f", cache])
         shutil.rmtree(cache, ignore_errors=True)
+
 
 def agents_by_urgency(scratch):
     """The Agents list by urgency, from agents that report through Cellix's real hook from

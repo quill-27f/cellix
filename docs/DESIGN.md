@@ -1335,6 +1335,11 @@ into a command, and with the same hold as a message while the person types there
 child counts as hearing of it. Children end with their parent, when it ends or its tab is
 closed, unless started with `--outlive-parent`, which then go on as agents of their own.
 
+In the Agents list a helper stands under the agent that started it, a step in, with a line bent
+round from its agent's mark, by the name it was given and the quiet word "helper" after it, in
+its agent's section whatever it's doing itself (the reference board's panel 4). Before its hooks
+have said anything it's there all the same, doing what Cellix knows of it.
+
 `cellix agent --skill` prints a short guide for agents, and the same guide ships as a skill with
 the Claude Code plugin, the Codex plugin and the Gemini CLI extension, which all read
 `skills/<name>/SKILL.md`; Gemini's GEMINI.md also points to it.

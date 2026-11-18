@@ -12119,19 +12119,26 @@ impl App {
                     _ => Urgency::Idle,
                 };
                 let icon = crate::dock::program_icon(&event.agent, false, false);
-                // An agent goes by its tab's name; what runs in a shell, by its own.
+                // An agent goes by its tab's name; what runs in a shell, by its own; a helper
+                // by the name the agent that started it gave it.
                 let named = tab.filter(|s| !s.shell);
+                let parent = tab.and_then(|s| self.parent_row(s));
+                let name = match (parent.as_ref(), tab.and_then(Session::called)) {
+                    (Some(_), Some(called)) => called.to_string(),
+                    _ => named.map_or_else(|| event.agent.clone(), Session::label),
+                };
                 Row {
                     icon: tab.map_or(icon, Session::icon),
-                    name: named.map_or_else(|| event.agent.clone(), Session::label),
+                    name,
                     urgency,
                     since: self.agents.since.get(&event.session).copied(),
                     detail: event.detail.clone(),
                     session: event.session.clone(),
-                    parent: None,
+                    parent,
                 }
             })
             .collect();
+        rows.extend(self.helper_rows());
         rows.extend(self.agents.silent_rows());
         rows
     }
@@ -12141,6 +12148,11 @@ impl App {
     fn look_at_agent(&mut self, id: &str) {
         let tab = (self.dock.sessions.iter())
             .position(|s| !s.exited && s.agent_session.as_deref() == Some(id));
+        // A helper that hasn't said anything yet goes by its name.
+        let tab = tab.or_else(|| {
+            let name = id.strip_prefix(team::MEMBER_ROW)?;
+            self.member_index(name)
+        });
         match tab {
             Some(index) => {
                 self.dock.active = Some(index);

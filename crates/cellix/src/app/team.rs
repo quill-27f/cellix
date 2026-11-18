@@ -32,6 +32,8 @@ pub(super) const CONSENT_BUTTONS: [&str; 3] = ["Deny", "Always Allow Here", "All
 const CONSENT_WIDTH: u16 = 64;
 /// Lines of a screen `read` gives when not told how many.
 const SCREEN_LINES: usize = 60;
+/// What a helper's row in the Agents list is named by before its hooks say its session.
+pub(crate) const MEMBER_ROW: &str = "member:";
 
 /// What an agent is doing, as its hooks last said.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -87,6 +89,9 @@ pub(super) struct Start {
     outlive: bool,
     /// Who asked, as the card names them.
     pub(super) by: String,
+    /// Where it runs, as the card says it: None for this folder. Worked out as the start is
+    /// asked for, so drawing the card asks nothing of the disk.
+    place: Option<String>,
 }
 
 impl Start {
@@ -407,6 +412,64 @@ impl App {
         self.look_at(index);
     }
 
+    /// What names a member's row in the Agents list: its agent's own session, once its hooks
+    /// have said, or else its name.
+    fn row_key(session: &Session) -> Option<String> {
+        let called = session.called()?;
+        Some(
+            session
+                .agent_session
+                .clone()
+                .unwrap_or_else(|| format!("{MEMBER_ROW}{called}")),
+        )
+    }
+
+    /// The row a helper stands under in the Agents list: the agent that started it.
+    pub(super) fn parent_row(&self, session: &Session) -> Option<String> {
+        let parent = session.member.as_ref()?.parent.as_deref()?;
+        let index = self.member_index(parent)?;
+        Self::row_key(&self.dock.sessions[index])
+    }
+
+    /// Rows for helpers that haven't said anything through hooks yet, or never will, as a
+    /// command doesn't, and for agents with helpers that haven't: they stand where they
+    /// belong all the same, doing what Cellix knows.
+    pub(super) fn helper_rows(&self) -> Vec<crate::agents::Row> {
+        use crate::agents::{Row, Urgency};
+        let has_helpers = |s: &Session| {
+            let called = s.called();
+            let mut members = self.dock.sessions.iter().filter_map(|c| c.member.as_ref());
+            called.is_some_and(|name| members.any(|m| m.parent.as_deref() == Some(name)))
+        };
+        let helpers = self.dock.sessions.iter().enumerate().filter(|(_, s)| {
+            let placed = self.parent_row(s).is_some() || has_helpers(s);
+            !s.exited && s.agent_session.is_none() && placed
+        });
+        helpers
+            .filter_map(|(index, session)| {
+                let doing = self.doing(index);
+                let urgency = match &doing {
+                    Doing::Asking(_) => Urgency::NeedsYou,
+                    doing if doing.working() => Urgency::Working,
+                    _ => Urgency::Idle,
+                };
+                Some(Row {
+                    icon: session.icon(),
+                    // A helper by the name it was given; its agent by its tab's.
+                    name: match self.parent_row(session) {
+                        Some(_) => session.called()?.to_string(),
+                        None => session.label(),
+                    },
+                    urgency,
+                    since: None,
+                    detail: doing.detail().to_string(),
+                    session: Self::row_key(session)?,
+                    parent: self.parent_row(session),
+                })
+            })
+            .collect()
+    }
+
     /// Takes in what the program in tab `index` said of itself (OSC 7501), as its hooks' word
     /// would be: `clear` takes back what it said.
     pub(super) fn heard_report(&mut self, index: usize, event: &AgentEvent, clear: bool) {
@@ -671,6 +734,13 @@ impl App {
         Some(Answer::fail(code::ASKING, error).with(out))
     }
 
+    /// What the card calls the folder a start runs in: None for this one.
+    fn place_of(&self, folder: &Path) -> Option<String> {
+        let root = self.workspace.root();
+        let here = dunce::canonicalize(root).is_ok_and(|root| root == folder);
+        (!here && folder != root).then(|| self.relative(folder))
+    }
+
     /// Checks a run and works out what it starts, without starting anything.
     fn plan_start(
         &self,
@@ -706,6 +776,7 @@ impl App {
         // The person knows an agent by its tab, as it's called there.
         let tab = caller.filter(|_| parent.is_some());
         let by = tab.map_or_else(|| someone.to_string(), |i| self.dock.sessions[i].label());
+        let place = self.place_of(&folder);
         Ok(Start {
             name,
             kind,
@@ -715,6 +786,7 @@ impl App {
             by,
             parent,
             outlive,
+            place,
         })
     }
 
@@ -1339,13 +1411,9 @@ impl App {
         } else {
             "It runs as you do, in this folder."
         };
-        let root = self.workspace.root();
-        let here = dunce::canonicalize(root).is_ok_and(|root| root == start.folder);
-        let note = if here || start.folder == root {
-            cost.to_string()
-        } else {
-            let place = format!("in {}", self.relative(&start.folder));
-            cost.replace("in this folder", &place)
+        let note = match &start.place {
+            None => cost.to_string(),
+            Some(place) => cost.replace("in this folder", &format!("in {place}")),
         };
         for line in self.wrap(&note, f32::from(width.saturating_sub(4))) {
             lines.push((line, false));
@@ -1869,6 +1937,46 @@ mod tests {
         says(&mut next, "three", AgentState::Idle, "Ready");
         assert_eq!(answered(&mut next, &third).code, code::OK);
         let _ = std::fs::remove_dir_all(crate::hold::folder_of(dir.path()));
+    }
+
+    /// The row of the screen that says `words` after the row that says `after`.
+    fn row_after(grid: &Grid, after: &str, words: &str) -> u16 {
+        let from = (0..grid.height()).find(|y| grid.row_text(*y).contains(after));
+        let from = from.unwrap_or_else(|| panic!("no {after:?}: {}", grid.text()));
+        (from..grid.height())
+            .find(|y| grid.row_text(*y).contains(words))
+            .unwrap_or_else(|| panic!("no {words:?} after {after:?}: {}", grid.text()))
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_helper_stands_under_the_agent_that_started_it_in_the_agents_list() {
+        let (dir, mut app, fake) = project();
+        app.team.always = true;
+        let lead = lead(&mut app, &fake);
+        says(&mut app, "claude-1", AgentState::Working, "Working");
+        let started = call(&mut app, &lead, run(dir.path(), "reviewer", "codex", None));
+        shows_in(&mut app, "reviewer", "fake agent up");
+        // Before its hooks say anything it stands under its agent, by the name it was given,
+        // a step in, with a line bent round from its agent's mark and the word for what it is.
+        app.run(Command::ListAgents);
+        let grid = screen(&app);
+        let agent = row_after(&grid, "WORKING", "Claude Code");
+        let helper = row_after(&grid, "WORKING", "reviewer");
+        assert_eq!(helper, agent + 1, "{}", grid.text());
+        let row = grid.row_text(helper);
+        assert!(row.contains('└') && row.contains("helper"), "{row}");
+        // Once it reports, it's the same row, and asking the person, it stays in its agent's
+        // section rather than going to the top.
+        says(&mut app, "reviewer", AgentState::Idle, "Ready");
+        assert_eq!(answered(&mut app, &started).code, code::OK);
+        says(&mut app, "reviewer", AgentState::NeedsYou, "Allow Bash?");
+        app.poll();
+        let grid = screen(&app);
+        let agent = row_after(&grid, "WORKING", "Claude Code");
+        let helper = row_after(&grid, "WORKING", "reviewer");
+        assert_eq!(helper, agent + 1, "{}", grid.text());
+        assert!(!grid.text().contains("NEEDS YOU"), "{}", grid.text());
     }
 
     /// Polls for `time`, and says `name` never showed `unwanted`.
