@@ -6424,5 +6424,12 @@
     "title": "A narrow side pane cuts the tabs behind to their marks, centred in a chip of their own, before the + or the maximize button gives way",
     "test": "tabs_are_cut_to_their_marks_before_the_plus_gives_way",
     "passes": true
+  },
+  {
+    "id": "tab-anatomy",
+    "milestone": 15,
+    "title": "Every tab, a file's and the side pane's, has one anatomy measured to the ink, the same air before its mark as after its ×, whatever it shows",
+    "test": "every_tab_has_one_anatomy",
+    "passes": true
   }
 ]

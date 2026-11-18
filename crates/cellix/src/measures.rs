@@ -13,6 +13,27 @@ pub const BUTTON_GAP: u16 = 2;
 pub const LINE_AIR: f32 = 8.0;
 /// Pixels between a dialog's last line, or control, and its row of buttons.
 pub const DIALOG_GAP: f32 = 24.0;
+
+/// One anatomy for every tab, a file's and the side pane's, in cells of 17 px, measured to
+/// the ink (0.11.0's final review, P12): from its edge to its mark's box, 15 px, so the mark's
+/// ink is about 17 px in; to its name, the mark's 25 px box and 8 px after its ink;
+pub const TAB_MARK: f32 = 0.9;
+pub const TAB_NAME: f32 = 2.85;
+/// from its name to where its × is placed, so the ×'s ink is 12 px after the name, whose box
+/// starts 2.5 px before that and whose ink is 7 px into the box;
+pub const TAB_CLOSE_AIR: f32 = 0.43;
+/// and from where the × is placed to the tab's end: its ink, 21 px past that, and as much
+/// air after it as before the mark. What a tab's whole columns hold past this is shared in
+/// thirds, before the mark, before the × and after it, whatever the tab shows, so each is
+/// about 17 to 21 px. A file's tab was 21 | icon | name | 51 to its × | 13, and the space
+/// after a pane tab's × ran from 9 px on a working tab to 25 on an idle one.
+pub const TAB_CLOSE_END: f32 = 2.26;
+
+/// How wide a tab with a mark paints, in cells, for a name `name` cells wide and `more` cells
+/// of what follows it before the × (an agent's state, its context).
+pub fn tab_painted(name: f32, more: f32) -> f32 {
+    TAB_NAME + name + more + TAB_CLOSE_AIR + TAB_CLOSE_END
+}
 /// How far under the top of a line of words their capitals start, and their tails end, in
 /// lines: 9 px and 31 of a line of 36, as the interface's font is set.
 const CAPS: f32 = 0.25;

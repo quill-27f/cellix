@@ -76,10 +76,14 @@ impl App {
         }
     }
 
-    /// Columns that tab takes: a file's tab's, and its mark's.
+    /// Columns that tab takes: a file's tab's, and on cells its mark's, which a file's tab
+    /// has only where there are pictures.
     pub(super) fn task_tab_width(&self) -> u16 {
         let name = self.measure.width(&self.task_tab_title(), Font::default());
-        name.ceil() as u16 + TAB_PADDING + TASK_TAB_ICON
+        if self.measure.in_cells() {
+            return name.ceil() as u16 + TAB_PADDING + TASK_TAB_ICON;
+        }
+        self.tab_columns(name)
     }
 
     /// Where the page stands: under the tabs, with a row of air over its title when the

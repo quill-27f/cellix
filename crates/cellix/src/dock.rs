@@ -61,11 +61,12 @@ const AGENTS_WIDTH: u16 = 11;
 const PREVIEW_WIDTH: u16 = 12;
 const LOG_WIDTH: u16 = 8;
 const PROBLEMS_WIDTH: u16 = 13;
-/// Where a tab's parts start, in cells: its mark's ink about 20 px in, as far as its ×'s ink
-/// is from its other end (`HUG_CLOSE`), and 8 px past the sheet's line for the first tab,
-/// whose sheet starts half a column into it. At a column and a half the mark stood 21 to 27 px
-/// in and the × 9 to 22 px from the end.
-const TAB_TEXT: f32 = 1.15;
+/// Where a tab's parts start, in cells: its mark's box where every tab's is
+/// (`measures::TAB_MARK`), its ink about 18 px in, as far as its ×'s ink is from its other
+/// end (`HUG_CLOSE`), and 8 px past the sheet's line for the first tab, whose sheet starts
+/// half a column into it. At a column and a half the mark stood 21 to 27 px in and the × 9 to
+/// 22 px from the end.
+const TAB_TEXT: f32 = crate::measures::TAB_MARK + ICON_SIZE - ICON_MIDDLE;
 /// The column between an agent's name and how full its context is.
 const CONTEXT_GAP: u16 = 1;
 /// Room between the name and the context, in cells: about 16 px.
@@ -88,10 +89,10 @@ const MARK_AIR: f32 = 0.8;
 /// What the tab in front has beside its name when the row is short, in cells: the lead a
 /// tab's name always has, 12 px to its ×, the ×, and as much air after it as before the mark.
 /// With room, a tab has more than this; without, the slack is what would cut its neighbours.
-pub(crate) const HUG: f32 = 3.92;
+pub(crate) const HUG: f32 = TAB_TEXT + crate::measures::TAB_CLOSE_AIR + HUG_CLOSE;
 /// How far before a tab's right edge its × is drawn, so its ink is as far from that edge as
-/// the mark's is from the other.
-const HUG_CLOSE: f32 = 2.42;
+/// the mark's is from the other: every tab's (`measures::TAB_CLOSE_END`).
+const HUG_CLOSE: f32 = crate::measures::TAB_CLOSE_END;
 /// Columns a program's mark takes before its name on its tab, as a file's icon does on its
 /// own, and how tall it is in rows: 13 pt. On cells it's one letter and a space.
 const ICON_ROOM: u16 = 2;
@@ -99,7 +100,7 @@ const ICON_SIZE: f32 = 0.70;
 /// How far the mark's middle stands past where a tab's name would start without it, and how
 /// far the name moves for it, in cells: where a file's tab has them.
 const ICON_MIDDLE: f32 = 0.5;
-pub(crate) const ICON_SHIFT: f32 = 1.7;
+pub(crate) const ICON_SHIFT: f32 = crate::measures::TAB_NAME - TAB_TEXT;
 /// Columns an agent's tab has before its × on cells for what it's doing, while it shows it.
 const MARK_ROOM: u16 = 2;
 /// How tall that mark is, in the terminal's lines: a spinner of 12 pt, and a dot half that.
@@ -107,6 +108,9 @@ pub const MARK_SIZE: f32 = 0.65;
 /// How far after the name, or its context, the state starts: half a cell, 8 px, so it reads as
 /// the name's and never as the next tab's.
 const STATE_AIR: f32 = 0.5;
+/// The whole columns a tab gains while it shows what its agent is doing: that air and the
+/// mark, 1.9 columns, and a tenth to spare after its ×.
+const STATE_COLUMNS: u16 = 2;
 /// What a whole tab has after its last part, in cells: 12 px to its ×, the ×, and 10 px to its
 /// edge, as the tab in front hugs them in a short row. Its width is what's painted, so the ×
 /// follows the last part closely and nothing stands idle before it.
@@ -2460,11 +2464,30 @@ impl Dock {
         TAB_TEXT + mark + self.text_width(&face.text) + said + state + TAIL
     }
 
+    /// Columns a tab takes where there are pictures: what it paints with nothing to say, and
+    /// two whole columns for what its agent is doing while it shows that, so the tab's slack,
+    /// shared at its ends, is the same whether it shows it or not, and its name doesn't move
+    /// as its agent starts and stops. Rounded with the state in it, a working tab had 9 px
+    /// after its × and an idle one 25 (0.11.0's final review, P12).
+    fn tab_columns(&self, face: &Face, context: bool) -> u16 {
+        let state = if face.state.is_some() {
+            STATE_AIR + MARK_WIDE
+        } else {
+            0.0
+        };
+        let room = if face.state.is_some() {
+            STATE_COLUMNS
+        } else {
+            0
+        };
+        columns(self.painted(face, context) - state) + room
+    }
+
     /// Columns a tab takes whole: where there are pictures, what it paints; on cells, its
     /// letters and the columns round them, and a view's own width.
     fn whole_width(&self, face: &Face, view: Option<u16>) -> u16 {
         if !self.in_cells() {
-            return columns(self.painted(face, true));
+            return self.tab_columns(face, true);
         }
         if let Some(width) = view {
             return width;
@@ -2552,7 +2575,7 @@ impl Dock {
             // A column either side, and one between the name and the ×.
             face.text.chars().count() as u16 + 4 + Self::cell_extra(face)
         } else {
-            columns(self.painted(face, false))
+            self.tab_columns(face, false)
         }
     }
 
@@ -3075,21 +3098,27 @@ impl Dock {
         }
         let close = after + chevron + CLOSE_AIR;
         // What its whole columns hold past what it paints is shared by its two ends, so the
-        // air before its mark and after its × is the same in every tab: left after the ×, it
-        // made that air 9 px in one tab and 22 in the next, by how the columns rounded. It's
-        // shared as the tab stands with nothing to say, so its name doesn't move as its agent
-        // starts and stops; what showing that takes goes after its ×.
+        // air before its mark and after its × is the same in every tab, whatever it shows:
+        // left after the ×, it made that air 9 px in one tab and 22 in the next, by how the
+        // columns rounded, and shared as the tab stood with nothing to say, a working tab had
+        // 9 px after its × and an idle one 25 (0.11.0's final review, P12). What it's doing
+        // has its own room before the ×.
+        // A third of it goes before the mark, a third between the name, or what it's doing,
+        // and the ×, and a third after the ×: halved at its ends, the air before the mark ran
+        // from 16 px to 24 by tab. What it's doing has its own two columns (`tab_columns`), so
+        // the share is reckoned as the tab stands with nothing to say, and the name stays put.
         let slack = f32::from(right) - (close + HUG_CLOSE);
         let quiet = close + HUG_CLOSE - f32::from(tab.x) - state;
         let idle = f32::from(columns(quiet)) - quiet;
-        let even = if text == face.text && (-1.0..1.0).contains(&slack) {
-            idle / 2.0
+        let third = if text == face.text && (-1.0..1.0).contains(&slack) {
+            idle / 3.0
         } else {
             0.0
         };
-        let (icon_x, name_x, name_end) = (icon_x + even, name_x + even, name_end + even);
-        let context = context.map(|(x, letters)| (x + even, letters));
-        let (state_x, after, close) = (state_x + even, after + even, close + even);
+        let (icon_x, name_x, name_end) = (icon_x + third, name_x + third, name_end + third);
+        let context = context.map(|(x, letters)| (x + third, letters));
+        let (state_x, after) = (state_x + third, after + third);
+        let close = close + third * 2.0;
         // What the cell tier's letters say, which the screen's text is: painted words are
         // narrower than their letters, so the parts' letters stand from the tab's end, its ×
         // in its last column, its chevron and what it's doing before that, its context before

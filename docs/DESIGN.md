@@ -1438,16 +1438,24 @@ front and may go out of view, until another is chosen, which brings the strip to
 every tab in view the wheel there does nothing. The side pane keeps every tab in view, cut
 short as it must, so there the wheel only steps from tab to tab where the tab in front shows
 alone with its chevron, as moving the strip would bring the next into view.
-Where there are pictures, each of the side pane's tabs is as wide as what it paints, measured:
-the lead, its mark, its name, how full its agent's context is, what it's doing half a cell
-(8 px) after that, and 12 px, its × and its air; its columns round away up to 5 px of that air,
-so a sliver doesn't cost a neighbour a column. The air before its mark and after its × is the
-same, about 20 px to their ink, and what its whole columns hold past what it paints is shared
-by both ends: left after the ×, the air there ran from 9 px to 22 by how a tab's columns
-rounded, beside 21 to 27 before the mark. A tab behind keeps its ×'s room, as VS Code's do,
-so a tab doesn't move as it's pointed at, and two tabs behind the one in front, whole or cut
-short, have a hairline between them, so that room reads as the tab's own (the tab in front is
-its own shape). Counted in letters, as cells count them, a tab
+Where there are pictures, every tab, a file's and the side pane's, has one anatomy, measured
+to the ink (`measures::TAB_MARK` and its neighbours): about 17 px before its mark, 8 px from the
+mark to its name, 12 px from its name, or from what its agent is doing, to its ×, and as much
+after the × as before the mark, whatever the tab shows (0.11.0's final review, P12: a file's
+tab was 21 | icon | name | 51 to its × | 13, and the air after a pane tab's × ran from 9 px on
+a working tab to 25 on an idle one, since its slack was shared as the tab stood with nothing to
+say). Each tab is as wide as what it paints: the lead, its mark, its name, how full its agent's
+context is, what it's doing half a cell (8 px) after that, and 12 px, its × and its air; its
+columns round away up to 5 px of that air, so a sliver doesn't cost a neighbour a column, and
+what its whole columns hold past what it paints is shared in thirds, before the mark, before the
+× and after it, so each is 17 to 21 px (halved at its ends, the air before a mark ran from 16 px
+to 24 by tab); while it shows what its agent is doing it has two whole columns more for that,
+so its share, and its name, don't move as its agent starts and stops. A file's tabs abut, as
+the pane's do, where a column stood between them and an unselected tab's name stood 110 px
+from the next one's icon. The Settings page's tab has the mark Settings has on the rail. A tab
+behind keeps its ×'s room, as VS Code's do, so a tab doesn't move as it's pointed at, and two
+tabs behind the one in front, a file's or the pane's, whole or cut short, have a hairline
+between them, so that room reads as the tab's own (the tab in front is its own shape). Counted in letters, as cells count them, a tab
 was nearly twice what it painted, and two tabs, an agent's and a terminal's, were enough to
 cut the row short with 200 px to spare, which took the + away (found in 0.11.0's tour). So
 the + stands a cell after the last tab whenever the tabs and it fit, and its menu is in reach;

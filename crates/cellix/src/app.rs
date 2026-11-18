@@ -210,9 +210,9 @@ const TAB_PADDING: u16 = 5;
 /// Columns the Task page's tab keeps for its mark, before its name, and how tall the mark
 /// is, in rows.
 const TASK_TAB_ICON: u16 = 2;
-/// Columns a file's icon takes before its name on its tab, where there are pictures, and how
-/// tall it is in rows: 13 pt, smaller than the tree's, as a tab's × is quieter than a row's.
-const TAB_ICON: u16 = 2;
+/// How tall a file's icon on its tab is, where there are pictures, in rows: 13 pt, smaller
+/// than the tree's, as a tab's × is quieter than a row's. Where it stands is the anatomy
+/// every tab has (`measures::TAB_MARK`).
 const TAB_ICON_SIZE: f32 = 0.70;
 const TASK_TAB_MARK: f32 = 0.6;
 /// The most of a task's name its tab shows, in cells.
@@ -15935,27 +15935,42 @@ impl App {
         grid.fill(Rect::new(main.x, main.y, main.w, 1), theme.tab);
         self.rule_under_tabs(grid, main);
         let area = self.tabs_area();
-        let width = self.measure.width("Settings", Font::default()).ceil() as u16 + TAB_PADDING;
+        let wide = self.measure.width("Settings", Font::default());
+        let width = self.tab_columns(wide);
         let tab = Rect::new(area.x, area.y, width, 1);
         let style = self.front_tab();
         grid.fill(tab, style);
-        // The accent's line under it, as under every tab in front.
-        if !self.measure.in_cells() {
-            let top = tab.y as f32 + 1.0 - TAB_LINE;
-            let edge = Bounds::cells(tab.x as f32, top, tab.w as f32, TAB_LINE);
-            grid.panel(edge, 0, Some(theme.accent), None);
+        if self.measure.in_cells() {
+            let close = tab.right().saturating_sub(2);
+            let (x, y) = (area.x, area.y);
+            grid.label_at(f32::from(x) + 1.5, x + 2, y, "Settings", style, close, 100);
+            grid.glyph(close as f32, area.y, Icon::Close, theme.tab.fg, "×", style);
+            return;
         }
-        let close = tab.right().saturating_sub(2);
-        grid.label_at(
-            area.x as f32 + 1.5,
-            area.x + 2,
-            area.y,
-            "Settings",
-            style,
-            close,
-            100,
+        // The accent's line under it, as under every tab in front, and the anatomy every tab
+        // has: its mark, the one Settings has on the rail, its name and its ×.
+        let top = tab.y as f32 + 1.0 - TAB_LINE;
+        let edge = Bounds::cells(tab.x as f32, top, tab.w as f32, TAB_LINE);
+        grid.panel(edge, 0, Some(theme.accent), None);
+        let third = (f32::from(width) - crate::measures::tab_painted(wide, 0.0)) / 3.0;
+        let lead = f32::from(tab.x) + third;
+        let mark = Bounds::cells(
+            lead + crate::measures::TAB_MARK,
+            f32::from(tab.y) + (1.0 - TAB_ICON_SIZE) / 2.0,
+            TAB_ICON_SIZE * 2.0,
+            TAB_ICON_SIZE,
         );
-        grid.glyph(close as f32, area.y, Icon::Close, theme.tab.fg, "×", style);
+        grid.paint.push(cellix_render::Paint::Icon {
+            bounds: mark,
+            icon: Icon::Settings,
+            color: theme.tab.fg,
+        });
+        let last = tab.right().saturating_sub(1);
+        let name = lead + crate::measures::TAB_NAME;
+        grid.label_at(name, tab.x + 3, tab.y, "Settings", style, last, 100);
+        let close = name + wide + crate::measures::TAB_CLOSE_AIR + third;
+        let at = (close, last);
+        grid.glyph_in(at, tab.y, (Icon::Close, theme.tab.fg), "×", style);
     }
 
     fn click_explorer(&mut self, y: u16) {
@@ -16015,15 +16030,26 @@ impl App {
     }
 
     /// Columns a tab takes, which hug its name: proportional text is narrower than its cells.
+    /// Where there are pictures, what it paints, the anatomy every tab has (`measures`).
     fn tab_width(&self, editor: &Editor) -> u16 {
         let name = self.measure.width(&editor.title(), Font::default());
-        name.ceil() as u16 + TAB_PADDING + self.tab_lead()
+        self.tab_columns(name)
     }
 
-    /// Columns a file's tab gives its icon. None in cells, where every file's is the same
-    /// mark and a strip has no columns to spare for it.
-    fn tab_lead(&self) -> u16 {
-        if self.measure.in_cells() { 0 } else { TAB_ICON }
+    /// Columns a tab with a name `name` cells wide takes: on cells its letters and the columns
+    /// round them; where there are pictures, its mark, its name, its × and the air every tab
+    /// has, rounded as the side pane's tabs are.
+    fn tab_columns(&self, name: f32) -> u16 {
+        if self.measure.in_cells() {
+            return name.ceil() as u16 + TAB_PADDING;
+        }
+        crate::dock::columns(crate::measures::tab_painted(name, 0.0))
+    }
+
+    /// The column between two tabs of the file's strip: on cells, where nothing else parts
+    /// them. Where there are pictures they abut, each with its own air, as the side pane's do.
+    fn tab_gap(&self) -> u16 {
+        u16::from(self.measure.in_cells())
     }
 
     /// Tabs that fit, as (index, x, width), starting late enough to show the active one.
@@ -16085,10 +16111,13 @@ impl App {
         Option<(Rect, usize)>,
     ) {
         let area = self.tabs_area();
-        let mut widths: Vec<u16> = self.editors.iter().map(|e| self.tab_width(e) + 1).collect();
+        let gap = self.tab_gap();
+        let mut widths: Vec<u16> = (self.editors.iter())
+            .map(|e| self.tab_width(e) + gap)
+            .collect();
         // The Task page's tab comes after every file's.
         if self.task_tab().is_some() {
-            widths.push(self.task_tab_width() + 1);
+            widths.push(self.task_tab_width() + gap);
         }
         let count = widths.len();
         let active = match self.task_tab() {
@@ -16099,7 +16128,7 @@ impl App {
             let mut x = area.x + left;
             let mut tabs = Vec::new();
             for (i, width) in widths.iter().enumerate().take(last).skip(first) {
-                tabs.push((i, x, (*width - 1).min(area.right().saturating_sub(x))));
+                tabs.push((i, x, (*width - gap).min(area.right().saturating_sub(x))));
                 x += width;
             }
             tabs
@@ -17567,6 +17596,10 @@ impl App {
             return;
         }
         let area = self.tabs_area();
+        let pictures = !self.measure.in_cells();
+        // The tab before, where it ended and whether it was in front, for the line between two
+        // behind it side by side, as the side pane's have.
+        let mut before: Option<(u16, bool)> = None;
         for (i, x, width) in self.visible_tabs() {
             let active = self.tab_in_front(i);
             let task = self.task_tab() == Some(i);
@@ -17576,30 +17609,82 @@ impl App {
             let style = if active { self.front_tab() } else { theme.tab };
             let tab = Rect::new(x, area.y, width.min(area.right().saturating_sub(x)), 1);
             grid.fill(tab, style);
-            if active && !self.measure.in_cells() {
+            if active && pictures {
                 let top = area.y as f32 + 1.0 - TAB_LINE;
                 let edge = Bounds::cells(x as f32, top, tab.w as f32, TAB_LINE);
                 grid.panel(edge, 0, Some(theme.accent), None);
             }
-            let name = self.tab_title(i);
-            let close_x = x + width.saturating_sub(2);
-            // The Task page's tab has its mark before its name, in the accent colour, and
-            // a file's has its kind's icon in that kind's.
-            let lead = if task { TASK_TAB_ICON } else { self.tab_lead() };
-            let cell = Rect::new(x + 1, area.y, 2, 1);
-            if task && x + 3 < close_x {
-                let mark = (Icon::ListTask, TASK_TAB_MARK);
-                crate::toolbar::draw_icon(grid, mark, cell, theme.accent, style);
-            } else if lead > 0 && x + 3 < close_x {
-                let kind = crate::explorer::file_icon(&name);
-                let color = crate::explorer::file_color(&name);
-                crate::toolbar::draw_icon(grid, (kind, TAB_ICON_SIZE), cell, color, style);
+            if !active && pictures && before.is_some_and(|(end, was)| !was && end == x) {
+                let line = Bounds::cells(f32::from(x), f32::from(area.y) + 0.28, 0.0, 0.44);
+                grid.hairline(line, theme.border);
             }
-            let at = x + lead + 2;
-            // A file's icon is wider than the Task page's mark, so its name starts later.
-            let back = if task { 0.25 } else { 0.15 };
-            let from = f32::from(x + lead) + 1.5 - f32::from(lead) * back;
-            grid.label_at(from, at, area.y, &name, style, close_x, 100);
+            before = Some((x + width, active));
+            let name = self.tab_title(i);
+            // Where its parts stand: on cells by columns; where there are pictures, the
+            // anatomy every tab has, its whole columns' slack shared by its two ends.
+            let (mark_at, name_at, close) = if pictures {
+                let wide = self.measure.width(&name, Font::default());
+                let painted = crate::measures::tab_painted(wide, 0.0);
+                // A third before the mark, a third before the × and a third after it.
+                let slack = f32::from(width) - painted;
+                let third = if (-1.0..1.0).contains(&slack) {
+                    slack / 3.0
+                } else {
+                    0.0
+                };
+                let lead = f32::from(x) + third;
+                let close = lead + crate::measures::TAB_NAME + wide + third;
+                let close = (close + crate::measures::TAB_CLOSE_AIR)
+                    .min(f32::from(x + width) - crate::measures::TAB_CLOSE_END);
+                (
+                    lead + crate::measures::TAB_MARK,
+                    lead + crate::measures::TAB_NAME,
+                    close,
+                )
+            } else {
+                let lead = if task { f32::from(TASK_TAB_ICON) } else { 0.0 };
+                let close = f32::from(x + width.saturating_sub(2));
+                (f32::from(x) + 1.0, f32::from(x) + lead + 1.5, close)
+            };
+            // The screen's text has the × in the tab's last column and the name's letters up
+            // to it, as the side pane's tabs do: painted words are narrower than their
+            // letters, and stopped where the × is painted, a name lost its last letters.
+            let close_x = if pictures {
+                (x + width).saturating_sub(1)
+            } else {
+                close.floor() as u16
+            };
+            // The Task page's tab has its mark before its name, in the accent colour, and
+            // a file's has its kind's icon in that kind's; on cells only the Task page's.
+            let mark = if task {
+                Some((Icon::ListTask, TASK_TAB_MARK, theme.accent))
+            } else if pictures {
+                let kind = crate::explorer::file_icon(&name);
+                Some((kind, TAB_ICON_SIZE, crate::explorer::file_color(&name)))
+            } else {
+                None
+            };
+            if let Some((icon, size, color)) = mark.filter(|_| x + 3 < close_x) {
+                // Its box as wide as a file's icon's, whatever its size, centred in that.
+                let across = size * 2.0;
+                let left = mark_at + (TAB_ICON_SIZE * 2.0 - across) / 2.0;
+                let top = f32::from(area.y) + (1.0 - size) / 2.0;
+                grid.paint.push(cellix_render::Paint::Icon {
+                    bounds: Bounds::cells(left, top, across, size),
+                    icon,
+                    color,
+                });
+                let shown = Style {
+                    fg: color,
+                    painted: true,
+                    ..style
+                };
+                let fallback = crate::toolbar::fallback(icon);
+                grid.put_str(x + 1, area.y, fallback, shown, x + 2);
+            }
+            let lead = if task { TASK_TAB_ICON } else { 0 };
+            let at = if pictures { x + 3 } else { x + lead + 2 };
+            grid.label_at(name_at, at, area.y, &name, style, close_x, 100);
             if close_x < area.right() {
                 let dirty = self.editors.get(i).is_some_and(|e| e.buffer.is_dirty());
                 let shown = if dirty { "●" } else { "×" };
@@ -17609,19 +17694,21 @@ impl App {
                 };
                 if dirty && !hovered {
                     grid.put_str(close_x, area.y, shown, mark, area.right());
-                    let dot =
-                        Bounds::cells(close_x as f32 + 0.45, area.y as f32 + 0.36, 0.56, 0.28);
+                    let dot = Bounds::cells(close + 0.45, area.y as f32 + 0.36, 0.56, 0.28);
                     grid.panel(dot, 14, Some(theme.sidebar.fg), None);
                 } else if active || hovered {
+                    let from = close.floor() as u16;
                     let on_close = self
                         .hover
-                        .is_some_and(|h| h.1 == area.y && h.0 >= close_x && h.0 < x + width);
+                        .is_some_and(|h| h.1 == area.y && h.0 >= from && h.0 < x + width);
                     if on_close {
-                        let chip = Bounds::cells(close_x as f32 - 0.05, 0.12, 1.75, 0.76);
+                        let top = area.y as f32 + 0.12;
+                        let chip = Bounds::cells(close - 0.05, top, 1.75, 0.76);
                         grid.panel(chip, 16, Some(theme.row_hover), None);
                     }
                     let color = if hovered { theme.text.fg } else { theme.tab.fg };
-                    grid.glyph(close_x as f32, area.y, Icon::Close, color, shown, style);
+                    let at = (close, close_x);
+                    grid.glyph_in(at, area.y, (Icon::Close, color), shown, style);
                 } else {
                     let quiet = Style {
                         painted: true,
@@ -32472,14 +32559,14 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             );
             let points = bounds.h as f32 / unit as f32 * 18.5;
             assert!((points - 13.0).abs() <= 0.5, "{name}'s icon: {points} pt");
-            // The tab is that much wider than its name and its × need.
+            // The tab is what it paints: its mark, its name, its × and the air every tab has,
+            // where on cells it's its letters and the columns round them.
             let cells = in_cells.iter().find(|tab| tab.0 == index).unwrap().2;
-            let wide = app.measure.width(&name, Font::default()).ceil() as u16;
-            assert_eq!(width, wide + TAB_PADDING + TAB_ICON, "{name}");
-            assert!(
-                cells <= width,
-                "{name}: {cells} in cells, {width} with its icon"
-            );
+            let wide = app.measure.width(&name, Font::default());
+            let painted = crate::measures::tab_painted(wide, 0.0);
+            assert_eq!(width, crate::dock::columns(painted), "{name}");
+            let letters = name.chars().count() as u16;
+            assert_eq!(cells, letters + TAB_PADDING, "{name} on cells");
         }
     }
 

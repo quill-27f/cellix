@@ -783,3 +783,158 @@ fn a_tabs_two_ends_have_the_same_air() {
         );
     }
 }
+
+fn asking() -> Request {
+    Request::Agent(AgentEvent {
+        state: AgentState::NeedsYou,
+        detail: "Allow Bash?".into(),
+        ..match working() {
+            Request::Agent(event) => event,
+            _ => unreachable!(),
+        }
+    })
+}
+
+/// How far from the start of an icon's box its ink starts, and from its end its ink ends, as
+/// parts of the box: a mark's about 2 of its 24, a ×'s 5.35 (`icon.rs`).
+const MARK_INK: f32 = 2.2 / 24.0;
+const CLOSE_INK: f32 = 5.35 / 24.0;
+
+/// Where an icon is drawn on row `y`, as (left, right) in cells: a square as tall as its
+/// bounds are, in the type's rows, from their left edge, whatever their width says.
+fn squares(grid: &Grid, y: u16, which: Option<Icon>) -> Vec<(f32, f32)> {
+    let unit = UNIT as f32;
+    let (top, bottom) = (i32::from(y) * UNIT, i32::from(y + 1) * UNIT);
+    let found = grid.paint.iter().filter_map(|paint| match paint {
+        Paint::Icon { bounds, icon, .. }
+            if which.is_none_or(|w| w == *icon) && bounds.y >= top && bounds.y < bottom =>
+        {
+            let left = bounds.x as f32 / unit;
+            Some((left, left + bounds.h as f32 / unit * 36.0 / 17.0))
+        }
+        _ => None,
+    });
+    found.collect()
+}
+
+/// A tab's anatomy in pixels, to the ink: (before its mark, mark to name, name to ×, after ×).
+fn anatomy(
+    (start, end): (f32, f32),
+    mark: (f32, f32),
+    (name_x, name_w): (f32, f32),
+    close: (f32, f32),
+) -> (f32, f32, f32, f32) {
+    let px = |cells: f32| cells * 17.0;
+    let (mark_ink, close_ink) = (
+        (mark.1 - mark.0) * MARK_INK,
+        (close.1 - close.0) * CLOSE_INK,
+    );
+    (
+        px(mark.0 + mark_ink - start),
+        px(name_x - (mark.1 - mark_ink)),
+        px(close.0 + close_ink - (name_x + name_w)),
+        px(end - (close.1 - close_ink)),
+    )
+}
+
+/// Every tab, a file's and the side pane's, idle, working or asking, has one anatomy, measured
+/// to the ink: about 18 px before its mark, 8 from the mark to its name, 12 from its name to
+/// its ×, and as much after the × as before the mark; what an agent is doing has room of its
+/// own before the ×. And a file's tabs abut, each with its own air, as the pane's do. The air
+/// after a pane tab's × ran from 9 px on a working tab to 25 on an idle one, and a file's tab
+/// was 21 | icon | name | 51 to its × | 13, with a column between it and the next (0.11.0's
+/// final review, P12).
+#[test]
+#[cfg(unix)]
+fn every_tab_has_one_anatomy() {
+    let (dir, mut app) = project((150, 44));
+    fs::write(dir.path().join("beta.rs"), "fn main() {}\n").unwrap();
+    app.open(&dir.path().join("alpha.txt")).unwrap();
+    app.open(&dir.path().join("beta.rs")).unwrap();
+    let mut measured = Vec::new();
+    let tabs = app.visible_tabs();
+    assert_eq!(tabs.len(), 2, "{tabs:?}");
+    assert_eq!(tabs[0].1 + tabs[0].2, tabs[1].1, "they abut: {tabs:?}");
+    for (index, x, width) in tabs.iter().copied() {
+        // Pointed at, so a tab behind shows its × in the room it keeps for it.
+        mouse(&mut app, MouseKind::Move, x + 1, 0);
+        let grid = screen(&app);
+        let (start, end) = (f32::from(x), f32::from(x + width));
+        let name = app.tab_title(index);
+        let (_, name_x, ..) = (words(&grid, 0).into_iter())
+            .find(|w| w.0 == name)
+            .unwrap_or_else(|| panic!("{name}: {:?}", words(&grid, 0)));
+        let mark = (squares(&grid, 0, None).into_iter())
+            .find(|(left, right)| *left >= start && *right <= name_x);
+        let mark = mark.unwrap_or_else(|| panic!("{name}'s mark"));
+        let close = squares(&grid, 0, Some(Icon::Close))
+            .into_iter()
+            .find(|c| c.0 >= start && c.0 < end)
+            .unwrap_or_else(|| panic!("{name}'s ×"));
+        let name_w = measure().width(&name, Font::default());
+        let parts = anatomy((start, end), mark, (name_x, name_w), close);
+        measured.push((name, parts));
+    }
+    // The side pane's: an agent's tab in front, idle, working and asking.
+    start_agent(dir.path(), &mut app, "✳ pricing page");
+    app.turn_at = Some(0);
+    let states = [
+        ("idle", None),
+        ("working", Some(working())),
+        ("asking", Some(asking())),
+    ];
+    for (state, said) in states {
+        if let Some(said) = said {
+            app.serve(said);
+        }
+        let grid = screen(&app);
+        let row = title(&app);
+        assert_eq!(app.dock.fit(row), Fit::Whole, "{}", grid.row_text(row.y));
+        let (from, to) = tab_span(&app, row, 0);
+        let (start, end) = (f32::from(from), f32::from(to));
+        let mark = squares(&grid, row.y, Some(Icon::AgentClaude))
+            .into_iter()
+            .find(|m| m.0 >= start && m.0 < end)
+            .expect("its mark");
+        let close = squares(&grid, row.y, Some(Icon::Close))
+            .into_iter()
+            .find(|c| c.0 >= start && c.0 < end)
+            .expect("its ×");
+        let (_, name_x, ..) = (words(&grid, row.y).into_iter())
+            .find(|w| w.0 == "pricing page")
+            .expect("its name");
+        let name_w = measure().width("pricing page", Font::default());
+        let (lead, mark_name, name_close, tail) =
+            anatomy((start, end), mark, (name_x, name_w), close);
+        // What it's doing has its own room between the name and the ×.
+        let doing = states_on(&grid, row.y, (name_x + name_w, close.0));
+        let name_close = if doing { 12.0 } else { name_close };
+        let what = format!("the agent's tab, {state}");
+        measured.push((what, (lead, mark_name, name_close, tail)));
+    }
+    // Each of the three gets a third of what the tab's whole columns hold past what it paints,
+    // up to 4 px.
+    for (what, (lead, mark_name, name_close, tail)) in &measured {
+        assert!(
+            (15.0..=22.0).contains(lead),
+            "{what}: {lead} px before its mark: {measured:?}"
+        );
+        assert!(
+            (5.0..=11.0).contains(mark_name),
+            "{what}: {mark_name} px from its mark to its name"
+        );
+        assert!(
+            (10.0..=16.5).contains(name_close),
+            "{what}: {name_close} px from its name to its ×: {measured:?}"
+        );
+        assert!(
+            (lead - tail).abs() <= 3.0,
+            "{what}: {lead} px before its mark and {tail} after its ×: {measured:?}"
+        );
+    }
+}
+
+/// Whether a spinner or a dot stands between `from` and `to` on row `y`, in cells.
+fn states_on(grid: &Grid, y: u16, (from, to): (f32, f32)) -> bool {
+    states(grid, y).iter().any(|x| *x >= from && *x < to)
+}
