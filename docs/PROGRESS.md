@@ -3412,3 +3412,10 @@ The docflow track, the first of the bigger items the user asked for.
 
 - A press on "Changed since your comment ›" opens, under the card's quote, the words it was made on and the words there now as one run, a word at a time: what went in the attention colour and struck through, what came in green, what stayed in the quote's grey (`threads::word_changes`, `similar`'s word diff, as Track Changes uses). It wraps at the card's width. Another press on the pill closes it, and a press anywhere else on the card goes to the words as before. A plan's "Changed in version N ›" still opens the versions side by side.
 - Test: `a_cards_pill_shows_what_changed_since_the_comment`.
+
+## Short cards in a narrow pane (2026-11-18)
+
+The docflow track, the second of the bigger items.
+
+- In a window under 80 columns (as Claude Code docks Cellix) or with the pane stacked under the file, a card is short until it's lit: header and pills, what it's about, two rows of its words with "…" where there's more, and "2 replies" in place of its answers. Its buttons keep their row and stand while the pointer is on the card, so nothing moves under the pointer; a click on it, or on its words in the file, lights it and shows it whole, with what it waits on. Wide panes keep every card whole.
+- Test: `a_narrow_panes_cards_are_short_until_one_is_lit`.

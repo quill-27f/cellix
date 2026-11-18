@@ -721,3 +721,52 @@ fn a_cards_pill_shows_what_changed_since_the_comment() {
         screen(&app).text()
     );
 }
+
+/// In a window as narrow as Claude Code docks Cellix in, a card is short until it's lit: two
+/// rows of its words ending "…", how many answers in place of them, and its buttons only while
+/// the pointer is on it. Lit, by a click on it, it's whole.
+#[test]
+fn a_narrow_panes_cards_are_short_until_one_is_lit() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("note.md");
+    fs::write(&path, "The cache goes first.\n").unwrap();
+    let mut app = App::new(dir.path().to_path_buf(), (64, 40));
+    app.open(&path).unwrap();
+    app.run(Command::AddComment);
+    let long = "Why first? Every read before it pays for the cold start, and the tests that \
+                time the warm path would be measuring the wrong thing entirely here.";
+    typed(&mut app, long);
+    enter(&mut app);
+    let id = app.threads[0].id;
+    for answer in ["It saves a read.", "And the tests warm it first."] {
+        let (found, _) = std::sync::mpsc::channel();
+        app.serve(Request::Reply {
+            id,
+            author: "Claude".into(),
+            text: answer.into(),
+            found,
+        });
+    }
+    app.lit_thread = None;
+    app.dock.open = true;
+    app.dock.show_comments();
+    app.handle(mouse(MouseKind::Move, 0, 0));
+    let text = screen(&app).text();
+    assert!(text.contains("2 replies"), "{text}");
+    assert!(!text.contains("entirely here"), "cut short: {text}");
+    assert!(!text.contains("It saves a read"), "{text}");
+    assert!(
+        !text.contains("Resolve"),
+        "no buttons till pointed at: {text}"
+    );
+    // Pointed at, its buttons stand where they were kept.
+    let (x, y) = find(&screen(&app), "2 replies");
+    app.handle(mouse(MouseKind::Move, x, y));
+    assert!(screen(&app).text().contains("Resolve"));
+    // Lit, it's whole.
+    click(&mut app, x + 1, y);
+    assert_eq!(app.lit_thread, Some(id));
+    let text = screen(&app).text();
+    assert!(text.contains("It saves a read"), "{text}");
+    assert!(!text.contains("2 replies"), "{text}");
+}

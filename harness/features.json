@@ -6375,5 +6375,12 @@
     "title": "A card's Changed since pill shows what changed since the comment, a word at a time",
     "test": "a_cards_pill_shows_what_changed_since_the_comment",
     "passes": true
+  },
+  {
+    "id": "compact-cards",
+    "milestone": 15,
+    "title": "In a narrow pane cards are short until lit, with their buttons while pointed at",
+    "test": "a_narrow_panes_cards_are_short_until_one_is_lit",
+    "passes": true
   }
 ]

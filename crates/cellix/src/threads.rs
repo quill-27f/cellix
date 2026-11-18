@@ -194,6 +194,8 @@ enum Line {
     Answer(u32, Option<String>, String),
     /// A row of an answer, set in from the comment it answers.
     Reply(u32, String),
+    /// On a short card, in place of its answers: how many there are.
+    Replies(u32, usize),
     Status(String),
     /// A row of what's being written, and where the caret is on it, in bytes, when it is.
     Input(String, Option<usize>),
@@ -269,6 +271,23 @@ fn words_of(thread: &Thread) -> (Words, Option<String>) {
             (Words::Changed, Some(format!("{CHANGED_SINCE} \u{203a}")))
         }
         None => (Words::Here, None),
+    }
+}
+
+/// How many rows of its words a short card shows.
+const SHORT_ROWS: usize = 2;
+
+/// Whether a comment's card is short: in a narrow pane, while it isn't lit and nothing's
+/// being written on it.
+fn is_short(id: u32, draft: Option<&Draft>, view: View) -> bool {
+    view.compact && view.lit != Some(id) && draft.is_none_or(|d| d.thread != Some(id))
+}
+
+/// How a short card says how many answers it has.
+fn replies_note(count: usize) -> String {
+    match count {
+        1 => "1 reply".to_string(),
+        n => format!("{n} replies"),
     }
 }
 
@@ -839,6 +858,9 @@ pub struct View<'a> {
     pub kind: Option<&'static str>,
     /// The comment whose card shows how its words changed since it was made.
     pub changes: Option<u32>,
+    /// The pane is narrow, so a card is short until it's lit: who and when, what it's about,
+    /// two rows of its words and how many answers, with its buttons while it's pointed at.
+    pub compact: bool,
     /// Now, in seconds since 1970, for how long ago each comment and reply was written.
     pub now: u64,
     pub unsent: Option<&'a Unsent>,
@@ -906,7 +928,7 @@ fn mark((threads, draft, agent, resolved, view): Shown, width: f32, measure: &dy
         view.kind,
     )
         .hash(&mut hasher);
-    view.changes.hash(&mut hasher);
+    (view.changes, view.compact).hash(&mut hasher);
     // How long ago says something new each minute, where any comment says when it was made.
     let dated = threads
         .iter()
@@ -957,6 +979,7 @@ impl Default for View<'_> {
             unsent: None,
             kind: None,
             changes: None,
+            compact: false,
             now: 0,
             quick: Some(crate::emoji::QUICK),
             pictures: None,
@@ -1553,6 +1576,8 @@ fn lay_out(
             out.extend(rows.into_iter().map(|row| Line::Diff(id, row)));
         }
         let editing = draft.filter(|d| d.thread == Some(id) && d.editing);
+        // In a narrow pane a card is short until it's lit or being written on.
+        let short = is_short(id, draft, view);
         // Its pictures are counted through its words and then its answers.
         let mut which = 0;
         match editing {
@@ -1561,6 +1586,18 @@ fn lay_out(
                 // Its own pictures are still counted, so its answers' keep their places.
                 which += shown(&thread.text, view).1.len();
             }
+            None if short => {
+                // Two rows of its words, the second ending "…" where there's more.
+                let (words, _) = shown(&thread.text, view);
+                let mut text = wrap(&words, width, measure);
+                if text.len() > SHORT_ROWS {
+                    text.truncate(SHORT_ROWS);
+                    if let Some(last) = text.last_mut() {
+                        last.push('\u{2026}');
+                    }
+                }
+                out.extend(text.into_iter().map(|row| Line::Text(id, row)));
+            }
             None => {
                 let (words, pictures) = shown(&thread.text, view);
                 let text = wrap(&words, width, measure);
@@ -1568,7 +1605,10 @@ fn lay_out(
                 picture_lines((id, false), &pictures, &mut which, (view, width), &mut out);
             }
         }
-        for reply in &thread.replies {
+        if short && !thread.replies.is_empty() {
+            out.push(Line::Replies(id, thread.replies.len()));
+        }
+        for reply in thread.replies.iter().filter(|_| !short) {
             // A verdict reads as one: its word on a chip, who said it, then why.
             let (word, author, body) = reply_parts(reply);
             let author = match age(reply.at, view.now) {
@@ -1586,7 +1626,8 @@ fn lay_out(
         // yet says how it gets to one, so nobody wonders whether it went.
         // A suggestion asked about is waited on like the reviewer's own comment.
         let asked_about = !suggested || thread.replies.iter().any(|r| r.author == YOU);
-        let waiting = asked_about && !thread.resolved && thread.waiting_answer();
+        // A short card says what it waits on once it's lit.
+        let waiting = !short && asked_about && !thread.resolved && thread.waiting_answer();
         let unsent = view.unsent.is_some_and(|unsent| unsent.has(id));
         if waiting && (thread.waiting() || unsent) {
             // Asked of an agent outside the pane, it goes with that one's next prompt.
@@ -1600,7 +1641,8 @@ fn lay_out(
             draft_lines(reply, view, width, measure, &mut out);
         }
         // The last word a rewrite: it's for the reviewer to apply or not.
-        if !thread.resolved
+        if !short
+            && !thread.resolved
             && thread
                 .replies
                 .last()
@@ -2098,6 +2140,7 @@ pub fn hit(
             })
         }
         Line::Quote(id, ..)
+        | Line::Replies(id, _)
         | Line::Diff(id, _)
         | Line::Answer(id, ..)
         | Line::Pill(id, ..)
@@ -2119,6 +2162,7 @@ pub fn draw(
     let begun = grid.painted_so_far();
     let width = area.w.saturating_sub(SIDE * 2 + 2) as f32;
     let threads = shown.0;
+    let shown_draft = shown.1;
     let view = shown.4;
     let all = lines(shown, width, measure);
     let top = top.min(last_of(all.len(), area.h));
@@ -2145,6 +2189,8 @@ pub fn draw(
     };
     let row_y = |index: usize| area.y as f32 + index as f32 - top as f32;
     let shown = |y: f32, height: f32| y + height > area.y as f32 && y < area.bottom() as f32;
+    // Each card's rows, so a short card shows its buttons while the pointer is on it.
+    let mut cards: Vec<(usize, usize, u32)> = Vec::new();
     let mut start = None;
     for (index, line) in all.iter().enumerate() {
         match line {
@@ -2177,6 +2223,9 @@ pub fn draw(
                         Line::Reopen(id) | Line::Send(id, _) => Some(*id),
                         _ => None,
                     };
+                    if let Some(of) = of {
+                        cards.push((first, index, of));
+                    }
                     let lit = view.lit.is_some() && of == view.lit;
                     let (fill, edge) = if lit {
                         // The one whose words were pressed in the document.
@@ -2252,6 +2301,18 @@ pub fn draw(
         ..inner
     };
     let reply_x = text_x as f32 + INSET;
+    let pointed = hover
+        .filter(|(x, y)| area.contains(*x, *y))
+        .map(|(_, y)| top + usize::from(y - area.y));
+    let draft = shown_draft;
+    // A short card's buttons stand only while the pointer is on the card.
+    let hidden = |index: usize| {
+        cards.iter().any(|(first, last, id)| {
+            (*first..=*last).contains(&index)
+                && is_short(*id, draft, view)
+                && !pointed.is_some_and(|row| (*first..=*last).contains(&row))
+        })
+    };
     // Muted text loses contrast on a raised or tinted surface, so it's lifted there.
     let raised_muted = mix(theme.text.fg, theme.gutter.fg, 0.3);
     for (index, line) in all.iter().enumerate().skip(top) {
@@ -2260,6 +2321,14 @@ pub fn draw(
             break;
         }
         let from = grid.painted_so_far();
+        if hidden(index)
+            && matches!(
+                line,
+                Line::Buttons(_) | Line::Edits(_) | Line::Choices(_) | Line::Addressed(_)
+            )
+        {
+            continue;
+        }
         let actions = matches!(
             line,
             Line::Buttons(_)
@@ -2270,6 +2339,10 @@ pub fn draw(
                 | Line::Send(..)
         );
         match line {
+            Line::Replies(_, count) => {
+                let note = replies_note(*count);
+                grid.label_at(text_x as f32, text_x, y, &note, inner_dim, right, SMALL);
+            }
             Line::Status(text) => {
                 grid.label_at(text_x as f32, text_x, y, text, inner_dim, right, SMALL);
             }

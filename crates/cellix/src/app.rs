@@ -11652,6 +11652,7 @@ impl App {
             unsent: Some(&self.comment_unsent),
             kind: self.comment_kind,
             changes: self.comment_changes,
+            compact: self.comments_compact(),
             now: cellix_review::threads::now(),
             quick: self.quick_emoji(),
             pictures: self.measure.cell_pixels().map(|_| &self.comment_pictures),
@@ -11682,6 +11683,12 @@ impl App {
             Some(name) => (name, threads::Goes::Ask),
             None => ("the agent".to_string(), threads::Goes::Nobody),
         }
+    }
+
+    /// Whether the Comments pane is small enough for short cards: in a window as narrow as
+    /// Claude Code docks Cellix in, or stacked under the file.
+    fn comments_compact(&self) -> bool {
+        self.docked() || self.dock_under()
     }
 
     /// The comments on code whose words wait among the review's, so no agent has had them.
