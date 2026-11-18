@@ -10,7 +10,7 @@ use std::sync::mpsc::Receiver;
 use std::time::SystemTime;
 
 use cellix_agent::{AgentEvent, AgentState};
-use cellix_render::{Bounds, Font, Grid, Measure, Rect, Style};
+use cellix_render::{Bounds, Font, Grid, Icon, Measure, Paint, Rect, Style};
 use cellix_review::tasks::{self, Event, Outcome, PlanStep, Step, Task, TestStep, TurnStep};
 use cellix_review::{Thread, changed_between, changed_since, numstat, numstat_between};
 use unicode_width::UnicodeWidthStr;
@@ -27,6 +27,13 @@ const TIMELINE_MAX: u16 = 50;
 const STEP_ROWS: u16 = 3;
 /// Rows the header takes: the name, what it is, and air before the line under it.
 const HEADER_ROWS: u16 = 3;
+/// How far over the columns the header's rule stands, in rows, and so how far short of the
+/// page's foot the line between the columns stops.
+const RULE_GAP: f32 = 0.7;
+/// The buttons that step through a narrow page's steps: their letter on cells, and the icon
+/// drawn where there are pictures.
+const PREVIOUS: (&str, Icon) = ("◂", Icon::ChevronLeft);
+const NEXT: (&str, Icon) = ("▸", Icon::ChevronRight);
 /// Lines of a prompt shown before the rest is cut.
 const PROMPT_LINES: usize = 6;
 const SMALL: u8 = 85;
@@ -197,6 +204,39 @@ fn took(ms: u64) -> String {
     }
 }
 
+/// Words broken into lines `width` cells wide as they're drawn: measured where there are
+/// pixels, so proportional words fill the room, and counted in cells where every letter is
+/// one.
+fn measured(text: &str, width: usize, context: &Context) -> Vec<String> {
+    if context.measure.in_cells() {
+        return wrap(text, width);
+    }
+    let mut lines = crate::threads::wrap(text, width.max(8) as f32, context.measure);
+    while lines.last().is_some_and(String::is_empty) {
+        lines.pop();
+    }
+    lines
+}
+
+/// A plan's lines with no empty one straight under a heading: its words belong to what it
+/// heads, so it stands nearer that than what's over it. With the empty line it stood two
+/// rows from the paragraph over it and two from the list it heads.
+fn under_headings(lines: Vec<String>) -> Vec<String> {
+    let heading = |line: &str| {
+        let bare = line.trim_start_matches('#');
+        bare.len() < line.len() && bare.starts_with(' ')
+    };
+    let mut kept: Vec<String> = Vec::with_capacity(lines.len());
+    for line in lines {
+        let after_heading = kept.last().is_some_and(|l| heading(l));
+        if line.trim().is_empty() && after_heading {
+            continue;
+        }
+        kept.push(line);
+    }
+    kept
+}
+
 /// Words broken into lines of at most `width` cells. A word longer than a line is cut.
 fn wrap(text: &str, width: usize) -> Vec<String> {
     let width = width.max(8);
@@ -330,6 +370,47 @@ impl Pen<'_> {
             grid.button(x, y, &cells, label, fill, style);
         }
         self.spots.push((spot, hit));
+        x
+    }
+
+    /// A quiet button that steps along: where there are pictures its chevron is an icon of
+    /// an icon's size in its middle, where the arrow, a letter of the button's words, was
+    /// 8 px across a 68 px chip and stood low in it. On cells it's the letter.
+    fn arrow(
+        &mut self,
+        right: u16,
+        y: u16,
+        (glyph, icon): (&str, Icon),
+        theme: &Theme,
+        hit: Hit,
+    ) -> u16 {
+        let x = self.button(right, y, glyph, false, theme, hit);
+        let measure = self.measure;
+        let Some(grid) = self.grid.as_deref_mut().filter(|_| !measure.in_cells()) else {
+            return x;
+        };
+        // The letter's paint gives way to the icon.
+        let letter = grid.paint.iter_mut().rev().find_map(|p| match p {
+            Paint::Text { text, .. } if text == glyph => Some(text),
+            _ => None,
+        });
+        if let Some(text) = letter {
+            text.clear();
+        }
+        let cells = crate::measures::button_cells(glyph, measure).width() as f32;
+        let middle = f32::from(x) + cells / 2.0;
+        let tall = cellix_render::GLYPH;
+        let across = tall * crate::measures::rows_to_columns(measure);
+        grid.paint.push(Paint::Icon {
+            bounds: Bounds::cells(
+                middle - across / 2.0,
+                f32::from(y) + (1.0 - tall) / 2.0,
+                across,
+                tall,
+            ),
+            icon,
+            color: theme.text.fg,
+        });
         x
     }
 
@@ -735,16 +816,21 @@ impl TaskPage {
         if let Some(timeline) = timeline {
             self.walk_timeline(pen, timeline, task, context, theme);
             if let Some(grid) = pen.grid.as_deref_mut() {
+                // A hairline, stopping as far short of the page's foot as it starts under
+                // the header's rule. Its cells' bar is the cell tier's alone: drawn in
+                // pixels too, beside the hairline, the two were a line 4 px wide, and it ran
+                // on into the foot.
                 let line = Bounds::cells(
                     timeline.right() as f32 + 0.5,
                     detail.y as f32,
                     0.0,
-                    detail.h as f32,
+                    detail.h as f32 - RULE_GAP,
                 );
                 grid.hairline(line, theme.border);
                 for y in detail.y..detail.bottom() {
                     let style = Style {
                         fg: theme.border,
+                        painted: true,
                         ..theme.text
                     };
                     grid.put_str(timeline.right(), y, "│", style, timeline.right() + 1);
@@ -891,7 +977,7 @@ impl TaskPage {
         if let Some(grid) = pen.grid.as_deref_mut() {
             let line = Bounds::cells(
                 area.x as f32,
-                (y + HEADER_ROWS) as f32 - 0.7,
+                (y + HEADER_ROWS) as f32 - RULE_GAP,
                 area.w as f32,
                 0.0,
             );
@@ -1122,18 +1208,21 @@ impl TaskPage {
                 if let Outcome::SentBack(note) = &plan.outcome
                     && !note.trim().is_empty()
                 {
-                    lines.extend(
-                        wrap(note, width.saturating_sub(7))
-                            .into_iter()
-                            .map(Line::Said),
-                    );
+                    // Measured as it's drawn: counted in cells, a proportional font wrapped at
+                    // about 670 px of 1,200 and left "decide." alone on its line.
+                    let room = width.saturating_sub(7);
+                    lines.extend(measured(note, room, context).into_iter().map(Line::Said));
                     lines.push(Line::Gap);
                 }
                 match self
                     .plan_path(task, plan)
                     .and_then(|p| std::fs::read_to_string(p).ok())
                 {
-                    Some(text) => lines.extend(wrap(&text, width).into_iter().map(Line::Text)),
+                    Some(text) => lines.extend(
+                        under_headings(measured(&text, width, context))
+                            .into_iter()
+                            .map(Line::Text),
+                    ),
                     None => lines.push(Line::Dim(
                         "This version is no longer on disk; it went with the agent's session."
                             .to_string(),
@@ -1170,11 +1259,27 @@ impl TaskPage {
         let mut y = column.y + 1;
         if narrow {
             let place = format!("Step {} of {}", self.step + 1, task.steps.len());
-            // From the page's text edge: a button, its gap, where it is, the gap, a button.
-            let wide = crate::measures::button_cells("◂", pen.measure).width() as u16;
-            let after = pen.button(left + wide, y, "◂", false, theme, Hit::Previous);
-            let end = pen.label(after + wide + BUTTON_GAP, y, &place, dim, right);
-            pen.button(end + BUTTON_GAP + wide, y, "▸", false, theme, Hit::Next);
+            // From the page's text edge: a button, its gap, where it is, the gap, a button,
+            // the words as wide as they're drawn, so they stand in the middle between the
+            // two: by their cells they stood 34 px from one and 90 from the other.
+            let wide = crate::measures::button_cells(PREVIOUS.0, pen.measure).width() as u16;
+            let after = pen.arrow(left + wide, y, PREVIOUS, theme, Hit::Previous);
+            let words = after + wide + BUTTON_GAP;
+            let end = if pen.measure.in_cells() {
+                pen.label(words, y, &place, dim, right)
+            } else {
+                // Its cells' end is past its painted end: the words move along by half what's
+                // over, so they're as far from either button.
+                let drawn = pen.measure.width(&place, Font::default());
+                let cells = drawn.ceil();
+                let from = pen.grid.as_deref().map(Grid::painted_so_far);
+                pen.label(words, y, &place, dim, right);
+                if let (Some(grid), Some(from)) = (pen.grid.as_deref_mut(), from) {
+                    grid.nudge_since(from, (cells - drawn) / 2.0);
+                }
+                words + cells as u16
+            };
+            pen.arrow(end + BUTTON_GAP + wide, y, NEXT, theme, Hit::Next);
             y += 2;
         }
         // The step's own title, and what can be done with it.
@@ -1463,6 +1568,39 @@ fn line_is_first(lines: &[Line], line: &Line) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A plan's words fill the room as they're drawn: what was said about it, in a column
+    /// of 60, takes one line where counting cells broke it into two and left its last word
+    /// alone. A heading's words follow it with no empty line between, and the line between
+    /// the page's columns is a hairline that stops as far short of the foot as it starts
+    /// under the header's rule, with the cells' bar for the cell tier alone.
+    #[test]
+    fn a_plans_words_fill_their_room_and_stay_by_their_heading() {
+        let pixels = cellix_render::FontMeasure::new(17, 50).with_type_row(36);
+        let context = Context {
+            threads: &[],
+            running: &[],
+            pending_plan: None,
+            measure: &pixels,
+        };
+        let said = "Don't drop anything. Refuse the push and let the caller decide.";
+        assert_eq!(wrap(said, 60).len(), 2, "in cells");
+        assert_eq!(measured(said, 60, &context), [said], "as it's drawn");
+        let cells = Context {
+            measure: &cellix_render::CellMeasure,
+            ..context
+        };
+        assert_eq!(measured(said, 60, &cells), wrap(said, 60));
+        let plan = measured(
+            "Over it.\n\n# Bound the queue\n\n1. Refuse a push.",
+            60,
+            &context,
+        );
+        assert_eq!(
+            under_headings(plan),
+            ["Over it.", "", "# Bound the queue", "1. Refuse a push."]
+        );
+    }
 
     #[test]
     fn words_wrap_to_the_width_and_keep_paragraphs() {

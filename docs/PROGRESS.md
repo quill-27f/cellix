@@ -3566,3 +3566,13 @@ From the final review of 0.11.0 (fixchrome track, C10 and C11).
 - Tests changed, saying so: `a_card_has_no_empty_row_where_a_row_has_room` asserted `CARD_EDGE`'s fractions, which `card_parts` replaces, and keeps its rows; the air is measured in the test above. `show_source_keeps_clear_of_the_tab_line` asserted 8 px from the row's top, not counting the line, and now asserts the air from the line's foot equals the side's. The two wash tests asserted a 32 px button with 4 px of wash, and now 27 with 6 (the raster's counts the five whole rows of it). `a_cards_end_rows_keep_the_colour_of_what_they_lie_on` asserted the install card lay across the pane's edge, with something not the file's colour under it; it now asserts the card stands inside the pane, and still that its end rows keep what they lie on.
 - Find over the pane covers what's painted in the column before the bar as well as its cells: once the bar ended two columns in, a list's count showed there.
 - Not done: C14's items (the zoomed image's sides, the emoji picker's height while filtering, the formula box's scrollbar and the others listed there).
+
+## The Task page's lines, plan and step control (2026-11-18)
+
+From the final review of 0.11.0 (fixchrome track, C12).
+
+- The line between the Task page's columns is a hairline, as the header's rule is: the cells' bar was drawn in pixels too, beside the hairline, a line 4 px wide. It stops as far short of the page's foot as it starts under the header's rule, where it ran on into the foot.
+- A plan's words, and what was said about it, are measured as they're drawn: counted in cells, the sent-back note wrapped at about 670 px of a 1,200 px column and left "decide." alone.
+- A plan's heading has no empty line under it, so it stands nearer what it heads than what's over it: it stood two rows from both.
+- Narrow, the step's place stands in the middle between the buttons that step (it stood 34 px from one and 90 from the other, by its cells), and their arrows are chevron icons in their middle (`Icon::ChevronLeft` is new, `ChevronRight` turned back), where the letters were 8 px across 68 px chips and stood low in them.
+- Tests: `a_plans_words_fill_their_room_and_stay_by_their_heading`, `the_task_pages_lines_and_step_control_are_even`.

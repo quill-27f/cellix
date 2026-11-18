@@ -873,6 +873,91 @@ mod tests {
         );
     }
 
+    /// The line between the page's two columns is a hairline, as the header's rule is, with
+    /// as much between its top and that rule as between its foot and the page's: it was the
+    /// cells' bar and a hairline beside it, 4 px wide, and ran on into the foot. Narrow, the
+    /// step's place stands in the middle between the buttons that step: by its cells it
+    /// stood 34 px from one and 90 from the other.
+    #[test]
+    fn the_task_pages_lines_and_step_control_are_even() {
+        use cellix_render::{Paint, UNIT};
+        let (_dir, mut app) = worked_on();
+        let airy = cellix_render::FontMeasure::new(17, 50).with_type_row(36);
+        app.set_measure(std::rc::Rc::new(airy));
+        app.run(Command::ShowAgentTask);
+        wait_for(&mut app, "1 file +1 -0");
+        let grid = screen(&app);
+        let lines: Vec<cellix_render::Bounds> = grid
+            .paint
+            .iter()
+            .filter_map(|p| match p {
+                Paint::Hairline { bounds, .. } => Some(*bounds),
+                _ => None,
+            })
+            .collect();
+        let divider = lines
+            .iter()
+            .find(|b| b.w == 0 && b.h > 3 * UNIT)
+            .expect("the line between the columns");
+        // The header's rule: the nearest line across over it.
+        let rule = lines
+            .iter()
+            .filter(|b| b.h == 0 && b.y < divider.y && b.w > 20 * UNIT)
+            .max_by_key(|b| b.y)
+            .expect("the header's rule");
+        let column = (divider.x / UNIT) as u16;
+        let rows: Vec<u16> = (0..grid.height())
+            .filter(|y| grid.cell(column, *y).symbol == "│")
+            .collect();
+        assert!(!rows.is_empty(), "the cell tier's bar");
+        for y in &rows {
+            assert!(
+                grid.cell(column, *y).style.painted,
+                "only on cells: row {y}"
+            );
+        }
+        let foot = i32::from(rows[rows.len() - 1] + 1) * UNIT;
+        let (over, under) = (divider.y - rule.y, foot - (divider.y + divider.h));
+        assert!(
+            (over - under).abs() <= 1,
+            "{over} over it, {under} under it"
+        );
+
+        // Narrow, the step's place between its buttons.
+        app.handle(Input::Resize(70, 40));
+        let grid = screen(&app);
+        let place = grid.paint.iter().find_map(|p| match p {
+            Paint::Text { text, x, y, .. } if text.starts_with("Step ") => {
+                Some((text.clone(), *x, *y))
+            }
+            _ => None,
+        });
+        let (place, x, y) = place.expect("the step's place");
+        let chips: Vec<cellix_render::Bounds> = grid
+            .paint
+            .iter()
+            .filter_map(|p| match p {
+                Paint::Panel {
+                    bounds,
+                    fill: Some(_),
+                    shadow: false,
+                    ..
+                } if (bounds.y - y).abs() < UNIT => Some(*bounds),
+                _ => None,
+            })
+            .collect();
+        let before = chips.iter().filter(|b| b.x < x).map(|b| b.x + b.w).max();
+        let after = chips.iter().filter(|b| b.x > x).map(|b| b.x).min();
+        let (before, after) = (before.expect("◂"), after.expect("▸"));
+        let wide = app.measure.width(&place, cellix_render::Font::default());
+        let end = x + cellix_render::units(wide);
+        let (left, right) = (x - before, after - end);
+        assert!(
+            (left - right).abs() <= UNIT / 8,
+            "{left} before the words, {right} after them"
+        );
+    }
+
     #[test]
     fn with_no_agent_work_the_page_says_how_a_task_starts() {
         let dir = tempfile::tempdir().unwrap();

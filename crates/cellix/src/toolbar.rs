@@ -360,6 +360,7 @@ pub fn fallback(icon: Icon) -> &'static str {
         Icon::HidePanel => "⬓",
         Icon::ReplaceAll => "⇉",
         Icon::ChevronRight => "›",
+        Icon::ChevronLeft => "‹",
         Icon::ChevronDown => "⌄",
         Icon::Globe => "◍",
         Icon::Agents => "◎",

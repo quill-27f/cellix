@@ -1781,7 +1781,11 @@ turn shows its prompt, what it changed, its tests and its comments, with Review 
 limited to that turn, read-only, since the tree has moved on) and Undo Turn (back to its
 checkpoint, itself undoable). A waiting plan has Approve, Send Back and Compare. Open Transcript
 opens the session's transcript as the transcript page does, and each turn shows how full the
-agent's context grew over it, from that transcript.
+agent's context grew over it, from that transcript. The line between the two columns is a
+hairline, as the header's rule is, and stops as far short of the page's foot as it starts under
+that rule. A plan's words, and what was said about it, are wrapped as they're drawn, measured,
+and a heading in it has no empty line under it, so it stands nearer what it heads. Narrow, the
+step's place stands in the middle between the two buttons that step, whose chevrons are icons.
 
 ### Agents starting agents
 

@@ -6536,5 +6536,19 @@
     "title": "Find's marks in a list leave the status bar's paint its own",
     "test": "finds_marks_in_a_list_leave_the_status_bars_paint_its_own",
     "passes": true
+  },
+  {
+    "id": "task-page-even",
+    "milestone": 15,
+    "title": "The Task page's divider, plan words and step control are even",
+    "test": "the_task_pages_lines_and_step_control_are_even",
+    "passes": true
+  },
+  {
+    "id": "plan-words-measured",
+    "milestone": 15,
+    "title": "A plan's words fill their room and stay by their heading",
+    "test": "a_plans_words_fill_their_room_and_stay_by_their_heading",
+    "passes": true
   }
 ]

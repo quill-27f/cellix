@@ -115,6 +115,8 @@ pub enum Icon {
     AgentCursor = 73,
     /// Lines of what was printed, of different lengths: the side pane's Log tab.
     Log = 92,
+    /// `ChevronRight` turned back: a step back, as the Task page's narrow step control has.
+    ChevronLeft = 93,
 }
 
 /// One cell of an icon that is `width` by `height` cells.
@@ -283,6 +285,7 @@ fn half_stroke(icon: Icon) -> f32 {
         | Icon::Folder
         | Icon::FolderOpen
         | Icon::ChevronRight
+        | Icon::ChevronLeft
         | Icon::ChevronDown
         | Icon::Close
         | Icon::ArrowUp
@@ -616,6 +619,7 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
             .min(circle(p, (12.0, 12.0)) - 0.5)
             .min(circle(p, (19.0, 12.0)) - 0.5),
         Icon::ChevronRight => path(p, &[(9.5, 6.5), (15.0, 12.0), (9.5, 17.5)]),
+        Icon::ChevronLeft => path(p, &[(14.5, 6.5), (9.0, 12.0), (14.5, 17.5)]),
         Icon::ChevronDown => path(p, &[(6.5, 9.5), (12.0, 15.0), (17.5, 9.5)]),
         Icon::Close => {
             segment(p, (6.5, 6.5), (17.5, 17.5)).min(segment(p, (17.5, 6.5), (6.5, 17.5)))
