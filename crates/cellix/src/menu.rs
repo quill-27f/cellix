@@ -19,10 +19,13 @@ const KEYS_SIZE: u8 = 85;
 /// How far the keys are dropped in their row, in rows, to share the words' baseline.
 const KEYS_DROP: f32 = 0.035;
 const MIN_WIDTH: u16 = 16;
-/// Air above the first row and below the last, in rows: 8 px of a 32 px row. Painted
-/// menus only; the cell tier has no fractions of a row.
-const PADDING: f32 = 0.25;
-/// What a rule between groups takes, in rows, so a hover band never meets it.
+/// Air above the first row and below the last, in rows, the same in every menu: half a row,
+/// 25 px of an airy row. Painted menus only; the cell tier has no fractions of a row. It was
+/// a quarter, with what rounding to whole rows left over shared above and below, so a menu
+/// had 26 px from its edge to its words or 39 by how many rules it had.
+const PADDING: f32 = 0.5;
+/// What a rule between groups takes at least, in rows, so a hover band never meets it. Where
+/// the rules leave half a row over, they share it: the edges keep their air.
 const RULE_ROOM: f32 = 0.5;
 /// The hover band inside its row: 26 px of 32 tall, and a column in from each side, as a
 /// wash is from a panel's edge.
@@ -249,6 +252,8 @@ pub struct Menu {
     fine: bool,
     /// Rows from the menu's top to its first item's.
     pad: f32,
+    /// Rows each rule takes: `RULE_ROOM`, and a share of what whole rows leave over.
+    rule_room: f32,
     /// Columns from the text edge to a row's words: an icon's, where any row has one.
     lead: f32,
     /// How wide each row's words are, for what comes after them.
@@ -282,14 +287,14 @@ impl Menu {
         } else {
             (items.len() as u16 + if spaced { rules } else { 0 }).min(room)
         };
-        // 8 px above the first row and below the last at least. What rounding to whole rows
-        // leaves over is shared between the two, so the rows stand in the menu's middle: all
-        // of it went under the last, half a row more there than over the first.
-        let pad = if fine {
-            let spare = f32::from(height) - rows - PADDING * 2.0;
-            PADDING + spare.max(0.0) / 2.0
-        } else {
-            0.0
+        // The same air over the first row and under the last in every menu. What rounding to
+        // whole rows leaves over, half a row with an odd number of rules, goes to the rules.
+        // A menu with no rules has none over, its rows and padding being whole.
+        let spare = (f32::from(height) - rows - PADDING * 2.0).max(0.0);
+        let (pad, rule_room) = match (fine, rules) {
+            (false, _) => (0.0, RULE_ROOM),
+            (true, 0) => (PADDING + spare / 2.0, RULE_ROOM),
+            (true, rules) => (PADDING, RULE_ROOM + spare / f32::from(rules)),
         };
         let x = x.min(screen.right().saturating_sub(width));
         let bottom = screen.bottom().saturating_sub(1);
@@ -312,6 +317,7 @@ impl Menu {
             spaced,
             fine,
             pad,
+            rule_room,
             lead,
             widths,
             selected: None,
@@ -520,7 +526,7 @@ impl Menu {
     fn top_of(&self, index: usize) -> f32 {
         let rules = self.items[..=index].iter().filter(|i| i.rule).count();
         if self.fine {
-            f32::from(self.area.y) + self.pad + index as f32 + rules as f32 * RULE_ROOM
+            f32::from(self.area.y) + self.pad + index as f32 + rules as f32 * self.rule_room
         } else {
             let blank = if self.spaced { rules } else { 0 };
             f32::from(self.area.y) + (index + blank) as f32
@@ -612,7 +618,7 @@ impl Menu {
                 let across = area.w as f32 - INSET * 2.0;
                 // In the middle of its own room, painted or a blank row in cells.
                 let above = if self.fine {
-                    RULE_ROOM / 2.0
+                    self.rule_room / 2.0
                 } else if self.spaced {
                     0.5
                 } else {
@@ -639,7 +645,18 @@ impl Menu {
                 );
                 grid.panel(band, 18, Some(fill), None);
             }
-            let style = if usable { base } else { greyed };
+            // A row that can't be picked and says why, as an agent that isn't installed, has its
+            // name as quiet as its note and no quieter: dimmed past it, the name read as less
+            // than "not installed" after it.
+            let unavailable = Style {
+                fg: theme.unavailable(),
+                ..base
+            };
+            let style = match (usable, item.noted) {
+                (true, _) => base,
+                (false, true) => unavailable,
+                (false, false) => greyed,
+            };
             let x = area.x as f32 + INSET;
             if item.heading {
                 // A section's heading: small, bold, quiet capitals, from the text edge.
@@ -693,10 +710,10 @@ impl Menu {
             if let Some(keys) = item.keys {
                 // As far from the menu's far edge as its words are from the near one.
                 let right = area.right().saturating_sub(INSET as u16);
-                let shown = if usable || item.noted {
-                    keys_style
-                } else {
-                    greyed
+                let shown = match (usable, item.noted) {
+                    (true, _) => keys_style,
+                    (false, true) => unavailable,
+                    (false, false) => greyed,
                 };
                 // Smaller than the words, so dropped a pixel to stand on their line.
                 words(
@@ -852,26 +869,54 @@ mod tests {
         assert_eq!(menu.row_at(2, on(menu.area.y + 2)), Some(2));
     }
 
-    /// Painted, a menu is whole rows: 8 px of air above and at least that below, half a row
-    /// for each rule, rounded up, so its edges sit on row lines.
+    /// Painted, a menu is whole rows with half a row of air over its first row and under its
+    /// last, whatever it holds: a rule has half a row at least, and where the rules leave half
+    /// a row over, they share it, so its edges sit on row lines. The air at the edges was a
+    /// quarter of a row or half by how many rules a menu had.
     #[test]
     fn with_paint_a_menu_is_whole_rows_and_a_rule_has_half_a_row() {
         let measure = cellix_render::FontMeasure::new(17, 37);
         let menu = Menu::new((1, 1), items(), &measure, SCREEN);
-        // Three rows, half a row for the rule and a quarter above and below.
-        assert_eq!(menu.area.h, 4);
-        assert_eq!(menu.top_of(0), 1.25);
-        assert_eq!(menu.top_of(1), 2.25);
-        assert_eq!(menu.top_of(2), 3.75, "past half a row for the rule");
+        // Three rows, a rule, and half a row above and below: the rule has a whole row.
+        assert_eq!(menu.area.h, 5);
+        assert_eq!(menu.top_of(0), 1.5);
+        assert_eq!(menu.top_of(1), 2.5);
+        assert_eq!(menu.top_of(2), 4.5, "past the rule's row");
+        assert_eq!(
+            f32::from(menu.area.bottom()) - (menu.top_of(2) + 1.0),
+            0.5,
+            "as much under the last"
+        );
         // Each row is hit across all of it, by the fraction of a row the pointer's on.
-        assert_eq!(menu.row_at(2, 1.3), Some(0));
-        assert_eq!(menu.row_at(2, 3.2), Some(1));
-        assert_eq!(menu.row_at(2, 3.5), None, "the rule's own room");
-        assert_eq!(menu.row_at(2, 3.8), Some(2));
-        assert_eq!(menu.row_at(2, 1.1), None, "the padding");
+        assert_eq!(menu.row_at(2, 1.6), Some(0));
+        assert_eq!(menu.row_at(2, 3.4), Some(1));
+        assert_eq!(menu.row_at(2, 4.0), None, "the rule's own room");
+        assert_eq!(menu.row_at(2, 4.8), Some(2));
+        assert_eq!(menu.row_at(2, 1.3), None, "the padding");
+        // Any number of rules, or none: the same air at the edges.
+        for rules in 0..4 {
+            let list: Vec<Item> = (0..5)
+                .map(|i| {
+                    let item = Item::run("Cut", Command::Cut);
+                    if i > 0 && i <= rules {
+                        item.after_rule()
+                    } else {
+                        item
+                    }
+                })
+                .collect();
+            let menu = Menu::new((1, 1), list, &measure, SCREEN);
+            let top = menu.top_of(0) - f32::from(menu.area.y);
+            let under = f32::from(menu.area.bottom()) - (menu.top_of(4) + 1.0);
+            let half = |air: f32| (air - 0.5).abs() < 0.001;
+            assert!(
+                half(top) && half(under),
+                "{rules} rules: {top} over, {under} under"
+            );
+        }
         // Its frame is its rows: nothing painted reaches past them.
         let mut grid = Grid::new(SCREEN.w, SCREEN.h, Style::default());
-        menu.draw(&mut grid, Some((2, 3.8)), &Theme::default());
+        menu.draw(&mut grid, Some((2, 4.8)), &Theme::default());
         let (top, bottom) = (
             i32::from(menu.area.y) * 64,
             i32::from(menu.area.bottom()) * 64,
@@ -996,6 +1041,47 @@ mod tests {
         );
         assert!(x_of("runs the tests") > x_of("Tester"), "{texts:?}");
         assert!(x_of("not installed").is_some(), "{texts:?}");
+    }
+
+    /// An agent that isn't installed is a row that can't be picked and says why: its name is
+    /// as strong as "not installed" after it, in both themes. It was dimmer than its note, which
+    /// read as the row's main words.
+    #[test]
+    fn a_rows_name_is_no_quieter_than_its_note() {
+        let measure = cellix_render::FontMeasure::new(17, 37);
+        for theme in [Theme::default(), Theme::named(Some("light"))] {
+            let items = vec![
+                Item::new("Codex", Action::Start("codex")),
+                Item::new("Claude Code", Action::Start("claude"))
+                    .note("not installed")
+                    .when(false),
+            ];
+            let menu = Menu::new((1, 1), items, &measure, SCREEN);
+            let mut grid = Grid::new(SCREEN.w, SCREEN.h, Style::default());
+            menu.draw(&mut grid, None, &theme);
+            let colour = |words: &str| {
+                grid.paint.iter().find_map(|p| match p {
+                    Paint::Text { text, color, .. } if text == words => Some(*color),
+                    _ => None,
+                })
+            };
+            let (name, note) = (colour("Claude Code"), colour("not installed"));
+            assert_eq!(name, Some(theme.unavailable()), "the name, readable");
+            let contrast = crate::theme::contrast;
+            let ratio = contrast(theme.unavailable(), theme.popup);
+            assert!(ratio >= 4.5, "{ratio:.2} to 1");
+            let ratio = contrast(theme.unavailable(), theme.text.fg);
+            assert!(
+                ratio >= 1.4,
+                "and quieter than one that can be picked: {ratio:.2}"
+            );
+            assert_eq!(note, name, "as strong as its note");
+            assert_eq!(
+                colour("Codex"),
+                Some(theme.text.fg),
+                "one that can be picked"
+            );
+        }
     }
 
     #[test]

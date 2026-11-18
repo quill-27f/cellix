@@ -547,9 +547,12 @@ impl SoftwareRasterizer {
             }
             Paint::Hairline { bounds, color } => {
                 let thickness = (th / 24.0).ceil().max(1.0);
+                // Across its length on whole pixels: between two, a menu's rule a fraction of a
+                // row down was a pale band three pixels tall.
+                let (x, y) = (scale(bounds.x, cw), scale(bounds.y, ch));
                 let shape = Shape {
-                    x: scale(bounds.x, cw),
-                    y: scale(bounds.y, ch),
+                    x: if bounds.w == 0 { x.round() } else { x },
+                    y: if bounds.h == 0 { y.round() } else { y },
                     w: scale(bounds.w, cw).max(thickness),
                     h: scale(bounds.h, ch).max(thickness),
                     radius: 0.0,
@@ -1585,6 +1588,26 @@ mod tests {
         let red = |x: usize, y: usize| image.rgb[(y * image.width + x) * 3];
         assert_eq!(red(50, 10), 255, "the middle is filled");
         assert_eq!(red(10, 0), 10, "the corner is cut");
+    }
+
+    /// A hairline a fraction of a row down stands on whole pixels, in its full colour: between
+    /// two it was a pale band a pixel taller, as a menu's rules were where they shared out a
+    /// half row.
+    #[test]
+    fn a_hairline_stands_on_whole_pixels() {
+        let Some(mut r) = rasterizer() else { return };
+        let mut grid = Grid::new(10, 1, style());
+        // A third of a row down a row of 20 pixels: 6.67 pixels.
+        let line = crate::paint::Bounds::cells(1.0, 1.0 / 3.0, 8.0, 0.0);
+        grid.hairline(line, Rgb(255, 0, 0));
+        let image = r.row(&grid, 0);
+        let red = |y: usize| image.rgb[(y * image.width + 50) * 3];
+        let touched: Vec<u8> = (0..image.height).map(red).filter(|r| *r > 10).collect();
+        assert!(!touched.is_empty(), "the line is drawn");
+        assert!(
+            touched.iter().all(|r| *r == 255),
+            "every row it touches in full: {touched:?}"
+        );
     }
 
     #[test]

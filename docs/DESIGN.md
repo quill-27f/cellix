@@ -1014,10 +1014,16 @@ Review's list too, with the same title row: its name in small quiet capitals, tw
 A tab is one shape, in the editor and in the pane: the strip is the frame's colour, and the
 tab in front takes the colour of what's under it, the sheet or the pane, with the accent's
 line along its top. One behind is its name, brighter under the pointer. Overlays sit on row lines: a menu
-is whole rows, padded 8 px above and below, with half a row for each rule and its hover band
-clear of them, and it drops from the bottom edge of what opened it. A menu that marks the one in
-use, the Comments pane's order, has its check in a column of its own, as an icon is, so every
-row's words start in one place. A tooltip is one row, on
+is whole rows, with half a row of air over its first row and under its last in every menu and
+half a row at least for each rule, its hover band clear of them; where whole rows leave half a
+row over, which an odd number of rules does, the rules share it, never the edges (they had a
+quarter of a row or half by how many rules there were, 26 px from the edge to the words in one
+menu and 39 in the next). A row that can't be picked and says why, an agent not installed, has
+its name and its note in one colour, readable and quieter than a row that can be picked
+(`Theme::unavailable`): the quiet words' in the dark theme, Latte's subtext0, #6c6f85, in the
+light one, whose quiet words are all but its text's. Dimmed past its note, the name read as less
+than "not installed". One that can't be picked and says nothing is dimmed. A menu that marks the one in use, the Comments pane's order, has its check in
+a column of its own, as an icon is, so every row's words start in one place. It drops from the bottom edge of what opened it; a tooltip is one row, on
 the row under its icon. Nothing covers part of a row. A palette (Quick Open, the commands, and
 every list that asks with a field) is whole rows too: the field's row, one row of air, and its
 list. The field is a box, as the Find bar's and a prompt's are, nine tenths of its row as the

@@ -360,6 +360,18 @@ impl Theme {
         }
     }
 
+    /// What can't be done here but has to be read, as an agent that isn't installed and the
+    /// note that says so. Dark, the quiet words' colour, herdr's muted. Light, Latte's subtext0,
+    /// #6c6f85, 4.9 to 1 on white: the light theme's quiet words are all but its text's colour
+    /// (1.1 to 1), and a row in them read as one that can be picked.
+    pub fn unavailable(&self) -> Rgb {
+        if self.is_light() {
+            Rgb(0x6c, 0x6f, 0x85)
+        } else {
+            self.popup_dim
+        }
+    }
+
     /// A warning, beside an error in the deleted colour. Dark, graphite's yellow, quieter than
     /// its red; light, the attention colour, as it was.
     pub fn warning(&self) -> Rgb {
