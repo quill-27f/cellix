@@ -22618,12 +22618,20 @@ mod tests {
         shows(&mut app, "front");
         let _ = app.take_printed();
         app.dock.sessions[0].write(b"go\n");
+        // Until the one behind holds what it printed: the first bytes out of sight can be its
+        // terminal echoing "go", ahead of the words, on a loaded machine.
         let deadline = std::time::Instant::now() + BACKGROUND;
+        let mut out_of_sight = false;
         loop {
             assert!(!app.poll(), "nothing on screen changed");
-            let (printed, out_of_sight) = app.take_printed();
+            let (printed, behind) = app.take_printed();
             assert!(!printed);
-            if out_of_sight {
+            out_of_sight |= behind;
+            let holds = app.dock.sessions[0]
+                .lines()
+                .iter()
+                .any(|line| line.contains("printed behind"));
+            if out_of_sight && holds {
                 break;
             }
             assert!(

@@ -3151,9 +3151,20 @@ The fix-spacing track, from Part 3 #1 of the review of 0.11.0's tour (95-editor-
 - Test: `a_status_message_uses_the_room_the_details_leave` (the maximized file's message whole; a long message cut with an ellipsis short of the bell).
 - Not done: its cells, which the tour reads, still stop where the details' cells begin.
 
+<<<<<<< HEAD
 ## A task's box is square, with air before its words (2026-11-18)
 
 The fix-spacing track, from Part 2 #13 and Part 3 #2 of the review of 0.11.0's tour (03-page, 24-light-page, 57-dock-page, 44-note; both themes): a task's box was 33 by 25 px and its words began on its edge.
 
 - It was sized by the row's height, 50 px on Airy rows, while a shape that short is drawn at the line's height, 36: so it was wider than tall, and wider than the room it had. It's now square on screen, two thirds of the line or less (`CHECK_SIDE`), at the start of the room a list's marker has (`rendered::MARKER`), with 9 px or more before its words (`CHECK_AIR`, `editor::check_box`), whose start lines up with a bullet's or a number's item. A click anywhere in that room ticks it.
 - Test: `a_tasks_box_is_square_with_air_before_its_words` (both boxes square, 9 px before their words, and the words where a bullet item's are).
+||||||| parent of 798d023 (Keep three tests from failing on a loaded machine)
+=======
+## Three tests that failed only on a loaded machine (2026-11-18)
+
+While 0.11.0 was being put together the machine ran at a load of 24 to 28 (other work), and three tests failed now and then and passed when run again. Each now checks the same thing without leaning on timing:
+
+- `an_agent_reviews_the_changes_and_what_it_finds_shows_in_review`: its stand-in agent wrote what it was told straight into the file the test reads, which a long prompt fills in more than one write, so the test could read half of it. The stand-in writes aside and moves the file into place.
+- `output_behind_another_tab_draws_nothing`: it stopped waiting at the first bytes the tab behind took in, which can be its terminal echoing what was typed, before the words it prints. It waits until that tab holds the words, still asserting on every turn that nothing on screen changed.
+- `a_paste_into_a_program_not_reading_doesnt_wait_for_it`: it asked for the paste back within 100 ms, and took 172 ms under load. The program sleeps for 30 s, so a paste that waited for it would take that long; the bound is 2 s.
+>>>>>>> 798d023 (Keep three tests from failing on a loaded machine)

@@ -195,8 +195,11 @@ mod tests {
         let aside = tempfile::tempdir().unwrap();
         let heard = aside.path().join("heard.txt");
         let fake = aside.path().join("stand-in");
+        // Written aside and moved into place, so the test never reads it half written: a
+        // long prompt goes out in more than one write, and on a loaded machine the test can
+        // look between them.
         let script = format!(
-            "#!/bin/sh\nprintf '%s\\n' started \"$@\" > '{}'\nsleep 9\n",
+            "#!/bin/sh\nprintf '%s\\n' started \"$@\" > '{0}.part'\nmv '{0}.part' '{0}'\nsleep 9\n",
             heard.display()
         );
         fs::write(&fake, script).unwrap();

@@ -3407,7 +3407,9 @@ mod tests {
         session.paste(&"pasted text\n".repeat(90_000));
         session.key(KeyEvent::plain(Key::Char('x')));
         let took = started.elapsed();
-        assert!(took < std::time::Duration::from_millis(100), "{took:?}");
+        // The program sleeps for 30 s, so waiting for it would take that long. Two seconds
+        // leaves a loaded machine room and still can't be a wait for the program.
+        assert!(took < std::time::Duration::from_secs(2), "{took:?}");
         assert!(!session.take_refused(), "a megabyte is queued");
         session.stop();
     }
