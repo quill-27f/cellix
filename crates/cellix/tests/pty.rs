@@ -211,15 +211,7 @@ impl Screen {
     fn story(&mut self) -> String {
         let raw = self.raw.lock().unwrap();
         let status = self.child.try_wait();
-        let all = self.all.lock().unwrap();
-        let panicked = all.windows(11).position(|w| w == b"panicked at");
-        let last = match panicked {
-            Some(at) => String::from_utf8_lossy(&all[at.saturating_sub(200)..]).into_owned(),
-            None => format!(
-                "{:?}",
-                String::from_utf8_lossy(&all[all.len().saturating_sub(1500)..])
-            ),
-        };
+        let last = last_written(&self.all.lock().unwrap());
         format!(
             "exited: {status:?}, wrote: {:?}\nwrote last: {last}",
             String::from_utf8_lossy(&raw)
@@ -321,16 +313,71 @@ impl Screen {
         }
     }
 
-    fn wait_exit(&mut self) {
+    /// Waits for Cellix to end, however it does, and gives how. A test that ends it some way
+    /// other than a quit says which way it expects; `wait_exit` expects a quit's 0.
+    fn wait_end(&mut self) -> portable_pty::ExitStatus {
         let deadline = Instant::now() + WAIT;
-        while Instant::now() < deadline {
-            if self.child.try_wait().unwrap().is_some() {
-                return;
+        loop {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                return status;
+            }
+            if Instant::now() > deadline {
+                let story = self.story();
+                panic!("cellix did not exit:\n{}\n{story}", self.contents());
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        panic!("cellix did not exit");
     }
+
+    /// Waits for Cellix to end, and requires it to end well, with 0. A panic ends it with
+    /// 101, and every quit once did, unseen: the message went to the screen it was leaving.
+    fn wait_exit(&mut self) {
+        let status = self.wait_end();
+        if !status.success() {
+            let story = self.story();
+            panic!(
+                "cellix ended with {status:?}:\n{}\n{story}",
+                self.contents()
+            );
+        }
+    }
+}
+
+/// What Cellix wrote last, for a failure to show: from a panic's message on where there is
+/// one, its backtrace with it, or else the end of what it wrote, its escapes made visible.
+fn last_written(all: &[u8]) -> String {
+    match all.windows(11).position(|w| w == b"panicked at") {
+        Some(at) => String::from_utf8_lossy(&all[at.saturating_sub(200)..]).into_owned(),
+        None => format!(
+            "{:?}",
+            String::from_utf8_lossy(&all[all.len().saturating_sub(1500)..])
+        ),
+    }
+}
+
+/// Waits up to `patience` for a Cellix started outside a `Screen` to end, and requires it to
+/// end with 0, as `Screen::wait_exit` does, saying what it wrote last where it doesn't.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn exits_well(
+    child: &mut Box<dyn portable_pty::Child + Send + Sync>,
+    wrote: &Mutex<Vec<u8>>,
+    patience: Duration,
+) {
+    let deadline = Instant::now() + patience;
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        let late = Instant::now() > deadline;
+        assert!(
+            !late,
+            "cellix did not exit: {}",
+            last_written(&wrote.lock().unwrap())
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let last = last_written(&wrote.lock().unwrap());
+    assert!(status.success(), "cellix ended with {status:?}: {last}");
 }
 
 impl Drop for Screen {
@@ -516,11 +563,7 @@ fn a_links_copy_reaches_the_terminals_clipboard() {
         }
         std::thread::sleep(Duration::from_millis(20));
     }
-    let status = screen.child.try_wait().unwrap().unwrap();
-    if !status.success() {
-        let story = screen.story();
-        panic!("it ended with {status:?}:\n{}\n{story}", screen.contents());
-    }
+    screen.wait_exit();
 }
 
 fn project() -> tempfile::TempDir {
@@ -731,11 +774,7 @@ fn expect_tiles(pixels: (u16, u16), reply: &[u8], tile_marker: &[u8]) {
     }
     input.write_all(b"\x11").unwrap();
     input.flush().unwrap();
-    let deadline = Instant::now() + WAIT;
-    while child.try_wait().unwrap().is_none() {
-        assert!(Instant::now() < deadline, "cellix did not exit");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    exits_well(&mut child, &raw, WAIT);
 }
 
 #[test]
@@ -881,11 +920,7 @@ fn pty_a_press_in_pixels_lands_on_its_line_after_a_resize() {
         "the same place in the window is the same line"
     );
     send(b"\x11");
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while child.try_wait().unwrap().is_none() {
-        assert!(Instant::now() < deadline, "cellix did not exit");
-        std::thread::sleep(Duration::from_millis(20));
-    }
+    exits_well(&mut child, &raw, Duration::from_secs(30));
 }
 
 #[test]
@@ -990,10 +1025,11 @@ fn a_hang_up_leaves_nothing_behind() {
 }
 
 /// Stops Cellix the way a closing terminal does: a stop, and the terminal gone straight
-/// after. Gives whether it exited, after a few tries, since the stop has to land while it
-/// waits for input. It used to read the closed terminal forever.
+/// after. Gives how it exited, as `waitpid` says, or nothing where it ran on. It's tried a
+/// few times, since the stop has to land while it waits for input. It used to read the
+/// closed terminal forever.
 #[cfg(unix)]
-fn stopped_and_closed(dir: &Path) -> bool {
+fn stopped_and_closed(dir: &Path) -> Option<i32> {
     use std::ffi::CString;
     let binary = CString::new(env!("CARGO_BIN_EXE_cellix")).unwrap();
     let folder = CString::new(dir.as_os_str().as_encoded_bytes()).unwrap();
@@ -1050,7 +1086,7 @@ fn stopped_and_closed(dir: &Path) -> bool {
         let mut status = 0;
         // SAFETY: waits only on that child.
         if unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) } == pid {
-            return true;
+            return Some(status);
         }
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -1059,7 +1095,7 @@ fn stopped_and_closed(dir: &Path) -> bool {
         libc::kill(pid, libc::SIGKILL);
         libc::waitpid(pid, std::ptr::null_mut(), 0);
     }
-    false
+    None
 }
 
 /// Windows has no stop signal to send, nor forkpty to send it through.
@@ -1068,9 +1104,13 @@ fn stopped_and_closed(dir: &Path) -> bool {
 fn a_stop_as_the_terminal_closes_still_ends_cellix() {
     let dir = project();
     for attempt in 1..=3 {
+        let status = stopped_and_closed(dir.path());
+        let status = status.unwrap_or_else(|| panic!("attempt {attempt}: still running"));
+        // Ended well, as a stop's end is, and not by a panic's 101 or a signal.
+        let well = libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0;
         assert!(
-            stopped_and_closed(dir.path()),
-            "attempt {attempt}: still running"
+            well,
+            "attempt {attempt}: ended with wait status {status:#x}"
         );
     }
 }
@@ -1386,13 +1426,18 @@ fn a_terminal_that_goes_without_a_hang_up_still_ends_cellix() {
     // SAFETY: the terminal goes, as when its window is closed.
     unsafe { libc::close(master) };
     let deadline = Instant::now() + WAIT;
-    while child.try_wait().unwrap().is_none() {
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
         if Instant::now() > deadline {
             let _ = child.kill();
             panic!("Cellix ran on without its terminal");
         }
         std::thread::sleep(Duration::from_millis(50));
-    }
+    };
+    // And it ends well, as a hang-up's does, rather than by a panic's 101.
+    assert!(status.success(), "Cellix ended with {status:?}");
 }
 
 /// A dropped SSH connection hangs up on Cellix. The next Cellix in the folder has the same
@@ -1652,7 +1697,10 @@ fn workspaces_open_when_cellix_dies_come_back() {
     let pid = screen.child.process_id().unwrap() as i32;
     // SAFETY: kill only sends a signal to the child this test started.
     assert_eq!(unsafe { libc::kill(pid, libc::SIGKILL) }, 0);
-    screen.wait_exit();
+    // Ended by the kill, which nothing outlives, and not by anything of its own.
+    let status = screen.wait_end();
+    let killed = status.signal().is_some_and(|s| s.starts_with("Killed"));
+    assert!(killed, "it ended with {status:?}, not by the kill");
     drop(screen);
     let listed = cellix_ls();
     for name in ["alpha", "beta", "gamma"] {
