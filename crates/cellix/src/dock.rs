@@ -1358,6 +1358,25 @@ impl Session {
         place_of(&word)
     }
 
+    /// The word under `spot` that could be an agent's name: its letters, digits, `-` and `_`.
+    pub fn word_at(&self, (x, y): Spot) -> Option<String> {
+        let rows = self.rows();
+        let chars: Vec<char> = rows.get(y as usize)?.chars().collect();
+        let x = x as usize;
+        let part = |c: &char| c.is_ascii_alphanumeric() || *c == '-' || *c == '_';
+        if !chars.get(x).is_some_and(part) {
+            return None;
+        }
+        let start = chars[..x]
+            .iter()
+            .rposition(|c| !part(c))
+            .map_or(0, |i| i + 1);
+        let end = (chars[x..].iter())
+            .position(|c| !part(c))
+            .map_or(chars.len(), |i| x + i);
+        Some(chars[start..end].iter().collect())
+    }
+
     /// Every line it holds as text, the scrollback's first and the screen's after them.
     pub fn lines(&self) -> Vec<String> {
         let grid = self.term.grid();

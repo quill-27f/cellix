@@ -10119,9 +10119,16 @@ impl App {
         }
     }
 
-    /// Opens the `file:line` under a Ctrl+click in a session.
+    /// Opens what a Ctrl+click in a session is on: another live agent's name looks at that
+    /// agent, and a `file:line` opens it.
     fn open_session_path(&mut self, x: u16, y: u16) {
         let spot = self.session_spot(x, y);
+        let word = self.dock.session().and_then(|s| s.word_at(spot));
+        if let (Some(word), Some(from)) = (word, self.dock.active)
+            && self.look_at_name(&word, from)
+        {
+            return;
+        }
         let found = self.dock.session().and_then(|s| s.path_at(spot));
         if let Some((file, line)) = found {
             self.go_to_place(&file, line);

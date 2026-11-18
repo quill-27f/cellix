@@ -3059,3 +3059,13 @@ Item 10 of the herdr work (the a2a track), with the rest of item 5: a helper an 
 - What a peeked helper prints draws at once, as the tab in front's does (`shown_session`).
 - Test: `a_helper_has_no_tab_and_peek_shows_it_live_over_the_pane`. Tour: `173-peek`, `-light`, `-narrow`.
 - Not done: the card's header on the cell tier is only looked at in the test's text.
+
+## Ctrl+click on an agent's name (2026-11-18)
+
+Item 14 of the herdr work (the a2a track).
+
+- An agent's name in any terminal's text is a way to it: Ctrl+click on the name of a live agent other than the terminal's own opens a helper in peek over that tab, or brings one with a tab of its own to the front, as their rows in the Agents list do (`App::look_at_name`, `Session::word_at`). It works in a peeked terminal too. Other words are as they were: a `file:line` still opens its file.
+- Ctrl on macOS as well, not the Cmd the brief named: a terminal keeps Cmd with a press to itself (Ghostty and iTerm open links with it) and reports only Shift, Alt and Ctrl to the program under it. Ctrl+click already opens a `file:line` here, so it's the one click for both.
+- The tour's terminal has a `ctrl` step, a click with Ctrl held, and its Claude Code stand-in now says which helper it asked.
+- Test: `a_ctrl_click_on_an_agents_name_in_a_terminal_looks_at_it`. Tour: `174-name-peek`, looked at: the helper's card over the lead's tab, live.
+- Not done: names aren't underlined under the pointer, as a link would be in VS Code's terminal; the click is found by trying it.

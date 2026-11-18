@@ -2054,6 +2054,76 @@ mod tests {
         assert!(grid.row_text(pane.y).contains("Codex"), "{}", grid.text());
     }
 
+    #[test]
+    #[cfg(unix)]
+    fn a_ctrl_click_on_an_agents_name_in_a_terminal_looks_at_it() {
+        let (dir, mut app, fake) = project();
+        app.team.always = true;
+        let lead = lead(&mut app, &fake);
+        let started = call(&mut app, &lead, run(dir.path(), "reviewer", "codex", None));
+        shows_in(&mut app, "reviewer", "fake agent up");
+        says(&mut app, "reviewer", AgentState::Idle, "Ready");
+        assert_eq!(answered(&mut app, &started).code, code::OK);
+
+        // The helper tells the lead something, which comes with its name.
+        let reviewer = Caller {
+            name: Some("reviewer".into()),
+            held: None,
+            agent: true,
+        };
+        let told = call(&mut app, &reviewer, send("claude-1", "see alpha.txt"));
+        assert_eq!(answered(&mut app, &told).code, code::OK);
+        let tag = "from=\"reviewer\">";
+        shows_in(&mut app, "claude-1", tag);
+        let deadline = Instant::now() + BACKGROUND;
+        while !screen(&app).text().contains(tag) {
+            assert!(Instant::now() < deadline, "{}", screen(&app).text());
+            app.poll();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(app.dock.active, Some(0));
+        let ctrl_click = |app: &mut App, (x, y): (u16, u16)| {
+            let mods = Mods {
+                ctrl: true,
+                ..Mods::default()
+            };
+            for kind in [MouseKind::Left, MouseKind::Up] {
+                app.handle(Event::Mouse(MouseEvent {
+                    kind,
+                    x,
+                    y,
+                    fine_x: f32::from(x) + 0.5,
+                    fine_y: f32::from(y) + 0.5,
+                    mods,
+                }));
+            }
+        };
+
+        // A plain press on its name does what a press in a terminal does, and no more.
+        let (x, y) = find(&screen(&app), tag);
+        let name = (x + 7, y);
+        click(&mut app, name);
+        assert!(app.peek.is_none());
+
+        // Ctrl+click on its name opens it in peek, over the lead's tab.
+        ctrl_click(&mut app, name);
+        assert_eq!(app.peek.as_deref(), Some("reviewer"));
+        let text = screen(&app).text();
+        assert!(text.contains("· from Claude Code"), "{text}");
+        assert_eq!(app.dock.active, Some(0));
+        click(&mut app, (2, 20));
+        assert!(app.peek.is_none());
+
+        // Other words are as they were: a file's name still opens the file.
+        let (x, y) = find(&screen(&app), "alpha.txt<");
+        ctrl_click(&mut app, (x + 1, y));
+        assert!(app.peek.is_none());
+        let opened = app
+            .editor_mut()
+            .and_then(|e| e.buffer.path().map(Path::to_path_buf));
+        assert!(opened.is_some_and(|p| p.ends_with("alpha.txt")));
+    }
+
     /// Polls for `time`, and says `name` never showed `unwanted`.
     fn never_shows(app: &mut App, name: &str, unwanted: &str, time: Duration) {
         let until = Instant::now() + time;

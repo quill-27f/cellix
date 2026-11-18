@@ -1409,6 +1409,12 @@ keyboard and pastes go to it while it's open; a press outside it or its × close
 press does nothing else. Keep as Tab gives it a tab of its own, in front. A helper that outlives
 its agent gets one too.
 
+An agent's name in any terminal's text, as in what one agent said to another, is a way to it:
+Ctrl+click on the name of a live agent opens a helper in peek, over the tab where the name was,
+and brings one with a tab of its own to the front, as their rows in the Agents list do. Other
+words are as they were, a `file:line` opening its file. It's Ctrl on macOS too, not Cmd: a
+terminal keeps Cmd with a press to itself and tells the program under it nothing of it.
+
 `cellix agent --skill` prints a short guide for agents, and the same guide ships as a skill with
 the Claude Code plugin, the Codex plugin and the Gemini CLI extension, which all read
 `skills/<name>/SKILL.md`; Gemini's GEMINI.md also points to it.

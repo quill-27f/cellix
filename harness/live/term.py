@@ -9,6 +9,7 @@ sees what a person sees.
 The script is a list of steps:
     ["wait", seconds]            ["keys", "text, with \\e as ESC"]
     ["click", col, row]          ["right", col, row]       ["middle", col, row]
+    ["ctrl", col, row]           A click with Ctrl held.
     ["double", col, row]         ["triple", col, row]      ["drag", col, row, col, row]
     ["press", col, row]          ["hold", col, row]        A press, and a move with it still held.
     ["move", col, row]           ["wheel", col, row, notches]  (negative is up)
@@ -388,8 +389,8 @@ def main():
         elif kind == "paste":
             os.write(master, f"\x1b[200~{step[1]}\x1b[201~".encode())
             pump(0.25)
-        elif kind in ("click", "right", "middle"):
-            button = {"click": 0, "middle": 1, "right": 2}[kind]
+        elif kind in ("click", "right", "middle", "ctrl"):
+            button = {"click": 0, "middle": 1, "right": 2, "ctrl": 16}[kind]
             os.write(master, mouse(button, step[1], step[2]))
             pump(0.02)
             os.write(master, mouse(button, step[1], step[2], False))

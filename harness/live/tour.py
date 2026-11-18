@@ -187,7 +187,7 @@ EXPECT = {
     "98-pane-drag-under": "loss.png",
 }
 # About how many scenes there are, to cut the tour into parts of a size.
-SCENES_IN_ALL = 217
+SCENES_IN_ALL = 218
 # Scenes come to, shot, and those that never reached their surface.
 SEEN, SHOT, FAILED = [0], [], []
 # Which commit the binary is, as far as git can say: the pictures are of that.
@@ -990,6 +990,7 @@ def team_scenes(scratch):
                 "printf 'I will hand the review to a helper.\\n'\n"
                 + hook("prompt", {**lead, "prompt": "Review the queue"}) +
                 f"'{binary}' agent run --name reviewer codex '{task}' >/dev/null 2>&1\n"
+                "printf 'Asked reviewer to look over the queue.\\n'\n"
                 "exec sleep 300\n")
     with open(f"{tools}/codex", "w") as f:
         f.write("#!/bin/sh\nprintf 'Codex (stand-in)\\n'\n"
@@ -1010,6 +1011,8 @@ def team_scenes(scratch):
         ("173-peek", [*allowed, *LIST_AGENTS, ["until", "helper"], ["click", *ON("reviewer")], ["until", "Keep as Tab"], ["wait", 0.8]], {}),
         ("173-peek-light", [*allowed, *LIST_AGENTS, ["until", "helper"], ["click", *ON("reviewer")], ["until", "Keep as Tab"], ["wait", 0.8]], {"background": "eff1f5"}),
         ("173-peek-narrow", [*allowed, *LIST_AGENTS, ["until", "helper"], ["click", *ON("reviewer")], ["until", "Keep as Tab"], ["wait", 0.8]], {"size": "100x40"}),
+        # Ctrl+click on the helper's name in the lead's own words opens it the same way.
+        ("174-name-peek", [*allowed, ["until", "Asked reviewer"], ["ctrl", *ON("Asked reviewer", 7)], ["until", "Keep as Tab"], ["wait", 0.8]], {}),
     ]
     for name, steps, extra in scenes:
         cache = tempfile.mkdtemp(prefix="cx", dir="/tmp")

@@ -3,6 +3,9 @@
 //! a column in from the pane's sides, with a header saying who it is, what it's doing and
 //! which agent started it, Keep as Tab, and ×. The keyboard goes to it while it's open; a press
 //! outside it, or its ×, closes it, and what's behind it is dimmed meanwhile.
+//!
+//! A Ctrl+click on an agent's name in any terminal's text looks at it the same way. Ctrl, and
+//! not Cmd on macOS: a terminal doesn't tell the program under it of Cmd with a press.
 
 use super::team::Doing;
 use super::*;
@@ -60,6 +63,31 @@ impl App {
         }
         self.peek = Some(name.to_string());
         self.fit_peek();
+    }
+
+    /// A Ctrl+click on `word` in the terminal of session `from`: when it's the name of a live
+    /// agent other than that one, a helper opens in peek and one with a tab of its own comes
+    /// to the front, as their rows in the Agents list do. Returns whether it was one.
+    pub(super) fn look_at_name(&mut self, word: &str, from: usize) -> bool {
+        let Some(index) = self.member_index(word) else {
+            return false;
+        };
+        let session = &self.dock.sessions[index];
+        if index == from || session.exited {
+            return false;
+        }
+        if session.tabbed {
+            self.peek = None;
+            self.dock.open = true;
+            self.dock.active = Some(index);
+            self.dock.front = Front::Session;
+            self.dock.focused = true;
+            self.dock.agents_tab = false;
+            self.see_front_tab();
+        } else {
+            self.open_peek(word);
+        }
+        true
     }
 
     pub(super) fn close_peek(&mut self) {
@@ -260,6 +288,18 @@ impl App {
         }
         if screen.contains(mouse.x, mouse.y) {
             let spot = (mouse.x - screen.x, mouse.y - screen.y);
+            // Ctrl+click on another agent's name looks at it, and on a `file:line` opens it.
+            if mouse.kind == MouseKind::Left && mouse.mods.ctrl {
+                let word = self.dock.sessions[index].word_at(spot);
+                if word.is_some_and(|word| self.look_at_name(&word, index)) {
+                    return true;
+                }
+                if let Some((file, line)) = self.dock.sessions[index].path_at(spot) {
+                    self.peek = None;
+                    self.go_to_place(&file, line);
+                }
+                return true;
+            }
             let session = &mut self.dock.sessions[index];
             match mouse.kind {
                 MouseKind::ScrollUp => session.wheel(true, spot),
