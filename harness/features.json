@@ -6361,5 +6361,12 @@
     "title": "A paper's suggestion whose words run onto another line shows on its page as one",
     "test": "a_suggestion_across_lines_shows_on_a_papers_page",
     "passes": true
+  },
+  {
+    "id": "rewrite-buttons-wrap",
+    "milestone": 15,
+    "title": "A rewrite's two quiet buttons stay together under Accept Rewrite on a narrow card",
+    "test": "a_rewrites_buttons_wrap_with_the_quiet_ones_together",
+    "passes": true
   }
 ]

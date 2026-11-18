@@ -1654,25 +1654,26 @@ fn resolved_button(area: Rect, count: usize, shown: bool, measure: &dyn Measure)
     control(area, &labels, Chevron::Unfolds(shown), measure)
 }
 
-/// The buttons under a rewrite, a row at a time: as many to a row as fit a card `width` wide,
-/// a button's gap apart.
+/// The buttons under a rewrite, a row at a time: all three on one where they fit a card
+/// `width` wide, else Accept Rewrite on its own and the two quiet ones together under it, so
+/// what takes the rewrite stands apart from what doesn't; each alone where even two don't fit.
 fn rewrite_rows(width: f32, measure: &dyn Measure) -> Vec<Vec<&'static str>> {
-    let mut rows: Vec<Vec<&'static str>> = Vec::new();
-    let mut used = 0.0;
-    for label in REWRITE {
-        let wide = button_cells(label, measure).chars().count() as f32;
-        match rows.last_mut() {
-            Some(row) if used + f32::from(BUTTON_GAP) + wide <= width + 1.0 => {
-                row.push(label);
-                used += f32::from(BUTTON_GAP) + wide;
-            }
-            _ => {
-                rows.push(vec![label]);
-                used = wide;
-            }
-        }
+    let fits = |labels: &[&str]| {
+        let cells: usize = labels
+            .iter()
+            .map(|label| button_cells(label, measure).chars().count())
+            .sum();
+        let gaps = labels.len().saturating_sub(1) * usize::from(BUTTON_GAP);
+        (cells + gaps) as f32 <= width + 1.0
+    };
+    let [take, apply, decline] = REWRITE;
+    if fits(&REWRITE) {
+        vec![REWRITE.to_vec()]
+    } else if fits(&[apply, decline]) {
+        vec![vec![take], vec![apply, decline]]
+    } else {
+        REWRITE.iter().map(|label| vec![*label]).collect()
     }
-    rows
 }
 
 /// Each button as (label, padded cells, start column): Edit and Delete with the others when
@@ -2814,6 +2815,26 @@ pub fn draw(
 mod tests {
     use super::*;
     use cellix_render::CellMeasure;
+
+    /// A rewrite's three buttons share a row where they fit; on a narrower card Accept Rewrite
+    /// stands alone and the two that don't take it stay together under it, where Not this was
+    /// left on a row of its own.
+    #[test]
+    fn a_rewrites_buttons_wrap_with_the_quiet_ones_together() {
+        let pixels = cellix_render::FontMeasure::new(17, 37);
+        let measures: [&dyn Measure; 2] = [&pixels, &CellMeasure];
+        for measure in measures {
+            assert_eq!(rewrite_rows(200.0, measure), vec![REWRITE.to_vec()]);
+            let narrow = (10..200)
+                .map(|width| rewrite_rows(width as f32, measure))
+                .find(|rows| rows.len() == 2)
+                .expect("a width that breaks them");
+            assert_eq!(
+                narrow,
+                vec![vec![ACCEPT_REWRITE], vec![APPLY_REWRITE, "Not this"]]
+            );
+        }
+    }
 
     /// The row of emoji offered for a name ends with "Tab", the key that takes the first of
     /// them, and keeps room for it: in a pane too narrow for every name and the key, the

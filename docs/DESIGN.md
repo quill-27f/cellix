@@ -715,7 +715,8 @@ Suggestion and Not this. Accept Rewrite puts it in place of the words as one edi
 resolves the comment, as committing a suggestion on GitHub resolves its conversation; Apply as
 Suggestion puts it in as a suggestion to settle on the page, which was the only way until 18
 November 2026. Both replace all of the commented words as they read now, found as a comment's
-words are (below). Where the three don't fit a card's row, what's over goes on the next. A paper's suggestion whose words run onto another
+words are (below). Where the three don't fit a card's row, Accept Rewrite stands alone and the
+two that don't take the rewrite stay together under it. A paper's suggestion whose words run onto another
 line shows on its page as one, as a Markdown one does (`Spanning`), where a line's own command left
 a brace and lost the new words; across lines its new words stand before the old, as they do in its
 source and its PDF.

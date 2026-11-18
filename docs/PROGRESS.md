@@ -3400,3 +3400,7 @@ The changes track, from the user's asks for reviewing documents (the docflow aud
 - New scenes: 71-sample-changes-chips (and -dark), -pointed (the pointer on a suggestion, the caret moved off it), -chip-hover, -row (and -dark), -row-next, -row-narrow (84 columns, the buttons under the count), 71-sample-rewrite (and -dark, -narrow), 82-paper-changes-chips and -row. A scene that opens the Comments pane opens it before going to the line, since a page laid out again narrower keeps its top row, not its words.
 - The samples say how suggestions are settled now.
 - Looked at by the ui-expert agent: every section scene shows its section. Not done: the words in every button stand 1 px high, which is the shared button's; "Apply as Suggestion" has 25 px before its words and 28 after, from rounding to cells.
+
+## A rewrite's quiet buttons wrap together (2026-11-18)
+
+- On a card too narrow for Accept Rewrite, Apply as Suggestion and Not this on one row, Accept Rewrite now stands alone and the other two stay together under it; Not this was left on a row of its own, which the docflow track's test, pressing Apply beside Not this, caught once both had landed. Test: `a_rewrites_buttons_wrap_with_the_quiet_ones_together`.
