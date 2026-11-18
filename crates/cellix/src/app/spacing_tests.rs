@@ -83,6 +83,54 @@ fn panels(grid: &Grid) -> Vec<(Bounds, Option<Rgb>, Option<Rgb>, bool)> {
         .collect()
 }
 
+/// Where the words of a painted run that starts with `start` begin, in pixels.
+fn words_at(grid: &Grid, start: &str) -> f32 {
+    let x = grid.paint.iter().find_map(|p| match p {
+        Paint::Text { x, text, .. } if text.starts_with(start) => Some(*x),
+        _ => None,
+    });
+    px(x.unwrap_or_else(|| panic!("no words {start:?}")))
+}
+
+/// A task's box is square on screen, as tall as the line words are sized for allows, and
+/// stands at least 9 px before its words, checked or not. It was 33 by 25 with its words
+/// touching it.
+#[test]
+fn a_tasks_box_is_square_with_air_before_its_words() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("note.md");
+    fs::write(
+        &path,
+        "- plain item\n\n- [ ] Check the spend cap\n- [x] Dry-run by default\n",
+    )
+    .unwrap();
+    let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+    airy(&mut app);
+    app.open(&path).unwrap();
+    let grid = screen(&app);
+    let theme = app.theme;
+    let boxes: Vec<Bounds> = panels(&grid)
+        .into_iter()
+        .filter(|(_, fill, border, _)| {
+            *border == Some(theme.gutter.fg) && fill.is_none()
+                || *fill == Some(theme.accent) && *border == Some(theme.accent)
+        })
+        .map(|(bounds, ..)| bounds)
+        .collect();
+    assert_eq!(boxes.len(), 2, "a box each");
+    for (bounds, words) in boxes.iter().zip(["Check", "Dry"]) {
+        let wide = px(bounds.w);
+        let (_, high) = tall(*bounds);
+        assert!((wide - high).abs() <= 1.0, "square: {wide} by {high}");
+        assert!(high >= 18.0, "about a capital's height or more: {high}");
+        let air = words_at(&grid, words) - px(bounds.x + bounds.w);
+        assert!(air >= 9.0, "{words}: {air} px before its words");
+    }
+    // The words of every kind of item still line up.
+    let bullet = words_at(&grid, "plain");
+    assert!((words_at(&grid, "Check") - bullet).abs() < 1.0);
+}
+
 /// A status message has the bar up to the details at its other end, as they're painted, and
 /// ends in an ellipsis only where even that's too short. With a file maximized, what says so
 /// was cut at "to re" with 375 px free.

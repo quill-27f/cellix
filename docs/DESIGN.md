@@ -997,7 +997,9 @@ sides (`measures::band`), counting the half of the frame's column the side pane'
 in; a comment's card is as far from that line on its right as on its left; a program in the
 side pane keeps the window's last column as air, as its first keeps the half column before the
 sheet's edge. A floating panel's grid, the table picker's squares and the math panel's
-buttons, stands as far from the panel's top as from its sides. A status message has the
+buttons, stands as far from the panel's top as from its sides. A task's box on a page is
+square, at most two thirds of the line, in the room a list's marker has, with 9 px before its
+words, which line up with every other item's (`rendered::MARKER`). A status message has the
 bar up to where the details at its other end are painted, and an ellipsis only where that's
 too short. Where a row is the terminal's own line there's no room for this air, and things
 stand as they did.

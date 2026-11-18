@@ -1377,7 +1377,7 @@ impl Editor {
         let Some((at, mark)) = rows.get(row).and_then(|r| r.checkbox) else {
             return false;
         };
-        if column < at || column >= at + 1.3 {
+        if column < at || column >= at + rendered::MARKER {
             return false;
         }
         let checked = self.buffer.rope().char(mark) != ' ';
@@ -4940,13 +4940,7 @@ impl Editor {
                     }
                 }
                 Tone::Check(checked) => {
-                    // Square on screen: a row is about twice as tall as a column is wide.
-                    const SIDE: f32 = 0.66;
-                    let cell = self.measure.cell_pixels().unwrap_or((1, 2));
-                    let across = SIDE * cell.1 as f32 / cell.0.max(1) as f32;
-                    let left = x + ((width - across) / 2.0).max(0.0);
-                    let top = y as f32 + (1.0 - SIDE) / 2.0;
-                    let bounds = Bounds::cells(left, top, across, SIDE);
+                    let bounds = check_box(x, y, width, &*self.measure);
                     let (fill, edge) = if checked {
                         (Some(theme.accent), Some(theme.accent))
                     } else {
@@ -5227,4 +5221,18 @@ impl Editor {
             .checked_sub(1)?;
         Some((first, rows.get(last)?.line + 1))
     }
+}
+
+/// Where a task's box stands in its marker's room `width` cells wide from `x`, on row `y`:
+/// square on screen, at most `CHECK_SIDE` of the line words are sized for, with `CHECK_AIR`
+/// left before the words. A shape that short keeps the line's height on a taller row (see
+/// `stood`), so its height is counted in lines.
+fn check_box(x: f32, y: u16, width: f32, measure: &dyn Measure) -> Bounds {
+    let cell = measure.cell_pixels().unwrap_or((1, 2));
+    let wide = cell.0.max(1) as f32;
+    let line = cell.1 as f32 / measure.row_air().max(1.0);
+    let room = (width - rendered::CHECK_AIR).max(0.0) * wide;
+    let side = (rendered::CHECK_SIDE * line).min(room);
+    let tall = side / line;
+    Bounds::cells(x, f32::from(y) + (1.0 - tall) / 2.0, side / wide, tall)
 }

@@ -3150,3 +3150,10 @@ The fix-spacing track, from Part 3 #1 of the review of 0.11.0's tour (95-editor-
 - It was cut where the details' cells start, counted a cell a letter; painted, they're far narrower. Now, with pictures, the words have the bar up to where the details are painted, two columns short of them (`STATUS_GAP`), and are cut with an ellipsis only where even that's too short (`source::clip_as`). On cells it's as it was.
 - Test: `a_status_message_uses_the_room_the_details_leave` (the maximized file's message whole; a long message cut with an ellipsis short of the bell).
 - Not done: its cells, which the tour reads, still stop where the details' cells begin.
+
+## A task's box is square, with air before its words (2026-11-18)
+
+The fix-spacing track, from Part 2 #13 and Part 3 #2 of the review of 0.11.0's tour (03-page, 24-light-page, 57-dock-page, 44-note; both themes): a task's box was 33 by 25 px and its words began on its edge.
+
+- It was sized by the row's height, 50 px on Airy rows, while a shape that short is drawn at the line's height, 36: so it was wider than tall, and wider than the room it had. It's now square on screen, two thirds of the line or less (`CHECK_SIDE`), at the start of the room a list's marker has (`rendered::MARKER`), with 9 px or more before its words (`CHECK_AIR`, `editor::check_box`), whose start lines up with a bullet's or a number's item. A click anywhere in that room ticks it.
+- Test: `a_tasks_box_is_square_with_air_before_its_words` (both boxes square, 9 px before their words, and the words where a bullet item's are).

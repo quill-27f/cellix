@@ -1148,6 +1148,15 @@ fn table(
     place_table(parsed, starts, &places, (&aligns, width, ruled), rows);
 }
 
+/// The room a list's marker has before its words, in cells: a bullet, a number, or a task's
+/// box with air after it, so the words of every kind of item line up.
+pub const MARKER: f32 = 1.8;
+/// The air between a task's box and its words, in cells: 9 px at the 17 px cell of a Retina
+/// screen, so the box never touches the first letter.
+pub const CHECK_AIR: f32 = 0.56;
+/// The tallest a task's box is, as a share of the line words are sized for.
+pub const CHECK_SIDE: f32 = 0.66;
+
 /// Space between a table cell's edge and its text, in cells.
 const CELL_PADDING: f32 = 1.0;
 /// The least a table's column holds, in cells of text.
@@ -2313,11 +2322,16 @@ pub fn layout_with(
         }
         template.end = lines[last].0 + lines[last].1.chars().count();
         measure_glyphs(&mut glyphs, measure);
-        // Checkboxes get a little more room than a glyph, for the box drawn there.
+        // A checkbox takes the whole of the marker's room, where its box is drawn with air
+        // before the words; the space after it, written for the cell tier, takes none.
         if proportional {
+            let mut boxed = false;
             for g in &mut glyphs[..decorated] {
                 if matches!(g.tone, Tone::Check(_)) {
-                    g.advance = 1.3;
+                    g.advance = MARKER;
+                    boxed = true;
+                } else if boxed {
+                    g.advance = 0.0;
                 }
             }
         }
@@ -2331,7 +2345,7 @@ pub fn layout_with(
             }
             let pad = indent as f32;
             let width: f32 = glyphs[..decorated].iter().map(|g| g.advance).sum();
-            glyphs[decorated - 1].advance += (pad + 1.8 - width).max(0.0);
+            glyphs[decorated - 1].advance += (pad + MARKER - width).max(0.0);
             glyphs[decorated - 1].tone = Tone::TableLine;
         }
         let lead = glyphs[..decorated].iter().map(|g| g.advance).sum::<f32>() + lead_extra;

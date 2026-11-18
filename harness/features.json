@@ -5878,5 +5878,12 @@
     "title": "A status message has the bar up to where its details are painted, and an ellipsis only where that's too short",
     "test": "a_status_message_uses_the_room_the_details_leave",
     "passes": true
+  },
+  {
+    "id": "task-box-square",
+    "milestone": 15,
+    "title": "A task's box on a page is square, with 9 px before its words, which line up with every other item's",
+    "test": "a_tasks_box_is_square_with_air_before_its_words",
+    "passes": true
   }
 ]
