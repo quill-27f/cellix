@@ -325,11 +325,22 @@ fn nothing_under_a_tab_row_stands_within_8_px_of_its_line() {
         } => Some(*bounds),
         _ => None,
     });
-    let (top, _) = tall(menu.expect("its panel"));
+    let panel = menu.expect("its panel");
+    let (top, _) = tall(panel);
     assert!(
         top - line >= 8.0,
         "the menu: {} px under the line",
         top - line
+    );
+    // And its first words as far under its top as every menu's are.
+    let words = grid.paint.iter().find_map(|p| match p {
+        Paint::Text { y, text, .. } if text == "Close" => Some(*y),
+        _ => None,
+    });
+    let over = (words.expect("its first row") - panel.y) as f32 / UNIT as f32;
+    assert!(
+        (over - crate::menu::PADDING).abs() < 0.02,
+        "{over} rows over its first row"
     );
     app.overlay = Overlay::None;
     // Find over a list in the pane.

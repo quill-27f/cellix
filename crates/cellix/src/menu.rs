@@ -23,7 +23,7 @@ const MIN_WIDTH: u16 = 16;
 /// 25 px of an airy row. Painted menus only; the cell tier has no fractions of a row. It was
 /// a quarter, with what rounding to whole rows left over shared above and below, so a menu
 /// had 26 px from its edge to its words or 39 by how many rules it had.
-const PADDING: f32 = 0.5;
+pub(crate) const PADDING: f32 = 0.5;
 /// What a rule between groups takes at least, in rows, so a hover band never meets it. Where
 /// the rules leave half a row over, they share it: the edges keep their air.
 const RULE_ROOM: f32 = 0.5;
@@ -560,13 +560,17 @@ impl Menu {
         if self.area.y + height > screen.bottom().saturating_sub(1) {
             return;
         }
-        // What the drop leaves over of its whole rows goes over its first row and under its
-        // last alike, so its rules keep the room they have in every menu.
+        // The same air over its first row and under its last as every menu has, and what
+        // whole rows leave over goes where it goes in every menu: to the rules, or shared
+        // over and under where there are none. Given to the air, a tab's menu had 8 px more
+        // of it than the others.
         let spare = (f32::from(height) - rows - PADDING * 2.0 - drop).max(0.0);
         self.area.h = height;
         self.drop = drop;
-        self.pad = drop + PADDING + spare / 2.0;
-        self.rule_room = RULE_ROOM;
+        (self.pad, self.rule_room) = match rules {
+            0 => (drop + PADDING + spare / 2.0, RULE_ROOM),
+            rules => (drop + PADDING, RULE_ROOM + spare / rules as f32),
+        };
         // Its rows moved down, and their submenus with them.
         self.subs = (0..self.items.len())
             .map(|row| self.place_submenu(row, measure, screen))
