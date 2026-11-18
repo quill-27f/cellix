@@ -477,4 +477,30 @@ fn sticky_lines_draw_a_shadow_on_pixels() {
         .filter(|p| matches!(p, Paint::Wash { color, .. } if *color == Rgb(0, 0, 0)))
         .count();
     assert_eq!(shadows, 3, "three bands fading down");
+    // On graphite's dark sheet a shadow hardly shows, so a hairline, as between any two
+    // regions, stands where the pinned lines end, at the shadow's top.
+    let first = grid.paint.iter().find_map(|p| match p {
+        Paint::Wash { bounds, color, .. } if *color == Rgb(0, 0, 0) => Some(bounds.y),
+        _ => None,
+    });
+    assert!(first.is_some());
+    let border = app.theme.border;
+    let line = grid.paint.iter().any(
+        |p| matches!(p, Paint::Hairline { bounds, color } if *color == border && Some(bounds.y) == first),
+    );
+    assert!(line, "a hairline at the shadow's top");
+    // Light, the shadow shows and stands alone.
+    app.match_terminal_background(Some((0xEF, 0xF1, 0xF5)));
+    let grid = screen(&app);
+    let border = app.theme.border;
+    let first = grid.paint.iter().find_map(|p| match p {
+        Paint::Wash { bounds, color, .. } if *color == Rgb(0, 0, 0) => Some(bounds.y),
+        _ => None,
+    });
+    assert!(first.is_some(), "the shadow");
+    let line = grid
+        .paint
+        .iter()
+        .any(|p| matches!(p, Paint::Hairline { bounds, color } if *color == border && Some(bounds.y) == first));
+    assert!(!line, "no line under them in the light theme");
 }

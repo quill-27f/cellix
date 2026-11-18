@@ -260,6 +260,9 @@ pub struct Menu {
     open: Option<usize>,
     /// Where the button that opened it is, which stands lit while it's open.
     pub from: Option<(u16, u16)>,
+    /// It opens over a card, a menu's colour, so it stands a step above it
+    /// (`Theme::over_card`).
+    pub over_card: bool,
 }
 
 impl Menu {
@@ -315,6 +318,7 @@ impl Menu {
             subs: Vec::new(),
             open: None,
             from: None,
+            over_card: false,
         };
         menu.subs = (0..menu.items.len())
             .map(|row| menu.place_submenu(row, measure, screen))
@@ -572,6 +576,13 @@ impl Menu {
 
     /// `hover` is where the pointer is, its row with the fraction.
     pub fn draw(&self, grid: &mut Grid, hover: Option<(u16, f32)>, theme: &Theme) {
+        let lifted;
+        let theme = if self.over_card {
+            lifted = theme.over_card();
+            &lifted
+        } else {
+            theme
+        };
         let area = self.area;
         if self.fine {
             // On its rows, covering each it touches whole: nothing reaches past its edges.

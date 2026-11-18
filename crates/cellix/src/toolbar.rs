@@ -360,7 +360,7 @@ pub fn fallback(icon: Icon) -> &'static str {
         Icon::Panel => "▭",
         Icon::Bell => "◬",
         Icon::Question => "?",
-        Icon::CircleCheck => "✓",
+        Icon::CircleCheck | Icon::Check => "✓",
         Icon::CircleX => "✗",
         Icon::FolderFilled => "▸",
         Icon::File

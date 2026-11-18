@@ -633,6 +633,9 @@ Every row of the code view is a line of the file, so nothing is drawn between li
 conflict is a card made of its own marker lines: `<<<<<<<` is the header, naming the current
 side and holding Compare, Both, Current and Incoming; `=======` names the incoming side;
 `>>>>>>>` is the foot. Current is tinted green, incoming blue, both mixed from the theme.
+Incoming is the filled button; the header's other three are the quiet kind every other action is,
+raised off the green band in the dark theme (toward graphite's sheet they were darker than the
+band and looked sunk), toward the sheet in the light one, where that's lighter.
 
 The commit graph sits at the end of Source Control, as in VS Code. Its lanes are straight
 lines with square joins, box-drawing characters on cells and hairlines on pixels, and a merge
@@ -849,7 +852,22 @@ bar: graphite's background a third of the way to black). A sheet is graphite's b
 #17191d, what herdr's panes stand on. What's raised, a menu, a card or a dialog, is herdr's
 popover, #25272b (6% toward white), with a line round it. A page's code block is sunk to the
 frame's depth and a text box a step under it, #0d0e11, as a box was before. Where herdr lays white over its ground, Cellix lays the same: a hover at
-5.5%, a picked or selected row at 9%, a hairline at 9.4% and a scrollbar at 14%. Text is
+5.5%, a hairline at 9.4% and a scrollbar at 14%. What's picked is one colour everywhere, the
+blue at 16% over its ground, as herdr.dev's picked rows are blue: a list's row on the sidebar or
+a sheet (#263041 on the sheet), a palette's or a menu's (#323c4d), Settings' page, and the words
+a comment is about on a page (`Theme::tint`). It was herdr's white at 9%, which was 1.10 to 1 from
+a hover beside it and read as one; the review of 0.11.0 found both, and the workspace picker and
+Settings already picking in blue. A file listed twice in Agent Context, an instruction the
+session also read, is picked only on the row it was opened from. A text box without the
+keyboard has a line of white at 20% over a menu round it (`Theme::field_line`), 2.4 to 1 on the
+frame: sunk a step under the frame, its fill is all but the frame's, and a menu's line round it
+left an empty Replace box nearly gone. A menu that opens over a card, the Comments pane's order
+menu, is drawn a step above it, white at 11% over a menu's colour, above an agent's answer set on
+the card in a quiet button's fill too, its hover, pick and line moved up with it and its quiet
+words lifted to read as well (`Theme::over_card`); it was the card's own colour. The emoji picker
+drops from under the buttons that send what's being written, a row clear of them, onto the pane,
+and is a menu's colour as any other: from its own button it covered the hint over them mid-word,
+on the card. Text is
 #eeeeef; the second weight is herdr's muted, #98999b, six tenths of the way from the sheet to
 the text; the third is 0.55 of the way, #8d8e91, since herdr's dim (0.38, #696a6d) is 3.3 to 1
 on the sheet and what's read here stays at 4.5 to 1. Dim is kept for what can't be done and
@@ -862,8 +880,12 @@ worse than the error (the light theme keeps its peach and red). A page's Importa
 callouts are graphite's magenta #b5a2ce and the yellow. Only the words at the foot that say an
 agent needs you take #f0705f; the file's details at the bar's other end stay its quiet colour
 (they took it too, which in a red read as errors). Matches Find isn't on are a wash of the
-yellow, 18% over the sheet, so the one it's on, in the selection's colour, is the one that
-stands out. A diff's lines are washes of that green and of #f0705f, a fifth of the way over the
+yellow, 28% over the sheet, 1.9 to 1 (at 18% they were 1.48 and hard to find), and the one it's
+on is the blue at 35% with a ring of #96b2d7 round it where there are pixels
+(`Theme::current_match`), in a file, on a page, in a terminal and in a list: in the selection's
+colour it was 1.2 to 1 from the others. Light, the one it's on keeps the selection's blue and
+takes the ring. Two selections, as Ctrl+D makes, are both selections and alike, as VS Code's
+are. A diff's lines are washes of that green and of #f0705f, a fifth of the way over the
 sheet and 0.36 for the words that changed: herdr's own washes, at 9%, read as grey beside a
 review. Code
 keeps Catppuccin Mocha's hues (mauve keywords, green strings, yellow types, peach numbers), each
@@ -955,10 +977,14 @@ a suggestion's Keep and Dismiss, Review with…, New Workspace and Resume at the
 row's wash, and hovers in a menu's colour that went darker than the button at rest on a card). In
 the dark theme the quiet fill is 20 steps over its ground, about herdr's raised, white at 9% over
 graphite's sheet; 14 left Review with… dimmer than a picked row beside it. A row of choices,
-Settings' and the New Worktree dialog's, is one track a button tall with a line round it in a
-menu's line colour and its ground showing through: the chosen one is filled with the accent
-inside the line, the others are plain words, and one pointed at takes the quiet fill. Each was a
-box of the frame's colour, which read as more text boxes. One
+Settings' and the New Worktree dialog's, is one track a button tall with a text box's line round
+it (`Theme::field_line`; a menu's line was 1.34 to 1 on a dialog) and its ground showing through:
+the chosen one is filled with the accent a pixel or two inside the line, the others are plain words, and
+one pointed at takes the quiet fill. Each was a
+box of the frame's colour, which read as more text boxes. A theme's card on Settings' Appearance
+page is the theme as a tiny window, its frame, a sidebar in what's raised and a sheet: with the
+sidebar in the frame's colour, as it really is, graphite's surfaces were 1.07 to 1 apart at that
+size and the window showed no panels. One
 measure sizes them all (`measures.rs`): a button's words keep a column
 and a half either side inside its chip, whatever they are, and buttons side by side stand two
 columns apart. In cells a button is its words between brackets. Text stands two columns inside
@@ -989,7 +1015,9 @@ A tab is one shape, in the editor and in the pane: the strip is the frame's colo
 tab in front takes the colour of what's under it, the sheet or the pane, with the accent's
 line along its top. One behind is its name, brighter under the pointer. Overlays sit on row lines: a menu
 is whole rows, padded 8 px above and below, with half a row for each rule and its hover band
-clear of them, and it drops from the bottom edge of what opened it; a tooltip is one row, on
+clear of them, and it drops from the bottom edge of what opened it. A menu that marks the one in
+use, the Comments pane's order, has its check in a column of its own, as an icon is, so every
+row's words start in one place. A tooltip is one row, on
 the row under its icon. Nothing covers part of a row. A palette (Quick Open, the commands, and
 every list that asks with a field) is whole rows too: the field's row, one row of air, and its
 list. The field is a box, as the Find bar's and a prompt's are, nine tenths of its row as the
@@ -1178,7 +1206,8 @@ cells for chevrons, shown while the pointer is over it, and a folded line always
 fold follows its header line through edits, found again by its text, and opens when a caret lands
 inside, whether from a search, a jump or a click. The headers of the scopes scrolled into stay
 pinned over the top rows, at most five, with a soft shadow under them on pixels and a line on
-cells. Brackets take one of three colours by depth, gold, orchid and sky as in VS Code, toned for
+cells; in the dark theme a hairline as well, where the shadow starts, since on graphite's sheet
+a shadow is 1.05 to 1 and the pinned lines ran into the code. Brackets take one of three colours by depth, gold, orchid and sky as in VS Code, toned for
 each theme, with a stray in the error colour and the caret's pair tinted. Pages are none of this:
 they lay themselves out.
 

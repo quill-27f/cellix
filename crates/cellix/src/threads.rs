@@ -1148,6 +1148,24 @@ pub fn order_menu_row(area: Rect, shown: Shown, top: usize, measure: &dyn Measur
     Some(row + under)
 }
 
+/// The row of the buttons that send or drop what's being written, the first at or under
+/// `from`: the emoji picker drops from under them, so it covers neither the hint over them
+/// nor the buttons.
+pub fn send_row(
+    area: Rect,
+    shown: Shown,
+    top: usize,
+    from: u16,
+    measure: &dyn Measure,
+) -> Option<u16> {
+    let width = area.w.saturating_sub(SIDE * 2 + 2) as f32;
+    let all = lines(shown, width, measure);
+    let top = top.min(last_of(all.len(), area.h));
+    let first = top + usize::from(from.checked_sub(area.y)?);
+    let index = (first..all.len()).find(|i| matches!(all[*i], Line::Send(..)))?;
+    Some(area.y + index.checked_sub(top)? as u16)
+}
+
 /// The row of the list a comment's card starts on, to scroll the pane to it.
 pub fn top_of(area: Rect, shown: Shown, id: u32, measure: &dyn Measure) -> Option<usize> {
     let width = area.w.saturating_sub(SIDE * 2 + 2) as f32;

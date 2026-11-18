@@ -2578,7 +2578,7 @@ impl App {
         };
         let root = self.workspace.root().to_path_buf();
         match self.context.click(hit, &root) {
-            Some(ContextHit::Open(path, line)) => {
+            Some(ContextHit::Open(path, line, _)) => {
                 self.mark_jump();
                 if let Err(e) = self.open(&path) {
                     self.say(format!("Could not open: {e}"));
@@ -3698,8 +3698,10 @@ impl App {
             };
             let hovered = self.hover.is_some_and(|h| row.contains(h.0, h.1));
             if hovered && i != suggest.selected {
+                // A menu's hover, as every pointed row is: the quiet button's fill was
+                // lighter than the picked row beside it.
                 let wash = Bounds::inset(row, 0.5, 0.055);
-                grid.panel(wash, 18, Some(theme.quiet_button(theme.popup)), None);
+                grid.panel(wash, 18, Some(theme.popup_hover), None);
             }
             if i == suggest.selected {
                 grid.fill(
@@ -6704,26 +6706,31 @@ impl App {
     /// them, since text set in pixels doesn't stand on its cells' columns.
     fn mark_listed(&self, grid: &mut Grid, find: &Find) {
         for (y, x, w, on) in self.listed_marks(grid, find) {
-            let color = if on {
-                self.theme.selection
+            // The one Find is on is the blue, ringed where there are pixels, as in a file.
+            let (color, ring) = if on {
+                (self.theme.current_match(), Some(self.theme.focus))
             } else {
-                self.theme.found
+                (self.theme.found, None)
             };
             let spot = Rect::new(x, y, w, 1);
             // One or the other: painted letters aren't over their cells, so a mark on the
             // cells too would show beside them. Code is its cells' own letters in pixels too.
             let painted = !self.measure.in_cells() && grid.cell(x, y).style.painted;
             if painted {
-                self.mark_painted(grid, spot, color);
+                self.mark_painted(grid, spot, (color, ring));
             } else {
                 grid.set_style(spot, |style| Style { bg: color, ..style });
+                if let Some(ring) = ring.filter(|_| !self.measure.in_cells()) {
+                    let shape = Bounds::cells(f32::from(x), f32::from(y), f32::from(w), 1.0);
+                    grid.panel(shape, 4, None, Some(ring));
+                }
             }
         }
     }
 
     /// Puts a mark behind the painted letters that stand in `spot`'s cells: the run of text
     /// painted on that row whose letters those are, measured to where they start and end.
-    fn mark_painted(&self, grid: &mut Grid, spot: Rect, color: Rgb) {
+    fn mark_painted(&self, grid: &mut Grid, spot: Rect, (color, ring): (Rgb, Option<Rgb>)) {
         let unit = cellix_render::UNIT;
         let letters: Vec<char> = (spot.x..spot.right())
             .filter_map(|x| grid.cell(x, spot.y).symbol.chars().next())
@@ -6776,7 +6783,7 @@ impl App {
             bounds,
             radius: 8,
             fill: Some(color),
-            border: None,
+            border: ring,
             shadow: false,
             dashed: false,
             inset: false,
@@ -9840,8 +9847,14 @@ impl App {
                     Some(ThreadHit::Sort) => {
                         self.show_sort_menu((screen.x + 2, menu.unwrap_or(y + 1)));
                     }
-                    // Every emoji, in a panel dropping from its button.
-                    Some(ThreadHit::Emoji) => self.show_emoji((x.saturating_sub(1), y + 1)),
+                    // Every emoji, in a panel dropping from under the buttons that send what's
+                    // written: from its own button it covered the hint between them.
+                    Some(ThreadHit::Emoji) => {
+                        let send = threads::send_row(screen, threads, top, y, &*self.measure);
+                        // A row of air under the buttons, which the panel's edge stands in.
+                        let under = send.map_or(y + 1, |row| row + 2);
+                        self.show_emoji((x.saturating_sub(1), under));
+                    }
                     Some(ThreadHit::AddPicture) => {
                         self.show_picture_menu((x.saturating_sub(1), y + 1));
                     }
@@ -11038,19 +11051,25 @@ impl App {
 
     /// The orders the Comments pane can list in, as a menu at `at`, the one in use marked.
     fn show_sort_menu(&mut self, at: (u16, u16)) {
+        // The check in a column of its own, as an icon is, so every order's words start in
+        // one place: written into the words, it pushed the one in use 8 px along.
+        let colour = self.theme.text.fg;
         let items = threads::Sort::ALL
             .iter()
             .map(|sort| {
-                let mark = if *sort == self.comment_sort {
-                    "✓ "
+                let item = MenuItem::new(sort.label(), MenuAction::SortComments(*sort));
+                if *sort == self.comment_sort {
+                    item.icon(Icon::Check, colour)
                 } else {
-                    "   "
-                };
-                let label = format!("{mark}{}", sort.label());
-                MenuItem::new(label, MenuAction::SortComments(*sort))
+                    item
+                }
             })
             .collect();
         self.show_menu(at, items);
+        // It opens over the pane's cards, which are a menu's colour.
+        if let Overlay::Menu(menu) = &mut self.overlay {
+            menu.over_card = true;
+        }
     }
 
     /// How the Comments pane shows its list: under headings or not, which is lit, and in
@@ -16084,6 +16103,8 @@ impl App {
             Overlay::Confirm(confirm) => self.draw_confirm(grid, confirm),
             Overlay::TablePicker(picker) => picker.draw(grid, self.hover, theme),
             Overlay::Math(panel) => panel.draw(grid, self.hover, theme),
+            // It drops from under the card the comment is written on, onto the pane, so it's a
+            // menu's colour as any other.
             Overlay::Emoji(picker) => picker.draw(grid, self.hover, &*self.measure, theme),
             Overlay::NewWorktree(form) => self.draw_new_worktree(grid, form),
             Overlay::None => {}
@@ -25277,10 +25298,14 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let (x, y) = find(&grid, "note 4 about needles");
         let at = x + "note 4 about ".len() as u16;
         let bg = |grid: &Grid, x: u16, y: u16| grid.cell(x, y).style.bg;
-        assert_eq!(bg(&grid, at, y), app.theme.selection, "the one Find is on");
-        assert_eq!(bg(&grid, at + 6, y), app.theme.selection);
-        assert_ne!(bg(&grid, at - 1, y), app.theme.selection);
-        assert_ne!(bg(&grid, at + 7, y), app.theme.selection);
+        assert_eq!(
+            bg(&grid, at, y),
+            app.theme.current_match(),
+            "the one Find is on"
+        );
+        assert_eq!(bg(&grid, at + 6, y), app.theme.current_match());
+        assert_ne!(bg(&grid, at - 1, y), app.theme.current_match());
+        assert_ne!(bg(&grid, at + 7, y), app.theme.current_match());
 
         // Enter goes on, and the list scrolls to what was far below.
         enter(&mut app);
@@ -25291,7 +25316,7 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let at = x + "note 12 about ".len() as u16;
         assert_eq!(
             bg(&grid, at, y),
-            app.theme.selection,
+            app.theme.current_match(),
             "scrolled to and marked"
         );
         // Another in view is marked as found, not as the one.
@@ -25304,7 +25329,7 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         // Where text is set in pixels the mark is painted behind the letters themselves.
         app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
         let painted = screen(&app).paint.iter().any(|p| {
-            matches!(p, Paint::Panel { fill: Some(f), radius: 8, .. } if *f == app.theme.selection)
+            matches!(p, Paint::Panel { fill: Some(f), radius: 8, .. } if *f == app.theme.current_match())
         });
         assert!(painted, "a mark behind the painted letters");
         app.set_measure(Rc::new(cellix_render::CellMeasure));
@@ -25314,7 +25339,7 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert!(matches!(app.overlay, Overlay::None));
         let grid = screen(&app);
         let (x, y) = find(&grid, "note 12 about needles");
-        assert_ne!(bg(&grid, x + 14, y), app.theme.selection);
+        assert_ne!(bg(&grid, x + 14, y), app.theme.current_match());
 
         // A press on the file, and Find is the file's again.
         let sheet = app.sheet_area();
@@ -25359,7 +25384,11 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert!(grid.text().contains("1 of 2"), "{}", grid.text());
         let (x, y) = find(&grid, "line 3 needle");
         let at = x + "line 3 ".len() as u16;
-        assert_eq!(grid.cell(at, y).style.bg, app.theme.selection, "marked");
+        assert_eq!(
+            grid.cell(at, y).style.bg,
+            app.theme.current_match(),
+            "marked"
+        );
 
         enter(&mut app);
         let grid = screen(&app);
@@ -25368,7 +25397,7 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let at = x + "line 110 ".len() as u16;
         assert_eq!(
             grid.cell(at, y).style.bg,
-            app.theme.selection,
+            app.theme.current_match(),
             "scrolled to"
         );
 
@@ -25747,6 +25776,62 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert_eq!(order(&app), [2, 1, 3]);
     }
 
+    /// The order's menu opens over the pane's cards, which are a menu's colour, so it stands a
+    /// step above them; the order in use has its check in a column of its own, every order's
+    /// words starting in one place. Written into the words, the check pushed them 8 px along.
+    #[test]
+    fn the_order_menu_stands_over_the_cards_with_its_check_in_a_column() {
+        let (dir, mut app) = project();
+        app.show_sidebar = false;
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        let fields = r#""id":1,"file":"alpha.txt","line":1,"text":"a note","quote":"""#;
+        app.threads = vec![serde_json::from_str(&format!("{{{fields}}}")).unwrap()];
+        app.run(Command::ShowComments);
+        // Painted words overlap in the cells' text, which has its button as "DDocument orde".
+        let (x, y) = find(&screen(&app), "Document");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        app.handle(mouse(MouseKind::Up, x + 1, y));
+        assert!(matches!(app.overlay, Overlay::Menu(_)));
+        let grid = screen(&app);
+        let lifted = app.theme.over_card().popup;
+        assert_ne!(lifted, app.theme.popup);
+        let over = grid
+            .paint
+            .iter()
+            .any(|p| matches!(p, Paint::Panel { fill: Some(f), shadow: true, .. } if *f == lifted));
+        assert!(over, "the menu a step above the card's colour");
+        let starts = |words: &str| -> Vec<i32> {
+            grid.paint
+                .iter()
+                .filter_map(|p| match p {
+                    Paint::Text { text, x, .. } if text == words => Some(*x),
+                    _ => None,
+                })
+                .collect()
+        };
+        let newest = starts("Newest first");
+        assert_eq!(newest.len(), 1);
+        assert_eq!(starts("Oldest first"), newest, "one place for the words");
+        assert!(
+            starts("Document order").contains(&newest[0]),
+            "the one in use too: {:?} against {newest:?}",
+            starts("Document order")
+        );
+        let check = grid.paint.iter().find_map(|p| match p {
+            Paint::Icon {
+                icon: Icon::Check,
+                bounds,
+                ..
+            } => Some(bounds.x),
+            _ => None,
+        });
+        assert!(
+            check.is_some_and(|x| x < newest[0]),
+            "its check before them"
+        );
+    }
+
     /// The column a string starts in on a row: an emoji takes two columns and one place in
     /// the row's text, so counting letters would come up short after one.
     fn column_of(grid: &Grid, y: u16, text: &str) -> u16 {
@@ -25816,6 +25901,18 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let grid = screen(&app);
         assert!(grid.text().contains("Search emoji"), "{}", grid.text());
         assert!(grid.text().contains("MOST USED") && grid.text().contains("SMILEYS"));
+        // It drops from under the buttons that send what's written, a row clear of them: it
+        // covered the hint over them, which went on under it mid-word.
+        let Overlay::Emoji(picker) = &app.overlay else {
+            unreachable!()
+        };
+        let send = hint + 1;
+        assert!(
+            grid.row_text(send).contains("Comment"),
+            "{}",
+            grid.row_text(send)
+        );
+        assert_eq!(picker.area().y, send + 2, "under the buttons");
         typed(&mut app, "tada");
         assert!(screen(&app).text().contains("party popper"));
         enter(&mut app);
@@ -27617,15 +27714,19 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             |grid: &Grid, row: usize, x: u16| grid.cell(pane.x + x, pane.y + row as u16).style.bg;
         assert_eq!(
             cell(&grid, row, 0),
-            app.theme.selection,
+            app.theme.current_match(),
             "marked as the one"
         );
         assert_eq!(
             cell(&grid, row, 4),
-            app.theme.selection,
+            app.theme.current_match(),
             "all of its letters"
         );
-        assert_ne!(cell(&grid, row, 5), app.theme.selection, "and only those");
+        assert_ne!(
+            cell(&grid, row, 5),
+            app.theme.current_match(),
+            "and only those"
+        );
         let other = showing(&app, "row 58").expect("beside it");
         assert_eq!(
             cell(&grid, other, 0),
@@ -27638,7 +27739,7 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let grid = screen(&app);
         assert!(grid.text().contains("1 of 11"), "{}", grid.text());
         let row = showing(&app, "row 5").expect("scrolled up to it");
-        assert_eq!(cell(&grid, row, 0), app.theme.selection);
+        assert_eq!(cell(&grid, row, 0), app.theme.current_match());
 
         // What the terminal prints while Find is open is looked through as it comes.
         for _ in 0.."row 5".len() {
@@ -27655,7 +27756,7 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert!(app.dock.focused);
         let grid = screen(&app);
         let row = showing(&app, "late-needle").unwrap();
-        assert_ne!(cell(&grid, row, 0), app.theme.selection);
+        assert_ne!(cell(&grid, row, 0), app.theme.current_match());
     }
 
     /// What the stand-in agent wrote down, once it has `want`.
@@ -28276,6 +28377,66 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let mut app = App::new(project.clone(), (150, 40));
         app.context = ContextPanel::new(homes);
         (dir, app, project)
+    }
+
+    /// A file can be listed twice in Agent Context, as AGENTS.md is when the session read the
+    /// instructions it's under: opened from one row, that row is the one picked, not both.
+    #[test]
+    fn a_file_listed_twice_in_agent_context_is_picked_on_the_row_pressed() {
+        let (_dir, mut app, project) = context_app();
+        // The session read AGENTS.md as well as app.rs.
+        let claude = project.parent().unwrap().join("home/.claude");
+        let transcript = cellix_agent::context::transcript_path(&claude, &project, "s1");
+        let read = serde_json::json!({"type": "assistant", "message": {"model": "claude-opus-5-5",
+            "content": [{"type": "tool_use", "id": "t2", "name": "Read",
+                "input": {"file_path": project.join("AGENTS.md")}}],
+            "usage": {"input_tokens": 10, "cache_read_input_tokens": 118_000}}});
+        let result = serde_json::json!({"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t2", "content": "x".repeat(400)}]}});
+        let mut text = fs::read_to_string(&transcript).unwrap();
+        text.push_str(&format!("{read}\n{result}\n"));
+        fs::write(&transcript, text).unwrap();
+        app.run(Command::ShowAgentContext);
+        waits_for(&mut app, |app| app.context.loaded);
+        // Its rows: under Instructions with its lines, and under Read Last Session with how
+        // often it was read. (A check names it too.)
+        let grid = screen(&app);
+        let row_of = |words: &str| {
+            (0..grid.height())
+                .find(|y| {
+                    grid.row_text(*y).contains("AGENTS.md") && grid.row_text(*y).contains(words)
+                })
+                .unwrap_or_else(|| panic!("AGENTS.md with {words:?}:\n{}", grid.text()))
+        };
+        let listed = [row_of("lines"), row_of("1×")];
+        assert!(
+            listed[0] < listed[1],
+            "under Instructions and Read Last Session"
+        );
+        // Pressed under Instructions.
+        click(&mut app, 12, listed[0]);
+        assert!(app.active_text().unwrap().contains("Never run"));
+        let picked = app.theme.on_frame().row_active;
+        let grid = screen(&app);
+        let lit: Vec<u16> = (0..grid.height())
+            .filter(|y| {
+                grid.paint_on_row(*y).any(
+                    |p| matches!(p, Paint::Panel { fill: Some(f), radius: 14, .. } if *f == picked),
+                )
+            })
+            .collect();
+        assert_eq!(lit, vec![listed[0]], "only the row pressed is picked");
+        // Pressed under what the session read, that row is the one.
+        click(&mut app, 12, listed[1]);
+        let grid = screen(&app);
+        let lit: Vec<u16> = (0..grid.height())
+            .filter(|y| {
+                grid.paint_on_row(*y).any(
+                    |p| matches!(p, Paint::Panel { fill: Some(f), radius: 14, .. } if *f == picked),
+                )
+            })
+            .collect();
+        assert_eq!(lit, vec![listed[1]]);
     }
 
     #[test]
@@ -35539,12 +35700,15 @@ while True:
         assert_eq!(grid.cell(name_x, name_y).style.bg, theme.sidebar.bg);
         assert_eq!(grid.cell(file_x, file_y).style.bg, theme.text.bg);
         assert_eq!(theme.tab.bg, theme.text.bg, "the strip is its sheet's");
-        // No chip is left inside the row.
+        // No chip is left inside the row, under the tab. (The icon at the top right of what's
+        // showing is picked, in the same blue, as it should be.)
         let top = i32::from(name_y) * 64;
+        let tab_end = (i32::from(name_x) + 10) * 64;
         let chip = grid.paint.iter().any(|p| {
             matches!(p, Paint::Panel { bounds, fill: Some(f), .. }
                 if *f == theme.row_active && bounds.y > top && bounds.y + bounds.h < top + 64
-                    && bounds.x >= i32::from(app.dock_area().unwrap().x) * 64)
+                    && bounds.x >= i32::from(app.dock_area().unwrap().x) * 64
+                    && bounds.x < tab_end)
         });
         assert!(!chip, "no chip under the tab in front");
         // A session's tab is the same, and its screen is the pane's colour.
@@ -35862,7 +36026,7 @@ while True:
                         border: Some(edge),
                         ..
                     } if inside(bounds) && bounds.w > (right - left) - unit => {
-                        assert_eq!(*edge, app.theme.popup_border, "the track's line");
+                        assert_eq!(*edge, app.theme.field_line(), "the track's line");
                         tracks += 1;
                     }
                     Paint::Panel {
@@ -35912,6 +36076,53 @@ while True:
         assert_eq!(cell(&app), app.theme.text.bg);
         app.set_measure(Rc::new(cellix_render::CellMeasure));
         assert_eq!(cell(&app), app.theme.button);
+    }
+
+    /// The dark theme's card in Settings shows its panels: the frame, a sidebar in what's
+    /// raised and a sheet, three colours apart. In the frame's and the sheet's own, 1.07 to 1
+    /// apart at that size, its panels didn't show.
+    #[test]
+    fn a_themes_card_shows_its_panels() {
+        let (_dir, mut app) = project();
+        app.run(Command::OpenSettings);
+        let area = app.sheet_area();
+        let card = {
+            let spots = app.settings_page.as_ref().unwrap().controls(area);
+            spots
+                .iter()
+                .find(|(_, c)| *c == Control::Theme("dark"))
+                .unwrap()
+                .0
+        };
+        let unit = cellix_render::UNIT;
+        let inside = |b: &Bounds| {
+            b.x >= i32::from(card.x) * unit
+                && b.x + b.w <= i32::from(card.right()) * unit
+                && b.y >= i32::from(card.y) * unit
+                && b.y < i32::from(card.bottom()) * unit
+        };
+        let grid = screen(&app);
+        let fills: Vec<Rgb> = grid
+            .paint
+            .iter()
+            .filter_map(|p| match p {
+                Paint::Panel {
+                    bounds,
+                    fill: Some(fill),
+                    ..
+                } if inside(bounds) => Some(*fill),
+                _ => None,
+            })
+            .collect();
+        let dark = app.theme;
+        assert!(!dark.is_light());
+        for (name, color) in [
+            ("the frame", dark.activity.bg),
+            ("a sidebar in what's raised", dark.popup),
+            ("a sheet", dark.text.bg),
+        ] {
+            assert!(fills.contains(&color), "{name}: {fills:?}");
+        }
     }
 
     #[test]

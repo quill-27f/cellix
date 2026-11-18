@@ -348,6 +348,18 @@ impl Theme {
         self
     }
 
+    /// The match Find is on, in a file, on a page, in a terminal or in a list: filled with the
+    /// blue, with a ring in the focus colour round it where there are pixels (`focus`). It was
+    /// the selection's colour, 1.2 to 1 from the other matches. Light, the selection's blue,
+    /// which the light theme's words read on.
+    pub fn current_match(&self) -> Rgb {
+        if self.is_light() {
+            self.selection
+        } else {
+            mix(self.text.bg, self.accent, 0.35)
+        }
+    }
+
     /// A warning, beside an error in the deleted colour. Dark, graphite's yellow, quieter than
     /// its red; light, the attention colour, as it was.
     pub fn warning(&self) -> Rgb {
@@ -478,6 +490,54 @@ impl Theme {
         }
     }
 
+    /// The line round a text box that doesn't have the keyboard. Dark, white at 20% over a
+    /// menu, 2.4 to 1 on the frame: the box is sunk only a step under the frame, so on the
+    /// sidebar its fill is all but the frame's, and a menu's line round it (1.69 to 1) left an
+    /// empty Replace box nearly gone. Light, a menu's line, which reads on white and on Latte's
+    /// grounds.
+    pub fn field_line(&self) -> Rgb {
+        if self.is_light() {
+            self.popup_border
+        } else {
+            mix(self.popup, Rgb(255, 255, 255), 0.2)
+        }
+    }
+
+    /// The theme a menu is drawn in where it opens over a card, which is a menu's colour: dark,
+    /// the menu and what's on it a step up, white at 11% over it, so it stands above the card
+    /// and above what's set on a card in a quiet button's fill, an agent's answer (they were one
+    /// colour, the menu's edge the only line between them; at 5.5% the menu was darker than an
+    /// answer under it). Light, as it is: a white menu over a white card has its line and its
+    /// shadow.
+    pub fn over_card(&self) -> Self {
+        if self.is_light() {
+            return *self;
+        }
+        let raised = mix(self.popup, Rgb(255, 255, 255), 0.11);
+        let by = (
+            i16::from(raised.0) - i16::from(self.popup.0),
+            i16::from(raised.1) - i16::from(self.popup.1),
+            i16::from(raised.2) - i16::from(self.popup.2),
+        );
+        let mut theme = *self;
+        theme.popup = raised;
+        for color in [
+            &mut theme.popup_hover,
+            &mut theme.pick,
+            &mut theme.popup_border,
+        ] {
+            *color = shifted(*color, by);
+        }
+        // Its quiet words, brought toward the words' own colour until they read as well as on a
+        // menu's own colour.
+        let wanted = contrast(self.popup_dim, self.popup);
+        theme.popup_dim = (0..=20)
+            .map(|step| mix(self.popup_dim, self.text.fg, step as f32 / 20.0))
+            .find(|lifted| contrast(*lifted, raised) >= wanted)
+            .unwrap_or(self.text.fg);
+        theme
+    }
+
     /// Every button that isn't the main one, wherever it stands: the quiet fill over what's
     /// behind it, and a second step off that under the pointer, so the hover always shows.
     /// A pointed one took the menu's hover in places, which is darker than the quiet fill on a
@@ -557,7 +617,10 @@ impl Default for Theme {
         // herdr lays white over whatever is under it, at these strengths of 255.
         let white = Rgb(255, 255, 255);
         let hover = |ground: Rgb| mix(ground, white, 14.0 / 255.0);
-        let selected = |ground: Rgb| mix(ground, white, 23.0 / 255.0);
+        // What's picked is the blue over its ground, as herdr.dev's picked rows are: one kind
+        // of picked, in every list, palette and menu and behind a commented span. herdr's
+        // white at 9% was 1.10 to 1 from a hover and read as one beside it.
+        let picked = |ground: Rgb| mix(ground, blue, 0.16);
         let hairline = |ground: Rgb| mix(ground, white, 24.0 / 255.0);
         let strong = |ground: Rgb| mix(ground, white, 36.0 / 255.0);
         Self {
@@ -570,14 +633,15 @@ impl Default for Theme {
             tab_active: style(text, sheet),
             gutter: style(third, sheet),
             selection: Rgb(0x39, 0x44, 0x54),
-            // Quieter than the selection, which marks the match Find is on.
-            found: mix(sheet, yellow, 0.18),
+            // The yellow at 28%, 1.9 to 1 on the sheet: at 18% it was 1.48, too faint to find.
+            // The match Find is on is the blue, with a ring round it (`current_match`).
+            found: mix(sheet, yellow, 0.28),
             row_hover: hover(sheet),
             page_hover: hover(sheet),
             popup_hover: hover(raised),
-            row_active: selected(sheet),
+            row_active: picked(sheet),
             accent: blue,
-            tint: mix(sheet, blue, 0.16),
+            tint: picked(sheet),
             accept_tint: mix(sheet, green, 0.15),
             attention: blocked,
             keyword: mauve,
@@ -617,7 +681,7 @@ impl Default for Theme {
             disabled: dim,
             ignored: dim,
             popup_border: hairline(raised),
-            pick: selected(raised),
+            pick: picked(raised),
             button: blue,
             // herdr writes on its blue in the sheet's colour.
             button_text: sheet,
@@ -636,7 +700,7 @@ fn mix(from: Rgb, to: Rgb, by: f32) -> Rgb {
 }
 
 /// How far apart two colours are to the eye, as WCAG counts it: 1 to 21.
-fn contrast(a: Rgb, b: Rgb) -> f32 {
+pub(crate) fn contrast(a: Rgb, b: Rgb) -> f32 {
     let channel = |c: u8| {
         let c = f32::from(c) / 255.0;
         if c <= 0.03928 {
@@ -873,14 +937,24 @@ mod tests {
         assert_eq!(dark.git_added, Rgb(0x4c, 0xc4, 0x8c), "done, and added");
         assert_eq!(dark.git_modified, Rgb(0xd8, 0xbe, 0x87), "changed");
         assert_eq!(dark.error, Rgb(0xdc, 0x8c, 0x95), "removed or failed");
-        // herdr lays white over its ground: measured on herdr.dev as 9% behind a picked row
-        // and 9.4% for a hairline, and 5.5% under the pointer in herdr's code.
+        // herdr lays white over its ground: 9.4% for a hairline, measured on herdr.dev, and
+        // 5.5% under the pointer in herdr's code. What's picked is the blue at 16% over its
+        // ground, as herdr.dev's picked rows are blue: herdr's white at 9% read as a hover.
         let over = |ground: Rgb, share: f32| mix(ground, Rgb(255, 255, 255), share);
+        let blue = |ground: Rgb| mix(ground, dark.accent, 0.16);
         let near = |a: Rgb, b: Rgb| {
             a.0.abs_diff(b.0) <= 1 && a.1.abs_diff(b.1) <= 1 && a.2.abs_diff(b.2) <= 1
         };
+        // On the frame, a picked row is the sheet's moved as far as the ground did: within a
+        // step or two of the blue laid over the frame itself.
+        let (now, wanted) = (side.row_active, blue(side.sidebar.bg));
+        assert!(
+            now.0.abs_diff(wanted.0) <= 2
+                && now.1.abs_diff(wanted.1) <= 2
+                && now.2.abs_diff(wanted.2) <= 2,
+            "a picked row on the frame is {now:?}, not {wanted:?}"
+        );
         for (name, now, wanted) in [
-            ("a picked row", side.row_active, over(side.sidebar.bg, 0.09)),
             (
                 "a pointed row",
                 side.row_hover,
@@ -888,7 +962,12 @@ mod tests {
             ),
             ("a hairline", dark.border, over(dark.text.bg, 0.094)),
             ("a menu's line", dark.popup_border, over(dark.popup, 0.094)),
-            ("a menu's pick", dark.pick, over(dark.popup, 0.09)),
+            ("a menu's pick", dark.pick, blue(dark.popup)),
+            (
+                "a picked row on a sheet",
+                dark.row_active,
+                blue(dark.text.bg),
+            ),
             ("a menu's hover", dark.popup_hover, over(dark.popup, 0.055)),
         ] {
             assert!(near(now, wanted), "{name} is {now:?}, not {wanted:?}");
@@ -1042,6 +1121,99 @@ mod tests {
         ] {
             assert!(brightness(panel.bg) < 80, "{panel:?}");
         }
+    }
+
+    /// One kind of picked: in a list on the frame or a sheet, in a palette or a menu, it's the
+    /// blue over its ground, and what's under the pointer stays the white herdr lays, so the
+    /// two can't be taken for each other (they were 1.10 to 1 apart, both white). Find's other
+    /// matches are the yellow and plain to see, and the one it's on is the blue, set apart
+    /// from them by its colour and from the sheet as plainly.
+    #[test]
+    fn picked_pointed_and_found_each_look_their_own() {
+        let dark = Theme::default();
+        let side = dark.on_frame();
+        let blue = |c: Rgb| i16::from(c.2) - i16::from(c.0) >= 20;
+        let yellow = |c: Rgb| i16::from(c.0) - i16::from(c.2) >= 10;
+        for (name, picked, pointed, ground) in [
+            (
+                "on the sidebar",
+                side.row_active,
+                side.row_hover,
+                side.sidebar.bg,
+            ),
+            ("on a sheet", dark.row_active, dark.page_hover, dark.text.bg),
+            ("in a menu", dark.pick, dark.popup_hover, dark.popup),
+            ("a commented span", dark.tint, dark.page_hover, dark.text.bg),
+        ] {
+            assert!(blue(picked), "{name}: picked {picked:?} is the blue");
+            assert!(!blue(pointed), "{name}: pointed {pointed:?} isn't");
+            assert!(
+                contrast(picked, ground) > contrast(pointed, ground),
+                "{name}: picked stands further off its ground than pointed"
+            );
+            let ratio = contrast(dark.text.fg, picked);
+            assert!(ratio >= 4.5, "{name}: words on it {ratio:.2} to 1");
+        }
+        let sheet = dark.text.bg;
+        let (found, on) = (dark.found, dark.current_match());
+        assert!(yellow(found), "other matches {found:?} are the yellow");
+        assert!(blue(on), "the one Find is on {on:?} is the blue");
+        assert_ne!(on, dark.selection, "and not a selection's colour");
+        for (name, color) in [("another match", found), ("the match it's on", on)] {
+            let ratio = contrast(color, sheet);
+            assert!(ratio >= 1.8, "{name} is {ratio:.2} to 1 on the sheet");
+            let ratio = contrast(dark.text.fg, color);
+            assert!(ratio >= 4.5, "words on {name} are {ratio:.2} to 1");
+        }
+        // Light keeps its own: the blue it picks in, and the selection's for the match.
+        let light = Theme::named(Some("light"));
+        assert_eq!(light.current_match(), light.selection);
+        assert_eq!(light.row_active, Rgb(0xC8, 0xD6, 0xF8));
+    }
+
+    /// A text box without the keyboard shows where it is on any ground: its line reads at 1.8 to
+    /// 1 or better on the frame, a sheet and a menu, where a menu's line was 1.69 on the frame
+    /// and the sunk fill 1.03, and an empty Replace box all but went. A menu that opens over a
+    /// card, a menu's colour, stands a step above it, and its hover and pick go up with it.
+    #[test]
+    fn a_box_and_a_menu_over_a_card_stand_off_their_ground() {
+        let dark = Theme::default();
+        for (name, ground) in [
+            ("the frame", dark.activity.bg),
+            ("a sheet", dark.text.bg),
+            ("a menu", dark.popup),
+        ] {
+            let ratio = contrast(dark.field_line(), ground);
+            assert!(ratio >= 1.8, "a box's line on {name} is {ratio:.2} to 1");
+        }
+        let light = Theme::named(Some("light"));
+        let ratio = contrast(light.field_line(), light.popup);
+        assert!(ratio >= 1.8, "light, on a menu {ratio:.2} to 1");
+        let over = dark.over_card();
+        let ratio = contrast(over.popup, dark.popup);
+        assert!(
+            ratio >= 1.15,
+            "a menu over a card is {ratio:.2} to 1 off it"
+        );
+        // And above what's set on a card in a quiet button's fill, as an agent's answer is.
+        let answer = dark.quiet_button(dark.popup);
+        assert!(
+            brightness(over.popup) > brightness(answer),
+            "{:?} over {answer:?}",
+            over.popup
+        );
+        for (name, now, was) in [
+            ("its hover", over.popup_hover, dark.popup_hover),
+            ("its pick", over.pick, dark.pick),
+            ("its line", over.popup_border, dark.popup_border),
+        ] {
+            assert!(brightness(now) > brightness(was), "{name} goes up with it");
+        }
+        assert!(
+            contrast(over.popup_dim, over.popup) >= 4.5,
+            "its quiet words still read"
+        );
+        assert_eq!(light.over_card().popup, light.popup, "light keeps white");
     }
 
     /// Every action that isn't the main one is one quiet kind of button, on the frame, a sheet,

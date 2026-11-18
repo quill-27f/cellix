@@ -1971,6 +1971,12 @@ impl Editor {
                     Bounds::cells(area.x as f32, below + n as f32 * 0.04, area.w as f32, 0.04);
                 grid.wash(band, 0, (Rgb(0, 0, 0), alpha), None);
             }
+            // On graphite's dark sheet a shadow hardly shows (1.05 to 1), so a hairline, as
+            // between any two regions, says where the pinned lines end.
+            if !theme.is_light() {
+                let line = Bounds::cells(area.x as f32, below, area.w as f32, 0.0);
+                grid.hairline(line, theme.border);
+            }
         }
     }
 
@@ -4364,10 +4370,17 @@ impl Editor {
                 head: end,
                 goal: None,
             };
-            self.draw_range(grid, area, (gutter, &rows), &s, theme.found);
+            self.draw_range(grid, area, (gutter, &rows), &s, (theme.found, None));
         }
         for s in self.selections.iter().filter(|s| !s.is_empty()) {
-            self.draw_range(grid, area, (gutter, &rows), s, theme.selection);
+            // The match Find is on, which Find selected: the blue, ringed where there are
+            // pixels, so it's told from the other matches and from a selection.
+            let mark = if self.found.contains(&(s.start(), s.end())) {
+                (theme.current_match(), Some(theme.focus))
+            } else {
+                (theme.selection, None)
+            };
+            self.draw_range(grid, area, (gutter, &rows), s, mark);
         }
         if focused {
             let head = self.selections.primary().head;
@@ -4796,13 +4809,24 @@ impl Editor {
         let quoted = |at: Option<usize>| {
             at.is_some_and(|at| self.quoted.borrow().iter().any(|q| at >= q.0 && at < q.1))
         };
+        // The match Find is on is the selection Find made of it.
+        let current = |at: Option<usize>| {
+            at.is_some_and(|at| {
+                self.selections.iter().any(|s| {
+                    at >= s.start() && at < s.end() && self.found.contains(&(s.start(), s.end()))
+                })
+            })
+        };
+        // A commented span is picked, as a picked row is: the blue over the page.
         let mark = |at: Option<usize>| {
-            if selected(at) {
+            if current(at) {
+                Some(theme.current_match())
+            } else if selected(at) {
                 Some(theme.selection)
             } else if found(at) {
                 Some(theme.found)
             } else {
-                quoted(at).then_some(theme.pick)
+                quoted(at).then_some(theme.tint)
             }
         };
         let issues = self.current_issues();
@@ -4897,7 +4921,8 @@ impl Editor {
             let width: f32 = run.iter().map(|g| g.advance).sum();
             if let Some(color) = mark(g.at) {
                 let bounds = Bounds::cells(x, text_y + 0.06, width, 0.88);
-                grid.panel(bounds, 6, Some(color), None);
+                let ring = current(g.at).then_some(theme.focus);
+                grid.panel(bounds, 6, Some(color), ring);
             }
             match g.tone {
                 Tone::TableLine => {}
@@ -5156,13 +5181,15 @@ impl Editor {
         }
     }
 
+    /// Marks a range of the code in `bg`, and on the pixel tiers rings each row's piece of it
+    /// in `ring` when there is one.
     fn draw_range(
         &self,
         grid: &mut Grid,
         area: Rect,
         (gutter, rows): (u16, &Rows),
         s: &Selection,
-        bg: Rgb,
+        (bg, ring): (Rgb, Option<Rgb>),
     ) {
         let rope = self.buffer.rope();
         let (first, last) = (rope.char_to_line(s.start()), rope.char_to_line(s.end()));
@@ -5183,6 +5210,11 @@ impl Editor {
                 grid.set_style(Rect::new(x as u16, y, w as u16, 1), |style| {
                     cellix_render::Style { bg, ..style }
                 });
+                if let Some(ring) = ring.filter(|_| !self.measure.in_cells() && w > 0) {
+                    // Round the marked cells, at their edges.
+                    let shape = Bounds::cells(x as f32, f32::from(y), w as f32, 1.0);
+                    grid.panel(shape, 4, None, Some(ring));
+                }
             }
         }
     }

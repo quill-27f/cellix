@@ -1909,10 +1909,11 @@ pub fn input(grid: &mut Grid, line: Rect, field: &Input, measure: &dyn Measure, 
         ..theme.sidebar
     };
     grid.fill(line, style);
+    // A box without the keyboard keeps a line that shows on any ground (`field_line`).
     let border = if field.focused {
         theme.focus
     } else {
-        theme.popup_border
+        theme.field_line()
     };
     grid.field(line, field.behind, theme.input, border);
     let (x, y) = (line.x as f32 + PADDING, line.y);

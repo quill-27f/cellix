@@ -102,9 +102,11 @@ const CARD_HEIGHT: u16 = 8;
 const PREVIEW_ROWS: u16 = 6;
 const SEGMENT_WIDTH: u16 = 11;
 /// A row of choices' track is a button's height, and the chosen one stands inside its line,
-/// this far in from its sides and its top and foot, in columns and rows: about 3 px each way.
+/// this far in from its sides, its top and its foot, in columns and rows: 2 px each way. The
+/// line is set on whole pixels and the fill isn't, which at the same top and foot left the
+/// fill on the line at its top and 2 px off it at its foot.
 const SEGMENT_HEIGHT: f32 = 0.88;
-const SEGMENT_INSET: (f32, f32) = (0.18, 0.07);
+const SEGMENT_INSET: (f32, f32, f32) = (0.18, 0.1, 0.07);
 /// How far inside its row the wash behind a pointed row starts and ends, in rows: 4 of a
 /// row's 64 paint units, so its middle is the row's. At 0.055 it rounded to 4 over and 3
 /// under, 0.4 px low, which a button standing inside the wash showed as 3 px of it over the
@@ -1925,7 +1927,8 @@ pub(crate) fn draw_segments(
         f32::from(right - left),
         SEGMENT_HEIGHT,
     );
-    grid.panel(track, 22, None, Some(theme.popup_border));
+    // The line a text box without the keyboard has: a menu's was 1.34 to 1 on a dialog.
+    grid.panel(track, 22, None, Some(theme.field_line()));
     for (rect, label, on) in segments {
         let hovered = !on && hover.is_some_and(|h| rect.contains(h.0, h.1));
         let fill = if *on {
@@ -1956,7 +1959,7 @@ pub(crate) fn draw_segments(
                 f32::from(rect.x) + SEGMENT_INSET.0,
                 top + SEGMENT_INSET.1,
                 f32::from(rect.w) - SEGMENT_INSET.0 * 2.0,
-                SEGMENT_HEIGHT - SEGMENT_INSET.1 * 2.0,
+                SEGMENT_HEIGHT - SEGMENT_INSET.1 - SEGMENT_INSET.2,
             );
             grid.panel(inner, 16, Some(fill), None);
         }
@@ -2013,7 +2016,9 @@ fn draw_card(grid: &mut Grid, rect: Rect, name: &str, (on, hovered): (bool, bool
         None,
     );
     let inner = |left: f32, width: f32| Bounds::cells(left, y + 0.4, width, rows - 0.8);
-    grid.panel(inner(x + 1.4, w * 0.26), 12, Some(sample.sidebar.bg), None);
+    // The sidebar in what's raised, a menu's colour: in the frame's or the sheet's, as it
+    // really is, graphite's three were 1.07 to 1 apart at this size and the panels didn't show.
+    grid.panel(inner(x + 1.4, w * 0.26), 12, Some(sample.popup), None);
     let sheet_x = x + 1.4 + w * 0.26 + 0.4;
     let sheet_w = x + w - 0.8 - sheet_x;
     grid.panel(inner(sheet_x, sheet_w), 12, Some(sample.text.bg), None);

@@ -790,6 +790,26 @@ mod tests {
         assert_ne!(bg(mine), ground);
         assert_ne!(bg(theirs), ground);
         assert_ne!(bg(mine), bg(theirs));
+        // The header's quiet choices stand raised off its band, as quiet buttons do: toward
+        // graphite's sheet they were darker than the band and looked sunk into it.
+        let (x, head) = find(&grid, "Current · HEAD");
+        let band = grid.cell(x, head).style.bg;
+        let light = |c: Rgb| u32::from(c.0) + u32::from(c.1) + u32::from(c.2);
+        let chips: Vec<Rgb> = grid
+            .paint_on_row(head)
+            .filter_map(|p| match p {
+                cellix_render::Paint::Panel {
+                    fill: Some(fill),
+                    radius: 22,
+                    ..
+                } if *fill != app.theme.button && *fill != app.theme.text.bg => Some(*fill),
+                _ => None,
+            })
+            .collect();
+        assert!(!chips.is_empty(), "the quiet choices");
+        for chip in chips {
+            assert!(light(chip) > light(band), "{chip:?} raised off {band:?}");
+        }
         // Committing with the conflict left says why not.
         app.finish_underway();
         assert!(screen(&app).text().contains("still in conflict"));

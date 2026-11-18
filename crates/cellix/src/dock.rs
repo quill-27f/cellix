@@ -1513,7 +1513,7 @@ impl Session {
                 bg = theme.selection;
             }
             match found(x, y) {
-                Some(true) => bg = theme.selection,
+                Some(true) => bg = theme.current_match(),
                 Some(false) => bg = theme.found,
                 None => {}
             }
@@ -1539,6 +1539,21 @@ impl Session {
             };
             if UnicodeWidthStr::width(shown) > 0 {
                 grid.put_str(area.x + x, area.y + y, shown, style, area.right());
+            }
+        }
+        // The match Find is on is ringed too where there are pixels, as in a file.
+        let current = self.found_at.and_then(|at| self.found.get(at));
+        if let Some(&(line, column, columns)) = current {
+            let row = line as i32 - top;
+            if (0..i32::from(area.h)).contains(&row) && column < area.w {
+                let wide = columns.min(area.w - column);
+                let shape = Bounds::cells(
+                    f32::from(area.x + column),
+                    f32::from(area.y) + row as f32,
+                    f32::from(wide),
+                    1.0,
+                );
+                grid.panel(shape, 4, None, Some(theme.focus));
             }
         }
         self.draw_pictures(grid, area, theme);

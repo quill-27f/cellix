@@ -716,8 +716,9 @@ mod tests {
         let grid = screen(&app);
         let text = grid.text();
         assert!(text.contains("1 of "), "{text}");
-        let marked = (0..grid.height())
-            .any(|y| (0..grid.width()).any(|x| grid.cell(x, y).style.bg == app.theme.selection));
+        let marked = (0..grid.height()).any(|y| {
+            (0..grid.width()).any(|x| grid.cell(x, y).style.bg == app.theme.current_match())
+        });
         assert!(marked, "the one Find is on is marked:\n{text}");
         press(&mut app, Key::Esc);
         assert!(matches!(app.overlay, crate::app::Overlay::None));

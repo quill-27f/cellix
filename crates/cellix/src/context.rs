@@ -85,8 +85,8 @@ pub enum Hit {
     Agent,
     Fold(Section),
     More(Section),
-    /// A file to open, at a line counting from one.
-    Open(PathBuf, Option<usize>),
+    /// A file to open, at a line counting from one, from a row under this section.
+    Open(PathBuf, Option<usize>, Section),
     /// A row with nothing to open, as a plugin's skill: say why.
     Say(String),
 }
@@ -144,6 +144,9 @@ pub struct ContextPanel {
     measure: Rc<dyn Measure>,
     /// The file last opened from the panel, whose row stays marked.
     pub selected: Option<PathBuf>,
+    /// The section it was opened from: a file can be listed twice, an instruction the
+    /// session also read, and only the row pressed is the one picked.
+    selected_in: Option<Section>,
     /// The transcript of the Claude Code session running in the dock, when it's known; else
     /// the newest one written for this project is read.
     pub session_file: Option<PathBuf>,
@@ -190,6 +193,7 @@ impl ContextPanel {
             width: Cell::new(30),
             measure: Rc::new(CellMeasure),
             selected: None,
+            selected_in: None,
             session_file: None,
             homes,
             loaded: false,
@@ -331,6 +335,24 @@ impl ContextPanel {
         }
     }
 
+    /// The section a row is listed under.
+    fn section_of(&self, line: &Line) -> Option<Section> {
+        match line {
+            Line::Check(..) => Some(Section::Checks),
+            Line::Instruction(_) => Some(Section::Instructions),
+            Line::File(_) => Some(Section::Read),
+            Line::Item(i) => [
+                Section::Skills,
+                Section::Commands,
+                Section::Hooks,
+                Section::Mcp,
+            ]
+            .into_iter()
+            .find(|section| self.items(*section).contains(i)),
+            _ => None,
+        }
+    }
+
     fn items(&self, section: Section) -> Vec<usize> {
         let wanted = |kind: ItemKind| match section {
             Section::Skills => matches!(
@@ -435,12 +457,12 @@ impl ContextPanel {
             Line::More(section, _) => Some(Hit::More(section)),
             Line::Check(i, _) => {
                 let check = self.checks.get(i)?;
-                Some(Hit::Open(check.path.clone(), check.line))
+                Some(Hit::Open(check.path.clone(), check.line, Section::Checks))
             }
             Line::Instruction(i) => {
                 let file = self.context.instructions.get(i)?;
                 if file.exists() {
-                    Some(Hit::Open(file.path.clone(), None))
+                    Some(Hit::Open(file.path.clone(), None, Section::Instructions))
                 } else {
                     Some(Hit::Say(format!(
                         "{} doesn't exist yet",
@@ -450,7 +472,8 @@ impl ContextPanel {
             }
             Line::Item(i) => {
                 let item = self.context.items.get(i)?;
-                Some(Hit::Open(item.path.clone(), item.line))
+                let section = self.section_of(&Line::Item(i))?;
+                Some(Hit::Open(item.path.clone(), item.line, section))
             }
             Line::Listed(i) => {
                 let (name, _) = self.listed.get(i)?;
@@ -460,7 +483,7 @@ impl ContextPanel {
             }
             Line::File(i) => {
                 let file = self.session.as_ref()?.files.get(i)?;
-                Some(Hit::Open(file.path.clone(), None))
+                Some(Hit::Open(file.path.clone(), None, Section::Read))
             }
             _ => None,
         }
@@ -488,8 +511,9 @@ impl ContextPanel {
                 self.open.insert(section);
             }
             other => {
-                if let Hit::Open(path, _) = &other {
+                if let Hit::Open(path, _, section) = &other {
                     self.selected = Some(path.clone());
+                    self.selected_in = Some(*section);
                 }
                 return Some(other);
             }
@@ -547,9 +571,11 @@ impl ContextPanel {
                     | Line::Agent
                     | Line::Check(..)
             );
+            // The row it was opened from, not every row that lists the same file.
             let selected = self.selected.is_some()
                 && self.path_of(line) == self.selected.as_deref()
-                && self.path_of(line).is_some();
+                && self.path_of(line).is_some()
+                && self.section_of(line) == self.selected_in;
             if (hovered && clickable) || selected {
                 let wash = if selected {
                     theme.row_active

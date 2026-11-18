@@ -254,8 +254,13 @@ pub fn draw(
                     (Choice::Incoming, true) => {
                         (Some(theme.quiet_button(theme.button)), theme.button_text)
                     }
-                    // Toward the sheet, not the text: a chip lighter than the band left
-                    // its words at 3.8 to 1.
+                    // Light, toward the sheet, which is lighter: a chip deeper than the band
+                    // left its words at 3.8 to 1. Dark, the quiet buttons every other action
+                    // is, raised off the band: toward graphite's sheet they were darker than
+                    // the band and looked sunk into it.
+                    (_, on) if !theme.is_light() => {
+                        (Some(theme.secondary(behind, on)), theme.text.fg)
+                    }
                     (_, false) => (Some(mix(behind, theme.text.bg, 45)), theme.text.fg),
                     (_, true) => (Some(mix(behind, theme.text.bg, 70)), theme.text.fg),
                 };

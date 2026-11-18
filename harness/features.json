@@ -5780,5 +5780,40 @@
     "title": "New Workspace is a quiet button a step further off the bar under the pointer",
     "test": "new_workspace_is_a_quiet_button_that_shows_the_pointer",
     "passes": true
+  },
+  {
+    "id": "picked-is-blue",
+    "milestone": 15,
+    "title": "Graphite's picked rows, palettes, menus and commented spans are the blue over their ground, apart from a pointed row's white",
+    "test": "picked_pointed_and_found_each_look_their_own",
+    "passes": true
+  },
+  {
+    "id": "context-one-pick",
+    "milestone": 15,
+    "title": "A file listed twice in Agent Context is picked only on the row it was opened from",
+    "test": "a_file_listed_twice_in_agent_context_is_picked_on_the_row_pressed",
+    "passes": true
+  },
+  {
+    "id": "box-line-and-menu-over-card",
+    "milestone": 15,
+    "title": "A text box without the keyboard keeps a line that shows, and a menu over a card stands a step above it",
+    "test": "a_box_and_a_menu_over_a_card_stand_off_their_ground",
+    "passes": true
+  },
+  {
+    "id": "order-menu-check-column",
+    "milestone": 15,
+    "title": "The Comments pane's order menu stands over the cards with its check in a column of its own",
+    "test": "the_order_menu_stands_over_the_cards_with_its_check_in_a_column",
+    "passes": true
+  },
+  {
+    "id": "theme-card-panels",
+    "milestone": 15,
+    "title": "Settings' dark theme card shows its frame, sidebar and sheet",
+    "test": "a_themes_card_shows_its_panels",
+    "passes": true
   }
 ]
