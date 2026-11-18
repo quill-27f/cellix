@@ -616,6 +616,46 @@ fn pty_restores_the_terminal_on_exit() {
     }
 }
 
+/// Where `words` are on the screen, as the terminal's column and row.
+#[cfg(unix)]
+fn place_of(screen: &Screen, words: &str) -> (usize, usize) {
+    let contents = screen.contents();
+    contents
+        .lines()
+        .enumerate()
+        .find_map(|(row, line)| Some((line.find(words)?, row)))
+        .unwrap_or_else(|| panic!("{words:?} isn't on screen:\n{contents}"))
+}
+
+/// Ghostty and xterm keep a Shift+click for their own selection unless the program asks for
+/// it with XTSHIFTESCAPE, so Cellix asks as it starts and hands it back as it ends; a
+/// Shift+click on a page then selects from the click before it, with the buttons for a
+/// comment beside it.
+#[test]
+#[cfg(unix)]
+fn pty_a_shift_click_on_a_page_selects_from_the_click_before() {
+    let dir = project();
+    let page = "# Scan\n\nThe first words.\n\n- an item\n\n> a quote\n\nThe last words.\n";
+    std::fs::write(dir.path().join("scan.md"), page).unwrap();
+    let mut screen = Screen::start(dir.path(), &["scan.md"]);
+    screen.wait_for("The last words.");
+    assert!(written(&screen).contains("\x1b[>1s"), "asks for Shift");
+    let (x, y) = place_of(&screen, "first words");
+    screen.send(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", x + 1, y + 1, x + 1, y + 1).as_bytes());
+    let (x, y) = place_of(&screen, "last words.");
+    let x = x + "last words".len();
+    // The mouse's report with Shift held: 4 in its button.
+    screen.send(format!("\x1b[<4;{};{}M\x1b[<4;{};{}m", x + 1, y + 1, x + 1, y + 1).as_bytes());
+    screen.wait_for("Ask Agent");
+    screen.send(b"\x11"); // Ctrl+Q
+    screen.wait_exit();
+    let deadline = Instant::now() + WAIT;
+    while !written(&screen).contains("\x1b[>0s") {
+        assert!(Instant::now() < deadline, "Shift was never handed back");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 /// A fake terminal that says it speaks Kitty graphics, so the binary takes the pixel path
 /// with real fonts. Returns once it has sent a tile with this size marker. Windows asks the
 /// terminal nothing, so it never takes this path.

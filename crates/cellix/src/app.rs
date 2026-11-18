@@ -396,6 +396,40 @@ enum Drag {
     PreviewBar(PdfHit),
 }
 
+/// A selection's drag held past the top or bottom of the text it selects in, which then
+/// scrolls on its own, as a browser's does, until the pointer comes back or lets go.
+#[derive(Clone, Copy, Debug)]
+struct Autoscroll {
+    /// Where the pointer is across, and the row at the edge it's past, on screen.
+    x: f32,
+    row: u16,
+    /// How far past the edge, in rows: below it when positive, above it when negative.
+    past: f32,
+    /// When the text last moved for it, and the part of a row it owes since.
+    last: std::time::Instant,
+    owed: f32,
+}
+
+/// The row of `text` nearest the pointer, and how far past its top (negative) or bottom the
+/// pointer is, in rows, when it's outside.
+fn past_edge(text: Rect, mouse: MouseEvent) -> (u16, Option<f32>) {
+    let last = text.bottom().saturating_sub(1).max(text.y);
+    let (top, bottom) = (f32::from(text.y), f32::from(text.bottom()));
+    let past = if mouse.fine_y < top {
+        Some((mouse.fine_y - top).min(-0.01))
+    } else if mouse.fine_y >= bottom {
+        Some((mouse.fine_y - bottom).max(0.01))
+    } else {
+        None
+    };
+    (mouse.y.clamp(text.y, last), past)
+}
+
+/// How fast a drag held past an edge scrolls, in rows a second: a crawl just past it, and
+/// this much faster for each row further, as browsers grow it with the distance.
+const AUTOSCROLL_RATE: f32 = 8.0;
+const AUTOSCROLL_GAIN: f32 = 16.0;
+
 /// Where a press in the Preview started, and where the pages stood then. It pans only once
 /// it has moved this far, so a click still goes to the source.
 #[derive(Clone, Copy)]
@@ -1301,6 +1335,8 @@ pub struct App {
     theme: Theme,
     registry: Rc<Registry>,
     drag: Drag,
+    /// A selection's drag held past an edge, while it is.
+    autoscroll: Option<Autoscroll>,
     message: RefCell<String>,
     clipboard: String,
     /// Text for the terminal's clipboard, sent with OSC 52 by the terminal loop.
@@ -1641,6 +1677,7 @@ impl App {
             theme: Theme::named(settings.theme.as_deref()),
             registry: Rc::default(),
             drag: Drag::None,
+            autoscroll: None,
             message: RefCell::new(String::new()),
             clipboard: String::new(),
             outgoing_clipboard: None,
@@ -2847,12 +2884,18 @@ impl App {
         let pan_hint = self.dock.pan_hint.is_some() && !self.dock.pan_hint_done;
         self.pending_ask.is_some()
             || self.pending_review.is_some()
+            || self.autoscroll.is_some()
             || spell
             || pan_hint
             || self.team_soon()
     }
 
     pub fn poll(&mut self) -> bool {
+        let scrolled = self.step_autoscroll(std::time::Instant::now());
+        self.poll_rest() || scrolled
+    }
+
+    fn poll_rest(&mut self) -> bool {
         self.tidy_inbox();
         if self.sidebar_view == SidebarView::Outline {
             self.refresh_outline();
@@ -5110,6 +5153,10 @@ impl App {
         }
         let screen = self.dock_screen()?;
         let session = self.dock.session()?;
+        // Scrolled out of view, the selection keeps its words and the buttons go till it's back.
+        if !session.selection_shows() {
+            return None;
+        }
         let (_, from, to) = session.selection()?;
         let width = COMMENT_WIDTH + ASK_WIDTH;
         // Whole rows are selected to the pane's edge, and part of one row ends where it ends.
@@ -5179,10 +5226,10 @@ impl App {
         let Some(session) = self.dock.session_mut() else {
             return;
         };
-        let Some((text, from, _)) = session.selection() else {
+        let Some((text, ..)) = session.selection() else {
             return;
         };
-        let command = session.command_before(from.1).unwrap_or_default();
+        let command = session.selection_command().unwrap_or_default();
         let tab = session.name.clone();
         // The buttons go, so the press shows it was taken.
         session.clear_selection();
@@ -9845,6 +9892,7 @@ impl App {
             return true;
         }
         if mouse.kind == MouseKind::Up && dragging {
+            self.autoscroll = None;
             // Only the drag that held the line lets it go: a line left by one that never
             // ended mustn't be applied by the next thing released.
             let held = self.dock_guide.take().filter(|_| self.drag == Drag::Dock);
@@ -9864,6 +9912,17 @@ impl App {
         }
         if mouse.kind == MouseKind::Drag && self.drag == Drag::Session {
             self.dock_session_mouse(mouse);
+            // Held past the top or bottom of its screen, the scrollback scrolls that way.
+            let screen = self.dock_screen().unwrap_or_default();
+            let (row, past) = past_edge(screen, mouse);
+            let held = self.autoscroll;
+            self.autoscroll = past.map(|past| Autoscroll {
+                x: mouse.fine_x,
+                row,
+                past,
+                last: held.map_or_else(std::time::Instant::now, |held| held.last),
+                owed: held.map_or(0.0, |held| held.owed),
+            });
             return true;
         }
         let in_preview = matches!(self.drag, Drag::Preview | Drag::PreviewBar(_));
@@ -10081,8 +10140,14 @@ impl App {
             MouseKind::ScrollUp | MouseKind::ScrollDown => {
                 let up = mouse.kind == MouseKind::ScrollUp;
                 let spot = self.session_spot(x, y);
+                let dragging = self.drag == Drag::Session;
                 if let Some(session) = self.dock.session_mut() {
                     session.wheel(up, spot);
+                    // Turned while a selection is dragged, it follows to what's under the
+                    // pointer now.
+                    if dragging {
+                        session.drag_to(spot);
+                    }
                 }
             }
             MouseKind::Left if mouse.mods.ctrl => self.open_session_path(x, y),
@@ -10366,7 +10431,7 @@ impl App {
         let copied = self
             .dock
             .session_mut()
-            .and_then(|session| session.mouse(mouse.kind, spot));
+            .and_then(|session| session.mouse(mouse.kind, spot, mouse.mods.shift));
         if let Some(text) = copied {
             self.copy_text(text, "Copied");
         }
@@ -13756,6 +13821,17 @@ impl App {
             return;
         }
         let (x, y, fine_x) = (mouse.x, mouse.y, mouse.fine_x);
+        // A selection being dragged follows the pointer wherever it goes, onto the bar at the
+        // foot or the tabs over the text too, which is how it's held past an edge.
+        if self.drag == Drag::Text && matches!(mouse.kind, MouseKind::Drag | MouseKind::Up) {
+            if mouse.kind == MouseKind::Drag {
+                self.drag_text(mouse);
+            } else {
+                self.drag = Drag::None;
+                self.autoscroll = None;
+            }
+            return;
+        }
         if self.compact() && self.drawer && !self.sidebar_frame().is_some_and(|a| a.contains(x, y))
         {
             self.drawer = false;
@@ -13897,6 +13973,14 @@ impl App {
                         let total = self.scrolled.map_or(0, |(_, r)| r) + rows;
                         self.scrolled = Some((text, total));
                     }
+                    // Turned while a selection is dragged, the selection follows to what's
+                    // under the pointer now.
+                    if self.drag == Drag::Text {
+                        self.drag_text(MouseEvent {
+                            kind: MouseKind::Drag,
+                            ..mouse
+                        });
+                    }
                 }
             }
             MouseKind::Left if in_sidebar && self.sidebar_view == SidebarView::Search => {
@@ -13978,10 +14062,14 @@ impl App {
                 if self.click_conflict(area, x, y) {
                     return;
                 }
+                // A Shift+click is about the selection wherever it lands, as in any document:
+                // it ends the selection there rather than opening, ticking or folding what's
+                // under it, and is never a second click.
+                let shift = mouse.mods.shift;
                 let target = self
                     .editors
                     .get(self.active())
-                    .filter(|e| e.rendered)
+                    .filter(|e| e.rendered && !shift)
                     .and_then(|e| e.row_target(area, y));
                 match target {
                     Some(Target::File(path)) => {
@@ -13998,11 +14086,22 @@ impl App {
                     }
                     None => {}
                 }
-                let clicks = self.count_click(x, y);
+                let clicks = if shift {
+                    self.last_click = None;
+                    1
+                } else {
+                    self.count_click(x, y)
+                };
                 if let Some(editor) = self.editor_mut() {
                     if editor.on_scrollbar(area, x) {
                         editor.scroll_to_row(area, y);
                         self.drag = Drag::Scrollbar;
+                        return;
+                    }
+                    if shift {
+                        let at = editor.position_at(area, fine_x, y);
+                        editor.extend_selection_to(at);
+                        self.drag = Drag::Text;
                         return;
                     }
                     if editor.click_checkbox(area, fine_x, y) {
@@ -14034,32 +14133,12 @@ impl App {
                         self.open_in_browser();
                         return;
                     }
-                    if mouse.mods.shift {
-                        let anchor = editor.selections.primary().anchor;
-                        editor.selections.set_single(Selection {
-                            anchor,
-                            head: at,
-                            goal: None,
-                        });
-                    } else if mouse.mods.alt {
+                    if mouse.mods.alt {
                         editor.selections.add(Selection::cursor(at));
                     } else {
                         editor.selections.set_single(Selection::cursor(at));
                     }
                     self.drag = Drag::Text;
-                }
-            }
-            MouseKind::Drag if self.drag == Drag::Text => {
-                let area = self.focused_area();
-                if let Some(editor) = self.editor_mut() {
-                    let at = editor.position_at(area, fine_x, y);
-                    let anchor = editor.selections.primary().anchor;
-                    editor.selections.set_single(Selection {
-                        anchor,
-                        head: at,
-                        goal: None,
-                    });
-                    editor.reveal(area);
                 }
             }
             MouseKind::Drag if self.drag == Drag::Scrollbar => {
@@ -14079,6 +14158,75 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// A selection dragged to a place: it ends at what's under the pointer, or held past the
+    /// top or bottom of the text, at what's on the edge row under it, and the text starts to
+    /// scroll that way.
+    fn drag_text(&mut self, mouse: MouseEvent) {
+        let area = self.focused_area();
+        let held = self.autoscroll;
+        let Some(editor) = self.editor_mut() else {
+            return;
+        };
+        let region = editor.scroll_region(area);
+        let (row, past) = past_edge(region, mouse);
+        let at = editor.position_at(area, mouse.fine_x, row);
+        editor.extend_selection_to(at);
+        editor.reveal(area);
+        self.autoscroll = past.map(|past| Autoscroll {
+            x: mouse.fine_x,
+            row,
+            past,
+            last: held.map_or_else(std::time::Instant::now, |held| held.last),
+            owed: held.map_or(0.0, |held| held.owed),
+        });
+        // What's on screen can't be slid into the next frame.
+        self.scrolled = None;
+    }
+
+    /// Moves the text a drag is held past the edge of, by how long it's been held there and
+    /// how far past, and takes the selection on to what comes onto the edge row. Says whether
+    /// anything moved.
+    fn step_autoscroll(&mut self, now: std::time::Instant) -> bool {
+        let Some(mut held) = self.autoscroll else {
+            return false;
+        };
+        if !matches!(self.drag, Drag::Text | Drag::Session) {
+            self.autoscroll = None;
+            return false;
+        }
+        let seconds = now.saturating_duration_since(held.last).as_secs_f32();
+        let speed = AUTOSCROLL_RATE + AUTOSCROLL_GAIN * held.past.abs();
+        let rows = seconds * speed + held.owed;
+        let whole = rows.floor();
+        held.owed = rows - whole;
+        held.last = now;
+        self.autoscroll = Some(held);
+        if whole < 1.0 {
+            return false;
+        }
+        let rows = whole as isize * if held.past < 0.0 { -1 } else { 1 };
+        if self.drag == Drag::Session {
+            let spot = self.session_spot(held.x as u16, held.row);
+            let Some(session) = self.dock.session_mut() else {
+                return false;
+            };
+            session.scroll_lines(rows);
+            session.drag_to(spot);
+            return true;
+        }
+        let area = self.focused_area();
+        let Some(editor) = self.editor_mut() else {
+            return false;
+        };
+        let before = (editor.top(), editor.selections.primary());
+        editor.scroll_by(rows);
+        let at = editor.position_at(area, held.x, held.row);
+        editor.extend_selection_to(at);
+        let moved = before != (editor.top(), editor.selections.primary());
+        self.scrolled = None;
+        moved
     }
 
     /// One, two or three, for a press in this place soon after the last.
@@ -19056,6 +19204,8 @@ mod link_tests;
 mod motion_tests;
 #[cfg(test)]
 mod pane_tab_tests;
+#[cfg(test)]
+mod select_tests;
 #[cfg(test)]
 mod shell_tab_tests;
 #[cfg(test)]

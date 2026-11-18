@@ -13,7 +13,7 @@ use cellix_doc::table::Edit as TableEdit;
 use cellix_input::{Command, Direction, Format};
 use cellix_lang::{Registry, Span, Token, Worker};
 use cellix_render::{
-    Bounds, Font, Grid, INTERFACE_SIZE, Icon, Measure, Paint, Rect, Rgb, Strip, units,
+    Bounds, Font, Grid, INTERFACE_SIZE, Icon, Measure, Paint, Pixels, Rect, Rgb, Strip, units,
 };
 use cellix_review::LineChange;
 use unicode_width::UnicodeWidthChar;
@@ -867,7 +867,7 @@ impl Editor {
         let selected = self
             .selected_text()
             .filter(|t| !t.trim().is_empty())
-            .map(|t| cellix_doc::words::count(&t, false));
+            .map(|t| cellix_doc::words::count(&t, latex));
         (all, selected, files > 1)
     }
 
@@ -1139,12 +1139,33 @@ impl Editor {
             if top + figure.height < area.y as f32 {
                 continue;
             }
+            let bounds = Bounds::cells(left + x, top + 0.2, figure.width, figure.height);
+            // Selected, it stands in the selection's colour as words do, so a selection over
+            // a formula or a picture reads as taking it in: ink on the colour, as a word's
+            // letters are, and a picture of its own colours under a see-through wash of it,
+            // as a browser shows one. Only as much as shows, since neither has a clip.
+            let place = row.glyphs.first().and_then(|g| g.at);
+            let picked = place.is_some_and(|at| {
+                let holds = |s: &Selection| !s.is_empty() && at >= s.start() && at < s.end();
+                self.selections.iter().any(holds)
+            });
+            let from = (top + 0.2).max(area.y as f32);
+            let to = (top + 0.2 + figure.height).min(area.bottom() as f32);
+            let shown = (picked && to > from)
+                .then(|| Bounds::cells(left + x, from, figure.width, to - from));
+            let ink = figure.bitmap.kind == Pixels::Coverage;
+            if let Some(shown) = shown.filter(|_| ink) {
+                grid.panel(shown, 6, Some(theme.selection), None);
+            }
             grid.paint.push(Paint::Image {
-                bounds: Bounds::cells(left + x, top + 0.2, figure.width, figure.height),
+                bounds,
                 clip: Bounds::cells(area.x as f32, area.y as f32, area.w as f32, area.h as f32),
                 bitmap: figure.bitmap.clone(),
                 color: theme.text.fg,
             });
+            if let Some(shown) = shown.filter(|_| !ink) {
+                grid.wash(shown, 6, (theme.selection, 110), None);
+            }
         }
     }
 
@@ -4150,6 +4171,36 @@ impl Editor {
         self.selections.set_single(Selection {
             anchor: head,
             head: head + "Column 1".len(),
+            goal: None,
+        });
+    }
+
+    /// Moves the selection's end to a place and keeps where it started, as a drag and a
+    /// Shift+click do. On a page, an end on a formula or a picture takes in the whole of it,
+    /// so it stays a picture, selected, rather than opening to half its source. One already
+    /// open, showing its source, is text like any other.
+    pub fn extend_selection_to(&mut self, at: usize) {
+        let anchor = self.selections.primary().anchor;
+        let picture = self.rendered.then(|| {
+            let page = self.page.borrow();
+            let page = page.as_ref()?;
+            let inside = |s: &(usize, usize)| s.0 < at && at < s.1 && Some(*s) != page.open;
+            page.spans.iter().copied().find(inside)
+        });
+        let picture = picture.flatten();
+        let head = match picture {
+            Some((start, end)) if at != anchor => {
+                if anchor < at {
+                    end
+                } else {
+                    start
+                }
+            }
+            _ => at,
+        };
+        self.selections.set_single(Selection {
+            anchor,
+            head,
             goal: None,
         });
     }

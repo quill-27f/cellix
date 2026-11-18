@@ -382,7 +382,7 @@ impl App {
                 MouseKind::ScrollUp => session.wheel(true, spot),
                 MouseKind::ScrollDown => session.wheel(false, spot),
                 kind => {
-                    if let Some(text) = session.mouse(kind, spot) {
+                    if let Some(text) = session.mouse(kind, spot, mouse.mods.shift) {
                         self.copy_text(text, "Copied");
                     }
                 }

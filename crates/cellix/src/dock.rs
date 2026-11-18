@@ -233,6 +233,9 @@ enum Link {
 
 /// A place in the visible text, as (column, row).
 type Spot = (u16, u16);
+/// A place in a terminal's text that stays on its words as it scrolls: a column, and the line
+/// counting from the top of the scrollback, as Find and the commands count.
+type Place = (u16, usize);
 
 /// Pixels in a cell, and none when the terminal outside can't show pictures.
 pub type CellPixels = (u16, u16);
@@ -285,7 +288,11 @@ pub struct Session {
     refused: bool,
     size: (u16, u16),
     cell: CellPixels,
-    selection: Option<(Spot, Spot)>,
+    /// Where the selection started and where it ends now, in the order they were made. A
+    /// click leaves both on the place it pressed, so a Shift+click after it selects from there.
+    selection: Option<(Place, Place)>,
+    /// The press now held selects here, though the program takes the mouse: it came with Shift.
+    selecting: bool,
     scanner: Scanner,
     protocol: Protocol,
     pictures: Vec<Picture>,
@@ -609,6 +616,7 @@ impl Session {
             size,
             cell,
             selection: None,
+            selecting: false,
             scanner: Scanner::default(),
             protocol: Protocol::default(),
             pictures: Vec::new(),
@@ -1237,9 +1245,19 @@ impl Session {
     }
 
     /// A press, drag or release at `spot`. Text selected here is returned on release, so
-    /// the pane copies the way a terminal does.
-    pub fn mouse(&mut self, kind: MouseKind, spot: Spot) -> Option<String> {
-        if self.wants_mouse() {
+    /// the pane copies the way a terminal does. A Shift+click ends the selection where it
+    /// lands, from where it started or the last click, however far it has scrolled since. With
+    /// Shift held a press selects even where the program takes the mouse, as in any terminal.
+    pub fn mouse(&mut self, kind: MouseKind, spot: Spot, shift: bool) -> Option<String> {
+        let own = match kind {
+            MouseKind::Left => {
+                self.selecting = shift || !self.wants_mouse();
+                self.selecting
+            }
+            MouseKind::Drag | MouseKind::Up => self.selecting || !self.wants_mouse(),
+            _ => !self.wants_mouse(),
+        };
+        if !own {
             match kind {
                 MouseKind::Left => self.report_mouse(0, spot, true),
                 MouseKind::Up => self.report_mouse(0, spot, false),
@@ -1255,27 +1273,74 @@ impl Session {
             }
             return None;
         }
+        let at = self.place_at(spot);
         match kind {
-            MouseKind::Left => self.selection = Some((spot, spot)),
+            MouseKind::Left => {
+                let anchor = self
+                    .selection
+                    .filter(|_| shift)
+                    .map_or(at, |(from, _)| from);
+                self.selection = Some((anchor, at));
+            }
             MouseKind::Drag => {
                 if let Some(selection) = &mut self.selection {
-                    selection.1 = spot;
+                    selection.1 = at;
                 }
             }
             MouseKind::Up => {
-                let text = self.selected_text();
-                if text.is_none() {
-                    self.selection = None;
-                }
-                return text;
+                self.selecting = false;
+                return self.selected_text();
             }
             _ => {}
         }
         None
     }
 
+    /// Moves what's shown down the scrollback by `lines`, up it when negative, as a selection
+    /// held past the screen's edge does.
+    pub fn scroll_lines(&mut self, lines: isize) {
+        let lines = i32::try_from(-lines).unwrap_or(0);
+        self.term.scroll_display(Scroll::Delta(lines));
+    }
+
+    /// Takes the end of a selection being dragged here to what's at `spot` now, after what's
+    /// shown has moved under the pointer.
+    pub fn drag_to(&mut self, spot: Spot) {
+        if !self.selecting {
+            return;
+        }
+        let at = self.place_at(spot);
+        if let Some(selection) = &mut self.selection {
+            selection.1 = at;
+        }
+    }
+
+    /// The line at the top of the screen, counting from the top of the scrollback.
+    fn top(&self) -> usize {
+        let grid = self.term.grid();
+        grid.history_size().saturating_sub(grid.display_offset())
+    }
+
+    /// The place in the text shown at a spot on the screen.
+    fn place_at(&self, (x, y): Spot) -> Place {
+        (x, self.top() + usize::from(y))
+    }
+
+    /// A line of the text, counting from the top of the scrollback, while it's kept.
+    fn line_text(&self, line: usize) -> Option<String> {
+        let grid = self.term.grid();
+        let history = grid.history_size();
+        let y = i32::try_from(line).ok()? - history as i32;
+        if line >= history + self.term.screen_lines() {
+            return None;
+        }
+        let row = &grid[Line(y)];
+        let text: String = (0..self.term.columns()).map(|x| row[Column(x)].c).collect();
+        Some(text.trim_end().to_string())
+    }
+
     /// The selection in reading order.
-    fn ordered(&self) -> Option<(Spot, Spot)> {
+    fn ordered(&self) -> Option<(Place, Place)> {
         let (a, b) = self.selection?;
         Some(if (a.1, a.0) <= (b.1, b.0) {
             (a, b)
@@ -1289,12 +1354,11 @@ impl Session {
         if from == to {
             return None;
         }
-        let rows = self.rows();
         let mut lines = Vec::new();
-        for y in from.1..=to.1 {
-            let chars: Vec<char> = rows.get(y as usize)?.chars().collect();
-            let start = if y == from.1 { from.0 as usize } else { 0 };
-            let end = if y == to.1 {
+        for line in from.1..=to.1 {
+            let chars: Vec<char> = self.line_text(line)?.chars().collect();
+            let start = if line == from.1 { from.0 as usize } else { 0 };
+            let end = if line == to.1 {
                 (to.0 as usize + 1).min(chars.len())
             } else {
                 chars.len()
@@ -1305,24 +1369,44 @@ impl Session {
         Some(lines.join("\n"))
     }
 
-    /// What's selected and where it is, as the first and last places in reading order,
-    /// while something is.
+    /// What's selected, while something is, and where it is on the screen: its first and
+    /// last places in reading order, held to the screen's edges where it runs past them.
     pub fn selection(&self) -> Option<(String, Spot, Spot)> {
         let (from, to) = self.ordered()?;
         let text = self.selected_text().filter(|t| !t.trim().is_empty())?;
-        Some((text, from, to))
+        let (top, lines) = (self.top(), self.term.screen_lines());
+        let last = lines.saturating_sub(1) as u16;
+        let right = self.term.columns().saturating_sub(1) as u16;
+        let shown = |(x, line): Place| -> Spot {
+            match line.checked_sub(top) {
+                None => (0, 0),
+                Some(y) if y >= lines => (right, last),
+                Some(y) => (x, y as u16),
+            }
+        };
+        Some((text, shown(from), shown(to)))
+    }
+
+    /// Whether any of the selection is on the screen.
+    pub fn selection_shows(&self) -> bool {
+        let (top, lines) = (self.top(), self.term.screen_lines());
+        self.ordered()
+            .is_some_and(|(from, to)| from.1 < top + lines && to.1 >= top)
+    }
+
+    /// The command that printed where the selection starts, as `command_at` says.
+    pub fn selection_command(&self) -> Option<String> {
+        let (from, _) = self.ordered()?;
+        self.command_at(from.1)
     }
 
     pub fn clear_selection(&mut self) {
         self.selection = None;
     }
 
-    /// The command entered at the shell's prompt that printed the visible row `row`, when
-    /// the shell was at its prompt as it was typed.
-    pub fn command_before(&self, row: u16) -> Option<String> {
-        let grid = self.term.grid();
-        let top = grid.history_size() as i32 - grid.display_offset() as i32;
-        let line = (top + row as i32).max(0) as usize;
+    /// The command entered at the shell's prompt that printed a line, counting from the top
+    /// of the scrollback, when the shell was at its prompt as it was typed.
+    fn command_at(&self, line: usize) -> Option<String> {
         let &(start, column) = self.commands.iter().rev().find(|(at, _)| *at <= line)?;
         let command = self.logical_line(start, column);
         let command = command.trim();
@@ -1527,13 +1611,16 @@ impl Session {
             },
         );
         let selection = self.ordered().filter(|(a, b)| a != b);
-        let picked = |x: u16, y: u16| {
-            selection.is_some_and(|(from, to)| (y, x) >= (from.1, from.0) && (y, x) <= (to.1, to.0))
-        };
         let content = self.term.renderable_content();
         let offset = content.display_offset as i32;
         // What Find found on a cell: whether it's the one Find is on.
         let top = self.term.grid().history_size() as i32 - offset;
+        let picked = |x: u16, y: u16| {
+            let line = (top + i32::from(y)) as usize;
+            selection.is_some_and(|(from, to)| {
+                (line, x) >= (from.1, from.0) && (line, x) <= (to.1, to.0)
+            })
+        };
         let found = |x: u16, y: u16| {
             let line = (top + i32::from(y)) as usize;
             let on = |(at, column, columns): &(usize, u16, u16)| {

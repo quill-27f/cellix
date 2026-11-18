@@ -190,7 +190,7 @@ EXPECT = {
 # About how many scenes there are, to cut the tour into parts of a size. Count them with
 # TOUR_LIST=1 when scenes are added: too low a count puts every scene past it in the last part,
 # which then runs out of the guard's time (0.11.0's tour lost ten scenes that way).
-SCENES_IN_ALL = 256
+SCENES_IN_ALL = 260
 # Scenes come to, shot, and those that never reached their surface.
 SEEN, SHOT, FAILED = [0], [], []
 # Which commit the binary is, as far as git can say: the pictures are of that.
@@ -1523,6 +1523,11 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("54-paper-pdf", build, PAPER_FILE, size="170x44", background="eff1f5")
     shoot("55-paper-cite", [["click", *ON("[", 0)]], PAPER_FILE, size="150x44", background="eff1f5")
     shoot("55-paper-menu", [["right", 70, 14]], PAPER_FILE, size="150x44", background="eff1f5")
+    # The same on a paper: from the abstract, over a section, a formula and a list's item.
+    # The abstract's words are the row under its heading, which comes through as "bsrct".
+    paper_across = [["click", ["bsrct", 0, 1]], ["shift", ["94.8", 4]], ["wait", 0.5]]
+    shoot("s1-paper-shift-select", paper_across, PAPER_FILE, size="150x44", background="eff1f5",
+          expect="Ask Agent")
     shoot("56-narrow-note", [*LIST_AGENTS, ["wait", 0.6]], NOTE_FILE, size="100x34")
     # About the size Claude Code docks Cellix at: at most 45% of a window, beside the chat.
     shoot("57-dock-page", [["wait", 1.5]], NOTE_FILE, size="64x40")
@@ -1603,6 +1608,22 @@ with tempfile.TemporaryDirectory() as scratch:
         shoot(f"{60 + number}-sample-{name}", steps, WRITING, **light)
     shoot("72-sample-dark", [["wheel", 90, 20, 22], ["wait", 1.0]], WRITING, size="150x44")
     shoot("73-selection-bar", [["double", 60, 7], ["wait", 0.5]], WRITING, **light)
+    # A click, and a Shift+click further down: everything between is selected, across the
+    # paragraphs, the heading and the lists, with the buttons that comment on it. Then the same
+    # after the wheel has taken the click out of view, in the dark. Measured type drops letters
+    # from the screen's text, so the places are rows under the "Text" heading and the "Second"
+    # item, whose words come through whole, and the paragraph under "Tables".
+    plain_words = ["click", ["Text", 0, 3, -1]]
+    across = [plain_words, ["shift", ["Second", 15, 1]], ["wait", 0.5]]
+    shoot("s1-page-shift-select", across, WRITING, **light, expect="Ask Agent")
+    scrolled = [plain_words, ["wheel", 90, 20, 14], ["wait", 1.0], ["shift", ["Tables", 12, 3]],
+                ["wait", 0.5]]
+    shoot("s1-page-shift-select-scrolled", scrolled, WRITING, size="150x44", expect="Ask Agent")
+    # A drag held on the bar at the foot, under the page, which scrolls on its own and takes
+    # the selection with it until it's let go.
+    held = [["press", ["Text", 0, 3, -1]], ["hold", 90, 43], ["wait", 0.8], ["release", 90, 43],
+            ["wait", 0.5]]
+    shoot("s1-page-drag-scroll", held, WRITING, **light, expect="Ask Agent")
     shoot("74-outline", [["click", *OUTLINE], ["wait", 0.8]], WRITING, **light)
     shoot("75-data", [], os.path.join(samples, "data.csv"), **light)
     shoot("76-notebook", [], os.path.join(samples, "notebook.ipynb"), **light)

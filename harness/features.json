@@ -6046,5 +6046,110 @@
     "title": "LaTeX's \\href and \\url, and a quoted URL, give their address to Ctrl+click and the link menu",
     "test": "latex_links_and_quoted_ones_give_their_address",
     "passes": true
+  },
+  {
+    "id": "shift-click-page",
+    "milestone": 15,
+    "title": "A click and a Shift+click select everything between on a page, across every kind of block, however far it scrolled",
+    "test": "a_shift_click_selects_everything_from_the_click_down_a_page",
+    "passes": true
+  },
+  {
+    "id": "shift-click-again",
+    "milestone": 15,
+    "title": "Another Shift+click moves the selection's end and keeps its start",
+    "test": "a_shift_click_again_moves_the_end_and_keeps_the_start",
+    "passes": true
+  },
+  {
+    "id": "shift-click-extends",
+    "milestone": 15,
+    "title": "A Shift+click after a drag or a double click extends that selection from its start",
+    "test": "a_shift_click_extends_a_selection_already_made_from_its_anchor",
+    "passes": true
+  },
+  {
+    "id": "shift-click-formula",
+    "milestone": 15,
+    "title": "A Shift+click takes a formula whole, drawn selected, and ticks no box; a plain click still ticks it",
+    "test": "a_shift_click_takes_a_formula_whole_and_ticks_no_box",
+    "passes": true
+  },
+  {
+    "id": "shift-click-comment",
+    "milestone": 15,
+    "title": "A Shift+click selection gets Comment and Ask Agent, and its comment carries all of it",
+    "test": "a_shift_click_selection_gets_the_comment_bar_and_its_comment_holds_all_of_it",
+    "passes": true
+  },
+  {
+    "id": "shift-click-paper",
+    "milestone": 15,
+    "title": "A Shift+click selects across a paper's sections, lists, tables, code and equations, counted as the paper is",
+    "test": "a_shift_click_selects_across_a_paper",
+    "passes": true
+  },
+  {
+    "id": "shift-click-notebook",
+    "milestone": 15,
+    "title": "A Shift+click selects across a notebook's cells",
+    "test": "a_shift_click_selects_across_a_notebooks_cells",
+    "passes": true
+  },
+  {
+    "id": "shift-click-source",
+    "milestone": 15,
+    "title": "A Shift+click selects the same way in the source",
+    "test": "a_shift_click_in_the_source_selects_the_same_way",
+    "passes": true
+  },
+  {
+    "id": "shift-click-terminal",
+    "milestone": 15,
+    "title": "A Shift+click in a terminal tab selects from the click before, however far its scrollback scrolled",
+    "test": "a_shift_click_in_a_terminal_selects_from_the_click_however_far_it_scrolled",
+    "passes": true
+  },
+  {
+    "id": "shift-terminal-mouse",
+    "milestone": 15,
+    "title": "Shift held selects in a terminal tab whose program takes the mouse",
+    "test": "shift_selects_in_a_terminal_whose_program_takes_the_mouse",
+    "passes": true
+  },
+  {
+    "id": "shift-click-pty",
+    "milestone": 15,
+    "title": "Cellix asks the terminal for Shift with the mouse, and a real Shift+click on a page selects",
+    "test": "pty_a_shift_click_on_a_page_selects_from_the_click_before",
+    "passes": true
+  },
+  {
+    "id": "drag-autoscroll",
+    "milestone": 15,
+    "title": "A drag held past the text's top or bottom scrolls it, faster further past, and the selection follows",
+    "test": "a_drag_held_past_the_foot_scrolls_the_page_and_the_selection_follows",
+    "passes": true
+  },
+  {
+    "id": "drag-wheel",
+    "milestone": 15,
+    "title": "The wheel turned while dragging scrolls, and the selection follows to what's under the pointer",
+    "test": "turning_the_wheel_while_dragging_scrolls_and_the_selection_follows",
+    "passes": true
+  },
+  {
+    "id": "autoscroll-idle",
+    "milestone": 15,
+    "title": "Nothing is timed unless a drag is held past an edge",
+    "test": "nothing_is_timed_unless_a_drag_is_held_past_an_edge",
+    "passes": true
+  },
+  {
+    "id": "terminal-drag-scroll",
+    "milestone": 15,
+    "title": "A drag held past a terminal tab's edge scrolls its scrollback, and the wheel while dragging too",
+    "test": "a_drag_held_past_a_terminals_top_scrolls_its_scrollback_and_the_wheel_does_too",
+    "passes": true
   }
 ]

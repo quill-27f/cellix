@@ -248,7 +248,11 @@ file to put it there in any window, and onto the right edge to put it back. A fi
 along the tab bar moves there, and dropped on a file it opens a pane beside it, or shows there.
 
 The mouse works everywhere: click files, tabs and hunks, drag to select, and right-click
-the explorer to create, rename or delete.
+the explorer to create, rename or delete. As in any document, click where a selection should start
+and Shift+click where it should end, however far you've scrolled in between: on a page it runs
+across headings, lists, tables, code and formulas, and it works the same in code and in a
+terminal tab. A drag can go further than the screen: hold it past the top or bottom and the text
+scrolls, faster the further past, or turn the wheel while the button is down.
 
 ## Writing
 

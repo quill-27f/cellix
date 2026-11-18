@@ -421,6 +421,33 @@ user's choice then; the user chose the reading width after a day in a wide windo
 break inside a paragraph shows as a space that keeps the newline's source position, so a
 hard-wrapped file fills the page and saves unchanged. On a page, arrows and Home and End move by what's shown.
 
+A page selects as any document does, with one selection, the editor's: a drag, a double click for
+a word, a third for the line, Shift with the arrows, and a click that sets where a selection starts
+and a Shift+click that ends it there, across headings, lists, quotes, tables, code and formulas,
+however far the page has been scrolled in between (the user's ask, 18 November 2026: "scan it
+through"). A drag covers more than the screen too ("or selecting text with scroll support"): held
+past the text's top or bottom edge, onto the tabs or the bar at the foot, the text scrolls that way
+and the selection takes in what comes onto the edge row under the pointer, at 8 rows a second just
+past the edge and 16 more for each row further, as browsers grow it with the distance; it stops
+when the pointer comes back over the text or lets go. Only while it's held there does `App::soon`
+have the loop look every 50 ms, so nothing is timed otherwise. The wheel turned with the button
+held scrolls, and the selection follows to what's under the pointer then. Until then a drag past
+the foot scrolled only as far as the pointer moved, one past the top not at all, and the wheel left
+the selection where it was. Another Shift+click moves the end and keeps the start, and one after a drag or a double
+click keeps that selection's start. A Shift+click is about the selection wherever it lands, so it
+ticks no box, folds nothing, opens no included file and isn't counted towards a double click; a
+plain click on those still does what it did. An end on a formula or a picture, by a drag or a
+Shift+click, takes in the whole of it, so it stays drawn and selected rather than opening to half its
+source; one already open is text like any other. One inside a selection is washed in the
+selection's colour, as words are, so it reads as taken in. The status bar counts the words selected
+in a paper as it counts the paper's, without its commands. The selection gets Comment and Ask Agent as a
+dragged one does, under its end when its start is out of view, and its comment quotes its first line
+and hears all of it. Code in the source view, notebooks, data, plans and transcripts are the same
+editor, so they select the same way. Ghostty and xterm keep a Shift+click for their own selection
+unless the program asks for it, so Cellix asks as it starts (XTSHIFTESCAPE, `CSI > 1 s`) and hands
+it back as it ends; until it did, a Shift+click on a page selected the terminal's cells instead.
+Inside tmux, the outer terminal isn't asked, and Claude Code's pane passes no Shift with a click.
+
 ### Companion
 
 A press on words a comment is about lights that comment's card in the Comments pane, with
@@ -540,7 +567,14 @@ Output is seen too, so a failing run needs no copy and paste. A selection in a t
 same two buttons, where they cover none of the output: on the row above the selection when its text
 ends before them, else on the row below, their right edge on the selection's, and failing both after
 the end of the selection's last row. Only output with no such room has them over the end of the row
-above. The agent hears all of the output, the command that printed it and every
+above. A terminal tab selects as a page does, and as terminals do: a drag, copied as it's let go,
+and a Shift+click that ends the selection from where it started or from the click before, however
+far the scrollback has been scrolled in between, since a selection keeps to its words as they
+scroll (it kept to the screen's rows until 18 November 2026, so a scroll moved it onto other words).
+With Shift held a press selects even where the program takes the mouse, as every terminal lets it.
+A drag held past the top or bottom of its screen scrolls the scrollback as a page does, and the
+wheel turned while dragging takes the selection on with it.
+Scrolled out of view, the selection's buttons go until it's back. The agent hears all of the output, the command that printed it and every
 `file:line` in it that is a file of the project. Cellix knows the command from where the first key
 was typed while the shell was at its prompt, read off the screen when it's asked. A comment on output
 has no file, so it shows in the Comments tab whatever file is in view, and opening it goes to the

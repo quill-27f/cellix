@@ -327,6 +327,13 @@ fn next_turn(grid: &Grid, now: Instant) -> Option<Instant> {
         .then(|| now + spinner::until_next(spinner::clock()))
 }
 
+/// XTSHIFTESCAPE: Shift held with the mouse comes to the program, in the mouse's report.
+#[cfg(not(windows))]
+const SHIFT_WITH_MOUSE: &str = "\x1b[>1s";
+/// And back to the terminal's own: Shift with the mouse extends the terminal's selection.
+#[cfg(not(windows))]
+const SHIFT_FOR_TERMINAL: &str = "\x1b[>0s";
+
 /// Restores the terminal however the loop ends, including on panic.
 struct Session;
 
@@ -348,6 +355,11 @@ impl Session {
             io::stdout(),
             PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
         )?;
+        // A terminal keeps a Shift+click for its own selection unless the program asks for it
+        // (XTSHIFTESCAPE), Ghostty and xterm by default, so a click and a Shift+click on a page
+        // never reached Cellix as a selection. Terminals that don't know it ignore it.
+        #[cfg(not(windows))]
+        execute!(io::stdout(), Print(SHIFT_WITH_MOUSE))?;
         // tmux ignores kitty's flags but passes modified keys on with its extended-keys, once
         // asked this way, so Ctrl+Shift+P stops arriving as Ctrl+P. Only in the csi-u form:
         // the xterm form, tmux's default, is one crossterm can't read, and every Ctrl key
@@ -370,7 +382,11 @@ fn tmux_keys_readable() -> bool {
 impl Drop for Session {
     fn drop(&mut self) {
         #[cfg(not(windows))]
-        let _ = execute!(io::stdout(), PopKeyboardEnhancementFlags);
+        let _ = execute!(
+            io::stdout(),
+            PopKeyboardEnhancementFlags,
+            Print(SHIFT_FOR_TERMINAL)
+        );
         let _ = execute!(
             io::stdout(),
             Print("\x1b[?1016l"),

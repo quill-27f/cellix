@@ -10,8 +10,12 @@ The script is a list of steps:
     ["wait", seconds]            ["keys", "text, with \\e as ESC"]
     ["click", col, row]          ["right", col, row]       ["middle", col, row]
     ["ctrl", col, row]           A click with Ctrl held.
+    ["shift", col, row]          A click with Shift held. As in Ghostty, it reaches Cellix only
+                                 once Cellix has asked for Shift with XTSHIFTESCAPE; until then
+                                 the terminal keeps it, and nothing is sent.
     ["double", col, row]         ["triple", col, row]      ["drag", col, row, col, row]
     ["press", col, row]          ["hold", col, row]        A press, and a move with it still held.
+    ["release", col, row]        Lets go of what a press holds.
     ["move", col, row]           ["wheel", col, row, notches]  (negative is up)
     ["tip", col, row, notches]   The wheel tipped sideways: to the right, or left when negative.
     ["paste", "text"]            ["resize", cols, rows]
@@ -87,6 +91,7 @@ class Screen:
         self.replies = []
         self.buffer = b""
         self.frames = 0
+        self.shift = False  # whether Shift with the mouse goes to the program (XTSHIFTESCAPE)
         self.files = 0  # pictures taken from files, and their bytes
         self.filed = 0
 
@@ -139,6 +144,8 @@ class Screen:
             self.replies.append("\x1b[?1016;2$y")
         elif final == b"l" and args == b"2026":
             self.frames += 1
+        elif final == b"s" and private == b">":
+            self.shift = args == b"1"
         elif final == b"J" and args == b"2":
             pass
 
@@ -395,6 +402,14 @@ def main():
             pump(0.02)
             os.write(master, mouse(button, step[1], step[2], False))
             pump(0.25)
+        elif kind == "shift":
+            if screen.shift:
+                os.write(master, mouse(4, step[1], step[2]))
+                pump(0.02)
+                os.write(master, mouse(4, step[1], step[2], False))
+            else:
+                print("shift click kept by the terminal: Cellix never asked for it", flush=True)
+            pump(0.25)
         elif kind in ("double", "triple"):
             for _ in range(2 if kind == "double" else 3):
                 os.write(master, mouse(0, step[1], step[2]))
@@ -414,6 +429,9 @@ def main():
             pump(0.1)
         elif kind == "hold":
             os.write(master, mouse(32, step[1], step[2]))
+            pump(0.25)
+        elif kind == "release":
+            os.write(master, mouse(0, step[1], step[2], False))
             pump(0.25)
         elif kind == "move":
             os.write(master, mouse(35, step[1], step[2]))
