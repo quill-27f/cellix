@@ -541,10 +541,11 @@ row, settles every one of those listed. The agents' skills, and how every commen
 agent, say so.
 
 The pill on a comment whose words were reworded since, "Changed since your comment ›", opens
-what changed on its card, under the quote: the words commented on and the words there now as one
-run, a word at a time, what went in the attention colour and struck through, what came in green,
-what stayed as the quote's words are (`threads::word_changes`, from `similar`'s word diff). Another
-press on the pill closes it. A plan's "Changed in version N ›" goes on opening the plan's versions
+what changed in the quote's place, on its bar: the words commented on and the words there now as
+one run, a word at a time, what went in the attention colour and struck through, what came in
+green, what stayed as the quote's words are (`threads::word_changes`, from `similar`'s word
+diff), and the pill's chevron turns down. Another press on the pill closes it. (It opened as a row
+under the quote, which said most of the quote's words again.) A plan's "Changed in version N ›" goes on opening the plan's versions
 side by side, since a plan has each version whole; a document has only the words commented on.
 
 Where the pane is small, in a window as narrow as Claude Code docks Cellix in or stacked under the

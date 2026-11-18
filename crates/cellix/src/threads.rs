@@ -1629,7 +1629,16 @@ fn lay_out(
         let fits = |pill: &String| {
             measure.width(&label, small()) + PILL_AIR + pill_width(pill, measure) <= width
         };
-        let mut pills = pills_of(thread).into_iter();
+        let open = view.changes == Some(id);
+        let mut pills =
+            pills_of(thread)
+                .into_iter()
+                .map(|(pill, tone)| match pill.strip_suffix('\u{203a}') {
+                    Some(words) if open && pill.starts_with(CHANGED_SINCE) => {
+                        (format!("{words}\u{25be}"), tone)
+                    }
+                    _ => (pill, tone),
+                });
         let first = pills.next();
         let (beside, under) = match first {
             Some((pill, tone)) if fits(&pill) => (Some((pill, tone)), None),
@@ -1640,13 +1649,15 @@ fn lay_out(
             out.push(Line::Pill(id, pill, tone));
         }
         let quote = shown_quote(&thread.quote, thread.line, thread.about.as_ref());
-        out.push(Line::Quote(id, quote, words));
-        // Opened from its pill: the words as they were, struck where they went, with what
-        // came in their place, under the quote they were.
+        // Opened from its pill, the quote's place shows the words as they were, struck where
+        // they went, with what came in their place: one run, on the quote's bar, where a row
+        // under the quote said six of its seven words again.
         if view.changes == Some(id) && !thread.now.is_empty() && thread.earlier.is_none() {
             let changes = cellix_review::threads::word_changes(&thread.quote, &thread.now);
             let rows = diff_rows(changes, width - QUOTE_IN, measure);
             out.extend(rows.into_iter().map(|row| Line::Diff(id, row)));
+        } else {
+            out.push(Line::Quote(id, quote, words));
         }
         let editing = draft.filter(|d| d.thread == Some(id) && d.editing);
         // In a narrow pane a card is short until it's lit or being written on.
@@ -2399,6 +2410,14 @@ pub fn draw(
         ..inner
     };
     let reply_x = text_x as f32 + INSET;
+    // The colour a card is painted in: the lit one's tint, else its own.
+    let card_fill = |id: u32| {
+        if view.lit == Some(id) {
+            mix(theme.accent, card, 0.1)
+        } else {
+            card_of(id)
+        }
+    };
     let pointed = hover
         .filter(|(x, y)| area.contains(*x, *y))
         .map(|(_, y)| top + usize::from(y - area.y));
@@ -2669,8 +2688,11 @@ pub fn draw(
                 }
             }
             Line::Diff(_, row) => {
-                // What went in the attention colour, struck through; what came in green; what
-                // stayed as the quote's words are.
+                // On the quote's quiet bar, as words no longer as said are. What went in the
+                // attention colour, struck through; what came in green; what stayed as the
+                // quote's words are.
+                let bar = Bounds::cells(text_x as f32, y as f32 + 0.16, 0.22, 0.68);
+                grid.panel(bar, 10, Some(mix(theme.gutter.fg, inner.bg, 0.55)), None);
                 let mut x = text_x as f32 + QUOTE_IN;
                 for (kind, piece) in row {
                     let fg = match kind {
@@ -3009,8 +3031,11 @@ pub fn draw(
                     grid.button(x, y, &cells, name, fill, style);
                 }
             }
-            Line::Buttons(_) => {
-                // Check my review is the panel's one filled button; these are all quiet.
+            Line::Buttons(id) => {
+                // Check my review is the panel's one filled button; these are all quiet, on
+                // the card's own colour, which a lit card's tint is: Edit and Delete stood on
+                // the unlit card's there, two dark slabs.
+                let card = card_fill(*id);
                 for (label, cells, x) in buttons(area, measure) {
                     let width = cells.chars().count() as u16;
                     let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
@@ -3034,7 +3059,8 @@ pub fn draw(
                     grid.button(x, y, &cells, label, fill, style);
                 }
             }
-            Line::Edits(_) => {
+            Line::Edits(id) => {
+                let card = card_fill(*id);
                 for (label, cells, x) in edits(area, measure) {
                     let width = cells.chars().count() as u16;
                     let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);

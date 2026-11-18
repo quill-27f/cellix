@@ -12084,7 +12084,15 @@ impl App {
                     (on_output(t), threads::place_of(t).to_lowercase(), t.line)
                 });
             }
-            threads::Sort::Document => threads.sort_by_key(|t| t.line),
+            threads::Sort::Document => {
+                let editor = self.editors.get(self.active());
+                threads.sort_by_cached_key(|t| {
+                    let at = editor
+                        .and_then(|e| quote_range(e, t))
+                        .map_or(0, |(at, _)| at);
+                    (t.line, at)
+                });
+            }
         }
         (threads, (resolved, shown))
     }
@@ -13938,7 +13946,15 @@ impl App {
             self.say("No comments on this file");
             return;
         }
-        placed.sort_unstable();
+        // In the pane's order: by line, and on one line by where the words start.
+        placed.sort_unstable_by_key(|(at, id)| {
+            let line = self
+                .threads
+                .iter()
+                .find(|t| t.id == *id)
+                .map_or(0, |t| t.line);
+            (line, *at)
+        });
         let head = editor.selections.primary().start();
         let count = placed.len();
         let lit = self
