@@ -1889,9 +1889,10 @@ fn suggestions_said(count: usize, at: Option<usize>) -> String {
 }
 
 /// Accept All, Reject All and Next as (label, cells, start column): at the right of the
-/// row, as Check my review is under them.
+/// row, ending where Check my review under them does.
 fn settle_buttons(area: Rect, measure: &dyn Measure) -> Vec<(&'static str, String, u16)> {
-    let mut end = area.right().saturating_sub(SIDE);
+    let (cells, x) = check_button(area, measure);
+    let mut end = x + cells.chars().count() as u16;
     let mut placed: Vec<_> = SETTLE
         .iter()
         .rev()
@@ -1906,9 +1907,9 @@ fn settle_buttons(area: Rect, measure: &dyn Measure) -> Vec<(&'static str, Strin
     placed
 }
 
-/// The same three on a row of their own, from the pane's text edge.
+/// The same three on a row of their own, from where the list's head starts.
 fn settle_row(area: Rect, measure: &dyn Measure) -> Vec<(&'static str, String, u16)> {
-    let mut x = area.x + SIDE;
+    let mut x = head(area, measure);
     SETTLE
         .iter()
         .map(|label| {
@@ -2837,11 +2838,16 @@ pub fn draw(
                         let end = placed
                             .first()
                             .map_or(right, |(_, _, x)| x.saturating_sub(1));
-                        grid.label_at(side as f32, side, y, &words, dim, end, SMALL);
+                        // Where the summary under it starts, as the head of the list does.
+                        let start = head(area, measure);
+                        let at = f32::from(start) + view.lead;
+                        grid.label_at(at, start, y, &words, dim, end, SMALL);
                         placed
                     }
                     _ => settle_row(area, measure),
                 };
+                let from = grid.painted_so_far();
+                let alone = matches!(line, Line::Settle);
                 // Quiet, as every button on the pane is but Check my review, and a control's
                 // height in its row, as Check my review is.
                 for (label, cells, x) in placed {
@@ -2858,6 +2864,10 @@ pub fn draw(
                         ..body
                     };
                     grid.button(x, y, &cells, label, fill, style);
+                }
+                // On a row of their own they start where the head does, as its controls do.
+                if alone {
+                    grid.nudge_since(from, view.lead);
                 }
             }
             Line::Deliver(count) => {
