@@ -186,8 +186,10 @@ EXPECT = {
     "96-tab-drag-split": "split right",
     "98-pane-drag-under": "loss.png",
 }
-# About how many scenes there are, to cut the tour into parts of a size.
-SCENES_IN_ALL = 221
+# About how many scenes there are, to cut the tour into parts of a size. Count them with
+# TOUR_LIST=1 when scenes are added: too low a count puts every scene past it in the last part,
+# which then runs out of the guard's time (0.11.0's tour lost ten scenes that way).
+SCENES_IN_ALL = 252
 # Scenes come to, shot, and those that never reached their surface.
 SEEN, SHOT, FAILED = [0], [], []
 # Which commit the binary is, as far as git can say: the pictures are of that.
@@ -944,10 +946,10 @@ def agent_tabs(scratch):
         ("m1-agent-tab-working", [*start, working(), ["wait", 0.8]], {}),
         ("m1-agent-tab-asking", [*start, asking(), ["wait", 0.8]], {}),
         ("m1-agent-tab-done", [*behind, working(), hook("stop"), ["wait", 0.8]], {}),
-        ("m1-agent-tab-menu", [*start, ["right", *ON("pricing page")], ["wait", 0.4]], {}),
-        ("m1-agent-tab-renamed", [*start, ["right", *ON("pricing page")], ["wait", 0.4],
+        ("m1-agent-tab-menu", [*start, ["right", *ON("pricing")], ["wait", 0.4]], {}),
+        ("m1-agent-tab-renamed", [*start, ["right", *ON("pricing")], ["wait", 0.4],
                                    ["click", *ON("Rename")], ["wait", 0.3], ["keys", "\x7f" * 12],
-                                   ["keys", "billing\r"], ["until", "billing"], ["wait", 0.3]], {}),
+                                   ["keys", "billing\r"], ["until", "bill"], ["wait", 0.3]], {}),
         ("m1-agent-tabs", [*start, working(), *others, asking("Codex"), working("Gemini"),
                             hook("stop", "Gemini"), ["wait", 0.8]], {}),
         ("m1-agent-tabs-narrow", [*start, working(), *others, asking("Codex"), working("Gemini"),
