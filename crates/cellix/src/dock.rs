@@ -97,8 +97,12 @@ const ICON_SHIFT: f32 = 1.7;
 const MARK_ROOM: u16 = 2;
 /// How tall that mark is, in the terminal's lines: a spinner of 12 pt, and a dot half that.
 pub const MARK_SIZE: f32 = 0.65;
-/// How far before the × the mark starts, in cells: its 24 px and about 9 px of air.
+/// How far before the × the mark starts at the furthest, in cells: its 24 px and about 9 px
+/// of air.
 const MARK_SHIFT: f32 = 1.6;
+/// How far after the name, or its context, the mark starts: 13 px, the board's gap between
+/// the parts of a tab.
+const MARK_GAP: f32 = 0.75;
 /// A tab cut short behind the one in front: from its edge to its mark's middle, and from its
 /// state's start to its other edge, in cells.
 const CUT_ICON: f32 = 1.2;
@@ -2164,11 +2168,15 @@ impl Dock {
 
     /// How wide a session's tab would like to be: its mark, its name, how full its context
     /// is, room for what it's doing, and its ×.
-    fn session_width(session: &Session) -> u16 {
+    fn session_width(&self, session: &Session) -> u16 {
         let context = session
             .context()
             .map_or(0, |c| c.chars().count() as u16 + CONTEXT_GAP);
-        let label = session.label().chars().count() as u16;
+        let label = if session.has_icon() {
+            self.text_width(&session.label()).ceil() as u16
+        } else {
+            session.label().chars().count() as u16
+        };
         label + TAB_PADDING * 2 + CLOSE_WIDTH + context + Self::session_extra(session)
     }
 
@@ -2202,7 +2210,11 @@ impl Dock {
     fn wanted_widths(&self) -> Vec<u16> {
         let views = self.views().into_iter().map(|view| view.2);
         views
-            .chain(self.sessions.iter().map(Self::session_width))
+            .chain(
+                self.sessions
+                    .iter()
+                    .map(|session| self.session_width(session)),
+            )
             .collect()
     }
 
@@ -2848,12 +2860,9 @@ impl Dock {
             } else {
                 end_cell
             };
-            if let Some(mark) = session.mark() {
-                draw_mark(grid, (end_at - MARK_SHIFT, area.y), mark, style, theme);
-            }
             // How full its context is, when the tab has its whole width.
             let pick_room = if pick.is_some() { PICK_WIDTH } else { 0 };
-            let whole = end - start >= Self::session_width(session) + pick_room;
+            let whole = end - start >= self.session_width(session) + pick_room;
             let context = session.context().filter(|_| whole);
             let name_end = match &context {
                 Some(text) => {
@@ -2873,7 +2882,33 @@ impl Dock {
                 }
                 None => stop,
             };
-            grid.label_at(at, first, area.y, &label, shown, name_end, 100);
+            let named = grid.label_at(at, first, area.y, &label, shown, name_end, 100);
+            // What its agent is doing, a gap after its name and context, and never nearer
+            // the × than its room before it: as far from the name as the mark is.
+            if let Some(mark) = session.mark() {
+                let (px, cell) = match &context {
+                    Some(text) => {
+                        let small = cellix_render::Font {
+                            size: CONTEXT_SIZE,
+                            ..font
+                        };
+                        let from = at + measure.width(&label, font) + CONTEXT_AIR;
+                        let from = from.min(name_end as f32);
+                        let cells = text.chars().count() as u16;
+                        (from + measure.width(text, small), name_end + cells)
+                    }
+                    None => (
+                        (at + measure.width(&label, font)).min(name_end as f32),
+                        named,
+                    ),
+                };
+                let x = if measure.in_cells() {
+                    f32::from(cell + 1).min(end_at - 2.0)
+                } else {
+                    (px + MARK_GAP).min(end_at - MARK_SHIFT)
+                };
+                draw_mark(grid, (x, area.y), mark, style, theme);
+            }
             if hovered || active {
                 let quiet = Style {
                     fg: theme.gutter.fg,
@@ -3079,7 +3114,9 @@ fn cut_session(
         grid.label_at(from, first, tab.y, &text, style, last, 100);
     }
     // Either end of the name; with none, the two side by side in the tab's middle.
-    let (icon_at, mark_at) = if named || !icon || measure.in_cells() {
+    let (icon_at, mark_at) = if measure.in_cells() && !named {
+        (x + CUT_ICON, x + 3.0)
+    } else if named || !icon || measure.in_cells() {
         (x + CUT_ICON, right - CUT_MARK)
     } else {
         let pair = ICON_SIZE * 2.0 + CUT_AIR + MARK_WIDE;

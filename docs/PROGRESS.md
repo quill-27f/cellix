@@ -3037,3 +3037,13 @@ Item 16 of the herdr round.
 - Tests: `the_wheel_over_the_tabs_moves_them_sideways_when_they_dont_all_fit`, `the_wheel_over_the_side_panes_tabs_steps_through_them_when_one_shows`.
 - Tour: `m4-tabs-strip` and `m4-tabs-wheel`, four files in a window 84 columns wide.
 - Unverified: a trackpad's flood of sideways events in a real terminal moves the strip a tab an event, which may be quick; the wheel's ramp isn't applied to it.
+
+## What the review of the motion pictures found (2026-11-18)
+
+One `ui-expert` pass over the pictures of items 3, 6, 7 and 16. Fixed here:
+
+- An agent's state stood against its ×, 96 px from its name and 10 px from the ×: it now stands 13 px after its name, or its context, as the board has it (`MARK_GAP`), no nearer the × than its room before it. An agent's tab is as wide as its name measures, not as its letters count, so an idle one no longer has 126 px of nothing before its ×.
+- On cells a tab cut to its mark and state had four or five empty columns between them: they're a column apart.
+- The status bar's details turned the attention colour while "An agent needs you" showed: fixed meanwhile on `next` by another track.
+
+Not done, from the same review: the cell-tier pictures came out blank in the headless terminal (their text is right); in the light theme a tab in front and one behind are close in colour, and an idle agent's row isn't dimmer; the Agents list's hover band is 7 px from the pane's edge and "‹ 2 more" 2 px; the "2 more" chips have 14 px before their words and 24 after; a menu has 36 px under its last item; tabs cut short stand closer to each other than their parts do; the current tab can be turned out of view with nothing saying so. All but the first two were so before this round.
