@@ -16,9 +16,11 @@ type Colour = Arc<Mutex<Option<String>>>;
 /// What else the "terminal" answers: when Cellix writes the first, it's sent the second.
 type Answers = Arc<Mutex<Vec<(Vec<u8>, Vec<u8>)>>>;
 
-/// How long a screen waits for text. Windows gets longer: a debug build there can take many
-/// seconds to start while it's scanned, with several starting at once.
-const WAIT: Duration = Duration::from_secs(if cfg!(windows) { 40 } else { 10 });
+/// How long a test waits for something to show before calling it lost. A test goes on the
+/// moment it shows, so this is only the patience: a minute, since on a machine at a load of 50
+/// the real binary took longer than ten seconds to answer, and Windows twice that, where a
+/// debug build can take many seconds to start while it's scanned, with several starting at once.
+const WAIT: Duration = Duration::from_secs(if cfg!(windows) { 120 } else { 60 });
 
 /// Feeds what Cellix draws to `parser`, answering a cursor position query as a terminal would.
 /// Windows' ConPTY asks one before it passes anything on, and waits for the answer. An answer
@@ -302,7 +304,7 @@ impl Screen {
     }
 
     fn wait_exit(&mut self) {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + WAIT;
         while Instant::now() < deadline {
             if self.child.try_wait().unwrap().is_some() {
                 return;
@@ -518,7 +520,7 @@ fn pty_cmd_w_closes_the_tab_and_cmd_q_quits() {
     let mut screen = Screen::start(dir.path(), &["hello.txt"]);
     screen.wait_for("hello from a file");
     screen.send(b"\x1b[119;9u"); // Cmd+W, Kitty keyboard protocol
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + WAIT;
     while screen.contents().contains("hello from a file") {
         assert!(Instant::now() < deadline, "the tab stayed open");
         std::thread::sleep(Duration::from_millis(20));
@@ -535,7 +537,7 @@ fn pty_restores_the_terminal_on_exit() {
     assert!(screen.parser.lock().unwrap().screen().alternate_screen());
     screen.send(b"\x11");
     screen.wait_exit();
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + WAIT;
     while screen.parser.lock().unwrap().screen().alternate_screen() {
         assert!(Instant::now() < deadline, "still on the alternate screen");
         std::thread::sleep(Duration::from_millis(20));
@@ -577,21 +579,21 @@ fn expect_tiles(pixels: (u16, u16), reply: &[u8], tile_marker: &[u8]) {
         let raw = raw.lock().unwrap();
         raw.windows(needle.len()).any(|w| w == needle)
     };
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + WAIT;
     while !contains(b"a=q") {
         assert!(Instant::now() < deadline, "no graphics query");
         std::thread::sleep(Duration::from_millis(5));
     }
     input.write_all(reply).unwrap();
     input.flush().unwrap();
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + WAIT;
     while !(contains(b"a=t,f=24") && contains(tile_marker)) {
         assert!(Instant::now() < deadline, "no tiles sent");
         std::thread::sleep(Duration::from_millis(20));
     }
     input.write_all(b"\x11").unwrap();
     input.flush().unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + WAIT;
     while child.try_wait().unwrap().is_none() {
         assert!(Instant::now() < deadline, "cellix did not exit");
         std::thread::sleep(Duration::from_millis(20));
@@ -1143,7 +1145,7 @@ fn closing_the_terminal_keeps_unsent_comments() {
     assert!(cellix(&["comments"]).status.success());
     screen.close();
     screen.wait_exit();
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + WAIT;
     while cellix(&["comments"]).status.success() {
         assert!(Instant::now() < deadline, "the socket outlived Cellix");
         std::thread::sleep(Duration::from_millis(100));
