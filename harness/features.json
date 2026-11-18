@@ -5948,5 +5948,40 @@
     "title": "A commented line's diamond in code is painted half a column in from the sheet's edge",
     "test": "a_comment_mark_in_code_keeps_clear_of_the_sheets_edge",
     "passes": true
+  },
+  {
+    "id": "pane-tabs-plus",
+    "milestone": 15,
+    "title": "The + stays after the side pane's tabs while they and it fit",
+    "test": "the_plus_stays_after_an_agents_tab_and_another",
+    "passes": true
+  },
+  {
+    "id": "pane-tabs-painted",
+    "milestone": 15,
+    "title": "A side pane's tab is as wide as what it paints, its state and × close after its name",
+    "test": "a_tab_is_as_wide_as_what_it_paints",
+    "passes": true
+  },
+  {
+    "id": "pane-tabs-cut-apart",
+    "milestone": 15,
+    "title": "Tabs cut short have a hairline between them, and the Agents tab keeps its mark",
+    "test": "tabs_cut_short_stand_apart_and_the_agents_tab_keeps_its_mark",
+    "passes": true
+  },
+  {
+    "id": "one-mark-each",
+    "milestone": 15,
+    "title": "One meaning per mark: unbranded agents a filled square with their initial, a task the prompt",
+    "test": "every_program_has_one_mark_and_none_is_a_box_to_tick",
+    "passes": true
+  },
+  {
+    "id": "foot-tile-marks",
+    "milestone": 15,
+    "title": "The foot's workspace tile shows the marks a tab shows",
+    "test": "a_tiles_marks_are_its_tabs",
+    "passes": true
   }
 ]

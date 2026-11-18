@@ -234,12 +234,26 @@ impl Grid {
     /// is, starting at `x` and standing in the middle of row `y`; on cells it's the one
     /// letter at `x`.
     pub fn spinner(&mut self, x: f32, y: u16, size: f32, color: Rgb, style: Style) {
+        self.spinner_in((x, x.floor() as u16), y, size, color, style);
+    }
+
+    /// The same, its letter on the cell tier in column `cell` rather than the one its paint
+    /// starts in: where painted words are narrower than their letters, the cells keep what
+    /// they can of the words before it.
+    pub fn spinner_in(
+        &mut self,
+        (x, cell): (f32, u16),
+        y: u16,
+        size: f32,
+        color: Rgb,
+        style: Style,
+    ) {
         let step = self.turn;
         self.spinning |= step.is_some();
         let letter = step.map_or(crate::spinner::STILL, |s| {
             crate::spinner::FRAMES[s as usize % crate::spinner::FRAMES.len()]
         });
-        self.mark(x, y, size, color, style, (step, letter));
+        self.mark((x, cell), y, size, color, style, (step, letter));
     }
 
     /// Takes every spinner on the grid to `step` of its turn, as drawing it again at that step
@@ -270,19 +284,24 @@ impl Grid {
     /// A still dot in the colour of what it means, sized and placed as a spinner is: a
     /// state that wants seeing, as an agent that needs you or one that's done.
     pub fn dot(&mut self, x: f32, y: u16, size: f32, color: Rgb, style: Style) {
-        self.mark(x, y, size, color, style, (None, crate::spinner::STILL));
+        self.dot_in((x, x.floor() as u16), y, size, color, style);
+    }
+
+    /// The same, its letter on the cell tier in column `cell`, as `spinner_in`'s.
+    pub fn dot_in(&mut self, (x, cell): (f32, u16), y: u16, size: f32, color: Rgb, style: Style) {
+        let still = (None, crate::spinner::STILL);
+        self.mark((x, cell), y, size, color, style, still);
     }
 
     fn mark(
         &mut self,
-        x: f32,
+        (x, cell): (f32, u16),
         y: u16,
         size: f32,
         color: Rgb,
         style: Style,
         (step, letter): (Option<u8>, &str),
     ) {
-        let cell = x.floor() as u16;
         if step.is_some() {
             self.turning.push((cell, y));
         }
@@ -678,7 +697,18 @@ impl Grid {
     /// name. It stands about `x`: its middle is where it was when it was a sixth smaller, so
     /// what's placed after it needn't move. `fallback` is what the cell tier shows there.
     pub fn glyph(&mut self, x: f32, y: u16, icon: Icon, color: Rgb, fallback: &str, style: Style) {
-        let cell = x.floor() as u16;
+        self.glyph_in((x, x.floor() as u16), y, (icon, color), fallback, style);
+    }
+
+    /// The same, `fallback` on the cell tier in column `cell`, as `spinner_in`'s letter.
+    pub fn glyph_in(
+        &mut self,
+        (x, cell): (f32, u16),
+        y: u16,
+        (icon, color): (Icon, Rgb),
+        fallback: &str,
+        style: Style,
+    ) {
         if cell < self.width && y < self.height {
             self.put_str(
                 cell,

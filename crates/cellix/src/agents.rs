@@ -851,8 +851,20 @@ fn draw_row(
         }
     }
     let color = crate::dock::icon_colour(row.icon, theme);
-    let fallback = crate::toolbar::fallback(row.icon);
+    // Any other program's square has its initial, the letter itself on cells.
+    let initial = crate::dock::initial(row.icon, &row.name);
+    let mut buffer = [0; 4];
+    let fallback = match initial {
+        Some(letter) => &*letter.encode_utf8(&mut buffer),
+        None => crate::toolbar::fallback(row.icon),
+    };
     grid.glyph(side as f32, y, row.icon, color, fallback, theme.sidebar);
+    if let Some(letter) = initial.filter(|_| !measure.in_cells()) {
+        // In the middle of the glyph, which stands about its start.
+        let middle = side as f32 + 1.0;
+        let size = cellix_render::GLYPH;
+        crate::dock::initial_over(grid, (middle, y), (size, letter), theme.sidebar.bg);
+    }
     let right = area.right().saturating_sub(2);
     // The state at the very end, and how long ago before it.
     let state = right as f32 - STATE_WIDTH;

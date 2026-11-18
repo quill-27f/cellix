@@ -18968,6 +18968,8 @@ mod agents_list_tests;
 #[cfg(test)]
 mod motion_tests;
 #[cfg(test)]
+mod pane_tab_tests;
+#[cfg(test)]
 mod shell_tab_tests;
 #[cfg(test)]
 mod spacing_tests;
@@ -29212,17 +29214,29 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         app.set_measure(Rc::new(cellix_render::FontMeasure::new(10, 20)));
         app.open(&dir.path().join("broken.png")).unwrap();
         let area = app.dock_area().unwrap();
-        let tab = screen(&app).row_text(area.y);
-        assert!(tab.contains("Preview"), "{tab}");
-        assert!(!tab.contains("PDF"), "{tab}");
+        // What its tab paints: its cells hold what of the word they have room for.
+        let painted = |app: &App| -> Vec<String> {
+            let row = i32::from(area.y) * cellix_render::UNIT;
+            let words = screen(app).paint.into_iter().filter_map(|p| match p {
+                Paint::Text { text, y, .. } if y == row => Some(text),
+                _ => None,
+            });
+            words.collect()
+        };
+        let tab = painted(&app);
+        assert!(tab.iter().any(|t| t == "Preview"), "{tab:?}");
+        assert!(!tab.iter().any(|t| t.contains("PDF")), "{tab:?}");
         assert!(screen(&app).text().contains("Reading the image…"));
         preview_read(&mut app);
         let text = screen(&app).text();
         assert!(text.contains("This image can't be shown."), "{text}");
         assert!(!text.contains("PDF"), "{text}");
-        // The Preview tab is as wide as its name and its ×, as the others are.
+        // The Preview tab is as wide as what it paints, as the others are: its lead, its name,
+        // and 12 px, its × and 10 px after it.
         let (front, _, rect) = app.dock.view_tabs_for_test(area)[0];
-        assert_eq!((front, rect.w), (Front::Pdf, 12));
+        let name = cellix_render::FontMeasure::new(10, 20).width("Preview", Font::default());
+        let painted = crate::dock::columns(name + crate::dock::HUG);
+        assert_eq!((front, rect.w), (Front::Pdf, painted));
     }
 
     #[test]
@@ -29576,17 +29590,19 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             } if *fill == app.theme.tint => Some(*bounds),
             _ => None,
         };
-        // The rail's own, or the top right's: the same icons stand elsewhere too.
+        // The rail's own, or the top right's: the same icons stand elsewhere too, as Agents
+        // does on its tab, so the top right's is the one furthest right.
         let rail = i32::from(app.activity_area().right()) * 64;
         let icon = |which: Icon| {
-            grid.paint.iter().find_map(|p| match p {
+            let found = grid.paint.iter().filter_map(|p| match p {
                 Paint::Icon { bounds, icon, .. }
                     if *icon == which && (bounds.x < rail) == (which == Icon::Files) =>
                 {
                     Some(*bounds)
                 }
                 _ => None,
-            })
+            });
+            found.max_by_key(|bounds| bounds.x)
         };
         let around = |inner: Bounds| {
             grid.paint.iter().filter_map(tinted).find(|b| {
@@ -32351,10 +32367,11 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             .filter(|x| app.dock.hit(title, *x) == Some(TabHit::Close(0)))
             .collect();
         assert_eq!(
-            close,
-            [end, end + 1],
-            "its × is the two columns after its name"
+            close.first(),
+            Some(&end),
+            "its × right after its name: {close:?}"
         );
+        assert!(close.len() <= 3, "and its 10 px after it: {close:?}");
         let tabs = app.dock.view_tabs_for_test(area);
         let comments = tabs.iter().find(|tab| tab.0 == Front::Comments).unwrap().2;
         // Comments behind it keeps all but a letter or two: the button that maximizes the
@@ -32376,7 +32393,8 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         );
         let tabs = app.dock.view_tabs_for_test(area);
         let width = |view: Front| tabs.iter().find(|tab| tab.0 == view).unwrap().2.w;
-        assert!(width(Front::Agents) <= 9, "{tabs:?}");
+        // In front it hugs its mark, its name and its ×.
+        assert!(width(Front::Agents) <= 11, "{tabs:?}");
         assert!(width(Front::Comments) >= 5, "{tabs:?}");
         let terminal = (area.x..first_icon)
             .filter(|x| app.dock.hit(title, *x) == Some(TabHit::Tab(0)))
@@ -33134,15 +33152,18 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         app.open(&dir.path().join("paper.pdf")).unwrap();
         app.dock.log = vec!["built".to_string()];
         let area = app.dock_area().unwrap();
+        // The tabs as their row has them, which starts a column into the pane, and each one's
+        // last column, its ×'s: it follows the name, so a tab's × is two columns or three.
+        let title = app.title_of(area);
         let (tab, x) = {
-            let (front, _, tab) = app.dock.view_tabs_for_test(area)[0];
-            (front, tab.right() - 2)
+            let (front, _, tab) = app.dock.view_tabs_for_test(title)[0];
+            (front, tab.right() - 1)
         };
         assert_eq!(tab, Front::Pdf);
         app.handle(mouse(MouseKind::Left, x, area.y));
         assert!(app.dock.pdf.is_none());
-        let (_, _, log) = app.dock.view_tabs_for_test(area)[0];
-        app.handle(mouse(MouseKind::Left, log.right() - 2, area.y));
+        let (_, _, log) = app.dock.view_tabs_for_test(title)[0];
+        app.handle(mouse(MouseKind::Left, log.right() - 1, area.y));
         assert!(app.dock.log.is_empty());
     }
 
@@ -36080,8 +36101,9 @@ while True:
                 _ => None,
             })
             .collect();
-        let (name_x, name_y) = find(&grid, "Agents");
-        // A tab's cells hold as much of its name as its width in cells has room for.
+        // A tab's cells hold as much of its name as its width in cells has room for: the Agents
+        // tab's mark, and the start of its name.
+        let (name_x, name_y) = find(&grid, "◎ Ag");
         let (file_x, file_y) = find(&grid, "alpha");
         assert_eq!((name_y, file_y), (0, 0), "both in the strip");
         // Under the tab, in its row's last sixteenth.

@@ -26,6 +26,9 @@ const BETWEEN: f32 = 2.0;
 /// Kept on every tile for its close button, so tiles don't move as it comes and goes.
 const CLOSE: f32 = 3.0;
 const MARK: f32 = 1.0;
+/// How far before the mark's room a spinner or dot starts, in cells: it's wider than the
+/// room, and stands centred on it.
+const MARK_LEAD: f32 = 0.15;
 /// How far a chip stands in from the top and bottom of its row: three quarters of a row
 /// tall. At two thirds, the tails of words of 12 pt stood on its lower edge.
 const CHIP_INSET: f32 = 0.12;
@@ -775,7 +778,7 @@ impl Workspaces {
                 "needs you".into(),
                 theme.attention,
             ),
-            TileState::Working => (Mark::Dot(theme.accent), "working".into(), dim),
+            TileState::Working => (Mark::Spin(theme.accent), "working".into(), dim),
             TileState::Done(at) => (Mark::Check, format!("done {}", ago(at)), dim),
             TileState::Stopped(_) => (Mark::Stopped, "stopped".into(), dim),
             TileState::Idle => (Mark::Dot(dim), String::new(), dim),
@@ -888,13 +891,17 @@ impl Workspaces {
                         git_added: ink,
                         ..*theme
                     };
+                    // On the accent the marks are in the chip's ink, but for what needs the
+                    // person, whose dot keeps its own colour and stands in a ring of the ink.
                     let mark = match mark {
+                        Mark::Dot(color) if color == theme.attention => Mark::Ringed(color, ink),
                         Mark::Dot(_) => Mark::Dot(ink),
+                        Mark::Spin(_) => Mark::Spin(ink),
                         other => other,
                     };
-                    draw_mark(grid, (x, y), mark, &inked, base);
+                    self.draw_mark(grid, (x, y), mark, &inked, base);
                 }
-                None => draw_mark(grid, (x, y), mark, theme, base),
+                None => self.draw_mark(grid, (x, y), mark, theme, base),
             }
             x += self.room(MARK) + self.room(GAP);
             let name = name_of(&workspace.app);
@@ -1303,17 +1310,60 @@ impl Workspaces {
 
 /// How a tile marks its state.
 #[derive(Clone, Copy)]
+/// What a workspace's chip shows before its name: the marks a tab shows for what its agents
+/// are doing, a spinner while they work and a dot in the colour of what needs the person, and
+/// its own for the rest.
 enum Mark {
     Dot(Rgb),
+    Spin(Rgb),
+    /// A dot standing in a ring of the second colour, where its own wouldn't show.
+    Ringed(Rgb, Rgb),
     Ring,
     Check,
     Stopped,
 }
 
+/// How much bigger the ring round a dot is than the dot, across.
+const RING: f32 = 1.45;
+
+impl Workspaces {
+    /// A tile's mark at `x`: the spinner and dots at the size a spinner beside the status bar's
+    /// words is, a little before where a word would start, so as much air stands between
+    /// them and the name as between the chip's edge and them.
+    fn draw_mark(
+        &self,
+        grid: &mut Grid,
+        (x, y): (f32, u16),
+        mark: Mark,
+        theme: &Theme,
+        base: Style,
+    ) {
+        let size = crate::measures::WAIT_SPIN;
+        let at = x - MARK_LEAD;
+        // How wide a mark `size` rows tall is, in columns.
+        let measure = self.measure();
+        let across = |size: f32| {
+            size * crate::measures::rows_to_columns(measure.as_ref()) / measure.row_air()
+        };
+        match mark {
+            Mark::Spin(color) => grid.spinner(at, y, size, color, base),
+            Mark::Dot(color) => grid.dot(at, y, size, color, base),
+            Mark::Ringed(color, ring) => {
+                let wider = (across(size * RING) - across(size)) / 2.0;
+                grid.dot(at - wider, y, size * RING, ring, base);
+                grid.dot(at, y, size, color, base);
+            }
+            other => draw_mark(grid, (x, y), other, theme, base),
+        }
+    }
+}
+
 fn draw_mark(grid: &mut Grid, (x, y): (f32, u16), mark: Mark, theme: &Theme, base: Style) {
     let right = grid.width();
     match mark {
-        Mark::Dot(color) => label(grid, (x, y), "●", Style { fg: color, ..base }, right),
+        Mark::Dot(color) | Mark::Spin(color) | Mark::Ringed(color, _) => {
+            label(grid, (x, y), "●", Style { fg: color, ..base }, right)
+        }
         Mark::Ring => label(
             grid,
             (x, y),
@@ -2017,6 +2067,81 @@ mod tests {
             .app
             .serve(event(AgentState::Working, "Working"));
         assert!(bar(&spaces).contains("infra working"), "{}", bar(&spaces));
+    }
+
+    /// A tile shows what its agents are doing with the marks their tabs have: the spinner
+    /// while one works, the needs-you colour's dot while one asks. On the tile in front, the
+    /// accent, the spinner is in the chip's ink and the dot keeps its colour, ringed in the ink.
+    #[test]
+    fn a_tiles_marks_are_its_tabs() {
+        use cellix_render::{FontMeasure, Paint, UNIT};
+        let (_dir, first, second) = projects();
+        let mut spaces = spaces();
+        spaces.open(first);
+        spaces.open(second);
+        spaces.handle(Event::Resize(140, 30));
+        spaces
+            .app_mut()
+            .set_measure(Rc::new(FontMeasure::new(17, 36)));
+        let foot = i32::from(spaces.size().1 - 1) * UNIT - UNIT / 2;
+        // The marks on the bar, as (colour, turning, left edge, size) in the order drawn.
+        let marks = |spaces: &Workspaces| -> Vec<(Rgb, bool, i32, i32)> {
+            let grid = screen(spaces);
+            let found = grid.paint.iter().filter_map(|p| match p {
+                Paint::Spinner {
+                    bounds,
+                    color,
+                    step,
+                } if bounds.y > foot => Some((*color, step.is_some(), bounds.x, bounds.h)),
+                _ => None,
+            });
+            found.collect()
+        };
+        let theme = *spaces.theme();
+        let (front, behind) = (spaces.active, 1 - spaces.active);
+        // Behind, working: the accent's spinner; asking: the needs-you dot.
+        spaces.list[behind]
+            .app
+            .serve(event(AgentState::Working, "Working"));
+        let shown = marks(&spaces);
+        assert!(
+            shown.iter().any(|m| m.0 == theme.accent && m.1),
+            "{shown:?}"
+        );
+        spaces.list[behind]
+            .app
+            .serve(event(AgentState::NeedsYou, "Allow sqlx migrate run?"));
+        let shown = marks(&spaces);
+        assert!(
+            shown.iter().any(|m| m.0 == theme.attention && !m.1),
+            "{shown:?}"
+        );
+        // In front, on the accent: the spinner in the ink, the dot ringed in it.
+        spaces.list[front]
+            .app
+            .serve(event(AgentState::Working, "Working"));
+        let ink = theme.button_text;
+        assert!(
+            marks(&spaces).iter().any(|m| m.0 == ink && m.1),
+            "{:?}",
+            marks(&spaces)
+        );
+        spaces.list[front]
+            .app
+            .serve(event(AgentState::NeedsYou, "Allow cargo publish?"));
+        let shown = marks(&spaces);
+        let dot = shown.iter().find(|m| {
+            m.0 == theme.attention && !m.1 && {
+                // The one on the tile in front: right after a ring of the ink.
+                shown.iter().any(|r| r.0 == ink && !r.1 && r.3 > m.3)
+            }
+        });
+        assert!(dot.is_some(), "its colour, ringed in the ink: {shown:?}");
+        let ring = shown.iter().find(|r| r.0 == ink && !r.1).unwrap();
+        let dot = dot.unwrap();
+        // The ring's middle is the dot's.
+        let middle = |m: &(Rgb, bool, i32, i32)| m.2 * 2 + m.3 * 36 / 17;
+        assert!((middle(ring) - middle(dot)).abs() <= 2, "{ring:?} {dot:?}");
     }
 
     #[test]

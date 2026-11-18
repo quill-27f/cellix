@@ -102,11 +102,17 @@ pub enum Icon {
     ShowSidebar = 91,
     /// Cellix's own marks for the programs in the side pane, never a vendor's logo: Claude
     /// Code an eight-line burst, Codex a hexagon with a prompt inside, Gemini CLI a filled
-    /// star of four points, and any other program a plain square. A shell is `Terminal`.
+    /// star of four points. An agent with no mark of its own has a filled square with its
+    /// initial cut out of it: OpenCode's O, Copilot CLI's and Cursor's C, and any other
+    /// program's square has its initial laid over it where it's drawn. A shell, and a task,
+    /// is `Terminal`, its prompt. Nothing is a hollow square, which reads as a box to tick.
     AgentClaude = 67,
     AgentCodex = 68,
     AgentGemini = 69,
     Program = 70,
+    AgentOpenCode = 71,
+    AgentCopilot = 72,
+    AgentCursor = 73,
 }
 
 /// One cell of an icon that is `width` by `height` cells.
@@ -294,7 +300,11 @@ fn half_stroke(icon: Icon) -> f32 {
         | Icon::ReplaceAll => 0.9,
         Icon::Agents => 0.8,
         Icon::AgentClaude => 1.3,
-        Icon::AgentCodex | Icon::Program => 1.0,
+        Icon::AgentCodex
+        | Icon::Program
+        | Icon::AgentOpenCode
+        | Icon::AgentCopilot
+        | Icon::AgentCursor => 1.0,
         Icon::AgentGemini => 0.5,
         Icon::Check => 1.7,
         _ => 1.15,
@@ -895,7 +905,25 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
                 f32::MAX
             }
         }
-        Icon::Program => rounded(p, (5.0, 5.0), (19.0, 19.0), 3.0),
+        // A square, filled: any program with no mark of its own, its initial laid over it.
+        Icon::Program => solid(p, (5.0, 5.0), (19.0, 19.0), 3.5),
+        // The same square with an O cut out of it.
+        Icon::AgentOpenCode => cut(
+            solid(p, (5.0, 5.0), (19.0, 19.0), 3.5),
+            ring(p, (12.0, 12.0), 3.6),
+            1.15,
+        ),
+        // And with a C, open to the right.
+        Icon::AgentCopilot | Icon::AgentCursor => {
+            let (dx, dy) = (p.0 - 12.0, p.1 - 12.0);
+            let open = dx > 0.0 && dy.abs() < dx * 0.9;
+            let letter = if open {
+                f32::MAX
+            } else {
+                ring(p, (12.0, 12.0), 3.6)
+            };
+            cut(solid(p, (5.0, 5.0), (19.0, 19.0), 3.5), letter, 1.15)
+        }
         Icon::Smile => ring(p, (12.0, 12.0), 9.5)
             .min(circle(p, (9.0, 9.6)) - 0.35)
             .min(circle(p, (15.0, 9.6)) - 0.35)
@@ -990,6 +1018,9 @@ mod tests {
             Icon::AgentCodex,
             Icon::AgentGemini,
             Icon::Program,
+            Icon::AgentOpenCode,
+            Icon::AgentCopilot,
+            Icon::AgentCursor,
         ] {
             let dots = (0..50)
                 .flat_map(|y| (0..50).map(move |x| (x, y)))

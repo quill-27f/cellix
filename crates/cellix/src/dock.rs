@@ -81,7 +81,7 @@ const CUT_AIR: f32 = 0.5;
 /// What the tab in front has beside its name when the row is short, in cells: the lead a
 /// tab's name always has, 12 px to its ×, the ×, and 10 px to the chip's edge. With room,
 /// a tab has more than this; without, the slack is what would cut its neighbours.
-const HUG: f32 = 3.92;
+pub(crate) const HUG: f32 = 3.92;
 /// How far before a hugging tab's right edge its × is drawn, so 10 px stay past its ink.
 const HUG_CLOSE: f32 = 2.07;
 /// Columns a program's mark takes before its name on its tab, as a file's icon does on its
@@ -92,17 +92,31 @@ const ICON_SIZE: f32 = 0.70;
 /// far the name moves for it, in cells: where a file's tab has them.
 const ICON_MIDDLE: f32 = 0.5;
 const ICON_SHIFT: f32 = 1.7;
-/// Columns an agent's tab keeps before its × for what it's doing, whether it shows anything
-/// or not, so a tab keeps its width as its agent starts and stops.
+/// Columns an agent's tab has before its × on cells for what it's doing, while it shows it.
 const MARK_ROOM: u16 = 2;
 /// How tall that mark is, in the terminal's lines: a spinner of 12 pt, and a dot half that.
 pub const MARK_SIZE: f32 = 0.65;
-/// How far before the × the mark starts at the furthest, in cells: its 24 px and about 9 px
-/// of air.
-const MARK_SHIFT: f32 = 1.6;
-/// How far after the name, or its context, the mark starts: 13 px, the board's gap between
-/// the parts of a tab.
-const MARK_GAP: f32 = 0.75;
+/// How far after the name, or its context, the state starts: half a cell, 8 px, so it reads as
+/// the name's and never as the next tab's.
+const STATE_AIR: f32 = 0.5;
+/// What a whole tab has after its last part, in cells: 12 px to its ×, the ×, and 10 px to its
+/// edge, as the tab in front hugs them in a short row. Its width is what's painted, so the ×
+/// follows the last part closely and nothing stands idle before it.
+const TAIL: f32 = HUG - TAB_TEXT;
+/// Where the × stands after the last part, in cells: the glyph's own lead and 12 px of air.
+const CLOSE_AIR: f32 = TAIL - HUG_CLOSE;
+/// How much of the air after a tab's × its columns may round away, in cells: 5 px of the 13
+/// past its ink, which leaves the 8 every edge keeps. Rounded up for a sliver, a tab took a
+/// column the row didn't have, and cut its neighbour short (131's Problems).
+const ROUNDING: f32 = 0.3;
+
+/// The columns a tab painted `wide` cells takes.
+pub(crate) fn columns(wide: f32) -> u16 {
+    (wide - ROUNDING).ceil() as u16
+}
+/// What a tab cut short gives its mark, or its state, at either end of its name, in cells:
+/// from its edge to the mark's middle and half its width, and the air before the name.
+const CUT_SIDE: f32 = CUT_ICON + ICON_SIZE;
 /// A tab cut short behind the one in front: from its edge to its mark's middle, and from its
 /// state's start to its other edge, in cells.
 const CUT_ICON: f32 = 1.2;
@@ -434,7 +448,9 @@ pub fn own_name(title: &str) -> Option<String> {
     (!name.is_empty()).then(|| name.to_string())
 }
 
-/// Cellix's own mark for a program in the side pane, by what the pane calls it.
+/// Cellix's own mark for a program in the side pane, by what the pane calls it. One meaning
+/// each: an agent with no mark of its own is a filled square with its initial, a shell and a
+/// task are a prompt, and nothing is a hollow square, which read as a box to tick.
 pub fn program_icon(name: &str, shell: bool, browser: bool) -> Icon {
     match name {
         _ if shell => Icon::Terminal,
@@ -442,6 +458,9 @@ pub fn program_icon(name: &str, shell: bool, browser: bool) -> Icon {
         "Claude Code" => Icon::AgentClaude,
         "Codex" => Icon::AgentCodex,
         "Gemini CLI" | "Gemini" => Icon::AgentGemini,
+        "OpenCode" => Icon::AgentOpenCode,
+        "Copilot CLI" | "Copilot" => Icon::AgentCopilot,
+        "Cursor CLI" | "Cursor" => Icon::AgentCursor,
         _ => Icon::Program,
     }
 }
@@ -715,12 +734,6 @@ impl Session {
         true
     }
 
-    /// Whether its tab keeps room for what it's doing: an agent's while it runs, whose state
-    /// its hooks report, and a shell's while what runs in it says how it is (OSC 7501).
-    pub fn marked(&self) -> bool {
-        !self.browser && !self.exited && (!self.shell || self.mark().is_some())
-    }
-
     /// Whether its tab has its program's mark before its name: an agent's or another
     /// program's, and a shell's while a command runs in it. A shell at its prompt and the
     /// browser are names alone, as they were.
@@ -728,9 +741,10 @@ impl Session {
         !self.browser && (!self.shell || self.running_program().is_some())
     }
 
-    /// Cellix's own mark for its program, as its tab and the Agents list show it.
+    /// Cellix's own mark for its program, as its tab and the Agents list show it: a task's
+    /// is a shell's prompt, since it's a command run as one is.
     pub fn icon(&self) -> Icon {
-        program_icon(&self.name, self.shell, self.browser)
+        program_icon(&self.name, self.shell || self.task(), self.browser)
     }
 
     /// A program that stopped without finishing, showing what it last showed.
@@ -2229,34 +2243,87 @@ impl Dock {
         views.iter().find(|v| v.0 == view).map_or("", |v| v.1)
     }
 
-    /// How wide a session's tab would like to be: its mark, its name, how full its context
-    /// is, room for what it's doing, and its ×.
-    fn session_width(&self, session: &Session) -> u16 {
-        let context = session
-            .context()
-            .map_or(0, |c| c.chars().count() as u16 + CONTEXT_GAP);
-        let label = if session.has_icon() {
-            self.text_width(&session.label()).ceil() as u16
+    /// What each tab shows, views and then sessions: its words, its mark, how full its agent's
+    /// context is, and what it's doing.
+    fn faces(&self) -> Vec<Face> {
+        let pictures = !self.in_cells();
+        let views = self.views().into_iter().map(|(view, name, _)| {
+            let counted = match view {
+                Front::Comments => self.comment_count.get(),
+                Front::Inbox => self.inbox_count.get(),
+                _ => 0,
+            };
+            let text = if counted > 0 {
+                format!("{name} {counted}")
+            } else {
+                name.to_string()
+            };
+            // The Agents tab has the mark its icon at the top right has, so a narrow pane cuts
+            // it short as it does an agent's, its mark kept. On cells it's its name, as it was.
+            let icon = (pictures && view == Front::Agents).then_some(Icon::Agents);
+            Face {
+                text,
+                icon,
+                context: None,
+                state: None,
+            }
+        });
+        let sessions = self.sessions.iter().map(|session| Face {
+            text: session.label(),
+            icon: session.has_icon().then(|| session.icon()),
+            context: session.context(),
+            state: session.mark(),
+        });
+        views.chain(sessions).collect()
+    }
+
+    /// Columns a tab has besides its name on cells: its mark's, and its state's while it shows
+    /// one. A tab whose program is idle has no room kept for a state it isn't showing.
+    fn cell_extra(face: &Face) -> u16 {
+        let icon = if face.icon.is_some() { ICON_ROOM } else { 0 };
+        icon + if face.state.is_some() { MARK_ROOM } else { 0 }
+    }
+
+    /// How wide what a whole tab paints is, in cells: the lead, its mark and its words, how full
+    /// its agent's context is where `context`, what it's doing half a cell after them, and the
+    /// 12 px, × and 10 px after that.
+    fn painted(&self, face: &Face, context: bool) -> f32 {
+        let mark = if face.icon.is_some() { ICON_SHIFT } else { 0.0 };
+        let said = (face.context.as_deref())
+            .filter(|_| context)
+            .map_or(0.0, |text| CONTEXT_AIR + self.small_width(text));
+        let state = if face.state.is_some() {
+            STATE_AIR + MARK_WIDE
         } else {
-            session.label().chars().count() as u16
+            0.0
         };
-        label + TAB_PADDING * 2 + CLOSE_WIDTH + context + Self::session_extra(session)
+        TAB_TEXT + mark + self.text_width(&face.text) + said + state + TAIL
     }
 
-    /// Columns a session's tab has besides its name: its mark, and room for what its agent is
-    /// doing.
-    fn session_extra(session: &Session) -> u16 {
-        let icon = if session.has_icon() { ICON_ROOM } else { 0 };
-        icon + if session.marked() { MARK_ROOM } else { 0 }
+    /// Columns a tab takes whole: where there are pictures, what it paints; on cells, its
+    /// letters and the columns round them, and a view's own width.
+    fn whole_width(&self, face: &Face, view: Option<u16>) -> u16 {
+        if !self.in_cells() {
+            return columns(self.painted(face, true));
+        }
+        if let Some(width) = view {
+            return width;
+        }
+        let context = (face.context.as_ref()).map_or(0, |c| c.chars().count() as u16 + CONTEXT_GAP);
+        let letters = face.text.chars().count() as u16;
+        letters + TAB_PADDING * 2 + CLOSE_WIDTH + context + Self::cell_extra(face)
     }
 
-    /// The same for any tab, views and then sessions: a view's tab has neither.
-    fn extra(&self, index: usize) -> u16 {
-        let views = self.views().len();
-        index
-            .checked_sub(views)
-            .and_then(|at| self.sessions.get(at))
-            .map_or(0, Self::session_extra)
+    /// How wide `text` is at the size an agent's context is set, in cells.
+    fn small_width(&self, text: &str) -> f32 {
+        let small = cellix_render::Font {
+            size: CONTEXT_SIZE,
+            ..cellix_render::Font::default()
+        };
+        match &self.measure {
+            Some(measure) => measure.width(text, small),
+            None => text.chars().count() as f32,
+        }
     }
 
     pub fn tabs_start(&self, area: Rect) -> u16 {
@@ -2271,13 +2338,18 @@ impl Dock {
 
     /// How wide each tab would like to be, views and then sessions.
     fn wanted_widths(&self) -> Vec<u16> {
-        let views = self.views().into_iter().map(|view| view.2);
-        views
-            .chain(
-                self.sessions
-                    .iter()
-                    .map(|s| if s.tabbed { self.session_width(s) } else { 0 }),
-            )
+        let views = self.views().into_iter().map(|view| Some(view.2));
+        let fixed = views.chain(self.sessions.iter().map(|_| None));
+        let tabbed =
+            (self.views().into_iter().map(|_| true)).chain(self.sessions.iter().map(|s| s.tabbed));
+        (self.faces().iter().zip(fixed).zip(tabbed))
+            .map(|((face, view), tabbed)| {
+                if tabbed {
+                    self.whole_width(face, view)
+                } else {
+                    0
+                }
+            })
             .collect()
     }
 
@@ -2314,39 +2386,27 @@ impl Dock {
         self.measure.as_ref().is_none_or(|m| m.in_cells())
     }
 
-    /// What each tab says, views and then sessions: a view's name with how many it holds.
-    fn tab_texts(&self) -> Vec<String> {
-        let views = self.views().into_iter().map(|(view, name, _)| {
-            let counted = match view {
-                Front::Comments => self.comment_count.get(),
-                Front::Inbox => self.inbox_count.get(),
-                _ => 0,
-            };
-            if counted > 0 {
-                format!("{name} {counted}")
-            } else {
-                name.to_string()
-            }
-        });
-        let sessions = self.sessions.iter().map(Session::label);
-        views.chain(sessions).collect()
-    }
-
     /// Columns the tab in front takes when the row is short: its mark, its name, what its
     /// agent is doing and its ×, with the air a chip has around them and none to spare.
-    fn hugging(&self, text: &str, extra: u16) -> u16 {
+    fn hugging(&self, face: &Face) -> u16 {
         if self.in_cells() {
             // A column either side, and one between the name and the ×.
-            text.chars().count() as u16 + 4 + extra
+            face.text.chars().count() as u16 + 4 + Self::cell_extra(face)
         } else {
-            (self.text_width(text) + HUG + f32::from(extra)).ceil() as u16
+            columns(self.painted(face, false))
         }
     }
 
     /// Columns a tab behind the one in front takes to show its whole name, with no × and
     /// half a column of air either side, and an agent's mark and state either end of it.
-    fn stub(&self, text: &str, extra: u16) -> u16 {
-        (self.text_width(text) + CUT_AIR * 2.0 + f32::from(extra)).ceil() as u16
+    fn stub(&self, face: &Face) -> u16 {
+        if self.in_cells() {
+            let extra = f32::from(Self::cell_extra(face));
+            return (self.text_width(&face.text) + CUT_AIR * 2.0 + extra).ceil() as u16;
+        }
+        let side = |on: bool| if on { CUT_SIDE } else { 0.0 };
+        let sides = side(face.icon.is_some()) + side(face.state.is_some());
+        (self.text_width(&face.text) + CUT_AIR * 2.0 + sides).ceil() as u16
     }
 
     /// What each tab gets, views and then sessions, and how they stand. When they don't all
@@ -2385,8 +2445,8 @@ impl Dock {
         // up to the icons' own cells, and it goes.
         let front = self.front_index().unwrap_or(0);
         let behind = self.shown_tabs().saturating_sub(1) as u16;
-        let texts = self.tab_texts();
-        let kept = (texts.get(front)).map_or(0, |text| self.hugging(text, self.extra(front)));
+        let faces = self.faces();
+        let kept = (faces.get(front)).map_or(0, |face| self.hugging(face));
         let room = end.saturating_sub(start + MAXIMIZE_SHORT);
         let short = if self.cut_tabs_leave_the_button(area) {
             room
@@ -2403,11 +2463,11 @@ impl Dock {
             }
             return (widths, Fit::Front);
         }
-        for (index, (width, text)) in widths.iter_mut().zip(&texts).enumerate() {
+        for (index, (width, face)) in widths.iter_mut().zip(&faces).enumerate() {
             *width = if index == front {
                 kept
             } else {
-                self.stub(text, self.extra(index))
+                self.stub(face)
             };
         }
         let rest = short - kept;
@@ -2444,17 +2504,11 @@ impl Dock {
     /// columns at the row's end.
     fn cut_tabs_leave_the_button(&self, area: Rect) -> bool {
         let front = self.front_index().unwrap_or(0);
-        let texts = self.tab_texts();
-        let kept = (texts.get(front)).map_or(0, |text| self.hugging(text, self.extra(front)));
+        let faces = self.faces();
+        let kept = (faces.get(front)).map_or(0, |face| self.hugging(face));
         let behind = self.shown_tabs().saturating_sub(1) as u16;
         let room = (self.tabs_end.get()).saturating_sub(self.tabs_start(area) + MAXIMIZE_SHORT);
         kept + behind * CUT_LEAST <= room
-    }
-
-    /// Whether the tab in front stands in a chip that hugs its name, with its × two columns
-    /// from its end rather than three.
-    fn hugs(&self, area: Rect) -> bool {
-        self.fit(area) == Fit::Cut
     }
 
     /// Which tabs stand as names alone, views and then sessions: every one behind the tab
@@ -2511,12 +2565,6 @@ impl Dock {
             .collect()
     }
 
-    /// Where the tab in front ends its name when it carries the chevron, and where the chevron
-    /// stands, given where its × stands.
-    fn pick_at(&self, area: Rect, close: u16) -> Option<u16> {
-        self.picking(area).then(|| close.saturating_sub(PICK_WIDTH))
-    }
-
     /// What an agent's tab says of its context, for a tooltip, with the pointer at `x`.
     pub fn context_tip(&self, area: Rect, x: u16) -> Option<String> {
         let (index, _) = self
@@ -2541,17 +2589,12 @@ impl Dock {
         let mut at = self.tabs_start(area);
         let pick = if self.picking(area) { PICK_WIDTH } else { 0 };
         let cuts = self.cut_short(area);
-        let texts = self.tab_texts();
-        let tabs = names
-            .zip(widths)
-            .zip(wanted)
-            .zip(cuts)
-            .zip(texts)
-            .enumerate();
-        for (index, ((((name, width), full), cut), text)) in tabs {
+        let faces = self.faces();
+        let tabs = names.zip(widths).zip(wanted).zip(cuts).zip(faces);
+        for ((((name, width), full), cut), face) in tabs {
             if x >= at && x < at + width {
                 // Standing as a name alone, it's cut when that name has no room.
-                let short = cut && self.stub(&text, self.extra(index)) > width;
+                let short = cut && self.stub(&face) > width;
                 let stub = pick > 0 && width < full + pick;
                 return (short || stub).then_some(name);
             }
@@ -2711,6 +2754,140 @@ impl Dock {
             .collect()
     }
 
+    /// Every tab where it stands, views and then sessions.
+    fn tab_rects(&self, area: Rect) -> Vec<Rect> {
+        let mut x = self.tabs_start(area);
+        let widths = self.tab_widths(area);
+        let tabs = widths.into_iter().map(|width| {
+            let tab = Rect::new(x, area.y, width, 1);
+            x += width;
+            tab
+        });
+        tabs.collect()
+    }
+
+    /// Where the parts of a whole tab stand, each as a place in cells and the column it has
+    /// on cells. Where there are pictures they follow one another as they're painted: its mark,
+    /// its words, how full its agent's context is, what it's doing half a cell after them, and
+    /// 12 px on its chevron or its ×. Its words are cut short with a "…" only where the tab
+    /// hasn't the width they're painted at.
+    fn parts(
+        &self,
+        face: &Face,
+        tab: Rect,
+        (hugs, picking): (bool, bool),
+        measure: &dyn cellix_render::Measure,
+    ) -> Parts {
+        let font = cellix_render::Font::default();
+        let right = tab.right();
+        // The cell a whole tab's name starts in: a column sooner where the chip hugs it.
+        let name_cell = tab.x + if hugs { 1 } else { 2 };
+        let first = name_cell + if face.icon.is_some() { ICON_ROOM } else { 0 };
+        let lead = f32::from(tab.x) + TAB_TEXT;
+        let (icon_x, name_x) = match face.icon {
+            Some(_) => (lead + ICON_MIDDLE, lead + ICON_SHIFT),
+            None => (lead, lead),
+        };
+        if measure.in_cells() {
+            // The ×, in a chip that hugs its name, a column from its end and with a column
+            // before it that the name stops short of.
+            let (close, stop) = if hugs {
+                (
+                    (f32::from(right) - 2.0, right.saturating_sub(2)),
+                    right.saturating_sub(3),
+                )
+            } else {
+                let at = right.saturating_sub(CLOSE_WIDTH + 1);
+                ((f32::from(at), at), at)
+            };
+            let pick = picking.then(|| close.1.saturating_sub(PICK_WIDTH));
+            let end = pick.unwrap_or(stop);
+            let stop = if face.state.is_some() {
+                end.saturating_sub(MARK_ROOM)
+            } else {
+                end
+            };
+            let letters = |text: &str| text.chars().count() as u16;
+            let whole = tab.w >= self.whole_width(face, None) + pick.map_or(0, |_| PICK_WIDTH);
+            let context = (face.context.as_deref()).filter(|_| whole).map(|_| {
+                let x = (first + letters(&face.text) + CONTEXT_GAP).min(stop.saturating_sub(1));
+                (f32::from(x), x)
+            });
+            let named = (first + letters(&face.text)).min(context.map_or(stop, |c| c.1));
+            let after = match (&face.context, context) {
+                (Some(text), Some((_, x))) => x + letters(text),
+                _ => named,
+            };
+            let end_at = pick.map_or(close.0, f32::from);
+            let state = f32::from(after + 1).min(end_at - 2.0);
+            return Parts {
+                icon: (icon_x, name_cell),
+                name: (name_x, first),
+                stop: context.map_or(stop, |c| c.1),
+                text: face.text.clone(),
+                context: context.map(|c| (c, stop)),
+                state: (state, state as u16),
+                pick: pick.map(|x| (f32::from(x), x)),
+                close,
+                close_cell: close.0.floor() as u16,
+            };
+        }
+        let state = if face.state.is_some() {
+            STATE_AIR + MARK_WIDE
+        } else {
+            0.0
+        };
+        let chevron = if picking { f32::from(PICK_WIDTH) } else { 0.0 };
+        // Its columns may have rounded away a sliver of the air after its ×.
+        let room = f32::from(right) + ROUNDING - TAIL - chevron - state - name_x;
+        let full = measure.width(&face.text, font);
+        let said = (face.context.as_deref())
+            .map(|text| (text, CONTEXT_AIR + self.small_width(text)))
+            .filter(|(_, wide)| full + wide <= room);
+        let text = crate::context::elide(&face.text, room - said.map_or(0.0, |s| s.1), measure);
+        let name_end = name_x + measure.width(&text, font);
+        let mut after = name_end;
+        let context = said.map(|(text, wide)| {
+            let x = name_end + CONTEXT_AIR;
+            after = name_end + wide;
+            (x, text.chars().count() as u16)
+        });
+        let state_x = after + STATE_AIR;
+        if face.state.is_some() {
+            after = state_x + MARK_WIDE;
+        }
+        let close = after + chevron + CLOSE_AIR;
+        // What the cell tier's letters say, which the screen's text is: painted words are
+        // narrower than their letters, so the parts' letters stand from the tab's end, its ×
+        // in its last column, its chevron and what it's doing before that, its context before
+        // those, and its name from where it's painted up to them. The cells keep what they can
+        // of the name; a click goes by what's painted.
+        let close_cell = right.saturating_sub(1);
+        let pick_cell = close_cell.saturating_sub(1);
+        let pick = picking.then_some((after + CLOSE_AIR, pick_cell));
+        let state_cell = if picking { pick_cell } else { close_cell }.saturating_sub(1);
+        let next = match (face.state, picking) {
+            (Some(_), _) => state_cell,
+            (None, true) => pick_cell,
+            (None, false) => close_cell,
+        };
+        let first = tab.x + if face.icon.is_some() { 3 } else { 1 };
+        let context = context.map(|(x, letters)| (x, next.saturating_sub(letters).max(first)));
+        let named = context.map_or(next, |c| c.1);
+        Parts {
+            icon: (icon_x, tab.x + 1),
+            name: (name_x, first),
+            // What's painted runs to its own end, whatever its letters have.
+            stop: named.max(name_end.ceil() as u16).max(first),
+            text,
+            context: context.map(|c| (c, next)),
+            state: (state_x, state_cell),
+            pick,
+            close: (close, close.floor() as u16),
+            close_cell,
+        }
+    }
+
     pub fn hit(&self, area: Rect, x: u16) -> Option<TabHit> {
         if x + HIDE_WIDTH >= area.right() {
             return Some(TabHit::Hide);
@@ -2718,47 +2895,32 @@ impl Dock {
         let fit = self.fit(area);
         let picking = fit == Fit::Front;
         let cuts = self.cut_short(area);
-        // Columns at a tab's end that are its ×: one fewer in a chip that hugs its name.
-        let reach = if fit == Fit::Cut { 2 } else { CLOSE_WIDTH + 1 };
-        let views = self.view_tabs(area);
-        let sessions_from = views.len();
-        for (index, (view, _, tab)) in views.into_iter().enumerate() {
-            if x >= tab.x && x < tab.right() {
-                // Behind the one in front, a tab has no × to miss: all of it brings it forward.
-                if cuts[index] {
-                    return Some(TabHit::View(view));
-                }
-                let close = tab.right().saturating_sub(reach);
-                if picking && x + PICK_WIDTH >= close && x < close {
-                    return Some(TabHit::Pick);
-                }
-                let on_close = x >= close;
-                return Some(if on_close {
-                    TabHit::CloseView(view)
-                } else {
-                    TabHit::View(view)
-                });
+        let views = self.views();
+        let faces = self.faces();
+        let cells = cellix_render::CellMeasure;
+        let measure: &dyn cellix_render::Measure = self.measure.as_deref().unwrap_or(&cells);
+        for (index, tab) in self.tab_rects(area).into_iter().enumerate() {
+            if tab.w == 0 || x < tab.x || x >= tab.right() {
+                continue;
             }
-        }
-        let tabs = self.tabs(area);
-        for (index, (start, end)) in tabs.iter().enumerate() {
-            if x >= *start && x < *end {
-                if cuts[sessions_from + index] {
-                    return Some(TabHit::Tab(index));
-                }
-                let close = end.saturating_sub(reach);
-                if picking && x + PICK_WIDTH >= close && x < close {
-                    return Some(TabHit::Pick);
-                }
-                let on_close = x >= close;
-                return Some(if on_close {
-                    TabHit::Close(index)
-                } else {
-                    TabHit::Tab(index)
-                });
+            let pick = |close: bool| match views.get(index) {
+                Some(view) if close => TabHit::CloseView(view.0),
+                Some(view) => TabHit::View(view.0),
+                None if close => TabHit::Close(index - views.len()),
+                None => TabHit::Tab(index - views.len()),
+            };
+            // Behind the one in front, a tab has no × to miss: all of it brings it forward.
+            if cuts[index] {
+                return Some(pick(false));
             }
+            let parts = self.parts(&faces[index], tab, (fit == Fit::Cut, picking), measure);
+            let close = parts.close.1;
+            if picking && x + PICK_WIDTH >= close && x < close {
+                return Some(TabHit::Pick);
+            }
+            return Some(pick(x >= close));
         }
-        let end = tabs.last().map_or(self.first_tab(area), |t| t.1);
+        let end = self.plus_x(area);
         // Out of room, the + gives way: the icons at the top right start the same things.
         if fit == Fit::Whole && x >= end && x < end + NEW_WIDTH {
             return Some(TabHit::New);
@@ -2777,59 +2939,45 @@ impl Dock {
         theme: &Theme,
         measure: &dyn cellix_render::Measure,
     ) {
-        let count = self.comment_count.get();
         let row = Rect::new(area.x, area.y, area.w, 1);
         grid.fill(row, theme.tab);
-        let whole = self.fit(area) == Fit::Whole;
-        let hugs = self.hugs(area);
+        let fit = self.fit(area);
+        let whole = fit == Fit::Whole;
+        let hugs = fit == Fit::Cut;
         let cuts = self.cut_short(area);
-        let font = cellix_render::Font::default();
-        // A tab behind the one in front: its name, or as much as fits and a "…", with no ×
-        // to crowd it. Under the pointer its chip is that name and the air around it.
-        let cut_name = |grid: &mut Grid, tab: Rect, name: &str, (style, hovered): (Style, bool)| {
-            let room = f32::from(tab.w) - CUT_AIR * 2.0;
-            let text = crate::context::elide(name, room, measure);
-            if hovered {
-                let (wide, high) = (measure.width(&text, font) + CUT_AIR * 2.0, 0.8);
-                let top = f32::from(tab.y) + (1.0 - high) / 2.0;
-                let chip = Bounds::cells(f32::from(tab.x), top, wide, high);
-                grid.panel(chip, TAB_CHIP_RADIUS, Some(theme.row_hover), None);
-            }
-            let at = f32::from(tab.x) + CUT_AIR;
-            grid.label_at(at, tab.x + 1, area.y, &text, style, tab.right(), 100);
-        };
-        // Where a whole tab's × stands, and the column its name stops before. In a chip that
-        // hugs its name the × is 10 px from the chip's edge and 12 px after the name.
-        let close_of = |tab: Rect| -> (f32, u16) {
-            let right = tab.right();
-            if !hugs {
-                let close = right.saturating_sub(CLOSE_WIDTH + 1);
-                (f32::from(close), close)
-            } else if measure.in_cells() {
-                (f32::from(right) - 2.0, right.saturating_sub(3))
-            } else {
-                (f32::from(right) - HUG_CLOSE, right.saturating_sub(2))
-            }
-        };
-        // The cell a whole tab's name starts in: a column sooner where the chip hugs it.
-        let name_cell = |tab: Rect| tab.x + if hugs { 1 } else { 2 };
-        let chevron = |grid: &mut Grid, x: u16, style: Style| {
+        let faces = self.faces();
+        let views = self.views();
+        let chevron = |grid: &mut Grid, at: (f32, u16), style: Style| {
             let quiet = Style {
                 bold: false,
                 ..style
             };
-            grid.glyph(x as f32, area.y, Icon::ChevronDown, quiet.fg, "▾", quiet);
+            grid.glyph_in(at, area.y, (Icon::ChevronDown, quiet.fg), "▾", quiet);
         };
-        let views = self.view_tabs(area);
-        let sessions_from = views.len();
-        for (index, (view, name, tab)) in views.into_iter().enumerate() {
+        // The tab before, where it ended and whether it stood cut short, for the line between
+        // two cut short side by side.
+        let mut before: Option<(u16, bool)> = None;
+        for (index, (face, tab)) in faces.iter().zip(self.tab_rects(area)).enumerate() {
             // Out of room, only the tab in front has columns; the rest are in its list.
             if tab.w == 0 {
                 continue;
             }
-            let on = self.front == view || (view == Front::Agents && self.listing());
+            let session = index
+                .checked_sub(views.len())
+                .and_then(|at| self.sessions.get(at));
+            let on = match (session, views.get(index)) {
+                (Some(_), _) => {
+                    self.active == Some(index - views.len()) && self.front == Front::Session
+                }
+                (None, Some(view)) => {
+                    self.front == view.0 || (view.0 == Front::Agents && self.listing())
+                }
+                (None, None) => false,
+            };
             let hovered = hover.is_some_and(|h| tab.contains(h.0, h.1));
-            let quiet = Style {
+            // A tab in front, or under the pointer, has its words in the text's own colour,
+            // whatever its program is doing: one that ended says so by its mark.
+            let style = Style {
                 fg: if on || hovered {
                     theme.text.fg
                 } else {
@@ -2838,166 +2986,77 @@ impl Dock {
                 bg: if on { theme.sidebar.bg } else { theme.tab.bg },
                 ..theme.tab
             };
-            let (close_at, close) = close_of(tab);
-            let counted = match view {
-                Front::Comments => count,
-                Front::Inbox => self.inbox_count.get(),
-                _ => 0,
-            };
-            let text = if counted > 0 {
-                format!("{name} {counted}")
-            } else {
-                name.to_string()
-            };
-            if cuts[index] {
-                cut_name(grid, tab, &text, (quiet, hovered));
+            let mark = face.icon.map(|icon| {
+                let colour = match session {
+                    Some(session) if session.exited => theme.disabled,
+                    Some(_) => icon_colour(icon, theme),
+                    None => style.fg,
+                };
+                (icon, colour, initial(icon, &face.text))
+            });
+            let cut = cuts[index];
+            // Two cut short side by side have a hairline between them, so the state at the end
+            // of one is never read as the next one's: they stand a cell apart.
+            if cut
+                && !measure.in_cells()
+                && before.is_some_and(|(end, was_cut)| was_cut && end == tab.x)
+            {
+                let line = Bounds::cells(f32::from(tab.x), f32::from(area.y) + 0.28, 0.0, 0.44);
+                grid.hairline(line, theme.border);
+            }
+            before = Some((tab.right(), cut));
+            if cut {
+                cut_tab(grid, tab, face, (style, hovered, mark), (measure, theme));
                 continue;
             }
             // Where the views are icons, the one showing has a column and no tab to draw.
             if on && tab.w > CLOSE_WIDTH + 1 {
                 front_tab(grid, tab, theme, measure.in_cells());
             }
-            let at = tab.x as f32 + TAB_TEXT;
-            let pick = self.pick_at(area, close);
+            let parts = self.parts(face, tab, (hugs, fit == Fit::Front), measure);
+            if let Some(mark) = mark {
+                tab_icon(grid, mark, parts.icon, area.y, style);
+            }
             grid.label_at(
-                at,
-                name_cell(tab),
+                parts.name.0,
+                parts.name.1,
                 area.y,
-                &text,
-                quiet,
-                pick.unwrap_or(close),
+                &parts.text,
+                style,
+                parts.stop,
                 100,
             );
-            if let Some(x) = pick {
-                chevron(grid, x, quiet);
+            if let (Some(text), Some(((px, cell), stop))) = (&face.context, parts.context) {
+                let percent = session
+                    .and_then(|s| s.usage.as_ref())
+                    .and_then(|u| u.percent());
+                let fg = match percent {
+                    Some(p) if p >= crate::transcript::FULL => theme.error,
+                    Some(p) if p >= crate::transcript::WARN => theme.attention,
+                    _ => theme.gutter.fg,
+                };
+                let quiet = Style { fg, ..style };
+                grid.label_at(px, cell, area.y, text, quiet, stop, CONTEXT_SIZE);
+            }
+            if let Some(state) = face.state {
+                let at = (parts.state.0 - dot_lead(state, measure), parts.state.1);
+                draw_mark_in(grid, (at, area.y), state, style, theme);
+            }
+            if let Some(at) = parts.pick {
+                chevron(grid, at, style);
             }
             if on || hovered {
-                let plain = Style {
-                    bold: false,
-                    ..quiet
-                };
-                grid.glyph(close_at, area.y, Icon::Close, plain.fg, "×", plain);
-            }
-        }
-        for (index, (start, end)) in self.tabs(area).into_iter().enumerate() {
-            if end == start {
-                continue;
-            }
-            let session = &self.sessions[index];
-            let label = session.label();
-            let active = self.active == Some(index) && self.front == Front::Session;
-            let tab = Rect::new(start, area.y, end - start, 1);
-            let hovered = hover.is_some_and(|h| tab.contains(h.0, h.1));
-            let style = if active {
-                Style {
-                    fg: theme.text.fg,
-                    bg: theme.sidebar.bg,
-                    ..theme.tab
-                }
-            } else if hovered {
-                Style {
-                    fg: theme.text.fg,
-                    ..theme.tab
-                }
-            } else {
-                theme.tab
-            };
-            let shown = if session.exited {
-                Style {
-                    fg: theme.gutter.fg,
-                    ..style
-                }
-            } else {
-                style
-            };
-            if cuts[sessions_from + index] {
-                if session.has_icon() || session.marked() {
-                    cut_session(grid, tab, session, (shown, hovered), (measure, theme));
-                } else {
-                    cut_name(grid, tab, &label, (shown, hovered));
-                }
-                continue;
-            }
-            if active {
-                front_tab(grid, tab, theme, measure.in_cells());
-            }
-            // Its program's mark, where a file's tab has its icon, and its name after it.
-            let lead = start as f32 + TAB_TEXT;
-            let (at, first) = if session.has_icon() {
-                let mark_at = (lead + ICON_MIDDLE, name_cell(tab));
-                tab_icon(grid, session.icon(), mark_at, area.y, style, theme);
-                (lead + ICON_SHIFT, name_cell(tab) + ICON_ROOM)
-            } else {
-                (lead, name_cell(tab))
-            };
-            let (close_at, close) = close_of(tab);
-            let pick = self.pick_at(area, close);
-            if let Some(x) = pick {
-                chevron(grid, x, style);
-            }
-            // What stands at its end, the chevron or the ×, and what its agent is doing before
-            // that: its name and context stop short of both.
-            let (end_at, end_cell) = pick.map_or((close_at, close), |x| (f32::from(x), x));
-            let stop = if session.marked() {
-                end_cell.saturating_sub(MARK_ROOM)
-            } else {
-                end_cell
-            };
-            // How full its context is, when the tab has its whole width.
-            let pick_room = if pick.is_some() { PICK_WIDTH } else { 0 };
-            let whole = end - start >= self.session_width(session) + pick_room;
-            let context = session.context().filter(|_| whole);
-            let name_end = match &context {
-                Some(text) => {
-                    // Right after the name, as the workspace's tile has it, not at the ×.
-                    let after = at + measure.width(&label, font) + CONTEXT_AIR;
-                    let x = after.ceil().min(stop.saturating_sub(1) as f32) as u16;
-                    let percent = session.usage.as_ref().and_then(|u| u.percent());
-                    let fg = match percent {
-                        Some(p) if p >= crate::transcript::FULL => theme.error,
-                        Some(p) if p >= crate::transcript::WARN => theme.attention,
-                        _ => theme.gutter.fg,
-                    };
-                    let quiet = Style { fg, ..shown };
-                    let px = after.min(x as f32);
-                    grid.label_at(px, x, area.y, text, quiet, stop, CONTEXT_SIZE);
-                    x
-                }
-                None => stop,
-            };
-            let named = grid.label_at(at, first, area.y, &label, shown, name_end, 100);
-            // What its agent is doing, a gap after its name and context, and never nearer
-            // the × than its room before it: as far from the name as the mark is.
-            if let Some(mark) = session.mark() {
-                let (px, cell) = match &context {
-                    Some(text) => {
-                        let small = cellix_render::Font {
-                            size: CONTEXT_SIZE,
-                            ..font
-                        };
-                        let from = at + measure.width(&label, font) + CONTEXT_AIR;
-                        let from = from.min(name_end as f32);
-                        let cells = text.chars().count() as u16;
-                        (from + measure.width(text, small), name_end + cells)
-                    }
-                    None => (
-                        (at + measure.width(&label, font)).min(name_end as f32),
-                        named,
-                    ),
-                };
-                let x = if measure.in_cells() {
-                    f32::from(cell + 1).min(end_at - 2.0)
-                } else {
-                    (px + MARK_GAP).min(end_at - MARK_SHIFT)
-                };
-                draw_mark(grid, (x, area.y), mark, style, theme);
-            }
-            if hovered || active {
                 let quiet = Style {
-                    fg: theme.gutter.fg,
+                    bold: false,
+                    fg: if hovered {
+                        theme.text.fg
+                    } else {
+                        theme.gutter.fg
+                    },
                     ..style
                 };
-                grid.glyph(close_at, area.y, Icon::Close, quiet.fg, "×", quiet);
+                let at = (parts.close.0, parts.close_cell);
+                grid.glyph_in(at, area.y, (Icon::Close, quiet.fg), "×", quiet);
             }
         }
         let plus = self.tabs(area).last().map_or(self.first_tab(area), |t| t.1);
@@ -3118,17 +3177,60 @@ fn front_tab(grid: &mut Grid, tab: Rect, theme: &Theme, in_cells: bool) {
     );
 }
 
+/// A program's mark as a tab draws it: its icon, its colour, and the initial any other
+/// program has on its square.
+type ProgramMark = (Icon, Rgb, Option<char>);
+
+/// What a tab of the pane shows: its words, the mark before them, how full its agent's context
+/// is, and what its program is doing.
+struct Face {
+    text: String,
+    icon: Option<Icon>,
+    context: Option<String>,
+    state: Option<TabMark>,
+}
+
+/// Where the parts of a whole tab stand, each as a place in cells and its column on cells.
+struct Parts {
+    icon: (f32, u16),
+    name: (f32, u16),
+    /// The column its words stop before.
+    stop: u16,
+    /// Its words as they fit, cut short with a "…" only where they don't.
+    text: String,
+    /// How full its agent's context is, and the column that stops before.
+    context: Option<((f32, u16), u16)>,
+    state: (f32, u16),
+    pick: Option<(f32, u16)>,
+    /// Where its × is painted, and the column a click on it starts at.
+    close: (f32, u16),
+    /// The column its × has on the cell tier.
+    close_cell: u16,
+}
+
+/// The letter any other program has on its square: the first of its name, as a capital.
+pub fn initial(icon: Icon, name: &str) -> Option<char> {
+    let first = name.chars().find(|c| c.is_alphanumeric());
+    (icon == Icon::Program)
+        .then_some(first)
+        .flatten()
+        .map(|c| c.to_uppercase().next().unwrap_or(c))
+}
+
+/// How large a program's initial is beside its mark's height, in percent of the interface's
+/// words per row of mark: about 7 pt on a mark of 13 pt.
+const INITIAL_SIZE: f32 = 80.0;
+
 /// A program's mark on its tab: a shape whose middle is at `middle` where there are pictures,
-/// and its letter in `cell` on cells.
+/// and its letter in `cell` on cells. Any other program's square has its initial cut out of
+/// it, and on cells is that letter.
 fn tab_icon(
     grid: &mut Grid,
-    icon: Icon,
+    (icon, color, letter): ProgramMark,
     (middle, cell): (f32, u16),
     y: u16,
     style: Style,
-    theme: &Theme,
 ) {
-    let color = icon_colour(icon, theme);
     let across = ICON_SIZE * 2.0;
     let top = y as f32 + (1.0 - ICON_SIZE) / 2.0;
     grid.paint.push(Paint::Icon {
@@ -3141,45 +3243,94 @@ fn tab_icon(
         painted: true,
         ..style
     };
-    grid.put_str(cell, y, crate::toolbar::fallback(icon), shown, cell + 1);
-}
-
-/// What an agent is doing, at `x`: turning while it works, a dot when it asks or is done.
-pub fn draw_mark(grid: &mut Grid, (x, y): (f32, u16), mark: TabMark, style: Style, theme: &Theme) {
-    let color = mark_colour(mark, theme);
-    match mark {
-        TabMark::Working => grid.spinner(x, y, MARK_SIZE, color, style),
-        TabMark::NeedsYou | TabMark::Done => grid.dot(x, y, MARK_SIZE, color, style),
+    let mut buffer = [0; 4];
+    let fallback = match letter {
+        Some(letter) => &*letter.encode_utf8(&mut buffer),
+        None => crate::toolbar::fallback(icon),
+    };
+    grid.put_str(cell, y, fallback, shown, cell + 1);
+    if let Some(letter) = letter {
+        initial_over(grid, (middle, y), (ICON_SIZE, letter), style.bg);
     }
 }
 
-/// A session's tab behind the one in front, in a row too short for every tab whole: its mark
-/// and what its agent is doing, either end of it, and as much of its name between as fits.
-/// Under the pointer its chip is the tab's width.
-fn cut_session(
+/// A program's initial cut out of its square: the letter painted in the colour of what the
+/// square stands on, in the middle of the mark standing about `middle`, `size` rows tall.
+/// On cells, where nothing is painted, the letter itself stands for the mark.
+pub fn initial_over(
+    grid: &mut Grid,
+    (middle, y): (f32, u16),
+    (size, letter): (f32, char),
+    ground: Rgb,
+) {
+    let font = cellix_render::Font {
+        bold: true,
+        size: (size * INITIAL_SIZE) as u8,
+        ..cellix_render::Font::default()
+    };
+    grid.paint.push(Paint::Text {
+        x: cellix_render::units(middle),
+        y: i32::from(y) * cellix_render::UNIT,
+        max_width: cellix_render::units(2.0),
+        text: letter.to_string(),
+        color: ground,
+        font,
+        align_right: false,
+        centred: true,
+        underline: false,
+    });
+}
+
+/// A tab behind the one in front, in a row too short for every tab whole: its mark and what
+/// its program is doing at either end of it, and as much of its name between as fits. Under
+/// the pointer its chip is the tab's width.
+fn cut_tab(
     grid: &mut Grid,
     tab: Rect,
-    session: &Session,
-    (style, hovered): (Style, bool),
+    face: &Face,
+    (style, hovered, mark): (Style, bool, Option<ProgramMark>),
     (measure, theme): (&dyn cellix_render::Measure, &Theme),
 ) {
     let (x, right) = (f32::from(tab.x), f32::from(tab.right()));
+    let icon = mark.is_some();
+    let marked = face.state.is_some();
+    // A name alone, as a view's is: as much of it as the stub holds, with half a column of air
+    // either side, and under the pointer a chip that's that name and the air around it.
+    if !icon && !marked {
+        let room = f32::from(tab.w) - CUT_AIR * 2.0;
+        let text = crate::context::elide(&face.text, room, measure);
+        if hovered {
+            let font = cellix_render::Font::default();
+            let (wide, high) = (measure.width(&text, font) + CUT_AIR * 2.0, 0.8);
+            let top = f32::from(tab.y) + (1.0 - high) / 2.0;
+            let chip = Bounds::cells(x, top, wide, high);
+            grid.panel(chip, TAB_CHIP_RADIUS, Some(theme.row_hover), None);
+        }
+        grid.label_at(
+            x + CUT_AIR,
+            tab.x + 1,
+            tab.y,
+            &text,
+            style,
+            tab.right(),
+            100,
+        );
+        return;
+    }
     if hovered {
         let high = 0.8;
         let top = f32::from(tab.y) + (1.0 - high) / 2.0;
         let chip = Bounds::cells(x, top, f32::from(tab.w), high);
         grid.panel(chip, TAB_CHIP_RADIUS, Some(theme.row_hover), None);
     }
-    let icon = session.has_icon();
-    let marked = session.marked();
     // The name, between the mark and the state, where three letters and a "…" have room.
     let from = if icon {
-        x + CUT_ICON + ICON_SIZE + CUT_AIR
+        x + CUT_AIR + CUT_SIDE
     } else {
         x + CUT_AIR
     };
     let to = if marked {
-        right - CUT_MARK - CUT_AIR
+        right - CUT_AIR - CUT_SIDE
     } else {
         right - CUT_AIR
     };
@@ -3190,11 +3341,17 @@ fn cut_session(
     } else {
         to - from
     };
-    let label = session.label();
-    let text = crate::context::elide(&label, room, measure);
-    let named = text == label || text.chars().count() >= 4;
+    let text = crate::context::elide(&face.text, room, measure);
+    let named = text == face.text || text.chars().count() >= 4;
     if named {
-        grid.label_at(from, first, tab.y, &text, style, last, 100);
+        // Painted, it runs to where its room ends, which isn't on a cell: stopped at the cell
+        // before, the "…" lost its last dot.
+        let end = if measure.in_cells() {
+            last
+        } else {
+            last.max(to.ceil() as u16)
+        };
+        grid.label_at(from, first, tab.y, &text, style, end, 100);
     }
     // Either end of the name; with none, the two side by side in the tab's middle.
     let (icon_at, mark_at) = if measure.in_cells() && !named {
@@ -3206,18 +3363,40 @@ fn cut_session(
         let start = x + (f32::from(tab.w) - pair) / 2.0;
         (start + ICON_SIZE, start + ICON_SIZE * 2.0 + CUT_AIR)
     };
-    if icon {
-        tab_icon(
-            grid,
-            session.icon(),
-            (icon_at, tab.x + 1),
-            tab.y,
-            style,
-            theme,
-        );
+    if let Some(mark) = mark {
+        tab_icon(grid, mark, (icon_at, tab.x + 1), tab.y, style);
     }
-    if let Some(mark) = session.mark() {
-        draw_mark(grid, (mark_at, tab.y), mark, style, theme);
+    if let Some(state) = face.state {
+        let at = mark_at - dot_lead(state, measure);
+        draw_mark_in(grid, ((at, at.floor() as u16), tab.y), state, style, theme);
+    }
+}
+
+/// How much sooner a dot starts than a spinner would, in cells, so its ink stands where the
+/// spinner's ring would begin: a dot is half the ring's width in the same square, and stood
+/// 5 px further from the name than a spinner.
+fn dot_lead(state: TabMark, measure: &dyn cellix_render::Measure) -> f32 {
+    if state == TabMark::Working || measure.in_cells() {
+        return 0.0;
+    }
+    // The ring's ink starts 1.4 of the square's 24 parts in, the dot's 6.
+    let square = MARK_SIZE * crate::measures::rows_to_columns(measure) / measure.row_air();
+    square * (6.0 - 1.4) / 24.0
+}
+
+/// What an agent is doing, at `x`: turning while it works, a dot when it asks or is done. Its
+/// letter on the cell tier is in a column of its own.
+fn draw_mark_in(
+    grid: &mut Grid,
+    (at, y): ((f32, u16), u16),
+    mark: TabMark,
+    style: Style,
+    theme: &Theme,
+) {
+    let color = mark_colour(mark, theme);
+    match mark {
+        TabMark::Working => grid.spinner_in(at, y, MARK_SIZE, color, style),
+        TabMark::NeedsYou | TabMark::Done => grid.dot_in(at, y, MARK_SIZE, color, style),
     }
 }
 

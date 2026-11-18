@@ -896,8 +896,9 @@ def transcripts(scratch):
     opened = [*start, *command("Agent Transcript", F1), ["until", "Show Source"], ["wait", 1.0]]
     scenes = [
         ("64-transcript-tab", start, [CODE_FILE], {}),
-        ("64-transcript-tab-hover", [*start, ["move", *ON("Claude Cod")], ["wait", 0.6]], [CODE_FILE], {}),
-        ("64-transcript-tab-menu", [*start, ["right", *ON("Claude Cod")], ["wait", 0.4]], [CODE_FILE], {}),
+        # A tab is as wide as what it paints, so its cells hold the start of its name.
+        ("64-transcript-tab-hover", [*start, ["move", *ON("Claude Co")], ["wait", 0.6]], [CODE_FILE], {}),
+        ("64-transcript-tab-menu", [*start, ["right", *ON("Claude Co")], ["wait", 0.4]], [CODE_FILE], {}),
         ("64-transcript-tab-full", start, [CODE_FILE], {"TRANSCRIPT": full}),
         ("64-transcript-tab-light", start, [CODE_FILE], {"background": "eff1f5"}),
         ("65-transcript-page", opened, [], {}),
@@ -1545,7 +1546,8 @@ with tempfile.TemporaryDirectory() as scratch:
           CODE_FILE, RESULTS, size="150x44")
     shoot("97-tab-drag-reorder", [["wait", 1.0], ["press", 50, 0], ["hold", 40, 0], ["hold", 34, 0]],
           CODE_FILE, RESULTS, size="150x44")
-    PREVIEW_TAB = ON("Preview")
+    # A tab is as wide as what it paints, so its cells hold the start of its name.
+    PREVIEW_TAB = ON("Previ")
     shoot("98-pane-drag-under", [["wait", 1.0], ["press", *PREVIEW_TAB], ["hold", 80, 20],
                                  ["hold", 60, 34]], RESULTS, LOSS, size="150x44")
     # A debug build takes a while over the frame that moves the whole layout.
