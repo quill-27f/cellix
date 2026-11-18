@@ -8,7 +8,10 @@ project and home folder, so a tour can't touch real settings.
 Beside each PNG goes the screen's text, as `<name>.txt`. A scene can say what its surface
 shows (`expect=`), and steps can wait for words rather than a clock (`["until", "words"]`): a
 scene that never gets there writes no picture, is listed as failed, and fails the tour. A
-picture of the wrong screen has passed for the right one before. `manifest.json` says, for
+picture of the wrong screen has passed for the right one before, so a picture of one colour,
+one whose screen said nothing, and one the same as the scene's before it though their steps
+differ are taken again, and fail the scene, with no picture left, if they come back so.
+`manifest.json` says, for
 each scene, which commit its picture is of, when it was taken, and whether it failed, so a
 folder of pictures from several runs still says how old each one is.
 
@@ -16,7 +19,7 @@ TOUR_ONLY=a,b takes just those scenes. TOUR_PART=2/3 takes the second third of t
 order: the whole tour is longer than one guarded job may run. TOUR_LIST=1 names the scenes
 it would take, and takes none.
 """
-import json, os, shutil, subprocess, sys, tempfile, time
+import hashlib, json, os, shutil, struct, subprocess, sys, tempfile, time, zlib
 
 binary, out = sys.argv[1], os.path.abspath(sys.argv[2])
 here = os.path.dirname(os.path.abspath(__file__))
@@ -198,6 +201,8 @@ EXPECT = {
 SCENES_IN_ALL = 265
 # Scenes come to, shot, and those that never reached their surface.
 SEEN, SHOT, FAILED = [0], [], []
+# The scene shot last, with its picture's digest and what it was taken from; and this one's.
+LAST = [None, None]
 # Which commit the binary is, as far as git can say: the pictures are of that.
 COMMIT = subprocess.run(["git", "-C", here, "describe", "--always", "--dirty"], capture_output=True,
                         text=True).stdout.strip()
@@ -207,6 +212,41 @@ try:
         SCENES = json.load(f)["scenes"]
 except (OSError, ValueError, KeyError):
     SCENES = {}
+
+
+def wrong(name, steps, cells):
+    """What says a scene's picture is of no screen, or of the one before: one colour, nothing
+    in the screen's text, or the same picture as the scene shot before it from other steps.
+    Each has passed for a surface before (a blank page while a sample loaded, a submenu's
+    scene aimed at a rule that opened nothing and looked like the menu's). A scene on cells
+    has only its text to go by: this terminal draws no letters, so its picture is its ground."""
+    with open(f"{out}/{name}.png", "rb") as f:
+        data = f.read()
+    at, packed, width, height = 8, b"", 0, 0
+    while at < len(data):
+        size, kind = struct.unpack(">I4s", data[at:at + 8])
+        if kind == b"IHDR":
+            width, height = struct.unpack(">II", data[at + 8:at + 16])
+        elif kind == b"IDAT":
+            packed += data[at + 8:at + 8 + size]
+        at += 12 + size
+    pixels = zlib.decompress(packed)
+    # term.py writes every row unfiltered, a zero and then its pixels.
+    if not cells and pixels == (b"\0" + pixels[1:4] * width) * height:
+        return "its picture is one colour"
+    try:
+        with open(f"{out}/{name}.txt", encoding="utf8") as f:
+            said = f.read()
+    except OSError:
+        said = ""
+    if not said.strip():
+        return "the screen said nothing"
+    digest = hashlib.sha1(pixels).hexdigest()
+    before = LAST[0]
+    if not cells and before and before[1] == digest and before[2] != steps:
+        return f"its picture is {before[0]}'s, from other steps"
+    LAST[1] = (name, digest, steps)
+    return None
 
 
 def note(name, why):
@@ -538,14 +578,26 @@ def shoot(name, steps, *args, size="120x40", background=DARK, cwd=None, env=None
     env.pop("CLAUDECODE", None)
     # By its own path, so a scene can have a PATH of its own.
     run = [sys.executable, "-I", f"{here}/term.py", f.name, binary, *args]
-    # Taken once more if it misses: a loaded machine can lose a scene its place, and one
-    # that misses twice is worth a person's look.
+    # What the scene is taken from, so a picture the same as the last scene's is only wrong
+    # when they were meant to differ.
+    taken_from = json.dumps([steps, args, size, background], default=str)
+    # Taken once more if it misses, or if its picture is of no screen or the last one's: a
+    # loaded machine can lose a scene its place, and one that misses twice is worth a
+    # person's look.
     for attempt in ("first", "second"):
         try:
             done = subprocess.run(run, cwd=cwd or ROOT, env=env, timeout=timeout, capture_output=True, text=True)
             why = done.stdout.strip().splitlines()[-1:] if done.returncode else None
         except subprocess.TimeoutExpired:
             why = [f"took more than {timeout} seconds"]
+        if why is None and os.path.exists(f"{out}/{name}.png"):
+            looked = wrong(name, taken_from, "CELLIX_TIER" in extra)
+            why = [looked] if looked else None
+            if looked:
+                # A picture of the wrong screen isn't left to stand for the right one.
+                for bad in (f"{out}/{name}.png", f"{out}/{name}.txt"):
+                    if os.path.exists(bad):
+                        os.unlink(bad)
         if why is None:
             break
         print(f"retaking {name}: {' '.join(why)}" if attempt == "first" else f"missed twice: {name}", flush=True)
@@ -559,6 +611,7 @@ def shoot(name, steps, *args, size="120x40", background=DARK, cwd=None, env=None
         subprocess.run(["pkill", "-9", "-f", own_cache])
         shutil.rmtree(own_cache, ignore_errors=True)
     if why is None and os.path.exists(f"{out}/{name}.png"):
+        LAST[0] = LAST[1]
         SHOT.append(name)
         note(name, None)
         print(name, flush=True)
@@ -1355,7 +1408,9 @@ with tempfile.TemporaryDirectory() as scratch:
     # The sidebar's own button, at the end of the views: pointed at, and pressed, after which
     # the same window in outline starts the tabs, pointed at too. The rail it ends without
     # pictures is the cells' alone, which this terminal doesn't draw: the tests read it.
-    shoot("27-sidebar-hide-hover", [["move", *HIDE_SIDEBAR], ["wait", 0.4]], CODE_FILE, expect="QUEUE")
+    # Pointed at once the sidebar is there: a move before Cellix asks for the mouse is lost.
+    shoot("27-sidebar-hide-hover", [["until", "QUEUE"], ["move", *HIDE_SIDEBAR], ["wait", 0.4]], CODE_FILE,
+          expect="QUEUE")
     shoot("27-sidebar-hidden", [["until", "QUEUE"], ["click", *HIDE_SIDEBAR], ["gone", "QUEUE"], ["move", 1, 0],
                                 ["wait", 0.4]], CODE_FILE)
     # A window too narrow for the button at the views' end, 84 columns: the sidebar keeps its
@@ -1379,17 +1434,24 @@ with tempfile.TemporaryDirectory() as scratch:
     # A language's Install, under the pointer and never pressed.
     shoot("42-hover-install", [*settings, EDITOR_PAGE, ["move", *ON("Install")]], CODE_FILE)
     shoot("43-light-hover-menu", [["right", 60, 12], ["move", 64, 13]], CODE_FILE, background="eff1f5")
-    shoot("40-hover-find", [["keys", CTRL("f")], ["keys", "item"], ["move", *ON("↑", 0)]], CODE_FILE)
+    # Pointed at once the count is in, which moves the arrows when it comes.
+    shoot("40-hover-find", [["keys", CTRL("f")], ["keys", "item"], ["until", "1 of"], ["move", *ON("↑", 0)],
+                            ["wait", 0.4]], CODE_FILE)
 
     FORMULA, TABLE = ON("Σ", 0), ON("▦", 0)
     shoot("44-note", [], NOTE_FILE, size="150x44", background="eff1f5")
     shoot("45-note-dark", [], NOTE_FILE, size="150x44")
-    shoot("46-formula-open", [["click", 88, 14], ["wait", 0.5]], NOTE_FILE, size="150x44")
-    shoot("47-math-panel", [["click", *FORMULA]], NOTE_FILE, size="150x44", background="eff1f5")
+    # Each waits for what it opens: a click before the page is drawn lands on nothing.
+    shoot("46-formula-open", [["until", "92 words"], ["click", 88, 14], ["wait", 0.5]], NOTE_FILE, size="150x44",
+          expect="$$")
+    shoot("47-math-panel", [["click", *FORMULA]], NOTE_FILE, size="150x44", background="eff1f5",
+          expect="Fraction")
     # A size in the picker under it: twenty columns right of the button and six rows down.
-    shoot("48-table-picker", [["click", *TABLE], ["move", *ON("▦", 20, 6)]], NOTE_FILE, size="150x44")
+    shoot("48-table-picker", [["click", *TABLE], ["move", *ON("▦", 20, 6)]], NOTE_FILE, size="150x44",
+          expect="columns")
     # In a window this wide the page stands eight columns in from where its pane's margin is.
-    shoot("49-table-menu", [["right", 49, 29]], NOTE_FILE, size="150x44", background="eff1f5")
+    shoot("49-table-menu", [["until", "92 words"], ["right", 49, 29]], NOTE_FILE, size="150x44",
+          background="eff1f5", expect="Delete Row")
     # A debug build presents a page of math slowly, so each step is given time to land.
     comment = [["wait", 1.5], ["click", 90, 5], ["wait", 0.6], *command("add comment", F1)]
     comment += [["until", "Enter sends"], ["keys", "Is this true for multi-head attention?\r"]]
@@ -1560,9 +1622,10 @@ with tempfile.TemporaryDirectory() as scratch:
           size="64x40")
     shoot("57-dock-agents", [*LIST_AGENTS, ["wait", 0.6]], NOTE_FILE, size="64x40")
     shoot("57-dock-menu", [["wait", 1.5], ["right", 20, 12], ["wait", 0.4]], NOTE_FILE, size="64x40")
-    # Format is the fourth item down, past the rule under Paste: menus stand on whole rows.
-    shoot("57-dock-menu-format", [["wait", 1.5], ["right", 20, 12], ["wait", 0.4], ["move", 24, 17],
-                                  ["wait", 0.4]], NOTE_FILE, size="64x40")
+    # Format by its name: a menu's rows don't stand on the window's, so a place by row and
+    # column landed on the rule over it once menus had their padding, and nothing opened.
+    shoot("57-dock-menu-format", [["wait", 1.5], ["right", 20, 12], ["wait", 0.4], ["move", *ON("Format", 2)],
+                                  ["wait", 0.4]], NOTE_FILE, size="64x40", expect="Bold")
     # With the pane open the note is taller than its view, so it has an end to scroll past.
     shoot("57-dock-end", [*LIST_AGENTS, ["wait", 0.6], ["wheel", 30, 10, 40], ["wait", 1.0]], NOTE_FILE,
           size="64x40")
@@ -1631,7 +1694,9 @@ with tempfile.TemporaryDirectory() as scratch:
     ):
         steps = [["wheel", 90, 20, notches], ["wait", 1.0]]
         shoot(f"{60 + number}-sample-{name}", steps, WRITING, **light)
-    shoot("72-sample-dark", [["wheel", 90, 20, 22], ["wait", 1.0]], WRITING, size="150x44")
+    # Scrolled once the sample is drawn: before, a loaded machine shot its blank ground.
+    LOADED = ["until", "232 lines", 60]
+    shoot("72-sample-dark", [LOADED, ["wheel", 90, 20, 22], ["wait", 1.0]], WRITING, size="150x44")
     shoot("73-selection-bar", [["double", 60, 7], ["wait", 0.5]], WRITING, **light)
     # A click, and a Shift+click further down: everything between is selected, across the
     # paragraphs, the heading and the lists, with the buttons that comment on it. Then the same
@@ -1670,7 +1735,8 @@ with tempfile.TemporaryDirectory() as scratch:
                                        ["wait", 0.5]], WIDE_FILE, **wide)
     shoot("162-reading-width-note", [["wait", 1.0]], NOTE_FILE, background="eff1f5", **wide)
     shoot("163-reading-width-paper", [["wait", 1.0]], PAPER, **wide)
-    shoot("164-reading-width-sample", [["wait", 1.0], ["wheel", 100, 20, 9], ["wait", 1.0]], WRITING, **wide)
+    shoot("164-reading-width-sample", [["until", "232 lines", 60], ["wait", 1.0], ["wheel", 100, 20, 9],
+                                       ["wait", 1.0]], WRITING, **wide)
     # A narrow side pane with more tabs than it has room for: the one in front whole, the
     # others cut short, and one of those under the pointer.
     three_tabs = [*LIST_AGENTS, *command("show comments", F1), ["until", "No comments"],
