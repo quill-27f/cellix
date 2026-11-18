@@ -548,10 +548,12 @@ press on the pill closes it. A plan's "Changed in version N ›" goes on opening
 side by side, since a plan has each version whole; a document has only the words commented on.
 
 Where the pane is small, in a window as narrow as Claude Code docks Cellix in or stacked under the
-file, a card is short until it's lit: who and when, its pills, what it's about, two rows of its
-words, the second ending "…" where there's more, and how many answers it has. Its buttons stand
-while the pointer is on it, in a row it keeps, so nothing moves as the pointer comes and goes; lit,
-by a click on it or on its words in the file, it's whole, with what it waits on. A wide pane keeps
+file, a card is short until it's lit: who and when, its pills, what it's about, and two rows of
+its words, the second ending "…" where there's more. Its last row says how many answers it has
+and what it waits on ("2 replies · Waiting for Claude Code…"), and while the pointer is on the
+card its buttons stand there instead, so nothing moves as the pointer comes and goes; a card with
+nothing to say there shows its buttons, so no row stands empty (a kept row with nothing in it read
+as slack in the pictures). Lit, by a click on it or on its words in the file, it's whole. A wide pane keeps
 every card whole, which read better there in the tour's pictures.
 
 A comment's kind is picked as it's written: under the hint stand the five kinds, a chip each,

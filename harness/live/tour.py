@@ -149,7 +149,7 @@ EXPECT = {
     "57-flow-dock": "Addressed",
     "50-flow-next": "Comment 2 of",
     "50-flow-changes": "Changed since",
-    "50-flow-kind": "Evidence 1",
+    "50-flow-kind": "Say how large",
     "50-flow-cards-light": "Addressed by",
     "50-flow-cards": "Addressed by",
     "50-flow-chips": "Reproducibility",
@@ -1609,7 +1609,7 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("50-flow-cards", flowing, NOTE_FILE, size="150x44")
     shoot("50-flow-cards-light", flowing, NOTE_FILE, size="150x44", background="eff1f5")
     # A press on a kind's pill lists that kind alone; its pill is the accent's.
-    shoot("50-flow-kind", [*flowing, ["click", *ON("Evidence 1")], ["gone", "Always exactly"],
+    shoot("50-flow-kind", [*flowing, ["click", *ON("Evidence")], ["gone", "Always exactly"],
                            ["wait", 0.6]], NOTE_FILE, size="150x44")
     # The pill on the reworded one opens what changed since, word by word.
     shoot("50-flow-changes", [*flowing, ["click", *ON("Changed since", 2)], ["wait", 0.8]],

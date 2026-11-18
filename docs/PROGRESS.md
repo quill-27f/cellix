@@ -3438,3 +3438,13 @@ The docflow track, the kind chips from the audit's bigger list, which the coordi
 ## The suggestions row stands where the list's head does (2026-11-18)
 
 - The fix-spacing track moved the Comments pane's head (the summary, the kinds, the order) a column left to where the cards start, and Check my review to where they end, which landed while the suggestions row was under way; the row stood 9 px inside the summary under it and 17 px short of Check my review's right edge. Its count now starts where the summary does (`head`, with the pane's lead), its buttons end where Check my review does, and on a row of their own they start where the head's controls do. Looked at in 71-sample-changes-row, -row-narrow and 71-sample-rewrite. With no comments open, the count is now a column left of "No comments yet." under it, which keeps the pane's text edge.
+
+
+## What the comment flow's pictures showed (2026-11-18)
+
+The docflow track, from its tour scenes (`50-flow-*`, `57-flow-dock`, and the comment scenes the changes reach), looked at before calling it done.
+
+- A short card in a narrow pane kept an empty row for its buttons, which read as slack at the foot of every card (57-flow-dock). That row now says how many answers the card has and what it waits on ("2 replies · Waiting for Claude Code…"), its buttons standing there while the pointer is on the card; a card with nothing to say there shows its buttons. The separate "N replies" row is gone, and a short card has no Edit and Delete row of its own.
+- "Resolve 1 addressed" and "Send 3 to Claude Code" filled their cells with the button's colour, a block a row tall behind the chip (50-flow-cards): their cells are the pane's colour on a ground, as Check my review's are.
+- 50-flow-kind presses Evidence by its name: the coverage strip's counts aren't in the screen's text where there are pictures, since a pill's words are narrower than their cells.
+- Test changed with it: `a_narrow_panes_cards_are_short_until_one_is_lit` finds "2 replies" in the card's last row and its buttons there once pointed at, and lights the card by its words.

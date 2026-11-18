@@ -200,8 +200,6 @@ enum Line {
     Answer(u32, Option<String>, String),
     /// A row of an answer, set in from the comment it answers.
     Reply(u32, String),
-    /// On a short card, in place of its answers: how many there are.
-    Replies(u32, usize),
     Status(String),
     /// A row of what's being written, and where the caret is on it, in bytes, when it is.
     Input(String, Option<usize>),
@@ -281,6 +279,28 @@ fn words_of(thread: &Thread) -> (Words, Option<String>) {
         }
         None => (Words::Here, None),
     }
+}
+
+/// What a short card's row of buttons says while the pointer isn't on it: how many answers
+/// it has and what it waits on. None with nothing to say, and then its buttons stand.
+fn short_note(line: &Line, threads: &[&Thread], agent: &str, view: View) -> Option<String> {
+    let (Line::Buttons(id) | Line::Choices(id) | Line::Addressed(id)) = line else {
+        return None;
+    };
+    let thread = threads.iter().find(|t| t.id == *id)?;
+    let mut said = Vec::new();
+    if !thread.replies.is_empty() {
+        said.push(replies_note(thread.replies.len()));
+    }
+    let asked = thread.suggested_by.is_empty() || thread.replies.iter().any(|r| r.author == YOU);
+    let waiting = asked && !thread.resolved && thread.waiting_answer();
+    let unsent = view.unsent.is_some_and(|unsent| unsent.has(*id));
+    if waiting && (thread.waiting() || unsent) {
+        said.push("Not sent yet".to_string());
+    } else if waiting && thread.told == Some(thread.replies.len()) {
+        said.push(format!("Waiting for {agent}\u{2026}"));
+    }
+    (!said.is_empty()).then(|| said.join(" \u{b7} "))
 }
 
 /// How many rows of its words a short card shows.
@@ -1658,9 +1678,6 @@ fn lay_out(
                 picture_lines((id, false), &pictures, &mut which, (view, width), &mut out);
             }
         }
-        if short && !thread.replies.is_empty() {
-            out.push(Line::Replies(id, thread.replies.len()));
-        }
         for reply in thread.replies.iter().filter(|_| !short) {
             // A verdict reads as one: its word on a chip, who said it, then why.
             let (word, author, body) = reply_parts(reply);
@@ -1721,6 +1738,7 @@ fn lay_out(
         // Edit and Delete go on a row of their own where the five don't fit on one.
         let addressed = thread.addressed_by().is_some();
         if writing.is_none()
+            && !short
             && !thread.resolved
             && !suggested
             && !addressed
@@ -2220,7 +2238,6 @@ pub fn hit(
             })
         }
         Line::Quote(id, ..)
-        | Line::Replies(id, _)
         | Line::Diff(id, _)
         | Line::Answer(id, ..)
         | Line::Pill(id, ..)
@@ -2402,12 +2419,13 @@ pub fn draw(
             break;
         }
         let from = grid.painted_so_far();
+        // A short card's buttons stand while the pointer is on it. Till then their row says
+        // how many answers it has and what it waits on, where there's that to say; where
+        // there isn't, the buttons stand, so the row is never empty.
         if hidden(index)
-            && matches!(
-                line,
-                Line::Buttons(_) | Line::Edits(_) | Line::Choices(_) | Line::Addressed(_)
-            )
+            && let Some(note) = short_note(line, threads, shown_agent, view)
         {
+            grid.label_at(text_x as f32, text_x, y, &note, inner_dim, right, SMALL);
             continue;
         }
         let actions = matches!(
@@ -2449,10 +2467,6 @@ pub fn draw(
                     let at = x + PILL_ROOM;
                     grid.label_at(at, at.floor() as u16, y, kind, style, right, SMALL);
                 }
-            }
-            Line::Replies(_, count) => {
-                let note = replies_note(*count);
-                grid.label_at(text_x as f32, text_x, y, &note, inner_dim, right, SMALL);
             }
             Line::Status(text) => {
                 grid.label_at(text_x as f32, text_x, y, text, inner_dim, right, SMALL);
@@ -2878,8 +2892,10 @@ pub fn draw(
                 let width = cells.chars().count() as u16;
                 let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
                 let fill = theme.secondary(body.bg, on_it);
+                let ground = Bounds::cells(f32::from(x), f32::from(y), f32::from(width), 1.0);
+                grid.panel(ground, 0, Some(body.bg), None);
                 let style = Style {
-                    bg: fill,
+                    bg: if measure.in_cells() { fill } else { body.bg },
                     fg: theme.text.fg,
                     ..body
                 };
@@ -3079,8 +3095,10 @@ pub fn draw(
                     let width = cells.chars().count() as u16;
                     let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
                     let fill = theme.secondary(body.bg, on_it);
+                    let ground = Bounds::cells(f32::from(x), f32::from(y), f32::from(width), 1.0);
+                    grid.panel(ground, 0, Some(body.bg), None);
                     let style = Style {
-                        bg: fill,
+                        bg: if measure.in_cells() { fill } else { body.bg },
                         fg: theme.text.fg,
                         ..body
                     };

@@ -759,11 +759,16 @@ fn a_narrow_panes_cards_are_short_until_one_is_lit() {
         !text.contains("Resolve"),
         "no buttons till pointed at: {text}"
     );
-    // Pointed at, its buttons stand where they were kept.
+    // Pointed at, its buttons stand in the row that said so.
     let (x, y) = find(&screen(&app), "2 replies");
     app.handle(mouse(MouseKind::Move, x, y));
-    assert!(screen(&app).text().contains("Resolve"));
-    // Lit, it's whole.
+    let text = screen(&app).text();
+    assert!(
+        text.contains("Resolve") && !text.contains("2 replies"),
+        "{text}"
+    );
+    // Lit, by a click on its words, it's whole.
+    let (x, y) = find(&screen(&app), "Why first?");
     click(&mut app, x + 1, y);
     assert_eq!(app.lit_thread, Some(id));
     let text = screen(&app).text();
