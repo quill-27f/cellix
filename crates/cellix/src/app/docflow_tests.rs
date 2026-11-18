@@ -178,7 +178,7 @@ fn sending_comments_sends_a_documents_comments_once() {
     app.run(Command::SendToAgent);
     let said = heard(&mut app, &dir.path().join("heard.txt"), "Which tests?");
     assert!(said.contains("Why first?"), "{said}");
-    assert_eq!(said.matches("cellix reply").count(), 2, "{said}");
+    assert_eq!(said.matches("Answer in the document").count(), 2, "{said}");
     assert_eq!(said.lines().count(), 1, "one message: {said}");
     assert!(app.threads.iter().all(|t| t.told == Some(0)));
     let kept = cellix_review::threads::load(dir.path()).unwrap();
@@ -493,4 +493,171 @@ fn next_comment_goes_through_the_files_comments_and_the_mark_opens_one() {
     app.run(Command::CheckReview);
     let prompt = app.take_outgoing_prompt().expect("the check's prompt");
     assert!(prompt.contains("Second"), "{prompt}");
+}
+
+/// A suggestion can be asked about without keeping it: Reply stands between Keep and
+/// Dismiss, and what's asked goes to the agent, which hears it's its own suggestion. The card
+/// waits on the answer, still a suggestion. It had Keep and Dismiss only.
+#[test]
+fn a_suggestion_can_be_asked_about_without_keeping_it() {
+    let (_dir, mut app) = page("Our method is better on every benchmark.\n");
+    let (made, number) = std::sync::mpsc::channel();
+    app.serve(Request::Suggest {
+        file: "note.md".into(),
+        line: 1,
+        kind: "Evidence".into(),
+        quote: "every benchmark".into(),
+        text: "Name the benchmarks.".into(),
+        author: "Claude".into(),
+        made,
+    });
+    let id = number.recv().unwrap();
+    app.run(Command::ShowComments);
+    press_beside(&mut app, "Reply", "Dismiss");
+    typed(&mut app, "Which ones matter here?");
+    enter(&mut app);
+    let thread = app.threads.iter().find(|t| t.id == id).unwrap();
+    assert_eq!(thread.suggested_by, "Claude", "still only a suggestion");
+    assert_eq!(thread.replies[0].text, "Which ones matter here?");
+    let text = screen(&app).text();
+    assert!(text.contains("Keep") && text.contains("Goes to"), "{text}");
+    let taken = take_threads(&mut app);
+    assert!(taken.contains("Which ones matter here?"), "{taken}");
+    let message = app.threads.iter().find(|t| t.id == id).unwrap().message();
+    assert!(
+        message.contains("suggested by Claude, not yet kept"),
+        "{message}"
+    );
+}
+
+/// A card says how long ago its comment was made, and each answer how long ago it came, in
+/// its header: the comment's number was the only record of when. A comment kept from before
+/// says nothing of when.
+#[test]
+fn a_card_says_how_long_ago_its_comment_and_answers_were_written() {
+    let (_dir, mut app) = page("The cache goes first.\n\nThe tests run last.\n");
+    comment(&mut app, "cache", "Why first?");
+    comment(&mut app, "tests", "Which ones?");
+    let now = cellix_review::threads::now();
+    assert!(app.threads.iter().all(|t| now - t.at < 60), "made now");
+    // Kept in the file, so it's known next time.
+    let kept = cellix_review::threads::load(app.workspace.root()).unwrap();
+    assert!(kept.iter().all(|t| t.at > 0), "{kept:?}");
+    app.threads[0].at = now - 300;
+    app.threads[1].at = 0;
+    let id = app.threads[0].id;
+    let (found, _) = std::sync::mpsc::channel();
+    app.serve(Request::Reply {
+        id,
+        author: "Claude".into(),
+        text: "It saves a read.".into(),
+        found,
+    });
+    app.threads[0].replies[0].at = now - 7200;
+    let text = screen(&app).text();
+    assert!(text.contains("You · 5 min"), "{text}");
+    assert!(text.contains("Claude · 2 h"), "{text}");
+    assert_eq!(
+        text.matches(" min").count(),
+        1,
+        "the other says nothing of when: {text}"
+    );
+}
+
+/// A press on a kind's pill lists only that kind's comments, its pill lit; another press
+/// lists them all. The strip counts the reviewer's own: a suggestion not yet kept was counted
+/// as covering its kind. With no file's words selected the pane says how a comment is made,
+/// naming the Comment button a selection shows: it named only Alt+C.
+#[test]
+fn a_kinds_pill_lists_that_kind_and_counts_only_your_own() {
+    let (_dir, mut app) = page("The cache goes first.\n\nThe tests run last.\n");
+    app.run(Command::ShowComments);
+    let text = screen(&app).text();
+    assert!(text.contains("then press Comment."), "{text}");
+    comment(&mut app, "cache", "Why first?");
+    comment(&mut app, "tests", "Which ones?");
+    app.threads[0].kind = "Clarity".into();
+    app.threads[1].kind = "Evidence".into();
+    let (made, number) = std::sync::mpsc::channel();
+    app.serve(Request::Suggest {
+        file: "note.md".into(),
+        line: 1,
+        kind: "Evidence".into(),
+        quote: "goes first".into(),
+        text: "Cite the timing.".into(),
+        author: "Claude".into(),
+        made,
+    });
+    number.recv().unwrap();
+    let text = screen(&app).text();
+    assert!(
+        text.contains("Evidence 1"),
+        "the suggestion isn't counted: {text}"
+    );
+    press(&mut app, "Clarity 1");
+    let text = screen(&app).text();
+    assert!(text.contains("Why first?"), "{text}");
+    assert!(
+        !text.contains("Which ones?") && !text.contains("Cite the timing."),
+        "{text}"
+    );
+    press(&mut app, "Correctness 0");
+    let text = screen(&app).text();
+    assert!(text.contains("No Correctness comments"), "{text}");
+    press(&mut app, "Correctness 0");
+    let text = screen(&app).text();
+    assert!(
+        text.contains("Why first?") && text.contains("Which ones?"),
+        "{text}"
+    );
+}
+
+/// An agent that did what a comment asks says so, and its card says "Addressed by" it, with
+/// Resolve and Not done: the reviewer settles it, never the agent. Not done begins a reply
+/// saying so, which goes back to the agent; Resolve 1 addressed settles what's left.
+#[test]
+fn an_agent_says_it_addressed_a_comment_and_the_reviewer_settles_it() {
+    let (_dir, mut app) = page("The cache goes first.\n\nThe tests run last.\n");
+    comment(&mut app, "cache", "Move it later.");
+    comment(&mut app, "tests", "Name them.");
+    let ids: Vec<u32> = app.threads.iter().map(|t| t.id).collect();
+    // As `cellix reply <id> --done "…"` sends it.
+    for (id, what) in ids
+        .iter()
+        .zip(["moved it after the tests", "named the three"])
+    {
+        let (found, _) = std::sync::mpsc::channel();
+        app.serve(Request::Reply {
+            id: *id,
+            author: "Claude".into(),
+            text: cellix_review::threads::addressed(what),
+            found,
+        });
+    }
+    assert!(
+        app.threads.iter().all(|t| !t.resolved),
+        "the agent resolves nothing"
+    );
+    app.dock.open = true;
+    app.dock.show_comments();
+    let text = screen(&app).text();
+    assert_eq!(text.matches("Addressed by Claude").count(), 2, "{text}");
+    assert!(text.contains("Resolve 2 addressed"), "{text}");
+    assert!(text.contains("Not done"), "{text}");
+    // Not done, on the first: a reply saying so, which the agent hears.
+    press_beside(&mut app, "Not done", "Resolve");
+    typed(&mut app, "it still runs first");
+    enter(&mut app);
+    let first = &app.threads[0];
+    assert_eq!(
+        first.replies.last().unwrap().text,
+        "Not done: it still runs first"
+    );
+    assert!(first.addressed_by().is_none() && first.waiting());
+    assert!(take_threads(&mut app).contains("Not done: it still runs first"));
+    let text = screen(&app).text();
+    assert!(text.contains("Resolve 1 addressed"), "{text}");
+    press(&mut app, "Resolve 1 addressed");
+    assert!(app.threads[1].resolved, "the addressed one settled");
+    assert!(!app.threads[0].resolved, "the one not done stays");
 }

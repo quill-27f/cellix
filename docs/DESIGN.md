@@ -480,7 +480,7 @@ says "Comment 2 of 7". A press on a line's ◆, in the gutter or a page's margin
 for that line's comment (presses there only folded). Check My Review is in the palette too. It goes the other way too: a click on a card goes to its
 words, selects them so they're plain to see, lights the card, and leaves the keyboard in the
 file; the buttons that offer to comment on a selection stay away from those words. The pane lists in the document's order, or by which comment was made last or first
-(a comment's number counts up as they're made, which is the only record of when), chosen from a
+(a comment's number counts up as they're made), chosen from a
 button under the kinds, which names the order in use beside a chevron and opens a list that marks
 it. With no file in view a heading still
 goes wherever the file changes, so by recency a file can have more than one.
@@ -519,6 +519,25 @@ and how many of each kind. Each comment is headed by its line and whether it's o
 its words (the whole selection) as a block quote, and has the reviewer's words and every answer
 under them, named, an agent's verdict as "Claude agrees" or "Claude pushes back". Comments carry
 no time, so neither does the review.
+
+A comment and each answer say how long ago they were written, after who wrote them: "You ·
+5 min", "Claude · 2 h" (`at`, seconds since 1970, kept with each; a comment's number had been the
+only record of when, and one kept from before says nothing). A suggestion has Reply between Keep
+and Dismiss, so the agent can be asked about it without its being kept; it's waited on as the
+reviewer's own comment is, and the agent hears it's its own suggestion. A press on a kind's pill
+lists only that kind's comments, the pill in the accent's colours, and another press lists them
+all; with none of that kind the pane says so and how to list them all. The pills count the
+reviewer's own comments: a suggestion not yet kept covers nothing, and was counted. With no
+comment open, the pane says to select text and press Comment, the button a selection shows,
+which names the keys as they're set; it named only Alt+C.
+
+An agent that has done what a comment asks says so with `cellix reply <id> --done "what it
+did"`, a reply that starts "Addressed:". Its card says "Addressed by Claude" in a green pill, the
+answer's chip says "Addressed", and its buttons are Resolve and Not done: the reviewer settles it,
+never the agent. Not done begins a reply "Not done: " for the reviewer to finish, which goes back
+to the agent as any reply does. "Resolve N addressed", a quiet button at the end of the order's
+row, settles every one of those listed. The agents' skills, and how every comment is put to an
+agent, say so.
 
 A web address in a comment's words or a reply's (`http://` or `https://`, up to the next space,
 without the full stop or bracket that ends its sentence) is drawn in the accent and underlined,

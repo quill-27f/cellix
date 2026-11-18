@@ -10,10 +10,49 @@ use serde::{Deserialize, Serialize};
 /// Who the person at the keyboard is, in a thread.
 pub const YOU: &str = "You";
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// How an agent's reply starts when it says it did what the comment asks, as
+/// `cellix reply <id> --done` writes it.
+pub const ADDRESSED: &str = "Addressed:";
+
+/// An agent's reply saying it did what a comment asks, and what it did.
+pub fn addressed(what: &str) -> String {
+    let what = what.trim();
+    if what.is_empty() {
+        format!("{ADDRESSED} done.")
+    } else {
+        format!("{ADDRESSED} {what}")
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Reply {
     pub author: String,
     pub text: String,
+    /// When it was written, in seconds since 1970; nothing for one kept before Cellix said.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub at: u64,
+}
+
+impl Reply {
+    /// A reply written now.
+    pub fn new(author: impl Into<String>, text: impl Into<String>) -> Self {
+        Self {
+            author: author.into(),
+            text: text.into(),
+            at: now(),
+        }
+    }
+}
+
+/// Now, in seconds since 1970, as a comment or reply says when it was written.
+pub fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -78,6 +117,10 @@ pub struct Thread {
     /// the file never has, and isn't gone for that.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub placed: bool,
+    /// When it was made, in seconds since 1970; nothing for one kept before Cellix said, whose
+    /// number was the only record of when.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub at: u64,
 }
 
 /// What a thread is about besides a file's words.
@@ -116,6 +159,14 @@ impl Thread {
         !self.resolved
             && self.told != Some(self.replies.len())
             && last.is_none_or(|r| r.author == YOU)
+    }
+
+    /// The agent that says it did what the comment asks, while that's the last word on it and
+    /// it's open: the reviewer resolves it, or says it isn't done. The agent never resolves.
+    pub fn addressed_by(&self) -> Option<&str> {
+        let last = self.replies.last()?;
+        let said = last.author != YOU && last.text.starts_with(ADDRESSED);
+        (!self.resolved && said).then_some(last.author.as_str())
     }
 
     /// Whether the last word so far was the person's, so an agent's answer is still due.
@@ -281,6 +332,14 @@ impl Thread {
             crate::quoted(about)
         };
         let id = self.id;
+        let earlier = if self.suggested_by.is_empty() {
+            earlier
+        } else {
+            format!(
+                "{earlier} (suggested by {}, not yet kept)",
+                self.suggested_by
+            )
+        };
         let mut text = match &self.about {
             // The page is Cellix's copy of the agent's own transcript, so the step says more
             // to the agent than a line of that copy would.
@@ -323,7 +382,7 @@ impl Thread {
             text.push_str(&format!(" {}: {}", reply.author, reply.text));
         }
         text.push_str(&format!(
-            " Answer in the document by running: cellix reply {id} \"your answer\""
+            " Answer in the document by running: cellix reply {id} \"your answer\", or once you've done what it asks: cellix reply {id} --done \"what you did\""
         ));
         text.replace('\n', " ")
     }
@@ -662,10 +721,7 @@ mod tests {
             line: 12,
             quote: "the cache".into(),
             text: "Why here?\nIt looks late.".into(),
-            replies: vec![Reply {
-                author: "Claude Code".into(),
-                text: "It saves a read.".into(),
-            }],
+            replies: vec![Reply::new("Claude Code", "It saves a read.")],
             resolved: false,
             told: None,
             asked: false,
@@ -789,10 +845,7 @@ mod tests {
     fn a_thread_waits_only_for_what_an_agent_hasnt_seen() {
         let mut thread = thread();
         assert!(!thread.waiting(), "an agent answered last");
-        thread.replies.push(Reply {
-            author: YOU.into(),
-            text: "And for writes?".into(),
-        });
+        thread.replies.push(Reply::new(YOU, "And for writes?"));
         assert!(thread.waiting());
         thread.told = Some(thread.replies.len());
         assert!(!thread.waiting(), "told once");

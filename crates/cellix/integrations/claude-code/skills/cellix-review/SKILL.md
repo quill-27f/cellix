@@ -17,6 +17,10 @@ Comments on documents are conversations. `cellix threads` prints the open ones a
 one with `cellix reply <id> "your answer"`, and it lands under the comment, beside the document.
 It fails if there's no such comment, so read the result.
 
+When you've done what a comment asks, say so with `cellix reply <id> --done "what you did"`. Its
+card shows it addressed by you, and the reviewer resolves it or says it isn't done, which reaches
+you as a reply. Don't resolve comments yourself.
+
 To have a plan reviewed before you start, write it to a Markdown file and run
 `cellix plan <file>`. It waits for the reviewer. It prints `Approved.` when you can go ahead, and
 exits 1 with what to change when the plan is sent back.

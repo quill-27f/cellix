@@ -128,6 +128,8 @@ Usage: cellix [--wait] [files]
   cellix reply <id> <text>  Answers a comment, beside the document
   cellix reply <id> --suggest <text>
                             Offers a rewrite of the words it's about, to apply
+  cellix reply <id> --done <text>
+                            Says you did what it asks, and what: the reviewer resolves it
   cellix suggest <file> <line> <kind> <quote> <text>
                             Suggests a comment the reviewer can keep or dismiss
   cellix plan <file>        Holds a plan for review, and prints the verdict
@@ -437,6 +439,12 @@ fn main() -> ExitCode {
             // A rewrite of the words the comment is about, which the reviewer can apply.
             let author = std::env::var("CELLIX_AGENT").unwrap_or_else(|_| "Agent".to_string());
             let text = cellix_agent::escape(&format!("Rewrite: {}", text.join(" ")));
+            return client(&format!("reply {id} {author}\t{text}"), None);
+        }
+        ["reply", id, "--done", text @ ..] => {
+            // Done as asked: the card says so, and the reviewer resolves it or says it isn't.
+            let author = std::env::var("CELLIX_AGENT").unwrap_or_else(|_| "Agent".to_string());
+            let text = cellix_agent::escape(&cellix_review::threads::addressed(&text.join(" ")));
             return client(&format!("reply {id} {author}\t{text}"), None);
         }
         ["reply", id, text @ ..] if !text.is_empty() => {

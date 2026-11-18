@@ -8,7 +8,7 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use cellix_render::{Bounds, Font, Grid, Icon, Measure, Paint, Rect, Style};
-use cellix_review::threads::{Reply, YOU};
+use cellix_review::threads::{ADDRESSED, Reply, YOU};
 use cellix_review::{About, Thread};
 
 use crate::measures::BUTTON_GAP;
@@ -27,12 +27,16 @@ const INSET: f32 = 0.6;
 const BUTTONS: [&str; 3] = ["Reply", "Ask agent", "Resolve"];
 /// On the reviewer's own comment, after those, or on a row of their own when they don't fit.
 const EDITS: [&str; 2] = ["Edit", "Delete"];
-const CHOICES: [&str; 2] = ["Keep", "Dismiss"];
+/// On a comment an agent says it addressed: settle it, or say it isn't done.
+const ADDRESSED_BUTTONS: [&str; 2] = ["Resolve", "Not done"];
+/// Under a suggestion: take it, ask about it without taking it, or drop it.
+const CHOICES: [&str; 3] = ["Keep", "Reply", "Dismiss"];
 const REWRITE: [&str; 2] = ["Apply", "Not this"];
 const REOPEN: [&str; 1] = ["Reopen"];
 const CHECK: &str = "Check my review";
 /// Under the words that say no comment is open: how one is made.
-const EMPTY_HINT: &str = "Select text in a file, then press Alt+C.";
+/// It named only Alt+C, not the button a selection shows, which names the keys as they're set.
+const EMPTY_HINT: &str = "Select text, then press Comment.";
 /// Columns the agent's icon takes on Check my review.
 const CHECK_ICON: u16 = 2;
 /// The kinds of comment a careful review covers, in the order the strip shows them.
@@ -96,6 +100,12 @@ pub enum Hit {
     ToggleResolved,
     /// Opens the file a heading names, by a comment on it.
     File(u32),
+    /// Lists only the comments of a kind, from its pill, or all of them again.
+    Kind(&'static str),
+    /// Answers an agent that says it addressed a comment, that it isn't done.
+    NotDone(u32),
+    /// Resolves every comment an agent says it addressed.
+    ResolveAddressed,
 }
 
 /// An agent's verdict on a comment, from how its reply starts: `Agree (Evidence): …` or
@@ -121,8 +131,9 @@ pub fn verdict(text: &str) -> Option<(&'static str, &str, &str)> {
 
 /// One row of the panel.
 enum Line {
-    /// The order the comments are listed in, which a press changes.
-    Sort,
+    /// The order the comments are listed in, which a press changes, and how many comments
+    /// agents say they addressed, which a button at its end resolves.
+    Sort(usize),
     /// Nothing open; true when there are resolved comments to show.
     Empty(bool),
     /// Under it, how a comment is made, a row of it. It has rows of its own, as many as a
@@ -149,6 +160,8 @@ enum Line {
     Choices(u32),
     /// Edit and Delete, under the other buttons when they don't all fit on one row.
     Edits(u32),
+    /// Resolve and Not done, on a comment an agent says it addressed.
+    Addressed(u32),
     /// Apply and Not this, under a rewrite still to be decided.
     Rewrite(u32),
     /// What a comment is about, and what became of those words in a plan's next version.
@@ -200,6 +213,20 @@ enum Words {
     Changed,
     /// Dropped: on a quiet bar and struck through.
     Removed,
+    /// Only for a pill's colour: an agent says it did what the comment asks.
+    Addressed,
+}
+
+/// The pills at a card's top: that an agent says it addressed it, and what became of its
+/// words. The first stands beside who wrote it where it fits, the rest under it.
+fn pills_of(thread: &Thread) -> Vec<(String, Words)> {
+    let mut pills = Vec::new();
+    if let Some(by) = thread.addressed_by() {
+        pills.push((format!("Addressed by {by}"), Words::Addressed));
+    }
+    let (words, pill) = words_of(thread);
+    pills.extend(pill.map(|pill| (pill, words)));
+    pills
 }
 
 /// The pill on a comment whose words changed or went: in a plan's later version, or in the
@@ -227,10 +254,10 @@ pub const WORDS_GONE: &str = "Words gone";
 /// A pill's colour: the warning colour for words that are gone, a quiet one for words
 /// only reworded.
 fn pill_tone(words: Words, theme: &Theme) -> cellix_render::Rgb {
-    if words == Words::Changed {
-        theme.gutter.fg
-    } else {
-        theme.attention
+    match words {
+        Words::Changed => theme.gutter.fg,
+        Words::Addressed => theme.git_added,
+        _ => theme.attention,
     }
 }
 
@@ -576,6 +603,15 @@ fn shown<'t>(text: &'t str, view: View) -> (Cow<'t, str>, Vec<String>) {
 /// An answer as its card shows it: its verdict's word if it gives one, who wrote it, and
 /// its words.
 pub(crate) fn reply_parts(reply: &Reply) -> (Option<String>, String, String) {
+    // Addressed, on its chip as a verdict is, and what the agent says it did.
+    if let Some(rest) = reply.text.strip_prefix(ADDRESSED) {
+        let rest = rest.trim_start();
+        return (
+            Some(ADDRESSED_WORD.to_string()),
+            reply.author.clone(),
+            sentence(rest),
+        );
+    }
     match (verdict(&reply.text), rewrite(&reply.text)) {
         (Some((shown, _, rest)), _) => {
             (Some(sentence(shown)), reply.author.clone(), sentence(rest))
@@ -643,6 +679,27 @@ fn picture_place(area: Rect, figure: &crate::rendered::Figure, inset: bool) -> (
     } else {
         (x, picture_size(figure, width))
     }
+}
+
+/// The word on an answer's chip that says it addressed the comment.
+const ADDRESSED_WORD: &str = "Addressed";
+
+/// What the button that resolves every addressed comment says.
+fn resolve_all_label(count: usize) -> String {
+    format!("Resolve {count} addressed")
+}
+
+/// That button's cells and start column, at the end of the order's row. None with nothing
+/// addressed.
+fn resolve_all(area: Rect, count: usize, measure: &dyn Measure) -> Option<(String, u16)> {
+    if count == 0 {
+        return None;
+    }
+    let cells = button_cells(&resolve_all_label(count), measure);
+    let width = cells.chars().count() as u16;
+    let (check, x) = check_button(area, measure);
+    let end = x + check.chars().count() as u16;
+    Some((cells, end.saturating_sub(width)))
 }
 
 /// The order the pane lists comments in.
@@ -719,6 +776,10 @@ pub struct View<'a> {
     pub sort: Sort,
     /// How what waits reaches the agent, and the comments on code that wait with the review.
     pub goes: Goes,
+    /// The only kind listed, from a press on its pill.
+    pub kind: Option<&'static str>,
+    /// Now, in seconds since 1970, for how long ago each comment and reply was written.
+    pub now: u64,
     pub unsent: Option<&'a Unsent>,
     /// The emoji that stand under a comment being written. None where the screen can't
     /// draw them, and then names between colons stay as they're typed too.
@@ -772,7 +833,20 @@ fn mark((threads, draft, agent, resolved, view): Shown, width: f32, measure: &dy
     draft.hash(&mut hasher);
     agent.hash(&mut hasher);
     resolved.hash(&mut hasher);
-    (view.grouped, view.lit, view.sort, view.quick, view.goes).hash(&mut hasher);
+    (
+        view.grouped,
+        view.lit,
+        view.sort,
+        view.quick,
+        view.goes,
+        view.kind,
+    )
+        .hash(&mut hasher);
+    // How long ago says something new each minute, where any comment says when it was made.
+    let dated = threads
+        .iter()
+        .any(|t| t.at > 0 || t.replies.iter().any(|r| r.at > 0));
+    dated.then_some(view.now / 60).hash(&mut hasher);
     view.unsent
         .map(|unsent| unsent.0.borrow().clone())
         .hash(&mut hasher);
@@ -815,6 +889,8 @@ impl Default for View<'_> {
             sort: Sort::default(),
             goes: Goes::default(),
             unsent: None,
+            kind: None,
+            now: 0,
             quick: Some(crate::emoji::QUICK),
             pictures: None,
             laid: None,
@@ -1138,7 +1214,9 @@ fn control_drop(all: &[Line], index: usize, measure: &dyn Measure) -> f32 {
         .and_then(|over| all.get(over))
         .is_some_and(|line| matches!(line, Line::EmptyHint(_)));
     match all.get(index) {
-        Some(Line::Sort | Line::Resolved(..)) if !measure.in_cells() && !under_hint => CONTROL_DROP,
+        Some(Line::Sort(_) | Line::Resolved(..)) if !measure.in_cells() && !under_hint => {
+            CONTROL_DROP
+        }
         _ => 0.0,
     }
 }
@@ -1218,7 +1296,7 @@ pub fn order_menu_row(area: Rect, shown: Shown, top: usize, measure: &dyn Measur
     let width = area.w.saturating_sub(SIDE * 2 + 2) as f32;
     let all = lines(shown, width, measure);
     let top = top.min(last_of(all.len(), area.h));
-    let index = all.iter().position(|line| matches!(line, Line::Sort))?;
+    let index = all.iter().position(|line| matches!(line, Line::Sort(_)))?;
     let row = area.y + index.checked_sub(top)? as u16;
     let under = if control_drop(&all, index, measure) > 0.0 {
         2
@@ -1279,7 +1357,11 @@ fn lay_out(
         places.dedup();
         let files = if grouped { places.len() } else { 0 };
         out.push(Line::Check(mine, open.len() - mine, files));
-        let count = |kind: &str| open.iter().filter(|t| t.kind == kind).count();
+        // The reviewer's own: a suggestion not yet kept covers nothing, and was counted.
+        let count = |kind: &str| {
+            let mine = |t: &&&Thread| t.kind == kind && t.suggested_by.is_empty();
+            open.iter().filter(mine).count()
+        };
         // As many pills to a row as fit.
         let mut row = Vec::new();
         let mut used = 0.0;
@@ -1293,7 +1375,8 @@ fn lay_out(
             used += pill;
         }
         out.push(Line::Coverage(row));
-        out.push(Line::Sort);
+        let addressed = open.iter().filter(|t| t.addressed_by().is_some()).count();
+        out.push(Line::Sort(addressed));
         out.push(Line::Gap);
     }
     if let Some(new) = draft.filter(|d| d.thread.is_none()) {
@@ -1317,8 +1400,14 @@ fn lay_out(
     // where it is when it's pressed, and what it shows unfolds under it.
     let still_open = threads.iter().filter(|t| !t.resolved);
     let mut unfolded = false;
+    let mut listed = 0;
     for thread in still_open.chain(threads.iter().filter(|t| t.resolved)) {
         let id = thread.id;
+        // A press on a kind's pill lists only that kind.
+        if view.kind.is_some_and(|kind| thread.kind != kind) {
+            continue;
+        }
+        listed += 1;
         if thread.resolved && !unfolded {
             unfolded = true;
             out.push(Line::Resolved(resolved.0, true));
@@ -1354,18 +1443,22 @@ fn lay_out(
         // Words a plan's next version changed or dropped: still said, and marked as such.
         // The pill sits at the header's end when both fit, and under it when they don't.
         let done = if thread.resolved { " · Resolved" } else { "" };
-        let label = format!("{by}{kind}{done}");
-        let (words, pill) = words_of(thread);
+        // And how long ago it was made, where that's known.
+        let ago = age(thread.at, view.now).map_or_else(String::new, |ago| format!(" · {ago}"));
+        let label = format!("{by}{kind}{done}{ago}");
+        let (words, _) = words_of(thread);
         let fits = |pill: &String| {
             measure.width(&label, small()) + PILL_AIR + pill_width(pill, measure) <= width
         };
-        let (beside, under) = match pill {
-            Some(pill) if fits(&pill) => (Some((pill, words)), None),
+        let mut pills = pills_of(thread).into_iter();
+        let first = pills.next();
+        let (beside, under) = match first {
+            Some((pill, tone)) if fits(&pill) => (Some((pill, tone)), None),
             under => (None, under),
         };
         out.push(Line::Header(id, label, suggested, beside));
-        if let Some(pill) = under {
-            out.push(Line::Pill(id, pill, words));
+        for (pill, tone) in under.into_iter().chain(pills) {
+            out.push(Line::Pill(id, pill, tone));
         }
         let quote = shown_quote(&thread.quote, thread.line, thread.about.as_ref());
         out.push(Line::Quote(id, quote, words));
@@ -1388,6 +1481,10 @@ fn lay_out(
         for reply in &thread.replies {
             // A verdict reads as one: its word on a chip, who said it, then why.
             let (word, author, body) = reply_parts(reply);
+            let author = match age(reply.at, view.now) {
+                Some(ago) => format!("{author} · {ago}"),
+                None => author,
+            };
             out.push(Line::Answer(id, word, author));
             let room = width - INSET * 2.0;
             let (words, pictures) = shown(&body, view);
@@ -1397,7 +1494,9 @@ fn lay_out(
         }
         // A suggestion is the agent's own, so there's nothing to wait for. What no agent has
         // yet says how it gets to one, so nobody wonders whether it went.
-        let waiting = !suggested && !thread.resolved && thread.waiting_answer();
+        // A suggestion asked about is waited on like the reviewer's own comment.
+        let asked_about = !suggested || thread.replies.iter().any(|r| r.author == YOU);
+        let waiting = asked_about && !thread.resolved && thread.waiting_answer();
         let unsent = view.unsent.is_some_and(|unsent| unsent.has(id));
         if waiting && (thread.waiting() || unsent) {
             // Asked of an agent outside the pane, it goes with that one's next prompt.
@@ -1428,13 +1527,31 @@ fn lay_out(
             Line::Reopen(id)
         } else if suggested {
             Line::Choices(id)
+        } else if thread.addressed_by().is_some() {
+            Line::Addressed(id)
         } else {
             Line::Buttons(id)
         });
         // Edit and Delete go on a row of their own where the five don't fit on one.
-        if writing.is_none() && !thread.resolved && !suggested && !all_fit(width, measure) {
+        let addressed = thread.addressed_by().is_some();
+        if writing.is_none()
+            && !thread.resolved
+            && !suggested
+            && !addressed
+            && !all_fit(width, measure)
+        {
             out.push(Line::Edits(id));
         }
+        out.push(Line::Gap);
+    }
+    // A kind none of them is: say so, and how to list them all again.
+    if let Some(kind) = view.kind.filter(|_| listed == 0 && !threads.is_empty()) {
+        let none = format!("No {kind} comments. Press {kind} again to list them all.");
+        out.extend(
+            wrap(&none, width + 2.0, measure)
+                .into_iter()
+                .map(Line::EmptyHint),
+        );
         out.push(Line::Gap);
     }
     if resolved.0 > 0 && !unfolded {
@@ -1442,6 +1559,39 @@ fn lay_out(
         out.push(Line::Gap);
     }
     out
+}
+
+/// How long ago something written at `at` was, as a card says it: "now", "5 min", "2 h",
+/// "3 d". None where when it was written isn't known.
+pub fn age(at: u64, now: u64) -> Option<String> {
+    if at == 0 {
+        return None;
+    }
+    let ago = now.saturating_sub(at);
+    Some(match ago {
+        0..60 => "now".to_string(),
+        60..3600 => format!("{} min", ago / 60),
+        3600..86400 => format!("{} h", ago / 3600),
+        _ => format!("{} d", ago / 86400),
+    })
+}
+
+/// Where each kind's pill stands on its row, as its kind and the columns it starts and ends.
+fn pills(
+    area: Rect,
+    kinds: &[(&'static str, usize)],
+    measure: &dyn Measure,
+) -> Vec<(&'static str, f32, f32)> {
+    let mut x = f32::from(head(area, measure));
+    kinds
+        .iter()
+        .map(|(kind, count)| {
+            let width = pill_width(&format!("{kind} {count}"), measure);
+            let at = x;
+            x += width + PILL_GAP;
+            (*kind, at, at + width)
+        })
+        .collect()
 }
 
 /// What the button for resolved comments says, and then what it says the other way: the
@@ -1638,6 +1788,7 @@ pub fn hit(
                 .find(|(_, cells, at)| x >= *at && x < at + cells.chars().count() as u16);
             match pressed?.0 {
                 "Keep" => Some(Hit::Keep(*id)),
+                "Reply" => Some(Hit::Reply(*id)),
                 _ => Some(Hit::Dismiss(*id)),
             }
         }
@@ -1654,9 +1805,24 @@ pub fn hit(
             let (cells, at) = check_button(area, measure);
             (x >= at && x < at + cells.chars().count() as u16).then_some(Hit::Check)
         }
-        Line::Sort => {
+        Line::Sort(addressed) => {
+            if let Some((cells, at)) = resolve_all(area, *addressed, measure)
+                && x >= at
+                && x < at + cells.chars().count() as u16
+            {
+                return Some(Hit::ResolveAddressed);
+            }
             let (cells, at) = control(area, &[shown.4.sort.label()], Chevron::Opens, measure);
             (x >= at && x < at + cells.chars().count() as u16).then_some(Hit::Sort)
+        }
+        Line::Addressed(id) => {
+            let pressed = row_of(area, &ADDRESSED_BUTTONS, measure)
+                .into_iter()
+                .find(|(_, cells, at)| x >= *at && x < at + cells.chars().count() as u16);
+            match pressed?.0 {
+                "Resolve" => Some(Hit::Resolve(*id)),
+                _ => Some(Hit::NotDone(*id)),
+            }
         }
         Line::Tools => tools(area, shown.4)
             .into_iter()
@@ -1694,6 +1860,13 @@ pub fn hit(
                 .map(Hit::Suggested)
         }
         Line::File(opens, ..) => opens.map(Hit::File),
+        Line::Coverage(kinds) => {
+            let at = f32::from(x) + 0.5;
+            pills(area, kinds, measure)
+                .into_iter()
+                .find(|(_, from, to)| at >= *from && at < *to)
+                .map(|(kind, ..)| Hit::Kind(kind))
+        }
         Line::Reopen(id) => {
             let (_, cells, at) = row_of(area, &REOPEN, measure).pop()?;
             (x >= at && x < at + cells.chars().count() as u16).then_some(Hit::Reopen(*id))
@@ -1787,6 +1960,7 @@ pub fn draw(
             Line::Buttons(_)
             | Line::Edits(_)
             | Line::Choices(_)
+            | Line::Addressed(_)
             | Line::Reopen(_)
             | Line::Send(..) => {
                 if let Some(first) = start.take() {
@@ -1805,6 +1979,7 @@ pub fn draw(
                     );
                     let of = match line {
                         Line::Buttons(id) | Line::Edits(id) | Line::Choices(id) => Some(*id),
+                        Line::Addressed(id) => Some(*id),
                         Line::Reopen(id) | Line::Send(id, _) => Some(*id),
                         _ => None,
                     };
@@ -1896,6 +2071,7 @@ pub fn draw(
             Line::Buttons(_)
                 | Line::Edits(_)
                 | Line::Choices(_)
+                | Line::Addressed(_)
                 | Line::Reopen(_)
                 | Line::Rewrite(_)
                 | Line::Send(..)
@@ -2115,7 +2291,7 @@ pub fn draw(
                 let mut x = reply_x;
                 if let Some(word) = word {
                     // Agreeing is the good news; pushing back is what to look at.
-                    let tone = if word == "Agrees" {
+                    let tone = if word == "Agrees" || word == ADDRESSED_WORD {
                         theme.git_added
                     } else {
                         theme.attention
@@ -2255,17 +2431,40 @@ pub fn draw(
             }
             Line::Coverage(kinds) => {
                 // A pill for each kind: filled where there are comments of it, and only
-                // outlined and quiet where there are none, so the filled ones read first.
-                let mut x = f32::from(head(area, measure)) + view.lead;
-                for (kind, count) in kinds {
+                // outlined and quiet where there are none, so the filled ones read first. The
+                // one whose comments alone are listed is the accent's, as a pick is.
+                for (kind, x, end) in pills(area, kinds, measure) {
+                    let (x, end) = (x + view.lead, end + view.lead);
+                    let count = kinds
+                        .iter()
+                        .find(|(k, _)| *k == kind)
+                        .map_or(0, |(_, n)| *n);
                     let text = format!("{kind} {count}");
-                    let width = pill_width(&text, measure);
+                    let width = end - x;
                     let bounds = Bounds::cells(x, y as f32 + PILL.0, width, PILL.1);
-                    let missing = *count == 0;
-                    if missing {
-                        grid.panel(bounds, 34, None, Some(theme.popup_border));
+                    let missing = count == 0;
+                    let on_it = hover.is_some_and(|h| {
+                        let at = f32::from(h.0) + 0.5;
+                        h.1 == y && at >= x && at < end
+                    });
+                    if view.kind == Some(kind) {
+                        grid.panel(
+                            bounds,
+                            34,
+                            Some(mix(theme.accent, body.bg, 0.28)),
+                            Some(theme.accent),
+                        );
+                    } else if missing {
+                        let fill = on_it.then(|| theme.quiet_button(body.bg));
+                        grid.panel(bounds, 34, fill, Some(theme.popup_border));
                     } else {
-                        grid.panel(bounds, 34, Some(theme.quiet_button(body.bg)), None);
+                        let fill = theme.quiet_button(body.bg);
+                        let fill = if on_it {
+                            theme.quiet_button(fill)
+                        } else {
+                            fill
+                        };
+                        grid.panel(bounds, 34, Some(fill), None);
                     }
                     let style = Style {
                         fg: if missing {
@@ -2277,7 +2476,6 @@ pub fn draw(
                     };
                     let at = x + PILL_ROOM;
                     grid.label_at(at, at.floor() as u16, y, &text, style, right, SMALL);
-                    x += width + PILL_GAP;
                 }
             }
             Line::Rewrite(_) => {
@@ -2297,6 +2495,7 @@ pub fn draw(
                 }
             }
             Line::Choices(_) => {
+                // Keep, Reply and Dismiss: the first two answer it, the last drops it.
                 for (label, cells, x) in row_of(area, &CHOICES, measure) {
                     let width = cells.chars().count() as u16;
                     let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
@@ -2399,17 +2598,45 @@ pub fn draw(
                 draw_control(grid, (x, y), what, how, (measure, theme));
                 grid.nudge_since(from, view.lead);
             }
-            Line::Sort => {
+            Line::Sort(addressed) => {
                 // A button that opens the list of orders, saying the one in use.
                 let names = [view.sort.label()];
                 let (cells, x) = control(area, &names, Chevron::Opens, measure);
                 let width = cells.chars().count() as u16;
                 let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
                 let what = (cells.as_str(), &names[..], Chevron::Opens);
-                let how = (on_it, control_drop(&all, index, measure));
+                let drop = control_drop(&all, index, measure);
                 let from = grid.painted_so_far();
-                draw_control(grid, (x, y), what, how, (measure, theme));
+                draw_control(grid, (x, y), what, (on_it, drop), (measure, theme));
                 grid.nudge_since(from, view.lead);
+                // At the row's end, the button that resolves what agents say they addressed.
+                if let Some((cells, x)) = resolve_all(area, *addressed, measure) {
+                    let from = grid.painted_so_far();
+                    let width = cells.chars().count() as u16;
+                    let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
+                    let fill = theme.secondary(body.bg, on_it);
+                    let style = Style {
+                        bg: fill,
+                        fg: theme.text.fg,
+                        ..body
+                    };
+                    let label = resolve_all_label(*addressed);
+                    grid.button(x, y, &cells, &label, fill, style);
+                    grid.lift_since(from, -drop);
+                }
+            }
+            Line::Addressed(_) => {
+                for (label, cells, x) in row_of(area, &ADDRESSED_BUTTONS, measure) {
+                    let width = cells.chars().count() as u16;
+                    let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
+                    let fill = theme.secondary(card, on_it);
+                    let style = Style {
+                        bg: fill,
+                        fg: inner.fg,
+                        ..inner
+                    };
+                    grid.button(x, y, &cells, label, fill, style);
+                }
             }
             Line::Gap => {}
         }
@@ -2657,10 +2884,10 @@ mod tests {
         let fields =
             r#""id":3,"file":"a.txt","line":1,"quote":"q","text":"See https://a.example/x""#;
         let mut thread: Thread = serde_json::from_str(&format!("{{{fields}}}")).unwrap();
-        thread.replies.push(Reply {
-            author: "Claude".to_string(),
-            text: "Agree: https://b.example/y and plot.png".to_string(),
-        });
+        thread.replies.push(Reply::new(
+            "Claude".to_string(),
+            "Agree: https://b.example/y and plot.png".to_string(),
+        ));
         let found = links(&thread, View::default());
         assert_eq!(
             found,

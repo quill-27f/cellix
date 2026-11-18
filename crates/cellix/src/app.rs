@@ -1570,6 +1570,8 @@ pub struct App {
     comment_rows: threads::Laid,
     /// The comments on code still waiting to go with the review, as the pane was last shown.
     comment_unsent: threads::Unsent,
+    /// The only kind of comment the pane lists, from a press on its pill.
+    comment_kind: Option<&'static str>,
     /// The session that was in front when the last run here ended.
     kept_session: Option<String>,
     /// Whether how the two sides work together has been said yet.
@@ -1770,6 +1772,7 @@ impl App {
             picture_stamps: HashMap::new(),
             comment_rows: threads::Laid::default(),
             comment_unsent: threads::Unsent::default(),
+            comment_kind: None,
             kept_session: None,
             kernels: HashMap::new(),
             team: team::Team::default(),
@@ -5044,10 +5047,7 @@ impl App {
             }
             Some(id) => {
                 if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
-                    thread.replies.push(Reply {
-                        author: YOU.to_string(),
-                        text,
-                    });
+                    thread.replies.push(Reply::new(YOU.to_string(), text));
                 }
             }
             None => {
@@ -5089,6 +5089,7 @@ impl App {
                     selection: draft.selection,
                     about: draft.about,
                     step,
+                    at: cellix_review::threads::now(),
                     ..Thread::default()
                 });
                 asked = draft.ask.then_some(id);
@@ -11276,6 +11277,7 @@ impl App {
                 selection: String::new(),
                 about: None,
                 step: String::new(),
+                at: cellix_review::threads::now(),
                 ..Thread::default()
             });
             self.save_threads();
@@ -11312,6 +11314,7 @@ impl App {
             selection: String::new(),
             about: None,
             step,
+            at: cellix_review::threads::now(),
             ..Thread::default()
         });
         self.save_threads();
@@ -11480,6 +11483,8 @@ impl App {
             sort: self.comment_sort,
             goes: self.comment_agent().1,
             unsent: Some(&self.comment_unsent),
+            kind: self.comment_kind,
+            now: cellix_review::threads::now(),
             quick: self.quick_emoji(),
             pictures: self.measure.cell_pixels().map(|_| &self.comment_pictures),
             laid: Some(&self.comment_rows),
@@ -12087,10 +12092,10 @@ impl App {
             ThreadHit::Apply(id) => self.apply_rewrite(id),
             ThreadHit::Decline(id) => {
                 if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
-                    thread.replies.push(Reply {
-                        author: YOU.to_string(),
-                        text: "Not taking this rewrite.".to_string(),
-                    });
+                    thread.replies.push(Reply::new(
+                        YOU.to_string(),
+                        "Not taking this rewrite.".to_string(),
+                    ));
                 }
                 self.save_threads();
             }
@@ -12116,6 +12121,39 @@ impl App {
                 self.save_threads();
             }
             ThreadHit::ToggleResolved => self.show_resolved = !self.show_resolved,
+            // Not done: a reply saying so, begun for the reviewer to say why, which goes to the
+            // agent as any reply does.
+            ThreadHit::NotDone(id) => {
+                let text = "Not done: ".to_string();
+                self.dock.draft = Some(Draft {
+                    thread: Some(id),
+                    file: String::new(),
+                    line: 0,
+                    quote: String::new(),
+                    selection: String::new(),
+                    caret: text.len(),
+                    text,
+                    ask: false,
+                    code: false,
+                    about: None,
+                    editing: false,
+                });
+            }
+            ThreadHit::ResolveAddressed => {
+                let shown: Vec<u32> = self.shown_threads().0.iter().map(|t| t.id).collect();
+                let mut count = 0;
+                for thread in self.threads.iter_mut().filter(|t| shown.contains(&t.id)) {
+                    if thread.addressed_by().is_some() {
+                        thread.resolved = true;
+                        count += 1;
+                    }
+                }
+                self.save_threads();
+                self.say(format!("Resolved {} addressed", comments_counted(count)));
+            }
+            ThreadHit::Kind(kind) => {
+                self.comment_kind = (self.comment_kind != Some(kind)).then_some(kind);
+            }
             ThreadHit::Edit(id) => {
                 let Some(thread) = self.threads.iter().find(|t| t.id == id) else {
                     return;
@@ -12197,10 +12235,10 @@ impl App {
             .buffer
             .replace_range(&mut editor.selections, start, end, &marked);
         if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
-            thread.replies.push(Reply {
-                author: YOU.to_string(),
-                text: "Applied the rewrite as a suggestion.".to_string(),
-            });
+            thread.replies.push(Reply::new(
+                YOU.to_string(),
+                "Applied the rewrite as a suggestion.".to_string(),
+            ));
         }
         self.save_threads();
         self.say("The rewrite is in as a suggestion: accept or reject it");
@@ -12399,6 +12437,7 @@ impl App {
                     selection: String::new(),
                     about: None,
                     step: String::new(),
+                    at: cellix_review::threads::now(),
                     ..Thread::default()
                 });
                 self.save_threads();
@@ -12423,15 +12462,19 @@ impl App {
                     {
                         thread.kind = kind.to_string();
                     }
-                    thread.replies.push(Reply {
-                        author: author.clone(),
-                        text,
-                    });
+                    thread.replies.push(Reply::new(author.clone(), text));
                     let quote = thread.quote.clone();
                     let file = thread.file.clone();
+                    let addressed = thread.addressed_by().is_some();
                     self.note_reply(id, &author, &quote, &file);
                     self.save_threads();
-                    self.say(format!("{author} answered a comment"));
+                    if addressed {
+                        self.say(format!(
+                            "{author} says it addressed a comment: resolve it, or say it isn't done"
+                        ));
+                    } else {
+                        self.say(format!("{author} answered a comment"));
+                    }
                 }
             }
             Request::TakeThreads(reply) => {
@@ -26633,25 +26676,25 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         };
         let shown = rows(&app);
         let none = row_of(&shown, "No open comments.");
-        let hint = row_of(&shown, "Select text in a file");
+        let hint = row_of(&shown, "Select text");
         let button = row_of(&shown, "Show 2 resolved");
         assert_eq!(hint, none + 1, "the hint is under its sentence");
         assert!(
-            shown[hint].contains("then press Alt+C."),
+            shown[hint].contains("then press Comment."),
             "and whole: {:?}",
             shown[hint]
         );
         assert_eq!(button, hint + 2, "the button a row clear of it");
-        assert!(!shown[button].contains("Alt+C"), "{:?}", shown[button]);
+        assert!(!shown[button].contains("Comment."), "{:?}", shown[button]);
 
         // The resolved ones shown: their first card starts clear of the hint too.
         let (x, y) = find(&screen(&app), "Show 2 resolved");
         app.handle(mouse(MouseKind::Left, x + 1, y));
         app.handle(mouse(MouseKind::Up, x + 1, y));
         let shown = rows(&app);
-        let hint = row_of(&shown, "Select text in a file");
+        let hint = row_of(&shown, "Select text");
         assert!(
-            shown[hint].contains("then press Alt+C."),
+            shown[hint].contains("then press Comment."),
             "{:?}",
             shown[hint]
         );
@@ -26663,9 +26706,9 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         // the first card starts a row clear of the second.
         app.set_pane_width(34);
         let shown = rows(&app);
-        let hint = row_of(&shown, "Select text in a file");
-        assert!(!shown[hint].contains("Alt+C"), "{:?}", shown[hint]);
-        let rest = row_of(&shown, "Alt+C.");
+        let hint = row_of(&shown, "Select text");
+        assert!(!shown[hint].contains("Comment."), "{:?}", shown[hint]);
+        let rest = row_of(&shown, "Comment.");
         assert_eq!(rest, hint + 1, "{}", shown.join("\n"));
         assert!(
             row_of(&shown, "Resolved") >= rest + 2,
@@ -26945,10 +26988,10 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let kept = app.state().emoji;
         assert_eq!(kept[..3], ["😁", "🎉", "💯"]);
         // An answer that spells a name out shows its emoji.
-        app.threads[0].replies.push(Reply {
-            author: "Claude".to_string(),
-            text: "Done :tada: on both".to_string(),
-        });
+        app.threads[0].replies.push(Reply::new(
+            "Claude".to_string(),
+            "Done :tada: on both".to_string(),
+        ));
         let text = screen(&app).text();
         assert!(text.contains("Done 🎉 on both"), "{text}");
     }
@@ -27457,10 +27500,10 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let (_dir, mut app) = picture_page("words here\n");
         let fields = r#""id":2,"file":"note.md","line":1,"quote":"words","text":"Why?""#;
         app.threads = vec![serde_json::from_str(&format!("{{{fields}}}")).unwrap()];
-        app.threads[0].replies.push(Reply {
-            author: "Claude".to_string(),
-            text: "See https://example.com/a for why".to_string(),
-        });
+        app.threads[0].replies.push(Reply::new(
+            "Claude".to_string(),
+            "See https://example.com/a for why".to_string(),
+        ));
         app.run(Command::ShowComments);
         let grid = screen(&app);
         let rows: Vec<(i32, &str)> = grid
@@ -27591,10 +27634,10 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let fields =
             r#""id":7,"file":"alpha.txt","line":1,"quote":"first","text":"See shot.png, here""#;
         app.threads = vec![serde_json::from_str(&format!("{{{fields}}}")).unwrap()];
-        app.threads[0].replies.push(Reply {
-            author: "Claude".to_string(),
-            text: "Agree: shot.png shows it".to_string(),
-        });
+        app.threads[0].replies.push(Reply::new(
+            "Claude".to_string(),
+            "Agree: shot.png shows it".to_string(),
+        ));
         app.run(Command::ShowComments);
         let grid = screen(&app);
         let (x, y) = find(&grid, "shot.png, here");

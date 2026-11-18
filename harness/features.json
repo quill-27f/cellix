@@ -6298,5 +6298,40 @@
     "title": "Next and Previous Comment go through a file's comments; a press on a line's mark opens its comment",
     "test": "next_comment_goes_through_the_files_comments_and_the_mark_opens_one",
     "passes": true
+  },
+  {
+    "id": "suggestion-reply",
+    "milestone": 15,
+    "title": "A suggestion can be asked about with Reply, without keeping it",
+    "test": "a_suggestion_can_be_asked_about_without_keeping_it",
+    "passes": true
+  },
+  {
+    "id": "comment-age",
+    "milestone": 15,
+    "title": "Each comment and answer says how long ago it was written",
+    "test": "a_card_says_how_long_ago_its_comment_and_answers_were_written",
+    "passes": true
+  },
+  {
+    "id": "kind-filter",
+    "milestone": 15,
+    "title": "A kind's pill lists that kind alone; the pills count only the reviewer's own",
+    "test": "a_kinds_pill_lists_that_kind_and_counts_only_your_own",
+    "passes": true
+  },
+  {
+    "id": "addressed-card",
+    "milestone": 15,
+    "title": "An agent says it addressed a comment; the card has Resolve and Not done, and Resolve N addressed",
+    "test": "an_agent_says_it_addressed_a_comment_and_the_reviewer_settles_it",
+    "passes": true
+  },
+  {
+    "id": "addressed-cli",
+    "milestone": 15,
+    "title": "cellix reply --done marks a comment addressed by that agent, through the running Cellix",
+    "test": "pty_an_agent_says_it_addressed_a_comment",
+    "passes": true
   }
 ]

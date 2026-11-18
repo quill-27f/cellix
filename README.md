@@ -81,7 +81,7 @@ cellix setup gemini   # then restart Gemini CLI
 | Claude Code | A mod. Cellix opens as a pane beside the conversation, and by itself when Claude proposes an edit or a plan. Your selection reaches the prompt, and every turn is checkpointed |
 | Codex | A plugin. Your comments reach its prompts, plans wait for your review, and turns and test runs show in Review |
 | Gemini CLI | An extension that does the same, holding plans as it leaves plan mode |
-| Anything else | `cellix plan`, `cellix comments --take` and `cellix reply`, which any agent can call |
+| Anything else | `cellix plan`, `cellix comments --take` and `cellix reply` (`--done` once it's done what a comment asks), which any agent can call |
 
 The pane needs what only Claude Code offers. With Codex and Gemini CLI, run Cellix in a split beside
 them, or let it run them, as under [On its own](#on-its-own).
@@ -122,7 +122,7 @@ words and Comment as you go, then press **Check my review** in the Comments pane
   their kind, to **Keep** as your own or **Dismiss**.
 - **Coverage you can see.** A strip counts your comments by kind (Clarity, Correctness, Evidence,
   Structure, Reproducibility), and a kind with none stands out, so the review isn't only about
-  wording.
+  wording. Click a kind to list only its comments.
 - **The words stay yours.** The agent never edits the document while it reviews; it only comments,
   through `cellix reply` and `cellix suggest`, which any agent can call.
 - **A comment at a glance.** With the Comments pane shut, rest the pointer on commented words to
@@ -132,6 +132,10 @@ words and Comment as you go, then press **Check my review** in the Comments pane
   Comments tab). It's every comment you kept, a file and a kind at a time in the document's order:
   each quote, your words, the agent's answers (*agrees* or *pushes back*), its line and whether
   it's resolved, under a head that counts them by kind. A referee report, ready to send on.
+
+- **You settle what's done.** An agent that did what a comment asks says so with
+  `cellix reply <id> --done "what it did"`, and the card says *Addressed by Claude*, with
+  **Resolve** and **Not done**; **Resolve N addressed** settles them all.
 
 ## Review what it did
 
@@ -312,7 +316,11 @@ Whatever you can see, you can talk about, the same way in every file type. Selec
 and **Ask Agent** appear beside it. A picture, diagram or formula has a Comment button under the
 pointer, and a PDF or image in the side pane's Preview takes one too. Comments are threads in the side pane,
 kept in `.cellix/threads.json`. Ask Agent sends yours to the agent with its file, line and quote, the
-agent answers with `cellix reply <id> "text"`, and the answer lands under your question. With a file
+agent answers with `cellix reply <id> "text"`, and the answer lands under your question. A comment
+not sent yet says on its card how it gets there: with your next prompt to Claude Code, Codex or
+Gemini CLI, whose hooks hand it over, or now with Ask agent. **Send Comments to Agent** sends
+everything waiting, on code and on pages, in one message. Each comment and answer says how long ago
+it was written, and a suggestion can be answered with **Reply** without keeping it. With a file
 open the Comments tab lists that file's; with none it lists every file's, each under its file's name,
 and a click on a name or a comment opens the file. Click words a comment is about and its card is
 lit in the Comments tab, which scrolls to it, and comes forward if the pane was open on another tab; click a card and its words are selected in the file. **Next Comment** and **Previous Comment** in the palette go through a file's comments in order, and a click on a line's ◆ opens its comment. Under the kinds a button says what order the tab lists in:

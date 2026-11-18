@@ -3347,3 +3347,22 @@ The docflow track (Q2).
 - A press on a commented line's ◆, in code's gutter or a page's margin, opens the Comments on that line's comment the same way (`Editor::comment_mark_at`); presses there only folded or placed the caret.
 - Comments: Check My Review, in the palette, does what the pane's button does.
 - Test: `next_comment_goes_through_the_files_comments_and_the_mark_opens_one`.
+
+## Cards: when, a reply to a suggestion, a kind at a time (2026-11-18)
+
+The docflow track (Q3, Q4, Q5, B6, B8). Both findings held.
+
+- A suggestion's card has Reply between Keep and Dismiss: the agent can be asked about it without its being kept. It's waited on as the reviewer's own comment is ("Goes to…", then "Waiting for…"), and the agent's message says it's its own suggestion, not yet kept.
+- Each comment and answer says how long ago it was written, after who wrote it ("You · 5 min", "Claude · 2 h"): `at` on threads and replies, seconds since 1970, kept in `threads.json` and absent from older ones, which say nothing of when. The list is laid out again each minute only where some comment says when.
+- A press on a kind's pill lists only that kind, its pill in the accent's colours; another press lists them all. With none of that kind the pane says so and how to list them all again.
+- The pills count the reviewer's own comments; a suggestion not yet kept was counted as covering its kind.
+- The empty pane's hint says "Select text, then press Comment.", the button a selection shows, which names the keys as they're set; it said "press Alt+C" whatever the keys were. `the_hint_under_no_open_comments_has_a_row_to_itself` looks for the new words, and is otherwise as it was: the hint is as short, so it breaks where it did.
+- Tests: `a_suggestion_can_be_asked_about_without_keeping_it`, `a_card_says_how_long_ago_its_comment_and_answers_were_written`, `a_kinds_pill_lists_that_kind_and_counts_only_your_own`.
+
+## The agent says it's done; the reviewer settles it (2026-11-18)
+
+The docflow track (Q6).
+
+- `cellix reply <id> --done "what you did"` answers a comment with a reply that starts "Addressed:" (`threads::addressed`). The card says "Addressed by Codex" in a green pill beside who wrote it, the answer's chip says "Addressed" as a verdict's does, and its buttons are Resolve and Not done. The agent never resolves; Not done begins a reply "Not done: " for the reviewer to finish, which goes back to the agent as any reply does, and the card waits on it again. "Resolve N addressed" at the end of the order's row settles every addressed comment listed.
+- Told to agents three ways: the Claude Code, Codex and Gemini CLI skills, `cellix --help`, and every comment's message, which now ends "or once you've done what it asks: cellix reply <id> --done …".
+- Tests: `an_agent_says_it_addressed_a_comment_and_the_reviewer_settles_it` (App), `pty_an_agent_says_it_addressed_a_comment` (the real binary running, and `cellix reply --done` run against it as an agent would).

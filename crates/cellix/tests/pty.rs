@@ -2302,3 +2302,47 @@ fn tiles_go_as_files_to_ghostty_here_and_look_the_same_for_fewer_bytes() {
     let left: Vec<_> = std::fs::read_dir(&ours[0]).unwrap().collect();
     assert!(left.is_empty(), "left in {:?}: {left:?}", ours[0]);
 }
+
+/// `cellix reply <id> --done "…"`, as an agent runs it, with the real binary on both ends: the
+/// running Cellix keeps the comment marked addressed by that agent, still open for the
+/// reviewer to settle.
+#[test]
+#[cfg(unix)]
+fn pty_an_agent_says_it_addressed_a_comment() {
+    use std::process::{Command, Stdio};
+    let dir = project();
+    let root = dir.path().canonicalize().unwrap();
+    std::fs::create_dir_all(root.join(".cellix")).unwrap();
+    let thread =
+        r#"[{"id":1,"file":"hello.txt","line":1,"quote":"hello","text":"Say goodbye too."}]"#;
+    std::fs::write(root.join(".cellix/threads.json"), thread).unwrap();
+    // Short, since a socket's path has to fit in about a hundred bytes.
+    let cache = tempfile::tempdir_in("/tmp").unwrap();
+    let mut screen = Screen::start_with(&root, &[], &[("XDG_CACHE_HOME", cache.path())]);
+    screen.wait_for("hello.txt");
+    let done = Command::new(env!("CARGO_BIN_EXE_cellix"))
+        .args(["reply", "1", "--done", "added", "a", "goodbye"])
+        .current_dir(&root)
+        .env("XDG_CACHE_HOME", cache.path())
+        .env("CELLIX_AGENT", "Codex")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&done.stderr).into_owned();
+    assert!(done.status.success(), "{said}");
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let kept = std::fs::read_to_string(root.join(".cellix/threads.json")).unwrap_or_default();
+        if kept.contains("Addressed: added a goodbye") {
+            assert!(kept.contains("\"author\": \"Codex\""), "{kept}");
+            assert!(kept.contains("\"resolved\": false"), "{kept}");
+            break;
+        }
+        assert!(Instant::now() < deadline, "never kept: {kept}");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    drop(screen);
+    let _ = Command::new("pkill")
+        .args(["-f", &cache.path().display().to_string()])
+        .status();
+}
