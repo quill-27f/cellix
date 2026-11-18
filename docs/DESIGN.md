@@ -834,8 +834,11 @@ picture of Lapce; a rail down the left edge took five columns for them until the
 Under the views there's a row of air, and the heading of what the one in front shows
 (the folder's name and its branch, OUTLINE, SOURCE CONTROL) is painted a third of a row up
 into it (`SIDEBAR_RAISE`, 0.34): the same air between the line and its capitals as between it
-and the capitals of the first row of its list. A view's tip stands on that heading and covers
-it whole, the one tip that isn't on a row. On the row straight under the line the heading read as part of the views (the user's
+and the capitals of the first row of its list. A view's tip, and the sidebar button's, stands
+8 px under the views' line, in that air over the heading, where a row has room for it: on the
+heading, it ended part way along its words and cut them ("QUEU", the branch's chip to "ma"). On a
+row the terminal's line tall there's no such room, and it stands on the heading, covering it
+whole. On the row straight under the line the heading read as part of the views (the user's
 third point on trying 0.10.0). Only the heading's paint is raised
 (`raise_sidebar_heading`): its cells, and every row under it, are where a press finds them,
 and a press on the row of air counts as one on the heading (`on_sidebar_heading`). The
@@ -860,9 +863,13 @@ Ctrl+B or a second press on the view in front, and nothing said so). It ends the
 Settings, in three columns as a view has: a window with its left part filled, the size of the
 icons at the top right and on their chip when pointed at, named "Hide Sidebar" with Ctrl+B
 quieter after it. Hidden, the button at the start of the tabs is the same window with its left
-part in outline, "Show Sidebar". The narrowest sidebar is what holds every view and that button
-with a column clear at each end, 23 columns (`SIDEBAR_MIN_WIDTH`; it was 20, which held the views
-alone). Without pictures the rail ends with it, ◧ under Settings at the rail's foot, and keeps it
+part in outline, "Show Sidebar". The narrowest sidebar is what holds every view with a column
+clear at each end, 20 columns (`SIDEBAR_MIN_WIDTH`), and the button ends the views' row where the
+sidebar has the 23 that hold it too (`SIDEBAR_WITH_BUTTON`), a window of 92 columns or more. In a
+narrower one the sidebar keeps its 20 and the button stands at the start of the tabs, filled,
+"Hide Sidebar", in the place where the button that brings it back stands once it's hidden
+(decided after 0.11.0's review: a minimum of 23 for the button took a 72-column window's file
+50 px, and the Task page's details were cut short for it). Without pictures the rail ends with it, ◧ under Settings at the rail's foot, and keeps it
 as ◫ while the sidebar is hidden, since there the tabs have no button. Ctrl+B does the same.
 Both themes are two surfaces: the frame (the views, the sidebar, the status bar) and the
 sheets on it (the file and the side pane, whatever it shows, a terminal too, each with its
@@ -1199,7 +1206,9 @@ Under 80 columns, about what Claude Code leaves Cellix beside its chat, the layo
 for that width rather than squeezed. The five panel icons lead the side pane's header, as
 VS Code's panel shows its views, with the one showing named and no tab of its own. The top
 right keeps one icon that shows or hides the pane. Tabs out of view are
-counted at the ends of the strip ("‹ 2 more", "3 more ›"), and each count lists its tabs. The wheel over the file's strip of tabs moves it sideways, a tab a notch, when they don't all
+counted at the ends of the strip ("‹ 2 more", "3 more ›"), and each count lists its tabs. A
+count is a chip with 14 px of air either side of its words, and the one at the strip's start
+stands 8 px in from the sheet's edge (it stood 3 px from it, with 24 px after its words). The wheel over the file's strip of tabs moves it sideways, a tab a notch, when they don't all
 fit, as VS Code's does, with the counts at its ends following; the tab in front stays in
 front and may go out of view, until another is chosen, which brings the strip to it. With
 every tab in view the wheel there does nothing. The side pane keeps every tab in view, cut

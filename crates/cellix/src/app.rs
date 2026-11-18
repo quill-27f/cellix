@@ -332,9 +332,13 @@ const RAIL_NAMES: [&str; 6] = [
 /// Below this width, opening the side pane puts the sidebar away.
 const CROWDED_WIDTH: u16 = 120;
 const SIDEBAR_WIDTH: u16 = 28;
-/// The narrowest sidebar: what holds every view's icon and the button that hides it, with a
-/// column clear at each end. Twenty held the views alone.
-const SIDEBAR_MIN_WIDTH: u16 = VIEW_INSET * 2 + VIEW_STEP * ACTIVITY.len() as u16 + SIDEBAR_HIDE;
+/// The narrowest sidebar: what holds every view's icon, with a column clear at each end.
+const SIDEBAR_MIN_WIDTH: u16 = VIEW_INSET * 2 + VIEW_STEP * ACTIVITY.len() as u16;
+/// The narrowest sidebar whose views' row ends with the button that hides it. In a window
+/// whose quarter is narrower, as at 72 columns, the sidebar keeps the views' 20 columns and
+/// the button stands at the start of the tabs, where the one that brings it back stands: a
+/// sidebar 23 columns wide for it took 50 px from the file there.
+const SIDEBAR_WITH_BUTTON: u16 = SIDEBAR_MIN_WIDTH + SIDEBAR_HIDE;
 /// The sidebar's own button, the side pane's mirrored: the window with its left part filled
 /// ends the views' row and hides it, and in outline it starts the tabs and brings it back.
 /// Its columns, as many as a view's.
@@ -349,6 +353,18 @@ const COMPACT_WIDTH: u16 = 70;
 const MENU_BUTTON: u16 = 3;
 /// Columns either side of the words in a "‹ 2 more" chip at the end of the tabs.
 const MORE_PADDING: u16 = 1;
+/// Where there are pictures: how far the chip at the strip's start stands in from the sheet's
+/// edge, half a column, 8 px; and the air either side of its words inside it, 14 px, the same
+/// at both ends. It stood 3 px from the edge, with 14 px before its words and 24 after.
+const MORE_EDGE: f32 = 0.5;
+const MORE_AIR: f32 = 0.85;
+/// The size its words are set at, a little under the tabs'.
+const MORE_FONT: Font = Font {
+    mono: false,
+    bold: false,
+    italic: false,
+    size: 92,
+};
 /// Below this width the window is laid out to be docked, as beside Claude Code's chat: the
 /// panels' icons move into the pane's header, and long menus fold into submenus.
 const DOCK_WIDTH: u16 = 80;
@@ -3926,7 +3942,22 @@ impl App {
     /// where the views went with a sidebar that's closed.
     fn sidebar_button(&self) -> bool {
         let closed = self.views_on_top() && self.sidebar_frame().is_none();
-        self.compact() || (closed && self.maximized.is_none())
+        self.compact() || ((closed || self.button_at_tabs()) && self.maximized.is_none())
+    }
+
+    /// Whether column `x` of the top row is on the button at the start of the tabs.
+    fn on_tabs_button(&self, x: u16) -> bool {
+        let start = self.main_area().x;
+        x >= start && x < start + MENU_BUTTON
+    }
+
+    /// Whether the sidebar shows, its views on top, too narrow for its button at their row's
+    /// end: the button stands at the start of the tabs.
+    fn button_at_tabs(&self) -> bool {
+        let frame = self
+            .sidebar_frame()
+            .filter(|_| self.views_on_top() && !self.compact());
+        frame.is_some_and(|frame| frame.w < SIDEBAR_WITH_BUTTON)
     }
 
     /// The button that hides the sidebar: after Settings at the end of the views' row, or
@@ -3934,7 +3965,7 @@ impl App {
     /// back.
     fn sidebar_hide(&self) -> Option<Rect> {
         let area = self.activity_area();
-        if area.w == 0 {
+        if area.w == 0 || self.button_at_tabs() {
             return None;
         }
         if self.views_on_top() {
@@ -13922,7 +13953,7 @@ impl App {
             MouseKind::Left if y == self.plan_bar().y + 1 && self.plan_in_view() && !in_sidebar => {
                 self.click_plan_bar(x)
             }
-            MouseKind::Left if self.sidebar_button() && y == 0 && x < MENU_BUTTON => {
+            MouseKind::Left if self.sidebar_button() && y == 0 && self.on_tabs_button(x) => {
                 // Review stands where the sidebar does, with its own list a view of it.
                 self.press_sidebar_button();
             }
@@ -15189,12 +15220,17 @@ impl App {
         }
     }
 
-    /// Columns a "more" chip takes, with its padding and the gap after it.
+    /// Columns a "more" chip takes, with its padding and the gap after it: where there are
+    /// pictures, the one at the strip's start has its 8 px from the sheet's edge too.
     fn more_width(&self, count: usize, before: bool) -> u16 {
         let text = self
             .measure
-            .width(&Self::more_label(count, before), Font::default());
-        text.ceil() as u16 + MORE_PADDING * 2 + 1
+            .width(&Self::more_label(count, before), MORE_FONT);
+        if self.measure.in_cells() {
+            return text.ceil() as u16 + MORE_PADDING * 2 + 1;
+        }
+        let edge = if before { MORE_EDGE } else { 0.0 };
+        (edge + MORE_AIR * 2.0 + text).ceil() as u16 + 1
     }
 
     /// The tabs that fit, and where tabs are out of view, a chip at that end saying how many:
@@ -15734,23 +15770,30 @@ impl App {
                     SHOW_SIDEBAR_TIP
                 };
                 if self.views_on_top() {
-                    // On the heading under the views, as theirs are, ending where its chip
-                    // does: centred, it reached over the file's first line.
+                    // Under the views' line, as theirs are, ending where its chip does:
+                    // centred, it reached over the file's first line.
                     let middle = f32::from(cell.x) + f32::from(cell.w) / 2.0;
                     let chip_end = middle + crate::dock::BESIDE_LINE_PILL.0 / 2.0;
                     let left = (chip_end - wide(name)).max(0.5);
-                    let top = rail.bottom() as f32 + f32::from(SIDEBAR_AIR) - SIDEBAR_RAISE;
-                    Some((name, left, top))
+                    Some((name, left, self.view_tip_top(rail)))
                 } else {
                     let top = f32::from(cell.y) + 0.5 - TOOLTIP_HEIGHT / 2.0;
                     Some((name, rail.right() as f32 + 1.0, top))
                 }
             }
-            // The button at the start of the tabs, on the row under it.
+            // The button at the start of the tabs, on the row under it, from where it starts.
             Overlay::None
-                if self.sidebar_button() && y == 0 && x < MENU_BUTTON && !rail.contains(x, y) =>
+                if self.sidebar_button()
+                    && y == 0
+                    && self.on_tabs_button(x)
+                    && !rail.contains(x, y) =>
             {
-                Some((SHOW_SIDEBAR_TIP, 0.5, 1.2))
+                let name = if self.button_at_tabs() {
+                    HIDE_SIDEBAR_TIP
+                } else {
+                    SHOW_SIDEBAR_TIP
+                };
+                Some((name, f32::from(self.main_area().x) + 0.5, 1.2))
             }
             Overlay::None if rail.w > 0 && rail.contains(x, y) => {
                 self.view_at(x, y).map(|i| {
@@ -15758,10 +15801,7 @@ impl App {
                         // Under its icon, clear of the window's edge.
                         let middle = self.view_x(i, rail) as f32 + VIEW_STEP as f32 / 2.0;
                         let left = (middle - wide(RAIL_NAMES[i]) / 2.0).max(0.5);
-                        // On the heading under the views, which it covers whole: on the
-                        // row of air it lay over the top few pixels of the heading.
-                        let top = rail.bottom() as f32 + f32::from(SIDEBAR_AIR) - SIDEBAR_RAISE;
-                        return (RAIL_NAMES[i], left, top);
+                        return (RAIL_NAMES[i], left, self.view_tip_top(rail));
                     }
                     let top = self.rail_top(i, rail);
                     // Level with the icon's middle.
@@ -15860,6 +15900,19 @@ impl App {
     /// the line there: in the middle of a row of 50 px it was 5 px under a tab's line. Where
     /// a row is the terminal's line there's no room for that without covering the words of
     /// the row under it, and it stays.
+    /// Where a view's tip stands, and the sidebar button's, under the views' row: 8 px under
+    /// its line, in the air over the heading, where a row has room for it. Standing on the
+    /// heading, as it did, it ended part way along the heading's words and cut them ("QUEU",
+    /// the branch's chip to "ma"). On a row the terminal's line tall there's no room in the
+    /// air, and it stands on the heading, covering it whole.
+    fn view_tip_top(&self, rail: Rect) -> f32 {
+        let drop = self.tip_drop();
+        if drop > 0.0 {
+            return f32::from(rail.bottom()) + drop;
+        }
+        f32::from(rail.bottom()) + f32::from(SIDEBAR_AIR) - SIDEBAR_RAISE
+    }
+
     fn tip_drop(&self) -> f32 {
         let Some((_, row)) = self.measure.cell_pixels() else {
             return 0.0;
@@ -16401,8 +16454,12 @@ impl App {
     /// hides the sidebar.
     fn view_x(&self, index: usize, area: Rect) -> u16 {
         if index + 1 == ACTIVITY.len() {
-            area.right()
-                .saturating_sub(VIEW_STEP + SIDEBAR_HIDE + VIEW_INSET)
+            let button = if self.button_at_tabs() {
+                0
+            } else {
+                SIDEBAR_HIDE
+            };
+            area.right().saturating_sub(VIEW_STEP + button + VIEW_INSET)
         } else {
             area.x + VIEW_INSET + index as u16 * VIEW_STEP
         }
@@ -16655,9 +16712,15 @@ impl App {
         grid.fill(Rect::new(main.x, main.y, main.w, 1), theme.tab);
         self.rule_under_tabs(grid, main);
         if self.sidebar_button() {
-            // The window with its left part in outline, where the sidebar would be.
+            // The window with its left part in outline, where the sidebar would be, or filled
+            // where it shows in a window too narrow for the button at the end of its views.
             let cell = Rect::new(main.x, main.y, MENU_BUTTON, 1);
-            self.draw_sidebar_button(grid, cell, Icon::ShowSidebar, theme.tab);
+            let icon = if self.button_at_tabs() {
+                Icon::HideSidebar
+            } else {
+                Icon::ShowSidebar
+            };
+            self.draw_sidebar_button(grid, cell, icon, theme.tab);
         }
         if self.plan_in_view() {
             self.draw_plan_banner(grid);
@@ -16734,14 +16797,19 @@ impl App {
                 continue;
             };
             let hovered = self.hover.is_some_and(|h| rect.contains(h.0, h.1));
-            // A chip of its own, so it can't be taken for a tab.
+            // A chip of its own, so it can't be taken for a tab: as wide as its words and their
+            // air, the one at the strip's start 8 px in from the sheet's edge.
             let fill = if hovered { theme.tint } else { theme.row_hover };
-            grid.panel(
-                Bounds::inset(rect, 0.15, 0.12),
-                PILL_RADIUS,
-                Some(fill),
-                None,
-            );
+            let label = Self::more_label(count, side);
+            let words = self.measure.width(&label, MORE_FONT);
+            let left = f32::from(rect.x) + if side { MORE_EDGE } else { 0.15 };
+            let chip = Bounds::inset(rect, 0.15, 0.12);
+            let chip = Bounds {
+                x: cellix_render::units(left),
+                w: cellix_render::units(words + MORE_AIR * 2.0),
+                ..chip
+            };
+            grid.panel(chip, PILL_RADIUS, Some(fill), None);
             let style = Style {
                 fg: if hovered {
                     theme.text.fg
@@ -16750,8 +16818,7 @@ impl App {
                 },
                 ..theme.tab
             };
-            let label = Self::more_label(count, side);
-            let at = (rect.x + MORE_PADDING) as f32;
+            let at = left + MORE_AIR;
             grid.label_at(
                 at,
                 rect.x + MORE_PADDING,
@@ -31992,26 +32059,68 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert!(cells.sidebar_area().is_some(), "which brings it back");
     }
 
-    /// The narrowest sidebar holds every view and the button that hides it, three columns
-    /// each, none over another and a column clear at each end.
+    /// The narrowest sidebar holds every view, three columns each, none over another and a
+    /// column clear at each end. Its button, which ends the views' row where the sidebar is
+    /// wide enough, stands at the start of the tabs here: 23 columns for it cost a window of
+    /// 72 three columns of its file.
     #[test]
-    fn the_narrowest_sidebar_holds_every_view_and_its_button() {
+    fn the_narrowest_sidebar_holds_every_view_and_its_button_starts_the_tabs() {
         let (dir, _) = project();
         let mut app = App::new(dir.path().to_path_buf(), (COMPACT_WIDTH + 2, 30));
         app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        app.open(&dir.path().join("alpha.txt")).unwrap();
         let row = app.activity_area();
         assert_eq!(row.w, SIDEBAR_MIN_WIDTH, "the narrowest");
-        let mut starts: Vec<u16> = (0..ACTIVITY.len()).map(|i| app.view_x(i, row)).collect();
-        starts.push(app.sidebar_hide().expect("it fits").x);
+        assert_eq!(app.main_area().x, row.right(), "the file has the rest");
+        assert_eq!(app.sidebar_hide(), None, "no button at the views' end");
+        let starts: Vec<u16> = (0..ACTIVITY.len()).map(|i| app.view_x(i, row)).collect();
         assert_eq!(starts[0], row.x + VIEW_INSET);
         for pair in starts.windows(2) {
             assert!(pair[0] + VIEW_STEP <= pair[1], "apart: {starts:?}");
         }
         let last = *starts.last().unwrap();
+        assert!(last + VIEW_STEP + VIEW_INSET <= row.right(), "{starts:?}");
+        // The button is the first thing in the tabs' row, the window with its left part
+        // filled, named Hide Sidebar; pressed, the sidebar goes and it's the one that brings
+        // it back, in the same place.
+        let unit = cellix_render::UNIT;
+        let main = app.main_area();
+        let at_tabs = |app: &App, icon: Icon| {
+            screen(app).paint.iter().any(|p| {
+                matches!(p, Paint::Icon { icon: drawn, bounds, .. }
+                    if *drawn == icon && bounds.y < unit
+                        && bounds.x >= i32::from(main.x) * unit
+                        && bounds.x < i32::from(main.x + MENU_BUTTON) * unit)
+            })
+        };
         assert!(
-            last + SIDEBAR_HIDE + VIEW_INSET <= row.right(),
-            "{starts:?}"
+            at_tabs(&app, Icon::HideSidebar),
+            "its button starts the tabs"
         );
+        assert!(
+            app.tabs_area().x >= main.x + MENU_BUTTON,
+            "the tabs after it"
+        );
+        app.handle(mouse(MouseKind::Move, main.x + 1, 0));
+        let said: String = (screen(&app).paint.iter())
+            .filter_map(|p| match p {
+                Paint::Text { text, .. } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(said.contains("Hide Sidebar"), "{said}");
+        app.handle(mouse(MouseKind::Left, main.x + 1, 0));
+        app.handle(mouse(MouseKind::Up, main.x + 1, 0));
+        assert!(app.sidebar_area().is_none(), "hidden");
+        // The file has the window's edge now, and the button its first columns.
+        let shown = screen(&app).paint.iter().any(|p| {
+            matches!(p, Paint::Icon { icon: Icon::ShowSidebar, bounds, .. }
+                if bounds.y < unit && bounds.x < i32::from(MENU_BUTTON) * unit)
+        });
+        assert!(shown, "and the same place brings it back");
+        app.handle(mouse(MouseKind::Left, 1, 0));
+        app.handle(mouse(MouseKind::Up, 1, 0));
+        assert!(app.sidebar_area().is_some(), "back");
         // And every icon is drawn, each in its own columns.
         let unit = cellix_render::UNIT;
         let grid = screen(&app);
@@ -32027,7 +32136,7 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
                 _ => None,
             })
             .collect();
-        assert_eq!(icons.len(), ACTIVITY.len() + 1, "{icons:?}");
+        assert_eq!(icons.len(), ACTIVITY.len(), "{icons:?}");
         let mut icons = icons;
         icons.sort_by_key(|b| b.x);
         // 8 px of a 17 px column, at least, between one icon and the next.

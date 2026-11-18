@@ -189,7 +189,7 @@ EXPECT = {
 # About how many scenes there are, to cut the tour into parts of a size. Count them with
 # TOUR_LIST=1 when scenes are added: too low a count puts every scene past it in the last part,
 # which then runs out of the guard's time (0.11.0's tour lost ten scenes that way).
-SCENES_IN_ALL = 253
+SCENES_IN_ALL = 254
 # Scenes come to, shot, and those that never reached their surface.
 SEEN, SHOT, FAILED = [0], [], []
 # Which commit the binary is, as far as git can say: the pictures are of that.
@@ -1352,6 +1352,10 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("27-sidebar-hide-hover", [["move", *HIDE_SIDEBAR], ["wait", 0.4]], CODE_FILE, expect="QUEUE")
     shoot("27-sidebar-hidden", [["until", "QUEUE"], ["click", *HIDE_SIDEBAR], ["gone", "QUEUE"], ["move", 1, 0],
                                 ["wait", 0.4]], CODE_FILE)
+    # A window too narrow for the button at the views' end, 84 columns: the sidebar keeps its
+    # 21 and the button starts the tabs, filled, where the one that brings it back stands.
+    shoot("27-sidebar-narrow-hover", [["until", "QUEUE"], ["move", 22, 0], ["wait", 0.4]], CODE_FILE,
+          size="84x40", expect="QUEUE")
     shoot("28-hover-tree", [["move", 12, 3]], CODE_FILE)
     shoot("29-hover-tab", [["move", 38, 0]], CODE_FILE)
     shoot("30-hover-menu", [["right", 60, 12], ["move", 64, 13]], CODE_FILE)

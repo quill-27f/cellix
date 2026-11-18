@@ -424,3 +424,50 @@ fn every_program_has_one_mark_and_none_is_a_box_to_tick() {
     });
     assert!(!hollow, "no agent in the menu is a plain square");
 }
+
+/// A tip under the views' line has 8 px of air under it on rows of Cellix's own, the sidebar
+/// button's and a view's in the air over the heading rather than on it, as the button's at the
+/// start of the tabs does under the tab row's line.
+#[test]
+fn a_tip_stands_eight_pixels_under_its_line() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("alpha.txt"), "first line\n").unwrap();
+    let (row, words) = (50, 36);
+    let mut app = App::new(dir.path().to_path_buf(), (150, 44));
+    let measure = cellix_render::FontMeasure::new(17, row).with_type_row(words);
+    app.set_measure(Rc::new(measure));
+    app.open(&dir.path().join("alpha.txt")).unwrap();
+    let tip_top = |app: &App| -> f32 {
+        let grid = screen(app);
+        let tip = grid.paint.iter().find_map(|paint| match paint {
+            Paint::Panel {
+                bounds,
+                shadow: true,
+                fill: Some(fill),
+                ..
+            } if *fill == app.theme().popup => Some(*bounds),
+            _ => None,
+        });
+        let tip = tip.expect("a tip");
+        let (top, _) = cellix_render::stood(tip.y, tip.h, row as f32, words as f32);
+        top.round()
+    };
+    let line = |at: u16| f32::from(at) * row as f32;
+    // 8 px of air under a line a pixel thick.
+    let under = |gap: f32| (9.0..=11.0).contains(&gap);
+    // The button that hides the sidebar, at the end of the views' row.
+    let views = app.activity_area();
+    let hide = app.sidebar_hide().expect("its button");
+    mouse(&mut app, MouseKind::Move, hide.x + 1, hide.y);
+    let gap = tip_top(&app) - line(views.bottom());
+    assert!(under(gap), "Hide Sidebar {gap} px under");
+    // A view's.
+    mouse(&mut app, MouseKind::Move, views.x + 2, views.y);
+    let gap = tip_top(&app) - line(views.bottom());
+    assert!(under(gap), "a view's {gap} px under");
+    // Hidden, the button at the start of the tabs.
+    app.handle(Event::Key(cellix_input::KeyEvent::ctrl('b')));
+    mouse(&mut app, MouseKind::Move, 1, 0);
+    let gap = tip_top(&app) - line(1);
+    assert!(under(gap), "Show Sidebar {gap} px under");
+}

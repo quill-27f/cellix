@@ -121,3 +121,60 @@ fn the_wheel_over_the_side_panes_tabs_steps_through_them_when_one_shows() {
     wheel(&mut app, MouseKind::ScrollDown, area.x + 3, area.y);
     assert_eq!(front(&app), before, "and back");
 }
+
+/// The count of tabs out of view at the strip's start is a chip 8 px in from the sheet's
+/// edge, with as much air after its words as before them: it stood 3 px from the edge, with
+/// 14 px before its words and 24 after.
+#[test]
+fn the_count_at_the_strips_start_keeps_clear_of_the_edge() {
+    use cellix_render::{Font, Measure, Paint, UNIT};
+    let (_dir, mut app) = many_files(8, (84, 40));
+    let measure = cellix_render::FontMeasure::new(17, 36);
+    app.set_measure(std::rc::Rc::new(cellix_render::FontMeasure::new(17, 36)));
+    app.show_tab(7);
+    let area = app.tabs_area();
+    let grid = screen(&app);
+    let px = |units: i32| units as f32 * 17.0 / UNIT as f32;
+    let (x, text) = (grid.paint.iter())
+        .find_map(|p| match p {
+            Paint::Text { x, text, y, .. } if *y == 0 && text.starts_with('‹') => {
+                Some((*x, text.clone()))
+            }
+            _ => None,
+        })
+        .expect("a count at the start");
+    // Its words are set a little under the tabs' size.
+    let font = Font {
+        size: 92,
+        ..Font::default()
+    };
+    let words = measure.width(&text, font) * UNIT as f32;
+    let chip = (grid.paint.iter())
+        .find_map(|p| match p {
+            Paint::Panel {
+                bounds,
+                fill: Some(fill),
+                ..
+            } if *fill == app.theme().row_hover
+                && bounds.y < UNIT
+                && bounds.x <= x
+                && bounds.x + bounds.w >= x =>
+            {
+                Some(*bounds)
+            }
+            _ => None,
+        })
+        .expect("its chip");
+    let edge = i32::from(area.x) * UNIT;
+    assert!(
+        px(chip.x - edge) >= 8.0,
+        "{} px from the edge",
+        px(chip.x - edge)
+    );
+    let before = px(x - chip.x);
+    let after = px(chip.x + chip.w) - px(x) - words * 17.0 / UNIT as f32;
+    assert!(
+        (before - after).abs() <= 1.0,
+        "{before} px before its words, {after} after"
+    );
+}

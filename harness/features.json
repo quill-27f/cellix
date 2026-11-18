@@ -5983,5 +5983,26 @@
     "title": "The foot's workspace tile shows the marks a tab shows",
     "test": "a_tiles_marks_are_its_tabs",
     "passes": true
+  },
+  {
+    "id": "more-chip-edge",
+    "milestone": 15,
+    "title": "The count of tabs out of view keeps 8 px from the sheet's edge, its words evenly inside",
+    "test": "the_count_at_the_strips_start_keeps_clear_of_the_edge",
+    "passes": true
+  },
+  {
+    "id": "tips-under-line",
+    "milestone": 15,
+    "title": "The views' and the sidebar button's tips stand 8 px under the views' line, over the heading",
+    "test": "a_tip_stands_eight_pixels_under_its_line",
+    "passes": true
+  },
+  {
+    "id": "narrow-sidebar-button",
+    "milestone": 15,
+    "title": "A narrow window's sidebar keeps the views' 20 columns, its button at the start of the tabs",
+    "test": "the_narrowest_sidebar_holds_every_view_and_its_button_starts_the_tabs",
+    "passes": true
   }
 ]
