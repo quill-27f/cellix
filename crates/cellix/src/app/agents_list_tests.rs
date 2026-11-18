@@ -104,6 +104,59 @@ fn the_agents_list_puts_who_needs_you_first() {
     assert!(!text.contains("DONE") && text.contains("IDLE 2"), "{text}");
 }
 
+/// How long ago stands in one column down the list: every row keeps room at its end as wide
+/// as the "needs you" chip, whatever its state, where the row that needs you had its time
+/// pushed six columns left of the others'.
+#[test]
+fn the_agents_lists_times_stand_in_one_column() {
+    let (_dir, mut app) = project();
+    let event = |session: &str, agent: &str, state: AgentState, detail: &str| {
+        Request::Agent(AgentEvent {
+            session: session.into(),
+            agent: agent.into(),
+            state,
+            detail: detail.into(),
+            folder: "/w".into(),
+            pid: None,
+            transcript: String::new(),
+            name: String::new(),
+        })
+    };
+    app.serve(event("a", "Claude Code", AgentState::Working, "Working"));
+    app.serve(event("b", "Codex", AgentState::Idle, "Finished"));
+    app.serve(event("c", "Gemini", AgentState::NeedsYou, "Allow Bash?"));
+    app.serve(event("d", "Codex", AgentState::Idle, "Ready"));
+    app.run(cellix_input::Command::ShowAgents);
+    // On cells: where each row's "<1m" ends.
+    let grid = screen(&app);
+    let ends: Vec<usize> = (0..grid.height())
+        .filter_map(|y| {
+            let row = grid.row_text(y);
+            let at = row.find("<1m")?;
+            Some(row[..at].chars().count() + 3)
+        })
+        .collect();
+    assert_eq!(ends.len(), 4, "{}", grid.text());
+    assert!(
+        ends.windows(2).all(|w| w[0] == w[1]),
+        "{ends:?}\n{}",
+        grid.text()
+    );
+    // With pictures: the same right edge for every painted time.
+    app.set_measure(std::rc::Rc::new(cellix_render::FontMeasure::new(17, 37)));
+    let grid = screen(&app);
+    let edges: Vec<i32> = grid
+        .paint
+        .iter()
+        .filter_map(|p| match p {
+            cellix_render::Paint::Text { x, text, .. } if text == "<1m" => Some(*x),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(edges.len(), 4, "{edges:?}");
+    assert!(edges.windows(2).all(|w| w[0] == w[1]), "{edges:?}");
+}
+
 #[test]
 fn how_long_ago_is_said_in_a_few_letters() {
     use crate::agents::ago;

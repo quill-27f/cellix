@@ -7,16 +7,14 @@ use super::*;
 use crate::agents::AGENTS;
 
 /// The dialog's measures: its width in columns and its rows (an edge, the title, the box,
-/// where it goes, which agent, a gap, the buttons, an edge). A row of air before the agents
-/// as well left four pieces floating, the inner gaps as wide as the edges.
+/// where it goes, which agent, the buttons, an edge). A row of air before the agents as well
+/// left four pieces floating, the inner gaps as wide as the edges.
 const WIDTH: u16 = 62;
-const HEIGHT: u16 = 8;
 /// The row of each part, from the dialog's top.
 const TITLE_ROW: u16 = 1;
 const FIELD_ROW: u16 = 2;
 const NOTE_ROW: u16 = 3;
 const AGENT_ROW: u16 = 4;
-const BUTTON_ROW: u16 = 6;
 /// What the last choice of agent says: start nothing.
 const NOTHING: &str = "Nothing";
 const BUTTONS: [&str; 2] = ["Cancel", "Create"];
@@ -185,8 +183,17 @@ impl App {
     pub(super) fn new_worktree_area(&self) -> Rect {
         let screen = Rect::new(0, 0, self.size.0, self.size.1);
         let width = WIDTH.min(screen.w);
-        let y = (screen.h / 4).min(screen.h.saturating_sub(HEIGHT));
-        Rect::new(screen.x + (screen.w - width) / 2, y, width, HEIGHT)
+        let height = self.worktree_button_row() + 2;
+        let y = (screen.h / 4).min(screen.h.saturating_sub(height));
+        Rect::new(screen.x + (screen.w - width) / 2, y, width, height)
+    }
+
+    /// The buttons' row, from the dialog's top: the row after its last control, as a card's
+    /// are, with a row between them only where a button all but fills its row
+    /// (`App::card_gap`). The empty row there stood 62 px of nothing between the choice of
+    /// agent and the buttons.
+    fn worktree_button_row(&self) -> u16 {
+        AGENT_ROW + 1 + self.card_gap()
     }
 
     /// The choices of agent, each as the columns it takes on its row, at the dialog's right:
@@ -222,7 +229,7 @@ impl App {
 
     pub(super) fn new_worktree_click(&mut self, mut form: NewWorktree, at: (f32, f32)) {
         let area = self.new_worktree_area();
-        let y = area.y + BUTTON_ROW;
+        let y = area.y + self.worktree_button_row();
         let width = |cells: &String| cells.chars().count() as u16;
         let buttons = self.worktree_buttons();
         let pressed = buttons
@@ -318,7 +325,7 @@ impl App {
             .collect();
         let pointed = (self.hover, theme.popup, self.measure.in_cells());
         crate::settings_page::draw_segments(grid, &segments, pointed, theme);
-        let y = area.y + BUTTON_ROW;
+        let y = area.y + self.worktree_button_row();
         for (i, (cells, x)) in self.worktree_buttons().iter().enumerate() {
             let primary = i == 1;
             let width = cells.chars().count() as u16;
@@ -472,6 +479,42 @@ mod tests {
 
     fn enter(app: &mut App) {
         app.handle(Event::Key(KeyEvent::plain(Key::Enter)));
+    }
+
+    /// A dialog's buttons stand on the row after its last control on rows with room, as a
+    /// card's do: New Worktree had two rows of nothing, 62 px, between its choice of agent and
+    /// its buttons, and the dialog that asks about unsaved changes as much under its words. On
+    /// the terminal's own line, where a button all but fills its row, a row stays between.
+    #[test]
+    fn dialog_buttons_stand_on_the_row_after_their_last_control() {
+        let (_dir, root) = repository();
+        let row_of = |grid: &Grid, words: &str| {
+            (0..grid.height())
+                .find(|y| grid.row_text(*y).contains(words))
+                .unwrap_or_else(|| panic!("no {words}: {}", grid.text()))
+        };
+        for (airy, gap) in [(true, 0), (false, 1)] {
+            let mut app = App::new(root.clone(), (150, 40));
+            if airy {
+                let rows = cellix_render::FontMeasure::new(17, 50).with_type_row(36);
+                app.set_measure(std::rc::Rc::new(rows));
+            }
+            app.run(Command::NewWorktree);
+            let grid = screen(&app);
+            let (agents, buttons) = (row_of(&grid, "Start in it"), row_of(&grid, "Create"));
+            assert_eq!(buttons, agents + 1 + gap, "airy: {airy}\n{}", grid.text());
+            let area = app.new_worktree_area();
+            assert_eq!(area.bottom(), buttons + 2, "and an edge's row under them");
+            app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
+
+            // Unsaved changes, asked about as the window quits.
+            app.open(&root.join("queue.rs")).unwrap();
+            typed(&mut app, "x");
+            app.run(Command::Quit);
+            let grid = screen(&app);
+            let (words, buttons) = (row_of(&grid, "lost if you"), row_of(&grid, "Cancel"));
+            assert_eq!(buttons, words + 1 + gap, "airy: {airy}\n{}", grid.text());
+        }
     }
 
     /// Cellix listed worktrees and couldn't make one. New Worktree asks for a branch, says

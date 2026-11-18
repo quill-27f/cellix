@@ -189,7 +189,7 @@ EXPECT = {
 # About how many scenes there are, to cut the tour into parts of a size. Count them with
 # TOUR_LIST=1 when scenes are added: too low a count puts every scene past it in the last part,
 # which then runs out of the guard's time (0.11.0's tour lost ten scenes that way).
-SCENES_IN_ALL = 252
+SCENES_IN_ALL = 253
 # Scenes come to, shot, and those that never reached their surface.
 SEEN, SHOT, FAILED = [0], [], []
 # Which commit the binary is, as far as git can say: the pictures are of that.
@@ -1053,6 +1053,11 @@ def reviewer_scenes(scratch):
         shoot(name, steps, CODE_FILE, **{"size": "150x44", **extra}, env=env)
         subprocess.run(["pkill", "-9", "-f", cache])
         shutil.rmtree(cache, ignore_errors=True)
+    # What the finding leaves in the file: its line's ◆ in the gutter. Then the finding goes,
+    # or every later scene of this file has it: 02-code showed a ◆ that 0.10.2 didn't.
+    shoot("177-code-comment-mark", [["wait", 1.0]], CODE_FILE)
+    if os.path.exists(f"{ROOT}/.cellix/threads.json"):
+        os.unlink(f"{ROOT}/.cellix/threads.json")
 
 
 def agents_by_urgency(scratch):
@@ -1358,7 +1363,7 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("36-hover-accept", [["keys", "\u0007"], ["wait", 0.6], ["move", *ON("Accept")]], CODE_FILE)
     shoot("37-hover-settings", [*settings, EDITOR_PAGE, ["move", *ON("After a pause")]], CODE_FILE)
     shoot("38-hover-dialog", [["keys", "x"], ["keys", CTRL("q")], ["move", 70, 17]], CODE_FILE)
-    shoot("39-hover-agents", [*LIST_AGENTS, ["wait", 0.5], ["move", *ON("+ Claude Code", 3)]], CODE_FILE)
+    shoot("39-hover-agents", [*LIST_AGENTS, ["wait", 0.5], ["move", *ON("Claude Code", 2)]], CODE_FILE)
     shoot("41-hover-tab-close", [["move", *ON("×", 0)]], CODE_FILE)
     # A language's Install, under the pointer and never pressed.
     shoot("42-hover-install", [*settings, EDITOR_PAGE, ["move", *ON("Install")]], CODE_FILE)

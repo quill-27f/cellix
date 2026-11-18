@@ -14,6 +14,14 @@ use super::*;
 const KEEP: &str = "Keep as Tab";
 /// How far what's around the card is dimmed, out of 255.
 const DIM: u8 = 110;
+/// Pixels between the header's groups, where there are pictures: the name, what it's doing
+/// (its mark and its word, 8 px apart, as one), and who started it.
+const GROUP_GAP: f32 = 16.0;
+const MARK_GAP: f32 = 8.0;
+/// How much of its box the spinner's ring and the still dot fill across: where their ink
+/// is, which the gaps are measured from.
+const RING_INK: f32 = 0.85;
+const DOT_INK: f32 = 0.5;
 
 /// `outer` with `inner` taken out of it, as up to four rectangles: over, under, left, right.
 fn around(outer: Rect, inner: Rect) -> Vec<Rect> {
@@ -95,7 +103,9 @@ impl App {
     }
 
     /// The card: a cell in from each side of the pane, a column at its sides and a row over
-    /// and under, between the row of its tabs and its foot.
+    /// and under, between the row of its tabs and its foot. Where there are pictures its
+    /// panel starts `PANE_CARD_LEAD` into its first column, a column from the sheet's edge as
+    /// at its right.
     fn peek_card(&self) -> Option<Rect> {
         self.peek.as_ref()?;
         let pane = self.dock_area()?;
@@ -105,13 +115,15 @@ impl App {
     }
 
     /// Where its terminal stands on the card: under the header's row and its line, a column
-    /// in from each side.
+    /// in from each side of its panel, and so a column and a half from its left where the
+    /// panel starts half way into its first.
     fn peek_screen(&self) -> Option<Rect> {
         let card = self.peek_card()?;
+        let lead = u16::from(self.pane_card_lead() > 0.0);
         Some(Rect::new(
-            card.x + 1,
+            card.x + 1 + lead,
             card.y + 1,
-            card.w.saturating_sub(2),
+            card.w.saturating_sub(2 + lead),
             card.h.saturating_sub(1),
         ))
     }
@@ -131,6 +143,109 @@ impl App {
         let close = card.right().saturating_sub(4);
         let keep = close.saturating_sub(cells.chars().count() as u16 + BUTTON_GAP);
         ((cells, keep), close)
+    }
+
+    /// The header, the card's first row, its words in the middle of it between the card's edge
+    /// and the line under it: the helper's mark, its name in bold, what it's doing as a mark
+    /// and a word in that state's colour, and who started it, quieter. Laid out by what each
+    /// measures, 8 px apart, so nothing is cut while there's room for it.
+    fn draw_peek_header(&self, grid: &mut Grid, (index, card): (usize, Rect), base: Style) {
+        let theme = &self.theme;
+        let measure = &*self.measure;
+        let session = &self.dock.sessions[index];
+        let pictures = !measure.in_cells();
+        let y = card.y;
+        let ((_, keep_x), _) = self.peek_buttons(card);
+        let stop = keep_x.saturating_sub(BUTTON_GAP);
+        // Pixels as columns, and the height of the terminal's line a mark is sized by; on
+        // cells, a column a gap.
+        let (cell_wide, cell_tall) = measure.cell_pixels().unwrap_or((1, 1));
+        let px = |pixels: f32| {
+            if pictures {
+                pixels / cell_wide.max(1) as f32
+            } else {
+                1.0
+            }
+        };
+        let line = cell_tall as f32 / measure.row_air().max(1.0);
+        let gap = px(GROUP_GAP);
+        // Where the next part starts: painted, and in the cells that hold its words, which
+        // keep to whole letters so the screen's text still reads.
+        let (mut at, mut cell) = (f32::from(card.x + 4), card.x + 4);
+        let next = |wide: f32, letters: usize, at: &mut f32, cell: &mut u16| {
+            *at += wide + gap;
+            *cell = (*cell + letters as u16 + 1).max(at.floor() as u16);
+        };
+        let icon = session.icon();
+        let colour = crate::dock::icon_colour(icon, theme);
+        let fallback = crate::toolbar::fallback(icon);
+        grid.glyph(f32::from(card.x + 2), y, icon, colour, fallback, base);
+        let name = session.called().unwrap_or_default();
+        let strong = Style { bold: true, ..base };
+        grid.label_at(at, cell, y, name, strong, stop, 100);
+        let bold = Font {
+            bold: true,
+            ..Font::default()
+        };
+        let wide = measure.width(name, bold);
+        next(wide, name.chars().count(), &mut at, &mut cell);
+        // What it's doing: the spinner while it works, a dot when it asks, has finished a
+        // turn or stopped on an error, each with its word in the same colour, as its row in
+        // the Agents list has it; ready and waiting, its word alone, quieter. The gaps are
+        // from the mark's ink, which stands inside its box.
+        let doing = self.doing(index);
+        let colour = match &doing {
+            doing if doing.working() => Some(theme.accent),
+            Doing::Asking(_) => Some(theme.attention),
+            Doing::Done(said) if said == "Finished" => Some(theme.git_added),
+            Doing::Failed(_) => Some(theme.error),
+            _ => None,
+        };
+        let size = crate::dock::MARK_SIZE;
+        let ink = if doing.working() { RING_INK } else { DOT_INK };
+        let (box_wide, inset) = if pictures {
+            let across = px(size * line);
+            (across, across * (1.0 - ink) / 2.0)
+        } else {
+            (1.0, 0.0)
+        };
+        if let Some(colour) = colour.filter(|_| at + box_wide < f32::from(stop)) {
+            let ground = Style {
+                bg: theme.popup,
+                ..theme.sidebar
+            };
+            let start = at - inset;
+            if doing.working() {
+                grid.spinner(start, y, size, colour, ground);
+            } else {
+                grid.dot(start, y, size, colour, ground);
+            }
+            at = start + box_wide - inset + px(MARK_GAP);
+            cell = (cell + 2).max(at.floor() as u16);
+        }
+        let word = doing.word();
+        let state = Style {
+            fg: colour.unwrap_or(theme.popup_dim),
+            ..base
+        };
+        grid.label_at(at, cell, y, word, state, stop, 100);
+        let wide = measure.width(word, Font::default());
+        next(wide, word.chars().count(), &mut at, &mut cell);
+        let parent = session.member.as_ref().and_then(|m| m.parent.as_deref());
+        if let Some(parent) = parent {
+            let from = self
+                .member_index(parent)
+                .map_or_else(|| parent.to_string(), |i| self.dock.sessions[i].label());
+            // Whole or not at all: "· from Cl…" said nothing in a narrow pane.
+            let from = format!("· from {from}");
+            let quiet = Style {
+                fg: theme.popup_dim,
+                ..base
+            };
+            if at + measure.width(&from, Font::default()) <= f32::from(stop) {
+                grid.label_at(at, cell, y, &from, quiet, stop, 100);
+            }
+        }
     }
 
     pub(super) fn draw_peek(&self, grid: &mut Grid) {
@@ -162,79 +277,29 @@ impl App {
             ..theme.bar
         };
         grid.clear_paint_in(card);
+        let lead = self.pane_card_lead();
         grid.fill(card, ground);
-        let base = Style {
-            fg: theme.text.fg,
-            bg: theme.popup,
-            ..theme.bar
-        };
-        let quiet = Style {
-            fg: theme.popup_dim,
-            ..base
-        };
-        // The header is the card's first row, its words in the middle of it between the card's
-        // edge and the line under it.
-        let y = card.y;
+        if lead > 0.0 {
+            // Its first column's left half is the pane's sheet: what stood in that column,
+            // as a terminal's cursor, is under the card.
+            let column = Rect::new(card.x, card.y, 1, card.h);
+            let sheet = Style {
+                bg: theme.sidebar.bg,
+                ..ground
+            };
+            grid.fill(column, sheet);
+        }
+        let base = ground;
+        self.draw_peek_header(grid, (index, card), base);
         let ((keep, keep_x), close) = self.peek_buttons(card);
-        let stop = keep_x.saturating_sub(2);
-        // Its mark, its name in bold, what it's doing, and who started it.
-        let icon = session.icon();
-        let colour = crate::dock::icon_colour(icon, theme);
-        let fallback = crate::toolbar::fallback(icon);
-        grid.glyph(f32::from(card.x + 2), y, icon, colour, fallback, base);
-        let name = session.called().unwrap_or_default();
-        let strong = Style { bold: true, ..base };
-        let mut x = grid.label(card.x + 4, y, name, strong, stop) + 1;
-        let doing = self.doing(index);
-        if doing.working() && x + 2 < stop {
-            let spin = Style {
-                bg: theme.popup,
-                ..theme.sidebar
-            };
-            grid.spinner(f32::from(x), y, crate::dock::MARK_SIZE, theme.accent, spin);
-            x += 2;
-        }
-        let state = match &doing {
-            Doing::Asking(_) => Style {
-                fg: theme.attention,
-                ..base
-            },
-            _ => base,
-        };
-        x = grid.label(x, y, doing.word(), state, stop) + 1;
-        let parent = session.member.as_ref().and_then(|m| m.parent.as_deref());
-        if let Some(parent) = parent {
-            let from = self
-                .member_index(parent)
-                .map_or_else(|| parent.to_string(), |i| self.dock.sessions[i].label());
-            // Cut short with an ellipsis where the header is narrow.
-            let room = f32::from(stop.saturating_sub(x));
-            let from = crate::context::elide(&format!("· from {from}"), room, &*self.measure);
-            grid.label(x, y, &from, quiet, stop);
-        }
+        let y = card.y;
         let hovered = self.over_button((keep_x, y), keep.chars().count() as u16);
-        let fill = if hovered {
-            theme.quiet_button(theme.quiet_button(theme.popup))
-        } else {
-            theme.quiet_button(theme.popup)
-        };
-        // In cells a button like any other. Where there are pictures, its words in the accent
-        // and no chip: the header is one row over the line under it, and a chip there would
-        // stand within 8 px of that line, so the words are the button, lit under the pointer.
-        let wide = keep.chars().count() as u16;
-        if self.measure.in_cells() {
-            let face = Style { bg: fill, ..base };
-            grid.button(keep_x, y, &keep, KEEP, fill, face);
-        } else {
-            grid.fill(Rect::new(keep_x, y, wide, 1), base);
-            let face = Style {
-                fg: if hovered { theme.text.fg } else { theme.accent },
-                ..base
-            };
-            let words = f32::from(keep_x) + measures::BUTTON_ROOM;
-            let size = measures::BUTTON_TEXT;
-            grid.label_at(words, keep_x, y, KEEP, face, keep_x + wide, size);
-        }
+        // A quiet button, as every one that isn't the answer is, at its height on the
+        // terminal's line (`Grid::row_button`), so on a taller row it keeps 9 px from the card's
+        // edge and the line under the header.
+        let fill = theme.secondary(theme.popup, hovered);
+        // Its cells keep the header's colour: the button is shorter than its row.
+        grid.row_button((keep_x, y), &keep, KEEP, fill, base);
         let shut = Style {
             fg: if self.hover == Some((close, y)) || self.hover == Some((close + 1, y)) {
                 theme.text.fg
@@ -247,14 +312,14 @@ impl App {
         session.draw_on(grid, screen, theme, (true, theme.popup));
         // The line under the header, the card's width, and the card's own line round it with
         // its corners, painted over the cells' square ones in what stands behind.
-        let line = Bounds::cells(
-            f32::from(card.x),
-            f32::from(card.y) + 1.0,
-            f32::from(card.w),
-            0.0,
-        );
+        let (x, w) = (f32::from(card.x) + lead, f32::from(card.w) - lead);
+        if lead > 0.0 {
+            // The part of its first column the panel covers.
+            let half = Bounds::cells(x, f32::from(card.y), 1.0 - lead, f32::from(card.h));
+            grid.panel(half, 0, Some(theme.popup), None);
+        }
+        let line = Bounds::cells(x, f32::from(card.y) + 1.0, w, 0.0);
         grid.hairline(line, theme.popup_border);
-        let (x, w) = (f32::from(card.x), f32::from(card.w));
         let edge = Bounds::cells(x, f32::from(card.y), w, f32::from(card.h));
         grid.corners(edge, CARD_RADIUS, theme.sidebar.bg, ALL_CORNERS);
         grid.panel(edge, CARD_RADIUS, None, Some(theme.popup_border));

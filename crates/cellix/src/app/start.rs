@@ -152,6 +152,11 @@ mod tests {
     /// Opens the pane on the Agents list, and presses the + after its tabs.
     fn open_menu(app: &mut App) {
         app.run(Command::ListAgents);
+        plus(app);
+    }
+
+    /// Presses the + after the pane's tabs.
+    fn plus(app: &mut App) {
         let title = app.title_of(app.dock_area().expect("the pane is open"));
         press(app, app.dock.plus_x(title) + 1, title.y);
         assert!(
@@ -230,6 +235,87 @@ mod tests {
         assert!(app.dock.sessions.is_empty(), "nothing started");
         app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
         assert!(matches!(app.overlay, Overlay::None), "Escape leaves it");
+    }
+
+    /// The Agents list's START says what the + menu says, in its order: Terminal first, a
+    /// rule, then each installed agent with its mark, one row each with what it runs at the
+    /// row's end. It had a generic + before each, "Starts here, working on this project" under
+    /// every agent, and Terminal last after a row of air.
+    #[test]
+    fn the_start_list_lists_as_the_plus_menu_does() {
+        let (_dir, mut app) = project();
+        app.run(Command::ListAgents);
+        let grid = screen(&app);
+        let rows: Vec<u16> = ["> Terminal", "⬡ Codex", "✦ Gemini CLI"]
+            .iter()
+            .map(|words| place_of(&grid, words).1)
+            .collect();
+        assert_eq!(rows[1], rows[0] + 2, "a rule's row after Terminal");
+        assert_eq!(rows[2], rows[1] + 1, "one row each");
+        assert!(grid.row_text(rows[0]).trim_end().ends_with("shell"));
+        assert!(grid.row_text(rows[1]).trim_end().ends_with("codex"));
+        assert!(!grid.text().contains("Starts here"), "{}", grid.text());
+        // The menu, in the same order.
+        plus(&mut app);
+        let grid = screen(&app);
+        let menu: Vec<u16> = ["Terminal", "Codex", "Gemini CLI"]
+            .iter()
+            .map(|words| place_of(&grid, words).1)
+            .collect();
+        assert!(menu.windows(2).all(|pair| pair[0] < pair[1]), "{menu:?}");
+    }
+
+    /// With a menu open, the pointer lights nothing under it: over the + menu's rows, the
+    /// START list's row under them stayed lit as the pointer crossed it.
+    #[test]
+    fn a_menu_takes_the_pointer_from_what_is_under_it() {
+        let (_dir, mut app) = project();
+        app.set_measure(std::rc::Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        app.run(Command::ListAgents);
+        let hover = app.theme.row_hover;
+        // The washes on the list's rows, which stand a step under the pane's tabs.
+        let top = (app.dock_area().unwrap().y + 2) as i32 * 64;
+        let washes = |grid: &Grid| {
+            let panels = grid.paint.iter().filter(|p| {
+                matches!(p, Paint::Panel { fill: Some(fill), bounds, .. }
+                    if *fill == hover && bounds.y >= top)
+            });
+            panels.count()
+        };
+        // A place on the list's Gemini CLI row that the menu will stand over.
+        let (_, y) = place_of(&screen(&app), "Gemini CLI");
+        plus(&mut app);
+        let Overlay::Menu(menu) = &app.overlay else {
+            unreachable!()
+        };
+        let x = menu.area().x + 2;
+        app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
+        let moved = |app: &mut App, x: u16, y: u16| {
+            app.handle(Event::Mouse(MouseEvent {
+                kind: MouseKind::Move,
+                x,
+                y,
+                fine_x: f32::from(x),
+                fine_y: f32::from(y) + 0.5,
+                mods: Mods::default(),
+            }));
+        };
+        // Without a menu, the pointer there lights the list's row.
+        moved(&mut app, x, y);
+        assert_eq!(washes(&screen(&app)), 1, "lit under the pointer");
+        // With the menu open over it, the same place lights a row of the menu, not the list's.
+        plus(&mut app);
+        let Overlay::Menu(menu) = &app.overlay else {
+            unreachable!()
+        };
+        assert!(menu.area().contains(x, y), "the menu stands over that row");
+        moved(&mut app, x, y);
+        let grid = screen(&app);
+        assert_eq!(washes(&grid), 0, "nothing under the menu is lit");
+        let lit = grid.paint.iter().any(|p| {
+            matches!(p, Paint::Panel { fill: Some(fill), .. } if *fill == app.theme.popup_hover)
+        });
+        assert!(lit, "the menu's own row is");
     }
 
     /// A stand-in for an agent's program, which writes the arguments it was started with,

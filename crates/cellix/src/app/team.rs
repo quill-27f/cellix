@@ -459,8 +459,11 @@ impl App {
         helpers
             .filter_map(|(index, session)| {
                 let doing = self.doing(index);
+                // As an agent's hooks say it: a turn it finished is done, a dot at its row's
+                // end, as one with a tab has it until that's in front.
                 let urgency = match &doing {
                     Doing::Asking(_) => Urgency::NeedsYou,
+                    Doing::Done(said) if said == "Finished" => Urgency::Done,
                     doing if doing.working() => Urgency::Working,
                     _ => Urgency::Idle,
                 };
@@ -1422,10 +1425,9 @@ impl App {
             return None;
         };
         let (x, width, top) = match self.dock_area().filter(|a| a.w >= 30) {
-            Some(pane) => {
-                let width = pane.w.saturating_sub(2).min(CONSENT_WIDTH);
-                (pane.x + 1, width, Some(pane.y + 2))
-            }
+            // A column in from each side, however wide the pane is: capped, it stood at the
+            // pane's left with its right side open.
+            Some(pane) => (pane.x + 1, pane.w.saturating_sub(2), Some(pane.y + 2)),
             None => {
                 let width = CONSENT_WIDTH.min(self.size.0.saturating_sub(4));
                 (self.size.0.saturating_sub(width + 2), width, None)
@@ -1492,7 +1494,12 @@ impl App {
             return;
         };
         let theme = &self.theme;
-        self.draw_card(grid, area);
+        // Over the side pane, a column from the sheet's edge on both sides.
+        let in_pane = self
+            .dock_area()
+            .is_some_and(|pane| pane.contains(area.x, area.y));
+        let lead = if in_pane { self.pane_card_lead() } else { 0.0 };
+        self.draw_card_led(grid, area, lead);
         let base = Style {
             fg: theme.text.fg,
             bg: theme.popup,
@@ -2023,6 +2030,175 @@ mod tests {
         let helper = row_after(&grid, "WORKING", "reviewer");
         assert_eq!(helper, agent + 1, "{}", grid.text());
         assert!(!grid.text().contains("NEEDS YOU"), "{}", grid.text());
+    }
+
+    /// A helper's row reads as its section's rows do, its name bright and bold under an agent
+    /// that works, where it read as idle beside "WORKING 2"; the mark at its end is its own,
+    /// a dot once it has finished a turn. The line bent round to it is one that can be seen,
+    /// and starts clear of the mark over it.
+    #[test]
+    #[cfg(unix)]
+    fn a_helpers_row_reads_as_its_section_with_its_own_mark() {
+        let (dir, mut app, fake) = project();
+        app.team.always = true;
+        let lead = lead(&mut app, &fake);
+        says(&mut app, "claude-1", AgentState::Working, "Working");
+        let started = call(&mut app, &lead, run(dir.path(), "reviewer", "codex", None));
+        shows_in(&mut app, "reviewer", "fake agent up");
+        says(&mut app, "reviewer", AgentState::Idle, "Ready");
+        assert_eq!(answered(&mut app, &started).code, code::OK);
+        app.run(Command::ListAgents);
+        let grid = screen(&app);
+        let helper = row_after(&grid, "WORKING", "reviewer");
+        let x = grid.row_text(helper).find("reviewer").unwrap();
+        let x = grid.row_text(helper)[..x].chars().count() as u16;
+        let name = grid.cell(x, helper).style;
+        assert!(name.bold, "bold, as its section's names are");
+        assert_eq!(name.fg, app.theme.sidebar.fg, "in the words' own colour");
+        assert!(
+            !grid.row_text(helper).contains('●'),
+            "nothing at its end yet"
+        );
+        // Its turn over, it has its own done dot.
+        says(&mut app, "reviewer", AgentState::Working, "Working");
+        says(&mut app, "reviewer", AgentState::Idle, "Finished");
+        let grid = screen(&app);
+        let helper = row_after(&grid, "WORKING", "reviewer");
+        assert!(grid.row_text(helper).contains('●'), "{}", grid.text());
+        // With pictures, the line to it is stronger than a hairline and starts under the
+        // agent's mark, not on it.
+        app.set_measure(std::rc::Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        let grid = screen(&app);
+        let helper = row_after(&grid, "WORKING", "reviewer");
+        let lines: Vec<(Bounds, Rgb)> = grid
+            .paint
+            .iter()
+            .filter_map(|p| match p {
+                cellix_render::Paint::Hairline { bounds, color } => Some((*bounds, *color)),
+                _ => None,
+            })
+            .filter(|(b, _)| b.w == 0 && b.y < i32::from(helper) * 64 + 32)
+            .filter(|(b, _)| b.y + b.h > i32::from(helper) * 64)
+            .collect();
+        let (down, color) = lines.first().copied().expect("the line down to it");
+        assert_ne!(
+            color, app.theme.border,
+            "stronger than the sheet's hairline"
+        );
+        assert!(
+            down.y >= i32::from(helper) * 64 - 4,
+            "under the mark: {down:?}"
+        );
+    }
+
+    /// The panels painted on the grid, as (bounds, fill, border).
+    fn panels(grid: &Grid) -> Vec<(Bounds, Option<Rgb>, Option<Rgb>)> {
+        grid.paint
+            .iter()
+            .filter_map(|p| match p {
+                Paint::Panel {
+                    bounds,
+                    fill,
+                    border,
+                    ..
+                } => Some((*bounds, *fill, *border)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The asking card and peek stand over the side pane a column from its sheet's edge on
+    /// both sides, where they stood 6 px from it on the left and 15 on the right. On the
+    /// asking card only Allow is filled, Deny and Always Allow Here quiet buttons alike.
+    /// Peek's header has its parts 8 px apart and nothing cut while there's room, the state
+    /// a mark and a word in its colour, and Keep as Tab a quiet button.
+    #[test]
+    #[cfg(unix)]
+    fn cards_over_the_side_pane_stand_alike_on_both_sides() {
+        let (dir, mut app, fake) = project();
+        let lead = lead(&mut app, &fake);
+        says(&mut app, "claude-1", AgentState::Working, "Working");
+        app.set_measure(std::rc::Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        let started = call(&mut app, &lead, run(dir.path(), "reviewer", "codex", None));
+        let pane = app.dock_area().unwrap();
+        let unit = |cells: f32| (cells * 64.0).round() as i32;
+        // The sheet starts half way into the pane's first column, and ends with its last.
+        let (sheet, end) = (unit(f32::from(pane.x) + 0.5), unit(f32::from(pane.right())));
+        let grid = screen(&app);
+        let theme = &app.theme;
+        let card = panels(&grid)
+            .into_iter()
+            .find(|(_, fill, border)| *fill == Some(theme.popup) && border.is_some())
+            .map(|(bounds, ..)| bounds)
+            .expect("the asking card");
+        assert_eq!(
+            card.x - sheet,
+            end - (card.x + card.w),
+            "{card:?} in {pane:?}"
+        );
+        assert_eq!(card.x - sheet, 64, "a column from the sheet's edge");
+        let quiet = theme.quiet_button(theme.popup);
+        let fills: Vec<Rgb> = panels(&grid)
+            .into_iter()
+            .filter(|(b, _, _)| b.y > card.y && b.y < card.y + card.h && b.w < card.w / 2)
+            // Not the quote's bar, which is the accent too.
+            .filter(|(b, _, _)| b.w >= 128)
+            .filter_map(|(_, fill, _)| fill)
+            .filter(|fill| *fill == quiet || *fill == theme.button)
+            .collect();
+        assert_eq!(
+            fills,
+            [quiet, quiet, theme.button],
+            "Deny, Always Allow Here, Allow"
+        );
+
+        app.answer_consent("Allow");
+        shows_in(&mut app, "reviewer", "fake agent up");
+        says(&mut app, "reviewer", AgentState::Working, "Working");
+        assert_eq!(answered(&mut app, &started).code, code::OK);
+        app.open_peek("reviewer");
+        let grid = screen(&app);
+        let theme = &app.theme;
+        let edge = panels(&grid)
+            .into_iter()
+            .find(|(_, fill, border)| fill.is_none() && *border == Some(theme.popup_border))
+            .map(|(bounds, ..)| bounds)
+            .expect("peek's card");
+        assert_eq!(
+            edge.x - sheet,
+            end - (edge.x + edge.w),
+            "{edge:?} in {pane:?}"
+        );
+        // Its header: who started it whole, and what it's doing in the accent.
+        let texts: Vec<(i32, String, Rgb)> = grid
+            .paint
+            .iter()
+            .filter_map(|p| match p {
+                Paint::Text {
+                    x, y, text, color, ..
+                } if *y == edge.y => Some((*x, text.clone(), *color)),
+                _ => None,
+            })
+            .collect();
+        let said = |words: &str| {
+            texts
+                .iter()
+                .find(|(_, text, _)| text == words)
+                .cloned()
+                .unwrap_or_else(|| panic!("no {words:?} in {texts:?}"))
+        };
+        let (_, _, colour) = said("working");
+        assert_eq!(colour, theme.accent);
+        let (from, ..) = said("· from Claude Code");
+        let (name, ..) = said("reviewer");
+        assert!(name < from);
+        let card_row = |b: &Bounds| b.y >= edge.y && b.y < edge.y + 64;
+        let keep = panels(&grid)
+            .into_iter()
+            .find(|(b, fill, _)| card_row(b) && *fill == Some(quiet))
+            .map(|(bounds, ..)| bounds)
+            .expect("Keep as Tab, a quiet button");
+        assert!(from < keep.x, "who started it stops short of Keep as Tab");
     }
 
     #[test]

@@ -177,7 +177,6 @@ const FIND_WIDTH: u16 = 58;
 /// the ends of what's under it.
 const FIND_SLIVER: u16 = 4;
 const CONFIRM_WIDTH: u16 = 56;
-const CONFIRM_HEIGHT: u16 = 6;
 /// Rows of the card on a session that stopped without finishing, besides its detail: an
 /// edge, the title, a gap, the buttons and an edge.
 const STOPPED_CARD_ROWS: u16 = 5;
@@ -292,6 +291,12 @@ const CARD_BOTTOM: f32 = 0.1;
 const CARD_EDGE: (f32, f32) = (0.86, 0.67);
 /// As a percentage of a row, about 9 pixels.
 const CARD_RADIUS: u8 = 26;
+/// How far into its first column a card over the side pane starts, where there are pictures.
+/// The pane's sheet starts half way into the pane's first column, so a card a column in from
+/// the pane stood 6 px from the sheet's edge at its left and 15 at its right; half a column
+/// further in, it's a column from the edge on both sides. That column's left half is the
+/// pane's sheet, whatever stood there.
+pub(super) const PANE_CARD_LEAD: f32 = 0.5;
 /// Columns at the end of the pane's title that close it.
 const PANE_CLOSE_REACH: u16 = 3;
 /// A tooltip's height in rows, and the size of its text.
@@ -1350,6 +1355,8 @@ pub struct App {
     stop_confirmed: bool,
     /// A build under way.
     build: Option<std::sync::mpsc::Receiver<Build>>,
+    /// The file the build under way builds, as the status bar names it.
+    building: String,
     /// A file made only for a build, to remove once it's done.
     remove_after_build: Vec<PathBuf>,
     /// The comments on this project, kept with it.
@@ -1743,6 +1750,7 @@ impl App {
             dock: Dock::default(),
             stop_confirmed: false,
             build: None,
+            building: String::new(),
             remove_after_build: Vec::new(),
             threads,
             threads_seen: None,
@@ -4463,6 +4471,10 @@ impl App {
             }
             Event::Tick => self.tick(),
         }
+        // A menu open takes the pointer from what's under it, from the moment it opens.
+        if matches!(self.overlay, Overlay::Menu(_)) {
+            self.hover = None;
+        }
         self.poll_pan_hint();
         self.keep_in_view(shown);
         self.bring_back_maximized(was_open);
@@ -6164,8 +6176,15 @@ impl App {
     fn confirm_area(&self) -> Rect {
         let screen = Rect::new(0, 0, self.size.0, self.size.1);
         let width = CONFIRM_WIDTH.min(screen.w);
-        let y = (screen.h / 3).min(screen.h.saturating_sub(CONFIRM_HEIGHT));
-        Rect::new(screen.x + (screen.w - width) / 2, y, width, CONFIRM_HEIGHT)
+        let height = self.confirm_button_row() + 2;
+        let y = (screen.h / 3).min(screen.h.saturating_sub(height));
+        Rect::new(screen.x + (screen.w - width) / 2, y, width, height)
+    }
+
+    /// The row of a dialog's buttons, from its top: the row after its words, as a card's are,
+    /// with a row between only where a button all but fills its row (`card_gap`).
+    fn confirm_button_row(&self) -> u16 {
+        3 + self.card_gap()
     }
 
     /// Each button as (cells, x), laid out from the right edge.
@@ -6216,7 +6235,7 @@ impl App {
             dim,
             area.right().saturating_sub(1),
         );
-        let y = area.y + 4;
+        let y = area.y + self.confirm_button_row();
         for (i, (cells, x)) in self.confirm_buttons(confirm).iter().enumerate() {
             let on = i == confirm.selected;
             let width = cells.chars().count() as u16;
@@ -8984,8 +9003,16 @@ impl App {
     /// so the title and the buttons have the same air above and below them, and what's under
     /// those rows is cleared so no text shows half covered.
     fn draw_card(&self, grid: &mut Grid, area: Rect) {
+        self.draw_card_led(grid, area, 0.0);
+    }
+
+    /// A card whose panel starts `lead` columns into its first column where there are
+    /// pictures (`PANE_CARD_LEAD`), the pane's sheet before it, on the rows between its first
+    /// and last.
+    fn draw_card_led(&self, grid: &mut Grid, area: Rect, lead: f32) {
         let theme = &self.theme;
         let plain = self.measure.in_cells();
+        let lead = if plain { 0.0 } else { lead };
         let base = Style {
             fg: theme.text.fg,
             bg: theme.popup,
@@ -8996,6 +9023,14 @@ impl App {
             let edge = y == area.y || y + 1 == area.bottom();
             if plain || !edge {
                 grid.fill(Rect::new(area.x, y, area.w, 1), base);
+                if lead > 0.0 {
+                    // The pane's sheet, whatever stood in that column: a terminal's cursor
+                    // there showed half of itself beside the card.
+                    let sheet = theme.sidebar.bg;
+                    grid.fill(Rect::new(area.x, y, 1, 1), Style { bg: sheet, ..base });
+                    let left = Bounds::cells(f32::from(area.x), f32::from(y), lead, 1.0);
+                    grid.panel(left, 0, Some(sheet), None);
+                }
                 continue;
             }
             // Behind its rounded ends, the colour of whatever each cell stands on: a card in
@@ -9028,9 +9063,9 @@ impl App {
         }
         let (top, foot) = self.card_ends();
         let bounds = Bounds::cells(
-            f32::from(area.x),
+            f32::from(area.x) + lead,
             f32::from(area.y) + top,
-            f32::from(area.w),
+            f32::from(area.w) - lead,
             f32::from(area.h) - top - foot,
         );
         grid.popup(bounds, CARD_RADIUS, theme.popup, theme.popup_border);
@@ -11196,6 +11231,18 @@ impl App {
             pictures: self.measure.cell_pixels().map(|_| &self.comment_pictures),
             laid: Some(&self.comment_rows),
             edge: self.pane_edge(),
+            lead: self.pane_card_lead(),
+        }
+    }
+
+    /// How far into its first column a card over the side pane starts: `PANE_CARD_LEAD`
+    /// beside the file, where the pane's sheet starts half way into that column, and nothing
+    /// under the file, where the sheet starts with it, or on cells.
+    fn pane_card_lead(&self) -> f32 {
+        if self.measure.in_cells() || self.dock_under() {
+            0.0
+        } else {
+            PANE_CARD_LEAD
         }
     }
 
@@ -12244,12 +12291,14 @@ impl App {
             return Some(busy.trim_end_matches('…').to_string());
         }
         if self.build.is_some() {
-            let what = if self.export_to.is_some() {
-                "Exporting PDF"
-            } else {
-                "Building PDF"
+            // Named once, here: the message that said it too stood beside it.
+            let exported = self.export_to.as_deref().and_then(Path::file_name);
+            let what = match (exported, self.building.as_str()) {
+                (Some(pdf), _) => format!("Exporting {}", pdf.to_string_lossy()),
+                (None, "") => "Building PDF".to_string(),
+                (None, file) => format!("Building {file}"),
             };
-            return Some(what.to_string());
+            return Some(what);
         }
         if self
             .settings_page
@@ -13028,7 +13077,7 @@ impl App {
         review.suggested.replace(suggested);
         let comments = self.comments.lock().map(|c| c.clone()).unwrap_or_default();
         match review.hit(area, x, y, &comments) {
-            Some(Hit::ReviewWith(at)) => self.show_review_with_menu(at),
+            Some(Hit::ReviewWith(at)) => self.show_review_with_menu((at, true)),
             Some(Hit::KeepSuggestion(id)) => self.keep_suggestion(id),
             Some(Hit::DismissSuggestion(id)) => self.dismiss_suggestion(id),
             Some(Hit::File(index)) => review.select(index),
@@ -13594,8 +13643,12 @@ impl App {
         if mouse.kind == MouseKind::Move {
             self.hover = Some((mouse.x, mouse.y));
             self.pointer = mouse.at();
+            // A menu takes the pointer: nothing under it, or beside it, is lit by it while
+            // it's open. Its own rows go by the place it keeps.
             if let Overlay::Menu(menu) = &mut self.overlay {
                 menu.hover(mouse.x, mouse.fine_y);
+                self.hover = None;
+                return;
             }
             let in_pane = self
                 .dock_screen()
@@ -14097,7 +14150,7 @@ impl App {
             }
             Overlay::NewWorktree(form) => self.new_worktree_click(form, mouse.at()),
             Overlay::Confirm(confirm) => {
-                let y = self.confirm_area().y + 4;
+                let y = self.confirm_area().y + self.confirm_button_row();
                 let spots = self.confirm_buttons(&confirm);
                 let width = |cells: &String| cells.chars().count() as u16;
                 let on = spots
@@ -16235,10 +16288,7 @@ impl App {
                 let hover = self.hover.map(|(x, _)| (x, self.pointer.1));
                 palette.draw(grid, hover, &*self.measure, theme);
             }
-            Overlay::Menu(menu) => {
-                let hover = self.hover.map(|(x, _)| (x, self.pointer.1));
-                menu.draw(grid, hover, theme);
-            }
+            Overlay::Menu(menu) => menu.draw(grid, menu.pointer, theme),
             Overlay::Prompt(prompt) => self.draw_prompt(grid, prompt),
             Overlay::Find(find) => {
                 // What it found on a screen that lists things, marked over that screen.
@@ -17263,7 +17313,8 @@ impl App {
         let name = file.file_name().map(PathBuf::from).unwrap_or_default();
         let folder = file.parent().map(Path::to_path_buf).unwrap_or_default();
         engine.push(name.display().to_string());
-        self.say(format!("Building {}…", name.display()));
+        // The status bar's spinner names it while it runs, so no message says so as well.
+        self.building = name.display().to_string();
         let started = std::time::Instant::now();
         std::thread::spawn(move || {
             let run = |program: &str, args: &[String]| {
@@ -17409,8 +17460,13 @@ impl App {
             return;
         }
         let root = cellix_doc::latex::root_of(&path, &editor.buffer.text());
+        let dirty = editor.buffer.is_dirty();
         self.save_paper(&root);
-        self.save();
+        // A file with nothing unsaved isn't written again, nor said to be saved: the status
+        // bar's spinner says what's happening, the build.
+        if dirty {
+            self.save();
+        }
         // Saving already builds when the PDF is open.
         if self.build.is_none() {
             self.start_build(root);
@@ -20963,12 +21019,115 @@ mod tests {
         app.run(Command::OpenDiff);
         let (x, y) = find(&screen(&app), "[Accept]");
         app.handle(mouse(MouseKind::Left, x + 1, y));
-        let (x, y) = find(&screen(&app), "[Commit 1 staged]");
+        let (x, y) = find(&screen(&app), "[Commit · 1 staged]");
         app.handle(mouse(MouseKind::Left, x + 1, y));
         typed(&mut app, "Change the second line");
         enter(&mut app);
         assert!(screen(&app).text().contains("Committed"));
         assert!(cellix_review::changed_files(dir.path()).is_empty());
+    }
+
+    /// Review's list ends a row of air under its files with Commit, which says how many it
+    /// takes, and Review with…, each as wide as its words: one under the other in a list too
+    /// narrow for both. Commit stood straight under the last file, the list's width, saying
+    /// "Commit" alone. Review with…'s menu drops 8 px under it, where it stood 3 px under.
+    #[test]
+    fn reviews_buttons_stand_after_a_row_of_air_each_its_own_width() {
+        let (_dir, mut app) = reviewed();
+        app.run(Command::OpenDiff);
+        let (x, y) = find(&screen(&app), "[Accept]");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        let grid = screen(&app);
+        let (left, commit) = find(&grid, "[Commit · 1 staged]");
+        let (_, review) = find(&grid, "[Review with…]");
+        assert_eq!(review, commit + 1, "one under the other: {}", grid.text());
+        // A row of air over them, where the files end.
+        let over: String = grid
+            .row_text(commit - 1)
+            .chars()
+            .skip(usize::from(left))
+            .take(19)
+            .collect();
+        assert!(over.trim().is_empty(), "{over:?}\n{}", grid.text());
+        let file: String = grid
+            .row_text(commit - 2)
+            .chars()
+            .skip(usize::from(left))
+            .take(19)
+            .collect();
+        assert!(file.contains("alpha.txt"), "{file:?}\n{}", grid.text());
+
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        let grid = screen(&app);
+        let theme = &app.theme;
+        // Each on its own row, as the cells said.
+        let (_, row) = find(&grid, "Commit · 1");
+        let panel = |fill: Rgb, y: u16| {
+            grid.paint.iter().find_map(|p| match p {
+                Paint::Panel {
+                    bounds,
+                    fill: Some(f),
+                    ..
+                } if *f == fill && bounds.y / 64 == i32::from(y) => Some(*bounds),
+                _ => None,
+            })
+        };
+        let quiet = theme.quiet_button(theme.sidebar.bg);
+        let commit = panel(theme.button, row).expect("Commit");
+        let button = panel(quiet, row + 1).expect("Review with…");
+        let width = |label: &str| measures::button_width(label, &*app.measure);
+        assert_eq!(
+            commit.w,
+            i32::from(width("Commit · 1 staged")) * 64,
+            "its words' width"
+        );
+        assert_eq!(
+            button.w,
+            i32::from(width("Review with…")) * 64,
+            "its words' width"
+        );
+        assert_eq!(commit.x, button.x, "both from the list's text edge");
+        // Its menu, a fifth of a row further down than the row under it.
+        let (x, y) = find(&grid, "Review with");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        let grid = screen(&app);
+        let menu = grid.paint.iter().find_map(|p| match p {
+            Paint::Panel {
+                bounds,
+                shadow: true,
+                ..
+            } if bounds.x == button.x => Some(*bounds),
+            _ => None,
+        });
+        let menu = menu.expect("the menu, dropping from the button");
+        let gap = (menu.y - (button.y + button.h)) as f32 * 37.0 / 64.0;
+        assert!(gap >= 8.0, "{gap} px under the button");
+    }
+
+    /// With a turn to compare with over the files, as in the tour, a press on Review with…
+    /// still drops its menu.
+    #[test]
+    fn review_with_drops_its_menu_under_a_turn_too() {
+        let (dir, mut app) = reviewed();
+        cellix_review::checkpoint(dir.path(), "Add the limit").unwrap();
+        fs::write(dir.path().join("beta.rs"), "fn turn() {}\n").unwrap();
+        let rows = cellix_render::FontMeasure::new(17, 50).with_type_row(36);
+        app.set_measure(Rc::new(rows));
+        app.run(Command::OpenDiff);
+        settle_review(&mut app);
+        let grid = screen(&app);
+        assert!(grid.text().contains("Add the limit"), "{}", grid.text());
+        let (x, y) = find(&grid, "Review with");
+        for kind in [MouseKind::Left, MouseKind::Up] {
+            app.handle(mouse(kind, x + 1, y));
+        }
+        let grid = screen(&app);
+        assert!(
+            matches!(app.overlay, Overlay::Menu(_)),
+            "no menu: {}",
+            grid.text()
+        );
+        assert!(grid.text().contains("Gemini CLI"), "{}", grid.text());
     }
 
     #[test]
@@ -21884,6 +22043,48 @@ mod tests {
         }
         let cursor = screen(&app).cursor;
         assert!(cursor.is_some(), "the caret is off the page");
+    }
+
+    /// A commented line's ◆ in code stood in the gutter's first column against the sheet's
+    /// edge. Where there are pictures it's painted half a column in, so it keeps 8 px from
+    /// that edge; on cells it's in the cell as before.
+    #[test]
+    fn a_comment_mark_in_code_keeps_clear_of_the_sheets_edge() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("beta.rs")).unwrap();
+        app.run(Command::AddComment);
+        typed(&mut app, "why main");
+        enter(&mut app);
+        // The mark on the commented line's row, not the Comments icon at the top right.
+        let mark = |grid: &Grid| {
+            let (_, y) = find(grid, "fn main");
+            let row = grid.row_text(y);
+            let at = row.find('◆').unwrap_or_else(|| panic!("no mark: {row}"));
+            (row[..at].chars().count() as u16, y)
+        };
+        // On cells, the cell's own letter, which that tier draws whatever's painted.
+        let (x, _) = mark(&screen(&app));
+        assert_eq!(x, app.main_area().x);
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        let grid = screen(&app);
+        let (x, y) = mark(&grid);
+        assert!(grid.cell(x, y).style.painted, "painted, not the cell's");
+        let painted = grid.paint.iter().find_map(|p| match p {
+            cellix_render::Paint::Text { x, y: at, text, .. }
+                if text == "◆" && *at == i32::from(y) * 64 =>
+            {
+                Some(*x)
+            }
+            _ => None,
+        });
+        let left = painted.expect("the mark painted on its row");
+        // The sheet's edge is where the gutter starts.
+        assert_eq!(x, app.main_area().x, "the gutter's first column");
+        assert_eq!(
+            left,
+            i32::from(x) * 64 + 32,
+            "half a column in, 8 px from the edge"
+        );
     }
 
     #[test]
@@ -32834,7 +33035,7 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let agents = tabs[1].2;
         app.handle(mouse(MouseKind::Left, agents.x + 1, area.y));
         assert!(app.dock.listing());
-        assert!(screen(&app).text().contains("A plain terminal"));
+        assert!(screen(&app).text().contains("> Terminal"));
         app.handle(mouse(MouseKind::Left, agents.right() - 2, area.y));
         assert!(!app.dock.agents_tab);
         assert_eq!(app.dock.front, Front::Session);
@@ -36685,9 +36886,8 @@ while True:
         );
         assert!(!text.contains("HOW IT WORKS"), "{text}");
         // One row each: what it is, and what it runs at the end of the row.
-        let (_, y) = find(&grid, "+ Terminal");
+        let (_, y) = find(&grid, "> Terminal");
         assert!(grid.row_text(y).contains("shell"), "{}", grid.row_text(y));
-        assert!(!text.contains("A plain terminal in this project"), "{text}");
         // Wider, the steps come back.
         app.handle(Event::Resize(140, 40));
         assert!(screen(&app).text().contains("HOW IT WORKS"));

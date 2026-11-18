@@ -32,6 +32,11 @@ use crate::theme::Theme;
 /// The most header lines sticky scroll keeps at the top, as VS Code's default.
 pub const STICKY_LINES: usize = 5;
 const GUTTER_MIN_DIGITS: usize = 4;
+/// Where a commented line's ◆ is painted in the gutter's first column, in columns from the
+/// sheet's edge, and its size: half a column in, about two thirds of a cell wide, so it keeps
+/// 8 px from that edge, where it stood on it.
+const COMMENT_MARK_IN: f32 = 0.5;
+const COMMENT_MARK_SIZE: u8 = 70;
 const NARROW_PANE: u16 = 60;
 /// Left margin of a rendered page, which also carries comment marks.
 /// Heading levels the toolbar steps through before going back to plain text.
@@ -4262,12 +4267,24 @@ impl Editor {
                 }
             }
             if laid.first() && marks.comments.contains(&(line + 1)) {
+                // The gutter's first column, against the sheet's edge: where there are
+                // pictures the mark is painted half a column in from it, and smaller, so it
+                // keeps 8 px from that edge and clears a number that starts in the next
+                // column. The cell tier shows it in the cell.
                 let mark = cellix_render::Style {
                     fg: theme.accent,
                     bg,
+                    painted: true,
                     ..theme.gutter
                 };
                 grid.put_str(area.x, y, "◆", mark, area.x + gutter);
+                let font = cellix_render::Font {
+                    mono: true,
+                    size: COMMENT_MARK_SIZE,
+                    ..cellix_render::Font::default()
+                };
+                let at = (f32::from(area.x) + COMMENT_MARK_IN, f32::from(y));
+                grid.text_run(at, f32::from(area.x + 2), "◆", (theme.accent, false), font);
             }
 
             let chars: Vec<char> = self.line_text(line).chars().collect();

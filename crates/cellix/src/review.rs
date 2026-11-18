@@ -109,12 +109,14 @@ enum Stacked<'a> {
 enum ListRow {
     Heading(&'static str),
     Base(Option<usize>),
-    Commit,
     Test(usize),
     File(usize),
     /// A row of air before a button.
     Space,
-    ReviewWith,
+    /// Review's own buttons, a row of air under the files: Commit with how many are staged,
+    /// where any are, and Review with…, side by side where both fit and else one under the
+    /// other, as (Commit, Review with…) on this row.
+    Actions(bool, bool),
 }
 
 /// Something fixed to read, rather than the working tree against HEAD or a turn: nothing in
@@ -777,27 +779,69 @@ impl Review {
         }
         rows.push(ListRow::Heading("CHANGES"));
         rows.extend((0..self.changes.len()).map(ListRow::File));
-        if self.staged > 0 {
-            rows.push(ListRow::Commit);
-        }
-        if !self.changes.is_empty() {
+        let (commit, review) = (self.staged > 0, !self.changes.is_empty());
+        if commit || review {
             rows.push(ListRow::Space);
-            rows.push(ListRow::ReviewWith);
+            if commit && review && self.actions_fit() {
+                rows.push(ListRow::Actions(true, true));
+            } else {
+                rows.extend(commit.then_some(ListRow::Actions(true, false)));
+                rows.extend(review.then_some(ListRow::Actions(false, true)));
+            }
         }
         rows
     }
 
-    /// Where Review with… drops its menu from, as the list stands in `area`; None when the
-    /// list isn't shown or the button isn't on it.
+    /// What Commit says in Review's list: how many files it takes.
+    fn commit_label(&self) -> String {
+        format!("Commit · {} staged", self.staged)
+    }
+
+    /// Whether Commit and Review with… fit side by side in the list, a column in from each
+    /// of its edges.
+    fn actions_fit(&self) -> bool {
+        let wide = |label: &str| self.cells_of(label).chars().count() as u16;
+        let both = wide(&self.commit_label()) + crate::measures::BUTTON_GAP + wide(REVIEW_WITH);
+        both + 2 <= self.list_width.get()
+    }
+
+    /// The buttons on a row of `Actions` in `list`, as (cells, label, where it starts, whether
+    /// it's Commit), each as wide as its words, from the list's text edge.
+    fn action_buttons(
+        &self,
+        list: Rect,
+        (commit, review): (bool, bool),
+    ) -> Vec<(String, String, u16, bool)> {
+        let mut x = list.x + 1;
+        let mut placed = Vec::new();
+        for (shown, label, is_commit) in [
+            (commit, self.commit_label(), true),
+            (review, REVIEW_WITH.to_string(), false),
+        ] {
+            if shown {
+                let cells = self.cells_of(&label);
+                let wide = cells.chars().count() as u16;
+                placed.push((cells, label, x, is_commit));
+                x += wide + crate::measures::BUTTON_GAP;
+            }
+        }
+        placed
+    }
+
+    /// Where Review with… drops its menu from, as the list stands in `area`, under its
+    /// button; None when the list isn't shown or the button isn't on it.
     pub fn review_with_at(&self, area: Rect) -> Option<(u16, u16)> {
         let (list, _) = self.layout(area);
         let list = list?;
-        let row = self
-            .list_rows()
-            .iter()
-            .position(|r| *r == ListRow::ReviewWith)?;
+        let rows = self.list_rows();
+        let (row, shown) = rows.iter().enumerate().find_map(|(at, r)| match r {
+            ListRow::Actions(commit, true) => Some((at, (*commit, true))),
+            _ => None,
+        })?;
         let y = list.y + row as u16;
-        (y < list.bottom()).then_some((list.x + 1, y + 1))
+        let buttons = self.action_buttons(list, shown);
+        let (_, _, x, _) = buttons.into_iter().find(|b| !b.3)?;
+        (y < list.bottom()).then_some((x, y + 1))
     }
 
     /// The first line of what a reviewing agent is told: which changes, and the git command
@@ -1032,10 +1076,12 @@ impl Review {
             Stacked::End => (self.selected + 1 < self.changes.len()).then_some(Hit::NextFile),
             Stacked::Suggested(index) => {
                 let suggestion = self.suggested.borrow().get(*index)?.clone();
-                let (keep, dismiss) = self.suggestion_buttons(body);
-                if x >= keep && x < keep + KEEP.chars().count() as u16 {
+                let [(keep, at), (dismiss, after)] = self.suggestion_buttons(body);
+                let on =
+                    |cells: &str, from: u16| x >= from && x < from + cells.chars().count() as u16;
+                if on(&keep, at) {
                     Some(Hit::KeepSuggestion(suggestion.id))
-                } else if x >= dismiss && x < dismiss + DISMISS.chars().count() as u16 {
+                } else if on(&dismiss, after) {
                     Some(Hit::DismissSuggestion(suggestion.id))
                 } else {
                     None
@@ -1045,12 +1091,14 @@ impl Review {
         }
     }
 
-    /// Where a suggestion's Keep and Dismiss stand, at the end of its row.
-    fn suggestion_buttons(&self, card: Rect) -> (u16, u16) {
+    /// A suggestion's Keep and Dismiss, as the cells each takes and where it starts, at the
+    /// end of its row, two columns apart as buttons side by side are.
+    fn suggestion_buttons(&self, card: Rect) -> [(String, u16); 2] {
+        let (keep, dismiss) = (self.cells_of(KEEP), self.cells_of(DISMISS));
         let end = card.right().saturating_sub(4);
-        let dismiss = end.saturating_sub(DISMISS.chars().count() as u16);
-        let keep = dismiss.saturating_sub(KEEP.chars().count() as u16 + 2);
-        (keep, dismiss)
+        let at = end.saturating_sub(dismiss.chars().count() as u16);
+        let first = at.saturating_sub(keep.chars().count() as u16 + crate::measures::BUTTON_GAP);
+        [(keep, first), (dismiss, at)]
     }
 
     pub fn step_file(&mut self, delta: isize) {
@@ -1359,8 +1407,8 @@ impl Review {
             fg: theme.accent,
             ..theme.sidebar
         };
-        let (keep, dismiss) = self.suggestion_buttons(card);
-        let stop = keep.saturating_sub(2);
+        let buttons = self.suggestion_buttons(card);
+        let stop = buttons[0].1.saturating_sub(2);
         let by = match suggestion.kind.as_str() {
             "" => format!("Suggested by {}", suggestion.by),
             kind => format!("Suggested by {} · {kind}", suggestion.by),
@@ -1379,19 +1427,22 @@ impl Review {
                 grid.label(end + 2, y, &suggestion.text, theme.sidebar, stop);
             }
         }
-        // Words, lit under the pointer, as a row's own actions are: a chip here would stand
-        // within 8 px of the card's lines.
-        for (x, words) in [(keep, KEEP), (dismiss, DISMISS)] {
-            let wide = words.chars().count() as u16;
+        // Quiet buttons, as on the suggestion's card in the Comments list, at their height on
+        // the terminal's line (`Grid::row_button`), so on a taller row they keep 9 px from the
+        // note's edges.
+        for ((cells, x), words) in buttons.iter().zip([KEEP, DISMISS]) {
+            let wide = cells.chars().count() as u16;
             let over = self
                 .hover
                 .get()
-                .is_some_and(|(hx, hy)| hy == y && hx >= x && hx < x + wide);
+                .is_some_and(|(hx, hy)| hy == y && hx >= *x && hx < x + wide);
+            let fill = theme.secondary(theme.sidebar.bg, over);
+            // Its cells keep the note's colour: the button is shorter than its row.
             let style = Style {
-                fg: if over { theme.text.fg } else { theme.accent },
+                fg: theme.text.fg,
                 ..theme.sidebar
             };
-            grid.label(x, y, words, style, x + wide + 1);
+            grid.row_button((*x, y), cells, words, fill, style);
         }
     }
 
@@ -1518,12 +1569,22 @@ impl Review {
             return match self.list_rows().get((y - area.y) as usize)? {
                 ListRow::Heading(_) | ListRow::Space => None,
                 ListRow::Base(base) => Some(Hit::Base(*base)),
-                ListRow::Commit => Some(Hit::Commit),
                 ListRow::Test(index) => Some(Hit::Test(*index)),
                 ListRow::File(index) => Some(Hit::File(*index)),
-                ListRow::ReviewWith => {
-                    let list = list?;
-                    Some(Hit::ReviewWith((list.x + 1, y + 1)))
+                ListRow::Actions(commit, review) => {
+                    // The row is its buttons': a press anywhere on it takes the one it's
+                    // nearer, as it did when the row held one button.
+                    let buttons = self.action_buttons(list?, (*commit, *review));
+                    let (_, _, at, is_commit) =
+                        buttons.into_iter().rev().find(|(_, _, at, _)| {
+                            let gap = crate::measures::BUTTON_GAP / 2;
+                            x + gap >= *at
+                        })?;
+                    Some(if is_commit {
+                        Hit::Commit
+                    } else {
+                        Hit::ReviewWith((at, y + 1))
+                    })
                 }
             };
         }
@@ -1581,26 +1642,24 @@ impl Review {
                 };
                 grid.label(list.x + 1, y, &text, style, list.right());
             }
-            ListRow::Commit => {
-                let style = Style {
-                    fg: theme.button_text,
-                    ..theme.sidebar
-                };
-                let text = format!("[Commit {} staged]", self.staged);
-                grid.button(list.x + 1, y, &text, "Commit", theme.button, style);
-            }
             ListRow::Space => {}
-            ListRow::ReviewWith => {
-                let cells = self.cells_of(REVIEW_WITH);
-                let wide = cells.chars().count() as u16;
-                let spot = Rect::new(list.x + 1, y, wide, 1);
-                let pointed = self.hover.get().is_some_and(|h| spot.contains(h.0, h.1));
-                let fill = theme.secondary(theme.sidebar.bg, pointed);
-                let style = Style {
-                    fg: theme.text.fg,
-                    ..theme.sidebar
-                };
-                grid.button(list.x + 1, y, &cells, REVIEW_WITH, fill, style);
+            ListRow::Actions(commit, review) => {
+                // Commit is the one to press, filled; Review with… a quiet button.
+                for (cells, label, x, is_commit) in self.action_buttons(list, (*commit, *review)) {
+                    let wide = cells.chars().count() as u16;
+                    let spot = Rect::new(x, y, wide, 1);
+                    let pointed = self.hover.get().is_some_and(|h| spot.contains(h.0, h.1));
+                    let (fill, fg) = if is_commit {
+                        (theme.button, theme.button_text)
+                    } else {
+                        (theme.secondary(theme.sidebar.bg, pointed), theme.text.fg)
+                    };
+                    let style = Style {
+                        fg,
+                        ..theme.sidebar
+                    };
+                    grid.button(x, y, &cells, &label, fill, style);
+                }
             }
             ListRow::Test(index) => {
                 let run = &self.tests[*index];

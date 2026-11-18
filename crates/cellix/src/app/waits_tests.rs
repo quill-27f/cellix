@@ -74,7 +74,11 @@ fn a_build_and_an_install_say_so_while_they_run() {
     app.build = Some(building);
     assert_eq!(app.waiting().as_deref(), Some("Building PDF"));
     app.export_to = Some("paper.pdf".into());
-    assert!(status(&app).0.contains(&format!("{STEP} Exporting PDF")));
+    assert!(
+        status(&app)
+            .0
+            .contains(&format!("{STEP} Exporting paper.pdf"))
+    );
     app.build = None;
     app.export_to = None;
     app.run(cellix_input::Command::OpenSettings);
@@ -83,6 +87,29 @@ fn a_build_and_an_install_say_so_while_they_run() {
     page.installing = Some(installing);
     page.installing_what = Some(Control::InstallServer(0));
     assert!(status(&app).0.contains(&format!("{STEP} Installing")));
+}
+
+/// A paper being built is named once at the foot, by the spinner: "Building main.tex". A
+/// message saying the same stood beside it, so the bar said it twice.
+#[test]
+#[cfg(unix)]
+fn a_build_is_named_once_while_it_runs() {
+    use std::os::unix::fs::PermissionsExt;
+    let (dir, mut app) = project();
+    let source = "\\documentclass{article}\n\\begin{document}\nHi\n\\end{document}\n";
+    fs::write(dir.path().join("main.tex"), source).unwrap();
+    // A stand-in engine, which takes its time and makes nothing.
+    let engine = dir.path().join("engine.sh");
+    fs::write(&engine, "#!/bin/sh\nsleep 3\n").unwrap();
+    fs::set_permissions(&engine, fs::Permissions::from_mode(0o755)).unwrap();
+    app.settings.latex_engine = Some(vec![engine.display().to_string()]);
+    app.open(&dir.path().join("main.tex")).unwrap();
+    app.run(cellix_input::Command::BuildPdf);
+    assert!(app.build.is_some(), "it runs");
+    let (row, grid) = status(&app);
+    assert!(row.contains(&format!("{STEP} Building main.tex")), "{row}");
+    assert_eq!(row.matches("main.tex").count(), 1, "said once: {row}");
+    assert!(grid.spinning);
 }
 
 /// A task turns in its tab while it runs, as VS Code's terminal tab does, and says so in the

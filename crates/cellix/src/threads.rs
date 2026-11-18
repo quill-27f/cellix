@@ -679,6 +679,10 @@ pub struct View<'a> {
     /// How far into the area's first column its sheet starts: half the frame's column for
     /// the pane beside the file. A card stands as far from the sheet's edge on its right.
     pub edge: f32,
+    /// How far into its first column a card's panel starts: half a column beside the file,
+    /// where the pane's sheet starts half way into the pane's first column, so a card is a
+    /// column from the sheet's edge on both sides. None under the file or on cells.
+    pub lead: f32,
 }
 
 /// A list's rows as they were last laid out, with a mark of all they were laid out from.
@@ -757,6 +761,7 @@ impl Default for View<'_> {
             pictures: None,
             laid: None,
             edge: 0.0,
+            lead: 0.0,
         }
     }
 }
@@ -1707,9 +1712,10 @@ pub fn draw(
                 if let Some(first) = start.take() {
                     let (y, height) = (row_y(first), (index - first + 1) as f32);
                     // A column from the pane's edge, so its text stands two inside it, and as
-                    // far from the sheet's edge on its right as on its left: 8 px and 17 by
-                    // the columns, beside the file, where the sheet starts half a column in.
-                    let left = side as f32 - CARD_REACH;
+                    // far from the sheet's edge on its right as on its left: beside the file,
+                    // where the sheet starts half a column in, its panel starts half a column
+                    // further, a column from that edge on both sides.
+                    let left = side as f32 - CARD_REACH + view.lead;
                     let air = left - (area.x as f32 + view.edge);
                     let bounds = Bounds::cells(
                         left,

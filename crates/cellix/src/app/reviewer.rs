@@ -14,8 +14,8 @@ const REVIEWER: &str = "reviewer";
 
 impl App {
     /// The menu Review with… drops at `at`: every agent Cellix starts, those not installed
-    /// dimmed, saying so.
-    pub(super) fn show_review_with_menu(&mut self, at: (u16, u16)) {
+    /// dimmed, saying so, each with its own mark. From the button, it stands 8 px under it.
+    pub(super) fn show_review_with_menu(&mut self, (at, button): ((u16, u16), bool)) {
         self.agents.look_for_agents();
         let installed = self.agents.installed_programs();
         let theme = &self.theme;
@@ -34,7 +34,13 @@ impl App {
             })
             .collect();
         let screen = Rect::new(0, 0, self.size.0.saturating_sub(1), self.size.1);
-        self.overlay = Overlay::Menu(Menu::new(at, items, &*self.measure, screen));
+        let mut menu = Menu::new(at, items, &*self.measure, screen);
+        // Under the button, which all but fills its row, it hangs 8 px down its first row, as
+        // a menu under a line does (`Menu::hang`): it stood 3 px under the button's foot.
+        if button {
+            menu.hang(&*self.measure, screen);
+        }
+        self.overlay = Overlay::Menu(menu);
     }
 
     /// Review with… from the palette: Review opens on the changes, and the menu drops from
@@ -45,7 +51,8 @@ impl App {
         }
         let area = self.main_area();
         let at = self.review.as_ref().and_then(|r| r.review_with_at(area));
-        self.show_review_with_menu(at.unwrap_or((area.x + 2, area.y + 1)));
+        let from = at.unwrap_or((area.x + 2, area.y + 1));
+        self.show_review_with_menu((from, at.is_some()));
     }
 
     /// Starts `program` reviewing the changes Review compares, or those since the last

@@ -5885,5 +5885,68 @@
     "title": "A task's box on a page is square, with 9 px before its words, which line up with every other item's",
     "test": "a_tasks_box_is_square_with_air_before_its_words",
     "passes": true
+  },
+  {
+    "id": "side-pane-cards-inset",
+    "milestone": 15,
+    "title": "Cards over the side pane, peek's, the asking card and a comment's, stand a column from the sheet's edge on both sides; peek's header is laid out by measure with its state's mark and word in colour and Keep as Tab a quiet button; only the answer is filled",
+    "test": "cards_over_the_side_pane_stand_alike_on_both_sides",
+    "passes": true
+  },
+  {
+    "id": "agents-times-column",
+    "milestone": 15,
+    "title": "The Agents list keeps a state column as wide as the needs-you chip on every row, so how long ago stands in one column",
+    "test": "the_agents_lists_times_stand_in_one_column",
+    "passes": true
+  },
+  {
+    "id": "helper-row-as-section",
+    "milestone": 15,
+    "title": "A helper's row reads as its section's names do, with its own state mark at its end and a line to it that can be seen, starting under its agent's mark",
+    "test": "a_helpers_row_reads_as_its_section_with_its_own_mark",
+    "passes": true
+  },
+  {
+    "id": "start-list-as-plus-menu",
+    "milestone": 15,
+    "title": "The Agents list's START lists as the + menu does: Terminal, a rule, then each agent with its mark, one row each with what it runs",
+    "test": "the_start_list_lists_as_the_plus_menu_does",
+    "passes": true
+  },
+  {
+    "id": "menu-takes-pointer",
+    "milestone": 15,
+    "title": "A menu open takes the pointer: nothing under it is lit while it's open",
+    "test": "a_menu_takes_the_pointer_from_what_is_under_it",
+    "passes": true
+  },
+  {
+    "id": "review-actions-row",
+    "milestone": 15,
+    "title": "Review's list ends a row of air under its files with Commit · N staged and Review with…, each as wide as its words, and Review with…'s menu drops 8 px under its button",
+    "test": "reviews_buttons_stand_after_a_row_of_air_each_its_own_width",
+    "passes": true
+  },
+  {
+    "id": "build-named-once",
+    "milestone": 15,
+    "title": "A PDF building is named once, by the status bar's spinner: Building main.tex",
+    "test": "a_build_is_named_once_while_it_runs",
+    "passes": true
+  },
+  {
+    "id": "dialog-buttons-after-controls",
+    "milestone": 15,
+    "title": "A dialog's buttons stand on the row after its last control on airy rows, as a card's do",
+    "test": "dialog_buttons_stand_on_the_row_after_their_last_control",
+    "passes": true
+  },
+  {
+    "id": "comment-mark-off-edge",
+    "milestone": 15,
+    "title": "A commented line's diamond in code is painted half a column in from the sheet's edge",
+    "test": "a_comment_mark_in_code_keeps_clear_of_the_sheets_edge",
+    "passes": true
   }
 ]

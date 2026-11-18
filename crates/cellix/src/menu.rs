@@ -270,6 +270,10 @@ pub struct Menu {
     /// It opens over a card, a menu's colour, so it stands a step above it
     /// (`Theme::over_card`).
     pub over_card: bool,
+    /// Where the pointer is over it, its row with the fraction, while it's open. A menu takes
+    /// the pointer, so nothing under it is lit by it: the app's own place for the pointer is
+    /// cleared while one is open, and the menu keeps this one for itself.
+    pub pointer: Option<(u16, f32)>,
 }
 
 impl Menu {
@@ -328,6 +332,7 @@ impl Menu {
             open: None,
             from: None,
             over_card: false,
+            pointer: None,
         };
         menu.subs = (0..menu.items.len())
             .map(|row| menu.place_submenu(row, measure, screen))
@@ -397,6 +402,7 @@ impl Menu {
 
     /// The pointer moved: over a row with a submenu it opens, over another row it closes.
     pub fn hover(&mut self, x: u16, y: f32) {
+        self.pointer = Some((x, y));
         if let Some(child) = self.child_mut().filter(|c| c.contains(x, y as u16)) {
             child.hover(x, y);
             return;
@@ -727,13 +733,15 @@ impl Menu {
                 mark(grid, (x, top), icon, color, style);
             }
             let x = x + self.lead;
-            words(
+            let (end, row_at) = words(
                 grid,
                 (x, top),
                 &item.label,
                 style,
                 (area.right(), 100, false),
             );
+            // What follows the words keeps their row and their letters in the cells.
+            let after_words = (end + 1, row_at);
             if let Some(detail) = item.detail.as_deref() {
                 let after = x + self.widths[row] + DETAIL_GAP;
                 let quiet = Style {
@@ -746,12 +754,13 @@ impl Menu {
                 };
                 // Smaller than the words, so dropped a pixel to stand on their line.
                 let end = area.right().saturating_sub(INSET as u16);
-                words(
+                words_in(
                     grid,
                     (after, top + KEYS_DROP),
                     detail,
                     quiet,
                     (end, DETAIL_SIZE, false),
+                    after_words,
                 );
             }
             if let Some(keys) = item.keys {
@@ -763,12 +772,13 @@ impl Menu {
                     (false, false) => greyed,
                 };
                 // Smaller than the words, so dropped a pixel to stand on their line.
-                words(
+                words_in(
                     grid,
                     (right as f32, top + KEYS_DROP),
                     keys,
                     shown,
                     (right, KEYS_SIZE, true),
+                    after_words,
                 );
             }
             if !item.sub.is_empty() {
@@ -848,23 +858,45 @@ fn words(
     text: &str,
     style: Style,
     (right, size, align_right): (u16, u8, bool),
-) {
+) -> (u16, u16) {
     // The row holding most of it; a row starting halfway takes the upper one, whose middle
     // is still on it, so a click on the cells lands on the row they show.
     let row = (top + 0.499).floor() as u16;
+    words_in(
+        grid,
+        (x, top),
+        text,
+        style,
+        (right, size, align_right),
+        (0, row),
+    )
+}
+
+/// The same, its cells on `row` and no further left than `from`: what stands after a row's
+/// words keeps their row and their letters, where its cells could land on the words' own and
+/// take letters from what the screen's text says.
+fn words_in(
+    grid: &mut Grid,
+    (x, top): (f32, f32),
+    text: &str,
+    style: Style,
+    (right, size, align_right): (u16, u8, bool),
+    (from, row): (u16, u16),
+) -> (u16, u16) {
     let cells = text.chars().count() as u16;
     let column = if align_right {
         right.saturating_sub(cells)
     } else {
         x as u16
-    };
+    }
+    .max(from);
     let shown = Style {
         painted: true,
         ..style
     };
-    grid.put_str(column, row, text, shown, right);
+    let end = grid.put_str(column, row, text, shown, right);
     if row >= grid.area().bottom() {
-        return;
+        return (end, row);
     }
     let width = grid.area().w;
     grid.paint.push(Paint::Text {
@@ -886,6 +918,7 @@ fn words(
         centred: false,
         underline: false,
     });
+    (end, row)
 }
 
 #[cfg(test)]

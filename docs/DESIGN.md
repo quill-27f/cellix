@@ -123,7 +123,9 @@ of the bar and not it, where a step was a new tile of the whole bar while anythi
 changed. The Search view says "Searching" with a spinner before it under its boxes; Source
 Control's button that pushed or pulled turns with its words; a language server being installed
 from Settings turns in its row where its button was; a task's tab turns until it ends. A PDF
-building or exporting has the status bar's item alone, as VS Code's tasks do.
+building or exporting has the status bar's item alone, as VS Code's tasks do, and it names the
+file: "Building main.tex", "Exporting notes.pdf". A message saying "Building main.tex…" stood
+beside an item saying "Building PDF" until 18 November 2026; the item says it once now.
 
 ### Counting what the loop does
 
@@ -994,7 +996,8 @@ takes another row where it needs one (`Menu::hang`); the Find bar over the side 
 row under the tab line, as it does over a file, and a sliver of what's under it either side is
 cleared. A band behind a pointed or picked row stands 8 px in from the sheet's line on both
 sides (`measures::band`), counting the half of the frame's column the side pane's sheet starts
-in; a comment's card is as far from that line on its right as on its left; a program in the
+in; a comment's card is as far from that line on its right as on its left, a column, as every
+card over the side pane is (`PANE_CARD_LEAD`, below); a program in the
 side pane keeps the window's last column as air, as its first keeps the half column before the
 sheet's edge. A floating panel's grid, the table picker's squares and the math panel's
 buttons, stands as far from the panel's top as from its sides. A task's box on a page is
@@ -1028,7 +1031,15 @@ measure sizes them all (`measures.rs`): a button's words keep a column
 and a half either side inside its chip, whatever they are, and buttons side by side stand two
 columns apart. In cells a button is its words between brackets. Text stands two columns inside
 whatever holds it, a panel, a card, a menu, a prompt; a card starts one column from its pane's
-edge and is raised over it, as a menu is over the page. A card in the window's corner, the
+edge and is raised over it, as a menu is over the page. Beside the file, the side pane's sheet
+starts half way into the pane's first column, so a card there, a comment's, peek's or the one
+asking to start an agent, has its panel start half way into its first column too
+(`PANE_CARD_LEAD`), a column from the sheet's edge on both sides (it stood 6 px from it at the
+left and 15 at the right); the pane's sheet shows in that half column, whatever stood there (a
+terminal's cursor in it showed half of itself beside the card).
+A dialog's buttons, as a card's, stand on the row after its last control on a row with room,
+and a row further down only on the terminal's line, where a button all but fills its row
+(`card_gap`): New Worktree had two rows, 62 px, of nothing over its buttons. A card in the window's corner, the
 logout notice or the offer to install a language's server, starts and ends inside its first and
 last rows: half a row and more is clear over its title and under its buttons, a row stands
 between its words and its buttons, and its words wrap inside it. The rows its round ends are on
@@ -1052,7 +1063,10 @@ stood two. Every sidebar is one width,
 Review's list too, with the same title row: its name in small quiet capitals, two columns in.
 A tab is one shape, in the editor and in the pane: the strip is the frame's colour, and the
 tab in front takes the colour of what's under it, the sheet or the pane, with the accent's
-line along its top. One behind is its name, brighter under the pointer. Overlays sit on row lines: a menu
+line along its top. One behind is its name, brighter under the pointer. A menu open takes the
+pointer: nothing under it, or beside it, is lit while it's open, where the Agents list's row
+under the + menu lit as the pointer crossed the menu; the menu's own rows go by where the
+pointer is over it. Overlays sit on row lines: a menu
 is whole rows, with half a row of air over its first row and under its last in every menu and
 half a row at least for each rule, its hover band clear of them; where whole rows leave half a
 row over, which an odd number of rules does, the rules share it, never the edges (they had a
@@ -1218,7 +1232,10 @@ Codex, and the marks do.
 The page's menu folds formatting and inserting into Format › and Insert ›, and the agents
 panel gives each agent one row under two lines of how-to. At every width a page keeps a
 cell for a comment's ◆ and one for a change's bar, and a long page scrolls past its end
-until its last row is a third of the way down.
+until its last row is a third of the way down. In code the ◆ of a commented line is in the
+gutter's first column, which is against the sheet's edge: where there are pictures it's painted
+half a column in and at seven tenths of the code's size, 8 px from the edge and clear of a
+number that starts in the next column; on cells it's that column's letter.
 The side pane or one editor can be maximized, from the pane's own tab row or a double-click on
 a tab. The side pane takes the keyboard as it takes the window, as a click on it would, when it
 shows a session or the Preview. The
@@ -1449,9 +1466,11 @@ own hooks; a program with none is working until it ends.
   mark) starts another, the person is asked in a card: the asking agent, what it would start
   and as whom, the task, and that it runs as they do and costs its own tokens; Deny, Always
   Allow Here and Allow. The card stands in the side pane a row under its tabs, a column in from
-  each side, or in the window's corner with no pane. Its buttons stand at the end of its foot
-  with Allow the accent and Deny only words, as the reference board for this release drew them;
-  the board's 18 px inset is one column here, the rule for every card. Always is kept in the
+  each side, however wide the pane, or in the window's corner with no pane. Its buttons stand at
+  the end of its foot with Allow the accent and Deny and Always Allow Here quiet buttons alike,
+  as every button that isn't the answer is: the reference board had Deny as words, which beside
+  two chips read as no button (the review of 0.11.0's tour). The board's 18 px inset is one
+  column here, from the sheet's edge on both sides, the rule for every card. Always is kept in the
   folder's `state.json`. `run` waits 90 s for an answer and says what happened.
 - `send` pastes, bracketed where the program asked for that, and enters 200 ms later. It waits
   while the person types in that agent: 3 s after their last key, and with a prompt they've
@@ -1479,16 +1498,29 @@ closed, unless started with `--outlive-parent`, which then go on as agents of th
 
 In the Agents list a helper stands under the agent that started it, a step in, with a line bent
 round from its agent's mark, by the name it was given and the quiet word "helper" after it, in
-its agent's section whatever it's doing itself (the reference board's panel 4). Before its hooks
-have said anything it's there all the same, doing what Cellix knows of it.
+its agent's section whatever it's doing itself (the reference board's panel 4). Its name reads
+as that section's names do, bold in the words' colour under an agent that works, and the mark at
+its row's end is its own: the spinner while it works, a dot once it has finished a turn, the
+chip while it asks. Under "WORKING 2" an idle helper's grey name read as a mistake. The line
+bent round to it is a fifth of the way from the sheet to the words (#45474a on the dark sheet;
+the sheet's hairline, 1.3 to 1, could hardly be seen), and starts 8 px under its agent's mark.
+Before its hooks have said anything it's there all the same, doing what Cellix knows of it.
 
 A helper has no tab of its own, so the pane's row stays the person's: a press on its row opens
 it in peek, its live terminal on a card over the side pane, a cell in from it (a column at the
 sides, a row over and under), with what's behind dimmed (panel 5). The card's header, its first
-row, has its mark, its name in bold, the spinner while it works, what it's doing, "· from" its
-agent's tab, Keep as Tab and ×; a line under it, then the terminal, sized to the card. Keep as
-Tab is its words in the accent where there are pictures, not the board's chip, which on a
-one-row header would stand within 8 px of the line under it. The
+row, has its mark, its name in bold, what it's doing as a mark and a word in that state's
+colour (the spinner and "working" in the blue, a green dot and "done" once it has finished a
+turn, the attention colour's dot and "asking", the red's and "error"; ready and waiting, its
+word alone and quieter, as its row in the Agents list has no mark then), "· from" its agent's
+tab, quieter, Keep as Tab and ×; a line under it, then the terminal, sized to the card, a
+column inside its panel. The header's parts are laid out by what each measures, from their
+ink: 16 px between the name, what it's doing and who started it, and a mark 8 px from its word
+(by cells, "from Claude…" was cut with 82 px to spare, and the gaps ran 10 to 21 px). Who
+started it is whole or not there: "· from Cl…" said nothing in a narrow pane. Keep as Tab is a quiet button, as the
+board has it, at its height on the terminal's line as a button on a pointed row is
+(`Grid::row_button`), which keeps 9 px from the card's edge and from the line under the header on
+a row with room. The
 keyboard and pastes go to it while it's open; a press outside it or its × closes it, and the
 press does nothing else. Keep as Tab gives it a tab of its own, in front. A helper that outlives
 its agent gets one too.
@@ -1510,7 +1542,7 @@ what opened it (decided 17 November 2026, after herdr: it showed the Agents list
 which took the pane over to start one thing). Terminal comes first, then every agent Cellix
 starts in the order it knows them, each with its mark: one installed is picked by its digit
 while the menu is open, 1 to 9 down the list, and Terminal by T; one not installed is dimmed
-with "not installed" at its end and does nothing, since installing is the person's to choose
+with "not installed" at its end, and does nothing, since installing is the person's to choose
 (Settings' Integrations says how). Then ROLES, and then New Worktree…. The list in the pane
 stays, for what's running.
 
@@ -1546,9 +1578,14 @@ instead, with a word saying so.
 
 ### Review with an agent
 
-Review's list ends, a row under its files, with Review with…, a quiet button; the palette has
-Agent: Review Changes with… for where there's no list. Both drop a menu of the agents Cellix
-starts, those not installed dimmed. The one picked starts in the pane as the Reviewer role does,
+Review's list ends, a row under its files, with its buttons: Commit with how many files it
+takes, "Commit · 1 staged", where any are staged, filled, and Review with…, a quiet button, each
+as wide as its words. They stand side by side where both fit, and one under the other in a list
+too narrow for both, as Review's own 24 columns is (Commit filled the list's width and said
+"Commit" alone, under the last file with no row of air). The palette has Agent: Review Changes
+with… for where there's no list. Both drop a menu of the agents Cellix
+starts, each with its own mark, those not installed dimmed. From the button it stands 8 px under
+it, hung as a menu under a line is (`Menu::hang`), where it stood 3 px under the button's foot. The one picked starts in the pane as the Reviewer role does,
 called reviewer while that name is free, its first prompt the role's with its first line saying
 which changes Review compares and the git command that shows them: since the last commit (`git
 diff HEAD`), since a turn's checkpoint, or one turn's own (`git diff <before> <after>`). A
@@ -1558,8 +1595,10 @@ changes is told them before the rest.
 The role tells it to change nothing and to leave each finding with `cellix suggest`, which makes
 a comment suggested by that agent. Review shows each under its line in the cards, after the
 person's own: "Suggested by Codex · Clarity" in the accent, as the Comments list says it, its
-words cut with an ellipsis, and Keep and Dismiss at the row's end. Those are words lit under the
-pointer, not chips: a note is one row, and a chip on it would stand within 8 px of its edges.
+words cut with an ellipsis, and Keep and Dismiss at the row's end: quiet buttons at their height on the
+terminal's line (`Grid::row_button`), which on a one-row note keep 9 px from its edges, and the same two
+quiet buttons on the suggestion's card in the Comments list, where Keep had been filled and
+Dismiss words, and under the line both had been words in the accent.
 Kept, it's the person's comment, and one on code goes with the review as theirs do; dismissed,
 it's resolved and gone. The Comments list's Keep and Dismiss do the same.
 
@@ -1842,7 +1881,11 @@ nobody in it left out. A row is the agent's mark, its name (its tab's, where it 
 long since what it's doing changed (`<1m`, `5m`, `2h`, `3d`, which the half-second tick keeps
 up and nothing redraws faster for), and at its end what that is: the spinner, a small chip
 saying "needs you" in the attention colour with what it's asking on the row under it, a green
-dot, or nothing. Done is an agent that finished a turn nobody has looked at: it stays Done
+dot, or nothing. Every row keeps room at its end as wide as that chip, so how long ago stands in
+one column down the list (it moved six columns left on the row that needs you). Under START,
+what can be started is listed as the + menu lists it: Terminal first, a rule, then the agents,
+one row each with its mark and what it runs at the row's end, where each had a + and "Starts
+here, working on this project" under it. Done is an agent that finished a turn nobody has looked at: it stays Done
 until its tab is in front, or for one with no tab here, until its row is pressed; a press on a
 row with a tab brings the tab forward. A row can stand under another, a step in with a line
 bent round from its parent's mark, in its parent's section whatever it is itself

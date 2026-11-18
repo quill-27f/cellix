@@ -15,9 +15,17 @@ const SECTION_SIZE: u8 = 80;
 const DETAIL_SIZE: u8 = 85;
 /// Room between a section's heading and how many are in it, in cells.
 const COUNT_GAP: f32 = 0.6;
-/// Room at a row's end for what the agent is doing, and between that and how long ago.
+/// Room at a row's end for a turning or done mark, and between what's doing and how long ago.
 const STATE_WIDTH: f32 = 2.0;
 const AGO_GAP: f32 = 0.8;
+/// How far the mark of the row a helper stands under reaches down into its own row, in rows:
+/// its line bent round starts 8 px under that, where it ran into the mark's foot.
+const ELBOW_TOP: f32 = 0.04;
+/// How far short of a helper's mark that line ends, in columns, about 9 px.
+const ELBOW_END: f32 = 0.55;
+/// How strong the line is, toward the words' colour: about #45474a on the dark sheet, where
+/// the sheet's own hairline, 1.3 to 1, could hardly be seen.
+const ELBOW_SHARE: f32 = 0.21;
 /// The chip that says an agent needs the person: its words, their size, its air either side
 /// of them, its height and how strong its wash is.
 const NEEDS_YOU: &str = "needs you";
@@ -267,6 +275,9 @@ enum Line {
     Tree(usize),
     /// An index into `installed`.
     Start(usize),
+    /// A row with a line across its middle, between the terminal and the agents to start, as
+    /// the + menu has; a blank row on cells, which have no hairline.
+    Rule,
 }
 
 /// The Agents panel: who's running, who needs you, and where work is happening.
@@ -486,16 +497,19 @@ impl Agents {
             lines.extend(section.into_iter().map(Line::Agent));
         }
         // Starting one comes before the worktrees, which can be a long list to scroll past.
-        // A terminal isn't an agent, so it stands apart from them, under a name that fits both.
+        // In the + menu's order, one row each: the terminal first, which isn't an agent, then
+        // a rule, then the agents.
         if !self.installed.is_empty() {
             lines.push(Line::Gap);
             lines.push(Line::Section("START"));
-            for (index, (_, program)) in self.installed.iter().enumerate() {
-                if *program == SHELL.1 && index > 0 && !self.docked {
-                    lines.push(Line::Gap);
-                }
-                lines.push(Line::Start(index));
+            let shell = |(_, (_, program)): &(usize, &(&str, &str))| *program == SHELL.1;
+            let (terminal, agents): (Vec<_>, Vec<_>) =
+                self.installed.iter().enumerate().partition(shell);
+            lines.extend(terminal.iter().map(|(index, _)| Line::Start(*index)));
+            if !terminal.is_empty() && !agents.is_empty() {
+                lines.push(Line::Rule);
             }
+            lines.extend(agents.iter().map(|(index, _)| Line::Start(*index)));
         }
         if !self.worktrees.is_empty() {
             lines.push(Line::Gap);
@@ -552,7 +566,6 @@ impl Agents {
             // else one says that's more than its state's own word.
             Line::Agent(at) if order[*at].0.tells() => 2,
             Line::Agent(_) => 1,
-            Line::Start(_) => 2,
             // One worktree is just this folder, so it needs no second line to tell them apart.
             Line::Tree(_) if self.worktrees.len() > 1 => 2,
             _ => 1,
@@ -639,7 +652,11 @@ impl Agents {
                         let wash = band(Rect::new(area.x, y, area.w, 1));
                         grid.panel(wash, 18, Some(theme.row_hover), None);
                     }
-                    draw_row(grid, (area, y), (row, depth), (measure, theme));
+                    // A helper stands in its agent's section, and its name reads as that
+                    // section's do; its mark at the row's end says what it's doing itself.
+                    let top = order[..=at].iter().rev().find(|(_, d)| *d == 0);
+                    let section = top.map_or(row.urgency, |(r, _)| r.urgency);
+                    draw_row(grid, (area, y), (row, depth, section), (measure, theme));
                     if rows > 1 {
                         let x = side + 2 + 2 * u16::from(depth);
                         let at = x as f32;
@@ -659,28 +676,29 @@ impl Agents {
                         let wash = band(row);
                         grid.panel(wash, 18, Some(theme.row_hover), None);
                     }
-                    let plus = Style {
-                        fg: theme.gutter.fg,
-                        ..theme.sidebar
-                    };
-                    grid.label(side, y, "+", plus, side + 2);
+                    // As the + menu has it: the program's own mark, its name, and what it
+                    // runs at the end of its one row.
                     let (label, program) = self.installed[index];
-                    grid.label(side + 2, y, label, theme.sidebar, area.right());
-                    if self.docked {
-                        // What it runs, at the end of its one row.
-                        let shown = if program == SHELL.1 { "shell" } else { program };
-                        let right = area.right().saturating_sub(2);
-                        grid.label_right(right, y, shown, dim, DETAIL_SIZE);
-                        y += rows;
-                        continue;
-                    }
-                    let note = if program == SHELL.1 {
-                        "A plain terminal in this project"
-                    } else {
-                        "Starts here, working on this project"
+                    let (icon, color) = mark(program, theme);
+                    let fallback = crate::toolbar::fallback(icon);
+                    grid.glyph(side as f32, y, icon, color, fallback, theme.sidebar);
+                    let shown = if program == SHELL.1 { "shell" } else { program };
+                    let right = area.right().saturating_sub(2);
+                    let font = Font {
+                        size: DETAIL_SIZE,
+                        ..Font::default()
                     };
-                    let x = (side + 2) as f32;
-                    grid.label_at(x, side + 2, y + 1, note, dim, area.right(), DETAIL_SIZE);
+                    let wide = measure.width(shown, font).ceil() as u16;
+                    let stop = right.saturating_sub(wide + 1).max(side + 3);
+                    grid.label(side + 2, y, label, theme.sidebar, stop);
+                    grid.label_right(right, y, shown, dim, DETAIL_SIZE);
+                }
+                Line::Rule => {
+                    // In the middle of its own row, from where the words start to where they
+                    // end, so nothing comes within 8 px of it.
+                    let across = f32::from(area.right().saturating_sub(2) - side);
+                    let rule = Bounds::cells(side as f32, y as f32 + 0.5, across, 0.0);
+                    grid.hairline(rule, theme.border);
                 }
             }
             y += rows;
@@ -803,27 +821,33 @@ impl Agents {
 
 /// One agent's row: its program's mark, its name, and at the row's end how long since what
 /// it's doing changed and what that is: turning while it works, a chip while it needs you, a
-/// green dot when it's done and nobody has looked, and nothing while it's idle. A helper
-/// stands two columns in for each agent over it, with a line bent round from that one's mark.
+/// green dot when it's done and nobody has looked, and nothing while it's idle. How long ago
+/// stands in one column down the list, before room as wide as the "needs you" chip. A helper
+/// stands two columns in for each agent over it, with a line bent round from that one's mark,
+/// its name as its section's are, `section` being its top agent's urgency.
 fn draw_row(
     grid: &mut Grid,
     (area, y): (Rect, u16),
-    (row, depth): (&Row, u8),
+    (row, depth, section): (&Row, u8, Urgency),
     (measure, theme): (&dyn Measure, &Theme),
 ) {
     let side = area.x + 2 + 2 * u16::from(depth);
     if depth > 0 {
         let elbow = side.saturating_sub(2);
+        let line = mix(theme.text.fg, theme.sidebar.bg, ELBOW_SHARE);
         if measure.in_cells() {
             let line = Style {
-                fg: theme.border,
+                fg: line,
                 ..theme.sidebar
             };
             grid.put_str(elbow, y, "└", line, elbow + 1);
         } else {
             let x = elbow as f32 + 0.9;
-            grid.hairline(Bounds::cells(x, y as f32 - 0.3, 0.0, 0.8), theme.border);
-            grid.hairline(Bounds::cells(x, y as f32 + 0.5, 0.8, 0.0), theme.border);
+            let top = y as f32 - ELBOW_TOP;
+            let down = Bounds::cells(x, top, 0.0, 0.5 + ELBOW_TOP);
+            grid.hairline(down, line);
+            let across = (side as f32 - ELBOW_END - x).max(0.2);
+            grid.hairline(Bounds::cells(x, y as f32 + 0.5, across, 0.0), line);
         }
     }
     let color = crate::dock::icon_colour(row.icon, theme);
@@ -849,10 +873,11 @@ fn draw_row(
         }
         Urgency::NeedsYou | Urgency::Idle => {}
     }
-    let mut end = state - AGO_GAP;
     if row.urgency == Urgency::NeedsYou {
-        end = draw_needs_you(grid, (right, y), (measure, theme)) - AGO_GAP;
+        draw_needs_you(grid, (right, y), (measure, theme));
     }
+    // Every row keeps the chip's room for its state, so how long ago is one column.
+    let mut end = f32::from(right) - chip_width(measure) - AGO_GAP;
     let dim = Style {
         fg: theme.gutter.fg,
         ..theme.sidebar
@@ -867,8 +892,9 @@ fn draw_row(
         grid.label_right(end.floor() as u16, y, &said, dim, DETAIL_SIZE);
         end -= wide + AGO_GAP;
     }
-    // Whoever is doing nothing is quieter, and not bold.
-    let name = if row.urgency == Urgency::Idle {
+    // Whoever is doing nothing is quieter, and not bold: a helper by its section.
+    let quiet = if depth > 0 { section } else { row.urgency };
+    let name = if quiet == Urgency::Idle {
         Style {
             fg: theme.tab.fg,
             ..theme.sidebar
@@ -907,20 +933,28 @@ fn draw_row(
 const HELPER: &str = "helper";
 const HELPER_GAP: f32 = 1.0;
 
-/// The chip that says an agent needs the person, at the end of its row, in the attention
-/// colour on a wash of it. Returns where it starts.
-fn draw_needs_you(
-    grid: &mut Grid,
-    (right, y): (u16, u16),
-    (measure, theme): (&dyn Measure, &Theme),
-) -> f32 {
+/// How wide the chip that says an agent needs the person is, in cells: its words and their
+/// air, or on cells its words alone.
+fn chip_width(measure: &dyn Measure) -> f32 {
+    if measure.in_cells() {
+        return NEEDS_YOU.len() as f32;
+    }
     let font = Font {
         size: CHIP_SIZE,
         bold: true,
         ..Font::default()
     };
-    let words = measure.width(NEEDS_YOU, font);
-    let wide = words + CHIP_PAD * 2.0;
+    measure.width(NEEDS_YOU, font) + CHIP_PAD * 2.0
+}
+
+/// The chip that says an agent needs the person, at the end of its row, in the attention
+/// colour on a wash of it.
+fn draw_needs_you(
+    grid: &mut Grid,
+    (right, y): (u16, u16),
+    (measure, theme): (&dyn Measure, &Theme),
+) {
+    let wide = chip_width(measure);
     let left = f32::from(right) - wide;
     let wash = mix(theme.attention, theme.sidebar.bg, CHIP_WASH);
     let top = y as f32 + (1.0 - CHIP_HIGH) / 2.0;
@@ -939,11 +973,6 @@ fn draw_needs_you(
     };
     let cell = right.saturating_sub(NEEDS_YOU.len() as u16);
     grid.label_at(left + CHIP_PAD, cell, y, NEEDS_YOU, style, right, CHIP_SIZE);
-    if measure.in_cells() {
-        cell as f32
-    } else {
-        left
-    }
 }
 
 /// `color` over `ground` at `share` of its strength.
@@ -1031,6 +1060,8 @@ p3\nccodex\nfcwd\nn/work/project/sub\n";
         assert!(found.is_some(), "and the last one can be clicked");
     }
 
+    /// What can be started is listed as the + menu lists it: the terminal first, a rule, then
+    /// the agents, one row each with its mark and what it runs at the row's end.
     #[test]
     fn the_terminal_stands_apart_from_the_agents() {
         let agents = Agents {
@@ -1045,13 +1076,37 @@ p3\nccodex\nfcwd\nn/work/project/sub\n";
                 .collect()
         };
         let (claude, codex, shell) = (rows("claude"), rows("codex"), rows(SHELL.1));
-        assert_eq!(codex[0], claude[1] + 1, "one agent right under the other");
         assert_eq!(
-            shell[0],
-            codex[1] + 2,
-            "and a row of air before the terminal"
+            (claude.len(), codex.len(), shell.len()),
+            (1, 1, 1),
+            "a row each"
         );
-        assert_eq!(agents.hit(area, codex[1] + 1, 0, &[]), None);
+        assert_eq!(
+            claude[0],
+            shell[0] + 2,
+            "the terminal first, and a rule's row"
+        );
+        assert_eq!(codex[0], claude[0] + 1, "one agent right under the other");
+        assert_eq!(agents.hit(area, shell[0] + 1, 0, &[]), None, "the rule");
+        let theme = Theme::default();
+        let look: (&dyn Measure, &Theme) = (&cellix_render::CellMeasure, &theme);
+        let mut grid = Grid::new(40, 30, Style::default());
+        agents.draw(&mut grid, area, (0, &[], 0.0), None, look);
+        let said = |y: u16| grid.row_text(y);
+        assert!(
+            said(shell[0]).trim_start().starts_with("> Terminal"),
+            "{}",
+            said(shell[0])
+        );
+        assert!(
+            said(shell[0]).trim_end().ends_with("shell"),
+            "{}",
+            said(shell[0])
+        );
+        assert!(said(claude[0]).trim_start().starts_with("✻ Claude Code"));
+        assert!(said(claude[0]).trim_end().ends_with("claude"));
+        assert!(said(codex[0]).trim_start().starts_with("⬡ Codex"));
+        assert!(!grid.text().contains("Starts here"), "{}", grid.text());
 
         // With no agent installed there's nothing to stand apart from.
         let alone = Agents {
