@@ -3142,3 +3142,11 @@ The fix-spacing track, from the reviews of 0.11.0's whole tour: older spacing fa
 - Where a row is the terminal's own line none of this has room, and things stand as they did.
 - Tests (`app/spacing_tests.rs`, in the tour's pixels): `a_program_in_the_pane_keeps_a_column_of_air_by_the_windows_edge`, `bands_and_cards_stand_as_far_in_from_both_sides_of_the_sheet`, `a_comments_card_is_as_far_from_both_sides_of_the_sheet`, `nothing_under_a_tab_row_stands_within_8_px_of_its_line`, `show_source_keeps_clear_of_the_tab_line`, `a_panels_grid_is_as_far_from_its_top_as_its_sides`.
 - Not done: the prompt (20-prompt: its field 10 px from its foot, its label 20 from its top) needs another row or a panel past its rows, which covers the tops of the words under it; the Inbox's wash, other lists' bands and the top right's icon chips weren't measured or moved; the selection bar over a block's edge (73) and the formula box's scrollbar (46) were left.
+
+## A status message uses the room it has (2026-11-18)
+
+The fix-spacing track, from Part 3 #1 of the review of 0.11.0's tour (95-editor-maximized): what says the sidebar and panes are hidden was cut at "…double-click its tab to re", with no ellipsis and 375 px free before "Spaces: 4".
+
+- It was cut where the details' cells start, counted a cell a letter; painted, they're far narrower. Now, with pictures, the words have the bar up to where the details are painted, two columns short of them (`STATUS_GAP`), and are cut with an ellipsis only where even that's too short (`source::clip_as`). On cells it's as it was.
+- Test: `a_status_message_uses_the_room_the_details_leave` (the maximized file's message whole; a long message cut with an ellipsis short of the bell).
+- Not done: its cells, which the tour reads, still stop where the details' cells begin.

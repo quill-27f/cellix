@@ -5871,5 +5871,12 @@
     "title": "The table picker's and the math panel's grids stand as far from the panel's top as from its sides",
     "test": "a_panels_grid_is_as_far_from_its_top_as_its_sides",
     "passes": true
+  },
+  {
+    "id": "status-message-painted-room",
+    "milestone": 15,
+    "title": "A status message has the bar up to where its details are painted, and an ellipsis only where that's too short",
+    "test": "a_status_message_uses_the_room_the_details_leave",
+    "passes": true
   }
 ]

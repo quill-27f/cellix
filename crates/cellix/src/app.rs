@@ -229,6 +229,9 @@ fn status_chip(measure: &dyn Measure) -> (f32, f32) {
 const PROBLEM_MARK: u8 = 74;
 /// Columns of air a status chip keeps either side of what it holds.
 const STATUS_PAD: f32 = 0.6;
+/// The least between the status bar's words and the details at its other end, in cells:
+/// more than between two of the details, so the words don't read as one of them.
+const STATUS_GAP: f32 = 2.0;
 /// Rows tall the bell is on the terminal's own line, where its chip is short: about as tall
 /// as the status words' capitals.
 const BELL_ICON: f32 = 0.50;
@@ -18384,13 +18387,40 @@ impl App {
         } else {
             bar
         };
-        grid.label_at(x as f32, x, y, left, said, right_x.saturating_sub(1), 90);
         // A status item's width from the bell, as the items are from each other.
         let right_end = if bell.is_some() {
             end
         } else {
             end.saturating_sub(1)
         };
+        // Painted, the words have until the details start as they're painted, which is
+        // well before their cells, and end in an ellipsis only where even that's too short.
+        // By the cells a message was cut mid-word with a fifth of the bar still free.
+        let limit = right_x.saturating_sub(1);
+        if self.measure.in_cells() {
+            grid.label_at(x as f32, x, y, left, said, limit, 90);
+        } else {
+            let details = if right.is_empty() {
+                0.0
+            } else {
+                self.measure.width(&right, status_font) + STATUS_GAP
+            };
+            let edge = f32::from(right_end) - details;
+            let left =
+                crate::source::clip_as(left, edge - f32::from(x), status_font, &*self.measure);
+            let style = Style {
+                painted: true,
+                ..said
+            };
+            grid.put_str(x, y, &left, style, limit);
+            grid.text_run(
+                (f32::from(x), f32::from(y)),
+                edge,
+                &left,
+                (said.fg, false),
+                status_font,
+            );
+        }
         grid.label_right(right_end, y, &right, bar, 90);
         if let Some(spot) = bell {
             self.draw_status_bell(grid, spot, y);

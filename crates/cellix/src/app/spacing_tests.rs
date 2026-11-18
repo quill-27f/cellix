@@ -83,6 +83,49 @@ fn panels(grid: &Grid) -> Vec<(Bounds, Option<Rgb>, Option<Rgb>, bool)> {
         .collect()
 }
 
+/// A status message has the bar up to the details at its other end, as they're painted, and
+/// ends in an ellipsis only where even that's too short. With a file maximized, what says so
+/// was cut at "to re" with 375 px free.
+#[test]
+fn a_status_message_uses_the_room_the_details_leave() {
+    let (dir, mut app) = project((150, 40));
+    app.open(&dir.path().join("alpha.txt")).unwrap();
+    app.message.borrow_mut().clear();
+    app.maximized = Some(Maximized::Editor);
+    let grid = screen(&app);
+    let said = grid.paint.iter().find_map(|p| match p {
+        Paint::Text { text, .. } if text.starts_with("Sidebar and panes hidden") => {
+            Some(text.clone())
+        }
+        _ => None,
+    });
+    let said = said.expect("the bar says what's hidden");
+    assert!(said.ends_with("to restore"), "{said}");
+    // One that can't fit ends in an ellipsis, short of the details.
+    app.maximized = None;
+    app.say(format!("Couldn't open {}", "a-very-long-name/".repeat(20)));
+    let grid = screen(&app);
+    let said = grid.paint.iter().find_map(|p| match p {
+        Paint::Text { text, x, .. } if text.starts_with("Couldn't open") => {
+            Some((text.clone(), *x))
+        }
+        _ => None,
+    });
+    let (said, x) = said.expect("the message");
+    assert!(said.ends_with('…'), "{said}");
+    let font = cellix_render::Font {
+        size: 90,
+        ..cellix_render::Font::default()
+    };
+    let end = px(x) + app.measure.width(&said, font) * CELL;
+    let (bell, _) = app.status_bell().expect("the bell");
+    assert!(
+        end <= f32::from(bell) * CELL,
+        "{end} px, the bell at {}",
+        bell
+    );
+}
+
 /// With pictures, a program in the pane has a column fewer than the pane, so its last
 /// column doesn't stand on the sheet's edge at the window's side; on cells it has them all.
 #[test]
