@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
+use cellix_doc::changes::Syntax;
 use cellix_doc::diagram::{Kind, Raster};
 use cellix_doc::figure::image_line;
 use cellix_doc::latex::Project;
@@ -1342,32 +1343,62 @@ struct Context<'a> {
     spanning: Vec<Spanning>,
 }
 
-/// A suggestion running across lines, as char places in the document.
+/// A suggestion running across lines, as char places in the document: where it starts and
+/// ends, and where the words it adds and the words it takes away stand inside it. The rest of
+/// it is its own marks.
 struct Spanning {
     start: usize,
     end: usize,
-    kind: cellix_doc::changes::Kind,
-    arrow: usize,
+    added: (usize, usize),
+    taken: (usize, usize),
+}
+
+impl Spanning {
+    /// Where a change's parts stand. CriticMarkup's marks are three chars each side and two
+    /// for a replacement's arrow, the old words first; the `changes` package's are the command
+    /// to its first brace, and a replacement's new words come first, a `}{` before the old.
+    fn of(change: &cellix_doc::changes::Change, text: &str, syntax: Syntax) -> Self {
+        use cellix_doc::changes::Kind;
+        let (start, end) = (change.start, change.end);
+        let (new, old) = (change.new.chars().count(), change.old.chars().count());
+        let (added, taken) = match syntax {
+            Syntax::Critic => match change.kind {
+                Kind::Insert => ((start + 3, end - 3), (0, 0)),
+                Kind::Delete => ((0, 0), (start + 3, end - 3)),
+                Kind::Replace => ((end - 3 - new, end - 3), (start + 3, start + 3 + old)),
+            },
+            Syntax::Latex => {
+                let brace = text.chars().skip(start).position(|c| c == '{').unwrap_or(0);
+                let open = start + brace + 1;
+                match change.kind {
+                    Kind::Insert => ((open, end - 1), (0, 0)),
+                    Kind::Delete => ((0, 0), (open, end - 1)),
+                    Kind::Replace => ((open, open + new), (end - 1 - old, end - 1)),
+                }
+            }
+        };
+        Self {
+            start,
+            end,
+            added,
+            taken,
+        }
+    }
 }
 
 impl Context<'_> {
     /// How a char inside a suggestion that runs across lines shows: as what it marks, or
     /// hidden when it's one of the suggestion's own markers. None outside them.
     fn across(&self, at: usize) -> Option<Option<Tone>> {
-        use cellix_doc::changes::Kind;
         let span = self.spanning.iter().find(|s| at >= s.start && at < s.end)?;
-        let marker = at < span.start + 3
-            || at >= span.end - 3
-            || (span.kind == Kind::Replace && (span.arrow..span.arrow + 2).contains(&at));
-        if marker {
-            return Some(None);
-        }
-        Some(Some(match span.kind {
-            Kind::Insert => Tone::Inserted,
-            Kind::Delete => Tone::Deleted,
-            Kind::Replace if at < span.arrow => Tone::Deleted,
-            Kind::Replace => Tone::Inserted,
-        }))
+        let within = |(from, to): (usize, usize)| at >= from && at < to;
+        Some(if within(span.added) {
+            Some(Tone::Inserted)
+        } else if within(span.taken) {
+            Some(Tone::Deleted)
+        } else {
+            None
+        })
     }
 }
 
@@ -1891,27 +1922,24 @@ pub fn layout_with(
     registry: &Registry,
     extras: &Extras,
 ) -> Vec<Row> {
-    // Only Markdown's marks are found here; a paper's go through its own commands.
-    let spanning = if extras.dialect == Dialect::Latex {
-        Vec::new()
+    // A suggestion on one line is seen whole where it stands, as a paper's command or as
+    // Markdown's marks; one across lines is found here, since no one line or block sees it.
+    let syntax = if extras.dialect == Dialect::Latex {
+        Syntax::Latex
     } else {
-        cellix_doc::changes::find(text, cellix_doc::changes::Syntax::Critic)
-            .into_iter()
-            .filter(|change| {
-                let chars = text
-                    .chars()
-                    .skip(change.start)
-                    .take(change.end - change.start);
-                chars.into_iter().any(|c| c == '\n')
-            })
-            .map(|change| Spanning {
-                arrow: change.start + 3 + change.old.chars().count(),
-                start: change.start,
-                end: change.end,
-                kind: change.kind,
-            })
-            .collect()
+        Syntax::Critic
     };
+    let spanning = cellix_doc::changes::find(text, syntax)
+        .into_iter()
+        .filter(|change| {
+            let chars = text
+                .chars()
+                .skip(change.start)
+                .take(change.end - change.start);
+            chars.into_iter().any(|c| c == '\n')
+        })
+        .map(|change| Spanning::of(&change, text, syntax))
+        .collect();
     let context = Context {
         measure,
         registry,

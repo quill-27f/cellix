@@ -38,5 +38,6 @@ missed with `cellix suggest <file> <line> <kind> "<exact words>" "<comment>"`, f
 haven't covered. Suggestions appear with Keep and Dismiss; don't edit the document yourself.
 
 When a comment asks for different wording, you can answer with the words themselves:
-`cellix reply <id> --suggest "<new words for the quoted text>"`. The reviewer sees Apply, which puts
-your rewrite in the document as a suggestion to accept or reject.
+`cellix reply <id> --suggest "<new words for the quoted text>"`, rewriting all of the quoted text,
+every line of it. The reviewer sees Accept Rewrite, which puts your words in its place, and Apply as
+Suggestion, which puts them in the document as a suggestion to accept or reject.

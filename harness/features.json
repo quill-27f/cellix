@@ -6347,5 +6347,19 @@
     "title": "The Comments pane counts a document's suggestions, with Accept All, Reject All and Next, which says which of how many",
     "test": "the_comments_pane_counts_the_suggestions_and_next_steps_through_them",
     "passes": true
+  },
+  {
+    "id": "accept-rewrite",
+    "milestone": 15,
+    "title": "Accept Rewrite puts an agent's rewrite in place of every line commented on, as one edit to undo",
+    "test": "accept_rewrite_takes_the_words_across_a_hard_wrapped_paragraph_in_one_step",
+    "passes": true
+  },
+  {
+    "id": "paper-suggestion-across-lines",
+    "milestone": 15,
+    "title": "A paper's suggestion whose words run onto another line shows on its page as one",
+    "test": "a_suggestion_across_lines_shows_on_a_papers_page",
+    "passes": true
   }
 ]

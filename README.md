@@ -133,6 +133,9 @@ words and Comment as you go, then press **Check my review** in the Comments pane
   Comments tab). It's every comment you kept, a file and a kind at a time in the document's order:
   each quote, your words, the agent's answers (*agrees* or *pushes back*), its line and whether
   it's resolved, under a head that counts them by kind. A referee report, ready to send on.
+- **A rewrite in one step.** When it answers a comment with a rewrite, **Accept Rewrite** puts it in
+  place of the words you commented on, every line of them, as one edit to undo; **Apply as
+  Suggestion** leaves it as a tracked change to settle on the page.
 
 - **You settle what's done.** An agent that did what a comment asks says so with
   `cellix reply <id> --done "what it did"`, and the card says *Addressed by Claude*, with

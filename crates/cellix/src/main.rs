@@ -127,7 +127,7 @@ Usage: cellix [--wait] [files]
   cellix threads            The comments on this project, as JSON
   cellix reply <id> <text>  Answers a comment, beside the document
   cellix reply <id> --suggest <text>
-                            Offers a rewrite of the words it's about, to apply
+                            Offers a rewrite of the words it's about, to accept
   cellix reply <id> --done <text>
                             Says you did what it asks, and what: the reviewer resolves it
   cellix suggest <file> <line> <kind> <quote> <text>

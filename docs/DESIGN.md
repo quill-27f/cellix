@@ -710,6 +710,16 @@ round the document and leaves the keyboard in the file, where the chips then sta
 is the document's in view, so the list of every file's comments has none. The suggestions are found
 once for each revision of the text, since every frame asks for them.
 
+An agent's rewrite of commented words (a reply starting `Rewrite:`) offers Accept Rewrite, Apply as
+Suggestion and Not this. Accept Rewrite puts it in place of the words as one edit to undo and
+resolves the comment, as committing a suggestion on GitHub resolves its conversation; Apply as
+Suggestion puts it in as a suggestion to settle on the page, which was the only way until 18
+November 2026. Both replace all of the commented words as they read now, found as a comment's
+words are (below). Where the three don't fit a card's row, what's over goes on the next. A paper's suggestion whose words run onto another
+line shows on its page as one, as a Markdown one does (`Spanning`), where a line's own command left
+a brace and lost the new words; across lines its new words stand before the old, as they do in its
+source and its PDF.
+
 The Outline in the sidebar lists a document's headings, or a paper's sections, and a click goes
 there. The side pane keeps what the last build said in a Log tab, and a line that names a place
 goes to it. Wide glyphs are looked up as sans-serif rather than monospace in the cells: asked for a

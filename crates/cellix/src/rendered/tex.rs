@@ -124,6 +124,15 @@ pub(super) fn inline(
     let mut i = 0;
     while i < chars.len() {
         let at = offset + i;
+        // Inside a suggestion that started or ends on another line, which no one line's
+        // command sees whole: its words in its tone, its own marks hidden.
+        if let Some(shown) = context.across(at) {
+            if let Some(tone) = shown {
+                out.push(glyph(chars[i], Some(at), Look { tone, ..look }));
+            }
+            i += 1;
+            continue;
+        }
         match chars[i] {
             '%' => {
                 for (n, c) in chars[i..].iter().enumerate() {
@@ -1414,6 +1423,36 @@ ignored after the end
                 }
             }
         }
+    }
+
+    /// A suggestion whose words run onto another line shows as one on the paper's page, as in
+    /// Markdown, where a line's own command left a brace and lost the new words.
+    #[test]
+    fn a_suggestion_across_lines_shows_on_a_papers_page() {
+        let source = "The cache \\replaced{comes last, after the index}{goes first,\nthen the \
+                      index} is built\nfrom the log, \\added{and a new\nline}, \\deleted[id=a]{and\nold}.\n";
+        let rows = page(source);
+        let all: String = rows.iter().map(text).collect::<Vec<_>>().join("\n");
+        for marker in ["\\replaced", "\\added", "\\deleted", "{", "}", "id=a"] {
+            assert!(!all.contains(marker), "{marker} shows: {all}");
+        }
+        let shown: Vec<&Glyph> = rows.iter().flat_map(|r| &r.glyphs).collect();
+        let letters: String = shown.iter().map(|g| g.ch).collect();
+        let tones = |word: &str| -> Vec<Tone> {
+            let at = letters
+                .find(word)
+                .unwrap_or_else(|| panic!("{word} in {letters}"));
+            let from = letters[..at].chars().count();
+            let count = word.chars().count();
+            shown[from..from + count].iter().map(|g| g.tone).collect()
+        };
+        assert!(tones("comes last").iter().all(|t| *t == Tone::Inserted));
+        assert!(tones("goes first,").iter().all(|t| *t == Tone::Deleted));
+        assert!(tones("then the index").iter().all(|t| *t == Tone::Deleted));
+        assert!(tones("and a new").iter().all(|t| *t == Tone::Inserted));
+        assert!(tones("old").iter().all(|t| *t == Tone::Deleted));
+        assert!(!tones("is built").contains(&Tone::Inserted));
+        assert!(!tones("is built").contains(&Tone::Deleted));
     }
 
     #[test]

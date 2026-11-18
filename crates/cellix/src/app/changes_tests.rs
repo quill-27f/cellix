@@ -280,3 +280,89 @@ fn accept_all_and_reject_all_in_the_comments_pane_settle_every_suggestion() {
     );
     assert_eq!(said(&app), "Rejected 3 changes");
 }
+
+fn typed(app: &mut App, text: &str) {
+    for c in text.chars() {
+        app.handle(Event::Key(KeyEvent::plain(Key::Char(c))));
+    }
+    app.handle(Event::Key(KeyEvent::plain(Key::Enter)));
+}
+
+/// Comments on what's selected, from `from` to the end of `to`, and has an agent answer with
+/// a rewrite.
+fn rewrite_asked(app: &mut App, (from, to): (&str, &str), rewrite: &str) -> u32 {
+    let text = app.active_text().unwrap();
+    let start = text[..text.find(from).unwrap()].chars().count();
+    let end = text[..text.find(to).unwrap()].chars().count() + to.chars().count();
+    let editor = app.editor_mut().unwrap();
+    editor.selections.set_single(cellix_core::Selection {
+        anchor: start,
+        head: end,
+        goal: None,
+    });
+    app.run(Command::AddComment);
+    typed(app, "Reword this");
+    let id = app.threads[0].id;
+    let (found, _) = std::sync::mpsc::channel();
+    app.serve(cellix_agent::Request::Reply {
+        id,
+        author: "Claude".into(),
+        text: format!("Rewrite: {rewrite}"),
+        found,
+    });
+    id
+}
+
+#[test]
+fn accept_rewrite_takes_the_words_across_a_hard_wrapped_paragraph_in_one_step() {
+    let source = "# Notes\n\nThe cache goes first,\nthen the index is built\nfrom the log.\n";
+    let (_dir, mut app) = page("note.md", source);
+    let id = rewrite_asked(&mut app, ("goes", "index"), "comes last, after the index");
+    let text = screen(&app).text();
+    assert!(
+        text.contains("Accept Rewrite") && text.contains("Apply as Suggestion"),
+        "{text}"
+    );
+    let button = spot(&app, "Accept Rewrite");
+    click(&mut app, (button.0 + 2, button.1));
+    assert_eq!(
+        app.active_text().unwrap(),
+        "# Notes\n\nThe cache comes last, after the index is built\nfrom the log.\n",
+        "every line of what was commented on, and nothing else"
+    );
+    let thread = app.threads.iter().find(|t| t.id == id).unwrap();
+    assert!(thread.resolved, "its ask is met");
+    assert!(!app.dock.focused);
+    undo(&mut app);
+    assert_eq!(app.active_text().unwrap(), source, "one edit to undo");
+}
+
+#[test]
+fn a_rewrite_applied_as_a_suggestion_in_a_paper_settles_by_its_chips() {
+    let source = paper("The cache goes first,\nthen the index is built\nfrom the log.");
+    let (_dir, mut app) = page("paper.tex", &source);
+    let id = rewrite_asked(&mut app, ("goes", "index"), "comes last, after the index");
+    let button = spot(&app, "Apply as Suggestion");
+    click(&mut app, (button.0 + 2, button.1));
+    let text = app.active_text().unwrap();
+    assert!(
+        text.contains(
+            "The cache \\replaced{comes last, after the index}{goes first,\nthen the index} is"
+        ),
+        "{text}"
+    );
+    let thread = app.threads.iter().find(|t| t.id == id).unwrap();
+    assert!(!thread.resolved, "still to be settled on the page");
+    let (x, y) = spot(&app, "comes last");
+    click(&mut app, (x + 2, y));
+    let (_, accept) = chips(&app).unwrap_or_else(|| {
+        let grid = screen(&app);
+        panic!("no chips by the rewrite at {x},{y}:\n{}", grid.text())
+    });
+    click(&mut app, accept);
+    let text = app.active_text().unwrap();
+    assert!(
+        text.contains("The cache comes last, after the index is built\nfrom the log."),
+        "{text}"
+    );
+}

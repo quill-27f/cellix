@@ -31,7 +31,11 @@ const EDITS: [&str; 2] = ["Edit", "Delete"];
 const ADDRESSED_BUTTONS: [&str; 2] = ["Resolve", "Not done"];
 /// Under a suggestion: take it, ask about it without taking it, or drop it.
 const CHOICES: [&str; 3] = ["Keep", "Reply", "Dismiss"];
-const REWRITE: [&str; 2] = ["Apply", "Not this"];
+/// Under an agent's rewrite: take it in place of the words, put it in as a suggestion to
+/// settle on the page, or turn it down.
+const ACCEPT_REWRITE: &str = "Accept Rewrite";
+const APPLY_REWRITE: &str = "Apply as Suggestion";
+const REWRITE: [&str; 3] = [ACCEPT_REWRITE, APPLY_REWRITE, "Not this"];
 const REOPEN: [&str; 1] = ["Reopen"];
 const CHECK: &str = "Check my review";
 /// What the row over the comments offers for the document's suggestions.
@@ -90,7 +94,9 @@ pub enum Hit {
     /// Takes an agent's suggestion as the reviewer's own, or drops it.
     Keep(u32),
     Dismiss(u32),
-    /// Puts an agent's rewrite in the document as a suggestion, or turns it down.
+    /// Puts an agent's rewrite in place of the words it's about, or in the document as a
+    /// suggestion, or turns it down.
+    AcceptRewrite(u32),
     Apply(u32),
     Decline(u32),
     /// Opens a resolved comment again.
@@ -173,8 +179,9 @@ enum Line {
     Edits(u32),
     /// Resolve and Not done, on a comment an agent says it addressed.
     Addressed(u32),
-    /// Apply and Not this, under a rewrite still to be decided.
-    Rewrite(u32),
+    /// Accept Rewrite, Apply as Suggestion and Not this, under a rewrite still to be decided:
+    /// which row of them, as many as a narrow card breaks them into.
+    Rewrite(u32, usize),
     /// What a comment is about, and what became of those words in a plan's next version.
     Quote(u32, String, Words),
     Text(u32, String),
@@ -409,6 +416,10 @@ const VERDICT_DROP: f32 = 0.05;
 /// How far a card's buttons are dropped in their row, in rows, so they stand half a row
 /// under the words above them: 13 px was the tightest words-to-button gap left.
 const ACTIONS_DROP: f32 = 0.14;
+/// How far the buttons under a rewrite are lifted in their row, so they stand nearer the
+/// rewrite than the comment's own buttons under them: dropped as those are, they stood 23 px
+/// under it and 11 over Reply.
+const REWRITE_LIFT: f32 = 0.11;
 
 /// A pill outlined in `tone`, its words in it, starting at `x`.
 fn draw_pill(
@@ -1547,7 +1558,8 @@ fn lay_out(
                 .last()
                 .is_some_and(|r| rewrite(&r.text).is_some())
         {
-            out.push(Line::Rewrite(id));
+            let rows = rewrite_rows(width, measure).len();
+            out.extend((0..rows).map(|row| Line::Rewrite(id, row)));
         }
         // While it's answered or changed its own buttons give way to the two that send
         // what's being written or drop it: one thing is being done to it at a time.
@@ -1640,6 +1652,27 @@ fn resolved_button(area: Rect, count: usize, shown: bool, measure: &dyn Measure)
     let labels = resolved_labels(count, shown);
     let labels = [labels[0].as_str(), labels[1].as_str()];
     control(area, &labels, Chevron::Unfolds(shown), measure)
+}
+
+/// The buttons under a rewrite, a row at a time: as many to a row as fit a card `width` wide,
+/// a button's gap apart.
+fn rewrite_rows(width: f32, measure: &dyn Measure) -> Vec<Vec<&'static str>> {
+    let mut rows: Vec<Vec<&'static str>> = Vec::new();
+    let mut used = 0.0;
+    for label in REWRITE {
+        let wide = button_cells(label, measure).chars().count() as f32;
+        match rows.last_mut() {
+            Some(row) if used + f32::from(BUTTON_GAP) + wide <= width + 1.0 => {
+                row.push(label);
+                used += f32::from(BUTTON_GAP) + wide;
+            }
+            _ => {
+                rows.push(vec![label]);
+                used = wide;
+            }
+        }
+    }
+    rows
 }
 
 /// Each button as (label, padded cells, start column): Edit and Delete with the others when
@@ -1865,12 +1898,14 @@ pub fn hit(
                 _ => Some(Hit::Dismiss(*id)),
             }
         }
-        Line::Rewrite(id) => {
-            let pressed = row_of(area, &REWRITE, measure)
+        Line::Rewrite(id, row) => {
+            let labels = rewrite_rows(width, measure).into_iter().nth(*row)?;
+            let pressed = row_of(area, &labels, measure)
                 .into_iter()
                 .find(|(_, cells, at)| x >= *at && x < at + cells.chars().count() as u16);
             match pressed?.0 {
-                "Apply" => Some(Hit::Apply(*id)),
+                ACCEPT_REWRITE => Some(Hit::AcceptRewrite(*id)),
+                APPLY_REWRITE => Some(Hit::Apply(*id)),
                 _ => Some(Hit::Decline(*id)),
             }
         }
@@ -2161,7 +2196,6 @@ pub fn draw(
                 | Line::Choices(_)
                 | Line::Addressed(_)
                 | Line::Reopen(_)
-                | Line::Rewrite(_)
                 | Line::Send(..)
         );
         match line {
@@ -2601,13 +2635,17 @@ pub fn draw(
                     grid.label_at(at, at.floor() as u16, y, &text, style, right, SMALL);
                 }
             }
-            Line::Rewrite(_) => {
-                for (label, cells, x) in row_of(area, &REWRITE, measure) {
-                    let main = label == "Apply";
+            Line::Rewrite(_, row) => {
+                let labels = rewrite_rows(width, measure).into_iter().nth(*row);
+                for (label, cells, x) in row_of(area, &labels.unwrap_or_default(), measure) {
+                    let width = cells.chars().count() as u16;
+                    let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
+                    // Taking it is what a rewrite is there for: the filled one.
+                    let main = label == ACCEPT_REWRITE;
                     let fill = if main {
                         theme.button
                     } else {
-                        theme.quiet_button(card)
+                        theme.secondary(card, on_it)
                     };
                     let style = Style {
                         bg: fill,
@@ -2616,6 +2654,8 @@ pub fn draw(
                     };
                     grid.button(x, y, &cells, label, fill, style);
                 }
+                // Up toward the rewrite they settle, and clear of the comment's own buttons.
+                grid.lift_since(from, REWRITE_LIFT);
             }
             Line::Choices(_) => {
                 // Keep, Reply and Dismiss: the first two answer it, the last drops it.

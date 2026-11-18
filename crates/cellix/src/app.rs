@@ -12262,7 +12262,8 @@ impl App {
             ThreadHit::Suggested(which) => {
                 self.take_suggestion(which);
             }
-            ThreadHit::Apply(id) => self.apply_rewrite(id),
+            ThreadHit::Apply(id) => self.apply_rewrite(id, false),
+            ThreadHit::AcceptRewrite(id) => self.apply_rewrite(id, true),
             // The keyboard stays in the file, where the suggestions are.
             ThreadHit::AcceptAll => {
                 self.run(Command::AcceptAllChanges);
@@ -12383,9 +12384,11 @@ impl App {
         }
     }
 
-    /// Puts an agent's rewrite in place of the words its comment is about, as a suggestion to
-    /// accept or reject like any other, so nothing changes until the reviewer says.
-    fn apply_rewrite(&mut self, id: u32) {
+    /// Puts an agent's rewrite in place of the words its comment is about: with `accept`, the
+    /// rewrite itself, as one edit to undo, and the comment is resolved, its ask met;
+    /// otherwise as a suggestion to accept or reject like any other, so nothing changes until
+    /// the reviewer says. The words are all that was commented on, as they read now.
+    fn apply_rewrite(&mut self, id: u32, accept: bool) {
         let Some(thread) = self.threads.iter().find(|t| t.id == id).cloned() else {
             return;
         };
@@ -12401,6 +12404,7 @@ impl App {
         if self.open(&path).is_err() {
             return;
         }
+        let area = self.focused_area();
         let Some(editor) = self.editor_mut() else {
             return;
         };
@@ -12416,18 +12420,36 @@ impl App {
             return;
         };
         let old = editor.buffer.rope().slice(start..end).to_string();
-        let marked = cellix_doc::changes::mark(&old, &words, editor.change_syntax());
+        let put = if accept {
+            words.clone()
+        } else {
+            cellix_doc::changes::mark(&old, &words, editor.change_syntax())
+        };
         editor
             .buffer
-            .replace_range(&mut editor.selections, start, end, &marked);
+            .replace_range(&mut editor.selections, start, end, &put);
+        let after = start + put.chars().count();
+        editor.selections.set_single(Selection::cursor(after));
+        editor.reveal(area);
+        // The keyboard goes to the words, where Undo would put the old ones back.
+        self.dock.focused = false;
         if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
             thread.replies.push(Reply::new(
                 YOU.to_string(),
-                "Applied the rewrite as a suggestion.".to_string(),
+                if accept {
+                    "Accepted the rewrite.".to_string()
+                } else {
+                    "Applied the rewrite as a suggestion.".to_string()
+                },
             ));
+            thread.resolved |= accept;
         }
         self.save_threads();
-        self.say("The rewrite is in as a suggestion: accept or reject it");
+        self.say(if accept {
+            "Took the rewrite and resolved the comment. Undo puts the old words back"
+        } else {
+            "The rewrite is in as a suggestion: accept or reject it"
+        });
     }
 
     /// Asks the agent to check the reviewer's comments on the document in view, and to
