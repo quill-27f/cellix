@@ -310,19 +310,23 @@ impl App {
             90,
         );
         grid.label(left, area.y + AGENT_ROW, "Start in it", base, right);
-        for (index, (rect, name)) in self.worktree_segments(form).into_iter().enumerate() {
-            crate::settings_page::draw_segment(grid, rect, name, index == form.picked, theme);
-        }
+        let segments: Vec<(Rect, &str, bool)> = self
+            .worktree_segments(form)
+            .into_iter()
+            .enumerate()
+            .map(|(index, (rect, name))| (rect, name, index == form.picked))
+            .collect();
+        let pointed = (self.hover, theme.popup, self.measure.in_cells());
+        crate::settings_page::draw_segments(grid, &segments, pointed, theme);
         let y = area.y + BUTTON_ROW;
         for (i, (cells, x)) in self.worktree_buttons().iter().enumerate() {
             let primary = i == 1;
             let width = cells.chars().count() as u16;
             let hovered = self.over_button((*x, y), width);
-            let quiet = theme.quiet_button(theme.popup);
-            let fill = match (primary, hovered) {
-                (true, _) => theme.button,
-                (false, true) => theme.quiet_button(quiet),
-                (false, false) => quiet,
+            let fill = if primary {
+                theme.button
+            } else {
+                theme.secondary(theme.popup, hovered)
             };
             let style = Style {
                 fg: if primary {

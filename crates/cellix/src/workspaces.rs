@@ -946,11 +946,8 @@ impl Workspaces {
             let on_it = self.hover.is_some_and(|(x, hy)| {
                 self.on_bar(hy) && f32::from(x) + 0.5 >= start && f32::from(x) + 0.5 < start + width
             });
-            let fill = if on_it {
-                theme.popup_hover
-            } else {
-                theme.row_active
-            };
+            // A quiet button, as every one that isn't the main action is.
+            let fill = theme.secondary(base.bg, on_it);
             grid.panel(chip, CHIP_RADIUS, Some(fill), None);
             let style = Style {
                 fg: theme.text.fg,
@@ -992,11 +989,9 @@ impl Workspaces {
             end - start,
             1.0 - 2.0 * CHIP_INSET,
         );
-        let fill = if on_it {
-            theme.popup_hover
-        } else {
-            theme.row_active
-        };
+        // A quiet button, with a hover that shows: it took a picked row's wash, and a menu's
+        // hover under the pointer, which on the frame were 1.07 to 1 apart.
+        let fill = theme.secondary(base.bg, on_it);
         grid.panel(chip, CHIP_RADIUS, Some(fill), None);
         let right = self.size.0.saturating_sub(1);
         let mark = start + self.room(PAD);
@@ -1732,6 +1727,45 @@ mod tests {
             _ => None,
         });
         assert_eq!(chip, Some(units(CHIP_INSET)));
+    }
+
+    /// New Workspace is a quiet button, as every action that isn't the main one is, and a step
+    /// further off the bar under the pointer. It took a picked row's wash, and a menu's hover
+    /// under the pointer, which on the frame were 1.07 to 1 apart.
+    #[test]
+    fn new_workspace_is_a_quiet_button_that_shows_the_pointer() {
+        use cellix_render::Paint;
+        let (_dir, first, second) = projects();
+        let mut spaces = spaces();
+        spaces.open(first);
+        spaces.open(second);
+        spaces.handle(Event::Resize(90, 30));
+        let (start, _) = spaces.new_button();
+        let chip = |spaces: &Workspaces| {
+            let at = cellix_render::units(start);
+            let grid = screen(spaces);
+            let fills = grid.paint_on_row(29).filter_map(|p| match p {
+                Paint::Panel {
+                    bounds,
+                    fill: Some(fill),
+                    ..
+                } if bounds.x == at => Some(*fill),
+                _ => None,
+            });
+            fills.last().expect("New Workspace's chip")
+        };
+        let theme = *spaces.theme();
+        let bar = theme.workspaces.bg;
+        assert_eq!(chip(&spaces), theme.secondary(bar, false), "at rest");
+        spaces.handle(Event::Mouse(MouseEvent {
+            kind: MouseKind::Move,
+            x: start as u16 + 1,
+            y: 29,
+            fine_x: start + 1.5,
+            fine_y: 29.5,
+            mods: Mods::default(),
+        }));
+        assert_eq!(chip(&spaces), theme.secondary(bar, true), "pointed at");
     }
 
     /// A worktree made for an agent opens as a workspace of its own, in front, with the

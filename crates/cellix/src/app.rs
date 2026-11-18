@@ -35827,6 +35827,93 @@ while True:
         assert!(!has(&app, Control::Theme("auto")));
     }
 
+    /// A row of choices is one track with a line round it: the chosen one filled with the
+    /// accent inside it, the others plain words on the page, and one that's pointed at washed.
+    /// Each was a box of its own in the frame's colour, which read as more text boxes, with
+    /// nothing to show under the pointer. The New Worktree dialog's agents are the same parts.
+    #[test]
+    fn a_row_of_choices_is_one_track_that_shows_the_pointer() {
+        let (_dir, mut app) = project();
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        app.run(Command::OpenSettings);
+        let area = app.sheet_area();
+        let (airy, comfortable, terminal) = {
+            let spots = app.settings_page.as_ref().unwrap().controls(area);
+            let at = |control: Control| spots.iter().find(|(_, c)| *c == control).unwrap().0;
+            (
+                at(Control::RowHeight("airy")),
+                at(Control::RowHeight("comfortable")),
+                at(Control::RowHeight("terminal")),
+            )
+        };
+        let unit = cellix_render::UNIT;
+        let (left, right) = (i32::from(airy.x) * unit, i32::from(terminal.right()) * unit);
+        // What's painted across the row's columns: its tracks, and what's filled inside them.
+        let row = |app: &App| {
+            let grid = screen(app);
+            let inside = |b: &Bounds| b.x >= left && b.x + b.w <= right;
+            let mut tracks = 0;
+            let mut fills = Vec::new();
+            for paint in grid.paint_on_row(airy.y) {
+                match paint {
+                    Paint::Panel {
+                        bounds,
+                        fill: None,
+                        border: Some(edge),
+                        ..
+                    } if inside(bounds) && bounds.w > (right - left) - unit => {
+                        assert_eq!(*edge, app.theme.popup_border, "the track's line");
+                        tracks += 1;
+                    }
+                    Paint::Panel {
+                        bounds,
+                        fill: Some(fill),
+                        ..
+                    } if inside(bounds) => fills.push((bounds.x / unit, *fill)),
+                    _ => {}
+                }
+            }
+            (tracks, fills)
+        };
+        let (tracks, fills) = row(&app);
+        assert_eq!(tracks, 1, "one track round the three");
+        assert_eq!(
+            fills,
+            vec![(i32::from(airy.x), app.theme.button)],
+            "only the chosen one is filled"
+        );
+        app.handle(mouse(MouseKind::Move, comfortable.x + 2, comfortable.y));
+        let (_, fills) = row(&app);
+        let washed = app.theme.quiet_button(app.theme.text.bg);
+        assert_eq!(
+            fills,
+            vec![
+                (i32::from(airy.x), app.theme.button),
+                (i32::from(comfortable.x), washed)
+            ],
+            "the one pointed at is washed"
+        );
+        // The chosen one doesn't change under the pointer: it's chosen either way.
+        app.handle(mouse(MouseKind::Move, airy.x + 2, airy.y));
+        let (_, fills) = row(&app);
+        assert_eq!(fills, vec![(i32::from(airy.x), app.theme.button)]);
+        // Its cells keep the page's colour under the paint, or they'd show as a square block
+        // round the rounded fill; on the cell tier, which has no paint, they're the accent's.
+        let cell = |app: &App| {
+            let spots = app
+                .settings_page
+                .as_ref()
+                .unwrap()
+                .controls(app.sheet_area());
+            let at = spots.iter().find(|(_, c)| *c == Control::RowHeight("airy"));
+            let rect = at.unwrap().0;
+            screen(app).cell(rect.x + 1, rect.y).style.bg
+        };
+        assert_eq!(cell(&app), app.theme.text.bg);
+        app.set_measure(Rc::new(cellix_render::CellMeasure));
+        assert_eq!(cell(&app), app.theme.button);
+    }
+
     #[test]
     fn settings_reach_the_editors_and_work_by_keyboard() {
         let (dir, mut app) = project();

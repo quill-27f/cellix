@@ -478,11 +478,27 @@ impl Theme {
         }
     }
 
+    /// Every button that isn't the main one, wherever it stands: the quiet fill over what's
+    /// behind it, and a second step off that under the pointer, so the hover always shows.
+    /// A pointed one took the menu's hover in places, which is darker than the quiet fill on a
+    /// card, so it went dimmer under the pointer.
+    pub fn secondary(&self, behind: Rgb, hovered: bool) -> Rgb {
+        let quiet = self.quiet_button(behind);
+        if hovered {
+            self.quiet_button(quiet)
+        } else {
+            quiet
+        }
+    }
+
     /// A button that isn't the main one, as a wash over whatever's behind it.
     pub fn quiet_button(&self, behind: Rgb) -> Rgb {
-        // Light grounds need a deeper wash to read as a button at all: Latte's base and a
-        // 14 step apart are 1.14:1, under the 1.3:1 a quiet button needs.
-        const WASH: i16 = 14;
+        // Dark, about herdr's raised, white at 9% over graphite's sheet (#2c2e31): the 14 of
+        // the blue-grey theme before it left a button on the sheet dimmer than a picked row
+        // beside it, and its hover hard to see. Light grounds need a deeper wash to read as a
+        // button at all: Latte's base and a 14 step apart are 1.14:1, under the 1.3:1 a quiet
+        // button needs.
+        const WASH: i16 = 20;
         const LIGHT_WASH: i16 = 24;
         let lighter = behind.0 < 128;
         let by = if lighter { WASH } else { -LIGHT_WASH };
@@ -1025,6 +1041,39 @@ mod tests {
             dark.tab_active,
         ] {
             assert!(brightness(panel.bg) < 80, "{panel:?}");
+        }
+    }
+
+    /// Every action that isn't the main one is one quiet kind of button, on the frame, a sheet,
+    /// a menu or a card: it stands off its ground, and under the pointer it moves a step
+    /// further off as plainly. A hover that took the menu's wash was darker than the button
+    /// at rest on a card, and the New Workspace button's was 1.07 to 1 from its rest.
+    #[test]
+    fn a_quiet_buttons_hover_shows_on_every_ground() {
+        for theme in [Theme::default(), Theme::named(Some("light"))] {
+            // A suggestion's card: the accent at 6% over a card.
+            let suggested = mix(theme.popup, theme.accent, 0.06);
+            for (name, ground) in [
+                ("the frame", theme.activity.bg),
+                ("a sheet", theme.text.bg),
+                ("a menu or a card", theme.popup),
+                ("a suggestion's card", suggested),
+            ] {
+                let (rest, over) = (
+                    theme.secondary(ground, false),
+                    theme.secondary(ground, true),
+                );
+                let (off, step) = (contrast(rest, ground), contrast(over, rest));
+                assert!(off >= 1.2, "{name}: at rest {off:.2} to 1 off its ground");
+                assert!(
+                    step >= 1.2,
+                    "{name}: pointed at, {step:.2} to 1 off its rest"
+                );
+                assert!(
+                    contrast(over, ground) > off,
+                    "{name}: further from its ground"
+                );
+            }
         }
     }
 

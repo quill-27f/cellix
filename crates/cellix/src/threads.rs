@@ -2186,20 +2186,12 @@ pub fn draw(
                 for (label, cells, x) in row_of(area, &CHOICES, measure) {
                     let width = cells.chars().count() as u16;
                     let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
-                    // Keep is the answer; Dismiss stays quiet until it's pointed at.
-                    let keep = label == "Keep";
-                    let fill = match (on_it, keep) {
-                        (true, _) => theme.popup_hover,
-                        (false, true) => theme.quiet_button(suggested_card),
-                        (false, false) => suggested_card,
-                    };
+                    // Neither is the panel's main action, so both are the one quiet kind, with
+                    // its hover: Dismiss was plain words beside a filled Keep.
+                    let fill = theme.secondary(suggested_card, on_it);
                     let style = Style {
                         bg: fill,
-                        fg: if keep || on_it {
-                            inner.fg
-                        } else {
-                            raised_muted
-                        },
+                        fg: inner.fg,
                         ..inner
                     };
                     grid.button(x, y, &cells, label, fill, style);
@@ -2211,10 +2203,10 @@ pub fn draw(
                     let width = cells.chars().count() as u16;
                     let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
                     let main = name != CANCEL;
-                    let fill = match (main, on_it) {
-                        (true, _) => theme.button,
-                        (false, true) => theme.popup_hover,
-                        (false, false) => theme.quiet_button(card),
+                    let fill = if main {
+                        theme.button
+                    } else {
+                        theme.secondary(card, on_it)
                     };
                     let style = Style {
                         bg: fill,
@@ -2232,9 +2224,10 @@ pub fn draw(
                     // Edit and Delete are the least of them: plain words until pointed at.
                     let plain = EDITS.contains(&label);
                     let fill = match (on_it, plain) {
-                        (true, _) => theme.popup_hover,
+                        // Pointed at, a plain one takes the quiet fill the others rest in.
+                        (true, true) => theme.secondary(card, false),
+                        (_, false) => theme.secondary(card, on_it),
                         (false, true) => card,
-                        (false, false) => theme.quiet_button(card),
                     };
                     let style = Style {
                         bg: fill,
@@ -2253,7 +2246,11 @@ pub fn draw(
                     let width = cells.chars().count() as u16;
                     let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
                     // Plain words until pointed at, as beside the other three.
-                    let fill = if on_it { theme.popup_hover } else { card };
+                    let fill = if on_it {
+                        theme.secondary(card, false)
+                    } else {
+                        card
+                    };
                     let style = Style {
                         bg: fill,
                         fg: if on_it { inner.fg } else { theme.popup_dim },
@@ -2266,11 +2263,7 @@ pub fn draw(
                 for (label, cells, x) in row_of(area, &REOPEN, measure) {
                     let width = cells.chars().count() as u16;
                     let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
-                    let fill = if on_it {
-                        theme.popup_hover
-                    } else {
-                        theme.quiet_button(card)
-                    };
+                    let fill = theme.secondary(card, on_it);
                     let style = Style {
                         bg: fill,
                         fg: inner.fg,

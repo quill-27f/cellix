@@ -1591,12 +1591,15 @@ impl Review {
             }
             ListRow::Space => {}
             ListRow::ReviewWith => {
-                let fill = theme.quiet_button(theme.sidebar.bg);
+                let cells = self.cells_of(REVIEW_WITH);
+                let wide = cells.chars().count() as u16;
+                let spot = Rect::new(list.x + 1, y, wide, 1);
+                let pointed = self.hover.get().is_some_and(|h| spot.contains(h.0, h.1));
+                let fill = theme.secondary(theme.sidebar.bg, pointed);
                 let style = Style {
                     fg: theme.text.fg,
                     ..theme.sidebar
                 };
-                let cells = self.cells_of(REVIEW_WITH);
                 grid.button(list.x + 1, y, &cells, REVIEW_WITH, fill, style);
             }
             ListRow::Test(index) => {

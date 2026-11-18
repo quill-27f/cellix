@@ -5759,5 +5759,26 @@
     "title": "Agent: Review Changes with... in the palette opens Review on the changes and drops the menu of agents from its button",
     "test": "the_palette_reviews_with_an_agent_from_review",
     "passes": true
+  },
+  {
+    "id": "quiet-buttons-one-kind",
+    "milestone": 15,
+    "title": "Every action that isn't the main one is one quiet button whose hover shows on any ground",
+    "test": "a_quiet_buttons_hover_shows_on_every_ground",
+    "passes": true
+  },
+  {
+    "id": "choices-one-track",
+    "milestone": 15,
+    "title": "A row of choices is one track: the chosen one in the accent, the others plain words that wash under the pointer",
+    "test": "a_row_of_choices_is_one_track_that_shows_the_pointer",
+    "passes": true
+  },
+  {
+    "id": "new-workspace-quiet-button",
+    "milestone": 15,
+    "title": "New Workspace is a quiet button a step further off the bar under the pointer",
+    "test": "new_workspace_is_a_quiet_button_that_shows_the_pointer",
+    "passes": true
   }
 ]

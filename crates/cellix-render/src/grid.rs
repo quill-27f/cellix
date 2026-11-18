@@ -581,6 +581,13 @@ impl Grid {
         self.centred_text(middle, y as f32 + drop - raised, label, style.fg, 90);
     }
 
+    /// A button's words by themselves, centred on `middle` in row `y` and raised in it as a
+    /// button's are, for a control that paints its own chip.
+    pub fn button_words(&mut self, middle: f32, y: u16, label: &str, color: Rgb) {
+        let raised = if self.roomy { 0.0 } else { BUTTON_WORDS };
+        self.centred_text(middle, y as f32 - raised, label, color, 90);
+    }
+
     /// Moves what was painted last down by part of a row.
     pub fn drop_last(&mut self, by: f32) {
         match self.paint.last_mut() {

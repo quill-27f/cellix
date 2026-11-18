@@ -101,6 +101,10 @@ const CARD_WIDTH: u16 = 24;
 const CARD_HEIGHT: u16 = 8;
 const PREVIEW_ROWS: u16 = 6;
 const SEGMENT_WIDTH: u16 = 11;
+/// A row of choices' track is a button's height, and the chosen one stands inside its line,
+/// this far in from its sides and its top and foot, in columns and rows: about 3 px each way.
+const SEGMENT_HEIGHT: f32 = 0.88;
+const SEGMENT_INSET: (f32, f32) = (0.18, 0.07);
 /// How far inside its row the wash behind a pointed row starts and ends, in rows: 4 of a
 /// row's 64 paint units, so its middle is the row's. At 0.055 it rounded to 4 over and 3
 /// under, 0.4 px low, which a button standing inside the wash showed as 3 px of it over the
@@ -1105,11 +1109,8 @@ impl SettingsPage {
                             let on = values.theme == *name;
                             draw_card(grid, *rect, name, (on, hovered(*control)), theme);
                         }
-                        Control::RowHeight(name) => {
-                            let label = ROW_HEIGHTS.iter().find(|r| r.0 == *name);
-                            let label = label.map_or("", |r| r.1);
-                            draw_segment(grid, *rect, label, values.row_height == *name, theme);
-                        }
+                        // Drawn together, as one track, after this.
+                        Control::RowHeight(_) => {}
                         _ => {
                             let words = SWITCHES.iter().find(|(switch, _)| switch == control);
                             if let Some((_, words)) = words {
@@ -1119,6 +1120,23 @@ impl SettingsPage {
                         }
                     }
                 }
+                let heights: Vec<(Rect, &str, bool)> = spots
+                    .iter()
+                    .filter(|(rect, _)| rect.h > 0)
+                    .filter_map(|(rect, control)| match control {
+                        Control::RowHeight(name) => {
+                            let label = ROW_HEIGHTS.iter().find(|r| r.0 == *name)?.1;
+                            Some((*rect, label, values.row_height == *name))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                draw_segments(
+                    grid,
+                    &heights,
+                    (hover, theme.text.bg, measure.in_cells()),
+                    theme,
+                );
             }
             Section::Editor => {
                 self.draw_editor(grid, page, &spots, values, (hover, measure), theme)
@@ -1257,11 +1275,20 @@ impl SettingsPage {
         };
         let segments =
             |grid: &mut Grid, y: u16, label: &dyn Fn(Control) -> Option<(&'static str, bool)>| {
-                for (rect, control) in spots.iter().filter(|(r, _)| r.y == y && r.h == 1) {
-                    if let Some((word, on)) = label(*control) {
-                        draw_segment(grid, *rect, word, on, theme);
-                    }
-                }
+                let row: Vec<(Rect, &str, bool)> = spots
+                    .iter()
+                    .filter(|(r, _)| r.y == y && r.h == 1)
+                    .filter_map(|(rect, control)| {
+                        let (word, on) = label(*control)?;
+                        Some((*rect, word, on))
+                    })
+                    .collect();
+                draw_segments(
+                    grid,
+                    &row,
+                    (hover, theme.text.bg, measure.in_cells()),
+                    theme,
+                );
             };
         let shared = keys::sharing(&self.shortcuts);
         let blocks = self.blocks();
@@ -1437,12 +1464,22 @@ impl SettingsPage {
         );
         let room = page.right().saturating_sub(SEGMENT_WIDTH * 3 + 1);
         draw_text(grid, page, (page.y + 3, room), KEYMAP, theme);
-        for (rect, control) in spots {
-            if let Control::Keymap(name) = control {
-                let label = KEYMAPS.iter().find(|k| k.0 == *name).map_or("", |k| k.1);
-                draw_segment(grid, *rect, label, values.keymap == *name, theme);
-            }
-        }
+        let keymaps: Vec<(Rect, &str, bool)> = spots
+            .iter()
+            .filter_map(|(rect, control)| match control {
+                Control::Keymap(name) => {
+                    let label = KEYMAPS.iter().find(|k| k.0 == *name).map_or("", |k| k.1);
+                    Some((*rect, label, values.keymap == *name))
+                }
+                _ => None,
+            })
+            .collect();
+        draw_segments(
+            grid,
+            &keymaps,
+            (hover, theme.text.bg, measure.in_cells()),
+            theme,
+        );
         let quiet = Style {
             fg: theme.gutter.fg,
             ..theme.text
@@ -1618,12 +1655,22 @@ impl SettingsPage {
         grid.hairline(above, theme.border);
         let room = page.right().saturating_sub(AUTO_SAVE_WIDTH * 3 + 1);
         draw_text(grid, page, (y, room), AUTO_SAVE, theme);
-        for (rect, control) in spots {
-            if let Control::AutoSave(name) = control {
-                let label = AUTO_SAVES.iter().find(|a| a.0 == *name).map_or("", |a| a.1);
-                draw_segment(grid, *rect, label, values.auto_save == *name, theme);
-            }
-        }
+        let saves: Vec<(Rect, &str, bool)> = spots
+            .iter()
+            .filter_map(|(rect, control)| match control {
+                Control::AutoSave(name) => {
+                    let label = AUTO_SAVES.iter().find(|a| a.0 == *name).map_or("", |a| a.1);
+                    Some((*rect, label, values.auto_save == *name))
+                }
+                _ => None,
+            })
+            .collect();
+        draw_segments(
+            grid,
+            &saves,
+            (hover, theme.text.bg, measure.in_cells()),
+            theme,
+        );
         let y = page.y + READING_ROW;
         let above = Bounds::cells(page.x as f32, y as f32 - 0.5, page.w as f32, 0.0);
         grid.hairline(above, theme.border);
@@ -1857,15 +1904,65 @@ type Shown<'a> = (
     &'a std::collections::HashMap<String, usize>,
 );
 
-/// One choice of a row of them, filled when it's the one chosen.
-pub(crate) fn draw_segment(grid: &mut Grid, rect: Rect, label: &str, on: bool, theme: &Theme) {
-    let fill = if on { theme.button } else { theme.activity.bg };
-    let style = Style {
-        fg: if on { theme.button_text } else { theme.text.fg },
-        ..theme.text
+/// A row of choices, one of them chosen: one track with a line round it and the ground showing
+/// through, the chosen one filled with the accent inside it, and the others plain words that
+/// wash under the pointer. Each was a box of its own in the frame's colour, so the ones not
+/// chosen read as more text boxes (the design review of 0.11.0).
+pub(crate) fn draw_segments(
+    grid: &mut Grid,
+    segments: &[(Rect, &str, bool)],
+    (hover, ground, cells): (Option<(u16, u16)>, Rgb, bool),
+    theme: &Theme,
+) {
+    let (Some(first), Some(last)) = (segments.first(), segments.last()) else {
+        return;
     };
-    let cells = format!("{label:^width$}", width = rect.w as usize);
-    grid.large_button(rect.x, rect.y, &cells, label, fill, style);
+    let (row, left, right) = (first.0.y, first.0.x, last.0.right());
+    let top = f32::from(row) + (1.0 - SEGMENT_HEIGHT) / 2.0;
+    let track = Bounds::cells(
+        f32::from(left),
+        top,
+        f32::from(right - left),
+        SEGMENT_HEIGHT,
+    );
+    grid.panel(track, 22, None, Some(theme.popup_border));
+    for (rect, label, on) in segments {
+        let hovered = !on && hover.is_some_and(|h| rect.contains(h.0, h.1));
+        let fill = if *on {
+            Some(theme.button)
+        } else if hovered {
+            Some(theme.quiet_button(ground))
+        } else {
+            None
+        };
+        let fg = if *on {
+            theme.button_text
+        } else {
+            theme.text.fg
+        };
+        // The cell tier has no paint, so there the chosen one is the accent's cells; where
+        // there's paint the cells keep the ground, or they'd show as a square block.
+        let style = Style {
+            fg,
+            bg: fill.filter(|_| cells).unwrap_or(ground),
+            painted: true,
+            ..theme.text
+        };
+        let words = format!("{label:^width$}", width = rect.w as usize);
+        grid.put_str(rect.x, rect.y, &words, style, rect.right());
+        if let Some(fill) = fill {
+            // Inside the track's line, with as much of the track showing on every side.
+            let inner = Bounds::cells(
+                f32::from(rect.x) + SEGMENT_INSET.0,
+                top + SEGMENT_INSET.1,
+                f32::from(rect.w) - SEGMENT_INSET.0 * 2.0,
+                SEGMENT_HEIGHT - SEGMENT_INSET.1 * 2.0,
+            );
+            grid.panel(inner, 16, Some(fill), None);
+        }
+        let middle = f32::from(rect.x) + f32::from(rect.w) / 2.0;
+        grid.button_words(middle, row, label, fg);
+    }
 }
 
 fn draw_toggle(grid: &mut Grid, page: Rect, y: u16, text: (&str, &str), on: bool, theme: &Theme) {
@@ -2041,10 +2138,10 @@ fn draw_button(
     theme: &Theme,
 ) {
     let hovered = hover.is_some_and(|h| rect.contains(h.0, h.1));
-    let fill = match (primary, hovered) {
-        (true, _) => theme.button,
-        (false, true) => theme.pick,
-        (false, false) => theme.quiet_button(theme.popup),
+    let fill = if primary {
+        theme.button
+    } else {
+        theme.secondary(theme.popup, hovered)
     };
     let fg = if primary {
         theme.button_text

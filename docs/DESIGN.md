@@ -948,7 +948,17 @@ One set of parts, everywhere. A button is one chip, nearly nine tenths of its ro
 primary one filled with the accent, the rest a quiet fill, the least of them plain words (Edit and
 Delete on a comment), and each takes a click anywhere it's painted, from one rectangle the painter
 and the hit test share. Under the pointer a quiet one stands a second step off what's behind it,
-lighter in the dark theme and deeper in the light one, on a card and in a dialog as in a pane. One
+lighter in the dark theme and deeper in the light one, on a card and in a dialog as in a pane
+(`Theme::secondary`). Every action that isn't the main one is that quiet kind: Deny beside Allow,
+a suggestion's Keep and Dismiss, Review with…, New Workspace and Resume at the foot, Cancel
+(the design review of 0.11.0 found Deny and Dismiss as plain words, New Workspace in a picked
+row's wash, and hovers in a menu's colour that went darker than the button at rest on a card). In
+the dark theme the quiet fill is 20 steps over its ground, about herdr's raised, white at 9% over
+graphite's sheet; 14 left Review with… dimmer than a picked row beside it. A row of choices,
+Settings' and the New Worktree dialog's, is one track a button tall with a line round it in a
+menu's line colour and its ground showing through: the chosen one is filled with the accent
+inside the line, the others are plain words, and one pointed at takes the quiet fill. Each was a
+box of the frame's colour, which read as more text boxes. One
 measure sizes them all (`measures.rs`): a button's words keep a column
 and a half either side inside its chip, whatever they are, and buttons side by side stand two
 columns apart. In cells a button is its words between brackets. Text stands two columns inside

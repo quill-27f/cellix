@@ -1515,13 +1515,12 @@ impl App {
         for (i, (cells, x)) in self.consent_buttons(area).iter().enumerate() {
             let label = CONSENT_BUTTONS[i];
             let hovered = self.over_button((*x, y), cells.chars().count() as u16);
-            let quiet = theme.quiet_button(theme.popup);
-            // Allow is the answer, Always Allow Here a quiet one, and Deny only its words.
-            let fill = match (label, hovered) {
-                ("Allow", _) => theme.button,
-                (_, true) => theme.quiet_button(quiet),
-                ("Deny", false) => theme.popup,
-                _ => quiet,
+            // Allow is the answer; Always Allow Here and Deny are the one quiet kind every
+            // other action is. Deny was only its words, a third kind beside them.
+            let fill = if label == "Allow" {
+                theme.button
+            } else {
+                theme.secondary(theme.popup, hovered)
             };
             let fg = if label == "Allow" {
                 theme.button_text
