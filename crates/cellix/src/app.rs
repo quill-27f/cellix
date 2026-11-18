@@ -44,7 +44,7 @@ pub use agent_task::Act as TaskAct;
 use crate::agent_task::TaskPage;
 use crate::context::{ContextPanel, Hit as ContextHit};
 use crate::dock::{ACTION_ICON, ACTION_PILL, BROWSER, CellPixels, Dock, Front, Session, TabHit};
-use crate::editor::{Editor, Marks};
+use crate::editor::{self, Editor, Marks};
 use crate::explorer::Explorer;
 use crate::find::{Find, Looked};
 use crate::inbox::{Hit as InboxHit, Inbox, Kind as Waits, Listed, Target as WaitTarget, Waiting};
@@ -105,8 +105,6 @@ const KERNEL_STATUS_END: u16 = 6;
 /// The row the Comment button stands on over a PDF, clear of its zoom buttons.
 const VIEW_COMMENT_ROW: u16 = 2;
 const ASK_WIDTH: u16 = 11;
-/// How the buttons by a terminal's selection are drawn: not lifted, and this much of a row tall.
-const OUTPUT_CHIP: (f32, f32) = (0.0, 0.88);
 /// What the two buttons by a suggestion on a page say, Review's words for the same thing.
 const REJECT: &str = "Reject";
 const ACCEPT: &str = "Accept";
@@ -5121,8 +5119,91 @@ impl App {
         }
     }
 
-    /// Where the buttons by a selection stand: under it, or over it on the last row.
+    /// Where the buttons by a selection stand.
     fn selection_bar(&self) -> Option<(Rect, Rect)> {
+        self.selection_bar_at()
+            .map(|(comment, ask, _)| (comment, ask))
+    }
+
+    /// The bar's height on these rows and the air it keeps, in rows and columns: `LINE_AIR`
+    /// where there are pixels, none on cells, where a row is the least anything moves.
+    fn bar_room(&self) -> (f32, (f32, f32)) {
+        let Some((wide, row)) = self
+            .measure
+            .cell_pixels()
+            .filter(|_| !self.measure.in_cells())
+        else {
+            return (1.0, (0.0, 0.0));
+        };
+        let (wide, row) = (wide.max(1) as f32, row.max(1) as f32);
+        let line = row / self.measure.row_air().max(1.0);
+        let (_, tall) = cellix_render::stood(0, cellix_render::units(SELECTION_CHIP.1), row, line);
+        let air = measures::LINE_AIR;
+        (tall / row, (air / wide, air / row))
+    }
+
+    /// Where a bar across `span` (columns) stands in its row, given what's drawn about that
+    /// row (`inks`, measured from its top): its top, in rows from the row's top, so that it
+    /// keeps `LINE_AIR` from every word, line and selection it would stand over or under, as
+    /// near its row's middle as that allows and leaning no further from it than a selection's
+    /// buttons lean, `SELECTION_CHIP.0`. None where something is in its way.
+    fn bar_top(&self, inks: &[editor::Ink], span: (f32, f32)) -> Option<f32> {
+        let (tall, (air_x, air_y)) = self.bar_room();
+        let middle = (1.0 - tall) / 2.0;
+        let (lean, near) = (SELECTION_CHIP.0, |ink: &&editor::Ink| {
+            ink.across.0 < span.1 + air_x && ink.across.1 > span.0 - air_x
+        });
+        let (mut over, mut under) = (middle - lean - 1.0, middle + lean + 1.0);
+        for ink in inks.iter().filter(near) {
+            // Something across the row's middle is in the bar's way.
+            if ink.down.0 < 0.5 && ink.down.1 > 0.5 {
+                return None;
+            }
+            if ink.down.1 <= 0.5 {
+                over = over.max(ink.down.1 + air_y);
+            } else {
+                under = under.min(ink.down.0 - air_y - tall);
+            }
+        }
+        if over > under + 0.001 {
+            return None;
+        }
+        let top = ((over + under) / 2.0).clamp(middle - lean, middle + lean);
+        Some(top.clamp(over, under.max(over)))
+    }
+
+    /// What's drawn about screen row `y` of an editor and the two rows either side of it, all
+    /// measured from row `y`'s top.
+    fn inks_near(&self, editor: &Editor, area: Rect, y: u16) -> Vec<editor::Ink> {
+        let mut all = editor.row_inks(area, y);
+        for near in [-2i32, -1, 1, 2] {
+            let Ok(row) = u16::try_from(i32::from(y) + near) else {
+                continue;
+            };
+            let inks = editor.row_inks(area, row);
+            all.extend(inks.into_iter().map(|ink| ink.lower(near as f32)));
+        }
+        // The text's own edges are lines too: the bar under the toolbar, the status bar.
+        let text = editor.text_bounds(area);
+        let edge = |at: f32| editor::Ink {
+            across: (f32::MIN, f32::MAX),
+            down: (at, at),
+        };
+        all.push(edge(f32::from(text.y) - f32::from(y)));
+        all.push(edge(f32::from(text.bottom()) - f32::from(y)));
+        all
+    }
+
+    /// Where the buttons by a selection on a page or in code stand, and how far they're lifted
+    /// in their row: one rule, as the final review of 0.11.0 asked (s1-*, 73, 108). They stand
+    /// in a row of their own over the first selected line, clear by `LINE_AIR` of words, lines
+    /// and the selection; over a block, a table or front matter or the paragraph the line is
+    /// in, that's above it. With no such row over it in view, its start scrolled out of view
+    /// or nothing but blocks over it, the same under the last selected line; failing both,
+    /// beside the end of that line, and then over it. Until then they stood on the row over
+    /// the first line whatever was there, lifted toward words over it, or under the last when
+    /// the first was out of view, on a table's lines or over their own selection.
+    fn selection_bar_at(&self) -> Option<(Rect, Rect, f32)> {
         let idle = matches!(self.overlay, Overlay::None) && self.drag != Drag::Text;
         let plain = self.review.is_none() && self.settings_page.is_none();
         if !idle || !plain || self.dock.draft.is_some() {
@@ -5140,28 +5221,61 @@ impl App {
         if self.lit_range == Some((primary.start(), primary.end())) {
             return None;
         }
-        let (start, end) = (
-            primary.anchor.min(primary.head),
-            primary.anchor.max(primary.head),
-        );
-        // Above the first selected line, so it never covers what it's about; below the last
-        // when the first is at the top or out of view.
-        let (x, y) = match editor.cell_of(area, start) {
-            Some((x, y)) if y > area.y => (x, y - 1),
-            _ => {
-                let (x, y) = editor.cell_of(area, end)?;
-                (x, (y + 1).min(area.bottom().saturating_sub(1)))
-            }
-        };
+        let (start, end) = (primary.start(), primary.end());
         let (comment, ask) = self.selection_labels();
         let (comment, ask) = (self.chip_width(&comment), self.chip_width(&ask));
         let width = comment + ask;
-        let x = (x as u16)
-            .min(area.right().saturating_sub(width + 1))
-            .max(area.x);
+        // Within the text's column, as the words they're about are.
+        let column = editor.text_end(area).min(area.right().saturating_sub(1));
+        let place = |x: f32| (x as u16).min(column.saturating_sub(width)).max(area.x);
+        let text = editor.text_bounds(area);
+        let first = editor.cell_of(area, start);
+        let last = editor.cell_of(area, end.saturating_sub(1).max(start));
+        let fits = |x: u16, y: u16| {
+            let span = (f32::from(x), f32::from(x + width));
+            Some((x, y, self.bar_top(&self.inks_near(editor, area, y), span)?))
+        };
+        let over = || {
+            let (x, y) = first?;
+            (text.y..y).rev().find_map(|row| fits(place(x), row))
+        };
+        let under = || {
+            let (x, y) = last?;
+            (y + 1..text.bottom()).find_map(|row| fits(place(x), row))
+        };
+        // After the end of the last line's words, or of the block it's in.
+        let beside = || {
+            let (x, y) = last?;
+            let (_, (air, _)) = self.bar_room();
+            let inks = editor.row_inks(area, y);
+            let across = inks
+                .iter()
+                .filter(|ink| ink.down.0 < 1.0 && ink.down.1 > 0.0);
+            let end = across.map(|ink| ink.across.1).fold(x, f32::max);
+            let x = (end + air).ceil() as u16 + 1;
+            (x + width <= column).then(|| fits(x, y)).flatten()
+        };
+        // With the first line out of view and no room by the last, over the last, which
+        // keeps them by what's selected.
+        let over_last = || {
+            let (x, y) = last?;
+            (text.y..y).rev().find_map(|row| fits(place(x), row))
+        };
+        let (tall, _) = self.bar_room();
+        let lift = |top: f32| (1.0 - tall) / 2.0 - top;
+        let found = over().or_else(under).or_else(beside).or_else(over_last);
+        let (x, y, lift) = match found {
+            Some((x, y, top)) => (x, y, lift(top)),
+            // Nowhere clear in view: over the first line in view, as before.
+            None => {
+                let (x, y) = first.or(last)?;
+                (place(x), y.saturating_sub(1).max(text.y), SELECTION_CHIP.0)
+            }
+        };
         Some((
             Rect::new(x, y, comment, 1),
             Rect::new(x + comment, y, ask, 1),
+            lift,
         ))
     }
 
@@ -5325,6 +5439,13 @@ impl App {
     /// both, after the end of the selection's own last row. Only output that leaves no such
     /// room has them over the end of the row above.
     fn output_bar(&self) -> Option<(Rect, Rect)> {
+        self.output_bar_at().map(|(comment, ask, _)| (comment, ask))
+    }
+
+    /// The same, with how far they're lifted in their row: as a page's, `LINE_AIR` clear of
+    /// the output and the selection over and under them, which they stood 0 to 5 px over with
+    /// their shadow on it (108-terminal-ask).
+    fn output_bar_at(&self) -> Option<(Rect, Rect, f32)> {
         let idle = matches!(self.overlay, Overlay::None) && self.drag != Drag::Session;
         // A terminal keeps its selection after a click elsewhere, as terminals do, but the
         // buttons go with the focus, so they don't stand over the pane while the file is worked on.
@@ -5361,20 +5482,86 @@ impl App {
             let after = screen.x + text.len() as u16 + 1;
             (after <= furthest).then_some(after)
         };
+        // What's drawn about a row of the output and the rows by it: its words, and the
+        // selection, whole rows between its first and last.
+        let (up, down) = self.words_reach();
+        let inks_near = |row: u16| -> Vec<editor::Ink> {
+            let mut inks = Vec::new();
+            for near in -2i32..=2 {
+                let Ok(at) = u16::try_from(i32::from(row) + near) else {
+                    continue;
+                };
+                let lower = |ink: editor::Ink| ink.lower(near as f32);
+                // Each word on its own, as `clear` looks between them.
+                let text: Vec<char> =
+                    (rows.get(usize::from(at))).map_or_else(Vec::new, |r| r.chars().collect());
+                let x = f32::from(screen.x);
+                let mut column = 0;
+                while column < text.len() {
+                    if text[column].is_whitespace() {
+                        column += 1;
+                        continue;
+                    }
+                    let end = (column..text.len())
+                        .find(|c| text[*c].is_whitespace())
+                        .unwrap_or(text.len());
+                    inks.push(lower(editor::Ink {
+                        across: (x + column as f32, x + end as f32),
+                        down: (0.5 - up, 0.5 + down),
+                    }));
+                    column = end;
+                }
+                if (from.1..=to.1).contains(&at) {
+                    let start = if at == from.1 { from.0 } else { 0 };
+                    let end = if at == to.1 { to.0 + 1 } else { screen.w };
+                    let x = f32::from(screen.x);
+                    inks.push(lower(editor::Ink {
+                        across: (x + f32::from(start), x + f32::from(end)),
+                        down: (0.0, 1.0),
+                    }));
+                }
+            }
+            inks
+        };
+        let width_cells = f32::from(width);
+        let lifted = |(x, row): (u16, u16)| {
+            let span = (f32::from(x), f32::from(x) + width_cells);
+            Some((x, row, self.bar_top(&inks_near(row), span)?))
+        };
         let above = from.1.checked_sub(1);
         let below = Some(to.1 + 1).filter(|row| *row < screen.h);
-        let beside = [above, below]
+        let candidates: Vec<(u16, u16)> = [above, below, Some(to.1)]
             .into_iter()
             .flatten()
-            .find_map(|row| Some((clear(row)?, row)));
-        let (x, row) = beside
-            .or_else(|| Some((clear(to.1)?, to.1)))
-            .unwrap_or((wanted, above.or(below).unwrap_or(to.1)));
+            .filter_map(|row| Some((clear(row)?, row)))
+            .collect();
+        let (tall, _) = self.bar_room();
+        let (x, row, lift) = match candidates.iter().copied().find_map(lifted) {
+            Some((x, row, top)) => (x, row, (1.0 - tall) / 2.0 - top),
+            None => {
+                let (x, row) = candidates
+                    .first()
+                    .copied()
+                    .unwrap_or((wanted, above.or(below).unwrap_or(to.1)));
+                (x, row, 0.0)
+            }
+        };
         let y = screen.y + row;
         Some((
             Rect::new(x, y, COMMENT_WIDTH, 1),
             Rect::new(x + COMMENT_WIDTH, y, ASK_WIDTH, 1),
+            lift,
         ))
+    }
+
+    /// How far a line of words reaches over and under its row's middle, in rows: on cells,
+    /// the whole row.
+    fn words_reach(&self) -> (f32, f32) {
+        if self.measure.in_cells() {
+            return (0.5, 0.5);
+        }
+        let letters = cellix_render::INTERFACE_SIZE / self.measure.row_air().max(1.0);
+        (editor::ASCENT * letters, editor::DESCENT * letters)
     }
 
     /// Every `file:line` in some output that's a file in this project, as the project names
@@ -5685,15 +5872,16 @@ impl App {
         if let Some((chip, _)) = self.run_button() {
             self.draw_chip(grid, chip, "Run");
         }
-        if let Some((comment, ask)) = self.output_bar() {
-            // In the middle of a row they have to themselves, with nothing to lift clear of.
-            self.draw_chip_lifted(grid, comment, "Comment", OUTPUT_CHIP);
-            self.draw_chip_lifted(grid, ask, "Ask Agent", OUTPUT_CHIP);
+        if let Some((comment, ask, lift)) = self.output_bar_at() {
+            let lift = (lift, SELECTION_CHIP.1);
+            self.draw_chip_lifted(grid, comment, "Comment", lift);
+            self.draw_chip_lifted(grid, ask, "Ask Agent", lift);
         }
-        if let Some((comment, ask)) = self.selection_bar() {
+        if let Some((comment, ask, lift)) = self.selection_bar_at() {
             let (comment_says, ask_says) = self.selection_labels();
-            self.draw_chip(grid, comment, &comment_says);
-            self.draw_chip(grid, ask, &ask_says);
+            let lift = (lift, SELECTION_CHIP.1);
+            self.draw_chip_lifted(grid, comment, &comment_says, lift);
+            self.draw_chip_lifted(grid, ask, &ask_says, lift);
         } else if let Some((chip, _)) = self.picture_comment() {
             self.draw_chip(grid, chip, "Comment");
         } else if let Some((_, reject, accept, (first, _))) = self.change_chips() {
@@ -28879,9 +29067,22 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             goal: None,
         });
         let grid = screen(&app);
-        let (_, first) = find(&grid, "two");
-        let (comment, _) = app.selection_bar().expect("a bar");
-        assert_eq!(comment.y, first - 1, "above the first selected line");
+        let (_, last) = find(&grid, "five");
+        let (comment, ask) = app.selection_bar().expect("a bar");
+        // The row over "two" has "one" under where the bar would stand, and nothing is over
+        // that, so it stands under the selection, on the first row with nothing under it.
+        // Until 0.11.0's review it stood on "one".
+        assert_eq!(comment.y, last + 1, "under the selection, past \"five\"");
+        let row = screen(&app).row_text(comment.y);
+        assert!(
+            row.contains("Comment") && row.contains("Ask Agent"),
+            "{row}"
+        );
+        let file: String = row.chars().skip(usize::from(ask.right())).collect();
+        assert!(
+            file.trim().is_empty(),
+            "nothing of the file beside it: {row}"
+        );
         let editor = app.editor_mut().unwrap();
         editor.selections.add(Selection {
             anchor: 20,

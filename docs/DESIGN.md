@@ -442,10 +442,18 @@ Shift+click, takes in the whole of it, so it stays drawn and selected rather tha
 source; one already open is text like any other. One inside a selection reads as taken in: a
 formula's ink stands on the selection's colour, with half a column and 7 px of it round the ink as
 a word's letters have, and a picture of its own colours lies under a see-through wash of it, as a
-browser shows one. The status bar counts the words selected
-in a paper as it counts the paper's, without its commands. The selection gets Comment and Ask Agent as a
-dragged one does, under its end when its start is out of view, and its comment quotes its first line
-and hears all of it. Code in the source view, notebooks, data, plans and transcripts are the same
+browser shows one. A selection is drawn as a browser or VS Code's Markdown preview draws one, a
+shape that reads as one: each line of it is one stretch the height of its row, so a paragraph's
+lines touch, painted over inline code's and a highlighter's grounds and under the words; a list's
+bullet or number, a task's box, a section's number and a citation's brackets are inside it where
+the selection runs through them, and an equation's number goes with its picture; a table's cells
+taken whole are filled from line to line, under the table's lines, which still say it's a table.
+Until 0.11.0's review it was a band for each run of one look, 38 px of a 50 px row, so it had a
+seam at every change of look, holes where code and highlights kept their grounds, a gap under every
+line, the markers and numbers left out and a table selected word by word. The status bar counts the
+words selected in a paper as it counts the paper's, without its commands. The selection gets Comment
+and Ask Agent as a dragged one does, by the rule below, and its comment quotes its first line and
+hears all of it. Code in the source view, notebooks, data, plans and transcripts are the same
 editor, so they select the same way. Ghostty and xterm keep a Shift+click for their own selection
 unless the program asks for it, so Cellix asks as it starts (XTSHIFTESCAPE, `CSI > 1 s`) and hands
 it back as it ends; until it did, a Shift+click on a page selected the terminal's cells instead.
@@ -635,9 +643,17 @@ stands on the cards' edges: from where a card starts to where it ends, where the
 
 Whatever can be seen can be talked about. A selection, in code or on a page, gets Comment and Ask
 Agent beside it, each naming in brackets the keys that do the same as they're set now (Alt+C and
-Alt+A unless changed), and a picture, diagram or formula gets a Comment button under the pointer. Comments
-are written in the side pane, with what they're about in view. Ask Agent sends the comment to the
-agent as soon as it's written, with its file, line and all of what was selected, and how to answer
+Alt+A unless changed), and a picture, diagram or formula gets a Comment button under the pointer.
+Where they stand is one rule (`App::selection_bar_at`, after 0.11.0's review): in a row of their own
+over the first selected line, `LINE_AIR` or more clear of words, lines and the selection, as near
+the row's middle as that allows; where the line is in a block, a table or front matter or a
+paragraph's later lines, that's above the block. With no such row over it in view, its start
+scrolled away or only blocks over it, the same under the last selected line, and failing both,
+beside the end of that line, then over it. Until then they stood on the row over the first line
+whatever was there, straddling a box's edge, over a label or 0 to 5 px over their own selection, or
+under the end on a table's lines when the start was out of view. Comments are written in the side
+pane, with what they're about in view. Ask Agent sends the comment to the agent as soon as it's
+written, with its file, line and all of what was selected, and how to answer
 with `cellix reply`, so the answer lands under it. Inside Claude Code it puts the file and the whole
 selection in Claude Code's prompt instead, a passage set out as a quote. A comment is typed as any
 text box is, with a caret that moves by letter and word and the Mac's word deletes. Resolving one
@@ -649,7 +665,8 @@ behind that place, so it stays put through every rebuild.
 Output is seen too, so a failing run needs no copy and paste. A selection in a terminal tab gets the
 same two buttons, where they cover none of the output: on the row above the selection when its text
 ends before them, else on the row below, their right edge on the selection's, and failing both after
-the end of the selection's last row. Only output with no such room has them over the end of the row
+the end of the selection's last row, each as a page's are, `LINE_AIR` clear of the output and the
+selection over and under them. Only output with no such room has them over the end of the row
 above. A terminal tab selects as a page does, and as terminals do: a drag, copied as it's let go,
 and a Shift+click that ends the selection from where it started or from the click before, however
 far the scrollback has been scrolled in between, since a selection keeps to its words as they

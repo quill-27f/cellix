@@ -210,6 +210,9 @@ pub struct Row {
     pub checkbox: Option<(f32, usize)>,
     /// Where each table cell starts in the source.
     pub cells: Vec<usize>,
+    /// Where each table cell's words end in the source, just past their last letter: with
+    /// `cells`, what a selection has to hold to take a cell whole.
+    pub cell_ends: Vec<usize>,
     pub table: Option<TableRow>,
     /// A picture that starts on this row, as an index into the page's figures, and its
     /// column.
@@ -242,10 +245,22 @@ impl Row {
             tall: false,
             checkbox: None,
             cells: Vec::new(),
+            cell_ends: Vec::new(),
             table: None,
             figure: None,
             target: None,
         }
+    }
+
+    /// Whether a selection over `ranges` (start, end) takes this table row's cell `index`
+    /// whole: all of its words, or the place of an empty one.
+    pub fn cell_taken(&self, index: usize, ranges: &[(usize, usize)]) -> bool {
+        let Some(start) = self.cells.get(index).copied() else {
+            return false;
+        };
+        let end = self.cell_ends.get(index).copied().unwrap_or(start);
+        let end = end.max(start + 1);
+        ranges.iter().any(|(from, to)| *from <= start && end <= *to)
     }
 
     /// The cell a source position is in.
@@ -1237,6 +1252,15 @@ fn place_table(
     let carets: Vec<f32> = (0..count)
         .map(|c| columns[c] + CELL_PADDING + shift(c, widths[c]))
         .collect();
+    // Where each cell's words end, just past the last letter shown, or at its start if it has
+    // none: what a selection holds to take the cell whole.
+    let ends: Vec<Vec<usize>> = (parsed.iter().zip(&starts))
+        .map(|(cells, starts)| {
+            let last = |c: usize| cells.get(c)?.iter().filter_map(|g| g.at).max();
+            let end = |(c, start): (usize, &usize)| last(c).map_or(*start, |at| at + 1);
+            starts.iter().enumerate().map(end).collect()
+        })
+        .collect();
     // Each line's cells, set in rows no wider than their columns, and where the line ends.
     let set = parsed.into_iter().enumerate().map(|(index, cells)| {
         let (line, line_end) = places[index];
@@ -1283,6 +1307,7 @@ fn place_table(
             rows.push(Row {
                 glyphs: dashes.collect(),
                 cells: starts[index].clone(),
+                cell_ends: ends[index].clone(),
                 stop: false,
                 table: Some(table(0)),
                 ..Row::new(line, end)
@@ -1311,6 +1336,7 @@ fn place_table(
             rows.push(Row {
                 glyphs,
                 cells: starts[index].clone(),
+                cell_ends: ends[index].clone(),
                 lead: CELL_PADDING,
                 table: Some(table(part)),
                 ..Row::new(line, end)
@@ -2436,6 +2462,48 @@ pub fn locate(rows: &[Row], pos: usize) -> (usize, f32) {
     }
     let last = rows.iter().rposition(|r| r.stop).unwrap_or(0);
     (last, rows.get(last).map_or(0.0, |r| r.caret_x(usize::MAX)))
+}
+
+/// Which of a row's glyphs a selection over `ranges` (start, end) takes in, as a browser
+/// shows one: each whose place it holds, and with them what the page draws that has no place
+/// of its own (a list's marker or number, a task's box, a section's number, a citation's
+/// brackets) when the selection holds the words on both sides of it, or runs on past it into
+/// the words it's beside. The space a list's or a quote's indent takes is never in it, and an
+/// equation's number goes with its picture.
+pub fn taken_in(row: &Row, ranges: &[(usize, usize)]) -> Vec<bool> {
+    let holds = |at: usize| ranges.iter().any(|(from, to)| *from <= at && at < *to);
+    let places: Vec<Option<usize>> = row.glyphs.iter().map(|g| g.at).collect();
+    // A picture's first row has its place; the rows under it keep the same place as their end.
+    let picture = places.iter().flatten().next().copied().unwrap_or(row.end);
+    let indent = row
+        .glyphs
+        .iter()
+        .take_while(|g| g.tone == Tone::TableLine)
+        .count();
+    (0..row.glyphs.len())
+        .map(|index| {
+            let glyph = &row.glyphs[index];
+            if let Some(at) = glyph.at {
+                return holds(at);
+            }
+            if matches!(glyph.tone, Tone::Margin(_)) {
+                return holds(picture);
+            }
+            if index < indent {
+                return false;
+            }
+            let before = places[..index].iter().rev().flatten().next().copied();
+            let after = places[index + 1..].iter().flatten().next().copied();
+            ranges.iter().any(|(from, to)| match (before, after) {
+                (Some(before), Some(after)) => *from <= before && after < *to,
+                // Ahead of the row's words: the selection comes in from before them.
+                (None, Some(after)) => *from < after && after < *to,
+                // After them: it goes on past the last.
+                (Some(before), None) => *from <= before && before + 1 < *to,
+                (None, None) => *from <= row.end && row.end < *to,
+            })
+        })
+        .collect()
 }
 
 /// The rows a table's source line stands on, given any one of them.

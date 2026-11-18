@@ -74,6 +74,30 @@ pub struct Marks {
     pub errors: Vec<usize>,
 }
 
+/// Something drawn about a row of the screen, for what would stand beside it: from and to
+/// across, in columns, and its top and foot in rows from the top of the row it was asked
+/// about, which a big heading's words, a box's edge or a picture can reach past.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ink {
+    pub across: (f32, f32),
+    pub down: (f32, f32),
+}
+
+impl Ink {
+    /// The same, measured from a row `rows` further up.
+    pub fn lower(self, rows: f32) -> Self {
+        Self {
+            down: (self.down.0 + rows, self.down.1 + rows),
+            ..self
+        }
+    }
+}
+
+/// How far a line of words reaches up from its middle and down from it, in the size of its
+/// letters: their tallest letters' tops and their tails, with a pixel or two to spare.
+pub const ASCENT: f32 = 0.45;
+pub const DESCENT: f32 = 0.6;
+
 /// A page's rows, its figures, and where its formulas and images are.
 type LaidOut = (
     Rc<Vec<Row>>,
@@ -4701,6 +4725,42 @@ impl Editor {
                     let head = Bounds::cells(from, top + 0.02, width, rows.count() as f32);
                     grid.panel(head, if open { 0 } else { 14 }, Some(theme.code_bg), None);
                 }
+                // What's selected stands under the table's lines, which still say it's a table:
+                // a cell taken whole fills its box from line to line, and one taken in part
+                // has its words selected, each row of it whole.
+                let ranges = self.selected_ranges();
+                for at in (index..end).filter(|_| !ranges.is_empty()) {
+                    let row = &rows[at];
+                    let Some(laid) = &row.table else {
+                        continue;
+                    };
+                    let taken = rendered::taken_in(row, &ranges);
+                    for cell in 0..row.cells.len() {
+                        let (Some(&first), Some(&last)) =
+                            (laid.columns.get(cell), laid.columns.get(cell + 1))
+                        else {
+                            continue;
+                        };
+                        let (a, b) = if row.cell_taken(cell, &ranges) {
+                            (first, last)
+                        } else {
+                            let inside = |(g, taken): &(&Glyph, &bool)| {
+                                **taken && g.tone != Tone::TableLine && g.x >= first && g.x < last
+                            };
+                            let mut words = row.glyphs.iter().zip(&taken).filter(inside);
+                            let Some((head, _)) = words.next() else {
+                                continue;
+                            };
+                            let tail = words.next_back().map_or(*head, |(g, _)| *g);
+                            (head.x, tail.x + tail.advance)
+                        };
+                        let (a, b) = ((start + a).max(from), (start + b).min(to));
+                        if b > a {
+                            let bounds = Bounds::cells(a, y_of(at), b - a, 1.0);
+                            grid.panel(bounds, 0, Some(theme.selection), None);
+                        }
+                    }
+                }
                 // A line under each line of the table, not under each row one takes.
                 for at in (index + 1..end).filter(|at| part_of(*at).is_some_and(|p| p.1 == 0)) {
                     let line = Bounds::cells(from, y_of(at), width, 0.0);
@@ -4956,13 +5016,6 @@ impl Editor {
             Tone::Deleted | Tone::Failed => theme.deleted(),
             Tone::Margin(_) => theme.gutter.fg,
         };
-        let selected = |at: Option<usize>| {
-            at.is_some_and(|at| {
-                self.selections
-                    .iter()
-                    .any(|s| at >= s.start() && at < s.end())
-            })
-        };
         let found = |at: Option<usize>| {
             at.is_some_and(|at| self.found.iter().any(|f| at >= f.0 && at < f.1))
         };
@@ -4977,27 +5030,53 @@ impl Editor {
                 })
             })
         };
-        // A commented span is picked, as a picked row is: the blue over the page.
-        let mark = |at: Option<usize>| {
+        // What the words stand on under any selection: Find's matches and a comment's tint,
+        // the blue over the page a picked row has.
+        let ground = |at: Option<usize>| {
             if current(at) {
                 Some(theme.current_match())
-            } else if selected(at) {
-                Some(theme.selection)
             } else if found(at) {
                 Some(theme.found)
             } else {
                 quoted(at).then_some(theme.tint)
             }
         };
+        // What's selected, as a browser shows it: the marks and numbers the words are set
+        // with as well as the words.
+        let ranges = self.selected_ranges();
+        let taken = rendered::taken_in(row, &ranges);
+        let mark = |index: usize| {
+            let at = row.glyphs[index].at;
+            if current(at) {
+                Some(theme.current_match())
+            } else if taken[index] {
+                Some(theme.selection)
+            } else {
+                ground(at)
+            }
+        };
         let issues = self.current_issues();
         let flagged = |at: Option<usize>| {
             at.is_some_and(|at| issues.iter().any(|i| at >= i.start && at < i.end))
         };
+        if !proportional && let Some(table) = &row.table {
+            // A cell taken whole is selected from its line to the next, as a browser's is.
+            for cell in (0..row.cells.len()).filter(|c| row.cell_taken(*c, &ranges)) {
+                let from = origin + table.columns[cell] + if cell > 0 { 1.0 } else { 0.0 };
+                let to = origin + table.columns.get(cell + 1).copied().unwrap_or(0.0);
+                let (from, to) = (from.max(left as f32) as u16, (to as u16).min(page_end));
+                let whole = Rect::new(from, y, to.saturating_sub(from), 1);
+                grid.set_style(whole, |style| cellix_render::Style {
+                    bg: theme.selection,
+                    ..style
+                });
+            }
+        }
         // Cells carry the text for the cell tier, and for tests. Pixels come from paint.
-        for g in row.glyphs.iter().filter(|g| !hidden(g)) {
+        for (index, g) in row.glyphs.iter().enumerate().filter(|(_, g)| !hidden(g)) {
             let style = cellix_render::Style {
                 fg: fg_of(g.tone),
-                bg: mark(g.at).filter(|_| !proportional).unwrap_or(bg),
+                bg: mark(index).filter(|_| !proportional).unwrap_or(bg),
                 bold: g.font.bold,
                 italic: g.font.italic,
                 underline: g.underline || flagged(g.at),
@@ -5030,6 +5109,66 @@ impl Editor {
             return;
         }
         let text_y = y as f32 + if row.tall { TALL_DROP } else { 0.0 };
+        // A row's glyphs in runs of one look, each drawn at once so kerning counts. A table's
+        // cells are apart, so a run stops at a jump in position.
+        let mut runs = Vec::new();
+        let mut i = 0;
+        while i < row.glyphs.len() {
+            let g = row.glyphs[i];
+            if hidden(&g) {
+                i += 1;
+                continue;
+            }
+            let same = |o: &Glyph| {
+                o.font == g.font
+                    && o.tone == g.tone
+                    && o.underline == g.underline
+                    && ground(o.at) == ground(g.at)
+                    && (g.tone != Tone::TableLine || o.x == g.x)
+            };
+            let mut end = i + 1;
+            while end < row.glyphs.len() && same(&row.glyphs[end]) {
+                let prior = row.glyphs[end - 1];
+                if (prior.x + prior.advance - row.glyphs[end].x).abs() > 0.01 {
+                    break;
+                }
+                end += 1;
+            }
+            runs.push(i..end);
+            i = end;
+        }
+        let width_of = |run: &std::ops::Range<usize>| -> f32 {
+            row.glyphs[run.clone()].iter().map(|g| g.advance).sum()
+        };
+        // First what the words stand on: a match, a comment's tint, inline code's pill and a
+        // highlighter's. Then the selection, over all of those as a browser paints it, and
+        // last the words, so a selection holes nothing and nothing holes it.
+        for run in &runs {
+            let g = row.glyphs[run.start];
+            let (x, width) = (origin + g.x, width_of(run));
+            if let Some(color) = ground(g.at) {
+                let bounds = Bounds::cells(x, text_y + 0.06, width, 0.88);
+                let ring = current(g.at).then_some(theme.focus);
+                grid.panel(bounds, 6, Some(color), ring);
+            }
+            if matches!(g.tone, Tone::Code | Tone::Source) {
+                let pill = Bounds::cells(x - 0.2, text_y + 0.05, width + 0.4, 0.9);
+                grid.panel(pill, 14, Some(theme.code_bg), None);
+            }
+            if g.tone == Tone::Marked {
+                // Nine tenths of the row, which holds a tail of words of 13 pt.
+                let pill = Bounds::cells(x - 0.1, text_y + 0.05, width + 0.2, 0.9);
+                grid.panel(pill, 8, Some(theme.highlighter()), None);
+            }
+        }
+        // A table's selection is drawn under its lines, with its box.
+        if row.table.is_none() {
+            let (top, tall) = self.selection_rows(row, y);
+            for (from, to, shift) in stretches(row, &taken, hidden) {
+                let bounds = Bounds::cells(origin + from, top + shift, to - from, tall);
+                grid.panel(bounds, 0, Some(theme.selection), None);
+            }
+        }
         for issue in issues {
             let inside = |g: &&Glyph| g.at.is_some_and(|at| at >= issue.start && at < issue.end);
             let mut word = row.glyphs.iter().filter(|g| !hidden(g)).filter(inside);
@@ -5052,38 +5191,10 @@ impl Editor {
                 grid.panel(spot, 0, Some(colour), None);
             }
         }
-        let mut i = 0;
-        while i < row.glyphs.len() {
-            let g = row.glyphs[i];
-            if hidden(&g) {
-                i += 1;
-                continue;
-            }
-            let same = |o: &Glyph| {
-                o.font == g.font
-                    && o.tone == g.tone
-                    && o.underline == g.underline
-                    && mark(o.at) == mark(g.at)
-                    && (g.tone != Tone::TableLine || o.x == g.x)
-            };
-            // A table's cells are apart, so a run stops at a jump in position.
-            let mut end = i + 1;
-            while end < row.glyphs.len() && same(&row.glyphs[end]) {
-                let prior = row.glyphs[end - 1];
-                if (prior.x + prior.advance - row.glyphs[end].x).abs() > 0.01 {
-                    break;
-                }
-                end += 1;
-            }
-            let run = &row.glyphs[i..end];
-            let text: String = run.iter().map(|g| g.ch).collect();
-            let x = origin + g.x;
-            let width: f32 = run.iter().map(|g| g.advance).sum();
-            if let Some(color) = mark(g.at) {
-                let bounds = Bounds::cells(x, text_y + 0.06, width, 0.88);
-                let ring = current(g.at).then_some(theme.focus);
-                grid.panel(bounds, 6, Some(color), ring);
-            }
+        for run in &runs {
+            let g = row.glyphs[run.start];
+            let text: String = row.glyphs[run.clone()].iter().map(|g| g.ch).collect();
+            let (x, width) = (origin + g.x, width_of(run));
             match g.tone {
                 Tone::TableLine => {}
                 Tone::Formula { index, .. } => {
@@ -5116,15 +5227,6 @@ impl Editor {
                     }
                 }
                 _ => {
-                    if matches!(g.tone, Tone::Code | Tone::Source) {
-                        let pill = Bounds::cells(x - 0.2, text_y + 0.05, width + 0.4, 0.9);
-                        grid.panel(pill, 14, Some(theme.code_bg), None);
-                    }
-                    if g.tone == Tone::Marked {
-                        // Nine tenths of the row, which holds a tail of words of 13 pt.
-                        let pill = Bounds::cells(x - 0.1, text_y + 0.05, width + 0.2, 0.9);
-                        grid.panel(pill, 8, Some(theme.highlighter()), None);
-                    }
                     let shift = match g.tone {
                         Tone::Raised | Tone::Footnote => -0.2,
                         Tone::Lowered => 0.2,
@@ -5140,8 +5242,188 @@ impl Editor {
                     }
                 }
             }
-            i = end;
         }
+    }
+
+    /// The ranges selected, start and end, that a selection is drawn for: every one with
+    /// something in it but the match Find is on, which shows as that.
+    fn selected_ranges(&self) -> Vec<(usize, usize)> {
+        (self.selections.iter())
+            .filter(|s| !s.is_empty())
+            .map(|s| (s.start(), s.end()))
+            .filter(|range| !self.found.contains(range))
+            .collect()
+    }
+
+    /// Where a selection stands in a row, its top and height in rows: the whole row, so the
+    /// lines of a paragraph touch as a browser's do; for words larger than a row, as a big
+    /// heading's are, the height of their own line, about its middle.
+    fn selection_rows(&self, row: &Row, y: u16) -> (f32, f32) {
+        /// A line of words is this many times their size, as a browser sets one.
+        const LINE: f32 = 1.25;
+        let size = row.glyphs.iter().map(|g| g.font.size).max().unwrap_or(100);
+        let line =
+            LINE * INTERFACE_SIZE * f32::from(size) / 100.0 / self.measure.row_air().max(1.0);
+        if !row.tall && line <= 1.0 {
+            return (f32::from(y), 1.0);
+        }
+        let middle = f32::from(y) + if row.tall { TALL_DROP } else { 0.0 } + 0.5;
+        let tall = line.max(1.0);
+        (middle - tall / 2.0, tall)
+    }
+
+    /// How far words of `size` percent reach over and under the middle of their line, in rows:
+    /// on cells, the whole of their row.
+    fn reach(&self, size: u8) -> (f32, f32) {
+        if self.measure.in_cells() {
+            return (0.5, 0.5);
+        }
+        let letters = INTERFACE_SIZE * f32::from(size) / 100.0 / self.measure.row_air().max(1.0);
+        (ASCENT * letters, DESCENT * letters)
+    }
+
+    /// The rows of the screen this text is drawn in, in the editor's `full` area.
+    pub fn text_bounds(&self, full: Rect) -> Rect {
+        self.text_area(full)
+    }
+
+    /// What's drawn about screen row `y` of this text, in the editor's `full` area, for a bar
+    /// that would stand there: its words, the selection and the blocks it's in (a code box, a
+    /// table, a quote's bar, a picture), each as high as it's drawn.
+    pub fn row_inks(&self, full: Rect, y: u16) -> Vec<Ink> {
+        let area = self.text_area(full);
+        if y < area.y || y >= area.bottom() {
+            return Vec::new();
+        }
+        let index = self.top + usize::from(y - area.y);
+        let ranges = self.selected_ranges();
+        if !self.rendered {
+            return self.code_inks(area, index, &ranges);
+        }
+        let rows = self.page(area);
+        let Some(row) = rows.get(index) else {
+            return Vec::new();
+        };
+        let page = f32::from(area.x + self.page_margin(area));
+        let left = page - self.row_shift(area, index);
+        let mut inks = Vec::new();
+        let size = row.glyphs.iter().map(|g| g.font.size).max().unwrap_or(100);
+        let (up, down) = self.reach(size);
+        let middle = if row.tall { TALL_DROP } else { 0.0 } + 0.5;
+        let inked = (row.glyphs.iter()).filter(|g| g.tone != Tone::TableLine && g.advance > 0.0);
+        let across = inked.fold((f32::MAX, f32::MIN), |(from, to), g| {
+            (from.min(g.x), to.max(g.x + g.advance))
+        });
+        if across.0 < across.1 {
+            inks.push(Ink {
+                across: (left + across.0, left + across.1),
+                down: (middle - up, middle + down),
+            });
+        }
+        if !ranges.is_empty() {
+            let (top, tall) = self.selection_rows(row, y);
+            let top = top - f32::from(y);
+            let taken = rendered::taken_in(row, &ranges);
+            for (from, to, shift) in stretches(row, &taken, |_| false) {
+                inks.push(Ink {
+                    across: (left + from, left + to),
+                    down: (top + shift, top + shift + tall),
+                });
+            }
+        }
+        // Blocks, each as far as its box reaches past its rows, as `draw_page_blocks` has it.
+        let edge = f32::from(self.page_end(area)) - 1.0;
+        let first = |same: fn(&Row) -> bool| index == 0 || !same(&rows[index - 1]);
+        let last = |same: fn(&Row) -> bool| rows.get(index + 1).is_none_or(|r| !same(r));
+        if row.shaded {
+            let (over, under) = (first(|r| r.shaded), last(|r| r.shaded));
+            inks.push(Ink {
+                across: (page, edge),
+                down: (
+                    if over { -0.08 } else { 0.0 },
+                    if under { 1.12 } else { 1.0 },
+                ),
+            });
+        }
+        if let Some(table) = &row.table {
+            let reach = table.columns.last().copied().unwrap_or(0.0);
+            let (over, under) = (first(|r| r.table.is_some()), last(|r| r.table.is_some()));
+            inks.push(Ink {
+                across: (left.max(page), (left + reach).min(edge)),
+                down: (
+                    if over { 0.02 } else { 0.0 },
+                    if under { 0.98 } else { 1.0 },
+                ),
+            });
+        }
+        if row.quote {
+            inks.push(Ink {
+                across: (page, page + 0.4),
+                down: (0.0, 1.0),
+            });
+        }
+        // A picture covers the rows it stands on, the tallest a few screens of them.
+        let figures = self.figures();
+        for (at, found) in rows.iter().enumerate().skip(index.saturating_sub(160)) {
+            if at > index + 3 {
+                break;
+            }
+            let Some(figure) = found.figure.and_then(|(f, x)| Some((figures.get(f)?, x))) else {
+                continue;
+            };
+            let (figure, x) = figure;
+            let top = at as f32 - index as f32 + 0.2;
+            if top + figure.height > -3.0 {
+                inks.push(Ink {
+                    across: (page + x, page + x + figure.width),
+                    down: (top, top + figure.height),
+                });
+            }
+        }
+        inks
+    }
+
+    /// What `row_inks` finds on a row of code: its text, from its first letter to its last,
+    /// and what's selected of it, on whole rows as code draws its selection.
+    fn code_inks(&self, area: Rect, index: usize, ranges: &[(usize, usize)]) -> Vec<Ink> {
+        let rows = self.code_rows(area.w);
+        let Some(laid) = rows.get(index) else {
+            return Vec::new();
+        };
+        let y = area.y + (index - self.top) as u16;
+        let x = f32::from(area.x + self.gutter_width(area.w));
+        let start = self.buffer.rope().line_to_char(laid.line);
+        let text: Vec<char> = self.line_text(laid.line).chars().collect();
+        let end = laid.end.min(text.len());
+        let from = laid.start.min(end);
+        let on_row = |a: usize, b: usize| {
+            (self.pieces(area, &rows, a, b).into_iter())
+                .filter(move |(row, ..)| *row == y)
+                .map(move |(_, f, t)| (x + f as f32, x + t as f32))
+        };
+        let mut inks = Vec::new();
+        let (up, down) = self.reach(100);
+        let letters = || (from..end).filter(|i| !text[*i].is_whitespace());
+        if let (Some(first), Some(last)) = (letters().next(), letters().next_back()) {
+            for across in on_row(start + first, start + last + 1) {
+                inks.push(Ink {
+                    across,
+                    down: (0.5 - up, 0.5 + down),
+                });
+            }
+        }
+        for (a, b) in ranges {
+            let (a, b) = ((*a).max(start + from), (*b).min(start + end));
+            if a < b {
+                for across in on_row(a, b) {
+                    inks.push(Ink {
+                        across,
+                        down: (0.0, 1.0),
+                    });
+                }
+            }
+        }
+        inks
     }
 
     fn draw_highlights(
@@ -5395,4 +5677,25 @@ fn check_box(x: f32, y: u16, width: f32, measure: &dyn Measure) -> Bounds {
     let side = (rendered::CHECK_SIDE * line).min(room);
     let tall = side / line;
     Bounds::cells(x, f32::from(y) + (1.0 - tall) / 2.0, side / wide, tall)
+}
+
+/// The stretches of a row a selection covers, from and to across the row and how far down
+/// each stands, given which glyphs it takes in: one for each run of them side by side, so a
+/// line reads as one shape where each change of look made a seam. An equation's number,
+/// which stands moved from its row's middle, is a stretch of its own.
+fn stretches(row: &Row, taken: &[bool], hidden: impl Fn(&Glyph) -> bool) -> Vec<(f32, f32, f32)> {
+    let mut out: Vec<(f32, f32, f32)> = Vec::new();
+    let shown = (row.glyphs.iter().zip(taken)).filter(|(g, taken)| **taken && !hidden(g));
+    for (g, _) in shown.filter(|(g, _)| g.advance > 0.0) {
+        let shift = match g.tone {
+            Tone::Margin(moved) => f32::from(moved) / 64.0,
+            _ => 0.0,
+        };
+        let (from, to) = (g.x, g.x + g.advance);
+        match out.last_mut() {
+            Some(last) if (last.1 - from).abs() <= 0.01 && last.2 == shift => last.1 = to,
+            _ => out.push((from, to, shift)),
+        }
+    }
+    out
 }

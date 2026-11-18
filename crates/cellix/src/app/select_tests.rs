@@ -7,7 +7,7 @@ use std::fs;
 use std::rc::Rc;
 
 use cellix_input::{Event, Key, KeyEvent, Mods, MouseEvent, MouseKind};
-use cellix_render::{Grid, Paint};
+use cellix_render::{Grid, Paint, Rect};
 use tempfile::TempDir;
 
 use super::{App, Command};
@@ -292,6 +292,368 @@ fn picture_selected(grid: &Grid) -> bool {
         Paint::Wash { bounds, color, .. } => *color == selection && pictures.contains(bounds),
         _ => false,
     })
+}
+
+/// The selection's shapes on the page, in the order they're painted: where in the paint each
+/// is, and its left, top, right and foot in columns and rows.
+fn selection_shapes(grid: &Grid) -> Vec<(usize, [f32; 4])> {
+    let selection = crate::theme::Theme::default().selection;
+    shapes(grid, selection)
+}
+
+/// The same for every panel filled with `colour`.
+fn shapes(grid: &Grid, colour: cellix_render::Rgb) -> Vec<(usize, [f32; 4])> {
+    let unit = cellix_render::units(1.0) as f32;
+    (grid.paint.iter().enumerate())
+        .filter_map(|(index, paint)| match paint {
+            Paint::Panel {
+                bounds,
+                fill: Some(fill),
+                ..
+            } if *fill == colour => {
+                let [x, y, w, h] =
+                    [bounds.x, bounds.y, bounds.w, bounds.h].map(|v| v as f32 / unit);
+                Some((index, [x, y, x + w, y + h]))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The shapes that stand on row `y`, as a row's selection does: from its top to its foot.
+fn on_row(shapes: &[(usize, [f32; 4])], y: u16) -> Vec<(usize, [f32; 4])> {
+    let top = f32::from(y);
+    (shapes.iter().copied())
+        .filter(|(_, [_, from, _, to])| *from == top && *to == top + 1.0)
+        .collect()
+}
+
+/// A paragraph with a look of every kind, set long enough to wrap, then lists and a table.
+fn every_look() -> String {
+    "# A page\n\n\
+     Plain words, **bold**, *italic*, `inline code`, ==highlighted== and then a long run of \
+     plain words that goes on well past the end of the first row of the page, so that it wraps \
+     onto a second row and onto a third one too, which is where the lines of one paragraph have \
+     to touch as they do in a browser when it is all selected at once.\n\n\
+     - A bullet\n\
+     - Another bullet\n\n\
+     1. First\n\
+     2. Second\n\n\
+     | name | value |\n\
+     |------|-------|\n\
+     | cell | 42 |\n\n\
+     After the table.\n"
+        .to_string()
+}
+
+/// What the user faulted in 0.11.0's selection (scenes s1-*): a seam at every change of
+/// look, inline code and a highlight keeping their own grounds as holes in it, each line a
+/// band of its own with a gap under it, the list's markers and numbers left out, and a table
+/// selected word by word. Now, as a browser or VS Code's Markdown preview draws one, each
+/// line selected is one shape the height of its row, so a paragraph's lines touch; it's
+/// painted over inline grounds; a list's marker and number are inside it; and a table's
+/// cells taken whole are filled from line to line, under the table's lines.
+#[test]
+fn a_selection_on_a_page_reads_as_one_shape() {
+    let (_dir, mut app) = open("looks.md", &every_look(), true);
+    let (start, end) = (at(&app, "Plain words"), after(&app, "| cell | 42"));
+    click(&mut app, start, false);
+    click(&mut app, end, true);
+    assert_eq!(selected(&app), source(&app, start, end));
+    let grid = screen(&app);
+    let selection = selection_shapes(&grid);
+    let theme = crate::theme::Theme::default();
+
+    // One shape on each row of the paragraph, none with a seam, each touching the next.
+    let first = spot(&app, start).unwrap().1;
+    let last = spot(&app, at(&app, "all selected at once")).unwrap().1;
+    assert!(last >= first + 2, "the paragraph wraps onto three rows");
+    for y in first..=last {
+        let row = on_row(&selection, y);
+        assert_eq!(
+            row.len(),
+            1,
+            "one shape a row tall on row {y}: {selection:?}"
+        );
+    }
+    // Inline code's pill and the highlighter are under it, not holes in it.
+    let band = on_row(&selection, first)[0];
+    for ground in [theme.code_bg, theme.highlighter()] {
+        let (index, [left, _, right, _]) = (shapes(&grid, ground).into_iter())
+            .find(|(_, [_, top, _, _])| top.floor() == f32::from(first))
+            .expect("the ground on the first row");
+        assert!(index < band.0, "painted before the selection");
+        assert!(left >= band.1[0] && right <= band.1[2], "and inside it");
+    }
+
+    // A list's bullet and number are inside it: the shape starts before the item's words.
+    for item in ["A bullet", "Another bullet", "First", "Second"] {
+        let (x, y) = spot(&app, at(&app, item)).unwrap();
+        let row = on_row(&selection, y);
+        assert_eq!(row.len(), 1, "{item}: {selection:?}");
+        assert!(
+            row[0].1[0] <= x - 1.5,
+            "{item}'s marker is inside: {:?} for words at {x}",
+            row[0].1
+        );
+    }
+
+    // The table's cells taken whole are filled from line to line, under the table's lines.
+    let (x, y) = spot(&app, at(&app, "42")).unwrap();
+    let cell = (selection.iter().copied())
+        .find(|(_, [left, top, right, _])| *top == f32::from(y) && *left < x && *right > x)
+        .expect("the cell with 42 selected");
+    let [left, _, right, _] = cell.1;
+    assert!(
+        left <= x - 0.9,
+        "from its line, a padding before 42: {left} for {x}"
+    );
+    assert!(right - left >= 6.0, "to the next: {left}..{right}");
+    let line = (grid.paint.iter().enumerate()).rfind(
+        |(_, paint)| matches!(paint, Paint::Hairline { color, .. } if *color == theme.popup_border),
+    );
+    assert!(
+        line.is_some_and(|(index, _)| index > cell.0),
+        "the table's lines go over it"
+    );
+
+    // On cells, the bullet's cell and a cell's padding are selected too.
+    let (_dir, mut app) = open("looks.md", &every_look(), false);
+    let (start, end) = (at(&app, "Plain words"), after(&app, "| cell | 42"));
+    click(&mut app, start, false);
+    click(&mut app, end, true);
+    let grid = screen(&app);
+    let (x, y) = spot(&app, at(&app, "A bullet")).unwrap();
+    let bullet = (0..x as u16)
+        .rev()
+        .find(|c| grid.cell(*c, y).symbol == "•")
+        .expect("a bullet before the words");
+    assert_eq!(grid.cell(bullet, y).style.bg, theme.selection, "the bullet");
+    let (x, y) = spot(&app, at(&app, "42")).unwrap();
+    assert_eq!(
+        grid.cell(x as u16 + 3, y).style.bg,
+        theme.selection,
+        "the cell's room after 42"
+    );
+}
+
+/// A paper's section number and an equation's number are inside the selection as its words
+/// are (0.11.0 left out "1" of "1 Introduction" and "(1)").
+#[test]
+fn a_papers_numbers_are_inside_its_selection() {
+    let text = "\\documentclass{article}\n\\begin{document}\n\
+        Words before the section.\n\n\
+        \\section{Introduction}\n\n\
+        Words of the section.\n\n\
+        \\begin{equation}\nx^2 + y^2 = z^2\n\\end{equation}\n\n\
+        Words after it.\n\n\\end{document}\n";
+    let (_dir, mut app) = open("paper.tex", text, true);
+    let (start, end) = (at(&app, "Words before"), after(&app, "Words after it"));
+    click(&mut app, start, false);
+    click(&mut app, end, true);
+    assert_eq!(selected(&app), source(&app, start, end));
+    let grid = screen(&app);
+    let selection = selection_shapes(&grid);
+    // The section's number stands before its title, inside the title's shape.
+    let (x, y) = spot(&app, at(&app, "Introduction")).unwrap();
+    let title = (selection.iter().copied())
+        .find(|(_, [left, top, right, foot])| {
+            *top <= f32::from(y) + 0.9 && *foot >= f32::from(y) + 1.0 && *left < x && *right > x
+        })
+        .unwrap_or_else(|| panic!("the title selected: {selection:?}"));
+    assert!(
+        title.1[0] <= x - 1.0,
+        "with its number: {:?} for {x}",
+        title.1
+    );
+    // The equation's number has the selection's colour behind it.
+    let unit = cellix_render::units(1.0) as f32;
+    let (column, row) = (grid.paint.iter())
+        .find_map(|paint| match paint {
+            Paint::Text { x, y, text, .. } if text == "(1)" => {
+                Some((*x as f32 / unit, *y as f32 / unit))
+            }
+            _ => None,
+        })
+        .expect("the equation's number");
+    assert!(
+        selection.iter().any(|(_, [left, top, right, foot])| {
+            *left <= column + 0.1
+                && *right >= column + 1.0
+                && *top <= row + 0.5
+                && *foot >= row + 0.5
+        }),
+        "(1) at {column}, {row}: {selection:?}"
+    );
+}
+
+/// A cell of 17 by 50 px with words set for a line of 36, as the tour's Airy rows are.
+const CELL: (usize, usize) = (17, 50);
+const LINE: usize = 36;
+
+/// The same file opened with Airy rows, in a window `size` cells.
+fn open_airy(name: &str, text: &str, size: (u16, u16)) -> (TempDir, App) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(name);
+    fs::write(&path, text).unwrap();
+    let mut app = App::new(dir.path().to_path_buf(), size);
+    let measure = cellix_render::FontMeasure::new(CELL.0, CELL.1).with_type_row(LINE);
+    app.set_measure(Rc::new(measure));
+    app.open(&path).unwrap();
+    (dir, app)
+}
+
+/// How near anything else drawn comes to the buttons by a selection, in pixels, from the
+/// screen painted as a terminal shows it: the buttons are taken out of the paint, the rows
+/// round them are drawn, and every pixel not the page's ground is measured from the buttons'
+/// box, across or down whichever is further.
+fn air_round(grid: &Grid, buttons: (Rect, Rect)) -> f32 {
+    use cellix_render::{Rasterizer, SoftwareRasterizer};
+    let (row, line) = (CELL.1 as f32, LINE as f32);
+    let unit = cellix_render::units(1.0) as f32;
+    let on_buttons = |bounds: &cellix_render::Bounds| {
+        let (x, y) = (bounds.x as f32 / unit, bounds.y as f32 / unit);
+        [buttons.0, buttons.1].iter().any(|b| {
+            x >= f32::from(b.x) - 0.5
+                && x < f32::from(b.right())
+                && (y - f32::from(b.y)).abs() < 1.0
+        })
+    };
+    // The buttons' box, as the painter stands it in its row.
+    let mut boxes = (grid.paint.iter()).filter_map(|paint| match paint {
+        Paint::Panel {
+            bounds,
+            shadow: true,
+            ..
+        } if on_buttons(bounds) => {
+            let (top, tall) = cellix_render::stood(bounds.y, bounds.h, row, line);
+            let left = bounds.x as f32 / unit * CELL.0 as f32;
+            Some([
+                left,
+                top,
+                left + bounds.w as f32 / unit * CELL.0 as f32,
+                top + tall,
+            ])
+        }
+        _ => None,
+    });
+    let first = boxes.next().expect("the buttons are painted");
+    let [left, top, right, foot] = boxes.fold(first, |a, b| {
+        [
+            a[0].min(b[0]),
+            a[1].min(b[1]),
+            a[2].max(b[2]),
+            a[3].max(b[3]),
+        ]
+    });
+    // Everything else, drawn on the rows round them.
+    let mut without = grid.clone();
+    let labels = ["Comment", "Ask Agent"];
+    without.paint.retain(|paint| match paint {
+        Paint::Panel { bounds, shadow, .. } => !(*shadow && on_buttons(bounds)),
+        Paint::Text { text, .. } => !labels.iter().any(|l| text.starts_with(l)),
+        _ => true,
+    });
+    let ground = crate::theme::Theme::default().text.bg;
+    let mut raster = SoftwareRasterizer::new(CELL.0, CELL.1)
+        .expect("fonts are in the binary")
+        .with_type_row(LINE);
+    let rows = buttons.0.y.saturating_sub(2)..(buttons.0.y + 3).min(grid.height());
+    let mut nearest = f32::MAX;
+    for y in rows {
+        let image = raster.row(&without, y);
+        for py in 0..image.height {
+            let down = (y as usize * CELL.1 + py) as f32 + 0.5;
+            let dy = (top - down).max(down - foot).max(0.0);
+            for px in (left as usize).saturating_sub(16)..(right as usize + 16).min(image.width) {
+                let at = (py * image.width + px) * 3;
+                let colour =
+                    cellix_render::Rgb(image.rgb[at], image.rgb[at + 1], image.rgb[at + 2]);
+                if colour == ground {
+                    continue;
+                }
+                let across = px as f32 + 0.5;
+                let dx = (left - across).max(across - right).max(0.0);
+                nearest = nearest.min(dx.max(dy));
+            }
+        }
+    }
+    nearest
+}
+
+/// The air the user asked of everything: 8 px of a Retina screen.
+const AIR: f32 = 8.0;
+
+/// One rule for the buttons by a selection (0.11.0's review: scenes s1-*, 73): in a row of
+/// their own over the first selected line, 8 px or more clear of words, lines and the
+/// selection; over a paragraph's lines, a table or front matter, above them.
+#[test]
+fn the_selection_bar_stands_over_the_first_line_clear_of_everything() {
+    let page = "---\ntitle: Front matter\n---\n\n# A heading of its own\n\n\
+        A first paragraph, long enough to run on over two rows of the page and then onto a third \
+        one as well, which takes a good many more words than a line holds, since a line of the page \
+        holds a hundred letters or more, so that a word on its last row has words over it on the \
+        rows before.\n\n\
+        | name | value |\n|------|-------|\n| cell | 42 |\n| more | 43 |\n\n\
+        A last paragraph.\n";
+    let (_dir, mut app) = open_airy("bar.md", page, (150, 40));
+    let check = |app: &mut App, word: &str, length: usize| {
+        let (from, to) = (at(app, word), at(app, word) + length);
+        let (x, y) = spot(app, from).unwrap();
+        app.handle(pointer(MouseKind::Left, x + 0.1, y, false));
+        let (x2, y2) = spot(app, to).unwrap();
+        app.handle(pointer(MouseKind::Drag, x2 + 0.1, y2, false));
+        app.handle(pointer(MouseKind::Up, x2 + 0.1, y2, false));
+        assert_eq!(selected(app).chars().count(), length, "{word}");
+        let bar = app.selection_bar().expect("the buttons");
+        let air = air_round(&screen(app), bar);
+        assert!(air >= AIR, "{word}: {air} px from the buttons");
+        (bar.0.y, y)
+    };
+    // A word on the paragraph's last row: over the paragraph, not on its words.
+    let (bar, line) = check(&mut app, "words over it", 5);
+    let first = spot(&app, at(&app, "A first paragraph")).unwrap().1;
+    assert!(line >= first + 2, "the word is on the third row");
+    assert_eq!(bar, first - 1, "in the row over the paragraph");
+    // A cell of the table's second line: over the table, clear of its box.
+    let (bar, _) = check(&mut app, "43", 2);
+    let head = spot(&app, at(&app, "name")).unwrap().1;
+    assert_eq!(bar, head - 1, "in the row over the table");
+    // A heading's word right under front matter: between the two, clear of both.
+    let (bar, line) = check(&mut app, "heading", 7);
+    assert!(bar < line, "over the heading");
+}
+
+/// With its start scrolled out of view, the bar goes under the last selected line, clear of
+/// what's there; with blocks under it to the foot, beside it.
+#[test]
+fn the_selection_bar_under_or_beside_the_end_keeps_clear_too() {
+    let lines: String = (0..90).map(|n| format!("| row {n} | {n} |\n")).collect();
+    let page = format!(
+        "# Top\n\nThe start of the selection.\n\n{}| name | value |\n|------|-------|\n{lines}",
+        filler(30)
+    );
+    let (_dir, mut app) = open_airy("end.md", &page, (150, 40));
+    let start = at(&app, "start of the selection");
+    click(&mut app, start, false);
+    // Scrolled until the table's tenth row is in view, the start long out of it.
+    let end = after(&app, "row 10");
+    scroll_to(&mut app, end);
+    for _ in 0..3 {
+        app.handle(pointer(MouseKind::ScrollDown, 60.0, 20, false));
+    }
+    assert!(spot(&app, start).is_none(), "the start is out of view");
+    let (_, y) = spot(&app, end).expect("the end in view");
+    click(&mut app, end, true);
+    let bar = app.selection_bar().expect("the buttons");
+    assert_eq!(
+        bar.0.y, y,
+        "beside the last line: the table runs on under it"
+    );
+    let (x, _) = spot(&app, after(&app, "| row 10 | 10")).unwrap();
+    assert!(f32::from(bar.0.x) > x, "after the table");
+    let air = air_round(&screen(&app), bar);
+    assert!(air >= AIR, "{air} px from the buttons");
 }
 
 #[test]

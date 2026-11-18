@@ -6445,5 +6445,33 @@
     "title": "The Agents list's needs-you chip is the design's chip, with room under its words' tails",
     "test": "the_needs_you_chip_has_room_for_its_words_tails",
     "passes": true
+  },
+  {
+    "id": "page-selection-one-shape",
+    "milestone": 15,
+    "title": "A selection on a page reads as one shape: rows that touch, painted over inline grounds, with list markers, numbers and whole table cells inside",
+    "test": "a_selection_on_a_page_reads_as_one_shape",
+    "passes": true
+  },
+  {
+    "id": "paper-numbers-selected",
+    "milestone": 15,
+    "title": "A paper's section and equation numbers are inside a selection",
+    "test": "a_papers_numbers_are_inside_its_selection",
+    "passes": true
+  },
+  {
+    "id": "selection-bar-one-rule",
+    "milestone": 15,
+    "title": "The buttons by a selection stand over its first line, 8 px clear of words, lines and the selection, above a block",
+    "test": "the_selection_bar_stands_over_the_first_line_clear_of_everything",
+    "passes": true
+  },
+  {
+    "id": "selection-bar-under-beside",
+    "milestone": 15,
+    "title": "With the start out of view, the selection's buttons stand under or beside its end, as clear",
+    "test": "the_selection_bar_under_or_beside_the_end_keeps_clear_too",
+    "passes": true
   }
 ]
