@@ -3474,3 +3474,13 @@ Every quit panicking went unseen because the PTY tests that quit Cellix waited f
 
 - Turned up: one test ends Cellix on purpose another way. `workspaces_open_when_cellix_dies_come_back` kills it with SIGKILL, so it asks that the kill ended it, by its signal. No test turned up a new failure; the whole PTY suite passed twice in a row (34 of 34) through the guard, and the full verify.
 - Not covered: Cellix in tmux and Zellij (`harness/x mux`, outside verify) is ended with its session, and the headless terminal behind the tour and `tiles_go_as_files…` stops it with SIGTERM when its script ends without saying how it went; neither is a quit.
+
+## The tour runs as a stand-in, and waits for each surface (2026-11-18)
+
+The final review of 0.11.0's whole tour found a login name and the machine's temporary folders in pictures, and seven scenes taken on the wrong screen.
+
+- The tour's projects are in a stand-in home's `dev` folder (its resolved path, as Cellix resolves it), so a path on screen is `~/dev/queue`; it sets `USER` and `LOGNAME` to `dev`, which 104's `loginctl enable-linger` names. 103, 106, 133 and 138 showed `/private/var/folders/…`, and 104 the real login.
+- 13-source-diff waited for SOURCE CONTROL, which shows before the press too: on a loaded machine the diff came after the picture (it opens in 0.3 s on a quiet one, checked with pictures every 0.3 s after the press). It waits for "Change 1". 110-view-fold-hover waits for the fold chevrons, 34-hover-header for git's dots in the tree before the pointer moves, 35 and 36 for Review before theirs, and 38-hover-dialog aims at Don't Save by its words (a fixed cell fell under the dialog once its air was evened). None of them was the app losing a press or a hover: each retaken alone showed its surface.
+- 176-review-suggested-light began with the dark scene's finding in the project, so it saw "Suggested by Codex" at once and was pictured before its Codex had started. Each of the reviewer scenes starts with none.
+- 165 to 167 find the cut Comments tab by its mark: since "+" keeps its room, the tab is cut to it, and "Comm" never shows.
+- Unverified: the identical-picture check is still defeated by a spinner or a relative time that differs between two scenes; the words each scene waits for are the guard now.

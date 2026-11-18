@@ -98,7 +98,9 @@ EXPECT = {
     "13-quit-beside-pane": "WORKTREES",
     "13-review": "Accept",
     "13-source-control": "SOURCE CONTROL",
-    "13-source-diff": "SOURCE CONTROL",
+    # The diff it opens: SOURCE CONTROL shows before the press too, and a loaded machine
+    # can take more than a second to read what changed.
+    "13-source-diff": "Change 1",
     "13-source-hover": "SOURCE CONTROL",
     "13-source-message": "what changed and",
     "13-source-staged": "STAGED CHANGES",
@@ -135,6 +137,10 @@ EXPECT = {
     "36-hover-accept": "Accept",
     "37-hover-settings": "files save",
     "38-hover-dialog": "Save changes",
+    # Folding is ready (its chevrons show), and the agent's finding has come in.
+    "110-view-fold-hover": "⌄",
+    "176-review-suggested": "1 suggested",
+    "176-review-suggested-light": "1 suggested",
     "39-hover-agents": "WORKTREES",
     "42-hover-install": "files save",
     "43-light-hover-menu": "Rename Symbol",
@@ -205,7 +211,7 @@ EXPECT = {
 # About how many scenes there are, to cut the tour into parts of a size. Count them with
 # TOUR_LIST=1 when scenes are added: too low a count puts every scene past it in the last part,
 # which then runs out of the guard's time (0.11.0's tour lost ten scenes that way).
-SCENES_IN_ALL = 278
+SCENES_IN_ALL = 285
 # Scenes come to, shot, and those that never reached their surface.
 SEEN, SHOT, FAILED = [0], [], []
 # The scene shot last, with its picture's digest and what it was taken from; and this one's.
@@ -561,6 +567,9 @@ def shoot(name, steps, *args, size="120x40", background=DARK, cwd=None, env=None
         "PS1": "$ ",
         "ENV": "",
         "HOME": HOME,
+        # A stand-in login too: a card that names it (104's `loginctl enable-linger`) shows it.
+        "USER": "dev",
+        "LOGNAME": "dev",
         "TERM_SIZE": size,
         # Rows are Cellix's own, 1.4 lines of 36 pixels, as Settings has them until it's told
         # otherwise. A scene on cells has the terminal's lines. A press here counts in rows
@@ -1114,7 +1123,12 @@ def reviewer_scenes(scratch):
         ("176-review-suggested", found, {}),
         ("176-review-suggested-light", found, {"background": "eff1f5"}),
     ]
+    threads = f"{ROOT}/.cellix/threads.json"
     for name, steps, extra in scenes:
+        # Each starts with no finding: the light one began with the dark one's, so it saw
+        # "Suggested by Codex" at once and was pictured before its Codex had started.
+        if os.path.exists(threads):
+            os.unlink(threads)
         cache = tempfile.mkdtemp(prefix="cx", dir="/tmp")
         env = {"XDG_CACHE_HOME": cache, "PATH": f"{tools}:{os.environ['PATH']}"}
         shoot(name, steps, CODE_FILE, **{"size": "150x44", **extra}, env=env)
@@ -1123,8 +1137,8 @@ def reviewer_scenes(scratch):
     # What the finding leaves in the file: its line's ◆ in the gutter. Then the finding goes,
     # or every later scene of this file has it: 02-code showed a ◆ that 0.10.2 didn't.
     shoot("177-code-comment-mark", [["wait", 1.0]], CODE_FILE)
-    if os.path.exists(f"{ROOT}/.cellix/threads.json"):
-        os.unlink(f"{ROOT}/.cellix/threads.json")
+    if os.path.exists(threads):
+        os.unlink(threads)
 
 
 def agents_by_urgency(scratch):
@@ -1241,10 +1255,13 @@ def task_scenes(scratch):
     shoot("154-task-narrow", show, cwd=root, size="72x44", **cache)
 
 
-with tempfile.TemporaryDirectory() as scratch:
+with tempfile.TemporaryDirectory() as made:
+    # The projects are in a stand-in home's dev folder, so a path on screen is ~/dev/queue and
+    # never the machine's own temporary folders: the resolved path, as Cellix resolves it.
+    HOME = f"{os.path.realpath(made)}/home"
+    scratch = f"{HOME}/dev"
     ROOT = f"{scratch}/queue"
-    HOME = f"{scratch}/home"
-    os.makedirs(HOME)
+    os.makedirs(scratch)
     project(ROOT)
     CODE_FILE, PAGE_FILE = "src/queue.rs", "README.md"
     NOTE_FILE, PAPER_FILE = "docs/attention.md", "docs/main.tex"
@@ -1431,11 +1448,19 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("32-hover-toolbar", [["move", *ON("▦", 0)]], PAGE_FILE)
     shoot("33-hover-branch", [["move", *FOOT("⎇", 2)]], CODE_FILE)
     # The branch beside the folder's name, in the row under the views.
-    shoot("34-hover-header", [["move", *ON("QUEUE main", 7)]], CODE_FILE)
-    shoot("35-hover-review", [["keys", "\u0007"], ["wait", 0.6], ["move", *ON("docs/PLAN.md")]], CODE_FILE)
-    shoot("36-hover-accept", [["keys", "\u0007"], ["wait", 0.6], ["move", *ON("Accept")]], CODE_FILE)
+    # Once git has answered (its dots in the tree), so the chip isn't pictured half loaded;
+    # and a moment under the pointer, as a person's hover has.
+    shoot("34-hover-header", [["until", "•"], ["move", *ON("QUEUE main", 7)], ["wait", 0.6]],
+          CODE_FILE)
+    shoot("35-hover-review", [["keys", "\u0007"], ["until", "Accept"], ["wait", 0.6],
+                              ["move", *ON("docs/PLAN.md")], ["wait", 0.4]], CODE_FILE)
+    shoot("36-hover-accept", [["keys", "\u0007"], ["until", "Accept"], ["wait", 0.6],
+                              ["move", *ON("Accept")], ["wait", 0.4]], CODE_FILE)
     shoot("37-hover-settings", [*settings, EDITOR_PAGE, ["move", *ON("After a pause")]], CODE_FILE)
-    shoot("38-hover-dialog", [["keys", "x"], ["keys", CTRL("q")], ["move", 70, 17]], CODE_FILE)
+    # On Don't Save by its words: a cell fixed by number fell under the dialog once its air
+    # was evened out.
+    shoot("38-hover-dialog", [["keys", "x"], ["keys", CTRL("q")], ["until", "Don't Save"],
+                              ["move", *ON("Don't Save", 2)], ["wait", 0.4]], CODE_FILE)
     shoot("39-hover-agents", [*LIST_AGENTS, ["wait", 0.5], ["move", *ON("Claude Code", 2)]], CODE_FILE)
     shoot("41-hover-tab-close", [["move", *ON("×", 0)]], CODE_FILE)
     # A language's Install, under the pointer and never pressed.
@@ -1857,13 +1882,16 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("163-reading-width-paper", [["wait", 1.0]], PAPER, **wide)
     shoot("164-reading-width-sample", to_line(line_of(WRITING, "## Tables")), WRITING, **wide)
     # A narrow side pane with more tabs than it has room for: the one in front whole, the
-    # others cut short, and one of those under the pointer.
+    # others cut short (Comments to its mark, the first ◆ on the top row, so "+" keeps its
+    # room), and one of those under the pointer.
     three_tabs = [*LIST_AGENTS, *command("show comments", F1), ["until", "No comments"],
                   *command("New Terminal"), ["wait", 1.5]]
+    comments_mark = ON("◆", 0)
     shoot("165-pane-tabs-cut", three_tabs, CODE_FILE)
-    shoot("166-pane-tabs-cut-hover", [*three_tabs, ["move", *ON("Comm")], ["wait", 1.2]], CODE_FILE)
-    shoot("167-pane-tabs-cut-light", [*three_tabs, ["click", *ON("Comm")], ["wait", 0.6]], CODE_FILE,
-          background="eff1f5")
+    shoot("166-pane-tabs-cut-hover", [*three_tabs, ["move", *comments_mark], ["wait", 1.2]],
+          CODE_FILE)
+    shoot("167-pane-tabs-cut-light", [*three_tabs, ["click", *comments_mark], ["wait", 0.6]],
+          CODE_FILE, background="eff1f5")
 
     # The code view: fold chevrons and chips, sticky scroll, word wrap, bracket pairs. The
     # file opens with the gutter's chevrons in columns 32 and 33, its line n on row n + 1.
