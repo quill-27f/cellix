@@ -65,6 +65,36 @@ fn blockquote(text: &str) -> String {
         .join("\n")
 }
 
+/// A time in seconds since 1970 as a date and a time of day in UTC: "2026-11-18 13:05 UTC".
+/// None for one not known.
+fn utc(seconds: u64) -> Option<String> {
+    if seconds == 0 {
+        return None;
+    }
+    let days = (seconds / 86_400) as i64;
+    let minutes = (seconds % 86_400) / 60;
+    // The civil date of a day count, after Howard Hinnant.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let day_of_era = z.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let shifted = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * shifted + 2) / 5 + 1;
+    let month = if shifted < 10 {
+        shifted + 3
+    } else {
+        shifted - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    Some(format!(
+        "{year}-{month:02}-{day:02} {:02}:{:02} UTC",
+        minutes / 60,
+        minutes % 60
+    ))
+}
+
 /// How many comments, on how much, how many settled, and how many of each kind.
 fn summary(kept: &[&Thread]) -> String {
     let mut files: Vec<&str> = kept
@@ -120,7 +150,9 @@ fn entry(thread: &Thread) -> String {
         };
         format!(" · {what} in version {}", version + 1)
     });
-    let mut text = format!("#### {at} · {state}{earlier}\n");
+    // When it was made, where that's known: in UTC, since a review is read anywhere.
+    let made = utc(thread.at).map_or_else(String::new, |made| format!(" · {made}"));
+    let mut text = format!("#### {at} · {state}{earlier}{made}\n");
     let about = match &thread.about {
         Some(About::Problem { message }) => message.as_str(),
         _ if !thread.selection.is_empty() => thread.selection.as_str(),

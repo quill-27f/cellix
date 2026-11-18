@@ -56,7 +56,7 @@ const THREADS: &str = r#"[
    "replies": [{"author": "Claude", "text": "Agree (Clarity): the checks should be named."},
                {"author": "You", "text": "Done in the next draft."}]},
   {"id": 3, "file": "intro.md", "line": 4, "quote": "We propose", "text": "Say what's new here.",
-   "kind": "Clarity"},
+   "kind": "Clarity", "at": 1763470800},
   {"id": 4, "file": "intro.md", "line": 20, "quote": "", "text": "Add a limitations paragraph."},
   {"id": 5, "file": "intro.md", "line": 7, "quote": "three datasets",
    "text": "Name them.", "kind": "Reproducibility", "suggested_by": "Claude"},
@@ -82,7 +82,7 @@ const REVIEW: &str = "# Review
 
 ### Clarity
 
-#### Line 4 · Open
+#### Line 4 · Open · 2025-11-18 13:00 UTC
 
 > We propose
 

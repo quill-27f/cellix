@@ -19571,9 +19571,9 @@ mod agent_tab_tests;
 #[cfg(test)]
 mod agents_list_tests;
 #[cfg(test)]
-mod glance_tests;
-#[cfg(test)]
 mod docflow_tests;
+#[cfg(test)]
+mod glance_tests;
 #[cfg(test)]
 mod link_tests;
 #[cfg(test)]

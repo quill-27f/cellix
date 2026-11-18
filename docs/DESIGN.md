@@ -517,8 +517,9 @@ An agent's suggestion goes in once it's kept, which makes it the reviewer's; one
 yet decided doesn't. A short head says how many comments, on how many files, how many resolved,
 and how many of each kind. Each comment is headed by its line and whether it's open or resolved, quotes
 its words (the whole selection) as a block quote, and has the reviewer's words and every answer
-under them, named, an agent's verdict as "Claude agrees" or "Claude pushes back". Comments carry
-no time, so neither does the review.
+under them, named, an agent's verdict as "Claude agrees" or "Claude pushes back". Its heading
+ends with when it was made, as a date and time in UTC ("Line 4 · Open · 2025-11-18 13:00 UTC"),
+since a review is read anywhere; one kept from before comments said when says nothing of it.
 
 A comment and each answer say how long ago they were written, after who wrote them: "You ·
 5 min", "Claude · 2 h" (`at`, seconds since 1970, kept with each; a comment's number had been the

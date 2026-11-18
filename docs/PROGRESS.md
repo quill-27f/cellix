@@ -3366,3 +3366,9 @@ The docflow track (Q6).
 - `cellix reply <id> --done "what you did"` answers a comment with a reply that starts "Addressed:" (`threads::addressed`). The card says "Addressed by Codex" in a green pill beside who wrote it, the answer's chip says "Addressed" as a verdict's does, and its buttons are Resolve and Not done. The agent never resolves; Not done begins a reply "Not done: " for the reviewer to finish, which goes back to the agent as any reply does, and the card waits on it again. "Resolve N addressed" at the end of the order's row settles every addressed comment listed.
 - Told to agents three ways: the Claude Code, Codex and Gemini CLI skills, `cellix --help`, and every comment's message, which now ends "or once you've done what it asks: cellix reply <id> --done …".
 - Tests: `an_agent_says_it_addressed_a_comment_and_the_reviewer_settles_it` (App), `pty_an_agent_says_it_addressed_a_comment` (the real binary running, and `cellix reply --done` run against it as an agent would).
+
+## The exported review says when (2026-11-18)
+
+The docflow track, for the extras track's Copy/Save Review as Markdown, which left times out until comments had them.
+
+- Each comment's heading in the exported review ends with when it was made, as a date and time in UTC ("#### Line 4 · Open · 2025-11-18 13:00 UTC"), since a review is read anywhere; a comment kept from before says nothing of when. `the_review_is_markdown_a_file_and_a_kind_at_a_time` gives one comment a time and expects it in its heading.

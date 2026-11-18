@@ -2139,7 +2139,9 @@ impl Dock {
     }
 
     fn agent_index(&self) -> Option<usize> {
-        let front = self.active.filter(|i| self.sessions[*i].agent());
+        let front = self
+            .active
+            .filter(|i| self.sessions.get(*i).is_some_and(Session::agent));
         front.or_else(|| self.sessions.iter().position(Session::agent))
     }
 
