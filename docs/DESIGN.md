@@ -462,6 +462,28 @@ on every row it wraps onto, and a click on it opens it the way Open in Browser o
 side pane's browser where one is set up, the system's otherwise. A click anywhere else on the
 comment is still the comment's.
 
+A right click on a link, wherever one can be clicked, opens a menu with Open Link and Copy Link
+(decided 18 November 2026: the user found a link opened in the terminal's browser hard to
+share). It drops from under the pointer's row, at the pointer's column, so the link it's about
+stays in view: opened on the pointer's own row, as a code menu is, it hid all of the address but
+its first letters. Over a comment's card or peek it stands a step above the card's colour
+(`Theme::over_card`), as the comments' order menu does. Open Link does what a click on it does, or Ctrl+click where a click puts the
+caret; Copy Link puts its address on the clipboard the way every copy goes, by OSC 52 through
+the terminal, so it reaches the person's own clipboard over SSH and in tmux, and says "Copied the
+link". The address is where the link goes: a Markdown link's target, `\href`'s and `\url`'s
+argument with LaTeX's escapes taken out, never the words it's shown as. A link to a file has
+Open File and Copy Path instead, as a `file:line` in a terminal's output, a Markdown link to a
+file beside the page, a paper's `\input` row and a comment's picture shown as its name (Open
+Picture); a link to a place on the page itself, `#section`, has neither. The places are a comment's
+words and its replies in the Comments pane, a file's text, rendered or as source (transcripts
+are pages), and a terminal's output in the side pane and in peek, where a web address now opens
+on Ctrl+click too, found whole where it wrapped onto the rows under it. Where a right click
+already has a menu, as on a page or in code, the link's two rows stand at its top, a rule under
+them; in a terminal or a comment, where it had none, a right click off a link still opens none.
+No key opens it: Cellix's context menus have none (no Shift+F10), and Open in Browser in the
+palette is the keyboard's way to the link at the caret. The Task page, Settings, Review's comment
+cards and the inbox show no links to click, so they have none.
+
 A comment takes emoji three ways, all of which leave the emoji itself in its words, so an agent
 reads it as written. A name between colons, GitHub's names, becomes its emoji as its second colon
 is typed (`:+1:`, `:100:`), unless a letter, a digit or another colon comes right before it, so
@@ -1572,7 +1594,8 @@ its agent gets one too.
 An agent's name in any terminal's text, as in what one agent said to another, is a way to it:
 Ctrl+click on the name of a live agent opens a helper in peek, over the tab where the name was,
 and brings one with a tab of its own to the front, as their rows in the Agents list do. Other
-words are as they were, a `file:line` opening its file. It's Ctrl on macOS too, not Cmd: a
+words are as they were, a `file:line` opening its file, and a web address opens as a link does,
+before any name in it is looked for. It's Ctrl on macOS too, not Cmd: a
 terminal keeps Cmd with a press to itself and tells the program under it nothing of it.
 
 `cellix agent --skill` prints a short guide for agents, and the same guide ships as a skill with

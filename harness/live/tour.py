@@ -141,6 +141,7 @@ EXPECT = {
     "50-emoji-picker-light": "fire",
     "50-comment-picture": "yours",
     "50-comment-picture-light": "yours",
+    "50-comment-link-menu": "Copy Link",
     "50-plan-versions": "yours",
     "50-plan-versions-narrow": "yours",
     "50-review": "suggested",
@@ -189,7 +190,7 @@ EXPECT = {
 # About how many scenes there are, to cut the tour into parts of a size. Count them with
 # TOUR_LIST=1 when scenes are added: too low a count puts every scene past it in the last part,
 # which then runs out of the guard's time (0.11.0's tour lost ten scenes that way).
-SCENES_IN_ALL = 254
+SCENES_IN_ALL = 256
 # Scenes come to, shot, and those that never reached their surface.
 SEEN, SHOT, FAILED = [0], [], []
 # Which commit the binary is, as far as git can say: the pictures are of that.
@@ -1425,6 +1426,18 @@ with tempfile.TemporaryDirectory() as scratch:
     with_picture = [["wait", 1.0], *command("show comments", F1), ["until", "yours"], ["wait", 1.5]]
     shoot("50-comment-picture", with_picture, NOTE_FILE, size="150x44")
     shoot("50-comment-picture-light", with_picture, NOTE_FILE, size="150x44", background="eff1f5")
+    # A right click on a link in a comment: Open Link and Copy Link, at the pointer.
+    linked = [
+        {"id": 1, "file": NOTE_FILE, "line": 3, "quote": "the weights sum to one",
+         "text": "The proof is at https://example.com/notes/softmax, in its second part.",
+         "replies": [{"author": "Claude", "text": "Agree: https://example.com/papers/attention says so too."}],
+         "resolved": False, "told": 1, "asked": False, "kind": "", "suggested_by": ""},
+    ]
+    with open(f"{ROOT}/.cellix/threads.json", "w") as f:
+        json.dump(linked, f)
+    link_menu = [["wait", 1.0], *command("show comments", F1), ["until", "yours"], ["wait", 1.0],
+                 ["right", ["example.com/notes", 6]], ["wait", 0.6]]
+    shoot("50-comment-link-menu", link_menu, NOTE_FILE, size="150x44")
     # A review the agent has checked: a verdict on the reviewer's comment and a suggestion.
     review = [
         {"id": 1, "file": NOTE_FILE, "line": 3, "quote": "the weights sum to one",
@@ -1677,6 +1690,14 @@ with tempfile.TemporaryDirectory() as scratch:
     running = [["keys", CTRL("j")], ["wait", 1.5], ["keys", "sleep 60\r"], ["wait", 2.5]]
     shoot("108-terminal-running", running, CODE_FILE, size="150x44", env=in_shell(caches[5]),
           expect="sleep 60")
+    # A right click on a web address a terminal printed: Open Link and Copy Link.
+    caches += [tempfile.mkdtemp(prefix="cx", dir="/tmp")]
+    # Worked out by the shell, so only what it prints says the whole address.
+    printed = "printf 'Docs: https://example.com/queue/v%s\\n' $((1+1))\r"
+    link = [["keys", CTRL("j")], ["wait", 1.5], ["keys", printed], ["until", "queue/v2"],
+            ["wait", 0.5], ["right", ["example.com/queue/v2", 4]], ["wait", 0.6]]
+    shoot("108-terminal-link-menu", link, CODE_FILE, size="150x44", env=in_shell(caches[6]),
+          expect="Copy Link")
     for cache in caches:
         subprocess.run(["pkill", "-9", "-f", cache])
         shutil.rmtree(cache, ignore_errors=True)

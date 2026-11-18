@@ -425,6 +425,78 @@ fn a_picture_pasted_from_the_terminals_clipboard_lands_in_the_project() {
     );
 }
 
+/// Where `text` starts on screen, as the column and row, counting from one, that a terminal
+/// reports a press at: on the last row that says it, a wide letter taking two columns.
+#[cfg(unix)]
+fn cell_of(screen: &Screen, text: &str) -> Option<(u16, u16)> {
+    let parser = screen.parser.lock().unwrap();
+    let shown = parser.screen();
+    let (rows, columns) = shown.size();
+    (0..rows).rev().find_map(|row| {
+        let mut line = String::new();
+        let mut starts = Vec::new();
+        for column in 0..columns {
+            let cell = shown.cell(row, column)?;
+            if cell.is_wide_continuation() {
+                continue;
+            }
+            let letters = if cell.has_contents() {
+                cell.contents()
+            } else {
+                " "
+            };
+            starts.extend(letters.chars().map(|_| column));
+            line.push_str(letters);
+        }
+        let at = line.find(text)?;
+        Some((starts[line[..at].chars().count()] + 1, row + 1))
+    })
+}
+
+/// A right click on a URL that a terminal in the side pane printed has Copy Link, which goes
+/// to the terminal Cellix runs in as OSC 52, as every copy does, so the address lands on the
+/// person's own clipboard, over SSH too. The real binary, driven by keys and the mouse.
+#[test]
+#[cfg(unix)]
+fn a_links_copy_reaches_the_terminals_clipboard() {
+    use base64::Engine;
+    let dir = project();
+    let shell = Path::new("/bin/sh");
+    let mut screen = Screen::start_with(dir.path(), &["hello.txt"], &[("SHELL", shell)]);
+    screen.wait_for("hello from a file");
+    screen.send(b"\x0a"); // Ctrl+J, a terminal in the side pane
+    // Worked out by the shell, so the line typed doesn't hold the address it prints.
+    let address = "https://example.com/pty/42";
+    screen.send(b"echo \"https://example.com/pty/$((6*7)).\"\r");
+    screen.wait_for(address);
+    let (column, row) = cell_of(&screen, address).unwrap();
+    let column = column + 3;
+    // SGR: a press and a release of the right button.
+    screen.send(format!("\x1b[<2;{column};{row}M\x1b[<2;{column};{row}m").as_bytes());
+    screen.wait_for("Copy Link");
+    let (column, row) = cell_of(&screen, "Copy Link").unwrap();
+    let column = column + 1;
+    screen.send(format!("\x1b[<0;{column};{row}M\x1b[<0;{column};{row}m").as_bytes());
+    let encoded = base64::engine::general_purpose::STANDARD.encode(address);
+    wait_written(&mut screen, format!("\x1b]52;c;{encoded}\x07").as_bytes());
+    screen.wait_for("Copied the link");
+    // The shell is still running, so quitting asks about it, and it's stopped with Cellix.
+    screen.send(b"\x11"); // Ctrl+Q
+    screen.wait_for("Stop and Quit");
+    let (column, row) = cell_of(&screen, "Stop and Quit").unwrap();
+    let column = column + 1;
+    screen.send(format!("\x1b[<0;{column};{row}M\x1b[<0;{column};{row}m").as_bytes());
+    let deadline = Instant::now() + WAIT;
+    while screen.child.try_wait().unwrap().is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "still running:\n{}",
+            screen.contents()
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 fn project() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("hello.txt"), "hello from a file\n").unwrap();

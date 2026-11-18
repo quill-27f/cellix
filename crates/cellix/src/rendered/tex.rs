@@ -51,7 +51,7 @@ fn env_end(line: &str) -> Option<&str> {
 }
 
 /// The char index of the brace closing the one at `open`.
-fn matching(chars: &[char], open: usize) -> Option<usize> {
+pub(super) fn matching(chars: &[char], open: usize) -> Option<usize> {
     let mut depth = 0;
     let mut i = open;
     while i < chars.len() {

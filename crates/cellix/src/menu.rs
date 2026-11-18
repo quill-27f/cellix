@@ -55,6 +55,13 @@ pub enum Action {
     CopyPath(PathBuf),
     CopyRelativePath(PathBuf),
     Reveal(PathBuf),
+    /// Opens a link's address as a click on it does: in the side pane's browser where there
+    /// is one, the system's otherwise.
+    OpenLink(String),
+    /// Puts a link's address on the clipboard: what it goes to, not the words it's shown as.
+    CopyLink(String),
+    /// Opens a file a link names, at a line counting from one where it names one.
+    OpenFile(PathBuf, Option<usize>),
     CloseTab(usize),
     CloseOtherTabs(usize),
     CloseAllTabs,

@@ -306,7 +306,8 @@ open the Comments tab lists that file's; with none it lists every file's, each u
 and a click on a name or a comment opens the file. Click words a comment is about and its card is
 lit in the Comments tab, which scrolls to it, and comes forward if the pane was open on another tab; click a card and its words are selected in the file. Under the kinds a button says what order the tab lists in:
 click it for the document's order, newest first or oldest first. Resolved comments are folded away under a **Show resolved** button after the open ones: click it and they unfold under it, click it again and they fold away. A link in a comment or a reply is
-underlined, and a click opens it, in the side pane's browser where there is one.
+underlined, and a click opens it, in the side pane's browser where there is one. Right-click it for
+**Open Link** and **Copy Link**, which puts its address on your clipboard to share, over SSH too.
 
 Comments take emoji. Type a name between colons, as on GitHub: `:+1:` becomes 👍 and `:100:` becomes 💯
 as you type the second colon, and part of a name, such as `:roc`, lists the ones that fit, with Tab
@@ -481,7 +482,10 @@ To turn off smooth scrolling on a slow link, add this to `~/.config/cellix/setti
 ## The web
 
 `Open in Browser` in the palette, or Ctrl+click on a link, opens the link at the cursor, the
-current HTML file, or a Markdown file as a page of its own, with its math typeset. Set
+current HTML file, or a Markdown file as a page of its own, with its math typeset. Right-click a
+link, on a page, in code, in a comment or in a terminal's output, for **Open Link** and **Copy
+Link**: Copy Link copies where it goes (a Markdown link's target, not its words), through your
+terminal's clipboard. A `file:line` a terminal prints has **Open File** and **Copy Path**. Set
 `browser` in the settings file to use another command first, such as
 [terminal-browser](https://github.com/zenbu-labs/terminal-browser). If that fails, the
 system's browser takes over.

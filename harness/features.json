@@ -6004,5 +6004,47 @@
     "title": "A narrow window's sidebar keeps the views' 20 columns, its button at the start of the tabs",
     "test": "the_narrowest_sidebar_holds_every_view_and_its_button_starts_the_tabs",
     "passes": true
+  },
+  {
+    "id": "link-menu-comments",
+    "milestone": 15,
+    "title": "A right click on a link in a comment or a reply has Open Link and Copy Link, which copies its exact address",
+    "test": "a_comments_link_has_open_and_copy_on_a_right_click",
+    "passes": true
+  },
+  {
+    "id": "link-menu-page",
+    "milestone": 15,
+    "title": "A link on a page puts Open Link and Copy Link at the top of the page's menu, copying its target, not its words; a link to a file has Open File and Copy Path",
+    "test": "a_pages_link_puts_open_and_copy_at_the_top_of_its_menu",
+    "passes": true
+  },
+  {
+    "id": "link-menu-paper-code",
+    "milestone": 15,
+    "title": "A paper's \\href and a URL in code have Open Link and Copy Link at the top of their menus",
+    "test": "a_papers_link_and_one_in_code_have_open_and_copy_too",
+    "passes": true
+  },
+  {
+    "id": "link-menu-terminal",
+    "milestone": 15,
+    "title": "A URL a terminal prints has Open Link and Copy Link, whole where it wrapped, and opens on Ctrl+click; a file:line has Open File and Copy Path",
+    "test": "a_terminals_link_has_open_and_copy_on_a_right_click",
+    "passes": true
+  },
+  {
+    "id": "link-copy-osc52",
+    "milestone": 15,
+    "title": "Copy Link reaches the terminal's clipboard as OSC 52, in the real binary",
+    "test": "a_links_copy_reaches_the_terminals_clipboard",
+    "passes": true
+  },
+  {
+    "id": "latex-link-address",
+    "milestone": 15,
+    "title": "LaTeX's \\href and \\url, and a quoted URL, give their address to Ctrl+click and the link menu",
+    "test": "latex_links_and_quoted_ones_give_their_address",
+    "passes": true
   }
 ]

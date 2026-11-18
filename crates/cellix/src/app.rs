@@ -65,6 +65,7 @@ use crate::source::{Hit as SourceHit, Source as SourceControl};
 
 mod available;
 mod gitops;
+mod links;
 mod peek;
 mod reviewer;
 mod start;
@@ -10041,6 +10042,9 @@ impl App {
                     None => {}
                 }
             }
+            if mouse.kind == MouseKind::Right {
+                self.comment_link_menu(screen, (x, y, mouse.fine_y));
+            }
             return true;
         }
         if self.dock.listing() {
@@ -10082,6 +10086,12 @@ impl App {
                 }
             }
             MouseKind::Left if mouse.mods.ctrl => self.open_session_path(x, y),
+            MouseKind::Right => {
+                let spot = self.session_spot(x, y);
+                if let Some(index) = self.dock.active {
+                    self.session_link_menu(index, spot, (x, y));
+                }
+            }
             MouseKind::Left => {
                 self.dock.focused = true;
                 self.drag = Drag::Session;
@@ -10314,10 +10324,14 @@ impl App {
         }
     }
 
-    /// Opens what a Ctrl+click in a session is on: another live agent's name looks at that
-    /// agent, and a `file:line` opens it.
+    /// Opens what a Ctrl+click in a session is on: a web address opens as a link does, another
+    /// live agent's name looks at that agent, and a `file:line` opens it.
     fn open_session_path(&mut self, x: u16, y: u16) {
         let spot = self.session_spot(x, y);
+        if let Some(address) = self.dock.session().and_then(|s| s.link_at(spot)) {
+            self.open_page(address);
+            return;
+        }
         let word = self.dock.session().and_then(|s| s.word_at(spot));
         if let (Some(word), Some(from)) = (word, self.dock.active)
             && self.look_at_name(&word, from)
@@ -10336,15 +10350,7 @@ impl App {
             self.say(format!("No file called {file} here"));
             return;
         };
-        if let Err(e) = self.open(&path) {
-            self.say(format!("Could not open {file}: {e}"));
-            return;
-        }
-        let area = self.focused_area();
-        if let (Some(line), Some(editor)) = (line, self.editor_mut()) {
-            editor.go_to_line(line, area);
-        }
-        self.dock.focused = false;
+        self.open_file_at(&path, line);
     }
 
     fn session_spot(&self, x: u16, y: u16) -> (u16, u16) {
@@ -11755,18 +11761,11 @@ impl App {
                 }
             }
             ThreadHit::Check => self.check_review(),
+            // A web address, or a picture's name where the picture itself can't stand on the
+            // card.
             ThreadHit::Link(id, index) => {
-                let view = self.comments_view();
-                let link = self
-                    .threads
-                    .iter()
-                    .find(|t| t.id == id)
-                    .and_then(|t| threads::links(t, view).into_iter().nth(index));
-                match link {
-                    Some(link) if link.contains("://") => self.open_page(link),
-                    // A picture's name, where the picture itself can't stand on the card.
-                    Some(name) => self.open_comment_picture(&name),
-                    None => {}
+                if let Some(linked) = self.comment_linked(id, index) {
+                    self.open_linked(linked);
                 }
             }
             ThreadHit::Picture(id, which) => {
@@ -13927,6 +13926,7 @@ impl App {
                     self.focus = pane;
                 }
                 let area = self.focused_area();
+                let mut pointed = None;
                 if let Some(editor) = self.editor_mut() {
                     let at = editor.position_at(area, fine_x, y);
                     // A click on the selection is about the selection, so it stays.
@@ -13937,8 +13937,11 @@ impl App {
                     if !on_it {
                         editor.selections.set_single(Selection::cursor(at));
                     }
+                    pointed = Some(at);
                 }
-                self.open_editor_menu(x, y);
+                // A link under the pointer puts its two rows at the menu's top.
+                let linked = pointed.and_then(|at| self.editor_linked(area, y, at));
+                self.open_editor_menu(x, y, linked);
             }
             MouseKind::Left if in_sidebar && self.click_timeline(x, y) => {}
             MouseKind::Left if in_sidebar && self.on_explorer_header(y) => {
@@ -14471,11 +14474,16 @@ impl App {
         items
     }
 
-    fn open_editor_menu(&mut self, x: u16, y: u16) {
+    fn open_editor_menu(&mut self, x: u16, y: u16, linked: Option<links::Linked>) {
         // A Review line's menu left unanswered isn't what this menu's Comment is about.
         self.review_line = None;
         let items = self.editor_items();
-        if !items.is_empty() {
+        // On a link, its rows at the top, and dropped from under the link's row, as every
+        // link's menu is, so the link stays in view.
+        if let Some(linked) = linked {
+            let items = self.with_link(linked, items);
+            self.show_link_menu((x, y), items, false);
+        } else if !items.is_empty() {
             self.show_menu((x, y), items);
         }
     }
@@ -14696,6 +14704,16 @@ impl App {
                 self.copy_text(self.relative(&path), "Copied the relative path");
             }
             MenuAction::Reveal(path) => self.reveal_in_sidebar(&path),
+            MenuAction::OpenLink(address) => {
+                // From peek, where the page may open in the side pane under it.
+                self.peek = None;
+                self.open_page(address);
+            }
+            MenuAction::CopyLink(address) => self.copy_text(address, "Copied the link"),
+            MenuAction::OpenFile(path, line) => {
+                self.peek = None;
+                self.open_file_at(&path, line);
+            }
             MenuAction::CloseTab(index) => {
                 self.show_tab(index);
                 self.run(Command::CloseTab);
@@ -19032,6 +19050,8 @@ pub(crate) fn machine_name() -> String {
 mod agent_tab_tests;
 #[cfg(test)]
 mod agents_list_tests;
+#[cfg(test)]
+mod link_tests;
 #[cfg(test)]
 mod motion_tests;
 #[cfg(test)]

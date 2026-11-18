@@ -1374,6 +1374,45 @@ impl Session {
         place_of(&word)
     }
 
+    /// The web address under `spot`, found as a comment's are, and whole where a long one ran
+    /// on past the row's end onto the rows under it.
+    pub fn link_at(&self, (x, y): Spot) -> Option<String> {
+        let rows = self.rows();
+        let (y, x) = (y as usize, x as usize);
+        rows.get(y)?;
+        let columns = self.term.columns();
+        let offset = self.term.grid().display_offset() as i32;
+        let wraps = |row: usize| {
+            let line = Line(row as i32 - offset);
+            let last = &self.term.grid()[line][Column(columns - 1)];
+            last.flags.contains(Flags::WRAPLINE)
+        };
+        let (mut first, mut last) = (y, y);
+        while first > 0 && wraps(first - 1) {
+            first -= 1;
+        }
+        while last + 1 < rows.len() && wraps(last) {
+            last += 1;
+        }
+        // The rows as the one line they were printed as, each wrapped row its whole width.
+        let mut text = String::new();
+        let mut at = 0;
+        for (row, line) in rows.iter().enumerate().take(last + 1).skip(first) {
+            let mut chars: Vec<char> = line.chars().collect();
+            if row < last {
+                chars.resize(columns, ' ');
+            }
+            if row == y {
+                let before = chars.get(..x).filter(|_| x < chars.len())?;
+                at = text.len() + before.iter().map(|c| c.len_utf8()).sum::<usize>();
+            }
+            text.extend(chars);
+        }
+        let spans = crate::threads::web_spans(&text);
+        let (start, end) = spans.into_iter().find(|(s, e)| (*s..*e).contains(&at))?;
+        Some(text[start..end].to_string())
+    }
+
     /// The word under `spot` that could be an agent's name: its letters, digits, `-` and `_`.
     pub fn word_at(&self, (x, y): Spot) -> Option<String> {
         let rows = self.rows();

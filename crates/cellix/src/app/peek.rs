@@ -353,8 +353,20 @@ impl App {
         }
         if screen.contains(mouse.x, mouse.y) {
             let spot = (mouse.x - screen.x, mouse.y - screen.y);
-            // Ctrl+click on another agent's name looks at it, and on a `file:line` opens it.
+            // A right click on a link has its menu, over the card.
+            if mouse.kind == MouseKind::Right
+                && self.session_link_menu(index, spot, (mouse.x, mouse.y))
+            {
+                return true;
+            }
+            // Ctrl+click on a web address opens it, on another agent's name looks at it, and
+            // on a `file:line` opens that.
             if mouse.kind == MouseKind::Left && mouse.mods.ctrl {
+                if let Some(address) = self.dock.sessions[index].link_at(spot) {
+                    self.peek = None;
+                    self.open_page(address);
+                    return true;
+                }
                 let word = self.dock.sessions[index].word_at(spot);
                 if word.is_some_and(|word| self.look_at_name(&word, index)) {
                     return true;

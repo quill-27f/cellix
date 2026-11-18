@@ -2781,7 +2781,9 @@ pub fn enter_intent(line: &str) -> Intent {
     })
 }
 
-/// The web address at a char position on a line: a `[text](url)` link or a bare URL.
+/// The address a link at a char position on a line goes to: a `[text](url)` link's target,
+/// LaTeX's `\href{url}{text}` and `\url{url}`, or a bare URL. A link's words are its target's,
+/// so a place anywhere on them gives the address, not the words.
 pub fn link_at(line: &str, column: usize) -> Option<String> {
     let chars: Vec<char> = line.chars().collect();
     let mut i = 0;
@@ -2799,15 +2801,66 @@ pub fn link_at(line: &str, column: usize) -> Option<String> {
         }
         i += 1;
     }
-    let mut start = 0;
-    for word in line.split(' ') {
-        let length = word.chars().count();
-        if (start..=start + length).contains(&column)
-            && (word.starts_with("http://") || word.starts_with("https://"))
-        {
-            return Some(word.trim_end_matches(['.', ',', ')', ';']).to_string());
+    if let Some(address) = latex_link_at(&chars, column) {
+        return Some(address);
+    }
+    // A bare one: from `http` at a word's start to the next space, without the stop, comma,
+    // bracket or quote a sentence or a string puts after it, as a comment's are found.
+    let at: usize = chars[..column.min(chars.len())]
+        .iter()
+        .map(|c| c.len_utf8())
+        .sum();
+    crate::threads::web_spans(line)
+        .into_iter()
+        .find(|(start, end)| (*start..=*end).contains(&at))
+        .map(|(start, end)| line[start..end].trim_end_matches('>').to_string())
+}
+
+/// LaTeX's links at a char position: `\href{url}{text}` from its backslash to its text's
+/// closing brace, and `\url{url}`, each giving its address with LaTeX's escapes taken out.
+fn latex_link_at(chars: &[char], column: usize) -> Option<String> {
+    let mut i = 0;
+    while i < chars.len() {
+        let named = |name: &str| {
+            let name: Vec<char> = name.chars().collect();
+            chars[i + 1..].starts_with(&name)
+        };
+        let command = if chars[i] != '\\' {
+            None
+        } else if named("href{") {
+            Some(5)
+        } else if named("url{") {
+            Some(4)
+        } else {
+            None
+        };
+        let Some(length) = command else {
+            i += 1;
+            continue;
+        };
+        let open = i + length;
+        let close = tex::matching(chars, open)?;
+        let mut end = close;
+        if length == 5 && chars.get(close + 1) == Some(&'{') {
+            end = tex::matching(chars, close + 1).unwrap_or(close);
         }
-        start += length + 1;
+        if (i..=end).contains(&column) {
+            let address: String = chars[open + 1..close].iter().collect();
+            let mut plain = String::new();
+            let mut letters = address.chars().peekable();
+            while let Some(c) = letters.next() {
+                let escaped = letters.peek().filter(|n| "%#&_~$".contains(**n));
+                match (c, escaped) {
+                    ('\\', Some(&next)) => {
+                        plain.push(next);
+                        letters.next();
+                    }
+                    _ => plain.push(c),
+                }
+            }
+            return Some(plain);
+        }
+        i = end + 1;
     }
     None
 }
@@ -3256,6 +3309,28 @@ body",
         assert_eq!(link_at(line, 6).as_deref(), Some("http://a.b/c"));
         assert_eq!(link_at(line, 32).as_deref(), Some("https://x.y/z"));
         assert_eq!(link_at(line, 1), None);
+    }
+
+    /// LaTeX's links give their address from anywhere on their words, with its escapes taken
+    /// out, and a bare one in quotes, as code writes it, leaves the quotes out.
+    #[test]
+    fn latex_links_and_quoted_ones_give_their_address() {
+        let line = r"see \href{https://example.com/a\%20b}{the \textbf{paper}} or \url{https://example.com/u}";
+        let at = |words: &str| line.find(words).unwrap();
+        let paper = Some("https://example.com/a%20b");
+        assert_eq!(link_at(line, at("paper")).as_deref(), paper);
+        assert_eq!(link_at(line, at("\\href")).as_deref(), paper);
+        assert_eq!(
+            link_at(line, at("u}")).as_deref(),
+            Some("https://example.com/u")
+        );
+        assert_eq!(link_at(line, at(" or")), None);
+        let code = r#"let home = "https://example.com/q?a=1"; // and <https://example.com/b>"#;
+        let at = |words: &str| code.find(words).unwrap();
+        let quoted = link_at(code, at("example.com/q"));
+        assert_eq!(quoted.as_deref(), Some("https://example.com/q?a=1"));
+        let angled = link_at(code, at("example.com/b"));
+        assert_eq!(angled.as_deref(), Some("https://example.com/b"));
     }
 
     type Typeset = (Vec<Row>, Vec<Figure>, Vec<(usize, usize)>);
