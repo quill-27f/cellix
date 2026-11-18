@@ -537,7 +537,7 @@ impl Source {
                         } else {
                             theme.row_hover
                         };
-                        let wash = Bounds::inset(whole, 0.4, 0.06);
+                        let wash = crate::measures::band(whole, 0.0, 0.06, measure);
                         grid.panel(wash, 14, Some(tone), None);
                     }
                     let row = Rect::new(left, y, right.saturating_sub(left + SIDE), 1);
@@ -569,7 +569,7 @@ impl Source {
                         } else {
                             theme.row_hover
                         };
-                        let wash = Bounds::inset(whole, 0.4, 0.06);
+                        let wash = crate::measures::band(whole, 0.0, 0.06, measure);
                         grid.panel(wash, 14, Some(tone), None);
                     }
                     let indent = left + self.graph.text_from();
@@ -584,7 +584,7 @@ impl Source {
                 Line::Stash(index) => {
                     if let Some(stash) = self.stashes.get(*index) {
                         if hovered {
-                            let wash = Bounds::inset(whole, 0.4, 0.06);
+                            let wash = crate::measures::band(whole, 0.0, 0.06, measure);
                             grid.panel(wash, 14, Some(theme.row_hover), None);
                         }
                         self.draw_stash(grid, (area, y), stash, hover, (measure, theme));
@@ -629,7 +629,7 @@ impl Source {
                         } else {
                             theme.row_hover
                         };
-                        let wash = Bounds::inset(whole, 0.4, 0.06);
+                        let wash = crate::measures::band(whole, 0.0, 0.06, measure);
                         grid.panel(wash, 14, Some(tone), None);
                     }
                     let look = (measure, theme);
@@ -650,10 +650,12 @@ impl Source {
         let left = area.x + SIDE;
         let width = area.w.saturating_sub(SIDE * 2);
         let frame = Rect::new(left, y, width, MESSAGE_ROWS);
+        // Without the keyboard it has the line every text box has, which shows on any
+        // ground (`Theme::field_line`): the menu's line it had was 1.7 to 1 on the sidebar.
         let edge = if self.focused {
             theme.accent
         } else {
-            theme.popup_border
+            theme.field_line()
         };
         let tall = MESSAGE_ROWS as f32 + BOX_ROOM * 2.0;
         let outline = Bounds::cells(left as f32, y as f32 - BOX_ROOM, width as f32, tall);

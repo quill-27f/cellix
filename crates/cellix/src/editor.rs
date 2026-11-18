@@ -33,10 +33,13 @@ use crate::theme::Theme;
 pub const STICKY_LINES: usize = 5;
 const GUTTER_MIN_DIGITS: usize = 4;
 /// Where a commented line's ◆ is painted in the gutter's first column, in columns from the
-/// sheet's edge, and its size: half a column in, about two thirds of a cell wide, so it keeps
-/// 8 px from that edge, where it stood on it.
+/// sheet's edge, and its size: half a column in, so it keeps 8 px from that edge, where it
+/// stood on it; as big as a page's ◆ (16 px) where the line's number leaves the column after
+/// it free, as one under 1000 does, and two thirds of that where the number starts there.
+/// At two thirds everywhere it was 11 px beside a page's 17, with 34 px free after it.
 const COMMENT_MARK_IN: f32 = 0.5;
-const COMMENT_MARK_SIZE: u8 = 70;
+const COMMENT_MARK_SIZE: u8 = 100;
+const COMMENT_MARK_SMALL: u8 = 70;
 const NARROW_PANE: u16 = 60;
 /// Left margin of a rendered page, which also carries comment marks.
 /// Heading levels the toolbar steps through before going back to plain text.
@@ -625,7 +628,11 @@ impl Editor {
         let margin = 0.6;
         let width = track.w as f32 - margin * 1.5;
         let view = Bounds::cells(track.x as f32 + margin - 0.3, top, width + 0.6, span);
-        grid.panel(view, 12, Some(theme.minimap_view), Some(theme.popup_border));
+        // Only where there's somewhere to scroll to: over a file that's all in view the marker
+        // was a slab a row tall over three lines of map.
+        if total > text.h as usize {
+            grid.panel(view, 12, Some(theme.minimap_view), Some(theme.popup_border));
+        }
         self.draw_minimap_pictures(grid, track, (margin, width), theme);
         if let Some((_, rows)) = self.minimap.borrow().as_ref() {
             for (row, strips) in rows.iter().enumerate().filter(|(_, s)| !s.is_empty()) {
@@ -4333,9 +4340,15 @@ impl Editor {
                     ..theme.gutter
                 };
                 grid.put_str(area.x, y, "◆", mark, area.x + gutter);
+                // The number is set to the right of its columns, the mark's first among them.
+                let free = (line + 1).to_string().len() + 1 < self.number_width(area.w);
                 let font = cellix_render::Font {
                     mono: true,
-                    size: COMMENT_MARK_SIZE,
+                    size: if free {
+                        COMMENT_MARK_SIZE
+                    } else {
+                        COMMENT_MARK_SMALL
+                    },
                     ..cellix_render::Font::default()
                 };
                 let at = (f32::from(area.x) + COMMENT_MARK_IN, f32::from(y));

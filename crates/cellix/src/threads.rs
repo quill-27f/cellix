@@ -1043,7 +1043,7 @@ fn control_parts(labels: &[&str], chevron: Chevron, measure: &dyn Measure) -> Pa
 /// of them; in pixels the cells are what the chip covers, holding what they can of its
 /// words so the screen's text says what it is.
 fn control(area: Rect, labels: &[&str], chevron: Chevron, measure: &dyn Measure) -> (String, u16) {
-    let x = area.x + SIDE;
+    let x = head(area, measure);
     let label = labels.first().copied().unwrap_or_default();
     if measure.in_cells() {
         let cells = match chevron {
@@ -1056,6 +1056,19 @@ fn control(area: Rect, labels: &[&str], chevron: Chevron, measure: &dyn Measure)
     let width = control_parts(labels, chevron, measure).wide.ceil() as usize;
     let held: String = label.chars().take(width).collect();
     (format!("{held:<width$}"), x)
+}
+
+/// The column the list's head starts in, its summary, its kinds and its controls: where the
+/// cards start, a column in from the pane, where there are pictures, their panels half a
+/// column further beside the file (`View::lead`), which the head is painted as far right of.
+/// It stood at the pane's text edge, 8 px inside the cards on the left, and Check my review
+/// 17 px inside them on the right. On cells, where a card is its rows, at the text edge.
+fn head(area: Rect, measure: &dyn Measure) -> u16 {
+    if measure.in_cells() {
+        area.x + SIDE
+    } else {
+        area.x + SIDE - CARD_REACH as u16
+    }
 }
 
 /// How far down its row the control on row `index` is painted: part of a row where it
@@ -1454,7 +1467,13 @@ fn check_button(area: Rect, measure: &dyn Measure) -> (String, u16) {
         cells.push_str(&" ".repeat(CHECK_ICON as usize));
     }
     let width = cells.chars().count() as u16;
-    let x = area.right().saturating_sub(SIDE + width).max(area.x + SIDE);
+    // Ending where the cards end, a column from the pane's edge, where there are pictures.
+    let end = if measure.in_cells() {
+        SIDE
+    } else {
+        SIDE - CARD_REACH as u16
+    };
+    let x = area.right().saturating_sub(end + width).max(area.x + SIDE);
     (cells, x)
 }
 
@@ -2167,14 +2186,16 @@ pub fn draw(
                     n => note.push_str(&format!(" · {n} files")),
                 }
                 let end = x.saturating_sub(1);
-                grid.label_at(side as f32, side, y, &note, dim, end, SMALL);
+                let start = head(area, measure);
+                let at = f32::from(start) + view.lead;
+                grid.label_at(at, start, y, &note, dim, end, SMALL);
                 // Half a row clear over the pills under it.
                 grid.lift_since(from, CHECK_LIFT);
             }
             Line::Coverage(kinds) => {
                 // A pill for each kind: filled where there are comments of it, and only
                 // outlined and quiet where there are none, so the filled ones read first.
-                let mut x = side as f32;
+                let mut x = f32::from(head(area, measure)) + view.lead;
                 for (kind, count) in kinds {
                     let text = format!("{kind} {count}");
                     let width = pill_width(&text, measure);
@@ -2313,7 +2334,9 @@ pub fn draw(
                 let labels = [labels[0].as_str(), labels[1].as_str()];
                 let what = (cells.as_str(), &labels[..], Chevron::Unfolds(*shown));
                 let how = (on_it, control_drop(&all, index, measure));
+                let from = grid.painted_so_far();
                 draw_control(grid, (x, y), what, how, (measure, theme));
+                grid.nudge_since(from, view.lead);
             }
             Line::Sort => {
                 // A button that opens the list of orders, saying the one in use.
@@ -2323,7 +2346,9 @@ pub fn draw(
                 let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
                 let what = (cells.as_str(), &names[..], Chevron::Opens);
                 let how = (on_it, control_drop(&all, index, measure));
+                let from = grid.painted_so_far();
                 draw_control(grid, (x, y), what, how, (measure, theme));
+                grid.nudge_since(from, view.lead);
             }
             Line::Gap => {}
         }

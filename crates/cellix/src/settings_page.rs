@@ -1080,7 +1080,8 @@ impl SettingsPage {
         };
         for (rect, control) in &spots {
             if let Control::Section(section) = control {
-                self.draw_section_tab(grid, *rect, *section, hovered(*control), theme);
+                let state = (hovered(*control), measure.in_cells());
+                self.draw_section_tab(grid, *rect, *section, state, theme);
             }
         }
         let page = Self::content(area);
@@ -1402,7 +1403,7 @@ impl SettingsPage {
         grid: &mut Grid,
         rect: Rect,
         section: Section,
-        hovered: bool,
+        (hovered, cells): (bool, bool),
         theme: &Theme,
     ) {
         // With a filter typed no page is the one showing: each says how many of its rows fit.
@@ -1418,8 +1419,11 @@ impl SettingsPage {
         if let Some(fill) = wash {
             grid.panel(Bounds::inset(rect, 0.0, ROW_WASH), 18, Some(fill), None);
         }
+        // Picked, its words keep the bright text colour on its wash, as every other picked
+        // row's do; they were the accent. On cells, where there's no wash, the accent says it.
         let fg = match (on, filtering && found == 0) {
-            (true, _) => theme.accent,
+            (true, _) if cells => theme.accent,
+            (true, _) => theme.text.fg,
             (false, true) => theme.gutter.fg,
             (false, false) => theme.text.fg,
         };

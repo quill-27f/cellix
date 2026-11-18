@@ -6195,10 +6195,6 @@
     "passes": true
   },
   {
-    "id": "polish-tile-marks",
-    "milestone": 15,
-    "title": "Tiles and the first screen use the tabs' marks and the shared buttons",
-    "test": "a_tile_and_the_first_screen_have_the_tabs_marks_and_the_shared_buttons",
     "id": "comment-glance",
     "milestone": 15,
     "title": "Resting on commented words with the Comments pane shut shows their comment, last answer and count on a card under them",
@@ -6217,6 +6213,20 @@
     "milestone": 15,
     "title": "A glance card with no room under its words stands over them, never on them",
     "test": "the_card_stands_over_words_with_no_room_under_them",
+    "passes": true
+  },
+  {
+    "id": "polish-commit-box",
+    "milestone": 15,
+    "title": "The commit box has a text box's line and Settings' picked page the text's colour",
+    "test": "the_commit_box_and_settings_picked_page_read_as_their_kind",
+    "passes": true
+  },
+  {
+    "id": "polish-minimap-marker",
+    "milestone": 15,
+    "title": "A file all in view has no minimap marker",
+    "test": "a_file_all_in_view_has_no_minimap_marker",
     "passes": true
   }
 ]

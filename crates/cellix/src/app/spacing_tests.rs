@@ -188,12 +188,13 @@ fn a_program_in_the_pane_keeps_a_column_of_air_by_the_windows_edge() {
 }
 
 /// The sheet beside the file starts half way across the pane's first column and ends at
-/// the window's side; its line is a pixel inside each edge. Returns the gaps between those
-/// lines and a band.
+/// the window's side; its line is inside each edge, two pixels thick as the painter draws it
+/// here. Returns the gaps between those lines' far sides and a band.
 fn gaps(app: &App, band: Bounds) -> (f32, f32) {
     let pane = app.dock_area().unwrap();
-    let left_line = (f32::from(pane.x) + SHEET_EDGE) * CELL + 1.0;
-    let right_line = f32::from(pane.right()) * CELL - 1.0;
+    let line = measures::line_pixels(&*app.measure);
+    let left_line = (f32::from(pane.x) + SHEET_EDGE) * CELL + line;
+    let right_line = f32::from(pane.right()) * CELL - line;
     (px(band.x) - left_line, right_line - px(band.x + band.w))
 }
 
@@ -226,11 +227,11 @@ fn bands_and_cards_stand_as_far_in_from_both_sides_of_the_sheet() {
         .0;
     let (left, right) = gaps(&app, band);
     assert!(
-        (7.5..=9.5).contains(&left),
+        (7.5..=8.5).contains(&left),
         "Problems: {left} px on the left"
     );
     assert!(
-        (7.5..=9.5).contains(&right),
+        (7.5..=8.5).contains(&right),
         "Problems: {right} px on the right"
     );
     // The Agents list's rows.
@@ -250,7 +251,7 @@ fn bands_and_cards_stand_as_far_in_from_both_sides_of_the_sheet() {
     // Its left starts under the frame's half column, which the sheet's edge covers.
     assert!(left <= 9.5, "Agents: {left} px on the left");
     assert!(
-        (7.5..=9.5).contains(&right),
+        (7.5..=8.5).contains(&right),
         "Agents: {right} px on the right"
     );
 }
@@ -276,17 +277,52 @@ fn a_comments_card_is_as_far_from_both_sides_of_the_sheet() {
         "{left} px on the left, {right} on the right"
     );
     assert!(left >= 7.0, "{left}");
+    // The list's head stands on the cards' edges: the order's chip starts where a card
+    // starts, and Check my review ends where one ends. They stood 8 px inside on the left
+    // and 17 on the right.
+    app.add_comment("alpha.txt".to_string(), 0, "and this".to_string());
+    let grid = screen(&app);
+    let found = panels(&grid)
+        .into_iter()
+        .find(|(_, fill, ..)| *fill == Some(card))
+        .expect("a card")
+        .0;
+    let quiet = app.theme.quiet_button(app.theme.sidebar.bg);
+    let order = panels(&grid)
+        .into_iter()
+        .find(|(b, fill, ..)| *fill == Some(quiet) && b.y < found.y && b.x + UNIT >= found.x)
+        .expect("the order's chip")
+        .0;
+    assert!(
+        (px(order.x) - px(found.x)).abs() <= 1.0,
+        "the order at {} px, the card at {}",
+        px(order.x),
+        px(found.x)
+    );
+    let check = panels(&grid)
+        .into_iter()
+        .find(|(b, fill, ..)| *fill == Some(app.theme.button) && b.y < found.y && b.x >= found.x)
+        .expect("Check my review")
+        .0;
+    let (end, card_end) = (px(check.x + check.w), px(found.x + found.w));
+    assert!(
+        (end - card_end).abs() <= 1.0,
+        "it ends at {end}, the card at {card_end}"
+    );
 }
 
 /// The top of a floating thing under a tab row is at least 8 px from the tab row's line:
-/// a tooltip under the pane's ⤢ (4 px before), the menu a tab drops (on the line before),
-/// Show Source (4 px under it), and the Find bar over the pane (5 px over it).
+/// a tooltip under the pane's ⤢ (4 px before), the menu a tab drops (on the line before,
+/// then 7 px from its far side), the menu the pane's + drops (on the line), Show Source
+/// (4 px under it), and the Find bar over the pane (5 px over it). The line is two pixels
+/// thick here, as the painter draws it on a line of 36, and the air counts from its foot.
 #[test]
 fn nothing_under_a_tab_row_stands_within_8_px_of_its_line() {
     let (dir, mut app) = project((150, 40));
     app.open(&dir.path().join("alpha.txt")).unwrap();
     app.run(Command::ListAgents);
-    let line = row_top(1);
+    assert_eq!(measures::line_pixels(&*app.measure), 2.0);
+    let line = row_top(1) + measures::line_pixels(&*app.measure);
     // The tooltip under the button that maximizes the pane.
     let area = app.title_of(app.dock_area().unwrap());
     let button = app.dock.maximize_button(area);
@@ -341,6 +377,27 @@ fn nothing_under_a_tab_row_stands_within_8_px_of_its_line() {
     assert!(
         (over - crate::menu::PADDING).abs() < 0.02,
         "{over} rows over its first row"
+    );
+    app.overlay = Overlay::None;
+    // The menu the pane's + drops.
+    let area = app.title_of(app.dock_area().unwrap());
+    let plus = app.dock.plus_x(area);
+    app.handle(mouse(MouseKind::Left, plus + 1, area.y));
+    assert!(matches!(app.overlay, Overlay::Menu(_)), "the + menu");
+    let grid = screen(&app);
+    let menu = grid.paint.iter().find_map(|p| match p {
+        Paint::Panel {
+            bounds,
+            shadow: true,
+            ..
+        } => Some(*bounds),
+        _ => None,
+    });
+    let (top, _) = tall(menu.expect("its panel"));
+    assert!(
+        top - line >= 8.0,
+        "the + menu: {} px under the line",
+        top - line
     );
     app.overlay = Overlay::None;
     // Find over a list in the pane.

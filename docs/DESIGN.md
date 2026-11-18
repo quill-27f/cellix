@@ -581,6 +581,9 @@ that two buttons: the one that sends it, filled and named for what sending does 
 Save, Ask agent), and Cancel. They do what Enter and Esc do. While a comment is answered or
 changed they stand in place of its own buttons, since one thing is being done to it. The filled
 button is the pane's second with Check my review; what's being written is what's under way.
+The list's head, what's yours and what's suggested, Check my review, the kinds and the order,
+stands on the cards' edges: from where a card starts to where it ends, where there are pictures
+(it stood 8 px inside them on the left and 17 on the right).
 
 Whatever can be seen can be talked about. A selection, in code or on a page, gets Comment and Ask
 Agent beside it, each naming in brackets the keys that do the same as they're set now (Alt+C and
@@ -988,11 +991,13 @@ blue at 16% over its ground, as herdr.dev's picked rows are blue: a list's row o
 a sheet (#263041 on the sheet), a palette's or a menu's (#323c4d), Settings' page, and the words
 a comment is about on a page (`Theme::tint`). It was herdr's white at 9%, which was 1.10 to 1 from
 a hover beside it and read as one; the review of 0.11.0 found both, and the workspace picker and
-Settings already picking in blue. A file listed twice in Agent Context, an instruction the
+Settings already picking in blue. A picked row's words keep the text's bright colour on it,
+Settings' page too, whose were the accent (on cells, with no wash, the accent still says it). A file listed twice in Agent Context, an instruction the
 session also read, is picked only on the row it was opened from. A text box without the
 keyboard has a line of white at 20% over a menu round it (`Theme::field_line`), 2.4 to 1 on the
 frame: sunk a step under the frame, its fill is all but the frame's, and a menu's line round it
-left an empty Replace box nearly gone. A menu that opens over a card, the Comments pane's order
+left an empty Replace box nearly gone; Source Control's message box has it too, where it had a
+menu's, 1.7 to 1 on the sidebar. A menu that opens over a card, the Comments pane's order
 menu, is drawn a step above it, white at 11% over a menu's colour, above an agent's answer set on
 the card in a quiet button's fill too, its hover, pick and line moved up with it and its quiet
 words lifted to read as well (`Theme::over_card`); it was the card's own colour. The emoji picker
@@ -1108,7 +1113,9 @@ takes another row where it needs one (`Menu::hang`); the Find bar over the side 
 row under the tab line, as it does over a file, and a sliver of what's under it either side is
 cleared. A band behind a pointed or picked row stands 8 px in from the sheet's line on both
 sides (`measures::band`), counting the half of the frame's column the side pane's sheet starts
-in; a comment's card is as far from that line on its right as on its left, a column, as every
+in and the line's own two pixels (`measures::line_pixels`; counted as one, Problems' band
+stood 7 px from it), in the sidebar's lists too (Source Control's, the Timeline's and Agent
+Context's were 0.4 of a column in, 6 px); a comment's card is as far from that line on its right as on its left, a column, as every
 card over the side pane is (`PANE_CARD_LEAD`, below); a program in the
 side pane keeps the window's last column as air, as its first keeps the half column before the
 sheet's edge. A floating panel's grid, the table picker's squares and the math panel's
@@ -1151,7 +1158,13 @@ left and 15 at the right); the pane's sheet shows in that half column, whatever 
 terminal's cursor in it showed half of itself beside the card).
 A dialog's buttons, as a card's, stand on the row after its last control on a row with room,
 and a row further down only on the terminal's line, where a button all but fills its row
-(`card_gap`): New Worktree had two rows, 62 px, of nothing over its buttons. A card in the window's corner, the
+(`card_gap`): New Worktree had two rows, 62 px, of nothing over its buttons. On a row with
+room a dialog ends with its buttons' row, and its parts are raised in their rows, by paint,
+so there's as much air over its title as under its buttons, about what its sides have (30 to
+33 px beside 34), and 24 px between its last line or control and its buttons
+(`measures::dialog_lifts`, `DIALOG_GAP`); a press lands where they're painted. With a row
+empty over the title and one under the buttons it had 65 px over and 54 under, and its buttons
+17 px under its words. A card in the window's corner, the
 logout notice or the offer to install a language's server, starts and ends inside its first and
 last rows: half a row and more is clear over its title and under its buttons, a row stands
 between its words and its buttons, and its words wrap inside it. The rows its round ends are on
@@ -1178,7 +1191,13 @@ tab in front takes the colour of what's under it, the sheet or the pane, with th
 line along its top. One behind is its name, brighter under the pointer. A menu open takes the
 pointer: nothing under it, or beside it, is lit while it's open, where the Agents list's row
 under the + menu lit as the pointer crossed the menu; the menu's own rows go by where the
-pointer is over it. Overlays sit on row lines: a menu
+pointer is over it. A menu that drops from under a line, a tab's and the pane's +'s, stands
+8 px clear of the line's far side (a line is two pixels thick on a Retina screen; counted as
+one, a tab's menu stood 7 px from it and the +'s on it), and one from a button 8 px clear of
+the button's foot (`Menu::hang_under`); with no rules to take what whole rows leave over, a
+hung menu keeps the rows it would have had and the drop comes out of its air, where another
+whole row shared over and under gave Review with… 56 px to its words against every other
+menu's 40. Overlays sit on row lines: a menu
 is whole rows, with half a row of air over its first row and under its last in every menu and
 half a row at least for each rule, its hover band clear of them; where whole rows leave half a
 row over, which an odd number of rules does, the rules share it, never the edges (they had a
@@ -1389,8 +1408,10 @@ panel gives each agent one row under two lines of how-to. At every width a page 
 cell for a comment's ◆ and one for a change's bar, and a long page scrolls past its end
 until its last row is a third of the way down. In code the ◆ of a commented line is in the
 gutter's first column, which is against the sheet's edge: where there are pictures it's painted
-half a column in and at seven tenths of the code's size, 8 px from the edge and clear of a
-number that starts in the next column; on cells it's that column's letter.
+half a column in, 8 px from the edge, and at the code's size, 16 px as a page's is, where the
+line's number leaves the next column free; beside a number that starts there it's seven tenths
+of that (it was seven tenths everywhere, 11 px with 34 px free after it). On cells it's that
+column's letter.
 The side pane or one editor can be maximized, from the pane's own tab row or a double-click on
 a tab. The side pane takes the keyboard as it takes the window, as a click on it would, when it
 shows a session or the Preview. The
@@ -1625,7 +1646,9 @@ own hooks; a program with none is working until it ends.
   the end of its foot with Allow the accent and Deny and Always Allow Here quiet buttons alike,
   as every button that isn't the answer is: the reference board had Deny as words, which beside
   two chips read as no button (the review of 0.11.0's tour). The board's 18 px inset is one
-  column here, from the sheet's edge on both sides, the rule for every card. Always is kept in the
+  column here, from the sheet's edge on both sides, the rule for every card. Its buttons end as
+  far in from its right edge as its words start from its left, its panel's half column painted
+  past their cells (they ended 33 px in where the words start 24 in). Always is kept in the
   folder's `state.json`. `run` waits 90 s for an answer and says what happened.
 - `send` pastes, bracketed where the program asked for that, and enters 200 ms later. It waits
   while the person types in that agent: 3 s after their last key, and with a prompt they've

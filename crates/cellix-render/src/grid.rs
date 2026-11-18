@@ -374,6 +374,28 @@ impl Grid {
         }
     }
 
+    /// Moves what was painted since `from` right by `columns`, which only the pixel tiers can
+    /// show: the cells under it stay in their columns, and so does where a click lands.
+    pub fn nudge_since(&mut self, from: usize, columns: f32) {
+        let by = units(columns);
+        for paint in self.paint.iter_mut().skip(from) {
+            match paint {
+                Paint::Text { x, .. } => *x += by,
+                Paint::Panel { bounds, .. }
+                | Paint::Wash { bounds, .. }
+                | Paint::Hairline { bounds, .. }
+                | Paint::Icon { bounds, .. }
+                | Paint::Spinner { bounds, .. }
+                | Paint::Corners { bounds, .. }
+                | Paint::Strips { bounds, .. } => bounds.x += by,
+                Paint::Image { bounds, clip, .. } => {
+                    bounds.x += by;
+                    clip.x += by;
+                }
+            }
+        }
+    }
+
     /// A label starting between cells, at a size relative to the interface font.
     #[allow(clippy::too_many_arguments)]
     pub fn label_at(
@@ -932,6 +954,21 @@ impl Grid {
 fn button_span((height, drop): (f32, f32), (x, y): (u16, u16), width: u16) -> (f32, f32, f32, f32) {
     let top = y as f32 + drop + (1.0 - height) / 2.0;
     (x as f32, top, (x + width) as f32, top + height)
+}
+
+/// How far a button's row reaches under its foot, in pixels, on rows `row` px tall with words
+/// sized for a line `line` px tall: what a menu dropping from the button already has clear.
+pub fn air_under_button(row: f32, line: f32) -> f32 {
+    row - button_in_row(row, line).1
+}
+
+/// Where a button's chip stands in its row, its top and its foot in pixels from the row's
+/// top, on rows `row` px tall with words sized for a line `line` px tall.
+pub fn button_in_row(row: f32, line: f32) -> (f32, f32) {
+    let (_, top, _, bottom) = button_span((BUTTON_HEIGHT, 0.0), (0, 0), 1);
+    let bounds = Bounds::cells(0.0, top, 1.0, bottom - top);
+    let (y, h) = crate::raster::stood(bounds.y, bounds.h, row, line);
+    (y, y + h)
 }
 
 /// Whether a click at `at` (columns and rows, with their fractions) lands on the large

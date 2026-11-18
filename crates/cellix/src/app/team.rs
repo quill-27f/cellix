@@ -1550,9 +1550,15 @@ impl App {
             }
         }
         let y = area.bottom().saturating_sub(2);
+        // As far in from the card's right edge as its words are from its left: the panel
+        // starts `lead` into its first column, so the buttons are painted that much right of
+        // their cells. They ended 33 px from the edge where the words start 24 in.
+        let buttons = grid.painted_so_far();
+        let (px, py) = self.pointer;
         for (i, (cells, x)) in self.consent_buttons(area).iter().enumerate() {
             let label = CONSENT_BUTTONS[i];
-            let hovered = self.over_button((*x, y), cells.chars().count() as u16);
+            let width = cells.chars().count() as u16;
+            let hovered = self.hover.is_some() && on_large_button((*x, y), width, (px - lead, py));
             // Allow is the answer; Always Allow Here and Deny are the one quiet kind every
             // other action is. Deny was only its words, a third kind beside them.
             let fill = if label == "Allow" {
@@ -1572,6 +1578,7 @@ impl App {
             };
             grid.large_button(*x, y, cells, label, fill, style);
         }
+        grid.nudge_since(buttons, lead);
     }
 
     /// A press on the consent card. Returns whether the card took it.
@@ -1586,11 +1593,18 @@ impl App {
             return false;
         }
         let y = area.bottom().saturating_sub(2);
+        // Where they're painted, `lead` right of their cells.
+        let in_pane = self
+            .dock_area()
+            .is_some_and(|pane| pane.contains(area.x, area.y));
+        let lead = if in_pane { self.pane_card_lead() } else { 0.0 };
+        let (fine_x, fine_y) = mouse.at();
         let hit = self
             .consent_buttons(area)
             .into_iter()
             .position(|(cells, x)| {
-                on_large_button((x, y), cells.chars().count() as u16, mouse.at())
+                let width = cells.chars().count() as u16;
+                on_large_button((x, y), width, (fine_x - lead, fine_y))
             });
         if let Some(index) = hit {
             self.answer_consent(CONSENT_BUTTONS[index]);
@@ -2167,6 +2181,32 @@ mod tests {
             fills,
             [quiet, quiet, theme.button],
             "Deny, Always Allow Here, Allow"
+        );
+        // Its buttons end as far in from its right edge as its words start from its left:
+        // they ended 33 px in where the words start 24 in.
+        let allow = panels(&grid)
+            .into_iter()
+            .filter(|(b, fill, _)| *fill == Some(theme.button) && b.y > card.y && b.w >= 128)
+            .map(|(bounds, ..)| bounds)
+            .next()
+            .expect("Allow");
+        let words = grid
+            .paint
+            .iter()
+            .find_map(|p| match p {
+                cellix_render::Paint::Text { x, text, .. } if text.contains("wants to start") => {
+                    Some(*x)
+                }
+                _ => None,
+            })
+            .expect("its title");
+        // The title follows the mark, a column and a half after the text's edge.
+        let text_edge = words - unit(2.0);
+        assert!(
+            ((card.x + card.w) - (allow.x + allow.w) - (text_edge - card.x)).abs() <= 2,
+            "{} in at the right, {} at the left",
+            (card.x + card.w) - (allow.x + allow.w),
+            text_edge - card.x
         );
 
         app.answer_consent("Allow");

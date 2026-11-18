@@ -161,3 +161,42 @@ fn a_dark_window_wears_herdrs_graphite() {
         "herdr's muted, not the attention colour"
     );
 }
+
+/// Where there are pictures the commit message's box, without the keyboard, has the line every
+/// text box has (`Theme::field_line`), which shows on the sidebar: it had a menu's, 1.7 to 1.
+/// And the page picked in Settings' list keeps the bright text colour on its wash, as every
+/// other picked row's words do; they were the accent.
+#[test]
+fn the_commit_box_and_settings_picked_page_read_as_their_kind() {
+    use cellix_render::Paint;
+    let (dir, mut app) = project();
+    let made = std::process::Command::new("git")
+        .args(["init", "-q", "-b", "main"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(made.status.success());
+    app.set_measure(std::rc::Rc::new(
+        cellix_render::FontMeasure::new(17, 50).with_type_row(36),
+    ));
+    app.run(Command::ShowSourceControl);
+    let grid = screen(&app);
+    let theme = app.theme();
+    let line = theme.field_line();
+    let boxed = grid.paint.iter().any(|paint| {
+        matches!(paint, Paint::Panel { fill: Some(fill), border: Some(edge), .. }
+            if *fill == theme.text.bg && *edge == line)
+    });
+    assert!(boxed, "the message box has a text box's line");
+    let ratio = crate::theme::contrast(line, theme.sidebar.bg);
+    assert!(ratio >= 1.8, "{ratio:.2} to 1 on the sidebar");
+
+    app.run(Command::OpenSettings);
+    let grid = screen(&app);
+    let theme = app.theme();
+    let picked = grid.paint.iter().find_map(|paint| match paint {
+        Paint::Text { text, color, .. } if text == "Appearance" => Some(*color),
+        _ => None,
+    });
+    assert_eq!(picked, Some(theme.text.fg), "the picked page's words");
+}

@@ -163,7 +163,7 @@ impl Timeline {
             let y = area.y + 1 + index as u16;
             let whole = Rect::new(area.x, y, area.w, 1);
             if hover.is_some_and(|h| whole.contains(h.0, h.1)) {
-                let wash = Bounds::inset(whole, 0.4, 0.06);
+                let wash = crate::measures::band(whole, 0.0, 0.06, measure);
                 grid.panel(wash, 14, Some(theme.row_hover), None);
             }
             // A dot, as the graph marks a commit.

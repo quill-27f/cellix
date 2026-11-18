@@ -582,7 +582,12 @@ impl ContextPanel {
                 } else {
                     theme.row_hover
                 };
-                grid.panel(Bounds::inset(whole, 0.4, 0.06), 14, Some(wash), None);
+                grid.panel(
+                    crate::measures::band(whole, 0.0, 0.06, measure),
+                    14,
+                    Some(wash),
+                    None,
+                );
             }
             match line {
                 Line::Title => {

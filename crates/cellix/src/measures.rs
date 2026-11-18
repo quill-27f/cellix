@@ -11,6 +11,60 @@ pub const BUTTON_GAP: u16 = 2;
 /// menu that opens under a tab row stands at least this far from its line, and a band
 /// behind a row stands this far in from both edges of its sheet. See DESIGN.md, Look.
 pub const LINE_AIR: f32 = 8.0;
+/// Pixels between a dialog's last line, or control, and its row of buttons.
+pub const DIALOG_GAP: f32 = 24.0;
+/// How far under the top of a line of words their capitals start, and their tails end, in
+/// lines: 9 px and 31 of a line of 36, as the interface's font is set.
+const CAPS: f32 = 0.25;
+const TAILS: f32 = 0.86;
+
+/// What a dialog's last row before its buttons holds: words, whose tails reach down it, or a
+/// control a button tall.
+#[derive(Clone, Copy)]
+pub enum DialogLast {
+    Words,
+    Control,
+}
+
+/// How far a dialog's parts are raised in their rows where a row has room, in rows: its title
+/// and what's under it by the first, its buttons by the second. A dialog is whole rows, its
+/// title on its second and its buttons on the row after its last control, with none under
+/// them; raised so, there's as much air over its title as under its buttons, about what its
+/// sides have, and `DIALOG_GAP` over its buttons. Not raised, an empty row over the title and
+/// one under the buttons left 65 px and 54, and the buttons stood 17 px under the words (10
+/// under New Worktree's choice of agent). Nothing moves on the terminal's line, which has no
+/// air to share.
+pub fn dialog_lifts(last: DialogLast, measure: &dyn Measure) -> (f32, f32) {
+    let Some((_, row)) = measure.cell_pixels().filter(|_| roomy(measure)) else {
+        return (0.0, 0.0);
+    };
+    let row = row as f32;
+    let line = row / measure.row_air().max(1.0);
+    let lead = (row - line) / 2.0;
+    let caps = lead + CAPS * line;
+    let (top, foot) = cellix_render::button_in_row(row, line);
+    let last = match last {
+        DialogLast::Words => lead + TAILS * line,
+        DialogLast::Control => foot,
+    };
+    // Over the title, a row and its capitals' place less the lift; under the buttons, what
+    // their row leaves under their foot and the lift they're given more than that.
+    let words = (caps + foot - row - top + last + DIALOG_GAP) / 2.0;
+    let buttons = words + row + top - last - DIALOG_GAP;
+    (words / row, buttons / row)
+}
+
+/// How thick a line is on screen, in pixels: what the painter draws a hairline at, a pixel
+/// for every 24 of the terminal's line or part of one, so two on a Retina screen. What stands
+/// `LINE_AIR` from a line counts from its far side: counted as one pixel, a menu hung under a
+/// tab row stood 7 px from it.
+pub fn line_pixels(measure: &dyn Measure) -> f32 {
+    let Some((_, row)) = measure.cell_pixels() else {
+        return 1.0;
+    };
+    let line = row as f32 / measure.row_air().max(1.0);
+    (line / 24.0).ceil().max(1.0)
+}
 /// How tall a spinner beside words is, in the terminal's lines: in the status bar, a view's
 /// heading or a button, 11 pt beside words of 13 or a little less.
 pub const WAIT_SPIN: f32 = 0.6;
@@ -79,10 +133,12 @@ pub fn band(
     inset: f32,
     measure: &dyn Measure,
 ) -> cellix_render::Bounds {
-    // A pixel for the sheet's line, and the air from it.
+    // The sheet's line, as thick as it's painted, and the air from it: counted as a pixel,
+    // a band stood 7 px from a line two pixels thick.
+    let line = line_pixels(measure);
     let air = measure
         .cell_pixels()
-        .map_or(0.4, |(wide, _)| (LINE_AIR + 1.0) / wide.max(1) as f32);
+        .map_or(0.4, |(wide, _)| (LINE_AIR + line) / wide.max(1) as f32);
     let left = f32::from(row.x) + edge + air;
     let right = f32::from(row.right()) - air;
     let top = f32::from(row.y) + inset;

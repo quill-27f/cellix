@@ -28,6 +28,11 @@ impl App {
         // A column clear of the window's edge, where the + near it pushes the menu.
         let screen = Rect::new(0, 0, self.size.0.saturating_sub(1), self.size.1);
         let mut menu = Menu::new(at, items, &*self.measure, screen);
+        // Under the tab row it hangs 8 px clear of its line, as a tab's menu does: it stood
+        // on the line.
+        if menu.top() == at.1 {
+            menu.hang(&*self.measure, screen);
+        }
         // The + it drops from stands lit while it's open: at its row, a column into it.
         menu.from = Some((at.0 + 1, at.1.saturating_sub(1)));
         self.overlay = Overlay::Menu(menu);

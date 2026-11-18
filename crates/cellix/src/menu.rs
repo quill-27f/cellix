@@ -553,17 +553,32 @@ impl Menu {
     /// `LINE_AIR` down its first row, rather than on the line, and its rows keep their air
     /// under that. It takes another row where it has to and there's room below.
     pub fn hang(&mut self, measure: &dyn Measure, screen: Rect) {
+        // The line reaches into its first row.
+        self.hang_under(measure, screen, -crate::measures::line_pixels(measure));
+    }
+
+    /// Opened on the row under something that leaves `clear` pixels of its first row clear
+    /// already, a button's foot or a line's (less than none, the line's thickness), its panel
+    /// starts as far down that row as leaves `LINE_AIR` between them.
+    pub fn hang_under(&mut self, measure: &dyn Measure, screen: Rect, clear: f32) {
         let Some((_, row)) = measure.cell_pixels().filter(|_| self.fine) else {
             return;
         };
-        // The air and a pixel for the line, in whole sixty-fourths of a row, rounded up, as
-        // paint places it.
+        // The air, in whole sixty-fourths of a row, rounded up, as paint places it.
         let unit = cellix_render::UNIT as f32;
-        let air = crate::measures::LINE_AIR + 1.0;
+        let air = (crate::measures::LINE_AIR - clear).max(0.0);
         let drop = (air / row.max(1) as f32 * unit).ceil() / unit;
         let rules = self.items.iter().filter(|i| i.rule).count();
         let rows = self.items.len() as f32 + rules as f32 * RULE_ROOM;
-        let height = (rows + PADDING * 2.0 + drop).ceil() as u16;
+        let mut height = (rows + PADDING * 2.0 + drop).ceil() as u16;
+        // With no rules to take what whole rows leave over, it has the rows it would have
+        // had, and the drop comes out of its air, where that's nearer every menu's half a
+        // row than the air another row would leave: shared over and under, a whole row's
+        // more made Review with…'s 56 px against every other menu's 40.
+        let air = |height: u16| (f32::from(height) - rows - drop) / 2.0;
+        if rules == 0 && (air(height - 1) - PADDING).abs() < (air(height) - PADDING).abs() {
+            height -= 1;
+        }
         if self.area.y + height > screen.bottom().saturating_sub(1) {
             return;
         }
@@ -575,7 +590,7 @@ impl Menu {
         self.area.h = height;
         self.drop = drop;
         (self.pad, self.rule_room) = match rules {
-            0 => (drop + PADDING + spare / 2.0, RULE_ROOM),
+            0 => (drop + air(height), RULE_ROOM),
             rules => (drop + PADDING, RULE_ROOM + spare / rules as f32),
         };
         // Its rows moved down, and their submenus with them.

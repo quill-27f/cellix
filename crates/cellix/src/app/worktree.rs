@@ -183,7 +183,7 @@ impl App {
     pub(super) fn new_worktree_area(&self) -> Rect {
         let screen = Rect::new(0, 0, self.size.0, self.size.1);
         let width = WIDTH.min(screen.w);
-        let height = self.worktree_button_row() + 2;
+        let height = self.worktree_button_row() + self.dialog_foot();
         let y = (screen.h / 4).min(screen.h.saturating_sub(height));
         Rect::new(screen.x + (screen.w - width) / 2, y, width, height)
     }
@@ -227,15 +227,23 @@ impl App {
         placed
     }
 
+    /// How far its parts and its buttons are raised in their rows (`measures::dialog_lifts`):
+    /// its last control is the choice of agent.
+    fn worktree_lifts(&self) -> (f32, f32) {
+        measures::dialog_lifts(measures::DialogLast::Control, &*self.measure)
+    }
+
     pub(super) fn new_worktree_click(&mut self, mut form: NewWorktree, at: (f32, f32)) {
         let area = self.new_worktree_area();
         let y = area.y + self.worktree_button_row();
         let width = |cells: &String| cells.chars().count() as u16;
         let buttons = self.worktree_buttons();
+        // Each where it's painted, raised in its row.
+        let (lift, raise) = self.worktree_lifts();
         let pressed = buttons
             .iter()
-            .position(|(c, x)| on_large_button((*x, y), width(c), at));
-        let at = (at.0 as u16, at.1 as u16);
+            .position(|(c, x)| on_large_button((*x, y), width(c), (at.0, at.1 + raise)));
+        let at = (at.0 as u16, (at.1 + lift) as u16);
         let segment = self
             .worktree_segments(&form)
             .iter()
@@ -259,6 +267,9 @@ impl App {
         let theme = &self.theme;
         let area = self.new_worktree_area();
         popup(grid, area, theme);
+        let (lift, raise) = self.worktree_lifts();
+        let words = grid.painted_so_far();
+        let caret = grid.caret;
         let base = Style {
             fg: theme.text.fg,
             bg: theme.popup,
@@ -323,13 +334,22 @@ impl App {
             .enumerate()
             .map(|(index, (rect, name))| (rect, name, index == form.picked))
             .collect();
-        let pointed = (self.hover, theme.popup, self.measure.in_cells());
+        // The pointer as it stands on what's raised.
+        let (px, py) = self.pointer;
+        let hover = self.hover.map(|_| (px as u16, (py + lift) as u16));
+        let pointed = (hover, theme.popup, self.measure.in_cells());
         crate::settings_page::draw_segments(grid, &segments, pointed, theme);
+        grid.lift_since(words, lift);
+        // The field's caret, which it set, goes up with its words.
+        if let Some(own) = grid.caret.as_mut().filter(|own| Some(**own) != caret) {
+            own.y -= cellix_render::units(lift);
+        }
+        let buttons = grid.painted_so_far();
         let y = area.y + self.worktree_button_row();
         for (i, (cells, x)) in self.worktree_buttons().iter().enumerate() {
             let primary = i == 1;
             let width = cells.chars().count() as u16;
-            let hovered = self.over_button((*x, y), width);
+            let hovered = self.over_raised_button((*x, y), width, raise);
             let fill = if primary {
                 theme.button
             } else {
@@ -346,6 +366,7 @@ impl App {
             };
             grid.large_button(*x, y, cells, BUTTONS[i], fill, style);
         }
+        grid.lift_since(buttons, raise);
     }
 
     /// The menu on a worktree's row in the Agents list.
@@ -485,6 +506,10 @@ mod tests {
     /// card's do: New Worktree had two rows of nothing, 62 px, between its choice of agent and
     /// its buttons, and the dialog that asks about unsaved changes as much under its words. On
     /// the terminal's own line, where a button all but fills its row, a row stays between.
+    /// Where a row has room the dialog ends with its buttons' row, and its parts are raised
+    /// so it has one measure of air round it, at its top as at its foot, and 24 px over its
+    /// buttons: 65 px over the title, 54 under the buttons and 17 over them before (10 over
+    /// New Worktree's).
     #[test]
     fn dialog_buttons_stand_on_the_row_after_their_last_control() {
         let (_dir, root) = repository();
@@ -504,7 +529,34 @@ mod tests {
             let (agents, buttons) = (row_of(&grid, "Start in it"), row_of(&grid, "Create"));
             assert_eq!(buttons, agents + 1 + gap, "airy: {airy}\n{}", grid.text());
             let area = app.new_worktree_area();
-            assert_eq!(area.bottom(), buttons + 2, "and an edge's row under them");
+            let foot = if airy { 1 } else { 2 };
+            assert_eq!(area.bottom(), buttons + foot, "airy: {airy}");
+            if airy {
+                let air = dialog_air(&app, &grid, area, ("New Worktree", "Create"), None);
+                assert!((air.0 - air.1).abs() <= 2.0, "{air:?}");
+                assert!((air.0 - 34.0).abs() <= 6.0, "about its sides' 34: {air:?}");
+                assert!((air.2 - measures::DIALOG_GAP).abs() <= 2.0, "{air:?}");
+                // A press on the raised choice lands on it.
+                let segments = app.worktree_segments(match &app.overlay {
+                    Overlay::NewWorktree(form) => form,
+                    _ => panic!("the dialog"),
+                });
+                let (rect, name) = segments[1];
+                let (lift, _) = app.worktree_lifts();
+                let painted = f32::from(rect.y) - lift + 0.3;
+                app.handle(Event::Mouse(MouseEvent {
+                    kind: MouseKind::Left,
+                    x: rect.x + 1,
+                    y: painted as u16,
+                    fine_x: f32::from(rect.x + 1),
+                    fine_y: painted,
+                    mods: Mods::default(),
+                }));
+                let Overlay::NewWorktree(form) = &app.overlay else {
+                    panic!("still open");
+                };
+                assert_eq!(form.choices()[form.picked], name);
+            }
             app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
 
             // Unsaved changes, asked about as the window quits.
@@ -514,7 +566,99 @@ mod tests {
             let grid = screen(&app);
             let (words, buttons) = (row_of(&grid, "lost if you"), row_of(&grid, "Cancel"));
             assert_eq!(buttons, words + 1 + gap, "airy: {airy}\n{}", grid.text());
+            if airy {
+                let area = app.confirm_area();
+                assert_eq!(area.bottom(), buttons + 1);
+                let last = Some("Your changes");
+                let air = dialog_air(&app, &grid, area, ("Save changes", "Cancel"), last);
+                assert!((air.0 - air.1).abs() <= 2.0, "{air:?}");
+                assert!((air.0 - 34.0).abs() <= 6.0, "about its sides' 34: {air:?}");
+                assert!((air.2 - measures::DIALOG_GAP).abs() <= 2.0, "{air:?}");
+                // A press on the raised button lands on it.
+                let (_, raise) = measures::dialog_lifts(measures::DialogLast::Words, &*app.measure);
+                let (x, _) = (0..grid.width())
+                    .map(|x| (x, grid.cell(x, buttons).symbol.clone()))
+                    .find(|(_, s)| s == "C")
+                    .expect("Cancel's cells");
+                let painted = f32::from(buttons) - raise + 0.2;
+                app.handle(Event::Mouse(MouseEvent {
+                    kind: MouseKind::Left,
+                    x: x + 1,
+                    y: painted as u16,
+                    fine_x: f32::from(x + 1),
+                    fine_y: painted,
+                    mods: Mods::default(),
+                }));
+                assert!(matches!(app.overlay, Overlay::None), "Cancel closed it");
+            }
         }
+    }
+
+    /// A dialog's air in pixels on rows of 50 with words for a line of 36: over its title's
+    /// capitals, under its buttons, and between its last line (or, with none named, its last
+    /// control, the choice of agent) and its buttons.
+    fn dialog_air(
+        app: &App,
+        grid: &Grid,
+        area: Rect,
+        (title, button): (&str, &str),
+        last: Option<&str>,
+    ) -> (f32, f32, f32) {
+        use cellix_render::{Paint, UNIT, stood};
+        let (row, line) = (50.0, 36.0);
+        let unit = UNIT as f32;
+        let lead = (row - line) / 2.0;
+        let text_y = |start: &str| {
+            grid.paint.iter().find_map(|p| match p {
+                Paint::Text { y, text, .. } if text.starts_with(start) => {
+                    Some(*y as f32 / unit * row)
+                }
+                _ => None,
+            })
+        };
+        let panel = (grid.paint.iter())
+            .find_map(|p| match p {
+                Paint::Panel {
+                    bounds,
+                    shadow: true,
+                    ..
+                } if bounds.y == i32::from(area.y) * UNIT => Some(*bounds),
+                _ => None,
+            })
+            .expect("its panel");
+        let top = panel.y as f32 / unit * row;
+        let foot = (panel.y + panel.h) as f32 / unit * row;
+        let caps = text_y(title).expect("its title") + lead + 0.25 * line;
+        let button = text_y(button).expect("its button");
+        let chip = (grid.paint.iter())
+            .find_map(|p| match p {
+                Paint::Panel {
+                    bounds,
+                    fill: Some(_),
+                    shadow: false,
+                    ..
+                } if (bounds.y as f32 / unit * row) > button - 1.0
+                    && (bounds.y as f32 / unit * row) < button + row =>
+                {
+                    Some(stood(bounds.y, bounds.h, row, line))
+                }
+                _ => None,
+            })
+            .expect("a button's chip");
+        let over = match last {
+            Some(words) => text_y(words).expect("its last line") + lead + 0.86 * line,
+            None => {
+                let form = match &app.overlay {
+                    Overlay::NewWorktree(form) => form,
+                    _ => panic!("the dialog"),
+                };
+                let segment = app.worktree_segments(form)[0].0;
+                let (lift, _) = app.worktree_lifts();
+                let at = (f32::from(segment.y) - lift) * row;
+                at + cellix_render::button_in_row(row, line).1
+            }
+        };
+        (caps - top, foot - (chip.0 + chip.1), chip.0 - over)
     }
 
     /// Cellix listed worktrees and couldn't make one. New Worktree asks for a branch, says

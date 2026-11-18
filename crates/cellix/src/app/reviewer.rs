@@ -35,10 +35,14 @@ impl App {
             .collect();
         let screen = Rect::new(0, 0, self.size.0.saturating_sub(1), self.size.1);
         let mut menu = Menu::new(at, items, &*self.measure, screen);
-        // Under the button, which all but fills its row, it hangs 8 px down its first row, as
-        // a menu under a line does (`Menu::hang`): it stood 3 px under the button's foot.
-        if button {
-            menu.hang(&*self.measure, screen);
+        // Under the button, which all but fills its row, it hangs 8 px clear of its foot, as a
+        // menu under a line does (`Menu::hang`): it stood 3 px under the button's foot, and
+        // then, hung as from a line at the row's top, 15.
+        if let Some((_, row)) = self.measure.cell_pixels().filter(|_| button) {
+            let row = row as f32;
+            let line = row / self.measure.row_air().max(1.0);
+            let clear = cellix_render::air_under_button(row, line);
+            menu.hang_under(&*self.measure, screen, clear);
         }
         self.overlay = Overlay::Menu(menu);
     }

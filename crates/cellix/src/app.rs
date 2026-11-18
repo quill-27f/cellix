@@ -6267,7 +6267,7 @@ impl App {
     fn confirm_area(&self) -> Rect {
         let screen = Rect::new(0, 0, self.size.0, self.size.1);
         let width = CONFIRM_WIDTH.min(screen.w);
-        let height = self.confirm_button_row() + 2;
+        let height = self.confirm_button_row() + self.dialog_foot();
         let y = (screen.h / 3).min(screen.h.saturating_sub(height));
         Rect::new(screen.x + (screen.w - width) / 2, y, width, height)
     }
@@ -6276,6 +6276,23 @@ impl App {
     /// with a row between only where a button all but fills its row (`card_gap`).
     fn confirm_button_row(&self) -> u16 {
         3 + self.card_gap()
+    }
+
+    /// The rows a dialog has from its buttons' row to its foot: that row alone where a row
+    /// has room, since its parts are raised to share the air round them
+    /// (`measures::dialog_lifts`), and an empty row under it on the terminal's line.
+    pub(crate) fn dialog_foot(&self) -> u16 {
+        if measures::roomy(&*self.measure) && !self.measure.in_cells() {
+            1
+        } else {
+            2
+        }
+    }
+
+    /// Whether the pointer is on a large button at `(x, y)` that's painted `raised` rows up.
+    pub(crate) fn over_raised_button(&self, (x, y): (u16, u16), width: u16, raised: f32) -> bool {
+        let (px, py) = self.pointer;
+        self.hover.is_some() && on_large_button((x, y), width, (px, py + raised))
     }
 
     /// Each button as (cells, x), laid out from the right edge.
@@ -6298,6 +6315,8 @@ impl App {
         let theme = &self.theme;
         let area = self.confirm_area();
         popup(grid, area, theme);
+        let (lift, raise) = measures::dialog_lifts(measures::DialogLast::Words, &*self.measure);
+        let words = grid.painted_so_far();
         let base = Style {
             fg: theme.text.fg,
             bg: theme.popup,
@@ -6326,11 +6345,13 @@ impl App {
             dim,
             area.right().saturating_sub(1),
         );
+        grid.lift_since(words, lift);
+        let buttons = grid.painted_so_far();
         let y = area.y + self.confirm_button_row();
         for (i, (cells, x)) in self.confirm_buttons(confirm).iter().enumerate() {
             let on = i == confirm.selected;
             let width = cells.chars().count() as u16;
-            let hovered = self.over_button((*x, y), width);
+            let hovered = self.over_raised_button((*x, y), width, raise);
             // A quiet button stands a step further off what's behind it when pointed at, as
             // every one that isn't the main one does.
             let quiet = theme.quiet_button(theme.popup);
@@ -6346,6 +6367,7 @@ impl App {
             };
             grid.large_button(*x, y, cells, confirm.buttons[i].0, fill, style);
         }
+        grid.lift_since(buttons, raise);
     }
 
     fn overlay_key(&mut self, key: KeyEvent) {
@@ -14430,9 +14452,14 @@ impl App {
                 let y = self.confirm_area().y + self.confirm_button_row();
                 let spots = self.confirm_buttons(&confirm);
                 let width = |cells: &String| cells.chars().count() as u16;
+                // Where it's painted, raised in its row.
+                let (_, raise) =
+                    measures::dialog_lifts(measures::DialogLast::Words, &*self.measure);
+                let (x, fine) = mouse.at();
+                let at = (x, fine + raise);
                 let on = spots
                     .iter()
-                    .position(|(c, x)| on_large_button((*x, y), width(c), mouse.at()));
+                    .position(|(c, x)| on_large_button((*x, y), width(c), at));
                 match on {
                     Some(index) => self.choose(confirm.buttons[index].1.clone()),
                     None => self.overlay = Overlay::Confirm(confirm),
@@ -16185,9 +16212,8 @@ impl App {
         let tall = TOOLTIP_HEIGHT - TIP_INSET * 2.0;
         let (top, drawn) =
             cellix_render::stood((TIP_INSET * unit) as i32, (tall * unit) as i32, row, line);
-        // The air, and a pixel for the line, in whole sixty-fourths of a row as paint places
-        // them.
-        let air = measures::LINE_AIR + 1.0;
+        // The air, and the line, in whole sixty-fourths of a row as paint places them.
+        let air = measures::LINE_AIR + measures::line_pixels(&*self.measure);
         let drop = ((air - top) / row * unit).ceil() / unit;
         // Into the row under it only as far as that row's air over its words.
         let fits = air + drawn <= row + (row - line) / 2.0;
@@ -21470,6 +21496,34 @@ mod tests {
             grid.text()
         );
         assert!(grid.text().contains("Gemini CLI"), "{}", grid.text());
+        // It hangs 8 px clear of the button's foot, and has every menu's half a row of air
+        // over its first row: hung as from a line, a whole row's more air was shared over
+        // and under it, 56 px to its words against every other menu's 40.
+        let menu = grid.paint.iter().find_map(|p| match p {
+            Paint::Panel {
+                bounds,
+                shadow: true,
+                ..
+            } => Some(*bounds),
+            _ => None,
+        });
+        let menu = menu.expect("its panel");
+        let (top, _) = cellix_render::stood(menu.y, menu.h, 50.0, 36.0);
+        let foot = f32::from(y + 1) * 50.0 - cellix_render::air_under_button(50.0, 36.0);
+        assert!(
+            (8.0..12.0).contains(&(top - foot)),
+            "{} px under the button",
+            top - foot
+        );
+        let words = grid.paint.iter().find_map(|p| match p {
+            Paint::Text { y, text, .. } if text == "Claude Code" => Some(*y),
+            _ => None,
+        });
+        let over = (words.expect("its first row") - menu.y) as f32 / 64.0;
+        assert!(
+            (over - crate::menu::PADDING).abs() < 0.1,
+            "{over} rows over its first row"
+        );
     }
 
     #[test]
@@ -22412,14 +22466,18 @@ mod tests {
         let (x, y) = mark(&grid);
         assert!(grid.cell(x, y).style.painted, "painted, not the cell's");
         let painted = grid.paint.iter().find_map(|p| match p {
-            cellix_render::Paint::Text { x, y: at, text, .. }
-                if text == "◆" && *at == i32::from(y) * 64 =>
-            {
-                Some(*x)
-            }
+            cellix_render::Paint::Text {
+                x,
+                y: at,
+                text,
+                font,
+                ..
+            } if text == "◆" && *at == i32::from(y) * 64 => Some((*x, font.size)),
             _ => None,
         });
-        let left = painted.expect("the mark painted on its row");
+        let (left, size) = painted.expect("the mark painted on its row");
+        // As big as a page's, where the number leaves it room: it was 11 px beside a page's 17.
+        assert_eq!(size, 100, "the code's own size");
         // The sheet's edge is where the gutter starts.
         assert_eq!(x, app.main_area().x, "the gutter's first column");
         assert_eq!(
@@ -34392,6 +34450,25 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         // Beside an agent, the code keeps the room.
         app.handle(Event::Resize(66, 30));
         assert_eq!(maps(&app), 0);
+    }
+
+    /// A file that's all in view has its map and no marker over it: the marker was a slab a
+    /// row tall over three lines (m3-waits-indexing).
+    #[test]
+    fn a_file_all_in_view_has_no_minimap_marker() {
+        let (dir, mut app) = project();
+        app.set_measure(Rc::new(cellix_render::FontMeasure::new(10, 20)));
+        app.handle(Event::Resize(140, 30));
+        let path = dir.path().join("short.rs");
+        fs::write(&path, "fn one() {}\nfn two() {}\nfn three() {}\n").unwrap();
+        app.open(&path).unwrap();
+        let grid = screen(&app);
+        let strips = grid.paint.iter().any(|p| matches!(p, Paint::Strips { .. }));
+        assert!(strips, "its map");
+        let marker = grid.paint.iter().any(|p| {
+            matches!(p, Paint::Panel { fill: Some(fill), .. } if *fill == app.theme.minimap_view)
+        });
+        assert!(!marker, "no marker where there's nowhere to scroll");
     }
 
     fn minimap_marker(app: &App) -> cellix_render::Bounds {
