@@ -5644,7 +5644,7 @@
   {
     "id": "agents-nested-rows",
     "milestone": 15,
-    "title": "A row of the Agents list with a parent stands under it, a step in, in its parent's section",
+    "title": "A row of the Agents list with a parent stands under it, a step in, while the two are in one state, and in its own section otherwise",
     "test": "a_helper_stands_under_the_agent_that_started_it",
     "passes": true
   },
@@ -5700,7 +5700,7 @@
   {
     "id": "agents-helpers-nested",
     "milestone": 15,
-    "title": "A helper stands under the agent that started it in the Agents list, a step in, by the name it was given with the word helper, in its agent's section, before its hooks say anything too",
+    "title": "A helper stands under the agent that started it in the Agents list, a step in, by the name it was given with the word helper, while it does what its agent does, before its hooks say anything too; asking, it stands in NEEDS YOU saying who started it",
     "test": "a_helper_stands_under_the_agent_that_started_it_in_the_agents_list",
     "passes": true
   },
@@ -5903,8 +5903,8 @@
   {
     "id": "helper-row-as-section",
     "milestone": 15,
-    "title": "A helper's row reads as its section's names do, with its own state mark at its end and a line to it that can be seen, starting under its agent's mark",
-    "test": "a_helpers_row_reads_as_its_section_with_its_own_mark",
+    "title": "A helper's row, its mark, its section and peek's header say one state: under its agent while the two do the same, in its own section saying who started it otherwise; the line to one under its agent can be seen and starts under its agent's mark",
+    "test": "a_helpers_row_mark_section_and_peek_say_one_state",
     "passes": true
   },
   {
@@ -6430,6 +6430,20 @@
     "milestone": 15,
     "title": "Every tab, a file's and the side pane's, has one anatomy measured to the ink, the same air before its mark as after its ×, whatever it shows",
     "test": "every_tab_has_one_anatomy",
+    "passes": true
+  },
+  {
+    "id": "one-set-of-marks",
+    "milestone": 15,
+    "title": "The status bar's needs-you dot, the workspace chips' dots and the Agent Context picker use the marks tabs have",
+    "test": "the_bar_and_the_picker_have_the_marks_tabs_have",
+    "passes": true
+  },
+  {
+    "id": "needs-you-chip-size",
+    "milestone": 15,
+    "title": "The Agents list's needs-you chip is the design's chip, with room under its words' tails",
+    "test": "the_needs_you_chip_has_room_for_its_words_tails",
     "passes": true
   }
 ]

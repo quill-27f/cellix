@@ -204,3 +204,61 @@ while True:
     elif i is not None and "method" in m:
         send({"jsonrpc": "2.0", "id": i, "result": None})
 "#;
+
+/// One set of marks: the status bar's "An agent needs you" has the dot an asking tab has, at
+/// the size the bar's spinner is, where a dot half that stood before its words; and the
+/// Agent Context picker has each agent's own mark, where a blue dot stood before every agent
+/// alike (0.11.0's final review, T5).
+#[test]
+fn the_bar_and_the_picker_have_the_marks_tabs_have() {
+    use cellix_agent::context::Agent;
+    use cellix_render::{FontMeasure, Paint, UNIT};
+    let (dir, mut app) = project();
+    app.set_measure(std::rc::Rc::new(FontMeasure::new(17, 36)));
+    app.serve(cellix_agent::Request::Agent(cellix_agent::AgentEvent {
+        session: "s1".into(),
+        agent: "Claude Code".into(),
+        state: cellix_agent::AgentState::NeedsYou,
+        detail: "Allow Bash?".into(),
+        folder: "/w".into(),
+        pid: None,
+        transcript: String::new(),
+        name: String::new(),
+    }));
+    let (row, grid) = status(&app);
+    assert!(row.contains("An agent needs you"), "{row}");
+    let y = i32::from(grid.height() - 1) * UNIT;
+    let attention = app.theme().attention;
+    let dots: Vec<_> = (grid.paint.iter())
+        .filter_map(|p| match p {
+            Paint::Spinner {
+                bounds,
+                color,
+                step: None,
+            } if bounds.y >= y && *color == attention => Some(bounds.h),
+            _ => None,
+        })
+        .collect();
+    let size = (crate::measures::WAIT_SPIN * UNIT as f32).round() as i32;
+    assert_eq!(dots, [size], "the dot, at the spinner's size");
+    let small = grid.paint.iter().any(|p| {
+        matches!(p, Paint::Panel { bounds, fill: Some(f), .. } if bounds.y >= y && *f == attention)
+    });
+    assert!(!small, "no smaller dot of its own");
+    // The picker names each agent with its own mark.
+    app.run(cellix_input::Command::ShowAgentContext);
+    let root = dir.path().to_path_buf();
+    for agent in Agent::ALL {
+        app.context.show(agent, &root);
+        let grid = screen(&app);
+        // The picker is the row under the view's heading.
+        let heading = (0..grid.height()).find(|y| grid.row_text(*y).contains("AGENT CONTEXT"));
+        let at = heading.unwrap_or_else(|| panic!("{}: {}", agent.name(), grid.text())) + 1;
+        let mark = crate::dock::program_icon(agent.name(), false, false);
+        let marked = grid.paint_on_row(at).any(|p| {
+            matches!(p, Paint::Icon { icon, color, .. }
+                if *icon == mark && *color == crate::dock::icon_colour(mark, app.theme()))
+        });
+        assert!(marked, "{}'s own mark: {}", agent.name(), grid.row_text(at));
+    }
+}

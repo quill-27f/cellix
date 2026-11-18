@@ -31,7 +31,11 @@ const ELBOW_SHARE: f32 = 0.21;
 const NEEDS_YOU: &str = "needs you";
 const CHIP_SIZE: u8 = 80;
 const CHIP_PAD: f32 = 0.7;
-const CHIP_HIGH: f32 = 0.66;
+/// A chip's share of the line, which a taller row makes the design's chip, 20/28 of the row
+/// (`cellix_render::stood`), with room under its words' tails: at two thirds of the line it
+/// kept the line's 24 px, and the "y" of "you" reached a pixel short of its foot (0.11.0's
+/// final review, m2).
+const CHIP_HIGH: f32 = 0.72;
 const CHIP_WASH: f32 = 0.16;
 /// What a worktree's row says a click on it opens, once the pointer is on it.
 const REVIEW: &str = "Review";
@@ -221,15 +225,25 @@ impl Row {
     }
 }
 
+/// The agent a row's agent was started by, where that one is in the list too.
+pub fn parent_of<'a>(row: &Row, rows: &'a [Row]) -> Option<&'a Row> {
+    let parent = row.parent.as_deref()?;
+    rows.iter().find(|other| other.session == parent)
+}
+
+/// Whether a helper stands under the agent that started it: while the two are doing the same,
+/// so a row's section, its mark and what peek says of it are one state. A helper that finished
+/// under an agent still working stood in "WORKING 2" with a green dot (0.11.0's final review,
+/// 172); doing something else, it stands in its own section, saying who started it.
+fn nested(row: &Row, rows: &[Row]) -> bool {
+    parent_of(row, rows).is_some_and(|parent| parent.urgency == row.urgency)
+}
+
 /// The rows in the list's order: by urgency, the most first, and in the order they came
-/// within that; each row's helpers straight under it, deeper by one, in the same order.
-/// Returns each row with how deep it stands.
+/// within that; each row's helpers doing what it does straight under it, deeper by one, in the
+/// same order. Returns each row with how deep it stands.
 pub fn ordered(rows: &[Row]) -> Vec<(&Row, u8)> {
-    let known = |id: &str| rows.iter().any(|row| row.session == id);
-    let mut tops: Vec<&Row> = rows
-        .iter()
-        .filter(|row| row.parent.as_deref().is_none_or(|parent| !known(parent)))
-        .collect();
+    let mut tops: Vec<&Row> = rows.iter().filter(|row| !nested(row, rows)).collect();
     tops.sort_by_key(|row| row.urgency);
     let mut out = Vec::new();
     fn under<'a>(row: &'a Row, depth: u8, rows: &'a [Row], out: &mut Vec<(&'a Row, u8)>) {
@@ -239,7 +253,7 @@ pub fn ordered(rows: &[Row]) -> Vec<(&Row, u8)> {
         }
         for child in rows
             .iter()
-            .filter(|c| c.parent.as_deref() == Some(&row.session))
+            .filter(|c| c.parent.as_deref() == Some(&row.session) && nested(c, rows))
         {
             under(child, depth + 1, rows, out);
         }
@@ -652,11 +666,12 @@ impl Agents {
                         let wash = band(Rect::new(area.x, y, area.w, 1));
                         grid.panel(wash, 18, Some(theme.row_hover), None);
                     }
-                    // A helper stands in its agent's section, and its name reads as that
-                    // section's do; its mark at the row's end says what it's doing itself.
-                    let top = order[..=at].iter().rev().find(|(_, d)| *d == 0);
-                    let section = top.map_or(row.urgency, |(r, _)| r.urgency);
-                    draw_row(grid, (area, y), (row, depth, section), (measure, theme));
+                    // A helper stands under its agent while it's doing what that one does;
+                    // doing something else, it stands in its own section and says who
+                    // started it.
+                    let from = parent_of(row, agents).filter(|_| depth == 0);
+                    let from = from.map(|parent| parent.name.as_str());
+                    draw_row(grid, (area, y), (row, depth, from), (measure, theme));
                     if rows > 1 {
                         let x = side + 2 + 2 * u16::from(depth);
                         let at = x as f32;
@@ -823,12 +838,12 @@ impl Agents {
 /// it's doing changed and what that is: turning while it works, a chip while it needs you, a
 /// green dot when it's done and nobody has looked, and nothing while it's idle. How long ago
 /// stands in one column down the list, before room as wide as the "needs you" chip. A helper
-/// stands two columns in for each agent over it, with a line bent round from that one's mark,
-/// its name as its section's are, `section` being its top agent's urgency.
+/// stands two columns in for each agent over it, with a line bent round from that one's mark;
+/// one in a section of its own says who started it, `from`.
 fn draw_row(
     grid: &mut Grid,
     (area, y): (Rect, u16),
-    (row, depth, section): (&Row, u8, Urgency),
+    (row, depth, from): (&Row, u8, Option<&str>),
     (measure, theme): (&dyn Measure, &Theme),
 ) {
     let side = area.x + 2 + 2 * u16::from(depth);
@@ -904,9 +919,8 @@ fn draw_row(
         grid.label_right(end.floor() as u16, y, &said, dim, DETAIL_SIZE);
         end -= wide + AGO_GAP;
     }
-    // Whoever is doing nothing is quieter, and not bold: a helper by its section.
-    let quiet = if depth > 0 { section } else { row.urgency };
-    let name = if quiet == Urgency::Idle {
+    // Whoever is doing nothing is quieter, and not bold.
+    let name = if row.urgency == Urgency::Idle {
         Style {
             fg: theme.tab.fg,
             ..theme.sidebar
@@ -920,8 +934,13 @@ fn draw_row(
     let stop = (end.floor() as u16).max(side + 3);
     let text = crate::context::elide(&row.name, f32::from(stop - side - 2), measure);
     let after = grid.label(side + 2, y, &text, name, stop);
-    // A helper says it is one, quietly, after its name, where there's room.
-    if depth > 0 && text == row.name {
+    // A helper says it is one, quietly, after its name, where there's room: under its agent
+    // "helper", and in a section of its own who started it, as peek's header says.
+    let said = match from {
+        Some(parent) => format!("from {parent}"),
+        None => HELPER.to_string(),
+    };
+    if (depth > 0 || from.is_some()) && text == row.name {
         let font = Font {
             size: DETAIL_SIZE,
             ..Font::default()
@@ -935,8 +954,8 @@ fn draw_row(
                 },
             );
         let x = named + HELPER_GAP;
-        if x + measure.width(HELPER, font) < f32::from(stop) {
-            grid.label_at(x, after + 1, y, HELPER, dim, stop, DETAIL_SIZE);
+        if x + measure.width(&said, font) < f32::from(stop) {
+            grid.label_at(x, after + 1, y, &said, dim, stop, DETAIL_SIZE);
         }
     }
 }

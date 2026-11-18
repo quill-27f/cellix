@@ -2035,26 +2035,40 @@ mod tests {
         assert_eq!(helper, agent + 1, "{}", grid.text());
         let row = grid.row_text(helper);
         assert!(row.contains('└') && row.contains("helper"), "{row}");
-        // Once it reports, it's the same row, and asking the person, it stays in its agent's
-        // section rather than going to the top.
+        // Once it reports, it's the same row. Asking the person, it goes to the top, in the
+        // section its own mark says, and says who started it: under "WORKING" it showed the
+        // chip that asks, and a finished one stood there with a green dot (0.11.0's final
+        // review, 172). The heading counts only the rows in it.
         says(&mut app, "reviewer", AgentState::Idle, "Ready");
         assert_eq!(answered(&mut app, &started).code, code::OK);
         says(&mut app, "reviewer", AgentState::NeedsYou, "Allow Bash?");
         app.poll();
         let grid = screen(&app);
-        let agent = row_after(&grid, "WORKING", "Claude Code");
-        let helper = row_after(&grid, "WORKING", "reviewer");
+        let helper = row_after(&grid, "NEEDS YOU 1", "reviewer");
+        let agent = row_after(&grid, "WORKING 1", "Claude Code");
+        assert!(helper < agent, "{}", grid.text());
+        let row = grid.row_text(helper);
+        assert!(
+            row.contains("from Claude Code") && !row.contains('└'),
+            "{row}"
+        );
+        // Working again, it's back under its agent.
+        says(&mut app, "reviewer", AgentState::Working, "Working");
+        let grid = screen(&app);
+        let agent = row_after(&grid, "WORKING 2", "Claude Code");
+        let helper = row_after(&grid, "WORKING 2", "reviewer");
         assert_eq!(helper, agent + 1, "{}", grid.text());
         assert!(!grid.text().contains("NEEDS YOU"), "{}", grid.text());
     }
 
-    /// A helper's row reads as its section's rows do, its name bright and bold under an agent
-    /// that works, where it read as idle beside "WORKING 2"; the mark at its end is its own,
-    /// a dot once it has finished a turn. The line bent round to it is one that can be seen,
-    /// and starts clear of the mark over it.
+    /// A helper's row, its mark, its section and peek's header say one state: finished, its
+    /// row has the done dot peek shows, its name bright and bold, under "DONE" with who
+    /// started it, where it stood under its working agent in "WORKING 2" with a green dot
+    /// (0.11.0's final review, 172). The line bent round to one under its agent is one that
+    /// can be seen, and starts clear of the mark over it.
     #[test]
     #[cfg(unix)]
-    fn a_helpers_row_reads_as_its_section_with_its_own_mark() {
+    fn a_helpers_row_mark_section_and_peek_say_one_state() {
         let (dir, mut app, fake) = project();
         app.team.always = true;
         let lead = lead(&mut app, &fake);
@@ -2065,7 +2079,13 @@ mod tests {
         assert_eq!(answered(&mut app, &started).code, code::OK);
         app.run(Command::ListAgents);
         let grid = screen(&app);
-        let helper = row_after(&grid, "WORKING", "reviewer");
+        let helper = row_after(&grid, "DONE 1", "reviewer");
+        assert!(
+            grid.row_text(helper).contains("from Claude Code"),
+            "{}",
+            grid.text()
+        );
+        assert!(grid.text().contains("WORKING 1"), "{}", grid.text());
         let x = grid.row_text(helper).find("reviewer").unwrap();
         let x = grid.row_text(helper)[..x].chars().count() as u16;
         let name = grid.cell(x, helper).style;
@@ -2090,17 +2110,24 @@ mod tests {
         // Closed, and the list in front again: peek opened over its agent's tab.
         click(&mut app, (2, 20));
         app.run(Command::ListAgents);
-        // Its turn over, it has its own done dot.
+        // Its turn over, it has its own done dot, in the section that says so.
         says(&mut app, "reviewer", AgentState::Working, "Working");
         says(&mut app, "reviewer", AgentState::Idle, "Finished");
         let grid = screen(&app);
-        let helper = row_after(&grid, "WORKING", "reviewer");
+        let helper = row_after(&grid, "DONE", "reviewer");
         assert!(grid.row_text(helper).contains('●'), "{}", grid.text());
-        // With pictures, the line to it is stronger than a hairline and starts under the
-        // agent's mark, not on it.
+        // Working, under its agent: with pictures, the line to it is stronger than a hairline
+        // and starts under the agent's mark, not on it.
+        says(&mut app, "reviewer", AgentState::Working, "Working");
         app.set_measure(std::rc::Rc::new(cellix_render::FontMeasure::new(17, 37)));
         let grid = screen(&app);
-        let helper = row_after(&grid, "WORKING", "reviewer");
+        let helper = row_after(&grid, "WORKING 2", "reviewer");
+        let name = grid.row_text(helper).find("reviewer").unwrap();
+        let name = grid.row_text(helper)[..name].chars().count() as u16;
+        assert!(
+            grid.cell(name, helper).style.bold,
+            "bold, as its section's are"
+        );
         let lines: Vec<(Bounds, Rgb)> = grid
             .paint
             .iter()

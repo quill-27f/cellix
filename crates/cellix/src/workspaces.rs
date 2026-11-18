@@ -784,10 +784,11 @@ impl Workspaces {
             TileState::Working => (Mark::Spin(theme.accent), "working".into(), dim),
             // The marks a tab shows and only those: green for a finished turn, where the tile
             // had a check; and nothing where a tab has nothing to say, where an idle terminal's
-            // tile had a dark dot, an empty one a ring and a stopped one a square, which no tab
-            // has. The words say stopped.
+            // tile had a dark dot and an empty one a ring, which no tab has.
             TileState::Done(at) => (Mark::Dot(theme.git_added), format!("done {}", ago(at)), dim),
-            TileState::Stopped(_) => (Mark::None, "stopped".into(), dim),
+            // Stopped, its dot is dimmed, as an ended program's tab dims its mark: with none,
+            // it stood beside chips that each had one (0.11.0's final review).
+            TileState::Stopped(_) => (Mark::Dot(theme.disabled), "stopped".into(), dim),
             TileState::Idle | TileState::Nothing => (Mark::None, String::new(), dim),
         }
     }
@@ -888,11 +889,10 @@ impl Workspaces {
             let (mark, word, color) = self.word(&workspace.app);
             let mut x = span.start + self.room(PAD);
             // On the accent the marks are in the chip's ink, but for what needs the person,
-            // whose dot keeps its own colour and stands in a ring of the ink.
+            // whose dot keeps its own colour, plain as a tab's is: it stood in a ring of the
+            // ink, which no other dot has (0.11.0's final review).
             let shown = match (ink, mark) {
-                (Some(ink), Mark::Dot(color)) if color == theme.attention => {
-                    Mark::Ringed(color, ink)
-                }
+                (Some(_), Mark::Dot(color)) if color == theme.attention => mark,
                 (Some(ink), Mark::Dot(_)) => Mark::Dot(ink),
                 (Some(ink), Mark::Spin(_)) => Mark::Spin(ink),
                 (_, mark) => mark,
@@ -1324,18 +1324,14 @@ impl Workspaces {
 
 /// What a workspace's chip shows before its name: the marks a tab shows for what its agents
 /// are doing, a spinner while they work, a dot in the colour of what needs the person and a
-/// green one for a finished turn, and nothing where a tab would show nothing.
+/// green one for a finished turn, a dimmed one once it stopped, and nothing where a tab would
+/// show nothing.
 #[derive(Clone, Copy, PartialEq)]
 enum Mark {
     Dot(Rgb),
     Spin(Rgb),
-    /// A dot standing in a ring of the second colour, where its own wouldn't show.
-    Ringed(Rgb, Rgb),
     None,
 }
-
-/// How much bigger the ring round a dot is than the dot, across.
-const RING: f32 = 1.45;
 
 impl Workspaces {
     /// A tile's mark at `x`: the spinner and dots at the size a spinner beside the status bar's
@@ -1344,19 +1340,9 @@ impl Workspaces {
     fn draw_mark(&self, grid: &mut Grid, (x, y): (f32, u16), mark: Mark, base: Style) {
         let size = crate::measures::WAIT_SPIN;
         let at = x - MARK_LEAD;
-        // How wide a mark `size` rows tall is, in columns.
-        let measure = self.measure();
-        let across = |size: f32| {
-            size * crate::measures::rows_to_columns(measure.as_ref()) / measure.row_air()
-        };
         match mark {
             Mark::Spin(color) => grid.spinner(at, y, size, color, base),
             Mark::Dot(color) => grid.dot(at, y, size, color, base),
-            Mark::Ringed(color, ring) => {
-                let wider = (across(size * RING) - across(size)) / 2.0;
-                grid.dot(at - wider, y, size * RING, ring, base);
-                grid.dot(at, y, size, color, base);
-            }
             Mark::None => {}
         }
     }
@@ -2184,19 +2170,20 @@ mod tests {
         spaces.list[front]
             .app
             .serve(event(AgentState::NeedsYou, "Allow cargo publish?"));
+        // Its dot keeps its colour, plain as a tab's: it stood in a ring of the ink, which no
+        // other dot has (0.11.0's final review). Both tiles' dots are one size.
         let shown = marks(&spaces);
-        let dot = shown.iter().find(|m| {
-            m.0 == theme.attention && !m.1 && {
-                // The one on the tile in front: right after a ring of the ink.
-                shown.iter().any(|r| r.0 == ink && !r.1 && r.3 > m.3)
-            }
-        });
-        assert!(dot.is_some(), "its colour, ringed in the ink: {shown:?}");
-        let ring = shown.iter().find(|r| r.0 == ink && !r.1).unwrap();
-        let dot = dot.unwrap();
-        // The ring's middle is the dot's.
-        let middle = |m: &(Rgb, bool, i32, i32)| m.2 * 2 + m.3 * 36 / 17;
-        assert!((middle(ring) - middle(dot)).abs() <= 2, "{ring:?} {dot:?}");
+        let dots: Vec<_> = shown
+            .iter()
+            .filter(|m| m.0 == theme.attention && !m.1)
+            .collect();
+        // Both tiles ask, and the status bar's words say so after the same dot.
+        assert!(dots.len() >= 2, "both tiles ask: {shown:?}");
+        assert!(dots.iter().all(|d| d.3 == dots[0].3), "one size: {shown:?}");
+        assert!(
+            !shown.iter().any(|m| m.0 == ink && !m.1),
+            "no ring in the ink: {shown:?}"
+        );
     }
 
     #[test]
@@ -2632,6 +2619,16 @@ mod tests {
         assert!(row.contains("Resume 1 Session"), "{row}");
 
         let grid = screen(&spaces);
+        // Its tile has a mark as every other tile with something to say has: the dot, dimmed
+        // as an ended tab's mark is. It had none (0.11.0's final review).
+        let disabled = spaces.theme().disabled;
+        let y = (0..grid.height()).find(|y| grid.row_text(*y).contains("infra stopped"));
+        let y = y.expect("the bar");
+        let dimmed = (0..grid.width()).any(|x| {
+            let cell = grid.cell(x, y);
+            cell.style.fg == disabled && cell.symbol == "●"
+        });
+        assert!(dimmed, "a dimmed dot: {row}");
         click(
             &mut spaces,
             MouseKind::Left,

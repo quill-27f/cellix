@@ -19426,10 +19426,15 @@ impl App {
         let needs_you = waiting > 0 && message.is_empty() && self.neovim_line.is_empty();
         // Only what says an agent needs you takes the attention colour: the file's details
         // at the other end stay the bar's own.
+        // Its dot is the one an asking tab has, at the size the bar's spinner is, with 9 px
+        // between its ink and the words: a dot half that size stood there (0.11.0's final
+        // review). The words are painted that much sooner than their cells.
+        let mut sooner = 0.0;
         let said = if needs_you {
-            let dot = Bounds::cells(x as f32, y as f32 + 0.34, 0.45, 0.32);
-            grid.panel(dot, 16, Some(self.theme.attention), None);
-            x += 1;
+            let spin = crate::measures::WAIT_SPIN;
+            grid.dot(x as f32 + 0.1, y, spin, self.theme.attention, bar);
+            x += 2;
+            sooner = 0.4;
             Style {
                 fg: self.theme.attention,
                 ..bar
@@ -19456,15 +19461,15 @@ impl App {
                 self.measure.width(&right, status_font) + STATUS_GAP
             };
             let edge = f32::from(right_end) - details;
-            let left =
-                crate::source::clip_as(left, edge - f32::from(x), status_font, &*self.measure);
+            let from = f32::from(x) - sooner;
+            let left = crate::source::clip_as(left, edge - from, status_font, &*self.measure);
             let style = Style {
                 painted: true,
                 ..said
             };
             grid.put_str(x, y, &left, style, limit);
             grid.text_run(
-                (f32::from(x), f32::from(y)),
+                (from, f32::from(y)),
                 edge,
                 &left,
                 (said.fg, false),

@@ -761,11 +761,12 @@ impl ContextPanel {
             fg: theme.gutter.fg,
             ..inside
         };
-        let dot = Style {
-            fg: theme.accent,
-            ..inside
-        };
-        grid.label(left, y, "●", dot, right);
+        // The agent's own mark, as its tab and the Agents list have it: a blue dot stood
+        // before every agent alike (0.11.0's final review, 81-context).
+        let icon = crate::dock::program_icon(self.agent.name(), false, false);
+        let colour = crate::dock::icon_colour(icon, theme);
+        let fallback = crate::toolbar::fallback(icon);
+        grid.small_glyph(left as f32, y, icon, colour, fallback, inside);
         let source = match (&self.session, self.age) {
             (Some(_), Some(when)) => ago(when),
             _ if self.agent == Agent::Claude => "no session yet".into(),

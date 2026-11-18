@@ -907,12 +907,14 @@ A workspace's tile shows what its agents are doing with the marks their tabs hav
 while one works, and a dot in the colour of what needs the person (#f0705f) while one asks, at
 the size of a spinner beside the status bar's words, standing in the room a word's mark has.
 On the tile in front, which is the accent, they're in its ink, but for the dot of what needs
-the person, which keeps its colour in a ring of the ink: the colour is too near the accent's
-to show on it. Until 0.11.0's review the tile said "working" after a still dot, and "needs
-you" in the chip's ink with nothing of its colour. It has those marks and only those: a green
-dot for a finished turn, where it had a check, and no mark where a tab would have none, idle,
-empty or stopped (the words say stopped), where it had a dark dot, a ring and a square no tab
-has; with no mark its name has the chip's padding before it. What it says is the most urgent
+the person, which keeps its colour, plain as a tab's is: it stood in a ring of the ink, which
+no other dot has (0.11.0's final review). Until 0.11.0's review the tile said "working" after
+a still dot, and "needs you" in the chip's ink with nothing of its colour. It has those marks
+and only those: a green dot for a finished turn, where it had a check, a dot dimmed as an ended
+tab's mark is once it stopped (it had none beside chips that each had one), and no mark where
+a tab would have none, idle or empty, where it had a dark dot and a ring no tab has; with no
+mark its name has the chip's padding before it. The status bar's "An agent needs you" has the
+same dot at the same size, where a dot half that size stood. What it says is the most urgent
 thing any of its tabs says, and the badge on the Agents icon and the status bar count the same
 way: a tab asking stood beside a tile that said "done just now" once another agent's news from
 the same process had taken the asking one's place among the agents (`App::needing_you`). The
@@ -1696,7 +1698,8 @@ the instruction files in order, the skills, subagents and MCP instructions it wa
 and the system prompt and tools. Without a session, each agent's own rules are applied to
 the files (Claude Code's `CLAUDE.md` levels, rules and auto memory; Codex's `AGENTS.md` from
 the repository's top down, to 32 KiB; Gemini CLI's `GEMINI.md`, or the names its settings
-give). The picker moves between Claude Code, Codex and Gemini CLI. All of it is read as data.
+give). The picker moves between Claude Code, Codex and Gemini CLI, each named with its own
+mark, as its tab has it (a blue dot stood before each alike). All of it is read as data.
 
 Checks are gentle and never block: the same command told to run in one file and never to
 run in another, an import that doesn't resolve, a file cut where the agent stops reading
@@ -1796,11 +1799,13 @@ child counts as hearing of it. Children end with their parent, when it ends or i
 closed, unless started with `--outlive-parent`, which then go on as agents of their own.
 
 In the Agents list a helper stands under the agent that started it, a step in, with a line bent
-round from its agent's mark, by the name it was given and the quiet word "helper" after it, in
-its agent's section whatever it's doing itself (the reference board's panel 4). Its name reads
-as that section's names do, bold in the words' colour under an agent that works, and the mark at
-its row's end is its own: the spinner while it works, a dot once it has finished a turn, the
-chip while it asks. Under "WORKING 2" an idle helper's grey name read as a mistake. The line
+round from its agent's mark, by the name it was given and the quiet word "helper" after it,
+while it's doing what its agent does (the reference board's panel 4). Doing something else, it
+stands in the section its own state puts it in, as a row of its own that says "from" its agent
+where "helper" stood: a row's mark, its section and peek's header are one state. It stood in its
+agent's section whatever it was doing, and a finished helper had a green dot and peek's "done"
+under "WORKING 2" (0.11.0's final review, 172). Its mark at its row's end is its own: the
+spinner while it works, a dot once it has finished a turn, the chip while it asks. The line
 bent round to it is a fifth of the way from the sheet to the words (#45474a on the dark sheet;
 the sheet's hairline, 1.3 to 1, could hardly be seen), and starts 8 px under its agent's mark.
 Before its hooks have said anything it's there all the same, doing what Cellix knows of it.
@@ -2187,8 +2192,10 @@ The Agents list orders agents by how much they want the person: Needs you, Done,
 Idle, each a section headed in small capitals with how many are in it, and a section with
 nobody in it left out. A row is the agent's mark, its name (its tab's, where it has one), how
 long since what it's doing changed (`<1m`, `5m`, `2h`, `3d`, which the half-second tick keeps
-up and nothing redraws faster for), and at its end what that is: the spinner, a small chip
-saying "needs you" in the attention colour with what it's asking on the row under it, a green
+up and nothing redraws faster for), and at its end what that is: the spinner, a chip, the
+design's chip of 20/28 of a taller row with room under its words' tails (it was 24 px, the "y"
+of "you" a pixel over its foot), saying "needs you" in the attention colour with what it's
+asking on the row under it, a green
 dot, or nothing. Every row keeps room at its end as wide as that chip, so how long ago stands in
 one column down the list (it moved six columns left on the row that needs you). Under START,
 what can be started is listed as the + menu lists it: Terminal first, a rule, then the agents,
@@ -2196,8 +2203,8 @@ one row each with its mark and what it runs at the row's end, where each had a +
 here, working on this project" under it. Done is an agent that finished a turn nobody has looked at: it stays Done
 until its tab is in front, or for one with no tab here, until its row is pressed; a press on a
 row with a tab brings the tab forward. A row can stand under another, a step in with a line
-bent round from its parent's mark, in its parent's section whatever it is itself
-(`agents::ordered`, by each row's `parent`): what an agent starts will stand there.
+bent round from its parent's mark, while the two are in one state (`agents::ordered`, by each
+row's `parent`); in another, it's in its own section and says who started it.
 
 - Rebuilding an agent's interface: the side pane shows the real program, so its features arrive with its updates.
 

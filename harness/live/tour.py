@@ -1085,10 +1085,10 @@ def team_scenes(scratch):
         ("170-agent-asks-light", asks, {"background": "eff1f5"}),
         ("170-agent-asks-narrow", asks, {"size": "100x40"}),
         ("171-agent-started", allowed, {}),
-        ("172-agents-helper", [*allowed, *LIST_AGENTS, ["until", "helper"], ["wait", 0.6]], {}),
-        ("173-peek", [*allowed, *LIST_AGENTS, ["until", "helper"], ["click", *ON("reviewer")], ["until", "Keep as Tab"], ["wait", 0.8]], {}),
-        ("173-peek-light", [*allowed, *LIST_AGENTS, ["until", "helper"], ["click", *ON("reviewer")], ["until", "Keep as Tab"], ["wait", 0.8]], {"background": "eff1f5"}),
-        ("173-peek-narrow", [*allowed, *LIST_AGENTS, ["until", "helper"], ["click", *ON("reviewer")], ["until", "Keep as Tab"], ["wait", 0.8]], {"size": "100x40"}),
+        ("172-agents-helper", [*allowed, *LIST_AGENTS, ["until", "reviewer"], ["wait", 0.6]], {}),
+        ("173-peek", [*allowed, *LIST_AGENTS, ["until", "reviewer"], ["click", *ON("reviewer")], ["until", "Keep as Tab"], ["wait", 0.8]], {}),
+        ("173-peek-light", [*allowed, *LIST_AGENTS, ["until", "reviewer"], ["click", *ON("reviewer")], ["until", "Keep as Tab"], ["wait", 0.8]], {"background": "eff1f5"}),
+        ("173-peek-narrow", [*allowed, *LIST_AGENTS, ["until", "reviewer"], ["click", *ON("reviewer")], ["until", "Keep as Tab"], ["wait", 0.8]], {"size": "100x40"}),
         # Ctrl+click on the helper's name in the lead's own words opens it the same way.
         ("174-name-peek", [*allowed, ["until", "Asked reviewer"], ["ctrl", *ON("Asked reviewer", 7)], ["until", "Keep as Tab"], ["wait", 0.8]], {}),
     ]

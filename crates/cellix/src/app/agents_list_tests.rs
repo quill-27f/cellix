@@ -167,8 +167,8 @@ fn how_long_ago_is_said_in_a_few_letters() {
     assert_eq!(ago(now - Duration::from_secs(3 * 86_400)), "3d");
 }
 
-/// A helper an agent started stands under it, in its section, a step in: the list has the
-/// room for that though nothing here starts one yet.
+/// A helper an agent started stands under it, a step in, while it's doing what its agent does;
+/// doing something else, it stands in its own section, so a row's section is its own state.
 #[test]
 fn a_helper_stands_under_the_agent_that_started_it() {
     use crate::agents::{Row, Urgency, ordered};
@@ -186,6 +186,7 @@ fn a_helper_stands_under_the_agent_that_started_it() {
         row("helper", Urgency::NeedsYou, Some("lead")),
         row("lead", Urgency::Working, None),
         row("asking", Urgency::NeedsYou, None),
+        row("worker", Urgency::Working, Some("lead")),
     ];
     let order: Vec<(&str, u8)> = ordered(&rows)
         .into_iter()
@@ -193,6 +194,71 @@ fn a_helper_stands_under_the_agent_that_started_it() {
         .collect();
     assert_eq!(
         order,
-        [("asking", 0), ("lead", 0), ("helper", 1), ("idle", 0)]
+        [
+            ("helper", 0),
+            ("asking", 0),
+            ("lead", 0),
+            ("worker", 1),
+            ("idle", 0)
+        ]
+    );
+}
+
+/// The chip that says an agent needs you is a chip as the design has it, 20/28 of a taller
+/// row, 36 px on the tour's, with room under its words' tails, and stands in its row's
+/// middle with its words: at 24 px the "y" of "you" reached a pixel short of its foot
+/// (0.11.0's final review, m2).
+#[test]
+fn the_needs_you_chip_has_room_for_its_words_tails() {
+    use cellix_render::{FontMeasure, Paint, UNIT, stood};
+    let (_dir, mut app) = project();
+    let (row, line) = (50.0, 36.0);
+    app.set_measure(std::rc::Rc::new(FontMeasure::new(17, 50).with_type_row(36)));
+    app.serve(Request::Agent(AgentEvent {
+        session: "c".into(),
+        agent: "Gemini".into(),
+        state: AgentState::NeedsYou,
+        detail: "Allow Bash?".into(),
+        folder: "/w".into(),
+        pid: None,
+        transcript: String::new(),
+        name: String::new(),
+    }));
+    app.run(cellix_input::Command::ShowAgents);
+    let grid = screen(&app);
+    let y = (0..grid.height())
+        .find(|y| grid.row_text(*y).contains("needs you") && grid.row_text(*y).contains("Gemini"))
+        .expect("the row that needs you");
+    let (top, bottom) = (i32::from(y) * UNIT, i32::from(y + 1) * UNIT);
+    let attention = app.theme().attention;
+    let chip = grid.paint.iter().find_map(|p| match p {
+        Paint::Panel {
+            bounds,
+            fill: Some(fill),
+            ..
+        } if bounds.y >= top
+            && bounds.y < bottom
+            && *fill != attention
+            && {
+                // Its wash is the attention colour's, faint.
+                let near = |a: u8, b: u8| a.abs_diff(b) < 120;
+                near(fill.0, attention.0) || near(fill.1, attention.1)
+            }
+            && bounds.w > UNIT * 3 =>
+        {
+            Some(*bounds)
+        }
+        _ => None,
+    });
+    let chip = chip.expect("the chip");
+    let (chip_top, chip_high) = stood(chip.y, chip.h, row, line);
+    let high = chip_high;
+    assert!((34.0..=37.0).contains(&high), "{high} px tall");
+    // In its row's middle, where its words are.
+    let middle = f32::from(y) * row + row / 2.0;
+    assert!(
+        (chip_top + high / 2.0 - middle).abs() <= 1.0,
+        "its middle at {} where the row's is {middle}",
+        chip_top + high / 2.0
     );
 }
