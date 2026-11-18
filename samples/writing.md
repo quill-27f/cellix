@@ -208,7 +208,7 @@ A claim that needs a source[^source], and a second one[^more]. Numbers follow th
 
 ## Track changes
 
-Press the pencil in the bar, or run Toggle Track Changes, then type: your edits stay as suggestions. Right-click one to accept or reject it, or settle them all from the commands.
+Press the pencil in the bar, or run Toggle Track Changes, then type: your edits stay as suggestions. Click one and Reject and Accept stand over it. The Comments pane counts them, with Accept All, Reject All and Next.
 
 The model {++clearly ++}improves on the baseline{-- by a wide margin--}, and {~~tests~>experiments~~} show it holds at scale.{>>A note for a reviewer.<<}
 

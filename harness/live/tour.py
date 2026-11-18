@@ -198,7 +198,7 @@ EXPECT = {
 # About how many scenes there are, to cut the tour into parts of a size. Count them with
 # TOUR_LIST=1 when scenes are added: too low a count puts every scene past it in the last part,
 # which then runs out of the guard's time (0.11.0's tour lost ten scenes that way).
-SCENES_IN_ALL = 265
+SCENES_IN_ALL = 278
 # Scenes come to, shot, and those that never reached their surface.
 SEEN, SHOT, FAILED = [0], [], []
 # The scene shot last, with its picture's digest and what it was taken from; and this one's.
@@ -1676,27 +1676,78 @@ with tempfile.TemporaryDirectory() as scratch:
     start_shell = [*command("New Terminal"), ["wait", 1.5]]
     shoot("58-welcome-with-shell", start_shell, **light)
     shoot("59-sample-top", [], WRITING, **light)
-    for number, (name, notches) in enumerate(
-        [
-            ("lists", 3),
-            ("callouts", 6),
-            ("table", 9),
-            ("math", 12),
-            ("pictures", 16),
-            ("flow", 22),
-            ("class", 30),
-            ("charts", 40),
-            ("tikz", 52),
-            ("code", 60),
-            ("footnotes", 68),
-            ("changes", 74),
-        ]
-    ):
-        steps = [["wheel", 90, 20, notches], ["wait", 1.0]]
+
+    def line_of(path, start, after=0):
+        """The line of a file that starts with `start`, counting from one, and `after` more."""
+        with open(path, encoding="utf8") as f:
+            found = [n for n, line in enumerate(f.read().split("\n"), 1) if line.startswith(start)]
+        return found[0] + after
+
+    def to_line(line):
+        """Go to Line to the end of the file and back up to `line`, which then stands at the
+        top of the page. The wheel landed short of a section, by how fast its notches came."""
+        go = lambda n: [["keys", CTRL("l")], ["until", "Go to line"], ["keys", f"{n}\r"],
+                        ["gone", "Go to line"]]
+        # Once the file is drawn: before, a loaded machine shot its blank ground.
+        return [["until", " lines", 60], ["wait", 1.0], *go(99999), *go(line), ["wait", 1.0]]
+
+    sections = [
+        ("lists", "### Lists", 0),
+        ("callouts", "## Callouts", 0),
+        ("table", "## Tables", 0),
+        ("math", "## Math", 0),
+        ("pictures", "## Pictures", 0),
+        ("flow", "## Diagrams", 0),
+        ("class", "classDiagram", -1),
+        ("charts", "gantt", -1),
+        ("tikz", "TikZ, built", 0),
+        ("code", "## Code", 0),
+        ("footnotes", "## Footnotes", 0),
+        ("changes", "## Track changes", 0),
+    ]
+    for number, (name, start, after) in enumerate(sections):
+        steps = to_line(line_of(WRITING, start, after))
+        # TikZ is built in the background by a LaTeX engine, which takes a few seconds.
+        if name == "tikz":
+            steps.append(["wait", 6.0])
         shoot(f"{60 + number}-sample-{name}", steps, WRITING, **light)
-    # Scrolled once the sample is drawn: before, a loaded machine shot its blank ground.
-    LOADED = ["until", "232 lines", 60]
-    shoot("72-sample-dark", [LOADED, ["wheel", 90, 20, 22], ["wait", 1.0]], WRITING, size="150x44")
+    shoot("72-sample-dark", to_line(line_of(WRITING, "## Diagrams")), WRITING, size="150x44")
+    # Track Changes at work: Accept and Reject by the suggestion the caret is in, and by the
+    # one under the pointer, and the row over the comments that counts them and settles them.
+    CHANGES = to_line(line_of(WRITING, "## Track changes"))
+    at_change = [*CHANGES, *command("Next Change"), ["until", "Suggestion 1 of 3"], ["wait", 0.5]]
+    shoot("71-sample-changes-chips", at_change, WRITING, **light)
+    shoot("71-sample-changes-chips-dark", at_change, WRITING, size="150x44")
+    # The pointer on the change itself, a row under the chips, which start where it does, and
+    # the caret then moved up off it: the chips stay for the pointer.
+    pointed = [*at_change, ["move", *ON("Rej", 2, 1, -1)], ["wait", 0.4], ["keys", "\\e[A"],
+               ["wait", 0.8]]
+    shoot("71-sample-changes-pointed", pointed, WRITING, **light)
+    shoot("71-sample-changes-chip-hover", [*at_change, ["move", *ON("Acc", 2, 0, -1)], ["wait", 0.5]],
+          WRITING, **light)
+    # The pane first, since a page laid out again narrower keeps its top row, not its words.
+    row = [["wait", 1.0], *command("show comments", F1), ["until", "3 suggestion"], *CHANGES]
+    shoot("71-sample-changes-row", row, WRITING, **light)
+    shoot("71-sample-changes-row-dark", row, WRITING, size="150x44")
+    shoot("71-sample-changes-row-next", [*row, ["click", *ON("Nex")], ["until", "Suggestion 1 of 3"],
+                                         ["wait", 0.5]], WRITING, **light)
+    # Narrow, the three buttons take a row of their own under the count.
+    shoot("71-sample-changes-row-narrow", row, WRITING, size="84x44", background="eff1f5")
+    # An agent's rewrite of commented words, to take in one step or as a suggestion.
+    with open(f"{ROOT}/.cellix/threads.json") as f:
+        kept = f.read()
+    rewrite = {"id": 40, "file": "samples/writing.md", "line": line_of(WRITING, "The model"),
+               "quote": "improves on the baseline", "text": "By how much? Vague as it stands.",
+               "replies": [{"author": "Claude", "text": "Rewrite: improves on the baseline by 3.6 points"}],
+               "resolved": False, "told": 1, "asked": False, "kind": "Clarity", "suggested_by": ""}
+    with open(f"{ROOT}/.cellix/threads.json", "w") as f:
+        json.dump([*json.loads(kept or "[]"), rewrite], f)
+    rewrite_card = [["wait", 1.0], *command("show comments", F1), ["until", "Accept Re"], *CHANGES]
+    shoot("71-sample-rewrite", rewrite_card, WRITING, **light)
+    shoot("71-sample-rewrite-dark", rewrite_card, WRITING, size="150x44")
+    shoot("71-sample-rewrite-narrow", rewrite_card, WRITING, size="100x44", background="eff1f5")
+    with open(f"{ROOT}/.cellix/threads.json", "w") as f:
+        f.write(kept)
     shoot("73-selection-bar", [["double", 60, 7], ["wait", 0.5]], WRITING, **light)
     # A click, and a Shift+click further down: everything between is selected, across the
     # paragraphs, the heading and the lists, with the buttons that comment on it. Then the same
@@ -1718,11 +1769,25 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("75-data", [], os.path.join(samples, "data.csv"), **light)
     shoot("76-notebook", [], os.path.join(samples, "notebook.ipynb"), **light)
     shoot("77-paper-top", [["wait", 1.0]], PAPER, **light)
-    for number, (name, notches) in enumerate(
-        [("math", 8), ("theorems", 14), ("drawn", 24), ("tables", 32), ("changes", 40)]
-    ):
-        steps = [["wait", 1.0], ["wheel", 90, 20, notches], ["wait", 1.0]]
-        shoot(f"{78 + number}-paper-{name}", steps, PAPER, **light)
+    paper_sections = [
+        ("math", "\\subsection{Equations}"),
+        ("theorems", "\\subsection{Theorems}"),
+        ("drawn", "\\subsection{Algorithms}"),
+        ("tables", None),
+        ("changes", "\\section{Track changes}"),
+    ]
+    for number, (name, start) in enumerate(paper_sections):
+        # The paper's table is in the file it takes in, which opens at its top.
+        if start is None:
+            shoot(f"{78 + number}-paper-{name}", [["wait", 1.0]],
+                  os.path.join(samples, "paper", "results.tex"), **light)
+            continue
+        shoot(f"{78 + number}-paper-{name}", to_line(line_of(PAPER, start)), PAPER, **light)
+    PAPER_CHANGES = to_line(line_of(PAPER, "\\section{Track changes}"))
+    shoot("82-paper-changes-chips", [*PAPER_CHANGES, *command("Next Change"),
+                                     ["until", "Suggestion 1 of 3"], ["wait", 0.5]], PAPER, **light)
+    shoot("82-paper-changes-row", [["wait", 1.0], *command("show comments", F1),
+                                   ["until", "3 suggestion"], *PAPER_CHANGES], PAPER, **light)
 
     # A window wider than a page is set: the page keeps to its reading width, in the middle,
     # and what's wider than that moves sideways inside it.
@@ -1735,8 +1800,7 @@ with tempfile.TemporaryDirectory() as scratch:
                                        ["wait", 0.5]], WIDE_FILE, **wide)
     shoot("162-reading-width-note", [["wait", 1.0]], NOTE_FILE, background="eff1f5", **wide)
     shoot("163-reading-width-paper", [["wait", 1.0]], PAPER, **wide)
-    shoot("164-reading-width-sample", [["until", "232 lines", 60], ["wait", 1.0], ["wheel", 100, 20, 9],
-                                       ["wait", 1.0]], WRITING, **wide)
+    shoot("164-reading-width-sample", to_line(line_of(WRITING, "## Tables")), WRITING, **wide)
     # A narrow side pane with more tabs than it has room for: the one in front whole, the
     # others cut short, and one of those under the pointer.
     three_tabs = [*LIST_AGENTS, *command("show comments", F1), ["until", "No comments"],
