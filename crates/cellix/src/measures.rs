@@ -86,6 +86,30 @@ pub fn line_pixels(measure: &dyn Measure) -> f32 {
     let line = row as f32 / measure.row_air().max(1.0);
     (line / 24.0).ceil().max(1.0)
 }
+/// How many columns along a panel that floats from column `left` to `right` moves so that
+/// neither of its edges stands within `LINE_AIR` of one of the upright `lines` (in columns,
+/// with their fractions): nearest first, to the right before the left, and not at all where
+/// every letter is a cell and no line is drawn. Its edge on a sheet's, the two lines merged
+/// into one (Go to Symbol and a tab's menu on the file's sheet).
+pub fn clear_of_lines(lines: &[f32], (left, right): (f32, f32), measure: &dyn Measure) -> i16 {
+    let Some((wide, _)) = measure.cell_pixels() else {
+        return 0;
+    };
+    let wide = wide.max(1) as f32;
+    let near = (LINE_AIR + line_pixels(measure)) / wide;
+    let clear = |by: f32| {
+        lines.iter().all(|line| {
+            [left + by, right + by]
+                .iter()
+                .all(|edge| (edge - line).abs() >= near)
+        })
+    };
+    [0, 1, -1, 2, -2]
+        .into_iter()
+        .find(|by| clear(f32::from(*by)))
+        .unwrap_or(0)
+}
+
 /// How tall a spinner beside words is, in the terminal's lines: in the status bar, a view's
 /// heading or a button, 11 pt beside words of 13 or a little less.
 pub const WAIT_SPIN: f32 = 0.6;
@@ -221,6 +245,17 @@ mod tests {
             );
         }
         assert_eq!(button_cells("Reply", &CellMeasure), "[Reply]");
+    }
+
+    /// A panel whose edge would stand on a line, or within 8 px of one, moves a column along;
+    /// one clear of every line stays, and on cells nothing moves.
+    #[test]
+    fn a_floating_panel_keeps_its_edges_off_a_sheets_line() {
+        let measure = FontMeasure::new(17, 50).with_type_row(36);
+        assert_eq!(clear_of_lines(&[28.0], (28.0, 92.0), &measure), 1);
+        assert_eq!(clear_of_lines(&[28.0, 93.0], (28.0, 92.0), &measure), -1);
+        assert_eq!(clear_of_lines(&[27.0, 100.5], (28.0, 92.0), &measure), 0);
+        assert_eq!(clear_of_lines(&[28.0], (28.0, 92.0), &CellMeasure), 0);
     }
 
     /// A text box's words are raised for their tails where a row is the terminal's line, or

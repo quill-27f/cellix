@@ -5805,8 +5805,8 @@
   {
     "id": "order-menu-check-column",
     "milestone": 15,
-    "title": "The Comments pane's order menu stands over the cards with its check in a column of its own",
-    "test": "the_order_menu_stands_over_the_cards_with_its_check_in_a_column",
+    "title": "The Comments pane's order menu drops from its button with its check in a column of its own",
+    "test": "the_order_menu_drops_from_its_button_with_its_check_in_a_column",
     "passes": true
   },
   {
@@ -6500,6 +6500,20 @@
     "milestone": 15,
     "title": "A big heading waiting to fit at the page's foot draws no mark in the status bar",
     "test": "a_heading_waiting_to_fit_draws_no_mark_under_the_page",
+    "passes": true
+  },
+  {
+    "id": "floating-clear-of-lines",
+    "milestone": 15,
+    "title": "Menus and tooltips keep 8 px off lines and never cover part of a chip",
+    "test": "a_views_tip_never_covers_part_of_the_branchs_chip",
+    "passes": true
+  },
+  {
+    "id": "submenu-level-with-its-row",
+    "milestone": 15,
+    "title": "A submenu's first row is level with the row that opened it",
+    "test": "a_submenus_first_row_is_level_with_the_row_that_opened_it",
     "passes": true
   }
 ]

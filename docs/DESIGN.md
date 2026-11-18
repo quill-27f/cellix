@@ -581,8 +581,8 @@ A right click on a link, wherever one can be clicked, opens a menu with Open Lin
 (decided 18 November 2026: the user found a link opened in the terminal's browser hard to
 share). It drops from under the pointer's row, at the pointer's column, so the link it's about
 stays in view: opened on the pointer's own row, as a code menu is, it hid all of the address but
-its first letters. Over a comment's card or peek it stands a step above the card's colour
-(`Theme::over_card`), as the comments' order menu does. Open Link does what a click on it does, or Ctrl+click where a click puts the
+its first letters. Over a comment's card or peek it's a menu's colour as every menu is, its line
+and shadow setting it off the card. Open Link does what a click on it does, or Ctrl+click where a click puts the
 caret; Copy Link puts its address on the clipboard the way every copy goes, by OSC 52 through
 the terminal, so it reaches the person's own clipboard over SSH and in tmux, and says "Copied the
 link". The address is where the link goes: a Markdown link's target, `\href`'s and `\url`'s
@@ -1129,10 +1129,10 @@ session also read, is picked only on the row it was opened from. A text box with
 keyboard has a line of white at 20% over a menu round it (`Theme::field_line`), 2.4 to 1 on the
 frame: sunk a step under the frame, its fill is all but the frame's, and a menu's line round it
 left an empty Replace box nearly gone; Source Control's message box has it too, where it had a
-menu's, 1.7 to 1 on the sidebar. A menu that opens over a card, the Comments pane's order
-menu, is drawn a step above it, white at 11% over a menu's colour, above an agent's answer set on
-the card in a quiet button's fill too, its hover, pick and line moved up with it and its quiet
-words lifted to read as well (`Theme::over_card`); it was the card's own colour. The emoji picker
+menu's, 1.7 to 1 on the sidebar. A menu is one colour wherever it opens: over a card, the
+Comments pane's order menu or a link's, its line and shadow set it off the card, as in the light
+theme (decided by the final review of 0.11.0, which found the order menu the one menu a step
+lighter than the rest, #3d3f42 where every menu is #25272b). The emoji picker
 drops from under the buttons that send what's being written, a row clear of them, onto the pane,
 and is a menu's colour as any other: from its own button it covered the hint over them mid-word,
 on the card. Text is
@@ -1240,10 +1240,19 @@ that was 5 px from the tab row's line. So, where a row has room: a control on a 
 lines keeps the height it has on the terminal's line (a button at a pointed row's end, Show
 Source under the tab row, the conflict header's buttons, the chip of the view showing in a
 docked pane's header: a panel's `inset`); a tooltip stands 8 px under its row's top, where the
-line it hangs from is; a menu that opens on the row under a tab row starts 8 px down it and
-takes another row where it needs one (`Menu::hang`); the Find bar over the side pane stands a
-row under the tab line, as it does over a file, and a sliver of what's under it either side is
-cleared. A band behind a pointed or picked row stands 8 px in from the sheet's line on both
+line it hangs from is, ends 8 px from the line down the window's side (`App::tip_end`), and
+never covers part of a chip, as the branch's on the heading under the views, or the top of a
+minimap: there's no room between them, so it stands the other side of that edge, 8 px under
+it (`App::tip_clear`); a menu that opens on the row under a tab row starts 8 px down it and
+takes another row where it needs one (`Menu::hang`), and one dropped from a button stands on
+the button's left edge 8 px under its foot (`Menu::under`), the Comments pane's order menu
+too, in a menu's colour as every menu is; a submenu's first row is level with the row that
+opened it, with every menu's air over and under its rows (`Menu::level`); a floating panel,
+a menu, a palette or a tip, keeps both its sides 8 px or more from the sheets' upright lines,
+moving a column along where it would stand on one (`measures::clear_of_lines`): Go to Symbol
+and a tab's menu had their left line on the file's sheet's; the Find bar over the side pane
+stands a row under the tab line, as it does over a file, and a sliver of what's under it either
+side is cleared. A band behind a pointed or picked row stands 8 px in from the sheet's line on both
 sides (`measures::band`), counting the half of the frame's column the side pane's sheet starts
 in and the line's own two pixels (`measures::line_pixels`; counted as one, Problems' band
 stood 7 px from it), in the sidebar's lists too (Source Control's, the Timeline's and Agent

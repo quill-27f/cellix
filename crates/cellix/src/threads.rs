@@ -1451,20 +1451,21 @@ fn draw_control(
     grid.lift_since(from, -drop);
 }
 
-/// The row a list drops from under the order's button, for its menu: the first whole row
-/// under what's painted of it. None when the button isn't in the list.
-pub fn order_menu_row(area: Rect, shown: Shown, top: usize, measure: &dyn Measure) -> Option<u16> {
+/// Where the order's button is, for the menu it drops: the column its chip starts at, before
+/// the view's lead (`View::lead`), its row, and how far down that row it's painted
+/// (`control_drop`). None when the button isn't in the list.
+pub fn order_button(
+    area: Rect,
+    shown: Shown,
+    top: usize,
+    measure: &dyn Measure,
+) -> Option<(u16, u16, f32)> {
     let width = area.w.saturating_sub(SIDE * 2 + 2) as f32;
     let all = lines(shown, width, measure);
     let top = top.min(last_of(all.len(), area.h));
     let index = all.iter().position(|line| matches!(line, Line::Sort(_)))?;
     let row = area.y + index.checked_sub(top)? as u16;
-    let under = if control_drop(&all, index, measure) > 0.0 {
-        2
-    } else {
-        1
-    };
-    Some(row + under)
+    Some((head(area, measure), row, control_drop(&all, index, measure)))
 }
 
 /// The row of the buttons that send or drop what's being written, the first at or under
@@ -3317,16 +3318,16 @@ mod tests {
             "its foot is in the row under"
         );
         assert_eq!(pressed(&pixels, row + 1.6), None, "under the chip");
-        // And its list drops from the first whole row under it.
-        let menu = order_menu_row(area, shown, 0, &pixels);
-        assert_eq!(menu, Some(row as u16 + 2));
+        // Its list drops from under what's painted of it, on its row and with its drop.
+        let button = order_button(area, shown, 0, &pixels);
+        assert_eq!(button, Some((area.x + SIDE - 1, row as u16, CONTROL_DROP)));
 
         let row = middle(&CellMeasure);
         assert_eq!(pressed(&CellMeasure, row + 0.2), Some(Hit::Sort));
         assert_eq!(pressed(&CellMeasure, row + 1.2), None);
         assert_eq!(
-            order_menu_row(area, shown, 0, &CellMeasure),
-            Some(row as u16 + 1)
+            order_button(area, shown, 0, &CellMeasure),
+            Some((area.x + SIDE, row as u16, 0.0))
         );
     }
 

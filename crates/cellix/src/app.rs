@@ -10563,12 +10563,9 @@ impl App {
                 let top = self.dock.tops.of(Front::Comments);
                 let at = (x, y, mouse.fine_y);
                 let hit = threads::hit(screen, threads, top, at, &*self.measure);
-                // Its list drops from under what's painted of its button.
-                let menu = threads::order_menu_row(screen, threads, top, &*self.measure);
                 match hit {
-                    Some(ThreadHit::Sort) => {
-                        self.show_sort_menu((screen.x + 2, menu.unwrap_or(y + 1)));
-                    }
+                    // Its list drops from under what's painted of its button.
+                    Some(ThreadHit::Sort) => self.show_sort_menu((screen.x + 2, y + 1)),
                     // Every emoji, in a panel dropping from under the buttons that send what's
                     // written: from its own button it covered the hint between them.
                     Some(ThreadHit::Emoji) => {
@@ -11806,7 +11803,10 @@ impl App {
         open.and_then(|e| e.buffer.path()).is_none()
     }
 
-    /// The orders the Comments pane can list in, as a menu at `at`, the one in use marked.
+    /// The orders the Comments pane can list in, as a menu dropped from the order's button,
+    /// the one in use marked: as every menu dropped from a button, on its left edge and
+    /// `LINE_AIR` under its foot. It opened 38 px under it and 10 px along, a step lighter
+    /// than every other menu. With the button out of view, it opens at `at`.
     fn show_sort_menu(&mut self, at: (u16, u16)) {
         // The check in a column of its own, as an icon is, so every order's words start in
         // one place: written into the words, it pushed the one in use 8 px along.
@@ -11822,11 +11822,46 @@ impl App {
                 }
             })
             .collect();
-        self.show_menu(at, items);
-        // It opens over the pane's cards, which are a menu's colour.
-        if let Overlay::Menu(menu) = &mut self.overlay {
-            menu.over_card = true;
+        let Some((left, row, drop)) = self.order_button_place() else {
+            self.show_menu(at, items);
+            return;
+        };
+        let screen = Rect::new(0, 0, self.size.0, self.size.1);
+        let mut menu = Menu::new(
+            (left.floor() as u16, row + 1),
+            items,
+            &*self.measure,
+            screen,
+        );
+        if let Some((_, tall)) = self.measure.cell_pixels() {
+            let tall = tall as f32;
+            let line = tall / self.measure.row_air().max(1.0);
+            // The button's foot, from the top of its own row; the menu's first row is under.
+            // Its drop in whole sixty-fourths of a row, rounded up, as paint may place it.
+            let unit = cellix_render::UNIT as f32;
+            let drop = (drop * unit).ceil() / unit;
+            let foot = drop * tall + cellix_render::button_in_row(tall, line).1;
+            menu.under(left, tall - foot, &*self.measure, screen);
         }
+        self.overlay = Overlay::Menu(menu);
+    }
+
+    /// Where the Comments pane's order button is painted: the column its chip starts at,
+    /// with its fraction, its row, and how far down that row it stands.
+    fn order_button_place(&self) -> Option<(f32, u16, f32)> {
+        if self.dock.front != Front::Comments {
+            return None;
+        }
+        let screen = self.dock_panel()?;
+        let (threads, resolved) = self.shown_threads();
+        let agent = self.comment_agent().0;
+        let draft = self.dock.draft.as_ref();
+        let view = self.comments_view();
+        let lead = view.lead;
+        let shown = (threads.as_slice(), draft, agent.as_str(), resolved, view);
+        let top = self.dock.tops.of(Front::Comments);
+        let (x, row, drop) = threads::order_button(screen, shown, top, &*self.measure)?;
+        Some((f32::from(x) + lead, row, drop))
     }
 
     /// How the Comments pane shows its list: under headings or not, which is lit, and in
@@ -15128,7 +15163,6 @@ impl App {
         if mouse.kind != MouseKind::Left {
             return;
         }
-        let screen = Rect::new(0, 0, self.size.0, self.size.1);
         let overlay = std::mem::replace(&mut self.overlay, Overlay::None);
         match overlay {
             Overlay::Emoji(mut picker) => {
@@ -15146,6 +15180,7 @@ impl App {
                 }
             }
             Overlay::Palette(mut palette) => {
+                let screen = self.palette_screen();
                 let at = (mouse.x, mouse.fine_y);
                 let row = palette.row_at(screen, at, &*self.measure);
                 let was = palette.selected;
@@ -15218,7 +15253,52 @@ impl App {
         if top == 1 || under.is_some_and(|row| top == row + 1) {
             menu.hang(&*self.measure, screen);
         }
+        // Nor does either of its sides stand on a sheet's line, or within 8 px of one: a
+        // tab's menu had its left line on the file's sheet's, the two merged.
+        let by = measures::clear_of_lines(&self.sheet_lines(), menu.edges(), &*self.measure);
+        if by != 0 {
+            menu.move_along(by, &*self.measure, screen);
+        }
         self.overlay = Overlay::Menu(menu);
+    }
+
+    /// Where the upright lines of the sheets are, in columns with their fractions, where
+    /// there are pictures: the file's sheet's sides, and the pane's beside it, whose sheet
+    /// starts half way into its first column. A panel that floats over them keeps its edges
+    /// off them (`measures::clear_of_lines`).
+    fn sheet_lines(&self) -> Vec<f32> {
+        if self.measure.in_cells() {
+            return Vec::new();
+        }
+        let main = self.main_area();
+        let mut lines = vec![f32::from(main.x), f32::from(main.right())];
+        if let Some(pane) = self.dock_area().filter(|_| !self.dock_under()) {
+            lines.extend([f32::from(pane.x) + SHEET_EDGE, f32::from(pane.right())]);
+        }
+        lines
+    }
+
+    /// The screen a palette is centred on: the window's, a column or two along where centred
+    /// its edges would stand on a sheet's line (`measures::clear_of_lines`). Go to Symbol's
+    /// left line was on the file's sheet's.
+    fn palette_screen(&self) -> Rect {
+        let screen = Rect::new(0, 0, self.size.0, self.size.1);
+        let area = Palette::area(screen);
+        let edges = (f32::from(area.x), f32::from(area.right()));
+        let by = measures::clear_of_lines(&self.sheet_lines(), edges, &*self.measure);
+        let along = by.unsigned_abs();
+        if by > 0 {
+            Rect {
+                x: screen.x + along,
+                ..screen
+            }
+        } else {
+            // Its middle a column to the left for each two columns fewer.
+            Rect {
+                w: screen.w.saturating_sub(along * 2),
+                ..screen
+            }
+        }
     }
 
     fn open_explorer_menu(&mut self, x: u16, y: u16) {
@@ -15492,7 +15572,7 @@ impl App {
         // link's menu is, so the link stays in view.
         if let Some(linked) = linked {
             let items = self.with_link(linked, items);
-            self.show_link_menu((x, y), items, false);
+            self.show_link_menu((x, y), items);
         } else if !items.is_empty() {
             self.show_menu((x, y), items);
         }
@@ -16905,6 +16985,16 @@ impl App {
             // Its row's top is where the line over it is, under a tab row or a bar.
             top + self.tip_drop()
         };
+        // Its sides off the sheets' upright lines (`measures::clear_of_lines`), and 8 px or
+        // more from the window's side where it ends at it.
+        let lines = self.sheet_lines();
+        let left = left.min(self.tip_end(wide(name)));
+        let along = measures::clear_of_lines(&lines, (left, left + wide(name)), &*self.measure);
+        let left = left + f32::from(along);
+        // Under a chip it would cover part of, or the top of a minimap, it stands the other
+        // side of that edge.
+        let under = (left, top + TIP_INSET, wide(name));
+        let top = top + self.tip_clear(grid, under, on_view);
         let theme = &self.theme;
         // A hair short of its row, which is what lets it keep its own height on a taller
         // row and stand in the middle of it, clear of a line over or under.
@@ -16969,6 +17059,90 @@ impl App {
             return f32::from(rail.bottom()) + drop;
         }
         f32::from(rail.bottom()) + f32::from(SIDEBAR_AIR) - SIDEBAR_RAISE
+    }
+
+    /// The furthest along a tip `wide` columns wide may start: `LINE_AIR` from the line down
+    /// the window's side, inside it, where there are pictures. Half a column short of the
+    /// side, Quit's tip stood 7 px from the pane's line.
+    fn tip_end(&self, wide: f32) -> f32 {
+        let margin = match self.measure.cell_pixels() {
+            Some((cell, _)) => {
+                let line = measures::line_pixels(&*self.measure);
+                (measures::LINE_AIR + line) / cell.max(1) as f32 + 0.01
+            }
+            None => 0.5,
+        };
+        self.size.0 as f32 - wide - margin
+    }
+
+    /// How far down, in rows, a tip at `(left, top)` and `wide` columns wide goes to stand
+    /// clear of what's under it: past the foot of a chip it would cover part of, as the
+    /// branch's under the views (`chips`), or under the top of a minimap, `LINE_AIR` from
+    /// either. Its foot stood on the branch chip's top 8 px and its shadow on the minimap's
+    /// first lines.
+    fn tip_clear(&self, grid: &Grid, (left, top, wide): (f32, f32, f32), chips: bool) -> f32 {
+        let Some((cell, row)) = self.measure.cell_pixels() else {
+            return 0.0;
+        };
+        let (cell, row) = (cell as f32, row as f32);
+        let line = row / self.measure.row_air().max(1.0);
+        let unit = cellix_render::UNIT as f32;
+        let tall = (TOOLTIP_HEIGHT - TIP_INSET * 2.0) * unit;
+        let (start, high) = cellix_render::stood((top * unit) as i32, tall as i32, row, line);
+        let air = measures::LINE_AIR;
+        let (from, to) = (left * cell - air, (left + wide) * cell + air);
+        let across = |b: &Bounds| {
+            let (x, w) = (b.x as f32 * cell / unit, b.w as f32 * cell / unit);
+            x < to && x + w > from
+        };
+        // Each thing in the way, its top and foot in pixels, and whether only its top counts.
+        let mut ways: Vec<(f32, f32, bool)> = Vec::new();
+        for paint in &grid.paint {
+            match paint {
+                Paint::Strips { bounds, .. } if across(bounds) => {
+                    let (y, h) = cellix_render::stood(bounds.y, bounds.h, row, line);
+                    ways.push((y, y + h, true));
+                }
+                Paint::Panel {
+                    bounds,
+                    fill: Some(_),
+                    shadow: false,
+                    ..
+                } if chips
+                    && bounds.h < cellix_render::UNIT
+                    && bounds.w <= 16 * cellix_render::UNIT
+                    && across(bounds) =>
+                {
+                    let (y, h) = cellix_render::stood(bounds.y, bounds.h, row, line);
+                    ways.push((y, y + h, false));
+                }
+                _ => {}
+            }
+        }
+        // A minimap is many rows of strips: only the first one's top is an edge.
+        let first_strip = ways
+            .iter()
+            .filter(|w| w.2)
+            .map(|w| w.0)
+            .fold(f32::INFINITY, f32::min);
+        ways.retain(|w| !w.2 || w.0 == first_strip);
+        let mut at = start;
+        for _ in 0..4 {
+            let hit = ways.iter().find(|(y, foot, top_only)| {
+                if *top_only {
+                    *y > at - air && *y < at + high + air
+                } else {
+                    *y < at + high + air && *foot > at - air
+                }
+            });
+            match hit {
+                Some((y, _, true)) => at = y + air,
+                Some((_, foot, false)) => at = foot + air,
+                None => break,
+            }
+        }
+        // In whole sixty-fourths of a row, rounded up, as paint places it.
+        ((at - start) / row * unit).ceil() / unit
     }
 
     fn tip_drop(&self) -> f32 {
@@ -17396,7 +17570,8 @@ impl App {
         match &self.overlay {
             Overlay::Palette(palette) => {
                 let hover = self.hover.map(|(x, _)| (x, self.pointer.1));
-                palette.draw(grid, hover, &*self.measure, theme);
+                let screen = self.palette_screen();
+                palette.draw_on(grid, screen, hover, (&*self.measure, theme));
             }
             Overlay::Menu(menu) => menu.draw(grid, menu.pointer, theme),
             Overlay::Prompt(prompt) => self.draw_prompt(grid, prompt),
@@ -27413,14 +27588,19 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert_eq!(order(&app), [2, 1, 3]);
     }
 
-    /// The order's menu opens over the pane's cards, which are a menu's colour, so it stands a
-    /// step above them; the order in use has its check in a column of its own, every order's
-    /// words starting in one place. Written into the words, the check pushed them 8 px along.
+    /// The order's menu is every menu: dropped from its button, on the button's left edge and
+    /// 8 px under its foot, in a menu's colour. It opened 38 px under the button and 10 px
+    /// along, a step lighter than every other menu. The order in use has its check in a column
+    /// of its own, every order's words starting in one place. Written into the words, the check
+    /// pushed them 8 px along.
     #[test]
-    fn the_order_menu_stands_over_the_cards_with_its_check_in_a_column() {
+    fn the_order_menu_drops_from_its_button_with_its_check_in_a_column() {
         let (dir, mut app) = project();
         app.show_sidebar = false;
-        app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        let (row, line) = (50.0, 36.0);
+        app.set_measure(Rc::new(
+            cellix_render::FontMeasure::new(17, 50).with_type_row(36),
+        ));
         app.open(&dir.path().join("alpha.txt")).unwrap();
         let fields = r#""id":1,"file":"alpha.txt","line":1,"text":"a note","quote":"""#;
         app.threads = vec![serde_json::from_str(&format!("{{{fields}}}")).unwrap()];
@@ -27431,13 +27611,50 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         app.handle(mouse(MouseKind::Up, x + 1, y));
         assert!(matches!(app.overlay, Overlay::Menu(_)));
         let grid = screen(&app);
-        let lifted = app.theme.over_card().popup;
-        assert_ne!(lifted, app.theme.popup);
-        let over = grid
-            .paint
-            .iter()
-            .any(|p| matches!(p, Paint::Panel { fill: Some(f), shadow: true, .. } if *f == lifted));
-        assert!(over, "the menu a step above the card's colour");
+        let menu = grid.paint.iter().find_map(|p| match p {
+            Paint::Panel {
+                bounds,
+                fill: Some(f),
+                shadow: true,
+                ..
+            } => Some((*bounds, *f)),
+            _ => None,
+        });
+        let (menu, fill) = menu.expect("the menu's panel");
+        assert_eq!(fill, app.theme.popup, "a menu's colour, as every menu");
+        // The button: the chip behind its words, the first "Document order" painted.
+        let label = grid.paint.iter().find_map(|p| match p {
+            Paint::Text { text, x, y, .. } if text == "Document order" => Some((*x, *y)),
+            _ => None,
+        });
+        let (lx, ly) = label.expect("the button's words");
+        let unit = cellix_render::UNIT;
+        let chip = grid.paint.iter().find_map(|p| match p {
+            Paint::Panel {
+                bounds,
+                shadow: false,
+                ..
+            } if bounds.x <= lx
+                && bounds.x + bounds.w > lx
+                && bounds.y < ly + unit
+                && bounds.y + bounds.h > ly =>
+            {
+                Some(*bounds)
+            }
+            _ => None,
+        });
+        let chip = chip.expect("the button's chip");
+        let px = |units: i32| units as f32 * 17.0 / unit as f32;
+        assert!(
+            (px(menu.x) - px(chip.x)).abs() <= 1.0,
+            "on its left edge: the menu at {} px, the button at {}",
+            px(menu.x),
+            px(chip.x)
+        );
+        let (top, tall) = cellix_render::stood(chip.y, chip.h, row, line);
+        let (menu_top, _) = cellix_render::stood(menu.y, menu.h, row, line);
+        let gap = menu_top - (top + tall);
+        assert!((8.0..=9.5).contains(&gap), "{gap} px under the button");
         let starts = |words: &str| -> Vec<i32> {
             grid.paint
                 .iter()

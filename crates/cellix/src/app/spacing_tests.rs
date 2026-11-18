@@ -499,3 +499,133 @@ fn a_panels_grid_is_as_far_from_its_top_as_its_sides() {
     let fine = (top + 4.0) / ROW;
     assert_eq!(picker.size_at(area.x + 2, fine), Some((1, 1)));
 }
+
+/// The tip on screen, the last raised panel painted, as its left and right edges and its top
+/// and foot in pixels.
+fn tip_pixels(grid: &Grid) -> (f32, f32, f32, f32) {
+    let tip = grid.paint.iter().rev().find_map(|p| match p {
+        Paint::Panel {
+            bounds,
+            shadow: true,
+            ..
+        } => Some(*bounds),
+        _ => None,
+    });
+    let tip = tip.expect("a tip");
+    let (top, high) = tall(tip);
+    (px(tip.x), px(tip.x + tip.w), top, top + high)
+}
+
+/// Whether a tip with these edges stands `LINE_AIR` or more from a thing whose top and foot
+/// are `(top, foot)`, over it or under it.
+fn clear_over_or_under(tip: (f32, f32, f32, f32), (top, foot): (f32, f32)) -> bool {
+    tip.3 + measures::LINE_AIR <= top + 0.5 || tip.2 + 0.5 >= foot + measures::LINE_AIR
+}
+
+/// A tip under the views stands clear of the branch's chip on the heading under them: its
+/// foot stood on the heading's capitals, over the chip's top 8 px. Where there's no room
+/// between them it stands the other side of the chip.
+#[test]
+fn a_views_tip_never_covers_part_of_the_branchs_chip() {
+    let (_dir, mut app) = project((150, 40));
+    app.branch = Some("main".to_string());
+    assert!(app.views_on_top(), "the views across the sidebar's top");
+    let rail = app.activity_area();
+    let mut seen = 0;
+    for x in rail.x..rail.right() {
+        app.handle(mouse(MouseKind::Move, x, rail.y));
+        let grid = screen(&app);
+        let named = grid.paint.iter().any(|p| match p {
+            Paint::Text { text, .. } => text == "Source Control" || text == "Hide Sidebar",
+            _ => false,
+        });
+        if !named {
+            continue;
+        }
+        seen += 1;
+        let tip = tip_pixels(&grid);
+        let chip = grid.paint.iter().find_map(|p| match p {
+            Paint::Panel {
+                bounds,
+                fill: Some(_),
+                shadow: false,
+                ..
+            } if bounds.h < UNIT
+                && bounds.y >= i32::from(rail.bottom()) * UNIT
+                && bounds.y < i32::from(rail.bottom() + 2) * UNIT =>
+            {
+                Some(*bounds)
+            }
+            _ => None,
+        });
+        let chip = chip.expect("the branch's chip");
+        let (top, high) = tall(chip);
+        let beside = px(chip.x + chip.w) < tip.0 || px(chip.x) > tip.1;
+        assert!(
+            beside || clear_over_or_under(tip, (top, top + high)),
+            "the tip {tip:?} on the chip at {top}..{}",
+            top + high
+        );
+        // And 8 px or more under the views' line.
+        let line = row_top(rail.bottom()) + measures::line_pixels(&*app.measure);
+        assert!(
+            tip.2 - line >= 8.0 - 0.5,
+            "{} px under the line",
+            tip.2 - line
+        );
+    }
+    assert!(seen >= 2, "Source Control's tip and the sidebar button's");
+}
+
+/// Quit's tip, over the bar at the foot, ends 8 px or more from the line down the window's
+/// side, as every tip ends at it: it stood 7 px from the pane's.
+#[test]
+fn a_tip_at_the_windows_side_keeps_clear_of_the_sheets_line() {
+    let (_dir, mut app) = project((150, 40));
+    for pane in [false, true] {
+        if pane {
+            app.run(Command::ListAgents);
+        }
+        let quit = app.quit_button().expect("Quit");
+        app.handle(mouse(MouseKind::Move, quit.x, quit.y));
+        let grid = screen(&app);
+        let tip = tip_pixels(&grid);
+        let line = f32::from(app.size().0) * CELL - measures::line_pixels(&*app.measure);
+        assert!(
+            line - tip.1 >= measures::LINE_AIR - 0.5,
+            "pane {pane}: {} px from the side's line",
+            line - tip.1
+        );
+        app.handle(mouse(MouseKind::Move, 1, 20));
+    }
+}
+
+/// A tip under the strip of the pane's views, over a file with a minimap, keeps clear of the
+/// minimap's top: Browser's stood on it, its shadow over the map's first lines.
+#[test]
+fn a_tip_over_a_minimap_keeps_clear_of_its_top() {
+    let (dir, mut app) = project((150, 40));
+    let long: String = (0..300).map(|i| format!("let line_{i} = {i};\n")).collect();
+    let path = dir.path().join("long.rs");
+    fs::write(&path, long).unwrap();
+    app.open(&path).unwrap();
+    let actions = app.pane_actions();
+    let browser = actions.iter().find(|(.., name)| *name == "Browser");
+    let (cell, ..) = browser.expect("the Browser view's icon");
+    app.handle(mouse(MouseKind::Move, cell.x + cell.w / 2, cell.y));
+    let grid = screen(&app);
+    let map = grid
+        .paint
+        .iter()
+        .filter_map(|p| match p {
+            Paint::Strips { bounds, .. } => Some(tall(*bounds).0),
+            _ => None,
+        })
+        .fold(f32::INFINITY, f32::min);
+    assert!(map.is_finite(), "a minimap");
+    let tip = tip_pixels(&grid);
+    assert!(
+        tip.3 + measures::LINE_AIR <= map + 0.5 || tip.2 + 0.5 >= map + measures::LINE_AIR,
+        "the tip {tip:?}, the map's top at {map}"
+    );
+}

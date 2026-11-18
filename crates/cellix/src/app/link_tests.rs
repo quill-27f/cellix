@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use cellix_input::{Command, Event, Mods, MouseEvent, MouseKind};
-use cellix_render::Grid;
+use cellix_render::{Grid, Paint};
 use tempfile::TempDir;
 
 use super::{App, Overlay};
@@ -141,11 +141,20 @@ fn a_comments_link_has_open_and_copy_on_a_right_click() {
     let (x, y) = find(&screen(&app), "https://example.com/spec/a");
     right(&mut app, (x + 4, y));
     let rows = menu_rows(&app, &["Open Link", "Copy Link"]);
-    // Dropped from under the pointer's row, so the link stays in view, and a step above the
-    // card's colour, as every menu over a card is.
+    // Dropped from under the pointer's row, so the link stays in view, in a menu's colour as
+    // every menu is, over a card too.
     assert_eq!(rows, [Some(y + 1), Some(y + 2)], "{}", screen(&app).text());
-    let lifted = matches!(&app.overlay, Overlay::Menu(menu) if menu.over_card);
-    assert!(lifted, "over the card's colour");
+    let grid = screen(&app);
+    // The last raised panel painted, over the card's.
+    let menu = grid.paint.iter().rev().find_map(|p| match p {
+        Paint::Panel {
+            fill: Some(fill),
+            shadow: true,
+            ..
+        } => Some(*fill),
+        _ => None,
+    });
+    assert_eq!(menu, Some(app.theme.popup), "a menu's colour");
     assert!(
         screen(&app)
             .row_text(y)

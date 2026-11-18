@@ -263,6 +263,12 @@ pub struct Menu {
     rule_room: f32,
     /// How far down its first row its panel starts, where it opens under a line (`hang`).
     drop: f32,
+    /// How much of its last row its panel leaves under it: a submenu set level with the row
+    /// that opened it keeps the same air under its last row as over its first.
+    foot: f32,
+    /// How far into its first column its panel starts: a menu dropped from a button stands on
+    /// the button's left edge, which needn't be a column's.
+    shift: f32,
     /// Columns from the text edge to a row's words: an icon's, where any row has one.
     lead: f32,
     /// How wide each row's words are, for what comes after them.
@@ -274,9 +280,6 @@ pub struct Menu {
     open: Option<usize>,
     /// Where the button that opened it is, which stands lit while it's open.
     pub from: Option<(u16, u16)>,
-    /// It opens over a card, a menu's colour, so it stands a step above it
-    /// (`Theme::over_card`).
-    pub over_card: bool,
     /// Where the pointer is over it, its row with the fraction, while it's open. A menu takes
     /// the pointer, so nothing under it is lit by it: the app's own place for the pointer is
     /// cleared while one is open, and the menu keeps this one for itself.
@@ -332,13 +335,14 @@ impl Menu {
             pad,
             rule_room,
             drop: 0.0,
+            foot: 0.0,
+            shift: 0.0,
             lead,
             widths,
             selected: None,
             subs: Vec::new(),
             open: None,
             from: None,
-            over_card: false,
             pointer: None,
         };
         menu.subs = (0..menu.items.len())
@@ -363,9 +367,75 @@ impl Menu {
             screen.right().saturating_sub(width)
         };
         // Its first row level with the row that opened it, as the pointer leaves that row:
-        // its top as far above that as its own first row is below its top.
-        let top = (self.top_of(row) - self.pad).floor() as u16;
-        Some(Menu::new((x, top), items, measure, screen))
+        // its panel as far above that as every menu's first row is below its edge. On whole
+        // rows its first row stood up to a row over the one that opened it, 16 px for Format.
+        let first = self.top_of(row);
+        let edge = if self.fine { first - PADDING } else { first };
+        let top = edge.max(0.0).floor() as u16;
+        let mut sub = Menu::new((x, top), items, measure, screen);
+        if sub.area.y == top {
+            sub.level(edge - f32::from(top), measure, screen);
+        }
+        Some(sub)
+    }
+
+    /// Its panel starts `drop` down its first row and its rows `PADDING` under that, so its
+    /// first row is where `drop` puts it; what whole rows leave over stays under its last row,
+    /// off the panel, so the air round its rows is every menu's. Painted menus only.
+    fn level(&mut self, drop: f32, measure: &dyn Measure, screen: Rect) {
+        if !self.fine || drop <= 0.0 {
+            return;
+        }
+        let rules = self.items.iter().filter(|i| i.rule).count();
+        let need = self.items.len() as f32 + rules as f32 * RULE_ROOM + PADDING * 2.0 + drop;
+        let height = need.ceil() as u16;
+        if self.area.y + height > screen.bottom().saturating_sub(1) {
+            return;
+        }
+        self.area.h = height;
+        self.drop = drop;
+        self.foot = f32::from(height) - need;
+        self.pad = drop + PADDING;
+        self.rule_room = RULE_ROOM;
+        self.subs = (0..self.items.len())
+            .map(|row| self.place_submenu(row, measure, screen))
+            .collect();
+    }
+
+    /// Dropped from under a button whose left edge is at `left`, in columns with their
+    /// fraction, that leaves `clear` pixels of the menu's first row clear (`hang_under`): its
+    /// panel stands on the button's left edge, `LINE_AIR` under its foot. Where the screen
+    /// pushed it along, it keeps the column it has.
+    pub fn under(&mut self, left: f32, clear: f32, measure: &dyn Measure, screen: Rect) {
+        if !self.fine {
+            return;
+        }
+        let column = left.max(0.0).floor();
+        if f32::from(self.area.x) == column {
+            self.shift = left - column;
+        }
+        self.hang_under(measure, screen, clear);
+    }
+
+    /// Moves it `by` columns along, as far as the screen allows, its submenus with it.
+    pub fn move_along(&mut self, by: i16, measure: &dyn Measure, screen: Rect) {
+        let most = screen.right().saturating_sub(self.area.w);
+        let x =
+            (i32::from(self.area.x) + i32::from(by)).clamp(i32::from(screen.x), i32::from(most));
+        self.area.x = x as u16;
+        self.subs = (0..self.items.len())
+            .map(|row| self.place_submenu(row, measure, screen))
+            .collect();
+    }
+
+    /// Where its panel's edges are, in columns with their fractions.
+    pub fn edges(&self) -> (f32, f32) {
+        (self.left(), f32::from(self.area.right()))
+    }
+
+    /// The column its panel starts at, with its fraction.
+    fn left(&self) -> f32 {
+        f32::from(self.area.x) + self.shift
     }
 
     /// The submenu showing, if any.
@@ -653,22 +723,26 @@ impl Menu {
 
     /// `hover` is where the pointer is, its row with the fraction.
     pub fn draw(&self, grid: &mut Grid, hover: Option<(u16, f32)>, theme: &Theme) {
-        let lifted;
-        let theme = if self.over_card {
-            lifted = theme.over_card();
-            &lifted
-        } else {
-            theme
-        };
         let area = self.area;
         // Hung under a line, its first row's cells keep their ground, which shows over its
-        // panel's top: the words its first row holds would have lit them in its colour.
-        let behind: Vec<Rgb> = (area.x..area.right())
-            .filter(|_| self.drop > 0.0)
-            .map(|x| grid.cell(x, area.y).style.bg)
+        // panel's top: the words its first row holds would have lit them in its colour. So do
+        // its last row's where the panel stops short of it, and its first column's where the
+        // panel starts part way into it.
+        let last = area.bottom().saturating_sub(1);
+        let behind: Vec<(u16, u16, Rgb)> = (area.y..area.bottom())
+            .flat_map(|y| (area.x..area.right()).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                (self.drop > 0.0 && y == area.y)
+                    || (self.foot > 0.0 && y == last)
+                    || (self.shift > 0.0 && x == area.x)
+            })
+            .filter(|&(x, y)| x < grid.width() && y < grid.height())
+            .map(|(x, y)| (x, y, grid.cell(x, y).style.bg))
             .collect();
-        if self.fine && self.drop > 0.0 {
-            hung(grid, area, self.drop, theme);
+        let left = self.left();
+        let width = f32::from(area.w) - self.shift;
+        if self.fine && (self.drop > 0.0 || self.foot > 0.0 || self.shift > 0.0) {
+            hung(grid, area, (self.drop, self.foot, self.shift), theme);
         } else if self.fine {
             // On its rows, covering each it touches whole: nothing reaches past its edges.
             popup(grid, area, theme);
@@ -694,7 +768,7 @@ impl Menu {
                 break;
             }
             if item.rule {
-                let across = area.w as f32 - INSET * 2.0;
+                let across = width - INSET * 2.0;
                 // In the middle of its own room, painted or a blank row in cells.
                 let above = if self.fine {
                     self.rule_room / 2.0
@@ -703,7 +777,7 @@ impl Menu {
                 } else {
                     0.0
                 };
-                let rule = Bounds::cells(area.x as f32 + INSET, top - above, across, 0.0);
+                let rule = Bounds::cells(left + INSET, top - above, across, 0.0);
                 grid.hairline(rule, theme.popup_border);
             }
             let usable = item.action.is_some();
@@ -717,9 +791,9 @@ impl Menu {
                     theme.popup_hover
                 };
                 let band = Bounds::cells(
-                    area.x as f32 + BAND_INSET,
+                    left + BAND_INSET,
                     top + (1.0 - BAND_HEIGHT) / 2.0,
-                    area.w as f32 - BAND_INSET * 2.0,
+                    width - BAND_INSET * 2.0,
                     BAND_HEIGHT,
                 );
                 grid.panel(band, 18, Some(fill), None);
@@ -736,7 +810,7 @@ impl Menu {
                 (false, true) => unavailable,
                 (false, false) => greyed,
             };
-            let x = area.x as f32 + INSET;
+            let x = left + INSET;
             if item.heading {
                 // A section's heading: small, bold, quiet capitals, from the text edge.
                 let heading = Style {
@@ -814,8 +888,8 @@ impl Menu {
                 words(grid, (right as f32, top), "›", shown, (right, 100, true));
             }
         }
-        for (x, bg) in (area.x..).zip(behind) {
-            grid.set_style(Rect::new(x, area.y, 1, 1), |style| Style { bg, ..style });
+        for (x, y, bg) in behind {
+            grid.set_style(Rect::new(x, y, 1, 1), |style| Style { bg, ..style });
         }
         if let Some(child) = self.child() {
             child.draw(grid, hover, theme);
@@ -823,28 +897,35 @@ impl Menu {
     }
 }
 
-/// A menu's panel that starts `drop` down its first row, under a line: the rows under that
-/// are its own, and the first keeps what's behind it over the panel's top.
-fn hung(grid: &mut Grid, area: Rect, drop: f32, theme: &Theme) {
+/// A menu's panel that starts `drop` down its first row, under a line, stops `foot` short of
+/// its last row's end and starts `shift` into its first column: the rows between are its
+/// own, and the cells it only partly covers keep what's behind them (`Menu::draw`).
+fn hung(grid: &mut Grid, area: Rect, (drop, foot, shift): (f32, f32, f32), theme: &Theme) {
     let base = Style {
         fg: theme.text.fg,
         bg: theme.popup,
         ..theme.bar
     };
-    for y in area.y + 1..area.bottom() {
-        // The last row's corner cells keep what's behind them, under the round corners.
-        let (x, w) = if y + 1 == area.bottom() {
-            (area.x + 1, area.w.saturating_sub(2))
+    // The rows and the column it only partly covers aren't filled.
+    let first = area.y + u16::from(drop > 0.0);
+    let end = area.bottom() - u16::from(foot > 0.0);
+    let from = area.x + u16::from(shift > 0.0);
+    for y in first..end {
+        // Its first and last rows' corner cells keep what's behind them, under the round
+        // corners.
+        let corner = y + 1 == area.bottom() || y == area.y;
+        let (x, w) = if corner {
+            (from + 1, area.right().saturating_sub(from + 2))
         } else {
-            (area.x, area.w)
+            (from, area.right().saturating_sub(from))
         };
         grid.fill(Rect::new(x, y, w, 1), base);
     }
     let bounds = Bounds::cells(
-        f32::from(area.x),
+        f32::from(area.x) + shift,
         f32::from(area.y) + drop,
-        f32::from(area.w),
-        f32::from(area.h) - drop,
+        f32::from(area.w) - shift,
+        f32::from(area.h) - drop - foot,
     );
     grid.popup(bounds, 28, theme.popup, theme.popup_border);
 }
@@ -1217,6 +1298,63 @@ mod tests {
                 "one that can be picked"
             );
         }
+    }
+
+    /// A submenu's first row is level with the row that opened it, with every menu's air over
+    /// its first row and under its last: on whole rows, Format's first row stood 16 px over
+    /// Format.
+    #[test]
+    fn a_submenus_first_row_is_level_with_the_row_that_opened_it() {
+        let measure = cellix_render::FontMeasure::new(17, 50).with_type_row(36);
+        let format = vec![
+            Item::run("Bold", Command::Cut),
+            Item::run("Italic", Command::Copy),
+            Item::run("Plain Text", Command::Paste).after_rule(),
+        ];
+        let items = vec![
+            Item::run("Show Source", Command::Cut),
+            Item::run("Cut", Command::Cut).after_rule(),
+            Item::run("Copy", Command::Copy),
+            Item::run("Paste", Command::Paste),
+            Item::submenu("Format", format).after_rule(),
+            Item::run("Insert", Command::Cut),
+            Item::run("Add Comment", Command::Cut).after_rule(),
+        ];
+        let mut menu = Menu::new((1, 1), items, &measure, SCREEN);
+        menu.open_submenu(4);
+        let child = menu.child().expect("Format's rows");
+        let level = child.top_of(0) - menu.top_of(4);
+        assert!(level.abs() < 0.02, "{} px off", level * 50.0);
+        let edge = f32::from(child.area.y) + child.drop;
+        assert!(
+            (child.top_of(0) - edge - PADDING).abs() < 0.001,
+            "its air over"
+        );
+        let foot = f32::from(child.area.bottom()) - child.foot;
+        let under = foot - (child.top_of(2) + 1.0);
+        assert!(
+            (under - PADDING).abs() < 0.001,
+            "{under} rows under its last"
+        );
+        // Painted from there, over the cells it only partly covers.
+        let mut grid = Grid::new(SCREEN.w, SCREEN.h, Style::default());
+        menu.draw(&mut grid, None, &Theme::default());
+        let panel = grid.paint.iter().rev().find_map(|p| match p {
+            Paint::Panel {
+                bounds,
+                shadow: true,
+                ..
+            } => Some(*bounds),
+            _ => None,
+        });
+        let panel = panel.expect("the submenu's panel");
+        assert_eq!(panel.y, units(edge));
+        assert_eq!(panel.y + panel.h, units(foot));
+        // On cells, where there are no fractions of a row, it stays on its rows.
+        let mut plain = Menu::new((1, 1), menu.items.clone(), &CellMeasure, SCREEN);
+        plain.open_submenu(4);
+        let child = plain.child().expect("Format's rows");
+        assert_eq!(child.top_of(0), plain.top_of(4));
     }
 
     #[test]

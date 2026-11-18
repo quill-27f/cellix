@@ -1389,6 +1389,7 @@ impl Palette {
     }
 
     /// `hover` is where the pointer is, its row with the fraction.
+    #[cfg(test)]
     pub fn draw(
         &self,
         grid: &mut Grid,
@@ -1397,6 +1398,18 @@ impl Palette {
         theme: &Theme,
     ) {
         let screen = grid.area();
+        self.draw_on(grid, screen, hover, (measure, theme));
+    }
+
+    /// Drawn centred on `screen`, which may be the window's moved along a column to keep the
+    /// palette's edges off a sheet's line.
+    pub fn draw_on(
+        &self,
+        grid: &mut Grid,
+        screen: Rect,
+        hover: Option<(u16, f32)>,
+        (measure, theme): (&dyn Measure, &Theme),
+    ) {
         let area = self.shown(screen);
         raised(grid, area, theme);
         let fine = !measure.in_cells();

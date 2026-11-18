@@ -48,12 +48,9 @@ impl App {
     }
 
     /// A link's menu, dropping from under the row at `(x, y)`, the pointer's. Over a card, as
-    /// a comment's or peek's, it stands a step above the card's colour, as the order's does.
-    pub(super) fn show_link_menu(&mut self, (x, y): (u16, u16), items: Vec<MenuItem>, card: bool) {
+    /// a comment's or peek's, it's every menu's colour, its line and shadow setting it off.
+    pub(super) fn show_link_menu(&mut self, (x, y): (u16, u16), items: Vec<MenuItem>) {
         self.show_menu((x, y + 1), items);
-        if let Overlay::Menu(menu) = &mut self.overlay {
-            menu.over_card = card;
-        }
     }
 
     /// A menu that already had `rest` starts with the link's two rows, a rule between.
@@ -117,7 +114,7 @@ impl App {
         };
         if let Some(linked) = self.comment_linked(id, index) {
             let items = self.link_items(linked);
-            self.show_link_menu((at.0, at.1), items, true);
+            self.show_link_menu((at.0, at.1), items);
         }
     }
 
@@ -145,8 +142,7 @@ impl App {
             return false;
         };
         let items = self.link_items(linked);
-        let card = self.peek.is_some();
-        self.show_link_menu(at, items, card);
+        self.show_link_menu(at, items);
         true
     }
 

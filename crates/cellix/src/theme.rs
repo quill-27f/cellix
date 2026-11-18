@@ -515,41 +515,6 @@ impl Theme {
         }
     }
 
-    /// The theme a menu is drawn in where it opens over a card, which is a menu's colour: dark,
-    /// the menu and what's on it a step up, white at 11% over it, so it stands above the card
-    /// and above what's set on a card in a quiet button's fill, an agent's answer (they were one
-    /// colour, the menu's edge the only line between them; at 5.5% the menu was darker than an
-    /// answer under it). Light, as it is: a white menu over a white card has its line and its
-    /// shadow.
-    pub fn over_card(&self) -> Self {
-        if self.is_light() {
-            return *self;
-        }
-        let raised = mix(self.popup, Rgb(255, 255, 255), 0.11);
-        let by = (
-            i16::from(raised.0) - i16::from(self.popup.0),
-            i16::from(raised.1) - i16::from(self.popup.1),
-            i16::from(raised.2) - i16::from(self.popup.2),
-        );
-        let mut theme = *self;
-        theme.popup = raised;
-        for color in [
-            &mut theme.popup_hover,
-            &mut theme.pick,
-            &mut theme.popup_border,
-        ] {
-            *color = shifted(*color, by);
-        }
-        // Its quiet words, brought toward the words' own colour until they read as well as on a
-        // menu's own colour.
-        let wanted = contrast(self.popup_dim, self.popup);
-        theme.popup_dim = (0..=20)
-            .map(|step| mix(self.popup_dim, self.text.fg, step as f32 / 20.0))
-            .find(|lifted| contrast(*lifted, raised) >= wanted)
-            .unwrap_or(self.text.fg);
-        theme
-    }
-
     /// Every button that isn't the main one, wherever it stands: the quiet fill over what's
     /// behind it, and a second step off that under the pointer, so the hover always shows.
     /// A pointed one took the menu's hover in places, which is darker than the quiet fill on a
@@ -1185,8 +1150,9 @@ mod tests {
 
     /// A text box without the keyboard shows where it is on any ground: its line reads at 1.8 to
     /// 1 or better on the frame, a sheet and a menu, where a menu's line was 1.69 on the frame
-    /// and the sunk fill 1.03, and an empty Replace box all but went. A menu that opens over a
-    /// card, a menu's colour, stands a step above it, and its hover and pick go up with it.
+    /// and the sunk fill 1.03, and an empty Replace box all but went. A menu is one colour
+    /// wherever it opens, over a card of a menu's colour too, where its line sets it off as
+    /// it does in the light theme; a step lighter, it was the one menu unlike the others.
     #[test]
     fn a_box_and_a_menu_over_a_card_stand_off_their_ground() {
         let dark = Theme::default();
@@ -1201,31 +1167,10 @@ mod tests {
         let light = Theme::named(Some("light"));
         let ratio = contrast(light.field_line(), light.popup);
         assert!(ratio >= 1.8, "light, on a menu {ratio:.2} to 1");
-        let over = dark.over_card();
-        let ratio = contrast(over.popup, dark.popup);
-        assert!(
-            ratio >= 1.15,
-            "a menu over a card is {ratio:.2} to 1 off it"
-        );
-        // And above what's set on a card in a quiet button's fill, as an agent's answer is.
-        let answer = dark.quiet_button(dark.popup);
-        assert!(
-            brightness(over.popup) > brightness(answer),
-            "{:?} over {answer:?}",
-            over.popup
-        );
-        for (name, now, was) in [
-            ("its hover", over.popup_hover, dark.popup_hover),
-            ("its pick", over.pick, dark.pick),
-            ("its line", over.popup_border, dark.popup_border),
-        ] {
-            assert!(brightness(now) > brightness(was), "{name} goes up with it");
+        for theme in [dark, light] {
+            let ratio = contrast(theme.popup_border, theme.popup);
+            assert!(ratio >= 1.25, "a menu's line on a card is {ratio:.2} to 1");
         }
-        assert!(
-            contrast(over.popup_dim, over.popup) >= 4.5,
-            "its quiet words still read"
-        );
-        assert_eq!(light.over_card().popup, light.popup, "light keeps white");
     }
 
     /// Every action that isn't the main one is one quiet kind of button, on the frame, a sheet,
