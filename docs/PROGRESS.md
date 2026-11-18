@@ -3419,3 +3419,10 @@ The docflow track, the second of the bigger items.
 
 - In a window under 80 columns (as Claude Code docks Cellix) or with the pane stacked under the file, a card is short until it's lit: header and pills, what it's about, two rows of its words with "…" where there's more, and "2 replies" in place of its answers. Its buttons keep their row and stand while the pointer is on the card, so nothing moves under the pointer; a click on it, or on its words in the file, lights it and shows it whole, with what it waits on. Wide panes keep every card whole.
 - Test: `a_narrow_panes_cards_are_short_until_one_is_lit`.
+
+## Send what's waiting, from the pane (2026-11-18)
+
+The docflow track, the third of the bigger items.
+
+- Under Check my review, ending where it does, a quiet "Send 3 to Claude Code" sends everything no agent has had in one message, by Send Comments to Agent's road: the review's comments on code and the threads waiting, which are then told. It shows only where there's an agent to send to now (one in the side pane, or the Claude Code Cellix is a pane of), and goes once all has gone. Check my review stays the pane's one filled button.
+- Test: `the_pane_sends_whats_waiting_in_one_message`.

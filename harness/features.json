@@ -6382,5 +6382,12 @@
     "title": "In a narrow pane cards are short until lit, with their buttons while pointed at",
     "test": "a_narrow_panes_cards_are_short_until_one_is_lit",
     "passes": true
+  },
+  {
+    "id": "send-waiting",
+    "milestone": 15,
+    "title": "Send N to the agent, under Check my review, sends every waiting comment in one message",
+    "test": "the_pane_sends_whats_waiting_in_one_message",
+    "passes": true
   }
 ]

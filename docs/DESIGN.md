@@ -786,6 +786,10 @@ the next one's prompt. Once it has gone, "Waiting for Claude Code…" names the 
 the one in front of the pane, which is the one sent to, where it named the first agent there.
 Check my review asks for a verdict on each comment, so each counts as told and the hook doesn't
 add them to that prompt again. A suggestion kept is the person's comment, and goes as theirs do.
+Under Check my review, ending where it does, a quiet "Send 3 to Claude Code" sends what Send
+Comments to Agent sends, as GitHub's Finish review does, where there's an agent to send it to now:
+in the side pane, or the Claude Code Cellix is a pane of. It counts the review's comments and the
+threads no agent has had, and goes once they've gone.
 
 A comment is about all of what was selected, over as many lines as it took: its quote is the
 whole selection, found again across line breaks and runs of spaces (`threads::span_from`), so

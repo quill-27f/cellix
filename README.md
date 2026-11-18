@@ -326,7 +326,8 @@ kept in `.cellix/threads.json`. Ask Agent sends yours to the agent with its file
 agent answers with `cellix reply <id> "text"`, and the answer lands under your question. A comment
 not sent yet says on its card how it gets there: with your next prompt to Claude Code, Codex or
 Gemini CLI, whose hooks hand it over, or now with Ask agent. **Send Comments to Agent** sends
-everything waiting, on code and on pages, in one message. Each comment and answer says how long ago
+everything waiting, on code and on pages, in one message, as does **Send 3 to Claude Code** under
+Check my review. Each comment and answer says how long ago
 it was written, and a suggestion can be answered with **Reply** without keeping it. A comment is
 about all you selected, across lines; when an agent rewords those words the card keeps what you
 commented on and says *Changed since your comment*, and a click on that shows the change word by

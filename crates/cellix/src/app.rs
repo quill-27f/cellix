@@ -11651,6 +11651,7 @@ impl App {
             goes: self.comment_agent().1,
             unsent: Some(&self.comment_unsent),
             kind: self.comment_kind,
+            send: self.sendable(),
             changes: self.comment_changes,
             compact: self.comments_compact(),
             now: cellix_review::threads::now(),
@@ -11689,6 +11690,18 @@ impl App {
     /// Claude Code docks Cellix in, or stacked under the file.
     fn comments_compact(&self) -> bool {
         self.docked() || self.dock_under()
+    }
+
+    /// How many comments no agent has had, where there's one here to send them to now: the
+    /// review's comments on code and the threads waiting, which Send sends in one message.
+    fn sendable(&self) -> Option<usize> {
+        let (_, goes) = self.comment_agent();
+        if !matches!(goes, threads::Goes::Prompt | threads::Goes::Ask) {
+            return None;
+        }
+        let review = self.comments.lock().map_or(0, |c| c.len());
+        let threads = self.threads.iter().filter(|t| t.waiting()).count();
+        Some(review + threads).filter(|n| *n > 0)
     }
 
     /// The comments on code whose words wait among the review's, so no agent has had them.
@@ -12226,6 +12239,7 @@ impl App {
                 }
             }
             ThreadHit::Check => self.check_review(),
+            ThreadHit::SendAll => self.send_to_agent(),
             // A web address, or a picture's name where the picture itself can't stand on the
             // card.
             ThreadHit::Link(id, index) => {

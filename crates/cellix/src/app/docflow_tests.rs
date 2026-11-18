@@ -770,3 +770,28 @@ fn a_narrow_panes_cards_are_short_until_one_is_lit() {
     assert!(text.contains("It saves a read"), "{text}");
     assert!(!text.contains("2 replies"), "{text}");
 }
+
+/// Under Check my review, "Send 2 to Claude Code" sends what waits, every comment no agent
+/// has had, in one message, as GitHub's Finish review does, and goes once it's sent. With no
+/// agent here to send to, it isn't offered.
+#[test]
+fn the_pane_sends_whats_waiting_in_one_message() {
+    let (dir, mut app) = page("The cache goes first.\n\nThe tests run last.\n");
+    comment(&mut app, "cache", "Why first?");
+    comment(&mut app, "tests", "Which ones?");
+    let text = screen(&app).text();
+    assert!(
+        text.contains("Check my review") && !text.contains("Send 2"),
+        "nobody to send to: {text}"
+    );
+    stand_in(&mut app, "Claude Code", "heard.txt");
+    app.dock.show_comments();
+    press(&mut app, "Send 2 to Claude Code");
+    let said = heard(&mut app, &dir.path().join("heard.txt"), "Which ones?");
+    assert!(said.contains("Why first?"), "{said}");
+    assert_eq!(said.lines().count(), 1, "one message: {said}");
+    assert!(app.threads.iter().all(|t| !t.waiting()));
+    let text = screen(&app).text();
+    assert!(!text.contains("Send 2"), "{text}");
+    assert!(text.contains("Waiting for Claude Code"), "{text}");
+}

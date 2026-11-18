@@ -91,6 +91,8 @@ pub enum Hit {
     Resolve(u32),
     /// Asks the agent to check the review and suggest more.
     Check,
+    /// Sends every comment no agent has had to the agent, in one message.
+    SendAll,
     /// Takes an agent's suggestion as the reviewer's own, or drops it.
     Keep(u32),
     Dismiss(u32),
@@ -163,6 +165,8 @@ enum Line {
     /// reviewer's and how many the agent's, and how many files they're on when the list
     /// covers every file.
     Check(usize, usize, usize),
+    /// Under Check my review: the button that sends the comments no agent has had, how many.
+    Deliver(usize),
     /// The heading over a file's comments, when the list covers every file: a comment on it
     /// for a click to open it by, none for a terminal's output, then its name and how many.
     File(Option<u32>, String, usize),
@@ -856,6 +860,8 @@ pub struct View<'a> {
     pub goes: Goes,
     /// The only kind listed, from a press on its pill.
     pub kind: Option<&'static str>,
+    /// How many comments no agent has had, where there's an agent to send them to now.
+    pub send: Option<usize>,
     /// The comment whose card shows how its words changed since it was made.
     pub changes: Option<u32>,
     /// The pane is narrow, so a card is short until it's lit: who and when, what it's about,
@@ -929,6 +935,7 @@ fn mark((threads, draft, agent, resolved, view): Shown, width: f32, measure: &dy
     )
         .hash(&mut hasher);
     (view.changes, view.compact).hash(&mut hasher);
+    view.send.hash(&mut hasher);
     // How long ago says something new each minute, where any comment says when it was made.
     let dated = threads
         .iter()
@@ -980,6 +987,7 @@ impl Default for View<'_> {
             kind: None,
             changes: None,
             compact: false,
+            send: None,
             now: 0,
             quick: Some(crate::emoji::QUICK),
             pictures: None,
@@ -1463,6 +1471,9 @@ fn lay_out(
         places.dedup();
         let files = if grouped { places.len() } else { 0 };
         out.push(Line::Check(mine, open.len() - mine, files));
+        if let Some(waiting) = view.send.filter(|n| *n > 0) {
+            out.push(Line::Deliver(waiting));
+        }
         // The reviewer's own: a suggestion not yet kept covers nothing, and was counted.
         let count = |kind: &str| {
             let mine = |t: &&&Thread| t.kind == kind && t.suggested_by.is_empty();
@@ -1867,6 +1878,21 @@ fn settle_row(area: Rect, measure: &dyn Measure) -> Vec<(&'static str, String, u
         .collect()
 }
 
+/// What the button that sends what waits says: how many, and to whom.
+fn deliver_label(count: usize, agent: &str) -> String {
+    format!("Send {count} to {agent}")
+}
+
+/// That button, under Check my review and ending where it does, as (padded cells, start
+/// column): the two the pane's actions, one over the other.
+fn deliver_button(area: Rect, count: usize, agent: &str, measure: &dyn Measure) -> (String, u16) {
+    let cells = button_cells(&deliver_label(count, agent), measure);
+    let width = cells.chars().count() as u16;
+    let (check, x) = check_button(area, measure);
+    let end = x + check.chars().count() as u16;
+    (cells, end.saturating_sub(width).max(head(area, measure)))
+}
+
 /// Check my review, at the right of its row, as (padded cells, start column). In pixels it
 /// has room for the agent's icon before its words.
 fn check_button(area: Rect, measure: &dyn Measure) -> (String, u16) {
@@ -2019,6 +2045,10 @@ pub fn hit(
                 _ => Some(Hit::NextSuggestion),
             }
         }
+        Line::Deliver(count) => {
+            let (cells, at) = deliver_button(area, *count, shown.2, measure);
+            (x >= at && x < at + cells.chars().count() as u16).then_some(Hit::SendAll)
+        }
         Line::Sort(addressed) => {
             if let Some((cells, at)) = resolve_all(area, *addressed, measure)
                 && x >= at
@@ -2163,6 +2193,7 @@ pub fn draw(
     let width = area.w.saturating_sub(SIDE * 2 + 2) as f32;
     let threads = shown.0;
     let shown_draft = shown.1;
+    let shown_agent = shown.2;
     let view = shown.4;
     let all = lines(shown, width, measure);
     let top = top.min(last_of(all.len(), area.h));
@@ -2749,6 +2780,23 @@ pub fn draw(
                     };
                     grid.button(x, y, &cells, label, fill, style);
                 }
+            }
+            Line::Deliver(count) => {
+                // Quiet: Check my review is the pane's filled button. As high in its row as
+                // that one is in its own, so the pills under it keep the same air.
+                let from = grid.painted_so_far();
+                let (cells, x) = deliver_button(area, *count, shown_agent, measure);
+                let width = cells.chars().count() as u16;
+                let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
+                let fill = theme.secondary(body.bg, on_it);
+                let style = Style {
+                    bg: fill,
+                    fg: theme.text.fg,
+                    ..body
+                };
+                let label = deliver_label(*count, shown_agent);
+                grid.button(x, y, &cells, &label, fill, style);
+                grid.lift_since(from, CHECK_LIFT);
             }
             Line::Coverage(kinds) => {
                 // A pill for each kind: filled where there are comments of it, and only
