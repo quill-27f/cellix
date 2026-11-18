@@ -554,6 +554,12 @@ while the pointer is on it, in a row it keeps, so nothing moves as the pointer c
 by a click on it or on its words in the file, it's whole, with what it waits on. A wide pane keeps
 every card whole, which read better there in the tour's pictures.
 
+A comment's kind is picked as it's written: under the hint stand the five kinds, a chip each,
+outlined and quiet as a coverage pill with none is, the one picked in the accent's colours as a
+kind listed alone is, and a press on it again takes it back. Changing a comment starts from its
+kind. A reply has none, since it's about its comment. Until 18 November 2026 a kind came only from
+an agent's verdict.
+
 A web address in a comment's words or a reply's (`http://` or `https://`, up to the next space,
 without the full stop or bracket that ends its sentence) is drawn in the accent and underlined,
 on every row it wraps onto, and a click on it opens it the way Open in Browser opens a page: the

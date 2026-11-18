@@ -146,6 +146,13 @@ EXPECT = {
     "50-comment-picture-light": "yours",
     "50-comment-link-menu": "Copy Link",
     "50-plan-versions": "yours",
+    "57-flow-dock": "Addressed",
+    "50-flow-next": "Comment 2 of",
+    "50-flow-changes": "Changed since",
+    "50-flow-kind": "Evidence 1",
+    "50-flow-cards-light": "Addressed by",
+    "50-flow-cards": "Addressed by",
+    "50-flow-chips": "Reproducibility",
     "50-plan-versions-narrow": "yours",
     "50-review": "suggested",
     "50-review-resolved": "Hide 1",
@@ -1568,6 +1575,54 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("50-plan-versions", comments, "docs/PLAN.md", size="150x44")
     # Narrow beside the editor: a pill that can't share its header's row goes under it.
     shoot("50-plan-versions-narrow", comments, "docs/PLAN.md", size="96x44")
+    # A comment being written, its kind picked from the chips under the hint.
+    if os.path.exists(f"{ROOT}/.cellix/threads.json"):
+        os.unlink(f"{ROOT}/.cellix/threads.json")
+    chips = [["wait", 3.0], ["click", 90, 5], ["wait", 1.5], *command("add comment", F1),
+             ["until", "Enter sends"], ["keys", "Only with softmax weights"], ["wait", 0.6],
+             ["click", *ON("Evidence")], ["wait", 0.6]]
+    shoot("50-flow-chips", chips, NOTE_FILE, size="150x44")
+    # How a comment goes, on one page: one waiting to reach an agent, saying how; one an agent
+    # says it addressed, with Resolve and Not done; one on words reworded since, which keeps
+    # what it was made on; and a suggestion to keep, ask about or dismiss. Each says how long
+    # ago it was written, where that's known.
+    now = int(time.time())
+    flow = [
+        {"id": 1, "file": NOTE_FILE, "line": 3, "quote": "the weights sum to one",
+         "text": "Is this true for multi-head attention?", "replies": [], "resolved": False,
+         "kind": "Clarity", "suggested_by": "", "at": now - 300},
+        {"id": 2, "file": NOTE_FILE, "line": 3, "quote": "for inputs of $n$ tokens",
+         "text": "Say how large n gets in the experiments.",
+         "replies": [{"author": "Claude", "text": "Addressed: the sizes are in the table now.",
+                      "at": now - 120}],
+         "resolved": False, "told": 0, "kind": "Evidence", "suggested_by": "", "at": now - 7200},
+        {"id": 3, "file": NOTE_FILE, "line": 3, "quote": "and the weights add to one, for inputs",
+         "text": "Always exactly one?", "replies": [], "resolved": False, "told": 0,
+         "kind": "Correctness", "suggested_by": "", "at": now - 90000},
+        {"id": 4, "file": NOTE_FILE, "line": 7, "quote": "a softmax over similarity scores",
+         "text": "Say which similarity: dot product, scaled.", "replies": [], "resolved": False,
+         "told": 0, "kind": "Clarity", "suggested_by": "Claude", "at": now - 60},
+    ]
+    with open(f"{ROOT}/.cellix/threads.json", "w") as f:
+        json.dump(flow, f)
+    flowing = [["wait", 1.0], *command("show comments", F1), ["until", "Addressed by"], ["wait", 1.0]]
+    shoot("50-flow-cards", flowing, NOTE_FILE, size="150x44")
+    shoot("50-flow-cards-light", flowing, NOTE_FILE, size="150x44", background="eff1f5")
+    # A press on a kind's pill lists that kind alone; its pill is the accent's.
+    shoot("50-flow-kind", [*flowing, ["click", *ON("Evidence 1")], ["gone", "Always exactly"],
+                           ["wait", 0.6]], NOTE_FILE, size="150x44")
+    # The pill on the reworded one opens what changed since, word by word.
+    shoot("50-flow-changes", [*flowing, ["click", *ON("Changed since", 2)], ["wait", 0.8]],
+          NOTE_FILE, size="150x44")
+    # Next Comment from the palette: the second in the document's order, its words selected
+    # and its card lit, and the bar says which of how many.
+    shoot("50-flow-next", [*flowing, *command("next comment", F1), ["until", "Comment 1 of"],
+                           *command("next comment", F1), ["until", "Comment 2 of"], ["wait", 0.6]],
+          NOTE_FILE, size="150x44")
+    # Narrow, as Claude Code docks it, where cards are short until one is lit.
+    shoot("57-flow-dock", flowing, NOTE_FILE, size="64x40")
+    with open(f"{ROOT}/.cellix/threads.json", "w") as f:
+        json.dump(review, f)
     # Every comment on the file settled: the pane says none is open, says how one is made and
     # offers the settled ones, each on a row of its own. Then with them shown, under those rows.
     settled = [dict(thread, resolved=True) for thread in review

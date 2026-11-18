@@ -123,7 +123,8 @@ words and Comment as you go, then press **Check my review** in the Comments pane
   their kind, to **Keep** as your own or **Dismiss**.
 - **Coverage you can see.** A strip counts your comments by kind (Clarity, Correctness, Evidence,
   Structure, Reproducibility), and a kind with none stands out, so the review isn't only about
-  wording. Click a kind to list only its comments.
+  wording. Click a kind to list only its comments, and pick a comment's kind from the chips
+  under it as you write it.
 - **The words stay yours.** The agent never edits the document while it reviews; it only comments,
   through `cellix reply` and `cellix suggest`, which any agent can call.
 - **A comment at a glance.** With the Comments pane shut, rest the pointer on commented words to

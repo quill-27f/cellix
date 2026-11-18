@@ -5059,6 +5059,7 @@ impl App {
                         }
                     }
                     thread.text = text;
+                    thread.kind = draft.kind;
                 }
                 self.save_threads();
                 return;
@@ -5099,7 +5100,7 @@ impl App {
                     resolved: false,
                     told: draft.code.then_some(0),
                     asked: false,
-                    kind: String::new(),
+                    kind: draft.kind,
                     suggested_by: String::new(),
                     copy: (0, 0),
                     earlier: None,
@@ -5446,6 +5447,7 @@ impl App {
                 places,
             }),
             editing: false,
+            kind: String::new(),
         });
     }
 
@@ -5512,6 +5514,7 @@ impl App {
             code: true,
             about: Some(About::Problem { message }),
             editing: false,
+            kind: String::new(),
         });
     }
 
@@ -5670,6 +5673,7 @@ impl App {
             code: false,
             about: None,
             editing: false,
+            kind: String::new(),
         });
     }
 
@@ -5779,6 +5783,7 @@ impl App {
             code: false,
             about: None,
             editing: false,
+            kind: String::new(),
         });
     }
 
@@ -12195,6 +12200,7 @@ impl App {
                     code: false,
                     about: None,
                     editing: false,
+                    kind: String::new(),
                 });
             }
             ThreadHit::Ask(id) => {
@@ -12349,6 +12355,7 @@ impl App {
                     code: false,
                     about: None,
                     editing: false,
+                    kind: String::new(),
                 });
             }
             ThreadHit::ResolveAddressed => {
@@ -12366,6 +12373,15 @@ impl App {
             ThreadHit::Changes(id) => {
                 self.comment_changes = (self.comment_changes != Some(id)).then_some(id);
             }
+            ThreadHit::DraftKind(kind) => {
+                if let Some(draft) = &mut self.dock.draft {
+                    draft.kind = if draft.kind == kind {
+                        String::new()
+                    } else {
+                        kind.to_string()
+                    };
+                }
+            }
             ThreadHit::Kind(kind) => {
                 self.comment_kind = (self.comment_kind != Some(kind)).then_some(kind);
             }
@@ -12374,6 +12390,7 @@ impl App {
                     return;
                 };
                 let text = thread.text.clone();
+                let kind = thread.kind.clone();
                 self.dock.draft = Some(Draft {
                     thread: Some(id),
                     file: String::new(),
@@ -12386,6 +12403,7 @@ impl App {
                     code: false,
                     about: None,
                     editing: true,
+                    kind,
                 });
             }
             ThreadHit::Delete(id) => {
@@ -12610,6 +12628,7 @@ impl App {
                     code,
                     about: None,
                     editing: false,
+                    kind: String::new(),
                 });
                 return;
             }
@@ -27208,7 +27227,10 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let Overlay::Emoji(picker) = &app.overlay else {
             unreachable!()
         };
-        let send = hint + 1;
+        // The kinds' chips stand between the hint and those buttons.
+        let send = (hint + 1..grid.height())
+            .find(|y| grid.row_text(*y).contains("Cancel"))
+            .expect("the buttons that send or drop it");
         assert!(
             grid.row_text(send).contains("Comment"),
             "{}",

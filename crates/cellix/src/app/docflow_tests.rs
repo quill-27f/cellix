@@ -795,3 +795,56 @@ fn the_pane_sends_whats_waiting_in_one_message() {
     assert!(!text.contains("Send 2"), "{text}");
     assert!(text.contains("Waiting for Claude Code"), "{text}");
 }
+
+/// Presses `kind`'s chip under the comment being written: on a row of chips, which, unlike the
+/// coverage strip's pills, has no counts.
+fn press_chip(app: &mut App, kind: &str) {
+    let grid = screen(app);
+    let y = (0..grid.height())
+        .find(|y| {
+            let row = grid.row_text(*y);
+            row.contains(kind) && !row.chars().any(|c| c.is_ascii_digit())
+        })
+        .unwrap_or_else(|| panic!("no chip {kind:?}:\n{}", grid.text()));
+    let row = grid.row_text(y);
+    let x = row[..row.find(kind).unwrap()].chars().count() as u16;
+    click(app, x + 1, y);
+}
+
+/// A comment's kind is picked from a row of chips while it's written, the coverage strip's
+/// kinds, rather than typed or left for an agent's verdict to say; the one picked is lit,
+/// and another press takes it back. Changing the comment starts from its kind. A reply has
+/// no chips.
+#[test]
+fn a_comments_kind_is_picked_from_chips_as_it_is_written() {
+    let (_dir, mut app) = page("Our method is better on every benchmark.\n");
+    select_word(&mut app, "better");
+    app.run(Command::AddComment);
+    press_chip(&mut app, "Correctness");
+    press_chip(&mut app, "Correctness");
+    assert_eq!(app.dock.draft.as_ref().unwrap().kind, "", "taken back");
+    press_chip(&mut app, "Evidence");
+    assert_eq!(app.dock.draft.as_ref().unwrap().kind, "Evidence");
+    typed(&mut app, "By how much?");
+    enter(&mut app);
+    assert_eq!(app.threads[0].kind, "Evidence");
+    let text = screen(&app).text();
+    assert!(
+        text.contains("Evidence 1") && text.contains("You · Evidence"),
+        "{text}"
+    );
+    // Changed, it starts from its kind, and takes another.
+    press_beside(&mut app, "Edit", "Resolve");
+    assert_eq!(app.dock.draft.as_ref().unwrap().kind, "Evidence");
+    press_chip(&mut app, "Clarity");
+    enter(&mut app);
+    assert_eq!(app.threads[0].kind, "Clarity");
+    // A reply is about the comment, whose kind it has.
+    press_beside(&mut app, "Reply", "Resolve");
+    let grid = screen(&app);
+    let chips = (0..grid.height()).any(|y| {
+        let row = grid.row_text(y);
+        row.contains("Structure") && !row.chars().any(|c| c.is_ascii_digit())
+    });
+    assert!(!chips, "no chips on a reply:\n{}", grid.text());
+}

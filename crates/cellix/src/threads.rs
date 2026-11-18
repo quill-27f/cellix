@@ -112,6 +112,8 @@ pub enum Hit {
     File(u32),
     /// Lists only the comments of a kind, from its pill, or all of them again.
     Kind(&'static str),
+    /// Picks the kind of the comment being written, from its chip, or none again.
+    DraftKind(&'static str),
     /// Shows on a comment's card how its words changed since it was made, or hides it.
     Changes(u32),
     /// Answers an agent that says it addressed a comment, that it isn't done.
@@ -223,6 +225,9 @@ enum Line {
     /// name, in place of the hint.
     Suggest(Vec<(&'static str, &'static str)>),
     Hint,
+    /// Under the hint, while a comment of the reviewer's own is made or changed: the kinds, a
+    /// chip each, to pick its kind by. As many to a row as fit.
+    Kinds(Vec<&'static str>),
     /// Under what's being written: the button that sends it, named for what it does, and
     /// Cancel. The comment it's on, so its card ends here while it's answered or changed.
     Send(u32, &'static str),
@@ -363,6 +368,9 @@ pub struct Draft {
     pub about: Option<About>,
     /// It's the comment of `thread` being changed, in place of its text, not a reply to it.
     pub editing: bool,
+    /// The kind picked for it from the chips under it, empty for none: a comment of the
+    /// reviewer's own being made or changed has them, a reply doesn't.
+    pub kind: String,
 }
 
 const NEW_DRAFT: u32 = 0;
@@ -577,6 +585,40 @@ fn draft_lines(draft: &Draft, view: View, width: f32, measure: &dyn Measure, out
     } else {
         Line::Suggest(found)
     });
+    // Its kind, picked rather than typed, for a comment and not for a reply.
+    if draft.thread.is_none() || draft.editing {
+        let mut row = Vec::new();
+        let mut used = 0.0;
+        for kind in KINDS {
+            let chip = pill_width(kind, measure) + PILL_GAP;
+            if used + chip > width + PILL_GAP && !row.is_empty() {
+                out.push(Line::Kinds(std::mem::take(&mut row)));
+                used = 0.0;
+            }
+            row.push(kind);
+            used += chip;
+        }
+        out.push(Line::Kinds(row));
+    }
+}
+
+/// Where each kind's chip stands under a comment being written: its kind, and the columns
+/// it starts and ends, from the card's text edge.
+fn chips(
+    area: Rect,
+    kinds: &[&'static str],
+    measure: &dyn Measure,
+) -> Vec<(&'static str, f32, f32)> {
+    let mut x = f32::from(area.x + SIDE + 1);
+    kinds
+        .iter()
+        .map(|kind| {
+            let width = pill_width(kind, measure);
+            let at = x;
+            x += width + PILL_GAP;
+            (*kind, at, at + width)
+        })
+        .collect()
 }
 
 /// What the panel shows: the comments, the one being written, the agent's name, how many
@@ -2104,6 +2146,13 @@ pub fn hit(
                 .map(Hit::Suggested)
         }
         Line::File(opens, ..) => opens.map(Hit::File),
+        Line::Kinds(kinds) => {
+            let at = f32::from(x) + 0.5;
+            chips(area, kinds, measure)
+                .into_iter()
+                .find(|(_, from, to)| at >= *from && at < *to)
+                .map(|(kind, ..)| Hit::DraftKind(kind))
+        }
         Line::Coverage(kinds) => {
             let at = f32::from(x) + 0.5;
             pills(area, kinds, measure)
@@ -2370,6 +2419,36 @@ pub fn draw(
                 | Line::Send(..)
         );
         match line {
+            Line::Kinds(kinds) => {
+                // As the coverage strip's pills are: outlined and quiet, the one picked in the
+                // accent's colours, as a kind listed alone is.
+                let picked = shown_draft.map(|draft| draft.kind.as_str());
+                for (kind, x, end) in chips(area, kinds, measure) {
+                    let bounds = Bounds::cells(x, y as f32 + PILL.0, end - x, PILL.1);
+                    let on_it = hover.is_some_and(|h| {
+                        let at = f32::from(h.0) + 0.5;
+                        h.1 == y && at >= x && at < end
+                    });
+                    let chosen = picked == Some(kind);
+                    if chosen {
+                        let fill = mix(theme.accent, card, 0.28);
+                        grid.panel(bounds, 34, Some(fill), Some(theme.accent));
+                    } else {
+                        let fill = on_it.then(|| theme.quiet_button(card));
+                        grid.panel(bounds, 34, fill, Some(theme.popup_border));
+                    }
+                    let style = Style {
+                        fg: if chosen || on_it {
+                            theme.text.fg
+                        } else {
+                            raised_muted
+                        },
+                        ..inner
+                    };
+                    let at = x + PILL_ROOM;
+                    grid.label_at(at, at.floor() as u16, y, kind, style, right, SMALL);
+                }
+            }
             Line::Replies(_, count) => {
                 let note = replies_note(*count);
                 grid.label_at(text_x as f32, text_x, y, &note, inner_dim, right, SMALL);

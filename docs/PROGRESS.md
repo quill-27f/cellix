@@ -3426,3 +3426,12 @@ The docflow track, the third of the bigger items.
 
 - Under Check my review, ending where it does, a quiet "Send 3 to Claude Code" sends everything no agent has had in one message, by Send Comments to Agent's road: the review's comments on code and the threads waiting, which are then told. It shows only where there's an agent to send to now (one in the side pane, or the Claude Code Cellix is a pane of), and goes once all has gone. Check my review stays the pane's one filled button.
 - Test: `the_pane_sends_whats_waiting_in_one_message`.
+
+## A comment's kind, picked as it's written (2026-11-18)
+
+The docflow track, the kind chips from the audit's bigger list, which the coordinator added.
+
+- Under the hint of a comment being made or changed stand the five kinds, a chip each, as many to a row as fit: outlined and quiet as a coverage pill with none is, lit in the accent's colours once picked, as a kind listed alone is; a press on the one picked takes it back. The thread takes the kind as it's sent, so the coverage strip counts it at once, and Edit starts from the comment's own kind. A reply has no chips. A kind had come only from an agent's verdict ("Agree (Evidence): …").
+- Test: `a_comments_kind_is_picked_from_chips_as_it_is_written`.
+- Tour: the docflow track's scenes, `50-flow-chips` (a kind picked while writing), `50-flow-cards` and `-light` (a card going to the agent, one addressed, one on reworded words, a suggestion, each saying when), `50-flow-kind` (a kind listed alone), `50-flow-changes` (what changed, word by word), `50-flow-next` (Next Comment) and `57-flow-dock` (short cards where Claude Code docks Cellix), each waiting for words only its own screen has.
+- Changed with the design: `a_comment_takes_emoji_by_name_by_a_click_and_from_the_whole_set` found the buttons that send a comment on the row under its hint; the kinds' chips stand between them now, so it finds them by their Cancel.
