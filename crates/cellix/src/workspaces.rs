@@ -1007,7 +1007,19 @@ impl Workspaces {
             fg: theme.accent,
             ..base
         };
-        grid.label_at(mark + 0.1, mark as u16, y, "+", plus, right, 120);
+        // In the middle of its room, which alone is the middle of the chip: a tenth of a
+        // column in, it stood 31 px from the chip's left and 24 from its right.
+        let font = cellix_render::Font {
+            size: 120,
+            ..cellix_render::Font::default()
+        };
+        let wide = self.measure().width("+", font);
+        let at = if self.measure().in_cells() {
+            mark
+        } else {
+            mark + (self.room(MARK) - wide) / 2.0
+        };
+        grid.label_at(at, mark as u16, y, "+", plus, right, 120);
         let text = Style {
             fg: theme.text.fg,
             ..base

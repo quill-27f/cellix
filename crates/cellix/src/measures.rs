@@ -75,6 +75,41 @@ pub fn dialog_lifts(last: DialogLast, measure: &dyn Measure) -> (f32, f32) {
     (words / row, buttons / row)
 }
 
+/// Where a row's words stand in it, in pixels from its top: their capitals' tops and their
+/// tails' feet. None where there are no pixels.
+pub fn words_in_row(measure: &dyn Measure) -> Option<(f32, f32)> {
+    let (_, row) = measure.cell_pixels()?;
+    let row = row as f32;
+    let line = row / measure.row_air().max(1.0);
+    let lead = (row - line) / 2.0;
+    Some((lead + CAPS * line, lead + TAILS * line))
+}
+
+/// A card's parts where a row has room, in rows: how far its words are raised over its
+/// buttons, so `DIALOG_GAP` stands between `last` and them, and how far into its first row
+/// its panel starts and how far short of its last row's end it stops, so its title's
+/// capitals and its buttons' foot have as much air to its edge as its sides have, `side`
+/// pixels, kept between 24 and 32. A card is a dialog in a corner: an empty row over its
+/// title and under its buttons, the panel inside them. They had 21 px over and under and 17
+/// between the words and the buttons, 11 under a command's box, against 34 at their sides.
+pub fn card_parts(last: DialogLast, side: f32, measure: &dyn Measure) -> Option<(f32, f32, f32)> {
+    let (_, row) = measure.cell_pixels().filter(|_| roomy(measure))?;
+    let row = row as f32;
+    let line = row / measure.row_air().max(1.0);
+    let lead = (row - line) / 2.0;
+    let caps = lead + CAPS * line;
+    let (top, foot) = cellix_render::button_in_row(row, line);
+    let last = match last {
+        DialogLast::Words => lead + TAILS * line,
+        DialogLast::Control => foot,
+    };
+    let lift = (DIALOG_GAP - (row - last + top)).max(0.0);
+    let air = side.clamp(24.0, 32.0);
+    let over = (row + caps - lift - air).clamp(0.0, row);
+    let under = (row * 2.0 - foot - air).clamp(0.0, row);
+    Some((lift / row, over / row, under / row))
+}
+
 /// How thick a line is on screen, in pixels: what the painter draws a hairline at, a pixel
 /// for every 24 of the terminal's line or part of one, so two on a Retina screen. What stands
 /// `LINE_AIR` from a line counts from its far side: counted as one pixel, a menu hung under a

@@ -2162,7 +2162,8 @@ impl App {
     /// A line of the corner card's words as the lines it takes inside the card, two cells
     /// in from either edge.
     fn offer_lines(&self, words: &str) -> Vec<String> {
-        self.wrap(words, f32::from(OFFER_WIDTH.saturating_sub(4)))
+        let width = self.corner_frame(OFFER_WIDTH).1;
+        self.wrap(words, f32::from(width.saturating_sub(4)))
     }
 
     /// The card's place, as tall as its words: an edge, the title, the detail, a gap, the
@@ -2173,13 +2174,10 @@ impl App {
             .offer_words()
             .map_or(1, |(_, detail, ..)| self.offer_lines(&detail).len() as u16);
         let height = detail.max(1) + 4 + self.card_gap();
-        // The window's corner, so opening the side pane doesn't move it over the writing.
-        Rect::new(
-            self.size.0.saturating_sub(OFFER_WIDTH + 2),
-            self.size.1.saturating_sub(height + 2),
-            OFFER_WIDTH,
-            height,
-        )
+        // The window's corner, so opening the side pane doesn't move it over the writing,
+        // and inside one sheet, never across the line between two.
+        let (x, width) = self.corner_frame(OFFER_WIDTH);
+        Rect::new(x, self.size.1.saturating_sub(height + 2), width, height)
     }
 
     fn offer_button_row(&self) -> u16 {
@@ -2335,7 +2333,7 @@ impl App {
         };
         let theme = &self.theme;
         let area = self.offer_area();
-        self.draw_card(grid, area);
+        self.draw_card(grid, area, measures::DialogLast::Words);
         let base = Style {
             fg: theme.text.fg,
             bg: theme.popup,
@@ -2359,10 +2357,13 @@ impl App {
             }
             return;
         }
+        let words = grid.painted_so_far();
         grid.label(area.x + 2, area.y + 1, &title, strong, right);
         for (i, line) in self.offer_lines(&detail).iter().enumerate() {
             grid.label(area.x + 2, area.y + 2 + i as u16, line, dim, right);
         }
+        let lift = self.card_lift(measures::DialogLast::Words, 0.0);
+        grid.lift_since(words, lift);
         let placed: Vec<(String, u16)> = self
             .offer_buttons()
             .into_iter()
@@ -7375,6 +7376,15 @@ impl App {
             inset: false,
         };
         grid.insert_paint(index, mark);
+        // What the status bar painted is moved later with the bar's row, by its place in the
+        // paint, which the mark has just moved along: left as it was, the pane's foot line
+        // went down with the bar and the bar's last words stayed.
+        let (from, to) = self.status_paint.get();
+        if index <= from {
+            self.status_paint.set((from + 1, to + 1));
+        } else if index < to {
+            self.status_paint.set((from, to + 1));
+        }
     }
 
     /// Searches the open file for the query as it stands.
@@ -7522,19 +7532,24 @@ impl App {
             Some(screen) => screen,
             None => self.focused_area(),
         };
-        let width = FIND_WIDTH.min(pane.w.saturating_sub(2));
-        let x = pane.right().saturating_sub(width + 1).max(pane.x);
+        // Over the pane it ends where its lists' words do, two columns in: a column in, it
+        // stood 17 px past them.
+        let end = if on_pane { 2 } else { 1 };
+        let width = FIND_WIDTH.min(pane.w.saturating_sub(end * 2));
+        let x = pane.right().saturating_sub(width + end).max(pane.x);
         // Just its rows: the panel is painted around them, so it's no taller than it needs.
         Rect::new(x, pane.y + 1, width, if replacing { 2 } else { 1 })
     }
 
     /// The Find bar's parts: the field, where the switches start inside it, and where the
-    /// count and then the buttons start. A chevron stands before the field, and the replace
-    /// row's field is as wide, with its two buttons straight after.
-    fn find_layout(area: Rect) -> (Rect, u16, u16, u16) {
+    /// count and then the buttons start. A chevron stands before the field where there's
+    /// something to replace, and the replace row's field is as wide, with its two buttons
+    /// straight after. Without one, in a terminal or a list, the field starts where the
+    /// chevron would: its empty slot was 54 px before the field.
+    fn find_layout(area: Rect, chevron: bool) -> (Rect, u16, u16, u16) {
         let first = area.right() - FIND_BUTTON * FIND_BUTTONS.len() as u16 - 1;
         let count = first.saturating_sub(FIND_COUNT);
-        let left = area.x + 1 + FIND_CHEVRON;
+        let left = area.x + 1 + if chevron { FIND_CHEVRON } else { 0 };
         let field = Rect::new(left, area.y, count.saturating_sub(left + 1), 1);
         let switches = field.right().saturating_sub(SWITCHES_WIDTH + 1);
         (field, switches, count, first)
@@ -7568,13 +7583,19 @@ impl App {
         let theme = &self.theme;
         let area = self.find_bar_for(find.replace.is_some());
         // A pane narrower than the bar leaves a column or two of what's under it either
-        // side, and the ends of a terminal's line stuck out of it: those are cleared.
+        // side, and the ends of a terminal's line stuck out of it: those are cleared. Before
+        // the bar, what's painted there is covered too, as a list's words are: a list's
+        // count showed in the column before it. After it the sheet's line stands in the last
+        // column, which a cover would take away with them.
         if let Some(screen) = self.dock_screen().filter(|_| self.find_on_pane()) {
             let left = area.x.saturating_sub(screen.x);
             let right = screen.right().saturating_sub(area.right());
             for y in area.y..area.bottom() {
                 if left > 0 && left < FIND_SLIVER {
                     grid.fill(Rect::new(screen.x, y, left, 1), theme.sidebar);
+                    let (x, w) = (f32::from(screen.x), f32::from(left));
+                    let ground = Bounds::cells(x, f32::from(y), w, 1.0);
+                    grid.panel(ground, 0, Some(theme.sidebar.bg), None);
                 }
                 if right > 0 && right < FIND_SLIVER {
                     grid.fill(Rect::new(area.right(), y, right, 1), theme.sidebar);
@@ -7582,7 +7603,7 @@ impl App {
             }
         }
         crate::palette::raised_bar(grid, area, theme);
-        let (line, switches, count_x, first) = Self::find_layout(area);
+        let (line, switches, count_x, first) = Self::find_layout(area, find.replaces());
         let chevron = if find.replace.is_some() {
             Icon::ChevronDown
         } else {
@@ -7590,7 +7611,7 @@ impl App {
         };
         let toggle = Rect::new(area.x + 1, area.y, FIND_CHEVRON, 1);
         // Nothing to replace in a terminal's output, so no chevron to open that row.
-        if !find.pane && !find.listed {
+        if find.replaces() {
             self.find_button(grid, toggle, chevron, false);
         }
         let text = Input {
@@ -7645,13 +7666,10 @@ impl App {
 
     fn click_find(&mut self, mut find: Find, x: u16, y: u16) {
         let area = self.find_bar_for(find.replace.is_some());
-        let (field, switches, _, first) = Self::find_layout(area);
+        let chevron = find.replaces();
+        let (field, switches, _, first) = Self::find_layout(area, chevron);
         let toggle = Rect::new(area.x + 1, area.y, FIND_CHEVRON, 1);
-        if toggle.contains(x, y) && (find.pane || find.listed) {
-            self.overlay = Overlay::Find(find);
-            return;
-        }
-        if toggle.contains(x, y) {
+        if chevron && toggle.contains(x, y) {
             find.replace = match find.replace {
                 Some(_) => None,
                 None => Some(String::new()),
@@ -9461,7 +9479,14 @@ impl App {
     /// The logout card's left edge and width: the window's corner, like the other offers,
     /// but clear of the line between the file and the side pane.
     fn linger_frame(&self) -> (u16, u16) {
-        let width = LINGER_WIDTH.min(self.size.0.saturating_sub(4));
+        self.corner_frame(LINGER_WIDTH)
+    }
+
+    /// A corner card's left edge and width, `wide` at most: the window's corner, but clear
+    /// of the line between the file and the side pane, inside the pane where it has room
+    /// and before it where it hasn't. The install card lay across that line.
+    fn corner_frame(&self, wide: u16) -> (u16, u16) {
+        let width = wide.min(self.size.0.saturating_sub(4));
         let x = self.size.0.saturating_sub(width + 2);
         match self.dock_area() {
             Some(dock) if !self.dock_under() && x < dock.x + 2 && x + width > dock.x => {
@@ -9509,14 +9534,20 @@ impl App {
     /// A card's panel, raised and rounded. It starts and ends inside its first and last rows,
     /// so the title and the buttons have the same air above and below them, and what's under
     /// those rows is cleared so no text shows half covered.
-    fn draw_card(&self, grid: &mut Grid, area: Rect) {
-        self.draw_card_led(grid, area, 0.0);
+    fn draw_card(&self, grid: &mut Grid, area: Rect, last: measures::DialogLast) {
+        self.draw_card_led(grid, area, (0.0, last));
     }
 
     /// A card whose panel starts `lead` columns into its first column where there are
     /// pictures (`PANE_CARD_LEAD`), the pane's sheet before it, on the rows between its first
-    /// and last.
-    fn draw_card_led(&self, grid: &mut Grid, area: Rect, lead: f32) {
+    /// and last. What it holds last before its buttons, words or a control, sets how far its
+    /// words are raised (`card_lift`) and with them where its panel starts.
+    fn draw_card_led(
+        &self,
+        grid: &mut Grid,
+        area: Rect,
+        (lead, last): (f32, measures::DialogLast),
+    ) {
         let theme = &self.theme;
         let plain = self.measure.in_cells();
         let lead = if plain { 0.0 } else { lead };
@@ -9568,7 +9599,7 @@ impl App {
                 grid.keep_to_rows(from, y, y + 1);
             }
         }
-        let (top, foot) = self.card_ends();
+        let (top, foot) = self.card_ends(last, lead);
         let bounds = Bounds::cells(
             f32::from(area.x) + lead,
             f32::from(area.y) + top,
@@ -9579,15 +9610,17 @@ impl App {
     }
 
     /// How far into its first row a card's panel starts and how far short of its last row's
-    /// end it stops: `CARD_TOP` and `CARD_BOTTOM`, moved to the nearest whole pixel where the
-    /// cell's size is known, so the lines along its top and bottom are as sharp as its sides'.
-    fn card_ends(&self) -> (f32, f32) {
-        // On a row with room the words and the buttons bring their own air, and the card
-        // adds the design's quarter of a row over the first and under the last.
-        let (top, bottom) = if measures::roomy(self.measure.as_ref()) {
-            CARD_EDGE
-        } else {
-            (CARD_TOP, CARD_BOTTOM)
+    /// end it stops: on a row with room, where its title's capitals and its buttons' foot
+    /// have the air its sides have (`measures::card_parts`), its words being raised to stand
+    /// `DIALOG_GAP` over its buttons; on the terminal's line `CARD_TOP` and `CARD_BOTTOM`.
+    /// Moved to the nearest whole pixel where the cell's size is known, so the lines along its
+    /// top and bottom are as sharp as its sides'.
+    fn card_ends(&self, last: measures::DialogLast, lead: f32) -> (f32, f32) {
+        let parts = measures::card_parts(last, self.card_side(lead), self.measure.as_ref());
+        let (top, bottom) = match parts {
+            Some((_, top, bottom)) => (top, bottom),
+            None if measures::roomy(self.measure.as_ref()) => CARD_EDGE,
+            None => (CARD_TOP, CARD_BOTTOM),
         };
         match self.measure.cell_pixels() {
             Some((_, tall)) if tall > 0 => {
@@ -9596,6 +9629,24 @@ impl App {
             }
             _ => (top, bottom),
         }
+    }
+
+    /// The pixels from a card's side to its words, which start two columns in from its cells
+    /// and `lead` of a column less from its panel.
+    fn card_side(&self, lead: f32) -> f32 {
+        let cell = self
+            .measure
+            .cell_pixels()
+            .map_or(0.0, |(wide, _)| wide as f32);
+        (2.0 - lead) * cell
+    }
+
+    /// How far a card's words are raised in their rows, so `last` stands `DIALOG_GAP` over its
+    /// buttons where a row has room (`measures::card_parts`); nothing on the terminal's line,
+    /// where an empty row parts them. The words and a command's box move together with it.
+    fn card_lift(&self, last: measures::DialogLast, lead: f32) -> f32 {
+        let parts = measures::card_parts(last, self.card_side(lead), self.measure.as_ref());
+        parts.map_or(0.0, |(lift, ..)| lift)
     }
 
     /// The rows a card leaves empty between its words and its buttons: one on the terminal's
@@ -9651,7 +9702,8 @@ impl App {
         }
         let theme = &self.theme;
         let area = self.linger_area();
-        self.draw_card(grid, area);
+        self.draw_card(grid, area, measures::DialogLast::Control);
+        let words = grid.painted_so_far();
         let base = Style {
             fg: theme.text.fg,
             bg: theme.popup,
@@ -9712,6 +9764,9 @@ impl App {
                 font,
             );
         }
+        // The words and the box over the buttons, `DIALOG_GAP` from them, as a dialog's.
+        let lift = self.card_lift(measures::DialogLast::Control, 0.0);
+        grid.lift_since(words, lift);
         let y = self.linger_button_row();
         self.draw_card_buttons(grid, y, &self.linger_buttons(), (&LINGER_BUTTONS, true));
     }
@@ -9925,7 +9980,7 @@ impl App {
                 None,
             );
         }
-        self.draw_card(grid, card);
+        self.draw_card(grid, card, measures::DialogLast::Words);
         let base = Style {
             fg: theme.text.fg,
             bg: theme.popup,
@@ -9941,10 +9996,12 @@ impl App {
             ..base
         };
         let right = card.right().saturating_sub(2);
+        let words = grid.painted_so_far();
         grid.label(card.x + 2, card.y + 1, &title, strong, right);
         for (i, line) in self.stopped_detail(&detail, card.w).iter().enumerate() {
             grid.label(card.x + 2, card.y + 2 + i as u16, line, dim, right);
         }
+        grid.lift_since(words, self.card_lift(measures::DialogLast::Words, 0.0));
         let placed = self.stopped_buttons(card, &buttons);
         let mut rows: Vec<u16> = placed.iter().map(|(_, _, y, _)| *y).collect();
         rows.dedup();
@@ -16829,12 +16886,16 @@ impl App {
         });
         // Where each one goes: its name, left edge and top, in cells and rows.
         let spot = match &self.overlay {
-            Overlay::Find(_) => {
+            Overlay::Find(find) => {
                 let area = self.find_bar();
-                let (field, _, _, first) = Self::find_layout(area);
+                let (field, _, _, first) = Self::find_layout(area, find.replaces());
                 let replacing = area.h > 1;
-                // Each button's name and the column it starts at.
-                let mut buttons: Vec<(&str, u16, u16)> = vec![(FIND_NAMES[3], area.x + 1, area.y)];
+                // Each button's name and the column it starts at: the chevron's only where
+                // it's drawn.
+                let mut buttons: Vec<(&str, u16, u16)> = Vec::new();
+                if find.replaces() {
+                    buttons.push((FIND_NAMES[3], area.x + 1, area.y));
+                }
                 for (n, name) in FIND_NAMES[..3].iter().enumerate() {
                     buttons.push((*name, first + n as u16 * FIND_BUTTON, area.y));
                 }
@@ -17601,10 +17662,11 @@ impl App {
 
     /// Asks in a floating box at the top, as VS Code's quick input does.
     fn draw_prompt(&self, grid: &mut Grid, prompt: &Prompt) {
-        let screen = Rect::new(0, 0, self.size.0, self.size.1);
-        let top = Palette::area(screen);
+        // Where a palette stands, its sides off the sheets' lines.
+        let top = Palette::area(self.palette_screen());
         let area = Rect::new(top.x, top.y, top.w, 2);
         crate::palette::raised_bar(grid, area, &self.theme);
+        let parts = grid.painted_so_far();
         let base = Style {
             fg: self.theme.text.fg,
             bg: self.theme.popup,
@@ -17632,6 +17694,22 @@ impl App {
             behind: self.theme.popup,
         };
         input(grid, line, &field, &*self.measure, &self.theme);
+        // Raised so its box's foot is as far from the bar's as the question's capitals are
+        // from its top: it stood 10 px from the foot and 19 from the top. The caret goes up
+        // with them.
+        if let (Some((caps, _)), Some((_, row))) = (
+            measures::words_in_row(&*self.measure),
+            self.measure.cell_pixels(),
+        ) {
+            let row = row as f32;
+            let line = row / self.measure.row_air().max(1.0);
+            let (_, foot) = cellix_render::button_in_row(row, line);
+            let lift = ((caps - (row - foot)) / 2.0).max(0.0) / row;
+            grid.lift_since(parts, lift);
+            if let Some(caret) = grid.caret.as_mut() {
+                caret.y -= cellix_render::units(lift);
+            }
+        }
     }
 
     /// The top of an icon's row, which can fall half way down a cell. The last view is
@@ -18316,9 +18394,29 @@ impl App {
                 },
                 ..style
             };
-            // At the line's height where a row has room: as tall as the row's control, it
-            // stood 4 px under the tab line over it.
+            // Shorter than the row's control where a row has room: as tall as one, it stood
+            // 4 px under the tab line over it. Lowered to stand as far under that line as
+            // its end is from the sheet's side, a column from it: in its row's middle it was
+            // 7 px under the line and 16 from the side.
+            let from = grid.painted_so_far();
             grid.row_button((cell.x, cell.y), &cells, name, fill, label);
+            if let Some((wide, tall)) = self
+                .measure
+                .cell_pixels()
+                .filter(|_| measures::roomy(&*self.measure) && !self.measure.in_cells())
+            {
+                let tall = tall as f32;
+                let line = tall / self.measure.row_air().max(1.0);
+                let (top, _) = cellix_render::row_button_in_row(tall, line);
+                // The line's own pixels and then the air the side has, which is a column
+                // less the side's line.
+                let wanted = wide as f32;
+                let unit = cellix_render::UNIT as f32;
+                let drop = ((wanted - top) / tall * unit).ceil() / unit;
+                if drop > 0.0 {
+                    grid.lift_since(from, -drop);
+                }
+            }
         }
     }
 
@@ -19732,11 +19830,12 @@ impl App {
             if hovered {
                 // Round the mark and the name as they're drawn, with the same air after the
                 // name as before the mark: by the cells, a short name left three times as
-                // much at its end.
+                // much at its end, and with half the pad before the mark it had 5 px there
+                // against 12 after the name.
                 let room = f32::from(end.saturating_sub(at + 2));
                 let name = self.measure.width(branch, status_font).min(room);
                 let (from, to) = status_chip(self.measure.as_ref());
-                let left = at as f32 - STATUS_PAD / 2.0;
+                let left = at as f32 - STATUS_PAD;
                 let right = at as f32 + 1.95 + name + STATUS_PAD;
                 let chip = Bounds::cells(left, y as f32 + from, right - left, to - from);
                 grid.panel(chip, 22, Some(self.theme.row_hover), None);
@@ -24092,13 +24191,14 @@ mod tests {
                 area.right(),
             );
             if card {
-                app.draw_card(&mut grid, area);
+                app.draw_card(&mut grid, area, measures::DialogLast::Words);
             }
             let mut rasterizer =
                 SoftwareRasterizer::new(cell.0, cell.1).expect("fonts are in the binary");
             let image = rasterizer.row(&grid, area.y);
             // Over the panel: the rows of pixels above its top line, in the card's columns.
-            let over = (app.card_ends().0 * cell.1 as f32) as usize - 1;
+            let ends = app.card_ends(measures::DialogLast::Words, 0.0);
+            let over = (ends.0 * cell.1 as f32) as usize - 1;
             let (from, to) = (
                 usize::from(area.x) * cell.0,
                 usize::from(area.right()) * cell.0,
@@ -24120,7 +24220,8 @@ mod tests {
     /// A card in the window's corner can lie over the side pane, which isn't the file's
     /// colour. The rows its rounded ends are on were filled with the file's, which showed as
     /// a strip of another colour over the card. Each cell there keeps the colour of what it
-    /// was drawn on.
+    /// was drawn on. It stands inside the pane, never across the line between the file and
+    /// the pane, as it did.
     #[test]
     fn a_cards_end_rows_keep_the_colour_of_what_they_lie_on() {
         let (_dir, mut app) = java_project();
@@ -24129,27 +24230,21 @@ mod tests {
         let area = app.offer_area();
         let dock = app.dock_area().expect("the side pane is open");
         assert!(
-            dock.x < area.right() && dock.right() > area.x,
-            "the card lies over the pane: {dock:?} {area:?}"
+            dock.x < area.x && dock.right() > area.right(),
+            "the card lies in the pane: {dock:?} {area:?}"
         );
         let with = screen(&app);
         assert!(with.text().contains("Install Java support?"));
         app.not_now.push("Java".to_string());
         let without = screen(&app);
         assert!(!without.text().contains("Install Java support?"));
-        let mut grounds = std::collections::HashSet::new();
         for row in [area.y, area.bottom() - 1] {
             for x in area.x..area.right() {
                 let (over, under) = (with.cell(x, row), without.cell(x, row));
                 assert_eq!(over.style.bg, under.style.bg, "column {x}, row {row}");
                 assert_eq!(over.symbol, " ", "column {x}, row {row}");
-                grounds.insert(under.style.bg);
             }
         }
-        assert!(
-            grounds.iter().any(|bg| *bg != app.theme.text.bg),
-            "something under the card that isn't the file's colour"
-        );
     }
 
     #[test]
@@ -31215,8 +31310,9 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
     }
 
     /// Where a row has room, the button on a pointed row is shorter than the wash behind it,
-    /// which shows over and under it. Both were a control's height, 39 px in a row of 50: the
-    /// button's edges lay on the wash's, and the two read as one shape with a step in it.
+    /// which shows 6 px over and under it. Both were a control's height, 39 px in a row of
+    /// 50: the button's edges lay on the wash's, and the two read as one shape with a step in
+    /// it; then at a button's 32 px the wash showed 4 px either side.
     #[test]
     fn a_button_on_a_pointed_row_stands_inside_the_wash() {
         let (dir, mut app) = project();
@@ -31271,12 +31367,12 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert!((wash - 39.0).abs() < 0.5, "the wash is a control: {wash}");
         let (over, under) = (top - wash_top, wash_top + wash - top - button);
         assert!(
-            over >= 3.0 && (over - under).abs() < 0.1,
+            over >= 5.9 && (over - under).abs() < 0.1,
             "{over} px of the wash over the button and {under} under it"
         );
         assert!(
-            (button - 0.88 * 36.0).abs() < 0.5,
-            "as tall as on the line: {button}"
+            (button - 0.75 * 36.0).abs() < 0.5,
+            "three quarters of the line: {button}"
         );
         // On the terminal's own line there's no room for that: a button like any other.
         let ((wash_top, wash), (top, button)) = shapes(&mut app, 36);
@@ -31328,9 +31424,9 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert!(!grid.row_text(y).contains('…'), "{}", grid.row_text(y));
     }
 
-    /// On a row with room a card has the design's quarter of a row over its first row and
-    /// under its last, and no empty row between its words and its buttons: on rows of 50 px
-    /// that row and the card's edges were 120 px of nothing in a card of five rows.
+    /// On a row with room a card has no empty row between its words and its buttons: on rows
+    /// of 50 px that row and the card's edges were 120 px of nothing in a card of five rows.
+    /// Its air round it is measured in `a_card_has_a_dialogs_air_round_it`.
     #[test]
     fn a_card_has_no_empty_row_where_a_row_has_room() {
         let (_dir, mut app) = java_project();
@@ -31348,9 +31444,6 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             card.y + 2 + lines,
             "straight under the words"
         );
-        // The same air over the title's capitals as under the buttons: see `CARD_EDGE`.
-        let (top, foot) = app.card_ends();
-        assert!((top - 0.86).abs() < 0.02 && (foot - 0.67).abs() < 0.02);
     }
 
     /// On a row with room a text box's words aren't raised: a capital has as much of the box

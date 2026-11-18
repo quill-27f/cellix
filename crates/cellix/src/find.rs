@@ -44,6 +44,12 @@ pub struct Find {
 }
 
 impl Find {
+    /// Whether what it looks through can have its matches replaced: a file, not a terminal's
+    /// output or a list. Only then does its bar have the chevron that opens the replace row.
+    pub fn replaces(&self) -> bool {
+        !self.pane && !self.listed
+    }
+
     /// Searches again, keeping to the first match at or after `from`.
     pub fn search(&mut self, text: &str, from: usize) {
         self.matches.clear();

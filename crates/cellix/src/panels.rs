@@ -272,6 +272,24 @@ pub struct MathPanel {
     pub selected: usize,
     /// Rows its buttons stand below its top row's top (`grid_drop`).
     drop: f32,
+    /// Rows the line at its foot, the symbol's name and source, is raised in its row, so its
+    /// tails are as far from the panel's foot as the buttons are from its top and sides: it
+    /// stood 13 px from the foot against 20 there.
+    foot_lift: f32,
+}
+
+/// How far a panel's last line of words is raised in its row so its tails stand `SIDE_INSET`
+/// from the panel's foot, in rows; nothing where there are no pixels.
+fn foot_lift(measure: &dyn Measure) -> f32 {
+    let (Some((_, tails)), Some((wide, row))) = (
+        crate::measures::words_in_row(measure),
+        measure.cell_pixels(),
+    ) else {
+        return 0.0;
+    };
+    let row = row as f32;
+    let side = SIDE_INSET * wide as f32;
+    ((side - (row - tails)) / row).clamp(0.0, 0.5)
 }
 
 /// Rows the chip of the button picked keeps from the button's top and foot.
@@ -308,6 +326,7 @@ impl MathPanel {
             previews,
             selected: 0,
             drop: grid_drop(CHIP_INSET, measure),
+            foot_lift: foot_lift(measure),
         }
     }
 
@@ -397,8 +416,10 @@ impl MathPanel {
         };
         let y = area.bottom().saturating_sub(1);
         let right = area.right().saturating_sub(1);
+        let from = grid.painted_so_far();
         let end = grid.label(area.x + 2, y, symbol.name, base, right);
         grid.label(end + 2, y, symbol.preview, dim, right);
+        grid.lift_since(from, self.foot_lift);
     }
 }
 

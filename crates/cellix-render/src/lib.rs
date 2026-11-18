@@ -10,7 +10,7 @@ pub mod spinner;
 
 pub use grid::{
     Cell, FIELD_AIR, GLYPH, Grid, Rect, Rgb, Run, SMALL_GLYPH, Style, air_under_button,
-    button_in_row, on_large_button,
+    button_in_row, on_large_button, row_button_in_row,
 };
 pub use icon::{Icon, Piece, inked};
 pub use measure::{CellMeasure, EMOJI_AIR, Font, FontMeasure, Measure};

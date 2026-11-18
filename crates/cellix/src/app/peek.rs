@@ -130,6 +130,17 @@ impl App {
         ))
     }
 
+    /// How far into the row under its cells the card's panel reaches, in rows, so its foot is
+    /// as far from the pane's as its right side is from the pane's: a column, less the line
+    /// down the pane's side, from that line. Nothing on cells.
+    fn peek_reach(&self) -> f32 {
+        let Some((wide, row)) = self.measure.cell_pixels() else {
+            return 0.0;
+        };
+        let row = row as f32;
+        ((row - wide as f32) / row).clamp(0.0, 1.0)
+    }
+
     /// Sizes the helper's terminal to the card, as it changes.
     pub(super) fn fit_peek(&mut self) {
         let (Some(index), Some(screen)) = (self.peeked(), self.peek_screen()) else {
@@ -325,14 +336,22 @@ impl App {
         // The line under the header, the card's width, and the card's own line round it with
         // its corners, painted over the cells' square ones in what stands behind.
         let (x, w) = (f32::from(card.x) + lead, f32::from(card.w) - lead);
+        // Under its last row it reaches down the pane's, to stand as far from the pane's foot
+        // as from its sides: a row short of it, it had 50 px under it against 17 beside it.
+        let reach = self.peek_reach();
+        let tall = f32::from(card.h) + reach;
+        if reach > 0.0 {
+            let under = Bounds::cells(x, f32::from(card.bottom()), w, reach);
+            grid.exact_fill(under, theme.popup);
+        }
         if lead > 0.0 {
             // The part of its first column the panel covers.
-            let half = Bounds::cells(x, f32::from(card.y), 1.0 - lead, f32::from(card.h));
+            let half = Bounds::cells(x, f32::from(card.y), 1.0 - lead, tall);
             grid.panel(half, 0, Some(theme.popup), None);
         }
         let line = Bounds::cells(x, f32::from(card.y) + 1.0, w, 0.0);
         grid.hairline(line, theme.popup_border);
-        let edge = Bounds::cells(x, f32::from(card.y), w, f32::from(card.h));
+        let edge = Bounds::cells(x, f32::from(card.y), w, tall);
         grid.corners(edge, CARD_RADIUS, theme.sidebar.bg, ALL_CORNERS);
         grid.panel(edge, CARD_RADIUS, None, Some(theme.popup_border));
     }

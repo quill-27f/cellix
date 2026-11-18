@@ -429,8 +429,9 @@ fn nothing_under_a_tab_row_stands_within_8_px_of_its_line() {
     );
 }
 
-/// Show Source stands on the row under the tab row at the line's height, 8 px or more from
-/// the tab row's line, where as tall as the row's control it stood 4 px under it.
+/// Show Source stands on the row under the tab row, as far under the tab row's line as its
+/// end is from the line down the sheet's side, more than 8 px: as tall as the row's control
+/// it stood 4 px under the line, and then 7 under it against 16 from the side.
 #[test]
 fn show_source_keeps_clear_of_the_tab_line() {
     let dir = tempfile::tempdir().unwrap();
@@ -453,12 +454,284 @@ fn show_source_keeps_clear_of_the_tab_line() {
                 && bounds.x < i32::from(cell.right()) * UNIT
         })
         .expect("its chip");
-    assert!(chip.3, "kept at the line's height");
+    assert!(chip.3, "a button inside its row");
     let (top, _) = cellix_render::inset(chip.0.y, chip.0.h, ROW, LINE);
+    let line = measures::line_pixels(&*app.measure);
+    let under = top - (row_top(1) + line);
+    let side = f32::from(app.main_area().right()) * CELL - line - px(chip.0.x + chip.0.w);
+    assert!(under >= 8.0, "{under} px under the line");
     assert!(
-        top - row_top(1) >= 8.0,
-        "{} px under the line",
-        top - row_top(1)
+        (under - side).abs() <= 2.0,
+        "{under} px under the line, {side} from the side"
+    );
+}
+
+/// Find's marks in a list are put in under the letters they mark, which moves along what's
+/// painted after them; the status bar's paint, which the bar at the foot moves with its row
+/// later, is still the status bar's alone. Its range had slipped a step back, and the pane's
+/// foot line went down 20 px with the bar.
+#[test]
+fn finds_marks_in_a_list_leave_the_status_bars_paint_its_own() {
+    let (dir, mut app) = project((150, 40));
+    app.show_sidebar = false;
+    app.open(&dir.path().join("alpha.txt")).unwrap();
+    for n in 1..=3 {
+        let text = format!("note {n} about needles");
+        app.add_comment("alpha.txt".to_string(), 0, text);
+    }
+    app.run(Command::ShowComments);
+    let panel = app.dock_panel().unwrap();
+    app.handle(mouse(MouseKind::Left, panel.x + 3, panel.y));
+    app.handle(mouse(MouseKind::Up, panel.x + 3, panel.y));
+    app.handle(Event::Key(cellix_input::KeyEvent::ctrl('f')));
+    assert!(matches!(&app.overlay, Overlay::Find(find) if find.listed));
+    for c in "needles".chars() {
+        app.handle(Event::Key(cellix_input::KeyEvent::plain(Key::Char(c))));
+    }
+    let grid = screen(&app);
+    let marks = grid
+        .paint
+        .iter()
+        .filter(|p| matches!(p, Paint::Panel { radius: 8, .. }))
+        .count();
+    assert!(marks >= 3, "marks behind the letters: {marks}");
+    let (from, to) = app.status_paint.get();
+    assert!(from < to, "the status bar painted");
+    let bar = i32::from(app.size().1 - 1) * UNIT;
+    for paint in &grid.paint[from..to] {
+        let y = match paint {
+            Paint::Text { y, .. } => *y,
+            Paint::Panel { bounds, .. }
+            | Paint::Hairline { bounds, .. }
+            | Paint::Icon { bounds, .. }
+            | Paint::Spinner { bounds, .. } => bounds.y + bounds.h / 2,
+            _ => bar,
+        };
+        assert!(
+            y >= bar - UNIT / 2,
+            "{paint:?} isn't the status bar's, on row {}",
+            y / UNIT
+        );
+    }
+}
+
+/// The raised panel painted last: a floating bar's or a panel's, as bounds.
+fn last_raised(grid: &Grid) -> Bounds {
+    let found = grid.paint.iter().rev().find_map(|p| match p {
+        Paint::Panel {
+            bounds,
+            shadow: true,
+            ..
+        } => Some(*bounds),
+        _ => None,
+    });
+    found.expect("a raised panel")
+}
+
+/// Where the painted words starting with `start` stand: their row's top in pixels.
+fn words_top(grid: &Grid, start: &str) -> f32 {
+    let y = grid.paint.iter().find_map(|p| match p {
+        Paint::Text { y, text, .. } if text.starts_with(start) => Some(*y),
+        _ => None,
+    });
+    y.unwrap_or_else(|| panic!("no words {start:?}")) as f32 * ROW / UNIT as f32
+}
+
+/// Boxes hold what they hold in the middle: the New file prompt has as much over its
+/// question's capitals as under its box (19 px and 10), the symbols panel as much under its
+/// last line as over its buttons (13 and 20), and Find over a list in the pane starts its
+/// box where the chevron would be and ends where the list's words do (a 54 px empty slot,
+/// and 17 px past them).
+#[test]
+fn boxes_hold_what_they_hold_in_their_middle() {
+    let (dir, mut app) = project((150, 40));
+    app.open(&dir.path().join("alpha.txt")).unwrap();
+    let (caps, tails) = measures::words_in_row(&*app.measure).unwrap();
+    // The New file prompt.
+    app.menu_action(MenuAction::NewFile(dir.path().to_path_buf()));
+    assert!(matches!(app.overlay, Overlay::Prompt(_)));
+    let grid = screen(&app);
+    let bar = last_raised(&grid);
+    let (top, high) = tall(bar);
+    let over = words_top(&grid, "New file") + caps - top;
+    let field = panels(&grid)
+        .into_iter()
+        .filter(|(b, fill, ..)| *fill == Some(app.theme.input) && b.y > bar.y)
+        .map(|(b, ..)| b)
+        .next()
+        .expect("its box");
+    let (field_top, field_high) = tall(field);
+    let under = top + high - (field_top + field_high);
+    assert!(
+        (over - under).abs() <= 2.0,
+        "{over} px over the question, {under} under the box"
+    );
+    // Its sides off the file's sheet's line.
+    let line = f32::from(app.main_area().x) * CELL;
+    let left = px(bar.x);
+    assert!(
+        (left - line).abs() >= measures::LINE_AIR,
+        "{left} by {line}"
+    );
+    app.overlay = Overlay::None;
+    // The symbols panel.
+    let panel = crate::panels::MathPanel::new((30, 4), &*app.measure);
+    app.overlay = Overlay::Math(panel);
+    let grid = screen(&app);
+    let raised = last_raised(&grid);
+    let (top, high) = tall(raised);
+    // Its last line: the symbol's name and source, the lowest words painted on it.
+    let last = grid
+        .paint
+        .iter()
+        .filter_map(|p| match p {
+            Paint::Text { y, x, .. }
+                if *y >= raised.y
+                    && *y < raised.y + raised.h
+                    && *x >= raised.x
+                    && *x < raised.x + raised.w =>
+            {
+                Some(*y)
+            }
+            _ => None,
+        })
+        .max()
+        .expect("its words");
+    let under = top + high - (last as f32 * ROW / UNIT as f32 + tails);
+    let side = 1.2 * CELL;
+    assert!(
+        (under - side).abs() <= 2.0,
+        "{under} px under its last line, {side} round its buttons"
+    );
+    app.overlay = Overlay::None;
+}
+
+/// Find over a list in the pane has no chevron, and its box starts where the chevron would
+/// be; the bar ends where the list's words do, two columns from the pane's side.
+#[test]
+fn find_over_a_list_starts_its_box_at_its_edge() {
+    let (dir, mut app) = project((150, 40));
+    app.open(&dir.path().join("alpha.txt")).unwrap();
+    app.add_comment("alpha.txt".to_string(), 0, "needles".to_string());
+    app.run(Command::ShowComments);
+    app.overlay = Overlay::Find(Find {
+        listed: true,
+        looked: Looked::Pane,
+        ..Find::default()
+    });
+    let bar = app.find_bar();
+    let screen_area = app.dock_screen().unwrap();
+    assert_eq!(bar.right() + 2, screen_area.right(), "two columns in");
+    let grid = screen(&app);
+    let field = panels(&grid)
+        .into_iter()
+        .filter(|(b, fill, ..)| *fill == Some(app.theme.input) && b.y >= i32::from(bar.y) * UNIT)
+        .map(|(b, ..)| b)
+        .next()
+        .expect("its box");
+    // A column in, and the box's own line inside its cells, where the chevron's room put it
+    // three and a half columns in.
+    assert!(
+        px(field.x) - f32::from(bar.x) * CELL <= CELL + 4.0,
+        "the box at {} px, the bar at {}",
+        px(field.x),
+        f32::from(bar.x) * CELL
+    );
+}
+
+/// The rows `rows` of what's drawn, as the tour's terminal shows them: each pixel row's
+/// colours, from the window's left edge.
+fn picture(grid: &Grid, rows: std::ops::Range<u16>) -> Vec<Vec<Rgb>> {
+    use cellix_render::{Rasterizer, SoftwareRasterizer};
+    let mut rasterizer = SoftwareRasterizer::new(17, 50)
+        .expect("fonts are in the binary")
+        .with_type_row(36);
+    let mut out = Vec::new();
+    for y in rows {
+        let image = rasterizer.row(grid, y);
+        for line in 0..image.height {
+            let pixels = (0..image.width)
+                .map(|x| {
+                    let at = (line * image.width + x) * 3;
+                    Rgb(image.rgb[at], image.rgb[at + 1], image.rgb[at + 2])
+                })
+                .collect();
+            out.push(pixels);
+        }
+    }
+    out
+}
+
+/// Whether two colours are apart by more than a hair.
+fn apart(a: Rgb, b: Rgb) -> bool {
+    let d = |p: u8, q: u8| p.abs_diff(q) > 24;
+    d(a.0, b.0) || d(a.1, b.1) || d(a.2, b.2)
+}
+
+/// A card's air in pixels, measured in its picture: over its title's capitals, under its
+/// buttons, and between what's last over its buttons and them. `area` is its cells, `main`
+/// its main button's colour.
+fn card_air(app: &App, area: Rect, main: Rgb) -> (usize, usize, usize) {
+    let grid = screen(app);
+    let rows = picture(&grid, area.y..area.bottom());
+    let popup = app.theme.popup;
+    // Down its right side, past its words: the panel's own colour from its top to its foot.
+    let side = usize::from(area.right()) * 17 - 12;
+    let inside: Vec<usize> = (0..rows.len())
+        .filter(|y| rows[*y][side] == popup)
+        .collect();
+    let (top, foot) = (inside[0], inside[inside.len() - 1]);
+    let (from, to) = (
+        usize::from(area.x) * 17 + 24,
+        usize::from(area.right()) * 17 - 24,
+    );
+    let inked = |y: usize| rows[y][from..to].iter().any(|p| apart(*p, popup));
+    let caps = (top..foot).find(|y| inked(*y)).expect("its title");
+    // Its buttons' rows: the main one's colour or a quiet one's, whole. The blended row at
+    // their edge isn't counted as words.
+    let quiet = app.theme.quiet_button(popup);
+    let button_rows: Vec<usize> = (top..foot)
+        .filter(|y| {
+            let row = &rows[*y][from..to];
+            row.iter().filter(|p| **p == main || **p == quiet).count() >= 20
+        })
+        .collect();
+    let (button, button_foot) = (button_rows[0], button_rows[button_rows.len() - 1]);
+    let over = (caps..button - 1)
+        .rev()
+        .find(|y| inked(*y))
+        .expect("its words");
+    (caps - top, foot - button_foot, button - over - 1)
+}
+
+/// A card has a dialog's air round it: as much over its title's capitals and under its
+/// buttons as at its sides, 24 to 32 px, and 24 px between its words, or the box of a
+/// command, and its buttons. The install card had 21 over and under and 17 over its
+/// buttons, the logout card 11 under its command's box, against 34 px at their sides.
+#[test]
+fn a_card_has_a_dialogs_air_round_it() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("Main.java"), "class Main {}\n").unwrap();
+    let mut app = App::new(dir.path().to_path_buf(), (120, 30));
+    airy(&mut app);
+    app.server_install = Some("exit 0".to_string());
+    app.open(&dir.path().join("Main.java")).unwrap();
+    app.servers.clear();
+    app.note_missing("Java");
+    let button = app.theme.button;
+    let (over, under, gap) = card_air(&app, app.offer_area(), button);
+    assert!((24..=34).contains(&over), "{over} px over its title");
+    assert!(over.abs_diff(under) <= 3, "{over} px over, {under} under");
+    assert!((22..=27).contains(&gap), "{gap} px over its buttons");
+    // The logout card, whose command's box is last over its buttons.
+    app.not_now.push("Java".to_string());
+    app.linger = Linger::Offered;
+    let (over, under, gap) = card_air(&app, app.linger_area(), button);
+    assert!((24..=34).contains(&over), "{over} px over its title");
+    assert!(over.abs_diff(under) <= 3, "{over} px over, {under} under");
+    assert!(
+        (22..=27).contains(&gap),
+        "{gap} px from its box to its buttons"
     );
 }
 

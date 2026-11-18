@@ -1501,7 +1501,10 @@ impl App {
             .dock_area()
             .is_some_and(|pane| pane.contains(area.x, area.y));
         let lead = if in_pane { self.pane_card_lead() } else { 0.0 };
-        self.draw_card_led(grid, area, lead);
+        let last = measures::DialogLast::Words;
+        self.draw_card_led(grid, area, (lead, last));
+        // Its words raised over its buttons as a dialog's are (`card_lift`).
+        let words = grid.painted_so_far();
         let base = Style {
             fg: theme.text.fg,
             bg: theme.popup,
@@ -1549,6 +1552,7 @@ impl App {
                 grid.label(area.x + 2, y, line, dim, right);
             }
         }
+        grid.lift_since(words, self.card_lift(last, lead));
         let y = area.bottom().saturating_sub(2);
         // As far in from the card's right edge as its words are from its left: the panel
         // starts `lead` into its first column, so the buttons are painted that much right of

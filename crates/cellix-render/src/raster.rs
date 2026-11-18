@@ -1509,16 +1509,18 @@ mod tests {
         };
         // Down the button's middle, eight cells along: wash, button, wash.
         let (button, round) = (rows(136, true), rows(136, false));
-        // 31.7 px: thirty rows of it whole, and a blended one at each edge.
+        // 27 px, three quarters of the line, where a button is 31.7: shorter, so the wash
+        // has 6 px over it and under it, five of them whole and one blended with the button's
+        // edge. With a button's height it had 4, too little to read.
         assert!(
-            (30..=33).contains(&button.len()),
+            (26..=28).contains(&button.len()),
             "{} px of button",
             button.len()
         );
         let over = round.iter().filter(|y| **y < button[0]).count();
         let under = round.len() - over;
         assert!(
-            (3..=5).contains(&over) && over.abs_diff(under) <= 1,
+            (5..=7).contains(&over) && over.abs_diff(under) <= 1,
             "{over} px of wash over the button, {under} under"
         );
         // Its corners are tighter than a button's, with its height.

@@ -1036,10 +1036,10 @@ from the same room:
 - A button at the end of a pointed row paints its chip on the row's wash and leaves its cells
   the row's own ground. Given the wash's colour, they were a whole row of it behind a button
   that's 0.78 of one.
-- That button stands inside the wash (`Grid::row_button`, `raster::inset`): it keeps the
-  32 px it has on the terminal's line, and the wash, a control of 39 px, shows 4 px over and
-  under it. As tall as the wash, its edges lay on the wash's and the two read as one shape
-  with a step in it. Its corners are 6 px where a button's are 8 (`ROW_BUTTON_RADIUS`),
+- That button stands inside the wash (`Grid::row_button`, `raster::inset`): it's three
+  quarters of the terminal's line, 27 px, and the wash, a control of 39 px, shows 6 px over
+  and under it. As tall as the wash, its edges lay on the wash's and the two read as one shape
+  with a step in it; at a button's 32 px the wash showed 4 px either side. Its corners are 6 px where a button's are 8 (`ROW_BUTTON_RADIUS`),
   nearer the wash's 4. Ask Agent on a problem's row and Install on a language server's are
   the two. Only on Airy rows: on Comfortable ones the wash is under 2 px taller than the
   button, which would be a rim of less than a pixel, and they stay the same height.
@@ -1239,7 +1239,8 @@ row: on a row of 50 px a control 39 px tall has 5 px over it, and on the row und
 that was 5 px from the tab row's line. So, where a row has room: a control on a row between
 lines keeps the height it has on the terminal's line (a button at a pointed row's end, Show
 Source under the tab row, the conflict header's buttons, the chip of the view showing in a
-docked pane's header: a panel's `inset`); a tooltip stands 8 px under its row's top, where the
+docked pane's header: a panel's `inset`; Show Source stands as far under the tab line as its end
+is from the sheet's side, 15 px); a tooltip stands 8 px under its row's top, where the
 line it hangs from is, ends 8 px from the line down the window's side (`App::tip_end`), and
 never covers part of a chip, as the branch's on the heading under the views, or the top of a
 minimap: there's no room between them, so it stands the other side of that edge, 8 px under
@@ -1251,8 +1252,9 @@ opened it, with every menu's air over and under its rows (`Menu::level`); a floa
 a menu, a palette or a tip, keeps both its sides 8 px or more from the sheets' upright lines,
 moving a column along where it would stand on one (`measures::clear_of_lines`): Go to Symbol
 and a tab's menu had their left line on the file's sheet's; the Find bar over the side pane
-stands a row under the tab line, as it does over a file, and a sliver of what's under it either
-side is cleared. A band behind a pointed or picked row stands 8 px in from the sheet's line on both
+stands a row under the tab line, as it does over a file, ends where the pane's lists' words do,
+two columns in, with its box from its edge where it has no chevron, and a sliver of what's
+under it either side is cleared. A band behind a pointed or picked row stands 8 px in from the sheet's line on both
 sides (`measures::band`), counting the half of the frame's column the side pane's sheet starts
 in and the line's own two pixels (`measures::line_pixels`; counted as one, Problems' band
 stood 7 px from it), in the sidebar's lists too (Source Control's, the Timeline's and Agent
@@ -1306,15 +1308,27 @@ so there's as much air over its title as under its buttons, about what its sides
 (`measures::dialog_lifts`, `DIALOG_GAP`); a press lands where they're painted. With a row
 empty over the title and one under the buttons it had 65 px over and 54 under, and its buttons
 17 px under its words. A card in the window's corner, the
-logout notice or the offer to install a language's server, starts and ends inside its first and
-last rows: half a row and more is clear over its title and under its buttons, a row stands
-between its words and its buttons, and its words wrap inside it. The rows its round ends are on
+logout notice or the offer to install a language's server, and the cards over the side pane
+(a stopped session's, an agent asking to start another), starts and ends inside its first and
+last rows, and is a dialog in a corner: on a row with room its words are raised so 24 px stand
+between them, or the box of a command, and its buttons, and its panel starts and stops so its
+title's capitals and its buttons' foot have the air its sides have, 24 to 32 px
+(`measures::card_parts`); they had 21 over and under and 17 or 11 over the buttons. On the
+terminal's line a row stands between its words and its buttons. Its words wrap inside it, and
+it stands inside one sheet, never across the line between the file and the pane
+(`App::corner_frame`). The rows its round ends are on
 keep the colour of whatever each cell lies on, since the corner can be over the file, the side
 pane and the line between them, and that colour is painted over them, so a page's words under
 the card don't show their tops over it. Its panel's top and bottom are moved to the nearest whole
 pixel, which keeps those two lines as sharp as its sides'. A bar that holds a text box, the Find bar
 and a prompt, keeps a quarter of a row clear above and below its rows, which only paint can show,
-and a box's text starts a column inside it. A section's heading is small, bold, quiet capitals
+and a box's text starts a column inside it; a prompt's question and box are raised so its box's
+foot is as far from the bar's as the question's capitals are from its top (they were 10 px and
+19). What a box holds stands in its middle the same way: the symbols panel's last line as far
+from its foot as its buttons from its top, peek's card as far from the pane's foot as from its
+sides (reaching part way into the pane's last row, `Grid::exact_fill`, since a panel shorter
+than a row is stood as a control), a chip's mark and words with the same air either side (the
+branch's, New Workspace's "+"). A section's heading is small, bold, quiet capitals
 wherever it is. Nothing is as wide as its panel for its own sake: Commit and Sync are as wide as
 their words, from the panel's text edge, where Commit had filled the sidebar. In a list of many
 rows an action is words in the accent until its row is pointed at, then a button: Install,

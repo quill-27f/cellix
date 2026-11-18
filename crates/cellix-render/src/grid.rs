@@ -14,8 +14,14 @@ use crate::paint::{Bounds, Paint, UNIT, units};
 const BUTTON_HEIGHT: f32 = 0.88;
 const LARGE_BUTTON_HEIGHT: f32 = BUTTON_HEIGHT;
 /// The corners of a button that stands inside a row's wash, as a percentage of the line:
-/// 6 px where a button's are 8, in keeping with its 32 px against a control's 39.
+/// 6 px where a button's are 8, in keeping with its 27 px against a control's 39.
 const ROW_BUTTON_RADIUS: u8 = 17;
+/// How tall a button inside a row's wash is where a row has room, of the line words are
+/// sized for: 27 px of 36, which leaves 6 px of a 39 px wash over and under it. At a
+/// button's 32 px the wash showed 4 px either side, too little to read as air.
+const ROW_BUTTON_HEIGHT: f32 = 0.75;
+/// The one picture `Grid::exact_fill` scales: a single pixel, all ink.
+const EXACT_FILL: u64 = u64::MAX - 1;
 /// How far a button's words are raised in its chip, in rows: a pixel. Words stand with their
 /// capitals in the row's middle, which left the tail of a "g" 2 px over the chip's foot and
 /// 7 px over a capital; a pixel up, it's 4 and 6.
@@ -535,15 +541,45 @@ impl Grid {
         if !self.roomy {
             return;
         }
-        // Its corners a little tighter with its height: a button's 8 px beside the wash's 4
-        // read as two kinds of shape once there was wash to see round it.
+        // Shorter than a button, about its middle, and its corners a little tighter with its
+        // height: a button's 8 px beside the wash's 4 read as two kinds of shape once there
+        // was wash to see round it.
+        let short = units(ROW_BUTTON_HEIGHT);
         let chips = self.paint.iter_mut().rev();
         for paint in chips.take(2) {
-            if let Paint::Panel { inset, radius, .. } = paint {
+            if let Paint::Panel {
+                bounds,
+                inset,
+                radius,
+                ..
+            } = paint
+            {
+                bounds.y += (bounds.h - short) / 2;
+                bounds.h = short;
                 *inset = true;
                 *radius = ROW_BUTTON_RADIUS;
             }
         }
+    }
+
+    /// A fill of `color` exactly where `bounds` is. A panel shorter than a row is stood as a
+    /// control is on a taller row (`raster::stood`), grown or shrunk about its middle, which
+    /// a surface reaching part way into a row mustn't be: peek's card reaching into the
+    /// pane's last row stood 4 px clear of its own cells.
+    pub fn exact_fill(&mut self, bounds: Bounds, color: Rgb) {
+        let bitmap = crate::paint::Bitmap {
+            id: EXACT_FILL,
+            width: 1,
+            height: 1,
+            kind: crate::paint::Pixels::Coverage,
+            pixels: std::sync::Arc::new(vec![255]),
+        };
+        self.paint.push(Paint::Image {
+            bounds,
+            clip: bounds,
+            bitmap,
+            color,
+        });
     }
 
     /// A button's chip by itself, as wide as asked and not a whole number of cells, for one
@@ -960,6 +996,17 @@ fn button_span((height, drop): (f32, f32), (x, y): (u16, u16), width: u16) -> (f
 /// sized for a line `line` px tall: what a menu dropping from the button already has clear.
 pub fn air_under_button(row: f32, line: f32) -> f32 {
     row - button_in_row(row, line).1
+}
+
+/// Where a button inside a row's wash (`Grid::row_button`) stands in its row where a row has
+/// room, its top and its foot in pixels from the row's top, on rows `row` px tall with words
+/// sized for a line `line` px tall.
+pub fn row_button_in_row(row: f32, line: f32) -> (f32, f32) {
+    let (_, top, _, bottom) = button_span((BUTTON_HEIGHT, 0.0), (0, 0), 1);
+    let (y, h) = (units(top), units(bottom - top));
+    let short = units(ROW_BUTTON_HEIGHT);
+    let (top, tall) = crate::raster::inset(y + (h - short) / 2, short, row, line);
+    (top, top + tall)
 }
 
 /// Where a button's chip stands in its row, its top and its foot in pixels from the row's

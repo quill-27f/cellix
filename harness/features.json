@@ -6515,5 +6515,26 @@
     "title": "A submenu's first row is level with the row that opened it",
     "test": "a_submenus_first_row_is_level_with_the_row_that_opened_it",
     "passes": true
+  },
+  {
+    "id": "card-dialog-air",
+    "milestone": 15,
+    "title": "A card has a dialog's air round it, 24 px over its buttons",
+    "test": "a_card_has_a_dialogs_air_round_it",
+    "passes": true
+  },
+  {
+    "id": "boxes-hold-their-middle",
+    "milestone": 15,
+    "title": "A prompt and the symbols panel hold what they hold in their middle",
+    "test": "boxes_hold_what_they_hold_in_their_middle",
+    "passes": true
+  },
+  {
+    "id": "status-paint-kept",
+    "milestone": 15,
+    "title": "Find's marks in a list leave the status bar's paint its own",
+    "test": "finds_marks_in_a_list_leave_the_status_bars_paint_its_own",
+    "passes": true
   }
 ]
