@@ -6146,10 +6146,6 @@
     "passes": true
   },
   {
-    "id": "terminal-drag-scroll",
-    "milestone": 15,
-    "title": "A drag held past a terminal tab's edge scrolls its scrollback, and the wheel while dragging too",
-    "test": "a_drag_held_past_a_terminals_top_scrolls_its_scrollback_and_the_wheel_does_too",
     "id": "review-markdown",
     "milestone": 15,
     "title": "The review exports as Markdown, a file and a kind at a time, with quotes, verdicts and what's resolved",
@@ -6203,6 +6199,24 @@
     "milestone": 15,
     "title": "Tiles and the first screen use the tabs' marks and the shared buttons",
     "test": "a_tile_and_the_first_screen_have_the_tabs_marks_and_the_shared_buttons",
+    "id": "comment-glance",
+    "milestone": 15,
+    "title": "Resting on commented words with the Comments pane shut shows their comment, last answer and count on a card under them",
+    "test": "resting_on_commented_words_shows_their_comment_until_the_pointer_leaves",
+    "passes": true
+  },
+  {
+    "id": "comment-glance-open",
+    "milestone": 15,
+    "title": "A press on a comment's glance card opens the Comments pane on that comment",
+    "test": "a_press_on_the_card_opens_the_comments_on_its_thread",
+    "passes": true
+  },
+  {
+    "id": "comment-glance-over",
+    "milestone": 15,
+    "title": "A glance card with no room under its words stands over them, never on them",
+    "test": "the_card_stands_over_words_with_no_room_under_them",
     "passes": true
   }
 ]

@@ -125,6 +125,8 @@ words and Comment as you go, then press **Check my review** in the Comments pane
   wording.
 - **The words stay yours.** The agent never edits the document while it reviews; it only comments,
   through `cellix reply` and `cellix suggest`, which any agent can call.
+- **A comment at a glance.** With the Comments pane shut, rest the pointer on commented words to
+  see the comment and its last answer on a card under them; press the card to open it in the pane.
 - **The review comes out as Markdown.** *Comments: Copy Review as Markdown*, or *Save Review as
   Markdown…* to write `review.md` into the project and open it (both also on a right click on the
   Comments tab). It's every comment you kept, a file and a kind at a time in the document's order:

@@ -82,13 +82,13 @@ const REVIEW: &str = "# Review
 
 ### Clarity
 
-**Line 4** · Open
+#### Line 4 · Open
 
 > We propose
 
 Say what's new here.
 
-**Line 12** · Resolved
+#### Line 12 · Resolved
 
 > is robust
 
@@ -100,7 +100,7 @@ Robust to what?
 
 ### Other
 
-**Line 20** · Open
+#### Line 20 · Open
 
 Add a limitations paragraph.
 
@@ -108,7 +108,7 @@ Add a limitations paragraph.
 
 ### Evidence
 
-**Line 9** · Open
+#### Line 9 · Open
 
 > a gain of 4 points
 
@@ -118,7 +118,7 @@ Over which baseline?
 
 ### Structure
 
-**Line 2** · Open
+#### Line 2 · Open
 
 > The first table
 > shows the runs.

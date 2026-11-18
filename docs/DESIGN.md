@@ -459,7 +459,20 @@ pane open on another tab turns to Comments for it, the tab it was on staying in 
 user's ask, 14 November 2026: until then the card was lit behind whatever was in front, where
 nobody saw it). That's only for a press that puts the caret in those words, not one on the
 scrollbar or a checkbox while the caret is already there. A pane that's shut stays shut, since
-the pane holds what was opened and a press in the text isn't a press on the pane. It goes the other way too: a click on a card goes to its
+the pane holds what was opened and a press in the text isn't a press on the pane. So with the pane
+shut, resting the pointer on commented words shows their comment on a card, made as a menu is
+(raised, half a row of air over its first words and under its last, two columns in): who made it
+and its kind, quietly; its words, three rows at most; the last answer, its author and verdict in
+bold ("Claude agrees:"), two rows at most; and under a rule, how many answers and "Open in
+Comments" in the accent. A press on the card opens the pane on that comment as a click on its card
+in the pane does: its words selected, its card lit and in view, the keyboard in the file. The card
+stands on whole rows of its own under the words, its words starting where theirs do, or over them
+where there's no room under; never on them. Where a row has air the panel stands down into the
+next row's air over its words, up to 8 px, clear of the words' tint, and what whole rows leave over
+goes to the room round its rule, as a menu's goes to its rules. It goes
+when the pointer leaves the words and the card, and at a press anywhere else, the wheel or a key.
+It's for words a comment tints, which pages show; code marks a commented line in its gutter
+instead, and has no card (`app/glance.rs`). It goes the other way too: a click on a card goes to its
 words, selects them so they're plain to see, lights the card, and leaves the keyboard in the
 file; the buttons that offer to comment on a selection stay away from those words. The pane lists in the document's order, or by which comment was made last or first
 (a comment's number counts up as they're made, which is the only record of when), chosen from a
@@ -497,7 +510,7 @@ pane lists them with no file in view, a terminal's output last; in each file a k
 in the strip's order, those with no kind last under Other; and down the document within a kind.
 An agent's suggestion goes in once it's kept, which makes it the reviewer's; one dismissed or not
 yet decided doesn't. A short head says how many comments, on how many files, how many resolved,
-and how many of each kind. Each comment says its line and whether it's open or resolved, quotes
+and how many of each kind. Each comment is headed by its line and whether it's open or resolved, quotes
 its words (the whole selection) as a block quote, and has the reviewer's words and every answer
 under them, named, an agent's verdict as "Claude agrees" or "Claude pushes back". Comments carry
 no time, so neither does the review.

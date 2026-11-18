@@ -65,6 +65,7 @@ use crate::source::{Hit as SourceHit, Source as SourceControl};
 
 mod available;
 mod gitops;
+mod glance;
 mod links;
 mod peek;
 mod report;
@@ -1436,6 +1437,9 @@ pub struct App {
     hover: Option<(u16, u16)>,
     /// The same, with the fractions of a cell, for what's painted past its cells.
     pointer: (f32, f32),
+    /// The comment whose words the pointer rests on while the Comments pane is shut, which
+    /// shows on a card under them.
+    glance: Option<glance::Glance>,
     /// The side pane or the editor taking the window.
     maximized: Option<Maximized>,
     /// A tab pressed, and perhaps being dragged.
@@ -1820,6 +1824,7 @@ impl App {
             inbox_shared: None,
             hover: None,
             pointer: (0.0, 0.0),
+            glance: None,
             last_click: None,
             last_toggle: None,
             preview_press: None,
@@ -4535,6 +4540,7 @@ impl App {
                 if typing && matches!(self.overlay, Overlay::None) && !self.dock.focused {
                     self.pane_pressed = false;
                 }
+                self.glance = None;
                 self.key(key);
             }
             Event::Mouse(mouse) => {
@@ -10035,7 +10041,19 @@ impl App {
                     )
                     .when(any),
                 ];
-                self.show_menu((x, y + 2), items);
+                // Hung from the tab's bottom edge, left-aligned to it, as a file tab's is.
+                let title = self.title_of(area);
+                let on_tab = |x: u16| {
+                    matches!(
+                        self.dock.hit(title, x),
+                        Some(TabHit::View(Front::Comments) | TabHit::CloseView(Front::Comments))
+                    )
+                };
+                let mut left = x;
+                while left > title.x && on_tab(left - 1) {
+                    left -= 1;
+                }
+                self.show_menu((left, y + 1), items);
                 return true;
             }
             if mouse.kind == MouseKind::Middle {
@@ -13815,6 +13833,7 @@ impl App {
                 self.hover = None;
                 return;
             }
+            self.follow_glance(mouse.x, mouse.y, mouse.fine_x);
             let in_pane = self
                 .dock_screen()
                 .is_some_and(|a| a.contains(mouse.x, mouse.y));
@@ -13838,6 +13857,9 @@ impl App {
         }
         if !matches!(self.overlay, Overlay::None) {
             self.overlay_mouse(mouse);
+            return;
+        }
+        if self.glance_mouse(mouse) {
             return;
         }
         if mouse.kind == MouseKind::Left && self.click_companion(mouse.x, mouse.y) {
@@ -15897,6 +15919,7 @@ impl App {
         self.draw_status(grid);
         self.draw_suggest(grid);
         self.draw_hover(grid);
+        self.draw_glance(grid);
         self.draw_signature(grid);
         if self.offering_linger() {
             self.draw_linger(grid);
@@ -19271,6 +19294,8 @@ pub(crate) fn machine_name() -> String {
 mod agent_tab_tests;
 #[cfg(test)]
 mod agents_list_tests;
+#[cfg(test)]
+mod glance_tests;
 #[cfg(test)]
 mod link_tests;
 #[cfg(test)]

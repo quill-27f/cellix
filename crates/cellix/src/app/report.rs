@@ -120,7 +120,7 @@ fn entry(thread: &Thread) -> String {
         };
         format!(" · {what} in version {}", version + 1)
     });
-    let mut text = format!("**{at}** · {state}{earlier}\n");
+    let mut text = format!("#### {at} · {state}{earlier}\n");
     let about = match &thread.about {
         Some(About::Problem { message }) => message.as_str(),
         _ if !thread.selection.is_empty() => thread.selection.as_str(),

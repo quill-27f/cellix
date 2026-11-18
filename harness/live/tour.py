@@ -150,6 +150,9 @@ EXPECT = {
     "50-review-order": "Newest first",
     "50-review-tab-menu": "Copy Review",
     "50-review-saved": "Saved the review",
+    "50-comment-glance": "Open in Comments",
+    "50-comment-glance-light": "Open in Comments",
+    "50-comment-glance-open": "Check my",
     "50-comments-all-resolved": "No open comments",
     # A button's cells are fewer than its words, so less of it is waited for.
     "50-comments-resolved-shown": "Hide 2",
@@ -192,7 +195,7 @@ EXPECT = {
 # About how many scenes there are, to cut the tour into parts of a size. Count them with
 # TOUR_LIST=1 when scenes are added: too low a count puts every scene past it in the last part,
 # which then runs out of the guard's time (0.11.0's tour lost ten scenes that way).
-SCENES_IN_ALL = 262
+SCENES_IN_ALL = 265
 # Scenes come to, shot, and those that never reached their surface.
 SEEN, SHOT, FAILED = [0], [], []
 # Which commit the binary is, as far as git can say: the pictures are of that.
@@ -1490,6 +1493,16 @@ with tempfile.TemporaryDirectory() as scratch:
     shoot("50-review-saved", saved, NOTE_FILE, size="150x44")
     if os.path.exists(f"{ROOT}/review.md"):
         os.unlink(f"{ROOT}/review.md")
+    # The pointer resting on commented words with the pane shut: their comment on a card
+    # under them. The page's words overlap in the screen's text, so the pointer goes by "sum"
+    # of "the weights sum to one", the first the screen says.
+    glance = [["wait", 1.5], ["move", *ON("sum", 1)], ["until", "Open in Comments"], ["wait", 0.6]]
+    shoot("50-comment-glance", glance, NOTE_FILE, size="150x44")
+    shoot("50-comment-glance-light", glance, NOTE_FILE, size="150x44", background="eff1f5")
+    # A press on the card opens the Comments on that comment.
+    shoot("50-comment-glance-open", [*glance, ["click", *ON("Open in Comments", 2)],
+                                     ["until", "Check my"], ["wait", 1.0]], NOTE_FILE,
+          size="150x44")
     shoot("50-plan-versions", comments, "docs/PLAN.md", size="150x44")
     # Narrow beside the editor: a pill that can't share its header's row goes under it.
     shoot("50-plan-versions-narrow", comments, "docs/PLAN.md", size="96x44")
