@@ -61,8 +61,11 @@ const AGENTS_WIDTH: u16 = 11;
 const PREVIEW_WIDTH: u16 = 12;
 const LOG_WIDTH: u16 = 8;
 const PROBLEMS_WIDTH: u16 = 13;
-/// Where a tab's name starts, as on the file's tabs.
-const TAB_TEXT: f32 = 1.5;
+/// Where a tab's parts start, in cells: its mark's ink about 20 px in, as far as its ×'s ink
+/// is from its other end (`HUG_CLOSE`), and 8 px past the sheet's line for the first tab,
+/// whose sheet starts half a column into it. At a column and a half the mark stood 21 to 27 px
+/// in and the × 9 to 22 px from the end.
+const TAB_TEXT: f32 = 1.15;
 /// The column between an agent's name and how full its context is.
 const CONTEXT_GAP: u16 = 1;
 /// Room between the name and the context, in cells: about 16 px.
@@ -79,11 +82,12 @@ const CUT_LEAST: u16 = 5;
 /// Its chip under the pointer is exactly its name and that air.
 const CUT_AIR: f32 = 0.5;
 /// What the tab in front has beside its name when the row is short, in cells: the lead a
-/// tab's name always has, 12 px to its ×, the ×, and 10 px to the chip's edge. With room,
-/// a tab has more than this; without, the slack is what would cut its neighbours.
+/// tab's name always has, 12 px to its ×, the ×, and as much air after it as before the mark.
+/// With room, a tab has more than this; without, the slack is what would cut its neighbours.
 pub(crate) const HUG: f32 = 3.92;
-/// How far before a hugging tab's right edge its × is drawn, so 10 px stay past its ink.
-const HUG_CLOSE: f32 = 2.07;
+/// How far before a tab's right edge its × is drawn, so its ink is as far from that edge as
+/// the mark's is from the other.
+const HUG_CLOSE: f32 = 2.42;
 /// Columns a program's mark takes before its name on its tab, as a file's icon does on its
 /// own, and how tall it is in rows: 13 pt. On cells it's one letter and a space.
 const ICON_ROOM: u16 = 2;
@@ -91,7 +95,7 @@ const ICON_SIZE: f32 = 0.70;
 /// How far the mark's middle stands past where a tab's name would start without it, and how
 /// far the name moves for it, in cells: where a file's tab has them.
 const ICON_MIDDLE: f32 = 0.5;
-const ICON_SHIFT: f32 = 1.7;
+pub(crate) const ICON_SHIFT: f32 = 1.7;
 /// Columns an agent's tab has before its × on cells for what it's doing, while it shows it.
 const MARK_ROOM: u16 = 2;
 /// How tall that mark is, in the terminal's lines: a spinner of 12 pt, and a dot half that.
@@ -329,6 +333,9 @@ pub struct Session {
     pub title: Option<String>,
     /// What the person named its tab, which outranks anything the program says.
     pub renamed: Option<String>,
+    /// What the program in it called itself (OSC 7501's `app`), until it takes that back: the
+    /// name the Agents list and the inbox know it by, which its tab goes by too.
+    pub reported: Option<String>,
     /// What its agent is doing, as its hooks last said: its tab's mark.
     pub doing: Doing,
     /// Its agent finished a turn while its tab wasn't in front: a dot until it's looked at.
@@ -469,6 +476,18 @@ pub fn program_icon(name: &str, shell: bool, browser: bool) -> Icon {
         "Copilot CLI" | "Copilot" => Icon::AgentCopilot,
         "Cursor CLI" | "Cursor" => Icon::AgentCursor,
         _ => Icon::Program,
+    }
+}
+
+/// The mark a view's tab has before its name.
+fn view_icon(view: Front) -> Icon {
+    match view {
+        Front::Agents => Icon::Agents,
+        Front::Comments => Icon::Comment,
+        Front::Inbox => Icon::Bell,
+        Front::Pdf => Icon::Picture,
+        Front::Problems => Icon::CircleX,
+        _ => Icon::Log,
     }
 }
 
@@ -632,6 +651,7 @@ impl Session {
             serial: SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             title: None,
             renamed: None,
+            reported: None,
             doing: Doing::Idle,
             done_unseen: false,
             member: None,
@@ -648,7 +668,7 @@ impl Session {
     /// What its tab is called: what the person named it, or for an agent the name its own
     /// title gives it, or else the program's name.
     pub fn label(&self) -> String {
-        if let Some(name) = &self.renamed {
+        if let Some(name) = self.renamed.as_ref().or(self.reported.as_ref()) {
             return name.clone();
         }
         // A shell's is the program running in it, as VS Code names a terminal's tab.
@@ -742,11 +762,14 @@ impl Session {
         true
     }
 
-    /// Whether its tab has its program's mark before its name: an agent's or another
-    /// program's, and a shell's while a command runs in it. A shell at its prompt and the
-    /// browser are names alone, as they were.
-    pub fn has_icon(&self) -> bool {
-        !self.browser && (!self.shell || self.running_program().is_some())
+    /// Whether its tab has its program's mark before its name: where there are pictures every
+    /// tab has, an agent's or another program's, a shell's prompt whether a command runs in it
+    /// or not, and the browser's globe (a shell at its prompt was its name alone beside one
+    /// running `sleep` with the prompt before it). On cells, where a mark is a letter and a
+    /// space of a narrow row, a shell at its prompt and the browser are names alone, as they
+    /// were: a stub of five columns held its prompt and nothing of "Terminal".
+    pub fn has_icon(&self, pictures: bool) -> bool {
+        pictures || (!self.browser && (!self.shell || self.running_program().is_some()))
     }
 
     /// Cellix's own mark for its program, as its tab and the Agents list show it: a task's
@@ -2384,9 +2407,11 @@ impl Dock {
             } else {
                 name.to_string()
             };
-            // The Agents tab has the mark its icon at the top right has, so a narrow pane cuts
-            // it short as it does an agent's, its mark kept. On cells it's its name, as it was.
-            let icon = (pictures && view == Front::Agents).then_some(Icon::Agents);
+            // Every view's tab has a mark, as every session's has: the Agents tab the one its
+            // icon at the top right has, Comments its bubble, the inbox its bell, so a narrow
+            // pane cuts each short as it does an agent's, its mark kept. The inbox's had none.
+            // On cells each is its name, as it was.
+            let icon = pictures.then(|| view_icon(view));
             Face {
                 text,
                 icon,
@@ -2396,7 +2421,7 @@ impl Dock {
         });
         let sessions = self.sessions.iter().map(|session| Face {
             text: session.label(),
-            icon: session.has_icon().then(|| session.icon()),
+            icon: session.has_icon(pictures).then(|| session.icon()),
             context: session.context(),
             state: session.mark(),
         });
@@ -2495,6 +2520,7 @@ impl Dock {
     pub fn another(&self, area: Rect) -> &'static str {
         match self.fit(area) {
             Fit::Whole => "press + for another",
+            Fit::Cut if self.plus_shows(area) => "press + for another",
             Fit::Cut => "start another above",
             Fit::Front => "use ⌄ for another",
         }
@@ -2574,11 +2600,7 @@ impl Dock {
         let faces = self.faces();
         let kept = (faces.get(front)).map_or(0, |face| self.hugging(face));
         let room = end.saturating_sub(start + MAXIMIZE_SHORT);
-        let short = if self.cut_tabs_leave_the_button(area) {
-            room
-        } else {
-            end.saturating_sub(start) + self.tabs_slack.get()
-        };
+        let short = self.cut_room(area);
         if kept + behind * CUT_LEAST > short {
             for (index, width) in widths.iter_mut().enumerate() {
                 *width = if index == front {
@@ -2624,6 +2646,45 @@ impl Dock {
             }
         }
         (widths, Fit::Cut)
+    }
+
+    /// The columns tabs cut short have between them. The + after them keeps its place
+    /// whenever they leave it room at their least: a name is cut further before it gives
+    /// way, since a + that went whenever a name was cut left a row with nothing to start
+    /// another from (m1-agent-tabs, 131, 132).
+    fn cut_room(&self, area: Rect) -> u16 {
+        let start = self.tabs_start(area);
+        let end = self.tabs_end.get();
+        if !self.cut_tabs_leave_the_button(area) {
+            return end.saturating_sub(start) + self.tabs_slack.get();
+        }
+        let room = end.saturating_sub(start + MAXIMIZE_SHORT);
+        if self.cut_keeps_the_plus(area) {
+            room - NEW_WIDTH
+        } else {
+            room
+        }
+    }
+
+    /// Whether the tabs, each cut to its least, leave room for the + after them as well as
+    /// the button that maximizes the pane.
+    fn cut_keeps_the_plus(&self, area: Rect) -> bool {
+        let front = self.front_index().unwrap_or(0);
+        let faces = self.faces();
+        let kept = (faces.get(front)).map_or(0, |face| self.hugging(face));
+        let behind = self.shown_tabs().saturating_sub(1) as u16;
+        let room = (self.tabs_end.get()).saturating_sub(self.tabs_start(area) + MAXIMIZE_SHORT);
+        kept + behind * CUT_LEAST + NEW_WIDTH <= room
+    }
+
+    /// Whether the + after the tabs is drawn: always while they're whole, and while they're
+    /// cut short and leave it room.
+    pub fn plus_shows(&self, area: Rect) -> bool {
+        match self.fit(area) {
+            Fit::Whole => true,
+            Fit::Cut => self.cut_keeps_the_plus(area),
+            Fit::Front => false,
+        }
     }
 
     /// Whether the tabs, each cut to its least, leave the button that maximizes the pane its
@@ -2983,6 +3044,22 @@ impl Dock {
             after = state_x + MARK_WIDE;
         }
         let close = after + chevron + CLOSE_AIR;
+        // What its whole columns hold past what it paints is shared by its two ends, so the
+        // air before its mark and after its × is the same in every tab: left after the ×, it
+        // made that air 9 px in one tab and 22 in the next, by how the columns rounded. It's
+        // shared as the tab stands with nothing to say, so its name doesn't move as its agent
+        // starts and stops; what showing that takes goes after its ×.
+        let slack = f32::from(right) - (close + HUG_CLOSE);
+        let quiet = close + HUG_CLOSE - f32::from(tab.x) - state;
+        let idle = f32::from(columns(quiet)) - quiet;
+        let even = if text == face.text && (-1.0..1.0).contains(&slack) {
+            idle / 2.0
+        } else {
+            0.0
+        };
+        let (icon_x, name_x, name_end) = (icon_x + even, name_x + even, name_end + even);
+        let context = context.map(|(x, letters)| (x + even, letters));
+        let (state_x, after, close) = (state_x + even, after + even, close + even);
         // What the cell tier's letters say, which the screen's text is: painted words are
         // narrower than their letters, so the parts' letters stand from the tab's end, its ×
         // in its last column, its chevron and what it's doing before that, its context before
@@ -3048,7 +3125,7 @@ impl Dock {
         }
         let end = self.plus_x(area);
         // Out of room, the + gives way: the icons at the top right start the same things.
-        if fit == Fit::Whole && x >= end && x < end + NEW_WIDTH {
+        if self.plus_shows(area) && x >= end && x < end + NEW_WIDTH {
             return Some(TabHit::New);
         }
         let maximize = self.maximize_button(area);
@@ -3068,7 +3145,6 @@ impl Dock {
         let row = Rect::new(area.x, area.y, area.w, 1);
         grid.fill(row, theme.tab);
         let fit = self.fit(area);
-        let whole = fit == Fit::Whole;
         let hugs = fit == Fit::Cut;
         let cuts = self.cut_short(area);
         let faces = self.faces();
@@ -3080,8 +3156,8 @@ impl Dock {
             };
             grid.glyph_in(at, area.y, (Icon::ChevronDown, quiet.fg), "▾", quiet);
         };
-        // The tab before, where it ended and whether it stood cut short, for the line between
-        // two cut short side by side.
+        // The tab before, where it ended and whether it was the one in front, for the line
+        // between two behind it side by side.
         let mut before: Option<(u16, bool)> = None;
         for (index, (face, tab)) in faces.iter().zip(self.tab_rects(area)).enumerate() {
             // Out of room, only the tab in front has columns; the rest are in its list.
@@ -3121,16 +3197,18 @@ impl Dock {
                 (icon, colour, initial(icon, &face.text))
             });
             let cut = cuts[index];
-            // Two cut short side by side have a hairline between them, so the state at the end
-            // of one is never read as the next one's: they stand a cell apart.
-            if cut
+            // Two tabs behind the one in front, side by side, have a hairline between them, so
+            // the state at the end of one is never read as the next one's, and the room a tab
+            // keeps for its × reads as its own: whole, an unselected tab's 54 px after its
+            // dot stood with nothing to say where it ended. The tab in front is its own shape.
+            if !on
                 && !measure.in_cells()
-                && before.is_some_and(|(end, was_cut)| was_cut && end == tab.x)
+                && before.is_some_and(|(end, was_on)| !was_on && end == tab.x)
             {
                 let line = Bounds::cells(f32::from(tab.x), f32::from(area.y) + 0.28, 0.0, 0.44);
                 grid.hairline(line, theme.border);
             }
-            before = Some((tab.right(), cut));
+            before = Some((tab.right(), on));
             if cut {
                 cut_tab(grid, tab, face, (style, hovered, mark), (measure, theme));
                 continue;
@@ -3189,7 +3267,8 @@ impl Dock {
         let button = Rect::new(plus, area.y, NEW_WIDTH, 1);
         let on_it = hover.is_some_and(|h| button.contains(h.0, h.1));
         // Out of room, the + gives way: the icons at the top right start the same things.
-        if on_it && whole {
+        let plus_shows = self.plus_shows(area);
+        if on_it && plus_shows {
             grid.panel(
                 Bounds::inset(button, 0.1, 0.1),
                 16,
@@ -3205,7 +3284,7 @@ impl Dock {
             },
             ..theme.tab
         };
-        if whole {
+        if plus_shows {
             grid.label(plus + 1, area.y, "+", style, area.right());
         }
         // Maximized, it stands on the chip a selected icon has, so it's plain how to get back.

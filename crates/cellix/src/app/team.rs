@@ -460,10 +460,12 @@ impl App {
             .filter_map(|(index, session)| {
                 let doing = self.doing(index);
                 // As an agent's hooks say it: a turn it finished is done, a dot at its row's
-                // end, as one with a tab has it until that's in front.
+                // end, as one with a tab has it until that's in front. One ready for a turn
+                // it hasn't had is done too, as peek's header says: its row stood with no
+                // mark under a heading that counted it (172).
                 let urgency = match &doing {
                     Doing::Asking(_) => Urgency::NeedsYou,
-                    Doing::Done(said) if said == "Finished" => Urgency::Done,
+                    Doing::Done(_) => Urgency::Done,
                     doing if doing.working() => Urgency::Working,
                     _ => Urgency::Idle,
                 };
@@ -2055,10 +2057,25 @@ mod tests {
         let name = grid.cell(x, helper).style;
         assert!(name.bold, "bold, as its section's names are");
         assert_eq!(name.fg, app.theme.sidebar.fg, "in the words' own colour");
-        assert!(
-            !grid.row_text(helper).contains('●'),
-            "nothing at its end yet"
-        );
+        // Ready, it has the done dot peek's header shows for it: with nothing at its end it
+        // stood under a heading that counted it as working.
+        let dot = grid.row_text(helper).chars().position(|c| c == '●');
+        let dot = dot.expect("its own mark") as u16;
+        assert_eq!(grid.cell(dot, helper).style.fg, app.theme.git_added);
+        // And peek's header says "● done" in that colour, where it said "done" in grey.
+        let x = grid.row_text(helper).find("reviewer").unwrap() as u16;
+        click(&mut app, (x, helper));
+        let grid = screen(&app);
+        let (_, head) = find(&grid, "done");
+        let header = grid.row_text(head);
+        let word = header[..header.find("done").unwrap()].chars().count() as u16;
+        let dot = (0..word).rev().find(|x| grid.cell(*x, head).symbol == "●");
+        let dot = dot.unwrap_or_else(|| panic!("a dot before done: {header}"));
+        assert_eq!(grid.cell(dot, head).style.fg, app.theme.git_added);
+        assert_eq!(grid.cell(word, head).style.fg, app.theme.git_added);
+        // Closed, and the list in front again: peek opened over its agent's tab.
+        click(&mut app, (2, 20));
+        app.run(Command::ListAgents);
         // Its turn over, it has its own done dot.
         says(&mut app, "reviewer", AgentState::Working, "Working");
         says(&mut app, "reviewer", AgentState::Idle, "Finished");

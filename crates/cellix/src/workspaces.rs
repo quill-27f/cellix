@@ -57,10 +57,9 @@ const AFTER: f32 = 2.0;
 /// there were 7 to 9 px more between the two than over the first or under the second.
 const PAIR: (f32, f32) = (0.04, 0.06);
 const NEW_WORKSPACE: &str = "New Workspace";
-/// The first screen's way out, beside Open: its word, and how far it stands from the
-/// column's left edge.
+/// The first screen's buttons: the way out, beside the one that opens the picked workspace.
 const QUIT: &str = "Quit";
-const QUIT_FROM: u16 = 8;
+const OPEN: &str = "Open";
 const NEW_WORKSPACE_TIP: &str = "Open another folder beside this one";
 /// The tip's size, relative to the interface font.
 const TIP_SIZE: u8 = 85;
@@ -631,11 +630,9 @@ impl Workspaces {
         let mut x = 1.0;
         let mut spans = Vec::new();
         for (index, workspace) in self.list.iter().enumerate() {
-            let (_, word, _) = self.word(&workspace.app);
-            let mut width = self.room(PAD)
-                + self.room(MARK)
-                + self.room(GAP)
-                + self.text_width(&name_of(&workspace.app));
+            let (mark, word, _) = self.word(&workspace.app);
+            let mut width =
+                self.room(PAD) + self.mark_room(mark) + self.text_width(&name_of(&workspace.app));
             if !word.is_empty() {
                 width += self.room(WORD_GAP) + self.text_width(&word);
             }
@@ -779,10 +776,13 @@ impl Workspaces {
                 theme.attention,
             ),
             TileState::Working => (Mark::Spin(theme.accent), "working".into(), dim),
-            TileState::Done(at) => (Mark::Check, format!("done {}", ago(at)), dim),
-            TileState::Stopped(_) => (Mark::Stopped, "stopped".into(), dim),
-            TileState::Idle => (Mark::Dot(dim), String::new(), dim),
-            TileState::Nothing => (Mark::Ring, String::new(), dim),
+            // The marks a tab shows and only those: green for a finished turn, where the tile
+            // had a check; and nothing where a tab has nothing to say, where an idle terminal's
+            // tile had a dark dot, an empty one a ring and a stopped one a square, which no tab
+            // has. The words say stopped.
+            TileState::Done(at) => (Mark::Dot(theme.git_added), format!("done {}", ago(at)), dim),
+            TileState::Stopped(_) => (Mark::None, "stopped".into(), dim),
+            TileState::Idle | TileState::Nothing => (Mark::None, String::new(), dim),
         }
     }
 
@@ -881,29 +881,18 @@ impl Workspaces {
             }
             let (mark, word, color) = self.word(&workspace.app);
             let mut x = span.start + self.room(PAD);
-            match ink {
-                Some(ink) => {
-                    let inked = Theme {
-                        gutter: Style {
-                            fg: ink,
-                            ..theme.gutter
-                        },
-                        git_added: ink,
-                        ..*theme
-                    };
-                    // On the accent the marks are in the chip's ink, but for what needs the
-                    // person, whose dot keeps its own colour and stands in a ring of the ink.
-                    let mark = match mark {
-                        Mark::Dot(color) if color == theme.attention => Mark::Ringed(color, ink),
-                        Mark::Dot(_) => Mark::Dot(ink),
-                        Mark::Spin(_) => Mark::Spin(ink),
-                        other => other,
-                    };
-                    self.draw_mark(grid, (x, y), mark, &inked, base);
+            // On the accent the marks are in the chip's ink, but for what needs the person,
+            // whose dot keeps its own colour and stands in a ring of the ink.
+            let shown = match (ink, mark) {
+                (Some(ink), Mark::Dot(color)) if color == theme.attention => {
+                    Mark::Ringed(color, ink)
                 }
-                None => self.draw_mark(grid, (x, y), mark, theme, base),
-            }
-            x += self.room(MARK) + self.room(GAP);
+                (Some(ink), Mark::Dot(_)) => Mark::Dot(ink),
+                (Some(ink), Mark::Spin(_)) => Mark::Spin(ink),
+                (_, mark) => mark,
+            };
+            self.draw_mark(grid, (x, y), shown, base);
+            x += self.mark_room(mark);
             let name = name_of(&workspace.app);
             let bright = if active { theme.text.fg } else { base.fg };
             let name_style = Style {
@@ -1118,8 +1107,11 @@ impl Workspaces {
     /// Where Quit stands on the first screen, beside Open.
     fn quit_link(&self) -> Rect {
         let (left, ..) = self.choice_rows();
-        let width = QUIT.len() as u16;
-        Rect::new(left + QUIT_FROM, self.open_all_row(), width, 1)
+        let measure = self.measure();
+        let open = crate::measures::button_cells(OPEN, measure.as_ref());
+        let quit = crate::measures::button_cells(QUIT, measure.as_ref());
+        let x = left + open.chars().count() as u16 + crate::measures::BUTTON_GAP;
+        Rect::new(x, self.open_all_row(), quit.chars().count() as u16, 1)
     }
 
     /// The button at the end of the first screen's foot, which quits as it does on every
@@ -1229,8 +1221,10 @@ impl Workspaces {
             } else if hovered {
                 grid.panel(chip, CHIP_RADIUS, Some(theme.row_hover), None);
             }
+            // The marks a tile and a tab show: a spinner while it works, where this was a
+            // still blue dot.
             let (mark, word, color) = self.word(&workspace.app);
-            draw_mark(grid, (f32::from(left), y), mark, theme, base);
+            self.draw_mark(grid, (f32::from(left), y), mark, base);
             let strong = Style { bold: true, ..base };
             label(
                 grid,
@@ -1257,21 +1251,35 @@ impl Workspaces {
             0.0,
         );
         grid.hairline(rule, theme.border);
-        let link = Style {
-            fg: theme.accent,
+        // Open the picked one, and the way out beside it: the buttons every screen has, the
+        // main one filled and the other quiet, where they were words in the accent and grey.
+        let y = self.open_all_row();
+        let measure = self.measure();
+        // Where there are pictures the cells keep the ground and the chip is painted round
+        // over them: in its fill they stood as a square block behind it.
+        let cells = measure.in_cells();
+        let ground = |fill| if cells { fill } else { base.bg };
+        let open = crate::measures::button_cells(OPEN, measure.as_ref());
+        let filled = Style {
+            fg: theme.button_text,
+            bg: ground(theme.button),
             ..base
         };
-        let y = self.open_all_row();
-        grid.label(left, y, "Open", link, right);
+        grid.button(left, y, &open, OPEN, theme.button, filled);
         // The way out, beside it and at the end of the foot, where it is on every other
         // screen.
         let leaving = self.hover.is_some_and(|(x, y)| self.on_quit(x, y));
         let quit = self.quit_link();
-        let style = if leaving { base } else { dim };
-        grid.label(quit.x, quit.y, QUIT, style, right);
+        let quiet = theme.secondary(base.bg, leaving);
+        let style = Style {
+            fg: theme.text.fg,
+            bg: ground(quiet),
+            ..base
+        };
+        let cells = crate::measures::button_cells(QUIT, measure.as_ref());
+        grid.button(quit.x, quit.y, &cells, QUIT, quiet, style);
         if let Some(cell) = self.quit_button() {
             let on_it = self.hover.is_some_and(|(x, y)| cell.contains(x, y));
-            let measure = self.measure();
             crate::app::draw_quit(grid, cell, on_it || leaving, (theme, measure.as_ref()));
         }
         // What the pointer is on says what it does, where the keys are named otherwise.
@@ -1308,19 +1316,16 @@ impl Workspaces {
     }
 }
 
-/// How a tile marks its state.
-#[derive(Clone, Copy)]
 /// What a workspace's chip shows before its name: the marks a tab shows for what its agents
-/// are doing, a spinner while they work and a dot in the colour of what needs the person, and
-/// its own for the rest.
+/// are doing, a spinner while they work, a dot in the colour of what needs the person and a
+/// green one for a finished turn, and nothing where a tab would show nothing.
+#[derive(Clone, Copy, PartialEq)]
 enum Mark {
     Dot(Rgb),
     Spin(Rgb),
     /// A dot standing in a ring of the second colour, where its own wouldn't show.
     Ringed(Rgb, Rgb),
-    Ring,
-    Check,
-    Stopped,
+    None,
 }
 
 /// How much bigger the ring round a dot is than the dot, across.
@@ -1330,14 +1335,7 @@ impl Workspaces {
     /// A tile's mark at `x`: the spinner and dots at the size a spinner beside the status bar's
     /// words is, a little before where a word would start, so as much air stands between
     /// them and the name as between the chip's edge and them.
-    fn draw_mark(
-        &self,
-        grid: &mut Grid,
-        (x, y): (f32, u16),
-        mark: Mark,
-        theme: &Theme,
-        base: Style,
-    ) {
+    fn draw_mark(&self, grid: &mut Grid, (x, y): (f32, u16), mark: Mark, base: Style) {
         let size = crate::measures::WAIT_SPIN;
         let at = x - MARK_LEAD;
         // How wide a mark `size` rows tall is, in columns.
@@ -1353,41 +1351,17 @@ impl Workspaces {
                 grid.dot(at - wider, y, size * RING, ring, base);
                 grid.dot(at, y, size, color, base);
             }
-            other => draw_mark(grid, (x, y), other, theme, base),
+            Mark::None => {}
         }
     }
-}
 
-fn draw_mark(grid: &mut Grid, (x, y): (f32, u16), mark: Mark, theme: &Theme, base: Style) {
-    let right = grid.width();
-    match mark {
-        Mark::Dot(color) | Mark::Spin(color) | Mark::Ringed(color, _) => {
-            label(grid, (x, y), "●", Style { fg: color, ..base }, right)
-        }
-        Mark::Ring => label(
-            grid,
-            (x, y),
-            "○",
-            Style {
-                fg: theme.gutter.fg,
-                ..base
-            },
-            right,
-        ),
-        Mark::Check => {
-            let style = Style {
-                fg: theme.git_added,
-                ..base
-            };
-            // The check is wider than the dots, so it starts a little earlier to end with them.
-            grid.glyph(x - 0.2, y, Icon::Check, theme.git_added, "✓", style);
-        }
-        Mark::Stopped => {
-            let style = Style {
-                fg: theme.gutter.fg,
-                ..base
-            };
-            grid.glyph(x, y, Icon::Stop, theme.gutter.fg, "■", style);
+    /// The columns a tile's mark takes before its name, with the air after it: none where
+    /// it has none, so its name has the chip's padding before it as at its other end.
+    fn mark_room(&self, mark: Mark) -> f32 {
+        if mark == Mark::None {
+            0.0
+        } else {
+            self.room(MARK) + self.room(GAP)
         }
     }
 }
@@ -1471,6 +1445,81 @@ mod tests {
 
     fn bar(spaces: &Workspaces) -> String {
         screen(spaces).row_text(spaces.size().1 - 1)
+    }
+
+    /// A tile has the marks a tab has and only those: a green dot for a finished turn, where
+    /// it had a check, and none where a tab has none, idle, empty or stopped, where it had a
+    /// dark dot, a ring and a square. The first screen shows the same marks, a spinner where
+    /// it had a still dot, and Open and Quit as the buttons every screen has, not words.
+    #[test]
+    fn a_tile_and_the_first_screen_have_the_tabs_marks_and_the_shared_buttons() {
+        use cellix_render::{FontMeasure, Paint, UNIT};
+        let (_dir, first, second) = projects();
+        let mut spaces = spaces();
+        spaces.open(first);
+        spaces.open(second);
+        spaces.handle(Event::Resize(140, 30));
+        spaces
+            .app_mut()
+            .set_measure(Rc::new(FontMeasure::new(17, 36)));
+        let theme = *spaces.theme();
+        let foot = i32::from(spaces.size().1 - 1) * UNIT - UNIT / 2;
+        let marks = |spaces: &Workspaces| -> Vec<(Rgb, bool)> {
+            let grid = screen(spaces);
+            let found = grid.paint.iter().filter_map(|p| match p {
+                Paint::Spinner {
+                    bounds,
+                    color,
+                    step,
+                } if bounds.y > foot => Some((*color, step.is_some())),
+                // The check and the square tiles had; a tile's × and the status bar's icons
+                // aren't marks.
+                Paint::Icon {
+                    bounds,
+                    color,
+                    icon: Icon::Check | Icon::Stop,
+                } if bounds.y > foot => Some((*color, false)),
+                _ => None,
+            });
+            found.collect()
+        };
+        // Nothing running: no mark on either tile, nor a letter standing for one.
+        assert!(marks(&spaces).is_empty(), "nothing to say");
+        let row = bar(&spaces);
+        for letter in ['○', '✓', '■'] {
+            assert!(!row.contains(letter), "{row}");
+        }
+        // Behind, a finished turn: the green dot a tab has, still.
+        let behind = 1 - spaces.active;
+        spaces.list[behind]
+            .app
+            .serve(event(AgentState::Working, "Working"));
+        spaces.list[behind]
+            .app
+            .serve(event(AgentState::Idle, "Finished"));
+        assert_eq!(marks(&spaces), [(theme.git_added, false)]);
+
+        // The first screen: the working one's spinner, and Open filled and Quit quiet.
+        spaces.list[behind]
+            .app
+            .serve(event(AgentState::Working, "Working"));
+        spaces.choosing = true;
+        spaces.fit();
+        let grid = screen(&spaces);
+        let turning = grid.paint.iter().any(
+            |p| matches!(p, Paint::Spinner { color, step: Some(_), .. } if *color == theme.accent),
+        );
+        assert!(turning, "a spinner for the one at work");
+        let y = spaces.open_all_row();
+        let on_row = |fill: Rgb| {
+            grid.paint.iter().any(|p| {
+                matches!(p, Paint::Panel { bounds, fill: Some(f), .. }
+                    if *f == fill && bounds.y / UNIT == i32::from(y))
+            })
+        };
+        assert!(on_row(theme.button), "Open, filled");
+        let base = theme.text.bg;
+        assert!(on_row(theme.secondary(base, false)), "Quit, quiet");
     }
 
     /// An app can't see the other workspaces, and its palette offers Next Workspace only

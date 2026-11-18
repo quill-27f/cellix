@@ -769,7 +769,16 @@ the size of a spinner beside the status bar's words, standing in the room a word
 On the tile in front, which is the accent, they're in its ink, but for the dot of what needs
 the person, which keeps its colour in a ring of the ink: the colour is too near the accent's
 to show on it. Until 0.11.0's review the tile said "working" after a still dot, and "needs
-you" in the chip's ink with nothing of its colour.
+you" in the chip's ink with nothing of its colour. It has those marks and only those: a green
+dot for a finished turn, where it had a check, and no mark where a tab would have none, idle,
+empty or stopped (the words say stopped), where it had a dark dot, a ring and a square no tab
+has; with no mark its name has the chip's padding before it. What it says is the most urgent
+thing any of its tabs says, and the badge on the Agents icon and the status bar count the same
+way: a tab asking stood beside a tile that said "done just now" once another agent's news from
+the same process had taken the asking one's place among the agents (`App::needing_you`). The
+first screen, the workspaces to pick from, shows the same marks, a spinner where it had a
+still dot, and Open and Quit are buttons, the main one filled and Quit quiet, where they were
+words.
 
 Under the sheets the frame fills a band: the bar's own row, what the terminal's lines leave
 over under the last of Cellix's rows, and the terminal's padding under its lines, which
@@ -1276,7 +1285,13 @@ alone with its chevron, as moving the strip would bring the next into view.
 Where there are pictures, each of the side pane's tabs is as wide as what it paints, measured:
 the lead, its mark, its name, how full its agent's context is, what it's doing half a cell
 (8 px) after that, and 12 px, its × and its air; its columns round away up to 5 px of that air,
-so a sliver doesn't cost a neighbour a column. Counted in letters, as cells count them, a tab
+so a sliver doesn't cost a neighbour a column. The air before its mark and after its × is the
+same, about 20 px to their ink, and what its whole columns hold past what it paints is shared
+by both ends: left after the ×, the air there ran from 9 px to 22 by how a tab's columns
+rounded, beside 21 to 27 before the mark. A tab behind keeps its ×'s room, as VS Code's do,
+so a tab doesn't move as it's pointed at, and two tabs behind the one in front, whole or cut
+short, have a hairline between them, so that room reads as the tab's own (the tab in front is
+its own shape). Counted in letters, as cells count them, a tab
 was nearly twice what it painted, and two tabs, an agent's and a terminal's, were enough to
 cut the row short with 200 px to spare, which took the + away (found in 0.11.0's tour). So
 the + stands a cell after the last tab whenever the tabs and it fit, and its menu is in reach;
@@ -1293,8 +1308,11 @@ of the slack a tab has when there's room, since that slack is what would cut its
 Those behind it stand as names alone, half a column of air either side, whole while they
 fit and then cut short with a "…", the longest giving way first; two of them side by side have
 a hairline between them, centred in the cell that parts them, so what one is doing at its end
-is never read as the next one's. The + gives way too, since
-the icons beside it start the same things. The button that maximizes the pane doesn't: it
+is never read as the next one's. The + keeps its place after them: the names are cut further
+before it gives way, and it goes only where the tabs, each cut to its least, leave it no room
+(the icons beside it start the same things). It gave way whenever any name was cut, which left
+a row of agents with nothing to start another from beside it (0.11.0's recheck: m1-agent-tabs,
+131, 132). The button that maximizes the pane doesn't give way: it
 keeps three columns at the end of the pane's part of the row, and the names are cut that much
 sooner (decided on 2026-11-16: it gave way with the +, and inside Claude Code, where Cellix has
 at most 45% of the window and its side pane opens 40 columns wide, the user had no way in
@@ -1310,17 +1328,22 @@ A program's tab in the side pane has its mark before its name, where a file's ta
 and at its size: Cellix's own marks, never a vendor's logo. Claude Code's is an eight-line
 burst in a warm clay, Codex's a hexagon with a prompt inside it in the text's colour, Gemini
 CLI's a filled star of four points in a blue of its own. OpenCode, Copilot CLI and Cursor's
-agent, which have none of Cellix's, are a filled square in the quieter text colour with their
-initial cut out of it, O, C and C, and any other program, one that reports by OSC 7501 under a
+agent, which have none of Cellix's, are a filled square in the quieter text colour with
+their initial cut out of it, O and C, and Cursor's a pointer cut out of it (it shared Copilot
+CLI's C, and the two read as one); any other program, one that reports by OSC 7501 under a
 name of its own, the same square with its own name's initial; a task's tab has a shell's
 prompt, `>_`. One meaning to a mark: a hollow square stood for an agent not installed, a
 running Copilot CLI and an ended task at once, and read as a box to tick (0.11.0's review).
-On cells one letter each, `✻ ⬡ ✦`, the initial for the squares, and `>` for a prompt. In the
-+ menu and Review with…, an agent that isn't installed keeps its own mark, dimmed. A shell's
-tab and the
-browser's are their names alone, as they were, and a shell's has room for a mark only while
-what runs in it says how it is (OSC 7501), or while a command runs in it, when it's named after
-the command with a shell's mark before it (below). An agent's tab shows what its agent is doing half a cell after its name: the spinner in
+On cells one letter each, `✻ ⬡ ✦`, the initial for the squares, `↖` for Cursor's and `>` for
+a prompt. In the + menu and Review with…, an agent that isn't installed keeps its own mark,
+dimmed. Every tab has a mark: a shell's has its prompt at its prompt as while a command runs
+in it, the browser's its globe, and where there are pictures each view's the one its icon
+has, the Agents list's, Comments' bubble, the inbox's bell, the Preview's picture, Problems'
+circled ×, the Log's lines (a shell at its prompt and the inbox were names alone beside
+tabs with marks). A program that says what it is (OSC 7501's `app`) names its tab, as it
+names its row in the Agents list and the inbox, until it takes that back: the tab said
+"Terminal" beside a row that said "deploy". A shell running a command is named after the
+command with a shell's mark before it (below). An agent's tab shows what its agent is doing half a cell after its name: the spinner in
 the accent while it works, a dot in the attention colour while it asks, a green dot when it
 finished a turn while its tab wasn't in front, until it is, and nothing while it's idle. An
 idle tab keeps no room for a state it isn't showing, so its × follows its name with nothing
@@ -1614,12 +1637,14 @@ it in peek, its live terminal on a card over the side pane, a cell in from it (a
 sides, a row over and under), with what's behind dimmed (panel 5). The card's header, its first
 row, has its mark, its name in bold, what it's doing as a mark and a word in that state's
 colour (the spinner and "working" in the blue, a green dot and "done" once it has finished a
-turn, the attention colour's dot and "asking", the red's and "error"; ready and waiting, its
-word alone and quieter, as its row in the Agents list has no mark then), "· from" its agent's
-tab, quieter, Keep as Tab and ×; a line under it, then the terminal, sized to the card, a
-column inside its panel. The header's parts are laid out by what each measures, from their
-ink: 16 px between the name, what it's doing and who started it, and a mark 8 px from its word
-(by cells, "from Claude…" was cut with 82 px to spare, and the gaps ran 10 to 21 px). Who
+turn or is ready for one, the attention colour's dot and "asking", the red's and "error"; its
+row in the Agents list has the same mark, where a ready helper had none under a heading that
+counted it, and "done" was grey words beside a working one's spinner, 0.11.0's recheck),
+"· from" its agent's tab, quieter, Keep as Tab and ×; a line under it, then the terminal, sized
+to the card, a column inside its panel. The header's parts are laid out by what each measures,
+from their ink: 16 px between the name and what it's doing, a mark 8 px from its word, and
+8 px either side of the "·" before who started it (it stood 20 px from the word and 8 from
+"from"; by cells, "from Claude…" was cut with 82 px to spare, and the gaps ran 10 to 21 px). Who
 started it is whole or not there: "· from Cl…" said nothing in a narrow pane. Keep as Tab is a quiet button, as the
 board has it, at its height on the terminal's line as a button on a pointed row is
 (`Grid::row_button`), which keeps 9 px from the card's edge and from the line under the header on

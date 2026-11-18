@@ -342,7 +342,9 @@ pub fn fallback(icon: Icon) -> &'static str {
         // An agent with no mark of its own is its initial, as its square has it cut out; any
         // other program's letter is its own name's, put there where it's drawn.
         Icon::AgentOpenCode => "O",
-        Icon::AgentCopilot | Icon::AgentCursor => "C",
+        Icon::AgentCopilot => "C",
+        Icon::Log => "≣",
+        Icon::AgentCursor => "↖",
         Icon::Program => "■",
         Icon::Diff => "±",
         Icon::Replace => "⇄",

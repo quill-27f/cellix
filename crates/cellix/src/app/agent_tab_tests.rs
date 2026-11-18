@@ -244,3 +244,50 @@ fn a_narrow_pane_keeps_each_agents_mark_and_state() {
     assert!(!row.contains("pri…"), "no letters cut short: {row}");
     assert_eq!(first, 0);
 }
+
+/// The workspace's tile says the most urgent thing its tabs say. A tab asking stood beside a
+/// tile that said "done just now", with no badge and no message, once another agent's news
+/// from the same process had taken the asking one's place among the agents (m1-agent-tabs).
+#[test]
+#[cfg(unix)]
+fn the_tile_says_what_the_most_urgent_tab_says() {
+    use super::TileState;
+    let (dir, mut app) = project();
+    start(dir.path(), &mut app, "✳ pricing page");
+    let pid = Some(std::process::id());
+    let news = |session: &str, agent: &str, state, detail: &str| {
+        Request::Agent(AgentEvent {
+            session: session.into(),
+            agent: agent.into(),
+            state,
+            detail: detail.into(),
+            folder: "/w".into(),
+            pid,
+            transcript: String::new(),
+            name: String::new(),
+        })
+    };
+    app.serve(news(
+        "s1",
+        "Claude Code",
+        AgentState::NeedsYou,
+        "Allow Bash?",
+    ));
+    assert_eq!(app.tile_state(), TileState::NeedsYou);
+    // Another agent's news from the same process, which works and then finishes.
+    app.serve(news("s2", "Gemini CLI", AgentState::Working, "Working"));
+    app.serve(news("s2", "Gemini CLI", AgentState::Idle, "Finished"));
+    assert_eq!(app.agents.needing_you(), 0, "its news is gone");
+    let (grid, y) = tab_row(&app);
+    let dot = column_of(&grid, y, "●").expect("the tab still asks");
+    assert_eq!(grid.cell(dot, y).style.fg, app.theme().attention);
+    assert_eq!(
+        app.tile_state(),
+        TileState::NeedsYou,
+        "and so does the tile"
+    );
+    assert_eq!(app.needing_you(), 1, "for the badge and the status bar too");
+    // Once it's answered, working is what the tile says while its tab turns.
+    app.serve(news("s1", "Claude Code", AgentState::Working, "Working"));
+    assert_eq!(app.tile_state(), TileState::Working);
+}

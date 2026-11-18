@@ -186,9 +186,14 @@ fn the_plus_stays_after_an_agents_tab_and_another() {
     }
     app.overlay = Overlay::None;
 
-    // Only when the tabs truly don't fit does it give way.
-    app.dock.width = Some(24);
-    app.handle(Event::Resize(150, 44));
+    // Only when the tabs, each cut to its least, leave it no room does it give way.
+    let gone = (16..60).rev().find(|width| {
+        app.dock.width = Some(*width);
+        app.handle(Event::Resize(150, 44));
+        let _ = screen(&app);
+        !app.dock.plus_shows(title(&app))
+    });
+    assert!(gone.is_some(), "some width is too narrow for it");
     let row = title(&app);
     assert_ne!(app.dock.fit(row), Fit::Whole);
     let grid = screen(&app);
@@ -196,6 +201,61 @@ fn the_plus_stays_after_an_agents_tab_and_another() {
         .into_iter()
         .any(|(text, ..)| text == "+");
     assert!(!drawn, "out of room it gives way");
+}
+
+/// A row too short for every tab whole cuts the names behind the one in front further
+/// rather than lose the +: it kept giving way the moment any name was cut, which left a row
+/// of agents with nothing to start another from (m1-agent-tabs, 131, 132).
+#[test]
+#[cfg(unix)]
+fn names_are_cut_further_before_the_plus_gives_way() {
+    let (dir, mut app) = project((150, 44));
+    start_agent(dir.path(), &mut app, "✳ pricing page");
+    app.open_agent(crate::agents::SHELL.1);
+    app.open_agent(crate::agents::SHELL.1);
+    app.dock.sessions[1].renamed = Some("the documentation's navigation".into());
+    app.dock.sessions[2].renamed = Some("the open graph tags".into());
+    // Narrowed until the names behind the one in front are cut short.
+    // The row's room is known once it's drawn.
+    let cut = (24..90).rev().find(|width| {
+        app.dock.width = Some(*width);
+        app.handle(Event::Resize(150, 44));
+        let _ = screen(&app);
+        app.dock.fit(title(&app)) == Fit::Cut
+    });
+    assert!(cut.is_some(), "some width cuts them");
+    let grid = screen(&app);
+    let row = title(&app);
+    let text = grid.row_text(row.y);
+    assert_eq!(
+        app.dock.fit(row),
+        Fit::Cut,
+        "those behind are names alone: {text}"
+    );
+    // The + stands after the last tab, before the button that maximizes the pane.
+    assert!(app.dock.plus_shows(row), "{text}");
+    let plus = app.dock.plus_x(row);
+    let drawn = words(&grid, row.y).into_iter().any(|(text, x, ..)| {
+        text == "+" && x >= f32::from(plus) + 1.0 && x < f32::from(plus) + 2.0
+    });
+    assert!(drawn, "the + is drawn: {text}");
+    assert_eq!(app.dock.hit(row, plus + 1), Some(TabHit::New));
+    let maximize = app.dock.maximize_button(row);
+    assert!(plus + 3 <= maximize, "{plus} and {maximize}: {text}");
+    assert_eq!(app.dock.hit(row, maximize), Some(TabHit::Maximize));
+    // No tab reaches into it.
+    for x in plus..plus + 3 {
+        assert_eq!(app.dock.hit(row, x), Some(TabHit::New), "at {x}: {text}");
+    }
+    // A click on it opens what starts things.
+    mouse(&mut app, MouseKind::Left, plus + 1, row.y);
+    assert!(matches!(app.overlay, Overlay::Menu(_)), "a menu");
+    app.overlay = Overlay::None;
+    // One that ends points at it.
+    app.dock.sessions[2].exited = true;
+    let text = screen(&app).text();
+    assert!(app.dock.plus_shows(title(&app)), "{text}");
+    assert!(text.contains("ress + for another"), "{text}");
 }
 
 /// A tab is as wide as what it paints: its name whole, with no letter cut and no "…" while
@@ -368,9 +428,25 @@ fn every_program_has_one_mark_and_none_is_a_box_to_tick() {
         .expect("its initial on its square");
     assert_eq!(letter.3, app.theme().tab.bg, "cut out of it: {letter:?}");
     // Each one's mark is drawn filled: inked at its middle, where a hollow square isn't.
-    for icon in [Icon::AgentOpenCode, Icon::AgentCopilot, Icon::Program] {
+    for icon in [
+        Icon::AgentOpenCode,
+        Icon::AgentCopilot,
+        Icon::AgentCursor,
+        Icon::Program,
+    ] {
         assert!(cellix_render::inked(icon, 0.25, 0.5), "{icon:?} is filled");
     }
+    // Copilot CLI's and Cursor's are told apart: a C, and a pointer, cut out of the square.
+    // They were one C.
+    let (x, y) = (10.0 / 24.0, 12.0 / 24.0);
+    assert!(
+        cellix_render::inked(Icon::AgentCopilot, x, y),
+        "inside the C"
+    );
+    assert!(
+        !cellix_render::inked(Icon::AgentCursor, x, y),
+        "on the pointer"
+    );
     assert!(!cellix_render::inked(
         Icon::AgentOpenCode,
         0.5,
@@ -382,7 +458,7 @@ fn every_program_has_one_mark_and_none_is_a_box_to_tick() {
     app.handle(Event::Resize(260, 44));
     let grid = screen(&app);
     let text = grid.row_text(title(&app).y);
-    for shown in ["O OpenCode", "C Copilot", "C Cursor", "D deploy", "> make"] {
+    for shown in ["O OpenCode", "C Copilot", "↖ Cursor", "D deploy", "> make"] {
         assert!(text.contains(shown), "{shown}: {text}");
     }
     assert!(!text.contains('▫'), "no hollow square: {text}");
@@ -470,4 +546,106 @@ fn a_tip_stands_eight_pixels_under_its_line() {
     mouse(&mut app, MouseKind::Move, 1, 0);
     let gap = tip_top(&app) - line(1);
     assert!(under(gap), "Show Sidebar {gap} px under");
+}
+
+/// Every tab has a mark: a shell at its prompt its prompt, as one running a command has, and
+/// each view the one its icon has, the inbox its bell; they were names alone. A program that
+/// says what it is (OSC 7501's `app`) names its tab until it takes that back, as it names its
+/// row in the Agents list: its tab said "Terminal" beside a row that said "deploy".
+#[test]
+#[cfg(unix)]
+fn every_tab_has_a_mark_and_a_program_names_its_tab() {
+    use crate::program::{Report, Word};
+    let (_dir, mut app) = project((150, 44));
+    app.open_agent(crate::agents::SHELL.1);
+    app.run(Command::ShowInbox);
+    app.dock.active = Some(0);
+    app.dock.front = Front::Session;
+    let grid = screen(&app);
+    let row = title(&app);
+    let text = grid.row_text(row.y);
+    assert!(text.contains("Terminal"), "{text}");
+    assert!(
+        !icons(&grid, row.y, Icon::Terminal).is_empty(),
+        "the prompt: {text}"
+    );
+    assert!(
+        !icons(&grid, row.y, Icon::Bell).is_empty(),
+        "the bell: {text}"
+    );
+    // A report under a name of its own names the tab; taken back, the tab is the shell's.
+    let said = |word: Word| Report {
+        word,
+        kind: None,
+        progress: None,
+        id: String::new(),
+        app: "deploy".to_string(),
+        title: String::new(),
+        message: String::new(),
+    };
+    app.dock.sessions[0]
+        .reports
+        .push((said(Word::Working), false));
+    app.hear_programs();
+    let text = screen(&app).row_text(row.y);
+    assert!(
+        text.contains("deploy") && !text.contains("Terminal"),
+        "{text}"
+    );
+    app.dock.sessions[0]
+        .reports
+        .push((said(Word::Clear), false));
+    app.hear_programs();
+    let text = screen(&app).row_text(row.y);
+    assert!(text.contains("Terminal"), "{text}");
+}
+
+/// A tab has as much air before its mark as after its ×, and what its whole columns hold past
+/// what it paints is shared by both ends, so the two don't change with how its columns
+/// round: the air after the × ran from 9 px to 22 by tab, beside 21 to 27 before the mark.
+#[test]
+#[cfg(unix)]
+fn a_tabs_two_ends_have_the_same_air() {
+    let (_dir, mut app) = project((150, 44));
+    app.dock.width = Some(70);
+    app.handle(Event::Resize(150, 44));
+    for name in ["a", "make", "og tags"] {
+        app.open_agent(crate::agents::SHELL.1);
+        let last = app.dock.sessions.len() - 1;
+        app.dock.sessions[last].renamed = Some(name.to_string());
+    }
+    let mut ends = Vec::new();
+    for index in 0..app.dock.sessions.len() {
+        app.dock.active = Some(index);
+        app.dock.front = Front::Session;
+        let grid = screen(&app);
+        let row = title(&app);
+        assert_eq!(app.dock.fit(row), Fit::Whole, "{}", grid.row_text(row.y));
+        let tab: Vec<u16> = (row.x..row.right())
+            .filter(|x| {
+                matches!(app.dock.hit(row, *x), Some(TabHit::Tab(i) | TabHit::Close(i)) if i == index)
+            })
+            .collect();
+        let (start, end) = (f32::from(tab[0]), f32::from(tab[tab.len() - 1] + 1));
+        let mark = icons(&grid, row.y, Icon::Terminal)
+            .into_iter()
+            .find(|(left, _)| *left >= start && *left < end)
+            .expect("its mark");
+        let close = icons(&grid, row.y, Icon::Close)
+            .into_iter()
+            .find(|(left, _)| *left >= start && *left < end)
+            .expect("its ×");
+        // From the tab's ends to the ink: the prompt's starts 2.4 of its 24 in, and the ×'s
+        // ends 5.6 of its 24 before its box does (`icon.rs`).
+        let lead = (mark.0 - start + 2.4 / 24.0 * (mark.1 - mark.0)) * 17.0;
+        let tail = (end - close.1 + 5.6 / 24.0 * (close.1 - close.0)) * 17.0;
+        ends.push((lead, tail));
+    }
+    // As much air at each end, to a few pixels, in every tab however its columns rounded.
+    for (lead, tail) in &ends {
+        assert!(
+            (lead - tail).abs() <= 4.0,
+            "{lead} px before the mark, {tail} after the ×: {ends:?}"
+        );
+    }
 }

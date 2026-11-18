@@ -18,6 +18,8 @@ const DIM: u8 = 110;
 /// (its mark and its word, 8 px apart, as one), and who started it.
 const GROUP_GAP: f32 = 16.0;
 const MARK_GAP: f32 = 8.0;
+/// How far into its letter the "·" before who started it has its ink, in pixels.
+const DOT_BEARING: f32 = 4.0;
 /// How much of its box the spinner's ring and the still dot fill across: where their ink
 /// is, which the gaps are measured from.
 const RING_INK: f32 = 0.85;
@@ -197,7 +199,9 @@ impl App {
         let colour = match &doing {
             doing if doing.working() => Some(theme.accent),
             Doing::Asking(_) => Some(theme.attention),
-            Doing::Done(said) if said == "Finished" => Some(theme.git_added),
+            // Done is done, a dot in the done colour, whatever it said: it was grey words
+            // with no mark beside the working one's spinner.
+            Doing::Done(_) => Some(theme.git_added),
             Doing::Failed(_) => Some(theme.error),
             _ => None,
         };
@@ -230,6 +234,7 @@ impl App {
         };
         grid.label_at(at, cell, y, word, state, stop, 100);
         let wide = measure.width(word, Font::default());
+        let word_end = at + wide;
         next(wide, word.chars().count(), &mut at, &mut cell);
         let parent = session.member.as_ref().and_then(|m| m.parent.as_deref());
         if let Some(parent) = parent {
@@ -241,6 +246,13 @@ impl App {
             let quiet = Style {
                 fg: theme.popup_dim,
                 ..base
+            };
+            // As much air before the "·" as after it, which the space after it has: at the
+            // group's gap it stood 20 px from what it's doing and 8 from "from".
+            let at = if pictures {
+                word_end + px(MARK_GAP - DOT_BEARING)
+            } else {
+                at
             };
             if at + measure.width(&from, Font::default()) <= f32::from(stop) {
                 grid.label_at(at, cell, y, &from, quiet, stop, 100);

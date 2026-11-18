@@ -4380,7 +4380,7 @@ impl App {
             toolbar::draw_icon(grid, (icon, ACTION_ICON), cell, color, ground);
             // With no tab to say so, the icon does.
             let waiting = match command {
-                Command::ListAgents => self.agents.needing_you() > 0,
+                Command::ListAgents => self.needing_you() > 0,
                 Command::ShowComments => self.dock.comment_count.get() > 0 && !on,
                 _ => false,
             };
@@ -9634,11 +9634,31 @@ impl App {
             .count()
     }
 
-    /// What this workspace's tile in the bar says: whether an agent needs you, is working,
-    /// finished, or stopped with the machine.
+    /// How many agents here are asking: those whose news says so, and those whose tab's mark
+    /// says so though no news here does, so the tile, the badge and the status bar say what
+    /// the tabs say. A tab's dot once stood beside a tile that said "done", when another
+    /// agent's news had taken the asking one's place.
+    pub fn needing_you(&self) -> usize {
+        use cellix_agent::AgentState;
+        let asking: Vec<&str> = (self.agents.running.iter())
+            .filter(|a| a.state == AgentState::NeedsYou)
+            .map(|a| a.session.as_str())
+            .collect();
+        let tabs = self.dock.sessions.iter().filter(|s| {
+            s.mark() == Some(crate::dock::TabMark::NeedsYou)
+                && s.agent_session
+                    .as_deref()
+                    .is_none_or(|id| !asking.contains(&id))
+        });
+        self.agents.needing_you() + tabs.count()
+    }
+
+    /// What this workspace's tile in the bar says: the most urgent of what its tabs and its
+    /// agents say, whether one needs you, is working, finished, or stopped with the machine.
     pub fn tile_state(&self) -> TileState {
+        use crate::dock::TabMark;
         let stopped = self.stopped_count();
-        if self.agents.needing_you() > 0 {
+        if self.needing_you() > 0 {
             return TileState::NeedsYou;
         }
         if stopped > 0 {
@@ -9649,9 +9669,11 @@ impl App {
             .running
             .iter()
             .any(|a| a.state == cellix_agent::AgentState::Working);
-        // A shell running a command is working too. An agent with no plugin can't say.
+        // A shell running a command is working too, and any tab that turns. An agent with no
+        // plugin can't say.
         let shell_busy = self.dock.sessions.iter().any(|s| s.shell && s.busy());
-        if working || shell_busy {
+        let turning = (self.dock.sessions.iter()).any(|s| s.mark() == Some(TabMark::Working));
+        if working || shell_busy || turning {
             return TileState::Working;
         }
         if let Some(at) = self.agents.finished {
@@ -12435,17 +12457,24 @@ impl App {
                     Some(session) => session.done_unseen,
                     None => self.agents.unseen.contains(&event.session),
                 };
+                let parent = tab.and_then(|s| self.parent_row(s));
+                // A helper whose turn is over, or which is ready for its first, has the done
+                // dot peek's header shows for it: its row had no mark under a heading that
+                // counted it.
+                let helper_done = parent.is_some()
+                    && (self.dock.sessions.iter())
+                        .position(|s| tab.is_some_and(|t| std::ptr::eq(s, t)))
+                        .is_some_and(|index| matches!(self.doing(index), team::Doing::Done(_)));
                 let urgency = match event.state {
                     AgentState::NeedsYou => Urgency::NeedsYou,
                     AgentState::Working => Urgency::Working,
-                    _ if done => Urgency::Done,
+                    _ if done || helper_done => Urgency::Done,
                     _ => Urgency::Idle,
                 };
                 let icon = crate::dock::program_icon(&event.agent, false, false);
                 // An agent goes by its tab's name; what runs in a shell, by its own; a helper
                 // by the name the agent that started it gave it.
                 let named = tab.filter(|s| !s.shell);
-                let parent = tab.and_then(|s| self.parent_row(s));
                 let name = match (parent.as_ref(), tab.and_then(Session::called)) {
                     (Some(_), Some(called)) => called.to_string(),
                     _ => named.map_or_else(|| event.agent.clone(), Session::label),
@@ -12583,10 +12612,18 @@ impl App {
                     format!("{tab}/{}", report.id)
                 };
                 if report.word == crate::program::Word::Clear {
+                    if report.id.is_empty() {
+                        self.dock.sessions[index].reported = None;
+                    }
                     self.end_program(&part);
                     continue;
                 }
                 let mut name = crate::program::name_of(&report.app, &tab_name);
+                // Its tab goes by the name it gave itself, as the list and the inbox do: it
+                // said "Terminal" beside a row that said "deploy".
+                if report.id.is_empty() && !report.app.is_empty() {
+                    self.dock.sessions[index].reported = Some(name.clone());
+                }
                 if !report.id.is_empty() {
                     // A part goes by its program's name, as that's said, with its own after.
                     if report.app.is_empty()
@@ -18451,7 +18488,7 @@ impl App {
             .as_ref()
             .filter(|r| r.is_proposal())
             .map_or_else(String::new, |r| format!("{} changes", r.diff.hunks.len()));
-        let waiting = self.agents.needing_you();
+        let waiting = self.needing_you();
         let attention = format!("An agent needs you ({waiting})");
         let typed = format!(":{}", self.neovim_line);
         let hidden = match self.maximized {
@@ -26221,7 +26258,8 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             |p| matches!(p, Paint::Panel { border: Some(edge), .. } if *edge == app.theme.accent),
         );
         assert!(lit, "its card is lit");
-        assert!(grid.text().contains("Inbox"), "{}", grid.text());
+        // Cut short beside the +, which keeps its place now.
+        assert!(grid.text().contains("Inb"), "{}", grid.text());
 
         // Back on the Inbox, a press on the scrollbar, with the caret still in those words,
         // isn't a press on them.
@@ -29471,11 +29509,11 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let text = screen(&app).text();
         assert!(text.contains("This image can't be shown."), "{text}");
         assert!(!text.contains("PDF"), "{text}");
-        // The Preview tab is as wide as what it paints, as the others are: its lead, its name,
-        // and 12 px, its × and 10 px after it.
+        // The Preview tab is as wide as what it paints, as the others are: its lead, its mark
+        // (every view's tab has one now), its name, and 12 px, its × and the air after it.
         let (front, _, rect) = app.dock.view_tabs_for_test(area)[0];
         let name = cellix_render::FontMeasure::new(10, 20).width("Preview", Font::default());
-        let painted = crate::dock::columns(name + crate::dock::HUG);
+        let painted = crate::dock::columns(name + crate::dock::HUG + crate::dock::ICON_SHIFT);
         assert_eq!((front, rect.w), (Front::Pdf, painted));
     }
 
@@ -32656,11 +32694,12 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert!(close.len() <= 3, "and its 10 px after it: {close:?}");
         let tabs = app.dock.view_tabs_for_test(area);
         let comments = tabs.iter().find(|tab| tab.0 == Front::Comments).unwrap().2;
-        // Comments behind it keeps all but a letter or two: the button that maximizes the
-        // pane has its four columns at the row's end now, which Comments had the last of.
+        // Comments behind it keeps three letters and its "…" at least: the button that
+        // maximizes the pane has its four columns at the row's end, and the + its three after
+        // the tabs, which the names are cut further for (it gave way whenever one was cut).
         assert!(
-            comments.w >= 7,
-            "Comments keeps most of its name: {comments:?}"
+            comments.w >= 5,
+            "Comments keeps three letters: {comments:?}"
         );
         let maximize = app.dock.maximize_button(title);
         assert_eq!(app.dock.hit(title, maximize), Some(TabHit::Maximize));

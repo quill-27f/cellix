@@ -113,6 +113,8 @@ pub enum Icon {
     AgentOpenCode = 71,
     AgentCopilot = 72,
     AgentCursor = 73,
+    /// Lines of what was printed, of different lengths: the side pane's Log tab.
+    Log = 92,
 }
 
 /// One cell of an icon that is `width` by `height` cells.
@@ -914,7 +916,7 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
             1.15,
         ),
         // And with a C, open to the right.
-        Icon::AgentCopilot | Icon::AgentCursor => {
+        Icon::AgentCopilot => {
             let (dx, dy) = (p.0 - 12.0, p.1 - 12.0);
             let open = dx > 0.0 && dy.abs() < dx * 0.9;
             let letter = if open {
@@ -924,6 +926,37 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
             };
             cut(solid(p, (5.0, 5.0), (19.0, 19.0), 3.5), letter, 1.15)
         }
+        // And with a pointer cut out of it, an arrow to its upper left: Cursor's agent shared
+        // Copilot CLI's C, and the two read as one.
+        Icon::AgentCursor => {
+            let arrow = [
+                (8.6, 7.0),
+                (8.6, 16.6),
+                (11.0, 14.4),
+                (12.8, 18.0),
+                (14.6, 17.2),
+                (12.8, 13.6),
+                (16.0, 13.4),
+            ];
+            let inside =
+                arrow
+                    .iter()
+                    .zip(arrow.iter().cycle().skip(1))
+                    .fold(false, |inside, (a, b)| {
+                        let crosses = (a.1 > p.1) != (b.1 > p.1)
+                            && p.0 < (b.0 - a.0) * (p.1 - a.1) / (b.1 - a.1) + a.0;
+                        inside != crosses
+                    });
+            if inside {
+                f32::MAX
+            } else {
+                solid(p, (5.0, 5.0), (19.0, 19.0), 3.5)
+            }
+        }
+        Icon::Log => segment(p, (4.0, 5.5), (20.0, 5.5))
+            .min(segment(p, (4.0, 10.0), (15.0, 10.0)))
+            .min(segment(p, (4.0, 14.5), (18.0, 14.5)))
+            .min(segment(p, (4.0, 19.0), (11.0, 19.0))),
         Icon::Smile => ring(p, (12.0, 12.0), 9.5)
             .min(circle(p, (9.0, 9.6)) - 0.35)
             .min(circle(p, (15.0, 9.6)) - 0.35)
@@ -1014,6 +1047,7 @@ mod tests {
             Icon::FileJson,
             Icon::FileConfig,
             Icon::FileCode,
+            Icon::Log,
             Icon::AgentClaude,
             Icon::AgentCodex,
             Icon::AgentGemini,

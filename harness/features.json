@@ -6151,5 +6151,40 @@
     "title": "A drag held past a terminal tab's edge scrolls its scrollback, and the wheel while dragging too",
     "test": "a_drag_held_past_a_terminals_top_scrolls_its_scrollback_and_the_wheel_does_too",
     "passes": true
+  },
+  {
+    "id": "polish-plus-cut",
+    "milestone": 15,
+    "title": "Names behind are cut further before the + gives way",
+    "test": "names_are_cut_further_before_the_plus_gives_way",
+    "passes": true
+  },
+  {
+    "id": "polish-tile-urgency",
+    "milestone": 15,
+    "title": "A workspace's tile says what its most urgent tab says",
+    "test": "the_tile_says_what_the_most_urgent_tab_says",
+    "passes": true
+  },
+  {
+    "id": "polish-every-tab-mark",
+    "milestone": 15,
+    "title": "Every tab has a mark, and a program that names itself names its tab",
+    "test": "every_tab_has_a_mark_and_a_program_names_its_tab",
+    "passes": true
+  },
+  {
+    "id": "polish-tab-ends",
+    "milestone": 15,
+    "title": "A tab has as much air before its mark as after its ×",
+    "test": "a_tabs_two_ends_have_the_same_air",
+    "passes": true
+  },
+  {
+    "id": "polish-tile-marks",
+    "milestone": 15,
+    "title": "Tiles and the first screen use the tabs' marks and the shared buttons",
+    "test": "a_tile_and_the_first_screen_have_the_tabs_marks_and_the_shared_buttons",
+    "passes": true
   }
 ]
