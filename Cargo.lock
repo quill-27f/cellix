@@ -815,6 +815,7 @@ dependencies = [
  "rmpv",
  "serde",
  "serde_json",
+ "signal-hook-registry",
  "tempfile",
  "unicode-segmentation",
  "unicode-width",

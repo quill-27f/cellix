@@ -2,7 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::Receiver;
 
 use cellix_agent::TestRun;
 use cellix_lang::{Registry, Token};
@@ -545,7 +545,7 @@ impl Review {
         }
         let (root, base, until) = (self.root.clone(), self.base, self.until.clone());
         let current = self.current_path().map(Path::to_path_buf);
-        let (sender, receiver) = mpsc::channel();
+        let (sender, receiver) = crate::wake::channel();
         self.reading = Some(receiver);
         std::thread::spawn(move || {
             let _ = sender.send(Reading::take(&root, base, until.as_deref(), current));

@@ -782,6 +782,30 @@ struct DiskLook {
     read_at: ReadAt,
 }
 
+impl DiskLook {
+    /// A number that's the same for two looks that saw the same, to tell whether this one
+    /// is news without the main thread comparing trees.
+    fn print(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::hash::DefaultHasher::new();
+        for entry in &self.entries {
+            (&entry.path, &entry.name, entry.depth).hash(&mut hasher);
+            (entry.is_dir, entry.expanded, entry.ignored).hash(&mut hasher);
+        }
+        self.branch.hash(&mut hasher);
+        (self.git.repo, self.git.underway, self.git.stashes).hash(&mut hasher);
+        // In whatever order the map holds them.
+        let mut status = 0u64;
+        for item in &self.status {
+            let mut one = std::hash::DefaultHasher::new();
+            item.hash(&mut one);
+            status = status.wrapping_add(one.finish());
+        }
+        status.hash(&mut hasher);
+        hasher.finish()
+    }
+}
+
 /// The commit and the open files that committed text was read for. While neither changes,
 /// nor does the text.
 type ReadAt = (Option<String>, Vec<PathBuf>);
@@ -1380,6 +1404,9 @@ pub struct App {
     source_age: u32,
     /// The periodic look at the tree and git, on its way.
     disk_look: Option<std::sync::mpsc::Receiver<DiskLook>>,
+    /// What the last look saw, as `DiskLook::print`: a look that saw the same is taken in at
+    /// the loop's next wake, and only one that saw something new wakes it.
+    disk_seen: Arc<std::sync::atomic::AtomicU64>,
     /// The commit and files the open files' committed text was last read for.
     committed_at: Option<ReadAt>,
     search: Search,
@@ -1738,6 +1765,7 @@ impl App {
             context: ContextPanel::default(),
             source_age: 0,
             disk_look: None,
+            disk_seen: Arc::default(),
             committed_at: None,
             search,
             drawer: false,
@@ -2075,7 +2103,7 @@ impl App {
             .find(|(_, cells, at)| x >= *at && x < at + cells.chars().count() as u16);
         match hit.map(|(label, _, _)| label) {
             Some("Install") => {
-                let (done, result) = std::sync::mpsc::channel();
+                let (done, result) = crate::wake::channel();
                 let command = self.server_install.clone();
                 std::thread::spawn(move || {
                     let install = command.as_deref().unwrap_or(SERVERS[server].install);
@@ -2138,7 +2166,7 @@ impl App {
         if self.browser_install.is_some() {
             return;
         }
-        let (done, result) = std::sync::mpsc::channel();
+        let (done, result) = crate::wake::channel();
         std::thread::spawn(move || {
             let _ = done.send(install_with(BROWSER_INSTALL, BROWSER_TOOL));
         });
@@ -2716,7 +2744,7 @@ impl App {
             Some(_) => "Syncing…",
             None => "Publishing…",
         });
-        let (done, result) = std::sync::mpsc::channel();
+        let (done, result) = crate::wake::channel();
         std::thread::spawn(move || {
             let outcome = match counts {
                 Some((_, 0)) => cellix_review::push(&root).map(|()| "Pushed"),
@@ -2771,6 +2799,26 @@ impl App {
             }
         }
         finished
+    }
+
+    /// Whether something here is timed from a moment just past, rather than waiting on an
+    /// answer that wakes the loop when it comes: a question for an agent once it's quiet, a
+    /// spell check once typing pauses, the hint over wide pages, an agent's call under way.
+    /// While one is, the loop looks every `POLL`, so it's on time; otherwise only what's due
+    /// wakes it.
+    pub fn soon(&self) -> bool {
+        let spell = self.spell_on
+            && self.editors.get(self.active()).is_some_and(|editor| {
+                editor.rendered
+                    && editor.dialect().is_writing()
+                    && editor.checked != editor.buffer.revision() + 1
+            });
+        let pan_hint = self.dock.pan_hint.is_some() && !self.dock.pan_hint_done;
+        self.pending_ask.is_some()
+            || self.pending_review.is_some()
+            || spell
+            || pan_hint
+            || self.team_soon()
     }
 
     pub fn poll(&mut self) -> bool {
@@ -4710,17 +4758,25 @@ impl App {
         let opened: Vec<PathBuf> = opened.map(Path::to_path_buf).collect();
         let known = self.committed_at.clone();
         let (done, look) = std::sync::mpsc::channel();
+        let seen = self.disk_seen.clone();
         std::thread::spawn(move || {
             let root = workspace.root();
             let (read_at, committed) = committed_texts(root, opened, known.as_ref());
-            let _ = done.send(DiskLook {
+            let look = DiskLook {
                 entries: workspace.entries(),
                 branch: current_branch(root),
                 git: GitNow::of(root),
                 status: status_of(root, &changed_files(root)),
                 committed,
                 read_at,
-            });
+            };
+            // A look every two seconds that saw what the last did would wake an idle loop
+            // for nothing; it waits for the next wake, which the tick makes.
+            let print = look.print();
+            let news = seen.swap(print, Ordering::Relaxed) != print || look.committed.is_some();
+            if done.send(look).is_ok() && news {
+                crate::wake::poke();
+            }
         });
         self.disk_look = Some(look);
     }
@@ -8274,7 +8330,7 @@ impl App {
         let mut commands: Vec<Vec<String>> = self.settings.browser.iter().cloned().collect();
         commands.push(self.system_browser.clone());
         // A command can start and still fail, so only its exit says the page opened.
-        let (done, result) = std::sync::mpsc::channel();
+        let (done, result) = crate::wake::channel();
         let page = target.clone();
         std::thread::spawn(move || {
             let opened = commands.iter().any(|command| ran_well(command, &page));
@@ -8793,7 +8849,7 @@ impl App {
             return;
         }
         let user = user_name();
-        let (told, answer) = std::sync::mpsc::channel();
+        let (told, answer) = crate::wake::channel();
         std::thread::spawn(move || {
             let _ = told.send(crate::linger::logout_stops_programs(&user));
         });
@@ -14800,7 +14856,7 @@ impl App {
             return;
         }
         let found = (page.found.codex_installed, page.found.gemini_installed);
-        let (sender, receiver) = std::sync::mpsc::channel();
+        let (sender, receiver) = crate::wake::channel();
         page.note = "Working…".to_string();
         page.installing = Some(receiver);
         page.installing_what = Some(control);
@@ -16857,7 +16913,7 @@ impl App {
         if let Some(old) = self.finding.take() {
             old.stop.store(true, Ordering::Relaxed);
         }
-        let (send, found) = std::sync::mpsc::channel();
+        let (send, found) = crate::wake::channel();
         let stop = Arc::new(AtomicBool::new(false));
         let stopping = stop.clone();
         std::thread::spawn(move || {
@@ -17104,7 +17160,7 @@ impl App {
             self.say("Building needs a LaTeX engine");
             return;
         };
-        let (done, result) = std::sync::mpsc::channel();
+        let (done, result) = crate::wake::channel();
         let name = file.file_name().map(PathBuf::from).unwrap_or_default();
         let folder = file.parent().map(Path::to_path_buf).unwrap_or_default();
         engine.push(name.display().to_string());

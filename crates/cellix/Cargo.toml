@@ -50,6 +50,8 @@ portable-pty = "0.9"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.191"
+# A resize wakes the loop as well as crossterm, which keeps its own action in the registry.
+signal-hook-registry = "1.4"
 
 # On Linux, crossterm's default input source waits for an edge that a burst of input never
 # gives once the terminal's buffer is full: a pasted picture comes as thousands of keys, and

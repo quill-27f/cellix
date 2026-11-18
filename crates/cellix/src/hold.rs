@@ -265,7 +265,6 @@ pub fn projects_with_activity() -> Vec<(PathBuf, Activity)> {
 mod host {
     use std::io::{self, ErrorKind, Write};
     use std::path::{Path, PathBuf};
-    use std::sync::mpsc::Sender;
 
     use super::Job;
 
@@ -316,7 +315,11 @@ mod host {
             match *self {}
         }
 
-        pub fn listen(&self, _output: impl super::Sink, _done: Sender<()>) -> io::Result<()> {
+        pub fn listen(
+            &self,
+            _output: impl super::Sink,
+            _ended: impl FnOnce() + Send + 'static,
+        ) -> io::Result<()> {
             match *self {}
         }
 

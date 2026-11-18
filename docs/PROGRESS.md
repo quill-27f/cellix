@@ -3118,3 +3118,15 @@ From the design reviews of 0.11.0's whole tour (fix-colours track, items 7 and 8
 - Tests: `with_paint_a_menu_is_whole_rows_and_a_rule_has_half_a_row` (changed, saying so: it asserted the quarter row; it now asserts half a row at both edges for none to three rules), `a_rows_name_is_no_quieter_than_its_note`, `a_hairline_stands_on_whole_pixels`.
 - Looked at: 04 to 07, 30-hover-menu, 25-light-menu, 64-transcript-tab-menu, m1-agent-tab-menu, 14-start-menu and -light, 175-review-with, 02-code and 13-source-control for the hairlines.
 - Not done: a menu with one rule gives it a whole row of air, more than the others' half; the marks of agents without one of their own (OpenCode, Copilot, Cursor) are the fix-agents track's.
+
+## An idle window wakes only when something is due (2026-11-18)
+
+From the release build's perf run in the review of 0.11.0's tour (the fix-spacing track): idle, the loop woke about 21 times a second with nothing to do, every 50 ms in case a language server or a thread had answered.
+
+- Everything that answers the loop now pokes its pipe (`wake.rs`): a thread's result through `wake::channel`, whose sender pokes as it sends and as it goes; the language servers' news and highlighting (`cellix_lang::wake_with`); the agents' socket and the IDE's calls (`cellix_agent::wake_with`); a session's end, its own or its host's (`Held::listen` now takes what to call); a stop; and a resize, whose SIGWINCH pokes it beside crossterm's own action in `signal-hook-registry`.
+- The look at the disk every two seconds pokes only when what it saw differs from the last look (`DiskLook::print`); one that saw the same is taken in at the next wake.
+- With nothing timed, the wait ends at the soonest of what's due: the tick, a spinner's step, output waiting for its frame, a synchronized update running out, the terminal asked its cell's size. What's timed from a moment just past and checked as the loop goes round (`App::soon`: a question for an agent once it's quiet, a spell check once typing pauses, the pan hint, an agent's call under way or a note for its parent, a notification waiting for its gap) keeps the 50 ms look while it lasts.
+- The wait is rounded up to the millisecond: rounded down, the wait for the tick ended just before it was due and the loop went round again for nothing, a wake every two seconds.
+- Measured with `CELLIX_PROF` in the PTY test: 2 wakes a second idle (the tick), where it was 21; draws 0.5 (the heartbeat), 0 bytes.
+- Tests: `an_idle_window_wakes_only_when_something_is_due` (PTY: 2.01 a second at most over five idle seconds, then a `cellix open` between ticks still opens the file), `a_send_on_a_waking_channel_ends_the_loops_wait`. Typing, output, spinner and tick tests unchanged.
+- Not measured: the release build's CPU idle (`harness/x perf`, which needs the machine to itself). Windows is unchanged: its loop still looks every few milliseconds.

@@ -10,6 +10,21 @@ use std::thread;
 
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
+/// What wakes the program that asked, when a highlight or a language server's news comes in
+/// on a thread here: set once, by a program that waits for them rather than looking.
+static WAKE: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
+
+/// Has `wake` called each time a highlight or a language server's news is ready to take.
+pub fn wake_with(wake: fn()) {
+    let _ = WAKE.set(wake);
+}
+
+fn wake() {
+    if let Some(wake) = WAKE.get() {
+        wake();
+    }
+}
+
 /// What a span of source is, independent of any theme.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Token {
@@ -663,6 +678,7 @@ impl Default for Worker {
                 if outbox.send((job.2, spans)).is_err() {
                     return;
                 }
+                wake();
             }
         });
         Self { jobs, done }

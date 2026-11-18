@@ -6,7 +6,7 @@
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::Receiver;
 use std::time::SystemTime;
 
 use cellix_agent::{AgentEvent, AgentState};
@@ -414,7 +414,7 @@ impl TaskPage {
             return;
         }
         let root = self.root.clone();
-        let (sender, receiver) = mpsc::channel();
+        let (sender, receiver) = crate::wake::channel();
         self.reading = Some(receiver);
         std::thread::spawn(move || {
             let _ = sender.send(read_changes(&root, &turns));
@@ -456,7 +456,7 @@ impl TaskPage {
             return;
         }
         let (agent, session) = (task.agent.clone(), task.session.clone());
-        let (sender, receiver) = mpsc::channel();
+        let (sender, receiver) = crate::wake::channel();
         self.reading_context = Some(receiver);
         std::thread::spawn(move || {
             let read = crate::transcript::find(&agent, &session)

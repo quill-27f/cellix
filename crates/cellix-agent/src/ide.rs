@@ -373,7 +373,9 @@ fn answer(
             let args = params["arguments"].clone();
             let (reply, done) = channel();
             let fallback = tool_fallback(&tool, &args);
-            let _ = calls.send(IdeCall { tool, args, reply });
+            if calls.send(IdeCall { tool, args, reply }).is_ok() {
+                crate::wake();
+            }
             // On its own thread, because a diff can wait for as long as the reviewer takes.
             let (id, outgoing) = (id.clone(), outgoing.clone());
             thread::spawn(move || {

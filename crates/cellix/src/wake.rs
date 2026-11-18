@@ -1,15 +1,55 @@
-//! Wakes the main loop when a program on screen prints, rather than leaving its output to the
-//! loop's next look. The loop waits on the keyboard and on a pipe of its own, which each
-//! session's reader pokes as its output comes; a session out of sight doesn't poke unless
-//! what it has printed is piling up, so it's taken in at the loop's slow pace and draws
-//! nothing.
+//! Wakes the main loop when something comes for it, rather than leaving it to the loop's
+//! next look. The loop waits on the keyboard and on a pipe of its own, which is poked by
+//! each session's reader as its output comes, by every thread that hands the loop an answer
+//! (`channel`), by the language servers and agents' threads, and by a resize. So a window
+//! where nothing happens wakes only when something is due, as the tick is: herdr's rule.
+//!
+//! A session out of sight doesn't poke unless what it has printed is piling up, so it's
+//! taken in at the loop's slow pace and draws nothing.
 //!
 //! Unix only: on Windows the console's input isn't a descriptor to wait on beside a pipe, so
-//! there the loop keeps looking at the sessions every few milliseconds, as it did.
+//! there the loop keeps looking every few milliseconds, as it did.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::sync::mpsc::{self, Receiver, SendError, SyncSender};
+
+/// A thread's end of a channel to the loop: what it sends wakes the loop to take it, and so
+/// does its going, which some threads' receivers read as their end.
+pub struct Sender<T>(Option<mpsc::Sender<T>>);
+
+impl<T> Sender<T> {
+    pub fn send(&self, value: T) -> Result<(), SendError<T>> {
+        let Some(sender) = &self.0 else {
+            return Err(SendError(value));
+        };
+        let sent = sender.send(value);
+        if sent.is_ok() {
+            poke();
+        }
+        sent
+    }
+}
+
+impl<T> Clone for Sender<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<T> Drop for Sender<T> {
+    fn drop(&mut self) {
+        // Gone first, so the loop the poke wakes finds it gone.
+        drop(self.0.take());
+        poke();
+    }
+}
+
+/// A channel from a thread to the loop, as `mpsc::channel`, whose sends wake the loop.
+pub fn channel<T>() -> (Sender<T>, Receiver<T>) {
+    let (sender, receiver) = mpsc::channel();
+    (Sender(Some(sender)), receiver)
+}
 
 /// Chunks of output that may wait to be taken in before a session's reader waits too. A
 /// chunk is a read of up to 8 KB, so this is about half a megabyte a session; the reader
@@ -106,10 +146,15 @@ mod pipe {
         Ok(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
     }
 
-    /// Makes the loop's pipe, once. Until then a poke does nothing.
+    /// Makes the loop's pipe, once. Until then a poke does nothing. A resize pokes it too:
+    /// the loop looks at the window's size each time round, and crossterm's own word of a
+    /// resize goes down a pipe of its own that the loop doesn't wait on.
     pub fn start() -> io::Result<()> {
         if PIPE.get().is_none() {
             let _ = PIPE.set(pipe()?);
+            // SAFETY: the action only writes a byte to a pipe that never blocks, which is
+            // safe in a signal handler; the registry keeps crossterm's own action beside it.
+            unsafe { signal_hook_registry::register(libc::SIGWINCH, poke) }?;
         }
         Ok(())
     }
@@ -152,7 +197,9 @@ mod pipe {
             revents: 0,
         };
         let mut fds = [watch(input), watch(pipe)];
-        let ms = timeout.as_millis().min(i32::MAX as u128) as i32;
+        // Rounded up: rounded down, a wait for the tick ended a little before it was due, and
+        // the loop went round again for nothing, or several times with nothing left to wait.
+        let ms = timeout.as_micros().div_ceil(1000).min(i32::MAX as u128) as i32;
         // SAFETY: two descriptors, in an array that outlives the call.
         let found = unsafe { libc::poll(fds.as_mut_ptr(), 2, ms) };
         if found < 0 {
@@ -179,7 +226,7 @@ mod pipe {
 pub use pipe::{start, wait};
 
 /// Wakes the loop, where it waits on the pipe.
-fn poke() {
+pub fn poke() {
     #[cfg(unix)]
     pipe::poke();
 }
@@ -221,6 +268,38 @@ mod tests {
         reader.join().unwrap();
         let wanted: Vec<u8> = (0..ROOM + 8).map(|n| n as u8).collect();
         assert_eq!(got, wanted);
+    }
+
+    /// What a thread hands the loop on a waking channel ends the loop's wait, well before its
+    /// timeout. Other tests here poke the same pipe, so the wait goes on until it's there.
+    #[cfg(unix)]
+    #[test]
+    fn a_send_on_a_waking_channel_ends_the_loops_wait() {
+        use std::os::fd::AsRawFd;
+        use std::time::{Duration, Instant};
+        start().unwrap();
+        let (keyboard, _typing) = pipe::pipe().unwrap();
+        let (sender, receiver) = channel();
+        let thread = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(30));
+            sender.send(7).unwrap();
+        });
+        let started = Instant::now();
+        let got = loop {
+            let woke = wait(keyboard.as_raw_fd(), Duration::from_secs(5)).unwrap();
+            if let Ok(got) = receiver.try_recv() {
+                assert!(woke.poked);
+                break got;
+            }
+            assert!(started.elapsed() < Duration::from_secs(4), "never woken");
+        };
+        thread.join().unwrap();
+        assert_eq!(got, 7);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
     }
 
     /// The loop wakes as soon as the pipe is poked, well before its timeout, and empties it.

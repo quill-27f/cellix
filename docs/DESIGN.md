@@ -152,6 +152,7 @@ its CPU isn't comparable and isn't given; one round of 6 s each):
 |---|---|---|---|---|
 | Idle, before | 20 | 2 | 2 | 44 |
 | Idle, after | 20 | 0.5, the heartbeat | 0 | 0 |
+| Idle, waking only for what's due (0.11.0) | 2, the tick | 0.5, the heartbeat | 0 | 0 |
 | Shell on screen at 30 Hz, before | 103 | 31.5 | 31.5 | 265,000 |
 | Shell on screen at 30 Hz, after | 34 | 27 | 27 | 268,000 |
 | Four tabs behind at 60 Hz, before | 100 | 98 | 98 | 2,200 |
@@ -253,9 +254,25 @@ the terminal is standard input (Unix), the loop waits on it and on a pipe of its
 session's reader pokes as output comes (`wake.rs`): output on screen is drawn as it comes,
 at most once every 16 ms, except a key's echo, which for 32 ms after the key draws at once (up
 to 16 frames). A session out of sight doesn't poke unless what it has printed is piling up.
-With nothing to do, the loop wakes every 50 ms for what has no way to wake it (language
-servers, threads). A reader's queue holds 64 reads, about half a megabyte; a program printing
-faster than that is taken in waits, rather than Cellix's memory growing. On Windows the
+A reader's queue holds 64 reads, about half a megabyte; a program printing faster than that
+is taken in waits, rather than Cellix's memory growing.
+
+Nothing wakes the loop on a timer of its own: an idle window wakes only when something is due,
+as herdr has it. It used to wake every 50 ms in case a language server or a thread had
+answered, about twenty times a second with nothing to do. Now everything that answers pokes the
+same pipe: every thread that hands the loop a result (`wake::channel`, whose sender pokes as it
+sends and as it goes), the language servers' and highlighting's threads (`cellix_lang::wake_with`),
+the agents' socket and the IDE's (`cellix_agent::wake_with`), a session's end, a stop, and a
+resize, whose signal pokes it beside crossterm's own (`signal-hook-registry`). The look at the
+disk every two seconds pokes only when it saw something the last look didn't. The wait then
+ends at the soonest of the tick, a spinner's step, a frame of output waiting, a program's
+synchronized update running out, and the terminal asked its cell's size once the window
+settles, rounded up to the millisecond so it never ends just before what it waits for. What is
+timed from a moment just past and checked as the loop goes round (a question for an agent
+once it's been quiet, a spell check once typing pauses, the hint over a wide page, an agent's
+call under way, a notification waiting for its gap) has `App::soon` say so, and the loop looks
+every 50 ms while it does. Idle, it wakes twice a second, for the tick, where it woke 21 times.
+A session out of sight is taken in at those wakes, or sooner once it has half filled its room. On Windows the
 console's input isn't a descriptor to wait on beside a pipe, so the loop there still looks at
 the sessions every 8 ms while they're lively and 40 ms after.
 

@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Receiver, channel};
+use std::sync::mpsc::Receiver;
 use std::thread;
 
 use cellix_core::pattern::{Options, SWITCHES};
@@ -141,7 +141,7 @@ impl Search {
             self.incoming = None;
             return;
         }
-        let (sender, receiver) = channel();
+        let (sender, receiver) = crate::wake::channel();
         let (generation, query, options) = (self.generation, self.query.clone(), self.options);
         let workspace = Workspace::new(self.root.clone());
         thread::spawn(move || {
@@ -534,7 +534,7 @@ mod switch_tests {
     fn a_search_under_way_turns_in_its_view() {
         let theme = Theme::default();
         let mut search = Search::new(PathBuf::from("/nowhere"));
-        let (_send, incoming) = channel();
+        let (_send, incoming) = std::sync::mpsc::channel();
         search.incoming = Some(incoming);
         let mut grid = Grid::new(40, 12, theme.sidebar);
         grid.turn = Some(6);

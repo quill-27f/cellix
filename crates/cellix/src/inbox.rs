@@ -138,6 +138,11 @@ impl Notifier {
         self.pending.push((workspace.to_string(), what.to_string()));
     }
 
+    /// Whether something waits to be told once the gap since the last is up.
+    pub fn waiting(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
     /// Forgets what wasn't told yet: the person is back and can see it.
     pub fn clear(&mut self) {
         self.pending.clear();

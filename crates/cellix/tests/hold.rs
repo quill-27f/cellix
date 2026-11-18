@@ -28,7 +28,10 @@ fn start(folder: &Path, job: &Job) -> Held {
 fn attach(held: &Held) -> (Receiver<Vec<u8>>, Receiver<()>) {
     let (output, seen) = channel();
     let (done, over) = channel();
-    held.listen(output, done).unwrap();
+    held.listen(output, move || {
+        let _ = done.send(());
+    })
+    .unwrap();
     (seen, over)
 }
 

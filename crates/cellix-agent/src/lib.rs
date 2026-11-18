@@ -228,6 +228,28 @@ pub fn escape(text: &str) -> String {
     text.replace('\\', "\\\\").replace('\n', "\\n")
 }
 
+/// What wakes the program serving, when a request comes in on a thread here: set once, by a
+/// program that waits for them rather than looking.
+static WAKE: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
+
+/// Has `wake` called each time a request from an agent or an IDE is ready to take.
+pub fn wake_with(wake: fn()) {
+    let _ = WAKE.set(wake);
+}
+
+pub(crate) fn wake() {
+    if let Some(wake) = WAKE.get() {
+        wake();
+    }
+}
+
+/// Passes a request on to the app, and wakes it to take it.
+fn ask(requests: &Sender<Request>, request: Request) {
+    if requests.send(request).is_ok() {
+        wake();
+    }
+}
+
 fn answer(line: &str, comments: &SharedComments, requests: &Sender<Request>) -> io::Result<String> {
     let mut parts = line.trim().splitn(2, ' ');
     let list = |clear: bool| -> io::Result<String> {
@@ -244,24 +266,24 @@ fn answer(line: &str, comments: &SharedComments, requests: &Sender<Request>) -> 
             let json = list(true)?;
             // The hook takes on every prompt, and an empty take isn't news.
             if json != "[]" {
-                let _ = requests.send(Request::CommentsTaken);
+                ask(requests, Request::CommentsTaken);
             }
             Ok(json)
         }
         (Some("open"), Some(path)) => {
-            let _ = requests.send(Request::Open(PathBuf::from(path)));
+            ask(requests, Request::Open(PathBuf::from(path)));
             Ok("ok".into())
         }
         (Some("threads"), None) => {
             let (reply, threads) = channel();
-            let _ = requests.send(Request::Threads(reply));
+            ask(requests, Request::Threads(reply));
             Ok(threads
                 .recv_timeout(ANSWER_TIME)
                 .unwrap_or_else(|_| "[]".to_string()))
         }
         (Some("take-threads"), None) => {
             let (reply, threads) = channel();
-            let _ = requests.send(Request::TakeThreads(reply));
+            ask(requests, Request::TakeThreads(reply));
             Ok(threads
                 .recv_timeout(ANSWER_TIME)
                 .unwrap_or_else(|_| "[]".to_string()))
@@ -286,12 +308,15 @@ fn answer(line: &str, comments: &SharedComments, requests: &Sender<Request>) -> 
             }
             let (author, text) = (author.to_string(), unescape(text));
             let (found, answer) = channel();
-            let _ = requests.send(Request::Reply {
-                id,
-                author,
-                text,
-                found,
-            });
+            ask(
+                requests,
+                Request::Reply {
+                    id,
+                    author,
+                    text,
+                    found,
+                },
+            );
             Ok(match answer.recv_timeout(ANSWER_TIME) {
                 Ok(true) => "ok".to_string(),
                 _ => format!("error: there's no comment {id}"),
@@ -301,36 +326,39 @@ fn answer(line: &str, comments: &SharedComments, requests: &Sender<Request>) -> 
             let value: serde_json::Value = serde_json::from_str(json)?;
             let field = |name: &str| value[name].as_str().unwrap_or_default().to_string();
             let (made, answer) = channel();
-            let _ = requests.send(Request::Suggest {
-                file: field("file"),
-                line: value["line"].as_u64().unwrap_or(1) as usize,
-                kind: field("kind"),
-                quote: field("quote"),
-                text: field("text"),
-                author: field("author"),
-                made,
-            });
+            ask(
+                requests,
+                Request::Suggest {
+                    file: field("file"),
+                    line: value["line"].as_u64().unwrap_or(1) as usize,
+                    kind: field("kind"),
+                    quote: field("quote"),
+                    text: field("text"),
+                    author: field("author"),
+                    made,
+                },
+            );
             Ok(match answer.recv_timeout(ANSWER_TIME) {
                 Ok(id) => format!("ok {id}"),
                 Err(_) => "error: Cellix didn't take the suggestion".to_string(),
             })
         }
         (Some("pane"), Some(json)) => {
-            let _ = requests.send(Request::Pane(json.to_string()));
+            ask(requests, Request::Pane(json.to_string()));
             Ok("ok".into())
         }
         (Some("event"), Some(json)) => {
-            let _ = requests.send(Request::Agent(serde_json::from_str(json)?));
+            ask(requests, Request::Agent(serde_json::from_str(json)?));
             Ok("ok".into())
         }
         (Some("test"), Some(json)) => {
-            let _ = requests.send(Request::Test(serde_json::from_str(json)?));
+            ask(requests, Request::Test(serde_json::from_str(json)?));
             Ok("ok".into())
         }
         (Some("agent"), Some(json)) => {
             let asked: team::Asked = serde_json::from_str(json)?;
             let (reply, answered) = channel();
-            let _ = requests.send(Request::Team { asked, reply });
+            ask(requests, Request::Team { asked, reply });
             // The app answers every call by its own deadline; a Cellix that quits drops it.
             Ok(answered.recv().unwrap_or_else(|_| {
                 team::Answer::fail(team::code::FAILED, "Cellix closed before it answered").line()
@@ -339,7 +367,7 @@ fn answer(line: &str, comments: &SharedComments, requests: &Sender<Request>) -> 
         (Some("plan"), Some(path)) => {
             let (reply, decision) = channel();
             let path = PathBuf::from(path);
-            let _ = requests.send(Request::Plan { path, reply });
+            ask(requests, Request::Plan { path, reply });
             // Quitting drops the sender, and the agent goes back to asking as usual.
             Ok(match decision.recv() {
                 Ok(Decision::Approve(None)) => "approve".to_string(),

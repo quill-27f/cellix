@@ -7,7 +7,7 @@ use std::cell::Cell;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::Receiver;
 use std::time::SystemTime;
 
 use cellix_agent::context::{
@@ -208,7 +208,7 @@ impl ContextPanel {
     pub fn refresh(&mut self, project: &Path) {
         let (agent, homes, project) = (self.agent, self.homes.clone(), project.to_path_buf());
         let chosen = self.session_file.clone().filter(|p| p.is_file());
-        let (done, reading) = mpsc::channel();
+        let (done, reading) = crate::wake::channel();
         std::thread::spawn(move || {
             let context = discover(agent, &project, &homes);
             let checks = checks(agent, &project, &context);

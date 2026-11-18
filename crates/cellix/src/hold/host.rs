@@ -7,7 +7,6 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -253,7 +252,13 @@ impl Held {
     }
 
     /// Passes what the program writes to `output`, and says on `done` when it's over.
-    pub fn listen(&self, output: impl super::Sink, done: Sender<()>) -> io::Result<()> {
+    /// Passes what the program prints to `output`, and calls `ended` once it has ended or
+    /// its host has gone.
+    pub fn listen(
+        &self,
+        output: impl super::Sink,
+        ended: impl FnOnce() + Send + 'static,
+    ) -> io::Result<()> {
         let mut stream = self.stream.try_clone()?;
         let at_prompt = self.at_prompt.clone();
         let foreground = self.foreground.clone();
@@ -265,10 +270,7 @@ impl Held {
                             return;
                         }
                     }
-                    EXITED => {
-                        let _ = done.send(());
-                        return;
-                    }
+                    EXITED => break,
                     AT_PROMPT => {
                         if let Ok(mut flag) = at_prompt.lock() {
                             *flag = payload == [1];
@@ -282,8 +284,8 @@ impl Held {
                     _ => {}
                 }
             }
-            // The host went away, and took the program with it.
-            let _ = done.send(());
+            // It ended, or the host went away and took the program with it.
+            ended();
         });
         Ok(())
     }

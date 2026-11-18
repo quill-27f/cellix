@@ -5,7 +5,7 @@
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::Receiver;
 
 use serde_json::{Value, json};
 
@@ -164,7 +164,7 @@ impl Kernel {
             .spawn()?;
         let output = child.stdout.take().ok_or(io::ErrorKind::BrokenPipe)?;
         let input = child.stdin.take();
-        let (sender, events) = mpsc::channel();
+        let (sender, events) = crate::wake::channel();
         std::thread::spawn(move || {
             for line in BufReader::new(output).lines().map_while(Result::ok) {
                 if let Some(event) = event_of(&line)

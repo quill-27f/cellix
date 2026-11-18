@@ -2,7 +2,7 @@
 //! changed it, newest first, each opening its diff against the commit before.
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::Receiver;
 
 use cellix_render::{Bounds, Grid, Measure, Rect, Style};
 use cellix_review::Commit;
@@ -47,7 +47,7 @@ impl Timeline {
         let Some(path) = path else {
             return;
         };
-        let (done, receiver) = mpsc::channel();
+        let (done, receiver) = crate::wake::channel();
         let (root, file) = (root.to_path_buf(), path.clone());
         std::thread::spawn(move || {
             let _ = done.send(cellix_review::file_history(&root, &file, READ));

@@ -40,7 +40,7 @@ fn read_words(file: Option<&Path>) -> HashSet<String> {
 impl Spell {
     pub fn start(words: Option<PathBuf>) -> Self {
         let (jobs, inbox) = mpsc::channel::<Job>();
-        let (done, found) = mpsc::channel();
+        let (done, found) = crate::wake::channel();
         let known = read_words(words.as_deref());
         std::thread::spawn(move || {
             let mut checker = None;

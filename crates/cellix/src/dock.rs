@@ -520,7 +520,7 @@ impl Session {
                 }
             }
         });
-        let (done, finished) = mpsc::channel();
+        let (done, finished) = crate::wake::channel();
         std::thread::spawn(move || {
             let _ = child.wait();
             let _ = done.send(());
@@ -543,8 +543,10 @@ impl Session {
     pub fn join(name: &str, held: Held, size: (u16, u16), cell: CellPixels) -> io::Result<Self> {
         let writer = Box::new(held.keys()?);
         let (feed, output) = crate::wake::feed();
-        let (done, finished) = mpsc::channel();
-        held.listen(feed, done)?;
+        let (done, finished) = crate::wake::channel();
+        held.listen(feed, move || {
+            let _ = done.send(());
+        })?;
         held.resize(
             size,
             (size.0.saturating_mul(cell.0), size.1.saturating_mul(cell.1)),

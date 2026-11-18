@@ -371,6 +371,12 @@ impl Workspaces {
             .min()
     }
 
+    /// Whether anything in any workspace is timed from a moment just past (`App::soon`), or
+    /// a notification waits for its gap: the loop looks as often as it did while one is.
+    pub fn soon(&self) -> bool {
+        self.notifier.waiting() || self.list.iter().any(|w| w.app.soon())
+    }
+
     /// Lets every app take what came in, and answers the requests that brings. Returns
     /// whether anything changed.
     /// What changes in a workspace not in front is out of sight but for its tile in the bar,

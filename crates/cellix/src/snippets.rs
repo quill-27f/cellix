@@ -124,7 +124,7 @@ pub struct Worker {
 impl Worker {
     pub fn start(engine: Vec<String>, folder: PathBuf) -> Self {
         let (jobs, inbox) = mpsc::channel::<Snippet>();
-        let (finished, done) = mpsc::channel();
+        let (finished, done) = crate::wake::channel();
         std::thread::spawn(move || {
             while let Ok(snippet) = inbox.recv() {
                 let _ = std::fs::create_dir_all(&folder);

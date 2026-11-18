@@ -2,7 +2,7 @@
 //! Review is for reading what changed. This is for deciding what goes in.
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::Receiver;
 
 use cellix_render::{Bounds, Font, Grid, Icon, Measure, Rect, Style};
 use cellix_review::conflict::{Operation, Underway, has_conflicts, underway};
@@ -165,7 +165,7 @@ impl Source {
             return;
         }
         let root = root.to_path_buf();
-        let (done, reading) = mpsc::channel();
+        let (done, reading) = crate::wake::channel();
         std::thread::spawn(move || {
             let entries = status_entries(&root);
             let counts = ahead_behind(&root);
@@ -1059,7 +1059,7 @@ mod tests {
     #[test]
     fn a_read_from_before_a_change_doesnt_undo_it() {
         let dir = tempfile::tempdir().unwrap();
-        let (late, reading) = mpsc::channel();
+        let (late, reading) = std::sync::mpsc::channel();
         let mut source = Source {
             reading: Some(reading),
             ..Source::default()

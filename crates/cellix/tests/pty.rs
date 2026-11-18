@@ -1043,6 +1043,50 @@ fn an_idle_window_draws_and_sends_nothing() {
     screen.wait_exit();
 }
 
+/// A window where nothing happens wakes only when something is due: with nothing turning,
+/// the tick, twice a second. It used to look every 50 ms in case anything had come, about
+/// twenty wakes a second with nothing to do; now whatever comes wakes it.
+#[test]
+fn an_idle_window_wakes_only_when_something_is_due() {
+    let dir = project();
+    let told = tempfile::tempdir().unwrap();
+    let file = told.path().join("prof.log");
+    let mut screen = Screen::start_with(dir.path(), &["hello.txt"], &[("CELLIX_PROF", &file)]);
+    screen.wait_for("hello from a file");
+    let lines = || -> Vec<String> {
+        let text = std::fs::read_to_string(&file).unwrap_or_default();
+        text.lines().map(str::to_string).collect()
+    };
+    let field = |line: &str, key: &str| -> u64 {
+        let word = line
+            .split(' ')
+            .find_map(|w| w.strip_prefix(&format!("{key}=")));
+        word.and_then(|w| w.parse().ok()).unwrap_or(u64::MAX)
+    };
+    // The start, and the first looks at the disk, are past by the fifth line.
+    let deadline = Instant::now() + WAIT * 2;
+    while lines().len() < 9 {
+        assert!(Instant::now() < deadline, "too few lines: {:?}", lines());
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let idle = &lines()[4..9];
+    let wakes: u64 = idle.iter().map(|line| field(line, "wakes")).sum();
+    let ms: u64 = idle.iter().map(|line| field(line, "ms")).sum();
+    // Each line is from one wake to the first a second or more after it.
+    let rate = wakes as f64 * 1000.0 / ms as f64;
+    assert!(rate <= 2.01, "{rate:.2} wakes a second: {idle:#?}");
+    // What comes from outside still wakes it: an agent's request opens a file between ticks.
+    let opened = std::process::Command::new(env!("CARGO_BIN_EXE_cellix"))
+        .args(["open", "other.txt"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert!(opened.status.success(), "{opened:?}");
+    screen.wait_for("other contents");
+    screen.send(b"\x11");
+    screen.wait_exit();
+}
+
 /// The tick looks at the disk on time however much input comes. With every pointer move
 /// reported, a hand on the mouse held it off, and a file an agent wrote wasn't read again
 /// until the hand was still.

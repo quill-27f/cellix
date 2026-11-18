@@ -113,7 +113,9 @@ fn catch_stops(left: Left) {
                 }
             }
         }
-        // The loop sees a stop within a frame; leaving normally ends this thread with it.
+        // The loop sees a stop as soon as it wakes, which this makes it do; leaving normally
+        // ends this thread with it.
+        crate::wake::poke();
         std::thread::sleep(Duration::from_secs(2));
         // In case the terminal is still there after all, it gets itself back.
         let _ = disable_raw_mode();
@@ -256,8 +258,11 @@ fn scrolling(on: bool, remote: bool) -> Option<Smooth> {
     })
 }
 
-/// How long to wait for input before checking on language servers.
+/// How often the loop looks while something is timed from a moment just past (`App::soon`),
+/// or where nothing can wake it (`wake.rs`).
 const POLL: Duration = Duration::from_millis(50);
+/// What it waits otherwise, where it can be woken: nothing but what's due ends the wait.
+const IDLE: Duration = Duration::MAX;
 /// How long to wait with a session in the side pane, whose output should feel typed.
 const SESSION_POLL: Duration = Duration::from_millis(8);
 /// The same once nothing has been typed or printed for a while. A session at its prompt, or
@@ -1126,6 +1131,11 @@ pub fn run(options: Options) -> io::Result<()> {
         use std::io::IsTerminal;
         io::stdin().is_terminal() && crate::wake::start().is_ok()
     };
+    // And so does every answer a thread here hands it, the language servers' and agents'.
+    if woken {
+        cellix_lang::wake_with(crate::wake::poke);
+        cellix_agent::wake_with(crate::wake::poke);
+    }
     #[cfg(not(unix))]
     let woken = false;
     // Where the screen is also written as text, for the harness: its terminal gets pictures,
@@ -1317,10 +1327,12 @@ pub fn run(options: Options) -> io::Result<()> {
             if spaces.quit || STOPPED.load(Ordering::Relaxed) {
                 break;
             }
-            let has_session = spaces.list.iter().any(|w| w.app.has_session());
-            // Woken by what's on screen as it prints, the loop needn't look at the sessions
-            // any more often than at anything else.
-            let rest = if has_session && !woken {
+            // Woken by what's on screen as it prints, by every answer it waits on, and by a
+            // resize, the loop looks only when something is due: the tick, a spinner's step,
+            // a frame of output, or what `soon` says is timed.
+            let rest = if woken {
+                if spaces.soon() { POLL } else { IDLE }
+            } else if spaces.list.iter().any(|w| w.app.has_session()) {
                 session_wait(lively.elapsed())
             } else {
                 POLL
@@ -1329,8 +1341,9 @@ pub fn run(options: Options) -> io::Result<()> {
             let now = Instant::now();
             let mut wait =
                 wait_for(rest, backend.gliding(), turning, now).min(pace.until_tick(now));
-            // A program's synchronized update left open is ended when its time is up.
-            if let Some(deadline) = spaces.update_deadline() {
+            // A program's synchronized update left open is ended when its time is up, and the
+            // terminal is asked its cell's size once the window has settled.
+            for deadline in [spaces.update_deadline(), cell_asked].into_iter().flatten() {
                 wait = wait.min(deadline.saturating_duration_since(Instant::now()));
             }
             // Output waiting for its frame is drawn when the frame's time comes.

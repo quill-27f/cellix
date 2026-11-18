@@ -5836,5 +5836,12 @@
     "title": "A hairline stands on whole pixels, in its full colour",
     "test": "a_hairline_stands_on_whole_pixels",
     "passes": true
+  },
+  {
+    "id": "idle-wakes-only-when-due",
+    "milestone": 15,
+    "title": "An idle window wakes only when something is due: every answer pokes the loop, and nothing wakes it on a timer of its own",
+    "test": "an_idle_window_wakes_only_when_something_is_due",
+    "passes": true
   }
 ]

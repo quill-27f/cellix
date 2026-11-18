@@ -593,6 +593,13 @@ fn recheck_when_loaded(writer: &mut Writer, quiet: bool) {
     }
 }
 
+/// Passes news on to the app, and wakes it to take it.
+fn tell(events: &Sender<LspEvent>, event: LspEvent) {
+    if events.send(event).is_ok() {
+        crate::wake();
+    }
+}
+
 fn read_loop(
     stdout: impl Read,
     writer: &Mutex<Writer>,
@@ -620,7 +627,7 @@ fn read_loop(
                     }
                 })
                 .collect();
-            let _ = events.send(LspEvent::Diagnostics(path, items));
+            tell(events, LspEvent::Diagnostics(path, items));
             continue;
         }
         if message["method"] == "experimental/serverStatus" {
@@ -629,14 +636,14 @@ fn read_loop(
                 writer.quiet = Some(quiet);
                 recheck_when_loaded(&mut writer, quiet);
             }
-            let _ = events.send(LspEvent::Activity);
+            tell(events, LspEvent::Activity);
             continue;
         }
         if message["method"] == "$/progress" {
             if let Ok(mut writer) = writer.lock() {
                 take_progress(&mut writer, &message["params"]);
             }
-            let _ = events.send(LspEvent::Activity);
+            tell(events, LspEvent::Activity);
             continue;
         }
         if !message["method"].is_null() {
@@ -662,7 +669,7 @@ fn read_loop(
                 Some(Pending::Folds(_) | Pending::InlayHints(..) | Pending::Signature)
             );
             if !background {
-                let _ = events.send(LspEvent::Failed(error.to_string()));
+                tell(events, LspEvent::Failed(error.to_string()));
             }
             continue;
         }
@@ -698,7 +705,7 @@ fn read_loop(
             None => None,
         };
         if let Some(event) = event {
-            let _ = events.send(event);
+            tell(events, event);
         }
     }
 }

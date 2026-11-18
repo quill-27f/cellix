@@ -1221,6 +1221,35 @@ impl App {
         Answer::ok(Value::String(shown.join("\n")))
     }
 
+    /// Whether a call, a card or a note is under way, or an agent was just given a message:
+    /// what moves those on is timed, so the loop keeps looking as often as it did.
+    pub(super) fn team_soon(&self) -> bool {
+        let prompted =
+            |s: &crate::dock::Session| s.prompted.is_some_and(|at| at.elapsed() < TAKING);
+        let members = self.dock.sessions.iter().filter_map(|s| s.member.as_ref());
+        let gone = self.team.gone.values().map(|g| &g.member);
+        // News for a parent that's still here to be told it.
+        let untold = members.chain(gone).any(|member| {
+            let Some(parent) = &member.parent else {
+                return false;
+            };
+            let here = self
+                .member_index(parent)
+                .is_some_and(|i| !self.dock.sessions[i].exited);
+            let told = self.team.told.get(&(parent.clone(), member.name.clone()));
+            let told = told.copied().unwrap_or(0);
+            here && self
+                .team
+                .alerts
+                .get(&member.name)
+                .is_some_and(|(count, _)| *count > told)
+        });
+        !self.team.pending.is_empty()
+            || !self.team.asking.is_empty()
+            || self.dock.sessions.iter().any(prompted)
+            || untold
+    }
+
     /// Moves every call under way on, and answers those that are done. Returns whether the
     /// screen may have changed.
     pub(super) fn poll_team(&mut self) -> bool {

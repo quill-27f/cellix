@@ -2,7 +2,7 @@
 //! time, so a long paper shows its first page at once and the interface never waits.
 
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::Receiver;
 
 use cellix_doc::pdf::{Document, Page};
 use cellix_doc::synctex::Map;
@@ -130,7 +130,7 @@ impl PdfView {
     /// Reads the file again and draws its pages `width` cells wide. Old pages stay until
     /// new ones replace them, so a rebuild doesn't flash.
     pub fn load(&mut self, width: u16, cell: (u32, u32)) {
-        let (sender, updates) = mpsc::channel();
+        let (sender, updates) = crate::wake::channel();
         let path = self.path.clone();
         self.fit = (width, cell);
         self.generation += 1;
