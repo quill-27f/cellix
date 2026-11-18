@@ -14224,6 +14224,9 @@ impl App {
         editor.scroll_by(rows);
         let at = editor.position_at(area, held.x, held.row);
         editor.extend_selection_to(at);
+        // What's under the edge row can be text further on, past an empty row: the end is
+        // kept in view, so it's seen where it is.
+        editor.reveal(area);
         let moved = before != (editor.top(), editor.selections.primary());
         self.scrolled = None;
         moved

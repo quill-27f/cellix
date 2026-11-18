@@ -428,8 +428,9 @@ however far the page has been scrolled in between (the user's ask, 18 November 2
 through"). A drag covers more than the screen too ("or selecting text with scroll support"): held
 past the text's top or bottom edge, onto the tabs or the bar at the foot, the text scrolls that way
 and the selection takes in what comes onto the edge row under the pointer, at 8 rows a second just
-past the edge and 16 more for each row further, as browsers grow it with the distance; it stops
-when the pointer comes back over the text or lets go. Only while it's held there does `App::soon`
+past the edge and 16 more for each row further, as browsers grow it with the distance, the end
+kept in view where the edge row is empty and the text after it is further on; it stops when the
+pointer comes back over the text or lets go. Only while it's held there does `App::soon`
 have the loop look every 50 ms, so nothing is timed otherwise. The wheel turned with the button
 held scrolls, and the selection follows to what's under the pointer then. Until then a drag past
 the foot scrolled only as far as the pointer moved, one past the top not at all, and the wheel left
@@ -438,8 +439,10 @@ click keeps that selection's start. A Shift+click is about the selection whereve
 ticks no box, folds nothing, opens no included file and isn't counted towards a double click; a
 plain click on those still does what it did. An end on a formula or a picture, by a drag or a
 Shift+click, takes in the whole of it, so it stays drawn and selected rather than opening to half its
-source; one already open is text like any other. One inside a selection is washed in the
-selection's colour, as words are, so it reads as taken in. The status bar counts the words selected
+source; one already open is text like any other. One inside a selection reads as taken in: a
+formula's ink stands on the selection's colour, with half a column and 7 px of it round the ink as
+a word's letters have, and a picture of its own colours lies under a see-through wash of it, as a
+browser shows one. The status bar counts the words selected
 in a paper as it counts the paper's, without its commands. The selection gets Comment and Ask Agent as a
 dragged one does, under its end when its start is out of view, and its comment quotes its first line
 and hears all of it. Code in the source view, notebooks, data, plans and transcripts are the same

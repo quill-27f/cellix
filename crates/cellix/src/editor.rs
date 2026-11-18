@@ -1149,11 +1149,15 @@ impl Editor {
                 let holds = |s: &Selection| !s.is_empty() && at >= s.start() && at < s.end();
                 self.selections.iter().any(holds)
             });
-            let from = (top + 0.2).max(area.y as f32);
-            let to = (top + 0.2 + figure.height).min(area.bottom() as f32);
-            let shown = (picked && to > from)
-                .then(|| Bounds::cells(left + x, from, figure.width, to - from));
             let ink = figure.bitmap.kind == Pixels::Coverage;
+            // Ink has room round it on the colour, half a column and 7 px, as a word's
+            // letters have; a wash lies on the picture's own edges.
+            let (side, over) = if ink { (0.5, 0.15) } else { (0.0, 0.0) };
+            let from = (top + 0.2 - over).max(area.y as f32);
+            let to = (top + 0.2 + figure.height + over).min(area.bottom() as f32);
+            let wide = figure.width + 2.0 * side;
+            let shown = (picked && to > from)
+                .then(|| Bounds::cells(left + x - side, from, wide, to - from));
             if let Some(shown) = shown.filter(|_| ink) {
                 grid.panel(shown, 6, Some(theme.selection), None);
             }

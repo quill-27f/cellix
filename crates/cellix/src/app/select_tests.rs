@@ -278,8 +278,17 @@ fn picture_selected(grid: &Grid) -> bool {
             _ => None,
         })
         .collect();
+    // Ink stands on the colour with room round it; a wash lies on the picture's edges.
+    let round = |outer: &cellix_render::Bounds| {
+        pictures.iter().any(|inner| {
+            outer.x < inner.x
+                && outer.y < inner.y
+                && outer.x + outer.w > inner.x + inner.w
+                && outer.y + outer.h > inner.y + inner.h
+        })
+    };
     grid.paint.iter().any(|paint| match paint {
-        Paint::Panel { bounds, fill, .. } => *fill == Some(selection) && pictures.contains(bounds),
+        Paint::Panel { bounds, fill, .. } => *fill == Some(selection) && round(bounds),
         Paint::Wash { bounds, color, .. } => *color == selection && pictures.contains(bounds),
         _ => false,
     })
@@ -431,7 +440,14 @@ fn a_drag_held_past_the_foot_scrolls_the_page_and_the_selection_follows() {
         "timed while it's held there"
     );
     let top = app.editors[0].top();
-    hold(&mut app, |app| spot(app, last).is_some());
+    hold(&mut app, |app| {
+        let head = app.editors[0].selections.primary().head;
+        assert!(
+            spot(app, head).is_some(),
+            "the end stays in view as it scrolls"
+        );
+        spot(app, last).is_some()
+    });
     assert!(app.editors[0].top() > top, "the page scrolled");
     let area = app.focused_area();
     let edge = app.editors[0].scroll_region(area).bottom() - 1;
