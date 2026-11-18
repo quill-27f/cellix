@@ -692,6 +692,16 @@ the file, and it reaches the web page and the PDF. Track Changes keeps edits as 
 text itself, as CriticMarkup or the `changes` package, so they travel with the file and any tool,
 agents included, can read them.
 
+A suggestion is settled where it stands. While the caret is in one, or the pointer is on one,
+Reject and Accept stand over its first row from where it starts, Review's two words for the same
+thing, with Accept filled as it is there; under its last row when the first is the top of the page,
+which Next keeps it off. They keep to the page's reading column, and lean a little toward the
+suggestion in the row's air. They're the chips a selection's Comment and Ask Agent are, and give
+way to them while anything is selected. The one under the pointer comes first, and stays while the
+pointer goes up to its chips across the row's other words. A press settles it as one edit to undo
+and says how many are left. Until 18 November 2026 Accept and Reject were only in the right-click
+menu and the palette, where they still are, with no key: the user asked for them at the change.
+
 The Outline in the sidebar lists a document's headings, or a paper's sections, and a click goes
 there. The side pane keeps what the last build said in a Log tab, and a line that names a place
 goes to it. Wide glyphs are looked up as sans-serif rather than monospace in the cells: asked for a

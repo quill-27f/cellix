@@ -30,6 +30,7 @@ use cellix_review::{
 use cellix_agent::hook::comments_message;
 use cellix_agent::ide::{IdeCall, IdeServer};
 use cellix_agent::{Decision, Request, SharedComments, TestRun};
+use cellix_doc::changes::Change;
 use cellix_doc::latex::ENGINES;
 use cellix_doc::notebook::{Marker, Notebook};
 use cellix_doc::table::{Align, Edit as TableEdit};
@@ -106,6 +107,16 @@ const VIEW_COMMENT_ROW: u16 = 2;
 const ASK_WIDTH: u16 = 11;
 /// How the buttons by a terminal's selection are drawn: not lifted, and this much of a row tall.
 const OUTPUT_CHIP: (f32, f32) = (0.0, 0.88);
+/// What the two buttons by a suggestion on a page say, Review's words for the same thing.
+const REJECT: &str = "Reject";
+const ACCEPT: &str = "Accept";
+/// How the buttons by a selection on a page are drawn: lifted this far off the words they
+/// stand over, and this much of a row tall.
+const SELECTION_CHIP: (f32, f32) = (0.2, 0.96);
+/// How far Reject and Accept lean toward the suggestion they stand by, in rows.
+const CHANGE_CHIP_LEAN: f32 = 0.08;
+/// Rows kept over a suggestion Next goes up to: its chips' row and one of what's before it.
+const CHANGE_CONTEXT: usize = 2;
 /// The list an empty window shows, its width, the rows above it, and the height it needs.
 const WELCOME_WIDTH: u16 = 44;
 const WELCOME_LEAD_ROWS: u16 = 4;
@@ -1556,6 +1567,9 @@ pub struct App {
     /// The words a click on a comment's card selected in the file: the comment's own, so the
     /// buttons that offer to comment on a selection stay away from them.
     lit_range: Option<(usize, usize)>,
+    /// Where the suggestion under the pointer starts, in the file in front: its Accept and
+    /// Reject stand by it while the pointer is on it or on them.
+    pointed_change: Option<usize>,
     /// The order the Comments pane lists them in.
     comment_sort: threads::Sort,
     /// The emoji put in comments, the last first, so the ones reached for stand ready.
@@ -1764,6 +1778,7 @@ impl App {
             dock_guide: None,
             lit_thread: None,
             lit_range: None,
+            pointed_change: None,
             comment_sort: threads::Sort::Document,
             emoji_used: Vec::new(),
             looked_at: Vec::new(),
@@ -5166,6 +5181,130 @@ impl App {
         )
     }
 
+    /// The suggestion whose Accept and Reject stand by it: the one under the pointer, or else
+    /// the one the caret is in or right after, on a page in front with nothing else going on.
+    /// None while something is selected, since the selection's own buttons stand there then.
+    fn chips_change(&self) -> Option<Change> {
+        let idle = matches!(self.overlay, Overlay::None) && self.drag == Drag::None;
+        let plain = self.review.is_none() && self.settings_page.is_none();
+        if !idle || !plain || self.dock.draft.is_some() || self.task_shown() {
+            return None;
+        }
+        let editor = self.editors.get(self.active()).filter(|e| e.rendered)?;
+        if editor.selections.len() > 1 || !editor.selections.primary().is_empty() {
+            return None;
+        }
+        let found = editor.suggestions();
+        let pointed = self
+            .pointed_change
+            .and_then(|start| found.iter().find(|c| c.start == start));
+        let head = editor.selections.primary().head;
+        let at_caret = || found.iter().find(|c| c.start <= head && head <= c.end);
+        pointed.or_else(at_caret).cloned()
+    }
+
+    /// Where Reject and Accept stand by a suggestion, as Review's stand on a change: over its
+    /// first row from where it starts, or under its last when the first is the top of the
+    /// page. With the rows the suggestion is on, first and last.
+    fn change_chips(&self) -> Option<(Change, Rect, Rect, (u16, u16))> {
+        let change = self.chips_change()?;
+        let editor = self.editors.get(self.active())?;
+        let area = self.focused_area();
+        let first = editor.cell_of(area, change.start);
+        let last = editor.cell_of(area, change.end).or(first);
+        let rows = (
+            first.map_or(area.y, |(_, y)| y),
+            last.map_or(area.bottom().saturating_sub(1), |(_, y)| y),
+        );
+        let (x, y) = match first {
+            Some((x, y)) if y > area.y => (x, y - 1),
+            _ => {
+                let (_, y) = last?;
+                let x = first.map_or(f32::from(area.x), |(x, _)| x);
+                (x, (y + 1).min(area.bottom().saturating_sub(1)))
+            }
+        };
+        let (reject, accept) = (self.chip_width(REJECT), self.chip_width(ACCEPT));
+        // Within the page's reading column, as the words they're about are.
+        let end = editor.text_end(area).min(area.right().saturating_sub(1));
+        let x = (x as u16)
+            .min(end.saturating_sub(reject + accept))
+            .max(area.x);
+        Some((
+            change,
+            Rect::new(x, y, reject, 1),
+            Rect::new(x + reject, y, accept, 1),
+            rows,
+        ))
+    }
+
+    /// How Reject and Accept stand in their row: a little nearer the suggestion than the line
+    /// on their other side, where a row has air to spare. A selection's lean away from what's
+    /// selected instead, and at their lift these stood 5 px under the line over a suggestion
+    /// and 31 over its words.
+    fn change_chip_lift(&self, over: bool) -> (f32, f32) {
+        let toward = if measures::roomy(self.measure.as_ref()) {
+            CHANGE_CHIP_LEAN
+        } else {
+            0.0
+        };
+        (if over { -toward } else { toward }, SELECTION_CHIP.1)
+    }
+
+    /// Notes the suggestion under the pointer, for its chips. It stays while the pointer is on
+    /// its chips, or between them and the rows it's on, so the way to them doesn't lose it.
+    fn point_change(&mut self, x: u16, y: u16) {
+        let pointed = self.pointed_change.and(self.change_chips());
+        if let Some((change, reject, accept, (first, last))) = pointed
+            && self.pointed_change == Some(change.start)
+        {
+            let on_chips = reject.contains(x, y) || accept.contains(x, y);
+            let between = y >= reject.y.min(first) && y <= reject.y.max(last);
+            if on_chips || (between && self.change_under(x, y).is_none()) {
+                return;
+            }
+        }
+        self.pointed_change = self.change_under(x, y).map(|c| c.start);
+    }
+
+    /// The suggestion at a place on the page in front.
+    fn change_under(&self, x: u16, y: u16) -> Option<Change> {
+        let area = self.focused_area();
+        if !area.contains(x, y) {
+            return None;
+        }
+        let editor = self.editors.get(self.active()).filter(|e| e.rendered)?;
+        let found = editor.suggestions();
+        if found.is_empty() {
+            return None;
+        }
+        let at = editor.position_at(area, f32::from(x), y);
+        // Past the end of a row the place is the row's end, which is in nothing.
+        let on_row = editor.cell_of(area, at).is_some_and(|(_, row)| row == y);
+        found
+            .iter()
+            .find(|c| on_row && c.start <= at && at < c.end)
+            .cloned()
+    }
+
+    /// Accepts or rejects the suggestion that starts at `start`, and says how many are left.
+    fn settle_suggestion(&mut self, start: usize, accept: bool) {
+        let Some(editor) = self.editor_mut() else {
+            return;
+        };
+        if !editor.settle_change_at(start, accept) {
+            return;
+        }
+        let left = editor.suggestions().len();
+        self.pointed_change = None;
+        let done = if accept { "Accepted" } else { "Rejected" };
+        self.say(match left {
+            0 => format!("{done}. No suggestions left"),
+            1 => format!("{done}. 1 suggestion left"),
+            n => format!("{done}. {n} suggestions left"),
+        });
+    }
+
     /// The columns a button by a selection takes for its words: a column either side where
     /// every letter is a cell, and the room every button has where they're measured.
     fn chip_width(&self, label: &str) -> u16 {
@@ -5397,24 +5536,34 @@ impl App {
     }
 
     fn draw_chip(&self, grid: &mut Grid, chip: Rect, name: &str) {
-        /// Its gap from the words it stands over, in cells.
-        const LIFT: f32 = 0.2;
-        self.draw_chip_lifted(grid, chip, name, (LIFT, 0.96));
+        self.draw_chip_lifted(grid, chip, name, SELECTION_CHIP);
     }
 
     /// A button as the ones by a selection, `lift` cells above its row and `height` of a
     /// row tall, centred on it.
-    fn draw_chip_lifted(
+    fn draw_chip_lifted(&self, grid: &mut Grid, chip: Rect, name: &str, lift: (f32, f32)) {
+        self.draw_chip_as(grid, chip, name, lift, false);
+    }
+
+    /// Such a button, filled with the accent when it's `main`, the one a press is most
+    /// likely for, as Accept is in Review.
+    fn draw_chip_as(
         &self,
         grid: &mut Grid,
         chip: Rect,
         name: &str,
         (lift, height): (f32, f32),
+        main: bool,
     ) {
         /// Its gap from the button beside it, in cells.
         const SIDE: f32 = 0.24;
         let theme = &self.theme;
         let on_it = self.hover.is_some_and(|h| chip.contains(h.0, h.1));
+        let words = if main {
+            theme.button_text
+        } else {
+            theme.text.fg
+        };
         // Painted, the cells under the label keep the ground they had, so a chip shorter
         // than its row doesn't show a strip of its colour above or below it.
         let inside = chip.x + 1 < grid.width() && chip.y < grid.height();
@@ -5423,12 +5572,13 @@ impl App {
         } else {
             theme.popup
         };
+        let rest = if main { theme.button } else { theme.popup };
         let style = Style {
-            fg: theme.text.fg,
+            fg: words,
             bold: false,
             painted: !self.measure.in_cells(),
             bg: if self.measure.in_cells() {
-                theme.popup
+                rest
             } else {
                 ground
             },
@@ -5437,30 +5587,27 @@ impl App {
         if self.measure.in_cells() {
             grid.fill(chip, style);
         } else {
-            let fill = if on_it {
-                theme.popup_hover
-            } else {
-                theme.popup
+            let fill = match (on_it, main) {
+                (false, _) => rest,
+                (true, true) => theme.quiet_button(theme.button),
+                (true, false) => theme.popup_hover,
             };
+            let edge = if main { fill } else { theme.popup_border };
             let bounds = Bounds::cells(
                 chip.x as f32 + SIDE,
                 chip.y as f32 + (1.0 - height) / 2.0 - lift,
                 chip.w as f32 - SIDE * 2.0,
                 height,
             );
-            grid.popup(bounds, 20, fill, theme.popup_border);
+            grid.popup(bounds, 20, fill, edge);
             let font = Font::default();
             let width = self.measure.width(name, font);
             let x = chip.x as f32 + (chip.w as f32 - width) / 2.0;
-            // A little over the chip's middle, so the tail of "Agent" keeps off its edge.
-            let top = chip.y as f32 - lift - 0.04;
-            grid.text_run(
-                (x, top),
-                chip.right() as f32,
-                name,
-                (theme.text.fg, false),
-                font,
-            );
+            // A hair over the chip's middle, so the tail of "Agent" keeps off its edge: at
+            // 0.04 of a row its capitals were 9 px under the chip's top and its baseline 12
+            // over its foot.
+            let top = chip.y as f32 - lift - 0.01;
+            grid.text_run((x, top), chip.right() as f32, name, (words, false), font);
         }
         grid.put_str(chip.x + 1, chip.y, name, style, chip.right());
     }
@@ -5542,6 +5689,10 @@ impl App {
             self.draw_chip(grid, ask, &ask_says);
         } else if let Some((chip, _)) = self.picture_comment() {
             self.draw_chip(grid, chip, "Comment");
+        } else if let Some((_, reject, accept, (first, _))) = self.change_chips() {
+            let lift = self.change_chip_lift(reject.y < first);
+            self.draw_chip_as(grid, reject, REJECT, lift, false);
+            self.draw_chip_as(grid, accept, ACCEPT, lift, true);
         }
     }
 
@@ -5575,6 +5726,12 @@ impl App {
                 self.prompt_comment_at_cursor(true);
                 return true;
             }
+        } else if self.picture_comment().is_none()
+            && let Some((change, reject, accept, _)) = self.change_chips()
+            && (reject.contains(x, y) || accept.contains(x, y))
+        {
+            self.settle_suggestion(change.start, accept.contains(x, y));
+            return true;
         }
         match self.picture_comment() {
             Some((chip, line)) if chip.contains(x, y) => {
@@ -8237,7 +8394,12 @@ impl App {
                 if let Some(editor) = self.editor_mut() {
                     let count = editor.settle_all_changes(accept);
                     let done = if accept { "Accepted" } else { "Rejected" };
-                    self.say(format!("{done} {count} changes"));
+                    self.pointed_change = None;
+                    self.say(match count {
+                        0 => "No suggestions in this document".to_string(),
+                        1 => format!("{done} 1 change"),
+                        n => format!("{done} {n} changes"),
+                    });
                 }
             }
             Command::ShowAgents => self.toggle_dock(),
@@ -13645,6 +13807,14 @@ impl App {
         let start = changes[index].start;
         editor.selections.set_single(Selection::cursor(start));
         editor.reveal(area);
+        // Brought down from the top row, where there's no room over it for its chips, which
+        // would stand on the words under it instead.
+        if editor
+            .cell_of(area, start)
+            .is_some_and(|(_, y)| y == area.y)
+        {
+            editor.scroll_by(-(CHANGE_CONTEXT as isize));
+        }
         self.say(format!("Suggestion {} of {}", index + 1, changes.len()));
     }
 
@@ -14095,6 +14265,7 @@ impl App {
         if mouse.kind == MouseKind::Move {
             self.hover = Some((mouse.x, mouse.y));
             self.pointer = mouse.at();
+            self.point_change(mouse.x, mouse.y);
             // A menu takes the pointer: nothing under it, or beside it, is lit by it while
             // it's open. Its own rows go by the place it keeps.
             if let Overlay::Menu(menu) = &mut self.overlay {
@@ -14113,6 +14284,10 @@ impl App {
                 self.note_view_spot(mouse.x, mouse.y);
             }
             return;
+        }
+        // The page moves under the pointer, off the suggestion it was on.
+        if matches!(mouse.kind, MouseKind::ScrollUp | MouseKind::ScrollDown) {
+            self.pointed_change = None;
         }
         // Where the last press landed says what Find looks through: the side pane, or the file.
         if mouse.kind == MouseKind::Left {
@@ -19570,6 +19745,8 @@ pub(crate) fn machine_name() -> String {
 mod agent_tab_tests;
 #[cfg(test)]
 mod agents_list_tests;
+#[cfg(test)]
+mod changes_tests;
 #[cfg(test)]
 mod docflow_tests;
 #[cfg(test)]

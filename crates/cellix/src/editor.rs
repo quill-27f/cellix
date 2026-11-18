@@ -212,6 +212,9 @@ pub struct Editor {
     view_width: Cell<u16>,
     /// Whether typing here is kept as suggested changes.
     pub tracking: bool,
+    /// The suggestions in the text, for the revision they were found at: every frame asks
+    /// for them, for the chips by one and the row that counts them.
+    suggestions: RefCell<Option<(u64, Rc<[Change]>)>>,
     /// While an agent's edits stand as suggestions nobody has touched: the text from before
     /// its first edit, and the buffer as Cellix last marked it. A later edit from the same
     /// turn is marked against that text again, so the edits pile up into one review.
@@ -354,6 +357,7 @@ impl Editor {
             dark: Cell::new(false),
             view_width: Cell::new(0),
             tracking: false,
+            suggestions: RefCell::new(None),
             agent_review: None,
             words: Cell::new(None),
             paper_files: RefCell::default(),
@@ -728,6 +732,13 @@ impl Editor {
         } else {
             (text + Self::right_margin(area) + 1).min(area.right())
         }
+    }
+
+    /// The column after the last one a page's text is set in, in the area the page is drawn
+    /// in: where what stands by its words ends, so it keeps to the reading column.
+    pub fn text_end(&self, area: Rect) -> u16 {
+        let area = self.text_area(area);
+        area.x + self.page_margin(area) + self.page_width(area) as u16
     }
 
     /// The columns a page shows of what's on it, from its own left edge to its right one.
@@ -3621,6 +3632,23 @@ impl Editor {
         changes::find(&self.buffer.text(), self.syntax())
     }
 
+    /// The suggestions in a document, top to bottom, found once for each revision of its
+    /// text. None in code or data, where `{++` can be code.
+    pub fn suggestions(&self) -> Rc<[Change]> {
+        if !self.has_page() || !self.dialect().is_writing() {
+            return Rc::from(Vec::new());
+        }
+        let revision = self.buffer.revision();
+        if let Some((at, found)) = &*self.suggestions.borrow()
+            && *at == revision
+        {
+            return found.clone();
+        }
+        let found: Rc<[Change]> = Rc::from(self.changes());
+        *self.suggestions.borrow_mut() = Some((revision, found.clone()));
+        found
+    }
+
     /// The change the caret is in or right after.
     pub fn change_at_caret(&self) -> Option<Change> {
         let head = self.selections.primary().head;
@@ -3630,9 +3658,22 @@ impl Editor {
 
     /// Keeps or drops the change at the caret.
     pub fn settle_change(&mut self, accept: bool) {
-        let Some(change) = self.change_at_caret() else {
-            return;
-        };
+        if let Some(change) = self.change_at_caret() {
+            self.settle(&change, accept);
+        }
+    }
+
+    /// Keeps or drops the change that starts at `start`. False when none does.
+    pub fn settle_change_at(&mut self, start: usize, accept: bool) -> bool {
+        let found = self.changes().into_iter().find(|c| c.start == start);
+        found.is_some_and(|change| {
+            self.settle(&change, accept);
+            true
+        })
+    }
+
+    /// Puts what a change keeps in its place, as one edit to undo, with the caret after it.
+    fn settle(&mut self, change: &Change, accept: bool) {
         let kept = if accept { &change.new } else { &change.old };
         self.buffer
             .replace_range(&mut self.selections, change.start, change.end, kept);

@@ -6333,5 +6333,12 @@
     "title": "cellix reply --done marks a comment addressed by that agent, through the running Cellix",
     "test": "pty_an_agent_says_it_addressed_a_comment",
     "passes": true
+  },
+  {
+    "id": "suggestion-chips",
+    "milestone": 15,
+    "title": "Accept and Reject stand by the suggestion at the caret or under the pointer on a page, Markdown and LaTeX",
+    "test": "a_suggestion_at_the_caret_is_accepted_or_rejected_by_its_chips",
+    "passes": true
   }
 ]

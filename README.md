@@ -100,7 +100,7 @@ edits what you edit and git sees every change.
 - **Ask about anything on the page.** Select text, a formula, a diagram or a figure, then Comment or
   Ask Agent. The answer lands under your question, as a thread beside the page.
 - **See suggestions as suggestions.** Track Changes keeps edits in the text itself, as CriticMarkup or
-  the `changes` package, to accept or reject one at a time.
+  the `changes` package. Accept and Reject stand by the one you're on.
 - **Real math and diagrams.** Formulas are typeset as you write, with no TeX installed. Mermaid,
   Graphviz and SVG draw from pure Rust, and TikZ builds in the background.
 - **Whole papers.** Sections, citations, equations, theorems and figures across `\input` files, Cite
@@ -293,7 +293,9 @@ and `tikzpicture`, `tikzcd`, `forest`, `circuitikz` and `algorithm` in a paper a
 your LaTeX engine in the background, and kept, so typing never waits.
 
 **Track changes.** The pencil keeps edits as suggestions in the text itself, as CriticMarkup or the
-`changes` package. Right-click one to accept or reject it, or settle them all from the commands.
+`changes` package, and an agent's edits arrive the same way. Put the caret in one, or point at it,
+and Reject and Accept stand over it. Right-click and the palette have them too, with Accept All and
+Reject All.
 
 **Papers.** A `.tex` file shows its sections, numbers, citations, equations, theorems, figures and
 tables, across `\input` files, and anything Cellix doesn't recognise stays visible as source. **Cite**
