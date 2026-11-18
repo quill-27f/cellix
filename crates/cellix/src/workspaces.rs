@@ -298,6 +298,12 @@ impl Workspaces {
     }
 
     pub fn handle(&mut self, event: Event) {
+        // Once the last workspace has quit there's no app to hand anything to: what came in
+        // the same read as the quit, as a click's release after the press that quit, goes
+        // nowhere. It went to the app in front, which was gone, and Cellix panicked.
+        if self.list.is_empty() {
+            return;
+        }
         // An app can't see the others. It's told how many there are, for the commands that
         // move between them.
         let count = self.list.len();
@@ -2446,6 +2452,32 @@ mod tests {
         for root in [&first, &second] {
             let _ = fs::remove_dir_all(crate::hold::folder_of(root));
         }
+    }
+
+    /// What comes in the same read as the quit, after it, goes nowhere: the release of the
+    /// click on Stop and Quit, a key, the tick, a resize. It went to the app in front, which
+    /// had gone with the last workspace, and Cellix panicked as it quit.
+    #[test]
+    fn what_comes_after_the_last_workspace_quits_goes_nowhere() {
+        let (_dir, first, _) = projects();
+        let mut spaces = spaces();
+        spaces.open(first.clone());
+        let ctrl = Mods {
+            ctrl: true,
+            ..Mods::default()
+        };
+        key(&mut spaces, Key::Char('q'), ctrl);
+        assert!(
+            spaces.quit && spaces.list.is_empty(),
+            "nothing to ask: it quits"
+        );
+        click(&mut spaces, MouseKind::Up, (10, 10));
+        key(&mut spaces, Key::Char('x'), Mods::default());
+        spaces.handle(Event::Tick);
+        spaces.handle(Event::Resize(80, 24));
+        spaces.poll();
+        assert!(spaces.quit && spaces.list.is_empty());
+        let _ = fs::remove_dir_all(crate::hold::folder_of(&first));
     }
 
     #[test]

@@ -1175,6 +1175,12 @@ pub fn run(options: Options) -> io::Result<()> {
                 prof.worked(backend.take_work());
                 prof.flush(Instant::now());
             }
+            // Quit while input was taken, the last workspace is gone, and what follows asks the
+            // one in front for things: a quit with nothing to ask panicked here, out of sight
+            // on the screen it was leaving, and ended Cellix with 101.
+            if spaces.quit || STOPPED.load(Ordering::Relaxed) {
+                break;
+            }
             // Polled as well as signalled: a resize during slow startup is otherwise lost.
             let lines = size()?;
             if display.fit_to(lines.1) {

@@ -6396,5 +6396,12 @@
     "title": "A comment's kind is picked from chips as it's written",
     "test": "a_comments_kind_is_picked_from_chips_as_it_is_written",
     "passes": true
+  },
+  {
+    "id": "quit-takes-nothing-after",
+    "milestone": 15,
+    "title": "What comes in after the last workspace quits goes nowhere, so quitting ends Cellix cleanly rather than with a panic",
+    "test": "what_comes_after_the_last_workspace_quits_goes_nowhere",
+    "passes": true
   }
 ]

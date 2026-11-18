@@ -205,12 +205,23 @@ impl Screen {
         self.pty.take();
     }
 
-    /// What Cellix wrote first, and whether it's still running, for a failure to show.
+    /// What Cellix wrote first and last, and whether it's still running, for a failure to
+    /// show. A panic's message and backtrace are the last it writes, after it has left its
+    /// screen, so they're shown whole from where they start.
     fn story(&mut self) -> String {
         let raw = self.raw.lock().unwrap();
         let status = self.child.try_wait();
+        let all = self.all.lock().unwrap();
+        let panicked = all.windows(11).position(|w| w == b"panicked at");
+        let last = match panicked {
+            Some(at) => String::from_utf8_lossy(&all[at.saturating_sub(200)..]).into_owned(),
+            None => format!(
+                "{:?}",
+                String::from_utf8_lossy(&all[all.len().saturating_sub(1500)..])
+            ),
+        };
         format!(
-            "exited: {status:?}, wrote: {:?}",
+            "exited: {status:?}, wrote: {:?}\nwrote last: {last}",
             String::from_utf8_lossy(&raw)
         )
     }
@@ -220,10 +231,17 @@ impl Screen {
     }
 
     fn wait_for(&mut self, text: &str) {
-        let deadline = Instant::now() + WAIT;
+        let mut deadline = Instant::now() + WAIT;
+        let mut ended = false;
         while Instant::now() < deadline {
             if self.contents().contains(text) {
                 return;
+            }
+            // Ended, it shows nothing more once what it wrote last is read: a little longer
+            // for that, and no more, so its story is told at once.
+            if !ended && self.child.try_wait().is_ok_and(|status| status.is_some()) {
+                ended = true;
+                deadline = deadline.min(Instant::now() + Duration::from_secs(2));
             }
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -480,20 +498,28 @@ fn a_links_copy_reaches_the_terminals_clipboard() {
     let encoded = base64::engine::general_purpose::STANDARD.encode(address);
     wait_written(&mut screen, format!("\x1b]52;c;{encoded}\x07").as_bytes());
     screen.wait_for("Copied the link");
-    // The shell is still running, so quitting asks about it, and it's stopped with Cellix.
+    // Quitting asks first while the shell counts as busy, which it may still do just after
+    // the echo: the host looks whether it's back at its prompt every half second. Asked, it's
+    // stopped with Cellix; at its prompt, Cellix quits at once. Either way it ends, and well.
     screen.send(b"\x11"); // Ctrl+Q
-    screen.wait_for("Stop and Quit");
-    let (column, row) = cell_of(&screen, "Stop and Quit").unwrap();
-    let column = column + 1;
-    screen.send(format!("\x1b[<0;{column};{row}M\x1b[<0;{column};{row}m").as_bytes());
     let deadline = Instant::now() + WAIT;
+    let mut stopped = false;
     while screen.child.try_wait().unwrap().is_none() {
-        assert!(
-            Instant::now() < deadline,
-            "still running:\n{}",
-            screen.contents()
-        );
+        if Instant::now() > deadline {
+            let story = screen.story();
+            panic!("still running:\n{}\n{story}", screen.contents());
+        }
+        if !stopped && let Some((column, row)) = cell_of(&screen, "Stop and Quit") {
+            let column = column + 1;
+            screen.send(format!("\x1b[<0;{column};{row}M\x1b[<0;{column};{row}m").as_bytes());
+            stopped = true;
+        }
         std::thread::sleep(Duration::from_millis(20));
+    }
+    let status = screen.child.try_wait().unwrap().unwrap();
+    if !status.success() {
+        let story = screen.story();
+        panic!("it ended with {status:?}:\n{}\n{story}", screen.contents());
     }
 }
 
