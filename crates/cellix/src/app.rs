@@ -67,6 +67,7 @@ mod available;
 mod gitops;
 mod links;
 mod peek;
+mod report;
 mod reviewer;
 mod start;
 mod team;
@@ -470,6 +471,8 @@ enum PromptAction {
     Link,
     /// Puts changes aside, with the message typed.
     Stash(cellix_review::Keep),
+    /// Writes the review as Markdown to the file named, in the project.
+    SaveReview,
 }
 
 struct Prompt {
@@ -627,6 +630,8 @@ enum Choice {
     Undo(String),
     /// Remove a comment and its replies.
     DeleteComment(u32),
+    /// Write the review over the file there.
+    SaveReview(PathBuf),
     Git(GitChoice),
     Worktree(WorktreeChoice),
 }
@@ -6196,6 +6201,7 @@ impl App {
                 }
                 self.refresh_tree();
             }
+            Choice::SaveReview(path) => self.write_review(&path),
             Choice::DeleteComment(id) => {
                 if let Some(at) = self.threads.iter().position(|t| t.id == id) {
                     let thread = self.threads.remove(at);
@@ -7908,6 +7914,10 @@ impl App {
                 self.branch_changed(name, result);
                 Ok(())
             }
+            PromptAction::SaveReview => {
+                self.save_review_as(name);
+                Ok(())
+            }
             PromptAction::NewFile(dir) => self.workspace.create_file(&dir.join(name)),
             PromptAction::NewFolder(dir) => self.workspace.create_dir(&dir.join(name)),
             PromptAction::Rename(path) => match path.parent() {
@@ -8045,6 +8055,8 @@ impl App {
                 self.run(Command::Format(Format::Bold));
             }
             Command::SendToAgent => self.send_to_agent(),
+            Command::CopyReview => self.copy_review(),
+            Command::SaveReview => self.ask_where_to_save_review(),
             Command::ApprovePlan => {
                 let path = self.plan.as_ref().map(|p| p.path.as_path());
                 let edited = self
@@ -10002,6 +10014,27 @@ impl App {
                     MenuItem::new("Close", MenuAction::CloseSession(index)),
                 ];
                 // Under the row of tabs, clear of the one it's about.
+                self.show_menu((x, y + 2), items);
+                return true;
+            }
+            // The Comments tab's own menu: what's done with the review once it's written.
+            if mouse.kind == MouseKind::Right
+                && let Some(TabHit::View(Front::Comments) | TabHit::CloseView(Front::Comments)) =
+                    self.dock.hit(self.title_of(area), x)
+            {
+                let any = self.threads.iter().any(report::kept);
+                let items = vec![
+                    MenuItem::new(
+                        "Copy Review as Markdown",
+                        MenuAction::Run(Command::CopyReview),
+                    )
+                    .when(any),
+                    MenuItem::new(
+                        "Save Review as Markdown…",
+                        MenuAction::Run(Command::SaveReview),
+                    )
+                    .when(any),
+                ];
                 self.show_menu((x, y + 2), items);
                 return true;
             }
@@ -19244,6 +19277,8 @@ mod link_tests;
 mod motion_tests;
 #[cfg(test)]
 mod pane_tab_tests;
+#[cfg(test)]
+mod report_tests;
 #[cfg(test)]
 mod select_tests;
 #[cfg(test)]

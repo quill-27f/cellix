@@ -566,7 +566,7 @@ fn shown<'t>(text: &'t str, view: View) -> (Cow<'t, str>, Vec<String>) {
 
 /// An answer as its card shows it: its verdict's word if it gives one, who wrote it, and
 /// its words.
-fn reply_parts(reply: &Reply) -> (Option<String>, String, String) {
+pub(crate) fn reply_parts(reply: &Reply) -> (Option<String>, String, String) {
     match (verdict(&reply.text), rewrite(&reply.text)) {
         (Some((shown, _, rest)), _) => {
             (Some(sentence(shown)), reply.author.clone(), sentence(rest))

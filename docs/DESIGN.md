@@ -486,6 +486,22 @@ side left it adrift in three. It's pressed where it's painted, by the row's frac
 reports (`threads::hit`), and the order's list drops from the first whole row under it. Under the
 words that say no comment is open it keeps its row, an empty one each side.
 
+A review has an output. Comments are kept in `.cellix/threads.json`, out of git, so a finished
+review, a referee's report say, went nowhere. Comments: Copy Review as Markdown puts it on the
+clipboard the way every copy goes (OSC 52), and Save Review as Markdown… asks for a name in the
+project, offering `review.md` or the next one free (`review-2.md`), asks before it replaces a
+file that's there, writes it and opens it as a page. A right click on the Comments tab has both:
+the pane has no header menu of its own, and the list its order button drops is only orders. The
+review is every comment the reviewer kept, open and resolved: a file at a time by name, as the
+pane lists them with no file in view, a terminal's output last; in each file a kind at a time,
+in the strip's order, those with no kind last under Other; and down the document within a kind.
+An agent's suggestion goes in once it's kept, which makes it the reviewer's; one dismissed or not
+yet decided doesn't. A short head says how many comments, on how many files, how many resolved,
+and how many of each kind. Each comment says its line and whether it's open or resolved, quotes
+its words (the whole selection) as a block quote, and has the reviewer's words and every answer
+under them, named, an agent's verdict as "Claude agrees" or "Claude pushes back". Comments carry
+no time, so neither does the review.
+
 A web address in a comment's words or a reply's (`http://` or `https://`, up to the next space,
 without the full stop or bracket that ends its sentence) is drawn in the accent and underlined,
 on every row it wraps onto, and a click on it opens it the way Open in Browser opens a page: the

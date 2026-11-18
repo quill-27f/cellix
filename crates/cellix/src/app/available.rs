@@ -115,6 +115,7 @@ impl App {
             // Comments and agents.
             C::AddComment | C::AskAgent => path.is_some(),
             C::SendToAgent => self.comments.lock().is_ok_and(|c| !c.is_empty()),
+            C::CopyReview | C::SaveReview => self.threads.iter().any(report::kept),
             C::MentionSelection => {
                 path.is_some() && self.ide.as_ref().is_some_and(|ide| ide.connected())
             }

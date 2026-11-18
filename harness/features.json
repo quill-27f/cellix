@@ -6150,6 +6150,24 @@
     "milestone": 15,
     "title": "A drag held past a terminal tab's edge scrolls its scrollback, and the wheel while dragging too",
     "test": "a_drag_held_past_a_terminals_top_scrolls_its_scrollback_and_the_wheel_does_too",
+    "id": "review-markdown",
+    "milestone": 15,
+    "title": "The review exports as Markdown, a file and a kind at a time, with quotes, verdicts and what's resolved",
+    "test": "the_review_is_markdown_a_file_and_a_kind_at_a_time",
+    "passes": true
+  },
+  {
+    "id": "review-copy",
+    "milestone": 15,
+    "title": "Copy Review as Markdown puts the review on the clipboard, from the palette and the Comments tab's menu",
+    "test": "copy_review_puts_the_markdown_on_the_clipboard",
+    "passes": true
+  },
+  {
+    "id": "review-save",
+    "milestone": 15,
+    "title": "Save Review as Markdown writes the review into the project, asking before it replaces a file, and opens it",
+    "test": "save_review_writes_it_into_the_project_and_opens_it",
     "passes": true
   },
   {

@@ -148,6 +148,8 @@ EXPECT = {
     "50-review-resolved": "Hide 1",
     "50-review-resolved-light": "Hide 1",
     "50-review-order": "Newest first",
+    "50-review-tab-menu": "Copy Review",
+    "50-review-saved": "Saved the review",
     "50-comments-all-resolved": "No open comments",
     # A button's cells are fewer than its words, so less of it is waited for.
     "50-comments-resolved-shown": "Hide 2",
@@ -190,7 +192,7 @@ EXPECT = {
 # About how many scenes there are, to cut the tour into parts of a size. Count them with
 # TOUR_LIST=1 when scenes are added: too low a count puts every scene past it in the last part,
 # which then runs out of the guard's time (0.11.0's tour lost ten scenes that way).
-SCENES_IN_ALL = 260
+SCENES_IN_ALL = 262
 # Scenes come to, shot, and those that never reached their surface.
 SEEN, SHOT, FAILED = [0], [], []
 # Which commit the binary is, as far as git can say: the pictures are of that.
@@ -1478,6 +1480,16 @@ with tempfile.TemporaryDirectory() as scratch:
     # The order's list, dropped from under its button.
     shoot("50-review-order", [*comments, ["click", *REVIEW_ORDER], ["wait", 0.6]], NOTE_FILE,
           size="150x44")
+    # The Comments tab's own menu: what's done with the review once it's written.
+    shoot("50-review-tab-menu", [*comments, ["right", *ON("Comments", 2)], ["wait", 0.6]],
+          NOTE_FILE, size="150x44")
+    # The review as Markdown, saved into the project and opened as a page; taken away after,
+    # so no later scene's tree has it.
+    saved = [*comments, *command("Save Review as Markdown", F1), ["until", "Save review as"],
+             ["keys", "\r"], ["until", "Saved the review"], ["wait", 1.5]]
+    shoot("50-review-saved", saved, NOTE_FILE, size="150x44")
+    if os.path.exists(f"{ROOT}/review.md"):
+        os.unlink(f"{ROOT}/review.md")
     shoot("50-plan-versions", comments, "docs/PLAN.md", size="150x44")
     # Narrow beside the editor: a pill that can't share its header's row goes under it.
     shoot("50-plan-versions-narrow", comments, "docs/PLAN.md", size="96x44")

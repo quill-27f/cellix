@@ -221,6 +221,10 @@ pub enum Command {
     ReplaceInFile,
     Format(Format),
     SendToAgent,
+    /// Every comment kept, as Markdown on the clipboard, a file and a kind at a time.
+    CopyReview,
+    /// The same, written to a file in the project, which then opens.
+    SaveReview,
     MentionSelection,
     AcceptProposal,
     RejectProposal,
